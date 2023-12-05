@@ -1,0 +1,76 @@
+# Begin: System Packages Install
+
+SYSTEM_PKGS=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.system', required=True)) }})
+SYSTEM_PKGS_7=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.system_7', required=True)) }})
+SYSTEM_PKGS_8=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.system_8', required=True)) }})
+SYSTEM_PKGS_9=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.system_9', required=True)) }})
+
+APPLICATION_PKGS=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.application', required=True)) }})
+APPLICATION_PKGS_7=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.application_7', required=True)) }})
+APPLICATION_PKGS_8=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.application_8', required=True)) }})
+
+SSSD_PKGS=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.sssd', required=True)) }})
+SSSD_PKGS_7=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.sssd_7', required=True)) }})
+OPENLDAP_CLIENT_PKGS=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.openldap_client', required=True)) }})
+
+DEFAULT_PACKAGES_FOR_ALL_OS=$(echo ${SYSTEM_PKGS[*]} ${APPLICATION_PKGS[*]} ${SSSD_PKGS[*]} ${OPENLDAP_CLIENT_PKGS[*]})
+
+{%- if context.base_os == 'rhel7' %}
+  yum install -y $DEFAULT_PACKAGES_FOR_ALL_OS $(echo ${SYSTEM_PKGS_7[*]} ${APPLICATION_PKGS_7[*]} ${SSSD_PKGS_7[*]}) --enablerepo rhel-7-server-rhui-optional-rpms
+{%- elif context.base_os in ('amazonlinux2', 'centos7') %}
+  yum install -y $DEFAULT_PACKAGES_FOR_ALL_OS $(echo ${SYSTEM_PKGS_7[*]} ${APPLICATION_PKGS_7[*]} ${SSSD_PKGS_7[*]})
+{%- elif context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+  dnf install -y dnf-plugins-core
+
+  {%- if context.base_os == 'rhel8' %}
+    dnf config-manager --set-enabled codeready-builder-for-rhel-8-rhui-rpms
+    ADDITIONAL_PKGS_TO_INSTALL=$(echo ${SYSTEM_PKGS_8[*]} ${APPLICATION_PKGS_8[*]})
+
+  {%- elif context.base_os == 'rhel9' %}
+    dnf config-manager --set-enabled codeready-builder-for-rhel-9-rhui-rpms
+    ADDITIONAL_PKGS_TO_INSTALL=$(echo ${SYSTEM_PKGS_9[*]})
+
+  {%- elif context.base_os == 'rocky8' %}
+    dnf config-manager --set-enabled powertools
+    ADDITIONAL_PKGS_TO_INSTALL=$(echo ${SYSTEM_PKGS_8[*]} ${APPLICATION_PKGS_8[*]})
+
+  {%- elif context.base_os == 'rocky9' %}
+    # PowerTool is known as crb on Rocky9 https://wiki.rockylinux.org/rocky/repo/#notes-on-crb
+    dnf config-manager --set-enabled crb
+    ADDITIONAL_PKGS_TO_INSTALL=$(echo ${SYSTEM_PKGS_9[*]})
+  {%- endif %}
+
+  EXCLUDE=()
+
+  {%- if context.is_amd_gpu() %}
+    # Don't upgrade the kernel and kernel packages to higher versions as AMD GPU driver support is dependent on the kernel version
+    EXCLUDE+=('kernel*el8_8*' 'kernel*el9_2*')
+  {%- endif %}
+
+  {%- if context.job_has_param('enable_efa_support') %}
+    # EFA installer provides an older version of this library
+    EXCLUDE+=()
+  {%- endif %}
+
+  printf -v EXCLUDE_JOINED '%s,' "${EXCLUDE[@]}"
+  command="dnf --exclude=${EXCLUDE_JOINED%,} install -y $DEFAULT_PACKAGES_FOR_ALL_OS $ADDITIONAL_PKGS_TO_INSTALL"
+  MAX_ATTEMPT=10
+  CURRENT_ATTEMPT=0
+  SLEEP_INTERVAL=5
+  while ! ($command); do
+    ((CURRENT_ATTEMPT=CURRENT_ATTEMPT+1))
+    if [[ $CURRENT_ATTEMPT -ge $MAX_ATTEMPT ]]; then
+      echo "Error: unable to execute dnf install command: $command"
+      break
+    fi
+    sleep $SLEEP_INTERVAL
+  done
+  systemctl enable hibinit-agent
+{%- endif %}
+
+if [[ $(rpm -qa kernel | wc -l) -gt "1" ]]; then
+  set_reboot_required "Updated kernel installed"
+fi
+
+# End: System Packages Install
+

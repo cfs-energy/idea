@@ -1,0 +1,15 @@
+spec:
+
+  title: 'IDEA / Scale-Out Computing on AWS (SOCA) API'
+
+  description: 'All APIs served by Scale-Out Computing on AWS (SOCA)'
+
+  tags:
+    - name: Scheduler
+      description: Scheduler User APIs **(Authenticated Access)**
+    - name: SchedulerAdmin
+      description: Scheduler Administration APIs **(Elevated Access)**
+
+
+
+
