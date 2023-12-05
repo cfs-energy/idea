@@ -8,6 +8,8 @@ AWS has decided to take a different direction with IDEA and pursue RES (https://
 
 This project is NOT AWS RES (https://github.com/aws/res). RES is a fork of IDEA and not all IDEA features made it to RES. RES Documentation is available on https://docs.aws.amazon.com/res/latest/ug/overview.html 
 
+This code was originally written by AWS but has been abandoned and taken open source as of version 3.1.6 respecting the original Apache 2.0 license terms.
+
 ## Documentation
 
 https://docs.ide-on-aws.com/
