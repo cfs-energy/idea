@@ -1,5 +1,13 @@
 # Integrated Digital Engineering on AWS
 
+**Read Me First**
+
+IDEA is **NOT** supported by AWS. Do **NOT** expect support from AWS for IDEA. If you're looking for a supported solution, please look to AWS RES.
+
+AWS has decided to take a different direction with IDEA and pursue RES (https://github.com/aws/res). Until RES achieves feature parity with IDEA, this repository will be the authoritative source for IDEA updates, patches, and information.
+
+This project is NOT AWS RES (https://github.com/aws/res). RES is a fork of IDEA and not all IDEA features made it to RES. RES Documentation is available on https://docs.aws.amazon.com/res/latest/ug/overview.html 
+
 ## Documentation
 
 https://docs.ide-on-aws.com/
