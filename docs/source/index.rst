@@ -6,7 +6,7 @@ https://github.com/aws/res). RES is a fork of IDEA and not all features
 listed on this doc made it to RES. RES Documentation is available on
 https://docs.aws.amazon.com/res/latest/ug/overview.html
 
-**I** ntegrated **D** igital **E** ngineering on **A** WS ( **IDEA**)
+**I** ntegrated **D**igital **E**ngineering on **A**WS ( **IDEA**)
 empowers teams of engineers, scientists and researchers with a cloud
 environment to host engineering tools required for end-to-end product
 development workloads (Computer Aided Design – CAD, Computer Aided
@@ -38,7 +38,7 @@ allowing engineering applications administrators and the engineers,
 analysts and designers they support to spend more time focusing on
 innovation.
 
-How to get started `Direct link to heading <#how-to-get-started>`__
+How to get started `<#how-to-get-started>`__
 -------------------------------------------------------------------
 
 Refer to this guide if you do not have any prior experience with IDEA.
@@ -57,10 +57,10 @@ Engineering Virtual Desktops ..) below to learn more.
 `🤖
 Modules </idea/modules>`__
 
-Key Features `Direct link to heading <#easy-installation>`__
+Key Features `<#easy-installation>`__
 ------------------------------------------------------------
 
-Easy installation `Direct link to heading <#easy-installation-1>`__
+Easy installation `<#easy-installation-1>`__
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Installation of IDEA is fully automated via a visual installation wizard
@@ -73,14 +73,14 @@ You can have multiple IDEA clusters on the same AWS account
 IDEA comes with a list of unique tags, making resource tracking easy for
 AWS Administrators
 
-Access your cluster in 1 click `Direct link to heading <#access-your-cluster-in-1-click>`__
+Access your cluster in 1 click `<#access-your-cluster-in-1-click>`__
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 You can access your IDEA cluster using multiple channels such as APIs,
 Virtual Desktops, Web Interface or SSH (`Access your IDEA
 cluster </idea/first-time-users/access-your-idea-cluster>`__)
 
-Linux & Windows Virtual Desktops `Direct link to heading <#simple-job-submission>`__
+Linux & Windows Virtual Desktops `<#simple-job-submission>`__
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Control your fleet of virtual desktops easily via the `Virtual Desktop
@@ -89,7 +89,7 @@ Interface
 Control what compute/AMIs can be used. Update your fleet in real-time
 and enable session-sharing to simplify collaboration cross teams.
 
-Simple Job Submission `Direct link to heading <#simple-job-submission-1>`__
+Simple Job Submission `<#simple-job-submission-1>`__
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 IDEA `supports a list of parameters designed to simplify your job
@@ -120,7 +120,7 @@ administrator)
 
 user@host$ qsub myscript.sh
 
-Web-Based Jobs Workflow `Direct link to heading <#os-agnostic-and-support-for-custom-ami>`__
+Web-Based Jobs Workflow `<#os-agnostic-and-support-for-custom-ami>`__
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Submit your Scale-Out Workloads simulation easily via a simple `NoCode
@@ -128,7 +128,7 @@ web-based wizard
 interface. <https://docs.ide-on-aws.com/hpc-simulations/admin-documentation/create-web-based-job-submission-worfklows>`__
 ​
 
-OS agnostic and support for custom AMI `Direct link to heading <#os-agnostic-and-support-for-custom-ami-1>`__
+OS agnostic and support for custom AMI `<#os-agnostic-and-support-for-custom-ami-1>`__
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Customers can integrate their Centos7/Rhel7/AmazonLinux2 AMI
@@ -151,20 +151,20 @@ AmazonLinux2, but you want to submit a job on your personal RHEL7 AMI
 
 -lbase_os=rhel7 myscript.sh
 
-Web User Interface `Direct link to heading <#web-user-interface>`__
+Web User Interface `<#web-user-interface>`__
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 IDEA includes a simple web interface designed to simplify user
 interactions (`Web
 Interface </idea/first-time-users/access-your-idea-cluster/web-interface>`__)
 
-HTTP Rest API `Direct link to heading <#http-rest-api>`__
+HTTP Rest API `<#http-rest-api>`__
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 IDEA is 100% API based. IDEA provide a Swagger template for all methods
 (.yml url is available via the ``Settings`` section of each module)
 
-Budgets and Cost Management `Direct link to heading <#budgets-and-cost-management>`__
+Budgets and Cost Management `<#budgets-and-cost-management>`__
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 You can review your HPC costs (`Review your AWS
@@ -182,7 +182,7 @@ restriction at a queue level. Refer to
 `Budget </idea/best-practices/budget>`__ for all best practices in order
 to control your HPC cost on AWS and prevent overspend.
 
-Detailed Cluster Analytics `Direct link to heading <#detailed-cluster-analytics>`__
+Detailed Cluster Analytics `<#detailed-cluster-analytics>`__
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 IDEA includes OpenSearch (formerly ElasticSearch) and automatically
@@ -193,7 +193,7 @@ Don’t know where to start? Check out `Create your own analytics
 visualizations </idea/best-practices/analytics/opensearch/create-your-own-analytics-visualizations>`__
 for some examples
 
-100% Customizable `Direct link to heading <#100-customizable>`__
+100% Customizable `<#100-customizable>`__
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 IDEA is built entirely on top of AWS and can be customized by users as
@@ -201,7 +201,7 @@ needed. The entire codebase is open-source and available on Github (
 `https://github.com/awslabs/integrated-digital-engineering-on-aws) <https://github.com/awslabs/integrated-digital-engineering-on-aws>`__
 ​
 
-Persistent and Unlimited Storage `Direct link to heading <#persistent-and-unlimited-storage>`__
+Persistent and Unlimited Storage `<#persistent-and-unlimited-storage>`__
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Scale-Out Computing on AWS includes two unlimited EFS storage (/apps and
@@ -211,32 +211,32 @@ disks or FSx for Lustre as scratch location on their compute nodes.
 options <https://awslabs.github.io/scale-out-computing-on-aws/storage/backend-storage-options/>`__
 offered by Scale-Out Computing on AWS
 
-Centralized user-management `Direct link to heading <#centralized-user-management>`__
+Centralized user-management `<#centralized-user-management>`__
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Customers can create unlimited LDAP users and groups via OpenLDAP or
 Microsoft Active Directory.
 
-Automatic backup `Direct link to heading <#automatic-backup>`__
+Automatic backup `<#automatic-backup>`__
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 IDEA automatically backup your data ( `Backup IDEA
 environment </idea/best-practices/security/backup-idea-environment>`__)
 with no additional effort required on your side.
 
-Support for network licenses `Direct link to heading <#support-for-network-licenses>`__
+Support for network licenses `<#support-for-network-licenses>`__
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 IDEA includes a FlexLM-enabled script which calculate the number of
 licenses for a given features and only start the job/provision the
 capacity when enough licenses are available.
 
-Automatic Errors Handling `Direct link to heading <#automatic-errors-handling>`__
+Automatic Errors Handling `<#automatic-errors-handling>`__
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 IDEA performs various dry run checks before provisioning the capacity.
 
-And more … `Direct link to heading <#and-more>`__
+And more … `<#and-more>`__
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Refer to the various sections (tutorial/security/analytics …) to learn
@@ -244,45 +244,3 @@ more about this solution
 
 `Next - First Time Users
 Install IDEA </idea/first-time-users/install-idea>`__
-
-Last modified 15d ago
-
-On this page
-
-How to get started
-
-Key Features
-
-Easy installation
-
-Access your cluster in 1 click
-
-Linux & Windows Virtual Desktops
-
-Simple Job Submission
-
-Web-Based Jobs Workflow
-
-OS agnostic and support for custom AMI
-
-Web User Interface
-
-HTTP Rest API
-
-Budgets and Cost Management
-
-Detailed Cluster Analytics
-
-100% Customizable
-
-Persistent and Unlimited Storage
-
-Centralized user-management
-
-Automatic backup
-
-Support for network licenses
-
-Automatic Errors Handling
-
-And more …
