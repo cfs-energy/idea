@@ -17,29 +17,29 @@ Alternatively, you can retrieve the OpenSearch dashboard endpoint via your IDEA 
 
 ## Initialize OpenSearch indexes (first time accessing OpenSearch)
 
-Click the hamburger menu on the left to open the sidebar, then click "**Stack Managemen**t" under "**Management**" section.&#x20;
+Click the hamburger menu on the left to open the sidebar, then click "**Stack Managemen**t" under "**Management**" section.
 
 Click "**Index Patterns**" on the left sidebar then "**Create Index Pattern**". Refer to the tabs below to create indexes based on your own interest.
 
 {% tabs %}
 {% tab title="Virtual Desktop Index" %}
-## **User Sessions**
+### **User Sessions**
 
-**As Index Pattern Name**, specify your cluster name followed by "**\_vdc\_user\_sessions\***". For example, if your cluster name is "idea-test" then search for "idea-test\__vdc\__user\_sessions\*". Once done, click "**Next Step**".
+**As Index Pattern Name**, specify your cluster name followed by "**\_vdc\_user\_sessions\***". For example, if your cluster name is "idea-test" then search for "idea-test\_\_vdc\_\_user\_sessions\*". Once done, click "**Next Step**".
 
 Use "**created\_on**" as Time Field then click "**Create Index Pattern"**
 {% endtab %}
 
 {% tab title="Scale-Out Workloads Index" %}
-## **Compute Nodes**
+### **Compute Nodes**
 
 **As Index Pattern Name**, specify your cluster name followed by "**\_scheduler\_nodes\***". For example, if your cluster name is "idea-test" then search for "idea-test\_scheduler\_nodes\*". Once done, click "**Next Step**".
 
 Use "**provisioning\_time**" as Time Field then click "**Create Index Pattern"**
 
-##
+###
 
-## Job Information
+### Job Information
 
 **As Index Pattern Name**, specify your cluster name followed by "**\_scheduler\_jobs\***". For example, if your cluster name is "idea-test" then search for "_idea-test\_scheduler\_jobs\*"_. Once done, click "**Next Step**".
 
@@ -53,9 +53,9 @@ Once your index is created, click the hamburger menu to open the sidebar and cli
 
 Select the Index pattern you have created previously using the dropdown section on the right
 
-<figure><img src="../../../.gitbook/assets/Screen Shot 2022-11-09 at 9.14.00 PM.png" alt=""><figcaption><p>Scheduler Index will store Scale-Out Workload jobs. VDC pattern is for Virtual Desktops</p></figcaption></figure>
+<figure><img src="../../../.gitbook/assets/Screen%20Shot%202022-11-09%20at%209.14.00%20PM.png" alt=""><figcaption><p>Scheduler Index will store Scale-Out Workload jobs. VDC pattern is for Virtual Desktops</p></figcaption></figure>
 
-All your IDEA data should now be visible.&#x20;
+All your IDEA data should now be visible.
 
 {% hint style="warning" %}
 **IMPORTANT**
@@ -63,11 +63,11 @@ All your IDEA data should now be visible.&#x20;
 OpenSearch display the events created within the last 15 minutes by default, make sure to update the timeframe accordingly.
 {% endhint %}
 
-<figure><img src="../../../.gitbook/assets/Screen Shot 2022-11-09 at 9.24.09 PM.png" alt=""><figcaption><p>Make sure to change the Time selection as needed.</p></figcaption></figure>
+<figure><img src="../../../.gitbook/assets/Screen%20Shot%202022-11-09%20at%209.24.09%20PM.png" alt=""><figcaption><p>Make sure to change the Time selection as needed.</p></figcaption></figure>
 
 OpenSearch will display the various entries ingested by IDEA as well as all the relevant metadata. You can use these metadata as filters to narrow your research to specific key elements.
 
-<figure><img src="../../../.gitbook/assets/Screen Shot 2022-11-09 at 9.22.47 PM.png" alt=""><figcaption><p>Example of IDEA data being ingested on OpenSearch</p></figcaption></figure>
+<figure><img src="../../../.gitbook/assets/Screen%20Shot%202022-11-09%20at%209.22.47%20PM.png" alt=""><figcaption><p>Example of IDEA data being ingested on OpenSearch</p></figcaption></figure>
 
 It's now time to [create-your-own-analytics-visualizations.md](create-your-own-analytics-visualizations.md "mention").
 
@@ -79,7 +79,7 @@ Access to OpenSearch is restricted to the IP you have specified during the insta
 {"Message":"User: anonymous is not authorized to perform: es:ESHttpGet"}
 ```
 
-To solve this issue, log in to AWS Console and go to OpenSearch Service dashboard. Select your OpenSearch  cluster and click "Modify Access Policy"
+To solve this issue, log in to AWS Console and go to OpenSearch Service dashboard. Select your OpenSearch cluster and click "Modify Access Policy"
 
 ![](https://awslabs.github.io/scale-out-computing-on-aws/imgs/kibana-8.png)
 

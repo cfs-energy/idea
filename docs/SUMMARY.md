@@ -24,12 +24,12 @@
 
 * [What is a module?](modules/what-is-a-module.md)
 * [Cluster Manager](modules/cluster-manager/README.md)
-  * [Projects Management](modules/cluster-manager/menu/projects-management.md)
-  * [Users Management](modules/cluster-manager/menu/users-management.md)
-  * [Groups Management](modules/cluster-manager/menu/groups-management.md)
-  * [Cluster Status](modules/cluster-manager/menu/cluster-status.md)
-  * [Email Templates](modules/cluster-manager/menu/email-templates.md)
-  * [APIs](modules/cluster-manager/menu/apis.md)
+  * [Projects Management](modules/cluster-manager/projects-management.md)
+  * [Users Management](modules/cluster-manager/users-management.md)
+  * [Groups Management](modules/cluster-manager/groups-management.md)
+  * [Cluster Status](modules/cluster-manager/cluster-status.md)
+  * [Email Templates](modules/cluster-manager/email-templates.md)
+  * [APIs](modules/cluster-manager/apis.md)
 * [Virtual Desktop Interfaces](modules/virtual-desktop-interfaces/README.md)
   * [User Documentation](modules/virtual-desktop-interfaces/user-documentation/README.md)
     * [Create a virtual desktop (Linux/Windows)](modules/virtual-desktop-interfaces/user-documentation/create-a-virtual-desktop-linux-windows.md)
@@ -44,8 +44,8 @@
     * [Permissions management](modules/virtual-desktop-interfaces/admin-documentation/permissions-management.md)
   * [Technical](modules/virtual-desktop-interfaces/technical/README.md)
     * [APIs](modules/virtual-desktop-interfaces/technical/apis.md)
-* [HPC Workloads]()
-* [Shared Storage]()
+* [HPC Workloads](modules/hpc-workloads.md)
+*
 
 ## 👑 Best Practices
 

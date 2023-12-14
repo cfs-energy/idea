@@ -6,10 +6,10 @@
 * [Python3](https://www.python.org/downloads/) + [PyEnv](https://github.com/pyenv/pyenv)
 * [nvm](https://github.com/nvm-sh/nvm)
 * [yarn](https://yarnpkg.com/)
-* [Git](https://git-scm.com/downloads)&#x20;
+* [Git](https://git-scm.com/downloads)
 
 {% hint style="warning" %}
-## Versions
+### Versions
 
 Replace the variables in the code snippets below with the following values:
 
@@ -20,7 +20,7 @@ Replace the variables in the code snippets below with the following values:
 
 ## Prepare environment
 
-### **Python <**PYTHON\_VERSION>
+### \*\*Python <\*\*PYTHON\_VERSION>
 
 ```bash
 pyenv install --skip-existing $PYTHON_VERSION
@@ -97,8 +97,7 @@ pip install -r requirements/dev.txt
 
 <summary><em><strong>Note for MacOS users</strong></em></summary>
 
-_**BigSur Note:**_ cryptography and orjson library requirements fail to install on MacOS BigSur.\
-
+_**BigSur Note:**_ cryptography and orjson library requirements fail to install on MacOS BigSur.\\
 
 To fix **cryptography**, follow the instructions mentioned here:\
 [https://stackoverflow.com/questions/64919326/pip-error-installing-cryptography-on-big-sur](https://stackoverflow.com/questions/64919326/pip-error-installing-cryptography-on-big-sur)
@@ -127,86 +126,68 @@ invoke -l
 
 Running this command should print output like below:
 
-| <pre><code>Available tasks:
+|
 
-  admin.main (admin)                   call administrator app main
-  build.administrator                  build administrator
-  build.all (build)                    build all
-  build.cluster-manager                build cluster manager
-  build.data-model                     build data-model
-  build.dcv-connection-gateway         build dcv connection gateway
-  build.scheduler                      build scheduler
-  build.sdk                            build sdk
-  build.virtual-desktop-controller     build virtual desktop controller
-  clean.administrator                  clean administrator
-  clean.all (clean)                    clean all components
-  clean.cluster-manager                clean cluster manager
-  clean.data-model                     clean data-model
-  clean.dcv-connection-gateway         clean dcv connection gateway
-  clean.scheduler                      clean scheduler
-  clean.sdk                            clean sdk
-  clean.virtual-desktop-controller     clean virtual desktop controller
-  devtool.build                        wrapper utility for invoke clean.&#x3C;module> build.&#x3C;module> package.&#x3C;module>
-  devtool.configure                    configure devtool
-  devtool.ssh                          ssh into the workstation
-  devtool.sync                         rsync local sources with remote development server
-  devtool.upload-packages              upload packages
-  docker.build                         build administrator docker image
-  docker.prepare-artifacts             copy administrator docker image artifacts to deployment dir
-  docker.print-commands                print docker push commands for ECR
-  package.administrator                package administrator
-  package.all (package)                package all components
-  package.cluster-manager              package cluster manager
-  package.dcv-connection-gateway       package dcv connection gateway
-  package.scheduler                    package scheduler
-  package.virtual-desktop-controller   package virtual desktop controller
-  release.prepare-opensource-package
-  release.update-version
-  req.install                          Install python requirements
-  req.update                           Update python requirements using pip-compile.
-  scheduler.cli (scheduler)            call scheduler cli
-  tests.run-integration-tests          Run Integration Tests
-  tests.run-unit-tests                 Run Unit Tests
-  web-portal.serve                     serve web-portal frontend app in web-browser
-  web-portal.typings                   convert idea python models to typescript
-</code></pre> |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+<pre><code>Available tasks:
+admin.main (admin)                   call administrator app main
+build.administrator                  build administrator
+build.all (build)                    build all
+build.cluster-manager                build cluster manager
+build.data-model                     build data-model
+build.dcv-connection-gateway         build dcv connection gateway
+build.scheduler                      build scheduler
+build.sdk                            build sdk
+build.virtual-desktop-controller     build virtual desktop controller
+clean.administrator                  clean administrator
+clean.all (clean)                    clean all components
+clean.cluster-manager                clean cluster manager
+clean.data-model                     clean data-model
+clean.dcv-connection-gateway         clean dcv connection gateway
+clean.scheduler                      clean scheduler
+clean.sdk                            clean sdk
+clean.virtual-desktop-controller     clean virtual desktop controller
+devtool.build                        wrapper utility for invoke clean.&#x3C;module> build.&#x3C;module> package.&#x3C;module>
+devtool.configure                    configure devtool
+devtool.ssh                          ssh into the workstation
+devtool.sync                         rsync local sources with remote development server
+devtool.upload-packages              upload packages
+docker.build                         build administrator docker image
+docker.prepare-artifacts             copy administrator docker image artifacts to deployment dir
+docker.print-commands                print docker push commands for ECR
+package.administrator                package administrator
+package.all (package)                package all components
+package.cluster-manager              package cluster manager
+package.dcv-connection-gateway       package dcv connection gateway
+package.scheduler                    package scheduler
+package.virtual-desktop-controller   package virtual desktop controller
+release.prepare-opensource-package
+release.update-version
+req.install                          Install python requirements
+req.update                           Update python requirements using pip-compile.
+scheduler.cli (scheduler)            call scheduler cli
+tests.run-integration-tests          Run Integration Tests
+tests.run-unit-tests                 Run Unit Tests
+web-portal.serve                     serve web-portal frontend app in web-browser
+web-portal.typings                   convert idea python models to typescript
 
-## Clean, Build and Package
 
-```bash
+
+
+
+
+
+Clean, Build and Package
 invoke clean build package
-```
+Run idea-admin.sh in Developer Mode
+<strong>The IDEA_DEV_MODE environment variable is used to indicate if idea-admin.sh should use the Docker Image or Run from sources.
+</strong>
+If IDEA_DEV_MODE=true, idea-admin.sh will execute administrator app directly using sources.
+If IDEA_DEV_MODE=false (default), idea-admin.sh will attempt to download the docker image for the latest release version and execute administrator app using Docker Container.
 
-## Run idea-admin.sh in Developer Mode
-
-The **IDEA\_DEV\_MODE** environment variable is used to indicate if _idea-admin.sh_ should use the Docker Image or Run from sources.
-
-* If IDEA\_DEV\_MODE=true, idea-admin.sh will execute administrator app directly using sources.
-* If IDEA\_DEV\_MODE=false (default), idea-admin.sh will attempt to download the docker image for the latest release version and execute administrator app using Docker Container.
-
-Export `IDEA_DEV_MODE=true` on your terminal, before executing idea-admin.sh on from project root.
-
-<pre class="language-bash"><code class="lang-bash"><strong># Enable Dev Mode
-</strong><strong>export IDEA_DEV_MODE=true
-</strong></code></pre>
-
-You will need to run **export IDEA\_DEV\_MODE=true**, each time you open a new Terminal session.
-
-#### Verify if Developer Mode is enabled
-
-To verify, if Developer Mode is enabled, run below command. This should print **(Developer Mode)** at the end of the banner.
-
-| <pre class="language-bash"><code class="lang-bash">./idea-admin.sh about
-
- '####:'########::'########::::'###::::
- . ##:: ##.... ##: ##.....::::'## ##:::
- : ##:: ##:::: ##: ######:::'##:::. ##:
- : ##:: ##:::: ##: ##...:::: #########:
- '####: ########:: ########: ##:::: ##:
-
- Integrated Digital Engineering on AWS
-          Version 3.0.0-beta.1
-            (Developer Mode)
-</code></pre> |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+Export IDEA_DEV_MODE=true on your terminal, before executing idea-admin.sh on from project root.
+# Enable Dev Modeexport IDEA_DEV_MODE=true
+<strong>You will need to run export IDEA_DEV_MODE=true, each time you open a new Terminal session.
+</strong><strong>Verify if Developer Mode is enabled
+</strong><strong>To verify, if Developer Mode is enabled, run below command. This should print (Developer Mode) at the end of the banner.
+</strong>| ./idea-admin.sh about'####:'########::'########::::'###::::. ##:: ##.... ##: ##.....::::'## ##:::: ##:: ##:::: ##: ######:::'##:::. ##:: ##:: ##:::: ##: ##...:::: #########:'####: ########:: ########: ##:::: ##:Integrated Digital Engineering on AWSVersion 3.0.0-beta.1(Developer Mode)
+</code></pre>

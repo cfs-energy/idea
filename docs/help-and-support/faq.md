@@ -106,8 +106,8 @@ IDEA_ALB=$(./idea-admin.sh config show \
 
 # Generate Authorization Header (remove -w 0 if using Mac)
 AUTHORIZATION_HEADER=$(echo -n $CLIENT_ID:$CLIENT_SECRET | base64 -w 0)
-<strong>
-</strong><strong># Request Bearer
+
+<strong># Request Bearer
 </strong>curl --silent --insecure --location --request POST "$COGNITO_USER_POOL/oauth2/token" \
 --header "Authorization: Basic $AUTHORIZATION_HEADER" \
 --header "Content-Type: application/x-www-form-urlencoded" \
@@ -118,8 +118,8 @@ AUTHORIZATION_HEADER=$(echo -n $CLIENT_ID:$CLIENT_SECRET | base64 -w 0)
 BEARER=$(cat .bearer | jq -r ".access_token")
 
 rm -rf .bearer
-<strong>
-</strong><strong># Create Admin User
+
+<strong># Create Admin User
 </strong>curl --silent --insecure --location --request POST "https://$IDEA_ALB/cluster-manager/api/v1" \
 --header "Authorization: Bearer $BEARER" \
 --header "Content-Type: application/json" \
@@ -143,7 +143,7 @@ rm -rf .bearer
 
 <details>
 
-<summary>How do I patch/update/change the configuration  an IDEA module</summary>
+<summary>How do I patch/update/change the configuration an IDEA module</summary>
 
 See [update-idea-cluster](../first-time-users/cluster-operations/update-idea-cluster/ "mention")
 
@@ -171,17 +171,17 @@ See [#how-do-i-resume-a-failed-installation](faq.md#how-do-i-resume-a-failed-ins
 
 The logo, title and subtitle of the Web Portal can be customized using configurations.
 
-![](https://confluence.amazon.com/download/attachments/108564578/Screen%20Shot%202022-07-11%20at%207.49.14%20AM.png?version=2\&modificationDate=1657551271000\&api=v2)
+<img src="https://confluence.amazon.com/download/attachments/108564578/Screen%20Shot%202022-07-11%20at%207.49.14%20AM.png?version=2&#x26;modificationDate=1657551271000&#x26;api=v2" alt="" data-size="original">
 
-### Defaults <a href="#customizelogo-titleandsubtitle-defaults" id="customizelogo-titleandsubtitle-defaults"></a>
+#### Defaults <a href="#customizelogo-titleandsubtitle-defaults" id="customizelogo-titleandsubtitle-defaults"></a>
 
 * title - Integrated Digital Engineering on AWS (IDEA)
 * logo - IDEA Default Logo
 * subtitle - \<cluster-name> (\<aws-region>)
 
-### Customization <a href="#customizelogo-titleandsubtitle-customization" id="customizelogo-titleandsubtitle-customization"></a>
+#### Customization <a href="#customizelogo-titleandsubtitle-customization" id="customizelogo-titleandsubtitle-customization"></a>
 
-#### Logo <a href="#customizelogo-titleandsubtitle-logo" id="customizelogo-titleandsubtitle-logo"></a>
+**Logo**
 
 Logo can be customized by uploading appropriate logo file to the cluster's S3 Bucket. Copy the S3 object key and run the below command:
 
@@ -192,7 +192,7 @@ set Key=cluster-manager.web_portal.logo,Type=string,Value=assets/logo.png \
 --aws-region <REGION>
 ```
 
-#### Title <a href="#customizelogo-titleandsubtitle-title" id="customizelogo-titleandsubtitle-title"></a>
+**Title**
 
 Title can be customized by running the below command:
 
@@ -203,7 +203,7 @@ Title can be customized by running the below command:
   --aws-region <REGION>
 ```
 
-#### Subtitle <a href="#customizelogo-titleandsubtitle-subtitle" id="customizelogo-titleandsubtitle-subtitle"></a>
+**Subtitle**
 
 Subtitle can be customized by running the below command:
 
@@ -247,7 +247,7 @@ custom_tags: []
 
 <summary>How to automatically add IAM Managed Policies to existing IDEA IAM roles</summary>
 
-Add the managed policy ARN in cluster settings: source/idea-administrator/resources/config/templates/cluster/settings.yml&#x20;
+Add the managed policy ARN in cluster settings: source/idea-administrator/resources/config/templates/cluster/settings.yml
 
 All roles will contain the policy(ies) you have added to the list.
 
@@ -257,7 +257,7 @@ All roles will contain the policy(ies) you have added to the list.
 
 <summary><strong>I am using an existing VPC and scheduler module is not working (not able to query the internal DNS)</strong></summary>
 
-IDEA create a route53 private hosted zone.&#x20;
+IDEA create a route53 private hosted zone.
 
 If you try to curl any DNS from this Route53 Zone,and get no result, even though the Private Zone is assigned to the VPC
 
@@ -312,7 +312,7 @@ Logging can configured per application server using IDEA Cluster Configuration. 
 
 1 - Log in to the EC2 machine and check the logs under **/root/boostrap/logs.**
 
-Try to find some potential issue(s) by looking for keywords like: &#x20;
+Try to find some potential issue(s) by looking for keywords like:
 
 * error
 * fatal
