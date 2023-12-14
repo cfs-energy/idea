@@ -45,7 +45,18 @@
   * [Technical](modules/virtual-desktop-interfaces/technical/README.md)
     * [APIs](modules/virtual-desktop-interfaces/technical/apis.md)
 * [HPC Workloads](modules/hpc-workloads.md)
-*
+  * [User Documentation](modules/hpc-workloads/user-documentation/README.md)
+    * [Submit a job](modules/hpc-workloads/user-documentation/submit-a-job.md)
+    * [Control my jobs](modules/hpc-workloads/user-documentation/control-my-jobs.md)
+    * [Supported EC2 parameters](modules/hpc-workloads/user-documentation/supported-ec2-parameters.md)
+    * [Job Storage](modules/hpc-workloads/user-documentation/job-storage.md)
+    * [Troubleshooting](modules/hpc-workloads/user-documentation/troubleshooting/README.md)
+      * [My job is not starting](modules/hpc-workloads/user-documentation/troubleshooting/my-job-is-not-starting.md)
+  * [Admin Documentation](modules/hpc-workloads/admin-documentation/README.md)
+    * [Queue Profiles](modules/hpc-workloads/admin-documentation/queue-profiles.md)
+    * [Create Web Based Job Submission Worfklows](modules/hpc-workloads/admin-documentation/create-web-based-job-submission-worfklows.md)
+    * [Configure Floating License resources](modules/hpc-workloads/admin-documentation/configure-floating-license-resources.md)
+
 
 ## 👑 Best Practices
 
