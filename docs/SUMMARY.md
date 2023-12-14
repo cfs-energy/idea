@@ -23,10 +23,17 @@
 ## 🤖 Modules
 
 * [What is a module?](modules/what-is-a-module.md)
-  * [Cluster Manager](modules/cluster-manager/README.md)
-* [Virtual Desktop Interfaces](http://127.0.0.1:5000/o/ewXgnQpSEObr0Vh0WSOj/s/QthiamUzKn8KJLl0hYBf/)
-* [HPC Workloads](http://127.0.0.1:5000/o/ewXgnQpSEObr0Vh0WSOj/s/LGamNPuOYtjAP3GFfRJO/)
-* [Shared Storage](http://127.0.0.1:5000/o/ewXgnQpSEObr0Vh0WSOj/s/5SSt4opQQGbm5tAfuEqy/)
+* [Cluster Manager](modules/cluster-manager/README.md)
+  * [Projects Management](modules/cluster-manager/menu/projects-management.md)
+  * [Users Management](modules/cluster-manager/menu/users-management.md)
+  * [Groups Management](modules/cluster-manager/menu/groups-management.md)
+  * [Cluster Status](modules/cluster-manager/menu/cluster-status.md)
+  * [Email Templates](modules/cluster-manager/menu/email-templates.md)
+  * [APIs](modules/cluster-manager/menu/apis.md)
+* [Virtual Desktop Interfaces](modules/virtual-desktop-interfaces/README.md)
+* 
+* [HPC Workloads]()
+* [Shared Storage]()
 
 ## 👑 Best Practices
 
