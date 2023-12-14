@@ -56,7 +56,8 @@
     * [Queue Profiles](modules/hpc-workloads/admin-documentation/queue-profiles.md)
     * [Create Web Based Job Submission Worfklows](modules/hpc-workloads/admin-documentation/create-web-based-job-submission-worfklows.md)
     * [Configure Floating License resources](modules/hpc-workloads/admin-documentation/configure-floating-license-resources.md)
-
+* [Shared Storage](modules/storage/README.md)
+  * [Storage Management](modules/storage/storage-management.md)
 
 ## 👑 Best Practices
 
