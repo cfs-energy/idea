@@ -37,13 +37,13 @@ To create a policy:
 1. Navigate to the IAM console page: [https://console.aws.amazon.com/iamv2/](https://console.aws.amazon.com/iamv2/)
 2. Click **"Policies"** on the left sidebar
 3. Click **"Create Policy"**
-4. Select the JSON tab and copy/paste the content of [https://github.com/awslabs/scale-out-computing-on-aws/blob/main/installer/SOCAInstallerIamPolicy.json](https://github.com/awslabs/scale-out-computing-on-aws/blob/main/installer/SOCAInstallerIamPolicy.json). This file contains all the required permissions to install/uninstall IDEA.&#x20;
+4. Select the JSON tab and copy/paste the content of [https://github.com/awslabs/scale-out-computing-on-aws/blob/main/installer/SOCAInstallerIamPolicy.json](https://github.com/awslabs/scale-out-computing-on-aws/blob/main/installer/SOCAInstallerIamPolicy.json). This file contains all the required permissions to install/uninstall IDEA.
 5. Click **"Next: Tags"** and add optional tags as needed
 6. Click **"Next: Review"**, chose a name and a description
 7. Click **"Create Policy"**
 8. Repeat the steps3 to 7, but this time copy/paste the content of JSONUNINSTALL during step4
 
-<figure><img src="../../.gitbook/assets/Screen Shot 2022-06-04 at 1.04.00 PM.png" alt=""><figcaption><p>Example of the two IAM policies (one for installation, one for termination)</p></figcaption></figure>
+<figure><img src="../../.gitbook/assets/Screen Shot June 4.webp" alt=""><figcaption><p>Example of the two IAM policies (one for installation, one for termination)</p></figcaption></figure>
 
 **Create your IAM user or role**
 
@@ -55,7 +55,7 @@ Should I configure an IAM user or role?
 
 ### Create IAM User
 
-IAM user must have the permissions required to install IDEA.&#x20;
+IAM user must have the permissions required to install IDEA.
 
 1. Navigate to the IAM console page: [https://console.aws.amazon.com/iamv2/](https://console.aws.amazon.com/iamv2/)
 2. Click "**Users**" on the left sidebar
@@ -64,17 +64,17 @@ IAM user must have the permissions required to install IDEA.&#x20;
    2. Under AWS Access Type check "**Access key - Programmatic access"**
 4. Click **"Next: Add Permissions"**
 5. Click **"Attach existing policies directly"** button and choose the IAM policy you just created on the previous step
-6. Click **"Next: Add Tags"**.  Add any optional tags as needed
+6. Click **"Next: Add Tags"**. Add any optional tags as needed
 7. Click "**Next: Review"**
 8. Click **"Create User"**
 9. You will be prompted with your **AWS Access Key ID** and **AWS Secret Access Key.** Save them in a secure location as we will need them later. In case you lost them, you can generate a new pair them via IAM User > Security Credentials
 10. Click **"Close"**
 
-<figure><img src="../../.gitbook/assets/Screen Shot 2022-06-04 at 1.06.37 PM.png" alt=""><figcaption><p>Example of IAM user configured with the IAM policy</p></figcaption></figure>
+<figure><img src="../../.gitbook/assets/Screen Shot June 4 (1).webp" alt=""><figcaption><p>Example of IAM user configured with the IAM policy</p></figcaption></figure>
 
 **Configure your local IAM user**
 
-Now you have created your IAM user, you must configure your local environment.&#x20;
+Now you have created your IAM user, you must configure your local environment.
 
 {% hint style="warning" %}
 Before configuring it, you must have AWSCLIv2 installed. To install it, refer to this guide: [https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
@@ -112,4 +112,4 @@ To create your SSH key:
 4. Pick a name, select RSA format and download it either as `.pem` if you are using Unix or `.ppk` via PuTTY on Windows. (note: you can always transform .pem to .ppk and vice-versa)
 5. Click "**Create key pair**"
 
-This will download the private key on your local system.  To be able to use the key, you must apply correct permissions by running `chmod 600 /path/to/your_pem_key.`
+This will download the private key on your local system. To be able to use the key, you must apply correct permissions by running `chmod 600 /path/to/your_pem_key.`
