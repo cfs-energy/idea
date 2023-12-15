@@ -8,7 +8,7 @@ Review [pre-requisites.md](pre-requisites.md "mention") section first
 
 {% tabs %}
 {% tab title="Linux/Mac" %}
-**Option1: Automatic installation**&#x20;
+**Option1: Automatic installation**
 
 Copy/Paste this command on your terminal to launch the installation
 
@@ -19,7 +19,7 @@ Copy/Paste this command on your terminal to launch the installation
 
 **Option2: Download the installer and execute it manually**
 
-As an alternative, you can download `idea-admin.sh` via this [https://raw.githubusercontent.com/awslabs/integrated-digital-engineering-on-aws/main/idea-admin.sh](https://raw.githubusercontent.com/awslabs/integrated-digital-engineering-on-aws/main/idea-admin.sh) and execute it on your Linux or Mac environment via `/bin/bash idea-admin.sh quick-setup`&#x20;
+As an alternative, you can download `idea-admin.sh` via this [https://raw.githubusercontent.com/awslabs/integrated-digital-engineering-on-aws/main/idea-admin.sh](https://raw.githubusercontent.com/awslabs/integrated-digital-engineering-on-aws/main/idea-admin.sh) and execute it on your Linux or Mac environment via `/bin/bash idea-admin.sh quick-setup`
 {% endtab %}
 
 {% tab title="Windows" %}
@@ -36,13 +36,13 @@ Installation of IDEA in Windows is managed by Powershell. Download and execute t
 
 Follow the installation wizard to install IDEA. During the installation, you will be prompted for various AWS parameters.
 
-&#x20;`quick-setup` proceed to a brand new deployment, if you are looking to re-use existing AWS resources running on your AWS environment (VPC, subnets ..), refer to [Broken link](broken-reference "mention").
+`quick-setup` proceed to a brand new deployment, if you are looking to re-use existing AWS resources running on your AWS environment (VPC, subnets ..), refer to [#install-idea-using-existing-aws-resources](standard-installation.md#install-idea-using-existing-aws-resources "mention").
 
 {% hint style="warning" %}
 Run `export IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER=Ec2InstanceMetadata` prior to `quick-setup` if you are planning to authenticate to AWS using IAM role and not IAM user.
 {% endhint %}
 
-<figure><img src="../../.gitbook/assets/Screen Shot 2022-11-13 at 10.32.32 AM.png" alt=""><figcaption><p>Installation of IDEA is managed by a wizard.</p></figcaption></figure>
+<figure><img src="../../.gitbook/assets/Screen Shot Nov 13 at 10.webp" alt=""><figcaption><p>Installation of IDEA is managed by a wizard.</p></figcaption></figure>
 
 Installation will take anywhere between 30 to 80 minutes depending the module(s) you are planning to install. Connection strings will be displayed at the end of the installation
 
@@ -64,7 +64,7 @@ IDEA deployment creates multiple stacks based on modules selected for deployment
 
 After a CloudFormation stack is deployed for a module, the status of each module maintained in DynamoDB changes from **not-deployed** → **deployed**.
 
-You can check the deployment status per module by running:&#x20;
+You can check the deployment status per module by running:
 
 ```
 ./idea-admin.sh list-modules  \
@@ -88,7 +88,7 @@ You can check the deployment status per module by running:&#x20;
 +----------------------------+------------------+--------+----------------------------+--------------+----------+
 ```
 
-If you encounter any errors during deployment, in one of the stacks, the default behavior is to rollback the deployment for that particular stack. Try to investigate the cause of the problem using the Event log displayed by CDK.&#x20;
+If you encounter any errors during deployment, in one of the stacks, the default behavior is to rollback the deployment for that particular stack. Try to investigate the cause of the problem using the Event log displayed by CDK.
 
 If you are able to identify and fix the problem, you can safely run the below command to re-trigger the installation. Process will resume automatically after the last known operation:
 
@@ -102,7 +102,7 @@ If only one module has failed, you can run `./idea-admin.sh deploy <MODULE_NAME>
 
 ## Install IDEA using existing AWS resources
 
-As an alternative, you can install IDEA using existing resources running on your AWS environment such as VPC, Subnets, Filesystems, OpenSearch clusters and more.&#x20;
+As an alternative, you can install IDEA using existing resources running on your AWS environment such as VPC, Subnets, Filesystems, OpenSearch clusters and more.
 
 To enable this mode, use `--existing-resources` as shown below:
 
@@ -112,7 +112,7 @@ To enable this mode, use `--existing-resources` as shown below:
 
 IDEA installer will guide you through the entire process during Step 3
 
-<figure><img src="../../.gitbook/assets/Screen Shot 2022-11-23 at 11.30.02 AM.png" alt=""><figcaption><p>Select the resources you want to re-use via the installer CLI interface</p></figcaption></figure>
+<figure><img src="../../.gitbook/assets/Screen Shot Nov 23 from Gitbook.webp" alt=""><figcaption><p>Select the resources you want to re-use via the installer CLI interface</p></figcaption></figure>
 
 ## Change default installation parameters
 
@@ -122,9 +122,9 @@ IDEA is 100% customizable and because of that, we cannot provide all the options
 
 2 - Pause when the installer prompt you with **"Are you sure you want to update cluster settings db with above configuration from local file system?"**
 
-<figure><img src="../../.gitbook/assets/Screen Shot 2022-11-15 at 2.05.19 PM.png" alt=""><figcaption><p>Pause your installation and open a new terminal to edit the configuration</p></figcaption></figure>
+<figure><img src="../../.gitbook/assets/Screen Shot Nov 15 from Gitbook.webp" alt=""><figcaption><p>Pause your installation and open a new terminal to edit the configuration</p></figcaption></figure>
 
-At this point, open a new terminal and navigate to `` ~/.idea/clusters/<YOUR_CLUSTER_NAME>/<YOUR_REGION>/` ``&#x20;
+At this point, open a new terminal and navigate to `` ~/.idea/clusters/<YOUR_CLUSTER_NAME>/<YOUR_REGION>/` ``
 
 You should see `` `values.yml` `` and a `` `config` `` folder. `config` contains all settings which are module specific
 
@@ -138,30 +138,30 @@ cluster-manager		identity-provider	vdc
 
 3 - Update your parameter(s)
 
-In this example, we will show you how to update the following  parameters:
+In this example, we will show you how to update the following parameters:
 
 * vdc.dcv\_session.allowed\_sessions\_per\_user: Number of virtual desktops per user (default to 5)
 * vdc.dcv\_session.instance\_types.allow: Control what type of EC2 instance can be provisioned as virtual desktops by the end users (default to t3, g4dn, g4ad, m6a and m6g).
 
 The screen below (generated during `idea-admin.sh quick-setup` ) reports the default values for both sessions
 
-<figure><img src="../../.gitbook/assets/Screen Shot 2022-12-04 at 1.25.49 PM.png" alt=""><figcaption></figcaption></figure>
+<figure><img src="../../.gitbook/assets/Screen Shot Dec 4.webp" alt=""><figcaption></figcaption></figure>
 
-To update these parameters, edit  \``` ~/.idea/clusters/<YOUR_CLUSTER_NAME>/<YOUR_REGION>/config/vdc/settings.yml` `` and update the relevant keys.
+To update these parameters, edit \``` ~/.idea/clusters/<YOUR_CLUSTER_NAME>/<YOUR_REGION>/config/vdc/settings.yml` `` and update the relevant keys.
 
-<figure><img src="../../.gitbook/assets/Screen Shot 2022-12-04 at 1.29.26 PM.png" alt=""><figcaption><p>Increased the number of allowed sessions and added c6i and r6i</p></figcaption></figure>
+<figure><img src="../../.gitbook/assets/Screen Shot Dec 4 (1).webp" alt=""><figcaption><p>Increased the number of allowed sessions and added c6i and r6i</p></figcaption></figure>
 
 4 - Reload the installer configuration
 
-&#x20;Go back to your IDEA installer and choose "Reload Changes"
+Go back to your IDEA installer and choose "Reload Changes"
 
-<figure><img src="../../.gitbook/assets/Screen Shot 2022-11-15 at 1.57.28 PM.png" alt=""><figcaption><p>Reload the configuration after making your changes</p></figcaption></figure>
+<figure><img src="../../.gitbook/assets/Screen Shot Nov 15.webp" alt=""><figcaption><p>Reload the configuration after making your changes</p></figcaption></figure>
 
 5 - Validate the installer will now use your new parameter(s)
 
 Reloading configuration should take less than 5 seconds. Once done, validate your parameter(s) is/are have been successfully updated. The screen below confirm "vdc.dcv\_session.allowed\_sessions\_per\_user" and "vdc.dcv\_session.instance\_types.allow" have been correctly updated with my changes.
 
-<figure><img src="../../.gitbook/assets/Screen Shot 2022-12-04 at 1.31.10 PM.png" alt=""><figcaption><p>IDEA will now configure the environment with your changes</p></figcaption></figure>
+<figure><img src="../../.gitbook/assets/Screen Shot Dec .webp" alt=""><figcaption><p>IDEA will now configure the environment with your changes</p></figcaption></figure>
 
 6 - Continue the installation
 
@@ -170,9 +170,9 @@ You can now move forward with the installer by choosing "Yes".
 {% hint style="info" %}
 IDEA parameters always use the same syntax: module.section.key.
 
-Example:&#x20;
+Example:
 
-If you want to update **scheduler.ec2.enable\_detailed\_monitoring,** you will have to edit `` \~/.idea/clusters/\<YOUR\_CLUSTER\_NAME>/\<YOUR\_REGION>/config/**scheduler**/settings.yml and find `enable_detailed_monitoring` key within the `ec2` section.
+If you want to update **scheduler.ec2.enable\_detailed\_monitoring,** you will have to edit \`\` \~/.idea/clusters/\<YOUR\_CLUSTER\_NAME>/\<YOUR\_REGION>/config/**scheduler**/settings.yml and find `enable_detailed_monitoring` key within the `ec2` section.
 {% endhint %}
 
 You can also change these settings post-installation. Refer to [cluster-operations](../cluster-operations/ "mention")for more details.
