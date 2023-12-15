@@ -1,12 +1,12 @@
 # What is IDEA?
 
-**ReadMe First:** This project is **NOT** AWS RES ([https://github.com/aws/res](https://github.com/aws/res)). RES is a fork of IDEA and not all features listed on this doc made it to RES. RES Documentation is available on [https://docs.aws.amazon.com/res/latest/ug/overview.html](https://docs.aws.amazon.com/res/latest/ug/overview.html)&#x20;
+**ReadMe First:** This project is **NOT** AWS RES ([https://github.com/aws/res](https://github.com/aws/res)). RES is a fork of IDEA and not all features listed on this doc made it to RES. RES Documentation is available on [https://docs.aws.amazon.com/res/latest/ug/overview.html](https://docs.aws.amazon.com/res/latest/ug/overview.html)
 
 **I**ntegrated **D**igital **E**ngineering on **A**WS (**IDEA**) empowers teams of engineers, scientists and researchers with a cloud environment to host engineering tools required for end-to-end product development workloads (Computer Aided Design – CAD, Computer Aided Engineering - CAE, Model Based Systems Engineering - MBSE, Electronic Design Automation – EDA). Using this solution, research and development (R\&D) leaders enable engineers and designers to break-through development silos and accelerate the product development process.
 
-With Integrated Digital Engineering on AWS, in a matter of hours engineering application teams can now deploy scalable engineering collaboration chambers customized to meet organizations security requirements for joint development with trusted partners and suppliers. Engineers interact with a catalog of familiar tools seamlessly integrated into an intuitive web portal. Applications tuned engineering workstations and compute clusters are automatically created and then scaled down once work is completed eliminating wasted time and resources.&#x20;
+With Integrated Digital Engineering on AWS, in a matter of hours engineering application teams can now deploy scalable engineering collaboration chambers customized to meet organizations security requirements for joint development with trusted partners and suppliers. Engineers interact with a catalog of familiar tools seamlessly integrated into an intuitive web portal. Applications tuned engineering workstations and compute clusters are automatically created and then scaled down once work is completed eliminating wasted time and resources.
 
-The solution features a large selection of compute resources; fast network backbone; unlimited storage;  budget and cost management directly integrated within AWS. The solution also deploys a user interface (UI) and automation tools that allows you to create your own queues, scheduler resources, Amazon Machine Images (AMIs), software and libraries.&#x20;
+The solution features a large selection of compute resources; fast network backbone; unlimited storage; budget and cost management directly integrated within AWS. The solution also deploys a user interface (UI) and automation tools that allows you to create your own queues, scheduler resources, Amazon Machine Images (AMIs), software and libraries.
 
 This solution is designed to provide a production ready reference implementation to be a starting point for digital engineering workloads, allowing engineering applications administrators and the engineers, analysts and designers they support to spend more time focusing on innovation.
 
@@ -49,11 +49,11 @@ You can access your IDEA cluster using multiple channels such as APIs, Virtual D
 
 ### Linux & Windows Virtual Desktops <a href="#simple-job-submission" id="simple-job-submission"></a>
 
-Control your fleet of virtual desktops easily via the [Virtual Desktop Interface (VDI)](http://127.0.0.1:5000/o/ewXgnQpSEObr0Vh0WSOj/s/QthiamUzKn8KJLl0hYBf/ "mention")modules. Control what compute/AMIs can be used. Update your fleet in real-time and enable session-sharing to simplify collaboration cross teams.
+Control your fleet of virtual desktops easily via the [virtual-desktop-interfaces](modules/virtual-desktop-interfaces/ "mention") modules. Control what compute/AMIs can be used. Update your fleet in real-time and enable session-sharing to simplify collaboration cross teams.
 
 ### Simple Job Submission <a href="#simple-job-submission" id="simple-job-submission"></a>
 
-IDEA [supports a list of parameters designed to simplify your job submission on AWS](https://docs.ide-on-aws.com/hpc-simulations/user-documentation/supported-ec2-parameters). Advanced users can either manually choose compute/storage/network configuration for their job or simply ignore these parameters and let IDEA picks the most optimal hardware (defined by the cluster administrator)
+IDEA [supports a list of parameters designed to simplify your job submission on AWS](modules/hpc-workloads/user-documentation/supported-ec2-parameters.md). Advanced users can either manually choose compute/storage/network configuration for their job or simply ignore these parameters and let IDEA picks the most optimal hardware (defined by the cluster administrator)
 
 ```bash
 # Advanced Configuration
@@ -70,7 +70,7 @@ user@host$ qsub myscript.sh
 
 ### Web-Based Jobs Workflow <a href="#os-agnostic-and-support-for-custom-ami" id="os-agnostic-and-support-for-custom-ami"></a>
 
-Submit your Scale-Out Workloads simulation easily via a simple [NoCode web-based wizard interface.](https://docs.ide-on-aws.com/hpc-simulations/admin-documentation/create-web-based-job-submission-worfklows)
+Submit your Scale-Out Workloads simulation easily via a simple [NoCode web-based wizard interface.](modules/hpc-workloads/admin-documentation/create-web-based-job-submission-worfklows.md)
 
 ### OS agnostic and support for custom AMI <a href="#os-agnostic-and-support-for-custom-ami" id="os-agnostic-and-support-for-custom-ami"></a>
 
@@ -99,11 +99,11 @@ IDEA is 100% API based. IDEA provide a Swagger template for all methods (.yml ur
 
 ### Budgets and Cost Management <a href="#budgets-and-cost-management" id="budgets-and-cost-management"></a>
 
-You can review your HPC costs ([review-your-aws-spend.md](best-practices/budget/review-your-aws-spend.md "mention"))  filtered by user/team/project/queue very easily using AWS Cost Explorer.
+You can review your HPC costs ([review-your-aws-spend.md](best-practices/budget/review-your-aws-spend.md "mention")) filtered by user/team/project/queue very easily using AWS Cost Explorer.
 
 IDEA also supports AWS Budget and let you create budgets assigned to user/team/project or queue. To prevent over-spend, IDEA includes hooks to restrict job submission when customer-defined budget has expired ([set-up-budget-per-project.md](best-practices/budget/set-up-budget-per-project.md "mention"))
 
-Lastly, Scale-Out Computing on AWS let you create queue ACLs or instance restriction at a queue level. Refer to  [budget](best-practices/budget/ "mention") for all best practices in order to control your HPC cost on AWS and prevent overspend.
+Lastly, Scale-Out Computing on AWS let you create queue ACLs or instance restriction at a queue level. Refer to [budget](best-practices/budget/ "mention") for all best practices in order to control your HPC cost on AWS and prevent overspend.
 
 ### Detailed Cluster Analytics <a href="#detailed-cluster-analytics" id="detailed-cluster-analytics"></a>
 
@@ -113,7 +113,7 @@ Don't know where to start? Check out [create-your-own-analytics-visualizations.m
 
 ### 100% Customizable <a href="#100-customizable" id="100-customizable"></a>
 
-IDEA is built entirely on top of AWS and can be customized by users as needed. The entire  codebase is open-source and available on Github ([https://github.com/awslabs/integrated-digital-engineering-on-aws)](https://github.com/awslabs/integrated-digital-engineering-on-aws)
+IDEA is built entirely on top of AWS and can be customized by users as needed. The entire codebase is open-source and available on Github ([https://github.com/awslabs/integrated-digital-engineering-on-aws)](https://github.com/awslabs/integrated-digital-engineering-on-aws)
 
 ### Persistent and Unlimited Storage <a href="#persistent-and-unlimited-storage" id="persistent-and-unlimited-storage"></a>
 
@@ -125,7 +125,7 @@ Customers can create unlimited LDAP users and groups via OpenLDAP or Microsoft A
 
 ### Automatic backup <a href="#automatic-backup" id="automatic-backup"></a>
 
-IDEA  automatically backup your data ( [backup-idea-environment.md](best-practices/security/backup-idea-environment.md "mention")) with no additional effort required on your side.
+IDEA automatically backup your data ( [backup-idea-environment.md](best-practices/security/backup-idea-environment.md "mention")) with no additional effort required on your side.
 
 ### Support for network licenses <a href="#support-for-network-licenses" id="support-for-network-licenses"></a>
 
@@ -133,7 +133,7 @@ IDEA includes a FlexLM-enabled script which calculate the number of licenses for
 
 ### Automatic Errors Handling <a href="#automatic-errors-handling" id="automatic-errors-handling"></a>
 
-IDEA performs various dry run checks before provisioning the capacity.&#x20;
+IDEA performs various dry run checks before provisioning the capacity.
 
 ### And more ... <a href="#and-more" id="and-more"></a>
 
