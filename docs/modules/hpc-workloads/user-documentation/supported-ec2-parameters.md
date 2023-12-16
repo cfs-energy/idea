@@ -141,7 +141,7 @@ If you specify more than 1 subnet and have `placement_group` set to True, IDEA w
 ## Storage <a href="#storage" id="storage"></a>
 
 {% hint style="info" %}
-[Refer to the Shared-Storage module](https://docs.ide-on-aws.com/shared-storage/introduction) if you are looking for more persistent / non-job specify storage backed.
+Refer to the [storage](../../storage/ "mention") module if you are looking for more persistent / non-job specify storage backed.
 {% endhint %}
 
 ### EBS <a href="#ebs" id="ebs"></a>
@@ -324,4 +324,3 @@ _Default to the value specified during SOCA installation_
 * Description: [Send anonymous operational metrics to AWS](https://docs.aws.amazon.com/solutions/latest/scale-out-computing-on-aws/appendix-d.html)
 * Allowed Values: `yes` `true` `no` `false` (case insensitive)
 * Example: `-l anonymous_metrics=True`
-

@@ -13,10 +13,10 @@ IDEA supports multiple way to submit jobs:
 
 * Regular `qsub` (see below)
 * Web based job submission: [create-web-based-job-submission-worfklows.md](../admin-documentation/create-web-based-job-submission-worfklows.md "mention")
-* HTTP Rest API ([https://docs.ide-on-aws.com/idea/first-time-users/access-your-idea-cluster/apis)](https://docs.ide-on-aws.com/idea/first-time-users/access-your-idea-cluster/apis)
+* HTTP Rest API: ([apis.md](../../../first-time-users/access-your-idea-cluster/apis.md "mention"))
 {% endhint %}
 
-To get started, either deploy a Linux virtual desktop [Virtual Desktop Interface (VDI)](https://app.gitbook.com/o/ewXgnQpSEObr0Vh0WSOj/s/QthiamUzKn8KJLl0hYBf/ "mention") or connect to the Bastion host via [https://docs.ide-on-aws.com/idea/first-time-users/access-your-idea-cluster/ssh.](https://docs.ide-on-aws.com/idea/first-time-users/access-your-idea-cluster/ssh)
+To get started, either deploy a Linux virtual desktop [virtual-desktop-interfaces](../../virtual-desktop-interfaces/ "mention") or connect to the Bastion host via [ssh.md](../../../first-time-users/access-your-idea-cluster/ssh.md "mention")
 
 Once connected to your Linux box, create a simple text file and name it "job\_submit.que". See below for a simple template (you will be required to edit whatever is between \*\*)
 
@@ -52,7 +52,7 @@ To see the job in the queue, you can run `qstat` utility from your Linux machine
 
 ### Dry Run <a href="#delete-a-job-from-the-queue" id="delete-a-job-from-the-queue"></a>
 
-IDEA automatically performs DryRun action to validate whether your job can run or not. DryRun checks for service quotas, EC2 typo etc&#x20;
+IDEA automatically performs DryRun action to validate whether your job can run or not. DryRun checks for service quotas, EC2 typo etc
 
 <pre class="language-bash"><code class="lang-bash"><strong># Example1: Trying to submit a job with an invalid instance type
 </strong><strong>$ qsub -l instance_type=fake_instance -- /bin/sleep 60

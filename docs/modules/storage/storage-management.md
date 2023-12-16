@@ -1,7 +1,7 @@
 # Storage Management
 
 {% hint style="info" %}
-Refer to [.](./ "mention")to learn more about Shared Storage configuration on IDEA.
+Refer to [.](./ "mention") to learn more about Shared Storage configuration on IDEA.
 {% endhint %}
 
 ## Apps and Data Storage (Required)
@@ -78,25 +78,27 @@ Shared Storage config generation for provisioning **new** file systems is only s
 
 To generate configurations for provisioning new file systems you can use the idea-admin.sh shared-storage add-file-system command as below:
 
-| <pre><code>$ ./idea-admin.sh shared-storage add-file-system --help                                          
+```
+$ ./idea-admin.sh shared-storage add-file-system --help
+
 Usage: idea-admin shared-storage add-file-system [OPTIONS]
-
-  add new shared-storage file-system
-
+add new shared-storage file-system
 Options:
-  --cluster-name TEXT  Cluster Name
-  --aws-region TEXT    AWS Region  [required]
-  --aws-profile TEXT   AWS Profile Name
-  --kms-key-id TEXT    KMS Key ID
-  -h, --help           Show this message and exit.
-</code></pre> |
-| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+--cluster-name TEXT  Cluster Name
+--aws-region TEXT    AWS Region  [required]
+--aws-profile TEXT   AWS Profile Name
+--kms-key-id TEXT    KMS Key ID
+-h, --help           Show this message and exit.
+```
 
-**Example**
+***
 
-| <pre class="language-bash"><code class="lang-bash">./idea-admin.sh shared-storage add-file-system \
-   --aws-region &#x3C;REGION>  \
-   --cluster-name &#x3C;CLUSTER_NAME>  
+#### Example
+
+```
+./idea-admin.sh shared-storage add-file-system \
+   --aws-region <REGION>  \
+   --cluster-name <CLUSTER_NAME>  
 Add Shared Storage to an IDEA Cluster
 
 Shared Storage Settings
@@ -148,16 +150,17 @@ updating config: shared-storage.testefs.efs.performance_mode = generalPurpose
 updating config: shared-storage.testefs.efs.removal_policy = DESTROY
 updating config: shared-storage.testefs.efs.cloudwatch_monitoring = False
 updating config: shared-storage.testefs.efs.transition_to_ia = None
-</code></pre> |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+```
+
+***
 
 `idea-admin.sh` utility will automatically update your IDEA cluster environment if you select " Update Cluster Settings and Exit". You can also choose to automatically "Deploy" the cluster which will automatize the steps mentioned below. For this demo, we are just Updating Cluster Settings and will proceed to a manual deployment afterwards.
 
 Once done, you can validate your new mount point in the web interface via "**Cluster Management**" > "**Settings**" > "**Shared Storage**"
 
-<figure><img src=".gitbook/assets/Screen Shot 2022-12-05 at 6.55.39 PM.png" alt=""><figcaption><p>IDEA is now configured with the new mount but EFS has not been created yet</p></figcaption></figure>
+<figure><img src="../../.gitbook/assets/mods_ss_man_mountconf.webp" alt=""><figcaption><p>IDEA is now configured with the new mount but EFS has not been created yet</p></figcaption></figure>
 
-At this point, the FileSystem ID is empty because you asked to provision a brand new EFS. To update the backend infrastructure and trigger the EFS creation, you must run `deploy` command ([see this page for more details about deploy utility](https://docs.ide-on-aws.com/idea/first-time-users/cluster-operations/update-idea-cluster/update-idea-backend-resource-idea-admin.sh-deploy)).
+At this point, the FileSystem ID is empty because you asked to provision a brand new EFS. To update the backend infrastructure and trigger the EFS creation, you must run `deploy` command ([see this page for more details about deploy utility](../../first-time-users/cluster-operations/update-idea-cluster/update-idea-backend-resource.md)).
 
 First, run the `idea-admin.sh cdk diff` to confirm the new EFS will be created:
 
@@ -188,9 +191,6 @@ Resources
      │   └─ [+] 918057b8-b0c3-4ea5-a92a-6da5569920f5
      ├─ [+] Added: .testefs.efs.dns
      └─ [+] Added: .testefs.efs.file_system_id
-
-
-
 ```
 
 This command confirmed the change and CDK will proceed to the EFS creation once you will run the actual `deploy` command:
@@ -242,12 +242,11 @@ Stack ARN:
 arn:aws:cloudformation:us-east-2:<REDACTED>:stack/<CLUSTER_NAME>-shared-storage/b7ada700-73d6-11ed-a507-0645fa8e8430
 
 ✨  Total time: 144.16s
-
 ```
 
 Now that the deployment command is complete, go back to the web interface and validate the new EFS has been created and now has valid FileSystem ID assigned.
 
-<figure><img src=".gitbook/assets/Screen Shot 2022-12-05 at 7.41.19 PM.png" alt=""><figcaption><p>New mount now has a valid FileSystem ID</p></figcaption></figure>
+<figure><img src="../../.gitbook/assets/mods_ss_man_idassigned.webp" alt=""><figcaption><p>New mount now has a valid FileSystem ID</p></figcaption></figure>
 
 To further validate our new mount point, we can submit a test job which will output `df` command
 
@@ -267,11 +266,12 @@ fs-0782abfc0e273d46d.efs.us-east-2.amazonaws.com:/  8.0E     0  8.0E   0% /data
 fs-01db45fc6a9eaf20a.efs.us-east-2.amazonaws.com:/  8.0E     0  8.0E   0% /custom_path
 ```
 
-### Attach existing File System
+### Attach Existing File System
 
 To generate configurations for attaching an existing file system, you can use the idea-admin.sh shared-storage attach-file-system command as below. This utility will automatically search for existing backed storage (FSx for Lustre/NetApp/OpenZFS/Windows, EFS) running in your VPC.
 
-| <pre><code> ./idea-admin.sh shared-storage attach-file-system --help
+```
+ ./idea-admin.sh shared-storage attach-file-system --help
 Usage: idea-admin shared-storage attach-file-system [OPTIONS]
 
   attach existing shared-storage file-system
@@ -282,21 +282,23 @@ Options:
   --aws-profile TEXT   AWS Profile Name
   --kms-key-id TEXT    KMS Key ID
   -h, --help           Show this message and exit.
-</code></pre> |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+```
 
-**Example**
+***
 
-| <pre class="language-bash"><code class="lang-bash">$  ./idea-admin.sh shared-storage attach-file-system \
-   --aws-region &#x3C;REGION> \
-   --cluster-name &#x3C;CLUSTER_NAME>
+#### Example
+
+```
+$  ./idea-admin.sh shared-storage attach-file-system \
+   --aws-region <REGION> \
+   --cluster-name <CLUSTER_NAME>
 Add Shared Storage to an IDEA Cluster
 
 Shared Storage Settings
 
 ? [Name] Enter the name of the shared storage file system  (Must be all lower case, no spaces or special characters) demo
 ? [Title] Enter a friendly title for the file system Demo FS
-? [VPC] Select the VPC from which an existing file system can be used vpc-0cb462f0bfc14526b (10.0.0.0/16) [&#x3C;CLUSTER_NAME>-vpc]
+? [VPC] Select the VPC from which an existing file system can be used vpc-0cb462f0bfc14526b (10.0.0.0/16) [<CLUSTER_NAME>-vpc]
 ? [Shared Storage Provider] Select a provider for the shared storage file system Amazon FSx for Lustre
 ? [Mount Directory] Location of the mount directory. eg. /my-mount-dir /demo
 ? [Mount Scopes] Select the mount scope for file system Cluster
@@ -324,10 +326,11 @@ demo:
 
 ----------------------------------------------------------------------------------------------------------------------------------------
 ? How do you want to proceed further?
-</code></pre> |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+```
 
-## Remove a File System
+***
+
+### Remove a File System
 
 Run `./idea-admin.sh config delete shared-storage.<filesystem_name>` to remove a shared filesystem from IDEA.
 
@@ -363,9 +366,10 @@ Removing a file system from IDEA won't trigger a file system deletion. Make sure
 
 ### Amazon EFS
 
-#### New EFS Configuration
+New EFS Configuration
 
-| <pre><code>demo:
+```
+demo:
   title: Demo FS
   provider: efs
   scope:
@@ -380,12 +384,14 @@ Removing a file system from IDEA won't trigger a file system deletion. Make sure
     removal_policy: DESTROY
     cloudwatch_monitoring: false
     transition_to_ia: ~
-</code></pre> |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+```
+
+***
 
 #### Existing EFS Configuration
 
-| <pre><code>demo:
+```
+demo:
   title: Demo FS
   provider: efs
   scope:
@@ -397,14 +403,16 @@ Removing a file system from IDEA won't trigger a file system deletion. Make sure
     file_system_id: fs-05b067d4a78e0fb29
     dns: fs-05b067d4a78e0fb29.efs.us-east-1.amazonaws.com
     encrypted: true
-</code></pre> |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+```
+
+***
 
 ### Amazon FSx for Lustre
 
 #### Existing FSx for Lustre Configuration
 
-| <pre><code>demo:
+```
+demo:
   title: Demo FS
   provider: fsx_lustre
   scope:
@@ -417,14 +425,16 @@ Removing a file system from IDEA won't trigger a file system deletion. Make sure
     dns: fs-01a2ccc035f0f007c.fsx.us-east-1.amazonaws.com
     mount_name: drohpbev
     version: '2.10'
-</code></pre> |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+```
+
+***
 
 ### Amazon FSx for NetApp ONTAP
 
 #### Existing FSx for NetApp ONTAP
 
-| <pre><code>demo:
+```
+demo:
   title: Demo FS
   provider: fsx_netapp_ontap
   scope:
@@ -445,14 +455,16 @@ Removing a file system from IDEA won't trigger a file system deletion. Make sure
       volume_id: fsvol-0f791716b33592fff
       volume_path: /
       security_style: MIXED
-</code></pre> |
-| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+```
+
+***
 
 ### Amazon FSx for OpenZFS
 
 #### Existing FSx for OpenZFS
 
-| <pre><code>demo:
+```
+demo:
   title: Demo FS
   provider: fsx_openzfs
   scope:
@@ -465,14 +477,16 @@ Removing a file system from IDEA won't trigger a file system deletion. Make sure
     dns: fs-09e1b30aab982aa34.fsx.us-east-1.amazonaws.com
     volume_id: fsvol-00d420eeb064ac36a
     volume_path: /fsx
-</code></pre> |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+```
+
+***
 
 ### Amazon FSx for Windows File Server
 
 #### Existing FSx for Windows File Server
 
-| <pre><code>demo:
+```
+demo:
   title: Demo FS
   provider: fsx_windows_file_server
   scope:
@@ -483,8 +497,9 @@ Removing a file system from IDEA won't trigger a file system deletion. Make sure
     file_system_id: fs-0c1f74968df26462e
     dns: amznfsx0wallrm9.idea.local
     preferred_file_server_ip: 10.0.113.174
-</code></pre> |
-| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+```
+
+***
 
 ## Visualize Cluster Settings
 
@@ -494,13 +509,14 @@ Shared storage settings can be viewed via **Web Portal** and **IDEA** **CLI**.
 
 Navigate to "**Cluster Management**" > "**Settings**" > "**Shared Storage**"
 
-<figure><img src=".gitbook/assets/Screen Shot 2022-12-05 at 4.57.08 PM.png" alt=""><figcaption></figcaption></figure>
+<figure><img src="../../.gitbook/assets/mods_ss_man_webportal.webp" alt=""><figcaption></figcaption></figure>
 
-### **IDEA CLI**
+### IDEA CLI
 
-| <pre><code>$ ./idea-admin.sh config show --query "shared-storage.*" \
-   --cluster-name &#x3C;CLUSTER_NAME> \
-  --aws-region &#x3C;REGION> \
+```
+$ ./idea-admin.sh config show --query "shared-storage.*" \
+   --cluster-name <CLUSTER_NAME> \
+  --aws-region <REGION> \
    --format yaml
    
 shared-storage: 
@@ -605,8 +621,7 @@ shared-storage:
     scope: 
       - project
     title: FSx Windows File Server
+    
+```
 
-</code></pre> |
-| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-
-\
+***

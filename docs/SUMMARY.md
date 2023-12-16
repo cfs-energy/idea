@@ -23,13 +23,6 @@
 ## 🤖 Modules
 
 * [What is a module?](modules/what-is-a-module.md)
-* [Cluster Manager](modules/cluster-manager/README.md)
-  * [Projects Management](modules/cluster-manager/projects-management.md)
-  * [Users Management](modules/cluster-manager/users-management.md)
-  * [Groups Management](modules/cluster-manager/groups-management.md)
-  * [Cluster Status](modules/cluster-manager/cluster-status.md)
-  * [Email Templates](modules/cluster-manager/email-templates.md)
-  * [APIs](modules/cluster-manager/apis.md)
 * [Virtual Desktop Interfaces](modules/virtual-desktop-interfaces/README.md)
   * [User Documentation](modules/virtual-desktop-interfaces/user-documentation/README.md)
     * [Create a virtual desktop (Linux/Windows)](modules/virtual-desktop-interfaces/user-documentation/create-a-virtual-desktop-linux-windows.md)
@@ -56,6 +49,13 @@
     * [Queue Profiles](modules/hpc-workloads/admin-documentation/queue-profiles.md)
     * [Create Web Based Job Submission Worfklows](modules/hpc-workloads/admin-documentation/create-web-based-job-submission-worfklows.md)
     * [Configure Floating License resources](modules/hpc-workloads/admin-documentation/configure-floating-license-resources.md)
+* [Cluster Manager](modules/cluster-manager/README.md)
+  * [Projects Management](modules/cluster-manager/projects-management.md)
+  * [Users Management](modules/cluster-manager/users-management.md)
+  * [Groups Management](modules/cluster-manager/groups-management.md)
+  * [Cluster Status](modules/cluster-manager/cluster-status.md)
+  * [Email Templates](modules/cluster-manager/email-templates.md)
+  * [APIs](modules/cluster-manager/apis.md)
 * [Shared Storage](modules/storage/README.md)
   * [Storage Management](modules/storage/storage-management.md)
 

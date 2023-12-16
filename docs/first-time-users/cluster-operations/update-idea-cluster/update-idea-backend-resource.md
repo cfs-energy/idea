@@ -32,7 +32,7 @@ Resources
 [~] Custom::ClusterSettings <CLUSTER_NAME>-cluster-settings ideapatchuclustersettings
 ```
 
-Once you have reviewed your changes  and everything looks correct, run `./idea-admin.sh deploy cluster --upgrade` to update your AWS environment by triggering a CloudFormation ChangeSet to the stack you are upgrading (`cluster` in this example).
+Once you have reviewed your changes and everything looks correct, run `./idea-admin.sh deploy cluster --upgrade` to update your AWS environment by triggering a CloudFormation ChangeSet to the stack you are upgrading (`cluster` in this example).
 
 ```
 ./idea-admin.sh deploy  cluster --upgrade \
@@ -101,8 +101,8 @@ arn:aws:cloudformation:us-east-2:<REDACTED>:stack/<CLUSTER_NAME>-cluster/06a115e
 
 You can validate your upgrade by looking at the AWS CloudFormation console. The stack you are being updating should be listed as "UPDATE\_IN\_PROGRESS".
 
-<figure><img src="../../../.gitbook/assets/Screen Shot 2022-12-04 at 3.17.37 PM.png" alt=""><figcaption></figcaption></figure>
+<figure><img src="../../../.gitbook/assets/ftu_ops_updatebk_inprogress.webp" alt=""><figcaption></figcaption></figure>
 
 Once the stack is updated, you can verify the resources have been upgraded correctly. In my example, I have changed the codebase of one Lambda function. I can confirm the function has been updated successfully by looking at the new code and confirming the timestamp under "Last Modified Time" match my `./idea-admin.sh deploy` command.
 
-<figure><img src="../../../.gitbook/assets/Screen Shot 2022-12-04 at 3.22.01 PM.png" alt=""><figcaption></figcaption></figure>
+<figure><img src="../../../.gitbook/assets/ftu_ops_updatebk_lastmod.webp" alt=""><figcaption></figcaption></figure>

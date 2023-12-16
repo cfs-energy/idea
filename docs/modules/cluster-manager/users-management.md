@@ -2,7 +2,7 @@
 
 To manage IDEA users, navigate to the **"Cluster Management**" section on the left sidebar of IDEA menu and click "**Users**"
 
-<figure><img src=".gitbook/assets/Screen%20Shot%202022-10-23%20at%2011.36.57%20AM.png" alt=""><figcaption><p>Users portal</p></figcaption></figure>
+<figure><img src="../../.gitbook/assets/mods_cm_users_portal.webp" alt=""><figcaption><p>Users portal</p></figcaption></figure>
 
 ### Create a new user
 
@@ -17,7 +17,7 @@ To manage IDEA users, navigate to the **"Cluster Management**" section on the le
 
 If "**Email is Verified**" is not checked during account creation, the user will receive a welcome email message with a temporary password. User will be required to change this password after first successful login.
 
-<figure><img src=".gitbook/assets/Screen%20Shot%202022-10-23%20at%2011.42.59%20AM.png" alt=""><figcaption><p>Example of invitation email</p></figcaption></figure>
+<figure><img src="../../.gitbook/assets/mods_cm_users_invite.webp" alt=""><figcaption><p>Example of invitation email</p></figcaption></figure>
 
 ### Understanding Confirmation Status
 
@@ -51,7 +51,7 @@ Force Change Password: User will be required to change his/her password after th
 * Click "**Actions**" then "**Add User to Group**"
 *   Choose the group from the list
 
-    <figure><img src=".gitbook/assets/Screen%20Shot%202022-10-23%20at%2012.34.45%20PM.png" alt=""><figcaption><p>Example of group selection</p></figcaption></figure>
+    <figure><img src="../../.gitbook/assets/mods_cm_users_groupsel.webp" alt=""><figcaption><p>Example of group selection</p></figcaption></figure>
 
 ### Remove user from group
 

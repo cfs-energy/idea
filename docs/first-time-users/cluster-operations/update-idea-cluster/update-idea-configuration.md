@@ -8,27 +8,27 @@ Use the **Config** command if you want to make a configuration change (e.g: enab
 
 ## Workflow
 
-<figure><img src="../../../.gitbook/assets/image (3).png" alt=""><figcaption></figcaption></figure>
+<figure><img src="../../../.gitbook/assets/ftu_ops_update_update.webp" alt=""><figcaption></figcaption></figure>
 
 * Admins run the `idea-admin.sh config` utility to retrieve/update the current configuration
 * Configuration change is updated on the Amazon DynamoDB table associated to the IDEA cluster
 * DynamoDB Stream updates the relevant IDEA module automatically after a configuration parameter has been changed
 
 {% hint style="info" %}
-Configuration keys are prefixed with the module information.&#x20;
+Configuration keys are prefixed with the module information.
 
 See some examples below:
 
-* scheduler.security\_group\_id is linked to the [Scale-Out Workloads](https://app.gitbook.com/o/ewXgnQpSEObr0Vh0WSOj/s/LGamNPuOYtjAP3GFfRJO/ "mention") module&#x20;
+* scheduler.security\_group\_id is linked to the [HPC WorkLoads](https://app.gitbook.com/o/ewXgnQpSEObr0Vh0WSOj/s/LGamNPuOYtjAP3GFfRJO/ "mention") module
 * vdc.dcv\_host\_security\_group\_id is linked to the [Virtual Desktop Interface (VDI)](https://app.gitbook.com/o/ewXgnQpSEObr0Vh0WSOj/s/QthiamUzKn8KJLl0hYBf/ "mention") module
 * directoryservice.root\_username\_secret\_arn is linked to the DirectoryService module
 {% endhint %}
 
 ## ./idea-admin.sh config show
 
-You can retrieve the current configuration of your IDEA cluster by running `./idea-admin.sh config show` utility.&#x20;
+You can retrieve the current configuration of your IDEA cluster by running `./idea-admin.sh config show` utility.
 
-This utility also supports regular expressions as part of the `--query/-q` argument.&#x20;
+This utility also supports regular expressions as part of the `--query/-q` argument.
 
 For example, run the command below to list all configuration related to the integration of AWS Backup:
 
@@ -74,7 +74,7 @@ For example, run the command below to list all configuration related to the inte
 You can display the output in multiple formats (yaml/table/raw)
 {% endhint %}
 
-To continue our example, let's pretend we want to disable the AWS Backup integration.&#x20;
+To continue our example, let's pretend we want to disable the AWS Backup integration.
 
 First, query your IDEA configuration to verify if the integration is active by checking the "cluster.backups.enabled" parameter.
 
@@ -92,7 +92,7 @@ First, query your IDEA configuration to verify if the integration is active by c
 
 Alternatively, you can validate this setting via the web interface under "**Cluster Settings**":
 
-![](<../../../.gitbook/assets/Screen Shot 2022-12-04 at 5.01.18 PM.png>)
+![](../../../.gitbook/assets/ftu\_ops\_update\_backup.webp)
 
 ## ./idea-admin.sh config set
 
@@ -114,7 +114,7 @@ updating config: cluster.backups.enabled = False
 ```
 
 {% hint style="info" %}
-Entry must be of below format: Key=KEY\_NAME,Type=\[str|int|float|bool|list|list|list|list],Value=\[VALUE|\[VALUE1,VALUE2,...]]&#x20;
+Entry must be of below format: Key=KEY\_NAME,Type=\[str|int|float|bool|list|list|list|list],Value=\[VALUE|\[VALUE1,VALUE2,...]]
 
 Config key names cannot contain: comma(,), colon(:)
 
@@ -150,4 +150,4 @@ You can now re-run the `./idea-admin.sh config show` command to validate the con
 
 Alternatively, you can validate this setting via the web interface under "**Cluster Settings**" and config the integration with AWS Backup is now disabled.
 
-![](<../../../.gitbook/assets/Screen Shot 2022-12-05 at 11.14.21 AM.png>)
+![](../../../.gitbook/assets/ftu\_ops\_update\_backup\_dis.webp)

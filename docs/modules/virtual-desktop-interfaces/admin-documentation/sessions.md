@@ -2,7 +2,7 @@
 
 VDI Administrators have the ability to list and control all virtual desktop sessions deployed on the IDEA environment.
 
-<figure><img src="../.gitbook/assets/Screen Shot 2022-10-26 at 2.59.03 PM.png" alt=""><figcaption><p>Admin dashboard for VDI sessions</p></figcaption></figure>
+<figure><img src="../../../.gitbook/assets/mods_vdi_admin_sessions.webp" alt=""><figcaption><p>Admin dashboard for VDI sessions</p></figcaption></figure>
 
 ### Join a session
 

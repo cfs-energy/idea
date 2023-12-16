@@ -43,7 +43,7 @@ To create a policy:
 7. Click **"Create Policy"**
 8. Repeat the steps3 to 7, but this time copy/paste the content of JSONUNINSTALL during step4
 
-<figure><img src="../../.gitbook/assets/Screen Shot June 4.webp" alt=""><figcaption><p>Example of the two IAM policies (one for installation, one for termination)</p></figcaption></figure>
+<figure><img src="../../.gitbook/assets/ftu_install_idea_prerequisites_example_iam.webp" alt=""><figcaption><p>Example of the two IAM policies (one for installation, one for termination)</p></figcaption></figure>
 
 **Create your IAM user or role**
 
@@ -70,7 +70,7 @@ IAM user must have the permissions required to install IDEA.
 9. You will be prompted with your **AWS Access Key ID** and **AWS Secret Access Key.** Save them in a secure location as we will need them later. In case you lost them, you can generate a new pair them via IAM User > Security Credentials
 10. Click **"Close"**
 
-<figure><img src="../../.gitbook/assets/Screen Shot June 4 (1).webp" alt=""><figcaption><p>Example of IAM user configured with the IAM policy</p></figcaption></figure>
+<figure><img src="../../.gitbook/assets/ftu_install_idea_prerequisites_ex_iam_user.webp" alt=""><figcaption><p>Example of IAM user configured with the IAM policy</p></figcaption></figure>
 
 **Configure your local IAM user**
 

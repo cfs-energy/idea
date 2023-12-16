@@ -6,7 +6,7 @@ IDEA let you create queues and queue profiles. To access this section, click "**
 You must have admin permission to the Scale-Out Compute module
 {% endhint %}
 
-<figure><img src="../.gitbook/assets/Screen Shot 2022-11-01 at 9.35.16 PM.png" alt=""><figcaption><p>Default queue profiles</p></figcaption></figure>
+<figure><img src="../../../.gitbook/assets/mods_hpc_admin_queue_profiles.webp" alt=""><figcaption><p>Default queue profiles</p></figcaption></figure>
 
 A queue is is a resource that can handle and execute user jobs. A queue profile extends queue functionalities by specifying default compute/storage values. You can have multiple queues registered to one queue profile.
 
@@ -20,7 +20,7 @@ qsub -q normal -- myscript.sh
 
 In this example, no job resources are specified during the qsub command. IDEA will determine instance type, AMI and all other required parameters based on the default values specified on [#instance-info](queue-profiles.md#instance-info "mention") for the queue called "normal".
 
-Example 2:&#x20;
+Example 2:
 
 ```
 qsub -q normal \
@@ -46,8 +46,6 @@ To edit a queue profile, select the profile and click "**Action**" > "**Edit Que
 
 ## Enable/Disable a queue profile
 
-
-
 ## Queue Profile Parameters
 
 ### Basic Info
@@ -62,13 +60,13 @@ Choose a user friendly title for the queue profile
 
 #### Projects
 
-Select applicable projects for the queue profile. Refer to [[Cluster Manager](https://app.gitbook.com/o/ewXgnQpSEObr0Vh0WSOj/s/GtBrWw9T1qCJK2QCOTW2/ "mention") ](https://docs.ide-on-aws.com/cluster-manager/menu/projects-management)to learn more about how projects work.
+Select applicable projects for the queue profile. Refer to [projects-management.md](../../cluster-manager/projects-management.md "mention") to learn more about how projects work.
 
 ### Operating Modes
 
 #### Scheduler Queues
 
-Select the queue(s) to add to this queue profile.&#x20;
+Select the queue(s) to add to this queue profile.
 
 {% hint style="info" %}
 * A queue cannot belong to more than one queue profile
@@ -77,7 +75,7 @@ Select the queue(s) to add to this queue profile.&#x20;
 
 #### Queue Mode
 
-Select the queue(s) mode.&#x20;
+Select the queue(s) mode.
 
 * First-In First-Out (FIFO): Default, jobs are processed in the order they have been send to the queue
 * License Optimized: IDEA will try to maximize licenses consumption and run as many job as possible based on license availabilities. Job order may not be honored.
@@ -114,7 +112,7 @@ Select whether or not you want to allow your users to submit their simulation jo
 
 List of instance type or instance families allowed to be provisioned by your users for their jobs.
 
-Example:&#x20;
+Example:
 
 * c5.large,m5: End users can provision a c5.large or any m5 instance types (e.g: m5.large, m5.xlarge ..) for their jobs.
 
@@ -122,7 +120,7 @@ Example:&#x20;
 
 List of instance type or instance families your users are not authorized to provision for their jobs.
 
-Example:&#x20;
+Example:
 
 * c5.large,m5: End users are not authorized to provision c5.large or any m5 instance types (e.g: m5.large, m5.xlarge ..) for their jobs.
 
@@ -162,7 +160,7 @@ Choose the default AMI to use for the compute nodes.
 
 Associated Job Resource: [#instance\_ami](../user-documentation/supported-ec2-parameters.md#instance\_ami "mention")
 
-#### &#x20;Instance Types
+#### Instance Types
 
 Choose the default instance type to provision for the compute nodes. Multiple instance types if provided will be used as weighted capacities. Order is important and must be provided in increasing CPU capacity (e.g: c5.large, c5.xlarge)
 
@@ -176,7 +174,7 @@ Associated Job Resource: [#root\_size](../user-documentation/supported-ec2-param
 
 #### Keep EBS Volumes ?
 
-Choose whether or not you want to retain ephemeral EBS disks associated to the compute nodes once the simulation has completed.&#x20;
+Choose whether or not you want to retain ephemeral EBS disks associated to the compute nodes once the simulation has completed.
 
 Associated Job Resource: [#keep\_ebs](../user-documentation/supported-ec2-parameters.md#keep\_ebs "mention")
 
@@ -283,4 +281,3 @@ Asociated Job Resource: [#system\_metrics](../user-documentation/supported-ec2-p
 Select whether or not you want to anonymous metrics collection [https://docs.aws.amazon.com/solutions/latest/scale-out-computing-on-aws/collection-of-operational-metrics.html](https://docs.aws.amazon.com/solutions/latest/scale-out-computing-on-aws/collection-of-operational-metrics.html)
 
 Associated Job Resource: [#anonymous\_metrics](../user-documentation/supported-ec2-parameters.md#anonymous\_metrics "mention")
-

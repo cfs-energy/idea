@@ -42,7 +42,7 @@ Follow the installation wizard to install IDEA. During the installation, you wil
 Run `export IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER=Ec2InstanceMetadata` prior to `quick-setup` if you are planning to authenticate to AWS using IAM role and not IAM user.
 {% endhint %}
 
-<figure><img src="../../.gitbook/assets/Screen Shot Nov 13 at 10.webp" alt=""><figcaption><p>Installation of IDEA is managed by a wizard.</p></figcaption></figure>
+<figure><img src="../../.gitbook/assets/ftu_install_idea_standard_wizard_example.webp" alt=""><figcaption><p>Installation of IDEA is managed by a wizard.</p></figcaption></figure>
 
 Installation will take anywhere between 30 to 80 minutes depending the module(s) you are planning to install. Connection strings will be displayed at the end of the installation
 
@@ -112,7 +112,7 @@ To enable this mode, use `--existing-resources` as shown below:
 
 IDEA installer will guide you through the entire process during Step 3
 
-<figure><img src="../../.gitbook/assets/Screen Shot Nov 23 from Gitbook.webp" alt=""><figcaption><p>Select the resources you want to re-use via the installer CLI interface</p></figcaption></figure>
+<figure><img src="../../.gitbook/assets/ftu_install_idea_standard_existing_resources.webp" alt=""><figcaption><p>Select the resources you want to re-use via the installer CLI interface</p></figcaption></figure>
 
 ## Change default installation parameters
 
@@ -122,7 +122,7 @@ IDEA is 100% customizable and because of that, we cannot provide all the options
 
 2 - Pause when the installer prompt you with **"Are you sure you want to update cluster settings db with above configuration from local file system?"**
 
-<figure><img src="../../.gitbook/assets/Screen Shot Nov 15 from Gitbook.webp" alt=""><figcaption><p>Pause your installation and open a new terminal to edit the configuration</p></figcaption></figure>
+<figure><img src="../../.gitbook/assets/ftu_install_idea_standard_change_default.webp" alt=""><figcaption><p>Pause your installation and open a new terminal to edit the configuration</p></figcaption></figure>
 
 At this point, open a new terminal and navigate to `` ~/.idea/clusters/<YOUR_CLUSTER_NAME>/<YOUR_REGION>/` ``
 
@@ -145,23 +145,23 @@ In this example, we will show you how to update the following parameters:
 
 The screen below (generated during `idea-admin.sh quick-setup` ) reports the default values for both sessions
 
-<figure><img src="../../.gitbook/assets/Screen Shot Dec 4.webp" alt=""><figcaption></figcaption></figure>
+<figure><img src="../../.gitbook/assets/ftu_install_idea_standard_quick_setup_report.webp" alt=""><figcaption></figcaption></figure>
 
 To update these parameters, edit \``` ~/.idea/clusters/<YOUR_CLUSTER_NAME>/<YOUR_REGION>/config/vdc/settings.yml` `` and update the relevant keys.
 
-<figure><img src="../../.gitbook/assets/Screen Shot Dec 4 (1).webp" alt=""><figcaption><p>Increased the number of allowed sessions and added c6i and r6i</p></figcaption></figure>
+<figure><img src="../../.gitbook/assets/ftu_install_idea_standard_modified_sessions.webp" alt=""><figcaption><p>Increased the number of allowed sessions and added c6i and r6i</p></figcaption></figure>
 
 4 - Reload the installer configuration
 
 Go back to your IDEA installer and choose "Reload Changes"
 
-<figure><img src="../../.gitbook/assets/Screen Shot Nov 15.webp" alt=""><figcaption><p>Reload the configuration after making your changes</p></figcaption></figure>
+<figure><img src="../../.gitbook/assets/ftu_install_idea_standard_reload_changes.webp" alt=""><figcaption><p>Reload the configuration after making your changes</p></figcaption></figure>
 
 5 - Validate the installer will now use your new parameter(s)
 
 Reloading configuration should take less than 5 seconds. Once done, validate your parameter(s) is/are have been successfully updated. The screen below confirm "vdc.dcv\_session.allowed\_sessions\_per\_user" and "vdc.dcv\_session.instance\_types.allow" have been correctly updated with my changes.
 
-<figure><img src="../../.gitbook/assets/Screen Shot Dec .webp" alt=""><figcaption><p>IDEA will now configure the environment with your changes</p></figcaption></figure>
+<figure><img src="../../.gitbook/assets/ftu_install_idea_standard_configuration.webp" alt=""><figcaption><p>IDEA will now configure the environment with your changes</p></figcaption></figure>
 
 6 - Continue the installation
 

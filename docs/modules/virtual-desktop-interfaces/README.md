@@ -1,8 +1,8 @@
-# Introduction
+# Virtual Desktop Interfaces
 
-Virtual Desktop Interface (VDI) module lets users easily create and manage their Windows or Linux virtual desktops on AWS. Users have the ability to launch EC2 images with their favorite tools & applications pre-installed/configured.&#x20;
+Virtual Desktop Interface (VDI) module lets users easily create and manage their Windows or Linux virtual desktops on AWS. Users have the ability to launch EC2 images with their favorite tools & applications pre-installed/configured.
 
-<figure><img src=".gitbook/assets/Screen Shot 2022-10-25 at 4.14.14 PM.png" alt=""><figcaption><p>Linux and Widows virtual desktops running on IDEA</p></figcaption></figure>
+<figure><img src="../../.gitbook/assets/mods_vdi_main.webp" alt=""><figcaption><p>Linux and Widows virtual desktops running on IDEA</p></figcaption></figure>
 
 ## User Documentation
 

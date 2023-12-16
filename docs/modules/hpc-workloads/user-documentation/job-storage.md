@@ -1,11 +1,9 @@
 # Job Storage
 
-
-
 {% hint style="info" %}
 Documentation on this page apply at job/node level.
 
-Refer to [Shared Storage](https://app.gitbook.com/o/ewXgnQpSEObr0Vh0WSOj/s/5SSt4opQQGbm5tAfuEqy/ "mention")if you are planning to customize your storage logic at users/teams/projects level.
+Refer to [storage](../../storage/ "mention") if you are planning to customize your storage logic at users/teams/projects level.
 {% endhint %}
 
 IDEA gives you the flexibility to customize your storage backend based on your requirements
@@ -29,7 +27,7 @@ IDEA gives you the flexibility to customize your storage backend based on your r
 
 ### FSx <a href="#fsx" id="fsx"></a>
 
-IDEA supports FSx natively.&#x20;
+IDEA supports FSx natively.
 
 ### Instance (local) partitions <a href="#instance-local-partitions" id="instance-local-partitions"></a>
 

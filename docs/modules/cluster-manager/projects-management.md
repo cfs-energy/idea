@@ -4,13 +4,13 @@ Projects enforce access restriction and limitations on your IDEA cluster.
 
 Projects in IDEA let you control access to queue profiles, virtual desktops provisioning, shared storage and more.
 
-For the [HPC WorkLoads](https://app.gitbook.com/o/ewXgnQpSEObr0Vh0WSOj/s/LGamNPuOYtjAP3GFfRJO/ "mention")module, projects control queues ACLs (user authorized to submit jobs) as well as web-based job submission forms at application level.
+For the [hpc-workloads.md](../hpc-workloads.md "mention") module, projects control queues ACLs (user authorized to submit jobs) as well as web-based job submission forms at application level.
 
-For the [Virtual Desktop Interface (VDI)](https://app.gitbook.com/o/ewXgnQpSEObr0Vh0WSOj/s/QthiamUzKn8KJLl0hYBf/ "mention")module, projects control the type of EC2 instances that can be selected as well as the software stack (AMI) that can be provisioned by the users.
+For the [virtual-desktop-interfaces](../virtual-desktop-interfaces/ "mention") module, projects control the type of EC2 instances that can be selected as well as the software stack (AMI) that can be provisioned by the users.
 
-For [Cluster Manager](https://app.gitbook.com/o/ewXgnQpSEObr0Vh0WSOj/s/GtBrWw9T1qCJK2QCOTW2/ "mention") module, projects control what shared file-systems are mounted.
+For [.](./ "mention") module, projects control what shared file-systems are mounted.
 
-<figure><img src=".gitbook/assets/idea-group%20(3).png" alt=""><figcaption><p>Example of AWS resources control at project level</p></figcaption></figure>
+<figure><img src="../../.gitbook/assets/mods_cm_projex.webp" alt=""><figcaption><p>Example of AWS resources control at project level</p></figcaption></figure>
 
 {% hint style="info" %}
 You can add additional AWS tags per project. IDEA will automatically tag all AWS resources created by jobs/desktops using this project.
@@ -18,7 +18,7 @@ You can add additional AWS tags per project. IDEA will automatically tag all AWS
 
 To create a new project, navigate to the **"Cluster Management**" section on the left sidebar of IDEA menu and click "**Projects**"
 
-<figure><img src=".gitbook/assets/Screen%20Shot%202022-10-23%20at%209.27.37%20AM.png" alt=""><figcaption><p>Projects section on IDEA</p></figcaption></figure>
+<figure><img src="../../.gitbook/assets/mods_cm_projsec.webp" alt=""><figcaption><p>Projects section on IDEA</p></figcaption></figure>
 
 ### Create a new project
 
@@ -32,7 +32,7 @@ To create a new project, click "**Create Project**" button located on the top ri
 
 By default, newly created projects are "Disabled". Refer to the section below to learn how to enable it.
 
-![](.gitbook/assets/Screen%20Shot%202022-10-23%20at%209.31.19%20AM.png)
+![](../../.gitbook/assets/mods\_cm\_projnewdis.webp)
 
 ### Enable a project
 
@@ -41,7 +41,7 @@ To enable a project:
 1. Select a project where Status is set to Disabled
 2. Click "**Actions**" > "**Enable Project**"
 
-![](.gitbook/assets/Screen%20Shot%202022-10-23%20at%209.36.50%20AM.png)
+![](../../.gitbook/assets/mods\_cm\_projnewen.webp)
 
 ### Disable a project
 
@@ -60,7 +60,7 @@ To add custom tags :
 2. Click "**Actions**" > "**Update Tags**"
 3. Click "**Add New Tag**"
 
-<figure><img src=".gitbook/assets/Screen%20Shot%202022-10-23%20at%209.41.35%20AM.png" alt=""><figcaption><p>Example of additional AWS tags associated to an IDEA project</p></figcaption></figure>
+<figure><img src="../../.gitbook/assets/mods_cm_projtags.webp" alt=""><figcaption><p>Example of additional AWS tags associated to an IDEA project</p></figcaption></figure>
 
 ### Manage associated LDAP groups membership
 

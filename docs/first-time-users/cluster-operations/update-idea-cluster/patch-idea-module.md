@@ -1,10 +1,10 @@
 # Patch IDEA module (idea-admin.sh patch)
 
 {% hint style="info" %}
-Use the **Patch** command  if you have updated the codebase of one of your module (e.g: developed new API, updated a function/class). Refer to [update-idea-configuration.md](update-idea-configuration.md "mention") for other types of updates.
+Use the **Patch** command if you have updated the codebase of one of your module (e.g: developed new API, updated a function/class). Refer to [update-idea-configuration.md](update-idea-configuration.md "mention") for other types of updates.
 {% endhint %}
 
-To patch/update one IDEA module, run the following `idea-admin.sh patch <MODULE_NAME>`  command.
+To patch/update one IDEA module, run the following `idea-admin.sh patch <MODULE_NAME>` command.
 
 ## Pre-Requisite
 
@@ -14,14 +14,14 @@ You also must be running this command on a system that has the permission to upl
 
 ## Workflow
 
-<figure><img src="../../../.gitbook/assets/image.png" alt=""><figcaption><p>Patch process</p></figcaption></figure>
+<figure><img src="../../../.gitbook/assets/ftu_ops_update_patch.webp" alt=""><figcaption><p>Patch process</p></figcaption></figure>
 
 1. IDEA admin clones the latest IDEA codebase locally. Onboard to [developer-onboarding.md](../../../developer-portal/developer-onboarding.md "mention")and run `invoke clean build package` to create the latest `dist` archives
 2. IDEA admin triggers `idea-admin.sh patch <MODULE> --aws-region <REGION> --cluster-name <CLUSTER_NAME>`
 3. idea-admin.sh will retrieve the latest `dist` archive(s) (inside the `dist` folder generated during the `invoke clean build` package command)
 4. idea-admin.sh will upload the `dist` file(s) to the S3 bucket created by the `cdk bootstrap` command during the installation of IDEA
 5. idea-admin.sh will trigger AWS System Manager (SSM)
-6. &#x20;AWS SSM triggers a `run-command` on the EC2 machine running the IDEA module you are planning to update
+6. AWS SSM triggers a `run-command` on the EC2 machine running the IDEA module you are planning to update
 7. EC2 machine will download the `dist` archive(s) from S3, install it and then restart the relevant IDEA services
 
 ## Example: Updating the `cluster-manager` module of a running IDEA environment

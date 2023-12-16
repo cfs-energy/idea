@@ -4,8 +4,6 @@ description: How to change the schedule of your Windows or Linux desktop
 
 # Virtual desktop scheduling
 
-
-
 By default, your virtual desktop come with no schedule, which means your desktop will stay up until you stop/terminate it, and will stay stopped until you turn it back on. You can change this behavior by configuring your own scheduling, and IDEA will ensure your desktop will automatically start/stop based on your own requirements.
 
 {% hint style="info" %}
@@ -14,11 +12,11 @@ Virtual Desktop will only be stopped if idle (e.g: no active session connected a
 
 You can at any moment review whether or not you have a schedule configured for the current day on your virtual desktop by checking the settings bar of your session (note: schedule are unique to each desktop)
 
-<figure><img src="../.gitbook/assets/Screen Shot 2022-10-25 at 3.25.15 PM.png" alt=""><figcaption><p>Verify if a schedule is applicable by checking the settings bar</p></figcaption></figure>
+<figure><img src="../../../.gitbook/assets/mods_vdi_user_schedule_verify.webp" alt=""><figcaption><p>Verify if a schedule is applicable by checking the settings bar</p></figcaption></figure>
 
-To create/edit a schedule, click "**Actions**" > **** "**Schedule**". **** This will open a new modal where you will be able to choose the schedule for any given day:
+To create/edit a schedule, click "**Actions**" > "**Schedule**". This will open a new modal where you will be able to choose the schedule for any given day:
 
-<figure><img src="../.gitbook/assets/Screen Shot 2022-10-25 at 2.31.55 PM.png" alt=""><figcaption><p>Set a custom schedule per day</p></figcaption></figure>
+<figure><img src="../../../.gitbook/assets/mods_vdi_user_schedule_custom.webp" alt=""><figcaption><p>Set a custom schedule per day</p></figcaption></figure>
 
 Simply click the dropdown menu to chose your schedule for that day using the different presets below:
 

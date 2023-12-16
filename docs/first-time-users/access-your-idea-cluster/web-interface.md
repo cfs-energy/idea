@@ -2,22 +2,21 @@
 
 IDEA includes a web-interface designed to simplify user-experience for your end-users.
 
-<figure><img src="../../.gitbook/assets/Screen Shot 2022-10-24 at 10.04.34 AM.png" alt=""><figcaption><p>IDEA interface</p></figcaption></figure>
+<figure><img src="../../.gitbook/assets/ftu_access_web_interface.webp" alt=""><figcaption><p>IDEA interface</p></figcaption></figure>
 
 <mark style="color:red;">**Red**</mark>: Logo/Cluster (can be customized)
 
-<mark style="color:blue;">**Light Blue**</mark>: User Menu.Options may vary based on the module(s) installed on your environment. For example, "Virtual Desktops" is not visible if you do not have installed [Virtual Desktop Interface (VDI)](https://app.gitbook.com/o/ewXgnQpSEObr0Vh0WSOj/s/QthiamUzKn8KJLl0hYBf/ "mention") module
+<mark style="color:blue;">**Light Blue**</mark>: User Menu.Options may vary based on the module(s) installed on your environment. For example, "Virtual Desktops" is not visible if you do not have installed [virtual-desktop-interfaces](../../modules/virtual-desktop-interfaces/ "mention") module
 
 <mark style="color:blue;">**Dark Blue**</mark>: Page content
 
 <mark style="color:orange;">**Orange**</mark>: Admin Zone. This section is only visible to users with admin privileges
 
-<mark style="color:green;">**Green**</mark>: [Broken link](broken-reference "mention") section displaying installed/available modules such as:
+<mark style="color:green;">**Green**</mark>:  [Broken link](broken-reference "mention") section displaying installed/available modules such as:
 
-* [Scale-Out Workloads](https://app.gitbook.com/o/ewXgnQpSEObr0Vh0WSOj/s/LGamNPuOYtjAP3GFfRJO/ "mention")
-* [Virtual Desktop Interface (VDI)](https://app.gitbook.com/o/ewXgnQpSEObr0Vh0WSOj/s/QthiamUzKn8KJLl0hYBf/ "mention")
-* [Cluster Manager](https://app.gitbook.com/o/ewXgnQpSEObr0Vh0WSOj/s/GtBrWw9T1qCJK2QCOTW2/ "mention")\
-
+* [hpc-workloads.md](../../modules/hpc-workloads.md "mention")
+* [virtual-desktop-interfaces](../../modules/virtual-desktop-interfaces/ "mention")
+* [cluster-manager](../../modules/cluster-manager/ "mention")
 
 Refer to the [Broken link](broken-reference "mention") for an up-to-date list of modules supported by IDEA
 

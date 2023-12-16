@@ -2,7 +2,7 @@
 
 IDEA lets you easily configure and manage automated email notifications such as when a virtual desktop is launched or when one simulation job has completed
 
-<figure><img src=".gitbook/assets/Screen%20Shot%202022-10-24%20at%202.13.02%20PM.png" alt=""><figcaption><p>Email Templates interface</p></figcaption></figure>
+<figure><img src="../../.gitbook/assets/mods_cm_email_interface.webp" alt=""><figcaption><p>Email Templates interface</p></figcaption></figure>
 
 ### Create a new email template
 

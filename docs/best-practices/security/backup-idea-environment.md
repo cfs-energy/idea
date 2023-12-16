@@ -1,8 +1,8 @@
 # Backup IDEA environment
 
-By default, IDEA **automatically backup your EC2 scheduler, EFS filesystems, DynamoDB and Virtual Desktops every day and keep the backups for 7 days** using AWS Backup.&#x20;
+By default, IDEA **automatically backup your EC2 scheduler, EFS filesystems, DynamoDB and Virtual Desktops every day and keep the backups for 7 days** using AWS Backup.
 
-During the installation, IDEA creates a new [#backup-vault](backup-idea-environment.md#backup-vault "mention") and one [#backup-plan](backup-idea-environment.md#backup-plan "mention") per module&#x20;
+During the installation, IDEA creates a new [#backup-vault](backup-idea-environment.md#backup-vault "mention") and one [#backup-plan](backup-idea-environment.md#backup-plan "mention") per module
 
 {% hint style="success" %}
 You can change the default AWS Backup parameters created by IDEA to match your own company requirements (what resources to backup, backup lifecycle policies, when to trigger a backup etc ...)
@@ -14,19 +14,19 @@ You can change the default AWS Backup parameters created by IDEA to match your o
 
 #### Backup Vault <a href="#backup-vault" id="backup-vault"></a>
 
-A "Backup Vault" is where all your backups are stored. Your vault is automatically encrypted using your [Key Management Service (KMS)](https://aws.amazon.com/kms/) key and reference to your IDEA cluster ID&#x20;
+A "Backup Vault" is where all your backups are stored. Your vault is automatically encrypted using your [Key Management Service (KMS)](https://aws.amazon.com/kms/) key and reference to your IDEA cluster ID
 
-<figure><img src="../../.gitbook/assets/Screen Shot 2022-11-19 at 10.26.08 AM.png" alt=""><figcaption><p>List of AWS Backup vault as well as count of the number of protected resources (recovery points)</p></figcaption></figure>
+<figure><img src="../../.gitbook/assets/bp_sec_backup_vaultex.webp" alt=""><figcaption><p>List of AWS Backup vault as well as count of the number of protected resources (recovery points)</p></figcaption></figure>
 
 #### Backup Plan <a href="#backup-plan" id="backup-plan"></a>
 
 A "Backup Plan" is where you define all your backup strategy such as backup frequency, data retention or resource assignments. IDEA creates separate backup plan for each modules (e.g: one for cluster, one for eVDI etc ..). By default, both backup plans use the same backup vaults created by IDEA.
 
-<figure><img src="../../.gitbook/assets/Screen Shot 2022-11-19 at 10.27.37 AM.png" alt=""><figcaption><p>List of AWS Backup plans created by IDEA</p></figcaption></figure>
+<figure><img src="../../.gitbook/assets/bp_sec_backup_planex.webp" alt=""><figcaption><p>List of AWS Backup plans created by IDEA</p></figcaption></figure>
 
 Click on any Backup plan to get more details about it.
 
-<figure><img src="../../.gitbook/assets/Screen Shot 2022-11-19 at 10.31.40 AM.png" alt=""><figcaption><p>Details of a AWS Backup plan</p></figcaption></figure>
+<figure><img src="../../.gitbook/assets/bp_sec_backup_plandetails.webp" alt=""><figcaption><p>Details of a AWS Backup plan</p></figcaption></figure>
 
 **Backup rules (red section)**
 
@@ -36,7 +36,7 @@ By default, IDEA creates one backup rule with the following parameters:
 * Backup will expire after 1 week (orange section)
 * Backup is stored on the encrypted vault created by IDEA (purple section)
 
-<figure><img src="../../.gitbook/assets/Screen Shot 2022-11-19 at 10.33.58 AM.png" alt=""><figcaption><p>Example of AWS Backup rule</p></figcaption></figure>
+<figure><img src="../../.gitbook/assets/bp_sec_backup_ruleex.webp" alt=""><figcaption><p>Example of AWS Backup rule</p></figcaption></figure>
 
 {% hint style="info" %}
 If needed, you can edit this rule (or create a new one) to match your company backup strategy.
@@ -46,7 +46,7 @@ If needed, you can edit this rule (or create a new one) to match your company ba
 
 By default, IDEA backup all data using the combination of Tags listed under the "Tags" section of the "Resource Assignment" section. In the example below, AWS Backup will backup all [#supported-resources](backup-idea-environment.md#supported-resources "mention") that match the combination of both `idea:BackupPlan = cluster` and `idea:ClusterName = idea-beta` tags.
 
-<figure><img src="../../.gitbook/assets/Screen Shot 2022-11-19 at 10.37.26 AM.png" alt=""><figcaption><p>Resource Assignment will let you configure what resource(s) you want to backup</p></figcaption></figure>
+<figure><img src="../../.gitbook/assets/bp_sec_backup_resassignment.webp" alt=""><figcaption><p>Resource Assignment will let you configure what resource(s) you want to backup</p></figcaption></figure>
 
 #### Supported Resources
 
@@ -65,11 +65,11 @@ Remove the tags listed on the [#resource-assignments-green-section](backup-idea-
 
 On the left sidebar, click "Protected Resources" then choose the resource you want to restore
 
-![Access the Backup Restore menu from the left sidebar](https://awslabs.github.io/scale-out-computing-on-aws/imgs/backup-plan-8.png)
+![Access the Backup Restore menu from the left sidebar](../../.gitbook/assets/bp\_sec\_backup\_restore1.webp)
 
 This will open a new window with additional information about this resource (either EFS or EC2). Select the latest entry you want to restore from the "Backups" section then click "Restore"
 
-![Click restore button to restore an EC2 instance from a AMI created by AWS Backup](https://awslabs.github.io/scale-out-computing-on-aws/imgs/backup-plan-9.png)
+![Click restore button to restore an EC2 instance from a AMI created by AWS Backup](../../.gitbook/assets/bp\_sec\_backup\_restore2.webp)
 
 This will open a regular EC2 launch instance or EFS wizard. Specify the parameters (VPC, Subnet, Security Group, IAM role ...) you want to use and click "Restore Backup"
 
@@ -77,13 +77,13 @@ This will open a regular EC2 launch instance or EFS wizard. Specify the paramete
 
 Select your vault, choose which recovery point you want to remove under the "Backups" section then click "Delete".
 
-![Delete a AWS backup](https://awslabs.github.io/scale-out-computing-on-aws/imgs/backup-plan-10.png)
+![Delete a AWS backup](../../.gitbook/assets/bp\_sec\_backup\_delete.webp)
 
 #### Check the status of the backup jobs <a href="#check-the-status-of-the-backup-jobs" id="check-the-status-of-the-backup-jobs"></a>
 
 On the left sidebar, check "Jobs" to verify if your backup jobs are running correctly
 
-![Check Backup restoration job](https://awslabs.github.io/scale-out-computing-on-aws/imgs/backup-plan-5.png)
+![Check Backup restoration job](../../.gitbook/assets/bp\_sec\_backup\_restorestatus.webp)
 
 #### What happen if you delete your CloudFormation stack? <a href="#what-happen-if-you-delete-your-cloudformation-stack" id="what-happen-if-you-delete-your-cloudformation-stack"></a>
 

@@ -53,7 +53,7 @@ Once your index is created, click the hamburger menu to open the sidebar and cli
 
 Select the Index pattern you have created previously using the dropdown section on the right
 
-<figure><img src="../../../.gitbook/assets/Screen%20Shot%202022-11-09%20at%209.14.00%20PM.png" alt=""><figcaption><p>Scheduler Index will store Scale-Out Workload jobs. VDC pattern is for Virtual Desktops</p></figcaption></figure>
+<figure><img src="../../../.gitbook/assets/bp_analytics_os_conf_validate.webp" alt=""><figcaption><p>Scheduler Index will store Scale-Out Workload jobs. VDC pattern is for Virtual Desktops</p></figcaption></figure>
 
 All your IDEA data should now be visible.
 
@@ -63,11 +63,11 @@ All your IDEA data should now be visible.
 OpenSearch display the events created within the last 15 minutes by default, make sure to update the timeframe accordingly.
 {% endhint %}
 
-<figure><img src="../../../.gitbook/assets/Screen%20Shot%202022-11-09%20at%209.24.09%20PM.png" alt=""><figcaption><p>Make sure to change the Time selection as needed.</p></figcaption></figure>
+<figure><img src="../../../.gitbook/assets/bp_analytics_os_conf_time.webp" alt=""><figcaption><p>Make sure to change the Time selection as needed.</p></figcaption></figure>
 
 OpenSearch will display the various entries ingested by IDEA as well as all the relevant metadata. You can use these metadata as filters to narrow your research to specific key elements.
 
-<figure><img src="../../../.gitbook/assets/Screen%20Shot%202022-11-09%20at%209.22.47%20PM.png" alt=""><figcaption><p>Example of IDEA data being ingested on OpenSearch</p></figcaption></figure>
+<figure><img src="../../../.gitbook/assets/bp_analytics_os_conf_exdata.webp" alt=""><figcaption><p>Example of IDEA data being ingested on OpenSearch</p></figcaption></figure>
 
 It's now time to [create-your-own-analytics-visualizations.md](create-your-own-analytics-visualizations.md "mention").
 
@@ -85,6 +85,6 @@ To solve this issue, log in to AWS Console and go to OpenSearch Service dashboar
 
 Finally, simply add your new IP under the "Condition" block, then click Submit
 
-![](https://awslabs.github.io/scale-out-computing-on-aws/imgs/kibana-9.png)
+![](../../../.gitbook/assets/bp\_analytics\_os\_ts\_expol.webp)
 
 Please note it may take up to 5 minutes for your IP to be validated

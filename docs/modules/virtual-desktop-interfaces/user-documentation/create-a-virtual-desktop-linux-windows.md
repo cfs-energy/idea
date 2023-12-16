@@ -6,12 +6,12 @@ description: Create a powerful Linux or Windows virtual desktop in a single clic
 
 To access the Virtual Desktop section, click "**Virtual Desktops**" on the left sidebar:
 
-<figure><img src="../.gitbook/assets/Screen Shot 2022-10-21 at 9.54.11 PM.png" alt=""><figcaption></figcaption></figure>
+<figure><img src="../../../.gitbook/assets/mods_vdi_user_create_menu.webp" alt=""><figcaption></figcaption></figure>
 
 To launch your virtual desktop click "**Launch new Virtual Desktop"** button. You will be prompted with a new modal asking you a couple of questions:
 
 * **Session Name**: A name for your desktop
-* **Project**: The project your session will get created. Refer to "Projects Management" section under [Cluster Manager](https://app.gitbook.com/o/ewXgnQpSEObr0Vh0WSOj/s/GtBrWw9T1qCJK2QCOTW2/ "mention") to learn more about projects.
+* **Project**: The project your session will get created. Refer to "Projects Management" section under [cluster-manager](../../cluster-manager/ "mention") to learn more about projects.
 * **Operating System**: The operating system you want to use from:
   * **Linux**
     * Amazon Linux 2
@@ -25,11 +25,11 @@ To launch your virtual desktop click "**Launch new Virtual Desktop"** button. Yo
 * **Storage Size**: Size of the main EBS partition
 * **Advanced Options**: Advanced option such as enforcing a subnet ID or choose the DCV sessions type
 
-<figure><img src="../.gitbook/assets/Screen Shot 2022-10-25 at 10.52.44 AM.png" alt=""><figcaption></figcaption></figure>
+<figure><img src="../../../.gitbook/assets/mods_vdi_user_create_launch.webp" alt=""><figcaption></figcaption></figure>
 
 Click "**Submit**" button to launch your virtual desktop creation. You will instantly see a new card with your desktop information. Your virtual desktop will be ready within 10-15 minutes. Startup time is based on the image selected, the operating system as well as the instance type.
 
-<figure><img src="../.gitbook/assets/Screen Shot 2022-10-25 at 10.53.56 AM.png" alt=""><figcaption><p>Desktop being started</p></figcaption></figure>
+<figure><img src="../../../.gitbook/assets/mods_vdi_user_create_starting.webp" alt=""><figcaption><p>Desktop being started</p></figcaption></figure>
 
 Wait a couple of minutes until your desktop is ready.
 
@@ -39,7 +39,7 @@ IDEA automatically detects GPU instances and install the relevant drivers (NVIDI
 
 ## How to access your Windows or Linux desktop
 
-Once your virtual desktop is up and running, you can click the card and connect it either via web or DCV client.&#x20;
+Once your virtual desktop is up and running, you can click the card and connect it either via web or DCV client.
 
 <details>
 
@@ -51,16 +51,16 @@ Click "**Connect**" button or click the thumbnail to access your Windows or Linu
 
 <details>
 
-<summary>Best Performance: Use DCV Client </summary>
+<summary>Best Performance: Use DCV Client</summary>
 
 Click "**DCV Session File**" button to download your `.dcv` file. To open this file, you will need to have the DCV Client installed on your system. Click the "**?**" icon to access to the download link and installation instructions.
 
 </details>
 
-<figure><img src="../.gitbook/assets/Screen Shot 2022-10-25 at 1.55.56 PM.png" alt=""><figcaption><p>Virtual Desktop ready to be used</p></figcaption></figure>
+<figure><img src="../../../.gitbook/assets/mods_vdi_user_create_ready.webp" alt=""><figcaption><p>Virtual Desktop ready to be used</p></figcaption></figure>
 
 ## Retrieve Session Information
 
 Click **Actions** then **Show Infos** to retrieve your session information such as instance type, subnet id, operating system etc ...
 
-<figure><img src="../.gitbook/assets/Screen Shot 2022-10-25 at 2.07.20 PM.png" alt=""><figcaption><p>Get detailed information about your virtual desktop</p></figcaption></figure>
+<figure><img src="../../../.gitbook/assets/mods_vdi_user_create_info.webp" alt=""><figcaption><p>Get detailed information about your virtual desktop</p></figcaption></figure>

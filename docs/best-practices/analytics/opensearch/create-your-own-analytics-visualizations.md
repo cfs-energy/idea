@@ -4,7 +4,7 @@
 Make sure to have reviewed [configure-your-opensearch.md](configure-your-opensearch.md "mention")
 {% endhint %}
 
-Click the hamburger menu to reveal the left sidebar then click "**Visualize**" under "**OpenSearch Dashboards**" section.&#x20;
+Click the hamburger menu to reveal the left sidebar then click "**Visualize**" under "**OpenSearch Dashboards**" section.
 
 Below are some example to help you get started:
 
@@ -32,7 +32,7 @@ Below are some example to help you get started:
 
 Example (click to enlarge):
 
-![](<../../../.gitbook/assets/Screen Shot 2022-11-09 at 10.55.05 PM.png>)
+<img src="../../../.gitbook/assets/bp_analytics_os_viz_type.webp" alt="" data-size="original">
 
 </details>
 
@@ -40,7 +40,7 @@ Example (click to enlarge):
 
 <summary>(Scale-Out-Workloads) Jobs per user</summary>
 
-* Select "Vertical Bars"&#x20;
+* Select "Vertical Bars"
 * Select "scheduler\_jobs\*" index
 * Y Axis (Metrics)
   * Aggregation: count
@@ -56,7 +56,7 @@ Example (click to enlarge):
 
 Example (click to enlarge):
 
-![](<../../../.gitbook/assets/Screen Shot 2022-11-09 at 11.01.46 PM.png>)
+<img src="../../../.gitbook/assets/bp_analytics_os_viz_user.webp" alt="" data-size="original">
 
 </details>
 
@@ -66,7 +66,7 @@ Example (click to enlarge):
 
 * Select "Vertical Bars"
 * Select "scheduler\_jobs" index
-* &#x20;Y Axis (Metrics):
+* Y Axis (Metrics):
   * Aggregation: count
 * X Axis (Buckets):
   * Aggregation: Terms
@@ -81,7 +81,7 @@ Example (click to enlarge):
 
 Example (click to enlarge):
 
-![](<../../../.gitbook/assets/Screen Shot 2022-11-09 at 11.06.37 PM.png>)
+<img src="../../../.gitbook/assets/bp_analytics_os_viz_usertype.webp" alt="" data-size="original">
 
 </details>
 
@@ -106,7 +106,7 @@ Example (click to enlarge):
 
 Example (click to enlarge):
 
-![](<../../../.gitbook/assets/Screen Shot 2022-11-10 at 2.05.07 PM.png>)
+<img src="../../../.gitbook/assets/bp_analytics_os_viz_heatuser.webp" alt="" data-size="original">
 
 </details>
 
@@ -126,7 +126,7 @@ Example (click to enlarge):
 
 Example (click to enlarge):
 
-![](../../../.gitbook/assets/dashboard-7.png)
+<img src="../../../.gitbook/assets/bp_analytics_os_viz_nodes.webp" alt="" data-size="original">
 
 </details>
 
@@ -150,13 +150,13 @@ Example (click to enlarge):
   * Size (adjust as needed): 20
 * Split Rows (Buckets):
   * Aggregation: Term
-  * Field: estimated\_bom\_cost_._total_._amount
+  * Field: estimated\_bom\_cost\_._total_.\_amount
   * Order By: metric: Count
   * Size (adjust as needed): 20
 
 Example (click to enlarge):
 
-![](<../../../.gitbook/assets/Screen Shot 2022-11-10 at 2.28.29 PM.png>)
+<img src="../../../.gitbook/assets/bp_analytics_os_viz_userinfo.webp" alt="" data-size="original">
 
 </details>
 
@@ -176,6 +176,6 @@ Example (click to enlarge):
 
 Example (click to enlarge):
 
-![](<../../../.gitbook/assets/Screen Shot 2022-11-10 at 2.36.57 PM.png>)
+<img src="../../../.gitbook/assets/bp_analytics_os_viz_useractive.webp" alt="" data-size="original">
 
 </details>

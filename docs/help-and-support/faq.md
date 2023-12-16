@@ -222,7 +222,7 @@ Subtitle can be customized by running the below command:
 
 <summary>How do I configure automatic mount for additional File-system (FSx Lustre/OnTAP/OpenZFS/Windows, EFS)</summary>
 
-See [Shared Storage](https://app.gitbook.com/o/ewXgnQpSEObr0Vh0WSOj/s/5SSt4opQQGbm5tAfuEqy/ "mention") module
+See [storage](../modules/storage/ "mention") module
 
 </details>
 

@@ -35,7 +35,7 @@ if [[ "$BACKUP" == "true" ]];
 fi
 ```
 
-Replace the values/parameters you want your users to configure with  `{{``VARIABLE_NAME }}` such as:
+Replace the values/parameters you want your users to configure with `{{``VARIABLE_NAME }}` such as:
 
 Job Script you will need to reuse later during [#configure-the-job-script](create-web-based-job-submission-worfklows.md#configure-the-job-script "mention"):
 
@@ -86,7 +86,7 @@ Now that you have identified all variables, you must create their associated HTM
 Click "**Form Builder**" then "**Reset Form**" to start from a fresh template and start to build the HTML form using the examples below.
 
 {% hint style="info" %}
-As an alternate option, you can copy/paste the content of the following section to  "**Form Builder (Advanced Mode using JSON)**" to directly import the template.&#x20;
+As an alternate option, you can copy/paste the content of the following section to "**Form Builder (Advanced Mode using JSON)**" to directly import the template.
 {% endhint %}
 
 <details>
@@ -269,7 +269,7 @@ Click "**Add Form Field**" and add a new "Text" field.
 
 Configure the widget and configure the Name settings (red) with the variable name associated (job\_name in our example) then click "**Save**"
 
-<figure><img src="../.gitbook/assets/Screen Shot 2022-11-17 at 10.47.59 AM.png" alt=""><figcaption><p>The value entered by the user for job_name will be sent to the job script and retrieved via {{ job_name }}</p></figcaption></figure>
+<figure><img src="../../../.gitbook/assets/mods_hpc_admin_web_form.webp" alt=""><figcaption><p>The value entered by the user for job_name will be sent to the job script and retrieved via {{ job_name }}</p></figcaption></figure>
 
 Repeat the same operation for job\_project, bucket\_to\_archive, parameter and input\_file
 
@@ -279,20 +279,20 @@ Repeat the same operation for job\_project, bucket\_to\_archive, parameter and i
 
 ### Read Only Field
 
-In this example, e want to enforce the instance type to be c5.18xlarge.&#x20;
+In this example, e want to enforce the instance type to be c5.18xlarge.
 
 * Create a new Text field
 * Specify the name (red) / title / description
 * Under Preview, write c5.18xlarge (green)
 * Enable the "is ReadOnly" button (blue)
 
-<figure><img src="../.gitbook/assets/Screen Shot 2022-11-17 at 10.53.28 AM.png" alt=""><figcaption><p>"Is ReadOnly" toggle button prevent users to change the value</p></figcaption></figure>
+<figure><img src="../../../.gitbook/assets/mods_hpc_admin_web_readonly.webp" alt=""><figcaption><p>"Is ReadOnly" toggle button prevent users to change the value</p></figcaption></figure>
 
 ### **Number Field**
 
-In this example, we want to create the `cpus` parameter hence recommend using the "Number"  field
+In this example, we want to create the `cpus` parameter hence recommend using the "Number" field
 
-<figure><img src="../.gitbook/assets/Screen Shot 2022-11-17 at 10.56.27 AM.png" alt=""><figcaption></figcaption></figure>
+<figure><img src="../../../.gitbook/assets/mods_hpc_admin_web_number.webp" alt=""><figcaption></figcaption></figure>
 
 To specify Min/Max values, click "**Form Builder (Advanced Mode Using Json)**" and locate the json entry associated to your field. Finally, add "**min**" and "**max**" values as shown below (line 14 and 15)
 
@@ -334,7 +334,7 @@ Assuming your application hierarchy is as follow:
 
 This time, we recommend you using the "Select" component:
 
-<figure><img src="../.gitbook/assets/Screen Shot 2022-11-17 at 1.01.32 PM.png" alt=""><figcaption></figcaption></figure>
+<figure><img src="../../../.gitbook/assets/mods_hpc_admin_web_select.webp" alt=""><figcaption></figcaption></figure>
 
 Similarly to the previous examples, map the "Name" to your variable name (\{{ version \}}) and add labels (green) and their associated values (blue)
 
@@ -342,7 +342,7 @@ Similarly to the previous examples, map the "Name" to your variable name (\{{ ve
 
 \{{ backup\_enabled \}} is a boolean which enable (1) or disable (0) archival of the job output data to S3. This time use "Toggle" form field.
 
-<figure><img src="../.gitbook/assets/Screen Shot 2022-11-17 at 1.05.01 PM.png" alt=""><figcaption></figcaption></figure>
+<figure><img src="../../../.gitbook/assets/mods_hpc_admin_web_toggle.webp" alt=""><figcaption></figcaption></figure>
 
 Now let's create a new "Text" field called `bucket_to_archive`. However, we want to display this information only when `backup_enabled` is set to checked. To do that, click "**Advanced Mode**", locate the "bucket\_to\_archive" section and add the `when` section as shown below. This will ensure bucket\_to\_archive will only be visible to the users if bucket\_enabled is checked
 
@@ -373,11 +373,11 @@ Now let's create a new "Text" field called `bucket_to_archive`. However, we want
 
 {% tabs %}
 {% tab title="backup_enabled is False" %}
-![](<../.gitbook/assets/Screen Shot 2022-11-18 at 2.42.07 PM.png>)
+![](../../../.gitbook/assets/mods\_hpc\_admin\_web\_toggle\_bud.webp)
 {% endtab %}
 
 {% tab title="backup_enabled is True" %}
-![](<../.gitbook/assets/Screen Shot 2022-11-18 at 2.42.21 PM.png>)
+![](../../../.gitbook/assets/mods\_hpc\_admin\_web\_toggle\_bue.webp)
 {% endtab %}
 {% endtabs %}
 
@@ -391,25 +391,25 @@ Job Script support Jinja2 templating. For example, **\{{ job\_name | upper \}}**
 
 Since this script is expected to be triggered by OpenPBS scheduler, keep the default "PBS Job Script" as interpreter. IDEA also gives you an easy way to determine if all the variables you have configured on the HTML form are being used in your job script
 
-<figure><img src="../.gitbook/assets/Screen Shot 2022-11-17 at 1.09.34 PM.png" alt=""><figcaption></figcaption></figure>
+<figure><img src="../../../.gitbook/assets/mods_hpc_admin_web_conf_vars.webp" alt=""><figcaption></figcaption></figure>
 
 **Save your profile**
 
-Finally, click "Next" choose an name, upload a thumbnail if needed (optional) and select the IDEA project that are authorized to use this form (learn more about project: [https://docs.ide-on-aws.com/cluster-manager/menu/projects-management)](https://docs.ide-on-aws.com/cluster-manager/menu/projects-management)
+Finally, click "Next" choose an name, upload a thumbnail if needed (optional) and select the IDEA project that are authorized to use this form (learn more about projects: [projects-management.md](../../cluster-manager/projects-management.md "mention"))
 
-<figure><img src="../.gitbook/assets/Screen Shot 2022-11-17 at 1.12.01 PM.png" alt=""><figcaption></figcaption></figure>
+<figure><img src="../../../.gitbook/assets/mods_hpc_admin_web_conf_save.webp" alt=""><figcaption></figcaption></figure>
 
 ## Submit a test job <a href="#submit-a-test-job" id="submit-a-test-job"></a>
 
-To submit a job, first navigate to "File Browser" on the left sidebar ([https://docs.ide-on-aws.com/idea/first-time-users/file-browser)](https://docs.ide-on-aws.com/idea/first-time-users/file-browser).
+To submit a job, first navigate to "File Browser" on the left sidebar [file-browser.md](../../../first-time-users/file-browser.md "mention").
 
-&#x20;Choose your input file and click "**Submit Job**" icon. This will open the submit job interface.wizard
+Choose your input file and click "**Submit Job**" icon. This will open the submit job interface.wizard
 
-<figure><img src="../.gitbook/assets/Screen Shot 2022-11-17 at 1.13.55 PM.png" alt=""><figcaption></figcaption></figure>
+<figure><img src="../../../.gitbook/assets/mods_hpc_admin_web_submit_test.webp" alt=""><figcaption></figcaption></figure>
 
 From there, click "Application" and select the application you just created
 
-![](https://awslabs.github.io/scale-out-computing-on-aws/imgs/application-profile-9.png)
+![](../../../.gitbook/assets/mods\_hpc\_admin\_web\_submit\_app.webp)
 
 Fill out the HTML form generated during the previous step with your own inputs.
 
@@ -419,7 +419,7 @@ IDEA also determine the number of nodes to provision automatically based on the 
 
 Prior to submitting a job, you can click "**Dry run**" to validate whether or not you job can run. You will also be able to check the cost estimation of your job as well as additional information specific to your simulation.
 
-![](<../.gitbook/assets/Screen Shot 2022-11-17 at 1.16.40 PM.png>)
+![](../../../.gitbook/assets/mods\_hpc\_admin\_web\_dryrun.webp)
 
 Once done, click "Submit Job" and you job will be submitted to the queue.
 
@@ -427,13 +427,21 @@ You can now verify the job script generated by IDEA correctly reports the HTML i
 
 {% tabs %}
 {% tab title="HTML form submitted" %}
-![](<../.gitbook/assets/Screen Shot 2022-11-18 at 2.28.38 PM (2).png>)
+<div align="left">
+
+<img src="../../../.gitbook/assets/mods_hpc_admin_web_form_submitted.webp" alt="" width="165">
+
+</div>
 
 (Click to enlarge)
 {% endtab %}
 
 {% tab title="Job Script Generated" %}
-![](<../.gitbook/assets/Screen Shot 2022-11-18 at 2.31.06 PM.png>)
+<div align="left">
+
+<img src="../../../.gitbook/assets/mods_hpc_admin_web_scriptgen.webp" alt="" width="178">
+
+</div>
 
 (Click to enlarge)
 {% endtab %}
@@ -476,4 +484,4 @@ Additional comparators will be added in the future.
 
 If you want your job script to use regular bash interpreter (and not qsub), simple select "Linux Shell Script". In other words, the output generated by your HTML world will be a simple bash script and SOCA will run `/bin/bash job_submit.sh` command.
 
-<figure><img src="../.gitbook/assets/Screen Shot 2022-11-17 at 1.18.38 PM.png" alt=""><figcaption></figcaption></figure>
+<figure><img src="../../../.gitbook/assets/mods_hpc_admin_web_interpreter.webp" alt=""><figcaption></figcaption></figure>
