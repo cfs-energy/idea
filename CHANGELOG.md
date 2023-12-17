@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * New Active Directory users will get their account name applied to the givenName and sn attributes to satisfy directory import syncing with Okta requirements.
 
 ### Bug Fixes
-* Fixed FSx for Lustre size mismatch between AWS and IDEA
+* Fixed FSx for Lustre allowed size mismatch between AWS and IDEA for scratch
   * This likely needs a re-work for different FSx Lustre types.
 
 
