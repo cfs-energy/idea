@@ -8,6 +8,8 @@ RUN apt-get update && \
     tar \
     unzip \
     locales \
+    gcc \
+    python3-dev \
     && apt-get clean
 
 
