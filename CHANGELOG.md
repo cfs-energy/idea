@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.7] -  TBD
+
+### Features
+* First truly Open Source IDEA Release!
+* Documentation combined into IDEA monorepo under `docs` folder
+
+### Changes
+* Update AWS CDK from `2.95.1` to `2.115.0`
+* Update Boto3 from `1.28.44` to `1.34.2`
+* Update botocore from `1.31.44` to `1.34.2`
+* Update s3transfer from `0.6.0` to `0.9.0`
+* Removed AWS Corporate ECR dependency in `idea-admin.sh` TODO
+* Regressed multiple EFA feature from 3.1.6 due to CloudFormation DeviceIndex issues.
+* New Active Directory users will get their account name applied to the givenName and sn attributes to satisfy directory import syncing with Okta requirements.
+
+### Bug Fixes
+* Fixed FSx for Lustre size mismatch between AWS and IDEA
+
+
 ## [3.1.6] - 2023-10-20
 
 ### Features

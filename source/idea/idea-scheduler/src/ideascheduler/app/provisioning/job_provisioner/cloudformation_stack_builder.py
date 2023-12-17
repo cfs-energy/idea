@@ -367,6 +367,7 @@ class CloudFormationStackBuilder:
             self.logger.debug(f"EFA requested - determined Max EFA interfaces for instance {launch_template_data.InstanceType}: {_max_efa_interfaces}")
 
             launch_template_data.NetworkInterfaces = []
+            _max_efa_interfaces: int = 0 #regressed in 3.1.7
             _nci: int = 0  # NetworkCardIndex
             for _i in range(0, _max_efa_interfaces):
                 self.logger.debug(f"Adding EFA interface #{_i} - NetworkCardIndex: {_nci}")

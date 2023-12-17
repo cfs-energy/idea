@@ -209,7 +209,7 @@ class SocaFSxLustreConfig(SocaBaseModel):
 
     @staticmethod
     def allowed_sizes_gb():
-        return [1200, 2400, 3600, 10800]
+        return list(range(1200, 100800, 2400))
 
     @staticmethod
     def is_allowed_deployment_type(value: str) -> bool:
