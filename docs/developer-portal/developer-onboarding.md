@@ -14,13 +14,45 @@
 Replace the variables in the code snippets below with the following values:
 
 * PYTHON\_VERSION: 3.9.18
-* NODEJS\_VERSION: 16.3.0
-* CDK\_VERSION: 2.95.1
+* NODEJS\_VERSION: 16.20.2
+* CDK\_VERSION: 2.115.0
 {% endhint %}
 
 ## Prepare environment
 
-### \*\*Python <\*\*PYTHON\_VERSION>
+### Set Environment Variables for Versions
+
+```
+PYTHON_VERSION=<see above>
+NODEJS_VERSION=<see above>
+CDK_VERSION=<see above>
+```
+
+### Install pyenv and nvm
+
+{% tabs %}
+{% tab title="Mac" %}
+Using Homebrew:
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+brew install pyenv
+brew install nvm
+```
+{% endtab %}
+
+{% tab title="Windows" %}
+Using Powershell:
+
+<pre class="language-powershell"><code class="lang-powershell"><strong>Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/pyenv-win/pyenv-win/master/pyenv-win/install-pyenv-win.ps1" -OutFile "./install-pyenv-win.ps1"; &#x26;"./install-pyenv-win.ps1"
+</strong></code></pre>
+
+Install NVM latest release from: [https://github.com/coreybutler/nvm-windows/releases](https://github.com/coreybutler/nvm-windows/releases)
+{% endtab %}
+{% endtabs %}
+
+### Python \<PYTHON\_VERSION>
 
 ```bash
 pyenv install --skip-existing $PYTHON_VERSION
@@ -64,11 +96,11 @@ Follow instructions on the below link to install Docker Desktop. (Required if yo
 
 ## Clone Git Repo
 
-All CRs will be accepted only against the main branch.
+All PRs will be accepted only against the main branch.
 
 ```bash
 git clone https://github.com/awslabs/integrated-digital-engineering-on-aws.git
-cd integrated-digital-engineering-on-awsb
+cd integrated-digital-engineering-on-aws
 // make your changes
 ```
 
@@ -97,7 +129,7 @@ pip install -r requirements/dev.txt
 
 <summary><em><strong>Note for MacOS users</strong></em></summary>
 
-_**BigSur Note:**_ cryptography and orjson library requirements fail to install on MacOS BigSur.\\
+_**BigSur Note:**_ cryptography and orjson library requirements fail to install on MacOS BigSur.
 
 To fix **cryptography**, follow the instructions mentioned here:\
 [https://stackoverflow.com/questions/64919326/pip-error-installing-cryptography-on-big-sur](https://stackoverflow.com/questions/64919326/pip-error-installing-cryptography-on-big-sur)
@@ -125,8 +157,6 @@ invoke -l
 ```
 
 Running this command should print output like below:
-
-|
 
 <pre><code>Available tasks:
 admin.main (admin)                   call administrator app main
