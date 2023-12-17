@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Bug Fixes
 * Fixed FSx for Lustre size mismatch between AWS and IDEA
+  * This likely needs a re-work for different FSx Lustre types.
 
 
 ## [3.1.6] - 2023-10-20
