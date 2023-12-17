@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Update s3transfer from `0.6.0` to `0.9.0`
 * Update cryptography from `41.0.4` to `41.0.6`
 * Upgrade yarn packages for cluster-manager webapp
-* Removed AWS Corporate ECR dependency in `idea-admin.sh` TODO
+* Removed AWS Corporate ECR dependency in `idea-admin.sh`
 * Regressed multiple EFA feature from 3.1.6 due to CloudFormation DeviceIndex issues.
 * New Active Directory users will get their account name applied to the givenName and sn attributes to satisfy directory import syncing with Okta requirements.
 
