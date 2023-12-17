@@ -191,3 +191,8 @@ codebuild_build.sh
 
 # Test outputs
 integration-test-results/
+
+package.json
+package-lock.json
+yarn.lock
+
