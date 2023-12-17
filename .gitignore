@@ -8,6 +8,15 @@ deployment/ecr/idea-administrator/*.tar.gz
 open-source/
 deployment/global-s3-assets/
 deployment/regional-s3-assets/
+source/idea/idea-administrator/src/ideaadministrator_meta/__init__.py
+source/idea/idea-cluster-manager/src/ideaclustermanager_meta/__init__.py
+source/idea/idea-cluster-manager/webapp/.env
+source/idea/idea-cluster-manager/webapp/package.json
+source/idea/idea-data-model/src/ideadatamodel_meta/__init__.py
+source/idea/idea-scheduler/src/ideascheduler_meta/__init__.py
+source/idea/idea-sdk/src/ideasdk_meta/__init__.py
+source/idea/idea-virtual-desktop-controller/src/ideavirtualdesktopcontroller_meta/__init__.py
+
 
 # C extensions
 *.so
@@ -195,4 +204,3 @@ integration-test-results/
 package.json
 package-lock.json
 yarn.lock
-
