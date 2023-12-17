@@ -12,7 +12,7 @@ cffi==1.15.1
 cfn-flip==1.3.0
 charset-normalizer==3.2.0
 click==8.1.6
-cryptography==41.0.4
+cryptography==41.0.6
 dataset==1.6.2
 decorator==5.1.1
 fastcounter==1.1.0
@@ -65,7 +65,6 @@ shortuuid==1.0.11
 six==1.16.0
 sqlalchemy==1.4.49
 supervisor==4.2.5
-tomli==2.0.1
 tracerite==1.1.0
 troposphere==4.4.1
 typing-extensions==4.7.1
