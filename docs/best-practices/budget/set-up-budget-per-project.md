@@ -30,7 +30,7 @@ You should now see the budget on your IDEA project. Make sure to select your pro
 
 ## Map the project to a queue
 
-Now that you have your IDEA project linked to AWS Budget created, you need to specify which queue(s) you want this configuration to apply. Navigate to [IDEA Queue Profile](https://docs.ide-on-aws.com/hpc-simulations/admin-documentation/queue-profiles)
+Now that you have your IDEA project linked to AWS Budget created, you need to specify which queue(s) you want this configuration to apply. Navigate to [queue-profiles.md](../../modules/hpc-workloads/admin-documentation/queue-profiles.md "mention")
 
 Select the queue profile and click "**Actions**" > "**Edit Queue Profile**" then map your project to the profile.
 

@@ -73,7 +73,7 @@ To register a new Software Stack, click "**Create Software Stack**" under the "*
 
 You will be asked to enter a name, description and other parameters specific to your image.
 
-You will also need to specify which IDEA Projects are authorized to use this image. [Refer to Project Management to learn more about IDEA Projects and ACLs](https://docs.ide-on-aws.com/cluster-manager/menu/projects-management).
+You will also need to specify which IDEA Projects are authorized to use this image. Refer to[projects-management.md](../../cluster-manager/projects-management.md "mention") for more information on IDEA Projects.
 
 {% hint style="warning" %}
 Storage Size (GB) must match the size of the EBS volumes attached at the time of the image creation
