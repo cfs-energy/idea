@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Update botocore from `1.31.44` to `1.34.2`
 * Update s3transfer from `0.6.0` to `0.9.0`
 * Update cryptography from `41.0.4` to `41.0.6`
-* Update @adobe/css-tools from `4.3.1` to `4.3.2` in cluster-manager
+* Upgrade yarn packages for cluster-manager webapp
 * Removed AWS Corporate ECR dependency in `idea-admin.sh` TODO
 * Regressed multiple EFA feature from 3.1.6 due to CloudFormation DeviceIndex issues.
 * New Active Directory users will get their account name applied to the givenName and sn attributes to satisfy directory import syncing with Okta requirements.
