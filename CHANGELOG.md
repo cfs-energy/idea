@@ -12,10 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changes
 * Update AWS CDK from `2.95.1` to `2.115.0`
+* Update aws-cdk-asset-awscli-v1 from `2.2.200` to `2.2.201`
 * Update Boto3 from `1.28.44` to `1.34.2`
 * Update botocore from `1.31.44` to `1.34.2`
 * Update s3transfer from `0.6.0` to `0.9.0`
 * Update cryptography from `41.0.4` to `41.0.6`
+* Update arrow from `1.2.3` to `1.3.0`
+* update jsii from `1.88.0` to `1.93.0`
 * Upgrade yarn packages for cluster-manager webapp
 * Removed AWS Corporate ECR dependency in `idea-admin.sh`
 * Regressed multiple EFA feature from 3.1.6 due to CloudFormation DeviceIndex issues.
