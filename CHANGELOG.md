@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Update cryptography from `41.0.4` to `41.0.6`
 * Update arrow from `1.2.3` to `1.3.0`
 * Update jsii from `1.88.0` to `1.93.0`
+* Removed greenlet requirement
+* Added types-python-dateutil ``2.8.19.14``
 * Added gcc and python3-dev to Docker image for building python requirements
 * Upgrade yarn packages for cluster-manager webapp
 * Removed AWS Corporate ECR dependency in `idea-admin.sh`
