@@ -4,7 +4,7 @@ Projects enforce access restriction and limitations on your IDEA cluster.
 
 Projects in IDEA let you control access to queue profiles, virtual desktops provisioning, shared storage and more.
 
-For the [hpc-workloads.md](../hpc-workloads.md "mention") module, projects control queues ACLs (user authorized to submit jobs) as well as web-based job submission forms at application level.
+For the [hpc-workloads](../hpc-workloads/ "mention") module, projects control queues ACLs (user authorized to submit jobs) as well as web-based job submission forms at application level.
 
 For the [virtual-desktop-interfaces](../virtual-desktop-interfaces/ "mention") module, projects control the type of EC2 instances that can be selected as well as the software stack (AMI) that can be provisioned by the users.
 

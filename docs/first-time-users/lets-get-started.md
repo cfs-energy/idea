@@ -4,7 +4,7 @@ Now that you have installed your cluster, it's time for you to become more famil
 
 * [x] Learn how to [access-your-idea-cluster](access-your-idea-cluster/ "mention")
 * [x] Launch your first virtual desktop [virtual-desktops-linux-windows.md](access-your-idea-cluster/virtual-desktops-linux-windows.md "mention")
-* [x] Submit your first simulation job via [hpc-workloads.md](../modules/hpc-workloads.md "mention")
+* [x] Submit your first simulation job via [hpc-workloads](../modules/hpc-workloads/ "mention")
 * [x] Check out the Best Practices section:
   * [x] [analytics](../best-practices/analytics/ "mention")
   * [x] [budget](../best-practices/budget/ "mention")

@@ -60,4 +60,4 @@ Allow 15 minutes for IDEA to be fully in sync with AWS Budget
 
 ## Integration with [virtual-desktop-interfaces](../../modules/virtual-desktop-interfaces/ "mention") <a href="#submit-a-job-when-budget-is-invalid" id="submit-a-job-when-budget-is-invalid"></a>
 
-IDEA projects can be consumed by multiple modules. In a similar way where [hpc-workloads.md](../../modules/hpc-workloads.md "mention") will be rejected if a budget has expired, IDEA users won't be able to provision their [virtual-desktop-interfaces](../../modules/virtual-desktop-interfaces/ "mention") until additional budget is available to them.
+IDEA projects can be consumed by multiple modules. In a similar way where [hpc-workloads](../../modules/hpc-workloads/ "mention") will be rejected if a budget has expired, IDEA users won't be able to provision their [virtual-desktop-interfaces](../../modules/virtual-desktop-interfaces/ "mention") until additional budget is available to them.

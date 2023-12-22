@@ -37,7 +37,7 @@
     * [Permissions management](modules/virtual-desktop-interfaces/admin-documentation/permissions-management.md)
   * [Technical](modules/virtual-desktop-interfaces/technical/README.md)
     * [APIs](modules/virtual-desktop-interfaces/technical/apis.md)
-* [HPC Workloads](modules/hpc-workloads.md)
+* [HPC Workloads](modules/hpc-workloads/README.md)
   * [User Documentation](modules/hpc-workloads/user-documentation/README.md)
     * [Submit a job](modules/hpc-workloads/user-documentation/submit-a-job.md)
     * [Control my jobs](modules/hpc-workloads/user-documentation/control-my-jobs.md)

@@ -16,6 +16,6 @@ Additionally[, you can map your mount point based on IDEA Project membership](..
 * Mount `/team1/project_name` (FSx for Lustre) for all Linux [virtual-desktop-interfaces](../virtual-desktop-interfaces/ "mention") launched for Project A
 * Mount `\\windows\project_name` (FSx for Windows File Server)for all Windows [virtual-desktop-interfaces](../virtual-desktop-interfaces/ "mention")
 * Mount `/team2/shared` Elastic File System for all [virtual-desktop-interfaces](../virtual-desktop-interfaces/ "mention") launched by team B
-* Mount `/fsx-scratch` FSx for OpenZFS for all compute nodes provisioned to run [hpc-workloads.md](../hpc-workloads.md "mention") on `queue1` or `queue2`
+* Mount `/fsx-scratch` FSx for OpenZFS for all compute nodes provisioned to run [hpc-workloads](../hpc-workloads/ "mention") on `queue1` or `queue2`
 
 Refer to [storage-management.md](storage-management.md "mention") to learn more about the integration of Shared Storage module onto the IDEA ecosystem

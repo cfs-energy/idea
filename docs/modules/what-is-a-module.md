@@ -9,7 +9,7 @@ All frontend modules are optionals and IDEA administrators can decide whether or
 {% endhint %}
 
 * [virtual-desktop-interfaces](virtual-desktop-interfaces/ "mention")
-* [hpc-workloads.md](hpc-workloads.md "mention")
+* [hpc-workloads](hpc-workloads/ "mention")
 
 ## Backend Modules (Cluster Admins)
 

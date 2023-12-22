@@ -1,6 +1,6 @@
 # Permissions management
 
-IDEA Virtual Desktop Interface enable sessions sharing. Sharing a session is particularly useful if you are planning to do live debugging with your collaborators. Read [share-a-virtual-desktop.md](../user-documentation/share-a-virtual-desktop.md "mention") to learn more about the use cases.
+IDEA Virtual Desktop Interface enable sessions sharing. Sharing a session is particularly useful if you are planning to do live debugging with your collaborators. Read [https://github.com/cfs-energy-internal/idea/blob/docs-update/docs/modules/virtual-desktop-interfaces/user-documentation/share-a-virtual-desktop.md](https://github.com/cfs-energy-internal/idea/blob/docs-update/docs/modules/virtual-desktop-interfaces/user-documentation/share-a-virtual-desktop.md "mention") to learn more about the use cases.
 
 As VDI administrator, you do have the ability to manage the current permission profiles available to your users. By default, IDEA ships with multiple pre-configured Permission Profiles:
 

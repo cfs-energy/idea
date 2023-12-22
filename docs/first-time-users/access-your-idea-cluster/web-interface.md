@@ -14,7 +14,7 @@ IDEA includes a web-interface designed to simplify user-experience for your end-
 
 <mark style="color:green;">**Green**</mark>:  [Broken link](broken-reference "mention") section displaying installed/available modules such as:
 
-* [hpc-workloads.md](../../modules/hpc-workloads.md "mention")
+* [hpc-workloads](../../modules/hpc-workloads/ "mention")
 * [virtual-desktop-interfaces](../../modules/virtual-desktop-interfaces/ "mention")
 * [cluster-manager](../../modules/cluster-manager/ "mention")
 

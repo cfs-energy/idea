@@ -64,6 +64,6 @@ This will open a new window where the content of your file will automatically be
 
 ## Submit a job
 
-You can select a file to be used as input file for one of your [hpc-workloads.md](../modules/hpc-workloads.md "mention").
+You can select a file to be used as input file for one of your [hpc-workloads](../modules/hpc-workloads/ "mention").
 
 Select your file and click "**Actions**" > "**Submit Job**". Alternatively, you can right-click to display the context menu and click "**Submit** **Job**"
