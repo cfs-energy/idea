@@ -1,5 +1,5 @@
 # Begin: Install OpenPBS
-{%- if context.base_os in ('amazonlinux2', 'centos7', 'rhel7', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+{%- if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'centos7', 'rhel7', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
 {%- if context.config.get_string('global-settings.package_config.openpbs.type') == 'release' %}
 function install_openpbs () {
   local OPENPBS_VERSION="{{ context.config.get_string('global-settings.package_config.openpbs.version', required=True) }}"
@@ -21,7 +21,7 @@ function install_openpbs () {
   {%- if context.base_os == 'rhel7' %}
   yum install -y $(echo ${OPENPBS_PKGS[*]}) --enablerepo rhel-7-server-rhui-optional-rpms
   {%- endif %}
-  {%- if context.base_os in ('amazonlinux2', 'centos7', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+  {%- if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'centos7', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
   yum install -y $(echo ${OPENPBS_PKGS[*]})
   {%- endif %}
   mkdir -p "${OPENPBS_WORK_DIR}"
@@ -65,7 +65,7 @@ function install_openpbs () {
   {%- if context.base_os == 'rhel7' %}
   yum install -y $(echo ${OPENPBS_PKGS[*]}) --enablerepo rhel-7-server-rhui-optional-rpms
   {%- endif %}
-  {%- if context.base_os in ('amazonlinux2', 'centos7', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+  {%- if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'centos7', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
   yum install -y $(echo ${OPENPBS_PKGS[*]})
   {%- endif %}
   mkdir -p "${OPENPBS_WORK_DIR}"

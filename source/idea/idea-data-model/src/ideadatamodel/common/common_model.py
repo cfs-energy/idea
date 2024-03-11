@@ -38,6 +38,7 @@ from datetime import datetime
 class BaseOS(str, Enum):
     WINDOWS = 'windows'
     AMAZON_LINUX_2 = 'amazonlinux2'
+    AMAZON_LINUX_2023 = 'amazonlinux2023'
     CENTOS_7 = 'centos7'
     RHEL_7 = 'rhel7'
     RHEL_8 = 'rhel8'

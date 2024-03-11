@@ -633,6 +633,8 @@ class Utils {
         switch (name) {
             case 'amazonlinux2':
                 return 'Amazon Linux 2'
+            case 'amazonlinux2023':
+                return 'Amazon Linux 2023'
             case 'centos7':
                 return 'CentOS 7'
             case 'rhel7':

@@ -233,6 +233,10 @@ class MySharedVirtualDesktopSessions extends Component<MySharedVirtualDesktopPro
                                 value: 'amazonlinux2'
                             },
                             {
+                                title: 'Amazon Linux 2023',
+                                value: 'amazonlinux2023'
+                            },
+                            {
                                 title: 'Windows',
                                 value: 'windows'
                             },

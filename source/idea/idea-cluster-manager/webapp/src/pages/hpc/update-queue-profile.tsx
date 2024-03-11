@@ -424,6 +424,10 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                                                             value: 'amazonlinux2'
                                                         },
                                                         {
+                                                            title: 'Amazon Linux 2023',
+                                                            value: 'amazonlinux2023'
+                                                        },
+                                                        {
                                                             title: 'CentOS 7',
                                                             value: 'centos7'
                                                         },

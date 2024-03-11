@@ -85,7 +85,7 @@ function install_amd_gpu_drivers() {
   mkdir -p /root/bootstrap/gpu_drivers
   pushd /root/bootstrap/gpu_drivers
 
-  {%- if context.base_os in ('rhel7', 'centos7', 'amazonlinux2') %}
+  {%- if context.base_os in ('rhel7', 'centos7', 'amazonlinux2', 'amazonlinux2023') %}
   local AWS=$(command -v aws)
   local DRIVER_BUCKET_REGION=$(curl -s --head {{ context.config.get_string('global-settings.gpu_settings.amd.s3_bucket_url', required=True) }} | grep bucket-region | awk '{print $2}' | tr -d '\r\n')
   $AWS --region ${DRIVER_BUCKET_REGION} s3 cp --quiet --recursive {{ context.config.get_string('global-settings.gpu_settings.amd.s3_bucket_path', required=True) }} .

@@ -584,6 +584,9 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
                             if (event.value === 'amazonlinux2') {
                                 // Hibernation is supported for Amazon Linux 2 .
                                 hibernation?.disable(false)
+                            } else if (event.value === 'amazonlinux2023') {
+                                // Hibernation is supported for Amazon Linux 2023
+                                hibernation?.disable(false)
                             } else if (event.value === 'rhel8') {
                                 // Hibernation is supported for RHEL8
                                 hibernation?.disable(false)
