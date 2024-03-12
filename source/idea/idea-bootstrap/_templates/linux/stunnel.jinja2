@@ -8,7 +8,7 @@
   function install_stunnel () {
   {%- if context.base_os in ('amazonlinux2') %}
     STUNNEL_CMD='stunnel5'
-  {%- elif context.base_os in ('centos7', 'rhel7', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+  {%- elif context.base_os in ('amazonlinux2023', 'centos7', 'rhel7', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
     STUNNEL_CMD='stunnel'
   {%- endif %}
   which ${STUNNEL_CMD} > /dev/null 2>&1

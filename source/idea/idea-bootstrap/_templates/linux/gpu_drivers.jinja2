@@ -19,7 +19,9 @@ function install_nvidia_grid_drivers () {
   if [[ ! -z "${x_server_pid}" ]]; then
     kill $x_server_pid
   fi
-
+  {%- if context.base_os in ('amazonlinux2') %}
+  CC=/usr/bin/gcc10-cc
+  {%- endif %}
   /bin/sh NVIDIA-Linux-x86_64*.run --no-precompiled-interface --run-nvidia-xconfig --no-questions --accept-license --silent
   log_info "X server configuration for GPU start..."
   local NVIDIAXCONFIG=$(which nvidia-xconfig)

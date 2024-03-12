@@ -123,7 +123,7 @@ exec > /root/bootstrap/logs/userdata.log 2>&1
 export PATH="${!PATH}:/usr/local/bin"
 
 function install_aws_cli () {
-  if [[ "${!BASE_OS}" == "amazonlinux2" ]]; then
+  if [[ "${!BASE_OS}" == "amazonlinux2" ]] || [[ "${!BASE_OS}" == "amazonlinux2023" ]]; then
     yum remove -y awscli
   fi
   cd /root/bootstrap
@@ -218,7 +218,7 @@ exec > /root/bootstrap/logs/userdata.log 2>&1
 export PATH="${PATH}:/usr/local/bin"
 
 function install_aws_cli () {
-  if [[ "${BASE_OS}" == "amazonlinux2" ]]; then
+  if [[ "${BASE_OS}" == "amazonlinux2" ]] || [[ "${BASE_OS}" == "amazonlinux2023" ]]; then
     yum remove -y awscli
   fi
   cd /root/bootstrap

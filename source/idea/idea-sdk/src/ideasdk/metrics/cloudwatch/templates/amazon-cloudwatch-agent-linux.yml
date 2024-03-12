@@ -99,7 +99,7 @@ metrics:
         {{ utils.to_yaml(append_dimensions) | indent(8) }}
       {%- endif %}
       resources:
-        {%- if base_os == 'amazonlinux2' %}
+        {%- if base_os in ('amazonlinux2', 'amazonlinux2023') %}
         - '/dev/xvda'
         {%- else %}
         - '/dev/sda1'
@@ -133,7 +133,7 @@ metrics:
         {{ utils.to_yaml(append_dimensions) | indent(8) }}
       {%- endif %}
       resources:
-        {%- if base_os == 'amazonlinux2' %}
+        {%- if base_os in ('amazonlinux2', 'amazonlinux2023') %}
         - '/dev/xvda'
         {%- else %}
         - '/dev/sda1'

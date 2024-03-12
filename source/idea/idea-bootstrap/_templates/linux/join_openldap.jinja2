@@ -68,7 +68,7 @@ mkdir -p /etc/openldap/cacerts/
 DS_TLS_CERTIFICATE=$(get_secret "${IDEA_DS_TLS_CERTIFICATE_SECRET_ARN}")
 echo -n "${DS_TLS_CERTIFICATE}" > /etc/openldap/cacerts/openldap-server.pem
 
-{%- if context.base_os in ('amazonlinux2', 'centos7', 'rhel7') %}
+{%- if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'centos7', 'rhel7') %}
 authconfig --disablesssd \
            --disablesssdauth \
            --disableldap \

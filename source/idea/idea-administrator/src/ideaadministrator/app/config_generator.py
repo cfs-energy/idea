@@ -165,7 +165,7 @@ class ConfigGenerator:
         return Utils.get_value_as_string('instance_type', self.user_values, 'm6i.large')
 
     def get_base_os(self) -> str:
-        return Utils.get_value_as_string('base_os', self.user_values, 'amazonlinux2')
+        return Utils.get_value_as_string('base_os', self.user_values, 'amazonlinux2023')
 
     def get_dcv_connection_gateway_instance_type(self) -> str:
         return Utils.get_value_as_string('dcv_connection_gateway_instance_type', self.user_values, 'm6i.large')

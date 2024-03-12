@@ -712,7 +712,7 @@ class Utils:
         """
         returns the ec2 block device name given a supported base os
         """
-        if base_os == constants.OS_AMAZONLINUX2:
+        if base_os == constants.OS_AMAZONLINUX2 or base_os == constants.AMAZON_LINUX2023:
             return '/dev/xvda'
         else:
             return '/dev/sda1'

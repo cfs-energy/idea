@@ -8,7 +8,7 @@ function install_efs_mount_helper () {
     which amazon-efs-mount-watchdog > /dev/null 2>&1
     if [[ "$?" != "0" ]]; then
       log_info "Installing Amazon EFS Mount Helper for {{ context.base_os }}"
-      {%- if context.base_os in ('amazonlinux2') %}
+      {%- if context.base_os in ('amazonlinux2', 'amazonlinux2023') %}
         yum install -y amazon-efs-utils
       {%- elif context.base_os in ('centos7','rhel7', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
         log_info "Installing Amazon EFS Mount Helper from Github"

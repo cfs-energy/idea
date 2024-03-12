@@ -404,8 +404,8 @@ SocaInputParamSpec:
       help_text: ~
       default: amazonlinux2
       choices:
-        - title: Amazon Linux 2
-          value: amazonlinux2
+        - title: Amazon Linux 2023
+          value: amazonlinux2023
         - title: CentOS 7
           value: centos7
         - title: Red Hat Enterprise Linux 7

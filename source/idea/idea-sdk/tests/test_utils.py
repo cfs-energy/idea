@@ -328,6 +328,7 @@ def test_utils_get_as_bool():
 
 def test_utils_get_ec2_block_device_name():
     assert Utils.get_ec2_block_device_name(constants.OS_AMAZONLINUX2) == '/dev/xvda'
+    assert Utils.get_ec2_block_device_name(constants.OS_AMAZONLINUX2023) == '/dev/xvda'
     assert Utils.get_ec2_block_device_name(constants.OS_RHEL7) == '/dev/sda1'
     assert Utils.get_ec2_block_device_name(constants.OS_CENTOS7) == '/dev/sda1'
     assert Utils.get_ec2_block_device_name(constants.OS_WINDOWS) == '/dev/sda1'
@@ -338,6 +339,7 @@ def test_utils_get_platform():
     assert Utils.get_platform(constants.OS_WINDOWS) == constants.PLATFORM_WINDOWS
     assert Utils.get_platform(constants.OS_RHEL7) == constants.PLATFORM_LINUX
     assert Utils.get_platform(constants.OS_AMAZONLINUX2) == constants.PLATFORM_LINUX
+    assert Utils.get_platform(constants.OS_AMAZONLINUX2023) == constants.PLATFORM_LINUX
     assert Utils.get_platform(constants.OS_CENTOS7) == constants.PLATFORM_LINUX
     with pytest.raises(exceptions.SocaException) as exc_info:
         Utils.get_platform('unknown')
