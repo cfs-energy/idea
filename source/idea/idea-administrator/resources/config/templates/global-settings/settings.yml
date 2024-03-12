@@ -379,23 +379,23 @@ package_config:
       x86_64:
         {%- if 'windows' in supported_base_os %}
         windows:
-          url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.0/Servers/nice-dcv-server-x64-Release-2023.0-15065.msi
-          sha256sum: 8f462ec0b224befe3f621d76634593e5e596e7c07bdccbac3a225dce94d4263d
+          url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.1/Servers/nice-dcv-server-x64-Release-2023.1-16388.msi
+          sha256sum: 24376cb0eed01a8a14c39d094c689c4315173a7ed9054443910ceb2d493037da
         {%- endif %}
         linux:
           {%- if 'amazonlinux2' in supported_base_os or 'rhel7' in supported_base_os or 'centos7' in supported_base_os %}
           al2_rhel_centos7:
-            version: 2023.0-15065-el7-x86_64
-            tgz: nice-dcv-2023.0-15065-el7-x86_64.tgz
-            url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.0/Servers/nice-dcv-2023.0-15065-el7-x86_64.tgz
-            sha256sum: 24cea3c7b67fbac1ea3d619b6233ac5851fd42176a7d240991345863f7ee599c
+            version: 2023.1-16388-el7-x86_64
+            tgz: nice-dcv-2023.1-16388-el7-x86_64.tgz
+            url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.1/Servers/nice-dcv-2023.1-16388-el7-x86_64.tgz
+            sha256sum: 31230edd66242038a95986c9207fc0f800986a94ee43bfc901e43521f4eb72a6
           {%- endif %}
           {%- if 'rhel8' in supported_base_os or 'centos8' in supported_base_os or 'rocky8' in supported_base_os %}
           rhel_centos_rocky8:
-            version: 2023.0-15065-el8-x86_64
-            tgz: nice-dcv-2023.0-15065-el8-x86_64.tgz
-            url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.0/Servers/nice-dcv-2023.0-15065-el8-x86_64.tgz
-            sha256sum: 5d5c130ed98976b513d232a20843e240dec6eb05eb669fe97441426afc49d8a5
+            version: 2023.1-16388-el8-x86_64
+            tgz: nice-dcv-2023.1-16388-el8-x86_64.tgz
+            url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.1/Servers/nice-dcv-2023.1-16388-el8-x86_64.tgz
+            sha256sum: 9f696bfc21fdfd267a079cd222170b7c737f789ec6f3da66a6666bc1d8fe2648
           {%- endif %}
           {%- if 'rhel9' in supported_base_os or 'centos9' in supported_base_os or 'rocky9' in supported_base_os %}
           rhel_centos_rocky9:
