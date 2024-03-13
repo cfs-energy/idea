@@ -39,21 +39,15 @@ def build(c, no_cache=False):
     prepare_artifacts(c)
 
     release_version = idea.props.idea_release_version
-    build_cmd_amd = str(f'docker buildx build --platform linux/amd64 '
-                        f'--build-arg PUBLIC_ECR_TAG=v{release_version} '
-                        f'-t idea-administrator-amd64:v{release_version} '
-                        f'"{idea.props.deployment_administrator_dir}"')
-    build_cmd_arm = str(f'docker buildx build --platform linux/arm64 '
-                        f'--build-arg PUBLIC_ECR_TAG=v{release_version} '
-                        f'-t idea-administrator-arm64:v{release_version} '
-                        f'"{idea.props.deployment_administrator_dir}"')
+    build_cmd = str(f'docker buildx build --platform linux/amd64,linux/arm64 '
+                    f'--build-arg PUBLIC_ECR_TAG=v{release_version} '
+                    f'-t idea-administrator:v{release_version} '
+                    f'"{idea.props.deployment_administrator_dir}"')
 
     if no_cache:
-        build_cmd_amd = f'{build_cmd_amd} --no-cache'
-        build_cmd_arm = f'{build_cmd_arm} --no-cache'
+        build_cmd = f'{build_cmd} --no-cache'
 
-    c.run(build_cmd_amd)
-    c.run(build_cmd_arm)
+    c.run(build_cmd)
 
 
 def publish(c, ecr_registry, ecr_tag):
