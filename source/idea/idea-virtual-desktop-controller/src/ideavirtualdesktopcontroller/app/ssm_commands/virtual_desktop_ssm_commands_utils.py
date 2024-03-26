@@ -130,10 +130,12 @@ class VirtualDesktopSSMCommandsUtils:
                 "$DCV_Describe_Session = Invoke-Expression \"& 'C:\\Program Files\\NICE\\DCV\\Server\\bin\\dcv' describe-session console -j\" | ConvertFrom-Json",
                 "$CPUAveragePerformanceLast10Secs = (GET-COUNTER -Counter \"\\Processor(_Total)\\% Processor Time\" -SampleInterval 2 -MaxSamples 5 |select -ExpandProperty countersamples | select -ExpandProperty cookedvalue | Measure-Object -Average).average",
                 "$output = @{}",
+                "$dcv = @{}",
+                "$dcv[\"num-of-connections\"] = $DCV_Describe_Session.\"num-of-connections\"",
+                "$dcv[\"creation-time\"] = $DCV_Describe_Session.\"creation-time\"",
+                "$dcv[\"last-disconnection-time\"] = $DCV_Describe_Session.\"last-disconnection-time\"",
+                "$output[\"DCV\"] = $dcv",
                 "$output[\"CPUAveragePerformanceLast10Secs\"] = $CPUAveragePerformanceLast10Secs",
-                "$output[\"DCVCurrentConnections\"] = $DCV_Describe_Session.\"num-of-connections\"",
-                "$output[\"DCVCreationTime\"] = $DCV_Describe_Session.\"creation-time\"",
-                "$output[\"DCVLastDisconnectTime\"] = $DCV_Describe_Session.\"last-disconnection-time\"",
                 "$output | ConvertTo-Json"
             ]
         else:
