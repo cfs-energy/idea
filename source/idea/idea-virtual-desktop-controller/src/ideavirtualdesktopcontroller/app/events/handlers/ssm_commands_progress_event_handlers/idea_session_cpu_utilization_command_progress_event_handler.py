@@ -51,6 +51,7 @@ class IDEASessionCPUUtilizationCommandProgressEventHandler(BaseVirtualDesktopCon
                     )
                 cpu_utilization = Utils.get_value_as_float('CPUAveragePerformanceLast10Secs', ssm_output, 0)
                 cpu_utilization_threshold = self.context.config().get_float('virtual-desktop-controller.dcv_session.cpu_utilization_threshold', required=True)
+                idle_autostop_delay = self.context.config().get_float('virtual-desktop-controller.dcv_session.idle_autostop_delay', required=True)
                 if cpu_utilization < cpu_utilization_threshold:
                     if session_current_connection == 0:
                         current_time = parse(
@@ -59,9 +60,9 @@ class IDEASessionCPUUtilizationCommandProgressEventHandler(BaseVirtualDesktopCon
                             .replace(tzinfo=timezone.utc)
                             .isoformat()
                         )
-                        if(last_dcv_disconnect+timedelta(hours=12)<current_time):
+                        if(last_dcv_disconnect+timedelta(minutes=idle_autostop_delay)<current_time):
                         # we can stop the session
-                            self.log_info(message_id=message_id, message=f'Will stop the session since CPU Utilization: {cpu_utilization} is less than threshold: {cpu_utilization_threshold}')
+                            self.log_info(message_id=message_id, message=f'Will stop the session since CPU Utilization: {cpu_utilization} is less than threshold: {cpu_utilization_threshold} and last DCV connection was: {last_dcv_disconnect}')
                             success_list, fail_list = self.session_utils.stop_sessions([session])
                             # we know there is only 1 session in either of success or fail list
                             if Utils.is_not_empty(fail_list):
