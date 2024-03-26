@@ -23,7 +23,7 @@ DCV_SERVER_AARCH64_TGZ="{{ context.config.get_string('global-settings.package_co
 DCV_SERVER_AARCH64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.rhel_centos_rocky8.version', required=True) }}"
 DCV_SERVER_AARCH64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.rhel_centos_rocky8.sha256sum', required=True) }}"
 
-{%- elif context.base_os in ('rhel9', 'rocky9') %}
+{%- elif context.base_os in ('amazonlinux2023', 'rhel9', 'rocky9') %}
   DCV_SERVER_X86_64_URL="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.rhel_centos_rocky9.url', required=True) }}"
   DCV_SERVER_X86_64_TGZ="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.rhel_centos_rocky9.tgz', required=True) }}"
   DCV_SERVER_X86_64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.rhel_centos_rocky9.version', required=True) }}"
@@ -123,7 +123,7 @@ if [[ -z "$(rpm -qa nice-dcv-server)" ]]; then
     rpm -ivh nice-xdcv-*.${machine}.rpm
     rpm -ivh nice-dcv-server-*.${machine}.rpm
     rpm -ivh nice-dcv-web-viewer-*.${machine}.rpm
-  {% elif context.base_os in ('rhel7', 'centos7', 'rhel8', 'rhel9', 'rocky8', 'rocky9') -%}
+  {% elif context.base_os in ('amazonlinux2023', 'rhel7', 'centos7', 'rhel8', 'rhel9', 'rocky8', 'rocky9') -%}
     rpm -ivh nice-xdcv-*.${machine}.rpm --nodeps
     rpm -ivh nice-dcv-server-*.${machine}.rpm --nodeps
     rpm -ivh nice-dcv-web-viewer-*.${machine}.rpm --nodeps

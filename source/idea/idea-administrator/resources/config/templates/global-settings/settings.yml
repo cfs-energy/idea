@@ -140,7 +140,7 @@ package_config:
       - compat-openldap
 
     openldap_server_9:
-      # Additional packages required for rhel9, and rocky9
+      # Additional packages required for rhel9, rocky9, and amazonlinux2023
       - openldap-compat
 
 
@@ -155,7 +155,6 @@ package_config:
       - c-ares
       - cups-libs
       - cyrus-sasl-gssapi
-      - http-parser
       - krb5-workstation
       - libdhash
       - libipa_hbac
@@ -190,6 +189,7 @@ package_config:
     sssd_7:
       # Additional packages required for rhel7, centos7, and amazonlinux2
       - python-sssdconfig
+      - http-parser
 
     system:
       # Default packages installed on all Linux OS
@@ -289,7 +289,6 @@ package_config:
       - rpcbind
       - sqlite-devel
       - nss-pam-ldapd
-      - tcp_wrappers
       - vim
       - wget
       - zlib
@@ -303,6 +302,7 @@ package_config:
       - system-lsb
       - libquadmath
       - libquadmath-devel
+      - tcp_wrappers
 
     system_8:
       # Additional packages required for rhel8, and rocky8
@@ -397,7 +397,7 @@ package_config:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.1/Servers/nice-dcv-2023.1-16388-el8-x86_64.tgz
             sha256sum: 9f696bfc21fdfd267a079cd222170b7c737f789ec6f3da66a6666bc1d8fe2648
           {%- endif %}
-          {%- if 'rhel9' in supported_base_os or 'centos9' in supported_base_os or 'rocky9' in supported_base_os %}
+          {%- if 'amazonlinux2023' in supported_base_os or 'rhel9' in supported_base_os or 'centos9' in supported_base_os or 'rocky9' in supported_base_os %}
           rhel_centos_rocky9:
             version: 2023.1-16388-el9-x86_64
             tgz: nice-dcv-2023.1-16388-el9-x86_64.tgz
@@ -456,7 +456,7 @@ package_config:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.1/Servers/nice-dcv-2023.1-16388-el8-aarch64.tgz
             sha256sum: 4d4b794467220ec1b0f3272b6938701ce1282664e25f63497cc30632d71aed17
           {%- endif %}
-          {%- if 'rhel9' in supported_base_os or 'centos9' in supported_base_os or 'rocky9' in supported_base_os %}
+          {%- if 'amazonlinux2023' in supported_base_os or 'rhel9' in supported_base_os or 'centos9' in supported_base_os or 'rocky9' in supported_base_os %}
           rhel_centos_rocky9:
             version: 2023.1-16388-el9-aarch64
             tgz: nice-dcv-2023.1-16388-el9-aarch64.tgz
@@ -498,7 +498,7 @@ package_config:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.1/SessionManagerAgents/nice-dcv-session-manager-agent-2023.1.732-1.el8.x86_64.rpm
             sha256sum: 3f2c08a2aede23e5c614e27184f8677a3b3c6bc28b1d15a7480460eb04e61b00
           {%- endif %}
-          {%- if 'rhel9' in supported_base_os or 'centos9' in supported_base_os or 'rocky9' in supported_base_os %}
+          {%- if 'amazonlinux2023' in supported_base_os or 'rhel9' in supported_base_os or 'centos9' in supported_base_os or 'rocky9' in supported_base_os %}
           rhel_centos_rocky9:
             version: 2023.1.732-1.el9.x86_64
             url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.1/SessionManagerAgents/nice-dcv-session-manager-agent-2023.1.732-1.el9.x86_64.rpm
@@ -549,7 +549,7 @@ package_config:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.1/SessionManagerAgents/nice-dcv-session-manager-agent-2023.1.732-1.el8.aarch64.rpm
             sha256sum: 933a8c2e1c67304e314231de5ccf4dc22b5c9a71b0e1f917c64eeb076bee01e2
           {%- endif %}
-          {%- if 'rhel9' in supported_base_os or 'centos9' in supported_base_os or 'rocky9' in supported_base_os %}
+          {%- if 'amazonlinux2023' in supported_base_os or 'rhel9' in supported_base_os or 'centos9' in supported_base_os or 'rocky9' in supported_base_os %}
           rhel_centos_rocky9:
             version: 2023.1.732-1.el9.aarch64
             url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.1/SessionManagerAgents/nice-dcv-session-manager-agent-2023.1.732-1.el9.aarch64.rpm
@@ -583,7 +583,7 @@ package_config:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.1/Gateway/nice-dcv-connection-gateway-2023.1.710-1.el8.x86_64.rpm
             sha256sum: 4c5be79bfc0c4e856fa7dabb10f310455504e71713ab5aa2877bd50239331c9b
           {%- endif %}
-          {%- if 'rhel9' in supported_base_os or 'centos9' in supported_base_os or 'rocky9' in supported_base_os %}
+          {%- if 'amazonlinux2023' in supported_base_os or 'rhel9' in supported_base_os or 'centos9' in supported_base_os or 'rocky9' in supported_base_os %}
           rhel_centos_rocky9:
             version: 2023.1.710-1.el9.x86_64
             url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.1/Gateway/nice-dcv-connection-gateway-2023.1.710-1.el9.x86_64.rpm
@@ -655,7 +655,7 @@ package_config:
           url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.1/SessionManagerBrokers/nice-dcv-session-manager-broker-2023.1.410-1.el8.noarch.rpm
           sha256sum: cb70808d421ef63205a9529d68e9a3e46150233940a66686410fe6272dd5ad90
         {%- endif %}
-        {%- if 'rhel9' in supported_base_os or 'centos9' in supported_base_os or 'rocky9' in supported_base_os %}
+        {%- if 'amazonlinux2023' in supported_base_os or 'rhel9' in supported_base_os or 'centos9' in supported_base_os or 'rocky9' in supported_base_os %}
         rhel_centos_rocky9:
           version: 2023.1.410-1.el9.noarch
           url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.1/SessionManagerBrokers/nice-dcv-session-manager-broker-2023.1.410-1.el9.noarch.rpm
@@ -703,7 +703,7 @@ package_config:
           label: RHEL 8 | CentOS 8 | Rocky Linux 8
           url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.1/Clients/nice-dcv-viewer-2023.1.6203-1.el8.x86_64.rpm
         rhel_centos_rocky9:
-          label: RHEL 9 | CentOS 9 | Rocky Linux 9
+          label: AL2023 | RHEL 9 | CentOS 9 | Rocky Linux 9
           url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.1/Clients/nice-dcv-viewer-2023.1.6203-1.el9.x86_64.rpm
         suse15:
           label: SUSE Enterprise Linux 15

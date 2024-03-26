@@ -84,8 +84,8 @@ def batch_create_sessions(path_to_csv: str, force: bool, generate_template: bool
         for row in csv_reader:
             _name = Utils.get_as_string(row.get('session_name', None))
             _owner = Utils.get_as_string(row.get('owner', None))
-            _base_os = Utils.get_as_string(row.get('base_os', None), default='amazonlinux2')
-            _software_stack_id = Utils.get_as_string(row.get('software_stack_id', None), default='ss-base-amazonlinux2-x86-64-base')
+            _base_os = Utils.get_as_string(row.get('base_os', None), default='amazonlinux2023')
+            _software_stack_id = Utils.get_as_string(row.get('software_stack_id', None), default='ss-base-amazonlinux2023-x86-64-base')
             _instance_type = Utils.get_as_string(row.get('instance_type', None), default='t3.large')
             _storage_size_gb = Utils.get_as_float(row.get('storage_size_gb', None), default=30.0)
             _project_id = Utils.get_as_string(row.get('project_id', None), default='default')

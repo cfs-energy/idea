@@ -48,7 +48,7 @@ identity-provider:
 
 directoryservice:
   automation_dir: {{ context.cluster_home_dir }}/directoryservice/automation
-  base_os: amazonlinux2
+  base_os: amazonlinux2023
   cloudwatch_logs:
     enabled: true
   deployment_id: ff77f60a-2588-4432-928a-a9e30a0bec09
@@ -81,7 +81,7 @@ directoryservice:
 
 scheduler:
   provider: openpbs
-  compute_node_os: amazonlinux2
+  compute_node_os: amazonlinux2023
   compute_node_ami: ami-mockclustersettings
   compute_node_instance_profile_arn: arn:aws:iam::123456789012:instance-profile/idea-test-compute-node-instance-profile
   spot_fleet_request_iam_role_arn: arn:aws:iam::123456789012:role/{{ context.cluster_name }}-scheduler-spot-fleet-request-role-us-east-1
