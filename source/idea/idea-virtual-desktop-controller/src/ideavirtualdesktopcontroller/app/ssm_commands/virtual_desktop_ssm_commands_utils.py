@@ -127,16 +127,26 @@ class VirtualDesktopSSMCommandsUtils:
         if base_os == VirtualDesktopBaseOS.WINDOWS:
             document_name = 'AWS-RunPowerShellScript'
             commands = [
+                "$DCV_Describe_Session = Invoke-Expression \"& 'C:\\Program Files\\NICE\\DCV\\Server\\bin\\dcv' describe-session console -j\" | ConvertFrom-Json",
                 "$CPUAveragePerformanceLast10Secs = (GET-COUNTER -Counter \"\\Processor(_Total)\\% Processor Time\" -SampleInterval 2 -MaxSamples 5 |select -ExpandProperty countersamples | select -ExpandProperty cookedvalue | Measure-Object -Average).average",
                 "$output = @{}",
                 "$output[\"CPUAveragePerformanceLast10Secs\"] = $CPUAveragePerformanceLast10Secs",
+                "$output[\"DCVCurrentConnections\"] = $DCV_Describe_Session.\"num-of-connections\"",
+                "$output[\"DCVCreationTime\"] = $DCV_Describe_Session.\"creation-time\"",
+                "$output[\"DCVLastDisconnectTime\"] = $DCV_Describe_Session.\"last-disconnection-time\"",
                 "$output | ConvertTo-Json"
             ]
         else:
             document_name = 'AWS-RunShellScript'
             commands = [
+                "DCV_Session_ID=$(dcv list-sessions -j | jq -r '.[].id')",
+                "DCV_Describe_Session=$(dcv describe-session $DCV_Session_ID -j)",
                 "CPUAveragePerformanceLast10Secs=$(top -d 5 -b -n2 | grep 'Cpu(s)' |tail -n 1 | awk '{print $2 + $4}')",
-                "echo '{\"CPUAveragePerformanceLast10Secs\": '"'$CPUAveragePerformanceLast10Secs'"'}'"
+                "echo '{\"DCV\": '"
+                "$DCV_Describe_Session"
+                "' , \"CPUAveragePerformanceLast10Secs\": '"
+                "$CPUAveragePerformanceLast10Secs"
+                "'}'"
             ]
 
         response = self._ssm_client.send_command(
