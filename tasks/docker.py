@@ -54,7 +54,19 @@ def publish(c, ecr_registry, ecr_tag):
     publish docker image to an ECR repository
     """
     local_image = f'idea-administrator:{ecr_tag}'
+    latest_image = f'idea-administrator:latest'
+    
+    # Tag the image with given tag
     c.run(f'docker tag {local_image} {ecr_registry}/{local_image}')
+    
+    # Tag the image with 'latest' tag
+    c.run(f'docker tag {local_image} {ecr_registry}/{latest_image}')
+
+    # Push the tagged images
+    c.run(f'docker push {ecr_registry}/{local_image}')
+    c.run(f'docker push {ecr_registry}/{latest_image}')
+
+
 
 
 @task
