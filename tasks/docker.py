@@ -47,7 +47,7 @@ def build(c, no_cache=False):
         build_cmd = f'{build_cmd} --no-cache'
     c.run(build_cmd)
 
-
+@task
 def publish(c, ecr_registry, ecr_tag):
     # type: (Context, str, str) -> None
     """

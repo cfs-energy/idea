@@ -1,4 +1,4 @@
-FROM public.ecr.aws/docker/library/python:3.9.18-slim
+FROM public.ecr.aws/docker/library/python:3.9.19-slim
 
 WORKDIR /root
 
@@ -29,14 +29,28 @@ RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2
     rm -rf ./aws awscliv2.zip
 
 # install node and npm
-RUN NODE_MAJOR=16 && rm -f /etc/apt/trusted.gpg.d/nodesource.gpg /etc/apt/sources.list.d/nodesource.list \
-    && apt-get install -y ca-certificates curl gnupg \
-    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/trusted.gpg.d/nodesource.gpg \
-    && echo "deb [signed-by=/etc/apt/trusted.gpg.d/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list \
-    && echo "Package: nodejs" >> /etc/apt/preferences.d/preferences \
-    && echo "Pin: origin deb.nodesource.com" >> /etc/apt/preferences.d/preferences \
-    && echo "Pin-Priority: 1001" >> /etc/apt/preferences.d/preferences\
-    && apt update && apt-get install -y nodejs
+# RUN NODE_MAJOR=16 && rm -f /etc/apt/trusted.gpg.d/nodesource.gpg /etc/apt/sources.list.d/nodesource.list \
+#     && apt-get install -y ca-certificates curl gnupg \
+#     && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/trusted.gpg.d/nodesource.gpg \
+#     && echo "deb [signed-by=/etc/apt/trusted.gpg.d/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list \
+#     && echo "Package: nodejs" >> /etc/apt/preferences.d/preferences \
+#     && echo "Pin: origin deb.nodesource.com" >> /etc/apt/preferences.d/preferences \
+#     && echo "Pin-Priority: 1001" >> /etc/apt/preferences.d/preferences\
+#     && apt update && apt-get install -y nodejs
+# install nvm and node
+RUN set -uex && \
+    apt-get update && \
+    apt-get install -y ca-certificates curl gnupg && \
+    mkdir -p /etc/apt/keyrings && \
+    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+    | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg && \
+    NODE_MAJOR=18 && \
+    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_$NODE_MAJOR.x nodistro main" \
+    > /etc/apt/sources.list.d/nodesource.list && \
+    apt-get update && \
+	apt-get install nodejs -y
+
+
 
 # add all packaged artifacts to container
 ARG PUBLIC_ECR_TAG
