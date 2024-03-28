@@ -48,6 +48,33 @@ def build(c, no_cache=False):
     c.run(build_cmd)
 
 @task
+def build_push_multi(c, ecr_registry, ecr_tag, no_cache=False):
+    # type: (Context, str, str, bool) -> None
+    """
+    Build and publish docker image to an ECR repository using buildx and IAM instance profile
+    """
+
+    prepare_artifacts(c)
+
+    release_version = idea.props.idea_release_version
+    build_cmd = (f'aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin {ecr_registry} && '
+                f'docker buildx ls | grep multi-platform-builder && docker buildx rm multi-platform-builder || echo "No builder to remove" && '
+                f'docker builder prune -f && '
+                f'docker buildx create --use --platform=linux/arm64,linux/amd64 --name multi-platform-builder && '
+                f'docker buildx inspect --bootstrap && '
+                f'docker buildx build --push --platform linux/amd64,linux/arm64 '
+                f'--build-arg PUBLIC_ECR_TAG=v{release_version} '
+                f'-t {ecr_registry}/idea-administrator:v{release_version} '
+                f'-t {ecr_registry}/idea-administrator:{ecr_tag} '
+                f'-t {ecr_registry}/idea-administrator:latest '
+                f'"{idea.props.deployment_administrator_dir}" ')
+
+    if no_cache:
+        build_cmd = f'{build_cmd} --no-cache'
+    c.run(build_cmd)
+
+
+@task
 def publish(c, ecr_registry, ecr_tag):
     # type: (Context, str, str) -> None
     """

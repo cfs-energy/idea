@@ -1,5 +1,9 @@
 FROM public.ecr.aws/docker/library/python:3.9.19-slim
 
+ARG TARGETARCH
+
+ENV OS_ARCH="${TARGETARCH:-amd64}"
+
 WORKDIR /root
 
 RUN apt-get update && \
@@ -23,10 +27,15 @@ RUN sed -i -e "s/# $LANG.*/$LANG UTF-8/" /etc/locale.gen \
     && dpkg-reconfigure locales
 
 # install aws cli
-RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && \
-    unzip -qq awscliv2.zip && \
+RUN if [ "${OS_ARCH}" = "amd64" ]; then \
+        curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" ; \
+    elif [ "${OS_ARCH}" = "arm64" ]; then \
+        curl "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o "awscliv2.zip" ; \
+    fi && \
+    unzip awscliv2.zip && \
     ./aws/install && \
     rm -rf ./aws awscliv2.zip
+
 
 # install node and npm
 # RUN NODE_MAJOR=16 && rm -f /etc/apt/trusted.gpg.d/nodesource.gpg /etc/apt/sources.list.d/nodesource.list \
