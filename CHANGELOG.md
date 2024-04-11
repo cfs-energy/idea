@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Removed AWS Corporate ECR dependency in `idea-admin.sh`
 * Regressed multiple EFA feature from 3.1.6 due to CloudFormation DeviceIndex issues.
 * New Active Directory users will get their account name applied to the givenName and sn attributes to satisfy directory import syncing with Okta requirements.
+* Added DCV Checks in the eVDI Auto Power off event. This will check both CPU and DCV connections based on the idle time setup before stopping eVDI hosts.
 
 ### Bug Fixes
 * Fixed FSx for Lustre allowed size mismatch between AWS and IDEA for scratch
