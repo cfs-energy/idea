@@ -127,7 +127,9 @@ class VirtualDesktopSSMCommandsUtils:
         if base_os == VirtualDesktopBaseOS.WINDOWS:
             document_name = 'AWS-RunPowerShellScript'
             commands = [
-                "$DCV_Describe_Session = Invoke-Expression \"& 'C:\\Program Files\\NICE\\DCV\\Server\\bin\\dcv' describe-session console -j\" | ConvertFrom-Json",
+                "$DCV_Session_JSON = Invoke-Expression \"& 'C:\\Program Files\\NICE\\DCV\\Server\\bin\\dcv' list-sessions -j\" | ConvertFrom-Json",
+                "$DCV_Session_ID = $DCV_Session_JSON.id",
+                "$DCV_Describe_Session = Invoke-Expression \"& 'C:\\Program Files\\NICE\\DCV\\Server\\bin\\dcv' describe-session $DCV_Session_ID -j\" | ConvertFrom-Json",
                 "$CPUAveragePerformanceLast10Secs = (GET-COUNTER -Counter \"\\Processor(_Total)\\% Processor Time\" -SampleInterval 2 -MaxSamples 5 |select -ExpandProperty countersamples | select -ExpandProperty cookedvalue | Measure-Object -Average).average",
                 "$output = @{}",
                 "$dcv = @{}",
