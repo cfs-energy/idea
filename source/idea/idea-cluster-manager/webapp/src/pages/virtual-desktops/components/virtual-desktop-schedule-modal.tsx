@@ -85,7 +85,7 @@ class VirtualDesktopDayOfWeekSchedule extends Component<VirtualDesktopDayOfWeekS
                                 value: 'WORKING_HOURS'
                             },
                             {
-                                title: 'Stop All Day',
+                                title: 'Stop On Idle',
                                 value: 'STOP_ALL_DAY'
                             },
                             {

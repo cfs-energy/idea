@@ -98,7 +98,7 @@ function VirtualDesktopScheduleDescription(props: VirtualDesktopScheduleDescript
         if (schedule.schedule_type === 'WORKING_HOURS') {
             label = 'Working Hours'
         } else if (schedule.schedule_type === 'STOP_ALL_DAY') {
-            label = 'Stopped All Day'
+            label = 'Stopped On Idle'
         } else if (schedule.schedule_type === 'START_ALL_DAY') {
             label = 'Running All Day'
         } else if (schedule.schedule_type === 'CUSTOM_SCHEDULE') {
@@ -116,7 +116,7 @@ function VirtualDesktopScheduleDescription(props: VirtualDesktopScheduleDescript
             case 'START_ALL_DAY':
                 return 'Running all day'
             case 'STOP_ALL_DAY':
-                return 'Stopped all day'
+                return 'Stopped on idle'
             case 'CUSTOM_SCHEDULE':
                 return `${schedule.start_up_time} - ${schedule.shut_down_time}`
         }

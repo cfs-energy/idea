@@ -23,7 +23,7 @@ Simply click the dropdown menu to chose your schedule for that day using the dif
 | Mode            | Running Desktop                        | Stopped Desktop                                |
 | --------------- | -------------------------------------- | ---------------------------------------------- |
 | No Schedule     | Stay running until you stop/terminate  | Stay stopped until you manually restart it     |
-| Stop All Day    | Will be stopped if idle after 00H      | Will stay stopped                              |
+| Stop On Idle    | Will be stopped if idle after 00H      | Will stay stopped                              |
 | Started All Day | Will stay running                      | Will be automatically started after 00H        |
 | Working Hours   | Will be started at 9 AM                | Will be stopped if idle after 5 PM             |
 | Custom Schedule | Will be started based on your own time | Will be stopped if idle based on your own time |

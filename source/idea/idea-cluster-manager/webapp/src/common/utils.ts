@@ -622,7 +622,7 @@ class Utils {
             return 'Start All Day'
         }
 
-        return 'Stop All Day'
+        return 'Stop On Idle'
     }
 
     static getScheduleDisplay(schedule: VirtualDesktopSchedule | undefined, working_hours_start: string | undefined, working_hours_end: string | undefined): string {
