@@ -65,7 +65,7 @@ six==1.16.0
 sqlalchemy==1.4.49
 supervisor==4.2.5
 tomli==2.0.1
-tracerite==1.1.0
+tracerite==1.1.1
 troposphere==4.4.1
 types-python-dateutil==2.8.19.14
 typing-extensions==4.7.1
