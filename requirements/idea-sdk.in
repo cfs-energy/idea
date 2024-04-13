@@ -25,7 +25,7 @@ blinker
 troposphere
 opensearch-py
 Jinja2
-certifi~=2023.11.17
+certifi~=2024.2.2
 cryptography~=42.0.5
 PyJWT
 random-password-generator
