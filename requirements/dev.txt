@@ -106,7 +106,7 @@ rich==13.4.2
 s3transfer==0.10.1
 sanic==23.3.0
 sanic-routing==23.6.0
-semver==3.0.1
+semver==3.0.2
 sh==2.0.4
 shortuuid==1.0.11
 six==1.16.0
