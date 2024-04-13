@@ -271,22 +271,19 @@ class TypingsGenerator:
 
         IDEA Modifications: Updated to fix duplicate anomalies in the generated JSON schema
         """
-        model_extras = [(m, getattr(m.Config, "extra", None)) if getattr(m, 'Config', None)
-        else (m, None) for m in models]
+        model_extras = [getattr(m.Config, "extra", None) for m in models]
 
         try:
-            for m, extra in model_extras:
-                if extra != Extra.allow:
-                    if getattr(m, 'Config', None):
-                        m.Config.extra = Extra.forbid
+            for m in models:
+                if getattr(m.Config, "extra", None) != Extra.allow:
+                    m.Config.extra = Extra.forbid
 
-            class ConfigClass:
-                extra = Extra.forbid
-                json_schema_extra = staticmethod(self.clean_schema)
+            master_model = create_model(
+                "_Master_", **{m.__name__: (m, ...) for m in models}
+            )
+            master_model.Config.extra = Extra.forbid
+            master_model.Config.json_schema_extra = staticmethod(self.clean_schema)
 
-            master_model = create_model("_Master_", **{m.__name__: (m, ...) for m in models})
-            master_model.Config = ConfigClass 
-            
             schema = json.loads(json.dumps(master_model.model_json_schema()))
 
             self.fix_anomalies(schema)
@@ -296,15 +293,13 @@ class TypingsGenerator:
             for name, definition in schema_definitions.items():
                 idea.console.info(f"Processing {name} ...")
                 self.clean_schema(definition)
-                if schema_definitions is not None:  # check if it is not None
-                    schema_definitions[name] = definition  
 
             return json.dumps(schema, indent=2)
 
         finally:
-            for m, extra in model_extras:
-                if extra is not None and getattr(m, 'Config', None):
-                    m.Config.extra = extra
+            for m, x in zip(models, model_extras):
+                if x is not None:
+                    m.Config.extra = x
 
     def generate_typescript_defs(self, modules: List[str], output: str, exclude: Set[str] = None, json2ts_cmd: str = "json2ts") -> None:
         """
