@@ -48,7 +48,7 @@ jsii~=1.96
 lazy-object-proxy==1.9.0
 ldappool==3.0.0
 mako==1.2.4
-markdown==3.4.4
+markdown==3.6
 markdown-it-py==3.0.0
 markupsafe==2.1.5
 mccabe==0.7.0
