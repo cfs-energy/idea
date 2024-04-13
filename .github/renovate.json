@@ -10,11 +10,11 @@
   "packageRules": [
     {
       "matchDatasources": ["pypi"],
-      "addlabels": ["python"]
+      "labels": ["python"]
     },
     {
       "matchDatasources": ["npm"],
-      "addlabels": ["node"]
+      "labels": ["node"]
     },
     {
       "matchDepTypes": ["optionalDependencies"],
