@@ -271,12 +271,14 @@ class TypingsGenerator:
 
         IDEA Modifications: Updated to fix duplicate anomalies in the generated JSON schema
         """
-        model_extras = [getattr(m.Config, "extra", None) for m in models]
+        model_extras = [(m, getattr(m.Config, "extra", None)) if getattr(m, 'Config', None)
+        else (m, None) for m in models]
 
         try:
-            for m in models:
-                if getattr(m.Config, "extra", None) != Extra.allow:
-                    m.Config.extra = Extra.forbid
+            for m, extra in model_extras:
+                if extra != Extra.allow:
+                    if getattr(m, 'Config', None):
+                        m.Config.extra = Extra.forbid
 
             master_model = create_model(
                 "_Master_", **{m.__name__: (m, ...) for m in models}
@@ -285,7 +287,6 @@ class TypingsGenerator:
             master_model.Config.json_schema_extra = staticmethod(self.clean_schema)
 
             schema = json.loads(json.dumps(master_model.model_json_schema()))
-
             self.fix_anomalies(schema)
 
             schema_definitions = Utils.get_value_as_dict('definitions', schema, {})
@@ -297,9 +298,10 @@ class TypingsGenerator:
             return json.dumps(schema, indent=2)
 
         finally:
-            for m, x in zip(models, model_extras):
-                if x is not None:
-                    m.Config.extra = x
+            # We now revert the changes we made to Config.extra.
+            for m, extra in model_extras:
+                if extra is not None and getattr(m, 'Config', None):
+                    m.Config.extra = extra
 
     def generate_typescript_defs(self, modules: List[str], output: str, exclude: Set[str] = None, json2ts_cmd: str = "json2ts") -> None:
         """
