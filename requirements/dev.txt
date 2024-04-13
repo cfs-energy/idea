@@ -71,7 +71,7 @@ platformdirs==4.2.0
 pluggy==1.4.0
 prettytable==3.10.0
 prometheus-client==0.20.0
-prompt-toolkit==3.0.43
+prompt-toolkit==3.0.36
 psutil==5.9.8
 publication==0.0.3
 pyasn1==0.6.0
