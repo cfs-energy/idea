@@ -1,4 +1,4 @@
-coverage[toml]==7.2.7
+coverage[toml]==7.4.4
 exceptiongroup==1.1.2
 iniconfig==2.0.0
 memory-profiler==0.61.0

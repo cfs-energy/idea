@@ -25,7 +25,7 @@ click==8.1.7
 colorama==0.4.6
 colored==2.2.4
 constructs==10.3.0
-coverage[toml]==7.2.7
+coverage[toml]==7.4.4
 cryptography==41.0.7
 dataset==1.6.2
 decorator==5.1.1
