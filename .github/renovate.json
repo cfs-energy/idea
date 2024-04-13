@@ -19,6 +19,22 @@
     {
       "matchDepTypes": ["optionalDependencies"],
       "addLabels": ["optional"]
+    },
+    {
+      "matchPackageNames": ["prompt-toolkit"],
+      "allowedVersions": "3.0.36"
+    },
+    {
+      "matchPackageNames": ["sqlalchemy"],
+      "allowedVersions": "1.4.52"
+    },
+    {
+      "matchPackageNames": ["typeguard"],
+      "allowedVersions": "2.13.3"
+    },
+    {
+      "matchPackageNames": ["urllib3"],
+      "allowedVersions": "1.26.18"
     }
   ]
 }
