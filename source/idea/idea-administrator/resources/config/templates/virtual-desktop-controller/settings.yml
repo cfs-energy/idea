@@ -246,23 +246,23 @@ dcv_session:
   #  shut_down_time: To be provided IF type is CUSTOM_SCHEDULE
   schedule:
     monday:
-      type: NO_SCHEDULE
+      type: STOP_ON_IDLE
       start_up_time: ~
       shut_down_time: ~
     tuesday:
-      type: NO_SCHEDULE
+      type: STOP_ON_IDLE
       start_up_time: ~
       shut_down_time: ~
     wednesday:
-      type: NO_SCHEDULE
+      type: STOP_ON_IDLE
       start_up_time: ~
       shut_down_time: ~
     thursday:
-      type: NO_SCHEDULE
+      type: STOP_ON_IDLE
       start_up_time: ~
       shut_down_time: ~
     friday:
-      type: NO_SCHEDULE
+      type: STOP_ON_IDLE
       start_up_time: ~
       shut_down_time: ~
     saturday:
