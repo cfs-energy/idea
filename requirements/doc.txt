@@ -17,7 +17,7 @@ pathspec==0.12.1
 platformdirs==3.11.0
 pygments==2.17.2
 pymdown-extensions==10.7.1
-python-dateutil==2.8.2
+python-dateutil==2.9.0.post0
 pyyaml==6.0.1
 pyyaml-env-tag==0.1
 regex==2023.12.25
