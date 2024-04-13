@@ -276,14 +276,15 @@ class TypingsGenerator:
         try:
             for m in models:
                 if m.model_config.get("extra", None) != Extra.allow:
-                    m.model_config.update({"extra": Extra.forbid})
+                    m.model_config["extra"] = Extra.forbid
 
-            master_model = create_model(
+            master_model_cls = create_model(
                 "_Master_", **{m.__class__.__name__: (m, ...) for m in models}
             )
-            master_model.model_config = {"extra": Extra.forbid, "json_schema_extra": self.clean_schema}
+            master_model_cls.model_config = {"extra": Extra.forbid, "json_schema_extra": self.clean_schema}
 
-            schema = json.loads(master_model.json())
+            master_model_instance = master_model_cls() 
+            schema = json.loads(master_model_instance.json())
 
             self.fix_anomalies(schema)
 
@@ -297,7 +298,7 @@ class TypingsGenerator:
         finally:
             for m, x in zip(models, model_extras):
                 if x is not None:
-                    m.model_config.update({"extra": x})
+                    m.model_config["extra"] = x
 
     def generate_typescript_defs(self, modules: List[str], output: str, exclude: Set[str] = None, json2ts_cmd: str = "json2ts") -> None:
         """
