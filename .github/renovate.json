@@ -6,4 +6,19 @@
   "pip_requirements": {
     "fileMatch": ["requirements\\/.*\\.(txt|in|out)$"]
   }
+  "labels": ["renovate"],
+  "packageRules": [
+    {
+      "matchDatasources": ["pypi"],
+      "addlabels": ["python"]
+    },
+    {
+      "matchDatasources": ["npm"],
+      "addlabels": ["node"]
+    },
+    {
+      "matchDepTypes": ["optionalDependencies"],
+      "addLabels": ["optional"]
+    }
+  ]
 }
