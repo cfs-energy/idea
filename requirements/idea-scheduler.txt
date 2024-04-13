@@ -51,7 +51,7 @@ random-password-generator==2.2.0
 requests==2.31.0
 requests-aws4auth==1.2.3
 requests-unixsocket==0.3.0
-rich==13.4.2
+rich==13.7.1
 s3transfer==0.10.1
 sanic==23.3.0
 sanic-routing==23.6.0
