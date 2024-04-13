@@ -4,7 +4,7 @@ iniconfig==2.0.0
 memory-profiler==0.61.0
 packaging==23.1
 pluggy==1.2.0
-psutil==5.9.5
+psutil==5.9.8
 pytest==7.4.0
 pytest-cov==4.1.0
 pytest-mock==3.11.1

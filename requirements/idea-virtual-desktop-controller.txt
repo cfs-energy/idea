@@ -32,7 +32,7 @@ opensearch-py==2.2.0
 orjson==3.9.2
 prometheus-client==0.17.1
 prompt-toolkit==3.0.43
-psutil==5.9.5
+psutil==5.9.8
 pycparser==2.21
 pydantic==2.3.0
 pydantic-core==2.6.3
