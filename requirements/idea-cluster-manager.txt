@@ -74,7 +74,7 @@ ujson==5.8.0
 urllib3==1.26.18
 uvloop==0.17.0
 validators==0.20.0
-wcwidth==0.2.6
+wcwidth==0.2.13
 websockets==11.0.3
 
 # The following packages are considered to be unsafe in a requirements file:
