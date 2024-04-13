@@ -67,7 +67,7 @@ orjson==3.10.0
 packaging==24.0
 pathspec==0.12.1
 pip-tools==7.4.1
-platformdirs==3.11.0
+platformdirs==4.2.0
 pluggy==1.4.0
 prettytable==3.10.0
 prometheus-client==0.20.0
