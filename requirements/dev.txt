@@ -113,7 +113,7 @@ six==1.16.0
 sqlalchemy==1.4.52
 supervisor==4.2.5
 tomli==2.0.1
-tomlkit==0.12.0
+tomlkit==0.12.4
 tracerite==1.1.1
 troposphere==4.4.1
 typeguard==2.13.3
