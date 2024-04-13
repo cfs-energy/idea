@@ -69,7 +69,7 @@ pathspec==0.11.1
 pip-tools==7.1.0
 platformdirs==3.9.1
 pluggy==1.4.0
-prettytable==3.8.0
+prettytable==3.10.0
 prometheus-client==0.17.1
 prompt-toolkit==3.0.43
 psutil==5.9.8
