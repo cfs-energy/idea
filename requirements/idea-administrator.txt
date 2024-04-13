@@ -45,7 +45,7 @@ opensearch-py==2.2.0
 orjson==3.9.2
 prettytable==3.8.0
 prometheus-client==0.17.1
-prompt-toolkit==3.0.39
+prompt-toolkit==3.0.43
 psutil==5.9.5
 publication==0.0.3
 pycparser==2.21
