@@ -4,7 +4,7 @@
   "assignees": ["cfsnate"],
   "baseBranches": ["dev-3.1.7"],
   "pip_requirements": {
-    "fileMatch": ["requirements\\/.*\\.(txt|in|out)$"]
+    "fileMatch": ["requirements\\/.*\\.(in)$"]
   },
   "labels": ["renovate"],
   "packageRules": [
