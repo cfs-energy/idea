@@ -274,14 +274,15 @@ class TypingsGenerator:
         schemas = dict()
         for model in models:
             # Override model configuration if necessary
-            if model.model_config.extra != Extra.allow:
+            if model.model_config.get("extra") != Extra.allow:
                 extra = Extra.forbid
             else:
-                extra = model.model_config.extra
+                extra = model.model_config.get("extra")
 
             # Create new model with updated configuration
             new_model = create_model("_"+ model.__name__, **model.__annotations__, 
-                                    model_config=ConfigDict(extra, json_schema_extra=staticmethod(self.clean_schema)))
+                                    model_config=ConfigDict(extra=extra, 
+                                                            json_schema_extra=staticmethod(self.clean_schema)))
             
             # Generate schema for the new model
             schema = new_model.schema()
