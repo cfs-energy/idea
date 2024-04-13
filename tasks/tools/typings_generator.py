@@ -280,15 +280,15 @@ class TypingsGenerator:
                     if getattr(m, 'Config', None):
                         m.Config.extra = Extra.forbid
 
-            # Create a new Config class for the master_model.
             class ConfigClass:
                 extra = Extra.forbid
                 json_schema_extra = staticmethod(self.clean_schema)
 
             master_model = create_model("_Master_", **{m.__name__: (m, ...) for m in models})
-            master_model.Config = ConfigClass  # Set the Config class
-
+            master_model.Config = ConfigClass 
+            
             schema = json.loads(json.dumps(master_model.model_json_schema()))
+
             self.fix_anomalies(schema)
 
             schema_definitions = Utils.get_value_as_dict('definitions', schema, {})
@@ -296,6 +296,8 @@ class TypingsGenerator:
             for name, definition in schema_definitions.items():
                 idea.console.info(f"Processing {name} ...")
                 self.clean_schema(definition)
+                if schema_definitions is not None:  # check if it is not None
+                    schema_definitions[name] = definition  
 
             return json.dumps(schema, indent=2)
 
