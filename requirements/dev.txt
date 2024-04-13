@@ -7,7 +7,7 @@ attrs==23.2.0
 aws-cdk-asset-awscli-v1~=2.2
 aws-cdk-asset-kubectl-v20~=2.1
 aws-cdk-asset-node-proxy-agent-v6~=2.0
-aws-cdk-lib==2.*
+aws-cdk-lib==2.137.0
 banal==1.0.6
 blinker==1.7.0
 boto3==1.34.84
