@@ -19,7 +19,7 @@ Copy/Paste this command on your terminal to launch the installation
 
 **Option2: Download the installer and execute it manually**
 
-As an alternative, you can download `idea-admin.sh` via this [https://raw.githubusercontent.com/awslabs/integrated-digital-engineering-on-aws/main/idea-admin.sh](https://raw.githubusercontent.com/awslabs/integrated-digital-engineering-on-aws/main/idea-admin.sh) and execute it on your Linux or Mac environment via `/bin/bash idea-admin.sh quick-setup`
+As an alternative, you can download `idea-admin.sh` via this [https://raw.githubusercontent.com/cfs-energy/integrated-digital-engineering-on-aws/main/idea-admin.sh](https://raw.githubusercontent.com/cfs-energy/integrated-digital-engineering-on-aws/main/idea-admin.sh) and execute it on your Linux or Mac environment via `/bin/bash idea-admin.sh quick-setup`
 {% endtab %}
 
 {% tab title="Windows" %}

@@ -237,13 +237,13 @@ class Home extends Component<HomePageProps, HomePageState> {
                     >
                         <ul aria-label="Additional resource links" className="custom-list-separator">
                             <li>
-                                <Link href="https://docs.ide-on-aws.com/">Documentation</Link>
+                                <Link href="https://docs.idea-hpc.com/">Documentation</Link>
                             </li>
                             <li>
-                                <Link href="https://docs.ide-on-aws.com/idea/help-and-support/faq">FAQ</Link>
+                                <Link href="https://docs.idea-hpc.com/idea/help-and-support/faq">FAQ</Link>
                             </li>
                             <li>
-                                <Link href="https://github.com/awslabs/integrated-digital-engineering-on-aws/issues">Report an Issue</Link>
+                                <Link href="https://github.com/cfs-energy/integrated-digital-engineering-on-aws/issues">Report an Issue</Link>
                             </li>
                         </ul>
                     </Container>

@@ -40,7 +40,7 @@ $VirtualEnv = if ($Env:VIRTUAL_ENV) {$Env:VIRTUAL_ENV} else {""}
 $ScriptDir = $PSScriptRoot
 $IDEARevision = if ($Env:IDEA_REVISION) {$Env:IDEA_REVISION} else {"v3.1.7"}
 $IDEADockerRepo = "public.ecr.aws/s5o2b4m0"
-$DocumentationError = "https://ide-on-aws.com"
+$DocumentationError = "https://docs.idea-hpc.com"
 $AWSProfile = if ($Env:AWS_PROFILE) {$Env:AWS_PROFILE} else {"default"}
 $AWSRegion= if ($Env:AWS_REGION) {$Env:AWS_REGION} else {"us-east-1"}
 Set-Location -Path "${ScriptDir}"

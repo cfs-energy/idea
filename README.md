@@ -28,11 +28,11 @@ IDEA can be a good solution for any compute or VDI workflow but often specialize
 
 ## Documentation
 
-https://docs.ide-on-aws.com/
+https://docs.idea-hpc.com/
 
 ## Installation
 
-Refer to [IDEA Installation](https://docs.ide-on-aws.com/idea/first-time-users/install-idea) for installation instructions.
+Refer to [IDEA Installation](https://docs.idea-hpc.com/idea/first-time-users/install-idea) for installation instructions.
 
 This solution collects anonymous operational metrics to help AWS improve the quality of the solution.
 
