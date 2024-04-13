@@ -47,7 +47,7 @@ pyparsing==3.1.2
 python-dateutil==2.8.2
 python-dynamodb-lock==0.9.1
 python-ldap==3.4.4
-pytz==2023.3
+pytz==2023.4
 pyyaml==6.0.1
 questionary==1.10.0
 random-password-generator==2.2.0
