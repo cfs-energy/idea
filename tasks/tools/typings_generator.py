@@ -280,11 +280,13 @@ class TypingsGenerator:
                     if getattr(m, 'Config', None):
                         m.Config.extra = Extra.forbid
 
-            master_model = create_model(
-                "_Master_", **{m.__name__: (m, ...) for m in models}
-            )
-            master_model.Config.extra = Extra.forbid
-            master_model.Config.json_schema_extra = staticmethod(self.clean_schema)
+            # Create a new Config class for the master_model.
+            class ConfigClass:
+                extra = Extra.forbid
+                json_schema_extra = staticmethod(self.clean_schema)
+
+            master_model = create_model("_Master_", **{m.__name__: (m, ...) for m in models})
+            master_model.Config = ConfigClass  # Set the Config class
 
             schema = json.loads(json.dumps(master_model.model_json_schema()))
             self.fix_anomalies(schema)
@@ -298,7 +300,6 @@ class TypingsGenerator:
             return json.dumps(schema, indent=2)
 
         finally:
-            # We now revert the changes we made to Config.extra.
             for m, extra in model_extras:
                 if extra is not None and getattr(m, 'Config', None):
                     m.Config.extra = extra
