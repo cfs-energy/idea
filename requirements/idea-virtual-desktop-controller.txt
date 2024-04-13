@@ -25,7 +25,7 @@ mako==1.2.4
 markdown-it-py==3.0.0
 markupsafe==2.1.3
 mdurl==0.1.2
-multidict==6.0.4
+multidict==6.0.5
 mypy==1.4.1
 mypy-extensions==1.0.0
 opensearch-py==2.2.0
