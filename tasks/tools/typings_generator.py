@@ -39,7 +39,7 @@ from tempfile import mkdtemp
 from types import ModuleType
 from typing import Type, Dict, Any, List, Set, Tuple, Optional
 from uuid import uuid4
-from pydantic import ConfigDict, BaseModel, Extra, create_model
+from pydantic import BaseModel, Extra, create_model
 
 GenericModel = None
 
