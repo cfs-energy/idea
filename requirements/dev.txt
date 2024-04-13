@@ -80,7 +80,7 @@ pycparser==2.21
 pydantic==2.3.0
 pydantic-core==2.6.3
 pyfiglet==0.8.post1
-pygments==2.15.1
+pygments==2.17.2
 pyhocon==0.3.60
 pyjwt==2.8.0
 pylint==2.17.7
