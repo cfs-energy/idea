@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Update AWS CDK from `2.95.1` to `2.317.0`
 * Update Node from `16.20.2` to `18.20.0`
 * Update Python from `3.9.18` to `3.9.19`
+* Update all AMIs for Base OS and Software Stacks
 * Implement Renovate for dependency tracking
   * Update all applicable Python packages per Renovate best-practices config
   * Dependency pinning for Cluster Manager Web App node packages
