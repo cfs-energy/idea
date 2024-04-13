@@ -48,7 +48,7 @@ prometheus-client==0.20.0
 prompt-toolkit==3.0.43
 psutil==5.9.8
 publication==0.0.3
-pycparser==2.21
+pycparser==2.22
 pydantic==2.3.0
 pydantic-core==2.6.3
 pygments==2.17.2
