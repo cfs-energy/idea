@@ -5,7 +5,7 @@
   "baseBranches": ["dev-3.1.7"],
   "pip_requirements": {
     "fileMatch": ["requirements\\/.*\\.(txt|in|out)$"]
-  }
+  },
   "labels": ["renovate"],
   "packageRules": [
     {
