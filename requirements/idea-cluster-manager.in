@@ -1,5 +1,5 @@
 -r idea-sdk.in
 supervisor
-sanic~=23.3.0
+sanic~=23.12.1
 python-ldap
 ldappool
