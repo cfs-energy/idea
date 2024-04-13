@@ -129,7 +129,7 @@ wcwidth==0.2.13
 websockets==11.0.3
 wheel==0.43.0
 wrapt==1.16.0
-zipp==3.16.2
+zipp==3.18.1
 
 # The following packages are considered to be unsafe in a requirements file:
 # pip
