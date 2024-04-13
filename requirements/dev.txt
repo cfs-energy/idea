@@ -128,7 +128,7 @@ watchdog==3.0.0
 wcwidth==0.2.13
 websockets==11.0.3
 wheel==0.38.4
-wrapt==1.15.0
+wrapt==1.16.0
 zipp==3.16.2
 
 # The following packages are considered to be unsafe in a requirements file:
