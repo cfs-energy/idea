@@ -271,28 +271,35 @@ class TypingsGenerator:
 
         IDEA Modifications: Updated to fix duplicate anomalies in the generated JSON schema
         """
-        schemas = dict()
-        for model in models:
-            # Override model configuration if necessary
-            if model.model_config.get("extra") != Extra.allow:
-                extra = Extra.forbid
-            else:
-                extra = model.model_config.get("extra")
+        model_extras = [getattr(m.Config, "extra", None) for m in models]
 
-            # Create new model with updated configuration
-            new_model = create_model("_"+ model.__name__, **model.__annotations__, 
-                                    model_config=ConfigDict(extra=extra, 
-                                                            json_schema_extra=staticmethod(self.clean_schema)))
-            
-            # Generate schema for the new model
-            schema = new_model.schema()
-            clean_schema = self.clean_schema(schema)
+        try:
+            for m in models:
+                if getattr(m.Config, "extra", None) != Extra.allow:
+                    m.Config.extra = Extra.forbid
 
-            # Add clean schema to the dict of all schemas
-            schemas[new_model.__name__] = clean_schema
+            master_model = create_model(
+                "_Master_", **{m.__name__: (m, ...) for m in models}
+            )
+            master_model.Config.extra = Extra.forbid
+            master_model.Config.json_schema_extra = staticmethod(self.clean_schema)
 
-        # Return combined schemas as a JSON string
-        return json.dumps(schemas, indent=2)
+            schema = json.loads(json.dumps(master_model.model_json_schema()))
+
+            self.fix_anomalies(schema)
+
+            schema_definitions = Utils.get_value_as_dict('definitions', schema, {})
+
+            for name, definition in schema_definitions.items():
+                idea.console.info(f"Processing {name} ...")
+                self.clean_schema(definition)
+
+            return json.dumps(schema, indent=2)
+
+        finally:
+            for m, x in zip(models, model_extras):
+                if x is not None:
+                    m.Config.extra = x
 
     def generate_typescript_defs(self, modules: List[str], output: str, exclude: Set[str] = None, json2ts_cmd: str = "json2ts") -> None:
         """

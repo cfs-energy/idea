@@ -14,12 +14,19 @@ __all__ = (
     'SocaBaseModel'
 )
 
-from pydantic import ConfigDict, BaseModel
+from pydantic import BaseModel
+import orjson
+
+from pydantic.generics import GenericModel
 
 
-class SocaGenericModel(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+class SocaGenericModel(GenericModel):
+    class Config:
+        arbitrary_types_allowed = True
+        json_loads = orjson.loads
 
 
 class SocaBaseModel(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    class Config:
+        arbitrary_types_allowed = True
+        json_loads = orjson.loads
