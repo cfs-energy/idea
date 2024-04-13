@@ -16,7 +16,7 @@ packaging==23.1
 pathspec==0.11.1
 platformdirs==3.9.1
 pygments==2.15.1
-pymdown-extensions==10.1
+pymdown-extensions==10.7.1
 python-dateutil==2.8.2
 pyyaml==6.0.1
 pyyaml-env-tag==0.1

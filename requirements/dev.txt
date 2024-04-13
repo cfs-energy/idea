@@ -84,7 +84,7 @@ pygments==2.15.1
 pyhocon==0.3.60
 pyjwt==2.8.0
 pylint==2.17.7
-pymdown-extensions==10.1
+pymdown-extensions==10.7.1
 pyparsing==3.1.2
 pyproject-hooks==1.0.0
 pytest==7.4.4
