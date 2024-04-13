@@ -33,7 +33,7 @@ opensearch-py==2.5.0
 orjson==3.10.0
 prettytable==3.10.0
 prometheus-client==0.20.0
-prompt-toolkit==3.0.43
+prompt-toolkit==3.0.36
 psutil==5.9.8
 pycparser==2.22
 pydantic==2.7.0
