@@ -52,7 +52,7 @@ requests==2.31.0
 requests-aws4auth==1.2.3
 requests-unixsocket==0.3.0
 rich==13.4.2
-s3transfer==0.9.0
+s3transfer==0.10.1
 sanic==23.3.0
 sanic-routing==23.6.0
 semver==3.0.2
