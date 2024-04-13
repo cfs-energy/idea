@@ -57,7 +57,7 @@ semver==3.0.2
 sh==2.0.6
 shortuuid==1.0.13
 six==1.16.0
-sqlalchemy==2.0.29
+sqlalchemy==1.4.52
 supervisor==4.2.5
 tomli==2.0.1
 tracerite==1.1.1
