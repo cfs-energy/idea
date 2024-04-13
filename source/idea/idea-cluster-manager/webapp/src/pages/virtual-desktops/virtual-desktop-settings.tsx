@@ -274,6 +274,7 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
                                                     <KeyValue title="Idle Timeout" value={dot.pick('dcv_session.idle_timeout', this.state.vdcSettings)} suffix={"minutes"}/>
                                                     <KeyValue title="Idle Timeout Warning" value={dot.pick('dcv_session.idle_timeout_warning', this.state.vdcSettings)} suffix={"seconds"}/>
                                                     <KeyValue title="CPU Utilization Threshold" value={dot.pick('dcv_session.cpu_utilization_threshold', this.state.vdcSettings)} suffix={"%"}/>
+                                                    <KeyValue title="Idle AutoStop Delay" value={dot.pick('dcv_session.idle_autostop_delay', this.state.vdcSettings)} suffix={"minutes"}/>
                                                 </ColumnLayout>
                                             </Container>
                                             <Container header={<Header variant={"h2"}>DCV Host</Header>}>
