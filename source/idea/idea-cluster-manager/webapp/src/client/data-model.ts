@@ -35,7 +35,7 @@ export type VirtualDesktopTenancy = "default" | "dedicated" | "host";
 export type DayOfWeek = "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday";
 export type VirtualDesktopScheduleType =
   | "WORKING_HOURS"
-  | "STOP_ALL_DAY"
+  | "STOP_ON_IDLE"
   | "START_ALL_DAY"
   | "CUSTOM_SCHEDULE"
   | "NO_SCHEDULE";

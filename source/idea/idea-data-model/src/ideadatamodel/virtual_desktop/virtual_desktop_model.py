@@ -87,7 +87,7 @@ class DayOfWeek(str, Enum):
 
 class VirtualDesktopScheduleType(str, Enum):
     WORKING_HOURS = 'WORKING_HOURS'
-    STOP_ALL_DAY = 'STOP_ALL_DAY'
+    STOP_ON_IDLE = 'STOP_ON_IDLE'
     START_ALL_DAY = 'START_ALL_DAY'
     CUSTOM_SCHEDULE = 'CUSTOM_SCHEDULE'
     NO_SCHEDULE = 'NO_SCHEDULE'

@@ -241,7 +241,7 @@ dcv_session:
 
   # You can provide default schedules of every day of the week in this section.
   # Every schedule entry looks as follows
-  #  type: NO_SCHEDULE, WORKING_HOURS (timings are defined in working_hours.start_up_time and working_hours.shut_down_time), STOP_ALL_DAY, START_ALL_DAY, CUSTOM_SCHEDULE
+  #  type: NO_SCHEDULE, WORKING_HOURS (timings are defined in working_hours.start_up_time and working_hours.shut_down_time), STOP_ON_IDLE, START_ALL_DAY, CUSTOM_SCHEDULE
   #  start_up_time: To be provided IF type is CUSTOM_SCHEDULE
   #  shut_down_time: To be provided IF type is CUSTOM_SCHEDULE
   schedule:
@@ -266,11 +266,11 @@ dcv_session:
       start_up_time: ~
       shut_down_time: ~
     saturday:
-      type: STOP_ALL_DAY
+      type: STOP_ON_IDLE
       start_up_time: ~
       shut_down_time: ~
     sunday:
-      type: STOP_ALL_DAY
+      type: STOP_ON_IDLE
       start_up_time: ~
       shut_down_time: ~
   default_profiles:
