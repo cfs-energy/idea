@@ -91,7 +91,7 @@ def context(ddb_local):
     mock_cognito_idp.admin_enable_user = mock_function
     mock_cognito_idp.admin_disable_user = mock_function
 
-    monkeypatch.setattr(EC2InstanceTypesDB, 'all_instance_type_names', MockInstanceTypes.get_instance_type_names)
+    monkeypatch.setattr(EC2InstanceTypesDB, '_instance_type_names_from_botocore', MockInstanceTypes.get_instance_type_names)
     monkeypatch.setattr(EvdiClient, 'publish_user_disabled_event', mock_function)
 
     def create_mock_boto_session(**_):

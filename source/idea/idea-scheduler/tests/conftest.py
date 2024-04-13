@@ -43,7 +43,7 @@ def context(monkeypatch):
     mock_s3_client.upload_file = lambda **_: {}
     mock_s3_client.get_bucket_acl = lambda **_: {}
 
-    monkeypatch.setattr(EC2InstanceTypesDB, 'all_instance_type_names', MockInstanceTypes.get_instance_type_names)
+    monkeypatch.setattr(EC2InstanceTypesDB, '_instance_type_names_from_botocore', MockInstanceTypes.get_instance_type_names)
     monkeypatch.setattr(Utils, 'create_boto_session', lambda **_: mock_boto_session)
     monkeypatch.setattr(AWSUtil, 'get_ec2_instance_type', MockInstanceTypes.get_instance_type)
     monkeypatch.setattr(AwsClientProvider, 's3', lambda *_: mock_s3_client)
