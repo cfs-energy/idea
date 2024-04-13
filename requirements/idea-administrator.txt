@@ -21,7 +21,7 @@ charset-normalizer==3.2.0
 click==8.1.7
 colored==2.2.4
 constructs==10.2.69
-cryptography==41.0.6
+cryptography==41.0.7
 dataset==1.6.2
 decorator==5.1.1
 exceptiongroup==1.1.2
