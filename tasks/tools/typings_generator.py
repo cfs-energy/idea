@@ -271,26 +271,27 @@ class TypingsGenerator:
 
         IDEA Modifications: Updated to fix duplicate anomalies in the generated JSON schema
         """
-        model_extras = [m.model_config.get("extra", None) for m in models]
+        model_extras = [getattr(m.Config, "extra", None) for m in models]
 
         try:
             for m in models:
-                if m.model_config.get("extra", None) != Extra.allow:
-                    m.model_config["extra"] = Extra.forbid
+                if getattr(m.Config, "extra", None) != Extra.allow:
+                    m.Config.extra = Extra.forbid
 
-            master_model_cls = create_model(
-                "_Master_", **{m.__class__.__name__: (m, ...) for m in models}
+            master_model = create_model(
+                "_Master_", **{m.__name__: (m, ...) for m in models}
             )
-            master_model_cls.model_config = {"extra": Extra.forbid, "json_schema_extra": self.clean_schema}
+            master_model.Config.extra = Extra.forbid
+            master_model.Config.json_schema_extra = staticmethod(self.clean_schema)
 
-            master_model_instance = master_model_cls() 
-            schema = json.loads(master_model_instance.json())
+            schema = json.loads(json.dumps(master_model.model_json_schema()))
 
             self.fix_anomalies(schema)
 
             schema_definitions = Utils.get_value_as_dict('definitions', schema, {})
 
             for name, definition in schema_definitions.items():
+                idea.console.info(f"Processing {name} ...")
                 self.clean_schema(definition)
 
             return json.dumps(schema, indent=2)
@@ -298,7 +299,7 @@ class TypingsGenerator:
         finally:
             for m, x in zip(models, model_extras):
                 if x is not None:
-                    m.model_config["extra"] = x
+                    m.Config.extra = x
 
     def generate_typescript_defs(self, modules: List[str], output: str, exclude: Set[str] = None, json2ts_cmd: str = "json2ts") -> None:
         """
