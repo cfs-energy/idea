@@ -6,7 +6,7 @@ Use the **Deploy** command if you have made an architecture update outside of co
 
 After you have made your infrastructure change, run `./idea-admin.sh cdk diff <STACK>` command to preview what infrastructure changes will be performed during the upcoming upgrade deployment.
 
-```
+```sh
 ./idea-admin.sh cdk diff cluster \
   --cluster-name <CLUSTER_NAME> \
   --aws-region us-east-2
@@ -34,7 +34,7 @@ Resources
 
 Once you have reviewed your changes and everything looks correct, run `./idea-admin.sh deploy cluster --upgrade` to update your AWS environment by triggering a CloudFormation ChangeSet to the stack you are upgrading (`cluster` in this example).
 
-```
+```sh
 ./idea-admin.sh deploy  cluster --upgrade \
   --cluster-name <CLUSTER_NAME>\
   --aws-region us-east-2
@@ -115,7 +115,7 @@ When this is the case, you first need to backup your existing global settings an
 
 Environment variables can be used to make the process more dynamic but are not required.
 
-```bash
+```sh
 export IDEA_CLUSTER_NAME=idea-test1
 export IDEA_AWS_REGION=us-east-2
 export IDEA_AWS_PROFILE=test1
