@@ -76,7 +76,7 @@
 
 * [High Level Overview](architecture/high-level-overview.md)
 
-## 🛠 Developer Portal
+## 🛠️ Developer Portal
 
 * [IDEA CLI utility](developer-portal/idea-cli-utility.md)
 * [Developer Onboarding](developer-portal/developer-onboarding.md)

@@ -106,3 +106,31 @@ You can validate your upgrade by looking at the AWS CloudFormation console. The 
 Once the stack is updated, you can verify the resources have been upgraded correctly. In my example, I have changed the codebase of one Lambda function. I can confirm the function has been updated successfully by looking at the new code and confirming the timestamp under "Last Modified Time" match my `./idea-admin.sh deploy` command.
 
 <figure><img src="../../../.gitbook/assets/ftu_ops_updatebk_lastmod.webp" alt=""><figcaption></figcaption></figure>
+
+## Global Settings Backup and Upgrade
+
+Some IDEA Upgrades require making updates to the clusters global settings. This will be noted in the release notes if it applies.
+
+When this is the case, you first need to backup your existing global settings and cluster config.
+
+Environment variables can be used to make the process more dynamic but are not required.
+
+```bash
+export IDEA_CLUSTER_NAME=idea-test1
+export IDEA_AWS_REGION=us-east-2
+export IDEA_AWS_PROFILE=test1
+
+### Backup settings from DDB
+./idea-admin.sh config export --cluster-name $IDEA_CLUSTER_NAME --aws-region $IDEA_AWS_REGION --aws-profile $IDEA_AWS_PROFILE --export-dir ~/.idea/clusters/$IDEA_CLUSTER_NAME/$IDEA_AWS_REGION/config
+
+### Copy settings to a golden backup ###
+cp -r ~/.idea/clusters/$IDEA_CLUSTER_NAME/$IDEA_AWS_REGION/config ~/.idea/clusters/$IDEA_CLUSTER_NAME/$IDEA_AWS_REGION/config.golden.$(date +%m%d%Y)
+
+### Regenerate config in filesystem from new update - root path is used for docker compatibility ###
+./idea-admin.sh config generate --regenerate --values-file /root/.idea/clusters/$IDEA_CLUSTER_NAME/$IDEA_AWS_REGION/values.yml
+
+### Overwrite DDB config for new global-settings ###
+./idea-admin.sh config update --key-prefix global-settings --overwrite --cluster-name $IDEA_CLUSTER_NAME --aws-region $IDEA_AWS_REGION --aws-profile $IDEA_AWS_PROFILE
+```
+
+Once you've updated the global settings, you can proceed with the upgrade of all modules.
