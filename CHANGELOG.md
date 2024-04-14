@@ -36,6 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   * This likely needs a re-work for different FSx Lustre types.
 * Fixed NVIDIA GPU Driver install for Amazon Linux 2 with Kernel 5.10
 
+### Known Issues
+* Data model was updated in 3.1.6, devtool.typings needs to be reworked to support new classes
+* Developer documentation needs some rework / updates
+* When using OpenLDAP and doing an upgrade, replacement of the directoryservice instance removes existing directory entries. This can be avoided by backing up and restoring post upgrade or using ideactl on cluster manager to sync groups and users from DynamoDB into OpenLDAP
+* Unit tests need some rework
+
 
 ## [3.1.6] - 2023-10-20
 
