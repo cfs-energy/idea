@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Updated Help menu in Cluster Web App to direct issues to GitHub
 * Update references to old Github Repo
 * Update references to old Docs URL
+* Added AMI update scripts in tasks/tools to update AMI versions for base and software stacks. These will be worked into devtool at a later time
 
 ### Bug Fixes
 * Fixed FSx for Lustre allowed size mismatch between AWS and IDEA for scratch
