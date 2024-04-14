@@ -196,3 +196,6 @@ integration-test-results/
 package.json
 package-lock.json
 yarn.lock
+
+region_ami_config_backup_*.yml
+base-software-stack-config_backup_*.yaml
