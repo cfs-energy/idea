@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changes
 * Update AWS CDK from `2.95.1` to `2.317.0`
-* Update Node from `16.20.2` to `18.20.0` for dev environment
+* Update Node from `16.20.2` to `18.20.0`
 * Update Python from `3.9.18` to `3.9.19`
 * Update all AMIs for Base OS and Software Stacks
 * Implement Renovate for dependency tracking
@@ -42,7 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Developer documentation needs some re-work / updates
 * When using OpenLDAP and doing an upgrade, replacement of the directoryservice instance removes existing directory entries. This can be avoided by backing up and restoring post upgrade or using ideactl on cluster manager to sync groups and users from DynamoDB into OpenLDAP
 * Unit tests need some re-work
-* Node and node dependencies need updating in more places. Docker container, Cluster Manager Web App
+* Node and node dependencies need updating in more places. Cluster Manager Web App
 * Python needs updating. 3.9 is EOL October 2025
 
 
