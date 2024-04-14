@@ -9,24 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Features
 * First truly Open Source IDEA Release!
 * Documentation combined into IDEA monorepo under `docs` folder
+* Multi Architecture Administrator Docker Image
+  * Added build-push-multi task to use buildx to create the IDEA Admin container and auto-push to ECR
+* Added DCV Checks in the eVDI Auto Power off event. This will check both CPU and DCV connections based on the idle time setup before stopping eVDI hosts
+  * Renamed schedule `STOP_ALL_DAY` to `STOP_ON_IDLE` to better represent stop schedule behavior
+  * Set default schedule for all days to `STOP_ON_IDLE`
 
 ### Changes
 * Update AWS CDK from `2.95.1` to `2.317.0`
 * Update Node from `16.20.2` to `18.20.0`
 * Update Python from `3.9.18` to `3.9.19`
-* Update all AMIs for Base OS and Software Stacks
+* Update all AMIs for Base OS and Software Stacks. Update Amazon Linux 2 AMI to Kernel 5.10
 * Implement Renovate for dependency tracking
   * Update all applicable Python packages per Renovate best-practices config
   * Dependency pinning and some dependency updates for Cluster Manager Web App node packages
 * Added gcc and python3-dev to Docker image for building Python requirements
-* Multi Architecture Administrator Docker Image building
-  * Added build-push-multi task to use buildx to create the IDEA Admin container and auto-push to ECR
 * Removed AWS Corporate ECR dependency in `idea-admin.sh`
 * Regressed multiple EFA feature from 3.1.6 due to CloudFormation DeviceIndex issues. Seen on at least hpc6id.32xlarge
 * New Active Directory users will get their account name applied to the givenName and sn attributes to satisfy directory import syncing with Okta requirements
-* Added DCV Checks in the eVDI Auto Power off event. This will check both CPU and DCV connections based on the idle time setup before stopping eVDI hosts
-  * Renamed schedule `STOP_ALL_DAY` to `STOP_ON_IDLE` to better represent stop schedule behavior
-  * Set default schedule for all days to `STOP_ON_IDLE`
 * Updated Help menu in Cluster Web App to direct issues to GitHub
 * Update references to old Github Repo
 * Update references to old Docs URL

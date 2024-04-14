@@ -27,7 +27,7 @@ def get_ami(region, ami_type, profile):
         elif ami_type == 'rocky9':
             ami_name = 'Rocky-9-EC2-Base-9.2-*.x86_64-*'
         elif ami_type == 'amazonlinux2':
-            ami_name = 'amzn2-ami-hvm-*-x86_64-gp2'
+            ami_name = 'amzn2-ami-kernel-5.10-hvm-*-x86_64-gp2'
         else:
             print(f'Unknown AMI type: {ami_type}')
             return None

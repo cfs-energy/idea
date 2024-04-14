@@ -56,9 +56,9 @@ def get_ami(region, ami_type, architecture_type, profile, ss_id_suffix):
         #         ami_name = 'Rocky-9-EC2-Base-9.2-*.x86_64-*'
         elif ami_type == 'amazonlinux2':
             if architecture_type == 'arm64':
-                ami_name = 'amzn2-ami-hvm-*-arm64-gp2'
+                ami_name = 'amzn2-ami-kernel-5.10-hvm-*-arm64-gp2'
             elif architecture_type == 'x86-64':
-                ami_name = 'amzn2-ami-hvm-*-x86_64-gp2'
+                ami_name = 'amzn2-ami-kernel-5.10-hvm-*-x86_64-gp2'
         else:
             print(f'Unknown AMI type: {ami_type}')
             return None
