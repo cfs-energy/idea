@@ -360,3 +360,4 @@ class TypingsGenerator:
         self.remove_master_model_from_output(output)
 
         idea.console.success(f"Saved typescript definitions to {output}.")
+        
