@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Update AWS CDK from `2.95.1` to `2.317.0`
 * Update Node from `16.20.2` to `18.20.0`
 * Update Python from `3.9.18` to `3.9.19`
+* Update NVIDIA GPU drivers used during installation
+  * LTSB from  `470.199.02` to `470.239.06`
+  * Production `535.104.05` to `550.54.15`
 * Update all AMIs for Base OS and Software Stacks. Update Amazon Linux 2 AMI to Kernel 5.10
 * Implement Renovate for dependency tracking
   * Update all applicable Python packages per Renovate best-practices config
