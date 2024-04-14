@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Fixed FSx for Lustre allowed size mismatch between AWS and IDEA for scratch
   * This likely needs a re-work for different FSx Lustre types.
 * Fixed NVIDIA GPU Driver install for Amazon Linux 2 with Kernel 5.10
+* Remove trailing whitespace from ENI IDS for tagging in instance bootstrap
 
 ### Known Caveats
 * Data model was updated in 3.1.6, devtool.typings needs to be re-worked to support changes in Pydantic and IDEA data model
