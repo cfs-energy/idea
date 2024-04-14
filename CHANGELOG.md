@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Update all AMIs for Base OS and Software Stacks
 * Implement Renovate for dependency tracking
   * Update all applicable Python packages per Renovate best-practices config
-  * Dependency pinning for Cluster Manager Web App node packages
+  * Dependency pinning and some dependency updates for Cluster Manager Web App node packages
 * Added gcc and python3-dev to Docker image for building Python requirements
 * Multi Architecture Administrator Docker Image building
   * Added build-push-multi task to use buildx to create the IDEA Admin container and auto-push to ECR
