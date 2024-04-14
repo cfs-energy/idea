@@ -41,7 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Data model was updated in 3.1.6, devtool.typings needs to be reworked to support changes in Pydantic and IDEA data model
 * Developer documentation needs some re-work / updates
 * When using OpenLDAP and doing an upgrade, replacement of the directoryservice instance removes existing directory entries. This can be avoided by backing up and restoring post upgrade or using ideactl on cluster manager to sync groups and users from DynamoDB into OpenLDAP
-* Unit tests need some re-work
+* Tests need some re-work
 * Node and node dependencies need updating in more places. Cluster Manager Web App
 * Python needs updating. 3.9 is EOL October 2025
 
