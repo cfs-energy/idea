@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Set AMI_VALUE and STOP_ON_IDLE variables
-AMI_VALUE="ami-0a699202e5027c10d" ## AMI ID for Amazon Linux 2 in us-east-2. AMI ID's can be found in source/idea/idea-administrator/resources/config/region_ami_config.yml
+AMI_VALUE="ami-00cda30cf72311684" ## AMI ID for Amazon Linux 2 in us-east-2. AMI ID's can be found in source/idea/idea-administrator/resources/config/region_ami_config.yml
 STOP_ON_IDLE="STOP_ON_IDLE"
 
 # Set IDEA_CLUSTER_NAME, IDEA_AWS_REGION, and IDEA_AWS_PROFILE variables
