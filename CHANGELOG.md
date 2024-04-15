@@ -7,7 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [3.1.7] -  TBD
 
 ### Notes
-This upgrade does require an update to the global settings. Please review [Global Settings Upgrade](https://docs.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/update-idea-backend-resource#global-settings-backup-and-upgrade) before upgrading.
+* This upgrade does require an update to the global settings. Please review [Global Settings Upgrade](https://docs.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/update-idea-backend-resource#global-settings-backup-and-upgrade) before upgrading.
+* Pre-upgrade script `scripts/pre-upgrade-317.sh` will assist by outputting the cluster settings command to update Base OS AMI as well as rename occurrences in settings for schedule `STOP_ALL_DAY` to `STOP_ON_IDLE`. 
 
 ### Features
 * First truly Open Source IDEA Release!
@@ -26,6 +27,7 @@ This upgrade does require an update to the global settings. Please review [Globa
   * LTSB from  `470.199.02` to `470.239.06`
   * Production `535.104.05` to `550.54.15`
 * Update all AMIs for Base OS and Software Stacks. Update Amazon Linux 2 AMI to Kernel 5.10
+  * Pre-Upgrade script can assist in updating AMI in DDB Settings. Software Stacks will remain untouched during upgrade
 * Implement Renovate for dependency tracking
   * Update all applicable Python packages per Renovate best-practices config
   * Dependency pinning and some dependency updates for Cluster Manager Web App node packages
@@ -36,7 +38,7 @@ This upgrade does require an update to the global settings. Please review [Globa
 * Updated Help menu in Cluster Web App to direct issues to GitHub
 * Update references to old Github Repo
 * Update references to old Docs URL
-* Added AMI update scripts in tasks/tools to update AMI versions for base and software stacks. These will be worked into devtool at a later time
+* Added AMI update scripts in `scripts/dev` to update AMI versions for base and software stacks. These will be worked into devtool at a later time
 
 ### Bug Fixes
 * Fixed FSx for Lustre allowed size mismatch between AWS and IDEA for scratch
