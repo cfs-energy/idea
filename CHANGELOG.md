@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   * Pre-Upgrade script can assist in updating AMI in DDB Settings. Software Stacks will remain untouched during upgrade
 * Implement Renovate for dependency tracking
   * Update all applicable Python packages per Renovate best-practices config
+    * sanic left at `23.6.0` for socket authorization issues in `ideactl`
   * Dependency pinning and some dependency updates for Cluster Manager Web App node packages
 * Added gcc and python3-dev to Docker image for building Python requirements
 * Removed AWS Corporate ECR dependency in `idea-admin.sh`

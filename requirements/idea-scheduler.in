@@ -2,4 +2,4 @@
 cachetools
 prettytable
 supervisor
-sanic~=23.12.1
+sanic~=23.6.0
