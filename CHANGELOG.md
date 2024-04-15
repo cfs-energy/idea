@@ -47,7 +47,8 @@ This upgrade does require an update to the global settings. Please review [Globa
 ### Known Caveats
 * Data model was updated in 3.1.6, devtool.typings needs to be re-worked to support changes in Pydantic and IDEA data model
 * Developer documentation needs some re-work / updates
-* When using OpenLDAP and doing an upgrade, replacement of the directoryservice instance removes existing directory entries. This can be avoided by backing up and restoring post upgrade or using ideactl on cluster manager to sync groups and users from DynamoDB into OpenLDAP
+* When using OpenLDAP and doing an upgrade, replacement of the directoryservice instance removes existing directory entries. This can be avoided by backing up and restoring post upgrade or using ideactl on cluster manager to sync groups and users from DynamoDB into OpenLDAP. Generally there is not an explicit need to upgrade the directoryservice module.
+* After upgrading the scheduler module, job id's reset to 0. This is purely cosmetic and does not affect functionality. However, users tracking analytics by job id may want to be aware of this upon upgrade.
 * Tests need some re-work
 * Node and node dependencies need updating in more places. Cluster Manager Web App, Global Settings
 * Python needs updating. 3.9 is EOL October 2025
