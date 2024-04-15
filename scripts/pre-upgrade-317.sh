@@ -36,7 +36,10 @@ CMD="./idea-admin.sh config set"
 
 # Add each key to the command
 while IFS= read -r KEY; do
-    CMD+=" \"Key=$KEY,Type=string,Value=$AMI_VALUE\""
+    # Skip if key is empty
+    if [[ -n "$KEY" ]]; then
+        CMD+=" \"Key=$KEY,Type=string,Value=$AMI_VALUE\""
+    fi
 done <<< "$KEYS"
 
 # Replace 'STOP_ALL_DAY' with 'STOP_ON_IDLE' and append to the command
@@ -61,7 +64,10 @@ for key in find_schedule_keys(output):
 ")
 
 while IFS= read -r KEY; do
-    CMD+=" \"Key=$KEY.type,Type=string,Value=$STOP_ON_IDLE\""
+    # Skip if key is empty
+    if [[ -n "$KEY" ]]; then
+        CMD+=" \"Key=$KEY.type,Type=string,Value=$STOP_ON_IDLE\""
+    fi
 done <<< "$KEYS"
 
 # Add additional parameters to the command
