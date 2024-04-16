@@ -51,6 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   * This likely needs a re-work for different FSx Lustre types.
 * Fixed NVIDIA GPU Driver install for Amazon Linux 2 with Kernel 5.10
 * Remove trailing whitespace from ENI IDS for tagging in instance bootstrap
+* Fixed HPC Job Name pydantic validation to allow strings, integers, and floats instead of just strings for HPC job names
 
 ### Known Caveats
 * Data model was updated in 3.1.6, devtool.typings needs to be re-worked to support changes in Pydantic and IDEA data model
