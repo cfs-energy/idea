@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Update NPM from `9.8.1` to `10.5.2`
 * Update OpenMPI from `4.1.5` to `5.0.3`
 * Update EFA Driver from `1.25.1` to `1.31.0`
+* Update DCV and components from `2023.0` to `2023.1`
 * Update NVIDIA GPU drivers used during installation
   * LTSB from  `470.199.02` to `470.239.06`
   * Production `535.104.05` to `550.54.15`
