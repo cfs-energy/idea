@@ -7,18 +7,18 @@
   * [Pre-Requisites](first-time-users/install-idea/pre-requisites.md)
   * [Standard Installation](first-time-users/install-idea/standard-installation.md)
 * [Access your IDEA cluster](first-time-users/access-your-idea-cluster/README.md)
-  * [APIs](first-time-users/access-your-idea-cluster/apis.md)
-  * [Virtual Desktops (Linux/Windows)](first-time-users/access-your-idea-cluster/virtual-desktops-linux-windows.md)
   * [Web Interface](first-time-users/access-your-idea-cluster/web-interface.md)
+  * [Virtual Desktops (Linux/Windows)](first-time-users/access-your-idea-cluster/virtual-desktops-linux-windows.md)
   * [SSH](first-time-users/access-your-idea-cluster/ssh.md)
+  * [APIs](first-time-users/access-your-idea-cluster/apis.md)
 * [File Browser](first-time-users/file-browser.md)
 * [Let's get started](first-time-users/lets-get-started.md)
 * [Cluster operations](first-time-users/cluster-operations/README.md)
-  * [Uninstall IDEA](first-time-users/cluster-operations/uninstall-idea.md)
   * [Update IDEA cluster](first-time-users/cluster-operations/update-idea-cluster/README.md)
     * [Patch IDEA module (idea-admin.sh patch)](first-time-users/cluster-operations/update-idea-cluster/patch-idea-module.md)
     * [Update IDEA configuration (idea-admin.sh config)](first-time-users/cluster-operations/update-idea-cluster/update-idea-configuration.md)
     * [Update IDEA backend resource (idea-admin.sh deploy)](first-time-users/cluster-operations/update-idea-cluster/update-idea-backend-resource.md)
+  * [Uninstall IDEA](first-time-users/cluster-operations/uninstall-idea.md)
 
 ## 🤖 Modules
 
