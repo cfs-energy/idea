@@ -680,7 +680,7 @@ class SocaJob(SocaBaseModel):
     job_uid: Optional[str] = Field(default=None)
     job_group: Optional[str] = Field(default=None)
     project: Optional[str] = Field(default=None)
-    name: Optional[str] = Field(default=None)
+    name: Optional[Union[int, str, float]] = Field(default=None)
     queue: Optional[str] = Field(default=None)
     queue_type: Optional[str] = Field(default=None)
     scaling_mode: Optional[SocaScalingMode] = Field(default=None)
