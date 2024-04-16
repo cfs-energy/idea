@@ -10,6 +10,10 @@ This project is NOT AWS RES (https://github.com/aws/res). RES is a fork of IDEA 
 
 This code was originally written by AWS but has been abandoned and taken open source as of version 3.1.6 respecting the original Apache 2.0 license terms.
 
+## Documentation
+
+https://docs.idea-hpc.com/
+
 ## What is IDEA?
 
 Integrated Digital Engineering on AWS (IDEA) is an evolution of SOCA ([Scale Out Computing on AWS](https://awslabs.github.io/scale-out-computing-on-aws/)). IDEA empowers teams of engineers, scientists and researchers with a cloud environment to host engineering tools required for end-to-end product development workloads.
@@ -24,11 +28,6 @@ IDEA can be a good solution for any compute or VDI workflow but often specialize
 * Model Based Systems Engineering - MBSE
 * Electronic Design Automation – EDA Using this solution, research and development (R&D) leaders enable engineers and designers to break-through development silos and accelerate the product development process.
 * Large distributed compute and simulation jobs. 1-100k+ CPU and GPU cores. CFD/EFA/etc
-
-
-## Documentation
-
-https://docs.idea-hpc.com/
 
 ## Installation
 
