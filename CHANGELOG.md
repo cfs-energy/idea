@@ -21,8 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changes
 * Update AWS CDK from `2.95.1` to `2.317.0`
-* Update Node from `16.20.2` to `18.20.0`
+* Update Node from `16.20.2` to `18.20.2`
 * Update Python from `3.9.18` to `3.9.19`
+* Update NVM from `0.39.5` to `0.39.7`
+* Update NPM from `9.8.1` to `10.5.2`
+* Update OpenMPI from `4.1.5` to `5.0.3`
+* Update EFA Driver from `1.25.1` to `1.31.0`
 * Update NVIDIA GPU drivers used during installation
   * LTSB from  `470.199.02` to `470.239.06`
   * Production `535.104.05` to `550.54.15`
@@ -53,7 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * When using OpenLDAP and doing an upgrade, replacement of the directoryservice instance removes existing directory entries. This can be avoided by backing up and restoring post upgrade or using ideactl on cluster manager to sync groups and users from DynamoDB into OpenLDAP. Generally there is not an explicit need to upgrade the directoryservice module.
 * After upgrading the scheduler module, job id's reset to 0. This is purely cosmetic and does not affect functionality. However, users tracking analytics by job id may want to be aware of this upon upgrade.
 * Tests need some re-work
-* Node and node dependencies need updating in more places. Cluster Manager Web App, Global Settings
+* Node dependencies need updating in more places. Cluster Manager Web App
 * Python needs updating. 3.9 is EOL October 2025
 
 
