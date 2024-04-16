@@ -575,7 +575,7 @@ package_config:
           al2_rhel_centos7:
             version: 2023.1.710-1.el7.x86_64
             url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.1/Gateway/nice-dcv-connection-gateway-2023.1.710-1.el7.x86_64.rpm
-            sha256sum: 7a4a373f9073eebf9ab8fe56d7a98b049918f0a402bd1cf75a16a44034e8a27de
+            sha256sum: a4a373f9073eebf9ab8fe56d7a98b049918f0a402bd1cf75a16a44034e8a27de
           {%- endif %}
           {%- if 'rhel8' in supported_base_os or 'centos8' in supported_base_os or 'rocky8' in supported_base_os %}
           rhel_centos_rocky8:
