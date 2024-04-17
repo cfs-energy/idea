@@ -172,7 +172,7 @@ class Home extends Component<HomePageProps, HomePageState> {
                                     Enable your employees with the latest and greatest EC2 instances to use the full power
                                     of AWS.
                                 </Box>
-                                <Link href="#" {...externalLinkProps}>
+                                <Link href="https://docs.idea-hpc.com/modules/virtual-desktop-interfaces/user-documentation" {...externalLinkProps}>
                                     Learn more
                                 </Link>
                             </div>
@@ -184,7 +184,7 @@ class Home extends Component<HomePageProps, HomePageState> {
                                     Run a powerful workload manager of your choice to run your simulation workloads at scale
                                     with the scalability and flexibility of Amazon AWS.
                                 </Box>
-                                <Link href="#" {...externalLinkProps}>
+                                <Link href="https://docs.idea-hpc.com/modules/hpc-workloads/user-documentation" {...externalLinkProps}>
                                     Learn more
                                 </Link>
                             </div>
@@ -208,18 +208,18 @@ class Home extends Component<HomePageProps, HomePageState> {
                         <ul aria-label="Getting started documentation" className="custom-list-separator">
                             <li>
                                 <Link
-                                    href="#"
+                                    href="https://docs.idea-hpc.com/"
                                     external={true}
                                 >What is Integrated Digital Engineering on AWS?</Link>
                             </li>
                             <li>
                                 <Link
-                                    href="#"
+                                    href="https://docs.idea-hpc.com/first-time-users/lets-get-started"
                                 >Getting started with IDEA</Link>
                             </li>
                             <li>
                                 <Link
-                                    href="#"
+                                    href="https://docs.idea-hpc.com/modules/hpc-workloads/user-documentation"
                                 >Submit your first HPC Job</Link>
                             </li>
                         </ul>
