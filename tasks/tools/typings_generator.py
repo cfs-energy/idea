@@ -258,7 +258,7 @@ class TypingsGenerator:
             for name in add_definitions:
                 definitions[name] = add_definitions[name]
 
-    def generate_json_schema(self, models: List[Type[BaseModel]]) -> str:
+    def generate_json_schema(models: List[Type[BaseModel]]) -> str:
         """
         Create a top-level '_Master_' model with references to each of the actual models.
         Generate the schema for this model, which will include the schemas for all the
@@ -271,20 +271,20 @@ class TypingsGenerator:
 
         IDEA Modifications: Updated to fix duplicate anomalies in the generated JSON schema
         """
-        model_extras = [getattr(m.Config, "extra", None) for m in models]
+        model_extras = [m.model_config.get("extra") for m in models]
 
         try:
             for m in models:
-                if getattr(m.Config, "extra", None) != Extra.allow:
-                    m.Config.extra = Extra.forbid
+                if m.model_config.get("extra") != "allow":
+                    m.model_config["extra"] = "forbid"
 
-            master_model = create_model(
+            master_model: BaseModel = create_model(
                 "_Master_", **{m.__name__: (m, ...) for m in models}
             )
-            master_model.Config.extra = Extra.forbid
-            master_model.Config.json_schema_extra = staticmethod(self.clean_schema)
+            master_model.model_config["extra"] = "forbid"
+            master_model.model_config["json_schema_extra"] = staticmethod(clean_schema)
 
-            schema = json.loads(json.dumps(master_model.model_json_schema()))
+            schema: dict = master_model.model_json_schema(mode="serialization")
 
             self.fix_anomalies(schema)
 
@@ -299,7 +299,7 @@ class TypingsGenerator:
         finally:
             for m, x in zip(models, model_extras):
                 if x is not None:
-                    m.Config.extra = x
+                    m.model_config["extra"] = x
 
     def generate_typescript_defs(self, modules: List[str], output: str, exclude: Set[str] = None, json2ts_cmd: str = "json2ts") -> None:
         """
