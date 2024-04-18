@@ -1,7 +1,7 @@
 # Begin: OpenPBS Client
 {% include '_templates/linux/openpbs.jinja2' %}
 
-echo -e "PBS_SERVER=scheduler.{{ context.config.get_string('cluster.route53.private_hosted_zone_name', required=True) }}
+echo -e "PBS_SERVER={{ context.config.get_string('scheduler.private_dns_name', required=True).split('.')[0] }}
 PBS_START_SERVER=0
 PBS_START_SCHED=0
 PBS_START_COMM=0
@@ -13,7 +13,7 @@ PBS_SCP=/usr/bin/scp
 " > /etc/pbs.conf
 
 echo -e "
-\$clienthost scheduler.{{ context.config.get_string('cluster.route53.private_hosted_zone_name', required=True) }}
+\$clienthost {{ context.config.get_string('scheduler.private_dns_name').split('.')[0] }}
 \$usecp *:/dev/null /dev/null
 \$usecp *:{{ context.config.get_string('shared-storage.data.mount_dir') }} {{ context.config.get_string('shared-storage.data.mount_dir') }}
 " > /var/spool/pbs/mom_priv/config
