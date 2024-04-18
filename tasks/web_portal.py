@@ -72,4 +72,4 @@ def typings(c):
 
     target = os.path.join(project_root, *('source/idea/idea-cluster-manager/webapp/src/client/data-model.ts'.split('/')))
 
-    converter.generate_typescript_defs(modules, target, exclude={'IdeaOpenAPISpecEntry', 'SocaGenericModel'})
+    converter.generate_typescript_defs(modules, target, exclude={'IdeaOpenAPISpecEntry'})
