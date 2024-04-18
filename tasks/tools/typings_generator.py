@@ -282,7 +282,7 @@ class TypingsGenerator:
                 "_Master_", **{m.__name__: (m, ...) for m in models}
             )
             master_model.model_config["extra"] = "forbid"
-            master_model.model_config["json_schema_extra"] = staticmethod(clean_schema)
+            master_model.model_config["json_schema_extra"] = staticmethod(self.clean_schema)
 
             schema: dict = master_model.model_json_schema(mode="serialization")
 
