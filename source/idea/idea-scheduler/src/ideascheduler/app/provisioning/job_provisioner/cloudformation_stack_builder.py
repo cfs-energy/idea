@@ -375,7 +375,8 @@ class CloudFormationStackBuilder:
                     NetworkInterfaces(
                         InterfaceType='efa',
                         DeleteOnTermination=True,
-                        DeviceIndex=1 if (_i > 0) else 0,
+                        #DeviceIndex=1 if (_i > 0) else 0,
+                        DeviceIndex=0,
                         NetworkCardIndex=_i,
                         Groups=self.job.params.security_groups
                     )
