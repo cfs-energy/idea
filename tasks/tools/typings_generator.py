@@ -258,7 +258,7 @@ class TypingsGenerator:
             for name in add_definitions:
                 definitions[name] = add_definitions[name]
 
-    def generate_json_schema(models: List[Type[BaseModel]]) -> str:
+    def generate_json_schema(self, models: List[Type[BaseModel]]) -> str:
         """
         Create a top-level '_Master_' model with references to each of the actual models.
         Generate the schema for this model, which will include the schemas for all the
@@ -333,9 +333,6 @@ class TypingsGenerator:
 
         models = sorted(models, key=lambda m: m.__name__)
         idea.console.info(f"Generating {len(models)} JSON schemas from pydantic models ...")
-
-        print("Models passed:", models)
-        print("Type of each element in models:", [type(m) for m in models])
 
 
         schema = self.generate_json_schema(models)
