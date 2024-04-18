@@ -334,6 +334,9 @@ class TypingsGenerator:
         models = sorted(models, key=lambda m: m.__name__)
         idea.console.info(f"Generating {len(models)} JSON schemas from pydantic models ...")
 
+        idea.console.info(f"Calling generate_json_schema with models:", {models})
+
+
         schema = self.generate_json_schema(models)
         schema_dir = mkdtemp()
         schema_file_path = os.path.join(schema_dir, "schema.json")
