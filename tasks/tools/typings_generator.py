@@ -330,7 +330,8 @@ class TypingsGenerator:
 
         if exclude:
             models = [m for m in models if m.__name__ not in exclude]
-        print("Calling generate_json_schema with models:", models)
+            print("Calling generate_json_schema with models:", models)
+
         models = sorted(models, key=lambda m: m.__name__)
         idea.console.info(f"Generating {len(models)} JSON schemas from pydantic models ...")
 
