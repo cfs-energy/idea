@@ -44,6 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Update references to old Github Repo
 * Update references to old Docs URL
 * Added AMI update scripts in `scripts/dev` to update AMI versions for base and software stacks. These will be worked into devtool at a later time
+* Cluster Manager WebUI Timeout Updated to 10 minutes
 
 ### Bug Fixes
 * Fixed FSx for Lustre allowed size mismatch between AWS and IDEA for scratch
@@ -54,7 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Set PBS config on eVDI and Computer Nodes to use the Rt53 scheduler record instead of the ec2 hostname. This will enable pbs to work with an upgraded scheduler with a new ip.
 
 ### Known Caveats
-* Data model was updated in 3.1.6, devtool.typings needs to be re-worked to support changes in Pydantic and IDEA data model
+* Data model was updated in 3.1.6, devtool web-portal.typings needs to be re-worked to support changes in Pydantic v2 and IDEA data model
 * Developer documentation needs some re-work / updates
 * When using OpenLDAP and doing an upgrade, replacement of the directoryservice instance removes existing directory entries. This can be avoided by backing up and restoring post upgrade or using ideactl on cluster manager to sync groups and users from DynamoDB into OpenLDAP. Generally there is not an explicit need to upgrade the directoryservice module.
 * After upgrading the scheduler module, job id's reset to 0. This is purely cosmetic and does not affect functionality. However, users tracking analytics by job id may want to be aware of this upon upgrade.
