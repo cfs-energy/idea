@@ -39,7 +39,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   * Dependency pinning and some dependency updates for Cluster Manager Web App node packages
 * Added gcc and python3-dev to Docker image for building Python requirements
 * Removed AWS Corporate ECR dependency in `idea-admin.sh`
-* Regressed multiple EFA feature from 3.1.6 due to CloudFormation DeviceIndex issues. Seen on at least hpc6id.32xlarge
 * New Active Directory users will get their account name applied to the givenName and sn attributes to satisfy directory import syncing with Okta requirements
 * Updated Help menu in Cluster Web App to direct issues to GitHub
 * Update references to old Github Repo
