@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Added DCV Checks in the eVDI Auto Power off event. This will check both CPU and DCV connections based on the idle time setup before stopping eVDI hosts
   * Renamed schedule `STOP_ALL_DAY` to `STOP_ON_IDLE` to better represent stop schedule behavior
   * Set default schedule for all days to `STOP_ON_IDLE`
+* Login page will show a Login With SSO button when SSO is enabled.
 
 ### Changes
 * Update AWS CDK from `2.95.1` to `2.317.0`
@@ -52,7 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Fixed NVIDIA GPU Driver install for Amazon Linux 2 with Kernel 5.10
 * Remove trailing whitespace from ENI IDS for tagging in instance bootstrap
 * Fixed HPC Job Name pydantic validation to allow strings, integers, and floats instead of just strings for HPC job names submitted from CLI
-* Set PBS config on eVDI and Computer Nodes to use the Rt53 scheduler record instead of the ec2 hostname. This will enable pbs to work with an upgraded scheduler with a new ip.
+* Set PBS config on eVDI Nodes to use the Rt53 scheduler record instead of the ec2 hostname. This will enable existing eVDI nodes to access PBS with an upgraded scheduler with a new ip.
 
 ### Known Caveats
 * Data model was updated in 3.1.6, devtool web-portal.typings needs to be re-worked to support changes in Pydantic v2 and IDEA data model

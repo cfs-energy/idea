@@ -124,10 +124,14 @@ class IdeaAuthLogin extends Component<IdeaAuthProps, IdeaAuthState> {
                     </React.Fragment>
                 )}
                 {isSsoEnabled && (
+
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
                     <Button variant="primary" onClick={refreshPage}>
                         Login with SSO
                     </Button>
-                )}
+                    </div>
+
+                    )}
                 </ColumnLayout>
             }
         />
