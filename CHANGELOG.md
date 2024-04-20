@@ -8,7 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Notes
 * This upgrade does require an update to the global settings. Please review [Global Settings Upgrade](https://docs.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/update-idea-backend-resource#global-settings-backup-and-upgrade) before upgrading.
-* Pre-upgrade script `scripts/pre-upgrade-317.sh` will assist by outputting the cluster settings command to update Base OS AMI as well as rename occurrences in settings for schedule `STOP_ALL_DAY` to `STOP_ON_IDLE`. 
+* Pre-upgrade script `scripts/pre-upgrade-317.sh` will assist by outputting the cluster settings command to update Base OS AMI as well as rename occurrences in settings for schedule `STOP_ALL_DAY` to `STOP_ON_IDLE`.
+* API Schedule Update script included in scripts to be able to update existing sessions to `STOP_ON_IDLE` via API
 
 ### Features
 * First truly Open Source IDEA Release!
