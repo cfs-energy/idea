@@ -31,8 +31,8 @@ class VirtualDesktopScheduleUtils:
             start_up_time = self.context.config().get_string('virtual-desktop-controller.dcv_session.working_hours.start_up_time', required=True)
             shut_down_time = self.context.config().get_string('virtual-desktop-controller.dcv_session.working_hours.shut_down_time', required=True)
         elif schedule_type == VirtualDesktopScheduleType.STOP_ON_IDLE:
-            start_up_time = '23:59'
-            shut_down_time = '00:00'
+            start_up_time = ''
+            shut_down_time = ''
         elif schedule_type == VirtualDesktopScheduleType.START_ALL_DAY:
             start_up_time = '00:00'
             shut_down_time = '23:59'
