@@ -46,8 +46,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Update references to old Github Repo
 * Update references to old Docs URL
 * Added AMI update scripts in `scripts/dev` to update AMI versions for base and software stacks. These will be worked into devtool at a later time
-* Cluster Manager WebUI Timeout Updated to 10 minutes
-
+* ~~Cluster Manager WebUI Timeout Updated to 10 minutes~~
+  
 ### Bug Fixes
 * Fixed FSx for Lustre allowed size mismatch between AWS and IDEA for scratch
   * This likely needs a re-work for different FSx Lustre types.
@@ -55,6 +55,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Remove trailing whitespace from ENI IDS for tagging in instance bootstrap
 * Fixed HPC Job Name pydantic validation to allow strings, integers, and floats instead of just strings for HPC job names submitted from CLI
 * Set PBS config on eVDI Nodes to use the Rt53 scheduler record instead of the ec2 hostname. This will enable existing eVDI nodes to access PBS with an upgraded scheduler with a new ip.
+* Fix root storage size calculation for new eVDI nodes with hibernation enabled
+* Fix resuming Hibernated eVDI nodes
 
 ### Known Caveats
 * Data model was updated in 3.1.6, devtool web-portal.typings needs to be re-worked to support changes in Pydantic v2 and IDEA data model
