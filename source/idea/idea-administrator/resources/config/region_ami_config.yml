@@ -202,7 +202,7 @@ us-east-2:
   rocky8: ami-02fb9384e880ed67c
   rocky9: ami-08f7b2cb6f6b78c21
 us-gov-west-1:
-  amazonlinux2: ami-0b3d111ef73891a57
+  amazonlinux2: ami-0c4bf799ed0f01f88
   rhel7: ami-09616d1f2ecd77e9b
   rhel8: ami-0206165c7b00c4adf
 us-west-1:

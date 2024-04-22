@@ -82,7 +82,7 @@ amazonlinux2:
     - ami-id: ami-0f81003716de74f07
       ss-id-suffix: base
     us-gov-west-1:
-    - ami-id: ami-0dfb9a2c7b7d80b5f
+    - ami-id: ami-0c3ec2bb416bd92f7
       ss-id-suffix: base
     us-west-1:
     - ami-id: ami-0cd016b158e57235a
@@ -173,7 +173,7 @@ amazonlinux2:
     - ami-id: ami-00cda30cf72311684
       ss-id-suffix: base
     us-gov-west-1:
-    - ami-id: ami-0b3d111ef73891a57
+    - ami-id: ami-0c4bf799ed0f01f88
       ss-id-suffix: base
     us-west-1:
     - ami-id: ami-050c61fa1bff25e5a
