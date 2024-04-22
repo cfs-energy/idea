@@ -99,21 +99,11 @@ class AuthService {
             auth_flow: 'SSO_AUTH',
             authorization_code: authorization_code
         }).then(_ => {
-            // Assuming user is authenticated at this point, fetch the claims
-            return this.props.clients.auth().getClaims().then(claims => {
-                this.claims = claims
-                console.log("loginSSO function claims: ", claims)
-                return true;  // Return true indicating successful login and claim retrieval
-            }).catch(error => {
-                console.error("Error fetching claims:", error);
-                throw error;  // Optionally, you could handle this differently, depending on your needs.
-            });
+            return true
         }).catch(error => {
-            console.error("Authentication error:", error);
-            throw error;
-        });
+            throw error
+        })
     }
-    
 
     respondToAuthChallenge(newPassword: string): Promise<boolean> {
         const challengeParams = this.getChallengeParams()
@@ -280,45 +270,59 @@ class AuthService {
     }
 
     isLoggedIn(): Promise<boolean> {
-        if (this.activeIsLoggedInPromise != null) {
-            return this.activeIsLoggedInPromise;
+
+        if(this.activeIsLoggedInPromise != null) {
+            return this.activeIsLoggedInPromise
         }
-    
+
         this.activeIsLoggedInPromise = this.props.clients.auth().isLoggedIn().then(status => {
+
+            // if already logged in do, nothing
             if (status) {
-                // If already logged in and claims are fetched, do nothing more
-                return true;
+                return this.props.clients.auth().getClaims().then(claims => {
+                    this.claims = claims
+                    return true
+                })
             }
-    
+
             if (typeof window.idea.app.sso === 'undefined' || !window.idea.app.sso) {
-                // If SSO is not enabled
-                return false;
+                return false
             }
-    
-            // If SSO is enabled, check for SSO auth
+
+            // if SSO is enabled, check for SSO auth
             if (Utils.isSsoEnabled()) {
-                const authStatus = window.idea.app.sso_auth_status;
-                if (authStatus && authStatus === 'SUCCESS' && window.idea.app.sso_auth_code) {
-                    // Use the auth code to login and fetch claims
-                    return this.login_using_sso_auth_code(window.idea.app.sso_auth_code).then(status => {
-                        // Discard the sso_auth_code after use as auth code is one-time use only.
-                        window.idea.app.sso_auth_code = null;
-                        return status; // This status already reflects the success of both login and claims fetching
-                    });
+                let authStatus = window.idea.app.sso_auth_status
+                if (authStatus) {
+                    if (authStatus === 'SUCCESS' && window.idea.app.sso_auth_code) {
+                        return this.login_using_sso_auth_code(window.idea.app.sso_auth_code).then(status => {
+                            // discard the sso_auth_code after use as auth code is one time use only.
+                            // this also prevents re-triggering SSO auth flow after the user has logged out manually.
+                            window.idea.app.sso_auth_code = null
+                            if(status) {
+                                return this.props.clients.auth().getClaims().then(claims => {
+                                    this.claims = claims
+                                    console.log("loginSSO claims: ", claims)
+                                    return true
+                                })
+                            } else {
+                                return false
+                            }
+                        })
+                    } else {
+                        // redirect to login page
+                        return false
+                    }
                 } else {
-                    // Redirect to SSO login page or another appropriate action
-                    window.location.href = '/sso';
-                    return false; // Assuming the redirection makes application leave the current flow
+                    window.location.href = '/sso'
                 }
             }
-            return false;
+            return false
         }).finally(() => {
-            this.activeIsLoggedInPromise = null;
-        });
-    
-        return this.activeIsLoggedInPromise;
+            this.activeIsLoggedInPromise = null
+        })
+
+        return this.activeIsLoggedInPromise
     }
-    
 
     logout() {
         return this.props.clients.auth()
