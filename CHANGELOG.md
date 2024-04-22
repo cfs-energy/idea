@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.1.7] -  TBD
+## [3.1.7] -  s00n™
 
 ### Notes
 * This upgrade does require an update to the global settings. Please review [Global Settings Upgrade](https://docs.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/update-idea-backend-resource#global-settings-backup-and-upgrade) before upgrading.
@@ -46,10 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Update references to old Github Repo
 * Update references to old Docs URL
 * Added AMI update scripts in `scripts/dev` to update AMI versions for base and software stacks. These will be worked into devtool at a later time
-* ~~Cluster Manager WebUI Timeout Updated to 10 minutes~~
   
 ### Bug Fixes
-* Fixed FSx for Lustre allowed size mismatch between AWS and IDEA for scratch
+* Fixed FSx for Lustre allowed size mismatch between AWS and IDEA
   * This likely needs a re-work for different FSx Lustre types.
 * Fixed NVIDIA GPU Driver install for Amazon Linux 2 with Kernel 5.10
 * Remove trailing whitespace from ENI IDS for tagging in instance bootstrap
