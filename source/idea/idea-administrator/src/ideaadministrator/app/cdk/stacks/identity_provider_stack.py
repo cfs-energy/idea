@@ -179,6 +179,7 @@ class IdentityProviderStack(IdeaBaseStack):
         self.id_token_claim_lambda.node.add_dependency(id_token_claim_lambda_role)
 
 
+
         self.user_pool = UserPool(
             context=self.context,
             name=f'{self.cluster_name}-user-pool',
@@ -188,7 +189,7 @@ class IdentityProviderStack(IdeaBaseStack):
                 user_invitation=cognito.UserInvitationConfig(
                     email_subject=user_invitation_email_subject,
                     email_body=user_invitation_email_body
-                )
+                ),
                 lambda_triggers=cognito.UserPoolTriggers(
                     pre_token_generation=self.id_token_claim_lambda
                 )
