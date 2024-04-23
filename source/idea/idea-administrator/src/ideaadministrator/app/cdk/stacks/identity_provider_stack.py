@@ -148,14 +148,14 @@ class IdentityProviderStack(IdeaBaseStack):
         claim_lambda_name = 'id-token-claim'
         id_token_claim_lambda_role = Role(
             context=self.context,
-            name=f'{lambda_name}-role',
+            name=f'{claim_lambda_name}-role',
             scope=self.stack,
             description=f'Role for id token claim Lambda function for Cluster: {self.cluster_name}',
             assumed_by=['lambda', 'cognito'])
 
         id_token_claim_lambda_role.attach_inline_policy(Policy(
             context=self.context,
-            name=f'{lambda_name}-policy',
+            name=f'{claim_lambda_name}-policy',
             scope=self.stack,
             policy_template_name='custom_resource_sso_claim_modifier.yml'
         ))
