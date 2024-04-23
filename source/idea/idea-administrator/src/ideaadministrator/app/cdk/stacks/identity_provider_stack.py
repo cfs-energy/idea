@@ -173,7 +173,7 @@ class IdentityProviderStack(IdeaBaseStack):
             log_retention_role=self.cluster.get_role(app_constants.LOG_RETENTION_ROLE_NAME)
         )
 
-        self.oauth_credentials_lambda.add_nag_suppression(suppressions=[
+        self.id_token_claim_lambda.add_nag_suppression(suppressions=[
             IdeaNagSuppression(rule_id='AwsSolutions-L1', reason='Python Runtime is selected for stability.')
         ])
         self.id_token_claim_lambda.node.add_dependency(id_token_claim_lambda_role)
