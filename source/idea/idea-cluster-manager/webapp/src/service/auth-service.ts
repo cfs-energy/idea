@@ -72,7 +72,6 @@ class AuthService {
             } else {
                 return this.props.clients.auth().getClaims().then(claims => {
                     this.claims = claims
-                    console.log("login function claims: ", claims)
                     if (this.onLogin) {
                         return this.onLogin()
                     } else {
@@ -99,7 +98,6 @@ class AuthService {
             auth_flow: 'SSO_AUTH',
             authorization_code: authorization_code
         }).then(_ => {
-            console.log("login using sso auth code function claims: ", this.claims)
             return true
         }).catch(error => {
             throw error
