@@ -300,7 +300,7 @@ class AuthService {
                             if(status) {
                                 return this.props.clients.auth().getClaims().then(claims => {
                                     this.claims = claims
-                                    console.log("loginSSO claims: ", claims)
+                                    // console.log("loginSSO claims: ", claims)
                                     return true
                                 })
                             } else {
