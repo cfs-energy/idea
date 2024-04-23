@@ -143,6 +143,42 @@ class IdentityProviderStack(IdeaBaseStack):
             user_invitation_email_subject = invite_message_template['EmailSubject']
             user_invitation_email_body = invite_message_template['EmailMessage']
 
+        ### Lambda Function to add custom claims to ID Token from Cognito when SSO is Enabled
+
+        claim_lambda_name = 'id-token-claim'
+        id_token_claim_lambda_role = Role(
+            context=self.context,
+            name=f'{lambda_name}-role',
+            scope=self.stack,
+            description=f'Role for id token claim Lambda function for Cluster: {self.cluster_name}',
+            assumed_by=['lambda', 'cognito'])
+
+        id_token_claim_lambda_role.attach_inline_policy(Policy(
+            context=self.context,
+            name=f'{lambda_name}-policy',
+            scope=self.stack,
+            policy_template_name='custom_resource_sso_claim_modifier.yml'
+        ))
+        self.id_token_claim_lambda = LambdaFunction(
+            context=self.context,
+            name=claim_lambda_name,
+            scope=self.stack,
+            idea_code_asset=IdeaCodeAsset(
+                lambda_package_name='idea_custom_resource_sso_claim_modifier',
+                lambda_platform=SupportedLambdaPlatforms.PYTHON
+            ),
+            description='Modify Cognito ID Token for SSO Enabled Clusters',
+            timeout_seconds=180,
+            role=id_token_claim_lambda_role,
+            log_retention_role=self.cluster.get_role(app_constants.LOG_RETENTION_ROLE_NAME)
+        )
+
+        self.oauth_credentials_lambda.add_nag_suppression(suppressions=[
+            IdeaNagSuppression(rule_id='AwsSolutions-L1', reason='Python Runtime is selected for stability.')
+        ])
+        self.id_token_claim_lambda.node.add_dependency(id_token_claim_lambda_role)
+
+
         self.user_pool = UserPool(
             context=self.context,
             name=f'{self.cluster_name}-user-pool',
@@ -152,6 +188,9 @@ class IdentityProviderStack(IdeaBaseStack):
                 user_invitation=cognito.UserInvitationConfig(
                     email_subject=user_invitation_email_subject,
                     email_body=user_invitation_email_body
+                )
+                lambda_triggers=cognito.UserPoolTriggers(
+                    pre_token_generation=self.id_token_claim_lambda
                 )
             )
         )
@@ -195,41 +234,6 @@ class IdentityProviderStack(IdeaBaseStack):
         ])
         self.oauth_credentials_lambda.node.add_dependency(oauth_credentials_lambda_role)
 
-
-        ### Lambda Function to add custom claims to ID Token from Cognito when SSO is Enabled
-
-        claim_lambda_name = 'id-token-claim'
-        id_token_claim_lambda_role = Role(
-            context=self.context,
-            name=f'{lambda_name}-role',
-            scope=self.stack,
-            description=f'Role for id token claim Lambda function for Cluster: {self.cluster_name}',
-            assumed_by=['lambda', 'cognito'])
-
-        id_token_claim_lambda_role.attach_inline_policy(Policy(
-            context=self.context,
-            name=f'{lambda_name}-policy',
-            scope=self.stack,
-            policy_template_name='custom_resource_sso_claim_modifier.yml'
-        ))
-        self.id_token_claim_lambda = LambdaFunction(
-            context=self.context,
-            name=claim_lambda_name,
-            scope=self.stack,
-            idea_code_asset=IdeaCodeAsset(
-                lambda_package_name='idea_custom_resource_sso_claim_modifier',
-                lambda_platform=SupportedLambdaPlatforms.PYTHON
-            ),
-            description='Modify Cognito ID Token for SSO Enabled Clusters',
-            timeout_seconds=180,
-            role=id_token_claim_lambda_role,
-            log_retention_role=self.cluster.get_role(app_constants.LOG_RETENTION_ROLE_NAME)
-        )
-
-        self.oauth_credentials_lambda.add_nag_suppression(suppressions=[
-            IdeaNagSuppression(rule_id='AwsSolutions-L1', reason='Python Runtime is selected for stability.')
-        ])
-        self.id_token_claim_lambda.node.add_dependency(id_token_claim_lambda_role)
 
     def build_cognito_cluster_settings(self):
 
