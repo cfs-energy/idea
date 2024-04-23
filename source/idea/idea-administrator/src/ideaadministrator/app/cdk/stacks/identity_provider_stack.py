@@ -151,7 +151,7 @@ class IdentityProviderStack(IdeaBaseStack):
             name=f'{claim_lambda_name}-role',
             scope=self.stack,
             description=f'Role for id token claim Lambda function for Cluster: {self.cluster_name}',
-            assumed_by=['lambda', 'cognito'])
+            assumed_by=['lambda', 'cognito-idp'])
 
         id_token_claim_lambda_role.attach_inline_policy(Policy(
             context=self.context,
