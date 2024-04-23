@@ -56,6 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Set PBS config on eVDI Nodes to use the Rt53 scheduler record instead of the ec2 hostname. This will enable existing eVDI nodes to access PBS with an upgraded scheduler with a new ip.
 * Fix root storage size calculation for new eVDI nodes with hibernation enabled
 * Fix resuming Hibernated eVDI nodes
+* Fixed ID Token claims for SSO enabled clusters. Added Cognito pre token generation Lambda to stuff custom attributes to ID token
 
 ### Known Caveats
 * Data model was updated in 3.1.6, devtool web-portal.typings needs to be re-worked to support changes in Pydantic v2 and IDEA data model
