@@ -11,14 +11,12 @@ def handler(event, context):
     aws_region = user_attributes.get('custom:aws_region', None)
     cluster_name = user_attributes.get('custom:cluster_name', None)
     
-    # Add scope to event response with provided or default attribute values
+    # In Cognito Trigger V1, Claims to ID Token can only be directly set to the response
     event['response'] = {
-        "claimsAndScopeOverrideDetails": {
-            "idTokenGeneration": {
-                "claimsToAddOrOverride": {
-                    "custom:aws_region": aws_region,
-                    "custom:cluster_name": cluster_name
-                }
+        "claimsOverrideDetails": {
+            "claimsToAddOrOverride": {
+                "custom:aws_region": aws_region,
+                "custom:cluster_name": cluster_name
             }
         }
     }
