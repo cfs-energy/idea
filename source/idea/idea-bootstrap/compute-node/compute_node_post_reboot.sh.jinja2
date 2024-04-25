@@ -22,6 +22,12 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
 mount -a
 
+MOUNT_DIRS=$(mount | grep lustre | awk '{print $3}')
+
+for dir in $MOUNT_DIRS; do
+    chmod 777 "$dir"
+done
+
 {%- if context.vars.job.params.enable_efa_support %}
   {% include 'compute-node/_templates/efa.jinja2' %}
 {%- endif %}

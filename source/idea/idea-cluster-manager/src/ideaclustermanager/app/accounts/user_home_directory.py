@@ -88,7 +88,7 @@ class UserHomeDirectory:
 
     def initialize_home_dir(self):
         os.makedirs(self.home_dir, exist_ok=True)
-        os.chmod(self.home_dir, 0o700)
+        os.chmod(self.home_dir, 0o710)
         self.own_path(self.home_dir)
 
         skeleton_files = [

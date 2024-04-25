@@ -59,6 +59,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Fixed ID Token claims for SSO enabled clusters. Added Cognito pre token generation Lambda to stuff custom attributes to ID token
 * Fix License Server Check script permissions
   * Cluster home directory `/apps/idea-<cluster name>` from `700` to `701` to allow traverse to script directory
+* Fix Home Dir permissions for New Users from `700` to `710` to allow file sharing when using `Add User to My Group` feature
+* Fix scratch storage mount permissions for HPC jobs on Linux
 
 ### Known Caveats
 * Data model was updated in 3.1.6, devtool web-portal.typings needs to be re-worked to support changes in Pydantic v2 and IDEA data model
