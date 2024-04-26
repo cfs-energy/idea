@@ -13,14 +13,14 @@ Review [pre-requisites.md](pre-requisites.md "mention") section first
 Copy/Paste this command on your terminal to launch the installation
 
 ```sh
-git clone https://github.com/cfs-energy/integrated-digital-engineering-on-aws
-cd integrated-digital-engineering-on-aws
+git clone https://github.com/cfs-energy/idea
+cd idea
 ./idea-admin.sh quick-setup
 ```
 
 **Option 2: Download the installer and execute it manually**
 
-As an alternative, you can download `idea-admin.sh` via this [https://raw.githubusercontent.com/cfs-energy/integrated-digital-engineering-on-aws/main/idea-admin.sh](https://raw.githubusercontent.com/cfs-energy/integrated-digital-engineering-on-aws/main/idea-admin.sh) and execute it on your Linux or Mac environment via `/bin/bash idea-admin.sh quick-setup`
+As an alternative, you can download `idea-admin.sh` via this [https://raw.githubusercontent.com/cfs-energy/idea/main/idea-admin.sh](https://raw.githubusercontent.com/cfs-energy/idea/main/idea-admin.sh) and execute it on your Linux or Mac environment via `/bin/bash idea-admin.sh quick-setup`
 {% endtab %}
 
 {% tab title="Windows" %}
@@ -29,8 +29,8 @@ Installation of IDEA in Windows is managed by Powershell. Download and execute t
 Note: This will only work on Windows 10/11 as Windows Server lacks support for Linux Containers.
 
 ```powershell
-git clone https://github.com/cfs-energy/integrated-digital-engineering-on-aws
-cd integrated-digital-engineering-on-aws
+git clone https://github.com/cfs-energy/idea
+cd idea
 ./idea-admin-windows.ps1 quick-setup
 ```
 {% endtab %}

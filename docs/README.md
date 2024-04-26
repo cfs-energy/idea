@@ -113,7 +113,7 @@ Don't know where to start? Check out [create-your-own-analytics-visualizations.m
 
 ### 100% Customizable <a href="#100-customizable" id="100-customizable"></a>
 
-IDEA is built entirely on top of AWS and can be customized by users as needed. The entire codebase is open-source and available on Github ([https://github.com/cfs-energy/integrated-digital-engineering-on-aws)](https://github.com/cfs-energy/integrated-digital-engineering-on-aws)
+IDEA is built entirely on top of AWS and can be customized by users as needed. The entire codebase is open-source and available on Github ([https://github.com/cfs-energy/idea)](https://github.com/cfs-energy/idea)
 
 ### Persistent and Unlimited Storage <a href="#persistent-and-unlimited-storage" id="persistent-and-unlimited-storage"></a>
 

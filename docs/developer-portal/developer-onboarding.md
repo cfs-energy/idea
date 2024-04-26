@@ -99,8 +99,8 @@ Follow instructions on the below link to install Docker Desktop. (Required if yo
 All PRs will be accepted only against the main branch.
 
 ```bash
-git clone https://github.com/cfs-energy/integrated-digital-engineering-on-aws.git
-cd integrated-digital-engineering-on-aws
+git clone https://github.com/cfs-energy/idea.git
+cd idea
 // make your changes
 ```
 

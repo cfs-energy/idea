@@ -243,7 +243,7 @@ class Home extends Component<HomePageProps, HomePageState> {
                                 <Link href="https://docs.idea-hpc.com/help-and-support/faq">FAQ</Link>
                             </li>
                             <li>
-                                <Link href="https://github.com/cfs-energy/integrated-digital-engineering-on-aws/issues">Report an Issue</Link>
+                                <Link href="https://github.com/cfs-energy/idea/issues">Report an Issue</Link>
                             </li>
                         </ul>
                     </Container>
