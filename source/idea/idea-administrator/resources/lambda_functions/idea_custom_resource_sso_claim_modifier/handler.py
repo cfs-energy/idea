@@ -10,13 +10,17 @@ def handler(event, context):
     # Safely get specific attributes with default values if they're missing
     aws_region = user_attributes.get('custom:aws_region', None)
     cluster_name = user_attributes.get('custom:cluster_name', None)
+    password_last_set = user_attributes.get('custom:password_last_set', None)
+    password_max_age = user_attributes.get('custom:password_max_age', None)
     
     # In Cognito Trigger V1, Claims to ID Token can only be directly set to the response
     event['response'] = {
         "claimsOverrideDetails": {
             "claimsToAddOrOverride": {
                 "custom:aws_region": aws_region,
-                "custom:cluster_name": cluster_name
+                "custom:cluster_name": cluster_name,
+                "custom:password_last_set": password_last_set,
+                "custom:password_max_age": password_max_age
             }
         }
     }
