@@ -278,6 +278,9 @@ class SingleSignOnHelper:
         oidc_attributes_url = Utils.get_value_as_string('oidc_attributes_url', kwargs)
         oidc_jwks_uri = Utils.get_value_as_string('oidc_jwks_uri', kwargs)
 
+        # Replace ',' with space in scopes
+        oidc_authorize_scopes = oidc_authorize_scopes.replace(',', ' ')
+
         if Utils.is_empty(oidc_client_id):
             raise exceptions.invalid_params('oidc_client_id is required')
         if Utils.is_empty(oidc_client_secret):
