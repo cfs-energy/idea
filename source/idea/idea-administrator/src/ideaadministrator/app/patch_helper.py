@@ -74,7 +74,7 @@ class PatchHelper:
 
         if package uri is not provided, find the local package uri for current release, upload to s3 and return the s3 path.
             if running in dev mode from sources, package uri is: <PROJECT_ROOT>/dist/<package>.tar.gz
-            if running in docker container, package uri is: /idea/.idea/downloads/<package>.tar.gz
+            if running in docker container, package uri is: /root/.idea/downloads/<package>.tar.gz
 
         :return: s3 path
         """

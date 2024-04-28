@@ -118,7 +118,7 @@ if [[ $? -ne 0 ]]; then
 fi
 
 # Launch installer
-${DOCKER_BIN} run --rm -it -v "${HOME}/.idea/clusters:/idea/.idea/clusters" \
+${DOCKER_BIN} run --rm -it -v "${HOME}/.idea/clusters:/root/.idea/clusters" \
               -e AWS_SESSION_TOKEN -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
               -e IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER="${IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER}" \
               -e IDEA_ADMIN_ENABLE_CDK_NAG_SCAN="${IDEA_ADMIN_ENABLE_CDK_NAG_SCAN}" \
