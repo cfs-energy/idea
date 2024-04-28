@@ -124,4 +124,3 @@ ${DOCKER_BIN} run --rm -it -v "${HOME}/.idea/clusters:/root/.idea/clusters" \
               -e IDEA_ADMIN_ENABLE_CDK_NAG_SCAN="${IDEA_ADMIN_ENABLE_CDK_NAG_SCAN}" \
               -v ~/.aws:/root/.aws "${IDEA_DOCKER_REPO}:${IDEA_REVISION}" \
               idea-admin "${@}"
-
