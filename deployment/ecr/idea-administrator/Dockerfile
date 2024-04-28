@@ -26,6 +26,8 @@ RUN sed -i -e "s/# $LANG.*/$LANG UTF-8/" /etc/locale.gen \
     && locale-gen "en_US.UTF-8" \
     && dpkg-reconfigure locales
 
+# Install AWS CLI
+RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-${OS_ARCH}.zip" -o "awscliv2.zip" && \
 # install aws cli
 RUN if [ "${OS_ARCH}" = "amd64" ]; then \
         curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" ; \
