@@ -24,7 +24,12 @@ RUN apt-get update && \
     dpkg-reconfigure locales
 
 # Install AWS CLI
-RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-${OS_ARCH}.zip" -o "awscliv2.zip" && \
+# install aws cli
+RUN if [ "${OS_ARCH}" = "amd64" ]; then \
+        curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" ; \
+    elif [ "${OS_ARCH}" = "arm64" ]; then \
+        curl "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o "awscliv2.zip" ; \
+    fi && \
     unzip awscliv2.zip && \
     ./aws/install && \
     rm -rf ./aws awscliv2.zip
