@@ -127,7 +127,7 @@ export IDEA_AWS_PROFILE=test1
 cp -r ~/.idea/clusters/$IDEA_CLUSTER_NAME/$IDEA_AWS_REGION/config ~/.idea/clusters/$IDEA_CLUSTER_NAME/$IDEA_AWS_REGION/config.golden.$(date +%m%d%Y)
 
 ### Regenerate config in filesystem from new update - root path is used for docker compatibility ###
-./idea-admin.sh config generate --regenerate --values-file /root/.idea/clusters/$IDEA_CLUSTER_NAME/$IDEA_AWS_REGION/values.yml
+./idea-admin.sh config generate --regenerate --values-file /idea/.idea/clusters/$IDEA_CLUSTER_NAME/$IDEA_AWS_REGION/values.yml
 
 ### Overwrite DDB config for new global-settings ###
 ./idea-admin.sh config update --key-prefix global-settings --overwrite --cluster-name $IDEA_CLUSTER_NAME --aws-region $IDEA_AWS_REGION --aws-profile $IDEA_AWS_PROFILE

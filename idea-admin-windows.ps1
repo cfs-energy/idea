@@ -104,6 +104,6 @@ if ($args.count -eq 0) {
     Write-Host "No arguments detected, defaulting to quick-setup. Use -h to see all options."
 }
 
-Invoke-Expression "& '$DockerBin' run --rm -it -v $HOME/.idea/clusters:/root/.idea/clusters -v $HOME/.aws:/root/.aws $IDEADockerRepo/idea-administrator:$IDEARevision idea-admin $args"
+Invoke-Expression "& '$DockerBin' run --rm -it -v $HOME/.idea/clusters:/idea/.idea/clusters -v $HOME/.aws:/root/.aws $IDEADockerRepo/idea-administrator:$IDEARevision idea-admin $args"
 
 Read-Host -Prompt "Press Enter to exit"
