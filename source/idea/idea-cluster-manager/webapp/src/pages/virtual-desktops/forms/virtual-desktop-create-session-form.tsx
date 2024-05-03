@@ -317,7 +317,7 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
             }
         }
         if (isHibernationEnabled && instanceTypeName) {
-            min_storage_gb.value += this.getInstanceRAM(instanceTypeName).value * 1.2;
+            min_storage_gb.value += this.getInstanceRAM(instanceTypeName).value * 1.3;
         }
         return min_storage_gb
     }
