@@ -148,8 +148,8 @@ class VirtualDesktopSSMCommandsUtils:
                 "CPUAveragePerformanceLast10Secs=$(top -d 5 -b -n2 | grep 'Cpu(s)' | tail -n 1 | awk '{print $2 + $4}')",
                 "SSH_Connection_Count=$(last -Fi | grep 'still logged in' | grep -v 0.0.0.0 | wc -l)",
                 "SSH_Last_Disconnect_Time=$(last -Fi | grep -v 0.0.0.0 | grep -v 'still logged in' | grep -v wtmp | grep -v '^\\s*$' | awk '{print $11, $12, $13, $14}' | head -n 1)",
-                "SSH_Last_Disconnect_ISO=$(date -u -d \"$SSH_Last_Disconnect_Time\" +\"%Y-%m-%dT%H:%M:%S.%6NZ\")",
-                "Final_JSON=$(jq -c -n --argjson dcv \"$DCV_Describe_Session\" --argjson cpuAvg \"$CPUAveragePerformanceLast10Secs\" --arg sshTime \"$SSH_Last_Disconnect_ISO\" --argjson sshCount \"$SSH_Connection_Count\" '{\"DCV\": ($dcv | .[\"num-of-connections\"] = ($sshCount | if . > $dcv[\"num-of-connections\"] then . else $dcv[\"num-of-connections\"] end) | .[\"last-disconnection-time\"] = (if $dcv[\"last-disconnection-time\"] != \"\" and $sshTime > $dcv[\"creation-time\"] then $sshTime else $dcv[\"last-disconnection-time\"] end)), \"CPUAveragePerformanceLast10Secs\": $cpuAvg}')",
+                "[ -n \"$SSH_Last_Disconnect_Time\" ] && SSH_Last_Disconnect_ISO=$(date -u -d \"$SSH_Last_Disconnect_Time\" +\"%Y-%m-%dT%H:%M:%S.%6NZ\") || SSH_Last_Disconnect_ISO=\"\"",
+                "Final_JSON=$(jq -c -n --argjson dcv \"$DCV_Describe_Session\" --argjson cpuAvg \"$CPUAveragePerformanceLast10Secs\" --arg sshTime \"$SSH_Last_Disconnect_ISO\" --argjson sshCount \"$SSH_Connection_Count\" '{\"DCV\": ($dcv | .[\"num-of-connections\"] = ($sshCount | if . > $dcv[\"num-of-connections\"] then . else $dcv[\"num-of-connections\"] end) | .[\"last-disconnection-time\"] = (if $dcv[\"last-disconnection-time\"] != \"\" and $sshTime > $dcv[\"creation-time\"] then $sshTime else $dcv[\"last-disconnection-time\"] end)), \"CPUAveragePerformanceLast10Secs\": $cpuAvg, \"SSH_Connection_Count\": $sshCount, \"SSH_Last_Disconnect_ISO\": $sshTime}')",
                 "echo \"$Final_JSON\""
             ]
 
