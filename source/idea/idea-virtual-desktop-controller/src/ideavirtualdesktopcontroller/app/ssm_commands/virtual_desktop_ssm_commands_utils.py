@@ -148,8 +148,8 @@ class VirtualDesktopSSMCommandsUtils:
                 "CPUAveragePerformanceLast10Secs=$(top -d 5 -b -n2 | grep 'Cpu(s)' | tail -n 1 | awk '{print $2 + $4}')",
                 "SSH_Connection_Count=$(last -Fi | grep 'still logged in' | grep -v 0.0.0.0 | wc -l)",
                 "SSH_Last_Disconnect_Time=$(last -Fi | grep -v 0.0.0.0 | grep -v 'still logged in' | grep -v wtmp | grep -v '^\\s*$' | awk '{print $11, $12, $13, $14}' | head -n 1)",
-                "SSH_Last_Disconnect_ISO=$(date -d \"$SSH_Last_Disconnect_Time\" --iso-8601=seconds)",
-                "Final_JSON=$(jq -n --argjson dcv \"$DCV_Describe_Session\" --argjson cpuAvg \"$CPUAveragePerformanceLast10Secs\" --arg sshTime \"$SSH_Last_Disconnect_ISO\" --argjson sshCount \"$SSH_Connection_Count\" '{\"DCV\": ($dcv | .[\"num-of-connections\"] = ($sshCount | if . > $dcv[\"num-of-connections\"] then . else $dcv[\"num-of-connections\"] end) | .[\"last-disconnection-time\"] = (if $sshTime > $dcv[\"last-disconnection-time\"] then $sshTime else $dcv[\"last-disconnection-time\"] end)), \"CPUAveragePerformanceLast10Secs\": $cpuAvg}')",
+                "SSH_Last_Disconnect_ISO=$(date -u -d \"$SSH_Last_Disconnect_Time\" +\"%Y-%m-%dT%H:%M:%S.%6NZ\")",
+                "Final_JSON=$(jq -c -n --argjson dcv \"$DCV_Describe_Session\" --argjson cpuAvg \"$CPUAveragePerformanceLast10Secs\" --arg sshTime \"$SSH_Last_Disconnect_ISO\" --argjson sshCount \"$SSH_Connection_Count\" '{\"DCV\": ($dcv | .[\"num-of-connections\"] = ($sshCount | if . > $dcv[\"num-of-connections\"] then . else $dcv[\"num-of-connections\"] end) | .[\"last-disconnection-time\"] = (if $sshTime > $dcv[\"last-disconnection-time\"] then $sshTime else $dcv[\"last-disconnection-time\"] end)), \"CPUAveragePerformanceLast10Secs\": $cpuAvg}')",
                 "echo \"$Final_JSON\""
             ]
 
