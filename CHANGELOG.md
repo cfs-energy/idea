@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Documentation combined into IDEA monorepo under `docs` folder
 * Multi Architecture Administrator Docker Image
   * Added build-push-multi task to use buildx to create the IDEA Admin container and auto-push to ECR
-* Added DCV Checks in the eVDI Auto Power off event. This will check both CPU and DCV connections based on the idle time setup before stopping eVDI hosts
+* Added DCV Checks in the eVDI Auto Power off event. This will check CPU, DCV, and SSH connections based on the idle time setup before stopping eVDI hosts
   * Renamed schedule `STOP_ALL_DAY` to `STOP_ON_IDLE` to better represent stop schedule behavior
   * Set default schedule for all days to `STOP_ON_IDLE`
 * Login page will show a Login With SSO button when SSO is enabled.
