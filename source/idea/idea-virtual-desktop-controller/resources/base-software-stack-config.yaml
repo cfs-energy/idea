@@ -13,8 +13,6 @@ amazonlinux2:
       description: 'Software Stack Amazon Linux 2 - ARM64' # override default description
       min-storage-unit: gb # override default min-storage-unit
       min-storage-value: 10 # override default min-storage-value
-      min-storage-unit: gb # override default min-storage-unit
-      min-storage-value: 5 # override default min-storage-value
     ap-east-1:
     - ami-id: ami-01174e0118c296c37
       ss-id-suffix: base

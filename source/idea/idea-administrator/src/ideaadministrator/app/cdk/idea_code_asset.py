@@ -34,7 +34,7 @@ class IdeaCodeAsset:
     """
     SOURCE_CODE_CHECKSUM_FILE = 'source.checksum.sha'
     PKG_DIR = 'pkg'
-    PKG_DIR_CHECKSUM_FILE = f'pkg.checksum.sha'
+    PKG_DIR_CHECKSUM_FILE = 'pkg.checksum.sha'
 
     def __init__(self, lambda_platform: SupportedLambdaPlatforms, lambda_package_name: str):
         self._lambda_platform = lambda_platform
@@ -84,7 +84,7 @@ class IdeaCodeAsset:
         shell = ShellInvoker(cwd=build_location)
         response = shell.invoke(
             shell=True,
-            cmd=[f'pip install -r requirements.txt --platform manylinux2014_x86_64 --only-binary=:all: --target . --upgrade'],
+            cmd=['pip install -r requirements.txt --platform manylinux2014_x86_64 --only-binary=:all: --target . --upgrade'],
             env=ideaadministrator.props.get_env()
         )
         if response.returncode != 0:

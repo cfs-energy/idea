@@ -400,7 +400,7 @@ class SessionsTestHelper:
                 payload=ResumeSessionsRequest(sessions=self.session_list),
                 access_token=self.access_token)
             return response
-        except(exceptions.SocaException, Exception) as e:
+        except (exceptions.SocaException, Exception) as e:
             self.context.error(f'Failed to Resume Sessions.Session Name: {self.session.name} Error : {e}')
 
     def reboot_sessions(self, namespace: str) -> RebootSessionResponse:
@@ -410,7 +410,7 @@ class SessionsTestHelper:
                 payload=RebootSessionRequest(sessions=self.session_list),
                 access_token=self.access_token)
             return response
-        except(exceptions.SocaException, Exception) as e:
+        except (exceptions.SocaException, Exception) as e:
             self.context.error(f'Failed to Reboot Sessions.Session Name: {self.session.name} Error : {e}')
 
     def delete_session(self, namespace: str) -> DeleteSessionResponse:
@@ -1178,7 +1178,7 @@ def get_sessions_test_cases_list(context: TestContext, username: str, access_tok
 
         # Create all the default testcases
         else:
-            context.info(f'Creating default testcases list')
+            context.info('Creating default testcases list')
             for session_values in session_test_data.values():
                 for session_data in session_values:
                     new_session_payload = SessionPayload(context, session_data, username, access_token)

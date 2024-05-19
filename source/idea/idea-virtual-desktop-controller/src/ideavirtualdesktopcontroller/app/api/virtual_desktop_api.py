@@ -297,7 +297,7 @@ class VirtualDesktopAPI(BaseAPI):
 
         # Instance Type validation
         if Utils.is_empty(session.server) or Utils.is_empty(session.server.instance_type):
-            session.failure_reason = f'missing session.server.instance_type'
+            session.failure_reason = 'missing session.server.instance_type'
             return session, False
 
         is_instance_type_valid = False
@@ -342,7 +342,7 @@ class VirtualDesktopAPI(BaseAPI):
 
         # Validate Root Volume Size
         if Utils.is_empty(session.server) or Utils.is_empty(session.server.root_volume_size):
-            session.failure_reason = f'missing session.server.root_volume_size'
+            session.failure_reason = 'missing session.server.root_volume_size'
             return session, False
 
         # Business Validation for MAX Root Volume
@@ -749,7 +749,7 @@ class VirtualDesktopAPI(BaseAPI):
 
                 if Utils.is_not_empty(session):
                     # we had a valid session, but we were unable to connect because DCV Broker denied. Need to error the session out.
-                    self._logger.error(f'Identified the DB entry, error-ing it out.')
+                    self._logger.error('Identified the DB entry, error-ing it out.')
                     session.state = VirtualDesktopSessionState.ERROR
                     _ = self.session_db.update(session)
             else:

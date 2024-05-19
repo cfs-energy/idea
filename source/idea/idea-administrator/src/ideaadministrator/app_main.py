@@ -867,7 +867,7 @@ def deploy(cluster_name: str, aws_region: str, aws_profile: str, termination_pro
 
     if all_modules:
         if len(module_ids_to_deploy) > 1:
-            raise exceptions.invalid_params(f'fatal error - use of "all" deployment must be the only requested module')
+            raise exceptions.invalid_params('fatal error - use of "all" deployment must be the only requested module')
         module_ids_to_deploy = None
 
     DeploymentHelper(
@@ -1233,7 +1233,7 @@ def show_connection_info(cluster_name: str, aws_region: str, aws_profile: str, m
                     base_os = cluster_config.get_string(f'{module_id}.base_os', required=True)
                     ec2_username = AdministratorUtils.get_ec2_username(base_os)
                     connection_info_entries.append({
-                        'key': f'Bastion Host (SSH Access)',
+                        'key': 'Bastion Host (SSH Access)',
                         'value': f'ssh -i ~/.ssh/{key_pair_name}.pem {ec2_username}@{ip_address}',
                         'weight': 1
                     })
@@ -1243,7 +1243,7 @@ def show_connection_info(cluster_name: str, aws_region: str, aws_profile: str, m
                     aws_partition = cluster_config.get_string('cluster.aws.partition', required=True)
                     connection_manager_url = AdministratorUtils.get_session_manager_url(aws_partition, aws_region, instance_id)
                     connection_info_entries.append({
-                        'key': f'Bastion Host (Session Manager URL)',
+                        'key': 'Bastion Host (Session Manager URL)',
                         'value': connection_manager_url,
                         'weight': 2
                     })
@@ -1325,7 +1325,7 @@ def quick_setup(ctx, values_file: str, existing_resources: bool, termination_pro
     ctx.invoke(list_modules, cluster_name=cluster_name, aws_region=aws_region, aws_profile=aws_profile)
 
     if not force:
-        continue_deployment = cli.prompt(f'Are you sure you want to deploy above IDEA modules with applicable configuration settings?', default=True)
+        continue_deployment = cli.prompt('Are you sure you want to deploy above IDEA modules with applicable configuration settings?', default=True)
         if not continue_deployment:
             cli.info('Deployment aborted!')
             raise SystemExit
@@ -1421,7 +1421,7 @@ def delete_backups(cluster_name: str, aws_region: str, aws_profile: str, force: 
     context = SocaCliContext()
     confirm_delete_backups = force
     if not force:
-        confirm_delete_backups = context.prompt(f'Are you sure you want to delete all the backup recovery points?')
+        confirm_delete_backups = context.prompt('Are you sure you want to delete all the backup recovery points?')
 
     if not confirm_delete_backups:
         return
@@ -1788,7 +1788,7 @@ def ds_create_service_secrets(cluster_name: str, aws_region: str, aws_profile: s
                 SocaUserInputParamMetadata(
                     name='purpose',
                     title='Purpose',
-                    description=f"Enter account purpose",
+                    description="Enter account purpose",
                     data_type='str',
                     param_type=SocaUserInputParamType.SELECT,
                     multiple=False,
@@ -1837,10 +1837,6 @@ def ds_create_service_secrets(cluster_name: str, aws_region: str, aws_profile: s
     print(f'Account Purpose: {purpose}')
     print(f'Username Secret ARN: {username_secret_arn}')
     print(f'Password Secret ARN: {password_secret_arn}')
-
-
-
-
 
 
 @shared_storage.command('add-file-system', context_settings=CLICK_SETTINGS)

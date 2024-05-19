@@ -83,6 +83,11 @@ network:
     {{ utils.to_yaml(vpc_gateway_endpoints) | indent(4) }}
   vpc_interface_endpoints:
     {{ utils.to_yaml(vpc_interface_endpoints) | indent(4) }}
+  # Some services used by IDEA don't support VPC endpoints (DynamoDB Streams, Cognito, Directory Service, Service Quota)
+  # https_proxy needs to be set to route traffic to these services if deploying in isolated subnets without a NAT gateway
+  # https_proxy expected format is http://<hostname>:<port>
+  https_proxy: ""
+  no_proxy: "127.0.0.1,169.254.169.254,localhost,{{ aws_region }}.local,{{ aws_region }}.vpce.{{ aws_dns_suffix }},s3.{{ aws_region }}.{{ aws_dns_suffix }},s3.dualstack.{{ aws_region }}.{{ aws_dns_suffix }},dynamodb.{{ aws_region }}.{{ aws_dns_suffix }},{{ aws_region }}.es.{{ aws_dns_suffix }},sqs.{{ aws_region }}.{{ aws_dns_suffix }},ec2.{{ aws_region }}.{{ aws_dns_suffix }},secretsmanager.{{ aws_region }}.{{ aws_dns_suffix }},sns.{{ aws_region }}.{{ aws_dns_suffix }},cloudformation.{{ aws_region }}.{{ aws_dns_suffix }},elasticloadbalancing.{{ aws_region }}.{{ aws_dns_suffix }},monitoring.{{ aws_region }}.{{ aws_dns_suffix }},logs.{{ aws_region }}.{{ aws_dns_suffix }},ssm.{{ aws_region }}.{{ aws_dns_suffix }},application-autoscaling.{{ aws_region }}.{{ aws_dns_suffix }},events.{{ aws_region }}.{{ aws_dns_suffix }},kinesis.{{ aws_region }}.{{ aws_dns_suffix }},{{ aws_region }}.elb.{{ aws_dns_suffix }},autoscaling.{{ aws_region }}.{{ aws_dns_suffix }}"
   {%- endif %}
 
 # AWS Key Management Service

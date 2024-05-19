@@ -226,7 +226,7 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
             name=f'{self.module_id}-ssm-commands-sns-topic-role',
             scope=self.stack,
             assumed_by=['ssm'],
-            description=f'IAM role for SSM Commands to send notifications via SNS'
+            description='IAM role for SSM Commands to send notifications via SNS'
         )
 
         self.ssm_command_pass_role.attach_inline_policy(Policy(
@@ -386,7 +386,7 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
         self.dcv_host_role = self._build_iam_role(
             role_description=f'IAM role assigned to virtual-desktop-{self.COMPONENT_DCV_HOST}',
             component_name=self.COMPONENT_DCV_HOST,
-            component_jinja=f'virtual-desktop-dcv-host.yml'
+            component_jinja='virtual-desktop-dcv-host.yml'
         )
         self.dcv_host_role.grant_pass_role(self.controller_role)
 
@@ -535,6 +535,17 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
 
         # autoscaling group
         dcv_broker_package_uri = self.stack.node.try_get_context('dcv_broker_bootstrap_package_uri')
+        use_vpc_endpoints = self.context.config().get_bool('cluster.network.use_vpc_endpoints', default=False)
+        https_proxy = self.context.config().get_string('cluster.network.https_proxy', required=False, default='')
+        no_proxy = self.context.config().get_string('cluster.network.no_proxy', required=False, default='')
+        proxy_config = {}
+        if use_vpc_endpoints and Utils.is_not_empty(https_proxy):
+            proxy_config = {
+                    'http_proxy': https_proxy,
+                    'https_proxy': https_proxy,
+                    'no_proxy': no_proxy
+                    }
+
         if Utils.is_empty(dcv_broker_package_uri):
             dcv_broker_package_uri = 'not-provided'
 
@@ -542,12 +553,13 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
             aws_region=self.aws_region,
             bootstrap_package_uri=dcv_broker_package_uri,
             install_commands=[
-                f'/bin/bash dcv-broker/setup.sh'
+                '/bin/bash dcv-broker/setup.sh'
             ],
             infra_config={
                 'BROKER_CLIENT_TARGET_GROUP_ARN': '${__BROKER_CLIENT_TARGET_GROUP_ARN__}',
                 'CONTROLLER_EVENTS_QUEUE_URL': '${__CONTROLLER_EVENTS_QUEUE_URL__}'
             },
+            proxy_config=proxy_config,
             base_os=self.context.config().get_string('virtual-desktop-controller.dcv_broker.autoscaling.base_os', required=True)
         ).build()
         substituted_userdata = cdk.Fn.sub(broker_userdata, {
@@ -558,7 +570,7 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
         self.dcv_broker_role = self._build_iam_role(
             role_description=f'IAM role assigned to virtual-desktop-{self.COMPONENT_DCV_BROKER}',
             component_name=self.COMPONENT_DCV_BROKER,
-            component_jinja=f'virtual-desktop-dcv-broker.yml'
+            component_jinja='virtual-desktop-dcv-broker.yml'
         )
 
         self.dcv_broker_autoscaling_group = self._build_auto_scaling_group(
@@ -624,8 +636,19 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
         self.controller_role = self._build_iam_role(
             role_description=f'IAM role assigned to virtual-desktop-{self.COMPONENT_CONTROLLER}',
             component_name=self.COMPONENT_CONTROLLER,
-            component_jinja=f'virtual-desktop-controller.yml'
+            component_jinja='virtual-desktop-controller.yml'
         )
+
+        use_vpc_endpoints = self.context.config().get_bool('cluster.network.use_vpc_endpoints', default=False)
+        https_proxy = self.context.config().get_string('cluster.network.https_proxy', required=False, default='')
+        no_proxy = self.context.config().get_string('cluster.network.no_proxy', required=False, default='')
+        proxy_config = {}
+        if use_vpc_endpoints and Utils.is_not_empty(https_proxy):
+            proxy_config = {
+                    'http_proxy': https_proxy,
+                    'https_proxy': https_proxy,
+                    'no_proxy': no_proxy
+                    }
 
         self.controller_auto_scaling_group = self._build_auto_scaling_group(
             component_name=self.COMPONENT_CONTROLLER,
@@ -637,6 +660,7 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
                 install_commands=[
                     '/bin/bash virtual-desktop-controller/setup.sh'
                 ],
+                proxy_config=proxy_config,
                 base_os=self.context.config().get_string('virtual-desktop-controller.controller.autoscaling.base_os', required=True)
             ).build()),
             node_type=constants.NODE_TYPE_APP
@@ -841,16 +865,28 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
         if Utils.is_empty(dcv_connection_gateway_bootstrap_package_uri):
             dcv_connection_gateway_bootstrap_package_uri = 'not-provided'
 
+        use_vpc_endpoints = self.context.config().get_bool('cluster.network.use_vpc_endpoints', default=False)
+        https_proxy = self.context.config().get_string('cluster.network.https_proxy', required=False, default='')
+        no_proxy = self.context.config().get_string('cluster.network.no_proxy', required=False, default='')
+        proxy_config = {}
+        if use_vpc_endpoints and Utils.is_not_empty(https_proxy):
+            proxy_config = {
+                    'http_proxy': https_proxy,
+                    'https_proxy': https_proxy,
+                    'no_proxy': no_proxy
+                    }
+
         connection_gateway_userdata = BootstrapUserDataBuilder(
             aws_region=self.aws_region,
             bootstrap_package_uri=dcv_connection_gateway_bootstrap_package_uri,
             install_commands=[
-                f'/bin/bash dcv-connection-gateway/setup.sh'
+                '/bin/bash dcv-connection-gateway/setup.sh'
             ],
             infra_config={
                 'CERTIFICATE_SECRET_ARN': '${__CERTIFICATE_SECRET_ARN__}',
                 'PRIVATE_KEY_SECRET_ARN': '${__PRIVATE_KEY_SECRET_ARN__}',
             },
+            proxy_config=proxy_config,
             base_os=self.context.config().get_string('virtual-desktop-controller.dcv_connection_gateway.autoscaling.base_os', required=True)
         ).build()
 
@@ -872,7 +908,7 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
             iam_role=self._build_iam_role(
                 role_description=f'IAM role assigned to virtual-desktop-{self.COMPONENT_DCV_CONNECTION_GATEWAY}',
                 component_name=self.COMPONENT_DCV_CONNECTION_GATEWAY,
-                component_jinja=f'virtual-desktop-dcv-connection-gateway.yml'
+                component_jinja='virtual-desktop-dcv-connection-gateway.yml'
             ),
             substituted_userdata=substituted_userdata,
             node_type=constants.NODE_TYPE_INFRA
@@ -975,7 +1011,7 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
                     'idea:ModuleName': 'virtual-desktop-controller'
                 }
             },
-            resource_type=f'Custom::SelfSignedCertificateConnectionGateway'
+            resource_type='Custom::SelfSignedCertificateConnectionGateway'
         )
 
     def build_dcv_connection_gateway(self):

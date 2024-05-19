@@ -13,4 +13,4 @@ def test_example():
     """
     example test case
     """
-    assert 1 + 1 is 2
+    assert (1 + 1) == 2

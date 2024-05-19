@@ -187,7 +187,7 @@ class AccountsService:
         if not db_group['enabled']:
             raise exceptions.soca_exception(
                 error_code=errorcodes.AUTH_GROUP_IS_DISABLED,
-                message=f'cannot modify a disabled group'
+                message='cannot modify a disabled group'
             )
 
         # do not support modification of group name or GID
@@ -316,7 +316,7 @@ class AccountsService:
         if not group['enabled']:
             raise exceptions.soca_exception(
                 error_code=errorcodes.AUTH_GROUP_IS_DISABLED,
-                message=f'cannot add users to a disabled user group'
+                message='cannot add users to a disabled user group'
             )
 
         users = []
@@ -441,7 +441,7 @@ class AccountsService:
         if not group['enabled'] and not force:
             raise exceptions.soca_exception(
                 error_code=errorcodes.AUTH_GROUP_IS_DISABLED,
-                message=f'cannot remove users from a disabled user group'
+                message='cannot remove users from a disabled user group'
             )
 
         users = []
@@ -596,8 +596,8 @@ class AccountsService:
             if Utils.is_empty(password):
                 raise exceptions.invalid_params('user.password is required')
         else:
-            self.logger.debug(f'create_user() - setting password to random value')
-            password = Utils.generate_password(8,2,2,2,2)
+            self.logger.debug('create_user() - setting password to random value')
+            password = Utils.generate_password(8, 2, 2, 2, 2)
             #password = None
 
         # login_shell
@@ -730,7 +730,7 @@ class AccountsService:
                                             message=f'User not found: {username}')
         if not existing_user['enabled']:
             raise exceptions.soca_exception(error_code=errorcodes.AUTH_USER_IS_DISABLED,
-                                            message=f'User is disabled and cannot be modified.')
+                                            message='User is disabled and cannot be modified.')
 
         user_updates = {
             'username': username
@@ -807,7 +807,7 @@ class AccountsService:
             raise exceptions.invalid_params('username is required')
 
         if self.is_cluster_administrator(username):
-            raise AuthUtils.invalid_operation(f'Cluster Administrator cannot be disabled.')
+            raise AuthUtils.invalid_operation('Cluster Administrator cannot be disabled.')
 
         existing_user = self.user_dao.get_user(username)
         if existing_user is None:
@@ -842,7 +842,7 @@ class AccountsService:
         log_tag = f'(DeleteUser: {username})'
 
         if self.is_cluster_administrator(username):
-            raise AuthUtils.invalid_operation(f'Cluster Administrator cannot be deleted.')
+            raise AuthUtils.invalid_operation('Cluster Administrator cannot be deleted.')
 
         user = self.user_dao.get_user(username=username)
         if user is None:
@@ -1152,7 +1152,7 @@ class AccountsService:
             if gid is not None:
                 self.logger.info(f'Group will use Directory Service Discovered GID: {gid}')
             else:
-                self.logger.info(f'Group will use AUTO GID')
+                self.logger.info('Group will use AUTO GID')
 
             self.create_group(
                 group=Group(
@@ -1199,7 +1199,7 @@ class AccountsService:
             if gid is not None:
                 self.logger.info(f'Group will use Directory Service Discovered GID: {gid}')
             else:
-                self.logger.info(f'Group will use AUTO GID')
+                self.logger.info('Group will use AUTO GID')
 
             self.create_group(
                 group=Group(
@@ -1241,7 +1241,7 @@ class AccountsService:
                 if gid is not None:
                     self.logger.info(f'Group will use Directory Service Discovered GID: {gid}')
                 else:
-                    self.logger.info(f'Group will use AUTO GID')
+                    self.logger.info('Group will use AUTO GID')
 
                 self.logger.info(f'creating module administrators group: {module_administrators_group_name}')
                 self.create_group(
@@ -1273,7 +1273,7 @@ class AccountsService:
                 if gid is not None:
                     self.logger.info(f'Group will use Directory Service Discovered GID: {gid}')
                 else:
-                    self.logger.info(f'Group will use AUTO GID')
+                    self.logger.info('Group will use AUTO GID')
 
                 self.create_group(
                     group=Group(

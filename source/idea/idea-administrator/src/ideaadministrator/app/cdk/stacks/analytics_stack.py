@@ -152,7 +152,7 @@ class AnalyticsStack(IdeaBaseStack):
                 lambda_package_name='idea_analytics_sink',
                 lambda_platform=SupportedLambdaPlatforms.PYTHON
             ),
-            description=f'Lambda to process analytics-kinesis-stream data',
+            description='Lambda to process analytics-kinesis-stream data',
             timeout_seconds=900,
             security_groups=[self.security_group],
             role=stream_processing_lambda_role,

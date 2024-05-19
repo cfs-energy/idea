@@ -40,5 +40,3 @@ class ValuesDiff:
     def get_values_file_s3_key(self) -> str:
         return self.values_file_dir + self.values_file
 
-
-
