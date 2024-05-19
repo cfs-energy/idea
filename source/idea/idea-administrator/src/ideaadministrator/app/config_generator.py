@@ -162,13 +162,13 @@ class ConfigGenerator:
         return Utils.get_value_as_string('kms_key_id', self.user_values, None)
 
     def get_instance_type(self) -> str:
-        return Utils.get_value_as_string('instance_type', self.user_values, 'm5.large')
+        return Utils.get_value_as_string('instance_type', self.user_values, 'm6i.large')
 
     def get_base_os(self) -> str:
         return Utils.get_value_as_string('base_os', self.user_values, 'amazonlinux2')
 
     def get_dcv_connection_gateway_instance_type(self) -> str:
-        return Utils.get_value_as_string('dcv_connection_gateway_instance_type', self.user_values, 'm5.xlarge')
+        return Utils.get_value_as_string('dcv_connection_gateway_instance_type', self.user_values, 'm6i.large')
 
     def get_dcv_connection_gateway_volume_size(self) -> int:
         return Utils.get_value_as_int('dcv_connection_gateway_volume_size', self.user_values, 200)

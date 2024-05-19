@@ -60,6 +60,7 @@ from ideaadministrator.app.aws_service_availability_helper import AwsServiceAvai
 
 from typing import Optional, List, TypeVar
 import validators
+import ipaddress
 
 T = TypeVar('T')
 SELECT_CHOICE_OTHER = constants.SELECT_CHOICE_OTHER
@@ -108,22 +109,22 @@ class ClusterNamePrompt(DefaultPrompt[str]):
         super().validate(value)
 
         # validate is not called for choice. so we are good here ...
-        token = AdministratorUtils.sanitize_cluster_name(value)
-        if Utils.is_empty(token):
+        _token = AdministratorUtils.sanitize_cluster_name(value)
+        if Utils.is_empty(_token):
             return
 
-        if token == f'{app_constants.CLUSTER_NAME_PREFIX}-{SELECT_CHOICE_OTHER}':
-            raise self.validation_error(message=f'Invalid ClusterName: {token}. '
+        if _token == f'{app_constants.CLUSTER_NAME_PREFIX}-{SELECT_CHOICE_OTHER}':
+            raise self.validation_error(message=f'Invalid ClusterName: {_token}. '
                                                 f'"{SELECT_CHOICE_OTHER}" is a reserved keyword and cannot be used in ClusterName.')
 
-        if 'idea' in token.replace('idea-', '', 1):
-            raise self.validation_error(message=f'Invalid ClusterName: {token}. '
-                                                f'"{token}" contains value "idea" and is not allowed.')
+        if 'idea' in _token.replace('idea-', '', 1):
+            raise self.validation_error(message=f'Invalid ClusterName: {_token}. '
+                                                f'"{_token}" contains value "idea" and is not allowed.')
 
         min_length, max_length = app_constants.CLUSTER_NAME_MIN_MAX_LENGTH
-        if not min_length <= len(token) <= max_length:
-            raise self.validation_error(message=f'ClusterName: ({token}) length must be between {min_length} and {max_length} characters. '
-                                                f'Current: {len(token)}')
+        if not min_length <= len(_token) <= max_length:
+            raise self.validation_error(message=f'ClusterName: ({_token}) length must be between {min_length} and {max_length} characters. '
+                                                f'Current: {len(_token)}')
 
         regenerate = Utils.get_as_bool(self.args.get('_regenerate'), False)
         if regenerate:
@@ -133,14 +134,14 @@ class ClusterNamePrompt(DefaultPrompt[str]):
         for vpc in vpcs:
             if vpc.cluster_name is None:
                 continue
-            if vpc.cluster_name == token:
-                raise self.validation_error(message=f'Cluster: ({token}) already exists and is in use by Vpc: {vpc.vpc_id}. '
+            if vpc.cluster_name == _token:
+                raise self.validation_error(message=f'Cluster: ({_token}) already exists and is in use by Vpc: {vpc.vpc_id}. '
                                                     f'Please enter a different cluster name.')
 
-        bootstrap_stack_name = f'{token}-bootstrap'
+        bootstrap_stack_name = f'{_token}-bootstrap'
         existing_bootstrap_stack = self.context.aws_util().cloudformation_describe_stack(bootstrap_stack_name)
         if existing_bootstrap_stack is not None:
-            raise self.validation_error(message=f'Cluster: ({token}) already exists and is in use by Bootstrap Stack: {bootstrap_stack_name}. '
+            raise self.validation_error(message=f'Cluster: ({_token}) already exists and is in use by Bootstrap Stack: {bootstrap_stack_name}. '
                                                 f'Please enter a different cluster name.')
 
     def filter(self, value: str) -> Optional[str]:
@@ -247,7 +248,7 @@ class ClientIPPrompt(DefaultPrompt[str]):
 
     def get_default(self, reset: bool = False) -> Optional[str]:
         if not reset:
-            client_ip = self.args.get('client_ip')
+            client_ip: str = self.args.get('client_ip')
             if client_ip:
                 return client_ip
         return AdministratorUtils.detect_client_ip()
@@ -255,14 +256,28 @@ class ClientIPPrompt(DefaultPrompt[str]):
     def filter(self, value: str) -> List[str]:
         tokens = value.split(',')
         result = []
-        for token in tokens:
-            if Utils.is_empty(token):
+        for _token in tokens:
+            if Utils.is_empty(_token):
                 continue
-            if '/' not in token:
-                token = f'{token}/32'
-            result.append(token.strip())
+            if '/' not in _token:
+                _token = f'{_token}/32'
+            result.append(_token.strip())
         super().filter(result)
         return result
+
+    def validate(self, value: str):
+
+        super().validate(value)
+
+        _tokens = value.split(',')
+        for _token in _tokens:
+            try:
+                _ip = ipaddress.ip_network(_token, strict=True)
+
+            except ValueError:
+                raise self.validation_error(
+                    message=f'CIDR Value: {_token} is invalid. Please enter a valid CIDR block'
+                )
 
 
 class SSHKeyPairPrompt(DefaultPrompt[str]):
@@ -518,7 +533,7 @@ class SubnetIdsPrompt(DefaultPrompt[str]):
                         message=f'SubnetId: {subnet.subnet_id} is already selected as part of {subnet_ids_alt_title} selection.'
                     )
 
-        if (self.param.name == 'private_subnet_ids') and ( (len(selected_subnets) < 2) and not is_outpost_installation):
+        if (self.param.name == 'private_subnet_ids') and ((len(selected_subnets) < 2) and not is_outpost_installation):
             raise self.validation_error(
                 message='Minimum 2 subnet selections are required to ensure high availability.'
             )
@@ -1131,6 +1146,7 @@ class QuickSetupPromptFactory(InstallerPromptFactory):
         self.register(ClusterNamePrompt(factory=self))
         self.register(EmailPrompt(factory=self, param=self.args.get_meta('administrator_email')))
         self.register(AwsProfilePrompt(factory=self))
+        self.register(AwsProfilePrompt2(factory=self))
         self.register(AwsPartitionPrompt(factory=self))
         self.register(AwsRegionPrompt(factory=self))
         self.register(ClientIPPrompt(factory=self))

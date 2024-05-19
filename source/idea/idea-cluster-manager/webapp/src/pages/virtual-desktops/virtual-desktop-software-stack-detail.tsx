@@ -104,9 +104,10 @@ class VirtualDesktopSoftwareStackDetail extends Component<VirtualDesktopSoftware
                     content: (
                         <Container header={<Header variant={"h2"}>Stack Details</Header>}>
                             <Grid gridDefinition={[{colspan: 8}, {colspan: 4}]}>
-                                <ColumnLayout columns={2} variant={"text-grid"}>
+                                <ColumnLayout columns={3} variant={"text-grid"}>
                                     <KeyValue title="Software Stack Id" value={this.state.softwareStack.stack_id} clipboard={true}/>
                                     <KeyValue title="Minimum Storage Size" value={this.state.softwareStack.min_storage} type="memory"/>
+                                    <KeyValue title="Minimum RAM Size" value={this.state.softwareStack.min_ram} type="memory"/>
                                     <KeyValue title="Architecture" value={this.state.softwareStack.architecture}/>
                                     <KeyValue title="GPU" value={this.state.softwareStack.gpu?.replaceAll('_', ' ')}/>
                                     <KeyValue title="Instance Tenancy" value={this.state.softwareStack.launch_tenancy}/>

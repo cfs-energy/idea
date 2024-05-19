@@ -141,14 +141,14 @@ testcases:
     instance_type: g4ad.xlarge
     storage_size: 50
 
-# Comment out RHEL8/Rocky8 for AMD GPU due to know issues with AMD GPU driver and kernel dependencies
-#  - name: rhel8-gpu-amd
-#    base_os: rhel8
-#    software_stack_id: ss-base-rhel8-x86-64-base
-#    hibernation_enabled: false
-#    instance_type: g4ad.xlarge
-#    storage_size: 50
-#
+  - name: rhel8-gpu-amd
+    base_os: rhel8
+    software_stack_id: ss-base-rhel8-x86-64-base
+    hibernation_enabled: false
+    instance_type: g4ad.xlarge
+    storage_size: 50
+
+# Comment out Rocky8 for AMD GPU due to know issues with AMD GPU driver and kernel dependencies
 #  - name: rocky8-gpu-amd
 #    base_os: rocky8
 #    software_stack_id: ss-base-rocky8-x86-64-base

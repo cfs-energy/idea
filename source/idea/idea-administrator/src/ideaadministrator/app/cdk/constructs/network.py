@@ -27,7 +27,8 @@ __all__ = (
     'OpenSearchSecurityGroup',
     'DefaultClusterSecurityGroup',
     'VirtualDesktopPublicLoadBalancerAccessSecurityGroup',
-    'VirtualDesktopBastionAccessSecurityGroup'
+    'VirtualDesktopBastionAccessSecurityGroup',
+    'VirtualDesktopBrokerSecurityGroup'
 )
 
 from typing import List, Optional, Dict
@@ -203,6 +204,11 @@ class SecurityGroup(SocaBaseConstruct, ec2.SecurityGroup):
             ec2.Port.tcp_range(0, 65535),
             description='Allow all egress for TCP'
         )
+        self.add_egress_rule(
+            ec2.Peer.ipv6('::/0'),
+            ec2.Port.tcp_range(0, 65535),
+            description='Allow all egress for TCP'
+        )
 
     def add_api_ingress_rule(self):
         self.add_ingress_rule(
@@ -232,6 +238,11 @@ class SecurityGroup(SocaBaseConstruct, ec2.SecurityGroup):
         )
         self.add_egress_rule(
             ec2.Peer.ipv4('0.0.0.0/0'),
+            ec2.Port.udp_range(0, 1024),
+            description='Allow UDP Traffic. Required for Directory Service'
+        )
+        self.add_egress_rule(
+            ec2.Peer.ipv6('::/0'),
             ec2.Port.udp_range(0, 1024),
             description='Allow UDP Traffic. Required for Directory Service'
         )
@@ -551,6 +562,60 @@ class VirtualDesktopPublicLoadBalancerAccessSecurityGroup(SecurityGroup):
             ec2.Port.all_traffic(),
             description=f'Allow all Internal traffic TO {self.component_name}'
         )
+        self.add_bastion_host_ingress_rule(self.bastion_host_security_group)
+        self.add_loadbalancer_ingress_rule(self.public_loadbalancer_security_group)
+
+    def setup_egress(self):
+        self.add_outbound_traffic_rule()
+
+
+class VirtualDesktopBrokerSecurityGroup(SecurityGroup):
+    """
+    Virtual Desktop Broker Security Group
+    """
+    component_name: str
+
+    def __init__(self, context: AdministratorContext, name: str, scope: constructs.Construct, vpc: ec2.IVpc,
+                 bastion_host_security_group: ec2.ISecurityGroup, description: str, component_name: str,
+                 public_loadbalancer_security_group: ec2.ISecurityGroup):
+        super().__init__(context, name, scope, vpc, description=description)
+        self.component_name = component_name
+        self.public_loadbalancer_security_group = public_loadbalancer_security_group
+        self.bastion_host_security_group = bastion_host_security_group
+        self.setup_ingress()
+        self.setup_egress()
+
+    def setup_ingress(self):
+        broker_client_port = self.context.config().get_int('virtual-desktop-controller.dcv_broker.client_communication_port', required=True)
+        broker_agent_port = self.context.config().get_int('virtual-desktop-controller.dcv_broker.agent_communication_port', required=True)
+        broker_gateway_port = self.context.config().get_int('virtual-desktop-controller.dcv_broker.gateway_communication_port', required=True)
+
+        _broker_port_list = sorted([broker_client_port, broker_agent_port, broker_gateway_port])
+
+        # Save SG rule entries if the ports are consecutive and can be expressed as a range
+        if _broker_port_list == list(range(min(_broker_port_list), max(_broker_port_list) + 1)):
+            self.add_ingress_rule(
+                ec2.Peer.ipv4(self.vpc.vpc_cidr_block),
+                ec2.Port.tcp_range(min(_broker_port_list), max(_broker_port_list)),
+                description=f'Allow VPC to broker ports {min(_broker_port_list)}-{max(_broker_port_list)}'
+            )
+        else:
+            # Non-consecutive ports - single rule per port
+            for _port in _broker_port_list:
+                self.add_ingress_rule(
+                    ec2.Peer.ipv4(self.vpc.vpc_cidr_block),
+                    ec2.Port.tcp(_port),
+                    description=f'Allow VPC to broker port {_port}'
+                )
+
+        # Broker to Broker communications
+        # TODO - these are hard-coded in templates and need to be pulled up to config knobs
+        for _port in [47100, 47200, 47500]:
+            self.add_ingress_rule(
+                self,
+                ec2.Port.tcp(_port),
+                description=f'Allow broker to broker port {_port}'
+            )
         self.add_bastion_host_ingress_rule(self.bastion_host_security_group)
         self.add_loadbalancer_ingress_rule(self.public_loadbalancer_security_group)
 

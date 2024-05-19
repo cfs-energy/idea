@@ -200,6 +200,11 @@ class EC2InstanceType:
         return ModelUtils.get_value_as_bool('EncryptionInTransitSupported', network_info)
 
     @property
+    def network_info_ena_express_supported(self) -> Optional[bool]:
+        network_info = ModelUtils.get_value_as_dict('NetworkInfo', self.instance_type_data())
+        return ModelUtils.get_value_as_bool('EnaSrdSupported', network_info)
+
+    @property
     def gpu_info_gpus(self) -> Optional[List[Dict]]:
         gpu_info = ModelUtils.get_value_as_dict('GpuInfo', self.instance_type_data())
         return ModelUtils.get_value_as_list('Gpus', gpu_info)

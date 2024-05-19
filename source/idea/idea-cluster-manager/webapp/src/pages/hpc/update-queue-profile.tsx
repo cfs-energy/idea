@@ -673,7 +673,7 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                                                     param_type: 'auto',
                                                     data_type: 'memory',
                                                     default: {
-                                                        value: 10,
+                                                        value: 60,
                                                         unit: 'gb'
                                                     },
                                                     when: {

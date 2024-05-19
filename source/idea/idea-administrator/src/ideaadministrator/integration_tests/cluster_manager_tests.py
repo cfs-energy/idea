@@ -79,7 +79,7 @@ def test_admin_create_user(context: TestContext):
     assert Utils.is_not_empty(user.username)
     assert Utils.are_equal(test_username, user.username)
     assert Utils.are_equal(email, user.email)
-    #assert Utils.are_equal(user.status, 'CONFIRMED')
+    # assert Utils.are_equal(user.status, 'CONFIRMED')
     assert Utils.is_false(user.sudo)
     assert Utils.is_true(user.enabled)
     assert Utils.is_not_empty(user.uid)

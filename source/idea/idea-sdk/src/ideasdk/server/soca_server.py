@@ -641,8 +641,6 @@ class SocaServer(SocaService):
                 _auto_name = f"unix-{path_prefix}-{uri}-{_method_names}"
                 _name = name if Utils.is_not_empty(name) else _auto_name
                 self.unix_app.add_route(handler, f'{path_prefix}{uri}', methods, name=_name)
-
-
     def initialize(self):
 
         if self.options.enable_http:
@@ -725,12 +723,12 @@ class SocaServer(SocaService):
         if Utils.is_empty(authorization):
             return self.unauthorized_access()
         token_type = Utils.get_value_as_string('token_type', authorization)
-        token = Utils.get_value_as_string('token', authorization)
-        if Utils.is_any_empty(token_type, token):
+        _token = Utils.get_value_as_string('token', authorization)
+        if Utils.is_any_empty(token_type, _token):
             return self.unauthorized_access()
         if token_type != 'Bearer':
             return self.unauthorized_access()
-        if token != self.metrics_api_token:
+        if _token != self.metrics_api_token:
             return self.unauthorized_access()
         # todo - enable gzip if accepted
         output = generate_latest()

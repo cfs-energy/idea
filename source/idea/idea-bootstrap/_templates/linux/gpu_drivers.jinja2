@@ -46,6 +46,7 @@ function install_nvidia_public_drivers() {
   # P3        Tesla	        V-Series	      V100
   # P4d       Tesla	        A-Series	      A100 (320 GB HBM2 GPU memory)
   # P4de      Tesla	        A-Series	      A100 (640 GB HBM2e GPU memory)
+  # P5        Tesla         H-Series        H100 (640 GB HBM3 GPU memory)
 
   local DRIVER_VERSION="{{ context.get_nvidia_gpu_driver_version() }}"
 
@@ -184,6 +185,11 @@ function install_gpu_drivers () {
   # Available drivers by instance type for Tesla vs Grid mapping.
   # we'll use NODE_TYPE="dcv" to install Grid drivers and NODE_TYPE="compute" to install Tesla drivers.
   case ${INSTANCE_FAMILY} in
+    p5)
+      log_info "AMD / NVIDIA H100"
+      # Tesla driver: Yes, GRID driver: No
+      install_nvidia_public_drivers
+      ;;
     p4d|p4de)
       log_info "Intel / NVIDIA A100"
       # Tesla driver: Yes, GRID driver: No

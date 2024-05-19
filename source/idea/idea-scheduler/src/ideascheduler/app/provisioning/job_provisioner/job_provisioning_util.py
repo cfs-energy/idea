@@ -315,6 +315,16 @@ class JobProvisioningUtil:
                     SecurityGroupIds=self.job.params.security_groups,
                     MaxCount=self.job.params.nodes,
                     MinCount=self.job.params.nodes,
+                    BlockDeviceMappings=[
+                        {
+                            'DeviceName': Utils.get_ec2_block_device_name(base_os=self.job.params.base_os),
+                            'Ebs': {
+                                'Encrypted': constants.DEFAULT_VOLUME_ENCRYPTION_COMPUTE,
+                                'VolumeType': constants.DEFAULT_VOLUME_TYPE_COMPUTE,
+                                'DeleteOnTermination': constants.DEFAULT_KEEP_EBS_VOLUMES
+                            }
+                        }
+                    ],
                     DryRun=True
                 )
             except ClientError as e:

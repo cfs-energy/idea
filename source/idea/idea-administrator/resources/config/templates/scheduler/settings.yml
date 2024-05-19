@@ -58,6 +58,11 @@ ec2:
   metadata_http_tokens: "required"  # supported values are "required" for IMDSv2 or "optional" for IMDSv1
 
 cache:
+  # How often a full refresh of EC2 instance type capabilities can be performed
+  # This only takes place when an unknown instance type is encountered by the user.
+  # This is how long an instance type could remain unknown to the running
+  # scheduler. A restart of the scheduler is required for this value to become effective after changing it.
+  instance_types_refresh_interval: 43200  # 12-hours by default
   long_term:
     max_size: 1000
     ttl_seconds: 86400 # 1 day

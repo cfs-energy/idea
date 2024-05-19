@@ -26,7 +26,7 @@ EXCLUDE+=('kernel*el8_8*')
 {%- endif %}
 {%- if context.job_has_param('enable_efa_support') %}
 #EFA installer provides an older version of this library
-EXCLUDE+=('libibverbs-44.0-2.el8.1')
+EXCLUDE+=('')
 {%- endif %}
 printf -v EXCLUDE_JOINED '%s,' "${EXCLUDE[@]}"
 dnf --exclude=${EXCLUDE_JOINED%,} install -y $(echo ${SYSTEM_PKGS[*]} ${SYSTEM_PKGS_8[*]} ${APPLICATION_PKGS[*]} ${SSSD_PKGS[*]} ${OPENLDAP_CLIENT_PKGS[*]})

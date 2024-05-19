@@ -48,7 +48,7 @@ def handler(event, _):
         for tags in ec2instance.tags:
             if tags["Key"].startswith(idea_tag_prefix):
                 event['detail']['tags'][tags["Key"]] = tags["Value"]
-                message_attributes[re.sub(r"[^a-zA-Z0-9_\-\.]+","_",tags["Key"]).strip()] = {
+                message_attributes[re.sub(r"[^a-zA-Z0-9_\-\.]+", "_", tags["Key"]).strip()] = {
                         'DataType': 'String',
                         'StringValue': tags["Value"]
                         }

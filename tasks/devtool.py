@@ -334,7 +334,7 @@ def update_cdk_version(_, version):
     buildspec_filename = 'deployment/idea/codebuild/integration_tests/buildspec-idea-integration-tests.yml'
     print(f'updating {buildspec_filename} with CDK version: {version}')
     with open(buildspec_filename, 'r') as f:
-        #buildspec = Utils.from_yaml(f.read())
+        # buildspec = Utils.from_yaml(f.read())
         lines = f.read().splitlines()
     for line in lines:
         # a proper regex would be better

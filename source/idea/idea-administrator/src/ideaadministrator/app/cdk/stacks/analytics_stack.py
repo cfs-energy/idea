@@ -182,6 +182,10 @@ class AnalyticsStack(IdeaBaseStack):
             )
         )
 
+        stream_processing_lambda.add_nag_suppression(suppressions=[
+            IdeaNagSuppression(rule_id='AwsSolutions-L1', reason='Python Runtime is selected for stability.')
+        ])
+
         stream_processing_lambda.add_event_source(lambda_event_sources.KinesisEventSource(
             self.kinesis_stream,
             batch_size=100,

@@ -505,6 +505,7 @@ class UpdateSessionPermissionModal extends Component<UpdateSessionPermissionModa
         return (
             <form onSubmit={(e) => e.preventDefault()}>
                 <Form
+                    variant="embedded"
                     header={<Header
                         description={'Select the username, permission profile and the expiry date of the rules'}
                         actions={<Button variant={"normal"} onClick={() => {

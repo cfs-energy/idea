@@ -23,7 +23,8 @@ from ideaadministrator.app.cdk.constructs import (
     UserPool,
     LambdaFunction,
     Role,
-    Policy
+    Policy,
+    IdeaNagSuppression
 )
 from typing import Optional
 import aws_cdk as cdk
@@ -188,6 +189,10 @@ class IdentityProviderStack(IdeaBaseStack):
             role=oauth_credentials_lambda_role,
             log_retention_role=self.cluster.get_role(app_constants.LOG_RETENTION_ROLE_NAME)
         )
+
+        self.oauth_credentials_lambda.add_nag_suppression(suppressions=[
+            IdeaNagSuppression(rule_id='AwsSolutions-L1', reason='Python Runtime is selected for stability.')
+        ])
         self.oauth_credentials_lambda.node.add_dependency(oauth_credentials_lambda_role)
 
     def build_cognito_cluster_settings(self):

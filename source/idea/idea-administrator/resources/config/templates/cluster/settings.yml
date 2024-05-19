@@ -28,7 +28,7 @@ route53:
   private_hosted_zone_name: "{{cluster_name}}.{{aws_region}}.local"
 
 network:
-  # You must specify the maximum number of entries for the prefix list. The maximum number of entries cannot be changed later.
+  # You must specify the maximum number of entries for the initial prefix list.
   cluster_prefix_list_max_entries: 10
   prefix_list_ids:
     {{ utils.to_yaml(prefix_list_ids) | indent(4) }}

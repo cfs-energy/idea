@@ -246,6 +246,7 @@ class CognitoUser(SocaBaseModel):
         gid = self.get_user_attribute('custom:gid')
         return ModelUtils.get_as_int(gid, None)
 
+
 class CognitoUserPoolPasswordPolicy(SocaBaseModel):
     minimum_length: Optional[int]
     require_uppercase: Optional[bool]

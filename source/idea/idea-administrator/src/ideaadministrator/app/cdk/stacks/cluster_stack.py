@@ -34,6 +34,7 @@ from ideaadministrator.app.cdk.constructs import (
     ManagedPolicy,
     Role,
     LambdaFunction,
+    IdeaNagSuppression,
     SNSTopic,
     BackupPlan
 )
@@ -430,6 +431,9 @@ class ClusterStack(IdeaBaseStack):
         lambda_function.node.add_dependency(lambda_role)
         lambda_function.node.add_dependency(self.cluster_prefix_list)
 
+        lambda_function.add_nag_suppression(suppressions=[
+            IdeaNagSuppression(rule_id='AwsSolutions-L1', reason='Python Runtime is selected for stability.')
+        ])
         entries = []
         for client_ip in client_ips:
             if '/' not in client_ip:
@@ -591,6 +595,10 @@ class ClusterStack(IdeaBaseStack):
         self.cluster_settings_lambda.node.add_dependency(self.cluster_settings_lambda_policy)
         self.cluster_settings_lambda.node.add_dependency(cluster_settings_lambda_role)
 
+        self.cluster_settings_lambda.add_nag_suppression(suppressions=[
+            IdeaNagSuppression(rule_id='AwsSolutions-L1', reason='Python Runtime is selected for stability.')
+        ])
+
     def build_solution_metrics_lambda(self):
         lambda_name = 'solution-metrics'
 
@@ -624,6 +632,10 @@ class ClusterStack(IdeaBaseStack):
         solution_metrics_lambda_role.attach_inline_policy(self.solution_metrics_lambda_policy)
         self.solution_metrics_lambda.node.add_dependency(self.solution_metrics_lambda_policy)
         self.solution_metrics_lambda.node.add_dependency(solution_metrics_lambda_role)
+
+        self.solution_metrics_lambda.add_nag_suppression(suppressions=[
+            IdeaNagSuppression(rule_id='AwsSolutions-L1', reason='Python Runtime is selected for stability.')
+        ])
 
     def build_self_signed_certificates_lambda(self):
         """
@@ -662,6 +674,10 @@ class ClusterStack(IdeaBaseStack):
         # and deletion fails.
         self.self_signed_certificate_lambda.node.add_dependency(self_signed_certificate_policy)
         self.self_signed_certificate_lambda.node.add_dependency(self_signed_certificate_role)
+
+        self.self_signed_certificate_lambda.add_nag_suppression(suppressions=[
+            IdeaNagSuppression(rule_id='AwsSolutions-L1', reason='Python Runtime is selected for stability.')
+        ])
 
     def build_self_signed_certificates(self):
         external_certificate_provided = self.context.config().get_bool('cluster.load_balancers.external_alb.certificates.provided', False)
@@ -806,6 +822,10 @@ class ClusterStack(IdeaBaseStack):
             )
         )
 
+        ec2_state_event_transformation_lambda.add_nag_suppression(suppressions=[
+            IdeaNagSuppression(rule_id='AwsSolutions-L1', reason='Python Runtime is selected for stability.')
+        ])
+
         ec2_monitoring_rule = events.Rule(
             scope=self.stack,
             id=f'{self.cluster_name}-ec2-state-monitoring-rule',
@@ -855,6 +875,10 @@ class ClusterStack(IdeaBaseStack):
         )
         self.cluster_endpoints_lambda.node.add_dependency(cluster_endpoints_policy)
         self.cluster_endpoints_lambda.node.add_dependency(cluster_endpoints_role)
+
+        self.cluster_endpoints_lambda.add_nag_suppression(suppressions=[
+            IdeaNagSuppression(rule_id='AwsSolutions-L1', reason='Python Runtime is selected for stability.')
+        ])
 
         # external ALB - can be deployed in public or private subnets
         is_public = self.context.config().get_bool('cluster.load_balancers.external_alb.public', default=True)

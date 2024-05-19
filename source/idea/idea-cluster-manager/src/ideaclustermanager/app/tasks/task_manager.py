@@ -24,23 +24,24 @@ import threading
 import ldap
 import time
 
-DEFAULT_MIN_WORKERS = 1 # The default setting if the configuration cannot be found
-DEFAULT_MAX_WORKERS = 5 # The default setting if the configuration cannot be found
-MAX_WORKERS = 10        # The absolute maximum
+DEFAULT_MIN_WORKERS = 1  # The default setting if the configuration cannot be found
+DEFAULT_MAX_WORKERS = 5  # The default setting if the configuration cannot be found
+MAX_WORKERS = 10         # The absolute maximum
 
 # WaitTime
 #  https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-short-and-long-polling.html
-DEFAULT_WAIT_TIME = 20 # WaitTime for SQS polling (short or long polling)
-MAX_WAIT_TIME = 20     # The absolute maximum
+DEFAULT_WAIT_TIME = 20  # WaitTime for SQS polling (short or long polling)
+MAX_WAIT_TIME = 20      # The absolute maximum
 
 # MaxMessages from SQS in one API call
 # NOTE - Due to message processing time and dependency - the suggested value is 1
-DEFAULT_MAX_MESSAGES = 1 # WaitTime for SQS polling (short or long polling)
-MAX_MESSAGES = 10     # The absolute maximum
+DEFAULT_MAX_MESSAGES = 1  # WaitTime for SQS polling (short or long polling)
+MAX_MESSAGES = 10         # The absolute maximum
 
 # Max Visibility from SQS in one API call
 DEFAULT_VISIBILITY = constants.SQS_VISIBILITY_TASKS
-MAX_VISIBILITY = (12 * 60 * 60) # The absolute maximum (12 hours, SQS limit)
+MAX_VISIBILITY = (12 * 60 * 60)  # The absolute maximum (12 hours, SQS limit)
+
 
 class TaskManager(SocaService):
 

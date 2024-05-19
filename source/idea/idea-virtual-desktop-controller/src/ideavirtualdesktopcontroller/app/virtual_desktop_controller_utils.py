@@ -72,6 +72,7 @@ class VirtualDesktopControllerUtils:
             base_os=session.software_stack.base_os.value,
             instance_type=session.server.instance_type
         )
+        bootstrap_context.vars.session = session
         bootstrap_context.vars.session_owner = session.owner
         bootstrap_context.vars.idea_session_id = session.idea_session_id
         bootstrap_context.vars.project = session.project.name
@@ -206,10 +207,17 @@ class VirtualDesktopControllerUtils:
 
         _attempt_subnets = []
         # Use a subnet_id if specified
-        if Utils.is_not_empty(session.server.server_id):
+        if Utils.is_not_empty(session.server.subnet_id):
             # this comes in as a string from the API
-            self._logger.debug(f"Using strict requested subnet_id: {session.server.server_id}")
-            _attempt_subnets.append(session.server.server_id)
+            self._logger.debug(f"Using strict requested subnet_id: {session.server.subnet_id}")
+            _subnets = session.server.subnet_id.split(',')
+            for _subnet in _subnets:
+                _subnet = _subnet.strip()
+                if _subnet not in [*cluster_private_subnets, *configured_vdi_subnets]:
+                    self._logger.error(f"User requested subnet_id ({_subnet}) is unknown. Ignoring request. Supported subnets: {', '.join([*cluster_private_subnets, *configured_vdi_subnets])}")
+                    raise Exception(f"Requested subnet_id ({_subnet}) is not available in the IDEA cluster configuration. Please contact your Administrator to validate the subnet_id or try again without an explicit subnet_id.")
+                self._logger.debug(f"Adding user supplied subnet_id to attempt list: {_subnet}")
+                _attempt_subnets.append(_subnet)
         elif configured_vdi_subnets:
             # A list from the config
             self._logger.debug(f"Found configured VDI subnets: {', '.join(configured_vdi_subnets)}")
@@ -221,14 +229,14 @@ class VirtualDesktopControllerUtils:
 
         # Shuffle the list if configured for random subnet
         if randomize_subnet_method:
-            random.shuffle(_attempt_subnets)
             self._logger.debug(f"Applying randomize to subnet list due to configuration.")
+            random.shuffle(_attempt_subnets)
 
         # At this stage _attempt_subnets contains the subnets
         # we want to attempt in the order that we prefer
         # (ordered or pre-shuffled)
 
-        self._logger.debug(f"Deployment Attempt Ready - Tenancy: {desired_tenancy} Retry: {subnet_autoretry_method} Attempt_Subnets({len(_attempt_subnets)}): {', '.join(_attempt_subnets)}")
+        self._logger.info(f"Deployment Attempt Ready - Tenancy: {desired_tenancy} Retry: {subnet_autoretry_method} Randomize: {randomize_subnet_method}, Attempt_Subnets({len(_attempt_subnets)}): {', '.join(_attempt_subnets)}")
 
         _deployment_loop = 0
         _attempt_provision = True
@@ -300,10 +308,12 @@ class VirtualDesktopControllerUtils:
             except botocore.exceptions.ClientError as err:
                 self._logger.warning(f"Encountered botocore Exception")
 
-                if err.response['Error']['Code'] == 'OptInRequired':
+                _error_code = Utils.get_as_string(err.response['Error']['Code'], default='Unknown')
+
+                if _error_code == 'OptInRequired':
                     self._logger.error(f"Unable to launch due to missing OptIn for this BaseOS AMI. Visit the AWS Marketplace in the AWS Console to subscribe: {err}")
                     break
-                elif err.response['Error']['Code'] == 'InsufficientInstanceCapacity':
+                elif _error_code in {'InsufficientInstanceCapacity', 'Unsupported'}:
                     if subnet_autoretry_method and _attempt_provision:
                         self._logger.info(f"Remaining subnets {len(_attempt_subnets)}: {_attempt_subnets}")
                         self._logger.info(f"Continuing next attempt with remaining subnets..")
@@ -323,31 +333,35 @@ class VirtualDesktopControllerUtils:
             return Utils.to_dict(response)
 
     def _add_instance_data_to_cache(self):
+        _start_ec2_data = Utils.current_time_ms()
+        self._logger.debug(f"Starting EC2 instance data collection: {_start_ec2_data}")
+
         with self.instance_types_lock:
             instance_type_names = self.context.cache().long_term().get(self.INSTANCE_TYPES_NAMES_LIST_CACHE_KEY)
             instance_info_data = self.context.cache().long_term().get(self.INSTANCE_INFO_CACHE_KEY)
             if instance_type_names is None or instance_info_data is None:
-                instance_type_names = []
                 instance_info_data = {}
 
-                has_more = True
-                next_token = None
-                while has_more:
-                    if next_token is None:
-                        result = self.context.aws().ec2().describe_instance_types(MaxResults=100)
-                    else:
-                        result = self.context.aws().ec2().describe_instance_types(MaxResults=100, NextToken=next_token)
+                ec2_paginator = self.context.aws().ec2().get_paginator('describe_instance_types')
+                ec2_iterator = ec2_paginator.paginate(MaxResults=100)
 
-                    next_token = Utils.get_value_as_string('NextToken', result)
-                    has_more = Utils.is_not_empty(next_token)
-                    current_instance_types = Utils.get_value_as_list('InstanceTypes', result)
+                for page in ec2_iterator:
+                    current_instance_types = Utils.get_value_as_list('InstanceTypes', page)
                     for current_instance_type in current_instance_types:
-                        instance_type_name = Utils.get_value_as_string('InstanceType', current_instance_type, '')
-                        instance_type_names.append(instance_type_name)
-                        instance_info_data[instance_type_name] = current_instance_type
+                        instance_type_name = Utils.get_value_as_string('InstanceType', current_instance_type, None)
+                        if instance_type_name is not None:
+                            instance_info_data[instance_type_name] = current_instance_type
 
-                self.context.cache().long_term().set(self.INSTANCE_TYPES_NAMES_LIST_CACHE_KEY, instance_type_names)
-                self.context.cache().long_term().set(self.INSTANCE_INFO_CACHE_KEY, instance_info_data)
+                self.context.cache().long_term().set(
+                    key=self.INSTANCE_TYPES_NAMES_LIST_CACHE_KEY,
+                    value=instance_info_data.keys()
+                )
+                self.context.cache().long_term().set(
+                    key=self.INSTANCE_INFO_CACHE_KEY,
+                    value=instance_info_data
+                )
+                _end_ec2_data = Utils.current_time_ms()
+                self._logger.info(f"Completed EC2 instance data cache for {len(instance_info_data)} instance types in {_end_ec2_data - _start_ec2_data}ms")
 
     def is_gpu_instance(self, instance_type: str) -> bool:
         return self.get_gpu_manufacturer(instance_type) != VirtualDesktopGPU.NO_GPU
@@ -430,16 +444,13 @@ class VirtualDesktopControllerUtils:
 
         for instance_type_name in instance_types_names:
             instance_type_family = instance_type_name.split('.')[0]
-            self._logger.debug(f"Processing - Instance Name: {instance_type_name}   Family: {instance_type_family}")
 
             if instance_type_name not in allowed_instance_type_names and instance_type_family not in allowed_instance_type_families:
                 # instance type or instance family is not present in allow list
-                self._logger.debug(f"Found {instance_type_name} ({instance_type_family}) NOT in ALLOW config")
                 continue
 
             if instance_type_name in denied_instance_type_names or instance_type_family in denied_instance_type_families:
                 # instance type or instance family is present in deny list
-                self._logger.debug(f"Found {instance_type_name} ({instance_type_family}) IN DENIED config: ({denied_instance_type_names} / {denied_instance_type_families})")
                 continue
 
             instance_info = instance_info_data[instance_type_name]
@@ -460,7 +471,6 @@ class VirtualDesktopControllerUtils:
                 continue
 
             supported_gpus = Utils.get_value_as_list('Gpus', Utils.get_value_as_dict('GpuInfo', instance_info, {}), [])
-            self._logger.debug(f"Instance {instance_type_name} GPU ({supported_gpus})")
             perform_gpu_check = False
             gpu_to_check_against = None
             if Utils.is_not_empty(gpu):
@@ -500,7 +510,7 @@ class VirtualDesktopControllerUtils:
             self._logger.debug(f"Instance {instance_type_name} - Added as valid_instance_types")
             valid_instance_types_names.append(instance_type_name)
             valid_instance_types.append(instance_info)
-        self._logger.debug(f"Returning valid_instance_types: {valid_instance_types_names}")
+        self._logger.debug(f"Returning {len(valid_instance_types)} valid_instance_types: {valid_instance_types_names}")
         return valid_instance_types
 
     def describe_image_id(self, ami_id: str) -> dict:

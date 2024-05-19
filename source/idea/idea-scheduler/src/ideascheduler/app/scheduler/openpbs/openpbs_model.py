@@ -109,38 +109,38 @@ class OpenPBSJob(SocaBaseModel):
 
     @staticmethod
     def to_soca_job_state(state: str) -> Optional[SocaJobState]:
-        token = state.lower()
-        if token == 't':
+        _token = state.lower()
+        if _token == 't':
             # Job is being moved to new location
             return SocaJobState.TRANSITION
-        elif token == 'q':
+        elif _token == 'q':
             # Job is queued
             return SocaJobState.QUEUED
-        elif token == 'h':
+        elif _token == 'h':
             # Job is held
             return SocaJobState.HELD
-        elif token == 'w':
+        elif _token == 'w':
             # Job is waiting for its submitter-assigned start time to be reached
             return SocaJobState.WAITING
-        elif token == 'r':
+        elif _token == 'r':
             # job is running
             return SocaJobState.RUNNING
-        elif token == 'e':
+        elif _token == 'e':
             # job is exiting after having run
             return SocaJobState.EXIT
-        elif token == 'x':
+        elif _token == 'x':
             # Subjob has completed execution or has been deleted
             return SocaJobState.SUBJOB_EXPIRED
-        elif token == 'b':
+        elif _token == 'b':
             # Array job has at least one subjob running
             return SocaJobState.SUBJOB_BEGUN
-        elif token == 'm':
+        elif _token == 'm':
             # Job was moved to another server
             return SocaJobState.MOVED
-        elif token == 'f':
+        elif _token == 'f':
             # Job is finished
             return SocaJobState.FINISHED
-        elif token == 's':
+        elif _token == 's':
             # Job is suspended
             return SocaJobState.SUSPENDED
 

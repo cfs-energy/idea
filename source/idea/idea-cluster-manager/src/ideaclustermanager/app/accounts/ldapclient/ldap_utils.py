@@ -14,8 +14,8 @@ from ideasdk.utils import Utils
 from typing import Optional, Dict, List
 import crypt
 
-class LdapUtils:
 
+class LdapUtils:
 
     @staticmethod
     def get_string_value(key: str, ldap_object: Dict) -> Optional[str]:

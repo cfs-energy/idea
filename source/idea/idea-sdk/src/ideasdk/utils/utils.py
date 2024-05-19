@@ -493,6 +493,14 @@ class Utils:
         return unix_timestamp
 
     @staticmethod
+    def humanize_unix_timestamp(timestamp: int) -> str:
+        return arrow.get(timestamp).humanize()
+
+    @staticmethod
+    def unix_timestamp_string(timestamp: int) -> str:
+        return arrow.get(timestamp).ctime()
+
+    @staticmethod
     def is_linux() -> bool:
         return platform.system() == 'Linux'
 
@@ -522,7 +530,7 @@ class Utils:
         Reference: https://stackoverflow.com/questions/898669/how-can-i-detect-if-a-file-is-binary-non-text-in-python
         :param file: path to file
         :return: True if file has binary content, False otherwise.
-        :raises FILE_NOT_FOUND
+        :raises FILE_NOT_FOUND: A non-file has been passed.
         """
         text_chars = bytearray({7, 8, 9, 10, 12, 13, 27} | set(range(0x20, 0x100)) - {0x7f})
         if not Utils.is_file(file):

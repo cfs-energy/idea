@@ -261,10 +261,10 @@ class ClusterManagerStack(IdeaBaseStack):
                     }
         kms_key_id = self.context.config().get_string('cluster.ebs.kms_key_id', required=False, default=None)
         if kms_key_id is not None:
-             kms_key_arn = self.get_kms_key_arn(kms_key_id)
-             ebs_kms_key = kms.Key.from_key_arn(scope=self.stack, id=f'ebs-kms-key', key_arn=kms_key_arn)
+            kms_key_arn = self.get_kms_key_arn(kms_key_id)
+            ebs_kms_key = kms.Key.from_key_arn(scope=self.stack, id=f'ebs-kms-key', key_arn=kms_key_arn)
         else:
-             ebs_kms_key = kms.Alias.from_alias_name(scope=self.stack, id=f'ebs-kms-key-default', alias_name='alias/aws/ebs')
+            ebs_kms_key = kms.Alias.from_alias_name(scope=self.stack, id=f'ebs-kms-key-default', alias_name='alias/aws/ebs')
 
         if is_public:
             vpc_subnets = ec2.SubnetSelection(

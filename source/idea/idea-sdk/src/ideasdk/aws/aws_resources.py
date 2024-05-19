@@ -226,18 +226,26 @@ class AwsResources:
 
             domains = []
             list_domain_names_result = self.aws.es().list_domain_names()
-            domain_names = Utils.get_value_as_list('DomainNames', list_domain_names_result, [])
+            domain_names = Utils.get_value_as_list('DomainNames', list_domain_names_result, default=[])
             for entry in domain_names:
-                domain_name = Utils.get_value_as_string('DomainName', entry)
+                domain_name = Utils.get_value_as_string('DomainName', entry, default='unknown-domain')
                 describe_domain_result = self.aws.es().describe_elasticsearch_domain(DomainName=domain_name)
                 domain_status = describe_domain_result['DomainStatus']
-                vpc_options = Utils.get_value_as_dict('VPCOptions', domain_status)
+
+                domain_created_status = Utils.get_value_as_bool('Created', domain_status, default=False)
+                domain_delete_status = Utils.get_value_as_bool('Deleted', domain_status, default=True)
+                domain_upgrade_status = Utils.get_value_as_bool('UpgradeProcessing', domain_status, default=True)
+                if (not domain_created_status) \
+                    or (domain_delete_status or domain_upgrade_status):
+                    continue
+
+                vpc_options = Utils.get_value_as_dict('VPCOptions', domain_status, default=None)
                 if vpc_options is None:
                     continue
-                domain_vpc_id = vpc_options['VPCId']
+                domain_vpc_id = Utils.get_value_as_string('VPCId', vpc_options, default=None)
                 if domain_vpc_id != vpc_id:
                     continue
-                elasticsearch_version = domain_status['ElasticsearchVersion']
+                elasticsearch_version = Utils.get_value_as_string('ElasticsearchVersion', domain_status, default='unknown version')
                 title = f'{domain_name} ({elasticsearch_version})'
                 domains.append(SocaOpenSearchDomain(
                     type='aws.opensearch.domain',

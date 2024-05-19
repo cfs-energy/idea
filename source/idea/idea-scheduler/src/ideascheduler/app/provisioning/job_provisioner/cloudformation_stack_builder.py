@@ -397,7 +397,7 @@ class CloudFormationStackBuilder:
                     DeviceName='/dev/xvdbx',
                     Ebs=EBSBlockDevice(
                         VolumeSize=self.job.params.scratch_storage_size.int_val(),
-                        VolumeType= Utils.get_as_string(constants.DEFAULT_VOLUME_TYPE_SCRATCH, default='io1') if iops > 0 else Utils.get_as_string(constants.DEFAULT_VOLUME_TYPE_COMPUTE, default='gp3'),
+                        VolumeType=Utils.get_as_string(constants.DEFAULT_VOLUME_TYPE_SCRATCH, default='io1') if iops > 0 else Utils.get_as_string(constants.DEFAULT_VOLUME_TYPE_COMPUTE, default='gp3'),
                         Iops=iops if iops > 0 else Ref('AWS::NoValue'),
                         DeleteOnTermination=not self.job.params.keep_ebs_volumes,
                         Encrypted=Utils.get_as_bool(constants.DEFAULT_VOLUME_ENCRYPTION_COMPUTE, default=True),
@@ -432,6 +432,7 @@ class CloudFormationStackBuilder:
     def build_fsx_lustre(self):
         fsx_lustre = FileSystem('FSxForLustre')
         fsx_lustre.FileSystemType = 'LUSTRE'
+        fsx_lustre.FileSystemTypeVersion = self.context.config().get_string('cluster.aws.fsx_lustre_version', required=False, default='2.15')
         fsx_lustre.StorageCapacity = self.job.params.fsx_lustre.size.int_val()
         fsx_lustre.SecurityGroupIds = self.job.params.security_groups
         fsx_lustre.SubnetIds = self.job.params.subnet_ids

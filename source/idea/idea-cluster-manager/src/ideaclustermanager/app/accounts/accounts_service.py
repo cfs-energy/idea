@@ -614,7 +614,7 @@ class AccountsService:
         else:
             self.logger.debug('create_user() - setting password to random value')
             password = Utils.generate_password(8, 2, 2, 2, 2)
-            #password = None
+            # password = None
 
         # login_shell
         login_shell = user.login_shell
@@ -634,7 +634,7 @@ class AccountsService:
 
         # gid, group name
         if self.ldap_client.is_readonly():
-            #group_name = self.group_name_helper.get_default_project_group()
+            # group_name = self.group_name_helper.get_default_project_group()
             group_name = self.group_name_helper.get_user_group(username)
         else:
             group_name = self.group_name_helper.get_user_group(username)
@@ -683,7 +683,6 @@ class AccountsService:
             })
         else:
             self.logger.debug(f'No need to create group for username: {username}:   Group ({group_name}) already exists.')
-
 
         created_user = self.user_dao.create_user({
             'username': username,
@@ -1113,7 +1112,6 @@ class AccountsService:
 
         self.user_pool.admin_global_sign_out(username=username)
 
-
     def _get_ds_group_name(self, groupname: str) -> str:
         ds_group_name = self.context.config().get_string(f'directoryservice.group_mapping.{groupname}', default=groupname)
         return ds_group_name
@@ -1272,7 +1270,6 @@ class AccountsService:
                         ref=module_id
                     )
                 )
-
 
             module_users_group_name = self.group_name_helper.get_module_users_group(module_id=module_id)
             module_users_group_name_ds = None

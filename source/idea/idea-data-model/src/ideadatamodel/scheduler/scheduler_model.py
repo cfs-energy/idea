@@ -564,12 +564,12 @@ class SocaCapacityType(str, Enum):
     def resolve(value: Optional[str], default=None) -> Optional['SocaCapacityType']:
         if value is None:
             return default
-        token = value.lower().strip()
-        if token in ('ondemand', 'on-demand', 'on_demand'):
+        _token = value.lower().strip()
+        if _token in ('ondemand', 'on-demand', 'on_demand'):
             return SocaCapacityType.ONDEMAND
-        elif token == 'spot':
+        elif _token == 'spot':
             return SocaCapacityType.SPOT
-        elif token == 'mixed':
+        elif _token == 'mixed':
             return SocaCapacityType.MIXED
         else:
             return default
@@ -1420,12 +1420,12 @@ class SocaQueueMode(str, Enum):
     def resolve(value: Optional[str], default=None) -> Optional['SocaQueueMode']:
         if ModelUtils.is_empty(value):
             return default
-        token = value.strip().lower()
-        if token == 'fairshare':
+        _token = value.strip().lower()
+        if _token == 'fairshare':
             return SocaQueueMode.FAIRSHARE
-        elif token == 'fifo':
+        elif _token == 'fifo':
             return SocaQueueMode.FIFO
-        elif token == 'license-optimized':
+        elif _token == 'license-optimized':
             return SocaQueueMode.LICENSE_OPTIMIZED
         return default
 

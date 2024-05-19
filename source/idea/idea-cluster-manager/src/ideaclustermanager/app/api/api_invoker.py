@@ -119,7 +119,6 @@ class ClusterManagerApiInvoker(ApiInvokerProtocol):
         # Namespaces that are subject to listing truncating
         # to keep the logs usable in larger environments.
 
-
         if namespace == 'Auth.InitiateAuth':
             response = context.get_response(deep_copy=True)
             payload = context.get_response_payload_as(InitiateAuthResult)

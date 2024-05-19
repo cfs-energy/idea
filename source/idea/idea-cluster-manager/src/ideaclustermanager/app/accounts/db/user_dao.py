@@ -144,7 +144,6 @@ class UserDAO:
             self.logger.debug(f"user_lookup: Took {_lu_stop - _lu_start}ms : {Utils.get_value_as_dict('Item', result)}")
         return Utils.get_value_as_dict('Item', result)
 
-
     def update_user(self, user: Dict) -> Dict:
         username = Utils.get_value_as_string('username', user)
         username = AuthUtils.sanitize_username(username)

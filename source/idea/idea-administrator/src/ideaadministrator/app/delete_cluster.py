@@ -601,7 +601,6 @@ class DeleteCluster:
         # Cleanup Cloudwatch Alarms for all tables
         self.delete_cloudwatch_alarms()
 
-
     def delete_cloudwatch_alarms(self):
         alarms_to_delete = []
         # Generate our list of Cloudwatch alarms that pertain to us
@@ -779,6 +778,10 @@ class DeleteCluster:
                 if recovery_points:
                     all_recovery_points_list += recovery_points
 
+            if len(all_recovery_points_list) <= 0:
+                self.context.info(f'No recovery points found for backup vault: {backup_vault_name}')
+                return
+
             # Now that we have assembled the entire list - process them
             _rp_delete_start = Utils.current_time_ms()
             self.context.info(f"Deleting {len(all_recovery_points_list)} recovery points from AWS Backup...")
@@ -801,8 +804,8 @@ class DeleteCluster:
                 time.sleep(.1)
 
             _rp_delete_end = Utils.current_time_ms()
-            _run_time_ms = int((_rp_delete_end - _rp_delete_start) / 1_000)
-            self.context.info(f'deleted {total_deleted} recovery points in {_run_time_ms} seconds.')
+            _run_time_sec = int((_rp_delete_end - _rp_delete_start) / 1_000)
+            self.context.info(f'deleted {total_deleted} recovery points in {_run_time_sec} seconds.')
 
         except botocore.exceptions.ClientError as e:
             if e.response['Error']['Code'] != 'ResourceNotFoundException':

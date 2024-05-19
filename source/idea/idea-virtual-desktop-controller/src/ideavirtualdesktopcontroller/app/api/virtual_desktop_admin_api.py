@@ -12,6 +12,7 @@ from typing import Dict
 
 import ideavirtualdesktopcontroller
 from ideadatamodel import (
+    GetUserRequest,
     ListUsersInGroupRequest,
     GetProjectRequest,
     CreateSessionRequest,
@@ -115,19 +116,27 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
             return session, False
 
         # validate if the user belongs within allowed group -
-        # Check is done for admin only since, virtual-desktop-user-api already enforces the group
+        # Check is done for admin only since virtual-desktop-user-api already enforces the group
         # check for api-call
-        response = self.context.accounts_client.list_users_in_group(ListUsersInGroupRequest(
-            group_names=self.VDI_GROUPS
+
+        # Shortcut 'clusteradmin' to avoid lockout scenarios
+        cluster_administrator = self.context.config().get_string('cluster.administrator_username', required=True)
+        if session.owner in cluster_administrator or session.owner.startswith('clusteradmin'):
+            return self.validate_create_session_request(session)
+
+        response = self.context.accounts_client.get_user(GetUserRequest(
+            username=session.owner
         ))
+        users_groups = Utils.get_as_list(response.user.additional_groups, default=[])
         is_user_part_of_group = False
-        for user in response.listing:
-            if user.username == session.owner:
+
+        for group in self.VDI_GROUPS:
+            if group in users_groups:
                 is_user_part_of_group = True
                 break
 
         if not is_user_part_of_group:
-            session.failure_reason = f'User {session.owner} does not belong to either of the groups: {self.VDI_GROUPS}'
+            session.failure_reason = f'User {session.owner} does not belong to any of the groups: {self.VDI_GROUPS}'
             return session, False
 
         return self.validate_create_session_request(session)
@@ -257,7 +266,7 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
 
     def batch_create_sessions(self, context: ApiInvocationContext):
         """
-        Creates a multiple sessions.
+        Creates multiple sessions.
         """
         sessions = context.get_request_payload_as(BatchCreateSessionRequest).sessions
         valid_sessions = []

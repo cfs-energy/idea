@@ -95,6 +95,9 @@ class CdkInvoker:
                  aws_profile: str = None,
                  deployment_id: str = None,
                  termination_protection: bool = True,
+                 custom_permissions_boundary: str = None,
+                 cloudformation_execution_policies: str = None,
+                 public_access_block_configuration: bool = True,
                  rollback: bool = True):
 
         self.cluster_name = cluster_name
@@ -102,6 +105,10 @@ class CdkInvoker:
         self.module_id = module_id
         self.aws_profile = aws_profile
         self.termination_protection = termination_protection
+        self.custom_permissions_boundary = custom_permissions_boundary
+        self.cloudformation_execution_policies = cloudformation_execution_policies
+        self.public_access_block_configuration = public_access_block_configuration
+
         self.rollback = rollback
 
         if Utils.is_empty(module_set):
@@ -453,7 +460,8 @@ class CdkInvoker:
                 'aws_dns_suffix': aws_client.aws_dns_suffix(),
                 'cluster_s3_bucket': cluster_config.get_string('cluster.cluster_s3_bucket', required=True),
                 'config': cluster_config,
-                'aws_elb_account_id': elb_account_id
+                'aws_elb_account_id': elb_account_id,
+                'input_permissions_boundary': self.custom_permissions_boundary
             })
             with open(toolkit_stack_target_file, 'w') as f:
                 f.write(toolkit_stack_content)
@@ -473,6 +481,16 @@ class CdkInvoker:
                 f'--template {toolkit_stack_target_file}'
             ]
 
+            if Utils.is_not_empty(self.custom_permissions_boundary):
+                cmd.append(f'--custom-permissions-boundary {self.custom_permissions_boundary}')
+
+            if Utils.is_not_empty(self.cloudformation_execution_policies):
+                cmd.append(f'--cloudformation-execution-policies {self.cloudformation_execution_policies}')
+
+            if Utils.is_not_empty(self.public_access_block_configuration):
+                _block_config_value = Utils.get_as_bool(self.public_access_block_configuration, default=True)
+                cmd.append(f'--public-access-block-configuration {str(_block_config_value).lower()}')
+
             # bootstrap stack tags
             tags = {
                 constants.IDEA_TAG_CLUSTER_NAME: self.cluster_name
@@ -487,6 +505,7 @@ class CdkInvoker:
                 cmd.append(f'--profile {self.aws_profile}')
 
             bootstrap_cmd = ' '.join(cmd)
+            print(f"CDK boostrap command: {bootstrap_cmd}")
             self.exec_shell(bootstrap_cmd)
         finally:
             self.log('CdkInvoker: Bootstrap End')

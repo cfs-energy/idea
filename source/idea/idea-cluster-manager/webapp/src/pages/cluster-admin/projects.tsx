@@ -269,7 +269,7 @@ class Projects extends Component<ProjectsProps, ProjectsState> {
                             param_type: 'text',
                             validate: {
                                 required: true,
-                                regex: '^([A-Za-z0-9-]+){3,32}$'
+                                regex: '^([A-Za-z0-9- ]+){3,32}$'
                             }
                           },
                           {
