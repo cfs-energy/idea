@@ -1,0 +1,267 @@
+{
+  "version": 1,
+  "index_patterns": [
+    "DYNAMIC_CONFIGURATION"
+  ],
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 1
+  },
+  "aliases": {
+    "DYNAMIC_CONFIGURATION": {}
+  },
+  "mappings": {
+    "_source": {
+      "enabled": true
+    },
+    "properties": {
+      "host": {
+        "type": "keyword"
+      },
+      "cluster_name": {
+        "type": "keyword"
+      },
+      "cluster_version": {
+        "type": "keyword"
+      },
+      "states": {
+        "type": "keyword"
+      },
+      "queue_type": {
+        "type": "keyword"
+      },
+      "queue": {
+        "type": "keyword"
+      },
+      "provisioning_time": {
+        "type": "date"
+      },
+      "last_used_time": {
+        "type": "date"
+      },
+      "last_state_changed_time": {
+        "type": "date"
+      },
+      "availability_zone": {
+        "type": "keyword"
+      },
+      "subnet_id": {
+        "type": "keyword"
+      },
+      "instance_id": {
+        "type": "keyword"
+      },
+      "instance_type": {
+        "type": "keyword"
+      },
+      "instance_ami": {
+        "type": "keyword"
+      },
+      "instance_profile": {
+        "type": "keyword"
+      },
+      "architecture": {
+        "type": "keyword"
+      },
+      "scheduler_info": {
+        "properties": {
+          "mom_port": {
+            "type": "integer"
+          },
+          "mom_private_dns": {
+            "type": "keyword"
+          },
+          "name": {
+            "type": "keyword"
+          },
+          "version": {
+            "type": "keyword"
+          }
+        }
+      },
+      "sharing": {
+        "type": "keyword"
+      },
+      "job_id": {
+        "type": "keyword"
+      },
+      "job_group": {
+        "type": "keyword"
+      },
+      "scaling_mode": {
+        "type": "keyword"
+      },
+      "keep_forever": {
+        "type": "boolean"
+      },
+      "terminate_when_idle": {
+        "type": "integer"
+      },
+      "compute_stack": {
+        "type": "keyword"
+      },
+      "stack_id": {
+        "type": "keyword"
+      },
+      "lifecyle": {
+        "type": "keyword"
+      },
+      "tenancy": {
+        "type": "keyword"
+      },
+      "spot_fleet_request": {
+        "type": "keyword"
+      },
+      "auto_scaling_group": {
+        "type": "keyword"
+      },
+      "spot": {
+        "type": "boolean"
+      },
+      "spot_price": {
+        "properties": {
+          "amount": {
+            "type": "double"
+          },
+          "unit": {
+            "type": "keyword"
+          }
+        }
+      },
+      "base_os": {
+        "type": "keyword"
+      },
+      "enable_placement_group": {
+        "type": "boolean"
+      },
+      "enable_ht_support": {
+        "type": "boolean"
+      },
+      "keep_ebs_volumes": {
+        "type": "boolean"
+      },
+      "root_storage_size": {
+        "properties": {
+          "value": {
+            "type": "double"
+          },
+          "unit": {
+            "type": "keyword"
+          }
+        }
+      },
+      "scratch_storage_size": {
+        "properties": {
+          "value": {
+            "type": "double"
+          },
+          "unit": {
+            "type": "keyword"
+          }
+        }
+      },
+      "scratch_storage_iops": {
+        "type": "integer"
+      },
+      "enable_efa_support": {
+        "type": "boolean"
+      },
+      "force_reserved_instances": {
+        "type": "boolean"
+      },
+      "enable_system_metrics": {
+        "type": "boolean"
+      },
+      "enable_anonymous_metrics": {
+        "type": "boolean"
+      },
+      "fsx_lustre": {
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "s3_backend": {
+            "type": "keyword"
+          },
+          "existing_fsx": {
+            "type": "keyword"
+          },
+          "import_path": {
+            "type": "keyword"
+          },
+          "export_path": {
+            "type": "keyword"
+          },
+          "deployment_type": {
+            "type": "keyword"
+          },
+          "per_unit_throughput": {
+            "type": "integer"
+          },
+          "size": {
+            "properties": {
+              "value": {
+                "type": "double"
+              },
+              "unit": {
+                "type": "keyword"
+              }
+            }
+          }
+        }
+      },
+      "launch_time": {
+        "type": "date"
+      },
+      "termination_time": {
+        "type": "date"
+      },
+      "terminated": {
+        "type": "boolean"
+      },
+      "resources_assigned": {
+        "properties": {
+          "cpus": {
+            "type": "integer"
+          },
+          "gpus": {
+            "type": "integer"
+          },
+          "memory": {
+            "properties": {
+              "value": {
+                "type": "double"
+              },
+              "unit": {
+                "type": "keyword"
+              }
+            }
+          }
+        }
+      },
+      "resources_available": {
+        "properties": {
+          "cpus": {
+            "type": "integer"
+          },
+          "gpus": {
+            "type": "integer"
+          },
+          "memory": {
+            "properties": {
+              "value": {
+                "type": "double"
+              },
+              "unit": {
+                "type": "keyword"
+              }
+            }
+          }
+        }
+      },
+      "timestamp": {
+        "type": "date"
+      }
+    }
+  }
+}

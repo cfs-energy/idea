@@ -1,0 +1,31 @@
+Version: '2012-10-17'
+Statement:
+  - Action:
+      - kinesis:DescribeStream
+      - kinesis:DescribeStreamSummary
+      - kinesis:GetRecords
+      - kinesis:GetShardIterator
+      - kinesis:ListShards
+      - kinesis:ListStreams
+      - kinesis:SubscribeToShard
+    Resource:
+      - {{ context.arns.get_kinesis_arn() }}
+    Effect: Allow
+
+  - Action:
+      - logs:CreateLogGroup
+      - logs:CreateLogStream
+      - logs:PutLogEvents
+    Resource: '*'
+    Effect: Allow
+
+  - Effect: Allow
+    Action:
+      - es:ESHttpPost
+      - es:ESHttpPut
+    Resource: '*'
+
+  - Effect: Allow
+    Action:
+      - ec2:*
+    Resource: '*'

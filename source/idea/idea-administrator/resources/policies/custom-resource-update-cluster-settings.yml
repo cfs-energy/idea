@@ -1,0 +1,17 @@
+Version: '2012-10-17'
+Statement:
+  - Action:
+      - logs:CreateLogGroup
+      - logs:CreateLogStream
+      - logs:DeleteLogStream
+      - logs:PutLogEvents
+    Resource: {{ context.arns.get_lambda_log_group_arn() }}
+    Effect: Allow
+    Sid: CloudWatchLogsPermissions
+
+  - Action:
+      - dynamodb:UpdateItem
+      - dynamodb:DeleteItem
+    Resource:
+      {{ context.utils.to_yaml(context.arns.cluster_config_ddb_arn) | indent(6) }}
+    Effect: Allow

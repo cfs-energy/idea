@@ -1,0 +1,15 @@
+# Begin: motd update
+{%- if context.base_os in ('amazonlinux2', 'centos7', 'rhel7') %}
+echo -e "
+     ________  _________
+    /  _/ __ \/ ____/   |
+    / // / / / __/ / /| |
+  _/ // /_/ / /___/ ___ |
+ /___/_____/_____/_/  |_|
+{% for message in messages %}
+{{ message }}
+{% endfor %}
+> source /etc/environment to load IDEA paths
+" > /etc/motd
+{%- endif %}
+# End: motd update

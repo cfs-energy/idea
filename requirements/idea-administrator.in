@@ -1,0 +1,8 @@
+-r idea-sdk.in
+colored
+ipaddress
+sanic==22.3.2
+aws-cdk-lib==2.63.0
+cdk-nag
+prettytable
+defusedxml

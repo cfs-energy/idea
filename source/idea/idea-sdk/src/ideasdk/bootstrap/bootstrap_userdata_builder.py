@@ -1,0 +1,270 @@
+#  Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+#
+#  Licensed under the Apache License, Version 2.0 (the "License"). You may not use this file except in compliance
+#  with the License. A copy of the License is located at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+#  or in the 'license' file accompanying this file. This file is distributed on an 'AS IS' BASIS, WITHOUT WARRANTIES
+#  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
+#  and limitations under the License.
+
+from ideadatamodel import exceptions
+from ideasdk.utils import Utils
+
+import os
+from typing import List, Dict, Optional
+
+
+class BootstrapUserDataBuilder:
+    """
+    generic user data script builder for all ec2 instances launched by IDEA bootstrap framework
+    todo: refactor implementation to use jinja2 based templates via SDK resources
+    """
+
+    def __init__(self, base_os: str, aws_region: str, bootstrap_package_uri: str, install_commands: List[str],
+                 infra_config: Optional[Dict] = None, substitution_support: bool = True):
+        self.base_os = base_os
+        self.aws_region = aws_region
+        self.bootstrap_package_uri = bootstrap_package_uri
+        self.install_commands = install_commands
+        self.infra_config = infra_config
+        self.substitution_support = substitution_support
+
+    def build(self):
+        if self.base_os.lower() == 'windows':
+            if Utils.is_not_empty(self.infra_config):
+                raise exceptions.general_exception('infra config is not supported for windows')
+            return self._build_windows_userdata()
+
+        if self.substitution_support:
+            return self._build_linux_userdata_substitution()
+        return self._build_linux_userdata_non_substitution()
+
+    def _build_windows_userdata(self) -> str:
+        userdata = f'''
+<powershell>
+ $BootstrapDir = "C`:\\Users\\Administrator\\IDEA\\bootstrap"
+ function Download-Idea-Package {{
+     Param(
+     [ValidateNotNullOrEmpty()]
+     [Parameter(Mandatory=$true)]
+     [String] $PackageDownloadURI
+     )
+     if (!(Test-Path "$BootstrapDir")) {{
+         New-Item -itemType Directory -Path "$BootstrapDir"
+     }}
+     cd "$BootstrapDir"
+     Write-Output $PackageDownloadURI
+     $PackageArchive=Split-Path $PackageDownloadURI -Leaf
+     $PackageName = [System.IO.Path]::GetFileNameWithoutExtension($PackageDownloadURI)
+     if ($PackageDownloadURI -like "s3`://*") {{
+        $urlParts = $PackageDownloadURI -Split "/", 4
+        $bucketName = $urlParts[2]
+        $key = $urlParts[3]
+        Copy-S3Object -BucketName $bucketName -Key $key -LocalFile "$BootstrapDir\\$PackageArchive" -Force
+     }} else {{
+        Copy-Item -Path $PackageDownloadURI -Destination "$BootstrapDir\\$PackageArchive"
+     }}
+     Tar -xf "$BootstrapDir\\$PackageArchive"
+ }}
+ Download-Idea-Package {self.bootstrap_package_uri}
+'''
+        for install_command in self.install_commands:
+            userdata += f'{install_command}{os.linesep}'
+        userdata += '</powershell>'
+        return userdata
+
+    def _build_linux_userdata_substitution(self) -> str:
+        userdata = f"""#!/bin/bash
+
+set -x
+mkdir -p /root/bootstrap
+AWS_REGION="{self.aws_region}"
+BASE_OS="{self.base_os}"
+DEFAULT_AWS_REGION="{self.aws_region}"
+SSM_X86_64_URL="https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_amd64/amazon-ssm-agent.rpm"
+SSM_AARCH64_URL="https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_arm64/amazon-ssm-agent.rpm"
+"""
+
+        infra_config_properties = ''
+        if self.infra_config is not None:
+            for key, value in self.infra_config.items():
+                infra_config_properties += f'{key}={value}{os.linesep}'
+
+        userdata += f'''
+echo "
+{infra_config_properties}
+" > /root/bootstrap/infra.cfg
+        '''
+
+        userdata += '''
+
+timestamp=$(date +%s)
+mkdir -p /root/bootstrap/logs
+if [[ -f /root/bootstrap/logs/userdata.log ]]; then
+  mv /root/bootstrap/logs/userdata.log /root/bootstrap/logs/userdata.log.${!timestamp}
+fi
+exec > /root/bootstrap/logs/userdata.log 2>&1
+
+export PATH="${!PATH}:/usr/local/bin"
+
+function install_aws_cli () {
+  if [[ "${!BASE_OS}" == "amazonlinux2" ]]; then
+    return 0
+  fi
+  which aws > /dev/null 2>&1
+  if [[ "$?" != "0" ]]; then
+    yum install -y python3-pip
+    PIP=$(which pip3)
+    ${!PIP} install awscli
+  fi
+}
+
+function install_ssm () {
+  # install SSM
+  systemctl status amazon-ssm-agent
+  if [[ "$?" == "0" ]]; then
+      return 0
+  fi
+  local machine=$(uname -m)
+  if [[ ${!machine} == "x86_64" ]]; then
+    yum install -y ${!SSM_X86_64_URL}
+  elif [[ ${!machine} == "aarch64" ]]; then
+    yum install -y ${!SSM_AARCH64_URL}
+  fi
+  systemctl enable amazon-ssm-agent || true
+  systemctl restart amazon-ssm-agent
+}
+
+echo "#!/bin/bash
+PACKAGE_DOWNLOAD_URI=\\${!1}
+PACKAGE_ARCHIVE=\\$(basename \\${!PACKAGE_DOWNLOAD_URI})
+PACKAGE_NAME=\\${!PACKAGE_ARCHIVE%.tar.gz*}
+INSTANCE_REGION=\\$(TOKEN=\\$(curl --silent -X PUT 'http://169.254.169.254/latest/api/token' -H 'X-aws-ec2-metadata-token-ttl-seconds: 900') && curl --silent -H \\"X-aws-ec2-metadata-token: \\${!TOKEN}\\" 'http://169.254.169.254/latest/meta-data/placement/region')
+if [[ \\${!PACKAGE_DOWNLOAD_URI} == s3://* ]]; then
+  AWS=\\$(command -v aws)
+  S3_BUCKET=\\$(echo \\${!PACKAGE_DOWNLOAD_URI} | cut -f3 -d/)
+  if [[ \\${!INSTANCE_REGION} =~ ^us-gov-[a-z]+-[0-9]+$ ]]; then
+    S3_BUCKET_REGION=\\$(curl -s --head \${!S3_BUCKET}.s3.us-gov-west-1.amazonaws.com | grep bucket-region | awk '{print \$2}' | tr -d '\\r\\n')
+  else
+    S3_BUCKET_REGION=\\$(curl -s --head \${!S3_BUCKET}.s3.us-east-1.amazonaws.com | grep bucket-region | awk '{print \$2}' | tr -d '\\r\\n')
+  fi
+  \\$AWS --region \\${!S3_BUCKET_REGION} s3 cp \\${!PACKAGE_DOWNLOAD_URI} /root/bootstrap/
+else
+  cp \\${!PACKAGE_DOWNLOAD_URI} /root/bootstrap/
+fi
+PACKAGE_DIR=/root/bootstrap/\\${!PACKAGE_NAME}
+if [[ -d \\${!PACKAGE_DIR} ]]; then
+  rm -rf \\${!PACKAGE_DIR}
+fi
+mkdir -p \\${!PACKAGE_DIR}
+tar -xvf /root/bootstrap/\\${!PACKAGE_ARCHIVE} -C \\${!PACKAGE_DIR}
+rm /root/bootstrap/latest
+ln -sf \\${!PACKAGE_DIR} /root/bootstrap/latest
+" > /root/bootstrap/download_bootstrap.sh
+
+chmod +x /root/bootstrap/download_bootstrap.sh
+        '''
+
+        userdata += f'''
+install_aws_cli
+install_ssm
+bash /root/bootstrap/download_bootstrap.sh "{self.bootstrap_package_uri}"
+
+cd /root/bootstrap/latest
+'''
+        for install_command in self.install_commands:
+            userdata += f'{install_command}{os.linesep}'
+        return userdata
+
+    def _build_linux_userdata_non_substitution(self) -> str:
+        userdata = f"""#!/bin/bash
+
+set -x
+mkdir -p /root/bootstrap
+AWS_REGION="{self.aws_region}"
+BASE_OS="{self.base_os}"
+DEFAULT_AWS_REGION="{self.aws_region}"
+SSM_X86_64_URL="https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_amd64/amazon-ssm-agent.rpm"
+SSM_AARCH64_URL="https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_arm64/amazon-ssm-agent.rpm"
+"""
+        userdata += '''
+
+timestamp=$(date +%s)
+mkdir -p /root/bootstrap/logs
+if [[ -f /root/bootstrap/logs/userdata.log ]]; then
+  mv /root/bootstrap/logs/userdata.log /root/bootstrap/logs/userdata.log.${timestamp}
+fi
+exec > /root/bootstrap/logs/userdata.log 2>&1
+
+export PATH="${PATH}:/usr/local/bin"
+
+function install_aws_cli () {
+  if [[ "${BASE_OS}" == "amazonlinux2" ]]; then
+    return 0
+  fi
+  which aws > /dev/null 2>&1
+  if [[ "$?" != "0" ]]; then
+    yum install -y python3-pip
+    PIP=$(which pip3)
+    ${PIP} install awscli
+  fi
+}
+
+function install_ssm () {
+  # install SSM
+  systemctl status amazon-ssm-agent
+  if [[ "$?" == "0" ]]; then
+      return 0
+  fi
+  local machine=$(uname -m)
+  if [[ ${machine} == "x86_64" ]]; then
+    yum install -y ${SSM_X86_64_URL}
+  elif [[ ${machine} == "aarch64" ]]; then
+    yum install -y ${SSM_AARCH64_URL}
+  fi
+  systemctl enable amazon-ssm-agent || true
+  systemctl restart amazon-ssm-agent
+}
+
+echo "#!/bin/bash
+PACKAGE_DOWNLOAD_URI=\\${1}
+PACKAGE_ARCHIVE=\\$(basename \\${PACKAGE_DOWNLOAD_URI})
+PACKAGE_NAME=\\${PACKAGE_ARCHIVE%.tar.gz*}
+INSTANCE_REGION=\\$(TOKEN=\\$(curl --silent -X PUT 'http://169.254.169.254/latest/api/token' -H 'X-aws-ec2-metadata-token-ttl-seconds: 900') && curl --silent -H \\"X-aws-ec2-metadata-token: \\${!TOKEN}\\" 'http://169.254.169.254/latest/meta-data/placement/region')
+if [[ \\${PACKAGE_DOWNLOAD_URI} == s3://* ]]; then
+  AWS=\\$(command -v aws)
+  S3_BUCKET=\\$(echo \\${PACKAGE_DOWNLOAD_URI} | cut -f3 -d/)
+  if [[ \\${INSTANCE_REGION} =~ ^us-gov-[a-z]+-[0-9]+$ ]]; then
+    S3_BUCKET_REGION=\\$(curl -s --head \\${S3_BUCKET}.s3.us-gov-west-1.amazonaws.com | grep bucket-region | awk '{print \$2}' | tr -d '\\r\\n')
+  else
+    S3_BUCKET_REGION=\\$(curl -s --head \\${S3_BUCKET}.s3.us-east-1.amazonaws.com | grep bucket-region | awk '{print \$2}' | tr -d '\\r\\n')
+  fi
+  \\$AWS --region \\${S3_BUCKET_REGION} s3 cp \\${PACKAGE_DOWNLOAD_URI} /root/bootstrap/
+else
+  cp \\${PACKAGE_DOWNLOAD_URI} /root/bootstrap/
+fi
+PACKAGE_DIR=/root/bootstrap/\\${PACKAGE_NAME}
+if [[ -d \\${PACKAGE_DIR} ]]; then
+  rm -rf \\${PACKAGE_DIR}
+fi
+mkdir -p \\${PACKAGE_DIR}
+tar -xvf /root/bootstrap/\\${PACKAGE_ARCHIVE} -C \\${PACKAGE_DIR}
+rm /root/bootstrap/latest
+ln -sf \\${PACKAGE_DIR} /root/bootstrap/latest
+" > /root/bootstrap/download_bootstrap.sh
+
+chmod +x /root/bootstrap/download_bootstrap.sh
+        '''
+
+        userdata += f'''
+install_aws_cli
+install_ssm
+bash /root/bootstrap/download_bootstrap.sh "{self.bootstrap_package_uri}"
+
+cd /root/bootstrap/latest
+'''
+        for install_command in self.install_commands:
+            userdata += f'{install_command}{os.linesep}'
+        return userdata

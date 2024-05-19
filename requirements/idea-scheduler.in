@@ -1,0 +1,5 @@
+-r idea-sdk.in
+cachetools
+prettytable
+supervisor
+sanic==22.3.2

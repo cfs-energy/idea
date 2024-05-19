@@ -1,0 +1,3 @@
+## Virtual Desktop Software Stack
+
+Context help coming soon ...

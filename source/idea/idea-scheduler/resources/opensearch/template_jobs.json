@@ -1,0 +1,668 @@
+{
+  "version": 1,
+  "index_patterns": [
+    "DYNAMIC_CONFIGURATION"
+  ],
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0
+  },
+  "aliases": {
+    "DYNAMIC_CONFIGURATION": {}
+  },
+  "mappings": {
+    "_source": {
+      "enabled": true
+    },
+    "properties": {
+      "cluster_name": {
+        "type": "keyword"
+      },
+      "cluster_version": {
+        "type": "keyword"
+      },
+      "job_id": {
+        "type": "keyword"
+      },
+      "job_group": {
+        "type": "keyword"
+      },
+      "project": {
+        "type": "text",
+        "fields": {
+          "raw": {
+            "type":  "keyword"
+          }
+        }
+      },
+      "name": {
+        "type": "text",
+        "fields": {
+          "raw": {
+            "type":  "keyword"
+          }
+        }
+      },
+      "queue": {
+        "type": "text",
+        "fields": {
+          "raw": {
+            "type":  "keyword"
+          }
+        }
+      },
+      "queue_type": {
+        "type": "text",
+        "fields": {
+          "raw": {
+            "type":  "keyword"
+          }
+        }
+      },
+      "scaling_mode": {
+        "type": "keyword"
+      },
+      "owner": {
+        "type": "text",
+        "fields": {
+          "raw": {
+            "type":  "keyword"
+          }
+        }
+      },
+      "state": {
+        "type": "keyword"
+      },
+      "provisioned": {
+        "type": "boolean"
+      },
+      "error_message": {
+        "type": "text"
+      },
+      "queue_time": {
+        "type": "date"
+      },
+      "provisioning_time": {
+        "type": "date"
+      },
+      "start_time": {
+        "type": "date"
+      },
+      "end_time": {
+        "type": "date"
+      },
+      "total_time_secs": {
+        "type": "long"
+      },
+      "comment": {
+        "type": "text"
+      },
+      "debug": {
+        "type": "boolean"
+      },
+      "params": {
+        "properties": {
+          "nodes": {
+            "type": "integer"
+          },
+          "cpus": {
+            "type": "integer"
+          },
+          "memory": {
+            "properties": {
+              "value": {
+                "type": "double"
+              },
+              "unit": {
+                "type": "keyword"
+              }
+            }
+          },
+          "gpus": {
+            "type": "integer"
+          },
+          "mpiprocs": {
+            "type": "integer"
+          },
+          "walltime": {
+            "type": "keyword"
+          },
+          "placement": {
+            "type": "keyword"
+          },
+          "base_os": {
+            "type": "keyword"
+          },
+          "instance_ami": {
+            "type": "text",
+            "fields": {
+              "raw": {
+                "type":  "keyword"
+              }
+            }
+          },
+          "instance_types": {
+            "type": "text",
+            "fields": {
+              "raw": {
+                "type":  "keyword"
+              }
+            }
+          },
+          "force_reserved_instances": {
+            "type": "boolean"
+          },
+          "spot": {
+            "type": "boolean"
+          },
+          "spot_price": {
+            "properties": {
+              "amount": {
+                "type": "double"
+              },
+              "unit": {
+                "type": "keyword"
+              }
+            }
+          },
+          "spot_allocation_count": {
+            "type": "integer"
+          },
+          "spot_allocation_strategy": {
+            "type": "keyword"
+          },
+          "subnet_ids": {
+            "type": "text",
+            "fields": {
+              "raw": {
+                "type":  "keyword"
+              }
+            }
+          },
+          "security_groups": {
+            "type": "text",
+            "fields": {
+              "raw": {
+                "type":  "keyword"
+              }
+            }
+          },
+          "instance_profile": {
+            "type": "text",
+            "fields": {
+              "raw": {
+                "type":  "keyword"
+              }
+            }
+          },
+          "keep_ebs_volumes": {
+            "type": "boolean"
+          },
+          "root_storage_size": {
+            "properties": {
+              "value": {
+                "type": "double"
+              },
+              "unit": {
+                "type": "keyword"
+              }
+            }
+          },
+          "scratch_storage_size": {
+            "properties": {
+              "value": {
+                "type": "double"
+              },
+              "unit": {
+                "type": "keyword"
+              }
+            }
+          },
+          "scratch_storage_iops": {
+            "type": "integer"
+          },
+          "fsx_lustre": {
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "s3_backend": {
+                "type": "keyword"
+              },
+              "existing_fsx": {
+                "type": "text",
+                "fields": {
+                  "raw": {
+                    "type":  "keyword"
+                  }
+                }
+              },
+              "import_path": {
+                "type": "keyword"
+              },
+              "export_path": {
+                "type": "keyword"
+              },
+              "deployment_type": {
+                "type": "keyword"
+              },
+              "per_unit_throughput": {
+                "type": "integer"
+              },
+              "size": {
+                "properties": {
+                  "value": {
+                    "type": "double"
+                  },
+                  "unit": {
+                    "type": "keyword"
+                  }
+                }
+              }
+            }
+          },
+          "enable_instance_store": {
+            "type": "boolean"
+          },
+          "enable_efa_support": {
+            "type": "boolean"
+          },
+          "enable_ht_support": {
+            "type": "boolean"
+          },
+          "enable_placement_group": {
+            "type": "boolean"
+          },
+          "enable_system_metrics": {
+            "type": "boolean"
+          },
+          "enable_anonymous_metrics": {
+            "type": "boolean"
+          },
+          "licenses": {
+            "type": "nested",
+            "properties": {
+              "name": {
+                "type": "keyword"
+              },
+              "count": {
+                "type": "integer"
+              }
+            }
+          },
+          "compute_stack": {
+            "type": "text",
+            "fields": {
+              "raw": {
+                "type":  "keyword"
+              }
+            }
+          },
+          "stack_id": {
+            "type": "text",
+            "fields": {
+              "raw": {
+                "type":  "keyword"
+              }
+            }
+          },
+          "job_group": {
+            "type": "keyword"
+          },
+          "custom_params": {
+            "type": "object",
+            "enabled": false
+          }
+        }
+      },
+      "provisioning_options": {
+        "properties": {
+          "keep_forever": {
+            "type": "boolean"
+          },
+          "terminate_when_idle": {
+            "type": "integer"
+          },
+          "ebs_optimized": {
+            "type": "boolean"
+          },
+          "spot_fleet_iam_role_arn": {
+            "type": "keyword"
+          },
+          "compute_fleet_instance_profile_arn": {
+            "type": "keyword"
+          },
+          "apps_fs_dns": {
+            "type": "keyword"
+          },
+          "apps_fs_provider": {
+            "type": "keyword"
+          },
+          "data_fs_dns": {
+            "type": "keyword"
+          },
+          "data_fs_provider": {
+            "type": "keyword"
+          },
+          "es_endpoint": {
+            "type": "keyword"
+          },
+          "stack_uuid": {
+            "type": "keyword"
+          },
+          "s3_bucket": {
+            "type": "keyword"
+          },
+          "s3_bucket_install_folder": {
+            "type": "keyword"
+          },
+          "scheduler_private_dns": {
+            "type": "keyword"
+          },
+          "scheduler_tcp_port": {
+            "type": "integer"
+          },
+          "ssh_key_pair": {
+            "type": "keyword"
+          },
+          "auth_provider": {
+            "type": "keyword"
+          },
+          "tags": {
+            "type": "object",
+            "enabled": false
+          },
+          "anonymous_metrics_lambda_arn": {
+            "type": "keyword"
+          },
+          "instance_types": {
+            "properties": {
+              "name": {
+                "type": "keyword"
+              },
+              "weighted_capacity": {
+                "type": "integer"
+              },
+              "cpu_options_supported": {
+                "type": "boolean"
+              },
+              "default_core_count": {
+                "type": "integer"
+              },
+              "default_vcpu_count": {
+                "type": "integer"
+              },
+              "default_threads_per_core": {
+                "type": "integer"
+              },
+              "threads_per_core": {
+                "type": "integer"
+              },
+              "memory": {
+                "properties": {
+                  "value": {
+                    "type": "double"
+                  },
+                  "unit": {
+                    "type": "keyword"
+                  }
+                }
+              },
+              "ebs_optimized": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "estimated_budget_usage": {
+        "properties": {
+          "budget_name": {
+            "type": "keyword"
+          },
+          "budget_limit": {
+            "properties": {
+              "amount": {
+                "type": "double"
+              },
+              "unit": {
+                "type": "keyword"
+              }
+            }
+          },
+          "actual_spend": {
+            "properties": {
+              "amount": {
+                "type": "double"
+              },
+              "unit": {
+                "type": "keyword"
+              }
+            }
+          },
+          "forecasted_spend": {
+            "properties": {
+              "amount": {
+                "type": "double"
+              },
+              "unit": {
+                "type": "keyword"
+              }
+            }
+          },
+          "job_usage_percent": {
+            "type": "float"
+          },
+          "job_usage_percent_with_savings": {
+            "type": "float"
+          }
+        }
+      },
+      "estimated_bom_cost": {
+        "properties": {
+          "line_items": {
+            "type": "nested",
+            "properties": {
+              "title": {
+                "type": "text"
+              },
+              "service": {
+                "type": "keyword"
+              },
+              "product": {
+                "type": "keyword"
+              },
+              "quantity": {
+                "type": "float"
+              },
+              "unit": {
+                "type": "keyword"
+              },
+              "unit_price": {
+                "properties": {
+                  "amount": {
+                    "type": "double"
+                  },
+                  "unit": {
+                    "type": "keyword"
+                  }
+                }
+              },
+              "total_price": {
+                "properties": {
+                  "amount": {
+                    "type": "double"
+                  },
+                  "unit": {
+                    "type": "keyword"
+                  }
+                }
+              }
+            }
+          },
+          "line_items_total": {
+            "properties": {
+              "amount": {
+                "type": "double"
+              },
+              "unit": {
+                "type": "keyword"
+              }
+            }
+          },
+          "savings": {
+            "type": "nested",
+            "properties": {
+              "title": {
+                "type": "text"
+              },
+              "service": {
+                "type": "keyword"
+              },
+              "product": {
+                "type": "keyword"
+              },
+              "quantity": {
+                "type": "float"
+              },
+              "unit": {
+                "type": "keyword"
+              },
+              "unit_price": {
+                "properties": {
+                  "amount": {
+                    "type": "double"
+                  },
+                  "unit": {
+                    "type": "keyword"
+                  }
+                }
+              },
+              "total_price": {
+                "properties": {
+                  "amount": {
+                    "type": "double"
+                  },
+                  "unit": {
+                    "type": "keyword"
+                  }
+                }
+              }
+            }
+          },
+          "savings_total": {
+            "properties": {
+              "amount": {
+                "type": "double"
+              },
+              "unit": {
+                "type": "keyword"
+              }
+            }
+          },
+          "total": {
+            "properties": {
+              "amount": {
+                "type": "double"
+              },
+              "unit": {
+                "type": "keyword"
+              }
+            }
+          }
+        }
+      },
+      "execution_hosts": {
+        "properties": {
+          "host": {
+            "type": "keyword"
+          },
+          "instance_id": {
+            "type": "text",
+            "fields": {
+              "raw": {
+                "type":  "keyword"
+              }
+            }
+          },
+          "instance_type": {
+            "type": "keyword"
+          },
+          "capacity_type": {
+            "type": "keyword"
+          },
+          "tenancy": {
+            "type": "keyword"
+          },
+          "reservation": {
+            "type": "keyword"
+          },
+          "execution": {
+            "properties": {
+              "run_count": {
+                "type": "integer"
+              },
+              "runs": {
+                "type": "nested",
+                "properties": {
+                  "run_id": {
+                    "type": "keyword"
+                  },
+                  "start": {
+                    "type": "date"
+                  },
+                  "end": {
+                    "type": "date"
+                  },
+                  "exit_code": {
+                    "type": "integer"
+                  },
+                  "status": {
+                    "type": "keyword"
+                  },
+                  "resources_used": {
+                    "properties": {
+                      "cpu_time_secs": {
+                        "type": "integer"
+                      },
+                      "memory": {
+                        "properties": {
+                          "value": {
+                            "type": "double"
+                          },
+                          "unit": {
+                            "type": "keyword"
+                          }
+                        }
+                      },
+                      "virtual_memory": {
+                        "properties": {
+                          "value": {
+                            "type": "double"
+                          },
+                          "unit": {
+                            "type": "keyword"
+                          }
+                        }
+                      },
+                      "cpus": {
+                        "type": "integer"
+                      },
+                      "gpus": {
+                        "type": "integer"
+                      },
+                      "cpu_percent": {
+                        "type": "integer"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+

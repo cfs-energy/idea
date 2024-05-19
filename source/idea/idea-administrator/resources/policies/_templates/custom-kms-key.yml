@@ -1,0 +1,9 @@
+  {%- if context.config.get_string('cluster.kms.key_type') == 'customer-managed' %}
+  - Action:
+      - kms:Encrypt
+      - kms:Decrypt
+      - kms:GenerateDataKey
+    Resource:
+      - '{{ context.arns.kms_key_arn }}'
+    Effect: Allow
+  {%- endif %}

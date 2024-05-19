@@ -1,0 +1,15 @@
+# Begin: System Packages Install
+
+SYSTEM_PKGS=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.system', required=True)) }})
+APPLICATION_PKGS=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.application', required=True)) }})
+SSSD_PKGS=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.sssd', required=True)) }})
+OPENLDAP_CLIENT_PKGS=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.openldap_client', required=True)) }})
+
+{%- if context.base_os == 'rhel7' %}
+  yum install -y $(echo ${SYSTEM_PKGS[*]} ${APPLICATION_PKGS[*]} ${SSSD_PKGS[*]} ${OPENLDAP_CLIENT_PKGS[*]}) --enablerepo rhel-7-server-rhui-optional-rpms
+{%- elif context.base_os in ('amazonlinux2', 'centos7') %}
+  yum install -y $(echo ${SYSTEM_PKGS[*]} ${APPLICATION_PKGS[*]} ${SSSD_PKGS[*]} ${OPENLDAP_CLIENT_PKGS[*]})
+{%- endif %}
+
+# End: System Packages Install
+
