@@ -74,8 +74,6 @@ function install_openpbs () {
   cd openpbs
   sh ./autogen.sh
   ./configure PBS_VERSION=${OPENPBS_VERSION} --prefix=/opt/pbs
-  ./autogen.sh
-  ./configure --prefix=/opt/pbs
   local NUM_PROCS=`nproc --all`
   local MAKE_FLAGS="-j${NUM_PROCS}"
   make ${MAKE_FLAGS}

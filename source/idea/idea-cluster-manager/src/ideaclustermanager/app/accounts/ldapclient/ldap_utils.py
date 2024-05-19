@@ -16,6 +16,7 @@ import crypt
 
 class LdapUtils:
 
+
     @staticmethod
     def get_string_value(key: str, ldap_object: Dict) -> Optional[str]:
         """

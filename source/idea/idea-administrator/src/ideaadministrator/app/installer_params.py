@@ -510,7 +510,7 @@ class SubnetIdsPrompt(DefaultPrompt[str]):
 
         if self.param.name == 'private_subnet_ids' and len(selected_subnets) < 2:
             raise self.validation_error(
-                message=f'Minimum 2 subnet selections are required to ensure high availability.'
+                message='Minimum 2 subnet selections are required to ensure high availability.'
             )
 
     def get_choices(self, refresh: bool = False) -> List[SocaUserInputChoice]:
@@ -697,7 +697,7 @@ class OpenSearchDomainEndpointPrompt(DefaultPrompt[str]):
         opensearch_clusters = self.context.get_aws_resources().get_opensearch_clusters(vpc_id=vpc_id, refresh=refresh)
 
         if len(opensearch_clusters) == 0:
-            raise exceptions.general_exception(f'Unable to find any existing opensearch clusters')
+            raise exceptions.general_exception('Unable to find any existing opensearch clusters')
 
         choices = []
 
@@ -729,7 +729,7 @@ class DirectoryServiceIdPrompt(DefaultPrompt[str]):
         directories = self.context.get_aws_resources().get_directories(vpc_id=vpc_id, refresh=refresh)
 
         if len(directories) == 0:
-            raise exceptions.general_exception(f'Unable to find any existing directories')
+            raise exceptions.general_exception('Unable to find any existing directories')
 
         choices = []
 

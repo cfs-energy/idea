@@ -160,7 +160,6 @@ class DirectoryServiceStack(IdeaBaseStack):
             clusteradmin_password_secret_arn = self.context.config().get_string('directoryservice.clusteradmin.clusteradmin_password_secret_arn')
             assert Utils.is_not_empty(clusteradmin_password_secret_arn)
 
-
             self.build_ad_automation_sqs_queue()
             self.build_activedirectory_cluster_settings()
 
@@ -222,7 +221,7 @@ class DirectoryServiceStack(IdeaBaseStack):
                     'idea:ModuleName': constants.MODULE_DIRECTORYSERVICE
                 }
             },
-            resource_type=f'Custom::SelfSignedCertificateOpenLDAPServer'
+            resource_type='Custom::SelfSignedCertificateOpenLDAPServer'
         )
 
     def build_ec2_instance(self):
@@ -236,6 +235,16 @@ class DirectoryServiceStack(IdeaBaseStack):
         enable_detailed_monitoring = self.context.config().get_bool('directoryservice.ec2.enable_detailed_monitoring', default=False)
         enable_termination_protection = self.context.config().get_bool('directoryservice.ec2.enable_termination_protection', default=False)
         metadata_http_tokens = self.context.config().get_string('directoryservice.ec2.metadata_http_tokens', required=True)
+        use_vpc_endpoints = self.context.config().get_bool('cluster.network.use_vpc_endpoints', default=False)
+        https_proxy = self.context.config().get_string('cluster.network.https_proxy', required=False, default='')
+        no_proxy = self.context.config().get_string('cluster.network.no_proxy', required=False, default='')
+        proxy_config = {}
+        if use_vpc_endpoints and Utils.is_not_empty(https_proxy):
+            proxy_config = {
+                    'http_proxy': https_proxy,
+                    'https_proxy': https_proxy,
+                    'no_proxy': no_proxy
+                    }
 
         if is_public and len(self.cluster.public_subnets) > 0:
             subnet_ids = self.cluster.existing_vpc.get_public_subnet_ids()
@@ -256,7 +265,8 @@ class DirectoryServiceStack(IdeaBaseStack):
                 'LDAP_ROOT_PASSWORD_SECRET_ARN': '${__LDAP_ROOT_PASSWORD_SECRET_ARN__}',
                 'LDAP_TLS_CERTIFICATE_SECRET_ARN': '${__LDAP_TLS_CERTIFICATE_SECRET_ARN__}',
                 'LDAP_TLS_PRIVATE_KEY_SECRET_ARN': '${__LDAP_TLS_PRIVATE_KEY_SECRET_ARN__}'
-            }
+            },
+            proxy_config=proxy_config
         ).build()
 
         substituted_userdata = cdk.Fn.sub(user_data, {

@@ -433,9 +433,9 @@ global-settings:
       npm_version: "7.15.1"
       url: "https://raw.githubusercontent.com/nvm-sh/nvm/"
     openmpi:
-      version: "4.1.4"
-      url: "https://download.open-mpi.org/release/open-mpi/v4.1/openmpi-4.1.4.tar.gz"
-      checksum: "61f78909fb582114afae0408e85caa22529ed511765065059593c97b5a4f73152cd56b96812f5d80047e4e6fa114397e"
+      version: "4.1.5"
+      url: "https://download.open-mpi.org/release/open-mpi/v4.1/openmpi-4.1.5.tar.gz"
+      checksum: "ca1bff69624909f16fb6c240cddb7b44236de616dfb6dd68d26cb264654e737457e265c61a78b7e42ec4832cfd6d48a5"
       checksum_method: sha384
     python:
       version: "3.9.16"
@@ -443,9 +443,9 @@ global-settings:
       checksum: "87acee12323b63a2e0c368193c03fd57e008585c754b6bceec6d5ec4c0bc34b3bb1ff20f31b6f5aff6e02502e7f5b291"
       checksum_method: sha384
     efa:
-      version: "1.21.0"
-      url: "https://efa-installer.amazonaws.com/aws-efa-installer-1.21.0.tar.gz"
-      checksum: "036e60b28793ed64072a53c9b67ab58e4cc93bcb6732bf5b7be2b3d4a9e082affbd37f6b91007641adb2860e08037823"
+      version: "1.22.0"
+      url: "https://efa-installer.amazonaws.com/aws-efa-installer-1.22.0.tar.gz"
+      checksum: "4c1b4a822f26e43c942623e3d0e6fb3816f15d6cbacd9bba286c9648b0cefe274cd79167d37c938bcdb49a96629b14a2"
       checksum_method: sha384
     openpbs:
       version: "22.05.11"

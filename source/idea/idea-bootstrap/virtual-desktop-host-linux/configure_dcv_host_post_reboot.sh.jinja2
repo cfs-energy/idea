@@ -13,6 +13,9 @@
 
 set -x
 source /etc/environment
+if [[ -f /etc/profile.d/proxy.sh ]]; then
+    source /etc/profile.d/proxy.sh
+fi
 timestamp=$(date +%s)
 if [[ -f ${BOOTSTRAP_DIR}/logs/configure_dcv_host_post_reboot.log ]]; then
   mv ${BOOTSTRAP_DIR}/logs/configure_dcv_host_post_reboot.log ${BOOTSTRAP_DIR}/logs/configure_dcv_host_post_reboot.log.${timestamp}

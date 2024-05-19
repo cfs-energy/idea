@@ -77,7 +77,7 @@ class EC2ServiceQuotaHelper:
         todo - documentation note:
           if service quota is updated, soca administrator must reset the cache key: aws.ec2.service-quota.all
         """
-        cache_key = f'aws.ec2.service-quota.all'
+        cache_key = 'aws.ec2.service-quota.all'
         result = self._context.cache().long_term().get(key=cache_key)
         if result is not None:
             return result

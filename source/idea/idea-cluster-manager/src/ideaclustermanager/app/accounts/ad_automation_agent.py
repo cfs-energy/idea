@@ -209,9 +209,9 @@ class ADAutomationAgent(SocaService):
                                     request=request
                                 ).invoke()
                             elif namespace == 'ADAutomation.DeleteComputer':
-                                self.logger.debug(f'Processing AD automation event: DeleteComputer')
+                                self.logger.debug('Processing AD automation event: DeleteComputer')
                             elif namespace == 'ADAutomation.UpdateComputerDescription':
-                                self.logger.debug(f'Processing AD automation event: UpdateComputerDescription')
+                                self.logger.debug('Processing AD automation event: UpdateComputerDescription')
 
                             # no exception, AD automation succeeded. delete from queue.
                             add_to_delete(sqs_message)

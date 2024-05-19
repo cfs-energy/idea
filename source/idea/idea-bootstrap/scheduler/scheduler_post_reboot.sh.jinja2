@@ -14,6 +14,9 @@
 set -x
 
 source /etc/environment
+if [[ -f /etc/profile.d/proxy.sh ]]; then
+    source /etc/profile.d/proxy.sh
+fi
 
 SOURCE="${1}"
 

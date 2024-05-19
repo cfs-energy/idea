@@ -137,7 +137,7 @@ class SyncUserInDirectoryServiceTask(BaseTask):
 
         if readonly:
             self.logger.info(f'sync user: Read-only Directory service - sync {username} NOOP ...')
-            self.logger.info(f'sync user: returning ...')
+            self.logger.info('sync user: returning ...')
             return
 
         if enabled:

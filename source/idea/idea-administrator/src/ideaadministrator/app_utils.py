@@ -113,7 +113,7 @@ class AdministratorUtils:
     @staticmethod
     def get_packages_to_upload() -> List[str]:
         """
-        if SOCA_DEV_MODE=true, find packages from dist dir
+        if IDEA_DEV_MODE=true, find packages from dist dir
         else, find packages in ~/.idea/downloads to be uploaded
         :return:
         """

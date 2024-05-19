@@ -497,7 +497,7 @@ class CdkInvoker:
         cdk_cmd = self.get_cdk_command('deploy', [
             f"--app '{cdk_app_cmd}' ",
             f'--outputs-file {outputs_file}',
-            f'--require-approval never'
+            '--require-approval never'
         ])
         self.exec_shell(cdk_cmd)
 
@@ -507,17 +507,17 @@ class CdkInvoker:
         cdk_cmd = self.get_cdk_command('deploy', [
             f"--app '{cdk_app_cmd}' ",
             f'--outputs-file {outputs_file}',
-            f'--require-approval never'
+            '--require-approval never'
         ])
         self.exec_shell(cdk_cmd)
 
     def invoke_analytics(self, **_):
         outputs_file = os.path.join(self.deployment_dir, 'analytics-outputs.json')
         cdk_app_cmd = self.get_cdk_app_cmd()
-        cdk_cmd = self.get_cdk_command(f'deploy', [
+        cdk_cmd = self.get_cdk_command('deploy', [
             f"--app '{cdk_app_cmd}' ",
             f'--outputs-file {outputs_file} ',
-            f'--require-approval never'
+            '--require-approval never'
         ])
         self.exec_shell(cdk_cmd)
 
@@ -527,7 +527,7 @@ class CdkInvoker:
         cdk_cmd = self.get_cdk_command('deploy', [
             f"--app '{cdk_app_cmd}' ",
             f'--outputs-file {outputs_file}',
-            f'--require-approval never'
+            '--require-approval never'
         ])
         self.exec_shell(cdk_cmd)
 
@@ -537,7 +537,7 @@ class CdkInvoker:
         cdk_cmd = self.get_cdk_command('deploy', [
             f"--app '{cdk_app_cmd}' ",
             f'--outputs-file {outputs_file}',
-            f'--require-approval never'
+            '--require-approval never'
         ])
         self.exec_shell(cdk_cmd)
 
@@ -599,12 +599,12 @@ class CdkInvoker:
                     force_build=force_build_bootstrap
                 )
             if upload_bootstrap_package and deploy_stack:
-                outputs_file = os.path.join(self.deployment_dir, f'directoryservice-outputs.json')
+                outputs_file = os.path.join(self.deployment_dir, 'directoryservice-outputs.json')
                 cdk_app_cmd = self.get_cdk_app_cmd()
-                cdk_cmd = self.get_cdk_command(f'deploy', params=[
+                cdk_cmd = self.get_cdk_command('deploy', params=[
                     f"--app '{cdk_app_cmd}' ",
                     f'--outputs-file {outputs_file} ',
-                    f'--require-approval never'
+                    '--require-approval never'
                 ], context_params={
                     'bootstrap_package_uri': bootstrap_package_uri
                 })
@@ -612,12 +612,12 @@ class CdkInvoker:
 
         else:
             if deploy_stack:
-                outputs_file = os.path.join(self.deployment_dir, f'directoryservice-outputs.json')
+                outputs_file = os.path.join(self.deployment_dir, 'directoryservice-outputs.json')
                 cdk_app_cmd = self.get_cdk_app_cmd()
-                cdk_cmd = self.get_cdk_command(f'deploy', params=[
+                cdk_cmd = self.get_cdk_command('deploy', params=[
                     f"--app '{cdk_app_cmd}' ",
                     f'--outputs-file {outputs_file} ',
-                    f'--require-approval never'
+                    '--require-approval never'
                 ])
                 self.exec_shell(cdk_cmd)
 
@@ -681,12 +681,12 @@ class CdkInvoker:
             )
 
         if upload_release_package and upload_bootstrap_package and deploy_stack:
-            outputs_file = os.path.join(self.deployment_dir, f'cluster-manager-outputs.json')
+            outputs_file = os.path.join(self.deployment_dir, 'cluster-manager-outputs.json')
             cdk_app_cmd = self.get_cdk_app_cmd()
-            cdk_cmd = self.get_cdk_command(f'deploy', params=[
+            cdk_cmd = self.get_cdk_command('deploy', params=[
                 f"--app '{cdk_app_cmd}' ",
                 f'--outputs-file {outputs_file} ',
-                f'--require-approval never'
+                '--require-approval never'
             ], context_params={
                 'bootstrap_package_uri': bootstrap_package_uri
             })
@@ -771,12 +771,12 @@ class CdkInvoker:
             )
 
         if upload_release_package and upload_bootstrap_package and deploy_stack:
-            outputs_file = os.path.join(self.deployment_dir, f'scheduler-outputs.json')
+            outputs_file = os.path.join(self.deployment_dir, 'scheduler-outputs.json')
             cdk_app_cmd = self.get_cdk_app_cmd()
-            cdk_cmd = self.get_cdk_command(f'deploy', params=[
+            cdk_cmd = self.get_cdk_command('deploy', params=[
                 f"--app '{cdk_app_cmd}' ",
                 f'--outputs-file {outputs_file} ',
-                f'--require-approval never'
+                '--require-approval never'
             ], context_params={
                 'bootstrap_package_uri': bootstrap_package_uri
             })
@@ -912,12 +912,12 @@ class CdkInvoker:
             )
 
         if upload_release_package and upload_bootstrap_package and deploy_stack:
-            outputs_file = os.path.join(self.deployment_dir, f'virtual-desktop-controller-outputs.json')
+            outputs_file = os.path.join(self.deployment_dir, 'virtual-desktop-controller-outputs.json')
             cdk_app_cmd = self.get_cdk_app_cmd()
-            cdk_cmd = self.get_cdk_command(f'deploy', params=[
+            cdk_cmd = self.get_cdk_command('deploy', params=[
                 f"--app '{cdk_app_cmd}' ",
                 f'--outputs-file {outputs_file} ',
-                f'--require-approval never'
+                '--require-approval never'
             ], context_params={
                 'controller_bootstrap_package_uri': controller_bootstrap_package_uri,
                 'dcv_broker_bootstrap_package_uri': dcv_broker_package_uri,
@@ -979,12 +979,12 @@ class CdkInvoker:
             )
 
         if upload_bootstrap_package and deploy_stack:
-            outputs_file = os.path.join(self.deployment_dir, f'bastion-host-outputs.json')
+            outputs_file = os.path.join(self.deployment_dir, 'bastion-host-outputs.json')
             cdk_app_cmd = self.get_cdk_app_cmd()
-            cdk_cmd = self.get_cdk_command(f'deploy', params=[
+            cdk_cmd = self.get_cdk_command('deploy', params=[
                 f"--app '{cdk_app_cmd}' ",
                 f'--outputs-file {outputs_file} ',
-                f'--require-approval never'
+                '--require-approval never'
             ], context_params={
                 'bootstrap_package_uri': bootstrap_package_uri
             })

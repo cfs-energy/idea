@@ -71,7 +71,7 @@ def _submit_all_jobs(context: TestContext, helper: JobSubmissionHelper, base_os_
 
 def _verify_all_jobs(helper: JobSubmissionHelper):
     try:
-        helper.context.info(f'Job Test Cases - Start Job Validations ...')
+        helper.context.info('Job Test Cases - Start Job Validations ...')
 
         iteration_interval = 60
         max_iterations = 30

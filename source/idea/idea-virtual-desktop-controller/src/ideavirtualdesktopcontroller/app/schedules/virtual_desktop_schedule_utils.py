@@ -88,7 +88,7 @@ class VirtualDesktopScheduleUtils:
 
     def _delete_schedule(self, schedule: VirtualDesktopSchedule):
         if Utils.is_empty(schedule) or schedule.schedule_type == VirtualDesktopScheduleType.NO_SCHEDULE:
-            self._logger.debug(f"No Schedule to delete. Returning")
+            self._logger.debug("No Schedule to delete. Returning")
             return
 
         if Utils.is_any_empty(schedule.schedule_id, schedule.day_of_week):

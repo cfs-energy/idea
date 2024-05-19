@@ -202,7 +202,7 @@ class DeleteCluster:
             print(f'executing app-module-clean-up commands for app: {module_id}')
             instance_ids.append(app_instance.instance_id)
 
-        command_to_execute = f'sudo ideactl app-module-clean-up'
+        command_to_execute = 'sudo ideactl app-module-clean-up'
         if self.delete_databases:
             command_to_execute = f'{command_to_execute} --delete-databases'
 
@@ -512,8 +512,9 @@ class DeleteCluster:
                     if pool_name == f'{self.cluster_name}-user-pool' and pool_id is not None:
                         user_pool_ids_to_unprotect.append(pool_id)
 
-            # Unprotect the discovered user pools if they have matching Tags
+            # Unprotect the discovered user pools if they have matching cluster Tags
             for pool_id in user_pool_ids_to_unprotect:
+                _remove_pool_protection = False
                 describe_user_pool_result = self.context.aws().cognito_idp().describe_user_pool(
                     UserPoolId=pool_id
                 )
@@ -521,14 +522,26 @@ class DeleteCluster:
 
                 if delete_protection.upper() == 'ACTIVE':
                     pool_tags = Utils.get_value_as_dict('UserPoolTags', Utils.get_value_as_dict('UserPool', describe_user_pool_result, default={}), default={})
+                    # Support previous deployments that didn't have UserPoolTags
+                    # It is OK to do this since we validated that the user pool Name still matched the expected name.
+                    # Note that the Name and the Name Tag can be different in this case.
+                    if not pool_tags:
+                        self.context.info(f'Cognito User Pool {pool_id} - Deletion Protection is {delete_protection} - No tags found - proceeding to remove')
+                        _remove_pool_protection = True
                     for tag_name, tag_value in pool_tags.items():
                         if tag_name == constants.IDEA_TAG_CLUSTER_NAME and tag_value == self.cluster_name:
                             self.context.info(f'Cognito User Pool {pool_id} - Deletion Protection is {delete_protection} - Removing')
-                            self.context.aws().cognito_idp().update_user_pool(
-                                UserPoolId=pool_id,
-                                DeletionProtection='INACTIVE'
-                            )
-                            time.sleep(0.5)
+                            _remove_pool_protection = True
+
+                    if _remove_pool_protection:
+                        self.context.aws().cognito_idp().update_user_pool(
+                            UserPoolId=pool_id,
+                            DeletionProtection='INACTIVE'
+                        )
+                        time.sleep(0.5)
+
+                elif delete_protection.upper() == 'INACTIVE':
+                    self.context.info(f'Cognito User Pool {pool_id} - Deletion Protection is INACTIVE - No need to remove protection.')
 
         # For non-Cognito deployments - we should just land here to cleanup the stacks
         # If there are any other cleanups needed - add them here
@@ -642,10 +655,9 @@ class DeleteCluster:
                 raise e
             self.context.success(f'Deleted CloudWatch alarms for: {self.cluster_name}')
         else:
-            self.context.info(f'Did not find any Cloudwatch alarms to delete...')
+            self.context.info('Did not find any Cloudwatch alarms to delete...')
 
     def find_cloudwatch_logs(self):
-        total_bytes = 0
         self.context.info('Searching for CloudWatch log groups to be deleted ...')
         paginator = self.context.aws().logs().get_paginator('describe_log_groups')
 
@@ -835,7 +847,7 @@ class DeleteCluster:
             self.print_ec2_instances(self.termination_protected_ec2_instances)
             print(f'found {len(self.termination_protected_ec2_instances)} EC2 instances with termination protection enabled.')
             if not self.force:
-                confirm = self.context.prompt(f'Are you sure you want to disable termination protection for above instances ?')
+                confirm = self.context.prompt('Are you sure you want to disable termination protection for above instances ?')
                 if not confirm:
                     return
 

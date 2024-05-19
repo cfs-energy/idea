@@ -128,7 +128,7 @@ class DynamoDBLocal:
             self.get_ddb_local_jar_file(),
             '-port',
             f'{self.port}',
-            f'-dbPath',
+            '-dbPath',
             self.db_dir,
             '-sharedDb'
         ]
@@ -146,7 +146,7 @@ class DynamoDBLocal:
             self.process.send_stop_signal()
             self.process.wait()
 
-        print(f'ddb local stopped.')
+        print('ddb local stopped.')
 
     def start(self):
         if self.reset and Utils.is_dir(self.db_dir):

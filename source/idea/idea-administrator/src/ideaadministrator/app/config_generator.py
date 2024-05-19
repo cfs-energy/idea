@@ -249,7 +249,7 @@ class ConfigGenerator:
             return None
         remote_write_url = Utils.get_value_as_string('prometheus_remote_write_url', self.user_values)
         if Utils.is_empty(remote_write_url):
-            raise exceptions.general_exception(f'prometheus_remote_write_url is required when metrics_provider = prometheus')
+            raise exceptions.general_exception('prometheus_remote_write_url is required when metrics_provider = prometheus')
         return remote_write_url
 
     def get_use_existing_vpc(self) -> bool:

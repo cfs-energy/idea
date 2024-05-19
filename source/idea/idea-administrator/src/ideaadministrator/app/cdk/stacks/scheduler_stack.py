@@ -293,6 +293,16 @@ class SchedulerStack(IdeaBaseStack):
         enable_detailed_monitoring = self.context.config().get_bool('scheduler.ec2.enable_detailed_monitoring', default=False)
         enable_termination_protection = self.context.config().get_bool('scheduler.ec2.enable_termination_protection', default=False)
         metadata_http_tokens = self.context.config().get_string('scheduler.ec2.metadata_http_tokens', required=True)
+        use_vpc_endpoints = self.context.config().get_bool('cluster.network.use_vpc_endpoints', default=False)
+        https_proxy = self.context.config().get_string('cluster.network.https_proxy', required=False, default='')
+        no_proxy = self.context.config().get_string('cluster.network.no_proxy', required=False, default='')
+        proxy_config = {}
+        if use_vpc_endpoints and Utils.is_not_empty(https_proxy):
+            proxy_config = {
+                    'http_proxy': https_proxy,
+                    'https_proxy': https_proxy,
+                    'no_proxy': no_proxy
+                    }
 
         if is_public and len(self.cluster.public_subnets) > 0:
             subnet_ids = self.cluster.existing_vpc.get_public_subnet_ids()
@@ -307,6 +317,7 @@ class SchedulerStack(IdeaBaseStack):
             install_commands=[
                 '/bin/bash scheduler/setup.sh'
             ],
+            proxy_config=proxy_config,
             base_os=base_os
         ).build()
 

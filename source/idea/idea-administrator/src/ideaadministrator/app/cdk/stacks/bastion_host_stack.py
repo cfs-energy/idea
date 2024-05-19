@@ -118,6 +118,16 @@ class BastionHostStack(IdeaBaseStack):
         enable_detailed_monitoring = self.context.config().get_bool('bastion-host.ec2.enable_detailed_monitoring', default=False)
         enable_termination_protection = self.context.config().get_bool('bastion-host.ec2.enable_termination_protection', default=False)
         metadata_http_tokens = self.context.config().get_string('bastion-host.ec2.metadata_http_tokens', required=True)
+        use_vpc_endpoints = self.context.config().get_bool('cluster.network.use_vpc_endpoints', default=False)
+        https_proxy = self.context.config().get_string('cluster.network.https_proxy', required=False, default='')
+        no_proxy = self.context.config().get_string('cluster.network.no_proxy', required=False, default='')
+        proxy_config = {}
+        if use_vpc_endpoints and Utils.is_not_empty(https_proxy):
+            proxy_config = {
+                    'http_proxy': https_proxy,
+                    'https_proxy': https_proxy,
+                    'no_proxy': no_proxy
+                    }
 
         instance_profile_name = self.bastion_host_instance_profile.instance_profile_name
         security_group = self.cluster.get_security_group(constants.MODULE_BASTION_HOST)
@@ -135,6 +145,7 @@ class BastionHostStack(IdeaBaseStack):
             install_commands=[
                 '/bin/bash bastion-host/setup.sh'
             ],
+            proxy_config=proxy_config,
             base_os=base_os
         ).build()
 

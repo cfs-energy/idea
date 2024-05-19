@@ -263,26 +263,32 @@ class OpenPBSAPIInvocationContext:
                     self._reserved_instances_unavailable = True
 
             # check service quota
-            try:
-                result = provisioning_util.check_service_quota()
-                self._service_quota_result = result
-                self._job_submission_result.service_quotas = result.quotas
-            except exceptions.SocaException as e:
-                if e.error_code == errorcodes.SERVICE_QUOTA_NOT_AVAILABLE:
-                    result: CheckServiceQuotaResult = e.ref
-                    not_requested = result.find_insufficient_quotas()
+            if self.app_context.config().get_bool('scheduler.job_provisioning.service_quotas', default=True):
+                try:
+                    result = provisioning_util.check_service_quota()
+                    self._service_quota_result = result
+                    self._job_submission_result.service_quotas = result.quotas
+                except exceptions.SocaException as e:
+                    if e.error_code == errorcodes.SERVICE_QUOTA_NOT_AVAILABLE:
+                        result: CheckServiceQuotaResult = e.ref
+                        not_requested = result.find_insufficient_quotas()
 
-                    if len(not_requested) > 0:
-                        message = f'Following AWS Service Quota needs to be requested from AWS: {os.linesep}'
-                        table = self.get_quotas_as_table(not_requested)
-                        message += str(table)
-                        message += f'{os.linesep} Please contact administrator to request these AWS Service Quotas.'
-                        self.add_incidentals_validation_entry(
-                            error_code='ServiceQuota',
-                            message=message
-                        )
-                    else:
-                        self._service_quota_unavailable = True
+                        if len(not_requested) > 0:
+                            message = f'Following AWS Service Quota needs to be requested from AWS: {os.linesep}'
+                            table = self.get_quotas_as_table(not_requested)
+                            message += str(table)
+                            message += f'{os.linesep} Please contact administrator to request these AWS Service Quotas.'
+                            self.add_incidentals_validation_entry(
+                                error_code='ServiceQuota',
+                                message=message
+                            )
+                        else:
+                            self._service_quota_unavailable = True
+            else:
+                self.app_context.logger(f"Bypassing Service Quota checks due to scheduler.job_provisioning.service_quotas")
+                self._service_quota_unavailable = False
+                self._service_quota_result = None
+                self._job_submission_result.service_quotas = None
 
             # check ec2 instance dry run - only if ephemeral capacity.
             # do not check dry run for batch/job-shared or always on nodes

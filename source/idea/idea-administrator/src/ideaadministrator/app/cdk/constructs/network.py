@@ -338,7 +338,7 @@ class ExternalLoadBalancerSecurityGroup(SecurityGroup):
             self.add_ingress_rule(
                 ec2.Peer.ipv4(f'{eip.ref}/32'),
                 ec2.Port.tcp(443),
-                description=f'Allow NAT EIP to communicate to ALB.'
+                description='Allow NAT EIP to communicate to ALB.'
             )
 
 
@@ -614,7 +614,7 @@ class VpcInterfaceEndpoint(SocaBaseConstruct):
                                                    ),
                                                    open=True,
                                                    # setting private_dns_enabled = True can be problem in GovCloud where Route53 and in turn Private Hosted Zones is not supported.
-                                                   private_dns_enabled=False,
+                                                   private_dns_enabled=True,
                                                    lookup_supported_azs=True,
                                                    security_groups=[vpc_endpoint_security_group])
 
