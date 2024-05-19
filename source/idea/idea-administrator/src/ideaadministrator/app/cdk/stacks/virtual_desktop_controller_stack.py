@@ -183,7 +183,7 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
             content_based_deduplication=True,
             encryption_master_key=self.context.config().get_string('cluster.sqs.kms_key_id'),
             dead_letter_queue=sqs.DeadLetterQueue(
-                max_receive_count=60,
+                max_receive_count=Utils.get_as_int(constants.SQS_MAX_RECEIVE_COUNT_VDC_EVENTS, default=16),
                 queue=SQSQueue(
                     self.context, 'virtual-desktop-controller-events-queue-dlq', self.stack,
                     queue_name=f'{self.cluster_name}-{self.module_id}-events-dlq.fifo',
@@ -207,8 +207,9 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
             queue_name=f'{self.cluster_name}-{self.module_id}-controller',
             encrypt_at_rest=encrypt_at_rest,
             encryption_master_key=kms_key,
+            visibility_timeout=cdk.Duration.seconds(constants.SQS_VISIBILITY_VDC_CONTROLLER),
             dead_letter_queue=sqs.DeadLetterQueue(
-                max_receive_count=30,
+                max_receive_count=Utils.get_as_int(constants.SQS_MAX_RECEIVE_COUNT_VDC_CONTROLLER, default=16),
                 queue=SQSQueue(
                     self.context, 'virtual-desktop-controller-queue-dlq', self.stack,
                     queue_name=f'{self.cluster_name}-{self.module_id}-controller-dlq',

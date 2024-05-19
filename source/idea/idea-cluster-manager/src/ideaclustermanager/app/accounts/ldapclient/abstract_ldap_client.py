@@ -323,6 +323,10 @@ class AbstractLDAPClient:
         return 'ldap://localhost'
 
     @property
+    def is_ldaps(self) -> bool:
+        return self.ldap_uri.startswith('ldaps://')
+
+    @property
     def password_max_age(self) -> Optional[float]:
         return self.options.password_max_age
 
@@ -406,9 +410,8 @@ class AbstractLDAPClient:
             bind=self.ldap_root_bind,
             passwd=self.ldap_root_password
         )
-        if self.logger.isEnabledFor(logging.DEBUG):
-            cm_info = str(self.connection_manager)
-            self.logger.debug(f"LDAP CM returning conn ({res}), CM now:\n{cm_info}")
+        #if self.logger.isEnabledFor(logging.DEBUG):
+        #    self.logger.debug(f"LDAP CM returning conn ({res})")
 
         return res
 
@@ -535,8 +538,6 @@ class AbstractLDAPClient:
     def convert_ldap_user(self, ldap_user: Dict) -> Optional[Dict]:
         if Utils.is_empty(ldap_user):
             return None
-
-        self.logger.debug(f'convert_ldap_user() - Converting from full lookup results: {ldap_user}')
 
         cn = LdapUtils.get_string_value('cn', ldap_user)
         username = LdapUtils.get_string_value('uid', ldap_user)

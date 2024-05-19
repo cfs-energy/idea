@@ -66,6 +66,11 @@ const VIRTUAL_DESKTOP_SESSIONS_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefini
         cell: e => Utils.getOsTitle(e.software_stack?.base_os)
     },
     {
+        id: 'tenancy',
+        header: 'Tenancy',
+        cell: e => Utils.getFormattedTenancy(e.software_stack?.launch_tenancy)
+    },
+    {
         id: 'instance_type',
         header: 'Instance Type',
         cell: e => e.server?.instance_type

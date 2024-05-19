@@ -254,7 +254,7 @@ class SchedulerStack(IdeaBaseStack):
             queue_name=f'{self.cluster_name}-{self.module_id}-job-status-events',
             encryption_master_key=kms_key_id,
             dead_letter_queue=sqs.DeadLetterQueue(
-                max_receive_count=10,
+                max_receive_count=Utils.get_as_int(constants.SQS_MAX_RECEIVE_COUNT_SCHEDULER_JOB_STATUS, default=10),
                 queue=SQSQueue(
                     self.context, 'job-status-events-dlq', self.stack,
                     queue_name=f'{self.cluster_name}-{self.module_id}-job-status-events-dlq',

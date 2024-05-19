@@ -12,12 +12,7 @@ directory_id: {{ directory_id or '~' }}
 ad_short_name: "IDEA"
 
 # AWS Managed Microsoft AD Edition. Must be one of: [Standard, Enterprise]
-# Note: Enterprise edition is not tested/supported yet, and additional configurations may be required and/or cdk stack needs to be updated.
 ad_edition: "Standard"
-
-# added for future use - not supported yet.
-# primary_region: "{{aws_region}}"
-# replica_region: "{{aws_region}}"
 
 # Password Max Age in Days. Used by Cluster IDP such as Cognito UserPool or KeyCloak in JWT Claims
 # Authenticated API requests will be rejected if the password has expired.

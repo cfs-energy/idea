@@ -17,6 +17,7 @@ from ideadatamodel import VirtualDesktopServer, VirtualDesktopSession
 from ideasdk.utils import Utils
 from ideavirtualdesktopcontroller.app.servers.virtual_desktop_server_db import VirtualDesktopServerDB
 from ideavirtualdesktopcontroller.app.virtual_desktop_controller_utils import VirtualDesktopControllerUtils
+from typing import Optional
 
 
 class VirtualDesktopServerUtils:
@@ -27,15 +28,24 @@ class VirtualDesktopServerUtils:
         self._server_db = db
         self._controller_utils = VirtualDesktopControllerUtils(self.context)
 
-    def provision_host_for_session(self, session: VirtualDesktopSession) -> VirtualDesktopServer:
+    def provision_host_for_session(self, session: VirtualDesktopSession) -> Optional[VirtualDesktopServer]:
         self._logger.info(f'initiate_host_provisioning for {session.name}')
+
+        # TODO - need a way to get information from provision_dcv_host_for_session to the end-user/caller
 
         host_provisioning_response = self._controller_utils.provision_dcv_host_for_session(session)
 
-        instances = Utils.get_value_as_list('Instances', host_provisioning_response, [])
+        instances = Utils.get_value_as_list('Instances', host_provisioning_response, default=[])
+
+        if not instances:
+            return None
 
         # We know that there is ONLY 1 instance
-        session.server.instance_id = Utils.get_value_as_string('InstanceId', instances[0], None)
+        session.server.instance_id = Utils.get_value_as_string('InstanceId', instances[0], default=None)
+
+        if session.server.instance_id is None:
+            return None
+
         return self._server_db.create(
             server=session.server,
             idea_session_id=session.idea_session_id,

@@ -654,15 +654,17 @@ class AccountsService:
             password=password,
             email_verified=email_verified
         )
+
         if self.is_sso_enabled():
             self.logger.debug(f'Performing IDP Link for {username} / {email}')
             self.user_pool.admin_link_idp_for_user(username, email)
+
         if sudo:
             self.logger.debug(f'Performing SUDO for {username}')
             self.user_pool.admin_add_sudo_user(username)
 
         # additional groups
-        additional_groups = Utils.get_as_list(user.additional_groups, [])
+        additional_groups = Utils.get_as_list(user.additional_groups, default=[])
         self.logger.debug(f'Additional groups for {username}: {additional_groups}')
         if group_name in additional_groups:
             additional_groups.remove(group_name)

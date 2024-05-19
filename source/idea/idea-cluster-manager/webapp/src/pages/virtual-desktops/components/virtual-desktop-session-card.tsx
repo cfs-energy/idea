@@ -18,7 +18,7 @@ import Utils from "../../../common/utils";
 import 'moment-timezone';
 import moment from 'moment';
 import {AppContext} from "../../../common";
-import {Box, Button, ButtonDropdown, ColumnLayout, Popover, SpaceBetween, StatusIndicator} from "@cloudscape-design/components";
+import {Badge, Box, Button, ButtonDropdown, ColumnLayout, Popover, SpaceBetween, StatusIndicator} from "@cloudscape-design/components";
 import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
 import {
     faClock,
@@ -211,8 +211,9 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
             </div>
             <SpaceBetween size="s" direction={"horizontal"}>
                 <VirtualDesktopSessionStatusIndicator state={this.props.session.state!} hibernation_enabled={this.props.session.hibernation_enabled!}/>
-                <small style={{color: 'grey'}}>{Utils.getOsTitle(this.props.session.software_stack?.base_os)}</small>
-                <small style={{color: 'grey'}}>{this.props.session.server?.instance_type}</small>
+                <Badge color="blue">{this.props.session.project?.title}</Badge>
+                <Badge color="blue">{Utils.getOsTitle(this.props.session.software_stack?.base_os)}</Badge>
+                <Badge color="blue">{this.props.session.server?.instance_type}</Badge>
                 {this.hasSchedule() &&
                     <small style={{color: 'grey'}}><FontAwesomeIcon icon={faClock}/>&nbsp;{<VirtualDesktopScheduleDescription session={this.props.session}/>}</small>}
             </SpaceBetween>
@@ -280,15 +281,17 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
         return (
             <Box padding={{top: 'xl', bottom: 'xl'}}>
                 <ul>
-                    <li><strong>IDEA Session Id</strong> {this.getSession().idea_session_id}</li>
-                    <li><strong>DCV Session Id</strong> {this.getSession().dcv_session_id}</li>
-                    <li><strong>OS</strong> {Utils.getOsTitle(this.getSession().software_stack?.base_os)}</li>
-                    <li><strong>Session State</strong> {this.getSession().state}</li>
-                    <li><strong>Instance Type</strong> {this.getSession().server?.instance_type}</li>
-                    <li><strong>Private IP</strong> {this.getSession().server?.private_ip} </li>
-                    <li><strong>Instance AMI</strong> {this.getSession().software_stack?.ami_id}</li>
-                    <li><strong>Instance Id</strong> {this.getSession().server?.instance_id}</li>
-                    <li><strong>Created On</strong> {new Date(this.getSession().created_on!).toLocaleString()}</li>
+                    <li><strong>IDEA Session Id:</strong> {this.getSession().idea_session_id}</li>
+                    <li><strong>DCV Session Id:</strong> {this.getSession().dcv_session_id}</li>
+                    <li><strong>Project:</strong> {this.getSession().project?.title}</li>
+                    <li><strong>Tenancy:</strong> {this.getSession().software_stack?.launch_tenancy}</li>
+                    <li><strong>OS:</strong> {Utils.getOsTitle(this.getSession().software_stack?.base_os)}</li>
+                    <li><strong>Session State:</strong> {this.getSession().state}</li>
+                    <li><strong>Instance Type:</strong> {this.getSession().server?.instance_type}</li>
+                    <li><strong>Private IP:</strong> {this.getSession().server?.private_ip}</li>
+                    <li><strong>Instance AMI:</strong> {this.getSession().software_stack?.ami_id}</li>
+                    <li><strong>Instance Id:</strong> {this.getSession().server?.instance_id}</li>
+                    <li><strong>Created On:</strong> {new Date(this.getSession().created_on!).toLocaleString()}</li>
                 </ul>
             </Box>
         )

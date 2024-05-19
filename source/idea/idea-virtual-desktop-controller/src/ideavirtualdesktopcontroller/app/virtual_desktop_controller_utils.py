@@ -14,6 +14,8 @@ import random
 from threading import RLock
 from typing import List, Dict, Optional
 
+import botocore.exceptions
+
 import ideavirtualdesktopcontroller
 from botocore.exceptions import ClientError
 
@@ -158,7 +160,7 @@ class VirtualDesktopControllerUtils:
             for tag in session.project.tags:
                 tags[tag.key] = tag.value
 
-        custom_tags = self.context.config().get_list('global-settings.custom_tags', [])
+        custom_tags = self.context.config().get_list('global-settings.custom_tags', default=[])
         custom_tags_dict = Utils.convert_custom_tags_to_key_value_pairs(custom_tags)
         tags = {
             **custom_tags_dict,
@@ -173,6 +175,9 @@ class VirtualDesktopControllerUtils:
             })
 
         metadata_http_tokens = self.context.config().get_string('virtual-desktop-controller.dcv_session.metadata_http_tokens', required=True)
+
+        # Our desired launch tenancy
+        desired_tenancy = Utils.get_as_string(session.software_stack.launch_tenancy, default='default')
 
         kms_key_id = self.context.config().get_string('cluster.ebs.kms_key_id', required=False, default=None)
         if kms_key_id is None:
@@ -223,7 +228,7 @@ class VirtualDesktopControllerUtils:
         # we want to attempt in the order that we prefer
         # (ordered or pre-shuffled)
 
-        self._logger.debug(f"Deployment Attempt Ready - Retry: {subnet_autoretry_method} Attempt_Subnets({len(_attempt_subnets)}): {', '.join(_attempt_subnets)}")
+        self._logger.debug(f"Deployment Attempt Ready - Tenancy: {desired_tenancy} Retry: {subnet_autoretry_method} Attempt_Subnets({len(_attempt_subnets)}): {', '.join(_attempt_subnets)}")
 
         _deployment_loop = 0
         _attempt_provision = True
@@ -234,7 +239,7 @@ class VirtualDesktopControllerUtils:
             _subnet_to_try = _attempt_subnets.pop(0)
             _remaining_subnet_count = len(_attempt_subnets)
 
-            self._logger.info(f"Deployment attempt #{_deployment_loop} subnet_id: {_subnet_to_try} Remaining Subnets: {_remaining_subnet_count}")
+            self._logger.info(f"Deployment attempt #{_deployment_loop}:  Subnet_id: {_subnet_to_try} Remaining Subnets: {_remaining_subnet_count}")
             if _remaining_subnet_count <= 0:
                 # this is our last attempt
                 self._logger.debug(f"Final deployment attempt (_remaining_subnet_count == 0)")
@@ -249,6 +254,9 @@ class VirtualDesktopControllerUtils:
                     UserData=self._build_userdata(session),
                     ImageId=session.software_stack.ami_id,
                     InstanceType=session.server.instance_type,
+                    Placement={
+                        'Tenancy': desired_tenancy
+                    },
                     TagSpecifications=[
                         {
                             'ResourceType': 'instance',
@@ -289,19 +297,30 @@ class VirtualDesktopControllerUtils:
                         'HttpEndpoint': 'enabled'
                     }
                 )
-            except Exception as err:
-                self._logger.warning(f"Encountered Deployment Exception: {err} / Response: {response}")
-                self._logger.debug(f"Remaining subnets {len(_attempt_subnets)}: {_attempt_subnets}")
-                if subnet_autoretry_method and _attempt_provision:
-                    self._logger.debug(f"Continue with next attempt with remaining subnets..")
-                    continue
-                else:
-                    self._logger.warning(f"Exhausted all deployment attempts. Cannot continue with this request.")
+            except botocore.exceptions.ClientError as err:
+                self._logger.warning(f"Encountered botocore Exception")
+
+                if err.response['Error']['Code'] == 'OptInRequired':
+                    self._logger.error(f"Unable to launch due to missing OptIn for this BaseOS AMI. Visit the AWS Marketplace in the AWS Console to subscribe: {err}")
                     break
+                elif err.response['Error']['Code'] == 'InsufficientInstanceCapacity':
+                    if subnet_autoretry_method and _attempt_provision:
+                        self._logger.info(f"Remaining subnets {len(_attempt_subnets)}: {_attempt_subnets}")
+                        self._logger.info(f"Continuing next attempt with remaining subnets..")
+                        continue
+                    else:
+                        self._logger.error(f"Exhausted all subnet/AZ deployment attempts. Cannot continue with this request.")
+                        break
+                else:
+                    self._logger.error(f"Encountered Deployment botocore Exception: {err} / Response: {response}")
+                    break
+
+            except Exception as err:
+                self._logger.error(f"Encountered Deployment Exception: {err} / Response: {response}")
 
             if response:
                 self._logger.debug(f"Returning response: {response}")
-                return Utils.to_dict(response)
+            return Utils.to_dict(response)
 
     def _add_instance_data_to_cache(self):
         with self.instance_types_lock:

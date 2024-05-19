@@ -141,7 +141,7 @@ class UserDAO:
         )
         _lu_stop = Utils.current_time_ms()
         if self.logger.isEnabledFor(logging.DEBUG):
-            self.logger.debug(f"user_lookup: {result} - {_lu_stop - _lu_start}ms")
+            self.logger.debug(f"user_lookup: Took {_lu_stop - _lu_start}ms : {Utils.get_value_as_dict('Item', result)}")
         return Utils.get_value_as_dict('Item', result)
 
 

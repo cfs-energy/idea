@@ -328,6 +328,10 @@ class JobProvisioningUtil:
 
     def check_service_quota(self) -> CheckServiceQuotaResult:
         result = CheckServiceQuotaResult(quotas=[])
+        enable_service_quota_check = self.context.config().get_bool('scheduler.job_provisioning.service_quotas', default=True)
+        if not enable_service_quota_check:
+            return result
+
         if self.job.is_spot_capacity():
 
             desired_capacity = 0

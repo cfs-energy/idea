@@ -18,12 +18,14 @@ import {Button, ColumnLayout, Container, Grid, Header, SpaceBetween} from "@clou
 import IdeaAppLayout from "../../components/app-layout/app-layout";
 import {KeyValue} from "../../components/key-value";
 import {AppContext} from "../../common";
-import {Project, VirtualDesktopBaseOS, VirtualDesktopSoftwareStack} from "../../client/data-model";
+import {Project, VirtualDesktopBaseOS, VirtualDesktopSoftwareStack, VirtualDesktopTenancy} from "../../client/data-model";
 import Tabs from "../../components/tabs/tabs";
 import Utils from "../../common/utils";
 import VirtualDesktopSoftwareStackEditForm from "./forms/virtual-desktop-software-stack-edit-form";
 import {VirtualDesktopAdminClient} from "../../client";
 import {withRouter} from "../../navigation/navigation-utils";
+import {EnabledDisabledStatusIndicator} from "../../components/common";
+import dot from "dot-object";
 
 export interface VirtualDesktopSoftwareStackDetailProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
 }
@@ -89,6 +91,10 @@ class VirtualDesktopSoftwareStackDetail extends Component<VirtualDesktopSoftware
                     <KeyValue title="Name" value={this.state.softwareStack.name}/>
                     <KeyValue title="AMI ID" value={this.state.softwareStack.ami_id} clipboard={true}/>
                     <KeyValue title="Base OS" value={Utils.getOsTitle(this.state.softwareStack.base_os)}/>
+
+                    <KeyValue title="Instance Tenancy" value={this.state.softwareStack.launch_tenancy}/>
+{/*                    <KeyValue title="Warming Pool" value={<EnabledDisabledStatusIndicator enabled={Utils.asBoolean(this.state.softwareStack.pool_enabled, false)}/>} type={"react-node"}/>*/}
+
                 </ColumnLayout>
             </Container>
             <Tabs tabs={[
@@ -103,12 +109,27 @@ class VirtualDesktopSoftwareStackDetail extends Component<VirtualDesktopSoftware
                                     <KeyValue title="Minimum Storage Size" value={this.state.softwareStack.min_storage} type="memory"/>
                                     <KeyValue title="Architecture" value={this.state.softwareStack.architecture}/>
                                     <KeyValue title="GPU" value={this.state.softwareStack.gpu?.replaceAll('_', ' ')}/>
+                                    <KeyValue title="Instance Tenancy" value={this.state.softwareStack.launch_tenancy}/>
                                 </ColumnLayout>
                                 <KeyValue title={"Projects"} value={this.buildProjectsDetails()} type={"react-node"}/>
                             </Grid>
                         </Container>
                     )
-                }
+                },
+/*                {
+                    label: 'Warming Pool',
+                    id: 'pool',
+                    content: (
+                        <Container header={<Header variant={"h2"}>Warming Pool Details</Header>}>
+                            <Grid gridDefinition={[{colspan: 8}, {colspan: 4}]}>
+                                <ColumnLayout columns={2} variant={"text-grid"}>
+                                    <KeyValue title="Warming Pool" value={<EnabledDisabledStatusIndicator enabled={Utils.asBoolean(this.state.softwareStack.pool_enabled, false)}/>} type={"react-node"}/>
+                                    <KeyValue title="Warming Pool ASG" value={this.state.softwareStack.pool_asg_name} clipboard={true}/>
+                                </ColumnLayout>
+                            </Grid>
+                        </Container>
+                    )
+                }*/
             ]}/>
         </SpaceBetween>)
     }
@@ -136,14 +157,17 @@ class VirtualDesktopSoftwareStackDetail extends Component<VirtualDesktopSoftware
             <VirtualDesktopSoftwareStackEditForm
                 ref={this.editStackForm}
                 softwareStack={this.state.softwareStack}
-                onSubmit={(stack_id: string, base_os: VirtualDesktopBaseOS, name: string, description: string, projects: Project[]) => {
+                onSubmit={(stack_id: string, base_os: VirtualDesktopBaseOS, name: string, description: string, projects: Project[], pool_enabled: boolean, pool_asg_name: string, launch_tenancy: VirtualDesktopTenancy) => {
                     return this.getVirtualDesktopAdminClient().updateSoftwareStack({
                             software_stack: {
                                 stack_id: stack_id,
                                 base_os: base_os,
                                 name: name,
                                 description: description,
-                                projects: projects
+                                projects: projects,
+                                pool_enabled: pool_enabled,
+                                pool_asg_name: pool_asg_name,
+                                launch_tenancy: launch_tenancy
                             }
                         }
                     ).then(response => {

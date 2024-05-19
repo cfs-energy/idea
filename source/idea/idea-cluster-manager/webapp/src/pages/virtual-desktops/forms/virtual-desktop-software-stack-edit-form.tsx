@@ -13,19 +13,29 @@
 
 import React, {Component, RefObject} from "react";
 import IdeaForm from "../../../components/form";
-import {Project, SocaUserInputChoice, VirtualDesktopBaseOS, VirtualDesktopSoftwareStack} from "../../../client/data-model";
+import {Project, SocaUserInputChoice, VirtualDesktopBaseOS, VirtualDesktopSoftwareStack, VirtualDesktopTenancy} from "../../../client/data-model";
 import {ProjectsClient} from "../../../client";
 import {AppContext} from "../../../common";
 
 export interface VirtualDesktopSoftwareStackEditFormProps {
     softwareStack: VirtualDesktopSoftwareStack
     onDismiss: () => void
-    onSubmit: (stack_id: string, base_os: VirtualDesktopBaseOS, name: string, description: string, projects: Project[]) => Promise<boolean>
+    onSubmit: (
+        stack_id: string,
+        base_os: VirtualDesktopBaseOS,
+        name: string,
+        description: string,
+        projects: Project[],
+        pool_enabled: boolean,
+        pool_asg_name: string,
+        launch_tenancy: VirtualDesktopTenancy
+    ) => Promise<boolean>
 }
 
 export interface VirtualDesktopSoftwareStackEditFormState {
     showModal: boolean
     projectChoices: SocaUserInputChoice[]
+    tenancyChoices: SocaUserInputChoice[]
 }
 
 class VirtualDesktopSoftwareStackEditForm extends Component<VirtualDesktopSoftwareStackEditFormProps, VirtualDesktopSoftwareStackEditFormState> {
@@ -36,7 +46,8 @@ class VirtualDesktopSoftwareStackEditForm extends Component<VirtualDesktopSoftwa
         this.form = React.createRef()
         this.state = {
             showModal: false,
-            projectChoices: []
+            projectChoices: [],
+            tenancyChoices: []
         }
     }
 
@@ -76,6 +87,27 @@ class VirtualDesktopSoftwareStackEditForm extends Component<VirtualDesktopSoftwa
         return choices
     }
 
+    getTenancyChoices(): SocaUserInputChoice[] {
+        let choices: SocaUserInputChoice[] = []
+        choices.push({
+            title:  'Default/Shared',
+            value: 'default',
+            description: 'Multiple AWS accounts may share the same physical hardware'
+        })
+        choices.push({
+            title: 'Dedicated',
+            value: 'dedicated',
+            description: 'Your instance runs on single-tenant hardware'
+        })
+        choices.push({
+            title: 'Host',
+            value: 'host',
+            description: 'Your instance runs on a physical server with EC2 instance capacity fully dedicated to your use'
+        })
+
+        return choices
+    }
+
     componentDidMount() {
         this.getProjectsClient().getUserProjects({}).then(result => {
             let projectChoices: SocaUserInputChoice[] = []
@@ -92,6 +124,14 @@ class VirtualDesktopSoftwareStackEditForm extends Component<VirtualDesktopSoftwa
                 this.getForm()?.getFormField('projects')?.setOptions({
                     listing: this.state.projectChoices
                 })
+            })
+        })
+
+        this.setState({
+            tenancyChoices: this.getTenancyChoices()
+        }, () => {
+            this.getForm()?.getFormField('tenancy')?.setOptions({
+                listing: this.state.tenancyChoices
             })
         })
     }
@@ -119,6 +159,7 @@ class VirtualDesktopSoftwareStackEditForm extends Component<VirtualDesktopSoftwa
                     }
 
                     const values = this.getForm().getValues()
+
                     let projects: Project[] = []
                     values.projects.forEach((project_id: string) => {
                         projects.push({
@@ -130,8 +171,11 @@ class VirtualDesktopSoftwareStackEditForm extends Component<VirtualDesktopSoftwa
                     const base_os = this.props.softwareStack?.base_os!
                     const name = values.name
                     const description = values.description
+                    const pool_enabled = values.pool_enabled
+                    const pool_asg_name = values.pool_asg_name
+                    const launch_tenancy = values.launch_tenancy
 
-                    return  this.props.onSubmit(stack_id, base_os, name, description, projects).then(result => {
+                    return this.props.onSubmit(stack_id, base_os, name, description, projects, pool_enabled, pool_asg_name, launch_tenancy).then(result => {
                         this.hideForm()
                         return Promise.resolve(result)
                     }).catch(error => {
@@ -175,7 +219,45 @@ class VirtualDesktopSoftwareStackEditForm extends Component<VirtualDesktopSoftwa
                         validate: {
                             required: true
                         }
-                    }
+                    },
+                    {
+                        name: 'launch_tenancy',
+                        title: 'Instance Launch Tenancy',
+                        description: 'Instance Launch Tenancy',
+                        data_type: 'str',
+                        param_type: 'select',
+                        choices: this.state.tenancyChoices,
+                        default: this.props.softwareStack?.launch_tenancy,
+                        validate: {
+                            required: true
+                        }
+                    },
+/*                    {
+                        name: 'pool_enabled',
+                        title: 'Warming Pool Enabled',
+                        description: 'Enable Warming Pool Behavior',
+                        data_type: 'bool',
+                        param_type: 'checkbox',
+                        default: this.props.softwareStack?.pool_enabled,
+                        validate: {
+                            required: true
+                        }
+                    },
+                    {
+                        name: 'pool_asg_name',
+                        title: 'Warming Pool ASG Name',
+                        description: 'Warming Pool ASG Name',
+                        data_type: 'str',
+                        param_type: 'text',
+                        default: this.props.softwareStack?.pool_asg_name,
+                        validate: {
+                            required: true
+                        },
+                        when: {
+                            param: 'pool_enabled',
+                            eq: true
+                        }
+                    },*/
                 ]}/>
         )
     }

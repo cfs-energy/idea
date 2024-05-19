@@ -61,7 +61,11 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 {% include '_templates/linux/mount_shared_storage.jinja2' %}
 
 if [[ ! -f ${BOOTSTRAP_DIR}/idea_preinstalled_packages.log ]]; then
+  {%- if context.base_os in ('amazonlinux2', 'centos7', 'rhel7') %}
   yum install -y deltarpm
+  {%- elif context.base_os in ('rhel8', 'rocky8') %}
+  yum install -y drpm
+  {%- endif %}
 
   {% include '_templates/linux/epel_repo.jinja2' %}
 
