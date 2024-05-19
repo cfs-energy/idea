@@ -10,7 +10,7 @@
 #  and limitations under the License.
 from enum import Enum
 from typing import Optional, Dict
-
+from pydantic import Field
 from ideadatamodel import SocaBaseModel
 from ideasdk.protocols import SocaContextProtocol
 from ideasdk.utils import Utils
@@ -43,9 +43,9 @@ class VirtualDesktopEventType(str, Enum):
 
 
 class VirtualDesktopEvent(SocaBaseModel):
-    event_group_id: Optional[str]
-    event_type: Optional[VirtualDesktopEventType]
-    detail: Optional[Dict]
+    event_group_id: Optional[str] = Field(default=None)
+    event_type: Optional[VirtualDesktopEventType] = Field(default=None)
+    detail: Optional[Dict] = Field(default=None)
 
 
 class EventsClient:

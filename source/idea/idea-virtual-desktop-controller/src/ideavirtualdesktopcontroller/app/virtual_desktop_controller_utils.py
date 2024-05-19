@@ -76,6 +76,8 @@ class VirtualDesktopControllerUtils:
         bootstrap_context.vars.session_owner = session.owner
         bootstrap_context.vars.idea_session_id = session.idea_session_id
         bootstrap_context.vars.project = session.project.name
+        bootstrap_context.vars.base_os = session.software_stack.base_os.value
+
         if session.software_stack.base_os != VirtualDesktopBaseOS.WINDOWS:
             escape_chars = '\\'
         else:
@@ -95,7 +97,7 @@ class VirtualDesktopControllerUtils:
             components=[component],
             tmp_dir=os.path.join(f'{self.context.config().get_string("shared-storage.apps.mount_dir", required=True)}', self.context.cluster_name(), self.context.module_id(), 'dcv-host-bootstrap', session.owner, f'{Utils.to_secure_filename(session.name)}-{session.idea_session_id}'),
             force_build=True,
-            base_os=session.software_stack.base_os.value,
+            base_os=str(session.software_stack.base_os.value),
             logger=self._logger
         ).build()
 
@@ -133,7 +135,7 @@ class VirtualDesktopControllerUtils:
                     }
 
         user_data_builder = BootstrapUserDataBuilder(
-            base_os=session.software_stack.base_os.value,
+            base_os=str(session.software_stack.base_os.value),
             aws_region=self.context.config().get_string('cluster.aws.region', required=True),
             bootstrap_package_uri=self._build_and_upload_bootstrap_package(session),
             install_commands=install_commands,
@@ -154,7 +156,8 @@ class VirtualDesktopControllerUtils:
             constants.IDEA_TAG_MODULE_VERSION: self.context.module_version(),
             constants.IDEA_TAG_BACKUP_PLAN: f'{self.context.cluster_name()}-{self.context.module_id()}',
             constants.IDEA_TAG_PROJECT: session.project.name,
-            constants.IDEA_TAG_DCV_SESSION_ID: 'TBD'
+            constants.IDEA_TAG_DCV_SESSION_ID: 'TBD',
+            constants.IDEA_TAG_JOB_OWNER: session.owner
         }
 
         if Utils.is_not_empty(session.project.tags):
@@ -286,7 +289,7 @@ class VirtualDesktopControllerUtils:
                     },
                     BlockDeviceMappings=[
                         {
-                            'DeviceName': Utils.get_ec2_block_device_name(session.software_stack.base_os.value),
+                            'DeviceName': Utils.get_ec2_block_device_name(str(session.software_stack.base_os.value)),
                             'Ebs': {
                                 'DeleteOnTermination': True,
                                 'VolumeSize': session.server.root_volume_size.int_val(),
@@ -491,7 +494,7 @@ class VirtualDesktopControllerUtils:
                     # we don't need GPU
                     if len(supported_gpus) > 0:
                         # this instance SHOULD NOT have GPU support, but it does.
-                        self._logger.debug(f"Instance {instance_type_name} Should not have GPU ({supported_gpus}) but it does.")
+                        self._logger.debug(f"Instance {instance_type_name} skipped - has GPU ({supported_gpus}) and stack is NO_GPU")
                         continue
                 else:
                     # we need GPU

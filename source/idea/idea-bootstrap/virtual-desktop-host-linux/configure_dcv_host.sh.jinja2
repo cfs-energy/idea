@@ -316,9 +316,10 @@ configure_dcv_agent
 configure_usb_remotization
 configure_gl
 machine=$(uname -m) #x86_64 or aarch64
-if [[ $machine == "x86_64" ]]; then
+{%- if context.vars.session.type.lower() == 'console'  %}
+  # X11 does not have to be running if you use Virtual Sessions
   start_and_validate_x_server
-fi
+{%- endif %}
 start_and_configure_dcv_service
 start_and_configure_dcv_agent_service
 

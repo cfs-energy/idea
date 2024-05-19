@@ -60,6 +60,7 @@ class Configuration(six.with_metaclass(TypeWithDefault, object)):
         # Username for HTTP basic authentication
         self.username = ""
         # Password for HTTP basic authentication
+        # noinspection HardcodedPassword
         self.password = ""
         # Logging Settings
         self.logger = {}

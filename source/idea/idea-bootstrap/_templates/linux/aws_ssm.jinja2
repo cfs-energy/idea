@@ -1,9 +1,9 @@
 # Begin: AWS Systems Manager Agent
-{%- if context.base_os in ('rhel7', 'rhel8') %}
+{%- if context.base_os in ('rhel7', 'rhel8', 'rhel9') %}
 sed -i 's/enabled=1/enabled=0/' /etc/yum/pluginconf.d/product-id.conf
 sed -i 's/enabled=1/enabled=0/' /etc/yum/pluginconf.d/subscription-manager.conf
 {%- endif %}
-{%- if context.base_os in ('amazonlinux2', 'centos7', 'rhel7', 'rhel8', 'rocky8') %}
+{%- if context.base_os in ('amazonlinux2', 'centos7', 'rhel7', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
 systemctl status amazon-ssm-agent
 if [[ "$?" != "0" ]]; then
   machine=$(uname -m)

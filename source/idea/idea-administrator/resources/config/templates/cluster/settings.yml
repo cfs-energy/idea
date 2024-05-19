@@ -1,3 +1,4 @@
+#file: noinspection YAMLDuplicatedKeys
 administrator_email: "{{administrator_email}}"
 administrator_username: "{{administrator_username}}"
 cluster_name: "{{cluster_name}}"

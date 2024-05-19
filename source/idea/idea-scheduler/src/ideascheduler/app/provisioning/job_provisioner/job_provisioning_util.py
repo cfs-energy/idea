@@ -22,7 +22,7 @@ from ideasdk.utils import Utils
 
 from ideascheduler.app.aws import EC2ServiceQuotaHelper, AwsBudgetsHelper
 from ideascheduler.app.provisioning.job_provisioner.batch_capacity_helper import BatchCapacityHelper
-
+from pydantic import Field
 from botocore.exceptions import ClientError
 from typing import Optional, List
 import arrow
@@ -31,16 +31,16 @@ import logging
 
 
 class NotEnoughReservedInstances(SocaBaseModel):
-    instance_type: Optional[str]
-    purchased_count: Optional[int]
-    instances_count: Optional[int]
-    desired_count: Optional[int]
+    instance_type: Optional[str] = Field(default=None)
+    purchased_count: Optional[int] = Field(default=None)
+    instances_count: Optional[int] = Field(default=None)
+    desired_count: Optional[int] = Field(default=None)
 
 
 class ProvisionCapacityResult(SocaBaseModel):
-    provisioned_jobs: Optional[List[SocaJob]]
-    unprovisioned_jobs: Optional[List[SocaJob]]
-    capacity_info: Optional[ProvisioningCapacityInfo]
+    provisioned_jobs: Optional[List[SocaJob]] = Field(default=None)
+    unprovisioned_jobs: Optional[List[SocaJob]] = Field(default=None)
+    capacity_info: Optional[ProvisioningCapacityInfo] = Field(default=None)
 
 
 class JobProvisioningUtil:

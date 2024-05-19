@@ -47,8 +47,7 @@ package_config:
 
   linux_packages:
     application:
-      # Extra package to install on Scheduler host, including OpenPBS dependencies
-      - dejavu-fonts-common
+      # Extra package to install on Scheduler host, including OpenPBS dependencies installed on all Linux OS
       - dejavu-sans-fonts
       - fontconfig
       - fontpackages-filesystem
@@ -92,6 +91,14 @@ package_config:
       - automake
       - stress
 
+    application_7:
+      # Additional packages required for ALI2, centos7, rhel7, and rocky7
+      - dejavu-fonts-common
+
+    application_8:
+      # Additional packages required for rhel8, and rocky8
+      - dejavu-fonts-common
+
     dcv_amazonlinux:
       # List of packages to install when using Mate Desktop
       - gdm
@@ -115,8 +122,7 @@ package_config:
       - openldap-clients
 
     openldap_server:
-      # OpenLDAP Server and dependencies
-      - compat-openldap
+      # OpenLDAP Server and dependencies installed on all Linux OS
       - cyrus-sasl
       - cyrus-sasl-devel
       - openldap
@@ -125,8 +131,21 @@ package_config:
       - unixODBC
       - unixODBC-devel
 
+    openldap_server_7:
+      # Additional packages required for amazonlinux2, centos7, rhel7, and rocky7
+      - compat-openldap
+
+    openldap_server_8:
+      # Additional packages required for rhel8, and rocky8
+      - compat-openldap
+
+    openldap_server_9:
+      # Additional packages required for rhel9, and rocky9
+      - openldap-compat
+
+
     sssd:
-      # SSSD and dependencies
+      # SSSD and dependencies installed on all Linux OS
       - adcli
       - avahi-libs
       - bind-libs
@@ -169,10 +188,11 @@ package_config:
       - sssd-ldap
       - sssd-proxy
     sssd_7:
-      # SSSD and dependencies for rhel7, centos7, and amazonlinux2
+      # Additional packages required for rhel7, centos7, and amazonlinux2
       - python-sssdconfig
+
     system:
-      # Default packages installed on all Linux systems
+      # Default packages installed on all Linux OS
       - chrony
       - cpp
       - e2fsprogs
@@ -266,7 +286,6 @@ package_config:
       - perl-threads-shared
       - quota
       - quota-nls
-      - redhat-lsb
       - rpcbind
       - sqlite-devel
       - nss-pam-ldapd
@@ -275,16 +294,25 @@ package_config:
       - wget
       - zlib
       - zlib-devel
+
     system_7:
-      # Default packages required for rhel7, centos7, and amazonlinux2
+      # Additional packages required for rhel7, centos7, and amazonlinux2
       - libverto-tevent
       - libselinux-python
+      - redhat-lsb
       - system-lsb
       - libquadmath
       - libquadmath-devel
+
     system_8:
-      # Default packages required for rhel8, and rocky8
+      # Additional packages required for rhel8, and rocky8
+      - redhat-lsb
       - ec2-hibinit-agent
+
+    system_9:
+      # Additional packages required for rhel9, rocky9
+      - ec2-hibinit-agent
+
 
     # used by cluster-manager to convert .pem files to .ppk files
     putty:
@@ -301,9 +329,9 @@ package_config:
     checksum: "ca1bff69624909f16fb6c240cddb7b44236de616dfb6dd68d26cb264654e737457e265c61a78b7e42ec4832cfd6d48a5"
     checksum_method: sha384
   python:
-    version: "3.9.16"
-    url: "https://www.python.org/ftp/python/3.9.16/Python-3.9.16.tgz"
-    checksum: "87acee12323b63a2e0c368193c03fd57e008585c754b6bceec6d5ec4c0bc34b3bb1ff20f31b6f5aff6e02502e7f5b291"
+    version: "3.9.18"
+    url: "https://www.python.org/ftp/python/3.9.18/Python-3.9.18.tgz"
+    checksum: "f713544332479d7fa7080db780703d7728b6002ba23b77885fa87922fab1ce3ee8316900c7de49b502b8624adcffb097"
     checksum_method: sha384
 
   {%- if metrics_provider and 'prometheus' in metrics_provider %}
@@ -329,9 +357,9 @@ package_config:
     checksum: "7e0648a2af37f8d5d18d8a38cb424754476dbbf2a62c9bd573eaec4195e586e8c49b4436246e2a0bd0a181682680d290"
     checksum_method: sha384
   openpbs:
-    version: "22.05.11"
-    url: "https://github.com/openpbs/openpbs/archive/v22.05.11.tar.gz"
-    checksum: "b1516586af058b3b52074fbc8e7849243ff983c58baff9a39e4d80d8e8c960e4c4cef1ae063b9729aea87fe5c52ca193"
+    version: "23.06.06"
+    url: "https://github.com/openpbs/openpbs/archive/v23.06.06.tar.gz"
+    checksum: "8a4d7f9c326fd1de5c103e700422bc4d49edc9d50f142c033e9e7de8d10d52f5c4f92e902e107b8e89d3e12c147ebef4"
     checksum_method: sha384
     # can be release or dev. if dev, sources will be cloned from github and installed for the configured release version.
     # additional customizations can be implemented in idea-bootstrap/_templates/linux/openpbs.jinja2
@@ -368,6 +396,13 @@ package_config:
             tgz: nice-dcv-2023.0-15065-el8-x86_64.tgz
             url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.0/Servers/nice-dcv-2023.0-15065-el8-x86_64.tgz
             sha256sum: 5d5c130ed98976b513d232a20843e240dec6eb05eb669fe97441426afc49d8a5
+          {%- endif %}
+          {%- if 'rhel9' in supported_base_os or 'centos9' in supported_base_os or 'rocky9' in supported_base_os %}
+          rhel_centos_rocky9:
+            version: 2023.0-15487-el9-x86_64
+            tgz: nice-dcv-2023.0-15487-el9-x86_64.tgz
+            url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.0/Servers/nice-dcv-2023.0-15487-el9-x86_64.tgz
+            sha256sum: eb906f41b0a064005499ab6a1be42c8d218a3fbaf9444cb907990aa6171bdea4
           {%- endif %}
           {%- if 'suse12' in supported_base_os %}
           suse12:
@@ -421,6 +456,13 @@ package_config:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.0/Servers/nice-dcv-2023.0-15065-el8-aarch64.tgz
             sha256sum: f02dc49a8eaa9799eea921b7557c564362ac79734ae65c1d8b26c0f8c9fd1574
           {%- endif %}
+          {%- if 'rhel9' in supported_base_os or 'centos9' in supported_base_os or 'rocky9' in supported_base_os %}
+          rhel_centos_rocky9:
+            version: 2023.0-15487-el9-aarch64
+            tgz: nice-dcv-2023.0-15487-el9-aarch64.tgz
+            url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.0/Servers/nice-dcv-2023.0-15487-el9-aarch64.tgz
+            sha256sum: 07148327f30dae656b338e24102945830601e85df4e135029b624df1e9ee3c2e
+          {%- endif %}
         ubuntu:
           {%- if 'ubuntu1804' in supported_base_os %}
           ubuntu1804:
@@ -455,6 +497,12 @@ package_config:
             version: 2023.0.675-1.el8.x86_64
             url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.0/SessionManagerAgents/nice-dcv-session-manager-agent-2023.0.675-1.el8.x86_64.rpm
             sha256sum: 83474440d5d230d97d4a435dc6ab9b385f13428a01e5d0ebb00f282ae7c38829
+          {%- endif %}
+          {%- if 'rhel9' in supported_base_os or 'centos9' in supported_base_os or 'rocky9' in supported_base_os %}
+          rhel_centos_rocky9:
+            version: 2023.0.675-1.el9.x86_64
+            url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.0/SessionManagerAgents/nice-dcv-session-manager-agent-2023.0.675-1.el9.x86_64.rpm
+            sha256sum: 4e626ff059c5b9a5a83576bcd9b9f1402d434babfe6dc8757669b59cebe4fe56
           {%- endif %}
           {%- if 'suse12' in supported_base_os %}
           suse12:
@@ -501,6 +549,12 @@ package_config:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.0/SessionManagerAgents/nice-dcv-session-manager-agent-2023.0.675-1.el8.aarch64.rpm
             sha256sum: 584349bb6ba1db4b595aa36fa5a72f040e475d52c637ce1111274553ad9157f3
           {%- endif %}
+          {%- if 'rhel9' in supported_base_os or 'centos9' in supported_base_os or 'rocky9' in supported_base_os %}
+          rhel_centos_rocky9:
+            version: 2023.0.675-1.el9.aarch64
+            url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.0/SessionManagerAgents/nice-dcv-session-manager-agent-2023.0.675-1.el9.aarch64.rpm
+            sha256sum: 728d50ca0cbe582d9c29531333f8fc3f2d144b20366fa00f1d68a8f996b10062
+          {%- endif %}
         ubuntu:
           {%- if 'ubuntu1804' in supported_base_os %}
           ubuntu1804:
@@ -528,6 +582,12 @@ package_config:
             version: 2023.0.531-1.el8.x86_64
             url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.0/Gateway/nice-dcv-connection-gateway-2023.0.531-1.el8.x86_64.rpm
             sha256sum: 67a71866996f1bd32b22d9cadb695ca357d165270e2d4373e5d4c9e2a56cb974
+          {%- endif %}
+          {%- if 'rhel9' in supported_base_os or 'centos9' in supported_base_os or 'rocky9' in supported_base_os %}
+          rhel_centos_rocky9:
+            version: 2023.0.531-1.el9.x86_64
+            url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.0/Gateway/nice-dcv-connection-gateway-2023.0.531-1.el9.x86_64.rpm
+            sha256sum: b58748fc3f726c6073c3c6d82688d5360e05a0d42244f420ba3ba9bdb92b0655
           {%- endif %}
         ubuntu:
           {%- if 'ubuntu1804' in supported_base_os %}
@@ -595,6 +655,12 @@ package_config:
           url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.0/SessionManagerBrokers/nice-dcv-session-manager-broker-2023.0.392-1.el8.noarch.rpm
           sha256sum: 5fc81cbc697f944c67127b529c620789f555fdc2585b07040a77c72ac0927f95
         {%- endif %}
+        {%- if 'rhel9' in supported_base_os or 'centos9' in supported_base_os or 'rocky9' in supported_base_os %}
+        rhel_centos_rocky9:
+          version: 2023.0.392-1.el9.noarch
+          url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.0/SessionManagerBrokers/nice-dcv-session-manager-broker-2023.0.392-1.el9.noarch.rpm
+          sha256sum: 97fd73bce10700c419902df6200890ad07d4d637aacc063b59ea9b4dfca58da1
+        {%- endif %}
       ubuntu:
         {%- if 'ubuntu1804' in supported_base_os %}
         ubuntu1804:
@@ -636,6 +702,9 @@ package_config:
         rhel_centos_rocky8:
           label: RHEL 8 | CentOS 8 | Rocky Linux 8
           url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.0/Clients/nice-dcv-viewer-2023.0.5483-1.el8.x86_64.rpm
+        rhel_centos_rocky9:
+          label: RHEL 9 | CentOS 9 | Rocky Linux 9
+          url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.0/Clients/nice-dcv-viewer-2023.0.5629-1.el9.x86_64.rpm
         suse15:
           label: SUSE Enterprise Linux 15
           url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.0/Clients/nice-dcv-viewer-2023.0.5483-1.sles15.x86_64.rpm
@@ -658,8 +727,8 @@ gpu_settings:
   amd:
     s3_bucket_url: "https://ec2-amd-linux-drivers.s3.amazonaws.com"
     s3_bucket_path: "s3://ec2-amd-linux-drivers/latest/"
-    rhel_rocky8_installer_url: "https://repo.radeon.com/amdgpu-install/23.10.1/rhel/8.8/amdgpu-install-5.5.50501-1.el8.noarch.rpm"
-
+    rhel_rocky8_installer_url: "https://repo.radeon.com/amdgpu-install/23.20/rhel/8.8/amdgpu-install-5.7.50700-1.el8.noarch.rpm"
+    rhel_rocky9_installer_url: "https://repo.radeon.com/amdgpu-install/23.20/rhel/9.2/amdgpu-install-5.7.50700-1.el9.noarch.rpm"
   instance_families:
   - p2
   - p3
@@ -674,8 +743,8 @@ gpu_settings:
   - g4dn
   - g4ad
   nvidia_public_driver_versions:
-    ltsb_version: &ltsb_version 470.141.03
-    production_version: &production_version 525.105.17
+    ltsb_version: &ltsb_version 470.199.02
+    production_version: &production_version 535.104.05
     p2: *ltsb_version
     g2: *ltsb_version
     g3: *production_version

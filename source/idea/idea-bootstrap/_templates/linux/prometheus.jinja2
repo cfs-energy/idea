@@ -1,5 +1,5 @@
 # Begin: Install Prometheus
-{%- if context.base_os in ('amazonlinux2', 'centos7', 'rhel7', 'rhel8', 'rocky8') %}
+{%- if context.base_os in ('amazonlinux2', 'centos7', 'rhel7', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
 PROMETHEUS_AMD64_URL="{{ context.config.get_string('global-settings.package_config.prometheus.installer.linux.x86_64', required=True) }}"
 PROMETHEUS_ARM64_URL="{{ context.config.get_string('global-settings.package_config.prometheus.installer.linux.aarch64', required=True) }}"
 function install_prometheus () {

@@ -29,7 +29,8 @@ from ideadatamodel.auth import (
 )
 from ideadatamodel.filesystem import (
     ReadFileResult,
-    TailFileResult
+    TailFileResult,
+    SaveFileRequest
 )
 
 from ideasdk.app import SocaAppAPI
@@ -65,6 +66,7 @@ class ClusterManagerApiInvoker(ApiInvokerProtocol):
     def get_token_service(self) -> Optional[TokenService]:
         return self._context.token_service
 
+    # noinspection HardcodedPassword
     def get_request_logging_payload(self, context: ApiInvocationContext) -> Optional[Dict]:
         namespace = context.namespace
 
@@ -107,6 +109,13 @@ class ClusterManagerApiInvoker(ApiInvokerProtocol):
             payload = context.get_request_payload_as(CreateUserRequest)
             if payload.user is not None and Utils.is_not_empty(payload.user.password):
                 payload.user.password = '*****'
+            request['payload'] = Utils.to_dict(payload)
+            return request
+        elif namespace == 'FileBrowser.SaveFile':
+            request = context.get_request(deep_copy=True)
+            payload = context.get_request_payload_as(SaveFileRequest)
+            if payload.content is not None and Utils.is_not_empty(payload.content):
+                payload.content = '*****'
             request['payload'] = Utils.to_dict(payload)
             return request
 

@@ -77,6 +77,7 @@ class ComputeNodeAmiBuilder:
             # do not associate name with any specific cluster as generated ami is cluster agnostic
             ami_name = f'idea-compute-node-{base_os}'
         if Utils.is_empty(ami_version):
+            # noinspection StrFormat
             ami_version = arrow.get().format('MMDDYYYY-HHmmss')
 
         # instance type

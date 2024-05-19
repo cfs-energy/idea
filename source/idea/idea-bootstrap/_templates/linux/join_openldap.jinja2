@@ -97,7 +97,7 @@ authconfig --enablesssd \
            --enablecachecreds \
            --updateall
 {%- endif %}
-{%- if context.base_os in ('rhel8', 'rocky8') %}
+{%- if context.base_os in ('rhel8','rhel9', 'rocky8', 'rocky9') %}
 openssl rehash /etc/openldap/cacerts
 
 systemctl stop sssd

@@ -158,14 +158,14 @@ class AWSUtil(AWSUtilProtocol):
 
     def get_instance_types_for_class(self, instance_class: str) -> List[str]:
         if instance_class == 'HighMem':
-            token = 'u-'
+            _token = 'u-'
         else:
-            token = instance_class.lower()
+            _token = instance_class.lower()
 
         result = []
         all_instance_types = self.get_all_instance_types()
         for instance_type in all_instance_types:
-            if instance_type.startswith(token):
+            if instance_type.startswith(_token):
                 result.append(instance_type)
 
         return result
@@ -182,6 +182,10 @@ class AWSUtil(AWSUtilProtocol):
                 return False
             else:
                 raise e
+
+    def get_instance_efa_max_interfaces_supported(self, instance_type: str) -> int:
+        ec2_instance_type = self.get_ec2_instance_type(instance_type=instance_type)
+        return ec2_instance_type.network_info_efa_info_max_efa_interfaces
 
     def is_instance_type_efa_supported(self, instance_type: str) -> bool:
         ec2_instance_type = self.get_ec2_instance_type(instance_type=instance_type)

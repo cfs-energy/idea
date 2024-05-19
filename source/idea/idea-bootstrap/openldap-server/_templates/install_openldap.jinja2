@@ -14,8 +14,18 @@ DS_TLS_PRIVATE_KEY=$(get_secret "${LDAP_TLS_PRIVATE_KEY_SECRET_ARN}")
 
 log_info "Installing LDAP packages ..."
 OPENLDAP_SERVER_PKGS=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.openldap_server', required=True)) }})
+OPENLDAP_SERVER_PKGS_7=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.openldap_server_7', required=True)) }})
+OPENLDAP_SERVER_PKGS_8=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.openldap_server_8', required=True)) }})
+OPENLDAP_SERVER_PKGS_9=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.openldap_server_9', required=True)) }})
 
-yum install -y ${OPENLDAP_SERVER_PKGS[*]}
+{%- if context.base_os in ('amazonlinux2', 'centos7', 'rhel7') %}
+  yum install -y $(echo ${OPENLDAP_SERVER_PKGS[*]} ${OPENLDAP_SERVER_PKGS_7[*]})
+{%- elif context.base_os in ('rhel8', 'rocky8') %}
+  dnf install -y $(echo ${OPENLDAP_SERVER_PKGS[*]} ${OPENLDAP_SERVER_PKGS_8[*]})
+{%- elif context.base_os in ('rhel9', 'rocky9') %}
+  dnf install -y $(echo ${OPENLDAP_SERVER_PKGS[*]} ${OPENLDAP_SERVER_PKGS_9[*]})
+{%- endif %}
+
 
 if [[ -f "/etc/openldap/ldap.conf" ]]; then
   cp /etc/openldap/ldap.conf /etc/openldap/ldap.conf.orig

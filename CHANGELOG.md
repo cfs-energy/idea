@@ -4,6 +4,58 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.6] - 2023-10-20
+
+### Features
+
+* Create all EFA interfaces for instances that support multiple-EFA interfaces (when an HPC job sets `enable_efa` to `True`)
+* Added support for `Red Hat Enterprise Linux 9.2` and `Rocky Linux 9.2` as supported operating systems for VDI and compute nodes.
+  * **NOTE:** Subscription to `Rocky Linux 9` in AWS Marketplace (https://aws.amazon.com/marketplace/pp/prodview-ygp66mwgbl2ii) is required to access Rocky Linux AMIs.
+  * `Red Hat Enterprise Linux 9.2` and `Rocky Linux 9.2` are not currently supported as installation / infrastructure nodes.
+
+
+### Changes
+* Improvements to Active Directory join process for Windows eVDI sessions.
+  * Improved debug logging for troubleshooting
+  * Add minimum floor of `3` seconds to wait before attempting AD join
+  * Auto-retry eVDI Active Directory process to reduce the chance of a join failure in busy environments
+  * Active Directory join timers are now controlled with new configuration options
+    * `directoryservice.ad_automation.ad_join_min_sleep` - The minimum sleep interval before attempting join (per loop)
+    * `directoryservice.ad_automation.ad_join_max_sleep` - The maximum sleep interval before attempting join (per loop)
+    * `directoryservice.ad_automation.ad_join_retry_count` - The retry count (loop count) to attempt Active Directory joins
+  * Allow the `cluster-manager` to supply an `OU` and `hostname` back to the joining client.
+    * This can be used to move `hostname` generation logic and `OU` sorting to `cluster-manager` (customizations required)
+    * Auto-rename the host on AD join when `cluster-manager` supplied hostname differs from the hostname
+* Dashes (`-`) are now allowed in IDEA usernames
+  * Dashes are not permitted at the start or end of a username, or appearing consecutively
+* `cluster-manager` will now mask the content of the API request `FileBrowser.SaveFile` (used when editing/saving a file in the browser)
+* NICE DCV historic session information from the internal API is available for up to `1-hour` after the DCV server has been removed
+* NICE DCV servers can be purged from API responses after being unreachable for `900` seconds
+* Update NVIDIA GPU drivers used during installation
+  * LTSB from `470.141.03` to `470.199.02`
+  * Production `525.105.17` to `535.104.05`
+* Update OpenPBS Scheduler from `v22.05.11` to `v23.06.06`
+* Update Python from `3.9.16` to `3.9.18`
+* Update AWS CDK from `2.93.0` to `2.95.1`
+* Updated boto3 from `1.28.12` to `1.28.44`
+* Update all Classes to be compatible with `Pydantic v2`
+* Update OpenAPI spec to `3.1.0`
+* Update swagger links to newer OpenAPI (`3.1.0`) compatible versions
+* Allow `VDC Controller` IAM permissions for Auto Scaling Groups
+* Misc 3rd party package updates
+
+### Bug Fixes
+* In the File browser right-click / context menu - the `Open Selection` action didn't open the file.
+* Updated installer policies for missing IAM permissions
+* AWS tag `JobOwner` was not being set for eVDI sessions. This has been fixed.
+* Misc PEP cleanups
+
+
+### Known Caveats
+* FSxL is not supported on Rocky9 and RHEL9
+* EFA is not supported on RHEL9
+* RHEL9 / Rocky9 is not able to be used as infrastructure nodes (IDEA/NICE DCV application nodes)
+
 
 ## [3.1.5] - 2023-09-06
 
@@ -38,7 +90,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Restore ability to have spaces in the Project `title`
 * During `GovCloud` installation - display a list of AWS profiles for the commercial profile versus requiring the user to type it in.
 * Correct a defect that was not allowing the selection of Tenancy Choices for a Software stack.
-* Improve eVDI subnet retry logic for both Capacity exceptions abd Unsupported Instance exceptions
+* Improve eVDI subnet retry logic for both Capacity exceptions and Unsupported Instance exceptions
 * OpenSearch domains that were not completely deployed were being listed during `idea-admin.sh config generate --existing-resources`
 * When generating a stack from a session - make sure to copy the minimum storage and projects from the session. This should restore the ability to create stacks from existing sessions.
 * Fixed WebUI modal for Session Sharing permissions appearing with a dark blue header no matter what the selected theme is

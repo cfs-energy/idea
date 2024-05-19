@@ -15,7 +15,6 @@ import orjson
 import hashlib
 from decimal import Decimal
 from pydantic import BaseModel
-from pydantic.generics import GenericModel
 
 T = TypeVar('T')
 TRUE_VALUES = ('true', 'yes', 'y', '1')
@@ -425,11 +424,11 @@ class ModelUtils:
 
     @staticmethod
     def to_json(payload: Union[BaseModel, Any], indent=False) -> str:
-        if isinstance(payload, BaseModel) or isinstance(payload, GenericModel):
+        if isinstance(payload, BaseModel):
             if indent:
-                return payload.json(exclude_none=True, by_alias=True, indent=2)
+                return payload.model_dump_json(exclude_none=True, by_alias=True, indent=2)
             else:
-                return payload.json(exclude_none=True, by_alias=True)
+                return payload.model_dump_json(exclude_none=True, by_alias=True)
         else:
             if indent:
                 return ModelUtils.from_bytes(orjson.dumps(payload, option=orjson.OPT_INDENT_2, default=json_serializer))

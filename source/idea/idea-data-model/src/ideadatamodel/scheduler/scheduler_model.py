@@ -73,6 +73,7 @@ from ideadatamodel import (
 from ideadatamodel.model_utils import ModelUtils
 
 from typing import Optional, List, Dict, Tuple, Any, Set, Union
+from pydantic import Field
 from enum import Enum
 import hashlib
 import os
@@ -109,9 +110,9 @@ class SocaJobPlacementSharing(str, Enum):
 
 
 class SocaJobPlacement(SocaBaseModel):
-    arrangement: Optional[SocaJobPlacementArrangement]
-    sharing: Optional[SocaJobPlacementSharing]
-    grouping: Optional[str]
+    arrangement: Optional[SocaJobPlacementArrangement] = Field(default=None)
+    sharing: Optional[SocaJobPlacementSharing] = Field(default=None)
+    grouping: Optional[str] = Field(default=None)
 
 
 class SocaSpotAllocationStrategy(str, Enum):
@@ -159,14 +160,14 @@ class SocaSpotAllocationStrategy(str, Enum):
 
 
 class SocaFSxLustreConfig(SocaBaseModel):
-    enabled: Optional[bool]
-    existing_fsx: Optional[str]
-    s3_backend: Optional[str]
-    import_path: Optional[str]
-    export_path: Optional[str]
-    deployment_type: Optional[str]
-    per_unit_throughput: Optional[int]
-    size: Optional[SocaMemory]
+    enabled: Optional[bool] = Field(default=None)
+    existing_fsx: Optional[str] = Field(default=None)
+    s3_backend: Optional[str] = Field(default=None)
+    import_path: Optional[str] = Field(default=None)
+    export_path: Optional[str] = Field(default=None)
+    deployment_type: Optional[str] = Field(default=None)
+    per_unit_throughput: Optional[int] = Field(default=None)
+    size: Optional[SocaMemory] = Field(default=None)
 
     def as_job_submit_params(self) -> Dict:
         result = {}
@@ -224,60 +225,60 @@ class SocaFSxLustreConfig(SocaBaseModel):
 
 
 class SocaJobLicenseAsk(SocaBaseModel):
-    name: Optional[str]
-    count: Optional[int]
+    name: Optional[str] = Field(default=None)
+    count: Optional[int] = Field(default=None)
 
 
 class SocaJobParams(SocaBaseModel):
-    nodes: Optional[int]
-    cpus: Optional[int]
-    memory: Optional[SocaMemory]
-    gpus: Optional[int]
-    mpiprocs: Optional[int]
-    walltime: Optional[str]
-    base_os: Optional[str]
-    instance_ami: Optional[str]
-    instance_types: Optional[List[str]]
-    force_reserved_instances: Optional[bool]
-    spot: Optional[bool]
-    spot_price: Optional[SocaAmount]
-    spot_allocation_count: Optional[int]
-    spot_allocation_strategy: Optional[SocaSpotAllocationStrategy]
-    subnet_ids: Optional[List[str]]
-    security_groups: Optional[List[str]]
-    instance_profile: Optional[str]
-    keep_ebs_volumes: Optional[bool]
-    root_storage_size: Optional[SocaMemory]
-    enable_scratch: Optional[bool]
-    scratch_provider: Optional[str]
-    scratch_storage_size: Optional[SocaMemory]
-    scratch_storage_iops: Optional[int]
-    fsx_lustre: Optional[SocaFSxLustreConfig]
-    enable_instance_store: Optional[bool]
-    enable_efa_support: Optional[bool]
-    enable_ht_support: Optional[bool]
-    enable_placement_group: Optional[bool]
-    enable_system_metrics: Optional[bool]
-    enable_anonymous_metrics: Optional[bool]
-    licenses: Optional[List[SocaJobLicenseAsk]]
-    compute_stack: Optional[str]
-    stack_id: Optional[str]
-    job_group: Optional[str]
-    job_started_email_template: Optional[str]
-    job_completed_email_template: Optional[str]
-    custom_params: Optional[Dict[str, Optional[str]]]
+    nodes: Optional[int] = Field(default=None)
+    cpus: Optional[int] = Field(default=None)
+    memory: Optional[SocaMemory] = Field(default=None)
+    gpus: Optional[int] = Field(default=None)
+    mpiprocs: Optional[int] = Field(default=None)
+    walltime: Optional[str] = Field(default=None)
+    base_os: Optional[str] = Field(default=None)
+    instance_ami: Optional[str] = Field(default=None)
+    instance_types: Optional[List[str]] = Field(default=None)
+    force_reserved_instances: Optional[bool] = Field(default=None)
+    spot: Optional[bool] = Field(default=None)
+    spot_price: Optional[SocaAmount] = Field(default=None)
+    spot_allocation_count: Optional[int] = Field(default=None)
+    spot_allocation_strategy: Optional[SocaSpotAllocationStrategy] = Field(default=None)
+    subnet_ids: Optional[List[str]] = Field(default=None)
+    security_groups: Optional[List[str]] = Field(default=None)
+    instance_profile: Optional[str] = Field(default=None)
+    keep_ebs_volumes: Optional[bool] = Field(default=None)
+    root_storage_size: Optional[SocaMemory] = Field(default=None)
+    enable_scratch: Optional[bool] = Field(default=None)
+    scratch_provider: Optional[str] = Field(default=None)
+    scratch_storage_size: Optional[SocaMemory] = Field(default=None)
+    scratch_storage_iops: Optional[int] = Field(default=None)
+    fsx_lustre: Optional[SocaFSxLustreConfig] = Field(default=None)
+    enable_instance_store: Optional[bool] = Field(default=None)
+    enable_efa_support: Optional[bool] = Field(default=None)
+    enable_ht_support: Optional[bool] = Field(default=None)
+    enable_placement_group: Optional[bool] = Field(default=None)
+    enable_system_metrics: Optional[bool] = Field(default=None)
+    enable_anonymous_metrics: Optional[bool] = Field(default=None)
+    licenses: Optional[List[SocaJobLicenseAsk]] = Field(default=None)
+    compute_stack: Optional[str] = Field(default=None)
+    stack_id: Optional[str] = Field(default=None)
+    job_group: Optional[str] = Field(default=None)
+    job_started_email_template: Optional[str] = Field(default=None)
+    job_completed_email_template: Optional[str] = Field(default=None)
+    custom_params: Optional[Dict[str, Optional[str]]] = Field(default=None)
 
 
 class SocaInstanceTypeOptions(SocaBaseModel):
-    name: Optional[str]
-    weighted_capacity: Optional[int]
-    cpu_options_supported: Optional[bool]
-    default_core_count: Optional[int]
-    default_vcpu_count: Optional[int]
-    default_threads_per_core: Optional[int]
-    threads_per_core: Optional[int]
-    memory: Optional[SocaMemory]
-    ebs_optimized: Optional[bool]
+    name: Optional[str] = Field(default=None)
+    weighted_capacity: Optional[int] = Field(default=None)
+    cpu_options_supported: Optional[bool] = Field(default=None)
+    default_core_count: Optional[int] = Field(default=None)
+    default_vcpu_count: Optional[int] = Field(default=None)
+    default_threads_per_core: Optional[int] = Field(default=None)
+    threads_per_core: Optional[int] = Field(default=None)
+    memory: Optional[SocaMemory] = Field(default=None)
+    ebs_optimized: Optional[bool] = Field(default=None)
 
 
 class SocaJobProvisioningOptions(SocaBaseModel):
@@ -292,36 +293,36 @@ class SocaJobProvisioningOptions(SocaBaseModel):
     If any of these values can be potentially be submitted by the user during job submission,
     these values must be pulled up to JobParams.
     """
-    keep_forever: Optional[bool]
-    terminate_when_idle: Optional[int]
-    ebs_optimized: Optional[bool]
-    spot_fleet_iam_role_arn: Optional[str]
-    compute_fleet_instance_profile_arn: Optional[str]
-    apps_fs_dns: Optional[str]
-    apps_fs_provider: Optional[str]
-    data_fs_dns: Optional[str]
-    data_fs_provider: Optional[str]
-    es_endpoint: Optional[str]
-    stack_uuid: Optional[str]
-    s3_bucket: Optional[str]
-    s3_bucket_install_folder: Optional[str]
-    scheduler_private_dns: Optional[str]
-    scheduler_tcp_port: Optional[int]
-    ssh_key_pair: Optional[str]
-    auth_provider: Optional[str]
-    tags: Optional[Dict[str, str]]
-    anonymous_metrics_lambda_arn: Optional[str]
-    instance_types: Optional[List[SocaInstanceTypeOptions]]
+    keep_forever: Optional[bool] = Field(default=None)
+    terminate_when_idle: Optional[int] = Field(default=None)
+    ebs_optimized: Optional[bool] = Field(default=None)
+    spot_fleet_iam_role_arn: Optional[str] = Field(default=None)
+    compute_fleet_instance_profile_arn: Optional[str] = Field(default=None)
+    apps_fs_dns: Optional[str] = Field(default=None)
+    apps_fs_provider: Optional[str] = Field(default=None)
+    data_fs_dns: Optional[str] = Field(default=None)
+    data_fs_provider: Optional[str] = Field(default=None)
+    es_endpoint: Optional[str] = Field(default=None)
+    stack_uuid: Optional[str] = Field(default=None)
+    s3_bucket: Optional[str] = Field(default=None)
+    s3_bucket_install_folder: Optional[str] = Field(default=None)
+    scheduler_private_dns: Optional[str] = Field(default=None)
+    scheduler_tcp_port: Optional[int] = Field(default=None)
+    ssh_key_pair: Optional[str] = Field(default=None)
+    auth_provider: Optional[str] = Field(default=None)
+    tags: Optional[Dict[str, str]] = Field(default=None)
+    anonymous_metrics_lambda_arn: Optional[str] = Field(default=None)
+    instance_types: Optional[List[SocaInstanceTypeOptions]] = Field(default=None)
 
 
 class SocaJobEstimatedBOMCostLineItem(SocaBaseModel):
-    title: Optional[str]
-    service: Optional[str]
-    product: Optional[str]
-    quantity: Optional[float]
-    unit: Optional[str]
-    unit_price: Optional[SocaAmount]
-    total_price: Optional[SocaAmount]
+    title: Optional[str] = Field(default=None)
+    service: Optional[str] = Field(default=None)
+    product: Optional[str] = Field(default=None)
+    quantity: Optional[float] = Field(default=None)
+    unit: Optional[str] = Field(default=None)
+    unit_price: Optional[SocaAmount] = Field(default=None)
+    total_price: Optional[SocaAmount] = Field(default=None)
 
     def replace(self, with_: 'SocaJobEstimatedBOMCostLineItem'):
         self.title = with_.title
@@ -341,11 +342,11 @@ class SocaJobEstimatedBOMCostLineItem(SocaBaseModel):
 
 
 class SocaJobEstimatedBOMCost(SocaBaseModel):
-    line_items: Optional[List[SocaJobEstimatedBOMCostLineItem]]
-    line_items_total: Optional[SocaAmount]
-    savings: Optional[List[SocaJobEstimatedBOMCostLineItem]]
-    savings_total: Optional[SocaAmount]
-    total: Optional[SocaAmount]
+    line_items: Optional[List[SocaJobEstimatedBOMCostLineItem]] = Field(default=None)
+    line_items_total: Optional[SocaAmount] = Field(default=None)
+    savings: Optional[List[SocaJobEstimatedBOMCostLineItem]] = Field(default=None)
+    savings_total: Optional[SocaAmount]  = Field(default=None)
+    total: Optional[SocaAmount] = Field(default=None)
 
     def _compute_total(self):
 
@@ -602,27 +603,27 @@ class SocaScalingMode(str, Enum):
 
 
 class SocaJobExecutionResourcesUsed(SocaBaseModel):
-    cpu_time_secs: Optional[int]
-    memory: Optional[SocaMemory]
-    virtual_memory: Optional[SocaMemory]
-    cpus: Optional[int]
-    gpus: Optional[int]
-    cpu_percent: Optional[int]
+    cpu_time_secs: Optional[int] = Field(default=None)
+    memory: Optional[SocaMemory] = Field(default=None)
+    virtual_memory: Optional[SocaMemory] = Field(default=None)
+    cpus: Optional[int] = Field(default=None)
+    gpus: Optional[int] = Field(default=None)
+    cpu_percent: Optional[int] = Field(default=None)
     # todo - add additional resources after further testing.
 
 
 class SocaJobExecutionRun(SocaBaseModel):
-    run_id: Optional[str]
-    start: Optional[datetime]
-    end: Optional[datetime]
-    exit_code: Optional[int]
-    status: Optional[str]
-    resources_used: Optional[SocaJobExecutionResourcesUsed]
+    run_id: Optional[str] = Field(default=None)
+    start: Optional[datetime] = Field(default=None)
+    end: Optional[datetime] = Field(default=None)
+    exit_code: Optional[int] = Field(default=None)
+    status: Optional[str] = Field(default=None)
+    resources_used: Optional[SocaJobExecutionResourcesUsed] = Field(default=None)
 
 
 class SocaJobExecution(SocaBaseModel):
-    run_count: Optional[int]
-    runs: Optional[List[SocaJobExecutionRun]]
+    run_count: Optional[int] = Field(default=None)
+    runs: Optional[List[SocaJobExecutionRun]] = Field(default=None)
 
     def get_or_create_run(self, run_id: str) -> Optional[SocaJobExecutionRun]:
         if self.runs is None:
@@ -646,62 +647,62 @@ class SocaJobExecution(SocaBaseModel):
 
 
 class SocaJobExecutionHost(SocaBaseModel):
-    host: Optional[str]
-    instance_id: Optional[str]
-    instance_type: Optional[str]
-    capacity_type: Optional[SocaCapacityType]
-    tenancy: Optional[str]
-    reservation: Optional[str]
-    execution: Optional[SocaJobExecution]
+    host: Optional[str] = Field(default=None)
+    instance_id: Optional[str] = Field(default=None)
+    instance_type: Optional[str] = Field(default=None)
+    capacity_type: Optional[SocaCapacityType] = Field(default=None)
+    tenancy: Optional[str] = Field(default=None)
+    reservation: Optional[str] = Field(default=None)
+    execution: Optional[SocaJobExecution] = Field(default=None)
 
 
 class SocaJobNotifications(SocaBaseModel):
-    started: Optional[bool]
-    completed: Optional[bool]
-    subjobs: Optional[bool]
-    job_started_email_template: Optional[str]
-    job_completed_email_template: Optional[str]
+    started: Optional[bool] = Field(default=None)
+    completed: Optional[bool] = Field(default=None)
+    subjobs: Optional[bool] = Field(default=None)
+    job_started_email_template: Optional[str] = Field(default=None)
+    job_completed_email_template: Optional[str] = Field(default=None)
 
 
 class SocaJobEstimatedBudgetUsage(SocaBaseModel):
-    budget_name: Optional[str]
-    budget_limit: Optional[SocaAmount]
-    actual_spend: Optional[SocaAmount]
-    forecasted_spend: Optional[SocaAmount]
-    job_usage_percent: Optional[float]
-    job_usage_percent_with_savings: Optional[float]
+    budget_name: Optional[str] = Field(default=None)
+    budget_limit: Optional[SocaAmount] = Field(default=None)
+    actual_spend: Optional[SocaAmount] = Field(default=None)
+    forecasted_spend: Optional[SocaAmount] = Field(default=None)
+    job_usage_percent: Optional[float] = Field(default=None)
+    job_usage_percent_with_savings: Optional[float] = Field(default=None)
 
 
 class SocaJob(SocaBaseModel):
-    cluster_name: Optional[str]
-    cluster_version: Optional[str]
-    job_id: Optional[str]
-    job_uid: Optional[str]
-    job_group: Optional[str]
-    project: Optional[str]
-    name: Optional[str]
-    queue: Optional[str]
-    queue_type: Optional[str]
-    scaling_mode: Optional[SocaScalingMode]
-    owner: Optional[str]
-    state: Optional[SocaJobState]
-    exit_status: Optional[str]
-    provisioned: Optional[bool]
-    error_message: Optional[str]
-    queue_time: Optional[datetime]
-    provisioning_time: Optional[datetime]
-    start_time: Optional[datetime]
-    end_time: Optional[datetime]
-    total_time_secs: Optional[int]
-    comment: Optional[str]
-    debug: Optional[bool]
-    capacity_added: Optional[bool]
-    params: Optional[SocaJobParams]
-    provisioning_options: Optional[SocaJobProvisioningOptions]
-    estimated_budget_usage: Optional[SocaJobEstimatedBudgetUsage]
-    estimated_bom_cost: Optional[SocaJobEstimatedBOMCost]
-    execution_hosts: Optional[List[SocaJobExecutionHost]]
-    notifications: Optional[SocaJobNotifications]
+    cluster_name: Optional[str] = Field(default=None)
+    cluster_version: Optional[str] = Field(default=None)
+    job_id: Optional[str] = Field(default=None)
+    job_uid: Optional[str] = Field(default=None)
+    job_group: Optional[str] = Field(default=None)
+    project: Optional[str] = Field(default=None)
+    name: Optional[str] = Field(default=None)
+    queue: Optional[str] = Field(default=None)
+    queue_type: Optional[str] = Field(default=None)
+    scaling_mode: Optional[SocaScalingMode] = Field(default=None)
+    owner: Optional[str] = Field(default=None)
+    state: Optional[SocaJobState] = Field(default=None)
+    exit_status: Optional[int] = Field(default=None, strict=False)
+    provisioned: Optional[bool] = Field(default=None)
+    error_message: Optional[str] = Field(default=None)
+    queue_time: Optional[datetime] = Field(default=None)
+    provisioning_time: Optional[datetime] = Field(default=None)
+    start_time: Optional[datetime] = Field(default=None)
+    end_time: Optional[datetime] = Field(default=None)
+    total_time_secs: Optional[int] = Field(default=None)
+    comment: Optional[str] = Field(default=None)
+    debug: Optional[bool] = Field(default=None)
+    capacity_added: Optional[bool] = Field(default=None)
+    params: Optional[SocaJobParams] = Field(default=None)
+    provisioning_options: Optional[SocaJobProvisioningOptions] = Field(default=None)
+    estimated_budget_usage: Optional[SocaJobEstimatedBudgetUsage] = Field(default=None)
+    estimated_bom_cost: Optional[SocaJobEstimatedBOMCost] = Field(default=None)
+    execution_hosts: Optional[List[SocaJobExecutionHost]] = Field(default=None)
+    notifications: Optional[SocaJobNotifications] = Field(default=None)
 
     def get_total_time_seconds(self) -> Optional[int]:
         if self.total_time_secs is not None:
@@ -1005,7 +1006,7 @@ class SocaJob(SocaBaseModel):
 
     def is_ephemeral_capacity(self) -> bool:
         """
-        ephemeral capacity is short lived and is terminated as soon as job execution is complete.
+        ephemeral capacity is short-lived and is terminated as soon as job execution is complete.
         > if keep_forever is True, capacity will never be deleted and has to be manually deleted
         > if terminate_when_idle > 0, the capacity will be deleted after {terminate_when_idle} minutes of inactivity.
             - inactivity is defined as the time the node is in FREE status
@@ -1144,19 +1145,19 @@ class SocaComputeNodeState(str, Enum):
 
 
 class SocaSchedulerInfo(SocaBaseModel):
-    name: Optional[str]
-    version: Optional[str]
+    name: Optional[str] = Field(default=None)
+    version: Optional[str] = Field(default=None)
 
 
 class OpenPBSInfo(SocaSchedulerInfo):
-    mom_private_dns: Optional[str]
-    mom_port: Optional[int]
+    mom_private_dns: Optional[str] = Field(default=None)
+    mom_port: Optional[int] = Field(default=None)
 
 
 class SocaComputeNodeResources(SocaBaseModel):
-    cpus: Optional[int]
-    gpus: Optional[int]
-    memory: Optional[SocaMemory]
+    cpus: Optional[int] = Field(default=None)
+    gpus: Optional[int] = Field(default=None)
+    memory: Optional[SocaMemory] = Field(default=None)
 
 
 class SocaComputeNodeSharing(str, Enum):
@@ -1169,55 +1170,55 @@ class SocaComputeNodeSharing(str, Enum):
 
 
 class SocaComputeNode(SocaBaseModel):
-    host: Optional[str]
-    cluster_name: Optional[str]
-    cluster_version: Optional[str]
-    states: Optional[List[SocaComputeNodeState]]
-    queue_type: Optional[str]
-    queue: Optional[str]
-    provisioning_time: Optional[datetime]
-    last_used_time: Optional[datetime]
-    last_state_changed_time: Optional[datetime]
-    availability_zone: Optional[str]
-    subnet_id: Optional[str]
-    instance_id: Optional[str]
-    instance_type: Optional[str]
-    instance_ami: Optional[str]
-    instance_profile: Optional[str]
-    architecture: Optional[str]
-    scheduler_info: Optional[SocaSchedulerInfo]
-    sharing: Optional[SocaComputeNodeSharing]
-    job_id: Optional[str]
-    job_group: Optional[str]
-    scaling_mode: Optional[SocaScalingMode]
-    keep_forever: Optional[bool]
-    terminate_when_idle: Optional[int]
-    compute_stack: Optional[str]
-    stack_id: Optional[str]
-    lifecyle: Optional[str]
-    tenancy: Optional[str]
-    spot_fleet_request: Optional[str]
-    auto_scaling_group: Optional[str]
-    spot: Optional[bool]
-    spot_price: Optional[SocaAmount]
-    base_os: Optional[str]
-    enable_placement_group: Optional[bool]
-    enable_ht_support: Optional[bool]
-    keep_ebs_volumes: Optional[bool]
-    root_storage_size: Optional[SocaMemory]
-    scratch_storage_size: Optional[SocaMemory]
-    scratch_storage_iops: Optional[int]
-    enable_efa_support: Optional[bool]
-    force_reserved_instances: Optional[bool]
-    enable_system_metrics: Optional[bool]
-    enable_anonymous_metrics: Optional[bool]
-    fsx_lustre: Optional[SocaFSxLustreConfig]
-    resources_available: Optional[SocaComputeNodeResources]
-    resources_assigned: Optional[SocaComputeNodeResources]
-    launch_time: Optional[datetime]
-    termination_time: Optional[datetime]
-    terminated: Optional[bool]
-    jobs: Optional[List[str]]
+    host: Optional[str] = Field(default=None)
+    cluster_name: Optional[str] = Field(default=None)
+    cluster_version: Optional[str] = Field(default=None)
+    states: Optional[List[SocaComputeNodeState]] = Field(default=None)
+    queue_type: Optional[str] = Field(default=None)
+    queue: Optional[str] = Field(default=None)
+    provisioning_time: Optional[datetime] = Field(default=None)
+    last_used_time: Optional[datetime] = Field(default=None)
+    last_state_changed_time: Optional[datetime] = Field(default=None)
+    availability_zone: Optional[str] = Field(default=None)
+    subnet_id: Optional[str] = Field(default=None)
+    instance_id: Optional[str] = Field(default=None)
+    instance_type: Optional[str] = Field(default=None)
+    instance_ami: Optional[str] = Field(default=None)
+    instance_profile: Optional[str] = Field(default=None)
+    architecture: Optional[str] = Field(default=None)
+    scheduler_info: Optional[SocaSchedulerInfo] = Field(default=None)
+    sharing: Optional[SocaComputeNodeSharing] = Field(default=None)
+    job_id: Optional[str] = Field(default=None)
+    job_group: Optional[str] = Field(default=None)
+    scaling_mode: Optional[SocaScalingMode] = Field(default=None)
+    keep_forever: Optional[bool] = Field(default=None)
+    terminate_when_idle: Optional[int] = Field(default=None)
+    compute_stack: Optional[str] = Field(default=None)
+    stack_id: Optional[str] = Field(default=None)
+    lifecyle: Optional[str] = Field(default=None)
+    tenancy: Optional[str] = Field(default=None)
+    spot_fleet_request: Optional[str] = Field(default=None)
+    auto_scaling_group: Optional[str] = Field(default=None)
+    spot: Optional[bool] = Field(default=None)
+    spot_price: Optional[SocaAmount] = Field(default=None)
+    base_os: Optional[str] = Field(default=None)
+    enable_placement_group: Optional[bool] = Field(default=None)
+    enable_ht_support: Optional[bool] = Field(default=None)
+    keep_ebs_volumes: Optional[bool] = Field(default=None)
+    root_storage_size: Optional[SocaMemory] = Field(default=None)
+    scratch_storage_size: Optional[SocaMemory] = Field(default=None)
+    scratch_storage_iops: Optional[int] = Field(default=None)
+    enable_efa_support: Optional[bool] = Field(default=None)
+    force_reserved_instances: Optional[bool] = Field(default=None)
+    enable_system_metrics: Optional[bool] = Field(default=None)
+    enable_anonymous_metrics: Optional[bool] = Field(default=None)
+    fsx_lustre: Optional[SocaFSxLustreConfig] = Field(default=None)
+    resources_available: Optional[SocaComputeNodeResources] = Field(default=None)
+    resources_assigned: Optional[SocaComputeNodeResources] = Field(default=None)
+    launch_time: Optional[datetime] = Field(default=None)
+    termination_time: Optional[datetime] = Field(default=None)
+    terminated: Optional[bool] = Field(default=None)
+    jobs: Optional[List[str]] = Field(default=None)
 
     def __eq__(self, other: 'SocaComputeNode'):
         return self.host == other.host
@@ -1337,15 +1338,15 @@ class SocaComputeNode(SocaBaseModel):
 
 
 class SocaQueueManagementParams(SocaBaseModel):
-    max_running_jobs: Optional[int]
-    max_provisioned_instances: Optional[int]
-    max_provisioned_capacity: Optional[int]
-    wait_on_any_job_with_license: Optional[bool]
-    allowed_instance_types: Optional[List[str]]
-    excluded_instance_types: Optional[List[str]]
-    restricted_parameters: Optional[List[str]]
-    allowed_security_groups: Optional[List[str]]
-    allowed_instance_profiles: Optional[List[str]]
+    max_running_jobs: Optional[int] = Field(default=None)
+    max_provisioned_instances: Optional[int] = Field(default=None)
+    max_provisioned_capacity: Optional[int] = Field(default=None)
+    wait_on_any_job_with_license: Optional[bool] = Field(default=None)
+    allowed_instance_types: Optional[List[str]] = Field(default=None)
+    excluded_instance_types: Optional[List[str]] = Field(default=None)
+    restricted_parameters: Optional[List[str]] = Field(default=None)
+    allowed_security_groups: Optional[List[str]] = Field(default=None)
+    allowed_instance_profiles: Optional[List[str]] = Field(default=None)
 
     def is_allowed_security_group(self, security_group: str) -> bool:
         if self.allowed_security_groups is None or len(self.allowed_security_groups) == 0:
@@ -1431,30 +1432,30 @@ class SocaQueueMode(str, Enum):
 
 
 class SocaQueueStats(SocaBaseModel):
-    transit: Optional[int]
-    queued: Optional[int]
-    held: Optional[int]
-    waiting: Optional[int]
-    running: Optional[int]
-    exiting: Optional[int]
-    begun: Optional[int]
+    transit: Optional[int] = Field(default=None)
+    queued: Optional[int] = Field(default=None)
+    held: Optional[int] = Field(default=None)
+    waiting: Optional[int] = Field(default=None)
+    running: Optional[int] = Field(default=None)
+    exiting: Optional[int] = Field(default=None)
+    begun: Optional[int] = Field(default=None)
 
 
 class SocaQueue(SocaBaseModel):
-    name: Optional[str]
-    enabled: Optional[bool]
-    started: Optional[bool]
-    total_jobs: Optional[int]
-    stats: Optional[SocaQueueStats]
+    name: Optional[str] = Field(default=None)
+    enabled: Optional[bool] = Field(default=None)
+    started: Optional[bool] = Field(default=None)
+    total_jobs: Optional[int] = Field(default=None)
+    stats: Optional[SocaQueueStats] = Field(default=None)
 
 
 class LimitCheckResult(SocaBaseModel):
-    success: Optional[bool]
-    limit_type: Optional[str]
-    queue_threshold: Optional[int]
-    queue_current: Optional[int]
-    group_threshold: Optional[int]
-    group_current: Optional[int]
+    success: Optional[bool] = Field(default=None)
+    limit_type: Optional[str] = Field(default=None)
+    queue_threshold: Optional[int] = Field(default=None)
+    queue_current: Optional[int] = Field(default=None)
+    group_threshold: Optional[int] = Field(default=None)
+    group_current: Optional[int] = Field(default=None)
 
     def __bool__(self):
         return ModelUtils.get_as_bool(self.success, False)
@@ -1490,12 +1491,12 @@ class LimitCheckResult(SocaBaseModel):
 
 
 class JobValidationResultEntry(SocaBaseModel):
-    error_code: Optional[str]
-    message: Optional[str]
+    error_code: Optional[str] = Field(default=None)
+    message: Optional[str] = Field(default=None)
 
 
 class JobValidationResult(SocaBaseModel):
-    results: Optional[List[JobValidationResultEntry]]
+    results: Optional[List[JobValidationResultEntry]] = Field(default=None)
 
     def is_valid(self):
         return len(self.results) == 0
@@ -1523,20 +1524,20 @@ class JobValidationResult(SocaBaseModel):
 
 
 class JobValidationDebugEntry(SocaBaseModel):
-    title: Optional[str]
-    name: Optional[str]
-    description: Optional[str]
-    valid: Optional[bool]
-    user_value: Optional[Any]
-    job_value: Optional[Any]
-    default_value: Optional[Any]
+    title: Optional[str] = Field(default=None)
+    name: Optional[str] = Field(default=None)
+    description: Optional[str] = Field(default=None)
+    valid: Optional[bool] = Field(default=None)
+    user_value: Optional[Any] = Field(default=None)
+    job_value: Optional[Any] = Field(default=None)
+    default_value: Optional[Any] = Field(default=None)
 
 
 class JobParameterInfo(SocaBaseModel):
-    name: Optional[str]
-    title: Optional[str]
-    description: Optional[str]
-    provider_names: Optional[Dict[str, str]]
+    name: Optional[str] = Field(default=None)
+    title: Optional[str] = Field(default=None)
+    description: Optional[str] = Field(default=None)
+    provider_names: Optional[Dict[str, str]] = Field(default=None)
 
 
 LicenseName = str
@@ -1625,30 +1626,30 @@ class DryRunOption(str, Enum):
                 return DryRunOption.DEFAULT
             return None
 
-        token = value.lower().strip()
+        _token = value.lower().strip()
 
-        if token == 'false':
+        if _token == 'false':
             return None
-        elif token in ('json', 'json:job'):
+        elif _token in ('json', 'json:job'):
             return DryRunOption.JSON_JOB
-        elif token == 'json:bom':
+        elif _token == 'json:bom':
             return DryRunOption.JSON_BOM
-        elif token == 'json:budget':
+        elif _token == 'json:budget':
             return DryRunOption.JSON_BUDGET
-        elif token == 'json:quota':
+        elif _token == 'json:quota':
             return DryRunOption.JSON_QUOTA
-        elif token == 'json:queue':
+        elif _token == 'json:queue':
             return DryRunOption.JSON_QUEUE
-        elif token == 'notifications:email':
+        elif _token == 'notifications:email':
             return DryRunOption.NOTIFICATION_EMAIL
         return DryRunOption.DEFAULT
 
 
 class JobUpdate(SocaBaseModel):
-    queue: Optional[str]
-    owner: Optional[str]
-    job_id: Optional[str]
-    timestamp: Optional[datetime]
+    queue: Optional[str] = Field(default=None)
+    owner: Optional[str] = Field(default=None)
+    job_id: Optional[str] = Field(default=None)
+    timestamp: Optional[datetime] = Field(default=None)
 
     def __hash__(self):
         return hash(f'{self.owner}.{self.job_id}')
@@ -1665,22 +1666,22 @@ class JobUpdates(SocaBaseModel):
 
 
 class ProvisioningCapacityInfo(SocaBaseModel):
-    desired_capacity: Optional[int]
-    group_capacity: Optional[int]
-    target_capacity: Optional[int]
-    existing_capacity: Optional[int]
-    provisioned_capacity: Optional[int]
-    idle_capacity: Optional[int]
-    busy_capacity: Optional[int]
-    pending_capacity: Optional[int]
-    total_instances: Optional[int]
-    idle_instances: Optional[int]
-    busy_instances: Optional[int]
-    pending_instances: Optional[int]
-    max_provisioned_instances: Optional[int]
-    max_provisioned_capacity: Optional[int]
-    comment: Optional[str]
-    error_code: Optional[str]
+    desired_capacity: Optional[int] = Field(default=None)
+    group_capacity: Optional[int] = Field(default=None)
+    target_capacity: Optional[int] = Field(default=None)
+    existing_capacity: Optional[int] = Field(default=None)
+    provisioned_capacity: Optional[int] = Field(default=None)
+    idle_capacity: Optional[int] = Field(default=None)
+    busy_capacity: Optional[int] = Field(default=None)
+    pending_capacity: Optional[int] = Field(default=None)
+    total_instances: Optional[int] = Field(default=None)
+    idle_instances: Optional[int] = Field(default=None)
+    busy_instances: Optional[int] = Field(default=None)
+    pending_instances: Optional[int] = Field(default=None)
+    max_provisioned_instances: Optional[int] = Field(default=None)
+    max_provisioned_capacity: Optional[int] = Field(default=None)
+    comment: Optional[str] = Field(default=None)
+    error_code: Optional[str] = Field(default=None)
 
     def __str__(self):
         s = ''
@@ -1722,12 +1723,12 @@ class ProvisioningCapacityInfo(SocaBaseModel):
 
 
 class QueuedJob(SocaBaseModel):
-    priority: Optional[int]
+    priority: Optional[int] = Field(default=None)
     job_id: str
     job_group: str
-    deleted: Optional[bool]
-    processed: Optional[bool]
-    capacity_added: Optional[bool]
+    deleted: Optional[bool] = Field(default=None)
+    processed: Optional[bool] = Field(default=None)
+    capacity_added: Optional[bool] = Field(default=None)
 
     def __eq__(self, other: 'QueuedJob'):
         return self.job_id == other.job_id
@@ -1746,53 +1747,52 @@ class QueuedJob(SocaBaseModel):
 
 
 class HpcApplication(SocaBaseModel):
-    application_id: Optional[str]
-    title: Optional[str]
-    description: Optional[str]
-    thumbnail_url: Optional[str]
-    thumbnail_data: Optional[str]
-    form_template: Optional[SocaUserInputModuleMetadata]
-    job_script_interpreter: Optional[str]
-    job_script_type: Optional[str]
-    job_script_template: Optional[str]
-    projects: Optional[List[Project]]
-    created_on: Optional[datetime]
-    updated_on: Optional[datetime]
+    application_id: Optional[str] = Field(default=None)
+    title: Optional[str] = Field(default=None)
+    description: Optional[str] = Field(default=None)
+    thumbnail_url: Optional[str] = Field(default=None)
+    thumbnail_data: Optional[str] = Field(default=None)
+    form_template: Optional[SocaUserInputModuleMetadata] = Field(default=None)
+    job_script_interpreter: Optional[str] = Field(default=None)
+    job_script_type: Optional[str] = Field(default=None)
+    job_script_template: Optional[str] = Field(default=None)
+    projects: Optional[List[Project]] = Field(default=None)
+    created_on: Optional[datetime] = Field(default=None)
+    updated_on: Optional[datetime] = Field(default=None)
 
 
 class HpcQueueProfile(SocaBaseModel):
-    queue_profile_id: Optional[str]
-    title: Optional[str]
-    description: Optional[str]
-    name: Optional[str]
-    projects: Optional[List[Project]]
-    queues: Optional[List[str]]
-    enabled: Optional[bool]
-    queue_mode: Optional[SocaQueueMode]
-    scaling_mode: Optional[SocaScalingMode]
-    terminate_when_idle: Optional[int]
-    keep_forever: Optional[bool]
-    stack_uuid: Optional[str]
-    queue_management_params: Optional[SocaQueueManagementParams]
-    default_job_params: Optional[SocaJobParams]
-    created_on: Optional[datetime]
-    updated_on: Optional[datetime]
-
+    queue_profile_id: Optional[str] = Field(default=None)
+    title: Optional[str] = Field(default=None)
+    description: Optional[str] = Field(default=None)
+    name: Optional[str] = Field(default=None)
+    projects: Optional[List[Project]] = Field(default=None)
+    queues: Optional[List[str]] = Field(default=None)
+    enabled: Optional[bool] = Field(default=None)
+    queue_mode: Optional[SocaQueueMode] = Field(default=None)
+    scaling_mode: Optional[SocaScalingMode] = Field(default=None)
+    terminate_when_idle: Optional[int] = Field(default=None)
+    keep_forever: Optional[bool] = Field(default=None)
+    stack_uuid: Optional[str] = Field(default=None)
+    queue_management_params: Optional[SocaQueueManagementParams] = Field(default=None)
+    default_job_params: Optional[SocaJobParams] = Field(default=None)
+    created_on: Optional[datetime] = Field(default=None)
+    updated_on: Optional[datetime] = Field(default=None)
     # real time params sourced from JobProvisioningQueue
-    status: Optional[str]
-    limit_info: Optional[LimitCheckResult]
-    queue_size: Optional[int]
+    status: Optional[str] = Field(default=None)
+    limit_info: Optional[LimitCheckResult] = Field(default=None)
+    queue_size: Optional[int] = Field(default=None)
 
     def is_enabled(self) -> bool:
         return ModelUtils.get_as_bool(self.enabled, False)
 
 
 class HpcLicenseResource(SocaBaseModel):
-    name: Optional[str]
-    title: Optional[str]
-    availability_check_cmd: Optional[str]
-    availability_check_status: Optional[str]
-    reserved_count: Optional[int]
-    available_count: Optional[int]
-    created_on: Optional[datetime]
-    updated_on: Optional[datetime]
+    name: Optional[str] = Field(default=None)
+    title: Optional[str] = Field(default=None)
+    availability_check_cmd: Optional[str] = Field(default=None)
+    availability_check_status: Optional[str] = Field(default=None)
+    reserved_count: Optional[int] = Field(default=None)
+    available_count: Optional[int] = Field(default=None)
+    created_on: Optional[datetime] = Field(default=None)
+    updated_on: Optional[datetime] = Field(default=None)

@@ -17,7 +17,6 @@ from ideaadministrator.app_context import AdministratorContext
 from ideasdk.utils import Utils
 
 from typing import List, Dict, Optional
-
 import aws_cdk as cdk
 import constructs
 from aws_cdk import (

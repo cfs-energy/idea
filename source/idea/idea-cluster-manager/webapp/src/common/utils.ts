@@ -639,8 +639,12 @@ class Utils {
                 return 'Red Hat Enterprise Linux 7'
             case 'rhel8':
                 return 'Red Hat Enterprise Linux 8'
+            case 'rhel9':
+                return 'Red Hat Enterprise Linux 9'
             case 'rocky8':
                 return 'Rocky Linux 8'
+             case 'rocky9':
+                return 'Rocky Linux 9'
             case 'windows':
                 return 'Windows'
         }

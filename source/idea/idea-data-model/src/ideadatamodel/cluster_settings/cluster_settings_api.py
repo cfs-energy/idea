@@ -24,35 +24,36 @@ __all__ = (
 from ideadatamodel import SocaPayload, SocaListingPayload, IdeaOpenAPISpecEntry
 
 from typing import Optional, List, Any
-
+from pydantic import Field
 
 # ClusterSettings.ListClusterModules
+
 
 class ListClusterModulesRequest(SocaListingPayload):
     pass
 
 
 class ListClusterModulesResult(SocaListingPayload):
-    listing: Optional[List[Any]]
+    listing: Optional[List[Any]] = Field(default=None)
 
 
 # ClusterSettings.GetClusterModule
 
 class GetModuleSettingsRequest(SocaPayload):
-    module_id: Optional[str]
+    module_id: Optional[str] = Field(default=None)
 
 
 class GetModuleSettingsResult(SocaPayload):
-    settings: Optional[Any]
+    settings: Optional[Any] = Field(default=None)
 
 
 # ClusterSettings.ListClusterHosts
 class ListClusterHostsRequest(SocaListingPayload):
-    instance_ids: Optional[List[str]]
+    instance_ids: Optional[List[str]] = Field(default=None)
 
 
 class ListClusterHostsResult(SocaListingPayload):
-    listing: Optional[List[Any]]
+    listing: Optional[List[Any]] = Field(default=None)
 
 
 # ClusterSettings.DescribeInstanceTypes

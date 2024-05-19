@@ -785,8 +785,16 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                                 value: 'rhel8'
                             },
                             {
+                                title: 'Red Hat Enterprise Linux 9',
+                                value: 'rhel9'
+                            },
+                            {
                                 title: 'Rocky Linux 8',
                                 value: 'rocky8'
+                            },
+                            {
+                                title: 'Rocky Linux 9',
+                                value: 'rocky9'
                             }
                         ]
                     }

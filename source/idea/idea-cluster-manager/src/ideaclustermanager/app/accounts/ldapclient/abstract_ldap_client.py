@@ -8,6 +8,7 @@
 #  or in the 'license' file accompanying this file. This file is distributed on an 'AS IS' BASIS, WITHOUT WARRANTIES
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
+from pydantic import Field
 
 from ideadatamodel import (
     exceptions, errorcodes, constants,
@@ -28,26 +29,25 @@ from ldap.controls.sss import SSSRequestControl, SSSResponseControl  # noqa
 from ldappool import ConnectionManager  # noqa
 from abc import abstractmethod
 import base64
-import logging
 
 
 class LdapClientOptions(SocaBaseModel):
-    uri: Optional[str]
-    domain_name: Optional[str]
-    root_username: Optional[str]
-    root_password: Optional[str]
-    root_username_secret_arn: Optional[str]
-    root_password_secret_arn: Optional[str]
-    root_username_file: Optional[str]
-    root_password_file: Optional[str]
-    connection_pool_enabled: Optional[bool]
-    connection_pool_size: Optional[int]
-    connection_retry_max: Optional[int]
-    connection_retry_delay: Optional[float]
-    connection_timeout: Optional[float]
-    ad_netbios: Optional[str]
-    directory_id: Optional[str]
-    password_max_age: Optional[float]
+    uri: Optional[str] = Field(default=None)
+    domain_name: Optional[str] = Field(default=None)
+    root_username: Optional[str] = Field(default=None)
+    root_password: Optional[str] = Field(default=None)
+    root_username_secret_arn: Optional[str] = Field(default=None)
+    root_password_secret_arn: Optional[str] = Field(default=None)
+    root_username_file: Optional[str] = Field(default=None)
+    root_password_file: Optional[str] = Field(default=None)
+    connection_pool_enabled: Optional[bool] = Field(default=None)
+    connection_pool_size: Optional[int] = Field(default=None)
+    connection_retry_max: Optional[int] = Field(default=None)
+    connection_retry_delay: Optional[float] = Field(default=None)
+    connection_timeout: Optional[float] = Field(default=None)
+    ad_netbios: Optional[str] = Field(default=None)
+    directory_id: Optional[str] = Field(default=None)
+    password_max_age: Optional[float] = Field(default=None)
 
 
 DEFAULT_LDAP_CONNECTION_POOL_SIZE = 10
@@ -216,7 +216,7 @@ class AbstractLDAPClient:
         all paging offsets must start with 0 for SOCA services
 
         sort_by: <attributeName>:<matchingRule>
-        eg.
+        e.g.
             1. gidNumber:integerOrderingMatch
             2. uidNumber:integerOrderingMatch
             3. cn:caseIgnoreOrderingMatch
