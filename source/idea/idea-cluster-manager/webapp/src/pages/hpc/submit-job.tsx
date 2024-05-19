@@ -206,7 +206,7 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
             jobSubmissionParameters = {
                 ...jobSubmissionParameters,
                 input_file: inputFile,
-                job_name: inputFile.substring(inputFile.lastIndexOf('/') + 1, inputFile.length).replaceAll(`.`, '_'),
+                job_name: inputFile.substring(inputFile.lastIndexOf('/') + 1, inputFile.length)
             }
         }
 
@@ -633,7 +633,7 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
 
         return (
             <div>
-                <Form header={<h3>Fill the below form to submit your job.</h3>} variant="embedded">
+                <Form header={<h3>Fill the below form to submit your job.</h3>}>
                     <SpaceBetween size="l" direction="vertical">
                         <FormField
                             label="Application"
@@ -786,7 +786,7 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
 
                     <ColumnLayout columns={2}>
                         <Box textAlign="left">
-                            <h3>Estimated Total Cost Per Hour</h3>
+                            <h3>Estimated Total Cost</h3>
                         </Box>
                         <Box textAlign="right">
                             <h3>{Utils.getFormattedAmount(estimated_bom_cost?.total)}</h3>

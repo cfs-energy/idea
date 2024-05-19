@@ -8,9 +8,6 @@
 #PBS -l walltime={{ wall_time }}
 #PBS -l force_ri={{ force_ri }}
 
-# Set our PBS_O_WORKDIR to file submission directory
-export PBS_O_WORKDIR="$(dirname "{{ input_file }}")"
-
 ## Note: You can use Jinja Templating here such as {{ job_name | upper }}
 
 

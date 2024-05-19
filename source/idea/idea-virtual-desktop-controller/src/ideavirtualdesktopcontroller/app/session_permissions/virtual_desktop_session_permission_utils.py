@@ -8,7 +8,6 @@
 #  or in the 'license' file accompanying this file. This file is distributed on an 'AS IS' BASIS, WITHOUT WARRANTIES
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
-import logging
 from typing import List, Union
 
 import ideavirtualdesktopcontroller
@@ -81,21 +80,10 @@ class VirtualDesktopSessionPermissionUtils:
         else:
             for permission in self._permission_profile_db.permission_types:
                 permission_entry = permission_profile.get_permission(permission.key)
-                self._logger.debug(f"Found permission entry: {permission_entry}")
-
                 if permission_entry.enabled:
-                    self._logger.debug(f"Applying allow permission for {permission_entry.key}")
                     allow_permissions.append(permission.key.replace('_', '-'))
                 else:
-                    if permission_entry.key.lower() in {'builtin'}:
-                        self._logger.debug(f"Skipping deny permission for \'builtin\'")
-                        continue
-                    else:
-                        self._logger.debug(f"Applying deny permission for {permission_entry.key}")
-                        deny_permissions.append(permission.key.replace('_', '-'))
-
-        if self._logger.isEnabledFor(logging.DEBUG):
-            self._logger.debug(f"Final permissions returning: Allow: {allow_permissions}   Deny: {deny_permissions}")
+                    deny_permissions.append(permission.key.replace('_', '-'))
 
         return allow_permissions, deny_permissions
 
@@ -107,7 +95,6 @@ class VirtualDesktopSessionPermissionUtils:
         else:
             new_line_char = self.WINDOWS_POWERSHELL_NEW_LINE
 
-        self._logger.debug(f"Generating Permissions for session - Admin: {admin_username}  BaseOS: {session.software_stack.base_os}")
         permission = f'[groups]{new_line_char}'
         if session.software_stack.base_os == VirtualDesktopBaseOS.WINDOWS:
             permission += f'group:ideaadmin=user:{admin_username}{new_line_char}'
@@ -128,9 +115,7 @@ class VirtualDesktopSessionPermissionUtils:
             permission_profiles.add(session_permission.permission_profile.profile_id)
 
         for profile in permission_profiles:
-            self._logger.debug(f"Processing permissions profile {profile}")
             allow_permissions, deny_permissions = self._retrieve_permission_profile_values(profile)
-            self._logger.debug(f"Retrieved profile permissions: Allow: {allow_permissions}   Deny: {deny_permissions}")
             if Utils.is_not_empty(allow_permissions):
                 permission += f'{profile}-allow={", ".join(allow_permissions)}{new_line_char}'
             if Utils.is_not_empty(deny_permissions):
@@ -163,8 +148,6 @@ class VirtualDesktopSessionPermissionUtils:
         if Utils.is_not_empty(profile_cache[owner_profile]['deny']):
             permission += f'%owner% deny {owner_profile}-deny{new_line_char}'
 
-        if self._logger.isEnabledFor(logging.DEBUG):
-            self._logger.debug(f"Returning permissions content {permission}")
         return permission
 
     def update_permission_for_sessions(self, request: UpdateSessionPermissionRequest) -> UpdateSessionPermissionResponse:

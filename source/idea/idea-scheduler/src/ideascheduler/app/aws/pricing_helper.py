@@ -234,7 +234,7 @@ class PricingHelper:
                 estimated_bom_cost.add_line_item(
                     title=f'Scratch: EBS io1 ({self.job.desired_nodes()} x {scratch_storage_size})',
                     service='aws.ebs',
-                    product='scratch_storage=io1',
+                    product=f'scratch_storage=io1',
                     unit='GB-month',
                     quantity=scratch_storage_quantity,
                     unit_price=scratch_storage_unit_price

@@ -334,7 +334,7 @@ def update_cdk_version(_, version):
     buildspec_filename = 'deployment/idea/codebuild/integration_tests/buildspec-idea-integration-tests.yml'
     print(f'updating {buildspec_filename} with CDK version: {version}')
     with open(buildspec_filename, 'r') as f:
-        # buildspec = Utils.from_yaml(f.read())
+        #buildspec = Utils.from_yaml(f.read())
         lines = f.read().splitlines()
     for line in lines:
         # a proper regex would be better
@@ -346,9 +346,9 @@ def update_cdk_version(_, version):
     with open(buildspec_filename, 'w') as f:
         f.write(os.linesep.join(updated_lines))
 
-    idea.console.success(f'successfully updated IDEA CDK version from {old_version} -> {version}')
+    idea.console.success(f'successfully updated idea cdk version from {old_version} -> {version}')
     idea.console.warning('Note:')
-    idea.console.warning('- run `invoke devtool.upgrade-cdk` to upgrade CDK nodejs binary and install CDK python libraries for new version.')
+    idea.console.warning('- run `invoke devtool.upgrade-cdk` to upgrade cdk nodejs binary and install cdk python libraries for new version.')
     idea.console.warning('Make sure to commit all changes back to the repo')
 
 
@@ -361,7 +361,7 @@ def upgrade_cdk(c):
     idea_cdk_dir = idea.props.idea_cdk_dir
     shutil.rmtree(idea_cdk_dir, ignore_errors=True)
     os.makedirs(idea_cdk_dir)
-    with idea.console.spinner(f'upgrading IDEA CDK version to: {idea.props.idea_cdk_version} ...'):
+    with idea.console.spinner(f'upgrading idea cdk version to: {idea.props.idea_cdk_version} ...'):
         with c.cd(idea_cdk_dir):
             c.run('npm init --force --yes')
             c.run(f'npm install aws-cdk@{idea.props.idea_cdk_version}')

@@ -151,7 +151,6 @@ class SocaLogging(SocaLoggingProtocol):
             else:
                 file_handler = logging.handlers.TimedRotatingFileHandler(
                     filename=logfile,
-                    encoding=constants.DEFAULT_ENCODING,
                     when=handler_config['when'],
                     interval=int(handler_config['interval']),
                     backupCount=int(handler_config['backupCount'])
@@ -269,7 +268,6 @@ class SocaLogging(SocaLoggingProtocol):
         else:
             file_handler = logging.handlers.TimedRotatingFileHandler(
                 filename=logfile,
-                encoding=constants.DEFAULT_ENCODING,
                 when=params.when,
                 interval=params.interval,
                 backupCount=params.backupCount

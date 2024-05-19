@@ -38,36 +38,36 @@ from ideasdk.metrics import MetricsService
 from logging import Logger
 from typing import Optional, List, Dict, Any
 from threading import RLock
-from pydantic import Field
+
 
 class SocaContextOptions(SocaBaseModel):
-    cluster_name: Optional[str] = Field(default=None)
-    aws_region: Optional[str] = Field(default=None)
-    aws_profile: Optional[str] = Field(default=None)
-    module_name: Optional[str] = Field(default=None)
-    module_id: Optional[str] = Field(default=None)
-    module_set: Optional[str] = Field(default=None)
+    cluster_name: Optional[str]
+    aws_region: Optional[str]
+    aws_profile: Optional[str]
+    module_name: Optional[str]
+    module_id: Optional[str]
+    module_set: Optional[str]
 
-    enable_analytics: Optional[bool] = Field(default=None)
-    enable_metrics: Optional[bool] = Field(default=None)
-    metrics_namespace: Optional[str] = Field(default=None)
+    enable_analytics: Optional[bool]
+    enable_metrics: Optional[bool]
+    metrics_namespace: Optional[str]
 
-    enable_iam_permission_util: Optional[bool] = Field(default=None)
-    enable_instance_metadata_util: Optional[bool] = Field(default=None)
-    enable_aws_util: Optional[bool] = Field(default=None)
-    enable_aws_client_provider: Optional[bool] = Field(default=None)
-    enable_distributed_lock: Optional[bool] = Field(default=None)
-    enable_leader_election: Optional[bool] = Field(default=None)
+    enable_iam_permission_util: Optional[bool]
+    enable_instance_metadata_util: Optional[bool]
+    enable_aws_util: Optional[bool]
+    enable_aws_client_provider: Optional[bool]
+    enable_distributed_lock: Optional[bool]
+    enable_leader_election: Optional[bool]
 
-    is_app_server: Optional[bool] = Field(default=None)
+    is_app_server: Optional[bool]
 
     # if set to True, AwsClientProvider will be initialized with Vpc Endpoint configuration, if enabled and available.
-    use_vpc_endpoints: Optional[bool] = Field(default=None)
+    use_vpc_endpoints: Optional[bool]
 
-    default_logging_profile: Optional[str] = Field(default=None)
-    locale: Optional[str] = Field(default=None)
+    default_logging_profile: Optional[str]
+    locale: Optional[str]
 
-    config: Optional[Dict[str, Any]] = Field(default=None)
+    config: Optional[Dict[str, Any]]
 
     @staticmethod
     def default() -> 'SocaContextOptions':
@@ -289,7 +289,7 @@ class SocaContext(SocaContextProtocol):
         return ideasdk.__version__
 
     def cluster_timezone(self) -> str:
-        return self.config().get_string('cluster.timezone', default='America/Los_Angeles')
+        return self.config().get_string('cluster.cluster_timezone', 'America/Los_Angeles')
 
     def get_aws_solution_id(self) -> str:
         return constants.AWS_SOLUTION_ID

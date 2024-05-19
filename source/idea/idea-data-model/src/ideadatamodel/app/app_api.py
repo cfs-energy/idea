@@ -18,7 +18,6 @@ from ideadatamodel import SocaPayload
 from ideadatamodel.app.app_model import ModuleInfo
 
 from typing import Optional
-from pydantic import Field
 
 
 class GetModuleInfoRequest(SocaPayload):
@@ -26,4 +25,4 @@ class GetModuleInfoRequest(SocaPayload):
 
 
 class GetModuleInfoResult(SocaPayload):
-    module: Optional[ModuleInfo] = Field(default=None)
+    module: Optional[ModuleInfo]

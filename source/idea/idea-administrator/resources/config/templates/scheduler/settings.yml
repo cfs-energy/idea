@@ -6,7 +6,6 @@ instance_type: {{instance_type}}
 base_os: {{base_os}}
 instance_ami: {{instance_ami}}
 volume_size: {{volume_size}}
-volume_type: {{volume_type}}
 hostname: "{{module_id}}.{{cluster_name}}.{{aws_region}}.local"
 provider: openpbs # only openpbs is supported as of now
 
@@ -58,11 +57,6 @@ ec2:
   metadata_http_tokens: "required"  # supported values are "required" for IMDSv2 or "optional" for IMDSv1
 
 cache:
-  # How often a full refresh of EC2 instance type capabilities can be performed
-  # This only takes place when an unknown instance type is encountered by the user.
-  # This is how long an instance type could remain unknown to the running
-  # scheduler. A restart of the scheduler is required for this value to become effective after changing it.
-  instance_types_refresh_interval: 43200  # 12-hours by default
   long_term:
     max_size: 1000
     ttl_seconds: 86400 # 1 day
@@ -81,13 +75,6 @@ cost_estimation:
   fsx_lustre: 0.000194 # GB per hour
 
 job_provisioning:
-  # Determine if AWS Service Quotas should be used:
-  # True (default) - query AWS service quotas API to make sure an incoming job can be deployed.
-  # False          - Do not query service quotas API. Submit the jobs for AWS provisioning.
-  # WARNING:
-  #  Setting this to False can have unintended consequences related to idle or stranded resources.
-  service_quotas: True
-
   # specifies the duration after which the cloud formation stack should be terminated and job provisioning should be retried.
   # this is used to ensure provisioning capacity failures, if any are retried
   stack_provisioning_timeout_seconds: 1800

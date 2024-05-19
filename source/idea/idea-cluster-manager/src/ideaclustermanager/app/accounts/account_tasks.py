@@ -136,7 +136,8 @@ class SyncUserInDirectoryServiceTask(BaseTask):
         readonly = self.context.ldap_client.is_readonly()
 
         if readonly:
-            self.logger.info(f'sync user: Read-only Directory service - sync {username} NOOP ... returning')
+            self.logger.info(f'sync user: Read-only Directory service - sync {username} NOOP ...')
+            self.logger.info(f'sync user: returning ...')
             return
 
         if enabled:

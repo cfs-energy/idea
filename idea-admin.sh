@@ -28,8 +28,8 @@
 # * IDEA_DEV_MODE - Set to "true" if you are working with IDEA sources
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-IDEA_REVISION=${IDEA_REVISION:-"v3.1.6"}
-IDEA_DOCKER_REPO=${IDEA_DOCKER_REPO:-"public.ecr.aws/h5i3y8y1/idea-administrator"}
+IDEA_REVISION=${IDEA_REVISION:-"v3.1.0"}
+IDEA_DOCKER_REPO=${IDEA_DOCKER_REPO:-"public.ecr.aws/g8j8s8q8/idea-administrator"}
 IDEA_ECR_CREDS_RESET=${IDEA_ECR_CREDS_RESET:-"true"}
 IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER=${IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER:=""}
 IDEA_ADMIN_ENABLE_CDK_NAG_SCAN=${IDEA_ADMIN_ENABLE_CDK_NAG_SCAN:-"true"}
@@ -102,9 +102,8 @@ verify_command "Docker is installed on the system but it does not seems to be ru
 if [[ "${IDEA_ECR_CREDS_RESET}" == "true" ]]; then
   # Check if user is connected to internet an can ping ECR repo
   DIG_BIN=$(command -v dig)
-  IDEA_DOCKER_REPO_HOSTNAME=$(echo "${IDEA_DOCKER_REPO}" | cut -d '/' -f 1)
-  ${DIG_BIN} +tries=1 +time=3 ${IDEA_DOCKER_REPO_HOSTNAME} >> /dev/null 2>&1
-  verify_command "Unable to query ECR host ${IDEA_DOCKER_REPO_HOSTNAME} . Are you connected to internet?"
+  ${DIG_BIN} +tries=1 +time=3 ${IDEA_DOCKER_REPO} >> /dev/null 2>&1
+  verify_command "Unable to query ECR. Are you connected to internet?"
 
   ${DOCKER_BIN} logout public.ecr.aws >> /dev/null 2>&1
   verify_command "Failed to refresh ECR credentials. docker logout public.ecr.aws failed"
@@ -118,10 +117,9 @@ if [[ $? -ne 0 ]]; then
 fi
 
 # Launch installer
-${DOCKER_BIN} run --rm -it -v "${HOME}/.idea/clusters:/root/.idea/clusters" \
-              -e AWS_SESSION_TOKEN -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
-              -e IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER="${IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER}" \
-              -e IDEA_ADMIN_ENABLE_CDK_NAG_SCAN="${IDEA_ADMIN_ENABLE_CDK_NAG_SCAN}" \
-              -v ~/.aws:/root/.aws "${IDEA_DOCKER_REPO}:${IDEA_REVISION}" \
-              idea-admin "${@}"
+${DOCKER_BIN} run --rm -it -v ${HOME}/.idea/clusters:/root/.idea/clusters \
+              -e IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER=${IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER} \
+              -e IDEA_ADMIN_ENABLE_CDK_NAG_SCAN=${IDEA_ADMIN_ENABLE_CDK_NAG_SCAN} \
+              -v ~/.aws:/root/.aws ${IDEA_DOCKER_REPO}:${IDEA_REVISION} \
+              idea-admin ${@}
 

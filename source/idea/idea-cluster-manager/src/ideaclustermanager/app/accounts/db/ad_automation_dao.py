@@ -75,10 +75,8 @@ class ADAutomationDAO:
         if status not in ('success', 'fail'):
             raise exceptions.invalid_params('status must be one of [success, fail]')
 
-        # TTL is required to be in seconds for DynamoDB auto-expiration functionality
         if ttl is None:
-            ttl = Utils.get_as_int(Utils.current_time()) + Utils.get_as_int(self.ad_automation_entry_ttl_seconds, default=1800)
-            self.context.logger().debug(f"Setting AD-Automation entry TTL to {ttl}")
+            ttl = Utils.current_time_ms() + (self.ad_automation_entry_ttl_seconds * 60 * 1000)
 
         created_entry = {
             **entry,

@@ -22,9 +22,7 @@ function install_efa() {
   popd
   popd
 }
-if [[ -z "$(rpm -qa efa)" ]]; then
-  install_efa
-fi
+install_efa
 # End: Amazon EFA (Elastic Fabric Adapter)
 
 

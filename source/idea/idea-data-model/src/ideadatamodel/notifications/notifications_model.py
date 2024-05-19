@@ -8,7 +8,6 @@
 #  or in the 'license' file accompanying this file. This file is distributed on an 'AS IS' BASIS, WITHOUT WARRANTIES
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
-from pydantic import Field
 
 from ideadatamodel import (
     SocaBaseModel
@@ -18,8 +17,8 @@ from typing import Optional, Dict
 
 
 class Notification(SocaBaseModel):
-    username: Optional[str] = Field(default=None)
-    template_name: Optional[str] = Field(default=None)
-    params: Optional[Dict] = Field(default=None)
-    subject: Optional[str] = Field(default=None)
-    body: Optional[str] = Field(default=None)
+    username: Optional[str]
+    template_name: Optional[str]
+    params: Optional[Dict]
+    subject: Optional[str]
+    body: Optional[str]

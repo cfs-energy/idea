@@ -39,8 +39,7 @@ from aws_cdk import (
     aws_cognito as cognito,
     aws_sqs as sqs,
     aws_route53 as route53,
-    aws_elasticloadbalancingv2 as elbv2,
-    aws_kms as kms
+    aws_elasticloadbalancingv2 as elbv2
 )
 
 
@@ -254,7 +253,7 @@ class SchedulerStack(IdeaBaseStack):
             queue_name=f'{self.cluster_name}-{self.module_id}-job-status-events',
             encryption_master_key=kms_key_id,
             dead_letter_queue=sqs.DeadLetterQueue(
-                max_receive_count=Utils.get_as_int(constants.SQS_MAX_RECEIVE_COUNT_SCHEDULER_JOB_STATUS, default=10),
+                max_receive_count=10,
                 queue=SQSQueue(
                     self.context, 'job-status-events-dlq', self.stack,
                     queue_name=f'{self.cluster_name}-{self.module_id}-job-status-events-dlq',
@@ -294,21 +293,6 @@ class SchedulerStack(IdeaBaseStack):
         enable_detailed_monitoring = self.context.config().get_bool('scheduler.ec2.enable_detailed_monitoring', default=False)
         enable_termination_protection = self.context.config().get_bool('scheduler.ec2.enable_termination_protection', default=False)
         metadata_http_tokens = self.context.config().get_string('scheduler.ec2.metadata_http_tokens', required=True)
-        https_proxy = self.context.config().get_string('cluster.network.https_proxy', required=False, default='')
-        no_proxy = self.context.config().get_string('cluster.network.no_proxy', required=False, default='')
-        proxy_config = {}
-        if Utils.is_not_empty(https_proxy):
-            proxy_config = {
-                    'http_proxy': https_proxy,
-                    'https_proxy': https_proxy,
-                    'no_proxy': no_proxy
-                    }
-        kms_key_id = self.context.config().get_string('cluster.ebs.kms_key_id', required=False, default=None)
-        if kms_key_id is not None:
-            kms_key_arn = self.get_kms_key_arn(kms_key_id)
-            ebs_kms_key = kms.Key.from_key_arn(scope=self.stack, id=f'ebs-kms-key', key_arn=kms_key_arn)
-        else:
-            ebs_kms_key = kms.Alias.from_alias_name(scope=self.stack, id=f'ebs-kms-key-default', alias_name='alias/aws/ebs')
 
         if is_public and len(self.cluster.public_subnets) > 0:
             subnet_ids = self.cluster.existing_vpc.get_public_subnet_ids()
@@ -316,8 +300,6 @@ class SchedulerStack(IdeaBaseStack):
             subnet_ids = self.cluster.existing_vpc.get_private_subnet_ids()
 
         block_device_name = Utils.get_ec2_block_device_name(base_os)
-        block_device_type_string = self.context.config().get_string(f'scheduler.volume_type', default='gp3')
-        block_device_type_volumetype = ec2.EbsDeviceVolumeType.GP3 if block_device_type_string == 'gp3' else ec2.EbsDeviceVolumeType.GP2
 
         user_data = BootstrapUserDataBuilder(
             aws_region=self.aws_region,
@@ -325,7 +307,6 @@ class SchedulerStack(IdeaBaseStack):
             install_commands=[
                 '/bin/bash scheduler/setup.sh'
             ],
-            proxy_config=proxy_config,
             base_os=base_os
         ).build()
 
@@ -340,10 +321,8 @@ class SchedulerStack(IdeaBaseStack):
             block_devices=[ec2.BlockDevice(
                 device_name=block_device_name,
                 volume=ec2.BlockDeviceVolume(ebs_device=ec2.EbsDeviceProps(
-                    encrypted=True,
-                    kms_key=ebs_kms_key,
                     volume_size=volume_size,
-                    volume_type=block_device_type_volumetype
+                    volume_type=ec2.EbsDeviceVolumeType.GP3
                     )
                 )
             )],
@@ -358,7 +337,7 @@ class SchedulerStack(IdeaBaseStack):
                     device_name=block_device_name,
                     ebs=ec2.CfnInstance.EbsProperty(
                         volume_size=volume_size,
-                        volume_type=block_device_type_string
+                        volume_type='gp3'
                     )
                 )
             ],
@@ -384,11 +363,6 @@ class SchedulerStack(IdeaBaseStack):
         cdk.Tags.of(self.ec2_instance).add('Name', self.build_resource_name(self.module_id))
         cdk.Tags.of(self.ec2_instance).add(constants.IDEA_TAG_NODE_TYPE, constants.NODE_TYPE_APP)
         self.add_backup_tags(self.ec2_instance)
-
-        self.add_nag_suppression(
-            construct=self.ec2_instance,
-            suppressions=[IdeaNagSuppression(rule_id='AwsSolutions-EC26', reason='EBS Encryption is enforced via Launch Template')]
-        )
 
         if not enable_detailed_monitoring:
             self.add_nag_suppression(
@@ -520,33 +494,23 @@ class SchedulerStack(IdeaBaseStack):
         )
 
     def build_cluster_settings(self):
-        cluster_settings = {
-            'deployment_id': self.deployment_id,
-            'private_ip': self.ec2_instance.attr_private_ip,
-            'private_dns_name': self.ec2_instance.attr_private_dns_name
-        }
+        cluster_settings = {}
+        cluster_settings['deployment_id'] = self.deployment_id
+        cluster_settings['private_ip'] = self.ec2_instance.attr_private_ip
+        cluster_settings['private_dns_name'] = self.ec2_instance.attr_private_dns_name
 
-        is_public = self.context.config().get_bool('scheduler.public', default=False)
+        is_public = self.context.config().get_bool('scheduler.public', False)
         if is_public:
-            cluster_settings.update({
-                'public_ip': self.ec2_instance.attr_public_ip
-            })
-
-        cluster_settings.update(
-            {
-                "instance_id": self.ec2_instance.ref,
-                "client_id": self.oauth2_client_secret.client_id.ref,
-                "client_secret": self.oauth2_client_secret.client_secret.ref,
-                "security_group_id": self.scheduler_security_group.security_group_id,
-                "iam_role_arn": self.scheduler_role.role_arn,
-                "compute_node_security_group_ids": [
-                    self.compute_node_security_group.security_group_id
-                ],
-                "compute_node_iam_role_arn": self.compute_node_role.role_arn,
-                "compute_node_instance_profile_arn": self.compute_node_instance_profile.ref,
-                "spot_fleet_request_iam_role_arn": self.spot_fleet_request_role.role_arn,
-                "job_status_sqs_queue_url": self.job_status_sqs_queue.queue_url,
-            }
-        )
+            cluster_settings['public_ip'] = self.ec2_instance.attr_public_ip
+        cluster_settings['instance_id'] = self.ec2_instance.ref
+        cluster_settings['client_id'] = self.oauth2_client_secret.client_id.ref
+        cluster_settings['client_secret'] = self.oauth2_client_secret.client_secret.ref
+        cluster_settings['security_group_id'] = self.scheduler_security_group.security_group_id
+        cluster_settings['iam_role_arn'] = self.scheduler_role.role_arn
+        cluster_settings['compute_node_security_group_ids'] = [self.compute_node_security_group.security_group_id]
+        cluster_settings['compute_node_iam_role_arn'] = self.compute_node_role.role_arn
+        cluster_settings['compute_node_instance_profile_arn'] = self.compute_node_instance_profile.ref
+        cluster_settings['spot_fleet_request_iam_role_arn'] = self.spot_fleet_request_role.role_arn
+        cluster_settings['job_status_sqs_queue_url'] = self.job_status_sqs_queue.queue_url
 
         self.update_cluster_settings(cluster_settings)

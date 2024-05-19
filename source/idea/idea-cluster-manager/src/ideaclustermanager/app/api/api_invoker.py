@@ -18,8 +18,6 @@ from ideadatamodel.auth import (
     CreateUserRequest,
     InitiateAuthRequest,
     InitiateAuthResult,
-    ListUsersResult,
-    ListGroupsResult,
     RespondToAuthChallengeRequest,
     RespondToAuthChallengeResult,
     ChangePasswordRequest,
@@ -29,8 +27,7 @@ from ideadatamodel.auth import (
 )
 from ideadatamodel.filesystem import (
     ReadFileResult,
-    TailFileResult,
-    SaveFileRequest
+    TailFileResult
 )
 
 from ideasdk.app import SocaAppAPI
@@ -57,16 +54,10 @@ class ClusterManagerApiInvoker(ApiInvokerProtocol):
         self.auth_api = AuthAPI(context)
         self.accounts_api = AccountsAPI(context)
         self.email_templates_api = EmailTemplatesAPI(context)
-        self.max_listings_for_logging = 10
-        self.auto_truncate_responses = {
-            "Accounts.ListUsers": ListUsersResult,
-            "Accounts.ListGroups": ListGroupsResult
-        }
 
     def get_token_service(self) -> Optional[TokenService]:
         return self._context.token_service
 
-    # noinspection HardcodedPassword
     def get_request_logging_payload(self, context: ApiInvocationContext) -> Optional[Dict]:
         namespace = context.namespace
 
@@ -111,23 +102,12 @@ class ClusterManagerApiInvoker(ApiInvokerProtocol):
                 payload.user.password = '*****'
             request['payload'] = Utils.to_dict(payload)
             return request
-        elif namespace == 'FileBrowser.SaveFile':
-            request = context.get_request(deep_copy=True)
-            payload = context.get_request_payload_as(SaveFileRequest)
-            if payload.content is not None and Utils.is_not_empty(payload.content):
-                payload.content = '*****'
-            request['payload'] = Utils.to_dict(payload)
-            return request
 
     def get_response_logging_payload(self, context: ApiInvocationContext) -> Optional[Dict]:
         if not context.is_success():
             return None
 
         namespace = context.namespace
-
-        # Namespaces that are subject to listing truncating
-        # to keep the logs usable in larger environments.
-
         if namespace == 'Auth.InitiateAuth':
             response = context.get_response(deep_copy=True)
             payload = context.get_response_payload_as(InitiateAuthResult)
@@ -167,18 +147,6 @@ class ClusterManagerApiInvoker(ApiInvokerProtocol):
             payload.lines = ['****']
             response['payload'] = Utils.to_dict(payload)
             return response
-        elif namespace in self.auto_truncate_responses:
-            request = context.get_response(deep_copy=True)
-            payload = context.get_response_payload_as(self.auto_truncate_responses.get(namespace))
-            payload_listing_count = Utils.get_as_int(len(Utils.get_as_list(payload.listing, default=[])), default=0)
-
-            if payload_listing_count > self.max_listings_for_logging:
-                # This would normally be a log_debug() but the API response log line comes out as INFO
-                # We want to make sure we do not confuse the admin log-user by showing a truncated list
-                context.log_info(f"Truncated {payload_listing_count - self.max_listings_for_logging} entries from payload logging for {namespace} ({payload_listing_count} non-truncated listings)")
-                payload.listing = payload.listing[0:self.max_listings_for_logging]
-            request['payload'] = Utils.to_dict(payload)
-            return request
 
     def invoke(self, context: ApiInvocationContext):
         namespace = context.namespace

@@ -19,21 +19,20 @@ from ideasdk.utils import Utils, Jinja2Utils
 from ideasdk.config.cluster_config import ClusterConfig
 
 from typing import Dict, Optional, List
-from pydantic import Field
 
 
 class PrometheusConfigOptions(SocaBaseModel):
     module_id: str
     base_os: str
-    namespace: Optional[str] = Field(default=None)
+    namespace: Optional[str]
     # if set to True, node exporter scrape_config will be added to scrape_configs
-    node_exporter: Optional[bool] = Field(default=None)
+    node_exporter: Optional[bool]
     # if set to True, IDEA application server scrape_config will be added to scrape_configs
-    app_exporter: Optional[bool] = Field(default=None)
+    app_exporter: Optional[bool]
     # prometheus scrape configurations
     # if node_exporter and app_exporter is None or False, scrape_configs is required.
     # refer to: https://prometheus.io/docs/prometheus/latest/configuration/configuration/#scrape_config
-    scrape_configs: Optional[List[Dict]] = Field(default=None)
+    scrape_configs: Optional[List[Dict]]
 
 
 class PrometheusConfig:

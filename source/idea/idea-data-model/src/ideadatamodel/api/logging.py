@@ -11,9 +11,8 @@
 
 from ideadatamodel.api import SocaPayload
 from typing import Optional
-from pydantic import Field
 
 
 class DebugLoggingPayload(SocaPayload):
-    logger_name: Optional[str] = Field(default=None)
-    level: Optional[str] = Field(default=None)
+    logger_name: Optional[str]
+    level: Optional[str]

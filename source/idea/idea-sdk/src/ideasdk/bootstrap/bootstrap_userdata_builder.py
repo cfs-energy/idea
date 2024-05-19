@@ -23,14 +23,12 @@ class BootstrapUserDataBuilder:
     """
 
     def __init__(self, base_os: str, aws_region: str, bootstrap_package_uri: str, install_commands: List[str],
-                 infra_config: Optional[Dict] = None, proxy_config: Optional[Dict] = None,
-                 substitution_support: bool = True):
+                 infra_config: Optional[Dict] = None, substitution_support: bool = True):
         self.base_os = base_os
         self.aws_region = aws_region
         self.bootstrap_package_uri = bootstrap_package_uri
         self.install_commands = install_commands
         self.infra_config = infra_config
-        self.proxy_config = proxy_config
         self.substitution_support = substitution_support
 
     def build(self):
@@ -85,8 +83,8 @@ mkdir -p /root/bootstrap
 AWS_REGION="{self.aws_region}"
 BASE_OS="{self.base_os}"
 DEFAULT_AWS_REGION="{self.aws_region}"
-AWSCLI_X86_64_URL="https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip"
-AWSCLI_AARCH64_URL="https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip"
+SSM_X86_64_URL="https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_amd64/amazon-ssm-agent.rpm"
+SSM_AARCH64_URL="https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_arm64/amazon-ssm-agent.rpm"
 """
 
         infra_config_properties = ''
@@ -98,17 +96,6 @@ AWSCLI_AARCH64_URL="https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip"
 echo "
 {infra_config_properties}
 " > /root/bootstrap/infra.cfg
-        '''
-
-        proxy_config_entries = ''
-        if self.proxy_config is not None:
-            for key, value in self.proxy_config.items():
-                proxy_config_entries += f'export {key}={value}{os.linesep}'
-
-        userdata += f'''
-echo "{proxy_config_entries}
-" > /root/bootstrap/proxy.cfg
-source /root/bootstrap/proxy.cfg
         '''
 
         userdata += '''
@@ -124,22 +111,30 @@ export PATH="${!PATH}:/usr/local/bin"
 
 function install_aws_cli () {
   if [[ "${!BASE_OS}" == "amazonlinux2" ]]; then
-    yum remove -y awscli
+    return 0
   fi
-  cd /root/bootstrap
+  which aws > /dev/null 2>&1
+  if [[ "$?" != "0" ]]; then
+    yum install -y python3-pip
+    PIP=$(which pip3)
+    ${!PIP} install awscli
+  fi
+}
+
+function install_ssm () {
+  # install SSM
+  systemctl status amazon-ssm-agent
+  if [[ "$?" == "0" ]]; then
+      return 0
+  fi
   local machine=$(uname -m)
   if [[ ${!machine} == "x86_64" ]]; then
-    curl -s ${!AWSCLI_X86_64_URL} -o "awscliv2.zip"
-    elif [[ ${!machine} == "aarch64" ]]; then
-      curl -s ${!AWSCLI_AARCH64_URL} -o "awscliv2.zip"
+    yum install -y ${!SSM_X86_64_URL}
+  elif [[ ${!machine} == "aarch64" ]]; then
+    yum install -y ${!SSM_AARCH64_URL}
   fi
-  which unzip > /dev/null 2>&1
-  if [[ "$?" != "0" ]]; then
-    yum install -y unzip
-  fi
-  unzip -q awscliv2.zip
-  ./aws/install --bin-dir /bin --update
-  rm -rf aws awscliv2.zip
+  systemctl enable amazon-ssm-agent || true
+  systemctl restart amazon-ssm-agent
 }
 
 echo "#!/bin/bash
@@ -151,12 +146,11 @@ if [[ \\${!PACKAGE_DOWNLOAD_URI} == s3://* ]]; then
   AWS=\\$(command -v aws)
   S3_BUCKET=\\$(echo \\${!PACKAGE_DOWNLOAD_URI} | cut -f3 -d/)
   if [[ \\${!INSTANCE_REGION} =~ ^us-gov-[a-z]+-[0-9]+$ ]]; then
-    S3_BUCKET_REGION=\\$(curl -s --head https://\${!S3_BUCKET}.s3.us-gov-west-1.amazonaws.com | grep bucket-region | awk '{print \$2}' | tr -d '\\r\\n')
-    \\$AWS --region \\${!S3_BUCKET_REGION} s3 cp \\${!PACKAGE_DOWNLOAD_URI} /root/bootstrap/
+    S3_BUCKET_REGION=\\$(curl -s --head \${!S3_BUCKET}.s3.us-gov-west-1.amazonaws.com | grep bucket-region | awk '{print \$2}' | tr -d '\\r\\n')
   else
-    #S3_BUCKET_REGION=\\$(curl -s --head https://\${!S3_BUCKET}.s3.us-east-1.amazonaws.com | grep bucket-region | awk '{print \$2}' | tr -d '\\r\\n')
-    \\$AWS --region \\${!INSTANCE_REGION} s3 cp \\${!PACKAGE_DOWNLOAD_URI} /root/bootstrap/
+    S3_BUCKET_REGION=\\$(curl -s --head \${!S3_BUCKET}.s3.us-east-1.amazonaws.com | grep bucket-region | awk '{print \$2}' | tr -d '\\r\\n')
   fi
+  \\$AWS --region \\${!S3_BUCKET_REGION} s3 cp \\${!PACKAGE_DOWNLOAD_URI} /root/bootstrap/
 else
   cp \\${!PACKAGE_DOWNLOAD_URI} /root/bootstrap/
 fi
@@ -175,6 +169,7 @@ chmod +x /root/bootstrap/download_bootstrap.sh
 
         userdata += f'''
 install_aws_cli
+install_ssm
 bash /root/bootstrap/download_bootstrap.sh "{self.bootstrap_package_uri}"
 
 cd /root/bootstrap/latest
@@ -191,21 +186,9 @@ mkdir -p /root/bootstrap
 AWS_REGION="{self.aws_region}"
 BASE_OS="{self.base_os}"
 DEFAULT_AWS_REGION="{self.aws_region}"
-AWSCLI_X86_64_URL="https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip"
-AWSCLI_AARCH64_URL="https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip"
+SSM_X86_64_URL="https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_amd64/amazon-ssm-agent.rpm"
+SSM_AARCH64_URL="https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_arm64/amazon-ssm-agent.rpm"
 """
-
-        proxy_config_entries = ''
-        if self.proxy_config is not None:
-            for key, value in self.proxy_config.items():
-                proxy_config_entries += f'export {key}={value}{os.linesep}'
-
-        userdata += f'''
-echo "{proxy_config_entries}
-" > /root/bootstrap/proxy.cfg
-source /root/bootstrap/proxy.cfg
-        '''
-
         userdata += '''
 
 timestamp=$(date +%s)
@@ -219,39 +202,46 @@ export PATH="${PATH}:/usr/local/bin"
 
 function install_aws_cli () {
   if [[ "${BASE_OS}" == "amazonlinux2" ]]; then
-    yum remove -y awscli
+    return 0
   fi
-  cd /root/bootstrap
+  which aws > /dev/null 2>&1
+  if [[ "$?" != "0" ]]; then
+    yum install -y python3-pip
+    PIP=$(which pip3)
+    ${PIP} install awscli
+  fi
+}
+
+function install_ssm () {
+  # install SSM
+  systemctl status amazon-ssm-agent
+  if [[ "$?" == "0" ]]; then
+      return 0
+  fi
   local machine=$(uname -m)
   if [[ ${machine} == "x86_64" ]]; then
-    curl -s ${AWSCLI_X86_64_URL} -o "awscliv2.zip"
-    elif [[ ${machine} == "aarch64" ]]; then
-      curl -s ${AWSCLI_AARCH64_URL} -o "awscliv2.zip"
+    yum install -y ${SSM_X86_64_URL}
+  elif [[ ${machine} == "aarch64" ]]; then
+    yum install -y ${SSM_AARCH64_URL}
   fi
-  which unzip > /dev/null 2>&1
-  if [[ "$?" != "0" ]]; then
-    yum install -y unzip
-  fi
-  unzip -q awscliv2.zip
-  ./aws/install --bin-dir /bin --update
-  rm -rf aws awscliv2.zip
+  systemctl enable amazon-ssm-agent || true
+  systemctl restart amazon-ssm-agent
 }
 
 echo "#!/bin/bash
 PACKAGE_DOWNLOAD_URI=\\${1}
 PACKAGE_ARCHIVE=\\$(basename \\${PACKAGE_DOWNLOAD_URI})
 PACKAGE_NAME=\\${PACKAGE_ARCHIVE%.tar.gz*}
-INSTANCE_REGION=\\$(TOKEN=\\$(curl --silent -X PUT 'http://169.254.169.254/latest/api/token' -H 'X-aws-ec2-metadata-token-ttl-seconds: 900') && curl --silent -H \\"X-aws-ec2-metadata-token: \\${TOKEN}\\" 'http://169.254.169.254/latest/meta-data/placement/region')
+INSTANCE_REGION=\\$(TOKEN=\\$(curl --silent -X PUT 'http://169.254.169.254/latest/api/token' -H 'X-aws-ec2-metadata-token-ttl-seconds: 900') && curl --silent -H \\"X-aws-ec2-metadata-token: \\${!TOKEN}\\" 'http://169.254.169.254/latest/meta-data/placement/region')
 if [[ \\${PACKAGE_DOWNLOAD_URI} == s3://* ]]; then
   AWS=\\$(command -v aws)
   S3_BUCKET=\\$(echo \\${PACKAGE_DOWNLOAD_URI} | cut -f3 -d/)
   if [[ \\${INSTANCE_REGION} =~ ^us-gov-[a-z]+-[0-9]+$ ]]; then
-    S3_BUCKET_REGION=\\$(curl -s --head https://\\${S3_BUCKET}.s3.us-gov-west-1.amazonaws.com | grep bucket-region | awk '{print \$2}' | tr -d '\\r\\n')
-    \\$AWS --region \\${S3_BUCKET_REGION} s3 cp \\${PACKAGE_DOWNLOAD_URI} /root/bootstrap/
+    S3_BUCKET_REGION=\\$(curl -s --head \\${S3_BUCKET}.s3.us-gov-west-1.amazonaws.com | grep bucket-region | awk '{print \$2}' | tr -d '\\r\\n')
   else
-    #S3_BUCKET_REGION=\\$(curl -s --head https://\\${S3_BUCKET}.s3.us-east-1.amazonaws.com | grep bucket-region | awk '{print \$2}' | tr -d '\\r\\n')
-    \\$AWS --region \\${INSTANCE_REGION} s3 cp \\${PACKAGE_DOWNLOAD_URI} /root/bootstrap/
+    S3_BUCKET_REGION=\\$(curl -s --head \\${S3_BUCKET}.s3.us-east-1.amazonaws.com | grep bucket-region | awk '{print \$2}' | tr -d '\\r\\n')
   fi
+  \\$AWS --region \\${S3_BUCKET_REGION} s3 cp \\${PACKAGE_DOWNLOAD_URI} /root/bootstrap/
 else
   cp \\${PACKAGE_DOWNLOAD_URI} /root/bootstrap/
 fi
@@ -270,6 +260,7 @@ chmod +x /root/bootstrap/download_bootstrap.sh
 
         userdata += f'''
 install_aws_cli
+install_ssm
 bash /root/bootstrap/download_bootstrap.sh "{self.bootstrap_package_uri}"
 
 cd /root/bootstrap/latest

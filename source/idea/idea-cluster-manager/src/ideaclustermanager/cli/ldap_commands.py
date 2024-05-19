@@ -22,10 +22,6 @@ from typing import Dict
 import click
 
 
-# Default page size for LDAP CLI operations
-DEFAULT_CLI_PAGE_SIZE = 500
-
-
 @click.group('ldap')
 def ldap_commands():
     """
@@ -35,8 +31,7 @@ def ldap_commands():
 
 @ldap_commands.command('search-users', context_settings=constants.CLICK_SETTINGS)
 @click.option('-q', '--query', help="search query (substring of username)")
-@click.option('-p', '--page-size', default=DEFAULT_CLI_PAGE_SIZE, help=f"LDAP page size for search query (default {DEFAULT_CLI_PAGE_SIZE})")
-def search_users(query: str, page_size: int):
+def search_users(query: str):
     """
     search for users in directory service using ldap
     """
@@ -44,41 +39,15 @@ def search_users(query: str, page_size: int):
     context = build_cli_context(cluster_config=True, enable_aws_client_provider=True, enable_aws_util=True)
     ldap_client = build_ldap_client(context)
 
-    _start = 0
-    _cur_page = 0
-    user_result = []
-
-    _loop_start = Utils.current_time_ms()
-    while True:
-        _cur_page += 1
-        _page_start_time = Utils.current_time_ms()
-        users, page = ldap_client.search_users(
-            username_filter=SocaFilter(like=query),
-            start=_start,
-            page_size=Utils.get_as_int(page_size, default=DEFAULT_CLI_PAGE_SIZE)
-        )
-        _page_end_time = Utils.current_time_ms()
-        context.debug(f"# DEBUG - Page #{_cur_page} query time: {_page_end_time - _page_start_time}ms")
-
-        # Need a way to indicate partial results?
-        if not users:
-            break
-
-        user_result += users
-        _start += len(users)
-
-        if _start >= page.total:
-            break
-
-    _loop_end = Utils.current_time_ms()
-    context.debug(f"# Total LDAP query time: {_loop_end - _loop_start}ms")
-    context.print_json(user_result)
+    users, _ = ldap_client.search_users(username_filter=SocaFilter(
+        like=query
+    ))
+    context.print_json(users)
 
 
 @ldap_commands.command('search-groups', context_settings=constants.CLICK_SETTINGS)
 @click.option('-q', '--query', help="search query (substring of group name)")
-@click.option('-p', '--page-size', default=DEFAULT_CLI_PAGE_SIZE, help=f"LDAP page size for search query (default {DEFAULT_CLI_PAGE_SIZE})")
-def search_groups(query: str, page_size: int):
+def search_groups(query: str):
     """
     search for groups in directory service using ldap
     """
@@ -86,36 +55,10 @@ def search_groups(query: str, page_size: int):
     context = build_cli_context(cluster_config=True, enable_aws_client_provider=True, enable_aws_util=True)
     ldap_client = build_ldap_client(context)
 
-    _start = 0
-    _cur_page = 0
-    group_result = []
-
-    _loop_start = Utils.current_time_ms()
-
-    while True:
-        _cur_page += 1
-        _page_start_time = Utils.current_time_ms()
-        groups, page = ldap_client.search_groups(
-            group_name_filter=SocaFilter(like=query),
-            start=_start,
-            page_size=Utils.get_as_int(page_size, default=DEFAULT_CLI_PAGE_SIZE)
-        )
-        _page_end_time = Utils.current_time_ms()
-        context.debug(f"# DEBUG - Page #{_cur_page} query time: {_page_end_time - _page_start_time}ms")
-
-        # Need a way to indicate partial results?
-        if not groups:
-            break
-
-        group_result += groups
-        _start += len(groups)
-
-        if _start >= page.total:
-            break
-
-    _loop_end = Utils.current_time_ms()
-    context.debug(f"# Total LDAP query time: {_loop_end - _loop_start}ms")
-    context.print_json(group_result)
+    groups, _ = ldap_client.search_groups(group_name_filter=SocaFilter(
+        like=query
+    ))
+    context.print_json(groups)
 
 
 @ldap_commands.command('delete-user', context_settings=constants.CLICK_SETTINGS)

@@ -60,7 +60,7 @@ directoryservice:
   instance_ami: ami-0489c6c0a2c0b6281
   instance_id: i-0fea892e74374ef26
   instance_profile_arn: {{ context.cluster_name }}-directoryservice-openldap-instance-profile-us-east-1
-  instance_type: m6i.large
+  instance_type: m5.large
   ldap_base: dc=idea,dc=local
   ldap_connection_uri: ldap://openldap.{{ context.cluster_name }}.us-east-1.local
   name: idea.local
@@ -428,29 +428,29 @@ global-settings:
         - putty
 
     nodejs:
-      version: "16.20.2"
-      nvm_version: "0.39.5"
-      npm_version: "9.8.1"
+      version: "16.10.0"
+      nvm_version: "0.39.0"
+      npm_version: "7.15.1"
       url: "https://raw.githubusercontent.com/nvm-sh/nvm/"
     openmpi:
-      version: "4.1.5"
-      url: "https://download.open-mpi.org/release/open-mpi/v4.1/openmpi-4.1.5.tar.gz"
-      checksum: "ca1bff69624909f16fb6c240cddb7b44236de616dfb6dd68d26cb264654e737457e265c61a78b7e42ec4832cfd6d48a5"
+      version: "4.1.4"
+      url: "https://download.open-mpi.org/release/open-mpi/v4.1/openmpi-4.1.4.tar.gz"
+      checksum: "61f78909fb582114afae0408e85caa22529ed511765065059593c97b5a4f73152cd56b96812f5d80047e4e6fa114397e"
       checksum_method: sha384
     python:
-      version: "3.9.18"
-      url: "https://www.python.org/ftp/python/3.9.18/Python-3.9.18.tgz"
-      checksum: "f713544332479d7fa7080db780703d7728b6002ba23b77885fa87922fab1ce3ee8316900c7de49b502b8624adcffb097"
+      version: "3.9.16"
+      url: "https://www.python.org/ftp/python/3.9.16/Python-3.9.16.tgz"
+      checksum: "87acee12323b63a2e0c368193c03fd57e008585c754b6bceec6d5ec4c0bc34b3bb1ff20f31b6f5aff6e02502e7f5b291"
       checksum_method: sha384
     efa:
-      version: "1.25.1"
-      url: "https://efa-installer.amazonaws.com/aws-efa-installer-1.25.1.tar.gz"
-      checksum: "7e0648a2af37f8d5d18d8a38cb424754476dbbf2a62c9bd573eaec4195e586e8c49b4436246e2a0bd0a181682680d290"
+      version: "1.21.0"
+      url: "https://efa-installer.amazonaws.com/aws-efa-installer-1.21.0.tar.gz"
+      checksum: "036e60b28793ed64072a53c9b67ab58e4cc93bcb6732bf5b7be2b3d4a9e082affbd37f6b91007641adb2860e08037823"
       checksum_method: sha384
     openpbs:
-      version: "23.06.06"
-      url: "https://github.com/openpbs/openpbs/archive/v23.06.06.tar.gz"
-      checksum: "8a4d7f9c326fd1de5c103e700422bc4d49edc9d50f142c033e9e7de8d10d52f5c4f92e902e107b8e89d3e12c147ebef4"
+      version: "22.05.11"
+      url: "https://github.com/openpbs/openpbs/archive/v22.05.11.tar.gz"
+      checksum: "b1516586af058b3b52074fbc8e7849243ff983c58baff9a39e4d80d8e8c960e4c4cef1ae063b9729aea87fe5c52ca193"
       checksum_method: sha384
       # can be release or dev. if dev, sources will be cloned from github and installed for the configured release version.
       # additional customizations can be implemented in idea-bootstrap/_templates/linux/openpbs.jinja2
@@ -533,7 +533,7 @@ global-settings:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/2022.1/Clients/nice-dcv-client-Release-portable-2022.1-8261.zip
         macos:
           m1:
-            label: Apple Silicon (M1, M2)
+            label: M1 Chip
             url: https://d1uj6qtbmh3dt5.cloudfront.net/2022.1/Clients/nice-dcv-viewer-2022.1.4279.arm64.dmg
           intel:
             label: Intel Chip

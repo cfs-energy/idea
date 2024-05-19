@@ -37,7 +37,7 @@ class OpenLDAPClient(AbstractLDAPClient):
 
     @property
     def ldap_user_filterstr(self) -> str:
-        return '(objectClass=posixAccount)'
+        return f'(objectClass=posixAccount)'
 
     @property
     def ldap_group_base(self) -> str:
@@ -45,7 +45,7 @@ class OpenLDAPClient(AbstractLDAPClient):
 
     @property
     def ldap_group_filterstr(self) -> str:
-        return '(objectClass=posixGroup)'
+        return f'(objectClass=posixGroup)'
 
     def build_group_filterstr(self, group_name: str = None, username: str = None) -> str:
         filterstr = self.ldap_group_filterstr
@@ -61,7 +61,7 @@ class OpenLDAPClient(AbstractLDAPClient):
 
     @property
     def ldap_sudoer_filterstr(self) -> str:
-        return '(objectClass=sudoRole)'
+        return f'(objectClass=sudoRole)'
 
     def build_sudoer_dn(self, username: str) -> str:
         return f'cn={username},{self.ldap_sudoers_base}'

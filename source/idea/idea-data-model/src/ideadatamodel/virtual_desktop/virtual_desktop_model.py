@@ -21,7 +21,6 @@ __all__ = (
     'VirtualDesktopGPU',
     'VirtualDesktopArchitecture',
     'VirtualDesktopSoftwareStack',
-    'VirtualDesktopTenancy',
     'DayOfWeek',
     'VirtualDesktopScheduleType',
     'VirtualDesktopSchedule',
@@ -38,7 +37,7 @@ from ideadatamodel import SocaBaseModel, SocaMemory, SocaBatchResponsePayload, P
 from typing import Optional, List
 from datetime import datetime
 from enum import Enum
-from pydantic import Field
+
 
 class VirtualDesktopSessionState(str, Enum):
     PROVISIONING = 'PROVISIONING'
@@ -56,12 +55,6 @@ class VirtualDesktopSessionState(str, Enum):
 class VirtualDesktopSessionType(str, Enum):
     CONSOLE = 'CONSOLE'
     VIRTUAL = 'VIRTUAL'
-
-
-class VirtualDesktopTenancy(str, Enum):
-    DEFAULT = 'default'
-    DEDICATED = 'dedicated'
-    HOST = 'host'
 
 
 class VirtualDesktopGPU(str, Enum):
@@ -97,10 +90,6 @@ class VirtualDesktopBaseOS(str, Enum):
     AMAZON_LINUX2 = constants.OS_AMAZONLINUX2
     CENTOS7 = constants.OS_CENTOS7
     RHEL7 = constants.OS_RHEL7
-    RHEL8 = constants.OS_RHEL8
-    RHEL9 = constants.OS_RHEL9
-    ROCKY8 = constants.OS_ROCKY8
-    ROCKY9 = constants.OS_ROCKY9
     WINDOWS = constants.OS_WINDOWS
 
 
@@ -110,106 +99,105 @@ class VirtualDesktopSessionPermissionActorType(str, Enum):
 
 
 class VirtualDesktopSessionScreenshot(SocaBaseModel):
-    image_type: Optional[str] = Field(default=None)
-    image_data: Optional[str] = Field(default=None)
-    dcv_session_id: Optional[str] = Field(default=None)
-    idea_session_id: Optional[str] = Field(default=None)
-    idea_session_owner: Optional[str] = Field(default=None)
-    create_time: Optional[str] = Field(default=None)
-    failure_reason: Optional[str] = Field(default=None)
+    image_type: Optional[str]
+    image_data: Optional[str]
+    dcv_session_id: Optional[str]
+    idea_session_id: Optional[str]
+    idea_session_owner: Optional[str]
+    create_time: Optional[str]
+    failure_reason: Optional[str]
 
 
 class VirtualDesktopSessionConnectionInfo(SocaBaseModel):
-    dcv_session_id: Optional[str] = Field(default=None)
-    idea_session_id: Optional[str] = Field(default=None)
-    idea_session_owner: Optional[str] = Field(default=None)
-    endpoint: Optional[str] = Field(default=None)
-    username: Optional[str] = Field(default=None)
-    web_url_path: Optional[str] = Field(default=None)
-    access_token: Optional[str] = Field(default=None)
-    failure_reason: Optional[str] = Field(default=None)
+    dcv_session_id: Optional[str]
+    idea_session_id: Optional[str]
+    idea_session_owner: Optional[str]
+    endpoint: Optional[str]
+    username: Optional[str]
+    web_url_path: Optional[str]
+    access_token: Optional[str]
+    failure_reason: Optional[str]
 
 
 class VirtualDesktopSoftwareStack(SocaBaseModel):
-    stack_id: Optional[str] = Field(default=None)
-    base_os: Optional[VirtualDesktopBaseOS] = Field(default=None)
-    name: Optional[str] = Field(default=None)
-    description: Optional[str] = Field(default=None)
-    created_on: Optional[datetime] = Field(default=None)
-    updated_on: Optional[datetime] = Field(default=None)
-    ami_id: Optional[str] = Field(default=None)
-    failure_reason: Optional[str] = Field(default=None)
-    enabled: Optional[bool] = Field(default=None)
-    min_storage: Optional[SocaMemory] = Field(default=None)
-    min_ram: Optional[SocaMemory] = Field(default=None)
-    architecture: Optional[VirtualDesktopArchitecture] = Field(default=None)
-    gpu: Optional[VirtualDesktopGPU] = Field(default=None)
-    projects: Optional[List[Project]] = Field(default=None)
-    pool_enabled: Optional[bool] = Field(default=None)
-    pool_asg_name: Optional[str] = Field(default=None)
-    launch_tenancy: Optional[VirtualDesktopTenancy] = Field(default=None)
+    stack_id: Optional[str]
+    base_os: Optional[VirtualDesktopBaseOS]
+    name: Optional[str]
+    description: Optional[str]
+    created_on: Optional[datetime]
+    updated_on: Optional[datetime]
+    ami_id: Optional[str]
+    failure_reason: Optional[str]
+    enabled: Optional[bool]
+    min_storage: Optional[SocaMemory]
+    min_ram: Optional[SocaMemory]
+    architecture: Optional[VirtualDesktopArchitecture]
+    gpu: Optional[VirtualDesktopGPU]
+    projects: Optional[List[Project]]
 
 
 class VirtualDesktopServer(SocaBaseModel):
-    server_id: Optional[str] = Field(default=None)
-    idea_sesssion_id: Optional[str] = Field(default=None)
-    idea_session_owner: Optional[str] = Field(default=None)
-    instance_id: Optional[str] = Field(default=None)
-    instance_type: Optional[str] = Field(default=None)
-    private_ip: Optional[str] = Field(default=None)
-    private_dns_name: Optional[str] = Field(default=None)
-    public_ip: Optional[str] = Field(default=None)
-    public_dns_name: Optional[str] = Field(default=None)
-    availability: Optional[str] = Field(default=None)
-    unavailability_reason: Optional[str] = Field(default=None)
-    console_session_count: Optional[int] = Field(default=None)
-    virtual_session_count: Optional[int] = Field(default=None)
-    max_concurrent_sessions_per_user: Optional[int] = Field(default=None)
-    max_virtual_sessions: Optional[int] = Field(default=None)
-    state: Optional[str] = Field(default=None)
-    locked: Optional[bool] = Field(default=None)
-    root_volume_size: Optional[SocaMemory] = Field(default=None)
-    root_volume_iops: Optional[int] = Field(default=None)
-    instance_profile_arn: Optional[str] = Field(default=None)
-    security_groups: Optional[List[str]] = Field(default=None)
-    subnet_id: Optional[str] = Field(default=None)
-    key_pair_name: Optional[str] = Field(default=None)
+    server_id: Optional[str]
+    idea_sesssion_id: Optional[str]
+    idea_session_owner: Optional[str]
+    instance_id: Optional[str]
+    instance_type: Optional[str]
+    private_ip: Optional[str]
+    private_dns_name: Optional[str]
+    public_ip: Optional[str]
+    public_dns_name: Optional[str]
+    availability: Optional[str]
+    unavailability_reason: Optional[str]
+    console_session_count: Optional[int]
+    virtual_session_count: Optional[int]
+    max_concurrent_sessions_per_user: Optional[int]
+    max_virtual_sessions: Optional[int]
+    state: Optional[str]
+    locked: Optional[bool]
+
+    instance_type: Optional[str]
+    root_volume_size: Optional[SocaMemory]
+    root_volume_iops: Optional[int]
+    instance_profile_arn: Optional[str]
+    security_groups: Optional[List[str]]
+    subnet_id: Optional[str]
+    key_pair_name: Optional[str]
 
 
 class VirtualDesktopSchedule(SocaBaseModel):
-    schedule_id: Optional[str] = Field(default=None)
-    idea_session_id: Optional[str] = Field(default=None)
-    idea_session_owner: Optional[str] = Field(default=None)
-    day_of_week: Optional[DayOfWeek] = Field(default=None)
-    start_up_time: Optional[str] = Field(default=None)
-    shut_down_time: Optional[str] = Field(default=None)
-    schedule_type: Optional[VirtualDesktopScheduleType] = Field(default=None)
+    schedule_id: Optional[str]
+    idea_session_id: Optional[str]
+    idea_session_owner: Optional[str]
+    day_of_week: Optional[DayOfWeek]
+    start_up_time: Optional[str]
+    shut_down_time: Optional[str]
+    schedule_type: Optional[VirtualDesktopScheduleType]
 
 
 class VirtualDesktopPermission(SocaBaseModel):
-    key: Optional[str] = Field(default=None)
-    name: Optional[str] = Field(default=None)
-    description: Optional[str] = Field(default=None)
-    enabled: Optional[bool] = Field(default=None)
+    key: Optional[str]
+    name: Optional[str]
+    description: Optional[str]
+    enabled: Optional[bool]
 
 
 class VirtualDesktopWeekSchedule(SocaBaseModel):
-    monday: Optional[VirtualDesktopSchedule] = Field(default=None)
-    tuesday: Optional[VirtualDesktopSchedule] = Field(default=None)
-    wednesday: Optional[VirtualDesktopSchedule] = Field(default=None)
-    thursday: Optional[VirtualDesktopSchedule] = Field(default=None)
-    friday: Optional[VirtualDesktopSchedule] = Field(default=None)
-    saturday: Optional[VirtualDesktopSchedule] = Field(default=None)
-    sunday: Optional[VirtualDesktopSchedule] = Field(default=None)
+    monday: Optional[VirtualDesktopSchedule]
+    tuesday: Optional[VirtualDesktopSchedule]
+    wednesday: Optional[VirtualDesktopSchedule]
+    thursday: Optional[VirtualDesktopSchedule]
+    friday: Optional[VirtualDesktopSchedule]
+    saturday: Optional[VirtualDesktopSchedule]
+    sunday: Optional[VirtualDesktopSchedule]
 
 
 class VirtualDesktopPermissionProfile(SocaBaseModel):
-    profile_id: Optional[str] = Field(default=None)
-    title: Optional[str] = Field(default=None)
-    description: Optional[str] = Field(default=None)
-    permissions: Optional[List[VirtualDesktopPermission]] = Field(default=None)
-    created_on: Optional[datetime] = Field(default=None)
-    updated_on: Optional[datetime] = Field(default=None)
+    profile_id: Optional[str]
+    title: Optional[str]
+    description: Optional[str]
+    permissions: Optional[List[VirtualDesktopPermission]]
+    created_on: Optional[datetime]
+    updated_on: Optional[datetime]
 
     def get_permission(self, permission_key: str) -> Optional[VirtualDesktopPermission]:
         if self.permissions is None:
@@ -222,51 +210,53 @@ class VirtualDesktopPermissionProfile(SocaBaseModel):
 
 
 class VirtualDesktopSessionPermission(SocaBaseModel):
-    idea_session_id: Optional[str] = Field(default=None)
-    idea_session_owner: Optional[str] = Field(default=None)
-    idea_session_name: Optional[str] = Field(default=None)
-    idea_session_instance_type: Optional[str] = Field(default=None)
-    idea_session_state: Optional[VirtualDesktopSessionState] = Field(default=None)
-    idea_session_base_os: Optional[VirtualDesktopBaseOS] = Field(default=None)
-    idea_session_created_on: Optional[datetime] = Field(default=None)
-    idea_session_hibernation_enabled: Optional[bool] = Field(default=None)
-    idea_session_type: Optional[VirtualDesktopSessionType] = Field(default=None)
-    permission_profile: Optional[VirtualDesktopPermissionProfile] = Field(default=None)
-    actor_type: Optional[VirtualDesktopSessionPermissionActorType] = Field(default=None)
-    actor_name: Optional[str] = Field(default=None)
-    created_on: Optional[datetime] = Field(default=None)
-    updated_on: Optional[datetime] = Field(default=None)
-    expiry_date: Optional[datetime] = Field(default=None)
-    failure_reason: Optional[str] = Field(default=None)
+    idea_session_id: Optional[str]
+    idea_session_owner: Optional[str]
+    idea_session_name: Optional[str]
+    idea_session_instance_type: Optional[str]
+    idea_session_state: Optional[VirtualDesktopSessionState]
+    idea_session_base_os: Optional[VirtualDesktopBaseOS]
+    idea_session_created_on: Optional[datetime]
+    idea_session_hibernation_enabled: Optional[bool]
+    idea_session_type: Optional[VirtualDesktopSessionType]
+    permission_profile: Optional[VirtualDesktopPermissionProfile]
+    actor_type: Optional[VirtualDesktopSessionPermissionActorType]
+    actor_name: Optional[str]
+    created_on: Optional[datetime]
+    updated_on: Optional[datetime]
+    expiry_date: Optional[datetime]
+
+    failure_reason: Optional[str]
 
 
 class VirtualDesktopSession(SocaBaseModel):
-    dcv_session_id: Optional[str] = Field(default=None)
-    idea_session_id: Optional[str] = Field(default=None)
-    base_os: Optional[VirtualDesktopBaseOS] = Field(default=None)
-    name: Optional[str] = Field(default=None)
-    owner: Optional[str] = Field(default=None)
-    type: Optional[VirtualDesktopSessionType] = Field(default=None)
-    server: Optional[VirtualDesktopServer] = Field(default=None)
-    created_on: Optional[datetime] = Field(default=None)
-    updated_on: Optional[datetime] = Field(default=None)
-    state: Optional[VirtualDesktopSessionState] = Field(default=None)
-    description: Optional[str] = Field(default=None)
-    software_stack: Optional[VirtualDesktopSoftwareStack] = Field(default=None)
-    project: Optional[Project] = Field(default=None)
-    schedule: Optional[VirtualDesktopWeekSchedule] = Field(default=None)
-    connection_count: Optional[int] = Field(default=None)
-    force: Optional[bool] = Field(default=None)
-    hibernation_enabled: Optional[bool] = Field(default=None)
-    is_launched_by_admin: Optional[bool] = Field(default=None)
-    locked: Optional[bool] = Field(default=None)
+    dcv_session_id: Optional[str]
+    idea_session_id: Optional[str]
+    base_os: Optional[VirtualDesktopBaseOS]
+    name: Optional[str]
+    owner: Optional[str]
+    type: Optional[VirtualDesktopSessionType]
+    server: Optional[VirtualDesktopServer]
+    created_on: Optional[datetime]
+    updated_on: Optional[datetime]
+    state: Optional[VirtualDesktopSessionState]
+    description: Optional[str]
+    software_stack: Optional[VirtualDesktopSoftwareStack]
+    project: Optional[Project]
+    schedule: Optional[VirtualDesktopWeekSchedule]
+    connection_count: Optional[int]
+    force: Optional[bool]
+    hibernation_enabled: Optional[bool]
+    is_launched_by_admin: Optional[bool]
+    locked: Optional[bool]
+
     # Transient field, to be used for API responses only.
-    failure_reason: Optional[str] = Field(default=None)
+    failure_reason: Optional[str]
 
 
 class VirtualDesktopSessionBatchResponsePayload(SocaBatchResponsePayload):
-    failed: Optional[List[VirtualDesktopSession]] = Field(default=None)
-    success: Optional[List[VirtualDesktopSession]] = Field(default=None)
+    failed: Optional[List[VirtualDesktopSession]]
+    success: Optional[List[VirtualDesktopSession]]
 
 
 class VirtualDesktopApplicationProfile(SocaBaseModel):

@@ -45,7 +45,7 @@ class BootstrapUtils:
         cloudwatch_metrics_enabled = Utils.is_not_empty(metrics_provider) and metrics_provider == constants.METRICS_PROVIDER_CLOUDWATCH
         cloudwatch_metrics_enabled = cloudwatch_metrics_enabled and Utils.is_true(enable_metrics, default=True)
 
-        include_metrics = ['cpu', 'disk', 'diskio', 'swap', 'mem', 'net', 'netstat', 'statsd', 'processes']
+        include_metrics = ['cpu', 'disk', 'diskio', 'swap', 'mem', 'net', 'netstat', 'processes']
         if bootstrap_context.is_nvidia_gpu():
             include_metrics.append('nvidia_gpu')
         bootstrap_context.vars.cloudwatch_agent_config = CloudWatchAgentConfig(

@@ -40,7 +40,6 @@ from aws_cdk import (
     aws_elasticloadbalancingv2 as elbv2,
     aws_kinesis as kinesis,
     aws_lambda as lambda_,
-    aws_kms as kms,
     aws_lambda_event_sources as lambda_event_sources,
     aws_logs as logs
 )
@@ -90,13 +89,6 @@ class AnalyticsStack(IdeaBaseStack):
                 domain_endpoint=f'https://{domain_vpc_endpoint_url}'
             )
             self.build_dashboard_endpoints()
-
-            self.add_nag_suppression(
-                construct=self.stack,
-                suppressions=[
-                    IdeaNagSuppression(rule_id='AwsSolutions-KDS3', reason='Kinesis Data Stream is encrypted with customer-managed KMS key')
-                ]
-            )
         else:
             self.build_opensearch()
             self.build_dashboard_endpoints()
@@ -107,17 +99,8 @@ class AnalyticsStack(IdeaBaseStack):
                     IdeaNagSuppression(rule_id='AwsSolutions-IAM5', reason='CDK L2 construct does not support custom LogGroup permissions'),
                     IdeaNagSuppression(rule_id='AwsSolutions-IAM4', reason='Usage is required for Service Linked Role'),
                     IdeaNagSuppression(rule_id='AwsSolutions-L1', reason='CDK L2 construct does not offer options to customize the Lambda runtime'),
-                    IdeaNagSuppression(rule_id='AwsSolutions-KDS3', reason='Kinesis Data Stream is encrypted with customer-managed KMS key')
                 ]
             )
-            data_nodes = self.context.config().get_int('analytics.opensearch.data_nodes', required=True)
-            if data_nodes == 1:
-                self.add_nag_suppression(
-                    construct=self.stack,
-                    suppressions=[
-                        IdeaNagSuppression(rule_id='AwsSolutions-OS7', reason='OpenSearch domain has 1 data node disabling Zone Awareness')
-                    ]
-                )
 
         self.build_analytics_input_stream()
         self.build_cluster_settings()
@@ -169,7 +152,7 @@ class AnalyticsStack(IdeaBaseStack):
                 lambda_package_name='idea_analytics_sink',
                 lambda_platform=SupportedLambdaPlatforms.PYTHON
             ),
-            description='Lambda to process analytics-kinesis-stream data',
+            description=f'Lambda to process analytics-kinesis-stream data',
             timeout_seconds=900,
             security_groups=[self.security_group],
             role=stream_processing_lambda_role,
@@ -181,10 +164,6 @@ class AnalyticsStack(IdeaBaseStack):
                 subnets=self.cluster.private_subnets
             )
         )
-
-        stream_processing_lambda.add_nag_suppression(suppressions=[
-            IdeaNagSuppression(rule_id='AwsSolutions-L1', reason='Python Runtime is selected for stability.')
-        ])
 
         stream_processing_lambda.add_event_source(lambda_event_sources.KinesisEventSource(
             self.kinesis_stream,
@@ -226,10 +205,6 @@ class AnalyticsStack(IdeaBaseStack):
         app_log_removal_policy = self.context.config().get_string('analytics.opensearch.logging.app_log_removal_policy', default='DESTROY')
         search_log_removal_policy = self.context.config().get_string('analytics.opensearch.logging.search_log_removal_policy', default='DESTROY')
         slow_index_log_removal_policy = self.context.config().get_string('analytics.opensearch.logging.slow_index_log_removal_policy', default='DESTROY')
-        kms_key_id = self.context.config().get_string('analytics.opensearch.kms_key_id')
-        kms_key_arn = None
-        if kms_key_id is not None:
-            kms_key_arn = kms.Key.from_key_arn(self.stack, 'opensearch-kms-key', self.get_kms_key_arn(key_id=kms_key_id))
 
         self.opensearch = OpenSearch(
             context=self.context,
@@ -242,7 +217,6 @@ class AnalyticsStack(IdeaBaseStack):
             ebs_volume_size=ebs_volume_size,
             removal_policy=cdk.RemovalPolicy(removal_policy),
             node_to_node_encryption=node_to_node_encryption,
-            kms_key_arn=kms_key_arn,
             create_service_linked_role=create_service_linked_role,
             logging=opensearch.LoggingOptions(
                 slow_search_log_enabled=self.context.config().get_bool('analytics.opensearch.logging.slow_search_log_enabled', required=True),

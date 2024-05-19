@@ -243,22 +243,6 @@ class MySharedVirtualDesktopSessions extends Component<MySharedVirtualDesktopPro
                             {
                                 title: 'RHEL 7',
                                 value: 'rhel7'
-                            },
-                            {
-                                title: 'RHEL 8',
-                                value: 'rhel8'
-                            },
-                            {
-                                title: 'RHEL 9',
-                                value: 'rhel9'
-                            },
-                            {
-                                title: 'Rocky 8',
-                                value: 'rocky8'
-                            },
-                            {
-                                title: 'Rocky 9',
-                                value: 'rocky9'
                             }
                         ]
                     }

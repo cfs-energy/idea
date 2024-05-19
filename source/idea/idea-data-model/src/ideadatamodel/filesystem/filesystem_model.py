@@ -18,28 +18,27 @@ from ideadatamodel import SocaBaseModel
 
 from typing import Optional, List
 from datetime import datetime
-from pydantic import Field
 
 
 class FileData(SocaBaseModel):
-    owner: Optional[str] = Field(default=None)
-    group: Optional[str] = Field(default=None)
-    file_id: Optional[str] = Field(default=None)
-    name: Optional[str] = Field(default=None)
-    ext: Optional[str] = Field(default=None)
-    is_dir: Optional[bool] = Field(default=None)
-    is_hidden: Optional[bool] = Field(default=None)
-    is_sym_link: Optional[bool] = Field(default=None)
-    is_encrypted: Optional[bool] = Field(default=None)
-    size: Optional[int] = Field(default=None)
-    mod_date: Optional[datetime] = Field(default=None)
-    children_count: Optional[int] = Field(default=None)
-    color: Optional[str] = Field(default=None)
-    icon: Optional[str] = Field(default=None)
-    folder_chain_icon: Optional[str] = Field(default=None)
-    thumbnail_url: Optional[str] = Field(default=None)
+    owner: Optional[str]
+    group: Optional[str]
+    file_id: Optional[str]
+    name: Optional[str]
+    ext: Optional[str]
+    is_dir: Optional[bool]
+    is_hidden: Optional[bool]
+    is_sym_link: Optional[bool]
+    is_encrypted: Optional[bool]
+    size: Optional[int]
+    mod_date: Optional[datetime]
+    children_count: Optional[int]
+    color: Optional[str]
+    icon: Optional[str]
+    folder_chain_icon: Optional[str]
+    thumbnail_url: Optional[str]
 
 
 class FileList(SocaBaseModel):
-    cwd: Optional[str] = Field(default=None)
-    files: Optional[List[FileData]] = Field(default=None)
+    cwd: Optional[str]
+    files: Optional[List[FileData]]

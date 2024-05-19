@@ -98,7 +98,7 @@ class DCVBrokerClient(DCVClientProtocol):
         return api_instance
 
     def enforce_session_permissions(self, session: VirtualDesktopSession):
-        permissions_content = self._session_permission_utils.generate_permissions_for_session(session, for_broker=True)
+        permissions_content = self._session_permission_utils.generate_permissions_for_session(session, True)
         permissions_content_base_64 = None if Utils.is_empty(permissions_content) else Utils.base64_encode(permissions_content)
         request = UpdateSessionPermissionsRequestData(
             session_id=session.dcv_session_id,
@@ -185,7 +185,7 @@ class DCVBrokerClient(DCVClientProtocol):
             requirements=f"tag:idea_session_id='{session.idea_session_id}'",
         )
 
-        permissions_content = self._session_permission_utils.generate_permissions_for_session(session, for_broker=True)
+        permissions_content = self._session_permission_utils.generate_permissions_for_session(session, True)
         request_data.permissions_file = None if Utils.is_empty(permissions_content) else Utils.base64_encode(permissions_content)
         request_data.storage_root = self._dcv_broker_client_utils.get_storage_root_for_base_os(session.software_stack.base_os, session.owner)
         return self._get_sessions_api().create_sessions(body=[request_data]).to_dict()

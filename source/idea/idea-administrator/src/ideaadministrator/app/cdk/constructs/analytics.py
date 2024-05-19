@@ -17,13 +17,13 @@ from ideaadministrator.app_context import AdministratorContext
 from ideasdk.utils import Utils
 
 from typing import List, Dict, Optional
+
 import aws_cdk as cdk
 import constructs
 from aws_cdk import (
     aws_ec2 as ec2,
     aws_iam as iam,
-    aws_opensearchservice as opensearch,
-    aws_kms as kms
+    aws_opensearchservice as opensearch
 )
 
 
@@ -49,7 +49,6 @@ class OpenSearch(SocaBaseConstruct, opensearch.Domain):
         ebs: Optional[opensearch.EbsOptions] = None,
         enable_version_upgrade: Optional[bool] = None,
         encryption_at_rest: Optional[opensearch.EncryptionAtRestOptions] = None,
-        kms_key_arn: Optional[kms.IKey] = None,
         enforce_https: Optional[bool] = None,
         fine_grained_access_control: Optional[opensearch.AdvancedSecurityOptions] = None,
         logging: Optional[opensearch.LoggingOptions] = None,
@@ -63,7 +62,7 @@ class OpenSearch(SocaBaseConstruct, opensearch.Domain):
         self.context = context
 
         if version is None:
-            version = opensearch.EngineVersion.OPENSEARCH_2_7
+            version = opensearch.EngineVersion.OPENSEARCH_2_3
 
         if vpc_subnets is None:
             vpc_subnets = [ec2.SubnetSelection(
@@ -89,8 +88,7 @@ class OpenSearch(SocaBaseConstruct, opensearch.Domain):
 
         if encryption_at_rest is None:
             encryption_at_rest = opensearch.EncryptionAtRestOptions(
-                enabled=True,
-                kms_key=kms_key_arn
+                enabled=True
             )
 
         if ebs is None:

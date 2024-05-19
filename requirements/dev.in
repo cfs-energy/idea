@@ -8,6 +8,5 @@
 pip-tools
 invoke
 pyfiglet
-openapi-pydantic
+openapi-schema-pydantic
 pylint
-wheel~=0.38.1

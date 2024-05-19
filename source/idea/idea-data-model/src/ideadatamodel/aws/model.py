@@ -26,11 +26,8 @@ __all__ = (
     'EC2PrefixList',
     'EC2PrefixListEntry',
     'CognitoUser',
-    'CognitoUserMFAOptions',
-    'CognitoUserPoolPasswordPolicy'
+    'CognitoUserMFAOptions'
 )
-
-from pydantic import Field
 
 from ideadatamodel.aws import EC2Instance
 from ideadatamodel.common import SocaAmount
@@ -43,54 +40,54 @@ from datetime import datetime
 
 
 class EC2InstanceIdentityDocument(SocaBaseModel):
-    accountId: Optional[str] = Field(default=None)
-    architecture: Optional[str] = Field(default=None)
-    availabilityZone: Optional[str] = Field(default=None)
-    billingProducts: Optional[str] = Field(default=None)
-    devpayProductCodes: Optional[str] = Field(default=None)
-    marketplaceProductCodes: Optional[str] = Field(default=None)
-    imageId: Optional[str] = Field(default=None)
-    instanceId: Optional[str] = Field(default=None)
-    instanceType: Optional[str] = Field(default=None)
-    kernelId: Optional[str] = Field(default=None)
-    pendingTime: Optional[str] = Field(default=None)
-    privateIp: Optional[str] = Field(default=None)
-    ramdiskId: Optional[str] = Field(default=None)
-    region: Optional[str] = Field(default=None)
-    version: Optional[str] = Field(default=None)
+    accountId: Optional[str]
+    architecture: Optional[str]
+    availabilityZone: Optional[str]
+    billingProducts: Optional[str]
+    devpayProductCodes: Optional[str]
+    marketplaceProductCodes: Optional[str]
+    imageId: Optional[str]
+    instanceId: Optional[str]
+    instanceType: Optional[str]
+    kernelId: Optional[str]
+    pendingTime: Optional[str]
+    privateIp: Optional[str]
+    ramdiskId: Optional[str]
+    region: Optional[str]
+    version: Optional[str]
 
 
 class EC2InstanceMonitorEvent(SocaBaseModel):
-    type: Optional[str] = Field(default=None)
-    instance: Optional[EC2Instance] = Field(default=None)
+    type: Optional[str]
+    instance: Optional[EC2Instance]
 
 
 class EC2SpotFleetInstance(SocaBaseModel):
-    InstanceId: Optional[str] = Field(default=None)
-    InstanceType: Optional[str] = Field(default=None)
-    SpotInstanceRequestId: Optional[str] = Field(default=None)
-    InstanceHealth: Optional[str] = Field(default=None)
+    InstanceId: Optional[str]
+    InstanceType: Optional[str]
+    SpotInstanceRequestId: Optional[str]
+    InstanceHealth: Optional[str]
 
 
 class AutoScalingGroupInstance(SocaBaseModel):
-    ProtectedFromScaleIn: Optional[bool] = Field(default=None)
-    AvailabilityZone: Optional[str] = Field(default=None)
-    InstanceId: Optional[str] = Field(default=None)
-    WeightedCapacity: Optional[str] = Field(default=None)
-    HealthStatus: Optional[str] = Field(default=None)
-    LifecycleState: Optional[str] = Field(default=None)
-    InstanceType: Optional[str] = Field(default=None)
+    ProtectedFromScaleIn: Optional[bool]
+    AvailabilityZone: Optional[str]
+    InstanceId: Optional[str]
+    WeightedCapacity: Optional[str]
+    HealthStatus: Optional[str]
+    LifecycleState: Optional[str]
+    InstanceType: Optional[str]
 
 
 class ServiceQuota(SocaBaseModel):
-    quota_name: Optional[str] = Field(default=None)
-    available: Optional[int] = Field(default=None)
-    consumed: Optional[int] = Field(default=None)
-    desired: Optional[int] = Field(default=None)
+    quota_name: Optional[str]
+    available: Optional[int]
+    consumed: Optional[int]
+    desired: Optional[int]
 
 
 class CheckServiceQuotaResult(SocaBaseModel):
-    quotas: Optional[List[ServiceQuota]] = Field(default=None)
+    quotas: Optional[List[ServiceQuota]]
 
     def is_available(self) -> bool:
         if self.quotas is None:
@@ -119,15 +116,15 @@ class CheckServiceQuotaResult(SocaBaseModel):
 
 
 class EC2InstanceUnitPrice(SocaBaseModel):
-    reserved: Optional[float] = Field(default=None)
-    ondemand: Optional[float] = Field(default=None)
+    reserved: Optional[float]
+    ondemand: Optional[float]
 
 
 class AwsProjectBudget(SocaBaseModel):
-    budget_name: Optional[str] = Field(default=None)
-    budget_limit: Optional[SocaAmount] = Field(default=None)
-    actual_spend: Optional[SocaAmount] = Field(default=None)
-    forecasted_spend: Optional[SocaAmount] = Field(default=None)
+    budget_name: Optional[str]
+    budget_limit: Optional[SocaAmount]
+    actual_spend: Optional[SocaAmount]
+    forecasted_spend: Optional[SocaAmount]
 
 
 class SocaAnonymousMetrics(AWSCustomObject):
@@ -154,11 +151,11 @@ class SocaAnonymousMetrics(AWSCustomObject):
 
 
 class SESSendEmailRequest(SocaBaseModel):
-    to_addresses: Optional[List[str]] = Field(default=None)
-    cc_addresses: Optional[List[str]] = Field(default=None)
-    bcc_addresses: Optional[List[str]] = Field(default=None)
-    subject: Optional[str] = Field(default=None)
-    body: Optional[str] = Field(default=None)
+    to_addresses: Optional[List[str]]
+    cc_addresses: Optional[List[str]]
+    bcc_addresses: Optional[List[str]]
+    subject: Optional[str]
+    body: Optional[str]
 
 
 class SESSendRawEmailRequest(SocaBaseModel):
@@ -166,15 +163,15 @@ class SESSendRawEmailRequest(SocaBaseModel):
 
 
 class AWSRegion(SocaBaseModel):
-    name: Optional[str] = Field(default=None)
-    region: Optional[str] = Field(default=None)
+    name: Optional[str]
+    region: Optional[str]
 
 
 class AWSPartition(SocaBaseModel):
-    name: Optional[str] = Field(default=None)
-    partition: Optional[str] = Field(default=None)
+    name: Optional[str]
+    partition: Optional[str]
     regions: List[AWSRegion]
-    dns_suffix: Optional[str] = Field(default=None)
+    dns_suffix: Optional[str]
 
     def get_region(self, region: str) -> Optional[AWSRegion]:
         for region_ in self.regions:
@@ -184,18 +181,18 @@ class AWSPartition(SocaBaseModel):
 
 
 class EC2PrefixListEntry(SocaBaseModel):
-    cidr: Optional[str] = Field(default=None)
-    description: Optional[str] = Field(default=None)
+    cidr: Optional[str]
+    description: Optional[str]
 
 
 class EC2PrefixList(SocaBaseModel):
-    prefix_list_id: Optional[str] = Field(default=None)
-    prefix_list_name: Optional[str] = Field(default=None)
-    prefix_list_arn: Optional[str] = Field(default=None)
-    max_entries: Optional[int] = Field(default=None)
-    state: Optional[str] = Field(default=None)
-    entries: Optional[List[EC2PrefixListEntry]] = Field(default=None)
-    address_family: Optional[str] = Field(default=None)
+    prefix_list_id: Optional[str]
+    prefix_list_name: Optional[str]
+    prefix_list_arn: Optional[str]
+    max_entries: Optional[int]
+    state: Optional[str]
+    entries: Optional[List[EC2PrefixListEntry]]
+    address_family: Optional[str]
 
     @staticmethod
     def from_aws_result(result: Dict) -> 'EC2PrefixList':
@@ -210,20 +207,20 @@ class EC2PrefixList(SocaBaseModel):
 
 
 class CognitoUserMFAOptions(SocaBaseModel):
-    DeliveryMedium: Optional[str] = Field(default=None)
-    AttributeName: Optional[str] = Field(default=None)
+    DeliveryMedium: Optional[str]
+    AttributeName: Optional[str]
 
 
 class CognitoUser(SocaBaseModel):
-    Username: Optional[str] = Field(default=None)
-    UserAttributes: Optional[List[Dict]] = Field(default=None)
-    UserCreateDate: Optional[datetime] = Field(default=None)
-    UserLastModifiedDate: Optional[datetime] = Field(default=None)
-    Enabled: Optional[bool] = Field(default=None)
-    UserStatus: Optional[str] = Field(default=None)
-    MFAOptions: Optional[CognitoUserMFAOptions] = Field(default=None)
-    PreferredMfaSetting: Optional[str] = Field(default=None)
-    UserMFASettingList: Optional[List[str]] = Field(default=None)
+    Username: Optional[str]
+    UserAttributes: Optional[List[Dict]]
+    UserCreateDate: Optional[datetime]
+    UserLastModifiedDate: Optional[datetime]
+    Enabled: Optional[bool]
+    UserStatus: Optional[str]
+    MFAOptions: Optional[CognitoUserMFAOptions]
+    PreferredMfaSetting: Optional[str]
+    UserMFASettingList: Optional[List[str]]
 
     def get_user_attribute(self, name: str) -> Optional[str]:
         if ModelUtils.is_empty(self.UserAttributes):
@@ -247,12 +244,3 @@ class CognitoUser(SocaBaseModel):
     def gid(self) -> Optional[int]:
         gid = self.get_user_attribute('custom:gid')
         return ModelUtils.get_as_int(gid, None)
-
-
-class CognitoUserPoolPasswordPolicy(SocaBaseModel):
-    minimum_length: Optional[int] = Field(default=None)
-    require_uppercase: Optional[bool] = Field(default=None)
-    require_lowercase: Optional[bool] = Field(default=None)
-    require_numbers: Optional[bool] = Field(default=None)
-    require_symbols: Optional[bool] = Field(default=None)
-    temporary_password_validity_days: Optional[int] = Field(default=None)

@@ -29,16 +29,16 @@ from typing import Optional, List, Dict
 from threading import Thread, Event
 import arrow
 import logging
-from pydantic import Field
+
 from ideascheduler.app.scheduler.openpbs.openpbs_qselect import OpenPBSQSelect
 from ideascheduler.app.provisioning.job_provisioner.batch_capacity_helper import BatchCapacityHelper
 
 
 class ProvisionJobsResult(SocaBaseModel):
-    error_code: Optional[str] = Field(default=None)
-    status: Optional[bool] = Field(default=None)
-    unprovisioned_jobs: Optional[List[SocaJob]] = Field(default=None)
-    exception: Optional[Exception] = Field(default=None)
+    error_code: Optional[str]
+    status: Optional[bool]
+    unprovisioned_jobs: Optional[List[SocaJob]]
+    exception: Optional[Exception]
 
     def get_error_code(self) -> str:
         if Utils.is_not_empty(self.error_code):

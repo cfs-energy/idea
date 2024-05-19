@@ -231,12 +231,7 @@ Statement:
     Effect: Allow
 
   - Action:
-      - sqs:DeleteMessage
-      - sqs:ReceiveMessage
-      - sqs:SendMessage
-      - sqs:GetQueueAttributes
-      - sqs:ChangeMessageVisibility
-      - sqs:GetQueueUrl
+      - sqs:*
     Resource:
       - '{{ context.arns.get_sqs_arn(context.module_id + "-job-status-events") }}'
     Effect: Allow

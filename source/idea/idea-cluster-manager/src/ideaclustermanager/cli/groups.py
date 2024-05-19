@@ -26,13 +26,9 @@ from ideadatamodel import (
     CreateGroupRequest,
     CreateGroupResult,
     DeleteGroupRequest,
-    DeleteGroupResult,
-    AddUserToGroupRequest,
-    AddUserToGroupResult,
-    RemoveUserFromGroupRequest,
-    RemoveUserFromGroupResult
-)
+    DeleteGroupResult
 
+)
 from ideaclustermanager.cli import build_cli_context
 from ideasdk.utils import Utils
 from ideaclustermanager.app.accounts.auth_utils import AuthUtils
@@ -99,7 +95,6 @@ def list_groups():
                             Utils.get_as_string(listing.enabled),
                             )
     context.print(group_table)
-
 
 @groups.command(context_settings=constants.CLICK_SETTINGS)
 @click.option('--groupname', required=True, help='Group Name to fetch users')
@@ -171,7 +166,6 @@ def disable_group(groupname: str):
     except exceptions.SocaException as e:
         context.error(e.message)
 
-
 @groups.command(context_settings=constants.CLICK_SETTINGS)
 @click.option('--groupname', required=True, help='Group Name')
 @click.option('--title', required=True, help='Group Title')
@@ -202,8 +196,6 @@ def create_group(**kwargs):
         result_as=CreateGroupResult
     )
     context.print_json(Utils.to_json(result.group))
-
-
 @groups.command(context_settings=constants.CLICK_SETTINGS)
 @click.option('--groupname', required=True, help='Groupname to DELETE')
 def delete_group(groupname: str):
@@ -221,53 +213,3 @@ def delete_group(groupname: str):
         )
     except exceptions.SocaException as e:
         context.error(e.message)
-
-
-@groups.command(context_settings=constants.CLICK_SETTINGS)
-@click.option('--username', required=True, multiple=True, help='Username for operation. Can be specified multiple times (-u user1 -u user2)')
-@click.option('--groupname', required=True, multiple=True, help='Groupname(s) to add username(s). Can be specified multiple times (-g group1 -g group2). All users will be added to all groups.')
-def add_user_to_group(username: list[str], groupname: list[str]):
-    """
-    Add username(s) to a group or multiple groups
-    """
-    context = ClusterManagerUtils.get_soca_cli_context_cluster_manager()
-    result = None
-    try:
-        for group_name in groupname:
-            print(f"Processing userlist: {username} to {group_name} for AddUserToGroup")
-            result = context.unix_socket_client.invoke_alt(
-                namespace='Accounts.AddUserToGroup',
-                payload=AddUserToGroupRequest(
-                    usernames=username,
-                    group_name=group_name
-                ),
-                result_as=AddUserToGroupResult
-            )
-            print(result)
-    except exceptions.SocaException as e:
-        context.error(e.message)
-
-
-@groups.command(context_settings=constants.CLICK_SETTINGS)
-@click.option('--username', required=True, multiple=True, help='Username for operation. Can be specified multiple times (-u user1 -u user2)')
-@click.option('--groupname', required=True, help='Groupname to remove username(s)')
-def remove_user_from_group(username: list[str], groupname: str):
-    """
-    Remove username(s) from a group
-    """
-    context = ClusterManagerUtils.get_soca_cli_context_cluster_manager()
-    result = None
-    try:
-        result = context.unix_socket_client.invoke_alt(
-            namespace='Accounts.RemoveUserFromGroup',
-            payload=RemoveUserFromGroupRequest(
-                usernames=username,
-                group_name=groupname
-            ),
-            result_as=RemoveUserFromGroupResult
-        )
-    except exceptions.SocaException as e:
-        context.error(e.message)
-
-    # Show the groupname in summary
-    print(result)

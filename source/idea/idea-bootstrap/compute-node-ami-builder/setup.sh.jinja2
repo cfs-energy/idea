@@ -33,27 +33,17 @@ IDEA_CLUSTER_NAME={{ context.cluster_name }}
 IDEA_CLUSTER_HOME={{ context.cluster_home_dir }}
 IDEA_COMPUTE_NODE_AMI_BUILDER_LOGS_DIR={{ context.vars.ami_dir }}/logs/$(hostname -s)
 IDEA_AMI_NAME={{ context.vars.ami_name }}
-BOOTSTRAP_DIR=/root/bootstrap" > /etc/environment
-
-{% if context.https_proxy != '' %}
-echo -e "IDEA_HTTPS_PROXY={{ context.https_proxy }}
-IDEA_NO_PROXY={{ context.no_proxy }}" >> /etc/environment
-{% endif %}
-
-echo -e "## [END] IDEA Environment Configuration
+BOOTSTRAP_DIR=/root/bootstrap
+## [END] IDEA Environment Configuration
 
 PATH={{ PATH }}
-" >> /etc/environment
+" > /etc/environment
 
 source /etc/environment
 
 {% include 'compute-node/_templates/scheduler_stop.jinja2' %}
 
-{% include '_templates/linux/idea_proxy.jinja2' %}
-
 {% include '_templates/linux/idea_service_account.jinja2' %}
-
-{% include '_templates/linux/aws_ssm.jinja2' %}
 
 {% include '_templates/linux/epel_repo.jinja2' %}
 

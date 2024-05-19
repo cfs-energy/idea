@@ -30,4 +30,4 @@ class UserCreatedEventHandler(BaseVirtualDesktopControllerEventHandler):
             self.log_warning(message_id=message_id, message=f'Invalid username {username}. NO=OP. Returning.')
             return
 
-        self.log_debug(message_id=message_id, message='Currently NO=OP. Returning')
+        self.log_debug(message_id=message_id, message=f'Currently NO=OP. Returning')

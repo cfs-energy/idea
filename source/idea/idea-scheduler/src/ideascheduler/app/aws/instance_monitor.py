@@ -66,7 +66,7 @@ class InstanceMonitor(SocaService):
                     )
                 )
             except Exception as e:
-                self._logger.exception('ec2 instance monitor iteration failed', exc_info=e)
+                self._logger.exception(f'ec2 instance monitor iteration failed', exc_info=e)
                 self._instance_cache.sync_abort(session_key=session_key)
             finally:
                 self._exit.wait(INSTANCE_MONITOR_INTERVAL_SECS)

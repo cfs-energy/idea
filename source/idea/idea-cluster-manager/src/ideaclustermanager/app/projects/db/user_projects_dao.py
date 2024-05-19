@@ -188,21 +188,11 @@ class UserProjectsDAO:
             KeyConditionExpression=Key('group_name').eq(group_name)
         )
         self.logger.debug(f'get_projects_by_group_name() - Group: {group_name} Result: {result}')
-        group_projects = Utils.get_value_as_list('Items', result, default=[])
-
-        if Utils.is_empty(group_projects):
-            self.logger.info(f'get_projects_by_group_name() - Group: {group_name} - No projects found (DAO)')
-            return []
-
+        group_projects = Utils.get_value_as_list('Items', result, [])
         self.logger.debug(f'get_projects_by_group_name() - Group: {group_name} group_projects: {group_projects}')
         project_ids = []
         for group_project in group_projects:
             project_ids.append(group_project['project_id'])
-
-        if Utils.is_empty(project_ids):
-            self.logger.info(f'get_projects_by_group_name() - Group: {group_name} - No projectIDs found (DAO)')
-            return []
-
         self.logger.debug(f'get_projects_by_group_name() - Group: {group_name} group_projects: {group_projects} - Returning IDs: {project_ids}')
         return project_ids
 

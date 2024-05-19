@@ -238,81 +238,10 @@ class ArnBuilder:
         return f'arn:{self.config.get_string("cluster.aws.partition", required=True)}:route53:::hostedzone/*'
 
     @property
-    def kms_secretsmanager_key_arn(self) -> str:
-        return(self.get_arn(service='kms',
+    def kms_key_arn(self) -> str:
+        return self.get_arn(service='kms',
                             resource=f'key/{self.config.get_string("cluster.secretsmanager.kms_key_id")}',
-                            aws_region=self.config.get_string("cluster.aws.region")))
-
-    @property
-    def kms_sqs_key_arn(self) -> str:
-        return(self.get_arn(service='kms',
-                            resource=f'key/{self.config.get_string("cluster.sqs.kms_key_id")}',
-                            aws_region=self.config.get_string("cluster.aws.region")))
-
-    @property
-    def kms_sns_key_arn(self) -> str:
-        return(self.get_arn(service='kms',
-                            resource=f'key/{self.config.get_string("cluster.sns.kms_key_id")}',
-                            aws_region=self.config.get_string("cluster.aws.region")))
-
-    @property
-    def kms_dynamodb_key_arn(self) -> str:
-        return(self.get_arn(service='kms',
-                            resource=f'key/{self.config.get_string("cluster.dynamodb.kms_key_id")}',
-                            aws_region=self.config.get_string("cluster.aws.region")))
-
-    @property
-    def kms_ebs_key_arn(self) -> str:
-        return(self.get_arn(service='kms',
-                            resource=f'key/{self.config.get_string("cluster.ebs.kms_key_id")}',
-                            aws_region=self.config.get_string("cluster.aws.region")))
-
-    @property
-    def kms_backup_key_arn(self) -> str:
-        return(self.get_arn(service='kms',
-                            resource=f'key/{self.config.get_string("cluster.backups.backup_vault.kms_key_id")}',
-                            aws_region=self.config.get_string("cluster.aws.region")))
-
-    @property
-    def kms_opensearch_key_arn(self) -> str:
-        return(self.get_arn(service='kms',
-                            resource=f'key/{self.config.get_string("analytics.opensearch.kms_key_id")}',
-                            aws_region=self.config.get_string("cluster.aws.region")))
-
-    @property
-    def kms_kinesis_key_arn(self) -> str:
-        return(self.get_arn(service='kms',
-                            resource=f'key/{self.config.get_string("analytics.kinesis.kms_key_id")}',
-                            aws_region=self.config.get_string("cluster.aws.region")))
-
-    @property
-    def kms_key_arn(self) -> List[str]:
-        kms_key_arns = []
-        service_kms_key_ids = {
-                'secretsmanager': 'cluster.secretsmanager.kms_key_id',
-                'sqs': 'cluster.sqs.kms_key_id',
-                'sns': 'cluster.sns.kms_key_id',
-                'dynamodb': 'cluster.dynamodb.kms_key_id',
-                'ebs': 'cluster.ebs.kms_key_id',
-                'backup': 'cluster.backups.backup_vault.kms_key_id',
-                'opensearch': 'analytics.opensearch.kms_key_id',
-                'kinesis': 'analytics.kinesis.kms_key_id'
-                }
-        service_kms_key_arns = {
-                'secretsmanager': self.kms_secretsmanager_key_arn,
-                'sqs': self.kms_sqs_key_arn,
-                'sns': self.kms_sns_key_arn,
-                'dynamodb': self.kms_dynamodb_key_arn,
-                'ebs': self.kms_ebs_key_arn,
-                'backup': self.kms_backup_key_arn,
-                'opensearch': self.kms_opensearch_key_arn,
-                'kinesis': self.kms_kinesis_key_arn
-                }
-        for service in service_kms_key_arns.keys():
-            if self.config.get_string(service_kms_key_ids[service]) is not None:
-                kms_key_arns.append(service_kms_key_arns[service])
-
-        return kms_key_arns
+                            aws_region=self.config.get_string("cluster.aws.region"))
 
     @property
     def user_pool_arn(self) -> str:

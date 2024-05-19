@@ -14,7 +14,6 @@ from ideasdk.utils import Utils
 from typing import Optional, Dict, List
 import crypt
 
-
 class LdapUtils:
 
     @staticmethod

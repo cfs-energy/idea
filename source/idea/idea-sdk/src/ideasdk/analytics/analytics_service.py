@@ -11,7 +11,7 @@
 import threading
 from enum import Enum
 from typing import Optional, Dict, List
-from pydantic import Field
+
 from ideadatamodel import SocaBaseModel
 from ideadatamodel.constants import SERVICE_ID_ANALYTICS
 from ideasdk.aws.opensearch.aws_opensearch_client import AwsOpenSearchClient
@@ -27,8 +27,8 @@ class EntryAction(str, Enum):
 
 
 class EntryContent(SocaBaseModel):
-    index_id: Optional[str] = Field(default=None)
-    entry_record: Optional[dict] = Field(default=None)
+    index_id: Optional[str]
+    entry_record: Optional[dict]
 
 
 class AnalyticsEntry(SocaBaseModel):

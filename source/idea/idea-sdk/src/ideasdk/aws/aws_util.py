@@ -104,13 +104,13 @@ class AWSUtil(AWSUtilProtocol):
         family = instance_type.split('.')[0].lower()
 
         # accelerated computing
-        if family.startswith(('p5', 'p4de', 'p4d', 'p3dn', 'p3', 'p2', 'p')):
+        if family.startswith(('p4de', 'p4d', 'p3dn', 'p3', 'p2', 'p')):
             return 'P', False
         elif family.startswith(('dl1', 'dl')):
             return 'DL', False  # todo - verify instance class in quota
-        elif family.startswith(('inf2', 'inf1', 'inf')):
+        elif family.startswith(('inf1', 'inf')):
             return 'Inf', False
-        elif family.startswith(('trn1n', 'trn1', 'trn')):
+        elif family.startswith(('trn1', 'trn')):
             return 'Trn', False
         elif family.startswith(('g4dn', 'g4ad', 'g5', 'g5g', 'g3s', 'g3', 'g2', 'g')):
             return 'G', False
@@ -119,7 +119,7 @@ class AWSUtil(AWSUtilProtocol):
         elif family.startswith(('vt1', 'vt')):
             return 'VT', False
         # storage optimized
-        elif family.startswith(('i4g', 'i4i', 'i3', 'i3en', 'i')):  # standard
+        elif family.startswith(('i4i', 'i3', 'i3en', 'i')):  # standard
             return 'I', True
         elif family.startswith('lm4gn'):
             return 'lm4gn', True
@@ -127,12 +127,12 @@ class AWSUtil(AWSUtilProtocol):
             return 'ls4gen', True
         elif family.startswith(('d2', 'd3', 'd3en', 'd')):  # standard
             return 'D', True
-        elif family.startswith(('hpc7g', 'hpc6id', 'hpc6a', 'hpc')):
+        elif family.startswith(('hpc6a', 'hpc')):
             return 'HPC', False
         elif family.startswith(('h1', 'h')):  # standard
             return 'H', False
         # memory optimized
-        elif family.startswith(('r7g', 'r7gd', 'r7iz', 'r6a', 'r6g', 'r6in', 'r6idn', 'r6i', 'r5a', 'r5b', 'r5d', 'r5dn', 'r5ad', 'r5n', 'r6', 'r5', 'r4', 'r')):  # standard
+        elif family.startswith(('r6a', 'r6g', 'r6i', 'r5a', 'r5b', 'r5d', 'r5dn', 'r5ad', 'r5n', 'r6', 'r5', 'r4', 'r')):  # standard
             return 'R', True
         elif family.startswith(('x2gd', 'x2idn', 'x2iedn', 'x2iezn', 'x1e', 'x1', 'x')):
             return 'X', False
@@ -141,14 +141,14 @@ class AWSUtil(AWSUtilProtocol):
         elif family.startswith(('z1d', 'z')):  # standard
             return 'Z', True
         # compute optimized
-        elif family.startswith(('c7g', 'c6a', 'c6g', 'c6gn', 'c6in', 'c6i', 'c5', 'c5a', 'c5n', 'c4', 'c')):  # standard
+        elif family.startswith(('c7g', 'c6g', 'c6gn', 'c6i', 'c5', 'c5a', 'c5n', 'c4', 'c')):  # standard
             return 'C', True
         # general purpose
         elif family.startswith(('mac1', 'mac2', 'mac')):
             return 'mac', False
         elif family.startswith(('t4g', 't3', 't3a', 't2', 't')):  # standard
             return 'T', True
-        elif family.startswith(('m7i', 'm7i-flex', 'm7a', 'm7g', 'm7gd', 'm6g', 'm6gd', 'm6in', 'm6idn', 'm6i', 'm6id', 'm6a', 'm5', 'm5a', 'm5d', 'm5ad', 'm5dn', 'm5n', 'm5zn', 'm4', 'm')):  # standard
+        elif family.startswith(('m6g', 'm6gd', 'm6i', 'm6id', 'm6a', 'm5', 'm5a', 'm5d', 'm5ad', 'm5dn', 'm5n', 'm5zn', 'm4', 'm')):  # standard
             return 'M', True
         elif family.startswith(('a1', 'a')):  # standard
             return 'A', True
@@ -158,14 +158,14 @@ class AWSUtil(AWSUtilProtocol):
 
     def get_instance_types_for_class(self, instance_class: str) -> List[str]:
         if instance_class == 'HighMem':
-            _token = 'u-'
+            token = 'u-'
         else:
-            _token = instance_class.lower()
+            token = instance_class.lower()
 
         result = []
         all_instance_types = self.get_all_instance_types()
         for instance_type in all_instance_types:
-            if instance_type.startswith(_token):
+            if instance_type.startswith(token):
                 result.append(instance_type)
 
         return result
@@ -183,17 +183,9 @@ class AWSUtil(AWSUtilProtocol):
             else:
                 raise e
 
-    def get_instance_efa_max_interfaces_supported(self, instance_type: str) -> int:
-        ec2_instance_type = self.get_ec2_instance_type(instance_type=instance_type)
-        return ec2_instance_type.network_info_efa_info_max_efa_interfaces
-
     def is_instance_type_efa_supported(self, instance_type: str) -> bool:
         ec2_instance_type = self.get_ec2_instance_type(instance_type=instance_type)
         return ec2_instance_type.network_info_efa_supported
-
-    def is_instance_type_ena_express_supported(self, instance_type: str) -> bool:
-        ec2_instance_type = self.get_ec2_instance_type(instance_type=instance_type)
-        return ec2_instance_type.network_info_ena_express_supported
 
     def s3_bucket_has_access(self, bucket_name: str) -> Dict:
         cache_key = f'aws.s3.bucket.{bucket_name}.has_access'
@@ -985,14 +977,6 @@ class AWSUtil(AWSUtilProtocol):
                 'Value': tag_value
             })
         create_table_request['Tags'] = updated_tags
-
-        dynamodb_kms_key_id = self._context.config().get_string('cluster.dynamodb.kms_key_id')
-        if dynamodb_kms_key_id is not None:
-            create_table_request['SSESpecification'] = {
-                    'Enabled': True,
-                    'SSEType': 'KMS',
-                    'KMSMasterKeyId': dynamodb_kms_key_id
-                    }
 
         self.aws().dynamodb().create_table(**create_table_request)
 

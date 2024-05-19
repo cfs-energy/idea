@@ -88,7 +88,7 @@ class VirtualDesktopScheduleUtils:
 
     def _delete_schedule(self, schedule: VirtualDesktopSchedule):
         if Utils.is_empty(schedule) or schedule.schedule_type == VirtualDesktopScheduleType.NO_SCHEDULE:
-            self._logger.debug("No Schedule to delete. Returning")
+            self._logger.debug(f"No Schedule to delete. Returning")
             return
 
         if Utils.is_any_empty(schedule.schedule_id, schedule.day_of_week):
@@ -238,7 +238,7 @@ class VirtualDesktopScheduleUtils:
                 start_up_time = schedule.start_up_time.split(":")
                 shut_down_time = schedule.shut_down_time.split(":")
 
-            start_up_time = DateTimeUtils.to_time_object(hours=int(start_up_time[0]), minutes=int(start_up_time[1]))
+            start_up_time = DateTimeUtils.to_time_object(hours=int(start_up_time[0]), minutes=int(shut_down_time[1]))
             shut_down_time = DateTimeUtils.to_time_object(hours=int(shut_down_time[0]), minutes=int(shut_down_time[1]))
             if event_time < start_up_time:
                 # should we shut down a running session ?? or leave as is.

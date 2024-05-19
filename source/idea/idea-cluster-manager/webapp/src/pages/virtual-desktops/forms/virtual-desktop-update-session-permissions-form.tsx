@@ -227,7 +227,7 @@ class PermissionRow extends Component<PermissionRowProps, PermissionRowState> {
                         {
                             name: 'actor',
                             data_type: 'str',
-                            param_type: 'select_or_text',
+                            param_type: 'select',
                             readonly: this.props.existing,
                             default: this.getDefaultUserChoice(),
                             validate: {
@@ -505,7 +505,6 @@ class UpdateSessionPermissionModal extends Component<UpdateSessionPermissionModa
         return (
             <form onSubmit={(e) => e.preventDefault()}>
                 <Form
-                    variant="embedded"
                     header={<Header
                         description={'Select the username, permission profile and the expiry date of the rules'}
                         actions={<Button variant={"normal"} onClick={() => {

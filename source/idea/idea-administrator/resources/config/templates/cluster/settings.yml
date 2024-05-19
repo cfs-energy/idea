@@ -1,4 +1,3 @@
-#file: noinspection YAMLDuplicatedKeys
 administrator_email: "{{administrator_email}}"
 administrator_username: "{{administrator_username}}"
 cluster_name: "{{cluster_name}}"
@@ -29,7 +28,7 @@ route53:
   private_hosted_zone_name: "{{cluster_name}}.{{aws_region}}.local"
 
 network:
-  # You must specify the maximum number of entries for the initial prefix list.
+  # You must specify the maximum number of entries for the prefix list. The maximum number of entries cannot be changed later.
   cluster_prefix_list_max_entries: 10
   prefix_list_ids:
     {{ utils.to_yaml(prefix_list_ids) | indent(4) }}
@@ -84,15 +83,6 @@ network:
     {{ utils.to_yaml(vpc_gateway_endpoints) | indent(4) }}
   vpc_interface_endpoints:
     {{ utils.to_yaml(vpc_interface_endpoints) | indent(4) }}
-  # Some services used by IDEA don't support VPC endpoints (DynamoDB Streams, Cognito, Directory Service, Service Quota)
-  # https_proxy needs to be set to route traffic to these services if deploying in isolated subnets without a NAT gateway
-  # https_proxy expected format is http://<hostname>:<port>
-  https_proxy: ""
-  no_proxy: "127.0.0.1,169.254.169.254,localhost,{{ aws_region }}.local,{{ aws_region }}.vpce.{{ aws_dns_suffix }},s3.{{ aws_region }}.{{ aws_dns_suffix }},s3.dualstack.{{ aws_region }}.{{ aws_dns_suffix }},dynamodb.{{ aws_region }}.{{ aws_dns_suffix }},{{ aws_region }}.es.{{ aws_dns_suffix }},sqs.{{ aws_region }}.{{ aws_dns_suffix }},ec2.{{ aws_region }}.{{ aws_dns_suffix }},secretsmanager.{{ aws_region }}.{{ aws_dns_suffix }},sns.{{ aws_region }}.{{ aws_dns_suffix }},cloudformation.{{ aws_region }}.{{ aws_dns_suffix }},elasticloadbalancing.{{ aws_region }}.{{ aws_dns_suffix }},monitoring.{{ aws_region }}.{{ aws_dns_suffix }},logs.{{ aws_region }}.{{ aws_dns_suffix }},ssm.{{ aws_region }}.{{ aws_dns_suffix }},application-autoscaling.{{ aws_region }}.{{ aws_dns_suffix }},events.{{ aws_region }}.{{ aws_dns_suffix }},kinesis.{{ aws_region }}.{{ aws_dns_suffix }},{{ aws_region }}.elb.{{ aws_dns_suffix }},autoscaling.{{ aws_region }}.{{ aws_dns_suffix }}"
-  {%- else %}
-  # https_proxy expected format is http://<hostname>:<port>
-  https_proxy: ""
-  no_proxy: "127.0.0.1,169.254.169.254,localhost,{{ aws_region }}.local,{{ aws_region }}.elb.{{ aws_dns_suffix }},{{ aws_region }}.es.{{ aws_dns_suffix }}"
   {%- endif %}
 
 # AWS Key Management Service
@@ -102,26 +92,21 @@ kms:
 
 # Configure cluster-wide AWS Secrets Manager settings below
 secretsmanager:
-  kms_key_id: {{ kms_key_id if kms_key_id else '~' }} # Specify your own CMK to encrypt Secrets Manager secrets. If set to ~ encryption will be managed by the default AWS key
+  kms_key_id: {{ kms_key_id if kms_key_id else '~' }} # Specify your own CMK to encrypt your Secret manager. If set to ~ encryption will be managed by the default AWS key
 
 # Configure cluster-wide SQS settings below
-# The customer managed key for Amazon SQS queues must have a policy statement that grants Amazon SNS service-principal access
-# Consult the documentation at: https://docs.aws.amazon.com/sns/latest/dg/sns-enable-encryption-for-topic-sqs-queue-subscriptions.html
 sqs:
   kms_key_id: {{ kms_key_id if kms_key_id else '~' }} # Specify your own CMK to encrypt SQS queues. If set to ~ encryption will be managed by the default AWS key
 
 # Configure cluster-wide SNS settings below
 sns:
-  kms_key_id: {{ kms_key_id if kms_key_id else '~' }} # Specify your own CMK to encrypt SNS topics. If set to ~ encryption will be managed by the default AWS key
+  kms_key_id: {{ kms_key_id if kms_key_id else '~' }} # Specify your own CMK to encrypt SNS topic. If set to ~ encryption will be managed by the default AWS key
 
 # Configure cluster-wide DynamoDB settings below.
 dynamodb:
-  # Note: Dynamodb <cluster-name>.vdc.dcv-broker.* tables are encrypted with DynamoDB service key
+  # this configuration is not supported and used at the moment.
+  # customizations are required to enable DDB encryption at rest.
   kms_key_id: {{ kms_key_id if kms_key_id else '~' }} # Specify your own CMK to encrypt DynamoDB tables. If set to ~ encryption will be managed by the default AWS key
-
-# Configure cluster-wide EBS settings below
-ebs:
-  kms_key_id: {{ kms_key_id if kms_key_id else '~' }} # Specify your own CMK to encrypt EBS volumes. If set to ~ encryption will be managed by the default AWS key
 
 solution:
   # Enable to disable IDEA Anonymous Metric Collection.
@@ -188,7 +173,7 @@ backups:
   # existing backup vault is not supported.
   backup_vault:
 
-    # Specify your own CMK to encrypt backup vault. If set to ~ encryption will be managed by the default AWS key
+    # Specify your own CMK to encrypt your Secret manager. If set to ~ encryption will be managed by the default AWS key
     kms_key_id: {{ kms_key_id if kms_key_id else '~' }}
 
     # The removal policy to apply to the vault.

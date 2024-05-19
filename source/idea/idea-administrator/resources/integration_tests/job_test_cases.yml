@@ -312,13 +312,12 @@ test_cases:
   - name: root_size
     resource: instance_type=t2.medium,root_size=44
     command: /bin/df -h --output=size / | tail -n1 | tr -d ' '
-    expected_output: 4[4|3]G
-    regex_match: true
+    expected_output: 44G
     queue: normal
     skip_regions: []
 
   - name: efa
-    resource: instance_type=c5n.9xlarge+c5n.18xlarge,efa_support=True
+    resource: instance_type=c5n.9xlarge,efa_support=True
     command: /opt/amazon/efa/bin/fi_info -p efa -t FI_EP_RDM | head -n1
     expected_output: "provider: efa"
     queue: normal
@@ -334,8 +333,7 @@ test_cases:
   - name: instance_store_multiple_volumes
     resource: instance_type=m5ad.4xlarge
     command: /bin/df -h --output=size /scratch | tail -n1 | tr -d ' '
-    expected_output: 5[4|5][9|0]G
-    regex_match: true
+    expected_output: 550G
     queue: normal
     skip_regions: []
 
@@ -397,7 +395,7 @@ test_cases:
     queue: normal
     skip_regions: []
 
-  # Tests for job-shared queue need to be named as job-shared_<name>_1 and job-shared_<name>_2
+  # Tests for job-shared queue need to be named as job-shared_1_* and job-shared_2_*
   # This is needed so that the output for 2nd job can be compared versus the output of the 1st job
   - name: job_shared_ondemand_1
     resource: instance_type=t3.xlarge+t3.2xlarge,ht_support=True,placement_group=False

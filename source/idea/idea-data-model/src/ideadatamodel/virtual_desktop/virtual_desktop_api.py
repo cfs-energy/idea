@@ -77,144 +77,144 @@ __all__ = (
     'OPEN_API_SPEC_ENTRIES_VIRTUAL_DESKTOP'
 )
 
+from ideadatamodel.api import SocaPayload, SocaListingPayload, SocaBatchResponsePayload, IdeaOpenAPISpecEntry
+from ideadatamodel.virtual_desktop.virtual_desktop_model import *
+
 from typing import Optional, List, Dict, Any
 
-from ideadatamodel.api import SocaPayload, SocaListingPayload, IdeaOpenAPISpecEntry
-from ideadatamodel.virtual_desktop.virtual_desktop_model import *
-from pydantic import Field
 
 # VirtualDesktopAdmin.CreateSession - Request
 # VirtualDesktop.CreateSession - Request
 
 
 class CreateSessionRequest(SocaPayload):
-    session: Optional[VirtualDesktopSession] = Field(default=None)
+    session: Optional[VirtualDesktopSession]
 
 
 # VirtualDesktopAdmin.CreateSession - Response
 # VirtualDesktop.CreateSession - Response
 class CreateSessionResponse(SocaPayload):
-    session: Optional[VirtualDesktopSession] = Field(default=None)
+    session: Optional[VirtualDesktopSession]
 
 
 # VirtualDesktopAdmin.BatchCreateSessions - Request
 class BatchCreateSessionRequest(SocaPayload):
-    sessions: Optional[List[VirtualDesktopSession]] = Field(default=None)
+    sessions: Optional[List[VirtualDesktopSession]]
 
 
 # VirtualDesktopAdmin.BatchCreateSessions - Response
 class BatchCreateSessionResponse(VirtualDesktopSessionBatchResponsePayload):
-    success: Optional[List[VirtualDesktopSession]] = Field(default=None)
-    failed: Optional[List[VirtualDesktopSession]] = Field(default=None)
+    success: Optional[List[VirtualDesktopSession]]
+    failed: Optional[List[VirtualDesktopSession]]
 
 
 # VirtualDesktopAdmin.GetSessionConnectionInfo - Request
 # VirtualDesktop.GetSessionConnectionInfo - Request
 class GetSessionConnectionInfoRequest(SocaPayload):
-    connection_info: Optional[VirtualDesktopSessionConnectionInfo] = Field(default=None)
+    connection_info: Optional[VirtualDesktopSessionConnectionInfo]
 
 
 # VirtualDesktopAdmin.GetSessionConnectionInfo - Response
 # VirtualDesktop.GetSessionConnectionInfo - Response
 class GetSessionConnectionInfoResponse(SocaPayload):
-    connection_info: Optional[VirtualDesktopSessionConnectionInfo] = Field(default=None)
+    connection_info: Optional[VirtualDesktopSessionConnectionInfo]
 
 
 # VirtualDesktopAdmin.GetSessionScreenshot - Request
 # VirtualDesktop.GetSessionScreenshot - Request
 class GetSessionScreenshotRequest(SocaPayload):
-    screenshots: Optional[List[VirtualDesktopSessionScreenshot]] = Field(default=None)
+    screenshots: Optional[List[VirtualDesktopSessionScreenshot]]
 
 
 # VirtualDesktopAdmin.GetSessionScreenshot - Response
 # VirtualDesktop.GetSessionScreenshot - Response
 class GetSessionScreenshotResponse(VirtualDesktopSessionBatchResponsePayload):
-    success: Optional[List[VirtualDesktopSessionScreenshot]] = Field(default=None)
-    failed: Optional[List[VirtualDesktopSessionScreenshot]] = Field(default=None)
+    success: Optional[List[VirtualDesktopSessionScreenshot]]
+    failed: Optional[List[VirtualDesktopSessionScreenshot]]
 
 
 # VirtualDesktop.UpdateSession - Request
 class UpdateSessionRequest(SocaPayload):
-    session: Optional[VirtualDesktopSession] = Field(default=None)
+    session: Optional[VirtualDesktopSession]
 
 
 # VirtualDesktop.UpdateSession - Response
 class UpdateSessionResponse(SocaPayload):
-    session: Optional[VirtualDesktopSession] = Field(default=None)
+    session: Optional[VirtualDesktopSession]
 
 
 # VirtualDesktopAdmin.GetSessionInfo - Request
 # VirtualDesktop.GetSessionInfo - Request
 class GetSessionInfoRequest(SocaPayload):
-    session: Optional[VirtualDesktopSession] = Field(default=None)
+    session: Optional[VirtualDesktopSession]
 
 
 # VirtualDesktopAdmin.GetSessionInfo - Response
 # VirtualDesktop.GetSessionInfo - Response
 class GetSessionInfoResponse(SocaPayload):
-    session: Optional[VirtualDesktopSession] = Field(default=None)
+    session: Optional[VirtualDesktopSession]
 
 
 # VirtualDesktopAdmin.GetSoftwareStackInfo - Request
 class GetSoftwareStackInfoRequest(SocaPayload):
-    stack_id: Optional[str] = Field(default=None)
+    stack_id: Optional[str]
 
 
 # VirtualDesktopAdmin.GetSoftwareStackInfo - Response
 class GetSoftwareStackInfoResponse(SocaPayload):
-    software_stack: Optional[VirtualDesktopSoftwareStack] = Field(default=None)
+    software_stack: Optional[VirtualDesktopSoftwareStack]
 
 
 # VirtualDesktopAdmin.DeleteSessions - Request
 # VirtualDesktop.DeleteSessions - Request
 class DeleteSessionRequest(SocaPayload):
-    sessions: Optional[List[VirtualDesktopSession]] = Field(default=None)
+    sessions: Optional[List[VirtualDesktopSession]]
 
 
 # VirtualDesktopAdmin.DeleteSessions - Response
 # VirtualDesktop.DeleteSessions - Response
 class DeleteSessionResponse(VirtualDesktopSessionBatchResponsePayload):
-    success: Optional[List[VirtualDesktopSession]] = Field(default=None)
-    failed: Optional[List[VirtualDesktopSession]] = Field(default=None)
+    success: Optional[List[VirtualDesktopSession]]
+    failed: Optional[List[VirtualDesktopSession]]
 
 
 # VirtualDesktopAdmin.StopSessions - Request
 # VirtualDesktop.StopSessions - Request
 class StopSessionRequest(SocaPayload):
-    sessions: Optional[List[VirtualDesktopSession]] = Field(default=None)
+    sessions: Optional[List[VirtualDesktopSession]]
 
 
 # VirtualDesktopAdmin.StopSessions - Response
 # VirtualDesktop.StopSessions - Response
 class StopSessionResponse(VirtualDesktopSessionBatchResponsePayload):
-    success: Optional[List[VirtualDesktopSession]] = Field(default=None)
-    failed: Optional[List[VirtualDesktopSession]] = Field(default=None)
+    success: Optional[List[VirtualDesktopSession]]
+    failed: Optional[List[VirtualDesktopSession]]
 
 
 # VirtualDesktopAdmin.RebootSessions - Request
 # VirtualDesktop.RebootSessions - Request
 class RebootSessionRequest(SocaPayload):
-    sessions: Optional[List[VirtualDesktopSession]] = Field(default=None)
+    sessions: Optional[List[VirtualDesktopSession]]
 
 
 # VirtualDesktopAdmin.RebootSessions - Response
 # VirtualDesktop.RebootSessions - Response
 class RebootSessionResponse(VirtualDesktopSessionBatchResponsePayload):
-    success: Optional[List[VirtualDesktopSession]] = Field(default=None)
-    failed: Optional[List[VirtualDesktopSession]] = Field(default=None)
+    success: Optional[List[VirtualDesktopSession]]
+    failed: Optional[List[VirtualDesktopSession]]
 
 
 # VirtualDesktopAdmin.ResumeSessions - Request
 # VirtualDesktop.ResumeSessions - Request
 class ResumeSessionsRequest(SocaPayload):
-    sessions: Optional[List[VirtualDesktopSession]] = Field(default=None)
+    sessions: Optional[List[VirtualDesktopSession]]
 
 
 # VirtualDesktopAdmin.ResumeSessions - Response
 # VirtualDesktop.ResumeSessions - Response
 class ResumeSessionsResponse(VirtualDesktopSessionBatchResponsePayload):
-    success: Optional[List[VirtualDesktopSession]] = Field(default=None)
-    failed: Optional[List[VirtualDesktopSession]] = Field(default=None)
+    success: Optional[List[VirtualDesktopSession]]
+    failed: Optional[List[VirtualDesktopSession]]
 
 
 # VirtualDesktopAdmin.ListSessions - Request
@@ -226,51 +226,51 @@ class ListSessionsRequest(SocaListingPayload):
 # VirtualDesktopAdmin.ListSessions - Response
 # VirtualDesktop.ListSessions - Response
 class ListSessionsResponse(SocaListingPayload):
-    listing: Optional[List[VirtualDesktopSession]] = Field(default=None)
+    listing: Optional[List[VirtualDesktopSession]]
 
 
 # VirtualDesktopAdmin.CreateSoftwareStackFromSession - Request
 class CreateSoftwareStackFromSessionRequest(SocaPayload):
-    session: Optional[VirtualDesktopSession] = Field(default=None)
-    new_software_stack: Optional[VirtualDesktopSoftwareStack] = Field(default=None)
+    session: Optional[VirtualDesktopSession]
+    new_software_stack: Optional[VirtualDesktopSoftwareStack]
 
 
 # VirtualDesktopAdmin.CreateSoftwareStackFromSession - Response
 class CreateSoftwareStackFromSessionResponse(SocaPayload):
-    software_stack: Optional[VirtualDesktopSoftwareStack] = Field(default=None)
+    software_stack: Optional[VirtualDesktopSoftwareStack]
 
 
 # VirtualDesktopAdmin.CreateSoftwareStack - Request
 class CreateSoftwareStackRequest(SocaPayload):
-    software_stack: Optional[VirtualDesktopSoftwareStack] = Field(default=None)
+    software_stack: Optional[VirtualDesktopSoftwareStack]
 
 
 # VirtualDesktopAdmin.CreateSoftwareStack - Response
 class CreateSoftwareStackResponse(SocaPayload):
-    software_stack: Optional[VirtualDesktopSoftwareStack] = Field(default=None)
+    software_stack: Optional[VirtualDesktopSoftwareStack]
 
 
 # VirtualDesktopAdmin.UpdateSoftwareStack - Request
 class UpdateSoftwareStackRequest(SocaPayload):
-    software_stack: Optional[VirtualDesktopSoftwareStack] = Field(default=None)
+    software_stack: Optional[VirtualDesktopSoftwareStack]
 
 
 # VirtualDesktopAdmin.UpdateSoftwareStack - Response
 class UpdateSoftwareStackResponse(SocaPayload):
-    software_stack: Optional[VirtualDesktopSoftwareStack] = Field(default=None)
+    software_stack: Optional[VirtualDesktopSoftwareStack]
 
 
 # VirtualDesktopAdmin.ListSoftwareStacks - Request
 # VirtualDesktop.ListSoftwareStacks - Request
 class ListSoftwareStackRequest(SocaListingPayload):
-    disabled_also: Optional[bool] = Field(default=None)
-    project_id: Optional[str] = Field(default=None)
+    disabled_also: Optional[bool]
+    project_id: Optional[str]
 
 
 # VirtualDesktopAdmin.ListSoftwareStacks - Response
 # VirtualDesktop.ListSoftwareStacks - Request
 class ListSoftwareStackResponse(SocaListingPayload):
-    listing: Optional[List[VirtualDesktopSoftwareStack]] = Field(default=None)
+    listing: Optional[List[VirtualDesktopSoftwareStack]]
 
 
 # VirtualDesktopDCV.DescribeServers - Request
@@ -280,17 +280,17 @@ class DescribeServersRequest(SocaPayload):
 
 # VirtualDesktopDCV.DescribeServers - Response
 class DescribeServersResponse(SocaPayload):
-    response: Optional[Dict] = Field(default=None)
+    response: Optional[Dict]
 
 
 # VirtualDesktopDCV.DescribeSessions - Request
 class DescribeSessionsRequest(SocaPayload):
-    sessions: Optional[List[VirtualDesktopSession]] = Field(default=None)
+    sessions: Optional[List[VirtualDesktopSession]]
 
 
 # VirtualDesktopDCV.DescribeSessions - Response
 class DescribeSessionsResponse(SocaPayload):
-    response: Optional[Dict] = Field(default=None)
+    response: Optional[Dict]
 
 
 # VirtualDesktopUtils.ListScheduleTypes - Request
@@ -300,7 +300,7 @@ class ListScheduleTypesRequest(SocaPayload):
 
 # VirtualDesktopUtils.ListScheduleTypes - Response
 class ListScheduleTypesResponse(SocaListingPayload):
-    listing: Optional[List[str]] = Field(default=None)
+    listing: Optional[List[str]]
 
 
 # VirtualDesktopUtils.ListSupportedOS - Request
@@ -310,7 +310,7 @@ class ListSupportedOSRequest(SocaPayload):
 
 # VirtualDesktopUtils.ListSupportedOS - Response
 class ListSupportedOSResponse(SocaListingPayload):
-    listing: Optional[List[str]] = Field(default=None)
+    listing: Optional[List[str]]
 
 
 # VirtualDesktopUtils.ListSupportedGPU - Request
@@ -320,13 +320,13 @@ class ListSupportedGPURequest(SocaPayload):
 
 # VirtualDesktopUtils.ListSupportedGPU - Response
 class ListSupportedGPUResponse(SocaListingPayload):
-    listing: Optional[List[str]] = Field(default=None)
+    listing: Optional[List[str]]
 
 
 # VirtualDesktopUtils.ListAllowedInstanceTypes - Request
 class ListAllowedInstanceTypesRequest(SocaPayload):
-    hibernation_support: Optional[bool] = Field(default=None)
-    software_stack: Optional[VirtualDesktopSoftwareStack] = Field(default=None)
+    hibernation_support: Optional[bool]
+    software_stack: Optional[VirtualDesktopSoftwareStack]
 
 
 # VirtualDesktopUtils.ListAllowedInstanceTypes - Response
@@ -336,12 +336,12 @@ class ListAllowedInstanceTypesResponse(SocaListingPayload):
 
 # VirtualDesktopUtils.ListAllowedInstanceTypesForSession - Request
 class ListAllowedInstanceTypesForSessionRequest(SocaPayload):
-    session: Optional[VirtualDesktopSession] = Field(default=None)
+    session: Optional[VirtualDesktopSession]
 
 
 # VirtualDesktopUtils.ListAllowedInstanceTypesForSession - Response
 class ListAllowedInstanceTypesForSessionResponse(SocaListingPayload):
-    listing: Optional[List[Any]] = Field(default=None)
+    listing: Optional[List[Any]]
 
 
 # VirtualDesktop.CreateSharedSession
@@ -377,37 +377,37 @@ class ListPermissionProfilesRequest(SocaListingPayload):
 
 # VirtualDesktopUtils.ListPermissionProfiles - Response
 class ListPermissionProfilesResponse(SocaListingPayload):
-    listing: Optional[List[VirtualDesktopPermissionProfile]] = Field(default=None)
+    listing: Optional[List[VirtualDesktopPermissionProfile]]
 
 
 # VirtualDesktopUtils.GetPermissionProfile - Request
 class GetPermissionProfileRequest(SocaListingPayload):
-    profile_id: Optional[str] = Field(default=None)
+    profile_id: Optional[str]
 
 
 # VirtualDesktopUtils.GetPermissionProfile - Response
 class GetPermissionProfileResponse(SocaPayload):
-    profile: Optional[VirtualDesktopPermissionProfile] = Field(default=None)
+    profile: Optional[VirtualDesktopPermissionProfile]
 
 
 # VirtualDesktopAdmin.UpdatePermissionProfile - Request
 class UpdatePermissionProfileRequest(SocaPayload):
-    profile: Optional[VirtualDesktopPermissionProfile] = Field(default=None)
+    profile: Optional[VirtualDesktopPermissionProfile]
 
 
 # VirtualDesktopAdmin.UpdatePermissionProfile - Response
 class UpdatePermissionProfileResponse(SocaPayload):
-    profile: Optional[VirtualDesktopPermissionProfile] = Field(default=None)
+    profile: Optional[VirtualDesktopPermissionProfile]
 
 
 # VirtualDesktopAdmin.CreatePermissionProfile - Request
 class CreatePermissionProfileRequest(SocaPayload):
-    profile: Optional[VirtualDesktopPermissionProfile] = Field(default=None)
+    profile: Optional[VirtualDesktopPermissionProfile]
 
 
 # VirtualDesktopAdmin.CreatePermissionProfile - Response
 class CreatePermissionProfileResponse(SocaPayload):
-    profile: Optional[VirtualDesktopPermissionProfile] = Field(default=None)
+    profile: Optional[VirtualDesktopPermissionProfile]
 
 
 # VirtualDesktopUtils.GetBasePermissions - Request
@@ -417,36 +417,36 @@ class GetBasePermissionsRequest(SocaPayload):
 
 # VirtualDesktopUtils.GetBasePermissions - Response
 class GetBasePermissionsResponse(SocaPayload):
-    permissions: Optional[List[VirtualDesktopPermission]] = Field(default=None)
+    permissions: Optional[List[VirtualDesktopPermission]]
 
 
 # VirtualDesktop.UpdateSessionPermission - Request
 # VirtualDesktopAdmin.UpdateSessionPermission - Request
 class UpdateSessionPermissionRequest(SocaPayload):
-    create: Optional[List[VirtualDesktopSessionPermission]] = Field(default=None)
-    delete: Optional[List[VirtualDesktopSessionPermission]] = Field(default=None)
-    update: Optional[List[VirtualDesktopSessionPermission]] = Field(default=None)
+    create: Optional[List[VirtualDesktopSessionPermission]]
+    delete: Optional[List[VirtualDesktopSessionPermission]]
+    update: Optional[List[VirtualDesktopSessionPermission]]
 
 
 # VirtualDesktop.UpdateSessionPermission - Response
 # VirtualDesktopAdmin.UpdateSessionPermission - Response
 class UpdateSessionPermissionResponse(SocaPayload):
-    permissions: Optional[List[VirtualDesktopSessionPermission]] = Field(default=None)
+    permissions: Optional[List[VirtualDesktopSessionPermission]]
 
 
 # VirtualDesktop.ListSessionPermissions - Request
 # VirtualDesktopAdmin.ListSessionPermissions - Request
 # VirtualDesktop.ListSharedPermissions - Request
 class ListPermissionsRequest(SocaListingPayload):
-    idea_session_id: Optional[str] = Field(default=None)
-    username: Optional[str] = Field(default=None)
+    idea_session_id: Optional[str]
+    username: Optional[str]
 
 
 # VirtualDesktop.ListSessionPermissions - Response
 # VirtualDesktopAdmin.ListSessionPermissions - Response
 # VirtualDesktop.ListSharedPermissions - Response
 class ListPermissionsResponse(SocaListingPayload):
-    listing: Optional[List[VirtualDesktopSessionPermission]] = Field(default=None)
+    listing: Optional[List[VirtualDesktopSessionPermission]]
 
 
 OPEN_API_SPEC_ENTRIES_VIRTUAL_DESKTOP = [

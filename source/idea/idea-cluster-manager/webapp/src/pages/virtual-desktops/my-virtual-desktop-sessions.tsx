@@ -389,7 +389,7 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
                 let os_filters: VirtualDesktopBaseOS[] = ['windows']
 
                 if (os_filter === OS_FILTER_LINUX_ID) {
-                    os_filters = ['amazonlinux2', 'centos7', 'rhel7', 'rhel8', 'rhel9', 'rocky8', 'rocky9']
+                    os_filters = ['amazonlinux2', 'centos7', 'rhel7']
                 }
 
                 if (!(os_filters?.includes(session?.base_os))) {
@@ -1001,7 +1001,7 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
                             <Button key="launch-new-virtual-desktop" variant="primary" onClick={() => {
                                 this.showCreateSessionForm()
                             }}>
-                                Launch New Virtual Desktop
+                                Launch new Virtual Desktop
                             </Button>
                         </SpaceBetween>
                     }>
@@ -1095,7 +1095,7 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
                         color="inherit">
                         Click the button below to create a new virtual desktop.
                     </Box>
-                    <Button onClick={() => this.showCreateSessionForm()}>Launch New Virtual Desktop</Button>
+                    <Button onClick={() => this.showCreateSessionForm()}>Launch new Virtual Desktop</Button>
                 </Box>
             }
             items={getSessions()}

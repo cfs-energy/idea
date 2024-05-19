@@ -12,7 +12,6 @@ from typing import Dict
 
 import ideavirtualdesktopcontroller
 from ideadatamodel import (
-    GetUserRequest,
     ListUsersInGroupRequest,
     GetProjectRequest,
     CreateSessionRequest,
@@ -116,27 +115,19 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
             return session, False
 
         # validate if the user belongs within allowed group -
-        # Check is done for admin only since virtual-desktop-user-api already enforces the group
+        # Check is done for admin only since, virtual-desktop-user-api already enforces the group
         # check for api-call
-
-        # Shortcut 'clusteradmin' to avoid lockout scenarios
-        cluster_administrator = self.context.config().get_string('cluster.administrator_username', required=True)
-        if session.owner in cluster_administrator or session.owner.startswith('clusteradmin'):
-            return self.validate_create_session_request(session)
-
-        response = self.context.accounts_client.get_user(GetUserRequest(
-            username=session.owner
+        response = self.context.accounts_client.list_users_in_group(ListUsersInGroupRequest(
+            group_names=self.VDI_GROUPS
         ))
-        users_groups = Utils.get_as_list(response.user.additional_groups, default=[])
         is_user_part_of_group = False
-
-        for group in self.VDI_GROUPS:
-            if group in users_groups:
+        for user in response.listing:
+            if user.username == session.owner:
                 is_user_part_of_group = True
                 break
 
         if not is_user_part_of_group:
-            session.failure_reason = f'User {session.owner} does not belong to any of the groups: {self.VDI_GROUPS}'
+            session.failure_reason = f'User {session.owner} does not belong to either of the groups: {self.VDI_GROUPS}'
             return session, False
 
         return self.validate_create_session_request(session)
@@ -163,18 +154,6 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
         if Utils.is_empty(software_stack.projects):
             software_stack.failure_reason = 'software_stack.projects missing'
             return software_stack, False
-
-        if Utils.is_empty(software_stack.pool_enabled):
-            software_stack.pool_enabled = False
-
-        # If the ASG is empty - toggle back to disabled
-        if Utils.is_empty(software_stack.pool_asg_name):
-            software_stack.pool_enabled = False
-            software_stack.pool_asg_name = None
-
-        # Default to 'default' launch tenancy
-        if Utils.is_empty(software_stack.launch_tenancy):
-            software_stack.launch_tenancy = 'default'
 
         for project in software_stack.projects:
             if Utils.is_empty(project.project_id):
@@ -217,21 +196,6 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
         if Utils.is_empty(software_stack.architecture):
             software_stack.architecture = VirtualDesktopArchitecture(Utils.get_value_as_string('Architecture', image_description, None))
 
-        if Utils.is_empty(software_stack.enabled):
-            software_stack.enabled = True
-
-        # Pool defaults to disabled
-        if Utils.is_empty(software_stack.pool_enabled):
-            software_stack.pool_enabled = False
-
-        # If the ASG/ARN is empty - make sure the pool is disabled too
-        if Utils.is_empty(software_stack.pool_asg_name):
-            software_stack.pool_enabled = False
-            software_stack.pool_asg_name = None
-
-        if Utils.is_empty(software_stack.launch_tenancy):
-            software_stack.launch_tenancy = 'default'
-
         return software_stack, True
 
     def create_session(self, context: ApiInvocationContext):
@@ -266,7 +230,7 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
 
     def batch_create_sessions(self, context: ApiInvocationContext):
         """
-        Creates multiple sessions.
+        Creates a multiple sessions.
         """
         sessions = context.get_request_payload_as(BatchCreateSessionRequest).sessions
         valid_sessions = []
@@ -510,21 +474,11 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
         if Utils.is_not_empty(new_software_stack.projects):
             old_software_stack.projects = new_software_stack.projects
 
-        if Utils.is_not_empty(new_software_stack.pool_enabled):
-            old_software_stack.pool_enabled = new_software_stack.pool_enabled
-        if Utils.is_not_empty(new_software_stack.pool_asg_name):
-            old_software_stack.pool_asg_name = new_software_stack.pool_asg_name
-
-        if Utils.is_not_empty(new_software_stack.launch_tenancy):
-            old_software_stack.launch_tenancy = new_software_stack.launch_tenancy
-
         new_software_stack = self.software_stack_db.update(old_software_stack)
-
         ss_projects = []
         for project in new_software_stack.projects:
             ss_projects.append(self.context.projects_client.get_project(GetProjectRequest(project_id=project.project_id)).project)
         new_software_stack.projects = ss_projects
-
         context.success(UpdateSoftwareStackResponse(
             software_stack=new_software_stack
         ))

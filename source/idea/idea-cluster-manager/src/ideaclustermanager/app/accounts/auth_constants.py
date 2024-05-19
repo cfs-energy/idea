@@ -11,4 +11,4 @@
 
 DEFAULT_LOGIN_SHELL = '/bin/bash'
 USER_HOME_DIR_BASE = '/data/home'
-USERNAME_REGEX = r'^(?=.{3,20}$)(?![_.-])(?!.*[_.-]{2})[a-z0-9_.-]+(?<![_.-])$'
+USERNAME_REGEX = r'^(?=.{3,20}$)(?![_.])(?!.*[_.]{2})[a-z0-9._]+(?<![_.])$'

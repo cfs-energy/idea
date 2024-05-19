@@ -46,7 +46,6 @@ function install_nvidia_public_drivers() {
   # P3        Tesla	        V-Series	      V100
   # P4d       Tesla	        A-Series	      A100 (320 GB HBM2 GPU memory)
   # P4de      Tesla	        A-Series	      A100 (640 GB HBM2e GPU memory)
-  # P5        Tesla         H-Series        H100 (640 GB HBM3 GPU memory)
 
   local DRIVER_VERSION="{{ context.get_nvidia_gpu_driver_version() }}"
 
@@ -77,7 +76,6 @@ function install_amd_gpu_drivers() {
     log_info "GPU driver already installed. Skip."
     return 0
   fi
-
   #
   # Instance GPU
   # G4ad     Radeon Pro V520
@@ -85,23 +83,13 @@ function install_amd_gpu_drivers() {
   mkdir -p /root/bootstrap/gpu_drivers
   pushd /root/bootstrap/gpu_drivers
 
-  {%- if context.base_os in ('rhel7', 'centos7', 'amazonlinux2') %}
   local AWS=$(command -v aws)
   local DRIVER_BUCKET_REGION=$(curl -s --head {{ context.config.get_string('global-settings.gpu_settings.amd.s3_bucket_url', required=True) }} | grep bucket-region | awk '{print $2}' | tr -d '\r\n')
   $AWS --region ${DRIVER_BUCKET_REGION} s3 cp --quiet --recursive {{ context.config.get_string('global-settings.gpu_settings.amd.s3_bucket_path', required=True) }} .
   tar -xf amdgpu-pro-*rhel*.tar.xz
-  cd $(find . -maxdepth 1 -mindepth 1 -type d -name "amdgpu-pro*rhel*")
+  cd amdgpu-pro*
   rpm --import RPM-GPG-KEY-amdgpu
   /bin/sh ./amdgpu-pro-install -y --opencl=pal,legacy
-  {%- elif context.base_os in ('rhel8', 'rocky8') %}
-  local RHEL_ROCKY8_INSTALLER_URL={{ context.config.get_string('global-settings.gpu_settings.amd.rhel_rocky8_installer_url', required=True)}}
-  yum localinstall -y ${RHEL_ROCKY8_INSTALLER_URL}
-  /bin/amdgpu-install --usecase=workstation --vulkan=pro --opencl=rocr,legacy --accept-eula -y
-  {%- elif context.base_os in ('rhel9', 'rocky9') %}
-  local RHEL_ROCKY9_INSTALLER_URL={{ context.config.get_string('global-settings.gpu_settings.amd.rhel_rocky9_installer_url', required=True)}}
-  yum localinstall -y ${RHEL_ROCKY9_INSTALLER_URL}
-  /bin/amdgpu-install --usecase=workstation --vulkan=pro --opencl=rocr,legacy --accept-eula -y
-  {%- endif %}
 
   set_reboot_required "Installed AMD GPU Driver"
 
@@ -113,12 +101,10 @@ echo """Section \"ServerLayout\"
     InputDevice     \"Mouse0\" \"CorePointer\"
 EndSection
 Section \"Files\"
-    ModulePath \"/opt/amdgpu/lib64\"
     ModulePath \"/opt/amdgpu/lib64/xorg/modules/drivers\"
-    ModulePath \"/opt/amdgpu/lib/xorg/modules/drivers\"
+    ModulePath \"/opt/amdgpu/lib/xorg/modules\"
     ModulePath \"/opt/amdgpu-pro/lib/xorg/modules/extensions\"
     ModulePath \"/opt/amdgpu-pro/lib64/xorg/modules/extensions\"
-    ModulePath \"/opt/amdgpu-pro/lib64\"
     ModulePath \"/usr/lib64/xorg/modules\"
     ModulePath \"/usr/lib/xorg/modules\"
 EndSection
@@ -166,7 +152,6 @@ EndSection
   popd
 }
 {%- endif %}
-
 function install_gpu_drivers () {
 
   # Identify Instance Type and Instance Family and install applicable GPU Drivers
@@ -191,11 +176,6 @@ function install_gpu_drivers () {
   # Available drivers by instance type for Tesla vs Grid mapping.
   # we'll use NODE_TYPE="dcv" to install Grid drivers and NODE_TYPE="compute" to install Tesla drivers.
   case ${INSTANCE_FAMILY} in
-    p5)
-      log_info "AMD / NVIDIA H100"
-      # Tesla driver: Yes, GRID driver: No
-      install_nvidia_public_drivers
-      ;;
     p4d|p4de)
       log_info "Intel / NVIDIA A100"
       # Tesla driver: Yes, GRID driver: No

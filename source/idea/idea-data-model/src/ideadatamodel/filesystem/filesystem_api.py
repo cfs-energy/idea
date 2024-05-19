@@ -27,8 +27,6 @@ __all__ = (
     'OPEN_API_SPEC_ENTRIES_FILE_BROWSER'
 )
 
-from pydantic import Field
-
 from ideadatamodel import SocaPayload, SocaListingPayload, IdeaOpenAPISpecEntry
 from ideadatamodel.filesystem.filesystem_model import *
 from typing import Optional, List
@@ -37,46 +35,46 @@ from typing import Optional, List
 # FileBrowser.ListFiles
 
 class ListFilesRequest(SocaListingPayload):
-    cwd: Optional[str] = Field(default=None)
+    cwd: Optional[str]
 
 
 class ListFilesResult(SocaListingPayload):
-    cwd: Optional[str] = Field(default=None)
-    listing: Optional[List[FileData]] = Field(default=None)
+    cwd: Optional[str]
+    listing: Optional[List[FileData]]
 
 
 # FileBrowser.ReadFile
 
 class ReadFileRequest(SocaPayload):
-    file: Optional[str] = Field(default=None)
+    file: Optional[str]
 
 
 class ReadFileResult(SocaPayload):
-    file: Optional[str] = Field(default=None)
-    content_type: Optional[str] = Field(default=None)
-    content: Optional[str] = Field(default=None)
+    file: Optional[str]
+    content_type: Optional[str]
+    content: Optional[str]
 
 
 # FileBrowser.TailFile
 
 class TailFileRequest(SocaPayload):
-    file: Optional[str] = Field(default=None)
-    line_count: Optional[int] = Field(default=None)
-    next_token: Optional[str] = Field(default=None)
+    file: Optional[str]
+    line_count: Optional[int]
+    next_token: Optional[str]
 
 
 class TailFileResult(SocaPayload):
-    file: Optional[str] = Field(default=None)
-    next_token: Optional[str] = Field(default=None)
-    lines: Optional[List[str]] = Field(default=None)
-    line_count: Optional[int] = Field(default=None)
+    file: Optional[str]
+    next_token: Optional[str]
+    lines: Optional[List[str]]
+    line_count: Optional[int]
 
 
 # FileBrowser.SaveFile
 
 class SaveFileRequest(SocaPayload):
-    file: Optional[str] = Field(default=None)
-    content: Optional[str] = Field(default=None)
+    file: Optional[str]
+    content: Optional[str]
 
 
 class SaveFileResult(SocaPayload):
@@ -86,16 +84,16 @@ class SaveFileResult(SocaPayload):
 # FileBrowser.DownloadFiles
 
 class DownloadFilesRequest(SocaPayload):
-    files: Optional[List[str]] = Field(default=None)
+    files: Optional[List[str]]
 
 
 class DownloadFilesResult(SocaPayload):
-    download_url: Optional[str] = Field(default=None)
+    download_url: Optional[str]
 
 
 # FileBrowser.DeleteFiles
 class DeleteFilesRequest(SocaPayload):
-    files: Optional[List[str]] = Field(default=None)
+    files: Optional[List[str]]
 
 
 class DeleteFilesResult(SocaPayload):
@@ -104,9 +102,9 @@ class DeleteFilesResult(SocaPayload):
 
 # FileBrowser.CreateFile
 class CreateFileRequest(SocaPayload):
-    cwd: Optional[str] = Field(default=None)
-    filename: Optional[str] = Field(default=None)
-    is_folder: Optional[bool] = Field(default=None)
+    cwd: Optional[str]
+    filename: Optional[str]
+    is_folder: Optional[bool]
 
 
 class CreateFileResult(SocaPayload):

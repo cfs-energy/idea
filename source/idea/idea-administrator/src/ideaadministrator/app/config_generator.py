@@ -162,13 +162,13 @@ class ConfigGenerator:
         return Utils.get_value_as_string('kms_key_id', self.user_values, None)
 
     def get_instance_type(self) -> str:
-        return Utils.get_value_as_string('instance_type', self.user_values, 'm6i.large')
+        return Utils.get_value_as_string('instance_type', self.user_values, 'm5.large')
 
     def get_base_os(self) -> str:
         return Utils.get_value_as_string('base_os', self.user_values, 'amazonlinux2')
 
     def get_dcv_connection_gateway_instance_type(self) -> str:
-        return Utils.get_value_as_string('dcv_connection_gateway_instance_type', self.user_values, 'm6i.large')
+        return Utils.get_value_as_string('dcv_connection_gateway_instance_type', self.user_values, 'm5.xlarge')
 
     def get_dcv_connection_gateway_volume_size(self) -> int:
         return Utils.get_value_as_int('dcv_connection_gateway_volume_size', self.user_values, 200)
@@ -232,10 +232,7 @@ class ConfigGenerator:
         return ami_id
 
     def get_volume_size(self) -> int:
-        return Utils.get_value_as_int('volume_size', self.user_values, default=200)
-
-    def get_volume_type_string(self) -> str:
-        return Utils.get_value_as_string('volume_type', self.user_values, default='gp3')
+        return Utils.get_value_as_int('volume_size', self.user_values, 200)
 
     def get_enabled_modules(self) -> List[str]:
         enabled_modules = Utils.get_value_as_list('enabled_modules', self.user_values)
@@ -252,7 +249,7 @@ class ConfigGenerator:
             return None
         remote_write_url = Utils.get_value_as_string('prometheus_remote_write_url', self.user_values)
         if Utils.is_empty(remote_write_url):
-            raise exceptions.general_exception('prometheus_remote_write_url is required when metrics_provider = prometheus')
+            raise exceptions.general_exception(f'prometheus_remote_write_url is required when metrics_provider = prometheus')
         return remote_write_url
 
     def get_use_existing_vpc(self) -> bool:
@@ -427,7 +424,6 @@ class ConfigGenerator:
             'base_os': self.get_base_os(),
             'instance_ami': self.get_instance_ami(),
             'volume_size': self.get_volume_size(),
-            'volume_type': self.get_volume_type_string(),
             'enabled_modules': self.get_enabled_modules(),
             'metrics_provider': self.get_metrics_provider(),
             'prometheus_remote_write_url': self.get_prometheus_remote_write_url(),

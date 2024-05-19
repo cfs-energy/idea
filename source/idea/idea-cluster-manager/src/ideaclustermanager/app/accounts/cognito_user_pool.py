@@ -8,7 +8,6 @@
 #  or in the 'license' file accompanying this file. This file is distributed on an 'AS IS' BASIS, WITHOUT WARRANTIES
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
-import logging
 
 from ideadatamodel import (
     exceptions,
@@ -20,12 +19,11 @@ from ideadatamodel import (
     RespondToAuthChallengeRequest,
     RespondToAuthChallengeResult,
     AuthResult,
-    CognitoUser,
-    CognitoUserPoolPasswordPolicy
+    CognitoUser
 )
 from ideasdk.utils import Utils
 from ideasdk.context import SocaContext
-from pydantic import Field
+
 from typing import Optional, Dict
 import botocore.exceptions
 import hmac
@@ -34,10 +32,10 @@ import base64
 
 
 class CognitoUserPoolOptions(SocaBaseModel):
-    user_pool_id: Optional[str] = Field(default=None)
-    admin_group_name: Optional[str] = Field(default=None)
-    client_id: Optional[str] = Field(default=None)
-    client_secret: Optional[str] = Field(default=None)
+    user_pool_id: Optional[str]
+    admin_group_name: Optional[str]
+    client_id: Optional[str]
+    client_secret: Optional[str]
 
 
 class CognitoUserPool:
@@ -131,8 +129,6 @@ class CognitoUserPool:
         if user is not None:
             return user
 
-        _api_query_start = Utils.current_time_ms()
-
         try:
             result = self._context.aws().cognito_idp().admin_get_user(
                 UserPoolId=self.user_pool_id,
@@ -143,10 +139,6 @@ class CognitoUserPool:
                 return None
             else:
                 raise e
-
-        _api_query_end = Utils.current_time_ms()
-        if self._logger.isEnabledFor(logging.DEBUG):
-            self._logger.debug(f"Cognito-API query: {_api_query_end - _api_query_start}ms")
 
         user = CognitoUser(**result)
         self._context.cache().short_term().set(cache_key, user)
@@ -313,21 +305,12 @@ class CognitoUserPool:
         )
 
     def admin_set_password(self, username: str, password: str, permanent: bool = False):
-        try:
-            self._context.aws().cognito_idp().admin_set_user_password(
-                UserPoolId=self.user_pool_id,
-                Username=username,
-                Password=password,
-                Permanent=permanent
-            )
-        except botocore.exceptions.ClientError as e:
-            if e.response['Error']['Code'] == 'InvalidPasswordException':
-                self._logger.error(f"Username: {username} - Failed Cognito password policy. Deleting User..")
-                self.admin_delete_user(username=username)
-                raise exceptions.invalid_params('Password does not confirm to Cognito user pool policy')
-            else:
-                # Should we still delete the user with any other exception?
-                raise e
+        self._context.aws().cognito_idp().admin_set_user_password(
+            UserPoolId=self.user_pool_id,
+            Username=username,
+            Password=password,
+            Permanent=permanent
+        )
 
         self.password_updated(username)
 
@@ -388,12 +371,6 @@ class CognitoUserPool:
         if Utils.is_empty(password):
             raise exceptions.invalid_params('password is required.')
 
-        # In SSO-enabled mode - local auth is not allowed except for clusteradmin
-        cluster_admin_username = self._context.config().get_string('cluster.administrator_username', required=True)
-        sso_enabled = self._context.config().get_bool('identity-provider.cognito.sso_enabled', required=True)
-        if sso_enabled and (username != cluster_admin_username):
-            self._logger.error(f"Ignoring local authentication request with SSO enabled. Username: {username}")
-            raise exceptions.unauthorized_access(f"Ignoring local authentication request with SSO enabled. Username: {username}")
         try:
             cognito_result = self._context.aws().cognito_idp().admin_initiate_auth(
                 AuthFlow='ADMIN_USER_PASSWORD_AUTH',
@@ -536,28 +513,3 @@ class CognitoUserPool:
             ProposedPassword=new_password
         )
         self.password_updated(username)
-
-    def describe_password_policy(self) -> CognitoUserPoolPasswordPolicy:
-        try:
-            describe_result = self._context.aws().cognito_idp().describe_user_pool(
-                UserPoolId=self.user_pool_id
-            )
-        except botocore.exceptions.ClientError as e:
-            raise e
-        user_pool = Utils.get_value_as_dict('UserPool', describe_result)
-        policies = Utils.get_value_as_dict('Policies', user_pool)
-        password_policy = Utils.get_value_as_dict('PasswordPolicy', policies)
-        minimum_length = Utils.get_value_as_int('MinimumLength', password_policy, 8)
-        require_uppercase = Utils.get_value_as_bool('RequireUppercase', password_policy, True)
-        require_lowercase = Utils.get_value_as_bool('RequireLowercase', password_policy, True)
-        require_numbers = Utils.get_value_as_bool('RequireNumbers', password_policy, True)
-        require_symbols = Utils.get_value_as_bool('RequireSymbols', password_policy, True)
-        temporary_password_validity_days = Utils.get_value_as_int('TemporaryPasswordValidityDays', password_policy, 7)
-        return CognitoUserPoolPasswordPolicy(
-            minimum_length=minimum_length,
-            require_uppercase=require_uppercase,
-            require_lowercase=require_lowercase,
-            require_numbers=require_numbers,
-            require_symbols=require_symbols,
-            temporary_password_validity_days=temporary_password_validity_days
-        )

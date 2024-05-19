@@ -18,7 +18,6 @@ from ideaadministrator.app.cdk.constructs import (
     InstanceProfile,
     VirtualDesktopBastionAccessSecurityGroup,
     VirtualDesktopPublicLoadBalancerAccessSecurityGroup,
-    VirtualDesktopBrokerSecurityGroup,
     SQSQueue,
     SNSTopic,
     Policy,
@@ -51,8 +50,7 @@ from aws_cdk import (
     aws_events_targets as events_targets,
     aws_s3 as s3,
     aws_backup as backup,
-    aws_iam as iam,
-    aws_kms as kms
+    aws_iam as iam
 )
 
 from aws_cdk.aws_events import Schedule
@@ -120,7 +118,7 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
         self.dcv_host_security_group: Optional[VirtualDesktopBastionAccessSecurityGroup] = None
         self.controller_security_group: Optional[VirtualDesktopPublicLoadBalancerAccessSecurityGroup] = None
         self.dcv_connection_gateway_security_group: Optional[VirtualDesktopPublicLoadBalancerAccessSecurityGroup] = None
-        self.dcv_broker_security_group: Optional[VirtualDesktopBrokerSecurityGroup] = None
+        self.dcv_broker_security_group: Optional[VirtualDesktopBastionAccessSecurityGroup] = None
         self.dcv_broker_alb_security_group: Optional[VirtualDesktopBastionAccessSecurityGroup] = None
 
         self.dcv_connection_gateway_self_signed_cert: Optional[cdk.CustomResource] = None
@@ -167,19 +165,9 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
             ec2.Port.udp_range(0, 65535),
             description='Allow all egress for UDP for QUIC Support on DCV Host'
         )
-        self.dcv_host_security_group.add_egress_rule(
-            ec2.Peer.ipv6('::/0'),
-            ec2.Port.udp_range(0, 65535),
-            description='Allow all egress for UDP for QUIC Support on DCV Host'
-        )
 
         self.dcv_connection_gateway_security_group.add_egress_rule(
             ec2.Peer.ipv4('0.0.0.0/0'),
-            ec2.Port.udp_range(0, 65535),
-            description='Allow all egress for UDP for QUIC Support on DCV Connection Gateway'
-        )
-        self.dcv_connection_gateway_security_group.add_egress_rule(
-            ec2.Peer.ipv6('::/0'),
             ec2.Port.udp_range(0, 65535),
             description='Allow all egress for UDP for QUIC Support on DCV Connection Gateway'
         )
@@ -194,7 +182,7 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
             content_based_deduplication=True,
             encryption_master_key=self.context.config().get_string('cluster.sqs.kms_key_id'),
             dead_letter_queue=sqs.DeadLetterQueue(
-                max_receive_count=Utils.get_as_int(constants.SQS_MAX_RECEIVE_COUNT_VDC_EVENTS, default=16),
+                max_receive_count=60,
                 queue=SQSQueue(
                     self.context, 'virtual-desktop-controller-events-queue-dlq', self.stack,
                     queue_name=f'{self.cluster_name}-{self.module_id}-events-dlq.fifo',
@@ -218,9 +206,8 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
             queue_name=f'{self.cluster_name}-{self.module_id}-controller',
             encrypt_at_rest=encrypt_at_rest,
             encryption_master_key=kms_key,
-            visibility_timeout=cdk.Duration.seconds(constants.SQS_VISIBILITY_VDC_CONTROLLER),
             dead_letter_queue=sqs.DeadLetterQueue(
-                max_receive_count=Utils.get_as_int(constants.SQS_MAX_RECEIVE_COUNT_VDC_CONTROLLER, default=16),
+                max_receive_count=30,
                 queue=SQSQueue(
                     self.context, 'virtual-desktop-controller-queue-dlq', self.stack,
                     queue_name=f'{self.cluster_name}-{self.module_id}-controller-dlq',
@@ -239,7 +226,7 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
             name=f'{self.module_id}-ssm-commands-sns-topic-role',
             scope=self.stack,
             assumed_by=['ssm'],
-            description='IAM role for SSM Commands to send notifications via SNS'
+            description=f'IAM role for SSM Commands to send notifications via SNS'
         )
 
         self.ssm_command_pass_role.attach_inline_policy(Policy(
@@ -311,9 +298,6 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
             )
         )
 
-        scheduled_event_transformer_lambda.add_nag_suppression(suppressions=[
-            IdeaNagSuppression(rule_id='AwsSolutions-L1', reason='Python Runtime is selected for stability.')
-        ])
         schedule_trigger_rule = events.Rule(
             scope=self.stack,
             id=f'{self.cluster_name}-{self.module_id}-schedule-rule',
@@ -402,7 +386,7 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
         self.dcv_host_role = self._build_iam_role(
             role_description=f'IAM role assigned to virtual-desktop-{self.COMPONENT_DCV_HOST}',
             component_name=self.COMPONENT_DCV_HOST,
-            component_jinja='virtual-desktop-dcv-host.yml'
+            component_jinja=f'virtual-desktop-dcv-host.yml'
         )
         self.dcv_host_role.grant_pass_role(self.controller_role)
 
@@ -538,29 +522,19 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
         )
 
         # security group
-        self.dcv_broker_security_group = VirtualDesktopBrokerSecurityGroup(
+        self.dcv_broker_security_group = VirtualDesktopBastionAccessSecurityGroup(
             context=self.context,
             name=f'{self.module_id}-{self.COMPONENT_DCV_BROKER}-security-group',
             scope=self.stack,
             vpc=self.cluster.vpc,
             bastion_host_security_group=self.cluster.get_security_group('bastion-host'),
-            public_loadbalancer_security_group=self.cluster.get_security_group('external-load-balancer'),
             description='Security Group for Virtual Desktop DCV Broker',
+            directory_service_access=False,
             component_name='DCV Broker'
         )
 
         # autoscaling group
         dcv_broker_package_uri = self.stack.node.try_get_context('dcv_broker_bootstrap_package_uri')
-        https_proxy = self.context.config().get_string('cluster.network.https_proxy', required=False, default='')
-        no_proxy = self.context.config().get_string('cluster.network.no_proxy', required=False, default='')
-        proxy_config = {}
-        if Utils.is_not_empty(https_proxy):
-            proxy_config = {
-                    'http_proxy': https_proxy,
-                    'https_proxy': https_proxy,
-                    'no_proxy': no_proxy
-                    }
-
         if Utils.is_empty(dcv_broker_package_uri):
             dcv_broker_package_uri = 'not-provided'
 
@@ -568,13 +542,12 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
             aws_region=self.aws_region,
             bootstrap_package_uri=dcv_broker_package_uri,
             install_commands=[
-                '/bin/bash dcv-broker/setup.sh'
+                f'/bin/bash dcv-broker/setup.sh'
             ],
             infra_config={
                 'BROKER_CLIENT_TARGET_GROUP_ARN': '${__BROKER_CLIENT_TARGET_GROUP_ARN__}',
                 'CONTROLLER_EVENTS_QUEUE_URL': '${__CONTROLLER_EVENTS_QUEUE_URL__}'
             },
-            proxy_config=proxy_config,
             base_os=self.context.config().get_string('virtual-desktop-controller.dcv_broker.autoscaling.base_os', required=True)
         ).build()
         substituted_userdata = cdk.Fn.sub(broker_userdata, {
@@ -585,7 +558,7 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
         self.dcv_broker_role = self._build_iam_role(
             role_description=f'IAM role assigned to virtual-desktop-{self.COMPONENT_DCV_BROKER}',
             component_name=self.COMPONENT_DCV_BROKER,
-            component_jinja='virtual-desktop-dcv-broker.yml'
+            component_jinja=f'virtual-desktop-dcv-broker.yml'
         )
 
         self.dcv_broker_autoscaling_group = self._build_auto_scaling_group(
@@ -651,18 +624,8 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
         self.controller_role = self._build_iam_role(
             role_description=f'IAM role assigned to virtual-desktop-{self.COMPONENT_CONTROLLER}',
             component_name=self.COMPONENT_CONTROLLER,
-            component_jinja='virtual-desktop-controller.yml'
+            component_jinja=f'virtual-desktop-controller.yml'
         )
-
-        https_proxy = self.context.config().get_string('cluster.network.https_proxy', required=False, default='')
-        no_proxy = self.context.config().get_string('cluster.network.no_proxy', required=False, default='')
-        proxy_config = {}
-        if Utils.is_not_empty(https_proxy):
-            proxy_config = {
-                    'http_proxy': https_proxy,
-                    'https_proxy': https_proxy,
-                    'no_proxy': no_proxy
-                    }
 
         self.controller_auto_scaling_group = self._build_auto_scaling_group(
             component_name=self.COMPONENT_CONTROLLER,
@@ -674,7 +637,6 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
                 install_commands=[
                     '/bin/bash virtual-desktop-controller/setup.sh'
                 ],
-                proxy_config=proxy_config,
                 base_os=self.context.config().get_string('virtual-desktop-controller.controller.autoscaling.base_os', required=True)
             ).build()),
             node_type=constants.NODE_TYPE_APP
@@ -790,18 +752,8 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
 
         base_os = self.context.config().get_string(f'virtual-desktop-controller.{self.CONFIG_MAPPING[component_name]}.autoscaling.base_os', required=True)
         block_device_name = Utils.get_ec2_block_device_name(base_os)
-        block_device_type_string = self.context.config().get_string(f'virtual-desktop-controller.volume_type', default='gp3')
-        block_device_type_volumetype = ec2.EbsDeviceVolumeType.GP3 if block_device_type_string == 'gp3' else ec2.EbsDeviceVolumeType.GP2
-
         enable_detailed_monitoring = self.context.config().get_bool(f'virtual-desktop-controller.{self.CONFIG_MAPPING[component_name]}.autoscaling.enable_detailed_monitoring', default=False)
         metadata_http_tokens = self.context.config().get_string(f'virtual-desktop-controller.{self.CONFIG_MAPPING[component_name]}.autoscaling.metadata_http_tokens', required=True)
-
-        kms_key_id = self.context.config().get_string('cluster.ebs.kms_key_id', required=False, default=None)
-        if kms_key_id is not None:
-            kms_key_arn = self.get_kms_key_arn(kms_key_id)
-            ebs_kms_key = kms.Key.from_key_arn(scope=self.stack, id=f'{component_name}-ebs-kms-key', key_arn=kms_key_arn)
-        else:
-            ebs_kms_key = kms.Alias.from_alias_name(scope=self.stack, id=f'{component_name}-ebs-kms-key-default', alias_name='alias/aws/ebs')
 
         launch_template = ec2.LaunchTemplate(
             self.stack, f'{component_name}-lt',
@@ -815,10 +767,8 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
             block_devices=[ec2.BlockDevice(
                 device_name=block_device_name,
                 volume=ec2.BlockDeviceVolume(ebs_device=ec2.EbsDeviceProps(
-                    encrypted=True,
-                    kms_key=ebs_kms_key,
                     volume_size=self.context.config().get_int(f'virtual-desktop-controller.{self.CONFIG_MAPPING[component_name]}.autoscaling.volume_size', default=200),
-                    volume_type=block_device_type_volumetype
+                    volume_type=ec2.EbsDeviceVolumeType.GP3
                 ))
             )],
             role=iam_role,
@@ -891,27 +841,16 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
         if Utils.is_empty(dcv_connection_gateway_bootstrap_package_uri):
             dcv_connection_gateway_bootstrap_package_uri = 'not-provided'
 
-        https_proxy = self.context.config().get_string('cluster.network.https_proxy', required=False, default='')
-        no_proxy = self.context.config().get_string('cluster.network.no_proxy', required=False, default='')
-        proxy_config = {}
-        if Utils.is_not_empty(https_proxy):
-            proxy_config = {
-                    'http_proxy': https_proxy,
-                    'https_proxy': https_proxy,
-                    'no_proxy': no_proxy
-                    }
-
         connection_gateway_userdata = BootstrapUserDataBuilder(
             aws_region=self.aws_region,
             bootstrap_package_uri=dcv_connection_gateway_bootstrap_package_uri,
             install_commands=[
-                '/bin/bash dcv-connection-gateway/setup.sh'
+                f'/bin/bash dcv-connection-gateway/setup.sh'
             ],
             infra_config={
                 'CERTIFICATE_SECRET_ARN': '${__CERTIFICATE_SECRET_ARN__}',
                 'PRIVATE_KEY_SECRET_ARN': '${__PRIVATE_KEY_SECRET_ARN__}',
             },
-            proxy_config=proxy_config,
             base_os=self.context.config().get_string('virtual-desktop-controller.dcv_connection_gateway.autoscaling.base_os', required=True)
         ).build()
 
@@ -933,7 +872,7 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
             iam_role=self._build_iam_role(
                 role_description=f'IAM role assigned to virtual-desktop-{self.COMPONENT_DCV_CONNECTION_GATEWAY}',
                 component_name=self.COMPONENT_DCV_CONNECTION_GATEWAY,
-                component_jinja='virtual-desktop-dcv-connection-gateway.yml'
+                component_jinja=f'virtual-desktop-dcv-connection-gateway.yml'
             ),
             substituted_userdata=substituted_userdata,
             node_type=constants.NODE_TYPE_INFRA
@@ -1036,7 +975,7 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
                     'idea:ModuleName': 'virtual-desktop-controller'
                 }
             },
-            resource_type='Custom::SelfSignedCertificateConnectionGateway'
+            resource_type=f'Custom::SelfSignedCertificateConnectionGateway'
         )
 
     def build_dcv_connection_gateway(self):
@@ -1112,11 +1051,6 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
         if not self.context.config().get_bool('virtual-desktop-controller.dcv_connection_gateway.certificate.provided', default=False):
             cluster_settings['dcv_connection_gateway.certificate.certificate_secret_arn'] = self.dcv_connection_gateway_self_signed_cert.get_att_string('certificate_secret_arn')
             cluster_settings['dcv_connection_gateway.certificate.private_key_secret_arn'] = self.dcv_connection_gateway_self_signed_cert.get_att_string('private_key_secret_arn')
-        else:
-            cluster_settings['dcv_connection_gateway.certificate.provided'] = self.context.config().get_string('virtual-desktop-controller.dcv_connection_gateway.certificate.provided', required=True)
-            cluster_settings['dcv_connection_gateway.certificate.certificate_secret_arn'] = self.context.config().get_string('virtual-desktop-controller.dcv_connection_gateway.certificate.certificate_secret_arn', required=True)
-            cluster_settings['dcv_connection_gateway.certificate.private_key_secret_arn'] = self.context.config().get_string('virtual-desktop-controller.dcv_connection_gateway.certificate.private_key_secret_arn', required=True)
-            cluster_settings['dcv_connection_gateway.certificate.custom_dns_name'] = self.context.config().get_string('virtual-desktop-controller.dcv_connection_gateway.certificate.custom_dns_name', required=True)
 
         if self.backup_plan is not None:
             cluster_settings['vdi_host_backup.backup_plan.arn'] = self.backup_plan.get_backup_plan_arn()

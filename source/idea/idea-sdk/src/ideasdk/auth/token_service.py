@@ -21,7 +21,6 @@ from ideadatamodel import SocaBaseModel, AuthResult, exceptions, errorcodes
 from ideasdk.utils import Utils
 
 from typing import Optional, Dict, List
-from pydantic import Field
 import jwt
 from jwt import PyJWKClient
 import requests
@@ -36,24 +35,24 @@ DEFAULT_KEY_ALGORITHM = 'RS256'
 class TokenServiceOptions(SocaBaseModel):
     # provider_url is of format: https://cognito-idp.us-east-1.amazonaws.com/[user-pool-id]
     # this is used to construct .well-known/jwks.json url
-    cognito_user_pool_provider_url: Optional[str] = Field(default=None)
+    cognito_user_pool_provider_url: Optional[str]
 
     # domain_url is used to access OAuth2 based services such as /oauth2/token to fetch an access token
     # domain url is of the format: https://[domain-name].auth.[aws-region].amazoncognito.com
-    cognito_user_pool_domain_url: Optional[str] = Field(default=None)
+    cognito_user_pool_domain_url: Optional[str]
 
-    jwk_cache_keys: Optional[bool] = Field(default=None)
-    jwk_max_cached_keys: Optional[int] = Field(default=None)
-    key_algorithm: Optional[str] = Field(default=None)
+    jwk_cache_keys: Optional[bool]
+    jwk_max_cached_keys: Optional[int]
+    key_algorithm: Optional[str]
 
-    client_id: Optional[str] = Field(default=None)
-    client_secret: Optional[str] = Field(default=None)
-    client_credentials_scope: Optional[List[str]] = Field(default=None)
+    client_id: Optional[str]
+    client_secret: Optional[str]
+    client_credentials_scope: Optional[List[str]]
 
-    refresh_token: Optional[str] = Field(default=None)
+    refresh_token: Optional[str]
 
-    administrators_group_name: Optional[str] = Field(default=None)
-    managers_group_name: Optional[str] = Field(default=None)
+    administrators_group_name: Optional[str]
+    managers_group_name: Optional[str]
 
 
 class ApiAuthorizationType(str, Enum):
@@ -65,11 +64,11 @@ class ApiAuthorizationType(str, Enum):
 
 class ApiAuthorization(SocaBaseModel):
     type: ApiAuthorizationType
-    username: Optional[str] = Field(default=None)  # will not exist for APP authorizations
-    client_id: Optional[str] = Field(default=None)
-    groups: Optional[List[str]] = Field(default=None)  # list of all groups user is part of
-    scopes: Optional[List[str]] = Field(default=None)  # list of allowed oauth scopes
-    invocation_source: Optional[str] = Field(default=None)
+    username: Optional[str]  # will not exist for APP authorizations
+    client_id: Optional[str]
+    groups: Optional[List[str]]  # list of all groups user is part of
+    scopes: Optional[List[str]]  # list of allowed oauth scopes
+    invocation_source: Optional[str]
 
 
 class TokenService(TokenServiceProtocol):

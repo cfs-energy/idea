@@ -66,11 +66,6 @@ const VIRTUAL_DESKTOP_SESSIONS_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefini
         cell: e => Utils.getOsTitle(e.software_stack?.base_os)
     },
     {
-        id: 'tenancy',
-        header: 'Tenancy',
-        cell: e => Utils.getFormattedTenancy(e.software_stack?.launch_tenancy)
-    },
-    {
         id: 'instance_type',
         header: 'Instance Type',
         cell: e => e.server?.instance_type
@@ -239,7 +234,7 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                 ref={this.createSoftwareStackForm}
                 name={"create-software-stack"}
                 modal={true}
-                title={"Create Software Stack from Session: " + this.state.sessionForSoftwareStack?.name}
+                title={"Create Software Stack for " + this.state.sessionForSoftwareStack?.name}
                 modalSize={"medium"}
                 onCancel={() => {
                     this.hideCreateSoftwareStackForm()
@@ -250,22 +245,15 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                         return
                     }
                     const values = this.getCreateSoftwareStackForm().getValues()
-
-                    let projectValues: any[] = [];
-                    values.projects.forEach((project: string) => {
-                        projectValues.push({project_id: project});
-                    });
                     this.getVirtualDesktopAdminClient().createSoftwareStackFromSession({
                         session: this.state.sessionForSoftwareStack,
                         new_software_stack: {
                             name: values.name,
                             description: values.description,
-                            min_storage:
-                                {
-                                    value: values.root_storage_size,
-                                    unit: 'gb'
-                                },
-                            projects: projectValues,
+                            min_storage: {
+                                value: values.root_storage_size,
+                                unit: 'gb'
+                            }
                         }
                     }).then(() => {
                         this.hideCreateSoftwareStackForm()
@@ -300,9 +288,8 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                         description: 'Enter the storage size for your virtual desktop in GBs',
                         data_type: 'int',
                         param_type: 'text',
-                        default: Math.max(10, this.state.sessionForSoftwareStack?.software_stack?.min_storage?.value!),
+                        default: 10,
                         validate: {
-                            min: Math.max(10, this.state.sessionForSoftwareStack?.software_stack?.min_storage?.value!),
                             required: true
                         }
                     },
@@ -674,7 +661,7 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                     },
                     {
                         id: "create-software-stack",
-                        text: "Create Software Stack from Session",
+                        text: "Create Software Stack",
                         disabled: !this.canCreateSoftwareStack(),
                         disabledReason: 'Select exactly 1 session to enable this Action',
                         onClick: () => {
@@ -777,24 +764,8 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                                 value: 'centos7'
                             },
                             {
-                                title: 'Red Hat Enterprise Linux 7',
+                                title: 'RHEL 7',
                                 value: 'rhel7'
-                            },
-                            {
-                                title: 'Red Hat Enterprise Linux 8',
-                                value: 'rhel8'
-                            },
-                            {
-                                title: 'Red Hat Enterprise Linux 9',
-                                value: 'rhel9'
-                            },
-                            {
-                                title: 'Rocky Linux 8',
-                                value: 'rocky8'
-                            },
-                            {
-                                title: 'Rocky Linux 9',
-                                value: 'rocky9'
                             }
                         ]
                     }

@@ -71,13 +71,13 @@ class IdeaThreadpoolService(SocaService):
             # need to mark certain threads for termination
             if len(self._active_threads) > count:
                 # there are actual threads that need to be marked for termination
-                self._logger.debug('Marked a thread for termination')
+                self._logger.debug(f'Marked a thread for termination')
                 for i in range(len(self._active_threads) - count):
                     self._active_threads.pop().exit.set()
             else:
                 # we have already marked them for termination, they just haven't terminated yet.
                 # we can eventually add more logic here. But for now. NO-OP
-                self._logger.debug('No=OP case, where threads are already marked for termination')
+                self._logger.debug(f'No=OP case, where threads are already marked for termination')
                 pass
         else:
             # need to provision new threads.

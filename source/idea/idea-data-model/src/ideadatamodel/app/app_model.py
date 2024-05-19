@@ -16,10 +16,9 @@ __all__ = (
 from ideadatamodel import SocaBaseModel
 
 from typing import Optional
-from pydantic import Field
 
 
 class ModuleInfo(SocaBaseModel):
-    module_name: Optional[str] = Field(default=None)
-    module_version: Optional[str] = Field(default=None)
-    module_id: Optional[str] = Field(default=None)
+    module_name: Optional[str]
+    module_version: Optional[str]
+    module_id: Optional[str]

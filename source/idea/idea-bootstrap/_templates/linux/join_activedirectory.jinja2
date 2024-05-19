@@ -91,7 +91,7 @@ function ad_automation_wait_for_authorization_and_join () {
     local DOMAIN_CONTROLLER=$(echo "${AD_AUTHORIZATION_ENTRY}" | jq -r '.domain_controller')
     export IDEA_HOSTNAME=$(echo "${AD_AUTHORIZATION_ENTRY}" | jq -r '.hostname')
     local LOCAL_HOSTNAME=$(hostname -s)
-    log_info "[Join AD] Using a local hostname of ${LOCAL_HOSTNAME^^}  / IDEA Hostname: ${IDEA_HOSTNAME^^} for AD Join operation to domain controller: ${DOMAIN_CONTROLLER}"
+    log_info "[Join AD] Using a local hostname of ${LOCAL_HOSTNAME^^}  / IDEA Hostname: ${IDEA_HOSTNAME^^} for AD Join operation"
     $REALM join \
     --one-time-password="${ONE_TIME_PASSWORD}" \
     --computer-name="${IDEA_HOSTNAME^^}" \

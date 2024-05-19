@@ -52,7 +52,6 @@ Statement:
       - ec2:DescribeAvailabilityZones
       - ec2:DescribeFlowLogs
       - ec2:DescribeInstances
-      - ec2:DescribeInstanceTypes
       - ec2:DescribeInternetGateways
       - ec2:DescribeKeyPairs
       - ec2:DescribeNatGateways
@@ -74,7 +73,6 @@ Statement:
       - elasticfilesystem:CreateMountTarget
       - elasticfilesystem:DescribeFileSystems
       - elasticfilesystem:DescribeMountTargets
-      - elasticfilesystem:PutFileSystemPolicy
       - elasticfilesystem:PutLifecycleConfiguration
       - elasticloadbalancing:AddTags
       - elasticloadbalancing:CreateListener
@@ -96,7 +94,6 @@ Statement:
       - es:ListDomainNames
       - fsx:CreateFileSystem
       - fsx:DescribeFileSystems
-      - fsx:DescribeFileCaches
       - fsx:TagResource
       - iam:AddRoleToInstanceProfile
       - iam:AttachRolePolicy
@@ -118,7 +115,6 @@ Statement:
       - lambda:GetFunction
       - lambda:InvokeFunction
       - logs:CreateLogGroup
-      - logs:CreateLogStream
       - logs:DescribeLogGroups
       - logs:PutRetentionPolicy
       - route53resolver:AssociateResolverEndpointIpAddress

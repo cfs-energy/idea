@@ -16,7 +16,6 @@ Statement:
       - elasticloadbalancing:ModifyRule
       - elasticloadbalancing:DescribeRules
       - elasticloadbalancing:DescribeTags
-      - elasticloadbalancing:AddTags
     Resource: '*'
     Effect: Allow
     Sid: ClusterEndpointManagementRules

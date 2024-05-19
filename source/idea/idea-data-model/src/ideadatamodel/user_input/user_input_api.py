@@ -22,8 +22,6 @@ __all__ = (
     'GetParamsResult'
 )
 
-from pydantic import Field
-
 from ideadatamodel import SocaPayload, SocaListingPayload
 from ideadatamodel.user_input.user_input_model import SocaUserInputModuleMetadata, SocaUserInputChoice
 
@@ -33,57 +31,57 @@ from typing import Optional, List, Any, Dict
 # Installer.GetModuleMetadata
 
 class GetModuleMetadataRequest(SocaPayload):
-    module: Optional[str] = Field(default=None)
+    module: Optional[str]
 
 
 class GetModuleMetadataResult(SocaPayload):
-    module: Optional[SocaUserInputModuleMetadata] = Field(default=None)
+    module: Optional[SocaUserInputModuleMetadata]
 
 
 # Installer.GetParamChoices
 
 class GetParamChoicesRequest(SocaListingPayload):
-    module: Optional[str] = Field(default=None)
-    param: Optional[str] = Field(default=None)
-    refresh: Optional[bool] = Field(default=None)
+    module: Optional[str]
+    param: Optional[str]
+    refresh: Optional[bool]
 
 
 class GetParamChoicesResult(SocaListingPayload):
-    listing: Optional[List[SocaUserInputChoice]] = Field(default=None)
+    listing: Optional[List[SocaUserInputChoice]]
 
 
 # Installer.GetParamDefault
 
 class GetParamDefaultRequest(SocaPayload):
-    module: Optional[str] = Field(default=None)
-    param: Optional[str] = Field(default=None)
-    reset: Optional[bool] = Field(default=None)
+    module: Optional[str]
+    param: Optional[str]
+    reset: Optional[bool]
 
 
 class GetParamDefaultResult(SocaPayload):
-    default: Optional[Any] = Field(default=None)
+    default: Optional[Any]
 
 
 # Installer.SetParam
 
 class SetParamRequest(SocaPayload):
-    module: Optional[str] = Field(default=None)
-    param: Optional[str] = Field(default=None)
-    value: Optional[Any] = Field(default=None)
+    module: Optional[str]
+    param: Optional[str]
+    value: Optional[Any]
 
 
 class SetParamResult(SocaPayload):
-    value: Optional[Any] = Field(default=None)
-    refresh: Optional[bool] = Field(default=None)
+    value: Optional[Any]
+    refresh: Optional[bool]
 
 
 # Installer.GetParams
 
 class GetParamsRequest(SocaPayload):
-    module: Optional[str] = Field(default=None)
-    format: Optional[str] = Field(default=None)
+    module: Optional[str]
+    format: Optional[str]
 
 
 class GetParamsResult(SocaPayload):
-    params: Optional[Dict[str, Any]] = Field(default=None)
-    yaml: Optional[str] = Field(default=None)
+    params: Optional[Dict[str, Any]]
+    yaml: Optional[str]

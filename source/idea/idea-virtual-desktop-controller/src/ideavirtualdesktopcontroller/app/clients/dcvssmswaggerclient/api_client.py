@@ -161,7 +161,7 @@ class ApiClient(object):
                 return_data = None
 
         if _return_http_data_only:
-            return return_data
+            return (return_data)
         else:
             return (return_data, response_data.status,
                     response_data.getheaders())
@@ -594,7 +594,7 @@ class ApiClient(object):
             )
 
     def __hasattr(self, object, name):
-        return name in object.__class__.__dict__
+            return name in object.__class__.__dict__
 
     def __deserialize_model(self, data, klass):
         """Deserializes list or dict to model.

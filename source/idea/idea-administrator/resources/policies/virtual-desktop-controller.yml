@@ -42,18 +42,6 @@ Statement:
       - application-autoscaling:RegisterScalableTarget
       - application-autoscaling:PutScalingPolicy
       - application-autoscaling:DescribeScalingPolicies
-      - budgets:ViewBudget
-    Resource: '*'
-    Effect: Allow
-
-  - Action:
-      - autoscaling:DescribeAutoScalingGroups
-      - autoscaling:DescribeAutoScalingInstances
-      - autoscaling:DescribeLaunchConfigurations
-      - autoscaling:DescribeScalingActivities
-      - autoscaling:DescribeTags
-      - autoscaling:DescribeWarmPool
-      - autoscaling:DetachInstances
     Resource: '*'
     Effect: Allow
 

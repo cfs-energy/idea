@@ -209,7 +209,6 @@ class VirtualDesktopSessionDetail extends Component<VirtualDesktopSessionDetailP
                                                 <KeyValue title="Base OS" value={Utils.getOsTitle(this.state.session.software_stack?.base_os)}/>
                                                 <KeyValue title="AMI ID" value={this.state.session.software_stack?.ami_id} clipboard={true}/>
                                                 <KeyValue title="Minimum Storage Size" value={this.state.session.software_stack?.min_storage} type="memory"/>
-                                                <KeyValue title="Minimum RAM Size" value={this.state.session.software_stack?.min_ram} type="memory"/>
                                                 <KeyValue title="Architecture" value={this.state.session.software_stack?.architecture}/>
                                                 <KeyValue title="GPU" value={this.state.session.software_stack?.gpu?.replaceAll('_', ' ')}/>
                                             </ColumnLayout>

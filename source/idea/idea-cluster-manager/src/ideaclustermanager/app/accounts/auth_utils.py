@@ -34,7 +34,6 @@ class AuthUtils:
             raise exceptions.invalid_params(f'invalid email: {email}')
 
         return email
-
     @staticmethod
     def sanitize_sub(sub: str) -> str:
         if Utils.is_empty(sub):

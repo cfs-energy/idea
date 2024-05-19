@@ -258,41 +258,9 @@ class VirtualDesktopAPI(BaseAPI):
                 session.project = project
                 break
 
-        # Relax the check for clusteradmin
-        cluster_administrator = self.context.config().get_string('cluster.administrator_username', required=True)
-        if (
-            not is_user_part_of_project
-            and (session.owner not in cluster_administrator)
-            and not session.owner.startswith('clusteradmin')
-            ):
+        if not is_user_part_of_project:
             session.failure_reason = f'User {session.owner} does not belong in project_id {session.project.project_id}'
             return session, False
-
-        # Check the Project budget if we are enabled for budget enforcement
-        if self.context.config().get_bool('vdc.controller.enforce_project_budgets', default=True):
-            self._logger.info(f"eVDI Project budgets is enabled. Checking budgets.")
-
-            if not session.project.is_budgets_enabled():
-                self._logger.info(f"Project budget disabled or not configured for {session.project.name}")
-            else:
-                project_budget_name = Utils.get_as_string(session.project.budget.budget_name, default=None)
-
-                if project_budget_name:
-                    self._logger.debug(f"Found Budget name: {project_budget_name}")
-                    project_budget = self.context.aws_util().budgets_get_budget(budget_name=project_budget_name)
-
-                    if Utils.is_not_empty(project_budget):
-                        self._logger.debug(f"Budget details: {project_budget}")
-
-                        if project_budget.actual_spend > project_budget.budget_limit:
-                            self._logger.error(f"Budget exceeded. Denying session request")
-                            session.failure_reason = f"Project {project_budget_name} budget has been exceeded. Unable to start session. Contact your Administrator."
-                            return session, False
-
-                        else:
-                            self._logger.debug(f"Budget usage is acceptable. Proceeding")
-        else:
-            self._logger.info(f"VDI Project budgets are disabled (vdc.controller.enforce_project_budgets). Not checking budgets.")
 
         # Validate Software Stack Object
         if Utils.is_empty(session.software_stack):
@@ -329,7 +297,7 @@ class VirtualDesktopAPI(BaseAPI):
 
         # Instance Type validation
         if Utils.is_empty(session.server) or Utils.is_empty(session.server.instance_type):
-            session.failure_reason = 'missing session.server.instance_type'
+            session.failure_reason = f'missing session.server.instance_type'
             return session, False
 
         is_instance_type_valid = False
@@ -353,7 +321,7 @@ class VirtualDesktopAPI(BaseAPI):
                 session.failure_reason = f'OS {session.software_stack.base_os} does not support Instance Hibernation for instances with RAM greater than 16GiB.'
                 return session, False
         else:
-            # amazonlinux2, rhel8, rocky8 support hibernation
+            # amazonlinux2 supports hibernation
             pass
 
         # Technical Validations for Session Type
@@ -374,7 +342,7 @@ class VirtualDesktopAPI(BaseAPI):
 
         # Validate Root Volume Size
         if Utils.is_empty(session.server) or Utils.is_empty(session.server.root_volume_size):
-            session.failure_reason = 'missing session.server.root_volume_size'
+            session.failure_reason = f'missing session.server.root_volume_size'
             return session, False
 
         # Business Validation for MAX Root Volume
@@ -534,8 +502,11 @@ class VirtualDesktopAPI(BaseAPI):
             # self.default_instance_profile_arn = self.context.app_config.virtual_desktop_dcv_host_profile_arn
             # self.default_security_group = self.context.app_config.virtual_desktop_dcv_host_security_group_id
 
+        if Utils.is_empty(session.server.subnet_id):
+            session.server.subnet_id = random.choice(self.context.config().get_list('cluster.network.private_subnets'))
+
         if Utils.is_empty(session.server.key_pair_name):
-            session.server.key_pair_name = self.context.config().get_string('cluster.network.ssh_key_pair', required=True)
+            session.server.key_pair_name = self.context.config().get_string('cluster.network.ssh_key_pair')
 
         if Utils.is_empty(session.server.security_groups):
             session.server.security_groups = []
@@ -778,7 +749,7 @@ class VirtualDesktopAPI(BaseAPI):
 
                 if Utils.is_not_empty(session):
                     # we had a valid session, but we were unable to connect because DCV Broker denied. Need to error the session out.
-                    self._logger.error('Identified the DB entry, error-ing it out.')
+                    self._logger.error(f'Identified the DB entry, error-ing it out.')
                     session.state = VirtualDesktopSessionState.ERROR
                     _ = self.session_db.update(session)
             else:

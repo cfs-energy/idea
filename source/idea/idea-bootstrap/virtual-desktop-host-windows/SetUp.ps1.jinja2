@@ -38,14 +38,6 @@ function Write-ToLog {
     "$FormattedDate $LevelText $Message" | Out-File -FilePath $LogFile -Append
 }
 
-{% include '_templates/windows/tag_ebs_volumes.jinja2' %}
-Write-ToLog -Message "Tagging EBS"
-Tag-EbsVolumes
-
-{% include '_templates/windows/tag_network_interface.jinja2' %}
-Write-ToLog -Message "Tagging Network Interface"
-Tag-NetworkInterface
-
 function Setup-WindowsEC2Instance {
   Param()
   # Creating unique hostname to avoid NETBIOS name conflict when using an existing AMI

@@ -303,7 +303,7 @@ class SocaUserInputParamRegistry:
         if template_param not in self._params:
             return None
         template = self._params[template_param]
-        template = template.model_copy(deep=True)
+        template = template.copy(deep=True)
         template.template = None
         template.name = name
         template.title = name
@@ -399,7 +399,7 @@ class SocaUserInputParamRegistry:
                 )
             return None
 
-        return param.model_copy(deep=True)
+        return param.copy(deep=True)
 
     def arg_to_param(self, arg_name: str) -> SocaUserInputParamMetadata:
         self._check_initialized()
@@ -409,7 +409,7 @@ class SocaUserInputParamRegistry:
                 error_code=errorcodes.INPUT_PARAM_NOT_DEFINED,
                 message=f'InstallArg: {arg_name} not found in InstallParamRegistry'
             )
-        return param.model_copy(deep=True)
+        return param.copy(deep=True)
 
     def get_params(self, module: str = None, section: str = None, group: str = None, all_=True) -> List[SocaUserInputParamMetadata]:
         self._check_initialized()
@@ -428,8 +428,8 @@ class SocaUserInputParamRegistry:
             return result
 
         def merge(to: SocaUserInputParamMetadata, from_: SocaUserInputParamMetadata) -> SocaUserInputParamMetadata:
-            to_dict = to.model_copy(deep=True).model_dump(exclude_unset=True, exclude_none=True, exclude_defaults=True, by_alias=True)
-            from_dict = from_.model_dump(by_alias=True)
+            to_dict = to.copy(deep=True).dict(exclude_unset=True, exclude_none=True, exclude_defaults=True, by_alias=True)
+            from_dict = from_.dict(by_alias=True)
             for key in from_dict:
                 value = from_dict[key]
                 if key not in to_dict:
@@ -474,7 +474,7 @@ class SocaUserInputParamRegistry:
         for section_ in module_.sections:
             if section_.name != section:
                 continue
-            return section_.model_copy(deep=True)
+            return section_.copy(deep=True)
 
         raise exceptions.soca_exception(
             error_code=errorcodes.GENERAL_ERROR,
@@ -493,7 +493,7 @@ class SocaUserInputParamRegistry:
         for module_ in self._spec.modules:
             if module_.name != module:
                 continue
-            return module_.model_copy(deep=deep_copy)
+            return module_.copy(deep=deep_copy)
 
         raise exceptions.soca_exception(
             error_code=errorcodes.GENERAL_ERROR,
@@ -859,7 +859,6 @@ class SocaPrompt(SocaPromptBaseClass, Generic[T]):
             questions.append({**common(), **override})
 
         override = None
-        # noinspection TimingAttack
         if param_type == SocaUserInputParamType.PASSWORD:
             override = {
                 'validate': self.get_validator()

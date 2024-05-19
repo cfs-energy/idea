@@ -34,7 +34,7 @@ const KEY_ID_TOKEN = 'id-token'
 const KEY_SSO_AUTH = 'sso-auth'
 
 const HEADER_CONTENT_TYPE_JSON = 'application/json;charset=UTF-8'
-const NETWORK_TIMEOUT = 30000
+const NETWORK_TIMEOUT = 10000
 
 /**
  * IDEA Authentication Context

@@ -34,8 +34,7 @@ import aws_cdk as cdk
 from aws_cdk import (
     aws_ec2 as ec2,
     aws_route53 as route53,
-    aws_sqs as sqs,
-    aws_kms as kms
+    aws_sqs as sqs
 )
 import constructs
 
@@ -161,6 +160,7 @@ class DirectoryServiceStack(IdeaBaseStack):
             clusteradmin_password_secret_arn = self.context.config().get_string('directoryservice.clusteradmin.clusteradmin_password_secret_arn')
             assert Utils.is_not_empty(clusteradmin_password_secret_arn)
 
+
             self.build_ad_automation_sqs_queue()
             self.build_activedirectory_cluster_settings()
 
@@ -222,7 +222,7 @@ class DirectoryServiceStack(IdeaBaseStack):
                     'idea:ModuleName': constants.MODULE_DIRECTORYSERVICE
                 }
             },
-            resource_type='Custom::SelfSignedCertificateOpenLDAPServer'
+            resource_type=f'Custom::SelfSignedCertificateOpenLDAPServer'
         )
 
     def build_ec2_instance(self):
@@ -231,26 +231,11 @@ class DirectoryServiceStack(IdeaBaseStack):
         base_os = self.context.config().get_string('directoryservice.base_os', required=True)
         instance_ami = self.context.config().get_string('directoryservice.instance_ami', required=True)
         instance_type = self.context.config().get_string('directoryservice.instance_type', required=True)
-        volume_size = self.context.config().get_int('directoryservice.volume_size', default=200)
+        volume_size = self.context.config().get_int('directoryservice.volume_size', 200)
         key_pair_name = self.context.config().get_string('cluster.network.ssh_key_pair', required=True)
         enable_detailed_monitoring = self.context.config().get_bool('directoryservice.ec2.enable_detailed_monitoring', default=False)
         enable_termination_protection = self.context.config().get_bool('directoryservice.ec2.enable_termination_protection', default=False)
         metadata_http_tokens = self.context.config().get_string('directoryservice.ec2.metadata_http_tokens', required=True)
-        https_proxy = self.context.config().get_string('cluster.network.https_proxy', required=False, default='')
-        no_proxy = self.context.config().get_string('cluster.network.no_proxy', required=False, default='')
-        proxy_config = {}
-        if Utils.is_not_empty(https_proxy):
-            proxy_config = {
-                    'http_proxy': https_proxy,
-                    'https_proxy': https_proxy,
-                    'no_proxy': no_proxy
-                    }
-        kms_key_id = self.context.config().get_string('cluster.ebs.kms_key_id', required=False, default=None)
-        if kms_key_id is not None:
-            kms_key_arn = self.get_kms_key_arn(kms_key_id)
-            ebs_kms_key = kms.Key.from_key_arn(scope=self.stack, id=f'ebs-kms-key', key_arn=kms_key_arn)
-        else:
-            ebs_kms_key = kms.Alias.from_alias_name(scope=self.stack, id=f'ebs-kms-key-default', alias_name='alias/aws/ebs')
 
         if is_public and len(self.cluster.public_subnets) > 0:
             subnet_ids = self.cluster.existing_vpc.get_public_subnet_ids()
@@ -258,8 +243,6 @@ class DirectoryServiceStack(IdeaBaseStack):
             subnet_ids = self.cluster.existing_vpc.get_private_subnet_ids()
 
         block_device_name = Utils.get_ec2_block_device_name(base_os)
-        block_device_type_string = self.context.config().get_string(f'directoryservice.volume_type', default='gp3')
-        block_device_type_volumetype = ec2.EbsDeviceVolumeType.GP3 if block_device_type_string == 'gp3' else ec2.EbsDeviceVolumeType.GP2
 
         user_data = BootstrapUserDataBuilder(
             aws_region=self.aws_region,
@@ -273,8 +256,7 @@ class DirectoryServiceStack(IdeaBaseStack):
                 'LDAP_ROOT_PASSWORD_SECRET_ARN': '${__LDAP_ROOT_PASSWORD_SECRET_ARN__}',
                 'LDAP_TLS_CERTIFICATE_SECRET_ARN': '${__LDAP_TLS_CERTIFICATE_SECRET_ARN__}',
                 'LDAP_TLS_PRIVATE_KEY_SECRET_ARN': '${__LDAP_TLS_PRIVATE_KEY_SECRET_ARN__}'
-            },
-            proxy_config=proxy_config
+            }
         ).build()
 
         substituted_userdata = cdk.Fn.sub(user_data, {
@@ -296,10 +278,8 @@ class DirectoryServiceStack(IdeaBaseStack):
             block_devices=[ec2.BlockDevice(
                 device_name=block_device_name,
                 volume=ec2.BlockDeviceVolume(ebs_device=ec2.EbsDeviceProps(
-                    encrypted=True,
-                    kms_key=ebs_kms_key,
                     volume_size=volume_size,
-                    volume_type=block_device_type_volumetype
+                    volume_type=ec2.EbsDeviceVolumeType.GP3
                     )
                 )
             )],
@@ -314,7 +294,7 @@ class DirectoryServiceStack(IdeaBaseStack):
                     device_name=block_device_name,
                     ebs=ec2.CfnInstance.EbsProperty(
                         volume_size=volume_size,
-                        volume_type=block_device_type_string
+                        volume_type='gp3'
                     )
                 )
             ],
@@ -340,11 +320,6 @@ class DirectoryServiceStack(IdeaBaseStack):
         cdk.Tags.of(self.openldap_ec2_instance).add('Name', self.build_resource_name(self.module_id))
         cdk.Tags.of(self.openldap_ec2_instance).add(constants.IDEA_TAG_NODE_TYPE, constants.NODE_TYPE_INFRA)
         self.add_backup_tags(self.openldap_ec2_instance)
-
-        self.add_nag_suppression(
-            construct=self.openldap_ec2_instance,
-            suppressions=[IdeaNagSuppression(rule_id='AwsSolutions-EC26', reason='EBS Encryption is enforced via Launch Template')]
-        )
 
         if not enable_detailed_monitoring:
             self.add_nag_suppression(
@@ -378,23 +353,18 @@ class DirectoryServiceStack(IdeaBaseStack):
         )
 
     def build_ad_automation_sqs_queue(self):
-        kms_key_id = self.context.config().get_string('cluster.sqs.kms_key_id')
-
         self.ad_automation_sqs_queue = SQSQueue(
             self.context, 'ad-automation-sqs-queue', self.stack,
             queue_name=f'{self.cluster_name}-{self.module_id}-ad-automation.fifo',
             fifo=True,
             content_based_deduplication=True,
-            encryption_master_key=kms_key_id,
-            visibility_timeout=cdk.Duration.seconds(constants.SQS_VISIBILITY_TIMEOUT_AD_AUTOMATION),
             dead_letter_queue=sqs.DeadLetterQueue(
-                max_receive_count=Utils.get_as_int(constants.SQS_MAX_RECEIVE_COUNT_AD_AUTOMATION, default=16),
+                max_receive_count=30,
                 queue=SQSQueue(
                     self.context, 'ad-automation-sqs-queue-dlq', self.stack,
                     queue_name=f'{self.cluster_name}-{self.module_id}-ad-automation-dlq.fifo',
                     fifo=True,
                     content_based_deduplication=True,
-                    encryption_master_key=kms_key_id,
                     is_dead_letter_queue=True
                 )
             )

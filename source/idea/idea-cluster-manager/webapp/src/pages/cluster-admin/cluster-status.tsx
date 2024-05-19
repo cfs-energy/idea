@@ -367,7 +367,7 @@ class ClusterStatus extends Component<ClusterStatusProps, ClusterStatusState> {
                             cell: (item: any) => {
                                 if (item.type === Constants.MODULE_TYPE_APP) {
                                     /* If the module is not deployed by admin-choice - don't alarm the admin with red status */
-                                    if (item.status === 'not-deployed') {
+                                    if (item.status == 'not-deployed') {
                                         return <StatusIndicator type={"stopped"}>Not Applicable</StatusIndicator>
                                     } else {
                                         return <ModuleHealthCheck module={item.name}/>

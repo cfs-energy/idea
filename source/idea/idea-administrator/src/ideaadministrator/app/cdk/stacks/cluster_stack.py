@@ -34,7 +34,6 @@ from ideaadministrator.app.cdk.constructs import (
     ManagedPolicy,
     Role,
     LambdaFunction,
-    IdeaNagSuppression,
     SNSTopic,
     BackupPlan
 )
@@ -136,9 +135,7 @@ class ClusterStack(IdeaBaseStack):
 
         self.oauth_credentials_lambda: Optional[LambdaFunction] = None
         self.solution_metrics_lambda: Optional[LambdaFunction] = None
-        self.solution_metrics_lambda_policy: Optional[Policy] = None
         self.cluster_settings_lambda: Optional[LambdaFunction] = None
-        self.cluster_settings_lambda_policy: Optional[Policy] = None
 
         self.ec2_events_sns_topic: Optional[SNSTopic] = None
 
@@ -269,7 +266,7 @@ class ClusterStack(IdeaBaseStack):
         backup_vault_kms_key_id = self.context.config().get_string('cluster.backups.backup_vault.kms_key_id', default=None)
         backup_vault_encryption_key = None
         if Utils.is_not_empty(backup_vault_kms_key_id):
-            backup_vault_encryption_key = kms.Key.from_key_arn(self.stack, 'backup-vault-kms-key', self.get_kms_key_arn(key_id=backup_vault_kms_key_id))
+            backup_vault_encryption_key = kms.Key.from_lookup(self.stack, 'backup-vault-kms-key', self.get_kms_key_arn(key_id=backup_vault_kms_key_id))
         backup_vault = backup.BackupVault(
             self.stack, 'backup-vault',
             backup_vault_name=f'{self.cluster_name}-{self.module_id}-backup-vault',
@@ -431,9 +428,6 @@ class ClusterStack(IdeaBaseStack):
         lambda_function.node.add_dependency(lambda_role)
         lambda_function.node.add_dependency(self.cluster_prefix_list)
 
-        lambda_function.add_nag_suppression(suppressions=[
-            IdeaNagSuppression(rule_id='AwsSolutions-L1', reason='Python Runtime is selected for stability.')
-        ])
         entries = []
         for client_ip in client_ips:
             if '/' not in client_ip:
@@ -571,12 +565,12 @@ class ClusterStack(IdeaBaseStack):
             description=f'Role for cluster-settings lambda function for Cluster: {self.cluster_name}',
             assumed_by=['lambda'])
 
-        self.cluster_settings_lambda_policy = Policy(
+        cluster_settings_lambda_role.attach_inline_policy(Policy(
             context=self.context,
             name=f'{lambda_name}-policy',
             scope=self.stack,
             policy_template_name='custom-resource-update-cluster-settings.yml'
-        )
+        ))
 
         self.cluster_settings_lambda = LambdaFunction(
             context=self.context,
@@ -591,13 +585,7 @@ class ClusterStack(IdeaBaseStack):
             role=cluster_settings_lambda_role,
             log_retention_role=self.roles[app_constants.LOG_RETENTION_ROLE_NAME]
         )
-        cluster_settings_lambda_role.attach_inline_policy(self.cluster_settings_lambda_policy)
-        self.cluster_settings_lambda.node.add_dependency(self.cluster_settings_lambda_policy)
         self.cluster_settings_lambda.node.add_dependency(cluster_settings_lambda_role)
-
-        self.cluster_settings_lambda.add_nag_suppression(suppressions=[
-            IdeaNagSuppression(rule_id='AwsSolutions-L1', reason='Python Runtime is selected for stability.')
-        ])
 
     def build_solution_metrics_lambda(self):
         lambda_name = 'solution-metrics'
@@ -609,12 +597,12 @@ class ClusterStack(IdeaBaseStack):
             description=f'Role for solution-metrics metrics Lambda function for Cluster: {self.cluster_name}',
             assumed_by=['lambda'])
 
-        self.solution_metrics_lambda_policy = Policy(
+        solution_metrics_lambda_role.attach_inline_policy(Policy(
             context=self.context,
             name=f'{lambda_name}-policy',
             scope=self.stack,
             policy_template_name='solution-metrics-lambda-function.yml'
-        )
+        ))
 
         self.solution_metrics_lambda = LambdaFunction(
             context=self.context,
@@ -629,13 +617,6 @@ class ClusterStack(IdeaBaseStack):
             role=solution_metrics_lambda_role,
             log_retention_role=self.roles[app_constants.LOG_RETENTION_ROLE_NAME]
         )
-        solution_metrics_lambda_role.attach_inline_policy(self.solution_metrics_lambda_policy)
-        self.solution_metrics_lambda.node.add_dependency(self.solution_metrics_lambda_policy)
-        self.solution_metrics_lambda.node.add_dependency(solution_metrics_lambda_role)
-
-        self.solution_metrics_lambda.add_nag_suppression(suppressions=[
-            IdeaNagSuppression(rule_id='AwsSolutions-L1', reason='Python Runtime is selected for stability.')
-        ])
 
     def build_self_signed_certificates_lambda(self):
         """
@@ -674,10 +655,6 @@ class ClusterStack(IdeaBaseStack):
         # and deletion fails.
         self.self_signed_certificate_lambda.node.add_dependency(self_signed_certificate_policy)
         self.self_signed_certificate_lambda.node.add_dependency(self_signed_certificate_role)
-
-        self.self_signed_certificate_lambda.add_nag_suppression(suppressions=[
-            IdeaNagSuppression(rule_id='AwsSolutions-L1', reason='Python Runtime is selected for stability.')
-        ])
 
     def build_self_signed_certificates(self):
         external_certificate_provided = self.context.config().get_bool('cluster.load_balancers.external_alb.certificates.provided', False)
@@ -811,8 +788,7 @@ class ClusterStack(IdeaBaseStack):
             environment={
                 'IDEA_EC2_STATE_SNS_TOPIC_ARN': self.ec2_events_sns_topic.topic_arn,
                 'IDEA_CLUSTER_NAME_TAG_KEY': constants.IDEA_TAG_CLUSTER_NAME,
-                'IDEA_CLUSTER_NAME_TAG_VALUE': self.context.cluster_name(),
-                'IDEA_TAG_PREFIX': constants.IDEA_TAG_PREFIX
+                'IDEA_CLUSTER_NAME_TAG_VALUE': self.context.cluster_name()
             },
             timeout_seconds=180,
             role=ec2_state_event_transformation_lambda_role,
@@ -821,10 +797,6 @@ class ClusterStack(IdeaBaseStack):
                 lambda_platform=SupportedLambdaPlatforms.PYTHON
             )
         )
-
-        ec2_state_event_transformation_lambda.add_nag_suppression(suppressions=[
-            IdeaNagSuppression(rule_id='AwsSolutions-L1', reason='Python Runtime is selected for stability.')
-        ])
 
         ec2_monitoring_rule = events.Rule(
             scope=self.stack,
@@ -876,10 +848,6 @@ class ClusterStack(IdeaBaseStack):
         self.cluster_endpoints_lambda.node.add_dependency(cluster_endpoints_policy)
         self.cluster_endpoints_lambda.node.add_dependency(cluster_endpoints_role)
 
-        self.cluster_endpoints_lambda.add_nag_suppression(suppressions=[
-            IdeaNagSuppression(rule_id='AwsSolutions-L1', reason='Python Runtime is selected for stability.')
-        ])
-
         # external ALB - can be deployed in public or private subnets
         is_public = self.context.config().get_bool('cluster.load_balancers.external_alb.public', default=True)
         external_alb_subnets = self.public_subnets() if is_public is True else self.private_subnets()
@@ -891,8 +859,7 @@ class ClusterStack(IdeaBaseStack):
             http2_enabled=True,
             vpc=self.vpc,
             vpc_subnets=ec2.SubnetSelection(subnets=external_alb_subnets),
-            internet_facing=is_public,
-            drop_invalid_header_fields=True,
+            internet_facing=is_public
         )
         if self.external_certificate is not None:
             self.external_alb.node.add_dependency(self.external_certificate)
@@ -906,8 +873,7 @@ class ClusterStack(IdeaBaseStack):
             http2_enabled=True,
             vpc=self.vpc,
             vpc_subnets=ec2.SubnetSelection(subnets=self.private_subnets()),
-            internet_facing=False,
-            drop_invalid_header_fields=True
+            internet_facing=False
         )
 
         # Manage Access Logs for external/internal Application Load Balancer
@@ -1132,10 +1098,10 @@ class ClusterStack(IdeaBaseStack):
         for name, role in self.roles.items():
             cluster_settings[f'iam.roles.{name}'] = role.role_arn
         # Policy Arns
-        cluster_settings['iam.policies.amazon_ssm_managed_instance_core_arn'] = self.amazon_ssm_managed_instance_core_policy.managed_policy_arn
-        cluster_settings['iam.policies.cloud_watch_agent_server_arn'] = self.cloud_watch_agent_server_policy.managed_policy_arn
+        cluster_settings[f'iam.policies.amazon_ssm_managed_instance_core_arn'] = self.amazon_ssm_managed_instance_core_policy.managed_policy_arn
+        cluster_settings[f'iam.policies.cloud_watch_agent_server_arn'] = self.cloud_watch_agent_server_policy.managed_policy_arn
         if self.amazon_prometheus_remote_write_policy is not None:
-            cluster_settings['iam.policies.amazon_prometheus_remote_write_arn'] = self.amazon_prometheus_remote_write_policy.managed_policy_arn
+            cluster_settings[f'iam.policies.amazon_prometheus_remote_write_arn'] = self.amazon_prometheus_remote_write_policy.managed_policy_arn
 
         cluster_settings['solution.solution_metrics_lambda_arn'] = self.solution_metrics_lambda.function_arn
         cluster_settings['cluster_settings_lambda_arn'] = self.cluster_settings_lambda.function_arn
@@ -1150,9 +1116,6 @@ class ClusterStack(IdeaBaseStack):
             cluster_settings['load_balancers.external_alb.certificates.certificate_secret_arn'] = self.external_certificate.get_att_string('certificate_secret_arn')
             cluster_settings['load_balancers.external_alb.certificates.private_key_secret_arn'] = self.external_certificate.get_att_string('private_key_secret_arn')
             cluster_settings['load_balancers.external_alb.certificates.acm_certificate_arn'] = self.external_certificate.get_att_string('acm_certificate_arn')
-        else:
-            cluster_settings['load_balancers.external_alb.certificates.provided'] = self.context.config().get_string('cluster.load_balancers.external_alb.certificates.provided', required=True)
-            cluster_settings['load_balancers.external_alb.certificates.acm_certificate_arn'] = self.context.config().get_string('cluster.load_balancers.external_alb.certificates.acm_certificate_arn', required=True)
 
         cluster_settings['load_balancers.internal_alb.certificates.certificate_secret_arn'] = self.internal_certificate.get_att_string('certificate_secret_arn')
         cluster_settings['load_balancers.internal_alb.certificates.private_key_secret_arn'] = self.internal_certificate.get_att_string('private_key_secret_arn')

@@ -8,7 +8,6 @@
 #  or in the 'license' file accompanying this file. This file is distributed on an 'AS IS' BASIS, WITHOUT WARRANTIES
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
-from pydantic import Field
 
 from ideadatamodel import constants
 
@@ -30,13 +29,13 @@ from concurrent.futures import ThreadPoolExecutor, Future
 from threading import Thread, Event
 import pathlib
 import os
-import ssl
 import sanic
 from sanic.server import AsyncioServer, serve as create_server, HttpProtocol
 from sanic.server.protocols.websocket_protocol import WebSocketProtocol
 import sanic.config
 import sanic.signals
 import sanic.router
+import sanic.tls
 from sanic.models.handler_types import RouteHandler
 import socket
 from prometheus_client import generate_latest
@@ -61,23 +60,23 @@ DUMMY_PORT = 9999
 
 
 class SocaServerOptions(SocaBaseModel):
-    enable_http: Optional[bool] = Field(default=None)
-    hostname: Optional[str] = Field(default=None)
-    port: Optional[int] = Field(default=None)
-    enable_unix_socket: Optional[bool] = Field(default=None)
-    unix_socket_file: Optional[str] = Field(default=None)
-    max_workers: Optional[int] = Field(default=None)
-    enable_metrics: Optional[bool] = Field(default=None)
-    enable_tls: Optional[bool] = Field(default=None)
-    tls_certificate_file: Optional[str] = Field(default=None)
-    tls_key_file: Optional[str] = Field(default=None)
-    graceful_shutdown_timeout: Optional[float] = Field(default=None)
-    enable_web_sockets: Optional[bool] = Field(default=None)
-    api_path_prefixes: Optional[List[str]] = Field(default=None)
-    enable_http_file_upload: Optional[bool] = Field(default=None)
-    enable_openapi_spec: Optional[bool] = Field(default=None)
-    openapi_spec_file: Optional[str] = Field(default=None)
-    enable_audit_logs: Optional[bool] = Field(default=None)
+    enable_http: Optional[bool]
+    hostname: Optional[str]
+    port: Optional[int]
+    enable_unix_socket: Optional[bool]
+    unix_socket_file: Optional[str]
+    max_workers: Optional[int]
+    enable_metrics: Optional[bool]
+    enable_tls: Optional[bool]
+    tls_certificate_file: Optional[str]
+    tls_key_file: Optional[str]
+    graceful_shutdown_timeout: Optional[float]
+    enable_web_sockets: Optional[bool]
+    api_path_prefixes: Optional[List[str]]
+    enable_http_file_upload: Optional[bool]
+    enable_openapi_spec: Optional[bool]
+    openapi_spec_file: Optional[str]
+    enable_audit_logs: Optional[bool]
 
     @staticmethod
     def default() -> 'SocaServerOptions':
@@ -626,22 +625,15 @@ class SocaServer(SocaService):
             )
         return self._unix_app
 
-    def add_route(self,
-                  handler: RouteHandler,
+    def add_route(self, handler: RouteHandler,
                   uri: str,
-                  name: Optional[str] = None,
                   methods: Iterable[str] = frozenset({"GET"})):
-        _method_names = ', '.join(list(methods))
         if self.options.enable_http:
             for path_prefix in self.options.api_path_prefixes:
-                _auto_name = f"http-{path_prefix}-{uri}-{_method_names}"
-                _name = name if Utils.is_not_empty(name) else _auto_name
-                self.http_app.add_route(handler, f'{path_prefix}{uri}', methods, name=_name)
+                self.http_app.add_route(handler, f'{path_prefix}{uri}', methods)
         else:
             for path_prefix in self.options.api_path_prefixes:
-                _auto_name = f"unix-{path_prefix}-{uri}-{_method_names}"
-                _name = name if Utils.is_not_empty(name) else _auto_name
-                self.unix_app.add_route(handler, f'{path_prefix}{uri}', methods, name=_name)
+                self.unix_app.add_route(handler, f'{path_prefix}{uri}', methods)
 
     def initialize(self):
 
@@ -679,26 +671,26 @@ class SocaServer(SocaService):
             self.http_app.register_middleware(add_cors_headers, "response")
 
             # health check routes
-            self.http_app.add_route(self.health_check_route, '/healthcheck', methods=['GET'], name='httpapp_healthcheck')
-            self.add_route(handler=self.health_check_route, uri='/healthcheck', methods=['GET'])
+            self.http_app.add_route(self.health_check_route, '/healthcheck', methods=['GET'])
+            self.add_route(self.health_check_route, '/healthcheck', methods=['GET'])
 
             # file transfer routes
             if self.options.enable_http_file_upload:
-                self.add_route(handler=self.file_upload_route, uri='/api/v1/upload', methods=['PUT'])
-                self.add_route(handler=self.file_upload_route, uri='/api/v1/<namespace:str>', methods=['PUT'])
-                self.add_route(handler=self.file_download_route, uri='/api/v1/download', methods=['GET'])
-                self.add_route(handler=self.file_download_route, uri='/api/v1/<namespace:str>', methods=['GET'])
+                self.add_route(self.file_upload_route, '/api/v1/upload', methods=['PUT'])
+                self.add_route(self.file_upload_route, '/api/v1/<namespace:str>', methods=['PUT'])
+                self.add_route(self.file_download_route, '/api/v1/download', methods=['GET'])
+                self.add_route(self.file_download_route, '/api/v1/<namespace:str>', methods=['GET'])
 
             # metrics routes
             if self.options.enable_metrics:
-                self.add_route(handler=self.metrics_route, uri='/metrics', methods=['GET'])
+                self.add_route(self.metrics_route, '/metrics', methods=['GET'])
 
             # open api spec routes
             if self.options.enable_openapi_spec:
-                self.add_route(handler=self.openapi_spec_route, uri='/api/v1/openapi.yml', methods=['GET'])
+                self.add_route(self.openapi_spec_route, '/api/v1/openapi.yml', methods=['GET'])
 
-        self.add_route(handler=self.api_route, uri='/api/v1', methods=['POST'])
-        self.add_route(handler=self.api_route, uri='/api/v1/<namespace:str>', methods=['POST'])
+        self.add_route(self.api_route, '/api/v1', methods=['POST'])
+        self.add_route(self.api_route, '/api/v1/<namespace:str>', methods=['POST'])
 
     async def invoke_api_task(self, http_request):
         result = self._executor.submit(
@@ -725,12 +717,12 @@ class SocaServer(SocaService):
         if Utils.is_empty(authorization):
             return self.unauthorized_access()
         token_type = Utils.get_value_as_string('token_type', authorization)
-        _token = Utils.get_value_as_string('token', authorization)
-        if Utils.is_any_empty(token_type, _token):
+        token = Utils.get_value_as_string('token', authorization)
+        if Utils.is_any_empty(token_type, token):
             return self.unauthorized_access()
         if token_type != 'Bearer':
             return self.unauthorized_access()
-        if _token != self.metrics_api_token:
+        if token != self.metrics_api_token:
             return self.unauthorized_access()
         # todo - enable gzip if accepted
         output = generate_latest()
@@ -861,8 +853,7 @@ class SocaServer(SocaService):
 
             ssl_context = None
             if self.options.enable_tls:
-                ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-                ssl_context.load_cert_chain(
+                ssl_context = sanic.tls.create_context(
                     certfile=self.options.tls_certificate_file,
                     keyfile=self.options.tls_key_file
                 )

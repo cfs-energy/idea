@@ -140,16 +140,11 @@ class GroupMembersDAO:
         username_set = set()
         users = []
 
-        self.logger.debug(f"list_users_in_group - PageSize: {request.page_size} - Listing users in groups: {group_names}")
-        _query_start = Utils.current_time_ms()
-
         if Utils.is_not_empty(cursor):
             exclusive_start_keys = Utils.from_json(Utils.base64_decode(cursor))
-            self.logger.debug(f"list_users_in_group - Using exclusive_start_keys: {exclusive_start_keys}")
 
         for group_name in group_names:
-            exclusive_start_key = Utils.get_value_as_dict(group_name, exclusive_start_keys, default={})
-            self.logger.debug(f"list_users_in_group - Group {group_name} - Exclusive_start_key: {exclusive_start_key}")
+            exclusive_start_key = Utils.get_value_as_dict(group_name, exclusive_start_keys, {})
             if Utils.is_not_empty(exclusive_start_key):
                 query_result = self.table.query(
                     Limit=request.page_size,
@@ -162,37 +157,26 @@ class GroupMembersDAO:
                     KeyConditionExpression=Key('group_name').eq(group_name)
                 )
 
-            db_user_groups = Utils.get_value_as_list('Items', query_result, default=[])
-            self.logger.debug(f"list_users_in_group - Group {group_name} - db_user_groups: {db_user_groups}")
-
+            db_user_groups = Utils.get_value_as_list('Items', query_result, [])
             for db_user_group in db_user_groups:
                 db_username = db_user_group['username']
                 if db_username in username_set:
-                    self.logger.debug(f"list_users_in_group - Group {group_name} - User {db_username} already listed")
                     continue
-                self.logger.debug(f"list_users_in_group - Adding user {db_username} to group {group_name}")
                 username_set.add(db_username)
                 db_user = self.user_dao.get_user(db_username)
-                self.logger.debug(f"list_users_in_group - Read Db_user entry for: {db_user}")
                 if db_user is None:
                     continue
                 user = self.user_dao.convert_from_db(db_user)
-                self.logger.debug(f"list_users_in_group - DB_user entry for: {user} (adding)")
                 users.append(user)
 
             last_evaluated_key = Utils.get_any_value('LastEvaluatedKey', query_result)
             if Utils.is_not_empty(last_evaluated_key):
                 last_evaluated_keys[group_name] = last_evaluated_key
-            self.logger.debug(f"list_users_in_group - Group {group_name} - last_evaluated_key: {last_evaluated_key}")
 
         response_cursor = None
         if Utils.is_not_empty(last_evaluated_keys):
             response_cursor = Utils.base64_encode(Utils.to_json(last_evaluated_keys))
 
-        self.logger.debug(f"list_users_in_group - response_cursor: {response_cursor}: Users: {users}")
-
-        _query_end = Utils.current_time_ms()
-        self.logger.debug(f"list_users_in_group - Listing completed for {group_names}. - Query took: {_query_end - _query_start}ms")
         return ListUsersInGroupResult(
             listing=users,
             paginator=SocaPaginator(

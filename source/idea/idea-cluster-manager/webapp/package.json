@@ -1,6 +1,6 @@
 {
   "name": "web-portal", 
-  "version": "3.1.6", 
+  "version": "3.1.0", 
   "private": true,
   "dependencies": {
     "@cloudscape-design/components": "^3.0.82",
@@ -24,13 +24,9 @@
     "chonky-icon-fontawesome": "^2.3.2",
     "dot-object": "^2.1.4",
     "idb": "^7.0.1",
-    "loader-utils": "^3.2.1",
-    "minimatch": ">=3.0.5",
-    "minimist": ">=1.2.6",
     "moment": "^2.29.4",
     "moment-timezone": "^0.5.38",
-    "nunjucks": "^3.2.4",
-    "postcss": ">=8.4.31",
+    "nunjucks": "^3.2.3",
     "react": "^18.2.0",
     "react-beautiful-dnd": "^13.1.1",
     "react-dom": "^18.2.0",
@@ -41,13 +37,11 @@
     "react-toastify": "^9.0.8",
     "rehype-raw": "^6.1.1",
     "remark-gfm": "^3.0.1",
-    "semver": "^7.5.4",
     "uuid": "^9.0.0",
     "xterm-addon-fit": "^0.6.0",
     "xterm-for-react": "^1.0.4"
   },
   "devDependencies": {
-    "@babel/plugin-proposal-private-property-in-object": "^7.21.0",
     "@testing-library/jest-dom": "^5.14.1",
     "@testing-library/react": "^13.0.0",
     "@testing-library/user-event": "^13.2.1",

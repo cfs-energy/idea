@@ -291,9 +291,6 @@ class CustomResource(SocaBaseConstruct):
             log_retention_role=self.lambda_log_retention_role,
             runtime=self.runtime
         )
-        self.lambda_function.add_nag_suppression(suppressions=[
-            IdeaNagSuppression(rule_id='AwsSolutions-L1', reason='Python Runtime is selected for stability.')
-        ])
 
         if self.policy_statements is not None:
             for statement in self.policy_statements:
@@ -601,18 +598,7 @@ class DynamoDBTable(SocaBaseConstruct, dynamodb.Table):
 
 class KinesisStream(SocaBaseConstruct, kinesis.Stream):
     def __init__(self, context: AdministratorContext, name: str, scope: constructs.Construct, stream_name: str, stream_mode: kinesis.StreamMode, shard_count: Optional[int]):
-        self.context = context
-        kms_key_id = self.context.config().get_string('analytics.kinesis.kms_key_id')
-
-        if kms_key_id is not None:
-            kms_key_arn = self.get_kms_key_arn(kms_key_id)
-            kinesis_encryption_key = kms.Key.from_key_arn(scope=scope, id=f'kinesis-kms-key', key_arn=kms_key_arn)
-        else:
-            kinesis_encryption_key = kms.Alias.from_alias_name(scope=scope, id=f'kinesis-kms-key-default', alias_name='alias/aws/kinesis')
-
         super().__init__(context, name, scope,
                          stream_name=f'{context.cluster_name()}-{stream_name}',
                          stream_mode=stream_mode,
-                         encryption=kinesis.StreamEncryption.KMS,
-                         encryption_key=kinesis_encryption_key,
                          shard_count=shard_count)

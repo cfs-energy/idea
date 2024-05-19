@@ -19,17 +19,16 @@ APP_PACKAGE_DOWNLOAD_URI="${1}"
 APP_NAME="virtual-desktop-controller"
 
 AWS=$(command -v aws)
-INSTANCE_REGION=${AWS_REGION}
+INSTANCE_REGION=$(instance_region)
 S3_BUCKET=$(echo ${APP_PACKAGE_DOWNLOAD_URI} | cut -f3 -d/)
 
 if [[ ${INSTANCE_REGION} =~ ^us-gov-[a-z]+-[0-9]+$ ]]; then
-  S3_BUCKET_REGION=$(curl -s --head https://${S3_BUCKET}.s3.us-gov-west-1.amazonaws.com | grep bucket-region | awk '{print $2}' | tr -d '\r\n')
-  $AWS --region ${S3_BUCKET_REGION} s3 cp "${APP_PACKAGE_DOWNLOAD_URI}" "${BOOTSTRAP_DIR}/"
+  S3_BUCKET_REGION=$(curl -s --head ${S3_BUCKET}.s3.us-gov-west-1.amazonaws.com | grep bucket-region | awk '{print $2}' | tr -d '\r\n')
 else
-  #S3_BUCKET_REGION=$(curl -s --head https://${S3_BUCKET}.s3.us-east-1.amazonaws.com | grep bucket-region | awk '{print $2}' | tr -d '\r\n')
-  $AWS --region ${INSTANCE_REGION} s3 cp "${APP_PACKAGE_DOWNLOAD_URI}" "${BOOTSTRAP_DIR}/"
+  S3_BUCKET_REGION=$(curl -s --head ${S3_BUCKET}.s3.us-east-1.amazonaws.com | grep bucket-region | awk '{print $2}' | tr -d '\r\n')
 fi
 
+$AWS --region ${S3_BUCKET_REGION} s3 cp "${APP_PACKAGE_DOWNLOAD_URI}" "${BOOTSTRAP_DIR}/"
 
 PACKAGE_ARCHIVE=$(basename "${APP_PACKAGE_DOWNLOAD_URI}")
 PACKAGE_NAME="${PACKAGE_ARCHIVE%.tar.gz*}"
@@ -49,17 +48,8 @@ cp -r ${PACKAGE_DIR}/resources ${IDEA_APP_DEPLOY_DIR}/${APP_NAME}
 
 {% include '_templates/linux/supervisord.jinja2' %}
 
-if [[ ! -z "${IDEA_HTTPS_PROXY}" ]]; then
-  echo "[program:${APP_NAME}]
-environment=
-    https_proxy=\"%(ENV_IDEA_HTTPS_PROXY)s\",
-    HTTPS_PROXY=\"%(ENV_IDEA_HTTPS_PROXY)s\",
-    no_proxy=\"%(ENV_IDEA_NO_PROXY)s\",
-    NO_PROXY=\"%(ENV_IDEA_NO_PROXY)s\"" > /etc/supervisord.d/${APP_NAME}.ini
-else
-  echo "[program:${APP_NAME}]" > /etc/supervisord.d/${APP_NAME}.ini
-fi
-echo "command=/opt/idea/python/latest/bin/ideaserver
+echo "[program:${APP_NAME}]
+command=/opt/idea/python/latest/bin/ideaserver
 process_name=${APP_NAME}
 redirect_stderr=true
 stdout_logfile = /opt/idea/app/logs/stdout.log
@@ -67,6 +57,6 @@ stdout_logfile_maxbytes=50MB
 stdout_logfile_backups=10
 startsecs=30
 startretries=3
-" >> /etc/supervisord.d/${APP_NAME}.ini
+" > /etc/supervisord.d/${APP_NAME}.ini
 
 systemctl restart supervisord

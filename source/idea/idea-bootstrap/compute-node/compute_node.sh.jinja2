@@ -3,9 +3,6 @@
 set -x
 
 source /etc/environment
-if [[ -f /etc/profile.d/proxy.sh ]]; then
-    source /etc/profile.d/proxy.sh
-fi
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
@@ -76,12 +73,18 @@ fi
   {% include 'compute-node/_templates/configure_openpbs_compute_node.jinja2' %}
 {% endif %}
 
+{% include 'compute-node/_templates/scratch_storage.jinja2' %}
+
+{%- if context.vars.job.params.enable_efa_support %}
+  {% include 'compute-node/_templates/efa.jinja2' %}
+{%- endif %}
+
 {% include '_templates/linux/disable_nouveau_drivers.jinja2' %}
 
 REBOOT_REQUIRED=$(cat /root/bootstrap/reboot_required.txt)
 if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
   log_info "reboot required. compute_node_post_reboot.sh will be executed after reboot ..."
-  (crontab -l; echo "@reboot /bin/bash ${SCRIPT_DIR}/compute_node_post_reboot.sh >> ${IDEA_COMPUTE_NODE_LOGS_DIR}/compute_node_bootstrap.log 2>&1") | crontab -
+  (crontab -l; echo "@reboot /bin/bash ${SCRIPT_DIR}/compute_node_post_reboot.sh >> ${IDEA_COMPUTE_NODE_LOGS_DIR}/compute_node_bootstrap.log" 2>&1) | crontab -
   reboot
 else
   mount -a

@@ -21,11 +21,7 @@ from typing import Dict, List, Optional
 import botocore.exceptions
 import secrets
 import string
-import copy
 
-
-# Fallback value - seconds to cache a domain discovery (domain controller IP addresses)
-AD_DISCOVERY_TTL_FALLBACK = 300
 
 
 class PresetComputeHelper:
@@ -61,17 +57,10 @@ class PresetComputeHelper:
 
         # Metadata for AD joins
         self.aws_account = self.context.config().get_string('cluster.aws.account_id', required=True)
-        self.cluster_name = self.context.config().get_string('cluster.cluster_name', required=True)
+        self.cluster_name =  self.context.config().get_string('cluster.cluster_name', required=True)
         self.aws_region = self.context.config().get_string('cluster.aws.region', required=True)
-        self._ad_discovery_ttl = self.context.config().get_int(
-            "directoryservice.ad_automation.domain_discovery_ttl_seconds",
-            default=AD_DISCOVERY_TTL_FALLBACK,
-        )
-        # Where should the object be created?
-        self.ou = self.get_ldap_computers_base()
-
         # parse and validate sender_id and request
-        payload = Utils.get_value_as_dict('payload', request, default={})
+        payload = Utils.get_value_as_dict('payload', request, {})
 
         # SenderId attribute from SQS message to protect against spoofing.
         if Utils.is_empty(sender_id):
@@ -132,7 +121,7 @@ class PresetComputeHelper:
         self.ec2_instance = ec2_instances[0]
 
         # for Windows instances, there is no way to fetch the hostname from describe instances API.
-        # request payload from windows instances will contain hostname. e.g. EC2AMAZ-6S29U5P
+        # request payload from windows instances will contain hostname. eg. EC2AMAZ-6S29U5P
         hostname = Utils.get_value_as_string('hostname', payload)
         if Utils.is_empty(hostname):
             # Generate and make use of an IDEA hostname
@@ -161,7 +150,6 @@ class PresetComputeHelper:
         self._shell = ShellInvoker(logger=self.logger)
 
         # verify if adcli is installed and available on the system.
-        self.logger.debug(f"Determining ADCLI installation path")
         which_adcli = self._shell.invoke('command -v adcli', shell=True)
         if which_adcli.returncode != 0:
             raise exceptions.general_exception('unable to locate adcli on system to initialize PresetComputerHelper')
@@ -198,20 +186,6 @@ class PresetComputeHelper:
         perform adcli discovery on the AD domain name and return all the domain controller hostnames.
         :return: hostnames all available domain controllers
         """
-
-        _start_time = Utils.current_time_ms()
-
-        _cache_key = f"AD-{self.ldap_client.domain_name.upper()}-domain-controller-ips"
-        _cache_result: list = self.context.cache().short_term().get(_cache_key)
-        if _cache_result is not None:
-            _domain_controller_ips = copy.deepcopy(_cache_result)
-            _end_time = Utils.current_time_ms()
-            self.logger.debug(
-                f"Returning cached Domain Controllers({_cache_key})({len(_domain_controller_ips)}): {_domain_controller_ips} Time: {_end_time - _start_time}ms"
-            )
-            return _domain_controller_ips
-
-        self.logger.info(f'Performing ADCLI domain discovery for domain: {self.ldap_client.domain_name}')
         result = self._shell.invoke(
             cmd=[
                 self.ADCLI,
@@ -250,7 +224,7 @@ class PresetComputeHelper:
                 result_key = line.split(' =')[0]
                 result_value = line.split('= ')[1]
             except IndexError as e:
-                self.logger.error(f'Error parsing AD discovery output: {e}.  Line skipped: {line}')
+                self.logger.warning(f'Error parsing AD discovery output: {e}.  Line skipped: {line}')
                 continue
 
             self.logger.debug(f'Key: [{result_key:25}]   Value: [{result_value:25}]')
@@ -259,7 +233,7 @@ class PresetComputeHelper:
                 not Utils.get_as_string(result_key, default='') or
                 not Utils.get_as_string(result_value, default='')
             ):
-                self.logger.error(f'Error parsing AD discovery output. Unable to parse Key/Value Pair. Check adcli version/output. Line skipped: {line}')
+                self.logger.warning(f'Error parsing AD discovery output. Unable to parse Key/Value Pair. Check adcli version/output. Line skipped: {line}')
                 continue
 
             # Save for later
@@ -279,7 +253,7 @@ class PresetComputeHelper:
         if domain_name.upper() != self.ldap_client.domain_name.upper():
             raise exceptions.soca_exception(
                 error_code=errorcodes.AD_AUTOMATION_PRESET_COMPUTER_RETRY,
-                message=f"{self.log_tag} AD domain discovery mismatch for domain-name: Discovered: {domain_name.upper()} Expected: {self.ldap_client.domain_name.upper()}"
+                message=f"{self.log_tag} AD domain discovery mismatch for domain-name: Got: {domain_name.upper()} Expected: {self.ldap_client.domain_name.upper()}"
             )
 
         # domain-short must be present and match our configuration
@@ -292,7 +266,7 @@ class PresetComputeHelper:
         if domain_shortname.upper() != self.ldap_client.ad_netbios.upper():
             raise exceptions.soca_exception(
                 error_code=errorcodes.AD_AUTOMATION_PRESET_COMPUTER_RETRY,
-                message=f'{self.log_tag} AD domain discovery mismatch for shortname: Discovered: {domain_shortname.upper()} Expected: {self.ldap_client.ad_netbios.upper()}'
+                message=f'{self.log_tag} AD domain discovery mismatch for shortname: Got: {domain_shortname.upper()} Expected: {self.ldap_client.ad_netbios.upper()}'
             )
 
         # domain_controllers must be a list of domain controllers
@@ -305,11 +279,7 @@ class PresetComputeHelper:
                 message=f'{self.log_tag} no domain controllers found for AD domain: {self.ldap_client.domain_name}. check your firewall settings and verify if traffic is allowed on port 53.'
             )
 
-        _end_time = Utils.current_time_ms()
-        self.context.cache().short_term().set(_cache_key, copy.deepcopy(domain_controllers), self._ad_discovery_ttl)
-        self.logger.info(f'ADCLI domain discovery on domain {self.ldap_client.domain_name}: Domain Controllers({len(domain_controllers)}): {domain_controllers} Discovery Time: {_end_time - _start_time}ms')
-
-        return copy.deepcopy(domain_controllers)
+        return domain_controllers
 
     def get_any_domain_controller_ip(self) -> str:
         """
@@ -363,7 +333,7 @@ class PresetComputeHelper:
         if len(one_time_password) != 120:
             raise exceptions.soca_exception(
                 error_code=errorcodes.AD_AUTOMATION_PRESET_COMPUTER_FAILED,
-                message=f'{self.log_tag} Internal error - Failed to generate a strong domain OTP password'
+                message=f'{self.log_tag} Internal error - Failed to generate a strong domain password'
             )
 
         preset_computer_result = self._shell.invoke(
@@ -376,7 +346,7 @@ class PresetComputeHelper:
                 '--stdin-password',
                 f'--one-time-password={one_time_password}',
                 f'--domain={self.ldap_client.domain_name}',
-                f'--domain-ou={self.ou}',
+                f'--domain-ou={self.get_ldap_computers_base()}',
                 '--verbose',
                 self.hostname
             ],
@@ -395,12 +365,12 @@ class PresetComputeHelper:
         # todo - jobIDs / other info that is useful to the AD admin?
         # should the incoming node provide a description field to cluster-manager?
         # infra nodes wouldn't have a jobID
-        # self.ldap_client.update_computer_description(
+        #self.ldap_client.update_computer_description(
         #    computer=self.hostname,
         #    description=f'IDEA|{self.cluster_name}|{self.instance_id}'
-        # )
+        #)
         # We cannot include this in the preset-computer or other adcli commands as this
-        # is not included in all adcli implementations for our baseOSs. So we manually update LDAP.
+        # is not inlucded in all adcli implementations for our baseOSs. So we manually update LDAP.
         # eg.
         #                # f"--description='IDEA {self.aws_region} / {self.cluster_name} / {self.instance_id}'",
 
@@ -414,8 +384,6 @@ class PresetComputeHelper:
         try:
 
             # fetch a domain controller IP to "pin" all adcli operations to ensure we don't run into synchronization problems
-            # We also want to return this to the requesting client via the AD Automation queue so that they perform join
-            # on the same domain controller.
             domain_controller_ip = self.get_any_domain_controller_ip()
 
             if self.is_existing_computer_account():
@@ -451,7 +419,6 @@ class PresetComputeHelper:
                 'hostname': self.hostname,
                 'otp': one_time_password,
                 'domain_controller': domain_controller_ip,
-                'ou': self.ou,
                 'node_type': self.ec2_instance.soca_node_type,
                 'module_id': self.ec2_instance.idea_module_id,
                 'status': 'success'

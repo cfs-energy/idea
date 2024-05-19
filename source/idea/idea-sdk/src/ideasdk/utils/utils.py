@@ -53,7 +53,6 @@ DIRECTORY_TREE_TEE = '├── '
 DIRECTORY_TREE_LAST = '└── '
 
 
-# noinspection InsecureHash
 class Utils:
 
     @staticmethod
@@ -354,7 +353,6 @@ class Utils:
         generator.minlchars = min_lowercase_chars
         generator.minnumbers = min_numbers
         generator.minschars = min_special_chars
-        generator.excludeschars = "$"
         return generator.generate()
 
     @staticmethod
@@ -428,10 +426,6 @@ class Utils:
         return os.path.islink(path)
 
     @staticmethod
-    def current_time() -> int:
-        return int(arrow.utcnow().timestamp())
-
-    @staticmethod
     def current_time_ms() -> int:
         return int(arrow.utcnow().timestamp() * 1000)
 
@@ -482,7 +476,6 @@ class Utils:
 
     @staticmethod
     def file_system_friendly_timestamp() -> str:
-        # noinspection StrFormat
         return arrow.now().format('YYYY-MM-DD-HHmmss.SSS')
 
     @staticmethod
@@ -493,14 +486,6 @@ class Utils:
         windows_timestamp_in_seconds = win_timestamp / 10_000_000
         unix_timestamp = windows_timestamp_in_seconds - epoch_delta.total_seconds()
         return unix_timestamp
-
-    @staticmethod
-    def humanize_unix_timestamp(timestamp: int) -> str:
-        return arrow.get(timestamp).humanize()
-
-    @staticmethod
-    def unix_timestamp_string(timestamp: int) -> str:
-        return arrow.get(timestamp).ctime()
 
     @staticmethod
     def is_linux() -> bool:
@@ -532,7 +517,7 @@ class Utils:
         Reference: https://stackoverflow.com/questions/898669/how-can-i-detect-if-a-file-is-binary-non-text-in-python
         :param file: path to file
         :return: True if file has binary content, False otherwise.
-        :raises FILE_NOT_FOUND: A non-file has been passed.
+        :raises FILE_NOT_FOUND
         """
         text_chars = bytearray({7, 8, 9, 10, 12, 13, 27} | set(range(0x20, 0x100)) - {0x7f})
         if not Utils.is_file(file):

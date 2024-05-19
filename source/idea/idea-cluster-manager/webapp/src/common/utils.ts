@@ -16,7 +16,7 @@ import {
     SocaUserInputParamCondition,
     SocaUserInputParamMetadata,
     SocaMemory, SocaAmount, SocaDateRange,
-    SocaUserInputChoice, VirtualDesktopGPU, VirtualDesktopSchedule, VirtualDesktopScheduleType, User, VirtualDesktopTenancy
+    SocaUserInputChoice, VirtualDesktopGPU, VirtualDesktopSchedule, VirtualDesktopScheduleType, User
 } from "../client/data-model";
 import {IdeaFormFieldRegistry} from "../components/form-field";
 import {v4 as uuid} from "uuid"
@@ -28,9 +28,6 @@ import {Constants} from "./constants";
 
 const TRUE_VALUES = ['true', 'yes', 'y']
 const FALSE_VALUES = ['false', 'no', 'n']
-
-
-type localeFormats = "browser" | "server"
 
 class Utils {
 
@@ -336,46 +333,19 @@ class Utils {
         return gpu
     }
 
-    static getFormattedTenancy(tenancy?: VirtualDesktopTenancy): string {
-        if (tenancy == null) {
-            return 'N/A'
-        }
-
-        switch(tenancy) {
-            case 'default':
-                return 'Default'
-            case 'dedicated':
-                return 'Dedicated'
-            case 'host':
-                return 'Host'
-            default:
-                return 'Unknown'
-        }
-
-    }
-
     static getFormattedMemory(memory?: SocaMemory): string {
         if (memory == null) {
             return '-'
         }
         return `${memory.value}${memory.unit}`.toUpperCase()
     }
+
     static getFormattedAmount(amount?: SocaAmount): string {
         if (amount == null) {
             return '-'
         }
-        return `${amount.amount.toLocaleString(
-            Utils.getBrowserLocale(),
-            {
-                    style: 'currency',
-                    currency: 'USD', // This may not match the browser locale, but it is the pricing API values
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2,
-                }
-            )
-        }`
+        return `${amount.amount.toFixed(2)} ${amount.unit}`
     }
-
 
     static isArray(value: any): boolean {
         if (value == null) {
@@ -460,7 +430,7 @@ class Utils {
                     break
                 case 'NVIDIA':
                     options.push({
-                        title: 'NVIDIA',
+                        title: 'NVIDA',
                         value: 'NVIDIA'
                     })
             }
@@ -484,14 +454,8 @@ class Utils {
         let a_InstanceFamily = a.InstanceType.split('.')[0]
         let b_InstanceFamily = b.InstanceType.split('.')[0]
         if (a_InstanceFamily === b_InstanceFamily) {
-            // same instance family - determine sort
-            if (a.MemoryInfo.SizeInMiB === b.MemoryInfo.SizeInMiB) {
-                // Memory sizes are equal in the same family (hpc7a) - sort by reverse vCPU (most vCPU first)
-                return b.VCpuInfo.DefaultVCpus - a.VCpuInfo.DefaultVCpus
-            } else {
-                // Memory sizes are different - just sort by reversed memory (largest memory first)
-                return b.MemoryInfo.SizeInMiB - a.MemoryInfo.SizeInMiB
-            }
+            // same instance family - sort in reverse memory order
+            return b.MemoryInfo.SizeInMiB - a.MemoryInfo.SizeInMiB
         } else {
             // diff instance family - return alphabetical
             return a_InstanceFamily.toLowerCase().localeCompare(b_InstanceFamily.toLowerCase(), undefined, {numeric: true});
@@ -584,27 +548,6 @@ class Utils {
         return options
     }
 
-    static getTenancyChoices(): SocaUserInputChoice[] {
-        let choices: SocaUserInputChoice[] = []
-        choices.push({
-            title: 'Default/Shared',
-            value: 'default',
-            description: 'Multiple AWS accounts may share the same physical hardware'
-        })
-        choices.push({
-            title: 'Dedicated',
-            value: 'dedicated',
-            description: 'Your instance runs on single-tenant hardware'
-        })
-        choices.push({
-            title: 'Host',
-            value: 'host',
-            description: 'Your instance runs on a physical server with EC2 instance capacity fully dedicated to your use'
-        })
-
-        return choices
-    }
-
     static getScheduleTypeDisplay(schedule_type: VirtualDesktopScheduleType | undefined, working_hours_start: string | undefined, working_hours_end: string | undefined, start_time: string | undefined, end_time: string | undefined): string {
         if (schedule_type === 'NO_SCHEDULE') {
             return 'No Schedule'
@@ -636,15 +579,7 @@ class Utils {
             case 'centos7':
                 return 'CentOS 7'
             case 'rhel7':
-                return 'Red Hat Enterprise Linux 7'
-            case 'rhel8':
-                return 'Red Hat Enterprise Linux 8'
-            case 'rhel9':
-                return 'Red Hat Enterprise Linux 9'
-            case 'rocky8':
-                return 'Rocky Linux 8'
-             case 'rocky9':
-                return 'Rocky Linux 9'
+                return 'RedHat Enterprise Linux 7'
             case 'windows':
                 return 'Windows'
         }
@@ -978,34 +913,6 @@ class Utils {
 
     static isSsoEnabled(): boolean {
         return typeof window.idea.app.sso !== 'undefined' && window.idea.app.sso
-    }
-
-    static getBrowserTimezoneId(): string {
-        const options = Intl.DateTimeFormat().resolvedOptions()
-        return Utils.asString(options.timeZone)
-    }
-
-    static getBrowserLocale(defaultFormat: localeFormats = 'browser'): string {
-        const options = Intl.DateTimeFormat().resolvedOptions()
-        let result: string
-        switch (defaultFormat) {
-            case 'browser':
-                result = Utils.asString(options.locale)
-                break;
-            case 'server':
-                result = Utils.asString(options.locale).replace('-', '_')
-                break;
-            default:
-                result = Utils.asString(options.locale)
-                break;
-        }
-
-        return result
-    }
-
-    static listAllTimezoneIds(): string[] {
-        const options = Intl.DateTimeFormat().resolvedOptions()
-        return []
     }
 }
 

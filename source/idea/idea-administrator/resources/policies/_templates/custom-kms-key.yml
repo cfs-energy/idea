@@ -4,14 +4,6 @@
       - kms:Decrypt
       - kms:GenerateDataKey
     Resource:
-      {{ context.utils.to_yaml(context.arns.kms_key_arn) | indent(6) }}
-    Effect: Allow
-  {%- endif %}
-  {%- if context.config.get_string('cluster.dynamodb.kms_key_id') %}
-  - Action:
-      - kms:DescribeKey
-      - kms:CreateGrant
-    Resource:
-      - '{{ context.arns.kms_dynamodb_key_arn }}'
+      - '{{ context.arns.kms_key_arn }}'
     Effect: Allow
   {%- endif %}

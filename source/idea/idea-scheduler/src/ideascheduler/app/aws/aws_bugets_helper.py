@@ -84,7 +84,7 @@ class AwsBudgetsHelper:
             raise exceptions.SocaException(
                 error_code=errorcodes.BUDGETS_LIMIT_EXCEEDED,
                 message=f'Project: ({self._job.project}) has exceeded the allocated budget limit. '
-                        f'Please update the limit on AWS Budgets Console or try again later.',
+                        f'Please update the limit on AWS Budget Console or try again later.',
                 ref=budget
             )
 

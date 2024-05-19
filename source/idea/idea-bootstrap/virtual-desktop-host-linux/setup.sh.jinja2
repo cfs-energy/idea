@@ -28,19 +28,11 @@ IDEA_CLUSTER_S3_BUCKET={{ context.cluster_s3_bucket }}
 IDEA_CLUSTER_NAME={{ context.cluster_name }}
 IDEA_CLUSTER_HOME={{ context.cluster_home_dir }}
 IDEA_APP_DEPLOY_DIR={{ context.app_deploy_dir }}
-IDEA_SESSION_ID="{{ context.vars.idea_session_id }}"
-IDEA_SESSION_OWNER="{{ context.vars.session_owner }}"
-BOOTSTRAP_DIR=/root/bootstrap" > /etc/environment
-
-{% if context.https_proxy != '' %}
-echo -e "IDEA_HTTPS_PROXY={{ context.https_proxy }}
-IDEA_NO_PROXY={{ context.no_proxy }}" >> /etc/environment
-{% endif %}
-
-echo -e "## [END] IDEA Environment Configuration
+BOOTSTRAP_DIR=/root/bootstrap
+## [END] IDEA Environment Configuration
 
 PATH={{ PATH }}
-" >> /etc/environment
+" > /etc/environment
 
 source /etc/environment
 
@@ -50,9 +42,9 @@ echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
-{% include '_templates/linux/idea_proxy.jinja2' %}
-
 {% include '_templates/linux/idea_service_account.jinja2' %}
+
+{% include '_templates/linux/aws_cli.jinja2' %}
 
 {% include '_templates/linux/aws_ssm.jinja2' %}
 
@@ -61,12 +53,8 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 {% include '_templates/linux/mount_shared_storage.jinja2' %}
 
 if [[ ! -f ${BOOTSTRAP_DIR}/idea_preinstalled_packages.log ]]; then
-  {%- if context.base_os in ('amazonlinux2', 'centos7', 'rhel7') %}
   yum install -y deltarpm
-  {%- elif context.base_os in ('rhel8', 'rocky8') %}
-  #drpm isn't available in rhel9 or rocky9
-  yum install -y drpm
-  {%- endif %}
+  yum -y upgrade
 
   {% include '_templates/linux/epel_repo.jinja2' %}
 

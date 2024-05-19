@@ -11,15 +11,6 @@ server:
   enable_metrics: false
   graceful_shutdown_timeout: 10
   api_context_path: /{{ module_id }}
-  # Additional USB Remotization AllowList defined in  list format
-  # Default is an empty list / no additional devices considered for USB remotization
-  # See docs:
-  # Admin Guide: https://docs.aws.amazon.com/dcv/latest/adminguide/manage-usb-remote.html
-  # User Guide:  https://docs.aws.amazon.com/dcv/latest/userguide/using-usb.html
-  usb_remotization: []
-# Example DCV USB Filter string:
-#      - "Q-LightLampHIDDevice,3,0,0,1240,59196,0,0"
-
 
 controller:
   autoscaling:
@@ -28,7 +19,6 @@ controller:
     base_os: {{base_os}}
     instance_ami: {{instance_ami}}
     volume_size: {{volume_size}}
-    volume_type: {{volume_type}}
     enabled_detailed_monitoring: false
     min_capacity: 1
     max_capacity: 3
@@ -46,13 +36,6 @@ controller:
       pause_time_minutes: 15
     # instance metadata access method
     metadata_http_tokens: "required"  # supported values are "required" for IMDSv2 or "optional" for IMDSv1
-  #
-  # Enable/Disable budget validation for eVDI sessions
-  # True (default) - Do not allow new eVDI sessions on projects that have exceeded their budget.
-  # False - Allow eVDI sessions on projects with exceeded budgets.
-  #
-  enforce_project_budgets: true  # True or False
-  #
   request_handler_threads:
     min: 1
     max: 8
@@ -71,7 +54,6 @@ dcv_broker:
     base_os: {{base_os}}
     instance_ami: {{instance_ami}}
     volume_size: {{volume_size}}
-    volume_type: {{volume_type}}
     enabled_detailed_monitoring: false
     min_capacity: 1
     max_capacity: 3
@@ -119,7 +101,6 @@ dcv_connection_gateway:
     base_os: {{base_os}}
     instance_ami: {{instance_ami}}
     volume_size: {{volume_size}}
-    volume_type: {{volume_type}}
     enabled_detailed_monitoring: false
     min_capacity: 1
     max_capacity: 3
@@ -156,10 +137,9 @@ opensearch:
     alias: {{cluster_name}}_{{module_id}}_session_permission
 
 dcv_session:
-  idle_timeout: 240 # in minutes. Default is 240-minutes / 4-hours
+  idle_timeout: 1440 # in minutes
   idle_timeout_warning: 300 # in seconds
-  idle_autostop_delay: 60 # Time (in minutes) a disconnected (but running) DCV session is eligible for autostop. Default is 60-minutes / 1-hour
-  cpu_utilization_threshold: 30 # in percentage. If a given session has more than this much CPU activity - autostop will not take place
+  cpu_utilization_threshold: 30 # in percentage
   max_root_volume_memory: 1000 # in GB
   additional_security_groups: []
   allowed_sessions_per_user: 5
@@ -168,30 +148,10 @@ dcv_session:
       - t3
       - g4dn
       - g4ad
-      - g5
       - m6a
       - m6g
     deny: [] # Supports both instance families and types. E.g. specify t3 for family and t3.large for instance type
   quic_support: {{ dcv_session_quic_support | lower }}
-
-  #
-  # By default, the eVDI subnets match the cluster private subnets.
-  # Here you can specify eVDI-specific subnets as an alternative to using the cluster.network.private_subnets
-  #
-  network:
-    private_subnets:
-      {{ utils.to_yaml(private_subnet_ids) | indent(6) }}
-
-    # Supported eVDI randomize_subnets settings:
-    # True - Randomize the subnets (dcv_session.network.private_subnets or cluster.network.private_subnets) for deployment
-    # False - (default)  Use the subnets (dcv_session.network.private_subnets or cluster.network.private_subnets) in the order specified in the configuration.
-    randomize_subnets: False
-
-    # Retry methods when encountering an eVDI deployment error
-    # True - (default) Immediately retry the next subnet (ordered or random from subnet_deployment_method)
-    # False - error the request on first error. This may be desired to avoid cross-AZ charges.
-    subnet_autoretry: True
-
   # instance metadata access method
   metadata_http_tokens: "required"  # supported values are "required" for IMDSv2 or "optional" for IMDSv1
   notifications:

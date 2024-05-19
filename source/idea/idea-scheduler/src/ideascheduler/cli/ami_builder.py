@@ -77,7 +77,6 @@ class ComputeNodeAmiBuilder:
             # do not associate name with any specific cluster as generated ami is cluster agnostic
             ami_name = f'idea-compute-node-{base_os}'
         if Utils.is_empty(ami_version):
-            # noinspection StrFormat
             ami_version = arrow.get().format('MMDDYYYY-HHmmss')
 
         # instance type
@@ -248,23 +247,12 @@ class ComputeNodeAmiBuilder:
                 Key=bootstrap_package_key
             )
 
-        https_proxy = self.context.config().get_string('cluster.network.https_proxy', required=False, default='')
-        no_proxy = self.context.config().get_string('cluster.network.no_proxy', required=False, default='')
-        proxy_config = {}
-        if Utils.is_not_empty(https_proxy):
-            proxy_config = {
-                    'http_proxy': https_proxy,
-                    'https_proxy': https_proxy,
-                    'no_proxy': no_proxy
-                    }
-
         return BootstrapUserDataBuilder(
             aws_region=self.context.aws().aws_region(),
             bootstrap_package_uri=bootstrap_package_uri,
             install_commands=[
                 '/bin/bash compute-node-ami-builder/setup.sh'
             ],
-            proxy_config=proxy_config,
             base_os=self.base_os,
             substitution_support=False
         ).build()

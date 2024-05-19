@@ -13,17 +13,16 @@ from ideadatamodel.api import SocaPayload
 from ideascheduler.app.scheduler.openpbs.openpbs_model import OpenPBSEvent
 
 from typing import Optional, Dict
-from pydantic import Field
 
 
 class OpenPBSHookRequest(SocaPayload):
-    event: Optional[OpenPBSEvent] = Field(default=None)
+    event: Optional[OpenPBSEvent]
 
 
 class OpenPBSHookResult(SocaPayload):
-    formatted_user_message: Optional[str] = Field(default=None)
-    queue: Optional[str] = Field(default=None)
-    project: Optional[str] = Field(default=None)
-    resources_updated: Optional[Dict[str, Optional[str]]] = Field(default=None)
-    resources_deleted: Optional[Dict[str, Optional[str]]] = Field(default=None)
-    accept: Optional[bool] = Field(default=None)
+    formatted_user_message: Optional[str]
+    queue: Optional[str]
+    project: Optional[str]
+    resources_updated: Optional[Dict[str, Optional[str]]]
+    resources_deleted: Optional[Dict[str, Optional[str]]]
+    accept: Optional[bool]

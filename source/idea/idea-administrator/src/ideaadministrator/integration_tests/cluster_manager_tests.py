@@ -58,7 +58,7 @@ def test_admin_create_user(context: TestContext):
     global test_password
     test_username = Utils.generate_password(8, 0, 8, 0, 0)
     test_password = Utils.generate_password(8, 1, 1, 1, 1)
-    email = f'{test_username}@sampleideauser.local'
+    email = f'{test_username}@samplesocauser.local'
     result = context.get_cluster_manager_client().invoke_alt(
         namespace='Accounts.CreateUser',
         payload=CreateUserRequest(
@@ -79,7 +79,7 @@ def test_admin_create_user(context: TestContext):
     assert Utils.is_not_empty(user.username)
     assert Utils.are_equal(test_username, user.username)
     assert Utils.are_equal(email, user.email)
-    # assert Utils.are_equal(user.status, 'CONFIRMED')
+    assert Utils.are_equal(user.status, 'CONFIRMED')
     assert Utils.is_false(user.sudo)
     assert Utils.is_true(user.enabled)
     assert Utils.is_not_empty(user.uid)

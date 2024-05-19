@@ -110,7 +110,7 @@ class UserHomeDirectory:
         # and a new clusteradmin user is created.
         # although the user is created in directory services, it's not yet synced with the local system
         # If you continue to see this log message it may indicate that the underlying cluster-manager
-        # host is not properly linked to the back-end directory service in some fashion.
+        # host is not probably linked to the back-end directory service in some fashion.
         while True:
             try:
                 pwd.getpwnam(self.user.username)

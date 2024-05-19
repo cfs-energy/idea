@@ -1,13 +1,13 @@
 # Begin: Microsoft AD Settings (activedirectory)
 
 # Below is a template configuration to connect to your existing "On-Prem" or "Self-Managed" AD on AWS
-# customize the configuration based on your environment requirements - The configuration below will not work out of the box.
+# customize below configuration based on your environment requirements - below configuration will not work out of the box.
 #
 #
 # When using the 'activedirectory' Directory Service back-end - READ-ONLY access is activated in IDEA
 # for User and Group management. All user and group management activities take place in Active Directory directly.
 # READ-WRITE is still required for the creation of Computer objects.
-# SSO is required to be configured and linked to the same Active Directory back-end.
+# SSO is expected to be configured and linked to the same Active Directory back-end.
 #
 
 # The NetBIOS name for your domain
@@ -25,7 +25,7 @@ sssd:
   # By default, the 'activedirectory' provider will rely on POSIX attributes defined in Active Directory (uidNumber, gidNumber).
   # If a user does not have these POSIX attributes - they will not be able to log into IDEA.
   # It is up to the AD Administrator / IDEA Administrator to arrange for POSIX attributes to be properly added to the AD schema for the IDEA users.
-  # If you want to enable ID mapping from the object SID, set ldap_id_mapping = true
+  # If you want to enable ID mapping from the object SID, set ldap_id_mapping = false
   # Note that this can have consequences when using systems that do not understand ID mapping.
   # For further details about ID mapping and the ldap_id_mapping parameter, see the sssd-ldap(8) man page.
   ldap_id_mapping: false
@@ -33,23 +33,6 @@ sssd:
 ad_automation:
   # time to live - for the ad-automation DDB table entry containing OTP and any other attributes
   entry_ttl_seconds: 1800
-  # Number of seconds to cache AD domain controller information
-  domain_discovery_ttl_seconds: 300
-
-  # Various timers / settings controlling AD Join process
-  # These configuration settings impact the AD Join process after the eVDI client has been authorized by
-  # cluster-manager to join AD.
-  # Min Sleep - The minimum amount of random seconds between attempts (default 30)
-  # Max Sleep - The maximum amount of random seconds between attempts (default 31)
-  # Retry Count - Number of attempts to join AD with the cluster-manager one-time-password (OTP) information
-  #
-  # By default there will be a 30-second delay in between retry attempts (including the first attempt).
-  # Set the Min and Max values as needed to generate a random number between the numbers.
-  # NOTE: Powershell Get-Random requires that Min be less than (and _not_ equal to) Maximum.
-  #
-  ad_join_min_sleep: 30  # in seconds
-  ad_join_max_sleep: 31  # in seconds
-  ad_join_retry_count: 10  # retry count
 
   # enable or disable service account's password rotation
   # when set to true, IDEA ADAutomationAgent running in Cluster Manager will try to reset the service account credentials,
@@ -113,16 +96,19 @@ clusteradmin:
 
 
 #
-# Provide a mapping of the base IDEA groups to Active Directory groups
+# Provide a mapping of the base IDEA groups to Active Directory DN
 #
-# If just the name of the group is supplied, e.g. "default-project-group" is provided, the qualified path will be computed as below:
+# If just the name of the group is supplied, e.g. "cluster-manager-administrators-module-group" is provided, the qualified path will be computed as below:
 # cn=<supplied_value>,<groups.ou>
-# otherwise it will be searched as the distinguishedName (must start with CN=)
-# e.g. cn=default-project-group,OU=Org123,DC=domain,DC=local
+# otherwise it is treated as a full DN
+# e.g. cn=cluster-manager-administrators-module-group,OU=Org123,DC=domain,DC=local
+
 
 group_mapping:
   # idea-required-group is a special mapping
+  # When users SSO for the first time - they do not have cache entries in DDB.
   # The users must be part of this AD group to be considered eligible for the IDEA cluster.
+  # This can be specified to a specific group.
   # The IDEA / AD Administrator is expected to create this group and maintain the proper membership
   # of the users.
   # e.g. CN=IDEAUsers,OU=AADDC Users,DC=idea-admin,DC=cloud

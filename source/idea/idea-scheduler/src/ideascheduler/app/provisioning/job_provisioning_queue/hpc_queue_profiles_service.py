@@ -102,7 +102,7 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
             raise exceptions.invalid_params('queue_profile.name is required')
         if Utils.is_empty(queue_profile.queues):
             raise exceptions.invalid_params('queue_profile.queues is required')
-        if Utils.is_empty(queue_profile.scaling_mode) and not Utils.get_as_bool(queue_profile.keep_forever, False):
+        if Utils.is_empty(queue_profile.scaling_mode):
             raise exceptions.invalid_params('queue_profile.scaling_mode is required')
         if Utils.is_empty(queue_profile.queue_mode):
             raise exceptions.invalid_params('queue_profile.queue_mode is required')
@@ -113,15 +113,17 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
                 raise exceptions.invalid_params('queue_profile.projects[] is required')
 
         terminate_when_idle = queue_profile.terminate_when_idle
-        if queue_profile.scaling_mode is not None and queue_profile.scaling_mode == SocaScalingMode.BATCH:
+        if queue_profile.scaling_mode == SocaScalingMode.BATCH:
             if terminate_when_idle is None or terminate_when_idle <= 0:
                 raise exceptions.invalid_params('queue_profile.terminate_when_idle must be required and > 0 when scaling_mode == BATCH')
-        elif queue_profile.scaling_mode is not None and queue_profile.scaling_mode == SocaScalingMode.SINGLE_JOB:
+        elif queue_profile.scaling_mode == SocaScalingMode.SINGLE_JOB:
             if terminate_when_idle is not None and terminate_when_idle > 0:
                 raise exceptions.invalid_params('queue_profile.terminate_when_idle must be 0 when scaling_mode == SINGLE_JOB')
 
         keep_forever = queue_profile.keep_forever
         if keep_forever is not None and keep_forever:
+            if terminate_when_idle is not None and terminate_when_idle > 0:
+                raise exceptions.invalid_params('queue_profile.terminate_when_idle must be 0 when keep_forever == True')
             if queue_profile.stack_uuid is None:
                 queue_profile.stack_uuid = Utils.uuid()
 

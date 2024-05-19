@@ -30,13 +30,7 @@ Statement:
     Effect: Allow
 
   - Effect: Allow
-    Action:
-      - sqs:DeleteMessage
-      - sqs:ReceiveMessage
-      - sqs:SendMessage
-      - sqs:GetQueueAttributes
-      - sqs:ChangeMessageVisibility
-      - sqs:GetQueueUrl
+    Action: sqs:*
     Resource:
       - '{{ context.arns.get_sqs_arn(context.config.get_module_id("virtual-desktop-controller") + "-events.fifo") }}'
 

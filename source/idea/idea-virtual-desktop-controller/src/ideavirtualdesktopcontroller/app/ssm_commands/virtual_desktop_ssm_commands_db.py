@@ -10,7 +10,6 @@
 #  and limitations under the License.
 from enum import Enum
 from typing import Optional, Union, Dict
-from pydantic import Field
 
 import ideavirtualdesktopcontroller
 from ideadatamodel import exceptions
@@ -26,9 +25,9 @@ class VirtualDesktopSSMCommandType(str, Enum):
 
 
 class VirtualDesktopSSMCommand:
-    command_id: Optional[str] = Field(default=None)
-    command_type: Optional[VirtualDesktopSSMCommandType] = Field(default=None)
-    additional_payload: Optional[Dict] = Field(default=None)
+    command_id: Optional[str]
+    command_type: Optional[VirtualDesktopSSMCommandType]
+    additional_payload: Optional[Dict]
 
     def __init__(self, command_id: Optional[str], command_type: Optional[VirtualDesktopSSMCommandType], additional_payload: Optional[Dict]):
         self.command_id = command_id

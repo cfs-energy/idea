@@ -8,7 +8,6 @@
 #  or in the 'license' file accompanying this file. This file is distributed on an 'AS IS' BASIS, WITHOUT WARRANTIES
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
-import logging
 
 from ideasdk.utils import Utils
 from ideadatamodel import ListUsersRequest, ListUsersResult, SocaPaginator, User
@@ -58,7 +57,7 @@ class UserDAO:
         self.table = self.context.aws().dynamodb_table().Table(self.get_table_name())
 
     def convert_from_db(self, user: Dict) -> User:
-        user_entry = User(
+        user = User(
             **{
                 'username': Utils.get_value_as_string('username', user),
                 'email': Utils.get_value_as_string('email', user),
@@ -76,12 +75,12 @@ class UserDAO:
                 'updated_on': Utils.get_value_as_int('updated_on', user)
             }
         )
-
-        # The Cognito status lookup was removed for performance considerations
-        # over multiple/looped API calls for bulk users. This takes place on
-        # singleton lookups/get_user.
-
-        return user_entry
+        cognito_user = self.user_pool.admin_get_user(user.username)
+        if cognito_user is not None:
+            user.status = cognito_user.UserStatus
+        else:
+            user.status = 'DELETED'
+        return user
 
     @staticmethod
     def convert_to_db(user: User) -> Dict:
@@ -133,16 +132,13 @@ class UserDAO:
 
     def get_user(self, username: str) -> Optional[Dict]:
         username = AuthUtils.sanitize_username(username)
-        _lu_start = Utils.current_time_ms()
         result = self.table.get_item(
             Key={
                 'username': username
             }
         )
-        _lu_stop = Utils.current_time_ms()
-        if self.logger.isEnabledFor(logging.DEBUG):
-            self.logger.debug(f"user_lookup: Took {_lu_stop - _lu_start}ms : {Utils.get_value_as_dict('Item', result)}")
         return Utils.get_value_as_dict('Item', result)
+
 
     def update_user(self, user: Dict) -> Dict:
         username = Utils.get_value_as_string('username', user)
@@ -212,25 +208,13 @@ class UserDAO:
         if scan_filter is not None:
             scan_request['ScanFilter'] = scan_filter
 
-        _scan_start = Utils.current_time_ms()
         scan_result = self.table.scan(**scan_request)
-        _scan_end = Utils.current_time_ms()
 
         db_users = Utils.get_value_as_list('Items', scan_result, [])
-
-        if self.logger.isEnabledFor(logging.DEBUG):
-            self.logger.debug(f"DDB Table scan took {_scan_end - _scan_start}ms for {len(db_users)} users")
-
         users = []
-
-        _idp_start = Utils.current_time_ms()
         for db_user in db_users:
             user = self.convert_from_db(db_user)
             users.append(user)
-        _idp_end = Utils.current_time_ms()
-
-        if self.logger.isEnabledFor(logging.DEBUG):
-            self.logger.debug(f"User status took {_idp_end - _idp_start}ms for {len(users)} users")
 
         response_cursor = None
         last_evaluated_key = Utils.get_any_value('LastEvaluatedKey', scan_result)

@@ -246,7 +246,7 @@ class ApiInvocationContext(ApiInvocationContextProtocol):
     @response.setter
     def response(self, response: Union[SocaEnvelope, Dict]):
         if isinstance(response, SocaEnvelope):
-            self._response = response.model_dump(exclude_none=True, by_alias=True)
+            self._response = response.dict(exclude_none=True, by_alias=True)
         else:
             self._response = response
 
@@ -258,7 +258,7 @@ class ApiInvocationContext(ApiInvocationContextProtocol):
 
     def success(self, payload: Union[SocaPayload, Dict] = None):
         if isinstance(payload, SocaPayload):
-            payload_dict = payload.model_dump(exclude_none=True, by_alias=True)
+            payload_dict = payload.dict(exclude_none=True, by_alias=True)
         else:
             payload_dict = payload
 
@@ -277,7 +277,7 @@ class ApiInvocationContext(ApiInvocationContextProtocol):
         payload_dict = None
         if payload is not None:
             if isinstance(payload, SocaPayload):
-                payload_dict = payload.model_dump(exclude_none=True, by_alias=True)
+                payload_dict = payload.dict(exclude_none=True, by_alias=True)
             else:
                 payload_dict = payload
 

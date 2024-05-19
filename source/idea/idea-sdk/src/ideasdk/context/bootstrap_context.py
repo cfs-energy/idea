@@ -77,27 +77,11 @@ class BootstrapContext:
         return DEFAULT_APP_DEPLOY_DIR
 
     @property
-    def https_proxy(self) -> str:
-        https_proxy = self.config.get_string('cluster.network.https_proxy', required=False, default='')
-        if Utils.is_not_empty(https_proxy):
-            return https_proxy
-        else:
-            return ''
-
-    @property
-    def no_proxy(self) -> str:
-        https_proxy = self.config.get_string('cluster.network.https_proxy', required=False, default='')
-        if Utils.is_not_empty(https_proxy):
-            return self.config.get_string('cluster.network.no_proxy', required=False, default='')
-        else:
-            return ''
-
-    @property
     def default_system_user(self) -> str:
-        if self.base_os in ('amazonlinux2', 'rhel7', 'rhel8', 'rhel9', 'rocky8', 'rocky9'):
+        if self.base_os in ('amazonlinux2', 'rhel7'):
             return 'ec2-user'
         if self.base_os == 'centos7':
-            return 'centos'
+            return 'centos7'
         raise exceptions.general_exception(f'unknown system user name for base_os: {self.base_os}')
 
     def has_storage_provider(self, provider: str) -> bool:
@@ -109,29 +93,6 @@ class BootstrapContext:
                 continue
             if storage['provider'] == provider:
                 return True
-        return False
-
-    def job_has_storage_provider(self, provider: str) -> bool:
-        context_vars = vars(self.vars)
-        if provider == 'fsx_lustre' and 'job' in context_vars:
-            params = self.vars.job.params
-            fsx_lustre = params.fsx_lustre
-            fsx_lustre_enabled = fsx_lustre.__getattribute__('enabled')
-            if fsx_lustre_enabled:
-                return True
-        return False
-
-    def job_has_param(self, parameter: str) -> bool:
-        context_vars = vars(self.vars)
-        if 'job' in context_vars:
-            params = self.vars.job.params
-            if not hasattr(params, parameter):
-                return False
-            param_value = params.__getattribute__(parameter)
-            if isinstance(param_value, bool):
-                return param_value
-            else:
-                return param_value is not None
         return False
 
     def eval_shared_storage_scope(self, shared_storage: Dict) -> bool:

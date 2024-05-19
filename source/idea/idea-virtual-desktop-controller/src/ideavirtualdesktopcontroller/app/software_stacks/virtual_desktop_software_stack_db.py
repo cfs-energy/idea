@@ -30,9 +30,7 @@ from ideadatamodel import (
     SocaListingPayload,
     SocaPaginator
 )
-from ideadatamodel.virtual_desktop.virtual_desktop_model import (
-    VirtualDesktopGPU, VirtualDesktopTenancy
-)
+from ideadatamodel.virtual_desktop.virtual_desktop_model import VirtualDesktopGPU
 from ideasdk.aws.opensearch.opensearchable_db import OpenSearchableDB
 from ideasdk.utils import Utils
 from ideavirtualdesktopcontroller.app.virtual_desktop_notifiable_db import VirtualDesktopNotifiableDB
@@ -170,7 +168,7 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
                     if Utils.is_not_empty(gpu_manufacturer) and gpu_manufacturer not in {'AMD', 'NVIDIA', 'NO_GPU'}:
                         error_message = f'Invalid base-software-stack-config.yaml configuration for OS: {base_os} Arch' \
                                         f' Config: {arch} AWS-Region: {aws_region}.' \
-                                        f' Invalid gpu-manufacturer {gpu_manufacturer}. Can be one of AMD, NVIDIA, NO_GPU only'
+                                        f' Invalid gpu-manufacturer {gpu_manufacturer} can be one of AMD, NVIDIA, NO_GPU only'
 
                         self._logger.error(error_message)
                         raise exceptions.general_exception(error_message)
@@ -196,7 +194,7 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
                     software_stack_db_entry = self.get(stack_id=software_stack_id, base_os=base_os)
                     if Utils.is_empty(software_stack_db_entry):
                         # base SS doesn't exist. creating
-                        self._logger.info(f'software_stack_id: {software_stack_id}, doesn\'t exist. CREATING.')
+                        self._logger.info(f'software_stack_id: {software_stack_id}, does\'nt exist. CREATING.')
                         self.create(VirtualDesktopSoftwareStack(
                             base_os=VirtualDesktopBaseOS(base_os),
                             stack_id=software_stack_id,
@@ -214,10 +212,7 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
                             ),
                             architecture=VirtualDesktopArchitecture(arch),
                             gpu=custom_stack_gpu_manufacturer,
-                            projects=[default_project],
-                            pool_enabled=False,
-                            pool_asg_name=None,
-                            launch_tenancy=VirtualDesktopTenancy.DEFAULT
+                            projects=[default_project]
                         ))
 
     @property
@@ -248,10 +243,7 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
             ),
             architecture=VirtualDesktopArchitecture(Utils.get_value_as_string(software_stacks_constants.SOFTWARE_STACK_DB_ARCHITECTURE_KEY, db_entry)),
             gpu=VirtualDesktopGPU(Utils.get_value_as_string(software_stacks_constants.SOFTWARE_STACK_DB_GPU_KEY, db_entry)),
-            projects=[],
-            pool_enabled=Utils.get_value_as_bool(software_stacks_constants.SOFTWARE_STACK_DB_POOL_ENABLED_KEY, db_entry),
-            pool_asg_name=Utils.get_value_as_string(software_stacks_constants.SOFTWARE_STACK_DB_POOL_ASG_KEY, db_entry),
-            launch_tenancy=VirtualDesktopTenancy(Utils.get_value_as_string(software_stacks_constants.SOFTWARE_STACK_DB_LAUNCH_TENANCY_KEY, db_entry, default='default'))
+            projects=[]
         )
 
         for project_id in Utils.get_value_as_list(software_stacks_constants.SOFTWARE_STACK_DB_PROJECTS_KEY, db_entry, []):
@@ -305,10 +297,7 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
             software_stacks_constants.SOFTWARE_STACK_DB_MIN_RAM_VALUE_KEY: str(software_stack.min_ram.value),
             software_stacks_constants.SOFTWARE_STACK_DB_MIN_RAM_UNIT_KEY: software_stack.min_ram.unit,
             software_stacks_constants.SOFTWARE_STACK_DB_ARCHITECTURE_KEY: software_stack.architecture,
-            software_stacks_constants.SOFTWARE_STACK_DB_GPU_KEY: software_stack.gpu,
-            software_stacks_constants.SOFTWARE_STACK_DB_POOL_ENABLED_KEY: software_stack.pool_enabled,
-            software_stacks_constants.SOFTWARE_STACK_DB_POOL_ASG_KEY: software_stack.pool_asg_name,
-            software_stacks_constants.SOFTWARE_STACK_DB_LAUNCH_TENANCY_KEY: software_stack.launch_tenancy
+            software_stacks_constants.SOFTWARE_STACK_DB_GPU_KEY: software_stack.gpu
         }
 
         project_ids = []

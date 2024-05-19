@@ -202,7 +202,7 @@ class DeleteCluster:
             print(f'executing app-module-clean-up commands for app: {module_id}')
             instance_ids.append(app_instance.instance_id)
 
-        command_to_execute = 'sudo ideactl app-module-clean-up'
+        command_to_execute = f'sudo ideactl app-module-clean-up'
         if self.delete_databases:
             command_to_execute = f'{command_to_execute} --delete-databases'
 
@@ -240,7 +240,7 @@ class DeleteCluster:
             time.sleep(10)
 
     def find_cloud_formation_stacks(self):
-        self.context.info(f'Searching for CloudFormation stacks to be terminated (matching {constants.IDEA_TAG_CLUSTER_NAME} of {self.cluster_name})...')
+        self.context.info('Searching for CloudFormation stacks to be terminated ...')
         stacks_to_delete = []
         cluster_stacks = []
         identity_provider_stacks = []
@@ -512,9 +512,8 @@ class DeleteCluster:
                     if pool_name == f'{self.cluster_name}-user-pool' and pool_id is not None:
                         user_pool_ids_to_unprotect.append(pool_id)
 
-            # Unprotect the discovered user pools if they have matching cluster Tags
+            # Unprotect the discovered user pools if they have matching Tags
             for pool_id in user_pool_ids_to_unprotect:
-                _remove_pool_protection = False
                 describe_user_pool_result = self.context.aws().cognito_idp().describe_user_pool(
                     UserPoolId=pool_id
                 )
@@ -522,26 +521,14 @@ class DeleteCluster:
 
                 if delete_protection.upper() == 'ACTIVE':
                     pool_tags = Utils.get_value_as_dict('UserPoolTags', Utils.get_value_as_dict('UserPool', describe_user_pool_result, default={}), default={})
-                    # Support previous deployments that didn't have UserPoolTags
-                    # It is OK to do this since we validated that the user pool Name still matched the expected name.
-                    # Note that the Name and the Name Tag can be different in this case.
-                    if not pool_tags:
-                        self.context.info(f'Cognito User Pool {pool_id} - Deletion Protection is {delete_protection} - No tags found - proceeding to remove')
-                        _remove_pool_protection = True
                     for tag_name, tag_value in pool_tags.items():
                         if tag_name == constants.IDEA_TAG_CLUSTER_NAME and tag_value == self.cluster_name:
                             self.context.info(f'Cognito User Pool {pool_id} - Deletion Protection is {delete_protection} - Removing')
-                            _remove_pool_protection = True
-
-                    if _remove_pool_protection:
-                        self.context.aws().cognito_idp().update_user_pool(
-                            UserPoolId=pool_id,
-                            DeletionProtection='INACTIVE'
-                        )
-                        time.sleep(0.5)
-
-                elif delete_protection.upper() == 'INACTIVE':
-                    self.context.info(f'Cognito User Pool {pool_id} - Deletion Protection is INACTIVE - No need to remove protection.')
+                            self.context.aws().cognito_idp().update_user_pool(
+                                UserPoolId=pool_id,
+                                DeletionProtection='INACTIVE'
+                            )
+                            time.sleep(0.5)
 
         # For non-Cognito deployments - we should just land here to cleanup the stacks
         # If there are any other cleanups needed - add them here
@@ -601,6 +588,7 @@ class DeleteCluster:
         # Cleanup Cloudwatch Alarms for all tables
         self.delete_cloudwatch_alarms()
 
+
     def delete_cloudwatch_alarms(self):
         alarms_to_delete = []
         # Generate our list of Cloudwatch alarms that pertain to us
@@ -654,13 +642,14 @@ class DeleteCluster:
                 raise e
             self.context.success(f'Deleted CloudWatch alarms for: {self.cluster_name}')
         else:
-            self.context.info('Did not find any Cloudwatch alarms to delete...')
+            self.context.info(f'Did not find any Cloudwatch alarms to delete...')
 
     def find_cloudwatch_logs(self):
+        total_bytes = 0
         self.context.info('Searching for CloudWatch log groups to be deleted ...')
         paginator = self.context.aws().logs().get_paginator('describe_log_groups')
 
-        for prefix in {f'{self.cluster_name}', f'/{self.cluster_name}', f'/aws/lambda/{self.cluster_name}'}:
+        for prefix in {f'/{self.cluster_name}', f'/aws/lambda/{self.cluster_name}'}:
             self.context.info(f'Looking for Cloudwatch logs in {prefix}')
             page_iterator = paginator.paginate(logGroupNamePrefix=prefix)
             for page in page_iterator:
@@ -767,45 +756,53 @@ class DeleteCluster:
                 BackupVaultName=backup_vault_name
             )
 
+            total_recovery_points = 0
             total_deleted = 0
-            all_recovery_points_list = []
 
-            bu_paginator = self.context.aws().backup().get_paginator('list_recovery_points_by_backup_vault')
-            bu_iterator = bu_paginator.paginate(BackupVaultName=backup_vault_name)
+            next_token = None
+            while True:
 
-            for _page in bu_iterator:
-                recovery_points = Utils.get_value_as_list('RecoveryPoints', _page, [])
-                if recovery_points:
-                    all_recovery_points_list += recovery_points
+                if next_token is None:
+                    list_recovery_points_by_backup_vault_result = self.context.aws().backup().list_recovery_points_by_backup_vault(
+                        BackupVaultName=backup_vault_name
+                    )
+                else:
+                    list_recovery_points_by_backup_vault_result = self.context.aws().backup().list_recovery_points_by_backup_vault(
+                        BackupVaultName=backup_vault_name,
+                        NextToken=next_token
+                    )
 
-            if len(all_recovery_points_list) <= 0:
-                self.context.info(f'No recovery points found for backup vault: {backup_vault_name}')
-                return
+                next_token = Utils.get_value_as_string('NextToken', list_recovery_points_by_backup_vault_result)
 
-            # Now that we have assembled the entire list - process them
-            _rp_delete_start = Utils.current_time_ms()
-            self.context.info(f"Deleting {len(all_recovery_points_list)} recovery points from AWS Backup...")
-            for recovery_point in all_recovery_points_list:
-                recovery_point_arn = Utils.get_value_as_string('RecoveryPointArn', recovery_point)
+                recovery_points = Utils.get_value_as_list('RecoveryPoints', list_recovery_points_by_backup_vault_result, [])
 
-                # can be one of: 'COMPLETED'|'PARTIAL'|'DELETING'|'EXPIRED'
-                # if status is not COMPLETED/EXPIRED, do not attempt to delete, but wait for deletion or backup completion.
-                recovery_point_status = Utils.get_value_as_string('Status', recovery_point, default='UNKNOWN')
-                if recovery_point_status.upper() not in ('COMPLETED', 'EXPIRED'):
-                    self.context.warning(f"Unable to delete recovery point {recovery_point_arn} . Status: {recovery_point_status}. This may cause failures to delete the stack.")
-                    continue
+                total_recovery_points += len(recovery_points)
 
-                self.context.info(f'deleting recovery point: {recovery_point_arn} ...')
-                self.context.aws().backup().delete_recovery_point(
-                    BackupVaultName=backup_vault_name,
-                    RecoveryPointArn=recovery_point_arn
-                )
-                total_deleted += 1
-                time.sleep(.1)
+                for recovery_point in recovery_points:
+                    recovery_point_arn = Utils.get_value_as_string('RecoveryPointArn', recovery_point)
 
-            _rp_delete_end = Utils.current_time_ms()
-            _run_time_sec = int((_rp_delete_end - _rp_delete_start) / 1_000)
-            self.context.info(f'deleted {total_deleted} recovery points in {_run_time_sec} seconds.')
+                    # can be one of: 'COMPLETED'|'PARTIAL'|'DELETING'|'EXPIRED'
+                    # if status is not COMPLETED/EXPIRED, do not attempt to delete, but wait for deletion or backup completion.
+                    recovery_point_status = Utils.get_value_as_string('Status', recovery_point)
+                    if recovery_point_status not in ('COMPLETED', 'EXPIRED'):
+                        continue
+
+                    self.context.info(f'deleting recovery point: {recovery_point_arn} ...')
+                    self.context.aws().backup().delete_recovery_point(
+                        BackupVaultName=backup_vault_name,
+                        RecoveryPointArn=recovery_point_arn
+                    )
+                    total_deleted += 1
+                    time.sleep(.1)
+
+                if next_token is None:
+                    if total_recovery_points == total_deleted:
+                        self.context.info(f'deleted {total_recovery_points} recovery points.')
+                        break
+                    else:
+                        total_pending = total_recovery_points - total_deleted
+                        with self.context.spinner(f'waiting for {total_pending} recovery points to be deleted or ready for deleting ...'):
+                            time.sleep(10)
 
         except botocore.exceptions.ClientError as e:
             if e.response['Error']['Code'] != 'ResourceNotFoundException':
@@ -838,7 +835,7 @@ class DeleteCluster:
             self.print_ec2_instances(self.termination_protected_ec2_instances)
             print(f'found {len(self.termination_protected_ec2_instances)} EC2 instances with termination protection enabled.')
             if not self.force:
-                confirm = self.context.prompt('Are you sure you want to disable termination protection for above instances ?')
+                confirm = self.context.prompt(f'Are you sure you want to disable termination protection for above instances ?')
                 if not confirm:
                     return
 

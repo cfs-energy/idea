@@ -9,7 +9,7 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
-# pkg config for idea-admin. no dependencies.
+# pkg config for soca-admin. no dependencies.
 
 __name__ = 'idea-administrator'
-__version__ = '3.1.6'
+__version__ = '3.1.0'

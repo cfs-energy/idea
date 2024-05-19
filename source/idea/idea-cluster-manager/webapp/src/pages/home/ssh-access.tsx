@@ -46,14 +46,8 @@ class SSHAccess extends Component<SSHAccessProps, SSHAccessState> {
 
     componentDidMount() {
         AppContext.get().getClusterSettingsService().getModuleSettings(Constants.MODULE_BASTION_HOST).then(moduleInfo => {
-            let sshHostIp: string
-            if (Utils.asBoolean(moduleInfo.public)) {
-                sshHostIp = Utils.asString(moduleInfo.public_ip)
-            } else {
-                sshHostIp = Utils.asString(moduleInfo.private_ip)
-            }
             this.setState({
-                sshHostIp: sshHostIp
+                sshHostIp: Utils.asString(moduleInfo.public_ip)
             })
         })
     }

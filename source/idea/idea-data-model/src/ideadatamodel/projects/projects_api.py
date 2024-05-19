@@ -32,41 +32,40 @@ __all__ = (
 from ideadatamodel import SocaPayload, SocaListingPayload, IdeaOpenAPISpecEntry
 from ideadatamodel.projects.projects_model import Project
 from typing import Optional, List
-from pydantic import Field
 
 
 # Projects.CreateProject
 class CreateProjectRequest(SocaPayload):
-    project: Optional[Project] = Field(default=None)
+    project: Optional[Project]
 
 
 class CreateProjectResult(SocaPayload):
-    project: Optional[Project] = Field(default=None)
+    project: Optional[Project]
 
 
 # Projects.CreateProject
 class GetProjectRequest(SocaPayload):
-    project_name: Optional[str] = Field(default=None)
-    project_id: Optional[str] = Field(default=None)
+    project_name: Optional[str]
+    project_id: Optional[str]
 
 
 class GetProjectResult(SocaPayload):
-    project: Optional[Project] = Field(default=None)
+    project: Optional[Project]
 
 
 # Projects.UpdateProject
 class UpdateProjectRequest(SocaPayload):
-    project: Optional[Project] = Field(default=None)
+    project: Optional[Project]
 
 
 class UpdateProjectResult(SocaPayload):
-    project: Optional[Project] = Field(default=None)
+    project: Optional[Project]
 
 
 # Projects.DeleteProject
 class DeleteProjectRequest(SocaPayload):
-    project_name: Optional[str] = Field(default=None)
-    project_id: Optional[str] = Field(default=None)
+    project_name: Optional[str]
+    project_id: Optional[str]
 
 
 class DeleteProjectResult(SocaPayload):
@@ -79,13 +78,13 @@ class ListProjectsRequest(SocaListingPayload):
 
 
 class ListProjectsResult(SocaListingPayload):
-    listing: Optional[List[Project]] = Field(default=None)
+    listing: Optional[List[Project]]
 
 
 # Projects.EnableProject
 class EnableProjectRequest(SocaPayload):
-    project_name: Optional[str] = Field(default=None)
-    project_id: Optional[str] = Field(default=None)
+    project_name: Optional[str]
+    project_id: Optional[str]
 
 
 class EnableProjectResult(SocaPayload):
@@ -94,8 +93,8 @@ class EnableProjectResult(SocaPayload):
 
 # Projects.DisableProject
 class DisableProjectRequest(SocaPayload):
-    project_name: Optional[str] = Field(default=None)
-    project_id: Optional[str] = Field(default=None)
+    project_name: Optional[str]
+    project_id: Optional[str]
 
 
 class DisableProjectResult(SocaPayload):
@@ -104,11 +103,11 @@ class DisableProjectResult(SocaPayload):
 
 # Projects.GetUserProjects
 class GetUserProjectsRequest(SocaPayload):
-    username: Optional[str] = Field(default=None)
+    username: Optional[str]
 
 
 class GetUserProjectsResult(SocaPayload):
-    projects: Optional[List[Project]] = Field(default=None)
+    projects: Optional[List[Project]]
 
 
 OPEN_API_SPEC_ENTRIES_PROJECTS = [

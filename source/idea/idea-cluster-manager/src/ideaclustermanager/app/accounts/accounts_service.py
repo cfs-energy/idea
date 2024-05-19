@@ -187,7 +187,7 @@ class AccountsService:
         if not db_group['enabled']:
             raise exceptions.soca_exception(
                 error_code=errorcodes.AUTH_GROUP_IS_DISABLED,
-                message='cannot modify a disabled group'
+                message=f'cannot modify a disabled group'
             )
 
         # do not support modification of group name or GID
@@ -316,7 +316,7 @@ class AccountsService:
         if not group['enabled']:
             raise exceptions.soca_exception(
                 error_code=errorcodes.AUTH_GROUP_IS_DISABLED,
-                message='cannot add users to a disabled user group'
+                message=f'cannot add users to a disabled user group'
             )
 
         users = []
@@ -441,7 +441,7 @@ class AccountsService:
         if not group['enabled'] and not force:
             raise exceptions.soca_exception(
                 error_code=errorcodes.AUTH_GROUP_IS_DISABLED,
-                message='cannot remove users from a disabled user group'
+                message=f'cannot remove users from a disabled user group'
             )
 
         users = []
@@ -594,27 +594,11 @@ class AccountsService:
         password = user.password
         if email_verified:
             if Utils.is_empty(password):
-                raise exceptions.invalid_params('Password is required')
-
-            user_pool_password_policy = self.user_pool.describe_password_policy()
-            # Validate password compliance versus Cognito user pool password policy
-            # Cognito: https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-settings-policies.html
-            if len(password) < user_pool_password_policy.minimum_length:
-                raise exceptions.invalid_params(f'Password should be greater than {user_pool_password_policy.minimum_length} characters')
-            elif len(password) > 256:
-                raise exceptions.invalid_params(f'Password can be up to 256 characters')
-            elif user_pool_password_policy.require_numbers and re.search('[0-9]', password) is None:
-                raise exceptions.invalid_params('Password should include at least 1 number')
-            elif user_pool_password_policy.require_uppercase and re.search('[A-Z]', password) is None:
-                raise exceptions.invalid_params('Password should include at least 1 uppercase letter')
-            elif user_pool_password_policy.require_lowercase and re.search('[a-z]', password) is None:
-                raise exceptions.invalid_params('Password should include at least 1 lowercase letter')
-            elif user_pool_password_policy.require_symbols and re.search('[\^\$\*\.\[\]{}\(\)\?"!@#%&\/\\,><\':;\|_~`=\+\-]', password) is None:
-                raise exceptions.invalid_params('Password should include at least 1 of these special characters: ^ $ * . [ ] { } ( ) ? " ! @ # % & / \ , > < \' : ; | _ ~ ` = + -')
+                raise exceptions.invalid_params('user.password is required')
         else:
-            self.logger.debug('create_user() - setting password to random value')
-            password = Utils.generate_password(8, 2, 2, 2, 2)
-            # password = None
+            self.logger.debug(f'create_user() - setting password to random value')
+            password = Utils.generate_password(8,2,2,2,2)
+            #password = None
 
         # login_shell
         login_shell = user.login_shell
@@ -634,7 +618,7 @@ class AccountsService:
 
         # gid, group name
         if self.ldap_client.is_readonly():
-            # group_name = self.group_name_helper.get_default_project_group()
+            #group_name = self.group_name_helper.get_default_project_group()
             group_name = self.group_name_helper.get_user_group(username)
         else:
             group_name = self.group_name_helper.get_user_group(username)
@@ -654,17 +638,15 @@ class AccountsService:
             password=password,
             email_verified=email_verified
         )
-
         if self.is_sso_enabled():
             self.logger.debug(f'Performing IDP Link for {username} / {email}')
             self.user_pool.admin_link_idp_for_user(username, email)
-
         if sudo:
             self.logger.debug(f'Performing SUDO for {username}')
             self.user_pool.admin_add_sudo_user(username)
 
         # additional groups
-        additional_groups = Utils.get_as_list(user.additional_groups, default=[])
+        additional_groups = Utils.get_as_list(user.additional_groups, [])
         self.logger.debug(f'Additional groups for {username}: {additional_groups}')
         if group_name in additional_groups:
             additional_groups.remove(group_name)
@@ -683,6 +665,7 @@ class AccountsService:
             })
         else:
             self.logger.debug(f'No need to create group for username: {username}:   Group ({group_name}) already exists.')
+
 
         created_user = self.user_dao.create_user({
             'username': username,
@@ -747,7 +730,7 @@ class AccountsService:
                                             message=f'User not found: {username}')
         if not existing_user['enabled']:
             raise exceptions.soca_exception(error_code=errorcodes.AUTH_USER_IS_DISABLED,
-                                            message='User is disabled and cannot be modified.')
+                                            message=f'User is disabled and cannot be modified.')
 
         user_updates = {
             'username': username
@@ -824,7 +807,7 @@ class AccountsService:
             raise exceptions.invalid_params('username is required')
 
         if self.is_cluster_administrator(username):
-            raise AuthUtils.invalid_operation('Cluster Administrator cannot be disabled.')
+            raise AuthUtils.invalid_operation(f'Cluster Administrator cannot be disabled.')
 
         existing_user = self.user_dao.get_user(username)
         if existing_user is None:
@@ -859,7 +842,7 @@ class AccountsService:
         log_tag = f'(DeleteUser: {username})'
 
         if self.is_cluster_administrator(username):
-            raise AuthUtils.invalid_operation('Cluster Administrator cannot be deleted.')
+            raise AuthUtils.invalid_operation(f'Cluster Administrator cannot be deleted.')
 
         user = self.user_dao.get_user(username=username)
         if user is None:
@@ -918,7 +901,6 @@ class AccountsService:
         """
         if not Utils.is_dir(self.ds_automation_dir):
             os.makedirs(self.ds_automation_dir)
-            # noinspection OsChmod
             os.chmod(self.ds_automation_dir, 0o700)
 
         temp_dir = tempfile.mkdtemp(dir=self.ds_automation_dir)
@@ -1113,6 +1095,7 @@ class AccountsService:
 
         self.user_pool.admin_global_sign_out(username=username)
 
+
     def _get_ds_group_name(self, groupname: str) -> str:
         ds_group_name = self.context.config().get_string(f'directoryservice.group_mapping.{groupname}', default=groupname)
         return ds_group_name
@@ -1169,7 +1152,7 @@ class AccountsService:
             if gid is not None:
                 self.logger.info(f'Group will use Directory Service Discovered GID: {gid}')
             else:
-                self.logger.info('Group will use AUTO GID')
+                self.logger.info(f'Group will use AUTO GID')
 
             self.create_group(
                 group=Group(
@@ -1216,7 +1199,7 @@ class AccountsService:
             if gid is not None:
                 self.logger.info(f'Group will use Directory Service Discovered GID: {gid}')
             else:
-                self.logger.info('Group will use AUTO GID')
+                self.logger.info(f'Group will use AUTO GID')
 
             self.create_group(
                 group=Group(
@@ -1258,7 +1241,7 @@ class AccountsService:
                 if gid is not None:
                     self.logger.info(f'Group will use Directory Service Discovered GID: {gid}')
                 else:
-                    self.logger.info('Group will use AUTO GID')
+                    self.logger.info(f'Group will use AUTO GID')
 
                 self.logger.info(f'creating module administrators group: {module_administrators_group_name}')
                 self.create_group(
@@ -1271,6 +1254,7 @@ class AccountsService:
                         ref=module_id
                     )
                 )
+
 
             module_users_group_name = self.group_name_helper.get_module_users_group(module_id=module_id)
             module_users_group_name_ds = None
@@ -1289,7 +1273,7 @@ class AccountsService:
                 if gid is not None:
                     self.logger.info(f'Group will use Directory Service Discovered GID: {gid}')
                 else:
-                    self.logger.info('Group will use AUTO GID')
+                    self.logger.info(f'Group will use AUTO GID')
 
                 self.create_group(
                     group=Group(

@@ -17,12 +17,11 @@ __all__ = (
 from ideadatamodel import SocaPayload
 
 from typing import Optional, Dict
-from pydantic import Field
 
 
 class OpenSearchQueryRequest(SocaPayload):
-    data: Optional[Dict] = Field(default=None)
+    data: Optional[Dict]
 
 
 class OpenSearchQueryResult(SocaPayload):
-    data: Optional[Dict] = Field(default=None)
+    data: Optional[Dict]

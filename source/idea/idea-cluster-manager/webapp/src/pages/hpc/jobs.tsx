@@ -332,7 +332,7 @@ class Jobs extends Component<JobsProps, JobsState> {
                                 <ColumnLayout columns={3} variant="text-grid">
                                     <KeyValue title="State" value={selected().state}/>
                                     <KeyValue title="Job Id" value={selected().job_id}/>
-                                    <KeyValue title="Job Group" value={selected().job_group} clipboard={true}/>
+                                    <KeyValue title="Job Group" value={selected().job_group}/>
                                     <KeyValue title="Queue" value={selected().queue}/>
                                     <KeyValue title="Queue Type" value={selected().queue_type}/>
                                     <KeyValue title="Scaling Mode" value={selected().scaling_mode}/>
@@ -342,7 +342,7 @@ class Jobs extends Component<JobsProps, JobsState> {
                                     <KeyValue title="Queue Time" value={selected().queue_time} type="date"/>
                                     <KeyValue title="Start Time" value={selected().start_time} type="date"/>
                                     <KeyValue title="End Time" value={selected().end_time} type="date"/>
-                                    <KeyValue title="Comment" value={selected().comment} clipboard={true}/>
+                                    <KeyValue title="Comment" value={selected().comment}/>
                                 </ColumnLayout>
                             )
                         },
@@ -353,7 +353,7 @@ class Jobs extends Component<JobsProps, JobsState> {
                                 <ColumnLayout columns={2} variant="text-grid">
                                     <KeyValueGroup title="Instance Info">
                                         <KeyValue title="Base OS" value={jobParams().base_os}/>
-                                        <KeyValue title="Instance AMI" value={jobParams().instance_ami} clipboard={true}/>
+                                        <KeyValue title="Instance AMI" value={jobParams().instance_ami}/>
                                         <KeyValue title="Instance Types" value={jobParams().instance_types}/>
                                         <KeyValue title="Keep EBS Volumes" value={jobParams().keep_ebs_volumes}/>
                                         <KeyValue title="Root Storage Size" value={jobParams().root_storage_size} type="memory"/>
@@ -363,8 +363,8 @@ class Jobs extends Component<JobsProps, JobsState> {
                                     </KeyValueGroup>
 
                                     <KeyValueGroup title="Network and Security">
-                                        <KeyValue title="Subnet Ids" value={jobParams().subnet_ids} clipboard={true}/>
-                                        <KeyValue title="Security Groups" value={jobParams().security_groups} clipboard={true}/>
+                                        <KeyValue title="Subnet Ids" value={jobParams().subnet_ids}/>
+                                        <KeyValue title="Security Groups" value={jobParams().security_groups}/>
                                         <KeyValue title="Instance Profile" value={jobParams().instance_profile}/>
                                         <KeyValue title="Enable Placement Group" value={jobParams().enable_placement_group}/>
                                     </KeyValueGroup>

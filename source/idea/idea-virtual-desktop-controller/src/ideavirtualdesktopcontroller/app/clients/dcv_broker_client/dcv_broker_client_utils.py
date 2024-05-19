@@ -107,7 +107,7 @@ class DCVBrokerClientUtils:
 
     @staticmethod
     def get_storage_root_for_base_os(base_os: VirtualDesktopBaseOS, owner) -> str:
-        if base_os in (VirtualDesktopBaseOS.AMAZON_LINUX2, VirtualDesktopBaseOS.CENTOS7, VirtualDesktopBaseOS.RHEL7, VirtualDesktopBaseOS.RHEL8, VirtualDesktopBaseOS.RHEL9, VirtualDesktopBaseOS.ROCKY8, VirtualDesktopBaseOS.ROCKY9):
+        if base_os in (VirtualDesktopBaseOS.AMAZON_LINUX2, VirtualDesktopBaseOS.CENTOS7, VirtualDesktopBaseOS.RHEL7):
             return f'/data/home/{owner}/storage-root'
 
         return f'C:\\session-storage\\{owner}'
@@ -115,7 +115,7 @@ class DCVBrokerClientUtils:
     def get_commands_to_execute_for_resuming_session(self, session: VirtualDesktopSession) -> List[str]:
         storage_root = DCVBrokerClientUtils.get_storage_root_for_base_os(session.software_stack.base_os, session.owner)
         command_list = []
-        permissions_content = self._session_permission_utils.generate_permissions_for_session(session, for_broker=False)
+        permissions_content = self._session_permission_utils.generate_permissions_for_session(session, False)
 
         if session.software_stack.base_os == VirtualDesktopBaseOS.WINDOWS:
             dcv_command = f'cmd.exe /c "`"C:\\Program Files\\NICE\\DCV\\Server\\bin\\dcv.exe`" create-session ' \

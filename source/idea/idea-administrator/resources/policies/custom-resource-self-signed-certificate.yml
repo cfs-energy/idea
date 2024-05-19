@@ -27,7 +27,7 @@ Statement:
       - kms:GenerateDataKey
       - kms:Decrypt
     Resource:
-      - '{{ context.arns.kms_secretsmanager_key_arn }}'
+      - '{{ context.arns.kms_key_arn }}'
     Effect: Allow
     {%- endif %}
 
@@ -39,4 +39,4 @@ Statement:
       - secretsmanager:TagResource
     Resource: '*'
     Effect: Allow
-    Sid: SecretsManagerPermissions
+    Sid: SecretManagerPermissions

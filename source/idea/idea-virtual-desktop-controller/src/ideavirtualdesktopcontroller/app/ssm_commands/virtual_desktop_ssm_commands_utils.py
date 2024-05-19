@@ -60,7 +60,7 @@ class VirtualDesktopSSMCommandsUtils:
         response = self._ssm_client.send_command(
             InstanceIds=[instance_id],
             DocumentName='AWS-RunPowerShellScript',
-            Comment='Enabling userdata execution for Windows EC2 Instance',
+            Comment=f'Enabling userdata execution for Windows EC2 Instance',
             Parameters={'commands': ['Unregister-ScheduledTask -TaskName "Amazon Ec2 Launch - Instance Initialization" -Confirm$False']},
             ServiceRoleArn=self.context.config().get_string('virtual-desktop-controller.ssm_commands_pass_role_arn', required=True),
             NotificationConfig={
@@ -93,7 +93,7 @@ class VirtualDesktopSSMCommandsUtils:
         response = self._ssm_client.send_command(
             InstanceIds=[instance_id],
             DocumentName='AWS-RunPowerShellScript',
-            Comment='Enabling userdata execution for Windows EC2 Instance',
+            Comment=f'Enabling userdata execution for Windows EC2 Instance',
             Parameters={'commands': ['C:\\ProgramData\\Amazon\\EC2-Windows\\Launch\\Scripts\\InitializeInstance.ps1 -Schedule']},
             ServiceRoleArn=self.context.config().get_string('virtual-desktop-controller.ssm_commands_pass_role_arn', required=True),
             NotificationConfig={

@@ -284,7 +284,7 @@ class Queues extends Component<QueuesProps, QueuesState> {
                                     <KeyValue title="Queues" value={selected().queues}/>
                                     <KeyValue title="Is Enabled?" value={selected().enabled}/>
                                     <KeyValue title="Queue Mode" value={selected().queue_mode}/>
-                                    {!Utils.asBoolean(selected().keep_forever) && <KeyValue title="Scaling Mode" value={selected().scaling_mode}/>}
+                                    <KeyValue title="Scaling Mode" value={selected().scaling_mode}/>
                                     <KeyValue title="Terminate When Idle" value={selected().terminate_when_idle} suffix="minutes"/>
                                     <KeyValue title="Keep Forever?" value={selected().keep_forever} type="boolean"/>
                                 </ColumnLayout>

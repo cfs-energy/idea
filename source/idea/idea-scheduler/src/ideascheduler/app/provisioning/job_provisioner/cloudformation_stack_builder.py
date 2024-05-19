@@ -168,23 +168,12 @@ class CloudFormationStackBuilder:
             Key=bootstrap_package_key
         )
 
-        https_proxy = self.context.config().get_string('cluster.network.https_proxy', required=False, default='')
-        no_proxy = self.context.config().get_string('cluster.network.no_proxy', required=False, default='')
-        proxy_config = {}
-        if Utils.is_not_empty(https_proxy):
-            proxy_config = {
-                    'http_proxy': https_proxy,
-                    'https_proxy': https_proxy,
-                    'no_proxy': no_proxy
-                    }
-
         return BootstrapUserDataBuilder(
             aws_region=self.context.aws().aws_region(),
             bootstrap_package_uri=bootstrap_package_uri,
             install_commands=[
                 '/bin/bash compute-node/setup.sh'
             ],
-            proxy_config=proxy_config,
             base_os=base_os
         ).build()
 
@@ -360,45 +349,27 @@ class CloudFormationStackBuilder:
             )
 
         if self.job.params.enable_efa_support:
-            _max_efa_interfaces: int = Utils.get_as_int(
-                self.context.aws_util().get_instance_efa_max_interfaces_supported(instance_type=launch_template_data.InstanceType),
-                default=0
-            )
-            self.logger.debug(f"EFA requested - determined Max EFA interfaces for instance {launch_template_data.InstanceType}: {_max_efa_interfaces}")
-
             launch_template_data.NetworkInterfaces = []
-            _nci: int = 0  # NetworkCardIndex
-            for _i in range(0, _max_efa_interfaces):
-                self.logger.debug(f"Adding EFA interface #{_i} - NetworkCardIndex: {_nci}")
-                launch_template_data.NetworkInterfaces.append(
-                    NetworkInterfaces(
-                        InterfaceType='efa',
-                        DeleteOnTermination=True,
-                        DeviceIndex=1 if _i > 0 else 0,
-                        NetworkCardIndex=_nci,
-                        Groups=self.job.params.security_groups
-                    )
-                )
-                _nci += 1
+            launch_template_data.NetworkInterfaces.append(NetworkInterfaces(
+                InterfaceType='efa',
+                DeleteOnTermination=True,
+                DeviceIndex=0,
+                Groups=self.job.params.security_groups,
+            ))
         else:
             launch_template_data.SecurityGroupIds = self.job.params.security_groups
 
         user_data = self.build_user_data()
         launch_template_data.UserData = Base64(Sub(user_data))
 
-        kms_key_id = self.context.config().get_string('cluster.ebs.kms_key_id', required=False, default=None)
-        if kms_key_id is None:
-            kms_key_id = 'alias/aws/ebs'
-
         launch_template_data.BlockDeviceMappings = [
             LaunchTemplateBlockDeviceMapping(
                 DeviceName=Utils.get_ec2_block_device_name(base_os=self.job.params.base_os),
                 Ebs=EBSBlockDevice(
                     VolumeSize=self.job.params.root_storage_size.int_val(),
-                    VolumeType=constants.DEFAULT_VOLUME_TYPE_COMPUTE,
+                    VolumeType='gp3',
                     DeleteOnTermination=not self.job.params.keep_ebs_volumes,
-                    Encrypted=constants.DEFAULT_VOLUME_ENCRYPTION_COMPUTE,
-                    KmsKeyId=kms_key_id
+                    Encrypted=True
                 )
             )
         ]
@@ -410,11 +381,10 @@ class CloudFormationStackBuilder:
                     DeviceName='/dev/xvdbx',
                     Ebs=EBSBlockDevice(
                         VolumeSize=self.job.params.scratch_storage_size.int_val(),
-                        VolumeType=Utils.get_as_string(constants.DEFAULT_VOLUME_TYPE_SCRATCH, default='io1') if iops > 0 else Utils.get_as_string(constants.DEFAULT_VOLUME_TYPE_COMPUTE, default='gp3'),
+                        VolumeType='io1' if iops > 0 else 'gp3',
                         Iops=iops if iops > 0 else Ref('AWS::NoValue'),
                         DeleteOnTermination=not self.job.params.keep_ebs_volumes,
-                        Encrypted=Utils.get_as_bool(constants.DEFAULT_VOLUME_ENCRYPTION_COMPUTE, default=True),
-                        KmsKeyId=kms_key_id
+                        Encrypted=True
                     )
                 )
             )
@@ -445,7 +415,6 @@ class CloudFormationStackBuilder:
     def build_fsx_lustre(self):
         fsx_lustre = FileSystem('FSxForLustre')
         fsx_lustre.FileSystemType = 'LUSTRE'
-        fsx_lustre.FileSystemTypeVersion = self.context.config().get_string('cluster.aws.fsx_lustre_version', required=False, default='2.15')
         fsx_lustre.StorageCapacity = self.job.params.fsx_lustre.size.int_val()
         fsx_lustre.SecurityGroupIds = self.job.params.security_groups
         fsx_lustre.SubnetIds = self.job.params.subnet_ids
@@ -616,6 +585,6 @@ class CloudFormationStackBuilder:
         except Exception as e:
             raise exceptions.SocaException(
                 error_code=errorcodes.CLOUDFORMATION_STACK_BUILDER_FAILED,
-                message='cloudformation stack builder failed',
+                message=f'cloudformation stack builder failed',
                 exc=e
             )

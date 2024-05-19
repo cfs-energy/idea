@@ -66,7 +66,7 @@ class HpcSchedulerSettings extends Component<HpcSchedulerSettingsProps, HpcSched
         }
 
         const getSchedulerSwaggerEditorUrl = () => {
-            return `https://editor-next.swagger.io/?url=${getSchedulerOpenAPISpecUrl()}`
+            return `https://editor.swagger.io/?url=${getSchedulerOpenAPISpecUrl()}`
         }
 
         return (

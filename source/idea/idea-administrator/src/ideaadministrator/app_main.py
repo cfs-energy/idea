@@ -395,13 +395,10 @@ def config_update(cluster_name: str, aws_profile: str, aws_region: str, force: b
             else:
                 break
 
-    local_config_dynamodb_kms_key_id = local_config.get_string(f'{cluster_module_id}.dynamodb.kms_key_id', required=False, default=None)
-
     cluster_config_db = ClusterConfigDB(
         cluster_name=config_generator.get_cluster_name(),
         aws_region=config_generator.get_aws_region(),
         aws_profile=config_generator.get_aws_profile(),
-        dynamodb_kms_key_id=local_config_dynamodb_kms_key_id,
         create_database=True
     )
     if config_dir:
@@ -803,11 +800,8 @@ def delete_config(cluster_name: str, aws_profile: str, aws_region: str, config_k
 @click.option('--aws-profile', help='AWS Profile Name')
 @click.option('--aws-region', required=True, help='AWS Region')
 @click.option('--termination-protection', default=True, help='Set termination protection to true or false. Default: true')
-@click.option('--custom-permissions-boundary', default='', help='Name of a custom permissions boundary to pass to CDK (Default to none)')
-@click.option('--cloudformation-execution-policies', default='', help='Customize CDK CloudFormation execution policies')
-@click.option('--public-access-block-configuration', default=True, help='Include S3 Block Public Access configuration for CDK staging bucket. Set to false for restricted S3 environments.')
 @click.option('--module-set', help='Name of the ModuleSet. Default: default')
-def bootstrap_cluster(cluster_name: str, aws_profile: str, aws_region: str, termination_protection: bool, module_set: str, custom_permissions_boundary: str, cloudformation_execution_policies: str, public_access_block_configuration: bool):
+def bootstrap_cluster(cluster_name: str, aws_profile: str, aws_region: str, termination_protection: bool, module_set: str):
     """
     bootstrap cluster
     """
@@ -828,10 +822,7 @@ def bootstrap_cluster(cluster_name: str, aws_profile: str, aws_region: str, term
             cluster_name=cluster_name,
             aws_region=aws_region,
             aws_profile=aws_profile,
-            termination_protection=termination_protection,
-            custom_permissions_boundary=custom_permissions_boundary,
-            cloudformation_execution_policies=cloudformation_execution_policies,
-            public_access_block_configuration=public_access_block_configuration
+            termination_protection=termination_protection
         ).bootstrap_cluster(cluster_bucket=cluster_s3_bucket)
 
 
@@ -876,7 +867,7 @@ def deploy(cluster_name: str, aws_region: str, aws_profile: str, termination_pro
 
     if all_modules:
         if len(module_ids_to_deploy) > 1:
-            raise exceptions.invalid_params('fatal error - use of "all" deployment must be the only requested module')
+            raise exceptions.invalid_params(f'fatal error - use of "all" deployment must be the only requested module')
         module_ids_to_deploy = None
 
     DeploymentHelper(
@@ -1242,7 +1233,7 @@ def show_connection_info(cluster_name: str, aws_region: str, aws_profile: str, m
                     base_os = cluster_config.get_string(f'{module_id}.base_os', required=True)
                     ec2_username = AdministratorUtils.get_ec2_username(base_os)
                     connection_info_entries.append({
-                        'key': 'Bastion Host (SSH Access)',
+                        'key': f'Bastion Host (SSH Access)',
                         'value': f'ssh -i ~/.ssh/{key_pair_name}.pem {ec2_username}@{ip_address}',
                         'weight': 1
                     })
@@ -1252,7 +1243,7 @@ def show_connection_info(cluster_name: str, aws_region: str, aws_profile: str, m
                     aws_partition = cluster_config.get_string('cluster.aws.partition', required=True)
                     connection_manager_url = AdministratorUtils.get_session_manager_url(aws_partition, aws_region, instance_id)
                     connection_info_entries.append({
-                        'key': 'Bastion Host (Session Manager URL)',
+                        'key': f'Bastion Host (Session Manager URL)',
                         'value': connection_manager_url,
                         'weight': 2
                     })
@@ -1334,7 +1325,7 @@ def quick_setup(ctx, values_file: str, existing_resources: bool, termination_pro
     ctx.invoke(list_modules, cluster_name=cluster_name, aws_region=aws_region, aws_profile=aws_profile)
 
     if not force:
-        continue_deployment = cli.prompt('Are you sure you want to deploy above IDEA modules with applicable configuration settings?', default=True)
+        continue_deployment = cli.prompt(f'Are you sure you want to deploy above IDEA modules with applicable configuration settings?', default=True)
         if not continue_deployment:
             cli.info('Deployment aborted!')
             raise SystemExit
@@ -1430,7 +1421,7 @@ def delete_backups(cluster_name: str, aws_region: str, aws_profile: str, force: 
     context = SocaCliContext()
     confirm_delete_backups = force
     if not force:
-        confirm_delete_backups = context.prompt(f"Are you sure you want to delete all the backup recovery points for cluster {cluster_name} ?")
+        confirm_delete_backups = context.prompt(f'Are you sure you want to delete all the backup recovery points?')
 
     if not confirm_delete_backups:
         return
@@ -1442,8 +1433,6 @@ def delete_backups(cluster_name: str, aws_region: str, aws_profile: str, force: 
         delete_bootstrap=False,
         delete_databases=False,
         delete_backups=True,
-        delete_cloudwatch_logs=False,
-        delete_all=False,
         force=force
     ).delete_backup_vault_recovery_points()
 
@@ -1799,7 +1788,7 @@ def ds_create_service_secrets(cluster_name: str, aws_region: str, aws_profile: s
                 SocaUserInputParamMetadata(
                     name='purpose',
                     title='Purpose',
-                    description="Enter account purpose",
+                    description=f"Enter account purpose",
                     data_type='str',
                     param_type=SocaUserInputParamType.SELECT,
                     multiple=False,
@@ -1850,6 +1839,10 @@ def ds_create_service_secrets(cluster_name: str, aws_region: str, aws_profile: s
     print(f'Password Secret ARN: {password_secret_arn}')
 
 
+
+
+
+
 @shared_storage.command('add-file-system', context_settings=CLICK_SETTINGS)
 @click.option('--cluster-name', help='Cluster Name')
 @click.option('--aws-region', required=True, help='AWS Region')
@@ -1895,7 +1888,6 @@ main.add_command(show_connection_info)
 main.add_command(quick_setup_help)
 main.add_command(quick_setup)
 main.add_command(delete_cluster)
-main.add_command(delete_backups)
 main.add_command(patch_module)
 main.add_command(check_cluster_status)
 main.add_command(about)

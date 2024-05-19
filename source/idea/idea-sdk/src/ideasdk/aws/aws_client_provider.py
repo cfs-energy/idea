@@ -17,7 +17,6 @@ from ideasdk.utils import Utils
 
 from threading import RLock
 from typing import List, Dict, Any, Optional, Set
-from pydantic import Field
 import botocore.exceptions
 from botocore.client import Config
 
@@ -93,18 +92,18 @@ DEFAULT_PRICING_API_REGION = 'us-east-1'
 
 
 class AwsServiceEndpoint(SocaBaseModel):
-    service_name: Optional[str] = Field(default=None)
-    endpoint_url: Optional[str] = Field(default=None)
+    service_name: Optional[str]
+    endpoint_url: Optional[str]
 
     def __str__(self):
         return f'Service: {self.service_name}, Endpoint Url: {self.endpoint_url}'
 
 
 class AWSClientProviderOptions(SocaBaseModel):
-    profile: Optional[str] = Field(default=None)
-    region: Optional[str] = Field(default=None)
-    pricing_api_region: Optional[str] = Field(default=None)
-    endpoints: Optional[List[AwsServiceEndpoint]] = Field(default=None)
+    profile: Optional[str]
+    region: Optional[str]
+    pricing_api_region: Optional[str]
+    endpoints: Optional[List[AwsServiceEndpoint]]
 
     @staticmethod
     def default():
@@ -234,7 +233,7 @@ class AwsClientProvider(AwsClientProviderProtocol):
 
     def are_credentials_expired(self) -> bool:
         credentials = self._session.get_credentials()
-        if credentials.method == 'shared-credentials-file' or credentials.method == 'env':
+        if credentials.method == 'shared-credentials-file':
             try:
                 self.aws_account_id()
                 return False

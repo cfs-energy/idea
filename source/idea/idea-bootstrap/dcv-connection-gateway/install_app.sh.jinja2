@@ -22,17 +22,16 @@ APP_PACKAGE_DOWNLOAD_URI="${1}"
 APP_NAME="dcv-connection-gateway"
 
 AWS=$(command -v aws)
-INSTANCE_REGION=${AWS_REGION}
+INSTANCE_REGION=$(instance_region)
 S3_BUCKET=$(echo ${APP_PACKAGE_DOWNLOAD_URI} | cut -f3 -d/)
 
 if [[ ${INSTANCE_REGION} =~ ^us-gov-[a-z]+-[0-9]+$ ]]; then
-  S3_BUCKET_REGION=$(curl -s --head https://${S3_BUCKET}.s3.us-gov-west-1.amazonaws.com | grep bucket-region | awk '{print $2}' | tr -d '\r\n')
-  $AWS --region ${S3_BUCKET_REGION} s3 cp "${APP_PACKAGE_DOWNLOAD_URI}" "${BOOTSTRAP_DIR}/"
+  S3_BUCKET_REGION=$(curl -s --head ${S3_BUCKET}.s3.us-gov-west-1.amazonaws.com | grep bucket-region | awk '{print $2}' | tr -d '\r\n')
 else
-  #S3_BUCKET_REGION=$(curl -s --head https://${S3_BUCKET}.s3.us-east-1.amazonaws.com | grep bucket-region | awk '{print $2}' | tr -d '\r\n')
-  $AWS --region ${INSTANCE_REGION} s3 cp "${APP_PACKAGE_DOWNLOAD_URI}" "${BOOTSTRAP_DIR}/"
+  S3_BUCKET_REGION=$(curl -s --head ${S3_BUCKET}.s3.us-east-1.amazonaws.com | grep bucket-region | awk '{print $2}' | tr -d '\r\n')
 fi
 
+$AWS --region ${S3_BUCKET_REGION} s3 cp "${APP_PACKAGE_DOWNLOAD_URI}" "${BOOTSTRAP_DIR}/"
 PACKAGE_ARCHIVE=$(basename "${APP_PACKAGE_DOWNLOAD_URI}")
 PACKAGE_NAME="${PACKAGE_ARCHIVE%.tar.gz*}"
 APP_DIR=${IDEA_APP_DEPLOY_DIR}/${APP_NAME}
@@ -43,20 +42,13 @@ mkdir -p ${APP_DIR}
 tar -xvf ${BOOTSTRAP_DIR}/${PACKAGE_ARCHIVE} -C ${APP_DIR}
 
 DCV_GPG_KEY="{{ context.config.get_string('global-settings.package_config.dcv.gpg_key', required=True) }}"
-{%- if context.base_os in ('amazonlinux2', 'centos7', 'rhel7') %}
 DCV_CONNECTION_GATEWAY_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.connection_gateway.x86_64.linux.al2_rhel_centos7.version', required=True) }}"
 DCV_CONNECTION_GATEWAY_URL="{{ context.config.get_string('global-settings.package_config.dcv.connection_gateway.x86_64.linux.al2_rhel_centos7.url', required=True) }}"
 DCV_CONNECTION_GATEWAY_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.connection_gateway.x86_64.linux.al2_rhel_centos7.sha256sum', required=True) }}"
-{%- elif context.base_os in ('rhel8', 'rocky8') %}
-DCV_CONNECTION_GATEWAY_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.connection_gateway.x86_64.linux.rhel_centos_rocky8.version', required=True) }}"
-DCV_CONNECTION_GATEWAY_URL="{{ context.config.get_string('global-settings.package_config.dcv.connection_gateway.x86_64.linux.rhel_centos_rocky8.url', required=True) }}"
-DCV_CONNECTION_GATEWAY_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.connection_gateway.x86_64.linux.rhel_centos_rocky8.sha256sum', required=True) }}"
-{%- endif %}
 
 INTERNAL_ALB_ENDPOINT="{{ context.config.get_cluster_internal_endpoint() }}"
 GATEWAY_TO_BROKER_PORT="{{ context.config.get_string("virtual-desktop-controller.dcv_broker.gateway_communication_port", required=True) }}"
 
-{%- if context.base_os in ('amazonlinux2', 'centos7', 'rhel7') %}
 DCV_SERVER_X86_64_URL="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.al2_rhel_centos7.url', required=True) }}"
 DCV_SERVER_X86_64_TGZ="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.al2_rhel_centos7.tgz', required=True) }}"
 DCV_SERVER_X86_64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.al2_rhel_centos7.version', required=True) }}"
@@ -66,17 +58,6 @@ DCV_SERVER_AARCH64_URL="{{ context.config.get_string('global-settings.package_co
 DCV_SERVER_AARCH64_TGZ="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.al2_rhel_centos7.tgz', required=True) }}"
 DCV_SERVER_AARCH64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.al2_rhel_centos7.version', required=True) }}"
 DCV_SERVER_AARCH64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.al2_rhel_centos7.sha256sum', required=True) }}"
-{%- elif context.base_os in ('rhel8', 'rocky8') %}
-DCV_SERVER_X86_64_URL="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.rhel_centos_rocky8.url', required=True) }}"
-DCV_SERVER_X86_64_TGZ="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.rhel_centos_rocky8.tgz', required=True) }}"
-DCV_SERVER_X86_64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.rhel_centos_rocky8.version', required=True) }}"
-DCV_SERVER_X86_64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.rhel_centos_rocky8.sha256sum', required=True) }}"
-
-DCV_SERVER_AARCH64_URL="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.rhel_centos_rocky8.url', required=True) }}"
-DCV_SERVER_AARCH64_TGZ="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.rhel_centos_rocky8.tgz', required=True) }}"
-DCV_SERVER_AARCH64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.rhel_centos_rocky8.version', required=True) }}"
-DCV_SERVER_AARCH64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.rhel_centos_rocky8.sha256sum', required=True) }}"
-{%- endif %}
 
 DCV_WEB_VIEWER_INSTALL_LOCATION="/usr/share/dcv/www"
 
@@ -140,7 +121,7 @@ function install_dcv_web_viewer() {
   pushd nice-dcv-${DCV_SERVER_VERSION}
   {% if context.base_os == 'amazonlinux2' -%}
     rpm -ivh nice-dcv-web-viewer-*.${machine}.rpm
-  {% elif context.base_os in ('rhel7', 'centos7', 'rhel8', 'rocky8') -%}
+  {% elif context.base_os in ('rhel7', 'centos7') -%}
     rpm -ivh nice-dcv-web-viewer-*.${machine}.rpm --nodeps
   {% endif -%}
   popd
@@ -186,18 +167,14 @@ function configure_dcv_connection_gateway() {
 level = \"trace\"
 
 [gateway]
-quic-listen-endpoints = [\"0.0.0.0:8443\", \"[::]:8443\"]
-web-listen-endpoints = [\"0.0.0.0:8443\", \"[::]:8443\"]
+quic-listen-endpoints = [\"0.0.0.0:8443\"]
+web-listen-endpoints = [\"0.0.0.0:8443\", \"[::]:8445\"]
 cert-file = \"/etc/dcv-connection-gateway/certs/default_cert.pem\"
 cert-key-file = \"/etc/dcv-connection-gateway/certs/default_key_pkcs8.pem\"
 
 [health-check]
 bind-addr = \"::\"
 port = 8989
-
-[metrics-reporter-statsd]
-host = \"127.0.0.1\"
-port = 8125
 
 [dcv]
 tls-strict = false

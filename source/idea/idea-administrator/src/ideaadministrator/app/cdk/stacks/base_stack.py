@@ -78,7 +78,7 @@ class IdeaBaseStack(SocaBaseConstruct):
             termination_protection=termination_protection,
             synthesizer=cdk.DefaultStackSynthesizer(
                 qualifier=cdk_toolkit_qualifier,
-                bucket_prefix='cdk/',
+                bucket_prefix=f'cdk/',
                 file_assets_bucket_name=cluster_s3_bucket
             )
         )

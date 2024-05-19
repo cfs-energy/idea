@@ -18,21 +18,20 @@ from ideadatamodel.model_utils import ModelUtils
 
 from typing import Optional, List
 from datetime import datetime
-from pydantic import Field
 
 
 class Project(SocaBaseModel):
-    project_id: Optional[str] = Field(default=None)
-    name: Optional[str] = Field(default=None)
-    title: Optional[str] = Field(default=None)
-    description: Optional[str] = Field(default=None)
-    enabled: Optional[bool] = Field(default=None)
-    ldap_groups: Optional[List[str]] = Field(default=None)
-    enable_budgets: Optional[bool] = Field(default=None)
-    budget: Optional[AwsProjectBudget] = Field(default=None)
-    tags: Optional[List[SocaKeyValue]] = Field(default=None)
-    created_on: Optional[datetime] = Field(default=None)
-    updated_on: Optional[datetime] = Field(default=None)
+    project_id: Optional[str]
+    name: Optional[str]
+    title: Optional[str]
+    description: Optional[str]
+    enabled: Optional[bool]
+    ldap_groups: Optional[List[str]]
+    enable_budgets: Optional[bool]
+    budget: Optional[AwsProjectBudget]
+    tags: Optional[List[SocaKeyValue]]
+    created_on: Optional[datetime]
+    updated_on: Optional[datetime]
 
     def is_enabled(self) -> bool:
         return ModelUtils.get_as_bool(self.enabled, False)

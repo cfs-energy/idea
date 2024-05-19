@@ -79,24 +79,8 @@ class JobTestCase:
             self.status = 'FAIL'
             self.context.error(f'Failed to Submit Job for TestCaseId: {self.test_case_id} - ERROR: Exhausted all potential subnets.')
 
-        if ('_placement_group_' in self.test_case_id) or ('_fsx_' in self.test_case_id):
-            subnet_id = random.choice(_potential_subnets)
-        else:
-            subnet_id = '+'.join(_potential_subnets)
-
-        if '_efa' in self.test_case_id:
-            # Don't specify a subnet for EFA test case as it needs 1 node. Let the ASG choose the subnet
-            job_script = f"""#!/bin/bash
-#PBS -N {self.test_case_id}
-#PBS -q {self.queue}
-#PBS -l {self.resources}
-#PBS -P default
-mkdir -p {self.output_folder}
-{self.command} > {self.output_file}
-
-"""
-        else:
-            job_script = f"""#!/bin/bash
+        subnet_id = random.choice(_potential_subnets)
+        job_script = f"""#!/bin/bash
 #PBS -N {self.test_case_id}
 #PBS -q {self.queue}
 #PBS -l {self.resources}
@@ -104,8 +88,7 @@ mkdir -p {self.output_folder}
 #PBS -P default
 mkdir -p {self.output_folder}
 {self.command} > {self.output_file}
-"""
-
+        """
         try:
             result = self.context.get_scheduler_client().invoke_alt(
                 namespace='Scheduler.SubmitJob',
@@ -342,4 +325,5 @@ class JobSubmissionHelper:
         for test_case_id in self.job_test_cases:
             test_case = self.job_test_cases[test_case_id]
             print('{:100s} {:10s} {:20s}'.format(test_case_id, test_case.get_job_id(), test_case.status))
+
 

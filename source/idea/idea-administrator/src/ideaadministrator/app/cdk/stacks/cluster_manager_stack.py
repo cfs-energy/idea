@@ -33,8 +33,7 @@ from aws_cdk import (
     aws_cognito as cognito,
     aws_sqs as sqs,
     aws_elasticloadbalancingv2 as elbv2,
-    aws_autoscaling as asg,
-    aws_kms as kms
+    aws_autoscaling as asg
 )
 import constructs
 
@@ -192,9 +191,8 @@ class ClusterManagerStack(IdeaBaseStack):
             fifo=True,
             content_based_deduplication=True,
             encryption_master_key=kms_key_id,
-            visibility_timeout=cdk.Duration.seconds(constants.SQS_VISIBILITY_TASKS),
             dead_letter_queue=sqs.DeadLetterQueue(
-                max_receive_count=Utils.get_as_int(constants.SQS_MAX_RECEIVE_COUNT_CLUSTER_TASKS, default=16),
+                max_receive_count=30,
                 queue=SQSQueue(
                     self.context, 'cluster-tasks-sqs-queue-dlq', self.stack,
                     queue_name=f'{self.cluster_name}-{self.module_id}-tasks-dlq.fifo',
@@ -214,9 +212,8 @@ class ClusterManagerStack(IdeaBaseStack):
             fifo=True,
             content_based_deduplication=True,
             encryption_master_key=kms_key_id,
-            visibility_timeout=cdk.Duration.seconds(constants.SQS_VISIBILITY_NOTIFICATIONS),
             dead_letter_queue=sqs.DeadLetterQueue(
-                max_receive_count=Utils.get_as_int(constants.SQS_MAX_RECEIVE_COUNT_NOTIFICATIONS, default=3),
+                max_receive_count=3,
                 queue=SQSQueue(
                     self.context, 'notifications-sqs-queue-dlq', self.stack,
                     queue_name=f'{self.cluster_name}-{self.module_id}-notifications-dlq.fifo',
@@ -250,21 +247,6 @@ class ClusterManagerStack(IdeaBaseStack):
         rolling_update_min_instances_in_service = self.context.config().get_int('cluster-manager.ec2.autoscaling.rolling_update_policy.min_instances_in_service', default=1)
         rolling_update_pause_time_minutes = self.context.config().get_int('cluster-manager.ec2.autoscaling.rolling_update_policy.pause_time_minutes', default=15)
         metadata_http_tokens = self.context.config().get_string('cluster-manager.ec2.autoscaling.metadata_http_tokens', required=True)
-        https_proxy = self.context.config().get_string('cluster.network.https_proxy', required=False, default='')
-        no_proxy = self.context.config().get_string('cluster.network.no_proxy', required=False, default='')
-        proxy_config = {}
-        if Utils.is_not_empty(https_proxy):
-            proxy_config = {
-                    'http_proxy': https_proxy,
-                    'https_proxy': https_proxy,
-                    'no_proxy': no_proxy
-                    }
-        kms_key_id = self.context.config().get_string('cluster.ebs.kms_key_id', required=False, default=None)
-        if kms_key_id is not None:
-            kms_key_arn = self.get_kms_key_arn(kms_key_id)
-            ebs_kms_key = kms.Key.from_key_arn(scope=self.stack, id=f'ebs-kms-key', key_arn=kms_key_arn)
-        else:
-            ebs_kms_key = kms.Alias.from_alias_name(scope=self.stack, id=f'ebs-kms-key-default', alias_name='alias/aws/ebs')
 
         if is_public:
             vpc_subnets = ec2.SubnetSelection(
@@ -276,8 +258,6 @@ class ClusterManagerStack(IdeaBaseStack):
             )
 
         block_device_name = Utils.get_ec2_block_device_name(base_os)
-        block_device_type_string = self.context.config().get_string(f'cluster-manager.ec2.autoscaling.volume_type', default='gp3')
-        block_device_type_volumetype = ec2.EbsDeviceVolumeType.GP3 if block_device_type_string == 'gp3' else ec2.EbsDeviceVolumeType.GP2
 
         user_data = BootstrapUserDataBuilder(
             aws_region=self.aws_region,
@@ -285,7 +265,6 @@ class ClusterManagerStack(IdeaBaseStack):
             install_commands=[
                 '/bin/bash cluster-manager/setup.sh'
             ],
-            proxy_config=proxy_config,
             base_os=base_os
         ).build()
 
@@ -301,10 +280,8 @@ class ClusterManagerStack(IdeaBaseStack):
             block_devices=[ec2.BlockDevice(
                 device_name=block_device_name,
                 volume=ec2.BlockDeviceVolume(ebs_device=ec2.EbsDeviceProps(
-                    encrypted=True,
-                    kms_key=ebs_kms_key,
                     volume_size=volume_size,
-                    volume_type=block_device_type_volumetype
+                    volume_type=ec2.EbsDeviceVolumeType.GP3
                 ))
             )],
             role=self.cluster_manager_role,

@@ -102,7 +102,7 @@ class ExistingVpc(SocaBaseConstruct):
         private_subnet_ids = self.get_private_subnet_ids()
         if Utils.is_empty(private_subnet_ids):
             self._private_subnets = []
-            return self._private_subnets
+            return self._public_subnets
 
         result = []
         if self.vpc.private_subnets is not None:
@@ -113,6 +113,7 @@ class ExistingVpc(SocaBaseConstruct):
             for subnet in self.vpc.isolated_subnets:
                 if subnet.subnet_id in private_subnet_ids:
                     result.append(subnet)
+
         # sort based on index in private_subnets[] configuration
         result.sort(key=lambda x: private_subnet_ids.index(x.subnet_id))
 

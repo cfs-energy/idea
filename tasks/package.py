@@ -8,7 +8,6 @@
 #  or in the 'license' file accompanying this file. This file is distributed on an 'AS IS' BASIS, WITHOUT WARRANTIES
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
-import time
 
 import tasks.idea as idea
 from tasks.tools.package_tool import PackageTool
@@ -134,7 +133,6 @@ def package_all(c):
     package all components
     """
 
-    _start_packaging = time.time()
     idea.console.print_header_block('begin: package all', style='main')
 
     scheduler(c)
@@ -149,7 +147,4 @@ def package_all(c):
     make_all_archive(c)
 
     print()
-    _stop_packaging = time.time()
-    _tdiff = _stop_packaging - _start_packaging
-
-    idea.console.print_header_block(f'end: package all {time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())} (took {_tdiff:.2f}s)', style='main')
+    idea.console.print_header_block('end: package all', style='main')

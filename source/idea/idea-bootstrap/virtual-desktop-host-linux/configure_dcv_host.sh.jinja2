@@ -13,10 +13,6 @@
 
 set -x
 source /etc/environment
-if [[ -f /etc/profile.d/proxy.sh ]]; then
-    source /etc/profile.d/proxy.sh
-fi
-
 timestamp=$(date +%s)
 if [[ -f ${BOOTSTRAP_DIR}/logs/configure_dcv_host.log ]]; then
   mv ${BOOTSTRAP_DIR}/logs/configure_dcv_host.log ${BOOTSTRAP_DIR}/logs/configure_dcv_host.log.${timestamp}
@@ -157,14 +153,6 @@ rotation = 'daily'
   echo -e "idea_session_id=\"${IDEA_SESSION_ID}\"" > /etc/dcv-session-manager-agent/tags/idea_tags.toml
 }
 
-function configure_usb_remotization() {
-  echo "Searching for USB Remotization configurations..."
-  {%- for usb_info in context.config.get_list('vdc.server.usb_remotization', default=[]) %}
-    echo -en "{{ usb_info }}\n" >>/etc/dcv/usb-devices.conf
-  {%- endfor %}
-
-}
-
 function restart_x_server() {
   echo "# restart x server ..."
   sudo systemctl isolate multi-user.target
@@ -280,25 +268,25 @@ WantedBy=multi-user.target
 }
 
 function x_server_validation_command() {
-  echo $(DISPLAY=:0 XAUTHORITY=$(ps aux | grep "X.*\-auth" | grep -v grep | sed -n 's/.*-auth \([^ ]\+\).*/\1/p') xhost | grep -E "SI:localuser:dcv$|LOCAL:$" | head -n1)
+  echo $(DISPLAY=:0 XAUTHORITY=$(ps aux | grep "X.*\-auth" | grep -v grep | sed -n 's/.*-auth \([^ ]\+\).*/\1/p') xhost | grep "SI:localuser:dcv$")
 }
 
 function verify_x_server_is_up() {
   echo "# validating if x server is running ..."
   sleep 10
-  local count=0
   local output=$(x_server_validation_command)
-  while [[ "$output" != "SI:localuser:dcv" && "$output" != "LOCAL:" ]]
+  local count=0
+  while [[ ! "$output" == "SI:localuser:dcv" ]]
   do
     echo -ne "Waiting for X Server to come up.. sleeping for 10 more seconds; ${count} seconds already slept \033[0K\r"
     count=$(($count+10))
     sleep 10
+    output=$(x_server_validation_command)
     if [[ $(expr $count % 50) == 0 ]]
     then
       echo "Waited 5 times in a row. Was unsuccessful. trying to restart x server again..."
       restart_x_server
     fi
-    output=$(x_server_validation_command)
   done
   echo "x server is up an running...."
 }
@@ -313,13 +301,12 @@ install_microphone_redirect
 download_broker_certificate
 configure_dcv_host
 configure_dcv_agent
-configure_usb_remotization
+
 configure_gl
 machine=$(uname -m) #x86_64 or aarch64
-{%- if context.vars.session.type.lower() == 'console'  %}
-  # X11 does not have to be running if you use Virtual Sessions
+if [[ $machine == "x86_64" ]]; then
   start_and_validate_x_server
-{%- endif %}
+fi
 start_and_configure_dcv_service
 start_and_configure_dcv_agent_service
 

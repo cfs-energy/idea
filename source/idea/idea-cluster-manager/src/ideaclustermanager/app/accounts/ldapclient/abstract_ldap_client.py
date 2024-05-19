@@ -8,7 +8,6 @@
 #  or in the 'license' file accompanying this file. This file is distributed on an 'AS IS' BASIS, WITHOUT WARRANTIES
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
-from pydantic import Field
 
 from ideadatamodel import (
     exceptions, errorcodes, constants,
@@ -32,22 +31,22 @@ import base64
 
 
 class LdapClientOptions(SocaBaseModel):
-    uri: Optional[str] = Field(default=None)
-    domain_name: Optional[str] = Field(default=None)
-    root_username: Optional[str] = Field(default=None)
-    root_password: Optional[str] = Field(default=None)
-    root_username_secret_arn: Optional[str] = Field(default=None)
-    root_password_secret_arn: Optional[str] = Field(default=None)
-    root_username_file: Optional[str] = Field(default=None)
-    root_password_file: Optional[str] = Field(default=None)
-    connection_pool_enabled: Optional[bool] = Field(default=None)
-    connection_pool_size: Optional[int] = Field(default=None)
-    connection_retry_max: Optional[int] = Field(default=None)
-    connection_retry_delay: Optional[float] = Field(default=None)
-    connection_timeout: Optional[float] = Field(default=None)
-    ad_netbios: Optional[str] = Field(default=None)
-    directory_id: Optional[str] = Field(default=None)
-    password_max_age: Optional[float] = Field(default=None)
+    uri: Optional[str]
+    domain_name: Optional[str]
+    root_username: Optional[str]
+    root_password: Optional[str]
+    root_username_secret_arn: Optional[str]
+    root_password_secret_arn: Optional[str]
+    root_username_file: Optional[str]
+    root_password_file: Optional[str]
+    connection_pool_enabled: Optional[bool]
+    connection_pool_size: Optional[int]
+    connection_retry_max: Optional[int]
+    connection_retry_delay: Optional[float]
+    connection_timeout: Optional[float]
+    ad_netbios: Optional[str]
+    directory_id: Optional[str]
+    password_max_age: Optional[float]
 
 
 DEFAULT_LDAP_CONNECTION_POOL_SIZE = 10
@@ -55,7 +54,7 @@ DEFAULT_LDAP_CONNECTION_RETRY_MAX = 60
 DEFAULT_LDAP_CONNECTION_RETRY_DELAY = 10
 DEFAULT_LDAP_CONNECTION_TIMEOUT = 10
 DEFAULT_LDAP_ENABLE_CONNECTION_POOL = True
-DEFAULT_LDAP_PAGE_SIZE = 100
+DEFAULT_LDAP_PAGE_SIZE = 20
 DEFAULT_LDAP_PAGE_START = 0
 DEFAULT_LDAP_COOKIE = ''
 
@@ -86,28 +85,6 @@ class AbstractLDAPClient:
         self.refresh_root_username_password()
 
         # initialize pooled connection manager for LDAP to conserve resources
-        # Set any LDAP options that may be needed
-        self.logger.debug(f"Setting LDAP options..")
-        default_ldap_options = [
-            {'name': 'Referrals', 'code': ldap.OPT_REFERRALS, 'value': ldap.OPT_OFF},
-            {'name': 'Protocol Version', 'code': ldap.OPT_PROTOCOL_VERSION, 'value': ldap.VERSION3}
-        ]
-        for option in default_ldap_options:
-            self.logger.debug(f"Setting default option: {option.get('name')}({option.get('code')}) -> {option.get('value')}")
-            ldap.set_option(option.get('code'), option.get('value'))
-            self.logger.debug(f"Confirming default option: {option.get('name')}({option.get('code')}) -> {ldap.get_option(option.get('code'))}")
-
-        configured_ldap_options = self.context.config().get_list('directoryservice.ldap_options', default=[])
-        if configured_ldap_options:
-            self.logger.debug(f"Obtained LDAP options from directoryservice.ldap_options: {configured_ldap_options}")
-            for option in configured_ldap_options:
-                opt_d = dict(eval(option))
-                if isinstance(opt_d, dict):
-                    self.logger.debug(f"Setting configured option: {opt_d.get('name')}({opt_d.get('code')}) -> {opt_d.get('value')}")
-                    ldap.set_option(opt_d.get('code'), opt_d.get('value'))
-                    self.logger.debug(f"Confirming configured option: {opt_d.get('name')}({opt_d.get('code')}) -> {ldap.get_option(opt_d.get('code'))}")
-
-        self.logger.debug(f"Starting LDAP connection pool to {self.ldap_uri}")
         self.connection_manager = ConnectionManager(
             uri=self.ldap_uri,
             size=Utils.get_as_int(options.connection_pool_size, DEFAULT_LDAP_CONNECTION_POOL_SIZE),
@@ -216,7 +193,7 @@ class AbstractLDAPClient:
         all paging offsets must start with 0 for SOCA services
 
         sort_by: <attributeName>:<matchingRule>
-        e.g.
+        eg.
             1. gidNumber:integerOrderingMatch
             2. uidNumber:integerOrderingMatch
             3. cn:caseIgnoreOrderingMatch
@@ -236,7 +213,7 @@ class AbstractLDAPClient:
         trace_message = f'ldapsearch -x -b "{base}" -D "{self.ldap_root_bind}" -H {self.ldap_uri} "{filterstr}"'
         if attrlist is not None:
             trace_message = f'{trace_message} {" ".join(attrlist)}'
-        self.logger.debug(f'> {trace_message}')
+        self.logger.info(f'> {trace_message}')
         result = []
 
         # sssvlv has a limit on no. of concurrent paginated result sets per connection to manage memory.
@@ -303,7 +280,6 @@ class AbstractLDAPClient:
             constants.DIRECTORYSERVICE_AWS_MANAGED_ACTIVE_DIRECTORY,
             constants.DIRECTORYSERVICE_ACTIVE_DIRECTORY
         )
-
     def is_readonly(self) -> bool:
         return self.ds_provider in (
             constants.DIRECTORYSERVICE_ACTIVE_DIRECTORY
@@ -323,10 +299,6 @@ class AbstractLDAPClient:
         if Utils.is_not_empty(self.options.uri):
             return self.options.uri
         return 'ldap://localhost'
-
-    @property
-    def is_ldaps(self) -> bool:
-        return self.ldap_uri.startswith('ldaps://')
 
     @property
     def password_max_age(self) -> Optional[float]:
@@ -408,14 +380,10 @@ class AbstractLDAPClient:
         """
         returns an LDAP connection object bound to ROOT user from the connection pool
         """
-        res = self.connection_manager.connection(
+        return self.connection_manager.connection(
             bind=self.ldap_root_bind,
             passwd=self.ldap_root_password
         )
-        # if self.logger.isEnabledFor(logging.DEBUG):
-        #    self.logger.debug(f"LDAP CM returning conn ({res})")
-
-        return res
 
     @staticmethod
     def convert_ldap_group(ldap_group: Dict) -> Optional[Dict]:
@@ -465,6 +433,7 @@ class AbstractLDAPClient:
 
         return len(results) > 0
 
+
     @property
     @abstractmethod
     def ldap_computers_base(self) -> str:
@@ -505,11 +474,7 @@ class AbstractLDAPClient:
     def build_group_filterstr(self, group_name: str = None, username: str = None) -> str:
         filterstr = self.ldap_group_filterstr
         if group_name is not None:
-            # Check if we have a fully qualified
-            if group_name.upper().startswith('CN='):
-                filterstr = f'{filterstr}(distinguishedName={group_name})'
-            else:
-                filterstr = f'{filterstr}(cn={group_name})'
+            filterstr = f'{filterstr}(cn={group_name})'
         if username is not None:
             filterstr = f'{filterstr}(memberUid={username})'
         return f'(&{filterstr})'
@@ -539,6 +504,8 @@ class AbstractLDAPClient:
     def convert_ldap_user(self, ldap_user: Dict) -> Optional[Dict]:
         if Utils.is_empty(ldap_user):
             return None
+
+        self.logger.debug(f'convert_ldap_user() - Converting from full lookup results: {ldap_user}')
 
         cn = LdapUtils.get_string_value('cn', ldap_user)
         username = LdapUtils.get_string_value('uid', ldap_user)
@@ -579,7 +546,6 @@ class AbstractLDAPClient:
         return result
 
     def get_group(self, group_name: str) -> Optional[Dict]:
-        self.logger.debug(f"abstract_ldap-get_group(): Attempting to lookup {group_name} . Base: {self.ldap_group_base}")
         result = self.search_s(
             base=self.ldap_group_base,
             filterstr=self.build_group_filterstr(group_name)
@@ -664,13 +630,11 @@ class AbstractLDAPClient:
             ldap_result = Utils.get_value_as_list('result', search_result)
             total = Utils.get_value_as_int('total', search_result)
 
-        if ldap_result:
-            self.logger.debug(f"search_groups Start: {start} - LDAP result count: {len(ldap_result)} - Results Total: {total}")
-            for ldap_group in ldap_result:
-                user_group = self.convert_ldap_group(ldap_group[1])
-                if Utils.is_empty(user_group):
-                    continue
-                result.append(user_group)
+        for ldap_group in ldap_result:
+            user_group = self.convert_ldap_group(ldap_group[1])
+            if Utils.is_empty(user_group):
+                continue
+            result.append(user_group)
 
         return result, SocaPaginator(page_size=page_size, start=start, total=total)
 
@@ -804,13 +768,11 @@ class AbstractLDAPClient:
             ldap_result = Utils.get_value_as_list('result', search_result)
             total = Utils.get_value_as_int('total', search_result)
 
-        if ldap_result:
-            self.logger.debug(f"search_users Start: {start} - LDAP result count: {len(ldap_result)} - Results Total: {total}")
-            for ldap_user in ldap_result:
-                user = self.convert_ldap_user(ldap_user[1])
-                if Utils.is_empty(user):
-                    continue
-                result.append(user)
+        for ldap_user in ldap_result:
+            user = self.convert_ldap_user(ldap_user[1])
+            if Utils.is_empty(user):
+                continue
+            result.append(user)
 
         return result, SocaPaginator(page_size=page_size, start=start, total=total)
 

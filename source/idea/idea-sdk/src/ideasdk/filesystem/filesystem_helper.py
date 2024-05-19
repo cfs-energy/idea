@@ -8,7 +8,6 @@
 #  or in the 'license' file accompanying this file. This file is distributed on an 'AS IS' BASIS, WITHOUT WARRANTIES
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
-import logging
 
 from ideadatamodel.filesystem import (
     ListFilesRequest,
@@ -33,6 +32,7 @@ from ideasdk.shell import ShellInvoker
 
 import os
 import arrow
+import stat
 import mimetypes
 import shutil
 import aiofiles
@@ -134,51 +134,46 @@ class FileSystemHelper:
 
     def list_files(self, request: ListFilesRequest) -> ListFilesResult:
         cwd = request.cwd
-
+        user_home = self.get_user_home()
 
         if Utils.is_empty(cwd):
-            cwd = self.get_user_home()
-
-        self.logger.debug(f"list_files() for CWD ({cwd})")
+            cwd = user_home
 
         self.check_access(cwd, check_dir=True, check_read=True, check_write=False)
 
-        # This is specifically _after_ the check_access so its timing doesnt impact this timing
-        if self.logger.isEnabledFor(logging.DEBUG):
-            listing_start = Utils.current_time_ms()
+        result = self.shell.invoke(['su', self.username, '-c', f'ls "{cwd}" -1'])
+        if result.returncode != 0:
+            raise exceptions.unauthorized_access()
 
+        files = result.stdout.split(os.linesep)
         result = []
-        with os.scandir(cwd) as scandir:
-            for entry in scandir:
+        for file in files:
+            if Utils.is_empty(file):
+                continue
+            file_path = os.path.join(cwd, file)
+            if os.path.islink(file_path):
+                # skip symlinks to avoid any security risks
+                continue
 
-                if Utils.is_empty(entry):
-                    self.logger.debug(f"Empty Entry found at cwd ({cwd}) Name: ({entry.name})")
+            if cwd == '/':
+                if file in RESTRICTED_ROOT_FOLDERS:
                     continue
 
-                if entry.is_file():
-                    # Check for restricted files/dirs and do not list them
-                    if cwd == '/' and entry.name in RESTRICTED_ROOT_FOLDERS:
-                        # This is only logged at debug since simply browsing to a directory that has
-                        # restricted folders isn't a sign of problems
-                        self.logger.debug(f"Listing denied for RESTRICTED_ROOT_FOLDERS: cwd ({cwd})  Name: ({entry.name})")
-                        continue
-
-                is_hidden = entry.name.startswith('.')
-                file_size = None if entry.is_dir() else entry.stat().st_size
-                mod_date = arrow.get(entry.stat().st_mtime).datetime
-
-                result.append(FileData(
-                    file_id=Utils.shake_256(f'{entry.name}{entry.is_dir()}', 5),
-                    name=entry.name,
-                    size=file_size,
-                    mod_date=mod_date,
-                    is_dir=entry.is_dir(),
-                    is_hidden=is_hidden
-                ))
-
-        if self.logger.isEnabledFor(logging.DEBUG):
-            listing_end = Utils.current_time_ms()
-            self.logger.debug(f"Directory Listing Timing: CWD ({cwd}), Len: {len(result)}, Time taken: {listing_end - listing_start} ms")  # noqa: listing_start is only set if logging.DEBUG
+            file_stat = os.stat(file_path)
+            is_dir = stat.S_ISDIR(file_stat.st_mode)
+            is_hidden = file.startswith('.')
+            file_size = None
+            if not is_dir:
+                file_size = file_stat.st_size
+            mod_date = arrow.get(file_stat.st_mtime).datetime
+            result.append(FileData(
+                file_id=Utils.shake_256(f'{file}{is_dir}', 5),
+                name=file,
+                size=file_size,
+                mod_date=mod_date,
+                is_dir=is_dir,
+                is_hidden=is_hidden
+            ))
 
         return ListFilesResult(
             cwd=cwd,

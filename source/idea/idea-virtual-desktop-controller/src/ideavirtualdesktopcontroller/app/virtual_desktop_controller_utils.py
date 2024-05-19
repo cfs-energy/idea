@@ -9,12 +9,8 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 import os
-import logging
-import random
 from threading import RLock
 from typing import List, Dict, Optional
-
-import botocore.exceptions
 
 import ideavirtualdesktopcontroller
 from botocore.exceptions import ClientError
@@ -72,12 +68,9 @@ class VirtualDesktopControllerUtils:
             base_os=session.software_stack.base_os.value,
             instance_type=session.server.instance_type
         )
-        bootstrap_context.vars.session = session
         bootstrap_context.vars.session_owner = session.owner
         bootstrap_context.vars.idea_session_id = session.idea_session_id
         bootstrap_context.vars.project = session.project.name
-        bootstrap_context.vars.base_os = session.software_stack.base_os.value
-
         if session.software_stack.base_os != VirtualDesktopBaseOS.WINDOWS:
             escape_chars = '\\'
         else:
@@ -97,7 +90,7 @@ class VirtualDesktopControllerUtils:
             components=[component],
             tmp_dir=os.path.join(f'{self.context.config().get_string("shared-storage.apps.mount_dir", required=True)}', self.context.cluster_name(), self.context.module_id(), 'dcv-host-bootstrap', session.owner, f'{Utils.to_secure_filename(session.name)}-{session.idea_session_id}'),
             force_build=True,
-            base_os=str(session.software_stack.base_os.value),
+            base_os=session.software_stack.base_os.value,
             logger=self._logger
         ).build()
 
@@ -124,22 +117,11 @@ class VirtualDesktopControllerUtils:
                 'Setup-WindowsEC2Instance'
             ]
 
-        https_proxy = self.context.config().get_string('cluster.network.https_proxy', required=False, default='')
-        no_proxy = self.context.config().get_string('cluster.network.no_proxy', required=False, default='')
-        proxy_config = {}
-        if Utils.is_not_empty(https_proxy):
-            proxy_config = {
-                    'http_proxy': https_proxy,
-                    'https_proxy': https_proxy,
-                    'no_proxy': no_proxy
-                    }
-
         user_data_builder = BootstrapUserDataBuilder(
-            base_os=str(session.software_stack.base_os.value),
+            base_os=session.software_stack.base_os.value,
             aws_region=self.context.config().get_string('cluster.aws.region', required=True),
             bootstrap_package_uri=self._build_and_upload_bootstrap_package(session),
             install_commands=install_commands,
-            proxy_config=proxy_config,
             substitution_support=False
         )
 
@@ -156,15 +138,14 @@ class VirtualDesktopControllerUtils:
             constants.IDEA_TAG_MODULE_VERSION: self.context.module_version(),
             constants.IDEA_TAG_BACKUP_PLAN: f'{self.context.cluster_name()}-{self.context.module_id()}',
             constants.IDEA_TAG_PROJECT: session.project.name,
-            constants.IDEA_TAG_DCV_SESSION_ID: 'TBD',
-            constants.IDEA_TAG_JOB_OWNER: session.owner
+            constants.IDEA_TAG_DCV_SESSION_ID: 'TBD'
         }
 
         if Utils.is_not_empty(session.project.tags):
             for tag in session.project.tags:
                 tags[tag.key] = tag.value
 
-        custom_tags = self.context.config().get_list('global-settings.custom_tags', default=[])
+        custom_tags = self.context.config().get_list('global-settings.custom_tags', [])
         custom_tags_dict = Utils.convert_custom_tags_to_key_value_pairs(custom_tags)
         tags = {
             **custom_tags_dict,
@@ -177,194 +158,79 @@ class VirtualDesktopControllerUtils:
                 'Key': key,
                 'Value': value
             })
-
+        
         metadata_http_tokens = self.context.config().get_string('virtual-desktop-controller.dcv_session.metadata_http_tokens', required=True)
-
-        # Our desired launch tenancy
-        desired_tenancy = Utils.get_as_string(session.software_stack.launch_tenancy, default='default')
-
-        kms_key_id = self.context.config().get_string('cluster.ebs.kms_key_id', required=False, default=None)
-        if kms_key_id is None:
-            kms_key_id = 'alias/aws/ebs'
-
-        # Handle subnet processing for eVDI hosts
-
-        randomize_subnet_method = self.context.config().get_bool(
-            'vdc.dcv_session.network.randomize_subnets',
-            default=Utils.get_as_bool(constants.DEFAULT_VDI_RANDOMIZE_SUBNETS, default=False)
-        )
-        subnet_autoretry_method = self.context.config().get_bool(
-            'vdc.dcv_session.network.subnet_autoretry',
-            default=Utils.get_as_bool(constants.DEFAULT_VDI_SUBNET_AUTORETRY, default=True)
-        )
-        # Determine if we have a specific list of subnets configured for VDI
-        configured_vdi_subnets = self.context.config().get_list(
-            'vdc.dcv_session.network.private_subnets',
-            default=[]
-        )
-        # Required=True as these should always be available, and we want to error otherwise
-        cluster_private_subnets = self.context.config().get_list(
-            'cluster.network.private_subnets',
-            required=True
-        )
-
-        _attempt_subnets = []
-        # Use a subnet_id if specified
-        if Utils.is_not_empty(session.server.subnet_id):
-            # this comes in as a string from the API
-            self._logger.debug(f"Using strict requested subnet_id: {session.server.subnet_id}")
-            _subnets = session.server.subnet_id.split(',')
-            for _subnet in _subnets:
-                _subnet = _subnet.strip()
-                if _subnet not in [*cluster_private_subnets, *configured_vdi_subnets]:
-                    self._logger.error(f"User requested subnet_id ({_subnet}) is unknown. Ignoring request. Supported subnets: {', '.join([*cluster_private_subnets, *configured_vdi_subnets])}")
-                    raise Exception(f"Requested subnet_id ({_subnet}) is not available in the IDEA cluster configuration. Please contact your Administrator to validate the subnet_id or try again without an explicit subnet_id.")
-                self._logger.debug(f"Adding user supplied subnet_id to attempt list: {_subnet}")
-                _attempt_subnets.append(_subnet)
-        elif configured_vdi_subnets:
-            # A list from the config
-            self._logger.debug(f"Found configured VDI subnets: {', '.join(configured_vdi_subnets)}")
-            _attempt_subnets = configured_vdi_subnets
-        else:
-            # fallback to a list of cluster private_subnets
-            self._logger.debug(f"Fallback to cluster private_subnets: {', '.join(cluster_private_subnets)}")
-            _attempt_subnets = cluster_private_subnets
-
-        # Shuffle the list if configured for random subnet
-        if randomize_subnet_method:
-            self._logger.debug(f"Applying randomize to subnet list due to configuration.")
-            random.shuffle(_attempt_subnets)
-
-        # At this stage _attempt_subnets contains the subnets
-        # we want to attempt in the order that we prefer
-        # (ordered or pre-shuffled)
-
-        self._logger.info(f"Deployment Attempt Ready - Tenancy: {desired_tenancy} Retry: {subnet_autoretry_method} Randomize: {randomize_subnet_method}, Attempt_Subnets({len(_attempt_subnets)}): {', '.join(_attempt_subnets)}")
-
-        _deployment_loop = 0
-        _attempt_provision = True
-
-        while _attempt_provision:
-            _deployment_loop += 1
-            # We just .pop(0) since the list has been randomized already if it was requested
-            _subnet_to_try = _attempt_subnets.pop(0)
-            _remaining_subnet_count = len(_attempt_subnets)
-
-            self._logger.info(f"Deployment attempt #{_deployment_loop}:  Subnet_id: {_subnet_to_try} Remaining Subnets: {_remaining_subnet_count}")
-            if _remaining_subnet_count <= 0:
-                # this is our last attempt
-                self._logger.debug(f"Final deployment attempt (_remaining_subnet_count == 0)")
-                _attempt_provision = False
-            else:
-                _attempt_provision = True
-
-            response = None
-
-            try:
-                response = self.ec2_client.run_instances(
-                    UserData=self._build_userdata(session),
-                    ImageId=session.software_stack.ami_id,
-                    InstanceType=session.server.instance_type,
-                    Placement={
-                        'Tenancy': desired_tenancy
-                    },
-                    TagSpecifications=[
-                        {
-                            'ResourceType': 'instance',
-                            'Tags': aws_tags
-                        }
-                    ],
-                    MaxCount=1,
-                    MinCount=1,
-                    NetworkInterfaces=[
-                        {
-                            'DeviceIndex': 0,
-                            'AssociatePublicIpAddress': False,
-                            'SubnetId': _subnet_to_try,
-                            'Groups': session.server.security_groups
-                        }
-                    ],
-                    IamInstanceProfile={
-                        'Arn': session.server.instance_profile_arn
-                    },
-                    BlockDeviceMappings=[
-                        {
-                            'DeviceName': Utils.get_ec2_block_device_name(str(session.software_stack.base_os.value)),
-                            'Ebs': {
-                                'DeleteOnTermination': True,
-                                'VolumeSize': session.server.root_volume_size.int_val(),
-                                'Encrypted': Utils.get_as_bool(constants.DEFAULT_VOLUME_ENCRYPTION_VDI, default=True),
-                                'KmsKeyId': kms_key_id,
-                                'VolumeType': Utils.get_as_string(constants.DEFAULT_VOLUME_TYPE_VDI, default='gp3')
-                            }
-                        }
-                    ],
-                    KeyName=session.server.key_pair_name,
-                    HibernationOptions={
-                        'Configured': False if Utils.is_empty(session.hibernation_enabled) else session.hibernation_enabled
-                    },
-                    MetadataOptions={
-                        'HttpTokens': metadata_http_tokens,
-                        'HttpEndpoint': 'enabled'
+        response = self.ec2_client.run_instances(
+            UserData=self._build_userdata(session),
+            ImageId=session.software_stack.ami_id,
+            InstanceType=session.server.instance_type,
+            TagSpecifications=[
+                {
+                    'ResourceType': 'instance',
+                    'Tags': aws_tags
+                }
+            ],
+            MaxCount=1,
+            MinCount=1,
+            NetworkInterfaces=[
+                {
+                    'DeviceIndex': 0,
+                    'AssociatePublicIpAddress': False,
+                    'SubnetId': session.server.subnet_id,
+                    'Groups': session.server.security_groups
+                }
+            ],
+            IamInstanceProfile={
+                'Arn': session.server.instance_profile_arn
+            },
+            BlockDeviceMappings=[
+                {
+                    'DeviceName': Utils.get_ec2_block_device_name(session.software_stack.base_os.value),
+                    'Ebs': {
+                        'DeleteOnTermination': True,
+                        'VolumeSize': session.server.root_volume_size.int_val(),
+                        'Encrypted': False if Utils.is_empty(session.hibernation_enabled) else session.hibernation_enabled,
+                        'VolumeType': 'gp3'
                     }
-                )
-            except botocore.exceptions.ClientError as err:
-                self._logger.warning(f"Encountered botocore Exception")
-
-                _error_code = Utils.get_as_string(err.response['Error']['Code'], default='Unknown')
-
-                if _error_code == 'OptInRequired':
-                    self._logger.error(f"Unable to launch due to missing OptIn for this BaseOS AMI. Visit the AWS Marketplace in the AWS Console to subscribe: {err}")
-                    break
-                elif _error_code in {'InsufficientInstanceCapacity', 'Unsupported'}:
-                    if subnet_autoretry_method and _attempt_provision:
-                        self._logger.info(f"Remaining subnets {len(_attempt_subnets)}: {_attempt_subnets}")
-                        self._logger.info(f"Continuing next attempt with remaining subnets..")
-                        continue
-                    else:
-                        self._logger.error(f"Exhausted all subnet/AZ deployment attempts. Cannot continue with this request.")
-                        break
-                else:
-                    self._logger.error(f"Encountered Deployment botocore Exception: {err} / Response: {response}")
-                    break
-
-            except Exception as err:
-                self._logger.error(f"Encountered Deployment Exception: {err} / Response: {response}")
-
-            if response:
-                self._logger.debug(f"Returning response: {response}")
-            return Utils.to_dict(response)
+                }
+            ],
+            KeyName=session.server.key_pair_name,
+            HibernationOptions={
+                'Configured': False if Utils.is_empty(session.hibernation_enabled) else session.hibernation_enabled
+            },
+            MetadataOptions={
+                'HttpTokens': metadata_http_tokens,
+                'HttpEndpoint': 'enabled'
+            }
+        )
+        return Utils.to_dict(response)
 
     def _add_instance_data_to_cache(self):
-        _start_ec2_data = Utils.current_time_ms()
-        self._logger.debug(f"Starting EC2 instance data collection: {_start_ec2_data}")
-
         with self.instance_types_lock:
             instance_type_names = self.context.cache().long_term().get(self.INSTANCE_TYPES_NAMES_LIST_CACHE_KEY)
             instance_info_data = self.context.cache().long_term().get(self.INSTANCE_INFO_CACHE_KEY)
             if instance_type_names is None or instance_info_data is None:
+                instance_type_names = []
                 instance_info_data = {}
 
-                ec2_paginator = self.context.aws().ec2().get_paginator('describe_instance_types')
-                ec2_iterator = ec2_paginator.paginate(MaxResults=100)
+                has_more = True
+                next_token = None
+                while has_more:
+                    if next_token is None:
+                        result = self.context.aws().ec2().describe_instance_types(MaxResults=100)
+                    else:
+                        result = self.context.aws().ec2().describe_instance_types(MaxResults=100, NextToken=next_token)
 
-                for page in ec2_iterator:
-                    current_instance_types = Utils.get_value_as_list('InstanceTypes', page)
+                    next_token = Utils.get_value_as_string('NextToken', result)
+                    has_more = Utils.is_not_empty(next_token)
+                    current_instance_types = Utils.get_value_as_list('InstanceTypes', result)
                     for current_instance_type in current_instance_types:
-                        instance_type_name = Utils.get_value_as_string('InstanceType', current_instance_type, None)
-                        if instance_type_name is not None:
-                            instance_info_data[instance_type_name] = current_instance_type
+                        instance_type_name = Utils.get_value_as_string('InstanceType', current_instance_type, '')
+                        instance_type_names.append(instance_type_name)
+                        instance_info_data[instance_type_name] = current_instance_type
 
-                self.context.cache().long_term().set(
-                    key=self.INSTANCE_TYPES_NAMES_LIST_CACHE_KEY,
-                    value=instance_info_data.keys()
-                )
-                self.context.cache().long_term().set(
-                    key=self.INSTANCE_INFO_CACHE_KEY,
-                    value=instance_info_data
-                )
-                _end_ec2_data = Utils.current_time_ms()
-                self._logger.info(f"Completed EC2 instance data cache for {len(instance_info_data)} instance types in {_end_ec2_data - _start_ec2_data}ms")
+                self.context.cache().long_term().set(self.INSTANCE_TYPES_NAMES_LIST_CACHE_KEY, instance_type_names)
+                self.context.cache().long_term().set(self.INSTANCE_INFO_CACHE_KEY, instance_info_data)
 
     def is_gpu_instance(self, instance_type: str) -> bool:
         return self.get_gpu_manufacturer(instance_type) != VirtualDesktopGPU.NO_GPU
@@ -418,7 +284,6 @@ class VirtualDesktopControllerUtils:
 
         # We now have a list of all instance types (Cache has been updated IF it was empty).
         valid_instance_types = []
-        valid_instance_types_names = []
 
         allowed_instance_types = self.context.config().get_list('virtual-desktop-controller.dcv_session.instance_types.allow', default=[])
         allowed_instance_type_names = set()
@@ -438,13 +303,6 @@ class VirtualDesktopControllerUtils:
             else:
                 denied_instance_type_families.add(instance_type)
 
-        if self._logger.isEnabledFor(logging.DEBUG):
-            self._logger.debug(f"get_valid_instance_types() - Instance Allow/Deny Summary")
-            self._logger.debug(f"Allowed instance Families: {allowed_instance_type_families}")
-            self._logger.debug(f"Allowed instances: {allowed_instance_type_names}")
-            self._logger.debug(f"Denied instance Families: {denied_instance_type_families}")
-            self._logger.debug(f"Denied instances: {denied_instance_type_names}")
-
         for instance_type_name in instance_types_names:
             instance_type_family = instance_type_name.split('.')[0]
 
@@ -459,18 +317,15 @@ class VirtualDesktopControllerUtils:
             instance_info = instance_info_data[instance_type_name]
             if Utils.is_not_empty(software_stack) and software_stack.min_ram > self.get_instance_ram(instance_type_name):
                 # this instance doesn't have the minimum ram required to support the software stack.
-                self._logger.debug(f"Minimum RAM check - Software stack {software_stack.stack_id} requires a minimum RAM of ({software_stack.min_ram}): Instance {instance_type_name} RAM ({self.get_instance_ram(instance_type_name)}). Skipping instance.")
                 continue
 
-            hibernation_supported = Utils.get_value_as_bool('HibernationSupported', instance_info, default=False)
+            hibernation_supported = Utils.get_value_as_bool('HibernationSupported', instance_info, False)
             if hibernation_support and not hibernation_supported:
-                self._logger.debug(f"Hibernation ({hibernation_support}) != Instance {instance_type_name} ({hibernation_supported}) Skipped.")
                 continue
 
             supported_archs = Utils.get_value_as_list('SupportedArchitectures', Utils.get_value_as_dict('ProcessorInfo', instance_info, {}), [])
             if Utils.is_not_empty(software_stack) and software_stack.architecture.value not in supported_archs:
                 # not desired architecture
-                self._logger.debug(f"Software Stack arch ({software_stack.architecture.value}) != Instance {instance_type_name} ({supported_archs}) Skipped.")
                 continue
 
             supported_gpus = Utils.get_value_as_list('Gpus', Utils.get_value_as_dict('GpuInfo', instance_info, {}), [])
@@ -494,7 +349,6 @@ class VirtualDesktopControllerUtils:
                     # we don't need GPU
                     if len(supported_gpus) > 0:
                         # this instance SHOULD NOT have GPU support, but it does.
-                        self._logger.debug(f"Instance {instance_type_name} skipped - has GPU ({supported_gpus}) and stack is NO_GPU")
                         continue
                 else:
                     # we need GPU
@@ -506,14 +360,9 @@ class VirtualDesktopControllerUtils:
 
                     if not gpu_found:
                         # we needed a GPU, but we didn't find any
-                        self._logger.debug(f"Instance {instance_type_name} - Needed a GPU but didn't find one.")
                         continue
 
-            # All checks passed if we make it this far
-            self._logger.debug(f"Instance {instance_type_name} - Added as valid_instance_types")
-            valid_instance_types_names.append(instance_type_name)
             valid_instance_types.append(instance_info)
-        self._logger.debug(f"Returning {len(valid_instance_types)} valid_instance_types: {valid_instance_types_names}")
         return valid_instance_types
 
     def describe_image_id(self, ami_id: str) -> dict:

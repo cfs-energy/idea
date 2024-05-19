@@ -70,7 +70,6 @@ ec2:
     base_os: {{base_os}}
     instance_ami: {{instance_ami}}
     volume_size: {{volume_size}}
-    volume_type: {{volume_type}}
     enable_detailed_monitoring: false
     min_capacity: 1
     max_capacity: 3
@@ -101,15 +100,3 @@ notifications:
   # email notifications are supported at the moment. slack, sms and other channels will be supported in a future release.
   email:
     enabled: true
-
-#
-# Control Task Manager settings
-#
-task_manager:
-  min_workers: 1    # Minimum number of task executor worker threads (Min 1)
-  max_workers: 5    # Maximum number of task executor worker threads (Max 10)
-  polling_messages_max: 1 # Max number of Messages to poll from SQS queue
-  polling_visibility_timeout: 30 # Visibility timeout for SQS messages
-  sqs_wait_time: 20 # SQS polling / Wait time (in seconds). Used to active short or long SQS polling. (Min 0, Max 20)
-  debug: false      # Debug task_manager (extra information in logs, logging profile must be 'debug' to see)
-

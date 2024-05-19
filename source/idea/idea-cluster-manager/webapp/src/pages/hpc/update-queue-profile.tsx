@@ -137,7 +137,7 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                         ref={this.wizard}
                         values={this.getValues()}
                         onFetchOptions={(request) => {
-                            if (request.param === 'project_ids') {
+                            if(request.param === 'project_ids') {
                                 return AppContext.get().client().projects().listProjects({
                                     paginator: {
                                         page_size: 100
@@ -294,19 +294,19 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                                                     name: 'terminate_when_idle',
                                                     title: 'Terminate When Idle (in minutes)',
                                                     description: 'Enter the idle duration in minutes, after which the provisioned AWS capacity will be terminated.',
-                                                    help_text: 'Terminate when idle is optional when Keep Forever is true but is required when scaling mode is Batch',
+                                                    help_text: 'Terminate when idle is required when scaling mode is Batch',
                                                     param_type: 'text',
                                                     data_type: 'int',
-                                                    default: 0,
+                                                    default: 3,
                                                     validate: {
                                                         required: true,
-                                                        min: 0
+                                                        min: 1
                                                     },
                                                     when: {
-                                                        or: [
+                                                        and: [
                                                             {
                                                                 param: 'keep_forever',
-                                                                eq: true
+                                                                eq: false
                                                             },
                                                             {
                                                                 param: 'scaling_mode',
@@ -424,28 +424,12 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                                                             value: 'amazonlinux2'
                                                         },
                                                         {
-                                                            title: 'CentOS 7',
+                                                            title: 'Cent OS 7',
                                                             value: 'centos7'
                                                         },
                                                         {
-                                                            title: 'Red Hat Enterprise Linux 7',
+                                                            title: 'RHEL 7',
                                                             value: 'rhel7'
-                                                        },
-                                                        {
-                                                            title: 'Red Hat Enterprise Linux 8',
-                                                            value: 'rhel8'
-                                                        },
-                                                        {
-                                                            title: 'Red Hat Enterprise Linux 9',
-                                                            value: 'rhel9'
-                                                        },
-                                                        {
-                                                            title: 'Rocky Linux 8',
-                                                            value: 'rocky8'
-                                                        },
-                                                        {
-                                                            title: 'Rocky Linux 9',
-                                                            value: 'rocky9'
                                                         }
                                                     ]
                                                 },
@@ -681,7 +665,7 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                                                     param_type: 'auto',
                                                     data_type: 'memory',
                                                     default: {
-                                                        value: 60,
+                                                        value: 10,
                                                         unit: 'gb'
                                                     },
                                                     when: {
@@ -934,14 +918,9 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                             })
                             const utils = new QueueUtils(queueProfile)
 
-                            let keep_forever = Utils.asBoolean(dot.pick('keep_forever', queueProfile), false)
-                            if (keep_forever) {
-                                dot.del('scaling_mode', queueProfile)
-                            } else {
-                                const scalingMode = dot.pick('scaling_mode', queueProfile)
-                                if (scalingMode === 'single-job') {
-                                    queueProfile.terminate_when_idle = 0
-                                }
+                            const scalingMode = dot.pick('scaling_mode', queueProfile)
+                            if(scalingMode === 'single-job') {
+                                queueProfile.terminate_when_idle = 0
                             }
 
                             if (utils.isScratchStorageEnabled()) {
@@ -973,7 +952,6 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                             } else {
                                 invoke = (params: any) => this.schedulerAdmin().updateQueueProfile(params)
                             }
-
                             return invoke({
                                 queue_profile: queueProfile
                             }).then(_ => {

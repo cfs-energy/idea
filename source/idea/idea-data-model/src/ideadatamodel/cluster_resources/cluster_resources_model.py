@@ -31,13 +31,13 @@ from ideadatamodel import SocaBaseModel, constants, exceptions
 from ideadatamodel.model_utils import ModelUtils
 
 from typing import Optional, List, Dict, Any, Set
-from pydantic import Field
+
 
 class SocaClusterResource(SocaBaseModel):
-    type: Optional[str] = Field(default=None)
-    title: Optional[str] = Field(default=None)
-    props: Optional[Dict] = Field(default=None)
-    ref: Optional[Any] = Field(default=None)
+    type: Optional[str]
+    title: Optional[str]
+    props: Optional[Dict]
+    ref: Optional[Any]
 
     def get_tag(self, key: str, ref_key: Optional[str] = None) -> Optional[str]:
         if self.ref is None:
@@ -174,20 +174,13 @@ class SocaSubnet(SocaClusterResource):
         return ModelUtils.get_value_as_string('AvailabilityZone', self.ref)
 
     @property
-    def outpost_arn(self) -> str:
-        return ModelUtils.get_value_as_string('OutpostArn', self.ref, default='')
-
-    def is_outpost(self) -> bool:
-        return len(self.outpost_arn) > 0
-
-    @property
     def sort_order(self) -> int:
         availability_zone = self.availability_zone
         return ord(availability_zone[-1])
 
 
 class SocaFileSystem(SocaClusterResource):
-    provider: Optional[str] = Field(default=None)
+    provider: Optional[str]
 
     @property
     def file_system_id(self) -> str:
@@ -268,12 +261,12 @@ class SocaFileSystem(SocaClusterResource):
 
 
 class SocaSecurityGroupPermission(SocaBaseModel):
-    from_port: Optional[int] = Field(default=None)
-    to_port: Optional[int] = Field(default=None)
-    approved_ips: Optional[Set[str]] = Field(default=None)
-    approved_groups_ids: Optional[Set[str]] = Field(default=None)
-    approved_user_ids: Optional[Set[str]] = Field(default=None)
-    type: Optional[str] = Field(default=None)
+    from_port: Optional[int]
+    to_port: Optional[int]
+    approved_ips: Optional[Set[str]]
+    approved_groups_ids: Optional[Set[str]]
+    approved_user_ids: Optional[Set[str]]
+    type: Optional[str]
 
 
 class SocaSecurityGroup(SocaClusterResource):
@@ -355,7 +348,7 @@ class SocaIAMRole(SocaClusterResource):
 
 
 class SocaS3Bucket(SocaClusterResource):
-    has_permission: Optional[bool] = Field(default=None)
+    has_permission: Optional[bool]
 
     @property
     def name(self) -> str:

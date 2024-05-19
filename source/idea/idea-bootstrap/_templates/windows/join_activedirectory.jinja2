@@ -9,14 +9,7 @@ $AD_AUTHORIZATION_INSTANCE_ID = $( Get-EC2InstanceMetadata -Category InstanceId 
 $AD_AUTOMATION_SQS_QUEUE_URL = "{{ context.config.get_string('directoryservice.ad_automation.sqs_queue_url', required=True) }}"
 $AD_AUTOMATION_DDB_TABLE_NAME = "{{ context.config.get_string('cluster.cluster_name', required=True) }}.ad-automation"
 $AD_DOMAIN_NAME = "{{ context.config.get_string('directoryservice.name', required=True) }}"
-$AD_SHORT_NAME = "{{ context.config.get_string('directoryservice.ad_short_name', required=True) }}"
 $WINDOWS_HOSTNAME = $env:COMPUTERNAME
-
-# Various timers / settings controlling AD Join process
-# These configuration settings impact the AD Join process after the eVDI client is authorized to join Active Directory
-$AD_JOIN_MIN_SLEEP = "{{ context.config.get_int('directoryservice.ad_automation.ad_join_min_sleep', default=30) }}"
-$AD_JOIN_MAX_SLEEP = "{{ context.config.get_int('directoryservice.ad_automation.ad_join_max_sleep', default=31) }}"
-$AD_JOIN_RETRY_COUNT = "{{ context.config.get_int('directoryservice.ad_automation.ad_join_retry_count', default=10) }}"
 
 function Send-ADAutomationSQSMessage
 {
@@ -29,16 +22,12 @@ function Send-ADAutomationSQSMessage
 
   $payload = @{ header = @{ namespace = 'ADAutomation.PresetComputer' }; payload = @{ nonce = $AD_AUTHORIZATION_NONCE; instance_id = $AD_AUTHORIZATION_INSTANCE_ID; hostname = $WINDOWS_HOSTNAME } } | ConvertTo-Json -Compress
   # todo - support vpc endpoint
-  Write-ToLog -Message ("[Join AD] Sending to AD Automation: $AD_AUTOMATION_SQS_QUEUE_URL /  InstanceID: $AD_AUTHORIZATION_INSTANCE_ID / Nonce: $AD_AUTHORIZATION_NONCE ...")
-
-  $sqs_output = Send-SQSMessage -QueueUrl $AD_AUTOMATION_SQS_QUEUE_URL `
+  Send-SQSMessage -QueueUrl $AD_AUTOMATION_SQS_QUEUE_URL `
                   -MessageBody $payload `
                   -MessageGroupId $AD_AUTHORIZATION_INSTANCE_ID `
                   -MessageDeduplicationId "ADAutomation.PresetComputer.$AD_AUTHORIZATION_INSTANCE_ID.$AD_AUTHORIZATION_NONCE" `
-                  -Region $AWS_REGION | Out-String
-  $exit_status = $?
-  Write-ToLog -Message ("[Join AD] SQS Output: $sqs_output")
-  $exit_status
+                  -Region $AWS_REGION
+  $?
 }
 
 function Start-ADAutomationAuthorization
@@ -53,8 +42,8 @@ function Start-ADAutomationAuthorization
   $success = Send-ADAutomationSQSMessage
   while (($success -ne $true) -and ($attemptCount -le $maxAttempts))
   {
-    $sleepTime = $( Get-Random -Minimum 3 -Maximum 10 )
-    Write-ToLog -Message "[Join AD] ($attemptCount of $maxAttempts) failed to request authorization to join AD, retrying in $sleepTime seconds ..."
+    $sleepTime = $( Get-Random -Maximum 10 )
+    Write-Host "($attemptCount of $maxAttempts) failed to request authorization to join AD, retrying in $sleepTime seconds ..."
     Start-Sleep -Seconds $sleepTime
     $attemptCount++
     $success = Send-ADAutomationSQSMessage
@@ -96,23 +85,11 @@ function Get-ADAutomationAuthorizationEntry
 
   if ($response.Item.status.S -eq "success")
   {
-    Write-ToLog -Message "[Join AD] DEBUG - AD Auth object from DDB: $($response | Format-List | Out-String)"
-    Write-ToLog -Message "[Join AD] DEBUG - DDB AuthResponse Items: $($response.Item | Format-List | Out-String)"
-    @{
-        status = $($response.Item.status.S);
-        domain_controller = $($response.Item.domain_controller.S);
-        otp = $($response.Item.otp.S);
-        hostname = $($response.Item.hostname.S);
-        ou = $($response.Item.ou.S);
-    }
+    @{ status = $($response.Item.status.S); domain_controller = $($response.Item.domain_controller.S); otp = $($response.Item.otp.S) }
   }
   else
   {
-    @{
-        status = $($response.Item.status.S);
-        error_code = $($response.Item.error_code.S);
-        message = $($response.Item.message.S)
-    }
+    @{ status = $($response.Item.status.S); error_code = $($response.Item.error_code.S); message = $($response.Item.message.S) }
   }
 }
 
@@ -131,106 +108,31 @@ function Start-ADAutomationWaitForAuthorizationAndJoin
   $ddbClient = New-Object Amazon.DynamoDBv2.AmazonDynamoDBClient($regionEndpoint)
 
   $attemptCount = 0
+  $maxAttempts = 180 # wait for no more than 30 minutes ( as max $sleepTime: 0 <= $sleepTime <= 10 )
   $authorizationEntry = Get-ADAutomationAuthorizationEntry -DDBClient $ddbClient
-  while (($authorizationEntry -eq $null) -and ($attemptCount -lt $AD_JOIN_RETRY_COUNT))
+  while (($authorizationEntry -eq $null) -and ($attemptCount -le $maxAttempts))
   {
-    $attemptCount++
-    $sleepTime = $( Get-Random -Minimum $AD_JOIN_MIN_SLEEP -Maximum $AD_JOIN_MAX_SLEEP )
-    Write-ToLog -Message "[Join AD] ($attemptCount of $AD_JOIN_RETRY_COUNT) waiting for AD authorization. Sleeping $sleepTime seconds ..."
+    $sleepTime = $( Get-Random -Maximum 10 )
+    Write-Host "($attemptCount of $maxAttempts) waiting for AD authorization, retrying in $sleepTime seconds ..."
     Start-Sleep -Seconds $sleepTime
+    $attemptCount++
     $authorizationEntry = Get-ADAutomationAuthorizationEntry -DDBClient $ddbClient
   }
 
-  # Now that we have the authorization from DynamoDB - Join AD with the information
   if ($authorizationEntry.status -eq "success")
   {
-
-    Write-ToLog -Message "[Join AD] authorization successful. Joining AD, Domain: $AD_DOMAIN_NAME using Domain Controller: $($authorizationEntry.domain_controller), Hostname: $($authorizationEntry.hostname) in OU: $($authorizationEntry.ou) ,  OTP: $($authorizationEntry.otp) ..."
-
+    Write-Host "[Join AD] authorization successful. joining AD, Domain: $AD_DOMAIN_NAME, OTP: $($authorizationEntry.otp) ..."
     $joinCred = New-Object pscredential -ArgumentList ([pscustomobject]@{
       UserName = $null
       Password = (ConvertTo-SecureString -String $($authorizationEntry.otp) -AsPlainText -Force)[0]
     })
-
-    # Our base arguments for Add-Computer
-    $optionsString = "UnsecuredJoin, PasswordPass "
-    $joinCmd = -join @(
-        "Add-Computer "
-        "-Force "
-        "-DomainName $AD_DOMAIN_NAME "
-        '-Credential $joinCred '
-        "-Server $($authorizationEntry.domain_controller) "
-        "-PassThru "
-        "-ErrorVariable +domainJoinError "
-        "-Verbose "
-    )
-
-    Write-ToLog -Message "[Join AD] AD Base arguments: $joinCmd"
-
-    # OU supplied by cluster-manager
-
-    if ($($authorizationEntry.ou) -ne $null -and $($authorizationEntry.ou) -ne '' )
-    {
-        Write-ToLog -Message "[Join AD] Adding to OUPath: -OUPath $($authorizationEntry.ou) "
-        $joinCmd += "-OUPath '$($authorizationEntry.ou)' "
-    } else {
-        Write-ToLog -Message "[Join AD] No OU supplied by cluster-manager. Using domain defaults"
-    }
-
-    # hostname supplied by cluster-manager
-
-    if ($($authorizationEntry.hostname) -ne $WINDOWS_HOSTNAME )
-    {
-        Write-ToLog -Message "[Join AD] Joining with cluster-manager supplied hostname: $($authorizationEntry.hostname)"
-        $joinCmd += "-NewName $($authorizationEntry.hostname) "
-        $optionsString += ", JoinWithNewName"
-    }
-
-    # Finally - append options to the command
-    $joinCmd += " -Options $optionsString "
-
-    Write-ToLog -Message "[Join AD] Final AD join args: $joinCmd"
-
-    $attemptNumber = 0
-    $joined = $false
-    Write-ToLog -Message "[Join AD] Using AD Join settings of (Min/Max/Attempts): $AD_JOIN_MIN_SLEEP / $AD_JOIN_MAX_SLEEP / $AD_JOIN_RETRY_COUNT"
-
-    # AD Join retry loop
-    do {
-        $attemptNumber++
-        $sleepBuffer = $(Get-Random -Minimum $AD_JOIN_MIN_SLEEP -Maximum $AD_JOIN_MAX_SLEEP)
-        Write-ToLog -Message "[Join AD] Attempt #$attemptNumber - Delaying $sleepBuffer seconds to allow AD sync"
-        Start-Sleep -Seconds $sleepBuffer
-        Write-ToLog -Message "[Join AD] Attempt #$attemptNumber - Proceeding with AD join"
-
-        $joinResult = Invoke-Expression $joinCmd
-
-        if ($joinResult.HasSucceeded -eq $false) {
-            Write-ToLog -Message "[Join AD] Attempt #$attemptNumber - ERROR - $($joinResult.ToString())"
-            $joined = $false
-
-            if ($domainJoinError) {
-                Write-ToLog -Message "[Join AD] Attempt #$attemptNumber - joinResult - $joinResult"
-                Write-ToLog -Message "[Join AD] Attempt #$attemptNumber - Error - $Error"
-                Write-ToLog -Message "[Join AD] Attempt #$attemptNumber - domainJoinError - $domainJoinError"
-            }
-        } else {
-            $joined = $true
-            Write-ToLog -Message "[Join AD] Attempt #$attemptNumber - SUCCESS - $($joinResult.ToString())"
-        }
-
-
-    } While ( ($joined -eq $false) -and ($attemptNumber -lt $AD_JOIN_RETRY_COUNT) )
-
-    Write-ToLog -Message "[Join AD] ------====== AD Join Summary ======------"
-    Write-ToLog -Message "[Join AD] Attempts - $attemptNumber"
-    Write-ToLog -Message "[Join AD] joinResult - $($joinResult.ToString())"
-    if ($domainJoinError) {
-        Write-ToLog -Message "[Join AD] domainJoinError - $domainJoinError"
-    }
-
-  } else {
-    Write-ToLog -Message "[Join AD] authorization failed: ($($authorizationEntry.error_code)) $($authorizationEntry.message)"
+    Add-Computer -Domain $AD_DOMAIN_NAME `
+                 -Options UnsecuredJoin, PasswordPass `
+                 -Credential $joinCred
+  }
+  else
+  {
+    Write-Host "[Join AD] authorization failed: ($($authorizationEntry.error_code)) $($authorizationEntry.message)"
   }
 
 }

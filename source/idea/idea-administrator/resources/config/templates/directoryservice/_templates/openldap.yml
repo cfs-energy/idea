@@ -5,7 +5,6 @@ instance_type: {{instance_type}}
 base_os: {{base_os}}
 instance_ami: {{instance_ami}}
 volume_size: {{volume_size}}
-volume_type: {{volume_type}}
 hostname: "openldap.{{cluster_name}}.{{aws_region}}.local"
 ldap_connection_uri: "ldap://openldap.{{cluster_name}}.{{aws_region}}.local"
 cloudwatch_logs:

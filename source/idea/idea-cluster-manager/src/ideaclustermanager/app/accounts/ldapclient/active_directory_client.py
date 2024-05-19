@@ -10,7 +10,7 @@
 #  and limitations under the License.
 
 from ideasdk.context import SocaContext
-from ideasdk.utils import Utils, GroupNameHelper
+from ideasdk.utils import Utils
 from ideadatamodel import exceptions, errorcodes, constants
 
 from ideaclustermanager.app.accounts.ldapclient.abstract_ldap_client import AbstractLDAPClient, LdapClientOptions
@@ -19,7 +19,6 @@ from ideaclustermanager.app.accounts.ldapclient.ldap_utils import LdapUtils
 from typing import Dict, Optional
 import ldap  # noqa
 import time
-from typing import Optional, List
 
 
 class ActiveDirectoryClient(AbstractLDAPClient):
@@ -55,14 +54,12 @@ class ActiveDirectoryClient(AbstractLDAPClient):
     @property
     def ldap_root_bind(self) -> str:
         return f'{self.ldap_root_username}@{self.domain_name}'
-
     @property
     def ldap_computers_base(self) -> str:
         ou_computers = self.context.config().get_string('directoryservice.computers.ou', required=True)
         if '=' in ou_computers:
             return ou_computers
         return f'ou={ou_computers},ou={self.ad_netbios},{self.ldap_base}'
-
     @property
     def ldap_user_base(self) -> str:
         ou_users = self.context.config().get_string('directoryservice.users.ou', required=True)
@@ -72,7 +69,7 @@ class ActiveDirectoryClient(AbstractLDAPClient):
 
     @property
     def ldap_user_filterstr(self) -> str:
-        return '(objectClass=user)'
+        return f'(objectClass=user)'
 
     @property
     def ldap_group_base(self) -> str:
@@ -83,7 +80,7 @@ class ActiveDirectoryClient(AbstractLDAPClient):
 
     @property
     def ldap_group_filterstr(self) -> str:
-        return '(objectClass=group)'
+        return f'(objectClass=group)'
 
     @property
     def ldap_sudoers_group_dn(self) -> str:
@@ -153,9 +150,10 @@ class ActiveDirectoryClient(AbstractLDAPClient):
 
         return self.convert_ldap_user(results[0][1])
 
+
     def change_password(self, username: str, password: str):
 
-        ad_provider = self.context.config().get_string('directoryservice.provider', required=True)
+        ad_provider  = self.context.config().get_string('directoryservice.provider', required=True)
 
         if ad_provider == constants.DIRECTORYSERVICE_ACTIVE_DIRECTORY:
             self.logger.info(f'change_passwd() for Active Directory provider {ad_provider} - NOOP')
@@ -220,10 +218,6 @@ class ActiveDirectoryClient(AbstractLDAPClient):
                   login_shell: str,
                   home_dir: str) -> Dict:
 
-        _ds_sync_user_start = Utils.current_time_ms()
-
-        self.logger.debug(f"Starting active_directory sync_user() for {username}")
-
         user_principal_name = f'{username}@{self.domain_name}'
 
         user_dn = self.build_user_dn(username)
@@ -278,21 +272,16 @@ class ActiveDirectoryClient(AbstractLDAPClient):
             self.modify_s(user_dn, modify_user_attrs)
         else:
             self.add_s(user_dn, user_attrs)
-
-            if self.is_ldaps:
-                self.logger.info('Applying user updates to enable user')
-                # Make sure the user account is enabled in AD.
-                # This is a two-step process
-                enable_attrs = [
-                    (ldap.MOD_REPLACE, 'userAccountControl', [Utils.to_bytes('512')])
-                ]
-                self.modify_s(user_dn, enable_attrs)
-            else:
-                self.logger.warn(f"Unable to set userAccountControl for username {username} on non-LDAPS AD connection ({self.ldap_uri})")
-
+            # todo
+            self.logger.info('Applying user updates to enable user')
+            # Make sure the user account is enabled in AD.
+            # This is a two-step process
+            enable_attrs = [
+                (ldap.MOD_REPLACE, 'userAccountControl', [Utils.to_bytes('512')])
+            ]
+            self.modify_s(user_dn, enable_attrs)
             self.wait_for_user_creation(username)
-        _ds_sync_user_end = Utils.current_time_ms()
-        self.logger.info(f"Completed active_directory sync_user() for {username} in {_ds_sync_user_end - _ds_sync_user_start}ms")
+
         return self.get_user(username)
 
     def sync_group(self, group_name: str, gid: int) -> Dict:
@@ -337,16 +326,6 @@ class ActiveDirectoryClient(AbstractLDAPClient):
             self.wait_for_group_creation(group_name)
 
         return self.get_group(group_name)
-
-    def add_user_to_group(self, usernames: List[str], group_name: str):
-        try:
-            group_dn = self.build_group_dn(group_name)
-            group_attrs = []
-            for username in usernames:
-                group_attrs.append((ldap.MOD_ADD, 'member', [Utils.to_bytes(self.build_user_dn(username))]))
-            self.modify_s(group_dn, group_attrs)
-        except ldap.TYPE_OR_VALUE_EXISTS:
-            pass
 
     def add_sudo_user(self, username: str):
         user_dn = self.build_user_dn(username)

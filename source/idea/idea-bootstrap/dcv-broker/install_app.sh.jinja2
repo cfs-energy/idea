@@ -1,6 +1,5 @@
 #!/bin/bash
 
-set -x
 # source environment. at this point, PATH should have been already updated
 # and must contain soca python installation
 source /etc/environment
@@ -11,15 +10,9 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
 # DCV Broker
 DCV_GPG_KEY="{{ context.config.get_string('global-settings.package_config.dcv.gpg_key', required=True) }}"
-{%- if context.base_os in ('amazonlinux2', 'centos7', 'rhel7') %}
 DCV_SESSION_MANAGER_BROKER_NOARCH_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.broker.linux.al2_rhel_centos7.version', required=True) }}"
 DCV_SESSION_MANAGER_BROKER_URL="{{ context.config.get_string('global-settings.package_config.dcv.broker.linux.al2_rhel_centos7.url', required=True) }}"
 DCV_SESSION_MANAGER_BROKER_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.broker.linux.al2_rhel_centos7.sha256sum', required=True) }}"
-{%- elif context.base_os in ('rhel8', 'rocky8') %}
-DCV_SESSION_MANAGER_BROKER_NOARCH_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.broker.linux.rhel_centos_rocky8.version', required=True) }}"
-DCV_SESSION_MANAGER_BROKER_URL="{{ context.config.get_string('global-settings.package_config.dcv.broker.linux.rhel_centos_rocky8.url', required=True) }}"
-DCV_SESSION_MANAGER_BROKER_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.broker.linux.rhel_centos_rocky8.sha256sum', required=True) }}"
-{%- endif %}
 
 timestamp=$(date +%s)
 clean_hostname=$(hostname -s)
@@ -45,31 +38,30 @@ function clean_staging_area() {
 }
 
 function setup_staging_area() {
-  log_info "setup staging area start"
+  echo "setup staging area start"
   mkdir -p ${STAGING_AREA_RELATIVE_PATH}
   rm -rf '${STAGING_AREA_RELATIVE_PATH}/*'
-  log_info "setup staging area end"
+  echo "setup staging area end"
 }
 
 function install_dcv_broker_package() {
-  log_info "dcv session manager broker package installation start."
+  echo "dcv session manager broker package installation start."
   setup_staging_area
 
   rpm --import ${DCV_GPG_KEY}
   pushd ${STAGING_AREA_RELATIVE_PATH}
   wget ${DCV_SESSION_MANAGER_BROKER_URL}
   if [[ $(sha256sum nice-dcv-session-manager-broker-${DCV_SESSION_MANAGER_BROKER_NOARCH_VERSION}.rpm | awk '{print $1}') != ${DCV_SESSION_MANAGER_BROKER_SHA256_HASH} ]];  then
-    log_error "FATAL ERROR: Checksum for DCV Broker failed. File may be compromised."
     echo -e "FATAL ERROR: Checksum for DCV Broker failed. File may be compromised." > /etc/motd
     exit 1
   fi
   yum install -y nice-dcv-session-manager-broker-${DCV_SESSION_MANAGER_BROKER_NOARCH_VERSION}.rpm
   popd
-  log_info "dcv session manager broker package installation complete."
+  echo "dcv session manager broker package installation complete."
 }
 
 function configure_dcv_broker_properties() {
-  log_info "dcv session manager broker properties configuration started."
+  echo "dcv session manager broker properties configuration started."
 
   if [[ -f /etc/dcv-session-manager-broker/session-manager-broker.properties ]]; then
     mv /etc/dcv-session-manager-broker/session-manager-broker.properties /etc/dcv-session-manager-broker/session-manager-broker.properties.${timestamp}
@@ -94,11 +86,11 @@ dynamodb-table-name-prefix = ${IDEA_CLUSTER_NAME}.${MODULE_ID}.dcv-broker.
 
 connect-session-token-duration-minutes = ${SESSION_TOKEN_DURATION}
 
-# 1-hour expiration
-delete-session-duration-seconds = 3600
+# Dont want to see deleted session info for now.
+delete-session-duration-hours = 0
 
-# Number of seconds of unreachable DCV server before declaring it removed
-seconds-before-deleting-unreachable-dcv-server = 900
+# Dont want to see unreachable dcv servers for now. Setting fails for values less than 60
+seconds-before-deleting-unreachable-dcv-server = 60
 
 # create-sessions-number-of-retries-on-failure = 2
 # autorun-file-arguments-max-size = 50
@@ -154,29 +146,15 @@ session-screenshot-max-width = 800
   chmod 640 /etc/dcv-session-manager-broker/session-manager-broker.properties
 
   systemctl enable dcv-session-manager-broker
-  log_info "dcv session manager broker properties configuration complete."
-
-  if [[ ! -z "${IDEA_HTTPS_PROXY}" ]]; then
-      log_info "Detected IDEA_HTTPS_PROXY.. starting java networking properties configuration updates"
-      if [[ -f /etc/alternatives/jre/conf/net.properties ]]; then
-          cp  /etc/alternatives/jre/conf/net.properties /etc/alternatives/jre/conf/net.properties.${timestamp}
-      fi
-      sed -i "s/http.nonProxyHosts=localhost|127.*|\[::1\]/http.nonProxyHosts=localhost|127.*|\[::1\]|169.254.169.254|dynamodb.${AWS_REGION}.amazonaws.com/" /etc/alternatives/jre/conf/net.properties
-      PROXY_HOST=$(echo $IDEA_HTTPS_PROXY | awk '{split($0,a,"//"); print a[2]}' | awk '{split($0,a,":"); print a[1]}')
-      PROXY_PORT=$(echo $IDEA_HTTPS_PROXY | awk '{split($0,a,":"); print a[3]}')
-      sed -i "s/# https.proxyHost=/https.proxyHost=${PROXY_HOST}/" /etc/alternatives/jre/conf/net.properties
-      sed -i "s/# https.proxyPort=443/https.proxyPort=${PROXY_PORT}/" /etc/alternatives/jre/conf/net.properties
-      log_info "java networking properties configuration completed"
-  fi
-
   restart_dcv_broker
+  echo "dcv session manager broker properties configuration complete."
 }
 
 function configure_dcv_broker() {
-  log_info "Configure dcv broker started"
+  echo "Configure dcv broker started"
   provider_url="{{ context.config.get_string('identity-provider.cognito.provider_url', required=True) }}"
   dcv-session-manager-broker register-auth-server --url "${provider_url}/.well-known/jwks.json"
-  log_info "Configure dcv broker complete"
+  echo "Configure dcv broker complete"
 }
 
 function verify_broker_installation() {
@@ -184,12 +162,12 @@ function verify_broker_installation() {
   local count=0
   while [[ ! "$output" == "No authorization header" ]]
   do
-    log_error "DCV Session Manager broker verification failed.. sleeping for 30 seconds; ${count} seconds elapsed waiting for broker readiness"
-    count=$(( count + 30 ))
+    echo -ne "DCV Session Manager broker verification failed.. sleeping for 30 seconds; ${count} seconds already slept \033[0K\r"
+    count=count+30
     sleep 30
-    output=$(curl -k -s "https://localhost:${CLIENT_TO_BROKER_PORT}/sessionConnectionData/aSession/aOwner" | jq -r '.error')
+    output=$(curl -k "https://localhost:${CLIENT_TO_BROKER_PORT}/sessionConnectionData/aSession/aOwner" | jq -r '.error')
   done
-  log_info "DCV Session Manager broker verification success"
+  echo "DCV Session Manager broker verification success"
 }
 
 function notify_controller() {

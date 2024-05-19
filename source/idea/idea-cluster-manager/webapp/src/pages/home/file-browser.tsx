@@ -137,16 +137,6 @@ const CustomActionTailLogFile = defineFileAction({
     }
 })
 
-/*
- * Override the Chonky default of showing hidden files.
- * We want to default to not showing hidden files.
- */
-const CustomActionToggleHiddenFiles = (
-    JSON.parse(JSON.stringify(ChonkyActions.ToggleHiddenFiles))
-)
-CustomActionToggleHiddenFiles.option.defaultValue = false
-CustomActionToggleHiddenFiles.button.toolbar = true
-
 const ACTIONS = [
     ChonkyActions.OpenFiles,
     ChonkyActions.UploadFiles,
@@ -156,8 +146,7 @@ const ACTIONS = [
     ChonkyActions.DownloadFiles,
     CustomActionFavorite,
     CustomActionRefresh,
-    CustomActionTailLogFile,
-    CustomActionToggleHiddenFiles
+    CustomActionTailLogFile
 ]
 
 const FAVORITE_ACTIONS = [
@@ -876,7 +865,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                                     onFileAction={(event) => {
                                                         const eventId: string = event.id
                                                         if (event.id === ChonkyActions.OpenFiles.id) {
-                                                            this.onOpenSelection(event.payload.targetFile === undefined ? event.payload.files[0]: event.payload.targetFile)
+                                                            this.onOpenSelection(event.payload.targetFile)
                                                         } else if (event.id === ChonkyActions.UploadFiles.id) {
                                                             this.showUploadModal()
                                                         } else if (event.id === ChonkyActions.DownloadFiles.id) {
@@ -915,6 +904,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                                     defaultFileViewActionId={ChonkyActions.EnableListView.id}
                                                     disableDefaultFileActions={[
                                                         ChonkyActions.CopyFiles.id,
+                                                        ChonkyActions.ToggleHiddenFiles.id,
                                                         ChonkyActions.ToggleShowFoldersFirst.id
                                                     ]}
 
@@ -956,6 +946,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                                     defaultFileViewActionId={ChonkyActions.EnableListView.id}
                                                     disableDefaultFileActions={[
                                                         ChonkyActions.CopyFiles.id,
+                                                        ChonkyActions.ToggleHiddenFiles.id,
                                                         ChonkyActions.ToggleShowFoldersFirst.id
                                                     ]}
                                                 >

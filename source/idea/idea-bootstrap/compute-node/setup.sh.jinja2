@@ -34,17 +34,11 @@ IDEA_JOB_NAME={{ context.vars.job.job_name }}
 IDEA_JOB_QUEUE={{ context.vars.job.queue }}
 IDEA_JOB_SCALING_MODE={{ context.vars.job.scaling_mode }}
 IDEA_COMPUTE_NODE_LOGS_DIR={{ context.vars.job_directory }}/logs/$(hostname -s)
-BOOTSTRAP_DIR=/root/bootstrap" > /etc/environment
-
-{% if context.https_proxy != '' %}
-echo -e "IDEA_HTTPS_PROXY={{ context.https_proxy }}
-IDEA_NO_PROXY={{ context.no_proxy }}" >> /etc/environment
-{% endif %}
-
-echo -e "## [END] IDEA Environment Configuration
+BOOTSTRAP_DIR=/root/bootstrap
+## [END] IDEA Environment Configuration
 
 PATH={{ PATH }}
-" >> /etc/environment
+" > /etc/environment
 
 source /etc/environment
 
@@ -54,11 +48,7 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 {% include 'compute-node/_templates/scheduler_stop.jinja2' %}
 
-{% include '_templates/linux/idea_proxy.jinja2' %}
-
 {% include '_templates/linux/idea_service_account.jinja2' %}
-
-{% include '_templates/linux/aws_ssm.jinja2' %}
 
 {% include '_templates/linux/epel_repo.jinja2' %}
 

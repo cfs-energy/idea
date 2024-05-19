@@ -14,8 +14,6 @@ __all__ = (
     'SendNotificationResult'
 )
 
-from pydantic import Field
-
 from ideadatamodel import SocaPayload
 from ideadatamodel.notifications.notifications_model import Notification
 from typing import Optional
@@ -23,7 +21,7 @@ from typing import Optional
 
 # Notifications.SendNotification
 class SendNotificationRequest(SocaPayload):
-    notification: Optional[Notification] = Field(default=None)
+    notification: Optional[Notification]
 
 
 class SendNotificationResult(SocaPayload):

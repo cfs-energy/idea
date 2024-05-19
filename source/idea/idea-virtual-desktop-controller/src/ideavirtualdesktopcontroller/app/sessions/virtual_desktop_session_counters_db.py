@@ -10,7 +10,7 @@
 #  and limitations under the License.
 from enum import Enum
 from typing import Union, Optional, Dict
-from pydantic import Field
+
 import ideavirtualdesktopcontroller
 from ideadatamodel import exceptions
 from ideasdk.utils import Utils
@@ -24,9 +24,9 @@ class VirtualDesktopSessionCounterType(str, Enum):
 
 
 class VirtualDesktopSessionCounterDBModel:
-    idea_session_id: Optional[str] = Field(default=None)
-    counter_type: Optional[VirtualDesktopSessionCounterType] = Field(default=None)
-    counter: Optional[int] = Field(default=None)
+    idea_session_id: Optional[str]
+    counter_type: Optional[VirtualDesktopSessionCounterType]
+    counter: Optional[int]
 
     def __init__(self, idea_session_id: Optional[str], counter_type: Optional[str], counter: Optional[int] = None):
         self.idea_session_id = idea_session_id

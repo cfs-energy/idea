@@ -21,7 +21,7 @@ from ideasdk.client import SocaClient, SocaClientOptions
 from ideasdk.api import ApiInvocationContext, BaseAPI
 from ideasdk.utils import Utils
 from ideatestutils import MockConfig
-from pydantic import Field
+
 from typing import Optional, List
 
 import pytest
@@ -33,19 +33,19 @@ UNIX_SOCKET_FILE = '/tmp/soca/test_socket.sock'
 # Create sample Calculator API Data Model
 
 class CalculateRequest(SocaPayload):
-    num1: Optional[int] = Field(default=None)
-    num2: Optional[int] = Field(default=None)
+    num1: Optional[int]
+    num2: Optional[int]
 
 
 class CalculateResult(SocaPayload):
-    result: Optional[int] = Field(default=None)
+    result: Optional[int]
 
 
 class CalculateHistoryEntry(SocaBaseModel):
-    num1: Optional[int] = Field(default=None)
-    num2: Optional[int] = Field(default=None)
-    operation: Optional[str] = Field(default=None)
-    result: Optional[int] = Field(default=None)
+    num1: Optional[int]
+    num2: Optional[int]
+    operation: Optional[str]
+    result: Optional[int]
 
 
 class ListHistoryRequest(SocaListingPayload):
@@ -53,7 +53,7 @@ class ListHistoryRequest(SocaListingPayload):
 
 
 class ListHistoryResult(SocaListingPayload):
-    listing: Optional[List[CalculateHistoryEntry]] = Field(default=None)
+    listing: Optional[List[CalculateHistoryEntry]]
 
 
 # Create Calculator API

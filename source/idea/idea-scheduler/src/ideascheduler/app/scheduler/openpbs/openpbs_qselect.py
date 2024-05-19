@@ -102,7 +102,6 @@ class OpenPBSQSelect:
         if self.is_job_state_query():
             cmd += ['-s', self.get_queue_select_state_filter()]
             if self.queued_after is not None and self.job_state == SocaJobState.QUEUED:
-                # noinspection StrFormat
                 date_format = self.queued_after.format('MMDDHHmm.ss')
                 cmd += [f'-tq.gt.{date_format}']
             if self.job_state == SocaJobState.FINISHED:

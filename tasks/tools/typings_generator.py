@@ -41,7 +41,10 @@ from typing import Type, Dict, Any, List, Set, Tuple, Optional
 from uuid import uuid4
 from pydantic import BaseModel, Extra, create_model
 
-GenericModel = None
+try:
+    from pydantic.generics import GenericModel
+except ImportError:
+    GenericModel = None
 
 
 class TypingsGenerator:
@@ -282,16 +285,15 @@ class TypingsGenerator:
                 "_Master_", **{m.__name__: (m, ...) for m in models}
             )
             master_model.Config.extra = Extra.forbid
-            master_model.Config.json_schema_extra = staticmethod(self.clean_schema)
+            master_model.Config.schema_extra = staticmethod(self.clean_schema)
 
-            schema = json.loads(json.dumps(master_model.model_json_schema()))
+            schema = json.loads(master_model.schema_json())
 
             self.fix_anomalies(schema)
 
             schema_definitions = Utils.get_value_as_dict('definitions', schema, {})
 
             for name, definition in schema_definitions.items():
-                idea.console.info(f"Processing {name} ...")
                 self.clean_schema(definition)
 
             return json.dumps(schema, indent=2)
@@ -331,8 +333,7 @@ class TypingsGenerator:
         if exclude:
             models = [m for m in models if m.__name__ not in exclude]
 
-        models = sorted(models, key=lambda m: m.__name__)
-        idea.console.info(f"Generating {len(models)} JSON schemas from pydantic models ...")
+        idea.console.info("Generating JSON schema from pydantic models...")
 
         schema = self.generate_json_schema(models)
         schema_dir = mkdtemp()
@@ -345,7 +346,7 @@ class TypingsGenerator:
 
         banner_comment_items = ['/* tslint:disable */',
                                 '/* eslint-disable */',
-                                '/* This file is generated using IDEA invoke web-portal.typings task. */',
+                                '/* This file is generated using IDEA invoke typings task. */',
                                 '/* Do not modify this file manually. */',
                                 '/**']
         for line in notice.COPYRIGHT_NOTICE.splitlines():
@@ -360,3 +361,4 @@ class TypingsGenerator:
         self.remove_master_model_from_output(output)
 
         idea.console.success(f"Saved typescript definitions to {output}.")
+
