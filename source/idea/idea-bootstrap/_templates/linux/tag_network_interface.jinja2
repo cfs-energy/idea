@@ -8,7 +8,7 @@ function tag_network_interface () {
                              --region "{{ context.aws_region }}" \
                              --query "NetworkInterfaces[*].[NetworkInterfaceId]" \
                              --out text)
-  local ENI_IDS=$(echo "${INTERFACES}" | tr "\n" " ")
+  local ENI_IDS=$(echo "${INTERFACES}" | tr "\n" " " | sed 's/ //g')
   $AWS ec2 create-tags --resources "${ENI_IDS}" \
       --region "{{ context.aws_region }}" \
       --tags "${TAGS}"

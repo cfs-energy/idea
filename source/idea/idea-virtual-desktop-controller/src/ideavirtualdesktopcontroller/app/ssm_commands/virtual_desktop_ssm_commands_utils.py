@@ -127,16 +127,30 @@ class VirtualDesktopSSMCommandsUtils:
         if base_os == VirtualDesktopBaseOS.WINDOWS:
             document_name = 'AWS-RunPowerShellScript'
             commands = [
+                "$DCV_Session_JSON = Invoke-Expression \"& 'C:\\Program Files\\NICE\\DCV\\Server\\bin\\dcv' list-sessions -j\" | ConvertFrom-Json",
+                "$DCV_Session_ID = $DCV_Session_JSON.id",
+                "$DCV_Describe_Session = Invoke-Expression \"& 'C:\\Program Files\\NICE\\DCV\\Server\\bin\\dcv' describe-session $DCV_Session_ID -j\" | ConvertFrom-Json",
                 "$CPUAveragePerformanceLast10Secs = (GET-COUNTER -Counter \"\\Processor(_Total)\\% Processor Time\" -SampleInterval 2 -MaxSamples 5 |select -ExpandProperty countersamples | select -ExpandProperty cookedvalue | Measure-Object -Average).average",
                 "$output = @{}",
+                "$dcv = @{}",
+                "$dcv[\"num-of-connections\"] = $DCV_Describe_Session.\"num-of-connections\"",
+                "$dcv[\"creation-time\"] = $DCV_Describe_Session.\"creation-time\"",
+                "$dcv[\"last-disconnection-time\"] = $DCV_Describe_Session.\"last-disconnection-time\"",
+                "$output[\"DCV\"] = $dcv",
                 "$output[\"CPUAveragePerformanceLast10Secs\"] = $CPUAveragePerformanceLast10Secs",
                 "$output | ConvertTo-Json"
             ]
         else:
             document_name = 'AWS-RunShellScript'
             commands = [
-                "CPUAveragePerformanceLast10Secs=$(top -d 5 -b -n2 | grep 'Cpu(s)' |tail -n 1 | awk '{print $2 + $4}')",
-                "echo '{\"CPUAveragePerformanceLast10Secs\": '"'$CPUAveragePerformanceLast10Secs'"'}'"
+                "DCV_Session_ID=$(dcv list-sessions -j | jq -r '.[].id')",
+                "DCV_Describe_Session=$(dcv describe-session $DCV_Session_ID -j)",
+                "CPUAveragePerformanceLast10Secs=$(top -d 5 -b -n2 | grep 'Cpu(s)' | tail -n 1 | awk '{print $2 + $4}')",
+                "SSH_Connection_Count=$(last -Fi | grep 'still logged in' | grep -v 0.0.0.0 | wc -l)",
+                "SSH_Last_Disconnect_Time=$(last -Fi | awk '!/0.0.0.0|still logged in|wtmp|^\\s*$/ {print $11, $12, $13, $14}' | sort -k3M -k4n -k5 -k6n | tail -n 1)",
+                "[ -n \"$SSH_Last_Disconnect_Time\" ] && SSH_Last_Disconnect_ISO=$(date -u -d \"$SSH_Last_Disconnect_Time\" +\"%Y-%m-%dT%H:%M:%S.%6NZ\") || SSH_Last_Disconnect_ISO=\"\"",
+                "Final_JSON=$(jq -c -n --argjson dcv \"$DCV_Describe_Session\" --argjson cpuAvg \"$CPUAveragePerformanceLast10Secs\" --arg sshTime \"$SSH_Last_Disconnect_ISO\" --argjson sshCount \"$SSH_Connection_Count\" '{\"DCV\": ($dcv | .[\"num-of-connections\"] = ($sshCount | if . > $dcv[\"num-of-connections\"] then . else $dcv[\"num-of-connections\"] end) | .[\"last-disconnection-time\"] = (if $dcv[\"last-disconnection-time\"] == \"\" and $sshTime > $dcv[\"creation-time\"] then $sshTime elif $dcv[\"last-disconnection-time\"] != \"\" and $sshTime > $dcv[\"last-disconnection-time\"] then $sshTime else $dcv[\"last-disconnection-time\"] end)), \"CPUAveragePerformanceLast10Secs\": $cpuAvg, \"SSH_Connection_Count\": $sshCount, \"SSH_Last_Disconnect_ISO\": $sshTime}')",                
+                "echo \"$Final_JSON\""
             ]
 
         response = self._ssm_client.send_command(

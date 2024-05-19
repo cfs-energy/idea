@@ -9,6 +9,7 @@ open-source/
 deployment/global-s3-assets/
 deployment/regional-s3-assets/
 
+
 # C extensions
 *.so
 
@@ -191,3 +192,10 @@ codebuild_build.sh
 
 # Test outputs
 integration-test-results/
+
+package.json
+package-lock.json
+yarn.lock
+
+region_ami_config_backup_*.yml
+base-software-stack-config_backup_*.yaml

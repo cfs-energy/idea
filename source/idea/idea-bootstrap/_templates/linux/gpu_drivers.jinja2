@@ -20,7 +20,13 @@ function install_nvidia_grid_drivers () {
     kill $x_server_pid
   fi
 
-  /bin/sh NVIDIA-Linux-x86_64*.run --no-precompiled-interface --run-nvidia-xconfig --no-questions --accept-license --silent
+  if [[ $(uname -a) =~ "amzn2" ]] && [[ $(uname -r) =~ ^5.10 ]]
+  then
+      CC=/usr/bin/gcc10-cc /bin/sh NVIDIA-Linux-x86_64*.run --no-precompiled-interface --run-nvidia-xconfig --no-questions --accept-license --silent
+  else
+      /bin/sh NVIDIA-Linux-x86_64*.run --no-precompiled-interface --run-nvidia-xconfig --no-questions --accept-license --silent
+  fi
+
   log_info "X server configuration for GPU start..."
   local NVIDIAXCONFIG=$(which nvidia-xconfig)
   $NVIDIAXCONFIG --preserve-busid --enable-all-gpus
@@ -61,7 +67,12 @@ function install_nvidia_public_drivers() {
     kill $x_server_pid
   fi
 
-  /bin/sh NVIDIA-Linux-${MACHINE}-${DRIVER_VERSION}.run -q -a -n -s
+  if [[ $(uname -a) =~ "amzn2" ]] && [[ $(uname -r) =~ ^5.10 ]]
+  then
+      CC=/usr/bin/gcc10-cc /bin/sh NVIDIA-Linux-${MACHINE}-${DRIVER_VERSION}.run -q -a -n -s
+  else
+      /bin/sh NVIDIA-Linux-${MACHINE}-${DRIVER_VERSION}.run -q -a -n -s
+  fi
   log_info "X server configuration for GPU start..."
   local NVIDIAXCONFIG=$(which nvidia-xconfig)
   $NVIDIAXCONFIG --preserve-busid --enable-all-gpus

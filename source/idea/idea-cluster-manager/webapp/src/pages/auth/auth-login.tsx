@@ -82,41 +82,56 @@ class IdeaAuthLogin extends Component<IdeaAuthProps, IdeaAuthState> {
         const hasSubtitle = () => {
             return Utils.isNotEmpty(getSubtitle())
         }
+
+        const isSsoEnabled = Utils.isSsoEnabled();
+
+        const refreshPage = () => {
+            window.location.reload();
+        }
+
         return <AuthLayout
             content={
                 <ColumnLayout columns={1} className="auth-content">
                     <h3 className="title">{AppContext.get().getTitle()}</h3>
                     {hasSubtitle() && <p className="subtitle">{getSubtitle()}</p>}
-                    <IdeaForm name="login-form"
-                              ref={this.form}
-                              modalSize={"max"}
-                              showHeader={false}
-                              showActions={false}
-                              onSubmit={(_) => {
-                                  this.onSubmit()
-                              }}
-                              stretch={true}
-                              params={[
-                                  AUTH_PARAM_USERNAME,
-                                  AUTH_PARAM_PASSWORD
-                              ]}
-                    />
-                    <SpaceBetween size={"xs"} direction={"vertical"} className="actions">
-                        {!this.state.loading && (
-                            <div>
-                                <Button variant="primary"
-                                        onClick={() => {
-                                            this.onSubmit()
-                                        }}
-                                >Sign In</Button>
-                                <Button variant="link" onClick={() => {
-                                    this.props.navigate('/auth/forgot-password')
-                                }}
-                                >Forgot Password?</Button>
-                            </div>
-                        )}
-                        {this.state.loading && <Box textAlign={"center"}><StatusIndicator type="loading"/></Box>}
-                    </SpaceBetween>
+                    {!isSsoEnabled && (
+                    <React.Fragment>
+                        <IdeaForm name="login-form"
+                                  ref={this.form}
+                                  modalSize={"max"}
+                                  showHeader={false}
+                                  showActions={false}
+                                  onSubmit={(_) => { this.onSubmit(); }}
+                                  stretch={true}
+                                  params={[AUTH_PARAM_USERNAME, AUTH_PARAM_PASSWORD]}
+                        />
+                        <SpaceBetween size={"xs"} direction={"vertical"} className="actions">
+                            {!this.state.loading && (
+                                <div>
+                                    <Button variant="primary"
+                                            onClick={() => { this.onSubmit(); }}
+                                    >Sign In</Button>
+                                    <Button variant="link" onClick={() => {
+                                        this.props.navigate('/auth/forgot-password')
+                                    }}
+                                    >Forgot Password?</Button>
+                                </div>
+                            )}
+                            {this.state.loading && <Box textAlign={"center"}>
+                                <StatusIndicator type="loading"/>
+                            </Box>}
+                        </SpaceBetween>
+                    </React.Fragment>
+                )}
+                {isSsoEnabled && (
+
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+                    <Button variant="primary" onClick={refreshPage}>
+                        Login with SSO
+                    </Button>
+                    </div>
+
+                    )}
                 </ColumnLayout>
             }
         />

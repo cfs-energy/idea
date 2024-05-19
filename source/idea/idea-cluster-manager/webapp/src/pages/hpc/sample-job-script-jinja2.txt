@@ -3,7 +3,7 @@
 #PBS -q {{ queue_name }}
 #PBS -N {{ job_name }}
 #PBS -P {{ project_name }}
-# https://docs.ide-on-aws.com/hpc-simulations/user-documentation/supported-ec2-parameters
+# https://docs.idea-hpc.com/hpc-simulations/user-documentation/supported-ec2-parameters
 #PBS -l instance_type={{ instance_type }}
 #PBS -l walltime={{ wall_time }}
 #PBS -l force_ri={{ force_ri }}

@@ -57,7 +57,7 @@ Setup a schedule to start/stop your virtual desktop to save and manage costs.
 
 - **No Schedule**: Virtual Desktop lifecycle are managed by the user. Active session will run until you manually stop/terminate it. Stopped session will stay stopped until you manually start it. This is the default scheduling mode
 - **Working Hours**: IDEA will automatically start your session in the morning and stop it if inactive in the evening. Hours can be configured by IDEA admins
-- **Stop All Days**: Enforce session to be stopped all day. If you manually start your session, IDEA will automatically stop it after the idle period configured by admins
+- **Stop On Idle**: Enforce session to be stopped all day. If you manually start your session, IDEA will automatically stop it after the idle period configured by admins as long as CPU utilization is below threshold.
 - **Start All Days**: Enforce session to be started all day. If you manually stop your session, IDEA will automatically start it.
 - **Custom Schedule**: User defines when the session must be started/stopped
 
