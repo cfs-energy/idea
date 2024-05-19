@@ -52,7 +52,7 @@
     "@testing-library/react": "13.4.0",
     "@testing-library/user-event": "13.5.0",
     "@types/jest": "27.5.2",
-    "@types/node": "16.18.96",
+    "@types/node": "16.18.97",
     "@types/sass": "1.45.0",
     "react-scripts": "5.0.1",
     "sass": "1.75.0",
