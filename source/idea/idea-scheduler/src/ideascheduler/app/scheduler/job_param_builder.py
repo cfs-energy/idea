@@ -226,8 +226,8 @@ JOB_PARAM_INFO = {
             constants.SCHEDULER_OPENPBS: 'placement_group'
         }
     ),
-    constants.JOB_PARAM_ENALE_SYSTEM_METRICS: JobParameterInfo(
-        name=constants.JOB_PARAM_ENALE_SYSTEM_METRICS,
+    constants.JOB_PARAM_ENABLE_SYSTEM_METRICS: JobParameterInfo(
+        name=constants.JOB_PARAM_ENABLE_SYSTEM_METRICS,
         title='Enable System Metrics',
         description='Indicates if System Metrics should be collected from Compute Notes and published for Analytics.',
         provider_names={
@@ -2769,7 +2769,7 @@ class JobParamsBuilderContext(JobParamsBuilderContextProtocol):
         self.add_builder(ScratchStorageSizeParamBuilder(job_param=constants.JOB_PARAM_SCRATCH_STORAGE_SIZE, context=self))
         self.add_builder(ScratchIopsParamBuilder(job_param=constants.JOB_PARAM_SCRATCH_IOPS, context=self))
         self.add_builder(EnableScratchParamBuilder(job_param=constants.JOB_PARAM_ENABLE_SCRATCH, context=self))
-        self.add_builder(EnableSystemMetricsParamBuilder(job_param=constants.JOB_PARAM_ENALE_SYSTEM_METRICS, context=self))
+        self.add_builder(EnableSystemMetricsParamBuilder(job_param=constants.JOB_PARAM_ENABLE_SYSTEM_METRICS, context=self))
         self.add_builder(EnableAnonymousMetricsParamBuilder(job_param=constants.JOB_PARAM_ENABLE_ANONYMOUS_METRICS, context=self))
         self.add_builder(KeepForeverOptionBuilder(job_param=constants.JOB_OPTION_KEEP_FOREVER, context=self))
         self.add_builder(TerminateWhenIdleOptionBuilder(job_param=constants.JOB_OPTION_TERMINATE_WHEN_IDLE, context=self))

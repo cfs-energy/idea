@@ -33,6 +33,11 @@ log_info "Installing GPU drivers"
   log_info "GPU InstanceType not detected. Skipping GPU driver installation."
 {% endif -%}
 
+{%- if not context.is_gpu_instance_type() and context.vars.session.type.lower() == 'console' %}
+  {%- include '_templates/linux/x_dummy_driver.jinja2' %}
+install_x_dummy_driver
+{%- endif %}
+
 if [[ -z "$(rpm -qa gnome-terminal)" ]]; then
 {% if context.base_os == 'amazonlinux2' -%}
   DCV_AMAZONLINUX_PKGS=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.dcv_amazonlinux', required=True)) }})
@@ -49,6 +54,8 @@ if [[ -z "$(rpm -qa gnome-terminal)" ]]; then
   {%- endif %}
   printf -v EXCLUDE_JOINED '%s,' "${EXCLUDE[@]}"
   yum --exclude=${EXCLUDE_JOINED%,} groupinstall "Server with GUI" -y --skip-broken
+  sed -i 's/#WaylandEnable=false/WaylandEnable=false/' /etc/gdm/custom.conf
+  systemctl restart gdm
   # The following is a workaroud to disable the pop-up "Authentication required to refresh system repositories"
   # see details in https://bugzilla.redhat.com/show_bug.cgi?id=1857654
     echo "[Disable Package Management all Users]

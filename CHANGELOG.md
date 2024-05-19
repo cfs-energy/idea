@@ -5,6 +5,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.1.5] - 2023-09-06
+
+### Features
+* Install XDummy driver for non-gpu Linux console eVDI sessions
+* Add command-line options (`--custom-permissions-boundary`, `--cloudformation-execution-policies`, `--public-access-block-configuration`) for `idea-admin.sh bootstrap` sub-command. These are passed to the underlying `cdk bootstrap` command as needed to support IAM permissions boundary and S3 bucket restrictions during the `cdk bootstrap` phase.
+  * Users may also need to customize `cdk.json` for the IDEA-created IAM roles to attach IAM permissions boundaries, depending on their specific AWS Account policy. See [this blog post](https://aws.amazon.com/blogs/devops/secure-cdk-deployments-with-iam-permission-boundaries/) for additional information regarding AWS CDK and IAM permission boundaries.
+* In Active Directory environments - added a cache for discovered Active Directory information (domain controller IP addresses)
+* Support added for [HPC7a](https://aws.amazon.com/ec2/instance-types/hpc7a/) and [P5](https://aws.amazon.com/ec2/instance-types/p5/) instance families
+* Added `delete-backups` sub-command for `idea-admin.sh`
+
+
+### Changes
+* Update AWS EFA Installer from `1.23.1` to `1.25.1`
+* Improve ability for IDEA SDK consumers (such as `scheduler` module) to support newly launched AWS EC2 instances on the same day of launch. This changes the authoritative source of instance type validity from the installed boto3 to the AWS API call `describe_instance_types()` and provides a caching method.
+* Adjust Project budget display (and other displays of currency) to be formatted with commas
+* Change default instance types to be `m6i` family from `m5` family in keeping with current generations of available instance families. Older family instances can still be updated in the generated YAML configuration files before `config update`.
+* Support egress IPv6 traffic in security groups where IPv4-traffic was permitted
+* Split apart VDC Broker Security group generation
+* Update OpenSearch default engine from `2.3` to `2.7`
+* AWS CDK `2.63.0` -> `2.93.0`
+* AWS CDK template updates from `v14` to `v18`
+* Set the FSx/Lustre filesystem version to `2.15` for newly created filesystems
+* Updated default scratch size to `60GiB` in the WebUI (when editing Queue profiles -> EBS Scratch Provider)
+* Misc 3rd party package updates
+
+### Bug Fixes
+* Fixed missing IAM permission for VDC Controller scheduled event transformer lambda when using a customer-managed KMS key for SQS. This would have impacted the ability for eVDI schedules to apply to sessions.
+* Fixed an issue that prevented `Red Hat Enterprise Linux 8.7` from launching VDI sessions on `G4ad` instances
+* Windows eVDI instances were not correctly tagging their underlying EBS volumes and Elastic Network Interfaces. This has been fixed (Linux eVDI was not impacted)
+* HPC Job DryRun functionality was not properly sending EBS Encryption settings. This could cause jobs to fail a DryRun in environments with Service control policies (SCPs) that required Encrypted EBS volumes. The actual job submission would work properly but the DryRun requirement was a gate that was required to be passed first.
+* Restore ability to have spaces in the Project `title`
+* During `GovCloud` installation - display a list of AWS profiles for the commercial profile versus requiring the user to type it in.
+* Correct a defect that was not allowing the selection of Tenancy Choices for a Software stack.
+* Improve eVDI subnet retry logic for both Capacity exceptions abd Unsupported Instance exceptions
+* OpenSearch domains that were not completely deployed were being listed during `idea-admin.sh config generate --existing-resources`
+* When generating a stack from a session - make sure to copy the minimum storage and projects from the session. This should restore the ability to create stacks from existing sessions.
+* Fixed WebUI modal for Session Sharing permissions appearing with a dark blue header no matter what the selected theme is
+* The example configuration displayed in the SSH Access screen was missing the `Hostname` (IP address) when the bastion was deployed in Private subnet scenarios
+* Misc PEP cleanups
+
+
+### Known Caveats
+
 ## [3.1.4] - 2023-07-25
 
 :heavy_exclamation_mark: - *Please note the IDEA ECR Repository location has changed as of `3.1.4`*
@@ -55,7 +98,7 @@ Users of older `idea-admin.sh` and `idea-admin-windows.ps1` may need to manually
 * Default Web/API page size increased from `20` to `50`
 * Update AMI IDs for all supported operating systems
 * Update AWS EFA Installer from `1.22.1` to `1.23.1`
-* Update DCV Server from `2023.0-14852` to `2023.0-15065`, DCV Session Manager from `2023.0-642` to `2023.0-675`, and DCV viewer from `2023.0.5388` to `2023.0.5483`
+* Update DCV Server from `2023.0-14852` to `2023.0-15065`, DCV Session Manager Agent from `2023.0.642` to `2023.0.675`, and DCV viewer from `2023.0.5388` to `2023.0.5483`
 * Reduce the default DCV idle disconnect from 24-hours to 4-hours
 * Update Nvidia drivers from `510.47.03` to `525.105.17`
 
@@ -83,7 +126,7 @@ Users of older `idea-admin.sh` and `idea-admin-windows.ps1` may need to manually
   * `EBS` customer-managed key needs the following service-roles to be added as key users: AWSServiceRoleForAutoScaling, AWSServiceRoleForEC2Fleet, AWSServiceRoleforEC2SpotFleet. Post IDEA cluster deployment, IDEA VDC Controller IAM role also needs to be added as a key user.
   * `SQS` customer-managed key needs customization to grant SNS service-principal access per https://docs.aws.amazon.com/sns/latest/dg/sns-enable-encryption-for-topic-sqs-queue-subscriptions.html
 * New options to control eVDI subnet use/selection can be found under `vdc.dcv_sessions.network`:
-  * Allow for eVDI subnets to differ from HPC/compute subnets in the configuration. By default the same subnets are configured. This can be changed on a running cluster without a restart.
+  * Allow for eVDI subnets to differ from HPC/compute subnets in the configuration. By default, the same subnets are configured. This can be changed on a running cluster without a restart.
   * Allow for `ordered`  or `random`  subnet selection during eVDI launching. Default subnet selection is `ordered` .
   * Allow for automatic retry of eVDI subnets during creating eVDI resources. Default is to `auto-retry` the next subnet. This may be disabled in situations to avoid cross-AZ charges with eVDI resources accessing resources in other AZs.
 * Allow the IDEA Administrator to define NICE DCV USB remotization devices that will apply to the eVDI fleet. USB filter strings can be added to `vdc.server.usb_remotization`  (list) for USB client-side devices to be enabled for USB remotization.
@@ -92,7 +135,7 @@ Users of older `idea-admin.sh` and `idea-admin-windows.ps1` may need to manually
 ### Changes
 
 * AWS EFA Installer updated from `1.22.0`  to `1.22.1`
-* Upgrade to NICE DCV `2023.0` where applicable.
+* Update DCV Server from `2022.1-13300` to `2023.0-14852`, DCV Session Manager Agent from `2022.1-592` to `2023.0-642`, DCV Connection Gateway from `2022.1.377` to `2023.0.531`, DCV Session Manager Broker from `2022.1.355` to `2023.0.392`, and DCV viewer from `2022.1.4251` to `2023.0.5388`
 * Changes to WebUI / notification icon - Password expiration warning will only appear at `<10days`.  Remove the default pip on the icon indicating a waiting notification.
 * eVDI hosts will now populate `/etc/environment`  with two additional environment variables that can be used by bootstrap scripting / post-boot customization. `IDEA_SESSION_OWNER`  and `IDEA_SESSION_ID` .
 * When submitting a job from the WebUI - the job name  will now default to the filename with the `.`  character replaced with `_`  as `.`  is not allowed in job names.
@@ -106,7 +149,7 @@ Users of older `idea-admin.sh` and `idea-admin-windows.ps1` may need to manually
 * The incorrect version number for IDEA was displayed in the Web console
 * eVDI sessions were launched with EBS volume encryption tied to the Hibernation setting
 * The download link for NICE DCV Session manager agent for Windows was incorrect
-* Log files are now encoded in `UTF-8` encoding. This allows for logging of eVDI session names with UTF-8/multi-byte characters. Previously this would cause a traceback.
+* Log files are now encoded in `UTF-8` encoding. This allows for logging of eVDI session names with UTF-8/multibyte characters. Previously this would cause a traceback.
 * A bug was preventing the cluster timezone from properly being detecting in some modules. The timezone would default to `America/Los_Angeles`  for some situations even when the `cluster.timezone`  was properly set. This would cause eVDI schedules to operate in `America/Los_Angeles`  instead of the cluster timezone.
 * Fixed a bug that prevented updates to DCV connection gateway certificate ARNs when private certificates are used
 * Fixed a bug that prevented SSH access to IDEA infrastructure instances when `CentOS7` is used
@@ -227,7 +270,7 @@ Users of older `idea-admin.sh` and `idea-admin-windows.ps1` may need to manually
 * IDEA Python updated to `3.9.16 `
 * Lustre client updated to `2.12`
 * Changes to integration-test infrastructure to leverage `IMDSv2`
-* Changes to integration-tests to cleanup any AWS Backups that are deployed and log more environment variables during the run
+* Changes to integration-tests to clean up any AWS Backups that are deployed and log more environment variables during the run
 * Connect anonymous metrics for telemetry information about the AWS Solution
 * Revised eVDI `allowlist/denylist` functionality to allow fine-grained control of instances. Supports both instance family and specific instance conventions.
 * Build python in the bootstrap directory vs. `/tmp`  - this is more compatible with AMIs that have `noexec`  mount policy for `/tmp` .

@@ -65,11 +65,13 @@ def batch_create_sessions(path_to_csv: str, force: bool, generate_template: bool
 
     if generate_template:
         #  TODO: generate template
-        return
+        raise NotImplementedError
 
     context = build_cli_context(unix_socket_timeout=360000)
 
     # TODO: check if valid path and throw error
+    if not path_to_csv:
+        raise ValueError('path_to_csv is required')
 
     with open(path_to_csv, 'r', encoding='utf-8-sig') as csv_file:
         csv_reader = csv.DictReader(csv_file)
@@ -78,26 +80,42 @@ def batch_create_sessions(path_to_csv: str, force: bool, generate_template: bool
 
         session_requests: List[List[VirtualDesktopSession]] = []
         sessions: List[VirtualDesktopSession] = []
+
         for row in csv_reader:
+            _name = Utils.get_as_string(row.get('session_name', None))
+            _owner = Utils.get_as_string(row.get('owner', None))
+            _base_os = Utils.get_as_string(row.get('base_os', None), default='amazonlinux2')
+            _software_stack_id = Utils.get_as_string(row.get('software_stack_id', None), default='ss-base-amazonlinux2-x86-64-base')
+            _instance_type = Utils.get_as_string(row.get('instance_type', None), default='t3.large')
+            _storage_size_gb = Utils.get_as_float(row.get('storage_size_gb', None), default=30.0)
+            _project_id = Utils.get_as_string(row.get('project_id', None), default='default')
+            _session_type = Utils.get_as_string(row.get('session_type', None), default='console')
+            _hibernation_enabled = Utils.get_as_bool(row.get('hibernation_enabled', None), default=False)
+
+            if Utils.is_any_empty(_name, _owner, _base_os, _software_stack_id, _instance_type, _storage_size_gb, _project_id, _session_type):
+                # Skip this entry
+                print(f"Skipping entry: {row}")
+                continue
+
             sessions.append(VirtualDesktopSession(
-                name=Utils.get_as_string(row['session_name']),
-                owner=Utils.get_as_string(row['owner']),
+                name=_name,
+                owner=_owner,
                 software_stack=VirtualDesktopSoftwareStack(
-                    base_os=VirtualDesktopBaseOS(Utils.get_as_string(row['base_os'])),
-                    stack_id=Utils.get_as_string(str(row['software_stack_id']))
+                    base_os=VirtualDesktopBaseOS(_base_os),
+                    stack_id=_software_stack_id
                 ),
                 server=VirtualDesktopServer(
-                    instance_type=Utils.get_as_string(row['instance_type']),
+                    instance_type=_instance_type,
                     root_volume_size=SocaMemory(
                         unit=SocaMemoryUnit.GB,
-                        value=Utils.get_as_float(row['storage_size_gb'])
+                        value=_storage_size_gb
                     )
                 ),
                 project=Project(
-                    project_id=Utils.get_as_string(row['project_id'])
+                    project_id=_project_id
                 ),
-                type=VirtualDesktopSessionType(Utils.get_as_string(row['session_type'])),
-                hibernation_enabled=Utils.get_as_bool(row['hibernation_enabled']),
+                type=VirtualDesktopSessionType(_session_type),
+                hibernation_enabled=_hibernation_enabled,
             ))
             # random batching with 10 sessions to not overload the API.
             if len(sessions) > 10:

@@ -240,49 +240,50 @@ class ArnBuilder:
     @property
     def kms_secretsmanager_key_arn(self) -> str:
         return(self.get_arn(service='kms',
-                        resource=f'key/{self.config.get_string("cluster.secretsmanager.kms_key_id")}',
-                        aws_region=self.config.get_string("cluster.aws.region")))
+                            resource=f'key/{self.config.get_string("cluster.secretsmanager.kms_key_id")}',
+                            aws_region=self.config.get_string("cluster.aws.region")))
 
     @property
     def kms_sqs_key_arn(self) -> str:
         return(self.get_arn(service='kms',
-                        resource=f'key/{self.config.get_string("cluster.sqs.kms_key_id")}',
-                        aws_region=self.config.get_string("cluster.aws.region")))
+                            resource=f'key/{self.config.get_string("cluster.sqs.kms_key_id")}',
+                            aws_region=self.config.get_string("cluster.aws.region")))
 
     @property
     def kms_sns_key_arn(self) -> str:
         return(self.get_arn(service='kms',
-                        resource=f'key/{self.config.get_string("cluster.sns.kms_key_id")}',
-                        aws_region=self.config.get_string("cluster.aws.region")))
+                            resource=f'key/{self.config.get_string("cluster.sns.kms_key_id")}',
+                            aws_region=self.config.get_string("cluster.aws.region")))
 
     @property
     def kms_dynamodb_key_arn(self) -> str:
         return(self.get_arn(service='kms',
-                        resource=f'key/{self.config.get_string("cluster.dynamodb.kms_key_id")}',
-                        aws_region=self.config.get_string("cluster.aws.region")))
+                            resource=f'key/{self.config.get_string("cluster.dynamodb.kms_key_id")}',
+                            aws_region=self.config.get_string("cluster.aws.region")))
+
     @property
     def kms_ebs_key_arn(self) -> str:
         return(self.get_arn(service='kms',
-                        resource=f'key/{self.config.get_string("cluster.ebs.kms_key_id")}',
-                        aws_region=self.config.get_string("cluster.aws.region")))
+                            resource=f'key/{self.config.get_string("cluster.ebs.kms_key_id")}',
+                            aws_region=self.config.get_string("cluster.aws.region")))
 
     @property
     def kms_backup_key_arn(self) -> str:
         return(self.get_arn(service='kms',
-                        resource=f'key/{self.config.get_string("cluster.backups.backup_vault.kms_key_id")}',
-                        aws_region=self.config.get_string("cluster.aws.region")))
+                            resource=f'key/{self.config.get_string("cluster.backups.backup_vault.kms_key_id")}',
+                            aws_region=self.config.get_string("cluster.aws.region")))
 
     @property
     def kms_opensearch_key_arn(self) -> str:
         return(self.get_arn(service='kms',
-                        resource=f'key/{self.config.get_string("analytics.opensearch.kms_key_id")}',
-                        aws_region=self.config.get_string("cluster.aws.region")))
+                            resource=f'key/{self.config.get_string("analytics.opensearch.kms_key_id")}',
+                            aws_region=self.config.get_string("cluster.aws.region")))
 
     @property
     def kms_kinesis_key_arn(self) -> str:
         return(self.get_arn(service='kms',
-                        resource=f'key/{self.config.get_string("analytics.kinesis.kms_key_id")}',
-                        aws_region=self.config.get_string("cluster.aws.region")))
+                            resource=f'key/{self.config.get_string("analytics.kinesis.kms_key_id")}',
+                            aws_region=self.config.get_string("cluster.aws.region")))
 
     @property
     def kms_key_arn(self) -> List[str]:

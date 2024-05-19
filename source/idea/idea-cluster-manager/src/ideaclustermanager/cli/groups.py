@@ -203,6 +203,7 @@ def create_group(**kwargs):
     )
     context.print_json(Utils.to_json(result.group))
 
+
 @groups.command(context_settings=constants.CLICK_SETTINGS)
 @click.option('--groupname', required=True, help='Groupname to DELETE')
 def delete_group(groupname: str):
@@ -220,6 +221,7 @@ def delete_group(groupname: str):
         )
     except exceptions.SocaException as e:
         context.error(e.message)
+
 
 @groups.command(context_settings=constants.CLICK_SETTINGS)
 @click.option('--username', required=True, multiple=True, help='Username for operation. Can be specified multiple times (-u user1 -u user2)')

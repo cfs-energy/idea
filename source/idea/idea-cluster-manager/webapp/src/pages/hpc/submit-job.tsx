@@ -633,7 +633,7 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
 
         return (
             <div>
-                <Form header={<h3>Fill the below form to submit your job.</h3>}>
+                <Form header={<h3>Fill the below form to submit your job.</h3>} variant="embedded">
                     <SpaceBetween size="l" direction="vertical">
                         <FormField
                             label="Application"

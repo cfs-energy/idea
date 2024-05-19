@@ -312,7 +312,7 @@ class IdeaForm extends Component<IdeaFormProps, IdeaFormState> {
         const numColumns = () => (this.props.columns != null) ? this.props.columns : 1
 
         return <form onSubmit={(e) => e.preventDefault()}>
-            <Form actions={this.showActions() && this.buildFormActions()}
+            <Form variant={"embedded"} actions={this.showActions() && this.buildFormActions()}
                   header={this.showHeader() && <Header variant="h2">{this.props.title}</Header>}
                   errorText={this.state.message}
             >

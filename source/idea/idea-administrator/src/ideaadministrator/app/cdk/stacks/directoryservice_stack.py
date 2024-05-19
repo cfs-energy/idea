@@ -247,10 +247,10 @@ class DirectoryServiceStack(IdeaBaseStack):
                     }
         kms_key_id = self.context.config().get_string('cluster.ebs.kms_key_id', required=False, default=None)
         if kms_key_id is not None:
-             kms_key_arn = self.get_kms_key_arn(kms_key_id)
-             ebs_kms_key = kms.Key.from_key_arn(scope=self.stack, id=f'ebs-kms-key', key_arn=kms_key_arn)
+            kms_key_arn = self.get_kms_key_arn(kms_key_id)
+            ebs_kms_key = kms.Key.from_key_arn(scope=self.stack, id=f'ebs-kms-key', key_arn=kms_key_arn)
         else:
-             ebs_kms_key = kms.Alias.from_alias_name(scope=self.stack, id=f'ebs-kms-key-default', alias_name='alias/aws/ebs')
+            ebs_kms_key = kms.Alias.from_alias_name(scope=self.stack, id=f'ebs-kms-key-default', alias_name='alias/aws/ebs')
 
         if is_public and len(self.cluster.public_subnets) > 0:
             subnet_ids = self.cluster.existing_vpc.get_public_subnet_ids()
@@ -340,6 +340,11 @@ class DirectoryServiceStack(IdeaBaseStack):
         cdk.Tags.of(self.openldap_ec2_instance).add('Name', self.build_resource_name(self.module_id))
         cdk.Tags.of(self.openldap_ec2_instance).add(constants.IDEA_TAG_NODE_TYPE, constants.NODE_TYPE_INFRA)
         self.add_backup_tags(self.openldap_ec2_instance)
+
+        self.add_nag_suppression(
+            construct=self.openldap_ec2_instance,
+            suppressions=[IdeaNagSuppression(rule_id='AwsSolutions-EC26', reason='EBS Encryption is enforced via Launch Template')]
+        )
 
         if not enable_detailed_monitoring:
             self.add_nag_suppression(

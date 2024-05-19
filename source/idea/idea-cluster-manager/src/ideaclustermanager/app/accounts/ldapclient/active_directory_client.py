@@ -290,7 +290,6 @@ class ActiveDirectoryClient(AbstractLDAPClient):
             else:
                 self.logger.warn(f"Unable to set userAccountControl for username {username} on non-LDAPS AD connection ({self.ldap_uri})")
 
-
             self.wait_for_user_creation(username)
         _ds_sync_user_end = Utils.current_time_ms()
         self.logger.info(f"Completed active_directory sync_user() for {username} in {_ds_sync_user_end - _ds_sync_user_start}ms")

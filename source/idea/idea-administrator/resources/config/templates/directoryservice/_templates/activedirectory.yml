@@ -33,6 +33,8 @@ sssd:
 ad_automation:
   # time to live - for the ad-automation DDB table entry containing OTP and any other attributes
   entry_ttl_seconds: 1800
+  # Number of seconds to cache AD domain controller information
+  domain_discovery_ttl_seconds: 300
 
   # enable or disable service account's password rotation
   # when set to true, IDEA ADAutomationAgent running in Cluster Manager will try to reset the service account credentials,

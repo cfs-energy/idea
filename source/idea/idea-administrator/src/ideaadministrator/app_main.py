@@ -803,8 +803,11 @@ def delete_config(cluster_name: str, aws_profile: str, aws_region: str, config_k
 @click.option('--aws-profile', help='AWS Profile Name')
 @click.option('--aws-region', required=True, help='AWS Region')
 @click.option('--termination-protection', default=True, help='Set termination protection to true or false. Default: true')
+@click.option('--custom-permissions-boundary', default='', help='Name of a custom permissions boundary to pass to CDK (Default to none)')
+@click.option('--cloudformation-execution-policies', default='', help='Customize CDK CloudFormation execution policies')
+@click.option('--public-access-block-configuration', default=True, help='Include S3 Block Public Access configuration for CDK staging bucket. Set to false for restricted S3 environments.')
 @click.option('--module-set', help='Name of the ModuleSet. Default: default')
-def bootstrap_cluster(cluster_name: str, aws_profile: str, aws_region: str, termination_protection: bool, module_set: str):
+def bootstrap_cluster(cluster_name: str, aws_profile: str, aws_region: str, termination_protection: bool, module_set: str, custom_permissions_boundary: str, cloudformation_execution_policies: str, public_access_block_configuration: bool):
     """
     bootstrap cluster
     """
@@ -825,7 +828,10 @@ def bootstrap_cluster(cluster_name: str, aws_profile: str, aws_region: str, term
             cluster_name=cluster_name,
             aws_region=aws_region,
             aws_profile=aws_profile,
-            termination_protection=termination_protection
+            termination_protection=termination_protection,
+            custom_permissions_boundary=custom_permissions_boundary,
+            cloudformation_execution_policies=cloudformation_execution_policies,
+            public_access_block_configuration=public_access_block_configuration
         ).bootstrap_cluster(cluster_bucket=cluster_s3_bucket)
 
 
@@ -1424,7 +1430,7 @@ def delete_backups(cluster_name: str, aws_region: str, aws_profile: str, force: 
     context = SocaCliContext()
     confirm_delete_backups = force
     if not force:
-        confirm_delete_backups = context.prompt('Are you sure you want to delete all the backup recovery points?')
+        confirm_delete_backups = context.prompt(f"Are you sure you want to delete all the backup recovery points for cluster {cluster_name} ?")
 
     if not confirm_delete_backups:
         return
@@ -1436,6 +1442,8 @@ def delete_backups(cluster_name: str, aws_region: str, aws_profile: str, force: 
         delete_bootstrap=False,
         delete_databases=False,
         delete_backups=True,
+        delete_cloudwatch_logs=False,
+        delete_all=False,
         force=force
     ).delete_backup_vault_recovery_points()
 
@@ -1887,6 +1895,7 @@ main.add_command(show_connection_info)
 main.add_command(quick_setup_help)
 main.add_command(quick_setup)
 main.add_command(delete_cluster)
+main.add_command(delete_backups)
 main.add_command(patch_module)
 main.add_command(check_cluster_status)
 main.add_command(about)

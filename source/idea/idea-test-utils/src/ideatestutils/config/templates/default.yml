@@ -60,7 +60,7 @@ directoryservice:
   instance_ami: ami-0489c6c0a2c0b6281
   instance_id: i-0fea892e74374ef26
   instance_profile_arn: {{ context.cluster_name }}-directoryservice-openldap-instance-profile-us-east-1
-  instance_type: m5.large
+  instance_type: m6i.large
   ldap_base: dc=idea,dc=local
   ldap_connection_uri: ldap://openldap.{{ context.cluster_name }}.us-east-1.local
   name: idea.local
@@ -428,9 +428,9 @@ global-settings:
         - putty
 
     nodejs:
-      version: "16.10.0"
-      nvm_version: "0.39.0"
-      npm_version: "7.15.1"
+      version: "16.20.2"
+      nvm_version: "0.39.5"
+      npm_version: "9.8.1"
       url: "https://raw.githubusercontent.com/nvm-sh/nvm/"
     openmpi:
       version: "4.1.5"

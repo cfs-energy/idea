@@ -305,10 +305,10 @@ class SchedulerStack(IdeaBaseStack):
                     }
         kms_key_id = self.context.config().get_string('cluster.ebs.kms_key_id', required=False, default=None)
         if kms_key_id is not None:
-             kms_key_arn = self.get_kms_key_arn(kms_key_id)
-             ebs_kms_key = kms.Key.from_key_arn(scope=self.stack, id=f'ebs-kms-key', key_arn=kms_key_arn)
+            kms_key_arn = self.get_kms_key_arn(kms_key_id)
+            ebs_kms_key = kms.Key.from_key_arn(scope=self.stack, id=f'ebs-kms-key', key_arn=kms_key_arn)
         else:
-             ebs_kms_key = kms.Alias.from_alias_name(scope=self.stack, id=f'ebs-kms-key-default', alias_name='alias/aws/ebs')
+            ebs_kms_key = kms.Alias.from_alias_name(scope=self.stack, id=f'ebs-kms-key-default', alias_name='alias/aws/ebs')
 
         if is_public and len(self.cluster.public_subnets) > 0:
             subnet_ids = self.cluster.existing_vpc.get_public_subnet_ids()
@@ -384,6 +384,11 @@ class SchedulerStack(IdeaBaseStack):
         cdk.Tags.of(self.ec2_instance).add('Name', self.build_resource_name(self.module_id))
         cdk.Tags.of(self.ec2_instance).add(constants.IDEA_TAG_NODE_TYPE, constants.NODE_TYPE_APP)
         self.add_backup_tags(self.ec2_instance)
+
+        self.add_nag_suppression(
+            construct=self.ec2_instance,
+            suppressions=[IdeaNagSuppression(rule_id='AwsSolutions-EC26', reason='EBS Encryption is enforced via Launch Template')]
+        )
 
         if not enable_detailed_monitoring:
             self.add_nag_suppression(
@@ -515,23 +520,33 @@ class SchedulerStack(IdeaBaseStack):
         )
 
     def build_cluster_settings(self):
-        cluster_settings = {}
-        cluster_settings['deployment_id'] = self.deployment_id
-        cluster_settings['private_ip'] = self.ec2_instance.attr_private_ip
-        cluster_settings['private_dns_name'] = self.ec2_instance.attr_private_dns_name
+        cluster_settings = {
+            'deployment_id': self.deployment_id,
+            'private_ip': self.ec2_instance.attr_private_ip,
+            'private_dns_name': self.ec2_instance.attr_private_dns_name
+        }
 
-        is_public = self.context.config().get_bool('scheduler.public', False)
+        is_public = self.context.config().get_bool('scheduler.public', default=False)
         if is_public:
-            cluster_settings['public_ip'] = self.ec2_instance.attr_public_ip
-        cluster_settings['instance_id'] = self.ec2_instance.ref
-        cluster_settings['client_id'] = self.oauth2_client_secret.client_id.ref
-        cluster_settings['client_secret'] = self.oauth2_client_secret.client_secret.ref
-        cluster_settings['security_group_id'] = self.scheduler_security_group.security_group_id
-        cluster_settings['iam_role_arn'] = self.scheduler_role.role_arn
-        cluster_settings['compute_node_security_group_ids'] = [self.compute_node_security_group.security_group_id]
-        cluster_settings['compute_node_iam_role_arn'] = self.compute_node_role.role_arn
-        cluster_settings['compute_node_instance_profile_arn'] = self.compute_node_instance_profile.ref
-        cluster_settings['spot_fleet_request_iam_role_arn'] = self.spot_fleet_request_role.role_arn
-        cluster_settings['job_status_sqs_queue_url'] = self.job_status_sqs_queue.queue_url
+            cluster_settings.update({
+                'public_ip': self.ec2_instance.attr_public_ip
+            })
+
+        cluster_settings.update(
+            {
+                "instance_id": self.ec2_instance.ref,
+                "client_id": self.oauth2_client_secret.client_id.ref,
+                "client_secret": self.oauth2_client_secret.client_secret.ref,
+                "security_group_id": self.scheduler_security_group.security_group_id,
+                "iam_role_arn": self.scheduler_role.role_arn,
+                "compute_node_security_group_ids": [
+                    self.compute_node_security_group.security_group_id
+                ],
+                "compute_node_iam_role_arn": self.compute_node_role.role_arn,
+                "compute_node_instance_profile_arn": self.compute_node_instance_profile.ref,
+                "spot_fleet_request_iam_role_arn": self.spot_fleet_request_role.role_arn,
+                "job_status_sqs_queue_url": self.job_status_sqs_queue.queue_url,
+            }
+        )
 
         self.update_cluster_settings(cluster_settings)

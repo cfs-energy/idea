@@ -233,7 +233,7 @@ class AwsClientProvider(AwsClientProviderProtocol):
 
     def are_credentials_expired(self) -> bool:
         credentials = self._session.get_credentials()
-        if credentials.method == 'shared-credentials-file':
+        if credentials.method == 'shared-credentials-file' or credentials.method == 'env':
             try:
                 self.aws_account_id()
                 return False

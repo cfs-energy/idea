@@ -16,6 +16,7 @@ import IdeaForm from "../../../components/form";
 import {Project, SocaUserInputChoice, VirtualDesktopBaseOS, VirtualDesktopSoftwareStack, VirtualDesktopTenancy} from "../../../client/data-model";
 import {ProjectsClient} from "../../../client";
 import {AppContext} from "../../../common";
+import Utils from "../../../common/utils";
 
 export interface VirtualDesktopSoftwareStackEditFormProps {
     softwareStack: VirtualDesktopSoftwareStack
@@ -87,26 +88,7 @@ class VirtualDesktopSoftwareStackEditForm extends Component<VirtualDesktopSoftwa
         return choices
     }
 
-    getTenancyChoices(): SocaUserInputChoice[] {
-        let choices: SocaUserInputChoice[] = []
-        choices.push({
-            title:  'Default/Shared',
-            value: 'default',
-            description: 'Multiple AWS accounts may share the same physical hardware'
-        })
-        choices.push({
-            title: 'Dedicated',
-            value: 'dedicated',
-            description: 'Your instance runs on single-tenant hardware'
-        })
-        choices.push({
-            title: 'Host',
-            value: 'host',
-            description: 'Your instance runs on a physical server with EC2 instance capacity fully dedicated to your use'
-        })
 
-        return choices
-    }
 
     componentDidMount() {
         this.getProjectsClient().getUserProjects({}).then(result => {
@@ -128,7 +110,7 @@ class VirtualDesktopSoftwareStackEditForm extends Component<VirtualDesktopSoftwa
         })
 
         this.setState({
-            tenancyChoices: this.getTenancyChoices()
+            tenancyChoices: Utils.getTenancyChoices()
         }, () => {
             this.getForm()?.getFormField('tenancy')?.setOptions({
                 listing: this.state.tenancyChoices

@@ -34,32 +34,32 @@ class OpenPBSConverter:
             return None
         tokens = state.strip().lower().split(',')
         result = set()
-        for token in tokens:
-            if token == 'busy':
+        for _token in tokens:
+            if _token == 'busy':
                 result.add(SocaComputeNodeState.BUSY)
-            elif token == 'down':
+            elif _token == 'down':
                 result.add(SocaComputeNodeState.DOWN)
-            elif token == 'free':
+            elif _token == 'free':
                 result.add(SocaComputeNodeState.FREE)
-            elif token == 'offline':
+            elif _token == 'offline':
                 result.add(SocaComputeNodeState.OFFLINE)
-            elif token == 'job-busy':
+            elif _token == 'job-busy':
                 result.add(SocaComputeNodeState.JOB_BUSY)
-            elif token == 'job-exclusive':
+            elif _token == 'job-exclusive':
                 result.add(SocaComputeNodeState.JOB_EXCLUSIVE)
-            elif token == 'provisioning':
+            elif _token == 'provisioning':
                 result.add(SocaComputeNodeState.PROVISIONING)
-            elif token == 'resv-exclusive':
+            elif _token == 'resv-exclusive':
                 result.add(SocaComputeNodeState.RESV_EXCLUSIVE)
-            elif token == 'stale':
+            elif _token == 'stale':
                 result.add(SocaComputeNodeState.STALE)
-            elif token == 'stale-unknown':
+            elif _token == 'stale-unknown':
                 result.add(SocaComputeNodeState.STALE_UNKNOWN)
-            elif token == 'unresolvable':
+            elif _token == 'unresolvable':
                 result.add(SocaComputeNodeState.UNRESOLVABLE)
-            elif token == 'wait-provisioning':
+            elif _token == 'wait-provisioning':
                 result.add(SocaComputeNodeState.WAIT_PROVISIONING)
-            elif token == 'initializing':
+            elif _token == 'initializing':
                 result.add(SocaComputeNodeState.INITIALIZING)
 
         if len(result) == 0:

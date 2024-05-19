@@ -130,10 +130,10 @@ class BastionHostStack(IdeaBaseStack):
                     }
         kms_key_id = self.context.config().get_string('cluster.ebs.kms_key_id', required=False, default=None)
         if kms_key_id is not None:
-             kms_key_arn = self.get_kms_key_arn(kms_key_id)
-             ebs_kms_key = kms.Key.from_key_arn(scope=self.stack, id=f'ebs-kms-key', key_arn=kms_key_arn)
+            kms_key_arn = self.get_kms_key_arn(kms_key_id)
+            ebs_kms_key = kms.Key.from_key_arn(scope=self.stack, id=f'ebs-kms-key', key_arn=kms_key_arn)
         else:
-             ebs_kms_key = kms.Alias.from_alias_name(scope=self.stack, id=f'ebs-kms-key-default', alias_name='alias/aws/ebs')
+            ebs_kms_key = kms.Alias.from_alias_name(scope=self.stack, id=f'ebs-kms-key-default', alias_name='alias/aws/ebs')
 
         instance_profile_name = self.bastion_host_instance_profile.instance_profile_name
         security_group = self.cluster.get_security_group(constants.MODULE_BASTION_HOST)
@@ -213,6 +213,11 @@ class BastionHostStack(IdeaBaseStack):
         cdk.Tags.of(self.ec2_instance).add(constants.IDEA_TAG_NODE_TYPE, constants.NODE_TYPE_INFRA)
         self.add_backup_tags(self.ec2_instance)
         self.ec2_instance.node.add_dependency(self.bastion_host_instance_profile)
+
+        self.add_nag_suppression(
+            construct=self.ec2_instance,
+            suppressions=[IdeaNagSuppression(rule_id='AwsSolutions-EC26', reason='EBS Encryption is enforced via Launch Template')]
+        )
 
         if not enable_detailed_monitoring:
             self.add_nag_suppression(

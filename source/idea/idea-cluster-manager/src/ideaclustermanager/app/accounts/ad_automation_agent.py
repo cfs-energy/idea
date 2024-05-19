@@ -201,7 +201,7 @@ class ADAutomationAgent(SocaService):
                         sender_id = Utils.get_value_as_string('SenderId', attributes)
 
                         self.logger.info(f'Processing AD automation event: {namespace}')
-
+                        _ad_automation_start = Utils.current_time_ms()
                         try:
 
                             if namespace == 'ADAutomation.PresetComputer':
@@ -230,6 +230,8 @@ class ADAutomationAgent(SocaService):
                             else:
                                 # retry on any unhandled exception.
                                 raise e
+                        _ad_automation_end = Utils.current_time_ms()
+                        self.logger.debug(f"AD Automation event for {namespace} completed - Duration {_ad_automation_end - _ad_automation_start}ms")
 
                     except Exception as e:
                         self.logger.exception(f'failed to process sqs message: {e}. payload: {Utils.to_json(sqs_message)}. processing will be retried in {visibility_timeout} seconds ...')
@@ -281,8 +283,9 @@ class ADAutomationAgent(SocaService):
                     _ttl = Utils.get_value_as_int('N', _ttl_dict)
                     _nonce = Utils.get_value_as_string('S', _nonce_dict)
                     if _instance_id and _ttl:
-                        self.logger.debug(f"AD Automation table scan entry #{_entrynum} - Instance: {_instance_id}, TTL: {_ttl}")
-                        if _ttl >= 2000000000: # Tue May 17 22:33:20 CDT 2033
+                        _ttl_str = f'({Utils.unix_timestamp_string(_ttl)} - {Utils.humanize_unix_timestamp(_ttl)})'
+                        self.logger.debug(f"AD Automation table scan entry #{_entrynum} - Instance: {_instance_id}, TTL: {_ttl} {_ttl_str}")
+                        if _ttl >= 2000000000:  # Tue May 17 22:33:20 CDT 2033
                             if self._update_ttl(instance_id=_instance_id, nonce=_nonce, new_ttl=new_ttl):
                                 self.logger.info(f"Automation DB entry TTL repaired: #{_entrynum} - Instance: {_instance_id}, TTL: {_ttl} -> {new_ttl}")
                                 _repaired_entries += 1
@@ -293,7 +296,6 @@ class ADAutomationAgent(SocaService):
         # Summarize for the logs
         self.logger.info(f"AD Automation table scan summary: {_entrynum} entries scanned, {_repaired_entries} entries repaired, {_repair_failures} repair failures")
 
-
     def _update_ttl(self, instance_id: str, nonce: str, new_ttl: int) -> bool:
         # Update the TTL in the dynamo DB table
         self.logger.debug(f"Updating DynamoDB TTL for instance_id/nonce: {instance_id}/{nonce} TO {new_ttl}")
@@ -301,12 +303,12 @@ class ADAutomationAgent(SocaService):
             result = self.context.aws().dynamodb().update_item(
                 TableName=self.ad_automation_dao.get_table_name(),
                 Key={
-                    'instance_id': { 'S': instance_id},
-                    'nonce': { 'S': nonce }
+                    'instance_id': {'S': instance_id},
+                    'nonce': {'S': nonce}
                 },
                 UpdateExpression='SET #ttl = :new_ttl',
                 ExpressionAttributeValues={
-                    ':new_ttl': { 'N': str(new_ttl) }
+                    ':new_ttl': {'N': str(new_ttl)}
                 },
                 ExpressionAttributeNames={
                     '#ttl': 'ttl'

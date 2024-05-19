@@ -125,7 +125,7 @@ class BootstrapContext:
         context_vars = vars(self.vars)
         if 'job' in context_vars:
             params = self.vars.job.params
-            if not hasattr (params, parameter):
+            if not hasattr(params, parameter):
                 return False
             param_value = params.__getattribute__(parameter)
             if isinstance(param_value, bool):

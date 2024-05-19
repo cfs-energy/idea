@@ -238,7 +238,7 @@ class VirtualDesktopScheduleUtils:
                 start_up_time = schedule.start_up_time.split(":")
                 shut_down_time = schedule.shut_down_time.split(":")
 
-            start_up_time = DateTimeUtils.to_time_object(hours=int(start_up_time[0]), minutes=int(shut_down_time[1]))
+            start_up_time = DateTimeUtils.to_time_object(hours=int(start_up_time[0]), minutes=int(start_up_time[1]))
             shut_down_time = DateTimeUtils.to_time_object(hours=int(shut_down_time[0]), minutes=int(shut_down_time[1]))
             if event_time < start_up_time:
                 # should we shut down a running session ?? or leave as is.

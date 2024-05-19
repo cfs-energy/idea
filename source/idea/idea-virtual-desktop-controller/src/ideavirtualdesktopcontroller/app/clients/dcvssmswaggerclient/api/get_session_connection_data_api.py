@@ -69,11 +69,7 @@ class GetSessionConnectionDataApi(object):
                  returns the request thread.
         """
 
-        all_params = ['session_id', 'user']  # noqa: E501
-        all_params.append('async_req')
-        all_params.append('_return_http_data_only')
-        all_params.append('_preload_content')
-        all_params.append('_request_timeout')
+        all_params = ['session_id', 'user', 'async_req', '_return_http_data_only', '_preload_content', '_request_timeout']
 
         params = locals()
         for key, val in six.iteritems(params['kwargs']):

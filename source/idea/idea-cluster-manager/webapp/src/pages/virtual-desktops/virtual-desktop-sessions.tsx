@@ -239,7 +239,7 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                 ref={this.createSoftwareStackForm}
                 name={"create-software-stack"}
                 modal={true}
-                title={"Create Software Stack for " + this.state.sessionForSoftwareStack?.name}
+                title={"Create Software Stack from Session: " + this.state.sessionForSoftwareStack?.name}
                 modalSize={"medium"}
                 onCancel={() => {
                     this.hideCreateSoftwareStackForm()
@@ -250,15 +250,22 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                         return
                     }
                     const values = this.getCreateSoftwareStackForm().getValues()
+
+                    let projectValues: any[] = [];
+                    values.projects.forEach((project: string) => {
+                        projectValues.push({project_id: project});
+                    });
                     this.getVirtualDesktopAdminClient().createSoftwareStackFromSession({
                         session: this.state.sessionForSoftwareStack,
                         new_software_stack: {
                             name: values.name,
                             description: values.description,
-                            min_storage: {
-                                value: values.root_storage_size,
-                                unit: 'gb'
-                            }
+                            min_storage:
+                                {
+                                    value: values.root_storage_size,
+                                    unit: 'gb'
+                                },
+                            projects: projectValues,
                         }
                     }).then(() => {
                         this.hideCreateSoftwareStackForm()
@@ -293,8 +300,9 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                         description: 'Enter the storage size for your virtual desktop in GBs',
                         data_type: 'int',
                         param_type: 'text',
-                        default: 10,
+                        default: Math.max(10, this.state.sessionForSoftwareStack?.software_stack?.min_storage?.value!),
                         validate: {
+                            min: Math.max(10, this.state.sessionForSoftwareStack?.software_stack?.min_storage?.value!),
                             required: true
                         }
                     },
@@ -666,7 +674,7 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                     },
                     {
                         id: "create-software-stack",
-                        text: "Create Software Stack",
+                        text: "Create Software Stack from Session",
                         disabled: !this.canCreateSoftwareStack(),
                         disabledReason: 'Select exactly 1 session to enable this Action',
                         onClick: () => {

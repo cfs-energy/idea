@@ -18,6 +18,7 @@ from ideaadministrator.app.cdk.constructs import (
     InstanceProfile,
     VirtualDesktopBastionAccessSecurityGroup,
     VirtualDesktopPublicLoadBalancerAccessSecurityGroup,
+    VirtualDesktopBrokerSecurityGroup,
     SQSQueue,
     SNSTopic,
     Policy,
@@ -119,7 +120,7 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
         self.dcv_host_security_group: Optional[VirtualDesktopBastionAccessSecurityGroup] = None
         self.controller_security_group: Optional[VirtualDesktopPublicLoadBalancerAccessSecurityGroup] = None
         self.dcv_connection_gateway_security_group: Optional[VirtualDesktopPublicLoadBalancerAccessSecurityGroup] = None
-        self.dcv_broker_security_group: Optional[VirtualDesktopBastionAccessSecurityGroup] = None
+        self.dcv_broker_security_group: Optional[VirtualDesktopBrokerSecurityGroup] = None
         self.dcv_broker_alb_security_group: Optional[VirtualDesktopBastionAccessSecurityGroup] = None
 
         self.dcv_connection_gateway_self_signed_cert: Optional[cdk.CustomResource] = None
@@ -166,9 +167,19 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
             ec2.Port.udp_range(0, 65535),
             description='Allow all egress for UDP for QUIC Support on DCV Host'
         )
+        self.dcv_host_security_group.add_egress_rule(
+            ec2.Peer.ipv6('::/0'),
+            ec2.Port.udp_range(0, 65535),
+            description='Allow all egress for UDP for QUIC Support on DCV Host'
+        )
 
         self.dcv_connection_gateway_security_group.add_egress_rule(
             ec2.Peer.ipv4('0.0.0.0/0'),
+            ec2.Port.udp_range(0, 65535),
+            description='Allow all egress for UDP for QUIC Support on DCV Connection Gateway'
+        )
+        self.dcv_connection_gateway_security_group.add_egress_rule(
+            ec2.Peer.ipv6('::/0'),
             ec2.Port.udp_range(0, 65535),
             description='Allow all egress for UDP for QUIC Support on DCV Connection Gateway'
         )
@@ -300,6 +311,9 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
             )
         )
 
+        scheduled_event_transformer_lambda.add_nag_suppression(suppressions=[
+            IdeaNagSuppression(rule_id='AwsSolutions-L1', reason='Python Runtime is selected for stability.')
+        ])
         schedule_trigger_rule = events.Rule(
             scope=self.stack,
             id=f'{self.cluster_name}-{self.module_id}-schedule-rule',
@@ -524,14 +538,14 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
         )
 
         # security group
-        self.dcv_broker_security_group = VirtualDesktopBastionAccessSecurityGroup(
+        self.dcv_broker_security_group = VirtualDesktopBrokerSecurityGroup(
             context=self.context,
             name=f'{self.module_id}-{self.COMPONENT_DCV_BROKER}-security-group',
             scope=self.stack,
             vpc=self.cluster.vpc,
             bastion_host_security_group=self.cluster.get_security_group('bastion-host'),
+            public_loadbalancer_security_group=self.cluster.get_security_group('external-load-balancer'),
             description='Security Group for Virtual Desktop DCV Broker',
-            directory_service_access=False,
             component_name='DCV Broker'
         )
 
@@ -784,10 +798,10 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
 
         kms_key_id = self.context.config().get_string('cluster.ebs.kms_key_id', required=False, default=None)
         if kms_key_id is not None:
-             kms_key_arn = self.get_kms_key_arn(kms_key_id)
-             ebs_kms_key = kms.Key.from_key_arn(scope=self.stack, id=f'{component_name}-ebs-kms-key', key_arn=kms_key_arn)
+            kms_key_arn = self.get_kms_key_arn(kms_key_id)
+            ebs_kms_key = kms.Key.from_key_arn(scope=self.stack, id=f'{component_name}-ebs-kms-key', key_arn=kms_key_arn)
         else:
-             ebs_kms_key = kms.Alias.from_alias_name(scope=self.stack, id=f'{component_name}-ebs-kms-key-default', alias_name='alias/aws/ebs')
+            ebs_kms_key = kms.Alias.from_alias_name(scope=self.stack, id=f'{component_name}-ebs-kms-key-default', alias_name='alias/aws/ebs')
 
         launch_template = ec2.LaunchTemplate(
             self.stack, f'{component_name}-lt',

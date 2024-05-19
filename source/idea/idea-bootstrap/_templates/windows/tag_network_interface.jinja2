@@ -1,0 +1,27 @@
+# Begin: Tag Network Interface
+function Tag-NetworkInterface
+{
+  <#
+      .SYNOPSIS
+          Update Network Interface tags to match the tags of the running instance.
+  #>
+  [OutputType([Boolean])]
+  [CmdletBinding()]
+
+  [string]$IMDS_Token = Invoke-RestMethod -Headers @{"X-aws-ec2-metadata-token-ttl-seconds" = "600"} -Method PUT -Uri http://169.254.169.254/latest/api/token
+  $InstanceId = Invoke-RestMethod -Headers @{"X-aws-ec2-metadata-token" = $IMDS_Token} -Method GET -Uri http://169.254.169.254/latest/meta-data/instance-id
+
+  Write-ToLog -Message ("Performing Network Interface tagging for InstanceID $InstanceId ...")
+  $TagList = Get-EC2Tag -Filter @{Name='resource-type'; Values="instance"}, @{ Name='resource-id'; Values=$InstanceId }
+
+  $ResourceList = Get-EC2NetworkInterface -Filter @{ Name='attachment.instance-id' ; Values = $InstanceId } -Select 'NetworkInterfaces.NetworkInterfaceId'
+
+  ForEach($res in $ResourceList) {
+   Write-ToLog ("Tagging resource: $res")
+    $TagList | ForEach-Object {
+      New-EC2Tag -ResourceId $res -Tag @{Key=$_.Key;Value=$_.Value}
+    }
+  }
+
+}
+# End: Tag Network Interfaces

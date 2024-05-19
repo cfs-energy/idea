@@ -117,6 +117,7 @@ def search_groups(query: str, page_size: int):
     context.debug(f"# Total LDAP query time: {_loop_end - _loop_start}ms")
     context.print_json(group_result)
 
+
 @ldap_commands.command('delete-user', context_settings=constants.CLICK_SETTINGS)
 @click.option('-u', '--username', required=True, multiple=True, help="username of the user to be deleted. accepts multiple inputs eg. -u user1 -u user2")
 def delete_user(username):

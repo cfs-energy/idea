@@ -291,9 +291,9 @@ package_config:
       - putty
 
   nodejs:
-    version: "16.10.0"
-    nvm_version: "0.39.0"
-    npm_version: "7.15.1"
+    version: "16.20.2"
+    nvm_version: "0.39.5"
+    npm_version: "9.8.1"
     url: "https://raw.githubusercontent.com/nvm-sh/nvm/"
   openmpi:
     version: "4.1.5"
@@ -324,9 +324,9 @@ package_config:
 
   {%- if 'scheduler' in enabled_modules %}
   efa:
-    version: "1.23.1"
-    url: "https://efa-installer.amazonaws.com/aws-efa-installer-1.23.1.tar.gz"
-    checksum: "6df2e36538619282bec6ba1423f1d505e7f5dd4e4764c363c559acc1a49c99d27809dd7a7808933da7a058eb84b45efb"
+    version: "1.25.1"
+    url: "https://efa-installer.amazonaws.com/aws-efa-installer-1.25.1.tar.gz"
+    checksum: "7e0648a2af37f8d5d18d8a38cb424754476dbbf2a62c9bd573eaec4195e586e8c49b4436246e2a0bd0a181682680d290"
     checksum_method: sha384
   openpbs:
     version: "22.05.11"
@@ -665,6 +665,7 @@ gpu_settings:
   - p3
   - p4d
   - p4de
+  - p5
   - g2
   - g3
   - g3s
@@ -685,6 +686,7 @@ gpu_settings:
     p3: *production_version
     p4d: *production_version
     p4de: *production_version
+    p5: *production_version
 
 # provide custom tags for all resources created by IDEA
 # for eg. to add custom tags, tags as below:

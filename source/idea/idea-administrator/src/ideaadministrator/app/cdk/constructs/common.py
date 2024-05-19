@@ -291,6 +291,9 @@ class CustomResource(SocaBaseConstruct):
             log_retention_role=self.lambda_log_retention_role,
             runtime=self.runtime
         )
+        self.lambda_function.add_nag_suppression(suppressions=[
+            IdeaNagSuppression(rule_id='AwsSolutions-L1', reason='Python Runtime is selected for stability.')
+        ])
 
         if self.policy_statements is not None:
             for statement in self.policy_statements:

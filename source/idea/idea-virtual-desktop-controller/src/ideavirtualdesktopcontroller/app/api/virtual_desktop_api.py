@@ -258,7 +258,13 @@ class VirtualDesktopAPI(BaseAPI):
                 session.project = project
                 break
 
-        if not is_user_part_of_project:
+        # Relax the check for clusteradmin
+        cluster_administrator = self.context.config().get_string('cluster.administrator_username', required=True)
+        if (
+            not is_user_part_of_project
+            and (session.owner not in cluster_administrator)
+            and not session.owner.startswith('clusteradmin')
+            ):
             session.failure_reason = f'User {session.owner} does not belong in project_id {session.project.project_id}'
             return session, False
 
@@ -527,7 +533,6 @@ class VirtualDesktopAPI(BaseAPI):
 
             # self.default_instance_profile_arn = self.context.app_config.virtual_desktop_dcv_host_profile_arn
             # self.default_security_group = self.context.app_config.virtual_desktop_dcv_host_security_group_id
-
 
         if Utils.is_empty(session.server.key_pair_name):
             session.server.key_pair_name = self.context.config().get_string('cluster.network.ssh_key_pair', required=True)

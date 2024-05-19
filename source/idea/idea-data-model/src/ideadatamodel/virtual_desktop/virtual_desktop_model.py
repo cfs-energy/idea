@@ -57,10 +57,12 @@ class VirtualDesktopSessionType(str, Enum):
     CONSOLE = 'CONSOLE'
     VIRTUAL = 'VIRTUAL'
 
+
 class VirtualDesktopTenancy(str, Enum):
     DEFAULT = 'default'
     DEDICATED = 'dedicated'
     HOST = 'host'
+
 
 class VirtualDesktopGPU(str, Enum):
     NO_GPU = 'NO_GPU'

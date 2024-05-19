@@ -89,8 +89,8 @@ class AbstractLDAPClient:
         # Set any LDAP options that may be needed
         self.logger.debug(f"Setting LDAP options..")
         default_ldap_options = [
-            { 'name': 'Referrals' , 'code': ldap.OPT_REFERRALS, 'value': ldap.OPT_OFF },
-            { 'name': 'Protocol Version', 'code': ldap.OPT_PROTOCOL_VERSION, 'value': ldap.VERSION3 }
+            {'name': 'Referrals', 'code': ldap.OPT_REFERRALS, 'value': ldap.OPT_OFF},
+            {'name': 'Protocol Version', 'code': ldap.OPT_PROTOCOL_VERSION, 'value': ldap.VERSION3}
         ]
         for option in default_ldap_options:
             self.logger.debug(f"Setting default option: {option.get('name')}({option.get('code')}) -> {option.get('value')}")
@@ -116,6 +116,7 @@ class AbstractLDAPClient:
             timeout=Utils.get_as_float(options.connection_timeout, DEFAULT_LDAP_CONNECTION_TIMEOUT),
             use_pool=Utils.get_as_bool(options.connection_pool_enabled, DEFAULT_LDAP_ENABLE_CONNECTION_POOL)
         )
+
     # ldap wrapper methods
     def add_s(self, dn, modlist):
         trace_message = f'ldapadd -x -D "{self.ldap_root_bind}" -H {self.ldap_uri} "{dn}"'
@@ -302,6 +303,7 @@ class AbstractLDAPClient:
             constants.DIRECTORYSERVICE_AWS_MANAGED_ACTIVE_DIRECTORY,
             constants.DIRECTORYSERVICE_ACTIVE_DIRECTORY
         )
+
     def is_readonly(self) -> bool:
         return self.ds_provider in (
             constants.DIRECTORYSERVICE_ACTIVE_DIRECTORY
@@ -410,7 +412,7 @@ class AbstractLDAPClient:
             bind=self.ldap_root_bind,
             passwd=self.ldap_root_password
         )
-        #if self.logger.isEnabledFor(logging.DEBUG):
+        # if self.logger.isEnabledFor(logging.DEBUG):
         #    self.logger.debug(f"LDAP CM returning conn ({res})")
 
         return res
@@ -462,7 +464,6 @@ class AbstractLDAPClient:
         )
 
         return len(results) > 0
-
 
     @property
     @abstractmethod

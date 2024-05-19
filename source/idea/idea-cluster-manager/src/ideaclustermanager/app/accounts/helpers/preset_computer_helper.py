@@ -21,7 +21,11 @@ from typing import Dict, List, Optional
 import botocore.exceptions
 import secrets
 import string
+import copy
 
+
+# Fallback value - seconds to cache a domain discovery (domain controller IP addresses)
+AD_DISCOVERY_TTL_FALLBACK = 300
 
 
 class PresetComputeHelper:
@@ -59,6 +63,10 @@ class PresetComputeHelper:
         self.aws_account = self.context.config().get_string('cluster.aws.account_id', required=True)
         self.cluster_name = self.context.config().get_string('cluster.cluster_name', required=True)
         self.aws_region = self.context.config().get_string('cluster.aws.region', required=True)
+        self._ad_discovery_ttl = self.context.config().get_int(
+            "directoryservice.ad_automation.domain_discovery_ttl_seconds",
+            default=AD_DISCOVERY_TTL_FALLBACK,
+        )
         # parse and validate sender_id and request
         payload = Utils.get_value_as_dict('payload', request, default={})
 
@@ -189,6 +197,17 @@ class PresetComputeHelper:
         """
 
         _start_time = Utils.current_time_ms()
+
+        _cache_key = f"AD-{self.ldap_client.domain_name.upper()}-domain-controller-ips"
+        _cache_result: list = self.context.cache().short_term().get(_cache_key)
+        if _cache_result is not None:
+            _domain_controller_ips = copy.deepcopy(_cache_result)
+            _end_time = Utils.current_time_ms()
+            self.logger.debug(
+                f"Returning cached Domain Controllers({_cache_key})({len(_domain_controller_ips)}): {_domain_controller_ips} Time: {_end_time - _start_time}ms"
+            )
+            return _domain_controller_ips
+
         self.logger.info(f'Performing ADCLI domain discovery for domain: {self.ldap_client.domain_name}')
         result = self._shell.invoke(
             cmd=[
@@ -284,9 +303,10 @@ class PresetComputeHelper:
             )
 
         _end_time = Utils.current_time_ms()
-        self.logger.info(f'ADCLI domain discovery on domain {self.ldap_client.domain_name}: Domain Controllers: {len(domain_controllers)} Discovery Time: {_end_time - _start_time}ms')
+        self.context.cache().short_term().set(_cache_key, copy.deepcopy(domain_controllers), self._ad_discovery_ttl)
+        self.logger.info(f'ADCLI domain discovery on domain {self.ldap_client.domain_name}: Domain Controllers({len(domain_controllers)}): {domain_controllers} Discovery Time: {_end_time - _start_time}ms')
 
-        return domain_controllers
+        return copy.deepcopy(domain_controllers)
 
     def get_any_domain_controller_ip(self) -> str:
         """
@@ -372,10 +392,10 @@ class PresetComputeHelper:
         # todo - jobIDs / other info that is useful to the AD admin?
         # should the incoming node provide a description field to cluster-manager?
         # infra nodes wouldn't have a jobID
-        #self.ldap_client.update_computer_description(
+        # self.ldap_client.update_computer_description(
         #    computer=self.hostname,
         #    description=f'IDEA|{self.cluster_name}|{self.instance_id}'
-        #)
+        # )
         # We cannot include this in the preset-computer or other adcli commands as this
         # is not included in all adcli implementations for our baseOSs. So we manually update LDAP.
         # eg.

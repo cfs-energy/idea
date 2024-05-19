@@ -143,10 +143,10 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
 
         except botocore.exceptions.ClientError as e:
             if e.response['Error']['Code'] == 'ResourceNotFoundException':
-                SSESpecification = {}
+                sse_specification = {}
                 if self.dynamodb_kms_key_id is not None:
                     self.log_info(f'detected cluster.dynamodb.kms_key_id is set to: {self.dynamodb_kms_key_id}')
-                    SSESpecification = {
+                    sse_specification = {
                             'Enabled': True,
                             'SSEType': 'KMS',
                             'KMSMasterKeyId': self.dynamodb_kms_key_id
@@ -168,7 +168,7 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
                             }
                         ],
                         BillingMode='PAY_PER_REQUEST',
-                        SSESpecification=SSESpecification,
+                        SSESpecification=sse_specification,
                         Tags=[
                             {
                                 'Key': constants.IDEA_TAG_CLUSTER_NAME,
@@ -204,9 +204,9 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
 
         except botocore.exceptions.ClientError as e:
             if e.response['Error']['Code'] == 'ResourceNotFoundException':
-                SSESpecification = {}
+                sse_specification = {}
                 if self.dynamodb_kms_key_id is not None:
-                    SSESpecification = {
+                    sse_specification = {
                             'Enabled': True,
                             'SSEType': 'KMS',
                             'KMSMasterKeyId': self.dynamodb_kms_key_id
@@ -232,7 +232,7 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
                             'StreamEnabled': True,
                             'StreamViewType': 'NEW_AND_OLD_IMAGES'
                         },
-                        SSESpecification=SSESpecification,
+                        SSESpecification=sse_specification,
                         Tags=[
                             {
                                 'Key': constants.IDEA_TAG_CLUSTER_NAME,

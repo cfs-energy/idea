@@ -134,7 +134,7 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
             })
         })
         this.setState({
-            tenancyChoices: Utils.getTenancyChoices(['default', 'dedicated', 'host'])
+            tenancyChoices: Utils.getTenancyChoices()
         })
 
         this.getVirtualDesktopUtilsClient().listSupportedGPUs({}).then(result => {
@@ -351,7 +351,9 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                     description: 'Select Launch Tenancy',
                     data_type: 'str',
                     param_type: 'select',
-                    default: this.state.tenancyChoices,
+                    multiple: false,
+                    choices: this.state.tenancyChoices,
+                    default: 'default',
                     validate: {
                         required: true
                     }
