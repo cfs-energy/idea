@@ -96,6 +96,7 @@ def list_groups():
                             )
     context.print(group_table)
 
+
 @groups.command(context_settings=constants.CLICK_SETTINGS)
 @click.option('--groupname', required=True, help='Group Name to fetch users')
 def list_users(groupname: str):
@@ -166,6 +167,7 @@ def disable_group(groupname: str):
     except exceptions.SocaException as e:
         context.error(e.message)
 
+
 @groups.command(context_settings=constants.CLICK_SETTINGS)
 @click.option('--groupname', required=True, help='Group Name')
 @click.option('--title', required=True, help='Group Title')
@@ -196,6 +198,7 @@ def create_group(**kwargs):
         result_as=CreateGroupResult
     )
     context.print_json(Utils.to_json(result.group))
+
 @groups.command(context_settings=constants.CLICK_SETTINGS)
 @click.option('--groupname', required=True, help='Groupname to DELETE')
 def delete_group(groupname: str):

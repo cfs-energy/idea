@@ -128,7 +128,7 @@ def handler(event: dict, context):
                     ListenerArn=listener_arn,
                     DefaultActions=actions
                 )
-                logger.info(f'default action modified')
+                logger.info('default action modified')
             else:
                 elbv2_client.modify_listener(
                     ListenerArn=listener_arn,
@@ -146,7 +146,7 @@ def handler(event: dict, context):
                         }
                     ]
                 )
-                logger.info(f'default action reset to fixed response')
+                logger.info('default action reset to fixed response')
 
         elif request_type == 'Create':
             result = elbv2_client.create_rule(
@@ -170,7 +170,7 @@ def handler(event: dict, context):
                 )
                 logger.info(f'rule modified. rule arn: {rule_arn}')
             else:
-                logger.warning(f'rule not found for target group. rule update skipped.')
+                logger.warning('rule not found for target group. rule update skipped.')
 
         elif request_type == 'Delete':
             rule_arn = find_rule_arn(elbv2_client, listener_arn=listener_arn, endpoint_name=endpoint_name)

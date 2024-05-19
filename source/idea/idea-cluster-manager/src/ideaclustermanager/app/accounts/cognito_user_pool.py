@@ -305,12 +305,21 @@ class CognitoUserPool:
         )
 
     def admin_set_password(self, username: str, password: str, permanent: bool = False):
-        self._context.aws().cognito_idp().admin_set_user_password(
-            UserPoolId=self.user_pool_id,
-            Username=username,
-            Password=password,
-            Permanent=permanent
-        )
+        try:
+            self._context.aws().cognito_idp().admin_set_user_password(
+                UserPoolId=self.user_pool_id,
+                Username=username,
+                Password=password,
+                Permanent=permanent
+            )
+        except botocore.exceptions.ClientError as e:
+            if e.response['Error']['Code'] == 'InvalidPasswordException':
+                self._logger.error(f"Username: {username} - Failed Cognito password policy. Deleting User..")
+                self.admin_delete_user(username=username)
+                raise exceptions.invalid_params('Password does not confirm to Cognito user pool policy')
+            else:
+                # Should we still delete the user with any other exception?
+                raise e
 
         self.password_updated(username)
 
@@ -371,6 +380,12 @@ class CognitoUserPool:
         if Utils.is_empty(password):
             raise exceptions.invalid_params('password is required.')
 
+        # In SSO-enabled mode - local auth is not allowed except for clusteradmin
+        cluster_admin_username = self._context.config().get_string('cluster.administrator_username', required=True)
+        sso_enabled = self._context.config().get_bool('identity-provider.cognito.sso_enabled', required=True)
+        if sso_enabled and (username != cluster_admin_username):
+            self._logger.error(f"Ignoring local authentication request with SSO enabled. Username: {username}")
+            raise exceptions.unauthorized_access(f"Ignoring local authentication request with SSO enabled. Username: {username}")
         try:
             cognito_result = self._context.aws().cognito_idp().admin_initiate_auth(
                 AuthFlow='ADMIN_USER_PASSWORD_AUTH',

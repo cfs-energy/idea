@@ -155,7 +155,7 @@ def list_users():
 @accounts.command(context_settings=constants.CLICK_SETTINGS)
 @click.option('--username', required=True, help='The Username')
 @click.option('--email', required=True, help='Email Address')
-@click.option('--password', help='Password')
+@click.option('--password', help='Password (Required when setting email-verified)')
 @click.option('--uid', help='UID')
 @click.option('--gid', help='GID')
 @click.option('--email-verified', is_flag=True, help='Indicate if the email address is verified. Invitation email will not be sent.')

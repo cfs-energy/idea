@@ -77,6 +77,22 @@ class BootstrapContext:
         return DEFAULT_APP_DEPLOY_DIR
 
     @property
+    def https_proxy(self) -> str:
+        use_vpc_endpoints = self.config.get_bool('cluster.network.use_vpc_endpoints', default=False)
+        if use_vpc_endpoints:
+            return self.config.get_string('cluster.network.https_proxy', required=False, default='')
+        else:
+            return ''
+
+    @property
+    def no_proxy(self) -> str:
+        use_vpc_endpoints = self.config.get_bool('cluster.network.use_vpc_endpoints', default=False)
+        if use_vpc_endpoints:
+            return self.config.get_string('cluster.network.no_proxy', required=False, default='')
+        else:
+            return ''
+
+    @property
     def default_system_user(self) -> str:
         if self.base_os in ('amazonlinux2', 'rhel7'):
             return 'ec2-user'

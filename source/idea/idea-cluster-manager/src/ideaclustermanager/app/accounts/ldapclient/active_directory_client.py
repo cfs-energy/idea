@@ -54,12 +54,14 @@ class ActiveDirectoryClient(AbstractLDAPClient):
     @property
     def ldap_root_bind(self) -> str:
         return f'{self.ldap_root_username}@{self.domain_name}'
+
     @property
     def ldap_computers_base(self) -> str:
         ou_computers = self.context.config().get_string('directoryservice.computers.ou', required=True)
         if '=' in ou_computers:
             return ou_computers
         return f'ou={ou_computers},ou={self.ad_netbios},{self.ldap_base}'
+
     @property
     def ldap_user_base(self) -> str:
         ou_users = self.context.config().get_string('directoryservice.users.ou', required=True)
@@ -69,7 +71,7 @@ class ActiveDirectoryClient(AbstractLDAPClient):
 
     @property
     def ldap_user_filterstr(self) -> str:
-        return f'(objectClass=user)'
+        return '(objectClass=user)'
 
     @property
     def ldap_group_base(self) -> str:
@@ -80,7 +82,7 @@ class ActiveDirectoryClient(AbstractLDAPClient):
 
     @property
     def ldap_group_filterstr(self) -> str:
-        return f'(objectClass=group)'
+        return '(objectClass=group)'
 
     @property
     def ldap_sudoers_group_dn(self) -> str:
@@ -150,10 +152,9 @@ class ActiveDirectoryClient(AbstractLDAPClient):
 
         return self.convert_ldap_user(results[0][1])
 
-
     def change_password(self, username: str, password: str):
 
-        ad_provider  = self.context.config().get_string('directoryservice.provider', required=True)
+        ad_provider = self.context.config().get_string('directoryservice.provider', required=True)
 
         if ad_provider == constants.DIRECTORYSERVICE_ACTIVE_DIRECTORY:
             self.logger.info(f'change_passwd() for Active Directory provider {ad_provider} - NOOP')

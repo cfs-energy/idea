@@ -201,7 +201,7 @@ class VirtualDesktopScheduleDB(VirtualDesktopNotifiableDB):
 
     def delete(self, schedule: VirtualDesktopSchedule):
         if Utils.is_empty(schedule):
-            self._logger.info(f'Empty schedule object. Returning.')
+            self._logger.info('Empty schedule object. Returning.')
             return
 
         result = self._table.delete_item(

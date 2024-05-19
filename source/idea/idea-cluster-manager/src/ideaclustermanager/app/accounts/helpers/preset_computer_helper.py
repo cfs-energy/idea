@@ -57,7 +57,7 @@ class PresetComputeHelper:
 
         # Metadata for AD joins
         self.aws_account = self.context.config().get_string('cluster.aws.account_id', required=True)
-        self.cluster_name =  self.context.config().get_string('cluster.cluster_name', required=True)
+        self.cluster_name = self.context.config().get_string('cluster.cluster_name', required=True)
         self.aws_region = self.context.config().get_string('cluster.aws.region', required=True)
         # parse and validate sender_id and request
         payload = Utils.get_value_as_dict('payload', request, {})

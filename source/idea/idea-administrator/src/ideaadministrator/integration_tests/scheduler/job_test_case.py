@@ -326,4 +326,3 @@ class JobSubmissionHelper:
             test_case = self.job_test_cases[test_case_id]
             print('{:100s} {:10s} {:20s}'.format(test_case_id, test_case.get_job_id(), test_case.status))
 
-

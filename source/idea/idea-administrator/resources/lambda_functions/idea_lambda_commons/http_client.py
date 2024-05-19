@@ -31,7 +31,7 @@ class HttpClient:
         if log_response:
             logger.info(f'SendingResponse: {json_response}')
         else:
-            logger.info(f'SendingResponse: REDACTED')
+            logger.info('SendingResponse: REDACTED')
 
         try:
             response_url = response.response_url

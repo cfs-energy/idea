@@ -28,11 +28,17 @@ IDEA_CLUSTER_S3_BUCKET={{ context.cluster_s3_bucket }}
 IDEA_CLUSTER_NAME={{ context.cluster_name }}
 IDEA_CLUSTER_HOME={{ context.cluster_home_dir }}
 IDEA_APP_DEPLOY_DIR={{ context.app_deploy_dir }}
-BOOTSTRAP_DIR=/root/bootstrap
-## [END] IDEA Environment Configuration
+BOOTSTRAP_DIR=/root/bootstrap" > /etc/environment
+
+{% if context.https_proxy != '' %}
+echo -e "IDEA_HTTPS_PROXY={{ context.https_proxy }}
+IDEA_NO_PROXY={{ context.no_proxy }}" >> /etc/environment
+{% endif %}
+
+echo -e "## [END] IDEA Environment Configuration
 
 PATH={{ PATH }}
-" > /etc/environment
+" >> /etc/environment
 
 source /etc/environment
 
@@ -42,9 +48,9 @@ echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
-{% include '_templates/linux/idea_service_account.jinja2' %}
+{% include '_templates/linux/idea_proxy.jinja2' %}
 
-{% include '_templates/linux/aws_cli.jinja2' %}
+{% include '_templates/linux/idea_service_account.jinja2' %}
 
 {% include '_templates/linux/aws_ssm.jinja2' %}
 
