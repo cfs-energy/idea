@@ -9,6 +9,7 @@ $AD_AUTHORIZATION_INSTANCE_ID = $( Get-EC2InstanceMetadata -Category InstanceId 
 $AD_AUTOMATION_SQS_QUEUE_URL = "{{ context.config.get_string('directoryservice.ad_automation.sqs_queue_url', required=True) }}"
 $AD_AUTOMATION_DDB_TABLE_NAME = "{{ context.config.get_string('cluster.cluster_name', required=True) }}.ad-automation"
 $AD_DOMAIN_NAME = "{{ context.config.get_string('directoryservice.name', required=True) }}"
+$AD_SHORT_NAME = "{{ context.config.get_string('directoryservice.ad_short_name', required=True) }}"
 $WINDOWS_HOSTNAME = $env:COMPUTERNAME
 
 function Send-ADAutomationSQSMessage
@@ -22,12 +23,16 @@ function Send-ADAutomationSQSMessage
 
   $payload = @{ header = @{ namespace = 'ADAutomation.PresetComputer' }; payload = @{ nonce = $AD_AUTHORIZATION_NONCE; instance_id = $AD_AUTHORIZATION_INSTANCE_ID; hostname = $WINDOWS_HOSTNAME } } | ConvertTo-Json -Compress
   # todo - support vpc endpoint
-  Send-SQSMessage -QueueUrl $AD_AUTOMATION_SQS_QUEUE_URL `
+  Write-ToLog -Message ("[Join AD] Sending to AD Automation: $AD_AUTOMATION_SQS_QUEUE_URL /  InstanceID: $AD_AUTHORIZATION_INSTANCE_ID / Nonce: $AD_AUTHORIZATION_NONCE ...")
+
+  $sqs_output = Send-SQSMessage -QueueUrl $AD_AUTOMATION_SQS_QUEUE_URL `
                   -MessageBody $payload `
                   -MessageGroupId $AD_AUTHORIZATION_INSTANCE_ID `
                   -MessageDeduplicationId "ADAutomation.PresetComputer.$AD_AUTHORIZATION_INSTANCE_ID.$AD_AUTHORIZATION_NONCE" `
-                  -Region $AWS_REGION
-  $?
+                  -Region $AWS_REGION | Out-String
+  $exit_status = $?
+  Write-ToLog -Message ("[Join AD] SQS Output: $sqs_output")
+  $exit_status
 }
 
 function Start-ADAutomationAuthorization
@@ -43,7 +48,7 @@ function Start-ADAutomationAuthorization
   while (($success -ne $true) -and ($attemptCount -le $maxAttempts))
   {
     $sleepTime = $( Get-Random -Maximum 10 )
-    Write-Host "($attemptCount of $maxAttempts) failed to request authorization to join AD, retrying in $sleepTime seconds ..."
+    Write-ToLog -Message "[Join AD] ($attemptCount of $maxAttempts) failed to request authorization to join AD, retrying in $sleepTime seconds ..."
     Start-Sleep -Seconds $sleepTime
     $attemptCount++
     $success = Send-ADAutomationSQSMessage
@@ -112,8 +117,8 @@ function Start-ADAutomationWaitForAuthorizationAndJoin
   $authorizationEntry = Get-ADAutomationAuthorizationEntry -DDBClient $ddbClient
   while (($authorizationEntry -eq $null) -and ($attemptCount -le $maxAttempts))
   {
-    $sleepTime = $( Get-Random -Maximum 10 )
-    Write-Host "($attemptCount of $maxAttempts) waiting for AD authorization, retrying in $sleepTime seconds ..."
+    $sleepTime = $( Get-Random -Maximum 20 )
+    Write-ToLog -Message "[Join AD] ($attemptCount of $maxAttempts) waiting for AD authorization, retrying in $sleepTime seconds ..."
     Start-Sleep -Seconds $sleepTime
     $attemptCount++
     $authorizationEntry = Get-ADAutomationAuthorizationEntry -DDBClient $ddbClient
@@ -121,18 +126,22 @@ function Start-ADAutomationWaitForAuthorizationAndJoin
 
   if ($authorizationEntry.status -eq "success")
   {
-    Write-Host "[Join AD] authorization successful. joining AD, Domain: $AD_DOMAIN_NAME, OTP: $($authorizationEntry.otp) ..."
+    Write-ToLog -Message "[Join AD] authorization successful. Joining AD, Domain: $AD_DOMAIN_NAME using Domain Controller: $($authorizationEntry.domain_controller) , OTP: $($authorizationEntry.otp) ..."
     $joinCred = New-Object pscredential -ArgumentList ([pscustomobject]@{
       UserName = $null
       Password = (ConvertTo-SecureString -String $($authorizationEntry.otp) -AsPlainText -Force)[0]
     })
-    Add-Computer -Domain $AD_DOMAIN_NAME `
+    $cmd_output = Add-Computer -DomainName $AD_DOMAIN_NAME `
                  -Options UnsecuredJoin, PasswordPass `
-                 -Credential $joinCred
+                 -Credential $joinCred `
+                 -Server $authorizationEntry.domain_controller `
+                 -PassThru `
+                 -Verbose | Out-String
+    Write-ToLog -Message "[Join AD] Add-Computer output: $cmd_output"
   }
   else
   {
-    Write-Host "[Join AD] authorization failed: ($($authorizationEntry.error_code)) $($authorizationEntry.message)"
+    Write-ToLog -Message "[Join AD] authorization failed: ($($authorizationEntry.error_code)) $($authorizationEntry.message)"
   }
 
 }

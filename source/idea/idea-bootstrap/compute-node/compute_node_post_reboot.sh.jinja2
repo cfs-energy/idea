@@ -7,6 +7,9 @@ if [[ -f /etc/profile.d/proxy.sh ]]; then
     source /etc/profile.d/proxy.sh
 fi
 
+# clean crontab, remove compute_node_post_reboot.sh from crontab
+crontab -l | grep -v 'compute_node_post_reboot.sh' | crontab -
+
 # reset reboot_required.txt
 echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
 
@@ -30,6 +33,8 @@ mount -a
 # a reboot may be required if GPU Drivers or FSx for Lustre client are installed.
 REBOOT_REQUIRED=$(cat /root/bootstrap/reboot_required.txt)
 if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
+  log_info "reboot required. compute_node_post_reboot.sh will be executed after reboot ..."
+  (crontab -l; echo "@reboot /bin/bash ${SCRIPT_DIR}/compute_node_post_reboot.sh >> ${IDEA_COMPUTE_NODE_LOGS_DIR}/compute_node_bootstrap.log 2>&1") | crontab -
   reboot
 else
   {% include 'compute-node/_templates/configure_hyperthreading.jinja2' %}

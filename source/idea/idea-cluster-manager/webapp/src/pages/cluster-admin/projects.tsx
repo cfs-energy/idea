@@ -262,14 +262,15 @@ class Projects extends Component<ProjectsProps, ProjectsState> {
                       }}
                       params={[
                           {
-                              name: 'title',
-                              title: 'Title',
-                              description: 'Enter a user friendly project title',
-                              data_type: 'str',
-                              param_type: 'text',
-                              validate: {
-                                  required: true
-                              }
+                            name: 'title',
+                            title: 'Title',
+                            description: 'Enter a user friendly project title',
+                            data_type: 'str',
+                            param_type: 'text',
+                            validate: {
+                                required: true,
+                                regex: '^([A-Za-z0-9-]+){3,32}$'
+                            }
                           },
                           {
                               name: 'name',

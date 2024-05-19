@@ -33,5 +33,9 @@ dnf --exclude=${EXCLUDE_JOINED%,} install -y $(echo ${SYSTEM_PKGS[*]} ${SYSTEM_P
 systemctl enable hibinit-agent
 {%- endif %}
 
+if [[ $(rpm -qa kernel | wc -l) -gt "1" ]]; then
+  set_reboot_required "Updated kernel installed"
+fi
+
 # End: System Packages Install
 

@@ -108,9 +108,9 @@ class AWSUtil(AWSUtilProtocol):
             return 'P', False
         elif family.startswith(('dl1', 'dl')):
             return 'DL', False  # todo - verify instance class in quota
-        elif family.startswith(('inf1', 'inf')):
+        elif family.startswith(('inf2', 'inf1', 'inf')):
             return 'Inf', False
-        elif family.startswith(('trn1', 'trn')):
+        elif family.startswith(('trn1n', 'trn1', 'trn')):
             return 'Trn', False
         elif family.startswith(('g4dn', 'g4ad', 'g5', 'g5g', 'g3s', 'g3', 'g2', 'g')):
             return 'G', False
@@ -119,7 +119,7 @@ class AWSUtil(AWSUtilProtocol):
         elif family.startswith(('vt1', 'vt')):
             return 'VT', False
         # storage optimized
-        elif family.startswith(('i4i', 'i3', 'i3en', 'i')):  # standard
+        elif family.startswith(('i4g', 'i4i', 'i3', 'i3en', 'i')):  # standard
             return 'I', True
         elif family.startswith('lm4gn'):
             return 'lm4gn', True
@@ -127,12 +127,12 @@ class AWSUtil(AWSUtilProtocol):
             return 'ls4gen', True
         elif family.startswith(('d2', 'd3', 'd3en', 'd')):  # standard
             return 'D', True
-        elif family.startswith(('hpc6a', 'hpc')):
+        elif family.startswith(('hpc6id', 'hpc6a', 'hpc')):
             return 'HPC', False
         elif family.startswith(('h1', 'h')):  # standard
             return 'H', False
         # memory optimized
-        elif family.startswith(('r6a', 'r6g', 'r6i', 'r5a', 'r5b', 'r5d', 'r5dn', 'r5ad', 'r5n', 'r6', 'r5', 'r4', 'r')):  # standard
+        elif family.startswith(('r7g', 'r7iz', 'r6a', 'r6g', 'r6in', 'r6idn', 'r6i', 'r5a', 'r5b', 'r5d', 'r5dn', 'r5ad', 'r5n', 'r6', 'r5', 'r4', 'r')):  # standard
             return 'R', True
         elif family.startswith(('x2gd', 'x2idn', 'x2iedn', 'x2iezn', 'x1e', 'x1', 'x')):
             return 'X', False
@@ -141,14 +141,14 @@ class AWSUtil(AWSUtilProtocol):
         elif family.startswith(('z1d', 'z')):  # standard
             return 'Z', True
         # compute optimized
-        elif family.startswith(('c7g', 'c6g', 'c6gn', 'c6i', 'c5', 'c5a', 'c5n', 'c4', 'c')):  # standard
+        elif family.startswith(('c7g', 'c6g', 'c6gn', 'c6in', 'c6i', 'c5', 'c5a', 'c5n', 'c4', 'c')):  # standard
             return 'C', True
         # general purpose
         elif family.startswith(('mac1', 'mac2', 'mac')):
             return 'mac', False
         elif family.startswith(('t4g', 't3', 't3a', 't2', 't')):  # standard
             return 'T', True
-        elif family.startswith(('m6g', 'm6gd', 'm6i', 'm6id', 'm6a', 'm5', 'm5a', 'm5d', 'm5ad', 'm5dn', 'm5n', 'm5zn', 'm4', 'm')):  # standard
+        elif family.startswith(('m6g', 'm6gd', 'm6in', 'm6idn', 'm6i', 'm6id', 'm6a', 'm5', 'm5a', 'm5d', 'm5ad', 'm5dn', 'm5n', 'm5zn', 'm4', 'm')):  # standard
             return 'M', True
         elif family.startswith(('a1', 'a')):  # standard
             return 'A', True

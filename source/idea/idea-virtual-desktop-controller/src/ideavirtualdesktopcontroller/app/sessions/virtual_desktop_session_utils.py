@@ -43,10 +43,15 @@ class VirtualDesktopSessionUtils:
 
     def create_session(self, session: VirtualDesktopSession) -> VirtualDesktopSession:
         # request has been validated and everything.
+        # TODO - Need a way to get more information from the provision_host_for_session to the end-user
         try:
             session.server = self._server_utils.provision_host_for_session(session)
         except Exception as e:
             session.failure_reason = f'{e}'
+            return session
+
+        if not session.server:
+            session.failure_reason = 'Unable to create DCV host. Contact the Administrator.'
             return session
 
         session = self._schedule_utils.update_schedule_for_session(self._schedule_utils.get_default_schedules(), session)

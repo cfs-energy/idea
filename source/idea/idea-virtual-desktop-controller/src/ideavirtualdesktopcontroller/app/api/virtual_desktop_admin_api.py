@@ -155,6 +155,18 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
             software_stack.failure_reason = 'software_stack.projects missing'
             return software_stack, False
 
+        if Utils.is_empty(software_stack.pool_enabled):
+            software_stack.pool_enabled = False
+
+        # If the ASG is empty - toggle back to disabled
+        if Utils.is_empty(software_stack.pool_asg_name):
+            software_stack.pool_enabled = False
+            software_stack.pool_asg_name = None
+
+        # Default to 'default' launch tenancy
+        if Utils.is_empty(software_stack.launch_tenancy):
+            software_stack.launch_tenancy = 'default'
+
         for project in software_stack.projects:
             if Utils.is_empty(project.project_id):
                 software_stack.failure_reason = 'software_stack.project.project_id missing'
@@ -198,6 +210,18 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
 
         if Utils.is_empty(software_stack.enabled):
             software_stack.enabled = True
+
+        # Pool defaults to disabled
+        if Utils.is_empty(software_stack.pool_enabled):
+            software_stack.pool_enabled = False
+
+        # If the ASG/ARN is empty - make sure the pool is disabled too
+        if Utils.is_empty(software_stack.pool_asg_name):
+            software_stack.pool_enabled = False
+            software_stack.pool_asg_name = None
+
+        if Utils.is_empty(software_stack.launch_tenancy):
+            software_stack.launch_tenancy = 'default'
 
         return software_stack, True
 
@@ -477,11 +501,21 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
         if Utils.is_not_empty(new_software_stack.projects):
             old_software_stack.projects = new_software_stack.projects
 
+        if Utils.is_not_empty(new_software_stack.pool_enabled):
+            old_software_stack.pool_enabled = new_software_stack.pool_enabled
+        if Utils.is_not_empty(new_software_stack.pool_asg_name):
+            old_software_stack.pool_asg_name = new_software_stack.pool_asg_name
+
+        if Utils.is_not_empty(new_software_stack.launch_tenancy):
+            old_software_stack.launch_tenancy = new_software_stack.launch_tenancy
+
         new_software_stack = self.software_stack_db.update(old_software_stack)
+
         ss_projects = []
         for project in new_software_stack.projects:
             ss_projects.append(self.context.projects_client.get_project(GetProjectRequest(project_id=project.project_id)).project)
         new_software_stack.projects = ss_projects
+
         context.success(UpdateSoftwareStackResponse(
             software_stack=new_software_stack
         ))

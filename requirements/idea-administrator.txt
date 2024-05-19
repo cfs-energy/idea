@@ -24,7 +24,6 @@ constructs==10.1.10
 cryptography==38.0.4
 dataset==1.5.2
 decorator==5.1.1
-defusedxml==0.7.1
 exceptiongroup==1.0.0rc6
 fastcounter==1.1.0
 greenlet==1.1.2

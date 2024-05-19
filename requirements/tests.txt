@@ -1,5 +1,4 @@
 coverage[toml]==6.5.0
-defusedxml==0.7.1
 exceptiongroup==1.1.1
 iniconfig==1.1.1
 memory-profiler==0.60.0

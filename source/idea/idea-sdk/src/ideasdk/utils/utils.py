@@ -427,6 +427,10 @@ class Utils:
         return os.path.islink(path)
 
     @staticmethod
+    def current_time() -> int:
+        return int(arrow.utcnow().timestamp())
+
+    @staticmethod
     def current_time_ms() -> int:
         return int(arrow.utcnow().timestamp() * 1000)
 

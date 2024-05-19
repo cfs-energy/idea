@@ -21,6 +21,7 @@ __all__ = (
     'VirtualDesktopGPU',
     'VirtualDesktopArchitecture',
     'VirtualDesktopSoftwareStack',
+    'VirtualDesktopTenancy',
     'DayOfWeek',
     'VirtualDesktopScheduleType',
     'VirtualDesktopSchedule',
@@ -56,6 +57,10 @@ class VirtualDesktopSessionType(str, Enum):
     CONSOLE = 'CONSOLE'
     VIRTUAL = 'VIRTUAL'
 
+class VirtualDesktopTenancy(str, Enum):
+    DEFAULT = 'default'
+    DEDICATED = 'dedicated'
+    HOST = 'host'
 
 class VirtualDesktopGPU(str, Enum):
     NO_GPU = 'NO_GPU'
@@ -136,6 +141,9 @@ class VirtualDesktopSoftwareStack(SocaBaseModel):
     architecture: Optional[VirtualDesktopArchitecture]
     gpu: Optional[VirtualDesktopGPU]
     projects: Optional[List[Project]]
+    pool_enabled: Optional[bool]
+    pool_asg_name: Optional[str]
+    launch_tenancy: Optional[VirtualDesktopTenancy]
 
 
 class VirtualDesktopServer(SocaBaseModel):
@@ -156,7 +164,6 @@ class VirtualDesktopServer(SocaBaseModel):
     max_virtual_sessions: Optional[int]
     state: Optional[str]
     locked: Optional[bool]
-
     instance_type: Optional[str]
     root_volume_size: Optional[SocaMemory]
     root_volume_iops: Optional[int]

@@ -60,9 +60,14 @@ Statement:
       - s3:DeleteBucket
       - s3:ListAllMyBuckets
       - s3:ListBucketVersions
+      - s3:DeleteObjectVersion
       - route53:DeleteHostedZone
       - acm:DescribeCertificate
       - acm:ListCertificates
       - acm:RequestCertificate
       - tag:GetResources
+      - cognito-idp:ListUserPools
+      - cognito-idp:DescribeUserPool
+      - cognito-idp:UpdateUserPool
+      - cognito-idp:DeleteUserPool
     Resource: '*'

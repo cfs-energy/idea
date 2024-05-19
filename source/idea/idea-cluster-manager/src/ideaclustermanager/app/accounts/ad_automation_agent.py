@@ -158,7 +158,7 @@ class ADAutomationAgent(SocaService):
                     self.check_and_reset_admin_password()
                 admin_user_ok = True
 
-                visibility_timeout = self.context.config().get_int('directoryservice.ad_automation.sqs_visibility_timeout_seconds', default=30)
+                visibility_timeout = self.context.config().get_int('directoryservice.ad_automation.sqs_visibility_timeout_seconds', default=60)
                 result = self.context.aws().sqs().receive_message(
                     QueueUrl=self.ad_automation_sqs_queue_url,
                     MaxNumberOfMessages=DEFAULT_MAX_MESSAGES,
@@ -167,7 +167,7 @@ class ADAutomationAgent(SocaService):
                     VisibilityTimeout=visibility_timeout
                 )
 
-                sqs_messages = Utils.get_value_as_list('Messages', result, [])
+                sqs_messages = Utils.get_value_as_list('Messages', result, default=[])
 
                 delete_messages = []
 
@@ -183,6 +183,10 @@ class ADAutomationAgent(SocaService):
                         message_body = Utils.get_value_as_string('Body', sqs_message)
 
                         request = Utils.from_json(message_body)
+                        # todo - validate request thus far
+                        if not request:
+                            self.logger.exception(f'Failed to process SQS message. Message Body: ({message_body}) Processing will be retried in {visibility_timeout} seconds ...')
+
                         header = Utils.get_value_as_dict('header', request)
                         namespace = Utils.get_value_as_string('namespace', header)
 
@@ -193,7 +197,7 @@ class ADAutomationAgent(SocaService):
                             add_to_delete(sqs_message)
                             continue
 
-                        attributes = Utils.get_value_as_dict('Attributes', sqs_message, {})
+                        attributes = Utils.get_value_as_dict('Attributes', sqs_message, default={})
                         sender_id = Utils.get_value_as_string('SenderId', attributes)
 
                         self.logger.info(f'Processing AD automation event: {namespace}')
@@ -231,11 +235,12 @@ class ADAutomationAgent(SocaService):
                         self.logger.exception(f'failed to process sqs message: {e}. payload: {Utils.to_json(sqs_message)}. processing will be retried in {visibility_timeout} seconds ...')
 
                 if len(delete_messages) > 0:
+                    self.logger.info(f"Attempting to delete {len(delete_messages)} AD automation entries from SQS")
                     delete_message_result = self.context.aws().sqs().delete_message_batch(
                         QueueUrl=self.ad_automation_sqs_queue_url,
                         Entries=delete_messages
                     )
-                    failed = Utils.get_value_as_list('Failed', delete_message_result, [])
+                    failed = Utils.get_value_as_list('Failed', delete_message_result, default=[])
                     if len(failed) > 0:
                         self.logger.error(f'Failed to delete AD automation entries. This could result in an infinite loop. Consider increasing the directoryservice.ad_automation.sqs_visibility_timeout_seconds. failed messages: {failed}')
 
@@ -250,8 +255,76 @@ class ADAutomationAgent(SocaService):
                     self._stop_event.wait(DEFAULT_WAIT_INTERVAL_SECONDS)
 
     def start(self):
+        self.logger.info(f'Starting AD Automation Agent sanity checks...')
+        self._sanity_check()
         self.logger.info('starting ad automation agent ...')
         self._automation_thread.start()
+
+    def _ddb_sanity_check(self):
+        self.logger.info(f"Performing AD Automation table integrity scan ...")
+
+        ddb_paginate = self.context.aws().dynamodb().get_paginator('scan')
+        ddb_iter = ddb_paginate.paginate(TableName=self.ad_automation_dao.get_table_name())
+        _entrynum = 0
+        _repaired_entries = 0
+        _repair_failures = 0
+        new_ttl = Utils.current_time()
+
+        for _page in ddb_iter:
+            for item in _page.get('Items', None):
+                _instance_dict = item.get('instance_id', None)
+                _ttl_dict = item.get('ttl', None)
+                _nonce_dict = item.get('nonce', None)
+                if _instance_dict and _ttl_dict and _nonce_dict:
+                    _entrynum += 1
+                    _instance_id = Utils.get_value_as_string('S', _instance_dict)
+                    _ttl = Utils.get_value_as_int('N', _ttl_dict)
+                    _nonce = Utils.get_value_as_string('S', _nonce_dict)
+                    if _instance_id and _ttl:
+                        self.logger.debug(f"AD Automation table scan entry #{_entrynum} - Instance: {_instance_id}, TTL: {_ttl}")
+                        if _ttl >= 2000000000: # Tue May 17 22:33:20 CDT 2033
+                            if self._update_ttl(instance_id=_instance_id, nonce=_nonce, new_ttl=new_ttl):
+                                self.logger.info(f"Automation DB entry TTL repaired: #{_entrynum} - Instance: {_instance_id}, TTL: {_ttl} -> {new_ttl}")
+                                _repaired_entries += 1
+                            else:
+                                self.logger.error(f"Unable to repair TTL for entry #{_entrynum} - Instance: {_instance_id}, TTL: {_ttl}")
+                                _repair_failures += 1
+
+        # Summarize for the logs
+        self.logger.info(f"AD Automation table scan summary: {_entrynum} entries scanned, {_repaired_entries} entries repaired, {_repair_failures} repair failures")
+
+
+    def _update_ttl(self, instance_id: str, nonce: str, new_ttl: int) -> bool:
+        # Update the TTL in the dynamo DB table
+        self.logger.debug(f"Updating DynamoDB TTL for instance_id/nonce: {instance_id}/{nonce} TO {new_ttl}")
+        try:
+            result = self.context.aws().dynamodb().update_item(
+                TableName=self.ad_automation_dao.get_table_name(),
+                Key={
+                    'instance_id': { 'S': instance_id},
+                    'nonce': { 'S': nonce }
+                },
+                UpdateExpression='SET #ttl = :new_ttl',
+                ExpressionAttributeValues={
+                    ':new_ttl': { 'N': str(new_ttl) }
+                },
+                ExpressionAttributeNames={
+                    '#ttl': 'ttl'
+                },
+                ReturnValues='UPDATED_NEW'
+            )
+            _res_status = result.get('ResponseMetadata', {}).get('HTTPStatusCode', None)
+            if _res_status != 200:
+                self.logger.warning(f"TTL Update error {instance_id}/{nonce} - HTTPStatusCode({_res_status}) - {result}")
+                return False
+
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to update TTL for instance_id/nonce: {instance_id}/{nonce} - {e}")
+
+    def _sanity_check(self):
+        self.logger.info(f"Performing startup sanity check for AD Automation agent ...")
+        self._ddb_sanity_check()
 
     def stop(self):
         self.logger.info('stopping ad automation agent ...')

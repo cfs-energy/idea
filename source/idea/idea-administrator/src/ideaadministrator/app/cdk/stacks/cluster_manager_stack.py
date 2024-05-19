@@ -192,8 +192,9 @@ class ClusterManagerStack(IdeaBaseStack):
             fifo=True,
             content_based_deduplication=True,
             encryption_master_key=kms_key_id,
+            visibility_timeout=cdk.Duration.seconds(constants.SQS_VISIBILITY_TASKS),
             dead_letter_queue=sqs.DeadLetterQueue(
-                max_receive_count=30,
+                max_receive_count=Utils.get_as_int(constants.SQS_MAX_RECEIVE_COUNT_CLUSTER_TASKS, default=16),
                 queue=SQSQueue(
                     self.context, 'cluster-tasks-sqs-queue-dlq', self.stack,
                     queue_name=f'{self.cluster_name}-{self.module_id}-tasks-dlq.fifo',
@@ -213,8 +214,9 @@ class ClusterManagerStack(IdeaBaseStack):
             fifo=True,
             content_based_deduplication=True,
             encryption_master_key=kms_key_id,
+            visibility_timeout=cdk.Duration.seconds(constants.SQS_VISIBILITY_NOTIFICATIONS),
             dead_letter_queue=sqs.DeadLetterQueue(
-                max_receive_count=3,
+                max_receive_count=Utils.get_as_int(constants.SQS_MAX_RECEIVE_COUNT_NOTIFICATIONS, default=3),
                 queue=SQSQueue(
                     self.context, 'notifications-sqs-queue-dlq', self.stack,
                     queue_name=f'{self.cluster_name}-{self.module_id}-notifications-dlq.fifo',

@@ -92,8 +92,7 @@ from ideadatamodel import (
 )
 from ideaadministrator.integration_tests.test_context import TestContext
 import time
-from defusedxml import cElementTree
-from defusedxml.ElementTree import parse
+from xml.etree import cElementTree
 from ideadatamodel import (
     exceptions
 )
@@ -170,7 +169,7 @@ class TestReportHelper:
                                method='xml')
 
     def parse_file_and_return_tree_element(self) -> cElementTree:
-        test_result_tree = parse(self.test_results_file)
+        test_result_tree = cElementTree.parse(self.test_results_file)
         return test_result_tree
 
     @staticmethod
@@ -501,7 +500,7 @@ class SessionsTestHelper:
 
     def wait_and_verify_session_state_matches(self, expected_state: VirtualDesktopSessionState, get_session_info_namespace: str) -> Dict:
         session_state = {'session_state_matches': bool, 'error_log': ''}
-        sleep_timer = 30
+        sleep_timer = 15
         try:
             wait_counter = 0
             current_session = self.get_session_info(get_session_info_namespace)
@@ -511,7 +510,7 @@ class SessionsTestHelper:
                 time.sleep(sleep_timer)
                 current_session = self.get_session_info(get_session_info_namespace)
                 wait_counter += 1
-                if wait_counter >= 40:
+                if wait_counter >= 80:
                     break
             current_session = self.get_session_info(get_session_info_namespace)
 
@@ -872,7 +871,7 @@ class SessionWorkflow:
         session_helper = SessionsTestHelper(self.context, self.session, self.username, self.access_token)
         session_response = session_helper.get_session_info(self.get_session_info_namespace)
         wait_counter = 0
-        sleep_timer = 30
+        sleep_timer = 15
 
         try:
             while session_response.state not in VirtualDesktopSessionState.ERROR:

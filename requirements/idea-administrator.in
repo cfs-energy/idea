@@ -5,4 +5,3 @@ sanic~=23.3.0
 aws-cdk-lib
 cdk-nag
 prettytable
-defusedxml

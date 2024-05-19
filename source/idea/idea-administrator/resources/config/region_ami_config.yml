@@ -147,6 +147,10 @@ us-east-2:
   rhel7: ami-00342897eb8ba6355
   rhel8: ami-057094267c651958e
   rocky8: ami-02fb9384e880ed67c
+us-gov-west-1:
+  amazonlinux2: ami-0d6bf8ceb4766ef71
+  rhel7: ami-09616d1f2ecd77e9b
+  rhel8: ami-0206165c7b00c4adf
 us-west-1:
   amazonlinux2: ami-0ee3e1e65adeef858
   centos7: ami-0bcd12d19d926f8e9

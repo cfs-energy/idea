@@ -16,7 +16,7 @@ import {
     SocaUserInputParamCondition,
     SocaUserInputParamMetadata,
     SocaMemory, SocaAmount, SocaDateRange,
-    SocaUserInputChoice, VirtualDesktopGPU, VirtualDesktopSchedule, VirtualDesktopScheduleType, User
+    SocaUserInputChoice, VirtualDesktopGPU, VirtualDesktopSchedule, VirtualDesktopScheduleType, User, VirtualDesktopTenancy
 } from "../client/data-model";
 import {IdeaFormFieldRegistry} from "../components/form-field";
 import {v4 as uuid} from "uuid"
@@ -333,6 +333,24 @@ class Utils {
         return gpu
     }
 
+    static getFormattedTenancy(tenancy?: VirtualDesktopTenancy): string {
+        if (tenancy == null) {
+            return 'N/A'
+        }
+
+        switch(tenancy) {
+            case 'default':
+                return 'Default'
+            case 'dedicated':
+                return 'Dedicated'
+            case 'host':
+                return 'Host'
+            default:
+                return 'Unknown'
+        }
+
+    }
+
     static getFormattedMemory(memory?: SocaMemory): string {
         if (memory == null) {
             return '-'
@@ -548,6 +566,17 @@ class Utils {
         return options
     }
 
+    static getTenancyChoices(tenancy: string[]): SocaUserInputChoice[] {
+        const options: SocaUserInputChoice[] = []
+        tenancy.forEach(tenancy_option => {
+            options.push({
+                title: Utils.getTenancyTitle(tenancy_option),
+                value: tenancy_option
+            })
+        })
+        return options
+    }
+
     static getScheduleTypeDisplay(schedule_type: VirtualDesktopScheduleType | undefined, working_hours_start: string | undefined, working_hours_end: string | undefined, start_time: string | undefined, end_time: string | undefined): string {
         if (schedule_type === 'NO_SCHEDULE') {
             return 'No Schedule'
@@ -586,6 +615,18 @@ class Utils {
                 return 'Rocky Linux 8'
             case 'windows':
                 return 'Windows'
+        }
+        return 'Unknown'
+    }
+
+    static getTenancyTitle(name?: string): string {
+        switch (name) {
+            case 'default':
+                return 'Default'
+            case 'dedicated':
+                return 'Dedicated (BYOL)'
+            case 'host':
+                return 'Host'
         }
         return 'Unknown'
     }

@@ -294,6 +294,7 @@ class TypingsGenerator:
             schema_definitions = Utils.get_value_as_dict('definitions', schema, {})
 
             for name, definition in schema_definitions.items():
+                idea.console.info(f"Processing {name} ...")
                 self.clean_schema(definition)
 
             return json.dumps(schema, indent=2)
@@ -333,7 +334,8 @@ class TypingsGenerator:
         if exclude:
             models = [m for m in models if m.__name__ not in exclude]
 
-        idea.console.info("Generating JSON schema from pydantic models...")
+        models = sorted(models, key=lambda m: m.__name__)
+        idea.console.info(f"Generating {len(models)} JSON schemas from pydantic models ...")
 
         schema = self.generate_json_schema(models)
         schema_dir = mkdtemp()
@@ -346,7 +348,7 @@ class TypingsGenerator:
 
         banner_comment_items = ['/* tslint:disable */',
                                 '/* eslint-disable */',
-                                '/* This file is generated using IDEA invoke typings task. */',
+                                '/* This file is generated using IDEA invoke web-portal.typings task. */',
                                 '/* Do not modify this file manually. */',
                                 '/**']
         for line in notice.COPYRIGHT_NOTICE.splitlines():

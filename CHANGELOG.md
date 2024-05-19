@@ -5,6 +5,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.1.4] - 2023-07-25
+
+:heavy_exclamation_mark: - *Please note the IDEA ECR Repository location has changed as of `3.1.4`*
+
+Users of older `idea-admin.sh` and `idea-admin-windows.ps1` may need to manually update these files for the new repo location (`public.ecr.aws/h5i3y8y1/idea-administrator`).
+
+
+### Features
+* Added support for `Launch Tenancy` for eVDI software stacks. This allows the IDEA administrator to configure [EC2 Launch Tenancy](https://docs.aws.amazon.com/autoscaling/ec2/userguide/auto-scaling-dedicated-instances.html).
+
+
+### Changes
+* Reduced IAM actions for SQS and SNS in scheduler, VDC broker, and VDC Host to least required privileges
+* eVDI session tiles now display the Project of the associated eVDI session (along with putting this information in boxes for clarity)
+* Updates to the ECR Repo alias/location
+* Add additional logging during (`debug` logging profile) for some latency sensitive operations such as Active Directory lookups.
+
+
+### Bug Fixes
+* In Active Directory (AD) environments - the DynamoDB AD automation table would continue to grow and not properly expire old entries.
+* In Active Directory environments - an incoming Windows eVDI session was not using the same domain-controller that `cluster-manager` pre-created the object. This could lead to a race condition where the incoming client would fail to join the domain properly as the AD object had not replicated within the domain.
+* In Active Directory environments - users were not displayed properly as members of a group on the Active Directory `Member Of` tab within Active Directory Users and Computers.
+* Restore AMI IDs for `us-gov-west-1` region (missing since `3.1.3`)
+* Fixed a bug that prevented `userdata_customizations.sh` from executing for jobs that require EFA driver to be installed
+* Fixed a syntax error in the `robots.txt` on `cluster-manager` that allowed bots to index IDEA.
+* Expand skipping service quotas to batch queues when `scheduler.job_provisioning.service_quotas` is set to `False`
+* Added missing IAM actions to installer policies
+* Project titles were allowed to exceed character limits in some cases. Project titles are now restricted to `3-32` characters.
+* Under certain conditions - the `cluster-manager` task manager could have difficulty keeping up with task execution requirements. Additional configuration parameters have been added to address this.
+
+
 ## [3.1.3] - 2023-06-16
 
 ### Features
@@ -12,22 +43,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Added support for `Red Hat Enterprise Linux 8.7` and `Rocky Linux 8.7` as supported operating systems for VDI and compute nodes.
   * **NOTE:** Subscription to `Rocky Linux 8` in AWS Marketplace is required to access Rocky Linux AMIs.
 
-* `ideactl`  now supports adding multiple users to multiple named groups in a single command. For example: `ideactl groups add-user-to-group --username user1 --username user2 --groupname group1 --groupname group2`  will add both `user1`  and `user2`  to groups `group1`  and `group2`
-* Added support for new instance families: `i4g, inf2, trn1n, c6in, m6in, m6idn, r6in,  rdidn`
+* `ideactl` now supports adding multiple users to multiple named groups in a single command. For example: `ideactl groups add-user-to-group --username user1 --username user2 --groupname group1 --groupname group2`  will add both `user1`  and `user2`  to groups `group1` and `group2`
+* Added support for new instance families: `i4g`, `inf2`, and `trn1n`
 * eVDI session startup now validates that there is remaining budget for the associated project. If there is no remaining budget a session cannot be started for the project. This is controlled via the new configuration setting `vdc.controller.enforce_project_budgets`  (defaults to `True` ).
 
 ### Changes
 
-* Update boto3 from 1.26.61 to 1.26.138
-* Update requests module from 2.27.1 to 2.31.0
+* Update boto3 from `1.26.61` to `1.26.138`
+* Update requests module from `2.27.1` to `2.31.0`
 * ALB deployments will now set the option to Drop Invalid Headers
-* Default Web/API page size increased from 20 to 50
+* Default Web/API page size increased from `20` to `50`
 * Update AMI IDs for all supported operating systems
-* Update AWS EFA Installer from 1.22.1  to 1.23.1
-* Update DCV Server from 2023.0-14852 to 2023.0-15065, DCV Session Manager from 2023.0-642 to 2023.0-675, and DCV viewer from 2023.0.5388 to 2023.0.5483
-
+* Update AWS EFA Installer from `1.22.1` to `1.23.1`
+* Update DCV Server from `2023.0-14852` to `2023.0-15065`, DCV Session Manager from `2023.0-642` to `2023.0-675`, and DCV viewer from `2023.0.5388` to `2023.0.5483`
 * Reduce the default DCV idle disconnect from 24-hours to 4-hours
-* Update Nvidia drivers from 510.47.03 to 525.105.17
+* Update Nvidia drivers from `510.47.03` to `525.105.17`
 
 ### Bug Fixes
 * `ideactl ldap search-nnn `on `cluster-manager` did not properly return all results when the results spanned multiple pages of results. This has been fixed.
@@ -37,7 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Known Caveats
 
-* `Red Hat Enterprise Linux  8.7` and `Rocky Linux 8.7` do not launch VDI sessions on `G4ad` instances due to AMD GPU driver kernel version dependencies.
+* `Red Hat Enterprise Linux 8.7` and `Rocky Linux 8.7` do not launch VDI sessions on `G4ad` instances due to AMD GPU driver kernel version dependencies.
 * AWS EFA installer doesn't install successfully on `Rocky Linux 8.7`
 
 
@@ -120,7 +150,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Amazon OpenSearch Service - Default engine version updated to OpenSearch 2.3  for new installations.
 * Enhanced `delete-cluster` to delete CloudWatch Log Groups.
 * Added option `--delete-all` for `delete-cluster`. This will delete bootstrap, backups, dynamodb tables, and cloudwatch log groups.
-* Support for new instances:   `C6in`, `M6in`, `M6idn`, `R6in` and `R6idn`
+* Support for new instance families:   `c6in`, `m6in`, `m6idn`, `r6in` and `r6idn`
 * (`cluster-manager`) - Added `groups`  subcommands for group add/delete/enable/disable/listing
 
 

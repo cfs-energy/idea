@@ -18,11 +18,11 @@ import {ProjectsClient, VirtualDesktopAdminClient} from '../../client'
 import {AppContext} from "../../common";
 import {TableProps} from "@cloudscape-design/components/table/interfaces";
 import IdeaForm from "../../components/form";
-import {Project, SocaUserInputChoice, VirtualDesktopBaseOS, VirtualDesktopSoftwareStack} from '../../client/data-model'
+import {Project, SocaUserInputChoice, VirtualDesktopBaseOS, VirtualDesktopSoftwareStack, VirtualDesktopTenancy} from '../../client/data-model'
 import Utils from "../../common/utils";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import IdeaAppLayout, {IdeaAppLayoutProps} from "../../components/app-layout";
-import {Link} from "@cloudscape-design/components";
+import {Link, StatusIndicator} from "@cloudscape-design/components";
 import VirtualDesktopSoftwareStackEditForm from "./forms/virtual-desktop-software-stack-edit-form";
 import {withRouter} from "../../navigation/navigation-utils";
 import VirtualDesktopUtilsClient from "../../client/virtual-desktop-utils-client";
@@ -36,6 +36,7 @@ export interface VirtualDesktopSoftwareStacksState {
     supportedOsChoices: SocaUserInputChoice[]
     supportedGPUChoices: SocaUserInputChoice[]
     projectChoices: SocaUserInputChoice[]
+    tenancyChoices: SocaUserInputChoice[]
     showCreateSoftwareStackForm: boolean
     showEditSoftwareStackForm: boolean
 }
@@ -45,6 +46,14 @@ const VIRTUAL_DESKTOP_SOFTWARE_STACKS_TABLE_COLUMN_DEFINITIONS: TableProps.Colum
         id: 'name',
         header: 'Name',
         cell: e => <Link href={`/#/virtual-desktop/software-stacks/${e.stack_id}`}>{e.name}</Link>
+    },
+    {
+        id: 'enabled',
+        header: 'Enabled',
+        cell: e => {
+            return (e.enabled) ? <StatusIndicator type="success">Enabled</StatusIndicator> :
+                <StatusIndicator type="stopped">Disabled</StatusIndicator>
+        }
     },
     {
         id: 'description',
@@ -77,6 +86,19 @@ const VIRTUAL_DESKTOP_SOFTWARE_STACKS_TABLE_COLUMN_DEFINITIONS: TableProps.Colum
         cell: e => Utils.getFormattedGPUManufacturer(e.gpu)
     },
     {
+        id: 'launch_tenancy',
+        header: 'Launch Tenancy',
+        cell: e => Utils.getFormattedTenancy(e.launch_tenancy)
+    },
+/*    {
+        id: 'pool_enabled',
+        header: 'Pool Enabled',
+        cell: e => {
+            return (e.pool_enabled) ? <StatusIndicator type="success">Enabled</StatusIndicator> :
+                <StatusIndicator type="stopped">Disabled</StatusIndicator>
+        }
+    },*/
+    {
         id: 'created_on',
         header: 'Created On',
         cell: e => new Date(e.created_on!).toLocaleString()
@@ -99,6 +121,7 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
             supportedOsChoices: [],
             supportedGPUChoices: [],
             projectChoices: [],
+            tenancyChoices: [],
             showCreateSoftwareStackForm: false,
             showEditSoftwareStackForm: false
         }
@@ -109,6 +132,9 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
             this.setState({
                 supportedOsChoices: Utils.getSupportedOSChoices(result.listing!)
             })
+        })
+        this.setState({
+            tenancyChoices: Utils.getTenancyChoices(['default', 'dedicated', 'host'])
         })
 
         this.getVirtualDesktopUtilsClient().listSupportedGPUs({}).then(result => {
@@ -209,7 +235,10 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                                 value: values.ram_size,
                                 unit: 'gb'
                             },
-                            projects: projects
+                            projects: projects,
+                            pool_enabled: values.pool_enabled,
+                            pool_asg_name: values.pool_asg_name,
+                            launch_tenancy: values.launch_tenancy,
                         }
                     }
                 ).then(() => {
@@ -315,7 +344,44 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                     validate: {
                         required: true
                     }
-                }
+                },
+                {
+                    name: 'launch_tenancy',
+                    title: 'Launch Tenancy',
+                    description: 'Select Launch Tenancy',
+                    data_type: 'str',
+                    param_type: 'select',
+                    default: this.state.tenancyChoices,
+                    validate: {
+                        required: true
+                    }
+                },
+/*                {
+                    name: 'pool_enabled',
+                    title: 'Pool Enabled',
+                    description: 'Select to activate warming pool',
+                    data_type: 'boolean',
+                    param_type: 'confirm',
+                    default: false,
+                    validate: {
+                        required: true
+                    }
+                },
+                {
+                    name: 'pool_asg_name',
+                    title: 'Pool ASG',
+                    description: 'Pool ASG',
+                    data_type: 'str',
+                    param_type: 'text',
+                    validate: {
+                        // TODO Regex
+                        required: false
+                    },
+                    when: {
+                        param: 'pool_enabled',
+                        eq: true
+                    }
+                }*/
             ]}
         />
 
@@ -356,14 +422,27 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
             <VirtualDesktopSoftwareStackEditForm
                 ref={this.editSoftwareStackForm}
                 softwareStack={this.getSelectedSoftwareStack()!}
-                onSubmit={(stack_id: string, base_os: VirtualDesktopBaseOS, name: string, description: string, projects: Project[]) => {
+                onSubmit={
+                (
+                    stack_id: string,
+                    base_os: VirtualDesktopBaseOS,
+                    name: string,
+                    description: string,
+                    projects: Project[],
+                    pool_enabled: boolean,
+                    pool_asg_name: string,
+                    launch_tenancy: VirtualDesktopTenancy
+                ) => {
                     return this.getVirtualDesktopAdminClient().updateSoftwareStack({
                             software_stack: {
                                 stack_id: stack_id,
                                 base_os: base_os,
                                 name: name,
                                 description: description,
-                                projects: projects
+                                projects: projects,
+                                pool_enabled: pool_enabled,
+                                pool_asg_name: pool_asg_name,
+                                launch_tenancy: launch_tenancy
                             }
                         }
                     ).then(_ => {

@@ -40,7 +40,12 @@ Statement:
     Resource: '*'
     Effect: Allow
   - Action:
-      - sns:*
+      - sns:Publish
+    Resource:
+      - '{{ context.arns.get_sns_arn(context.config.get_module_id("virtual-desktop-controller") + "-ssm-commands-sns-topic") }}'
+      - '{{ context.arns.get_sns_arn(context.config.get_module_id("cluster") + "-ec2-state-change-sns-topic") }}'
+    Effect: Allow
+  - Action:
       - events:PutTargets
       - events:PutRule
       - events:PutEvents

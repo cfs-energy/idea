@@ -381,8 +381,9 @@ class DirectoryServiceStack(IdeaBaseStack):
             fifo=True,
             content_based_deduplication=True,
             encryption_master_key=kms_key_id,
+            visibility_timeout=cdk.Duration.seconds(constants.SQS_VISIBILITY_TIMEOUT_AD_AUTOMATION),
             dead_letter_queue=sqs.DeadLetterQueue(
-                max_receive_count=30,
+                max_receive_count=Utils.get_as_int(constants.SQS_MAX_RECEIVE_COUNT_AD_AUTOMATION, default=16),
                 queue=SQSQueue(
                     self.context, 'ad-automation-sqs-queue-dlq', self.stack,
                     queue_name=f'{self.cluster_name}-{self.module_id}-ad-automation-dlq.fifo',

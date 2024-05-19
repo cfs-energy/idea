@@ -111,6 +111,7 @@ def build_opensource_dist(c):
 
     # copy all source artifacts to build/open-source
     targets = [
+        'deployment/ecr',
         'tasks',
         'source',
         'requirements',

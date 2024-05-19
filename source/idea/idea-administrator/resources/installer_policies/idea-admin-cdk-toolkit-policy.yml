@@ -7,6 +7,7 @@ Statement:
       - s3:PutBucketVersioning
       - s3:PutBucketPublicAccessBlock
       - s3:PutBucketPolicy
+      - s3:PutBucketTagging
       - s3:GetBucketPolicy
       - s3:CreateBucket
     Resource: arn:aws:s3:::idea*
@@ -16,12 +17,15 @@ Statement:
       - ecr:CreateRepository
       - ecr:DescribeRepositories
       - ecr:SetRepositoryPolicy
+      - ecr:TagResource
       - ec2:DescribeAccountAttributes
       - ssm:GetParameter
       - ssm:GetParameters
       - ssm:PutParameter
       - ssm:DeleteParameter
       - ssm:GetParametersByPath
+      - ssm:SendCommand
+      - ssm:ListCommandInvocations
       - iam:CreateRole
       - iam:CreateServiceLinkedRole
       - iam:GetRole
