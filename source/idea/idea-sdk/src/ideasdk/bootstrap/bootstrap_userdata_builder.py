@@ -126,6 +126,7 @@ function install_aws_cli () {
   if [[ "${!BASE_OS}" == "amazonlinux2" ]]; then
     yum remove -y awscli
   fi
+  cd /root/bootstrap
   local machine=$(uname -m)
   if [[ ${!machine} == "x86_64" ]]; then
     curl -s ${!AWSCLI_X86_64_URL} -o "awscliv2.zip"
@@ -138,6 +139,7 @@ function install_aws_cli () {
   fi
   unzip -q awscliv2.zip
   ./aws/install --bin-dir /bin --update
+  rm -rf aws awscliv2.zip
 }
 
 echo "#!/bin/bash
@@ -219,6 +221,7 @@ function install_aws_cli () {
   if [[ "${BASE_OS}" == "amazonlinux2" ]]; then
     yum remove -y awscli
   fi
+  cd /root/bootstrap
   local machine=$(uname -m)
   if [[ ${machine} == "x86_64" ]]; then
     curl -s ${AWSCLI_X86_64_URL} -o "awscliv2.zip"
@@ -231,6 +234,7 @@ function install_aws_cli () {
   fi
   unzip -q awscliv2.zip
   ./aws/install --bin-dir /bin --update
+  rm -rf aws awscliv2.zip
 }
 
 echo "#!/bin/bash

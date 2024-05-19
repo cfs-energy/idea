@@ -78,16 +78,16 @@ class BootstrapContext:
 
     @property
     def https_proxy(self) -> str:
-        use_vpc_endpoints = self.config.get_bool('cluster.network.use_vpc_endpoints', default=False)
-        if use_vpc_endpoints:
-            return self.config.get_string('cluster.network.https_proxy', required=False, default='')
+        https_proxy = self.config.get_string('cluster.network.https_proxy', required=False, default='')
+        if Utils.is_not_empty(https_proxy):
+            return https_proxy
         else:
             return ''
 
     @property
     def no_proxy(self) -> str:
-        use_vpc_endpoints = self.config.get_bool('cluster.network.use_vpc_endpoints', default=False)
-        if use_vpc_endpoints:
+        https_proxy = self.config.get_string('cluster.network.https_proxy', required=False, default='')
+        if Utils.is_not_empty(https_proxy):
             return self.config.get_string('cluster.network.no_proxy', required=False, default='')
         else:
             return ''
@@ -97,7 +97,7 @@ class BootstrapContext:
         if self.base_os in ('amazonlinux2', 'rhel7'):
             return 'ec2-user'
         if self.base_os == 'centos7':
-            return 'centos7'
+            return 'centos'
         raise exceptions.general_exception(f'unknown system user name for base_os: {self.base_os}')
 
     def has_storage_provider(self, provider: str) -> bool:

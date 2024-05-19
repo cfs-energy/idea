@@ -73,6 +73,7 @@ Statement:
       - elasticfilesystem:CreateMountTarget
       - elasticfilesystem:DescribeFileSystems
       - elasticfilesystem:DescribeMountTargets
+      - elasticfilesystem:PutFileSystemPolicy
       - elasticfilesystem:PutLifecycleConfiguration
       - elasticloadbalancing:AddTags
       - elasticloadbalancing:CreateListener
@@ -115,6 +116,7 @@ Statement:
       - lambda:GetFunction
       - lambda:InvokeFunction
       - logs:CreateLogGroup
+      - logs:CreateLogStream
       - logs:DescribeLogGroups
       - logs:PutRetentionPolicy
       - route53resolver:AssociateResolverEndpointIpAddress

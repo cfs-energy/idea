@@ -121,6 +121,12 @@ rotation = 'daily'
   # DCVSessionManagerAgentService is usually disabled on the system. Need to enable it.
   Set-Service -Name DcvSessionManagerAgentService -StartupType Automatic
 
+  # Determine if we have any additional USB remotization configurations
+  $UsbDevicesConfFile = "C:\Program Files\NICE\DCV\Server\conf\usb-devices.conf"
+
+  {%- for usb_info in context.config.get_list('vdc.server.usb_remotization', default=[]) %}
+    Add-Content $UsbDevicesConfFile -Value "{{ usb_info }}"
+  {%- endfor %}
 {%- if context.config.get_string('directoryservice.provider', required=True) in ['aws_managed_activedirectory', 'activedirectory'] %}
   # if ActiveDirectory, add the user to local Administrators group.
   # todo: need to have a broader discussion with the group on this. this will work well as long as no shared storage is mounted automatically.

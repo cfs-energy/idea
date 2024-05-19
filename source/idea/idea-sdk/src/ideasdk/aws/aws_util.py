@@ -978,6 +978,14 @@ class AWSUtil(AWSUtilProtocol):
             })
         create_table_request['Tags'] = updated_tags
 
+        dynamodb_kms_key_id = self._context.config().get_string('cluster.dynamodb.kms_key_id')
+        if dynamodb_kms_key_id is not None:
+            create_table_request['SSESpecification'] = {
+                    'Enabled': True,
+                    'SSEType': 'KMS',
+                    'KMSMasterKeyId': dynamodb_kms_key_id
+                    }
+
         self.aws().dynamodb().create_table(**create_table_request)
 
         if wait or ttl:

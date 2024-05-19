@@ -26,7 +26,8 @@ __all__ = (
     'EC2PrefixList',
     'EC2PrefixListEntry',
     'CognitoUser',
-    'CognitoUserMFAOptions'
+    'CognitoUserMFAOptions',
+    'CognitoUserPoolPasswordPolicy'
 )
 
 from ideadatamodel.aws import EC2Instance
@@ -244,3 +245,11 @@ class CognitoUser(SocaBaseModel):
     def gid(self) -> Optional[int]:
         gid = self.get_user_attribute('custom:gid')
         return ModelUtils.get_as_int(gid, None)
+
+class CognitoUserPoolPasswordPolicy(SocaBaseModel):
+    minimum_length: Optional[int]
+    require_uppercase: Optional[bool]
+    require_lowercase: Optional[bool]
+    require_numbers: Optional[bool]
+    require_symbols: Optional[bool]
+    temporary_password_validity_days: Optional[int]

@@ -289,7 +289,7 @@ class SocaContext(SocaContextProtocol):
         return ideasdk.__version__
 
     def cluster_timezone(self) -> str:
-        return self.config().get_string('cluster.cluster_timezone', 'America/Los_Angeles')
+        return self.config().get_string('cluster.timezone', default='America/Los_Angeles')
 
     def get_aws_solution_id(self) -> str:
         return constants.AWS_SOLUTION_ID

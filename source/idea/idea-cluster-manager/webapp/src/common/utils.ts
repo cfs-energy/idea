@@ -430,7 +430,7 @@ class Utils {
                     break
                 case 'NVIDIA':
                     options.push({
-                        title: 'NVIDA',
+                        title: 'NVIDIA',
                         value: 'NVIDIA'
                     })
             }

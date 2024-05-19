@@ -40,6 +40,7 @@ def test_admin_batch_session_workflow(context: TestContext):
         batch_sessions = create_batch_sessions(context, sessions)
         # 3. Execute Tests
         for session in batch_sessions:
+            admin_access_token = context.get_admin_access_token()
             session_workflow = SessionWorkflow(context, session, testcase_id, context.admin_username, admin_access_token, 'VirtualDesktopAdmin.GetSessionInfo')
             session_workflow.test_session_workflow()
 

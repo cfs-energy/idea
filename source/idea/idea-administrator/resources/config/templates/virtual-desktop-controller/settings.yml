@@ -11,6 +11,15 @@ server:
   enable_metrics: false
   graceful_shutdown_timeout: 10
   api_context_path: /{{ module_id }}
+  # Additional USB Remotization AllowList defined in  list format
+  # Default is an empty list / no additional devices considered for USB remotization
+  # See docs:
+  # Admin Guide: https://docs.aws.amazon.com/dcv/latest/adminguide/manage-usb-remote.html
+  # User Guide:  https://docs.aws.amazon.com/dcv/latest/userguide/using-usb.html
+  usb_remotization: []
+# Example DCV USB Filter string:
+#      - "Q-LightLampHIDDevice,3,0,0,1240,59196,0,0"
+
 
 controller:
   autoscaling:
@@ -153,6 +162,25 @@ dcv_session:
       - m6g
     deny: [] # Supports both instance families and types. E.g. specify t3 for family and t3.large for instance type
   quic_support: {{ dcv_session_quic_support | lower }}
+
+  #
+  # By default, the eVDI subnets match the cluster private subnets.
+  # Here you can specify eVDI-specific subnets as an alternative to using the cluster.network.private_subnets
+  #
+  network:
+    private_subnets:
+      {{ utils.to_yaml(private_subnet_ids) | indent(6) }}
+
+    # Supported eVDI randomize_subnets settings:
+    # True - Randomize the subnets (dcv_session.network.private_subnets or cluster.network.private_subnets) for deployment
+    # False - (default)  Use the subnets (dcv_session.network.private_subnets or cluster.network.private_subnets) in the order specified in the configuration.
+    randomize_subnets: False
+
+    # Retry methods when encountering an eVDI deployment error
+    # True - (default) Immediately retry the next subnet (ordered or random from subnet_deployment_method)
+    # False - error the request on first error. This may be desired to avoid cross-AZ charges.
+    subnet_autoretry: True
+
   # instance metadata access method
   metadata_http_tokens: "required"  # supported values are "required" for IMDSv2 or "optional" for IMDSv1
   notifications:

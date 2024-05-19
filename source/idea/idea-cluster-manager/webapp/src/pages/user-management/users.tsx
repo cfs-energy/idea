@@ -91,25 +91,6 @@ export const USER_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<User>[] 
         }
     },
     {
-        id: 'confirmation_status',
-        header: 'Confirmation Status',
-        cell: e => {
-            let status
-            if (e.status === 'CONFIRMED') {
-                status = 'Confirmed'
-            } else if (e.status === 'PENDING_CONFIRMATION') {
-                status = 'Pending Confirmation'
-            } else if (e.status === 'FORCE_CHANGE_PASSWORD') {
-                status = 'Force Change Password'
-            } else if (e.status === 'RESET_REQUIRED') {
-                status = 'Reset Required'
-            } else {
-                status = 'Unknown'
-            }
-            return status
-        }
-    },
-    {
         id: 'created_on',
         header: 'Created On',
         cell: e => new Date(e.created_on!).toLocaleString()

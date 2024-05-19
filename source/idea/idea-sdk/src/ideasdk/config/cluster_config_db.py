@@ -40,7 +40,7 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
         * implementation from AwsUtil.dynamodb_create_table() cannot be used in this class and tables must be created manually
     """
 
-    def __init__(self, cluster_name: str, aws_region: str, aws_profile: Optional[str], create_database: bool = False, create_subscription: bool = False, cluster_config_subscriber: Optional[DynamoDBStreamSubscriber] = None, logger=None):
+    def __init__(self, cluster_name: str, aws_region: str, aws_profile: Optional[str], dynamodb_kms_key_id: Optional[str] = None, create_database: bool = False, create_subscription: bool = False, cluster_config_subscriber: Optional[DynamoDBStreamSubscriber] = None, logger=None):
 
         self.logger = logger
 
@@ -58,6 +58,7 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
         self.create_database = create_database
         self.create_subscription = create_subscription
         self.stream_subscriber = cluster_config_subscriber
+        self.dynamodb_kms_key_id = dynamodb_kms_key_id
         self.module_metadata_helper = ModuleMetadataHelper()
 
         self.aws = AwsClientProvider(
@@ -142,6 +143,14 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
 
         except botocore.exceptions.ClientError as e:
             if e.response['Error']['Code'] == 'ResourceNotFoundException':
+                SSESpecification = {}
+                if self.dynamodb_kms_key_id is not None:
+                    self.log_info(f'detected cluster.dynamodb.kms_key_id is set to: {self.dynamodb_kms_key_id}')
+                    SSESpecification = {
+                            'Enabled': True,
+                            'SSEType': 'KMS',
+                            'KMSMasterKeyId': self.dynamodb_kms_key_id
+                        }
                 if self.create_database:
                     self.log_info(f'creating cluster config dynamodb table: {table_name}, region: {self.aws_region}')
                     self.aws.dynamodb().create_table(
@@ -159,6 +168,7 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
                             }
                         ],
                         BillingMode='PAY_PER_REQUEST',
+                        SSESpecification=SSESpecification,
                         Tags=[
                             {
                                 'Key': constants.IDEA_TAG_CLUSTER_NAME,
@@ -194,6 +204,13 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
 
         except botocore.exceptions.ClientError as e:
             if e.response['Error']['Code'] == 'ResourceNotFoundException':
+                SSESpecification = {}
+                if self.dynamodb_kms_key_id is not None:
+                    SSESpecification = {
+                            'Enabled': True,
+                            'SSEType': 'KMS',
+                            'KMSMasterKeyId': self.dynamodb_kms_key_id
+                        }
                 if self.create_database:
                     self.log_info(f'creating cluster config dynamodb table: {table_name}, region: {self.aws_region}')
                     self.aws.dynamodb().create_table(
@@ -215,6 +232,7 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
                             'StreamEnabled': True,
                             'StreamViewType': 'NEW_AND_OLD_IMAGES'
                         },
+                        SSESpecification=SSESpecification,
                         Tags=[
                             {
                                 'Key': constants.IDEA_TAG_CLUSTER_NAME,

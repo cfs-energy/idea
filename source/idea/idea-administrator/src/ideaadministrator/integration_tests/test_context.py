@@ -138,19 +138,24 @@ class TestContext:
                 username=self.admin_username,
                 password=self.admin_password
             ), result_as=InitiateAuthResult)
+            admin_auth = result.auth
+            if Utils.is_empty(admin_auth.access_token):
+                raise exceptions.general_exception('access_token not found')
+            if Utils.is_empty(admin_auth.refresh_token):
+                raise exceptions.general_exception('refresh_token not found')
         else:
             self.idea_context.info('Renewing Admin Authentication Access Token ...')
             result = self._admin_http_client.invoke_alt('Auth.InitiateAuth', InitiateAuthRequest(
                 auth_flow='REFRESH_TOKEN_AUTH',
                 username=self.admin_username,
-                password=self.admin_auth.refresh_token
+                refresh_token=self.admin_auth.refresh_token
             ), result_as=InitiateAuthResult)
 
-        admin_auth = result.auth
-        if Utils.is_empty(admin_auth.access_token):
-            raise exceptions.general_exception('access_token not found')
-        if Utils.is_empty(admin_auth.refresh_token):
-            raise exceptions.general_exception('refresh_token not found')
+            admin_auth = result.auth
+            if Utils.is_empty(admin_auth.access_token):
+                raise exceptions.general_exception('access_token not found')
+            # set refresh token from previous auth
+            admin_auth.refresh_token = self.admin_auth.refresh_token
 
         self.admin_auth = admin_auth
         self.admin_auth_expires_on = arrow.get().shift(seconds=admin_auth.expires_in)
@@ -163,19 +168,22 @@ class TestContext:
                 username=self.non_admin_username,
                 password=self.non_admin_password
             ), result_as=InitiateAuthResult)
+            non_admin_auth = result.auth
+            if Utils.is_empty(non_admin_auth.access_token):
+                raise exceptions.general_exception('access_token not found')
+            if Utils.is_empty(non_admin_auth.refresh_token):
+                raise exceptions.general_exception('refresh_token not found')
         else:
             self.idea_context.info('Renewing Non-Admin Authentication Access Token ...')
             result = self._admin_http_client.invoke_alt('Auth.InitiateAuth', InitiateAuthRequest(
                 auth_flow='REFRESH_TOKEN_AUTH',
                 username=self.non_admin_username,
-                password=self.non_admin_auth.refresh_token
+                refresh_token=self.non_admin_auth.refresh_token
             ), result_as=InitiateAuthResult)
 
-        non_admin_auth = result.auth
-        if Utils.is_empty(non_admin_auth.access_token):
-            raise exceptions.general_exception('access_token not found')
-        if Utils.is_empty(non_admin_auth.refresh_token):
-            raise exceptions.general_exception('refresh_token not found')
+            non_admin_auth = result.auth
+            if Utils.is_empty(non_admin_auth.access_token):
+                raise exceptions.general_exception('access_token not found')
 
         self.non_admin_auth = non_admin_auth
         self.non_admin_auth_expires_on = arrow.get().shift(seconds=non_admin_auth.expires_in)
@@ -183,7 +191,7 @@ class TestContext:
     def get_admin_access_token(self) -> str:
         if self.admin_auth is None:
             raise exceptions.general_exception('admin authentication not initialized')
-        if self.admin_auth_expires_on > arrow.get().shift(minutes=-5):
+        if self.admin_auth_expires_on > arrow.get().shift(minutes=15):
             return self.admin_auth.access_token
         self.initialize_admin_auth()
         return self.admin_auth.access_token
@@ -191,7 +199,7 @@ class TestContext:
     def get_non_admin_access_token(self):
         if self.non_admin_auth is None:
             raise exceptions.general_exception('non admin authentication not initialized')
-        if self.non_admin_auth_expires_on > arrow.get().shift(minutes=-5):
+        if self.non_admin_auth_expires_on > arrow.get().shift(minutes=15):
             return self.non_admin_auth.access_token
         self.initialize_non_admin_auth()
         return self.non_admin_auth.access_token

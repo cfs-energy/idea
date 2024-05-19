@@ -447,7 +447,7 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
                 title: 'User',
                 description: 'Select the user to create the session for',
                 data_type: 'str',
-                param_type: 'select',
+                param_type: 'select_or_text',
                 validate: {
                     required: true
                 },
@@ -572,7 +572,7 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
                 ref={this.form}
                 name="create-session"
                 modal={true}
-                title="Launch new Virtual Desktop"
+                title="Launch New Virtual Desktop"
                 modalSize="medium"
                 onStateChange={(event) => {
                     if (event.param.name === 'base_os') {

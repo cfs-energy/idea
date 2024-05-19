@@ -137,7 +137,7 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                         ref={this.wizard}
                         values={this.getValues()}
                         onFetchOptions={(request) => {
-                            if(request.param === 'project_ids') {
+                            if (request.param === 'project_ids') {
                                 return AppContext.get().client().projects().listProjects({
                                     paginator: {
                                         page_size: 100
@@ -294,19 +294,19 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                                                     name: 'terminate_when_idle',
                                                     title: 'Terminate When Idle (in minutes)',
                                                     description: 'Enter the idle duration in minutes, after which the provisioned AWS capacity will be terminated.',
-                                                    help_text: 'Terminate when idle is required when scaling mode is Batch',
+                                                    help_text: 'Terminate when idle is optional when Keep Forever is true but is required when scaling mode is Batch',
                                                     param_type: 'text',
                                                     data_type: 'int',
-                                                    default: 3,
+                                                    default: 0,
                                                     validate: {
                                                         required: true,
-                                                        min: 1
+                                                        min: 0
                                                     },
                                                     when: {
-                                                        and: [
+                                                        or: [
                                                             {
                                                                 param: 'keep_forever',
-                                                                eq: false
+                                                                eq: true
                                                             },
                                                             {
                                                                 param: 'scaling_mode',
@@ -918,9 +918,14 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                             })
                             const utils = new QueueUtils(queueProfile)
 
-                            const scalingMode = dot.pick('scaling_mode', queueProfile)
-                            if(scalingMode === 'single-job') {
-                                queueProfile.terminate_when_idle = 0
+                            let keep_forever = Utils.asBoolean(dot.pick('keep_forever', queueProfile), false)
+                            if (keep_forever) {
+                                dot.del('scaling_mode', queueProfile)
+                            } else {
+                                const scalingMode = dot.pick('scaling_mode', queueProfile)
+                                if (scalingMode === 'single-job') {
+                                    queueProfile.terminate_when_idle = 0
+                                }
                             }
 
                             if (utils.isScratchStorageEnabled()) {
@@ -952,6 +957,7 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                             } else {
                                 invoke = (params: any) => this.schedulerAdmin().updateQueueProfile(params)
                             }
+
                             return invoke({
                                 queue_profile: queueProfile
                             }).then(_ => {

@@ -240,7 +240,7 @@ class DeleteCluster:
             time.sleep(10)
 
     def find_cloud_formation_stacks(self):
-        self.context.info('Searching for CloudFormation stacks to be terminated ...')
+        self.context.info(f'Searching for CloudFormation stacks to be terminated (matching {constants.IDEA_TAG_CLUSTER_NAME} of {self.cluster_name})...')
         stacks_to_delete = []
         cluster_stacks = []
         identity_provider_stacks = []
@@ -771,50 +771,35 @@ class DeleteCluster:
             total_recovery_points = 0
             total_deleted = 0
 
-            next_token = None
-            while True:
+            bu_paginator = self.context.aws().backup().get_paginator('list_recovery_points_by_backup_vault')
+            bu_iterator = bu_paginator.paginate(BackupVaultName=backup_vault_name)
 
-                if next_token is None:
-                    list_recovery_points_by_backup_vault_result = self.context.aws().backup().list_recovery_points_by_backup_vault(
-                        BackupVaultName=backup_vault_name
-                    )
-                else:
-                    list_recovery_points_by_backup_vault_result = self.context.aws().backup().list_recovery_points_by_backup_vault(
-                        BackupVaultName=backup_vault_name,
-                        NextToken=next_token
-                    )
-
-                next_token = Utils.get_value_as_string('NextToken', list_recovery_points_by_backup_vault_result)
-
-                recovery_points = Utils.get_value_as_list('RecoveryPoints', list_recovery_points_by_backup_vault_result, [])
-
+            for _page in bu_iterator:
+                recovery_points = Utils.get_value_as_list('RecoveryPoints', _page, [])
                 total_recovery_points += len(recovery_points)
 
-                for recovery_point in recovery_points:
-                    recovery_point_arn = Utils.get_value_as_string('RecoveryPointArn', recovery_point)
+            _rp_delete_start = Utils.current_time_ms()
+            self.context.info(f"Deleting {len(recovery_points)} recovery points from AWS Backup...")
+            for recovery_point in recovery_points:
+                recovery_point_arn = Utils.get_value_as_string('RecoveryPointArn', recovery_point)
 
-                    # can be one of: 'COMPLETED'|'PARTIAL'|'DELETING'|'EXPIRED'
-                    # if status is not COMPLETED/EXPIRED, do not attempt to delete, but wait for deletion or backup completion.
-                    recovery_point_status = Utils.get_value_as_string('Status', recovery_point)
-                    if recovery_point_status not in ('COMPLETED', 'EXPIRED'):
-                        continue
+                # can be one of: 'COMPLETED'|'PARTIAL'|'DELETING'|'EXPIRED'
+                # if status is not COMPLETED/EXPIRED, do not attempt to delete, but wait for deletion or backup completion.
+                recovery_point_status = Utils.get_value_as_string('Status', recovery_point)
+                if recovery_point_status not in ('COMPLETED', 'EXPIRED'):
+                    continue
 
-                    self.context.info(f'deleting recovery point: {recovery_point_arn} ...')
-                    self.context.aws().backup().delete_recovery_point(
-                        BackupVaultName=backup_vault_name,
-                        RecoveryPointArn=recovery_point_arn
-                    )
-                    total_deleted += 1
-                    time.sleep(.1)
+                self.context.info(f'deleting recovery point: {recovery_point_arn} ...')
+                self.context.aws().backup().delete_recovery_point(
+                    BackupVaultName=backup_vault_name,
+                    RecoveryPointArn=recovery_point_arn
+                )
+                total_deleted += 1
+                time.sleep(.1)
 
-                if next_token is None:
-                    if total_recovery_points == total_deleted:
-                        self.context.info(f'deleted {total_recovery_points} recovery points.')
-                        break
-                    else:
-                        total_pending = total_recovery_points - total_deleted
-                        with self.context.spinner(f'waiting for {total_pending} recovery points to be deleted or ready for deleting ...'):
-                            time.sleep(10)
+            _rp_delete_end = Utils.current_time_ms()
+            _run_time_ms = int((_rp_delete_end - _rp_delete_start) / 1_000)
+            self.context.info(f'deleted {total_recovery_points} recovery points in {_run_time_ms} seconds.')
 
         except botocore.exceptions.ClientError as e:
             if e.response['Error']['Code'] != 'ResourceNotFoundException':

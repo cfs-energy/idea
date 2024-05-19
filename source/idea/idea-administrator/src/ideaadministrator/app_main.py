@@ -395,10 +395,13 @@ def config_update(cluster_name: str, aws_profile: str, aws_region: str, force: b
             else:
                 break
 
+    local_config_dynamodb_kms_key_id = local_config.get_string(f'{cluster_module_id}.dynamodb.kms_key_id', required=False, default=None)
+
     cluster_config_db = ClusterConfigDB(
         cluster_name=config_generator.get_cluster_name(),
         aws_region=config_generator.get_aws_region(),
         aws_profile=config_generator.get_aws_profile(),
+        dynamodb_kms_key_id=local_config_dynamodb_kms_key_id,
         create_database=True
     )
     if config_dir:

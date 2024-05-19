@@ -227,7 +227,7 @@ class PermissionRow extends Component<PermissionRowProps, PermissionRowState> {
                         {
                             name: 'actor',
                             data_type: 'str',
-                            param_type: 'select',
+                            param_type: 'select_or_text',
                             readonly: this.props.existing,
                             default: this.getDefaultUserChoice(),
                             validate: {

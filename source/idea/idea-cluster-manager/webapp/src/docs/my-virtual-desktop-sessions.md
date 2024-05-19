@@ -7,7 +7,7 @@ Manage your Windows & Linux virtual desktops, powered by [AWS NICE DCV](https://
     <summary markdown="span"><b>Create a new desktop</b></summary>
 
 
-Click **"Launch new Virtual Desktop"** and follow the instructions to create your virtual desktop.
+Click **"Launch New Virtual Desktop"** and follow the instructions to create your virtual desktop.
 
 </details>
 
