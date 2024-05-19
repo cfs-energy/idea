@@ -74,70 +74,70 @@ from ideadatamodel.aws import ServiceQuota
 from ideadatamodel.scheduler.scheduler_model import *
 
 from typing import Optional, Set, List
-
+from pydantic import Field
 
 class ListNodesRequest(SocaListingPayload):
-    instance_ids: Optional[List[str]]
-    instance_types: Optional[List[str]]
-    job_id: Optional[str]
-    job_group: Optional[str]
-    compute_stack: Optional[str]
-    queue_type: Optional[str]
-    states: Optional[Set[SocaComputeNodeState]]
+    instance_ids: Optional[List[str]] = Field(default=None)
+    instance_types: Optional[List[str]] = Field(default=None)
+    job_id: Optional[str] = Field(default=None)
+    job_group: Optional[str] = Field(default=None)
+    compute_stack: Optional[str] = Field(default=None)
+    queue_type: Optional[str] = Field(default=None)
+    states: Optional[Set[SocaComputeNodeState]] = Field(default=None)
 
 
 class ListNodesResult(SocaListingPayload):
-    listing: Optional[List[SocaComputeNode]]
+    listing: Optional[List[SocaComputeNode]] = Field(default=None)
 
 
 class ListJobsRequest(SocaListingPayload):
-    queue_type: Optional[str]
-    queue: Optional[str]
-    states: Optional[Set[SocaJobState]]
+    queue_type: Optional[str] = Field(default=None)
+    queue: Optional[str] = Field(default=None)
+    states: Optional[Set[SocaJobState]] = Field(default=None)
 
 
 class ListJobsResult(SocaListingPayload):
-    listing: Optional[List[SocaJob]]
+    listing: Optional[List[SocaJob]] = Field(default=None)
 
 
 # SchedulerAdmin.CreateQueueProfile
 
 class CreateQueueProfileRequest(SocaPayload):
-    queue_profile: Optional[HpcQueueProfile]
+    queue_profile: Optional[HpcQueueProfile] = Field(default=None)
 
 
 class CreateQueueProfileResult(SocaPayload):
-    queue_profile: Optional[HpcQueueProfile]
-    validation_errors: Optional[JobValidationResult]
+    queue_profile: Optional[HpcQueueProfile] = Field(default=None)
+    validation_errors: Optional[JobValidationResult] = Field(default=None)
 
 
 # SchedulerAdmin.GetQueueProfile
 
 class GetQueueProfileRequest(SocaPayload):
-    queue_profile_name: Optional[str]
-    queue_profile_id: Optional[str]
-    queue_name: Optional[str]
+    queue_profile_name: Optional[str] = Field(default=None)
+    queue_profile_id: Optional[str] = Field(default=None)
+    queue_name: Optional[str] = Field(default=None)
 
 
 class GetQueueProfileResult(SocaPayload):
-    queue_profile: Optional[HpcQueueProfile]
+    queue_profile: Optional[HpcQueueProfile] = Field(default=None)
 
 
 # SchedulerAdmin.UpdateQueueProfile
 
 class UpdateQueueProfileRequest(SocaPayload):
-    queue_profile: Optional[HpcQueueProfile]
+    queue_profile: Optional[HpcQueueProfile] = Field(default=None)
 
 
 class UpdateQueueProfileResult(SocaPayload):
-    queue_profile: Optional[HpcQueueProfile]
+    queue_profile: Optional[HpcQueueProfile] = Field(default=None)
 
 
 # SchedulerAdmin.EnableQueueProfile
 
 class EnableQueueProfileRequest(SocaPayload):
-    queue_profile_id: Optional[str]
-    queue_profile_name: Optional[str]
+    queue_profile_id: Optional[str] = Field(default=None)
+    queue_profile_name: Optional[str] = Field(default=None)
 
 
 class EnableQueueProfileResult(SocaPayload):
@@ -147,8 +147,8 @@ class EnableQueueProfileResult(SocaPayload):
 # SchedulerAdmin.DisableQueueProfile
 
 class DisableQueueProfileRequest(SocaPayload):
-    queue_profile_id: Optional[str]
-    queue_profile_name: Optional[str]
+    queue_profile_id: Optional[str] = Field(default=None)
+    queue_profile_name: Optional[str] = Field(default=None)
 
 
 class DisableQueueProfileResult(SocaPayload):
@@ -158,9 +158,9 @@ class DisableQueueProfileResult(SocaPayload):
 # SchedulerAdmin.DeleteQueueProfile
 
 class DeleteQueueProfileRequest(SocaPayload):
-    queue_profile_id: Optional[str]
-    queue_profile_name: Optional[str]
-    delete_queues: Optional[bool]
+    queue_profile_id: Optional[str] = Field(default=None)
+    queue_profile_name: Optional[str] = Field(default=None)
+    delete_queues: Optional[bool] = Field(default=None)
 
 
 class DeleteQueueProfileResult(SocaPayload):
@@ -170,9 +170,9 @@ class DeleteQueueProfileResult(SocaPayload):
 # SchedulerAdmin.CreateQueues
 
 class CreateQueuesRequest(SocaPayload):
-    queue_profile_id: Optional[str]
-    queue_profile_name: Optional[str]
-    queue_names: Optional[str]
+    queue_profile_id: Optional[str] = Field(default=None)
+    queue_profile_name: Optional[str] = Field(default=None)
+    queue_names: Optional[str] = Field(default=None)
 
 
 class CreateQueuesResult(SocaPayload):
@@ -182,9 +182,9 @@ class CreateQueuesResult(SocaPayload):
 # SchedulerAdmin.DeleteQueues
 
 class DeleteQueuesRequest(SocaPayload):
-    queue_profile_id: Optional[str]
-    queue_profile_name: Optional[str]
-    queue_names: Optional[str]
+    queue_profile_id: Optional[str] = Field(default=None)
+    queue_profile_name: Optional[str] = Field(default=None)
+    queue_names: Optional[str] = Field(default=None)
 
 
 class DeleteQueuesResult(SocaPayload):
@@ -194,46 +194,46 @@ class DeleteQueuesResult(SocaPayload):
 # SchedulerAdmin.ListQueueProfiles
 
 class ListQueueProfilesRequest(SocaListingPayload):
-    lite: Optional[bool]
+    lite: Optional[bool] = Field(default=None)
 
 
 class ListQueueProfilesResult(SocaListingPayload):
-    listing: Optional[List[HpcQueueProfile]]
+    listing: Optional[List[HpcQueueProfile]] = Field(default=None)
 
 
 # Scheduler.GetInstanceTypeOptions
 class GetInstanceTypeOptionsRequest(SocaPayload):
-    enable_ht_support: Optional[bool]
-    instance_types: Optional[List[str]]
-    queue_name: Optional[str]
-    queue_profile_name: Optional[str]
+    enable_ht_support: Optional[bool] = Field(default=None)
+    instance_types: Optional[List[str]] = Field(default=None)
+    queue_name: Optional[str] = Field(default=None)
+    queue_profile_name: Optional[str] = Field(default=None)
 
 
 class GetInstanceTypeOptionsResult(SocaPayload):
-    instance_types: Optional[List[SocaInstanceTypeOptions]]
+    instance_types: Optional[List[SocaInstanceTypeOptions]] = Field(default=None)
 
 
 # Scheduler.SubmitJob
 
 class SubmitJobRequest(SocaPayload):
-    job_owner: Optional[str]
-    project: Optional[str]
-    dry_run: Optional[bool]
-    job_script_interpreter: Optional[str]
-    job_script: Optional[str]  # base64 encoded job data shell script
+    job_owner: Optional[str] = Field(default=None)
+    project: Optional[str] = Field(default=None)
+    dry_run: Optional[bool] = Field(default=None)
+    job_script_interpreter: Optional[str] = Field(default=None)
+    job_script: Optional[str] = Field(default=None)  # base64 encoded job data shell script
 
 
 class SubmitJobResult(SocaPayload):
-    dry_run: Optional[DryRunOption]
-    accepted: Optional[bool]
-    job: Optional[SocaJob]
-    validations: Optional[JobValidationResult]
-    incidentals: Optional[JobValidationResult]
-    service_quotas: Optional[List[ServiceQuota]]
-    reserved_instances_unavailable: Optional[bool]
-    service_quota_unavailable: Optional[bool]
-    estimated_bom_cost: Optional[SocaJobEstimatedBOMCost]
-    budget_usage: Optional[SocaJobEstimatedBudgetUsage]
+    dry_run: Optional[DryRunOption] = Field(default=None)
+    accepted: Optional[bool] = Field(default=None)
+    job: Optional[SocaJob] = Field(default=None)
+    validations: Optional[JobValidationResult] = Field(default=None)
+    incidentals: Optional[JobValidationResult] = Field(default=None)
+    service_quotas: Optional[List[ServiceQuota]] = Field(default=None)
+    reserved_instances_unavailable: Optional[bool] = Field(default=None)
+    service_quota_unavailable: Optional[bool] = Field(default=None)
+    estimated_bom_cost: Optional[SocaJobEstimatedBOMCost] = Field(default=None)
+    budget_usage: Optional[SocaJobEstimatedBudgetUsage] = Field(default=None)
 
     @property
     def job_uid(self) -> Optional[str]:
@@ -244,7 +244,7 @@ class SubmitJobResult(SocaPayload):
 
 # Scheduler.DeleteJob
 class DeleteJobRequest(SocaPayload):
-    job_id: Optional[str]
+    job_id: Optional[str] = Field(default=None)
 
 
 class DeleteJobResult(SocaPayload):
@@ -253,48 +253,48 @@ class DeleteJobResult(SocaPayload):
 
 # Scheduler.GetActiveJob, Scheduler.GetCompletedJob
 class GetJobRequest(SocaPayload):
-    job_id: Optional[str]
+    job_id: Optional[str] = Field(default=None)
 
 
 class GetJobResult(SocaPayload):
-    job: Optional[SocaJob]
+    job: Optional[SocaJob] = Field(default=None)
 
 
 # SchedulerAdmin.CreateHpcApplication
 
 class CreateHpcApplicationRequest(SocaPayload):
-    application: Optional[HpcApplication]
+    application: Optional[HpcApplication] = Field(default=None)
 
 
 class CreateHpcApplicationResult(SocaPayload):
-    application: Optional[HpcApplication]
+    application: Optional[HpcApplication] = Field(default=None)
 
 
 # SchedulerAdmin.GetHpcApplication
 
 class GetHpcApplicationRequest(SocaPayload):
-    application_id: Optional[str]
+    application_id: Optional[str] = Field(default=None)
 
 
 class GetHpcApplicationResult(SocaPayload):
-    application: Optional[HpcApplication]
+    application: Optional[HpcApplication] = Field(default=None)
 
 
 # SchedulerAdmin.UpdateHpcApplication
 
 
 class UpdateHpcApplicationRequest(SocaPayload):
-    application: Optional[HpcApplication]
+    application: Optional[HpcApplication] = Field(default=None)
 
 
 class UpdateHpcApplicationResult(SocaPayload):
-    application: Optional[HpcApplication]
+    application: Optional[HpcApplication] = Field(default=None)
 
 
 # SchedulerAdmin.DeleteHpcApplication
 
 class DeleteHpcApplicationRequest(SocaPayload):
-    application_id: Optional[str]
+    application_id: Optional[str] = Field(default=None)
 
 
 class DeleteHpcApplicationResult(SocaPayload):
@@ -304,32 +304,32 @@ class DeleteHpcApplicationResult(SocaPayload):
 # SchedulerAdmin.ListHpcApplications
 
 class ListHpcApplicationsRequest(SocaListingPayload):
-    lite: Optional[bool]
+    lite: Optional[bool] = Field(default=None)
 
 
 class ListHpcApplicationsResult(SocaListingPayload):
-    listing: Optional[List[HpcApplication]]
+    listing: Optional[List[HpcApplication]] = Field(default=None)
 
 
 # SchedulerAdmin.ProvisionAlwaysOnNodes
 class ProvisionAlwaysOnNodesRequest(SocaPayload):
-    project_name: Optional[str]
-    queue_profile_name: Optional[str]
-    queue_name: Optional[str]
-    owner: Optional[str]
-    params: Optional[SocaJobParams]
+    project_name: Optional[str] = Field(default=None)
+    queue_profile_name: Optional[str] = Field(default=None)
+    queue_name: Optional[str] = Field(default=None)
+    owner: Optional[str] = Field(default=None)
+    params: Optional[SocaJobParams] = Field(default=None)
 
 
 class ProvisionAlwaysOnNodesResult(SocaPayload):
-    stack_name: Optional[str]
-    stack_id: Optional[str]
+    stack_name: Optional[str] = Field(default=None)
+    stack_id: Optional[str] = Field(default=None)
 
 
 # SchedulerAdmin.GetUserApplications
 
 class GetUserApplicationsRequest(SocaPayload):
-    username: Optional[str]
-    application_ids: Optional[List[str]]
+    username: Optional[str] = Field(default=None)
+    application_ids: Optional[List[str]] = Field(default=None)
 
 
 class GetUserApplicationsResult(SocaPayload):
@@ -339,36 +339,36 @@ class GetUserApplicationsResult(SocaPayload):
 # SchedulerAdmin.CreateHpcLicenseResource
 
 class CreateHpcLicenseResourceRequest(SocaPayload):
-    license_resource: Optional[HpcLicenseResource]
-    dry_run: Optional[bool]
+    license_resource: Optional[HpcLicenseResource] = Field(default=None)
+    dry_run: Optional[bool] = Field(default=None)
 
 
 class CreateHpcLicenseResourceResult(SocaPayload):
-    license_resource: Optional[HpcLicenseResource]
+    license_resource: Optional[HpcLicenseResource] = Field(default=None)
 
 
 # SchedulerAdmin.GetHpcLicenseResource
 class GetHpcLicenseResourceRequest(SocaPayload):
-    name: Optional[str]
+    name: Optional[str] = Field(default=None)
 
 
 class GetHpcLicenseResourceResult(SocaPayload):
-    license_resource: Optional[HpcLicenseResource]
+    license_resource: Optional[HpcLicenseResource] = Field(default=None)
 
 
 # SchedulerAdmin.UpdateHpcLicenseResource
 class UpdateHpcLicenseResourceRequest(SocaPayload):
-    license_resource: Optional[HpcLicenseResource]
-    dry_run: Optional[bool]
+    license_resource: Optional[HpcLicenseResource] = Field(default=None)
+    dry_run: Optional[bool] = Field(default=None)
 
 
 class UpdateHpcLicenseResourceResult(SocaPayload):
-    license_resource: Optional[HpcLicenseResource]
+    license_resource: Optional[HpcLicenseResource] = Field(default=None)
 
 
 # SchedulerAdmin.DeleteHpcLicenseResource
 class DeleteHpcLicenseResourceRequest(SocaPayload):
-    name: Optional[str]
+    name: Optional[str] = Field(default=None)
 
 
 class DeleteHpcLicenseResourceResult(SocaPayload):
@@ -381,16 +381,16 @@ class ListHpcLicenseResourcesRequest(SocaListingPayload):
 
 
 class ListHpcLicenseResourcesResult(SocaListingPayload):
-    listing: Optional[List[HpcLicenseResource]]
+    listing: Optional[List[HpcLicenseResource]] = Field(default=None)
 
 
 # SchedulerAdmin.CheckHpcLicenseResourceAvailability
 class CheckHpcLicenseResourceAvailabilityRequest(SocaPayload):
-    name: Optional[str]
+    name: Optional[str] = Field(default=None)
 
 
 class CheckHpcLicenseResourceAvailabilityResult(SocaPayload):
-    available_count: Optional[int]
+    available_count: Optional[int] = Field(default=None)
 
 
 OPEN_API_SPEC_ENTRIES_SCHEDULER = [

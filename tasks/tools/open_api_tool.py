@@ -9,7 +9,7 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
-from openapi_schema_pydantic import *
+from openapi_pydantic import *
 from ideadatamodel import (
     constants,
     IdeaOpenAPISpecEntry,
@@ -87,7 +87,7 @@ class OpenAPITool:
         convert a Pydantic data model class to JSON Schema
         return a deep copy as model.schema() returns a cached copy
         """
-        return Utils.deep_copy(model.schema())
+        return Utils.deep_copy(model.model_json_schema())
 
     def build_schema(self, payload_type: Type[BaseModel], request: bool, listing: bool) -> Dict:
         """
@@ -103,7 +103,7 @@ class OpenAPITool:
         :return:
         """
         envelope_schema = self.get_mutable_json_schema(SocaEnvelope)
-        for name, value in envelope_schema['definitions'].items():
+        for name, value in envelope_schema['$defs'].items():
             if name == 'SocaAuthScope':
                 continue
             self.schemas[name] = Schema(**value)
@@ -112,25 +112,25 @@ class OpenAPITool:
             del envelope_schema['properties']['error_code']
             del envelope_schema['properties']['message']
             del envelope_schema['properties']['success']
-        del envelope_schema['definitions']
+        del envelope_schema['$defs']
 
         api_schema = self.get_mutable_json_schema(payload_type)
         request_title = api_schema["title"]
-        if 'definitions' in api_schema:
-            for name, value in api_schema['definitions'].items():
+        if '$defs' in api_schema:
+            for name, value in api_schema['$defs'].items():
                 self.schemas[name] = Schema(**value)
-            del api_schema['definitions']
+            del api_schema['$defs']
 
         if request and listing:
             if 'listing' in api_schema['properties']:
                 del api_schema['properties']['listing']
         self.schemas[request_title] = Schema(**api_schema)
 
-        envelope_schema['properties']['payload']['$ref'] = f'#/definitions/{request_title}'
+        envelope_schema['properties']['payload']['$ref'] = f'#/$defs/{request_title}'
         envelope_schema['title'] = f'{request_title}Envelope'
 
         content = Utils.to_yaml(envelope_schema)
-        content = content.replace('#/definitions', '#/components/schemas')
+        content = content.replace('#/$defs', '#/components/schemas')
         return Utils.from_yaml(content)
 
     @staticmethod
@@ -141,16 +141,16 @@ class OpenAPITool:
         """
 
         response_json = Schema(
-            type='object',
+            type=DataType.OBJECT,
             properties={
                 'error_code': Schema(
-                    type='string'
+                    type=DataType.STRING
                 ),
                 'success': Schema(
-                    type='boolean'
+                    type=DataType.BOOLEAN
                 ),
                 'message': Schema(
-                    type='string'
+                    type=DataType.STRING
                 )
             }
         )
@@ -168,20 +168,20 @@ class OpenAPITool:
                         name='cwd',
                         description='Current Working Directory',
                         required=True,
-                        param_in='query',
-                        param_schema=Schema(type='string')
+                        param_in=ParameterLocation.QUERY,
+                        param_schema=Schema(type=DataType.STRING)
                     )
                 ],
                 requestBody=RequestBody(
                     content={
                         'multipart/form-data': MediaType(
                             media_type_schema=Schema(
-                                type='object',
+                                type=DataType.OBJECT,
                                 properties={
                                     'files[]': Schema(
-                                        type='array',
+                                        type=DataType.ARRAY,
                                         items=Schema(
-                                            type='string',
+                                            type=DataType.STRING,
                                             schema_format='binary'
                                         )
                                     )
@@ -216,8 +216,8 @@ class OpenAPITool:
                         name='file',
                         description='Path of the file to download',
                         required=True,
-                        param_in='query',
-                        param_schema=Schema(type='string')
+                        param_in=ParameterLocation.QUERY,
+                        param_schema=Schema(type=DataType.STRING)
                     )
                 ],
                 responses={
@@ -229,23 +229,23 @@ class OpenAPITool:
                             ),
                             'text/plain': MediaType(
                                 media_type_schema=Schema(
-                                    type='string'
+                                    type=DataType.STRING
                                 )
                             ),
                             'application/xml': MediaType(
                                 media_type_schema=Schema(
-                                    type='string'
+                                    type=DataType.STRING
                                 )
                             ),
                             'image/*': MediaType(
                                 media_type_schema=Schema(
-                                    type='string',
+                                    type=DataType.STRING,
                                     schema_format='binary'
                                 )
                             ),
                             '*/*': MediaType(
                                 media_type_schema=Schema(
-                                    type='string',
+                                    type=DataType.STRING,
                                     schema_format='binary'
                                 )
                             )
@@ -385,4 +385,4 @@ class OpenAPITool:
             content = Utils.to_yaml(self.open_api_spec)
 
         idea.console.print('post-processing ...')
-        return content.replace('#/definitions', '#/components/schemas')
+        return content.replace('#/$defs', '#/components/schemas')

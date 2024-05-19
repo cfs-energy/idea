@@ -105,7 +105,7 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
         }
 
         const getVirtualDesktopSwaggerEditorUrl = () => {
-            return `https://editor.swagger.io/?url=${getVirtualDesktopOpenAPISpecUrl()}`
+            return `https://editor-next.swagger.io/?url=${getVirtualDesktopOpenAPISpecUrl()}`
         }
 
         const getInternalALBUrl = () => {

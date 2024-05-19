@@ -94,11 +94,11 @@ dynamodb-table-name-prefix = ${IDEA_CLUSTER_NAME}.${MODULE_ID}.dcv-broker.
 
 connect-session-token-duration-minutes = ${SESSION_TOKEN_DURATION}
 
-# Dont want to see deleted session info for now.
-delete-session-duration-hours = 0
+# 1-hour expiration
+delete-session-duration-seconds = 3600
 
-# Dont want to see unreachable dcv servers for now. Setting fails for values less than 60
-seconds-before-deleting-unreachable-dcv-server = 60
+# Number of seconds of unreachable DCV server before declaring it removed
+seconds-before-deleting-unreachable-dcv-server = 900
 
 # create-sessions-number-of-retries-on-failure = 2
 # autorun-file-arguments-max-size = 50

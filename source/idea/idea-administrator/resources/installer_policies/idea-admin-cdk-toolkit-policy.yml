@@ -9,6 +9,7 @@ Statement:
       - s3:PutBucketPolicy
       - s3:PutBucketTagging
       - s3:GetBucketPolicy
+      - s3:PutLifecycleConfiguration
       - s3:CreateBucket
     Resource: arn:aws:s3:::idea*
   - Sid: CreateCDKToolkit
@@ -17,6 +18,7 @@ Statement:
       - ecr:CreateRepository
       - ecr:DescribeRepositories
       - ecr:SetRepositoryPolicy
+      - ecr:PutLifecyclePolicy
       - ecr:TagResource
       - ec2:DescribeAccountAttributes
       - ssm:GetParameter

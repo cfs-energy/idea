@@ -674,13 +674,13 @@ class IdeaWizard extends Component<IdeaWizardProps, IdeaWizardState> {
         return (
             <Wizard
                 i18nStrings={{
-                    stepNumberLabel: this.props.wizard.i18nStrings.stepNumberLabel,
-                    collapsedStepsLabel: this.props.wizard.i18nStrings.collapsedStepsLabel,
-                    cancelButton: this.props.wizard.i18nStrings.cancelButton,
-                    previousButton: this.props.wizard.i18nStrings.previousButton,
-                    nextButton: this.props.wizard.i18nStrings.nextButton,
-                    submitButton: this.props.wizard.i18nStrings.submitButton,
-                    optional: this.props.wizard.i18nStrings.optional
+                    stepNumberLabel: this.props.wizard.i18nStrings!.stepNumberLabel,
+                    collapsedStepsLabel: this.props.wizard.i18nStrings!.collapsedStepsLabel,
+                    cancelButton: this.props.wizard.i18nStrings!.cancelButton,
+                    previousButton: this.props.wizard.i18nStrings!.previousButton,
+                    nextButton: this.props.wizard.i18nStrings!.nextButton,
+                    submitButton: this.props.wizard.i18nStrings!.submitButton,
+                    optional: this.props.wizard.i18nStrings!.optional
                 }}
                 onNavigate={({detail}) => this.onNavigate(detail)}
                 onSubmit={() => this.onSubmit()}

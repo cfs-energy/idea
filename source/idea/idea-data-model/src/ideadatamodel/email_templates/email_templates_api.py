@@ -26,38 +26,39 @@ __all__ = (
 from ideadatamodel import SocaPayload, SocaListingPayload, IdeaOpenAPISpecEntry
 from ideadatamodel.email_templates.email_templates_model import EmailTemplate
 from typing import Optional, List
+from pydantic import Field
 
 
 # EmailTemplates.CreateEmailTemplate
 class CreateEmailTemplateRequest(SocaPayload):
-    template: Optional[EmailTemplate]
+    template: Optional[EmailTemplate] = Field(default=None)
 
 
 class CreateEmailTemplateResult(SocaPayload):
-    template: Optional[EmailTemplate]
+    template: Optional[EmailTemplate] = Field(default=None)
 
 
 # EmailTemplates.CreateEmailTemplate
 class GetEmailTemplateRequest(SocaPayload):
-    name: Optional[str]
+    name: Optional[str] = Field(default=None)
 
 
 class GetEmailTemplateResult(SocaPayload):
-    template: Optional[EmailTemplate]
+    template: Optional[EmailTemplate] = Field(default=None)
 
 
 # EmailTemplates.UpdateEmailTemplate
 class UpdateEmailTemplateRequest(SocaPayload):
-    template: Optional[EmailTemplate]
+    template: Optional[EmailTemplate] = Field(default=None)
 
 
 class UpdateEmailTemplateResult(SocaPayload):
-    template: Optional[EmailTemplate]
+    template: Optional[EmailTemplate] = Field(default=None)
 
 
 # EmailTemplates.DeleteEmailTemplate
 class DeleteEmailTemplateRequest(SocaPayload):
-    name: Optional[str]
+    name: Optional[str] = Field(default=None)
 
 
 class DeleteEmailTemplateResult(SocaPayload):
@@ -70,7 +71,7 @@ class ListEmailTemplatesRequest(SocaListingPayload):
 
 
 class ListEmailTemplatesResult(SocaListingPayload):
-    listing: Optional[List[EmailTemplate]]
+    listing: Optional[List[EmailTemplate]] = Field(default=None)
 
 
 OPEN_API_SPEC_ENTRIES_EMAIL_TEMPLATES = [

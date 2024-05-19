@@ -8,6 +8,7 @@
 #  or in the 'license' file accompanying this file. This file is distributed on an 'AS IS' BASIS, WITHOUT WARRANTIES
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
+from pydantic import Field
 
 from ideadatamodel import constants
 
@@ -60,23 +61,23 @@ DUMMY_PORT = 9999
 
 
 class SocaServerOptions(SocaBaseModel):
-    enable_http: Optional[bool]
-    hostname: Optional[str]
-    port: Optional[int]
-    enable_unix_socket: Optional[bool]
-    unix_socket_file: Optional[str]
-    max_workers: Optional[int]
-    enable_metrics: Optional[bool]
-    enable_tls: Optional[bool]
-    tls_certificate_file: Optional[str]
-    tls_key_file: Optional[str]
-    graceful_shutdown_timeout: Optional[float]
-    enable_web_sockets: Optional[bool]
-    api_path_prefixes: Optional[List[str]]
-    enable_http_file_upload: Optional[bool]
-    enable_openapi_spec: Optional[bool]
-    openapi_spec_file: Optional[str]
-    enable_audit_logs: Optional[bool]
+    enable_http: Optional[bool] = Field(default=None)
+    hostname: Optional[str] = Field(default=None)
+    port: Optional[int] = Field(default=None)
+    enable_unix_socket: Optional[bool] = Field(default=None)
+    unix_socket_file: Optional[str] = Field(default=None)
+    max_workers: Optional[int] = Field(default=None)
+    enable_metrics: Optional[bool] = Field(default=None)
+    enable_tls: Optional[bool] = Field(default=None)
+    tls_certificate_file: Optional[str] = Field(default=None)
+    tls_key_file: Optional[str] = Field(default=None)
+    graceful_shutdown_timeout: Optional[float] = Field(default=None)
+    enable_web_sockets: Optional[bool] = Field(default=None)
+    api_path_prefixes: Optional[List[str]] = Field(default=None)
+    enable_http_file_upload: Optional[bool] = Field(default=None)
+    enable_openapi_spec: Optional[bool] = Field(default=None)
+    openapi_spec_file: Optional[str] = Field(default=None)
+    enable_audit_logs: Optional[bool] = Field(default=None)
 
     @staticmethod
     def default() -> 'SocaServerOptions':
@@ -641,6 +642,7 @@ class SocaServer(SocaService):
                 _auto_name = f"unix-{path_prefix}-{uri}-{_method_names}"
                 _name = name if Utils.is_not_empty(name) else _auto_name
                 self.unix_app.add_route(handler, f'{path_prefix}{uri}', methods, name=_name)
+
     def initialize(self):
 
         if self.options.enable_http:

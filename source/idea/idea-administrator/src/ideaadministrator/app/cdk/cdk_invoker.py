@@ -123,6 +123,7 @@ class CdkInvoker:
         self.logging = SocaLogging()
         cluster_logs_dir = ideaadministrator.props.cluster_logs_dir(self.cluster_name, self.aws_region)
         now = arrow.utcnow()
+        # noinspection StrFormat
         log_file_name = now.format('YYYY-MM-DD')
         self.file_logger = self.logging.get_custom_file_logger(
             params=CustomFileLoggerParams(

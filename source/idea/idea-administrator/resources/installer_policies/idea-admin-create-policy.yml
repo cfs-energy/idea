@@ -52,6 +52,7 @@ Statement:
       - ec2:DescribeAvailabilityZones
       - ec2:DescribeFlowLogs
       - ec2:DescribeInstances
+      - ec2:DescribeInstanceTypes
       - ec2:DescribeInternetGateways
       - ec2:DescribeKeyPairs
       - ec2:DescribeNatGateways
@@ -95,6 +96,7 @@ Statement:
       - es:ListDomainNames
       - fsx:CreateFileSystem
       - fsx:DescribeFileSystems
+      - fsx:DescribeFileCaches
       - fsx:TagResource
       - iam:AddRoleToInstanceProfile
       - iam:AttachRolePolicy

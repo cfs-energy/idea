@@ -38,36 +38,36 @@ from ideasdk.metrics import MetricsService
 from logging import Logger
 from typing import Optional, List, Dict, Any
 from threading import RLock
-
+from pydantic import Field
 
 class SocaContextOptions(SocaBaseModel):
-    cluster_name: Optional[str]
-    aws_region: Optional[str]
-    aws_profile: Optional[str]
-    module_name: Optional[str]
-    module_id: Optional[str]
-    module_set: Optional[str]
+    cluster_name: Optional[str] = Field(default=None)
+    aws_region: Optional[str] = Field(default=None)
+    aws_profile: Optional[str] = Field(default=None)
+    module_name: Optional[str] = Field(default=None)
+    module_id: Optional[str] = Field(default=None)
+    module_set: Optional[str] = Field(default=None)
 
-    enable_analytics: Optional[bool]
-    enable_metrics: Optional[bool]
-    metrics_namespace: Optional[str]
+    enable_analytics: Optional[bool] = Field(default=None)
+    enable_metrics: Optional[bool] = Field(default=None)
+    metrics_namespace: Optional[str] = Field(default=None)
 
-    enable_iam_permission_util: Optional[bool]
-    enable_instance_metadata_util: Optional[bool]
-    enable_aws_util: Optional[bool]
-    enable_aws_client_provider: Optional[bool]
-    enable_distributed_lock: Optional[bool]
-    enable_leader_election: Optional[bool]
+    enable_iam_permission_util: Optional[bool] = Field(default=None)
+    enable_instance_metadata_util: Optional[bool] = Field(default=None)
+    enable_aws_util: Optional[bool] = Field(default=None)
+    enable_aws_client_provider: Optional[bool] = Field(default=None)
+    enable_distributed_lock: Optional[bool] = Field(default=None)
+    enable_leader_election: Optional[bool] = Field(default=None)
 
-    is_app_server: Optional[bool]
+    is_app_server: Optional[bool] = Field(default=None)
 
     # if set to True, AwsClientProvider will be initialized with Vpc Endpoint configuration, if enabled and available.
-    use_vpc_endpoints: Optional[bool]
+    use_vpc_endpoints: Optional[bool] = Field(default=None)
 
-    default_logging_profile: Optional[str]
-    locale: Optional[str]
+    default_logging_profile: Optional[str] = Field(default=None)
+    locale: Optional[str] = Field(default=None)
 
-    config: Optional[Dict[str, Any]]
+    config: Optional[Dict[str, Any]] = Field(default=None)
 
     @staticmethod
     def default() -> 'SocaContextOptions':

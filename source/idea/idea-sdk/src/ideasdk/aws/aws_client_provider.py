@@ -17,6 +17,7 @@ from ideasdk.utils import Utils
 
 from threading import RLock
 from typing import List, Dict, Any, Optional, Set
+from pydantic import Field
 import botocore.exceptions
 from botocore.client import Config
 
@@ -92,18 +93,18 @@ DEFAULT_PRICING_API_REGION = 'us-east-1'
 
 
 class AwsServiceEndpoint(SocaBaseModel):
-    service_name: Optional[str]
-    endpoint_url: Optional[str]
+    service_name: Optional[str] = Field(default=None)
+    endpoint_url: Optional[str] = Field(default=None)
 
     def __str__(self):
         return f'Service: {self.service_name}, Endpoint Url: {self.endpoint_url}'
 
 
 class AWSClientProviderOptions(SocaBaseModel):
-    profile: Optional[str]
-    region: Optional[str]
-    pricing_api_region: Optional[str]
-    endpoints: Optional[List[AwsServiceEndpoint]]
+    profile: Optional[str] = Field(default=None)
+    region: Optional[str] = Field(default=None)
+    pricing_api_region: Optional[str] = Field(default=None)
+    endpoints: Optional[List[AwsServiceEndpoint]] = Field(default=None)
 
     @staticmethod
     def default():

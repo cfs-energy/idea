@@ -876,7 +876,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                                     onFileAction={(event) => {
                                                         const eventId: string = event.id
                                                         if (event.id === ChonkyActions.OpenFiles.id) {
-                                                            this.onOpenSelection(event.payload.targetFile)
+                                                            this.onOpenSelection(event.payload.targetFile === undefined ? event.payload.files[0]: event.payload.targetFile)
                                                         } else if (event.id === ChonkyActions.UploadFiles.id) {
                                                             this.showUploadModal()
                                                         } else if (event.id === ChonkyActions.DownloadFiles.id) {

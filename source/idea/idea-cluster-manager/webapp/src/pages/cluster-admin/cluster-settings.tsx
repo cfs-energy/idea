@@ -155,7 +155,7 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
         }
 
         const getClusterManagerSwaggerEditorUrl = () => {
-            return `https://editor.swagger.io/?url=${getClusterManagerOpenAPISpecUrl()}`
+            return `https://editor-next.swagger.io/?url=${getClusterManagerOpenAPISpecUrl()}`
         }
 
         const getSelectedFileSystem = () => {

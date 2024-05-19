@@ -8,6 +8,8 @@
 #  or in the 'license' file accompanying this file. This file is distributed on an 'AS IS' BASIS, WITHOUT WARRANTIES
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
+from pydantic import Field
+
 import ideascheduler
 from ideadatamodel import (
     constants,
@@ -30,82 +32,82 @@ DEFAULT_QUEUE_NAME = 'normal'
 
 
 class OpenPBSJob(SocaBaseModel):
-    dry_run: Optional[str]
-    id: Optional[str]
-    accounting_id: Optional[str]
-    Account_Name: Optional[str]
-    accrue_type: Optional[str]
-    alt_id: Optional[str]
-    argument_list: Optional[str]
-    array: Optional[str]
-    array_id: Optional[str]
-    array_index: Optional[str]
-    array_indices_remaining: Optional[str]
-    array_indices_submitted: Optional[str]
-    array_state_count: Optional[str]
-    block: Optional[str]
-    Checkpoint: Optional[str]
-    comment: Optional[str]
-    create_resv_from_job: Optional[str]
-    ctime: Optional[str]
-    depend: Optional[str]
-    egroup: Optional[str]
-    eligible_time: Optional[str]
-    Error_Path: Optional[str]
-    estimated: Optional[str]
-    etime: Optional[str]
-    euser: Optional[str]
-    Executable: Optional[str]
-    Execution_Time: Optional[str]
-    exec_host: Optional[str]
-    exec_vnode: Optional[str]
-    Exit_status: Optional[str]
-    group_list: Optional[dict]
-    hashname: Optional[str]
-    Hold_Types: Optional[str]
-    interactive: Optional[str]
-    jobdir: Optional[str]
-    Job_Name: Optional[str]
-    Job_Owner: Optional[str]
-    job_state: Optional[str]
-    Join_Path: Optional[str]
-    Keep_Files: Optional[str]
-    Mail_Points: Optional[str]
-    Mail_Users: Optional[str]
-    mtime: Optional[str]
-    no_stdio_sockets: Optional[str]
-    Output_Path: Optional[str]
-    Priority: Optional[str]
-    project: Optional[str]
-    pset: Optional[str]
-    qtime: Optional[str]
-    queue: Optional[str]
-    queue_rank: Optional[str]
-    queue_type: Optional[str]
-    release_nodes_on_stageout: Optional[str]
-    Rerunable: Optional[str]
-    resources_released: Optional[str]
-    resources_released_list: Optional[dict]
-    resources_used: Optional[Union[str, dict]]
-    Resource_List: Optional[dict]
-    run_count: Optional[str]
-    run_version: Optional[str]
-    sandbox: Optional[str]
-    schedselect: Optional[str]
-    sched_hint: Optional[str]
-    server: Optional[str]
-    session_id: Optional[str]
-    Shell_Path_List: Optional[str]
-    stagein: Optional[str]
-    stageout: Optional[str]
-    Stageout_status: Optional[str]
-    stime: Optional[str]
-    Submit_arguments: Optional[str]
-    substate: Optional[str]
-    sw_index: Optional[str]
-    umask: Optional[str]
-    User_List: Optional[dict]
-    Variable_List: Optional[dict]
+    dry_run: Optional[str] = Field(default=None)
+    id: Optional[str] = Field(default=None)
+    accounting_id: Optional[str] = Field(default=None)
+    Account_Name: Optional[str] = Field(default=None)
+    accrue_type: Optional[str] = Field(default=None)
+    alt_id: Optional[str] = Field(default=None)
+    argument_list: Optional[str] = Field(default=None)
+    array: Optional[str] = Field(default=None)
+    array_id: Optional[str] = Field(default=None)
+    array_index: Optional[str] = Field(default=None)
+    array_indices_remaining: Optional[str] = Field(default=None)
+    array_indices_submitted: Optional[str] = Field(default=None)
+    array_state_count: Optional[str] = Field(default=None)
+    block: Optional[str] = Field(default=None)
+    Checkpoint: Optional[str] = Field(default=None)
+    comment: Optional[str] = Field(default=None)
+    create_resv_from_job: Optional[str] = Field(default=None)
+    ctime: Optional[str] = Field(default=None)
+    depend: Optional[str] = Field(default=None)
+    egroup: Optional[str] = Field(default=None)
+    eligible_time: Optional[str] = Field(default=None)
+    Error_Path: Optional[str] = Field(default=None)
+    estimated: Optional[str] = Field(default=None)
+    etime: Optional[str] = Field(default=None)
+    euser: Optional[str] = Field(default=None)
+    Executable: Optional[str] = Field(default=None)
+    Execution_Time: Optional[str] = Field(default=None)
+    exec_host: Optional[str] = Field(default=None)
+    exec_vnode: Optional[str] = Field(default=None)
+    Exit_status: Optional[int] = Field(default=None, strict=False)
+    group_list: Optional[dict] = Field(default=None)
+    hashname: Optional[str] = Field(default=None)
+    Hold_Types: Optional[str] = Field(default=None)
+    interactive: Optional[str] = Field(default=None)
+    jobdir: Optional[str] = Field(default=None)
+    Job_Name: Optional[str] = Field(default=None)
+    Job_Owner: Optional[str] = Field(default=None)
+    job_state: Optional[str] = Field(default=None)
+    Join_Path: Optional[str] = Field(default=None)
+    Keep_Files: Optional[str] = Field(default=None)
+    Mail_Points: Optional[str] = Field(default=None)
+    Mail_Users: Optional[str] = Field(default=None)
+    mtime: Optional[str] = Field(default=None)
+    no_stdio_sockets: Optional[str] = Field(default=None)
+    Output_Path: Optional[str] = Field(default=None)
+    Priority: Optional[int] = Field(default=None, strict=False)
+    project: Optional[str] = Field(default=None)
+    pset: Optional[str] = Field(default=None)
+    qtime: Optional[str] = Field(default=None)
+    queue: Optional[str] = Field(default=None)
+    queue_rank: Optional[int] = Field(default=None, strict=False)
+    queue_type: Optional[str] = Field(default=None)
+    release_nodes_on_stageout: Optional[str] = Field(default=None)
+    Rerunable: Optional[str] = Field(default=None)
+    resources_released: Optional[str] = Field(default=None)
+    resources_released_list: Optional[dict] = Field(default=None)
+    resources_used: Optional[Union[str, dict]] = Field(default=None)
+    Resource_List: Optional[dict] = Field(default=None)
+    run_count: Optional[int] = Field(default=None, strict=False)
+    run_version: Optional[int] = Field(default=None, strict=False)
+    sandbox: Optional[str] = Field(default=None)
+    schedselect: Optional[str] = Field(default=None)
+    sched_hint: Optional[str] = Field(default=None)
+    server: Optional[str] = Field(default=None)
+    session_id: Optional[int] = Field(default=None, strict=False)
+    Shell_Path_List: Optional[str] = Field(default=None)
+    stagein: Optional[str] = Field(default=None)
+    stageout: Optional[str] = Field(default=None)
+    Stageout_status: Optional[int] = Field(default=None, strict=False)
+    stime: Optional[str] = Field(default=None)
+    Submit_arguments: Optional[str] = Field(default=None)
+    substate: Optional[int] = Field(default=None, strict=False)
+    sw_index: Optional[str] = Field(default=None)
+    umask: Optional[str] = Field(default=None)
+    User_List: Optional[dict] = Field(default=None)
+    Variable_List: Optional[dict] = Field(default=None)
 
     @staticmethod
     def to_soca_job_state(state: str) -> Optional[SocaJobState]:
@@ -575,26 +577,26 @@ class OpenPBSJob(SocaBaseModel):
 
 
 class OpenPBSEvent(SocaBaseModel):
-    timestamp: Optional[int]
-    instance_id: Optional[str]
-    instance_type: Optional[str]
-    type: Optional[str]
-    hook_name: Optional[str]
-    requestor: Optional[str]
-    requestor_host: Optional[str]
-    hook_type: Optional[str]
-    user: Optional[str]
-    vnode_list: Optional[dict]
-    job_list: Optional[dict]
-    argv: Optional[str]
-    env: Optional[str]
-    prog: Optional[str]
-    vnode_list_fail: Optional[dict]
-    pid: Optional[str]
-    src_queue: Optional[str]
-    resv: Optional[str]
-    job: Optional[OpenPBSJob]
-    job_o: Optional[OpenPBSJob]
+    timestamp: Optional[int] = Field(default=None)
+    instance_id: Optional[str] = Field(default=None)
+    instance_type: Optional[str] = Field(default=None)
+    type: Optional[str] = Field(default=None)
+    hook_name: Optional[str] = Field(default=None)
+    requestor: Optional[str] = Field(default=None)
+    requestor_host: Optional[str] = Field(default=None)
+    hook_type: Optional[str] = Field(default=None)
+    user: Optional[str] = Field(default=None)
+    vnode_list: Optional[dict] = Field(default=None)
+    job_list: Optional[dict] = Field(default=None)
+    argv: Optional[str] = Field(default=None)
+    env: Optional[str] = Field(default=None)
+    prog: Optional[str] = Field(default=None)
+    vnode_list_fail: Optional[dict] = Field(default=None)
+    pid: Optional[str] = Field(default=None)
+    src_queue: Optional[str] = Field(default=None)
+    resv: Optional[str] = Field(default=None)
+    job: Optional[OpenPBSJob] = Field(default=None)
+    job_o: Optional[OpenPBSJob] = Field(default=None)
 
     def __str__(self):
         # all required parameters

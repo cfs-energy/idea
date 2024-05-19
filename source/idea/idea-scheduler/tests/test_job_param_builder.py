@@ -25,13 +25,14 @@ from ideadatamodel import (
 from ideascheduler.app.scheduler import SocaJobBuilder
 from ideascheduler import SchedulerAppContext
 from ideasdk.utils import Utils
+from pydantic import Field
 
 
 class BuildAndValidateResult(SocaBaseModel):
-    job_params: Optional[SocaJobParams]
-    validation_result: Optional[JobValidationResult]
-    provisioning_options: Optional[SocaJobProvisioningOptions]
-    success: Optional[bool]
+    job_params: Optional[SocaJobParams] = Field(default=None)
+    validation_result: Optional[JobValidationResult] = Field(default=None)
+    provisioning_options: Optional[SocaJobProvisioningOptions] = Field(default=None)
+    success: Optional[bool] = Field(default=None)
 
 
 def build_and_validate(context: SchedulerAppContext, params: Dict, queue_profile: Optional[HpcQueueProfile] = None, stack_uuid: str = None) -> BuildAndValidateResult:

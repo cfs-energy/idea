@@ -48,7 +48,7 @@ testcases:
 #    hibernation_enabled: false
 #    instance_type: t3.xlarge
 #    storage_size: 50
-# 
+#
 #  - name: rhel7-gpu-nvidia
 #    base_os: rhel7
 #    software_stack_id: ss-base-rhel7-x86-64-base
@@ -97,8 +97,29 @@ testcases:
     hibernation_enabled: False
     instance_type: g4dn.xlarge
     storage_size: 50
- 
-# Comment out rocky8 tests to reduce the time for vdi batch tests
+
+  - name: rhel9-x86_64
+    base_os: rhel9
+    software_stack_id: ss-base-rhel9-x86-64-base
+    hibernation_enabled: False
+    instance_type: t3.xlarge
+    storage_size: 50
+
+  - name: rhel9-arm
+    base_os: rhel9
+    software_stack_id: ss-base-rhel9-arm64-base
+    hibernation_enabled: False
+    instance_type: m6g.2xlarge
+    storage_size: 50
+
+  - name: rhel9-gpu-nvidia
+    base_os: rhel9
+    software_stack_id: ss-base-rhel9-x86-64-base
+    hibernation_enabled: False
+    instance_type: g4dn.xlarge
+    storage_size: 50
+
+# Comment out rocky8/9 tests to reduce the time for vdi batch tests
 #  - name: rocky8-x86_64
 #    base_os: rocky8
 #    software_stack_id: ss-base-rocky8-x86-64-base
@@ -116,6 +137,27 @@ testcases:
 #  - name: rocky8-gpu-nvidia
 #    base_os: rocky8
 #    software_stack_id: ss-base-rocky8-x86-64-base
+#    hibernation_enabled: False
+#    instance_type: g4dn.xlarge
+#    storage_size: 50
+
+#  - name: rocky9-x86_64
+#    base_os: rocky9
+#    software_stack_id: ss-base-rocky9-x86-64-base
+#    hibernation_enabled: False
+#    instance_type: t3.xlarge
+#    storage_size: 50
+#
+#  - name: rocky9-arm
+#    base_os: rocky9
+#    software_stack_id: ss-base-rocky9-arm64-base
+#    hibernation_enabled: False
+#    instance_type: m6g.2xlarge
+#    storage_size: 50
+#
+#  - name: rocky9-gpu-nvidia
+#    base_os: rocky9
+#    software_stack_id: ss-base-rocky9-x86-64-base
 #    hibernation_enabled: False
 #    instance_type: g4dn.xlarge
 #    storage_size: 50
@@ -141,17 +183,34 @@ testcases:
     instance_type: g4ad.xlarge
     storage_size: 50
 
-  - name: rhel8-gpu-amd
-    base_os: rhel8
-    software_stack_id: ss-base-rhel8-x86-64-base
-    hibernation_enabled: false
-    instance_type: g4ad.xlarge
-    storage_size: 50
+# Comment out RHEL8 for AMD GPU due to know issues with AMD GPU driver and kernel dependencies
+# - name: rhel8-gpu-amd
+#   base_os: rhel8
+#   software_stack_id: ss-base-rhel8-x86-64-base
+#   hibernation_enabled: false
+#   instance_type: g4ad.xlarge
+#   storage_size: 50
+
+# Comment out RHEL9 for AMD GPU due to know issues with AMD GPU driver and kernel dependencies
+#  - name: rhel9-gpu-amd
+#    base_os: rhel9
+#    software_stack_id: ss-base-rhel9-x86-64-base
+#    hibernation_enabled: false
+#    instance_type: g4ad.xlarge
+#    storage_size: 50
 
 # Comment out Rocky8 for AMD GPU due to know issues with AMD GPU driver and kernel dependencies
 #  - name: rocky8-gpu-amd
 #    base_os: rocky8
 #    software_stack_id: ss-base-rocky8-x86-64-base
+#    hibernation_enabled: false
+#    instance_type: g4ad.xlarge
+#    storage_size: 50
+
+# Comment out Rocky9 for AMD GPU due to know issues with AMD GPU driver and kernel dependencies
+#  - name: rocky9-gpu-amd
+#    base_os: rocky9
+#    software_stack_id: ss-base-rocky9-x86-64-base
 #    hibernation_enabled: false
 #    instance_type: g4ad.xlarge
 #    storage_size: 50

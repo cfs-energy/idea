@@ -36,6 +36,21 @@ ad_automation:
   # Number of seconds to cache AD domain controller information
   domain_discovery_ttl_seconds: 300
 
+  # Various timers / settings controlling AD Join process
+  # These configuration settings impact the AD Join process after the eVDI client has been authorized by
+  # cluster-manager to join AD.
+  # Min Sleep - The minimum amount of random seconds between attempts (default 30)
+  # Max Sleep - The maximum amount of random seconds between attempts (default 31)
+  # Retry Count - Number of attempts to join AD with the cluster-manager one-time-password (OTP) information
+  #
+  # By default there will be a 30-second delay in between retry attempts (including the first attempt).
+  # Set the Min and Max values as needed to generate a random number between the numbers.
+  # NOTE: Powershell Get-Random requires that Min be less than (and _not_ equal to) Maximum.
+  #
+  ad_join_min_sleep: 30  # in seconds
+  ad_join_max_sleep: 31  # in seconds
+  ad_join_retry_count: 10  # retry count
+
   # enable or disable service account's password rotation
   # when set to true, IDEA ADAutomationAgent running in Cluster Manager will try to reset the service account credentials,
   #  when nearing expiration.

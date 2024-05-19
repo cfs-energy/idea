@@ -15,13 +15,14 @@ from ideadatamodel import (
 
 from typing import Optional
 from datetime import datetime
+from pydantic import Field
 
 
 class EmailTemplate(SocaBaseModel):
-    name: Optional[str]
-    title: Optional[str]
-    template_type: Optional[str]
-    subject: Optional[str]
-    body: Optional[str]
-    created_on: Optional[datetime]
-    updated_on: Optional[datetime]
+    name: Optional[str] = Field(default=None)
+    title: Optional[str] = Field(default=None)
+    template_type: Optional[str] = Field(default=None)
+    subject: Optional[str] = Field(default=None)
+    body: Optional[str] = Field(default=None)
+    created_on: Optional[datetime] = Field(default=None)
+    updated_on: Optional[datetime] = Field(default=None)

@@ -918,6 +918,7 @@ class AccountsService:
         """
         if not Utils.is_dir(self.ds_automation_dir):
             os.makedirs(self.ds_automation_dir)
+            # noinspection OsChmod
             os.chmod(self.ds_automation_dir, 0o700)
 
         temp_dir = tempfile.mkdtemp(dir=self.ds_automation_dir)

@@ -67,6 +67,9 @@ class PresetComputeHelper:
             "directoryservice.ad_automation.domain_discovery_ttl_seconds",
             default=AD_DISCOVERY_TTL_FALLBACK,
         )
+        # Where should the object be created?
+        self.ou = self.get_ldap_computers_base()
+
         # parse and validate sender_id and request
         payload = Utils.get_value_as_dict('payload', request, default={})
 
@@ -373,7 +376,7 @@ class PresetComputeHelper:
                 '--stdin-password',
                 f'--one-time-password={one_time_password}',
                 f'--domain={self.ldap_client.domain_name}',
-                f'--domain-ou={self.get_ldap_computers_base()}',
+                f'--domain-ou={self.ou}',
                 '--verbose',
                 self.hostname
             ],
@@ -448,6 +451,7 @@ class PresetComputeHelper:
                 'hostname': self.hostname,
                 'otp': one_time_password,
                 'domain_controller': domain_controller_ip,
+                'ou': self.ou,
                 'node_type': self.ec2_instance.soca_node_type,
                 'module_id': self.ec2_instance.idea_module_id,
                 'status': 'success'

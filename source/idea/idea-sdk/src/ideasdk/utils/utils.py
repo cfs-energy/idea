@@ -53,6 +53,7 @@ DIRECTORY_TREE_TEE = '├── '
 DIRECTORY_TREE_LAST = '└── '
 
 
+# noinspection InsecureHash
 class Utils:
 
     @staticmethod
@@ -481,6 +482,7 @@ class Utils:
 
     @staticmethod
     def file_system_friendly_timestamp() -> str:
+        # noinspection StrFormat
         return arrow.now().format('YYYY-MM-DD-HHmmss.SSS')
 
     @staticmethod

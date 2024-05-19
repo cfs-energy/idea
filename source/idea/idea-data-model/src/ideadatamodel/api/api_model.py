@@ -36,8 +36,8 @@ class SocaPayload(SocaBaseModel):
 
 
 class SocaBatchResponsePayload(SocaPayload):
-    failed: Optional[List[Any]]
-    success: Optional[List[Any]]
+    failed: Optional[List[Any]] = Field(default=None)
+    success: Optional[List[Any]] = Field(default=None)
 
 
 SocaPayloadType = TypeVar('SocaPayloadType', bound='SocaPayload')
@@ -49,18 +49,18 @@ def get_payload_as(payload: Optional[Union[dict, SocaPayload]], payload_type: Ty
     if isinstance(payload, payload_type):
         return payload
     elif isinstance(payload, SocaBaseModel):
-        return payload_type(**payload.dict(exclude_none=True, by_alias=True))
+        return payload_type(**payload.model_dump(exclude_none=True, by_alias=True))
     elif isinstance(payload, dict):
         return payload_type(**payload)
     return None
 
 
 class SocaListingPayload(SocaPayload):
-    paginator: Optional[SocaPaginator]
-    sort_by: Optional[SocaSortBy]
-    date_range: Optional[SocaDateRange]
-    listing: Optional[List[Union[SocaBaseModel, Any]]]
-    filters: Optional[List[SocaFilter]]
+    paginator: Optional[SocaPaginator] = Field(default=None)
+    sort_by: Optional[SocaSortBy] = Field(default=None)
+    date_range: Optional[SocaDateRange] = Field(default=None)
+    listing: Optional[List[Union[SocaBaseModel, Any]]] = Field(default=None)
+    filters: Optional[List[SocaFilter]] = Field(default=None)
 
     @property
     def page_size(self) -> int:
@@ -95,23 +95,23 @@ class SocaListingPayload(SocaPayload):
 
 
 class SocaHeader(SocaBaseModel):
-    namespace: Optional[str]
+    namespace: Optional[str] = Field(default=None)
     version: Optional[int] = Field(default=1)
     request_id: Optional[str] = Field(format='uuid')
 
 
 class SocaAuthScope(SocaBaseModel):
-    token_type: Optional[str]
-    token: Optional[str]
+    token_type: Optional[str] = Field(default=None)
+    token: Optional[str] = Field(default=None)
 
 
 class SocaEnvelope(SocaBaseModel):
-    scope: Optional[SocaAuthScope]
-    header: Optional[SocaHeader]
-    success: Optional[bool]
-    error_code: Optional[str]
-    message: Optional[str]
-    payload: Optional[Any]
+    scope: Optional[SocaAuthScope] = Field(default=None)
+    header: Optional[SocaHeader] = Field(default=None)
+    success: Optional[bool] = Field(default=None)
+    error_code: Optional[str] = Field(default=None)
+    message: Optional[str] = Field(default=None)
+    payload: Optional[Any] = Field(default=None)
 
     def payload_as(self, payload_type: Type[SocaPayloadType]) -> Optional[SocaPayloadType]:
         return get_payload_as(payload=self.payload, payload_type=payload_type)

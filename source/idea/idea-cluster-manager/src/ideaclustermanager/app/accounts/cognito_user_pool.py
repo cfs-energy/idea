@@ -25,7 +25,7 @@ from ideadatamodel import (
 )
 from ideasdk.utils import Utils
 from ideasdk.context import SocaContext
-
+from pydantic import Field
 from typing import Optional, Dict
 import botocore.exceptions
 import hmac
@@ -34,10 +34,10 @@ import base64
 
 
 class CognitoUserPoolOptions(SocaBaseModel):
-    user_pool_id: Optional[str]
-    admin_group_name: Optional[str]
-    client_id: Optional[str]
-    client_secret: Optional[str]
+    user_pool_id: Optional[str] = Field(default=None)
+    admin_group_name: Optional[str] = Field(default=None)
+    client_id: Optional[str] = Field(default=None)
+    client_secret: Optional[str] = Field(default=None)
 
 
 class CognitoUserPool:

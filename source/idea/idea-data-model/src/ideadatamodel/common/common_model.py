@@ -41,7 +41,9 @@ class BaseOS(str, Enum):
     CENTOS_7 = 'centos7'
     RHEL_7 = 'rhel7'
     RHEL_8 = 'rhel8'
+    RHEL_9 = 'rhel9'
     ROCKY_8 = 'rocky8'
+    ROCKY_9 = 'rocky9'
 
     def __str__(self):
         return self.value
@@ -497,7 +499,7 @@ class SocaMemory(SocaBaseModel):
 @total_ordering
 class SocaAmount(SocaBaseModel):
     amount: float
-    unit: Optional[str]
+    unit: Optional[str] = Field(default=None)
 
     def __init__(self, amount: float = 0.0, unit: str = None):
         super().__init__(amount=amount, unit=unit)
@@ -553,9 +555,9 @@ class SocaAmount(SocaBaseModel):
 
 
 class SocaDateRange(SocaBaseModel):
-    key: Optional[str]
-    start: Optional[datetime]
-    end: Optional[datetime]
+    key: Optional[str] = Field(default=None)
+    start: Optional[datetime] = Field(default=None)
+    end: Optional[datetime] = Field(default=None)
 
 
 class SocaSortOrder(str, Enum):
@@ -564,33 +566,33 @@ class SocaSortOrder(str, Enum):
 
 
 class SocaSortBy(SocaBaseModel):
-    key: Optional[str]
-    order: Optional[SocaSortOrder]
+    key: Optional[str] = Field(default=None)
+    order: Optional[SocaSortOrder] = Field(default=None)
 
 
 class SocaPaginator(SocaBaseModel):
-    total: Optional[int]
-    page_size: Optional[int]
-    start: Optional[int]
-    cursor: Optional[str]
+    total: Optional[int] = Field(default=None)
+    page_size: Optional[int] = Field(default=None)
+    start: Optional[int] = Field(default=None)
+    cursor: Optional[str] = Field(default=None)
 
 
 class SocaFilter(SocaBaseModel):
-    key: Optional[str]
-    value: Optional[Any]
-    eq: Optional[Any]
-    in_: Optional[Union[str, List[Any]]] = Field(alias='in')
-    like: Optional[str]
-    starts_with: Optional[str]
-    ends_with: Optional[str]
-    and_: Optional[List['SocaFilter']] = Field(alias='and')
-    or_: Optional[List['SocaFilter']] = Field(alias='or')
+    key: Optional[str] = Field(default=None)
+    value: Optional[Any] = Field(default=None)
+    eq: Optional[Any] = Field(default=None)
+    in_: Optional[Union[str, List[Any]]] = Field(alias='in', default=None)
+    like: Optional[str] = Field(default=None)
+    starts_with: Optional[str] = Field(default=None)
+    ends_with: Optional[str] = Field(default=None)
+    and_: Optional[List['SocaFilter']] = Field(alias='and', default=None)
+    or_: Optional[List['SocaFilter']] = Field(alias='or', default=None)
 
 
 class SocaLogEntry(SocaBaseModel):
-    tag: Optional[str]
-    message: Optional[Union[str, Dict, SocaBaseModel]]
-    file_handle: Optional[str]
+    tag: Optional[str] = Field(default=None)
+    message: Optional[Union[str, Dict, SocaBaseModel]] = Field(default=None)
+    file_handle: Optional[str] = Field(default=None)
 
     def __str__(self):
         s = ''
@@ -605,13 +607,13 @@ class SocaLogEntry(SocaBaseModel):
 
 
 class SocaKeyValue(SocaBaseModel):
-    key: Optional[str]
-    value: Optional[str]
+    key: Optional[str] = Field(default=None)
+    value: Optional[str] = Field(default=None)
 
 
 class CustomFileLoggerParams(SocaBaseModel):
     logger_name: str
-    log_dir_name: Optional[str]
+    log_dir_name: Optional[str] = Field(default=None)
     log_file_name: str
     when: str
     interval: int

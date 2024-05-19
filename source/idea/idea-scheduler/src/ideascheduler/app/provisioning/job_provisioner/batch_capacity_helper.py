@@ -16,12 +16,13 @@ from ideadatamodel import (
     SocaJob, SocaComputeNodeState, ProvisioningCapacityInfo
 )
 from typing import Optional, List
+from pydantic import Field
 
 
 class BatchCapacityResult(SocaBaseModel):
-    provisioned_jobs: Optional[List[SocaJob]]
-    unprovisioned_jobs: Optional[List[SocaJob]]
-    capacity_info: Optional[ProvisioningCapacityInfo]
+    provisioned_jobs: Optional[List[SocaJob]] = Field(default=None)
+    unprovisioned_jobs: Optional[List[SocaJob]] = Field(default=None)
+    capacity_info: Optional[ProvisioningCapacityInfo] = Field(default=None)
 
 
 class BatchCapacityHelper:

@@ -24,6 +24,7 @@ from ideasdk.utils import Utils, Jinja2Utils
 from ideasdk.config.cluster_config import ClusterConfig
 
 from typing import Dict, Optional, List, Union, Any
+from pydantic import Field
 
 
 class CloudWatchAgentMetricsCollectedOptions(SocaBaseModel):
@@ -32,18 +33,18 @@ class CloudWatchAgentMetricsCollectedOptions(SocaBaseModel):
     enabled: bool
     # if config is not provided, applicable defaults will be used from amazon-cloudwatch-agent-[linux|windows].yml jinja2 template
     # refer to cloudwatch agent config docs for config details on each metric section
-    config: Optional[Dict]
+    config: Optional[Dict] = Field(default=None)
 
 
 class CloudWatchAgentMetricsOptions(SocaBaseModel):
     namespace: str
-    metrics_collection_interval: Optional[int]
-    force_flush_interval: Optional[int]
+    metrics_collection_interval: Optional[int] = Field(default=None)
+    force_flush_interval: Optional[int] = Field(default=None)
     # eg: "aggregation_dimensions" : [["AutoScalingGroupName"], ["InstanceId", "InstanceType"],[]]
-    aggregation_dimensions: Optional[Union[List[str], List[List[str]]]]
-    append_dimensions: Optional[Dict]
+    aggregation_dimensions: Optional[Union[List[str], List[List[str]]]] = Field(default=None)
+    append_dimensions: Optional[Dict] = Field(default=None)
     # eg. ['ImageId', 'InstanceId', 'InstanceType', 'AutoScalingGroupName']
-    include_dimensions: Optional[List[str]]
+    include_dimensions: Optional[List[str]] = Field(default=None)
     metrics_collected: List[CloudWatchAgentMetricsCollectedOptions]
 
     @staticmethod
@@ -93,16 +94,16 @@ class CloudWatchAgentLogFileOptions(SocaBaseModel):
     # Specifies what to use as the log group name in CloudWatch Logs.
     log_group_name: str
     log_stream_name: str
-    retention_in_days: Optional[int]
-    auto_removal: Optional[bool]
-    filters: Optional[List[CloudWatchAgentLogFileFilter]]
+    retention_in_days: Optional[int] = Field(default=None)
+    auto_removal: Optional[bool] = Field(default=None)
+    filters: Optional[List[CloudWatchAgentLogFileFilter]] = Field(default=None)
     # valid values are UTC and Local
-    timezone: Optional[str]
+    timezone: Optional[str] = Field(default=None)
 
 
 class CloudWatchAgentLogsOptions(SocaBaseModel):
-    force_flush_interval: Optional[int]
-    default_log_stream_name: Optional[str]
+    force_flush_interval: Optional[int] = Field(default=None)
+    default_log_stream_name: Optional[str] = Field(default=None)
     files: List[CloudWatchAgentLogFileOptions]
 
 
@@ -113,8 +114,8 @@ class CloudWatchAgentConfigOptions(SocaBaseModel):
     enable_metrics: bool
     # cloud watch logging may be enabled at cluster level, but an individual module might not want to use cloud watch logs
     enable_logs: bool
-    metrics: Optional[CloudWatchAgentMetricsOptions]
-    logs: Optional[CloudWatchAgentLogsOptions]
+    metrics: Optional[CloudWatchAgentMetricsOptions] = Field(default=None)
+    logs: Optional[CloudWatchAgentLogsOptions] = Field(default=None)
 
 
 class CloudWatchAgentConfig:

@@ -438,19 +438,19 @@ global-settings:
       checksum: "ca1bff69624909f16fb6c240cddb7b44236de616dfb6dd68d26cb264654e737457e265c61a78b7e42ec4832cfd6d48a5"
       checksum_method: sha384
     python:
-      version: "3.9.16"
-      url: "https://www.python.org/ftp/python/3.9.16/Python-3.9.16.tgz"
-      checksum: "87acee12323b63a2e0c368193c03fd57e008585c754b6bceec6d5ec4c0bc34b3bb1ff20f31b6f5aff6e02502e7f5b291"
+      version: "3.9.18"
+      url: "https://www.python.org/ftp/python/3.9.18/Python-3.9.18.tgz"
+      checksum: "f713544332479d7fa7080db780703d7728b6002ba23b77885fa87922fab1ce3ee8316900c7de49b502b8624adcffb097"
       checksum_method: sha384
     efa:
-      version: "1.22.0"
-      url: "https://efa-installer.amazonaws.com/aws-efa-installer-1.22.0.tar.gz"
-      checksum: "4c1b4a822f26e43c942623e3d0e6fb3816f15d6cbacd9bba286c9648b0cefe274cd79167d37c938bcdb49a96629b14a2"
+      version: "1.25.1"
+      url: "https://efa-installer.amazonaws.com/aws-efa-installer-1.25.1.tar.gz"
+      checksum: "7e0648a2af37f8d5d18d8a38cb424754476dbbf2a62c9bd573eaec4195e586e8c49b4436246e2a0bd0a181682680d290"
       checksum_method: sha384
     openpbs:
-      version: "22.05.11"
-      url: "https://github.com/openpbs/openpbs/archive/v22.05.11.tar.gz"
-      checksum: "b1516586af058b3b52074fbc8e7849243ff983c58baff9a39e4d80d8e8c960e4c4cef1ae063b9729aea87fe5c52ca193"
+      version: "23.06.06"
+      url: "https://github.com/openpbs/openpbs/archive/v23.06.06.tar.gz"
+      checksum: "8a4d7f9c326fd1de5c103e700422bc4d49edc9d50f142c033e9e7de8d10d52f5c4f92e902e107b8e89d3e12c147ebef4"
       checksum_method: sha384
       # can be release or dev. if dev, sources will be cloned from github and installed for the configured release version.
       # additional customizations can be implemented in idea-bootstrap/_templates/linux/openpbs.jinja2

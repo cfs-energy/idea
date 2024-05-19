@@ -9,18 +9,19 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
-from ideasdk.protocols import SocaContextProtocol
-from ideasdk.utils import Utils
-from ideadatamodel import exceptions, errorcodes, SocaBaseModel, SocaEnvelope, SocaHeader, SocaAnyPayload
+import urllib.parse
+import warnings
+from typing import Optional, TypeVar, Type, Any
 
-from typing import Optional, TypeVar, Type, Any, Union
 import requests
 import requests.adapters
-import requests_unixsocket.adapters
-import urllib.parse
 import requests.exceptions
-import warnings
-import urllib3.exceptions
+import requests_unixsocket.adapters
+
+from ideadatamodel import exceptions, errorcodes, SocaBaseModel, SocaEnvelope, SocaHeader, SocaAnyPayload
+from ideasdk.protocols import SocaContextProtocol
+from ideasdk.utils import Utils
+from pydantic import Field
 
 T = TypeVar('T')
 
@@ -40,15 +41,15 @@ SCHEME_UNIX_HTTPS = 'unix+https://'
 
 
 class SocaClientOptions(SocaBaseModel):
-    enable_logging: Optional[bool]
-    endpoint: Optional[str]
-    unix_socket: Optional[str]
-    timeout: Optional[float]
-    pool_connections: Optional[int]
-    pool_max_size: Optional[int]
-    pool_block: Optional[bool]
-    max_retries: Optional[int]
-    verify_ssl: Optional[bool]
+    enable_logging: Optional[bool] = Field(default=None)
+    endpoint: Optional[str] = Field(default=None)
+    unix_socket: Optional[str] = Field(default=None)
+    timeout: Optional[float] = Field(default=None)
+    pool_connections: Optional[int] = Field(default=None)
+    pool_max_size: Optional[int] = Field(default=None)
+    pool_block: Optional[bool] = Field(default=None)
+    max_retries: Optional[int] = Field(default=None)
+    verify_ssl: Optional[bool] = Field(default=None)
 
 
 class SocaClient:

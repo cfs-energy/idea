@@ -16,6 +16,8 @@ __all__ = (
     'DecodedToken'
 )
 
+from pydantic import Field
+
 from ideadatamodel import SocaBaseModel
 
 from typing import Optional, List
@@ -23,44 +25,44 @@ from datetime import datetime
 
 
 class User(SocaBaseModel):
-    username: Optional[str]
-    password: Optional[str]
-    email: Optional[str]
-    uid: Optional[int]
-    gid: Optional[int]
-    group_name: Optional[str]
-    ds_group_name: Optional[str]
-    additional_groups: Optional[List[str]]
-    login_shell: Optional[str]
-    home_dir: Optional[str]
-    sudo: Optional[bool]
-    status: Optional[str]
-    enabled: Optional[bool]
-    password_last_set: Optional[datetime]
-    password_max_age: Optional[float]
-    created_on: Optional[datetime]
-    updated_on: Optional[datetime]
+    username: Optional[str] = Field(default=None)
+    password: Optional[str] = Field(default=None)
+    email: Optional[str] = Field(default=None)
+    uid: Optional[int] = Field(default=None)
+    gid: Optional[int] = Field(default=None)
+    group_name: Optional[str] = Field(default=None)
+    ds_group_name: Optional[str] = Field(default=None)
+    additional_groups: Optional[List[str]] = Field(default=None)
+    login_shell: Optional[str] = Field(default=None)
+    home_dir: Optional[str] = Field(default=None)
+    sudo: Optional[bool] = Field(default=None)
+    status: Optional[str] = Field(default=None)
+    enabled: Optional[bool] = Field(default=None)
+    password_last_set: Optional[datetime] = Field(default=None)
+    password_max_age: Optional[float] = Field(default=None)
+    created_on: Optional[datetime] = Field(default=None)
+    updated_on: Optional[datetime] = Field(default=None)
 
 
 class Group(SocaBaseModel):
-    title: Optional[str]
-    description: Optional[str]
-    name: Optional[str]
-    ds_name: Optional[str]
-    gid: Optional[int]
-    group_type: Optional[str]
-    ref: Optional[str]
-    enabled: Optional[bool]
-    created_on: Optional[datetime]
-    updated_on: Optional[datetime]
+    title: Optional[str] = Field(default=None)
+    description: Optional[str] = Field(default=None)
+    name: Optional[str] = Field(default=None)
+    ds_name: Optional[str] = Field(default=None)
+    gid: Optional[int] = Field(default=None)
+    group_type: Optional[str] = Field(default=None)
+    ref: Optional[str] = Field(default=None)
+    enabled: Optional[bool] = Field(default=None)
+    created_on: Optional[datetime] = Field(default=None)
+    updated_on: Optional[datetime] = Field(default=None)
 
 
 class AuthResult(SocaBaseModel):
-    access_token: Optional[str]
-    id_token: Optional[str]
-    refresh_token: Optional[str]
-    expires_in: Optional[int]
-    token_type: Optional[str]
+    access_token: Optional[str] = Field(default=None)
+    id_token: Optional[str] = Field(default=None)
+    refresh_token: Optional[str] = Field(default=None)
+    expires_in: Optional[int] = Field(default=None)
+    token_type: Optional[str] = Field(default=None)
 
 
 class DecodedToken(SocaBaseModel):

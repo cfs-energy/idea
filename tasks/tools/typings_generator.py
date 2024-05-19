@@ -41,10 +41,7 @@ from typing import Type, Dict, Any, List, Set, Tuple, Optional
 from uuid import uuid4
 from pydantic import BaseModel, Extra, create_model
 
-try:
-    from pydantic.generics import GenericModel
-except ImportError:
-    GenericModel = None
+GenericModel = None
 
 
 class TypingsGenerator:
@@ -285,9 +282,9 @@ class TypingsGenerator:
                 "_Master_", **{m.__name__: (m, ...) for m in models}
             )
             master_model.Config.extra = Extra.forbid
-            master_model.Config.schema_extra = staticmethod(self.clean_schema)
+            master_model.Config.json_schema_extra = staticmethod(self.clean_schema)
 
-            schema = json.loads(master_model.schema_json())
+            schema = json.loads(json.dumps(master_model.model_json_schema()))
 
             self.fix_anomalies(schema)
 
@@ -363,4 +360,3 @@ class TypingsGenerator:
         self.remove_master_model_from_output(output)
 
         idea.console.success(f"Saved typescript definitions to {output}.")
-

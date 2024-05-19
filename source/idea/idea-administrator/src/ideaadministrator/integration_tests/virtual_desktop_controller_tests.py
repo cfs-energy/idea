@@ -25,11 +25,22 @@ from ideaadministrator.integration_tests.test_context import TestContext
 import time
 from ideadatamodel import (
     exceptions,
+    VirtualDesktopSession,
     VirtualDesktopSessionState
 )
+import multiprocessing
+import concurrent.futures
 
 
 # VDC Admin Tests
+
+def session_worker_thread(context: TestContext, testcase_id: str, session: VirtualDesktopSession):
+    context.info(f"Session Worker Thread - Starting: {session.name}")
+    admin_access_token = context.get_admin_access_token()
+    session_workflow = SessionWorkflow(context, session, testcase_id, context.admin_username, admin_access_token, 'VirtualDesktopAdmin.GetSessionInfo')
+    session_workflow.test_session_workflow()
+    context.info(f"Session Worker Thread - Completed: {session.name}")
+
 def test_admin_batch_session_workflow(context: TestContext):
     try:
         testcase_id = test_constants.VIRTUAL_DESKTOP_TEST_ADMIN_BATCH_SESSION_WORKFLOW
@@ -38,11 +49,16 @@ def test_admin_batch_session_workflow(context: TestContext):
         sessions = get_sessions_test_cases_list(context, context.admin_username, admin_access_token)
         # 2. Create Batch Sessions
         batch_sessions = create_batch_sessions(context, sessions)
-        # 3. Execute Tests
-        for session in batch_sessions:
-            admin_access_token = context.get_admin_access_token()
-            session_workflow = SessionWorkflow(context, session, testcase_id, context.admin_username, admin_access_token, 'VirtualDesktopAdmin.GetSessionInfo')
-            session_workflow.test_session_workflow()
+
+        desired_threads = int(multiprocessing.cpu_count()) * 2
+        context.info(f"Using {desired_threads} processing threads")
+
+        with concurrent.futures.ThreadPoolExecutor(
+                max_workers=desired_threads, thread_name_prefix="sessionworker"
+        ) as executor:
+            for session in batch_sessions:
+                executor.submit(session_worker_thread, context=context, testcase_id=testcase_id, session=session)
+        context.info(f"All sessions processed.")
 
     except exceptions.SocaException as e:
         context.error(f'Failed to execute test admin session workflow. Error Code : {e.error_code} Error: {e.message}')
@@ -75,6 +91,8 @@ def test_admin_create_session(context: TestContext):
             testcase_error_message = f'Failed to execute {test_case_name}.Session Name : {session.name}. Session is in invalid State : {session.state}. Session ID : {session.idea_session_id}' + session_status.get('error_log')
             test_results_map.update_test_result_map(VirtualDesktopSessionTestResults.FAILED, testcase_error_message)
             assert False
+
+        sessionHelper.delete_session('VirtualDesktop.DeleteSessions')
 
     except (exceptions.SocaException, Exception) as error:
         vdc_test_helper.on_test_exception(test_case_name, error, test_results_map)

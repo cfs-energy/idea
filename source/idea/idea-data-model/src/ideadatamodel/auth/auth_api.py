@@ -70,6 +70,8 @@ __all__ = (
     'OPEN_API_SPEC_ENTRIES_AUTH'
 )
 
+from pydantic import Field
+
 from ideadatamodel.api import SocaPayload, SocaListingPayload, IdeaOpenAPISpecEntry
 from ideadatamodel.auth.auth_model import User, Group, AuthResult
 
@@ -79,39 +81,39 @@ from typing import Optional, List, Dict
 # CreateUser
 
 class CreateUserRequest(SocaPayload):
-    user: Optional[User]
-    email_verified: Optional[bool]
+    user: Optional[User] = Field(default=None)
+    email_verified: Optional[bool] = Field(default=None)
 
 
 class CreateUserResult(SocaPayload):
-    user: Optional[User]
+    user: Optional[User] = Field(default=None)
 
 
 # GetUser
 
 class GetUserRequest(SocaPayload):
-    username: Optional[str]
+    username: Optional[str] = Field(default=None)
 
 
 class GetUserResult(SocaPayload):
-    user: Optional[User]
+    user: Optional[User] = Field(default=None)
 
 
 # ModifyUser
 
 class ModifyUserRequest(SocaPayload):
-    user: Optional[User]
-    email_verified: Optional[bool]
+    user: Optional[User] = Field(default=None)
+    email_verified: Optional[bool] = Field(default=None)
 
 
 class ModifyUserResult(SocaPayload):
-    user: Optional[User]
+    user: Optional[User] = Field(default=None)
 
 
 # DeleteUser
 
 class DeleteUserRequest(SocaPayload):
-    username: Optional[str]
+    username: Optional[str] = Field(default=None)
 
 
 class DeleteUserResult(SocaPayload):
@@ -121,21 +123,21 @@ class DeleteUserResult(SocaPayload):
 # EnableUser
 
 class EnableUserRequest(SocaPayload):
-    username: Optional[str]
+    username: Optional[str] = Field(default=None)
 
 
 class EnableUserResult(SocaPayload):
-    user: Optional[User]
+    user: Optional[User] = Field(default=None)
 
 
 # DisableUser
 
 class DisableUserRequest(SocaPayload):
-    username: Optional[str]
+    username: Optional[str] = Field(default=None)
 
 
 class DisableUserResult(SocaPayload):
-    user: Optional[User]
+    user: Optional[User] = Field(default=None)
 
 
 # ListUsers
@@ -145,50 +147,50 @@ class ListUsersRequest(SocaListingPayload):
 
 
 class ListUsersResult(SocaListingPayload):
-    listing: Optional[List[User]]
+    listing: Optional[List[User]] = Field(default=None)
 
 
 # InitiateAuth
 
 class InitiateAuthRequest(SocaPayload):
-    client_id: Optional[str]
-    auth_flow: Optional[str]
-    username: Optional[str]
-    password: Optional[str]
-    refresh_token: Optional[str]
-    authorization_code: Optional[str]
+    client_id: Optional[str] = Field(default=None)
+    auth_flow: Optional[str] = Field(default=None)
+    username: Optional[str] = Field(default=None)
+    password: Optional[str] = Field(default=None)
+    refresh_token: Optional[str] = Field(default=None)
+    authorization_code: Optional[str] = Field(default=None)
 
 
 class InitiateAuthResult(SocaPayload):
-    challenge_name: Optional[str]
-    session: Optional[str]
-    challenge_params: Optional[Dict]
-    auth: Optional[AuthResult]
+    challenge_name: Optional[str] = Field(default=None)
+    session: Optional[str] = Field(default=None)
+    challenge_params: Optional[Dict] = Field(default=None)
+    auth: Optional[AuthResult] = Field(default=None)
 
 
 # RespondToAuthChallenge
 
 class RespondToAuthChallengeRequest(SocaPayload):
-    client_id: Optional[str]
-    session: Optional[str]
-    challenge_name: Optional[str]
-    challenge_params: Optional[Dict]
-    username: Optional[str]
-    new_password: Optional[str]
+    client_id: Optional[str] = Field(default=None)
+    session: Optional[str] = Field(default=None)
+    challenge_name: Optional[str] = Field(default=None)
+    challenge_params: Optional[Dict] = Field(default=None)
+    username: Optional[str] = Field(default=None)
+    new_password: Optional[str] = Field(default=None)
 
 
 class RespondToAuthChallengeResult(SocaPayload):
-    challenge_name: Optional[str]
-    session: Optional[str]
-    challenge_params: Optional[Dict]
-    auth: Optional[AuthResult]
+    challenge_name: Optional[str] = Field(default=None)
+    session: Optional[str] = Field(default=None)
+    challenge_params: Optional[Dict] = Field(default=None)
+    auth: Optional[AuthResult] = Field(default=None)
 
 
 # ForgotPassword
 
 class ForgotPasswordRequest(SocaPayload):
-    client_id: Optional[str]
-    username: Optional[str]
+    client_id: Optional[str] = Field(default=None)
+    username: Optional[str] = Field(default=None)
 
 
 class ForgotPasswordResult(SocaPayload):
@@ -198,9 +200,9 @@ class ForgotPasswordResult(SocaPayload):
 # ChangePassword
 
 class ChangePasswordRequest(SocaPayload):
-    username: Optional[str]
-    old_password: Optional[str]
-    new_password: Optional[str]
+    username: Optional[str] = Field(default=None)
+    old_password: Optional[str] = Field(default=None)
+    new_password: Optional[str] = Field(default=None)
 
 
 class ChangePasswordResult(SocaPayload):
@@ -210,7 +212,7 @@ class ChangePasswordResult(SocaPayload):
 # ResetPassword
 
 class ResetPasswordRequest(SocaPayload):
-    username: Optional[str]
+    username: Optional[str] = Field(default=None)
 
 
 class ResetPasswordResult(SocaPayload):
@@ -220,10 +222,10 @@ class ResetPasswordResult(SocaPayload):
 # ConfirmForgotPassword
 
 class ConfirmForgotPasswordRequest(SocaPayload):
-    client_id: Optional[str]
-    username: Optional[str]
-    confirmation_code: Optional[str]
-    password: Optional[str]
+    client_id: Optional[str] = Field(default=None)
+    username: Optional[str] = Field(default=None)
+    confirmation_code: Optional[str] = Field(default=None)
+    password: Optional[str] = Field(default=None)
 
 
 class ConfirmForgotPasswordResult(SocaPayload):
@@ -233,8 +235,8 @@ class ConfirmForgotPasswordResult(SocaPayload):
 # SignOut
 
 class SignOutRequest(SocaPayload):
-    refresh_token: Optional[str]
-    sso_auth: Optional[bool]
+    refresh_token: Optional[str] = Field(default=None)
+    sso_auth: Optional[bool] = Field(default=None)
 
 
 class SignOutResult(SocaPayload):
@@ -244,7 +246,7 @@ class SignOutResult(SocaPayload):
 # GlobalSignOut
 
 class GlobalSignOutRequest(SocaPayload):
-    username: Optional[str]
+    username: Optional[str] = Field(default=None)
 
 
 class GlobalSignOutResult(SocaPayload):
@@ -254,27 +256,27 @@ class GlobalSignOutResult(SocaPayload):
 # CreateGroup
 
 class CreateGroupRequest(SocaPayload):
-    group: Optional[Group]
+    group: Optional[Group] = Field(default=None)
 
 
 class CreateGroupResult(SocaPayload):
-    group: Optional[Group]
+    group: Optional[Group] = Field(default=None)
 
 
 # ModifyGroup
 
 class ModifyGroupRequest(SocaPayload):
-    group: Optional[Group]
+    group: Optional[Group] = Field(default=None)
 
 
 class ModifyGroupResult(SocaPayload):
-    group: Optional[Group]
+    group: Optional[Group] = Field(default=None)
 
 
 # DeleteGroup
 
 class DeleteGroupRequest(SocaPayload):
-    group_name: Optional[str]
+    group_name: Optional[str] = Field(default=None)
 
 
 class DeleteGroupResult(SocaPayload):
@@ -284,7 +286,7 @@ class DeleteGroupResult(SocaPayload):
 # EnableGroup
 
 class EnableGroupRequest(SocaPayload):
-    group_name: Optional[str]
+    group_name: Optional[str] = Field(default=None)
 
 
 class EnableGroupResult(SocaPayload):
@@ -294,7 +296,7 @@ class EnableGroupResult(SocaPayload):
 # DisableGroup
 
 class DisableGroupRequest(SocaPayload):
-    group_name: Optional[str]
+    group_name: Optional[str] = Field(default=None)
 
 
 class DisableGroupResult(SocaPayload):
@@ -304,28 +306,28 @@ class DisableGroupResult(SocaPayload):
 # GetGroup
 
 class GetGroupRequest(SocaPayload):
-    group_name: Optional[str]
+    group_name: Optional[str] = Field(default=None)
 
 
 class GetGroupResult(SocaPayload):
-    group: Optional[Group]
+    group: Optional[Group] = Field(default=None)
 
 
 # ListGroups
 
 class ListGroupsRequest(SocaListingPayload):
-    username: Optional[str]
+    username: Optional[str] = Field(default=None)
 
 
 class ListGroupsResult(SocaListingPayload):
-    listing: Optional[List[Group]]
+    listing: Optional[List[Group]] = Field(default=None)
 
 
 # AddUserToGroup
 
 class AddUserToGroupRequest(SocaPayload):
-    usernames: Optional[List[str]]
-    group_name: Optional[str]
+    usernames: Optional[List[str]] = Field(default=None)
+    group_name: Optional[str] = Field(default=None)
 
 
 class AddUserToGroupResult(SocaPayload):
@@ -335,65 +337,65 @@ class AddUserToGroupResult(SocaPayload):
 # RemoveUserFromGroup
 
 class RemoveUserFromGroupRequest(SocaPayload):
-    usernames: Optional[List[str]]
-    group_name: Optional[str]
+    usernames: Optional[List[str]] = Field(default=None)
+    group_name: Optional[str] = Field(default=None)
 
 
 class RemoveUserFromGroupResult(SocaPayload):
-    group: Optional[Group]
+    group: Optional[Group] = Field(default=None)
 
 
 # ListUsersInGroup
 
 class ListUsersInGroupRequest(SocaListingPayload):
-    group_names: Optional[List[str]]
+    group_names: Optional[List[str]] = Field(default=None)
 
 
 class ListUsersInGroupResult(SocaListingPayload):
-    listing: Optional[List[User]]
+    listing: Optional[List[User]] = Field(default=None)
 
 
 # AddSudoUser
 
 class AddSudoUserRequest(SocaPayload):
-    username: Optional[str]
+    username: Optional[str] = Field(default=None)
 
 
 class AddSudoUserResult(SocaPayload):
-    user: Optional[User]
+    user: Optional[User] = Field(default=None)
 
 
 # RemoveSudoUser
 
 class RemoveSudoUserRequest(SocaPayload):
-    username: Optional[str]
+    username: Optional[str] = Field(default=None)
 
 
 class RemoveSudoUserResult(SocaPayload):
-    user: Optional[User]
+    user: Optional[User] = Field(default=None)
 
 
 # AuthenticateUser
 
 class AuthenticateUserRequest(SocaPayload):
-    username: Optional[str]
-    password: Optional[str]
+    username: Optional[str] = Field(default=None)
+    password: Optional[str] = Field(default=None)
 
 
 class AuthenticateUserResult(SocaPayload):
-    status: Optional[bool]
+    status: Optional[bool] = Field(default=None)
 
 
 # GetUserPrivateKey
 
 class GetUserPrivateKeyRequest(SocaPayload):
-    key_format: Optional[str]  # pem, ppk
-    platform: Optional[str]
+    key_format: Optional[str] = Field(default=None)  # pem, ppk
+    platform: Optional[str] = Field(default=None)
 
 
 class GetUserPrivateKeyResult(SocaPayload):
-    name: Optional[str]
-    key_material: Optional[str]
+    name: Optional[str] = Field(default=None)
+    key_material: Optional[str] = Field(default=None)
 
 
 OPEN_API_SPEC_ENTRIES_AUTH = [

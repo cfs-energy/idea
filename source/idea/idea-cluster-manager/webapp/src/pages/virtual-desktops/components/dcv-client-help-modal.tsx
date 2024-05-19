@@ -32,6 +32,8 @@ function downloadDcvClient(os: string) {
         window.open(client_settings.linux.rhel_centos7.url)
     } else if (os === 'linux-rhel_centos_rocky8') {
         window.open(client_settings.linux.rhel_centos_rocky8.url)
+    } else if (os === 'linux-rhel_centos_rocky9') {
+        window.open(client_settings.linux.rhel_centos_rocky9.url)
     } else if (os === 'linux-suse15') {
         window.open(client_settings.linux.suse15.url)
     } else if (os === 'ubuntu-ubuntu1804') {
@@ -57,6 +59,8 @@ function getDCVClientLabelForOSFlavor(os: string): string {
         return client_settings.linux.rhel_centos7.label
     } else if (os === 'linux-rhel_centos_rocky8') {
         return client_settings.linux.rhel_centos_rocky8.label
+    } else if (os === 'linux-rhel_centos_rocky9') {
+        return client_settings.linux.rhel_centos_rocky9.label
     } else if (os === 'linux-suse15') {
         return client_settings.linux.suse15.label
     } else if (os === 'ubuntu-ubuntu1804') {
@@ -154,6 +158,7 @@ export function DcvClientHelpModal(props: DcvClientHelpModalProps) {
                             <p>
                                 <Button variant={"link"} onClick={() => downloadDcvClient('linux-rhel_centos7')}><FontAwesomeIcon icon={faDownload}/> {getDCVClientLabelForOSFlavor('linux-rhel_centos7')}</Button>
                                 <Button variant={"link"} onClick={() => downloadDcvClient('linux-rhel_centos_rocky8')}><FontAwesomeIcon icon={faDownload}/> {getDCVClientLabelForOSFlavor('linux-rhel_centos_rocky8')}</Button>
+                                <Button variant={"link"} onClick={() => downloadDcvClient('linux-rhel_centos_rocky9')}><FontAwesomeIcon icon={faDownload}/> {getDCVClientLabelForOSFlavor('linux-rhel_centos_rocky9')}</Button>
                                 <Button variant={"link"} onClick={() => downloadDcvClient('linux-suse15')}><FontAwesomeIcon icon={faDownload}/> {getDCVClientLabelForOSFlavor('linux-suse15')}</Button>
                             </p>
                             <p>

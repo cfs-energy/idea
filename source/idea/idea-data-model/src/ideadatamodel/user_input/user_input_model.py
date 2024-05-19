@@ -39,17 +39,18 @@ from enum import Enum
 
 
 class SocaInputParamCliOptions(SocaBaseModel):
-    long_name: Optional[str]
-    short_name: Optional[str]
-    required: Optional[str]
-    help_text: Optional[str]
+    long_name: Optional[str] = Field(default=None)
+    short_name: Optional[str] = Field(default=None)
+    required: Optional[str] = Field(default=None)
+    help_text: Optional[str] = Field(default=None)
 
 
 class SocaUserInputParamExposeOptions(SocaBaseModel):
-    cli: Optional[SocaInputParamCliOptions]
-    web_app: Optional[bool]
+    cli: Optional[SocaInputParamCliOptions] = Field(default=None)
+    web_app: Optional[bool] = Field(default=None)
 
 
+# noinspection HardcodedPassword
 class SocaUserInputParamType(str, Enum):
     TEXT = 'text'
     PASSWORD = 'password'
@@ -79,12 +80,12 @@ class SocaUserInputParamType(str, Enum):
 
 
 class SocaUserInputChoice(SocaBaseModel):
-    title: Optional[str]
-    value: Optional[Any]
-    disabled: Optional[bool]
-    checked: Optional[bool]
-    options: Optional[List['SocaUserInputChoice']]
-    description: Optional[str]
+    title: Optional[str] = Field(default=None)
+    value: Optional[Any] = Field(default=None)
+    disabled: Optional[bool] = Field(default=None)
+    checked: Optional[bool] = Field(default=None)
+    options: Optional[List['SocaUserInputChoice']] = Field(default=None)
+    description: Optional[str] = Field(default=None)
 
     def __repr__(self):
         return self.value
@@ -94,91 +95,91 @@ class SocaUserInputChoice(SocaBaseModel):
 
 
 class SocaUserInputRange(SocaBaseModel):
-    type_: Optional[str] = Field(alias='type')
-    from_: Optional[List[Union[Any]]] = Field(alias='from')
-    to: Optional[List[Union[Any]]]
+    type_: Optional[str] = Field(alias='type', default=None)
+    from_: Optional[List[Union[Any]]] = Field(alias='from', default=None)
+    to: Optional[List[Union[Any]]] = Field(default=None)
 
 
 class SocaUserInputCondition(SocaBaseModel):
-    eq: Optional[Any]
-    not_eq: Optional[Any]
-    in_: Optional[Union[str, List[Any]]] = Field(alias='in')
-    not_in: Optional[Union[str, List[Any]]]
-    gt: Optional[Union[Any]]
-    gte: Optional[Union[Any]]
-    lt: Optional[Union[Any]]
-    lte: Optional[Union[Any]]
-    min: Optional[Union[Any]]
-    max: Optional[Union[Any]]
-    range: Optional[SocaUserInputRange]
-    not_in_range: Optional[SocaUserInputRange]
-    regex: Optional[str]
-    not_regex: Optional[str]
-    exact: Optional[str]
-    starts_with: Optional[str]
-    ends_with: Optional[str]
-    empty: Optional[bool]
-    not_empty: Optional[bool]
-    contains: Optional[Any]
-    not_contains: Optional[Any]
+    eq: Optional[Any] = Field(default=None)
+    not_eq: Optional[Any] = Field(default=None)
+    in_: Optional[Union[str, List[Any]]] = Field(alias='in', default=None)
+    not_in: Optional[Union[str, List[Any]]] = Field(default=None)
+    gt: Optional[Union[Any]] = Field(default=None)
+    gte: Optional[Union[Any]] = Field(default=None)
+    lt: Optional[Union[Any]] = Field(default=None)
+    lte: Optional[Union[Any]] = Field(default=None)
+    min: Optional[Union[Any]] = Field(default=None)
+    max: Optional[Union[Any]] = Field(default=None)
+    range: Optional[SocaUserInputRange] = Field(default=None)
+    not_in_range: Optional[SocaUserInputRange] = Field(default=None)
+    regex: Optional[str] = Field(default=None)
+    not_regex: Optional[str] = Field(default=None)
+    exact: Optional[str] = Field(default=None)
+    starts_with: Optional[str] = Field(default=None)
+    ends_with: Optional[str] = Field(default=None)
+    empty: Optional[bool] = Field(default=None)
+    not_empty: Optional[bool] = Field(default=None)
+    contains: Optional[Any] = Field(default=None)
+    not_contains: Optional[Any] = Field(default=None)
 
 
 class SocaUserInputHandlers(SocaBaseModel):
-    class_: Optional[str] = Field(alias='class')
-    choices: Optional[str]
-    default: Optional[str]
-    validate_: Optional[str] = Field(alias='validate')
-    autocomplete: Optional[str]
-    filter: Optional[str]
+    class_: Optional[str] = Field(alias='class', default=None)
+    choices: Optional[str] = Field(default=None)
+    default: Optional[str] = Field(default=None)
+    validate_: Optional[str] = Field(alias='validate', default=None)
+    autocomplete: Optional[str] = Field(default=None)
+    filter: Optional[str] = Field(default=None)
 
 
 class SocaUserInputParamCondition(SocaUserInputCondition):
-    param: Optional[str]
-    and_: Optional[List['SocaUserInputParamCondition']] = Field(alias='and')
-    or_: Optional[List['SocaUserInputParamCondition']] = Field(alias='or')
+    param: Optional[str] = Field(default=None)
+    and_: Optional[List['SocaUserInputParamCondition']] = Field(alias='and', default=None)
+    or_: Optional[List['SocaUserInputParamCondition']] = Field(alias='or', default=None)
 
 
-SocaUserInputParamCondition.update_forward_refs()
+SocaUserInputParamCondition.model_rebuild()
 
 
 class SocaUserInputValidate(SocaUserInputCondition):
-    required: Optional[bool]
-    auto_prefix: Optional[str]
+    required: Optional[bool] = Field(default=None)
+    auto_prefix: Optional[str] = Field(default=None)
 
 
 class SocaUserInputParamMetadata(SocaBaseModel):
-    name: Optional[str]
-    template: Optional[str]
-    title: Optional[str]
-    prompt: Optional[bool]
-    description: Optional[str]
-    description2: Optional[str]
-    help_text: Optional[str]
-    param_type: Optional[SocaUserInputParamType]
-    data_type: Optional[str]
-    custom_type: Optional[str]
-    multiple: Optional[bool]
-    multiline: Optional[bool]
-    auto_enter: Optional[bool]
-    auto_focus: Optional[bool]
-    unique: Optional[bool]
-    default: Optional[Union[List, Any]]
-    readonly: Optional[bool]
-    validate_: Optional[SocaUserInputValidate] = Field(alias='validate')
-    choices: Optional[List[SocaUserInputChoice]]
-    choices_meta: Optional[Dict[str, Any]]
-    dynamic_choices: Optional[bool]
-    choices_empty_label: Optional[str]
-    refreshable: Optional[bool]
-    ignore_case: Optional[bool]
-    match_middle: Optional[bool]
-    tag: Optional[str]
-    export: Optional[bool]
-    when: Optional[SocaUserInputParamCondition]
-    expose: Optional[SocaUserInputParamExposeOptions]
-    markdown: Optional[str]
-    developer_notes: Optional[str]
-    custom: Optional[Dict]
+    name: Optional[str] = Field(default=None)
+    template: Optional[str] = Field(default=None)
+    title: Optional[str] = Field(default=None)
+    prompt: Optional[bool] = Field(default=None)
+    description: Optional[str] = Field(default=None)
+    description2: Optional[str] = Field(default=None)
+    help_text: Optional[str] = Field(default=None)
+    param_type: Optional[SocaUserInputParamType] = Field(default=None)
+    data_type: Optional[str] = Field(default=None)
+    custom_type: Optional[str] = Field(default=None)
+    multiple: Optional[bool] = Field(default=None)
+    multiline: Optional[bool] = Field(default=None)
+    auto_enter: Optional[bool] = Field(default=None)
+    auto_focus: Optional[bool] = Field(default=None)
+    unique: Optional[bool] = Field(default=None)
+    default: Optional[Union[List, Any]] = Field(default=None)
+    readonly: Optional[bool] = Field(default=None)
+    validate_: Optional[SocaUserInputValidate] = Field(alias='validate', default=None)
+    choices: Optional[List[SocaUserInputChoice]] = Field(default=None)
+    choices_meta: Optional[Dict[str, Any]] = Field(default=None)
+    dynamic_choices: Optional[bool] = Field(default=None)
+    choices_empty_label: Optional[str] = Field(default=None)
+    refreshable: Optional[bool] = Field(default=None)
+    ignore_case: Optional[bool] = Field(default=None)
+    match_middle: Optional[bool] = Field(default=None)
+    tag: Optional[str] = Field(default=None)
+    export: Optional[bool] = Field(default=None)
+    when: Optional[SocaUserInputParamCondition] = Field(default=None)
+    expose: Optional[SocaUserInputParamExposeOptions] = Field(default=None)
+    markdown: Optional[str] = Field(default=None)
+    developer_notes: Optional[str] = Field(default=None)
+    custom: Optional[Dict] = Field(default=None)
 
     @property
     def is_required(self) -> bool:
@@ -331,14 +332,14 @@ class SocaUserInputParamMetadata(SocaBaseModel):
 
 
 class SocaInputParamValidationEntry(SocaBaseModel):
-    name: Optional[str]
-    section: Optional[str]
-    message: Optional[str]
-    meta: Optional[SocaUserInputParamMetadata]
+    name: Optional[str] = Field(default=None)
+    section: Optional[str] = Field(default=None)
+    message: Optional[str] = Field(default=None)
+    meta: Optional[SocaUserInputParamMetadata] = Field(default=None)
 
 
 class SocaInputParamValidationResult(SocaBaseModel):
-    entries: Optional[List[SocaInputParamValidationEntry]]
+    entries: Optional[List[SocaInputParamValidationEntry]] = Field(default=None)
 
     def __bool__(self):
         return self.is_valid
@@ -349,28 +350,28 @@ class SocaInputParamValidationResult(SocaBaseModel):
 
 
 class SocaUserInputGroupMetadata(SocaBaseModel):
-    name: Optional[str]
-    module: Optional[str]
-    section: Optional[str]
-    title: Optional[str]
-    description: Optional[str]
-    params: Optional[List[SocaUserInputParamMetadata]]
+    name: Optional[str] = Field(default=None)
+    module: Optional[str] = Field(default=None)
+    section: Optional[str] = Field(default=None)
+    title: Optional[str] = Field(default=None)
+    description: Optional[str] = Field(default=None)
+    params: Optional[List[SocaUserInputParamMetadata]] = Field(default=None)
 
 
 class SocaUserInputSectionReview(SocaBaseModel):
-    prompt: Optional[str]
+    prompt: Optional[str] = Field(default=None)
 
 
 class SocaUserInputSectionMetadata(SocaBaseModel):
-    name: Optional[str]
-    module: Optional[str]
-    title: Optional[str]
-    description: Optional[str]
-    required: Optional[bool]
-    review: Optional[SocaUserInputSectionReview]
-    params: Optional[List[SocaUserInputParamMetadata]]
-    groups: Optional[List[SocaUserInputGroupMetadata]]
-    markdown: Optional[str]
+    name: Optional[str] = Field(default=None)
+    module: Optional[str] = Field(default=None)
+    title: Optional[str] = Field(default=None)
+    description: Optional[str] = Field(default=None)
+    required: Optional[bool] = Field(default=None)
+    review: Optional[SocaUserInputSectionReview] = Field(default=None)
+    params: Optional[List[SocaUserInputParamMetadata]] = Field(default=None)
+    groups: Optional[List[SocaUserInputGroupMetadata]] = Field(default=None)
+    markdown: Optional[str] = Field(default=None)
 
     @property
     def is_required(self) -> bool:
@@ -378,26 +379,26 @@ class SocaUserInputSectionMetadata(SocaBaseModel):
 
 
 class SocaUserInputModuleMetadata(SocaBaseModel):
-    name: Optional[str]
-    title: Optional[str]
-    description: Optional[str]
-    sections: Optional[List[SocaUserInputSectionMetadata]]
-    markdown: Optional[str]
+    name: Optional[str] = Field(default=None)
+    title: Optional[str] = Field(default=None)
+    description: Optional[str] = Field(default=None)
+    sections: Optional[List[SocaUserInputSectionMetadata]] = Field(default=None)
+    markdown: Optional[str] = Field(default=None)
 
 
 class SocaUserInputTag(SocaBaseModel):
-    name: Optional[str]
-    title: Optional[str]
-    description: Optional[str]
-    markdown: Optional[str]
-    unicode: Optional[str]
-    ascii: Optional[str]
-    icon: Optional[str]
+    name: Optional[str] = Field(default=None)
+    title: Optional[str] = Field(default=None)
+    description: Optional[str] = Field(default=None)
+    markdown: Optional[str] = Field(default=None)
+    unicode: Optional[str] = Field(default=None)
+    ascii: Optional[str] = Field(default=None)
+    icon: Optional[str] = Field(default=None)
 
 
 class SocaInputParamSpec(SocaBaseModel):
-    name: Optional[str]
-    version: Optional[str]
-    tags: Optional[List[SocaUserInputTag]]
-    modules: Optional[List[SocaUserInputModuleMetadata]]
-    params: Optional[List[SocaUserInputParamMetadata]]
+    name: Optional[str] = Field(default=None)
+    version: Optional[str] = Field(default=None)
+    tags: Optional[List[SocaUserInputTag]] = Field(default=None)
+    modules: Optional[List[SocaUserInputModuleMetadata]] = Field(default=None)
+    params: Optional[List[SocaUserInputParamMetadata]] = Field(default=None)

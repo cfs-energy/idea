@@ -64,6 +64,7 @@ if [[ ! -f ${BOOTSTRAP_DIR}/idea_preinstalled_packages.log ]]; then
   {%- if context.base_os in ('amazonlinux2', 'centos7', 'rhel7') %}
   yum install -y deltarpm
   {%- elif context.base_os in ('rhel8', 'rocky8') %}
+  #drpm isn't available in rhel9 or rocky9
   yum install -y drpm
   {%- endif %}
 

@@ -360,13 +360,26 @@ class CloudFormationStackBuilder:
             )
 
         if self.job.params.enable_efa_support:
+            _max_efa_interfaces: int = Utils.get_as_int(
+                self.context.aws_util().get_instance_efa_max_interfaces_supported(instance_type=launch_template_data.InstanceType),
+                default=0
+            )
+            self.logger.debug(f"EFA requested - determined Max EFA interfaces for instance {launch_template_data.InstanceType}: {_max_efa_interfaces}")
+
             launch_template_data.NetworkInterfaces = []
-            launch_template_data.NetworkInterfaces.append(NetworkInterfaces(
-                InterfaceType='efa',
-                DeleteOnTermination=True,
-                DeviceIndex=0,
-                Groups=self.job.params.security_groups,
-            ))
+            _nci: int = 0  # NetworkCardIndex
+            for _i in range(0, _max_efa_interfaces):
+                self.logger.debug(f"Adding EFA interface #{_i} - NetworkCardIndex: {_nci}")
+                launch_template_data.NetworkInterfaces.append(
+                    NetworkInterfaces(
+                        InterfaceType='efa',
+                        DeleteOnTermination=True,
+                        DeviceIndex=1 if _i > 0 else 0,
+                        NetworkCardIndex=_nci,
+                        Groups=self.job.params.security_groups
+                    )
+                )
+                _nci += 1
         else:
             launch_template_data.SecurityGroupIds = self.job.params.security_groups
 
