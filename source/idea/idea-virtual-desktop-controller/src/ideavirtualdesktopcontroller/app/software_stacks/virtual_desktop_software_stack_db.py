@@ -168,7 +168,7 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
                     if Utils.is_not_empty(gpu_manufacturer) and gpu_manufacturer not in {'AMD', 'NVIDIA', 'NO_GPU'}:
                         error_message = f'Invalid base-software-stack-config.yaml configuration for OS: {base_os} Arch' \
                                         f' Config: {arch} AWS-Region: {aws_region}.' \
-                                        f' Invalid gpu-manufacturer {gpu_manufacturer} can be one of AMD, NVIDIA, NO_GPU only'
+                                        f' Invalid gpu-manufacturer {gpu_manufacturer}. Can be one of AMD, NVIDIA, NO_GPU only'
 
                         self._logger.error(error_message)
                         raise exceptions.general_exception(error_message)
@@ -194,7 +194,7 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
                     software_stack_db_entry = self.get(stack_id=software_stack_id, base_os=base_os)
                     if Utils.is_empty(software_stack_db_entry):
                         # base SS doesn't exist. creating
-                        self._logger.info(f'software_stack_id: {software_stack_id}, does\'nt exist. CREATING.')
+                        self._logger.info(f'software_stack_id: {software_stack_id}, doesn\'t exist. CREATING.')
                         self.create(VirtualDesktopSoftwareStack(
                             base_os=VirtualDesktopBaseOS(base_os),
                             stack_id=software_stack_id,

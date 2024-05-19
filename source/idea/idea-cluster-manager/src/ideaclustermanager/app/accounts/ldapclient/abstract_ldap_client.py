@@ -55,7 +55,7 @@ DEFAULT_LDAP_CONNECTION_RETRY_MAX = 60
 DEFAULT_LDAP_CONNECTION_RETRY_DELAY = 10
 DEFAULT_LDAP_CONNECTION_TIMEOUT = 10
 DEFAULT_LDAP_ENABLE_CONNECTION_POOL = True
-DEFAULT_LDAP_PAGE_SIZE = 20
+DEFAULT_LDAP_PAGE_SIZE = 100
 DEFAULT_LDAP_PAGE_START = 0
 DEFAULT_LDAP_COOKIE = ''
 
@@ -235,7 +235,7 @@ class AbstractLDAPClient:
         trace_message = f'ldapsearch -x -b "{base}" -D "{self.ldap_root_bind}" -H {self.ldap_uri} "{filterstr}"'
         if attrlist is not None:
             trace_message = f'{trace_message} {" ".join(attrlist)}'
-        self.logger.info(f'> {trace_message}')
+        self.logger.debug(f'> {trace_message}')
         result = []
 
         # sssvlv has a limit on no. of concurrent paginated result sets per connection to manage memory.
@@ -662,11 +662,13 @@ class AbstractLDAPClient:
             ldap_result = Utils.get_value_as_list('result', search_result)
             total = Utils.get_value_as_int('total', search_result)
 
-        for ldap_group in ldap_result:
-            user_group = self.convert_ldap_group(ldap_group[1])
-            if Utils.is_empty(user_group):
-                continue
-            result.append(user_group)
+        if ldap_result:
+            self.logger.debug(f"search_groups Start: {start} - LDAP result count: {len(ldap_result)} - Results Total: {total}")
+            for ldap_group in ldap_result:
+                user_group = self.convert_ldap_group(ldap_group[1])
+                if Utils.is_empty(user_group):
+                    continue
+                result.append(user_group)
 
         return result, SocaPaginator(page_size=page_size, start=start, total=total)
 
@@ -800,11 +802,13 @@ class AbstractLDAPClient:
             ldap_result = Utils.get_value_as_list('result', search_result)
             total = Utils.get_value_as_int('total', search_result)
 
-        for ldap_user in ldap_result:
-            user = self.convert_ldap_user(ldap_user[1])
-            if Utils.is_empty(user):
-                continue
-            result.append(user)
+        if ldap_result:
+            self.logger.debug(f"search_users Start: {start} - LDAP result count: {len(ldap_result)} - Results Total: {total}")
+            for ldap_user in ldap_result:
+                user = self.convert_ldap_user(ldap_user[1])
+                if Utils.is_empty(user):
+                    continue
+                result.append(user)
 
         return result, SocaPaginator(page_size=page_size, start=start, total=total)
 

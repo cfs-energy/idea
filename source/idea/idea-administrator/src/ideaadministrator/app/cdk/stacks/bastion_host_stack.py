@@ -144,6 +144,8 @@ class BastionHostStack(IdeaBaseStack):
             subnet_ids = self.cluster.existing_vpc.get_private_subnet_ids()
 
         block_device_name = Utils.get_ec2_block_device_name(base_os)
+        block_device_type_string = self.context.config().get_string(f'bastion-host.volume_type', default='gp3')
+        block_device_type_volumetype = ec2.EbsDeviceVolumeType.GP3 if block_device_type_string == 'gp3' else ec2.EbsDeviceVolumeType.GP2
 
         user_data = BootstrapUserDataBuilder(
             aws_region=self.aws_region,
@@ -169,7 +171,7 @@ class BastionHostStack(IdeaBaseStack):
                     encrypted=True,
                     kms_key=ebs_kms_key,
                     volume_size=volume_size,
-                    volume_type=ec2.EbsDeviceVolumeType.GP3
+                    volume_type=block_device_type_volumetype
                     )
                 )
             )],
@@ -184,7 +186,7 @@ class BastionHostStack(IdeaBaseStack):
                     device_name=block_device_name,
                     ebs=ec2.CfnInstance.EbsProperty(
                         volume_size=volume_size,
-                        volume_type='gp3'
+                        volume_type=block_device_type_string
                     )
                 )
             ],

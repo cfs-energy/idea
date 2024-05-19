@@ -237,7 +237,7 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
         if (this.state.listingRequest.paginator.page_size != null) {
             return this.state.listingRequest.paginator.page_size
         }
-        return 20
+        return 50
     }
 
     getTotalPages(): number {

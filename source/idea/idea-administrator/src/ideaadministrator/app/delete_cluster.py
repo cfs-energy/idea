@@ -661,7 +661,7 @@ class DeleteCluster:
         self.context.info('Searching for CloudWatch log groups to be deleted ...')
         paginator = self.context.aws().logs().get_paginator('describe_log_groups')
 
-        for prefix in {f'/{self.cluster_name}', f'/aws/lambda/{self.cluster_name}'}:
+        for prefix in {f'{self.cluster_name}', f'/{self.cluster_name}', f'/aws/lambda/{self.cluster_name}'}:
             self.context.info(f'Looking for Cloudwatch logs in {prefix}')
             page_iterator = paginator.paginate(logGroupNamePrefix=prefix)
             for page in page_iterator:
@@ -768,25 +768,28 @@ class DeleteCluster:
                 BackupVaultName=backup_vault_name
             )
 
-            total_recovery_points = 0
             total_deleted = 0
+            all_recovery_points_list = []
 
             bu_paginator = self.context.aws().backup().get_paginator('list_recovery_points_by_backup_vault')
             bu_iterator = bu_paginator.paginate(BackupVaultName=backup_vault_name)
 
             for _page in bu_iterator:
                 recovery_points = Utils.get_value_as_list('RecoveryPoints', _page, [])
-                total_recovery_points += len(recovery_points)
+                if recovery_points:
+                    all_recovery_points_list += recovery_points
 
+            # Now that we have assembled the entire list - process them
             _rp_delete_start = Utils.current_time_ms()
-            self.context.info(f"Deleting {len(recovery_points)} recovery points from AWS Backup...")
-            for recovery_point in recovery_points:
+            self.context.info(f"Deleting {len(all_recovery_points_list)} recovery points from AWS Backup...")
+            for recovery_point in all_recovery_points_list:
                 recovery_point_arn = Utils.get_value_as_string('RecoveryPointArn', recovery_point)
 
                 # can be one of: 'COMPLETED'|'PARTIAL'|'DELETING'|'EXPIRED'
                 # if status is not COMPLETED/EXPIRED, do not attempt to delete, but wait for deletion or backup completion.
-                recovery_point_status = Utils.get_value_as_string('Status', recovery_point)
-                if recovery_point_status not in ('COMPLETED', 'EXPIRED'):
+                recovery_point_status = Utils.get_value_as_string('Status', recovery_point, default='UNKNOWN')
+                if recovery_point_status.upper() not in ('COMPLETED', 'EXPIRED'):
+                    self.context.warning(f"Unable to delete recovery point {recovery_point_arn} . Status: {recovery_point_status}. This may cause failures to delete the stack.")
                     continue
 
                 self.context.info(f'deleting recovery point: {recovery_point_arn} ...')
@@ -799,7 +802,7 @@ class DeleteCluster:
 
             _rp_delete_end = Utils.current_time_ms()
             _run_time_ms = int((_rp_delete_end - _rp_delete_start) / 1_000)
-            self.context.info(f'deleted {total_recovery_points} recovery points in {_run_time_ms} seconds.')
+            self.context.info(f'deleted {total_deleted} recovery points in {_run_time_ms} seconds.')
 
         except botocore.exceptions.ClientError as e:
             if e.response['Error']['Code'] != 'ResourceNotFoundException':

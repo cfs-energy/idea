@@ -867,7 +867,8 @@ class ClusterStack(IdeaBaseStack):
             http2_enabled=True,
             vpc=self.vpc,
             vpc_subnets=ec2.SubnetSelection(subnets=external_alb_subnets),
-            internet_facing=is_public
+            internet_facing=is_public,
+            drop_invalid_header_fields=True,
         )
         if self.external_certificate is not None:
             self.external_alb.node.add_dependency(self.external_certificate)
@@ -881,7 +882,8 @@ class ClusterStack(IdeaBaseStack):
             http2_enabled=True,
             vpc=self.vpc,
             vpc_subnets=ec2.SubnetSelection(subnets=self.private_subnets()),
-            internet_facing=False
+            internet_facing=False,
+            drop_invalid_header_fields=True
         )
 
         # Manage Access Logs for external/internal Application Load Balancer

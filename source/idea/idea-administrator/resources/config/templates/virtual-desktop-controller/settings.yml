@@ -28,6 +28,7 @@ controller:
     base_os: {{base_os}}
     instance_ami: {{instance_ami}}
     volume_size: {{volume_size}}
+    volume_type: {{volume_type}}
     enabled_detailed_monitoring: false
     min_capacity: 1
     max_capacity: 3
@@ -45,6 +46,13 @@ controller:
       pause_time_minutes: 15
     # instance metadata access method
     metadata_http_tokens: "required"  # supported values are "required" for IMDSv2 or "optional" for IMDSv1
+  #
+  # Enable/Disable budget validation for eVDI sessions
+  # True (default) - Do not allow new eVDI sessions on projects that have exceeded their budget.
+  # False - Allow eVDI sessions on projects with exceeded budgets.
+  #
+  enforce_project_budgets: true  # True or False
+  #
   request_handler_threads:
     min: 1
     max: 8
@@ -63,6 +71,7 @@ dcv_broker:
     base_os: {{base_os}}
     instance_ami: {{instance_ami}}
     volume_size: {{volume_size}}
+    volume_type: {{volume_type}}
     enabled_detailed_monitoring: false
     min_capacity: 1
     max_capacity: 3
@@ -110,6 +119,7 @@ dcv_connection_gateway:
     base_os: {{base_os}}
     instance_ami: {{instance_ami}}
     volume_size: {{volume_size}}
+    volume_type: {{volume_type}}
     enabled_detailed_monitoring: false
     min_capacity: 1
     max_capacity: 3
@@ -146,9 +156,10 @@ opensearch:
     alias: {{cluster_name}}_{{module_id}}_session_permission
 
 dcv_session:
-  idle_timeout: 1440 # in minutes
+  idle_timeout: 240 # in minutes. Default is 240-minutes / 4-hours
   idle_timeout_warning: 300 # in seconds
-  cpu_utilization_threshold: 30 # in percentage
+  idle_autostop_delay: 60 # Time (in minutes) a disconnected (but running) DCV session is eligible for autostop. Default is 60-minutes / 1-hour
+  cpu_utilization_threshold: 30 # in percentage. If a given session has more than this much CPU activity - autostop will not take place
   max_root_volume_memory: 1000 # in GB
   additional_security_groups: []
   allowed_sessions_per_user: 5

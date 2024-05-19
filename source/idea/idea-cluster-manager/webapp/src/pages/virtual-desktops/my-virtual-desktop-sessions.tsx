@@ -389,7 +389,7 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
                 let os_filters: VirtualDesktopBaseOS[] = ['windows']
 
                 if (os_filter === OS_FILTER_LINUX_ID) {
-                    os_filters = ['amazonlinux2', 'centos7', 'rhel7']
+                    os_filters = ['amazonlinux2', 'centos7', 'rhel7', 'rhel8', 'rocky8']
                 }
 
                 if (!(os_filters?.includes(session?.base_os))) {

@@ -63,7 +63,7 @@ class Vpc(SocaBaseConstruct, ec2.Vpc):
         self.context = context
         self.scope = scope
         super().__init__(context, name, scope,
-                         cidr=context.config().get_string('cluster.network.vpc_cidr_block'),
+                         ip_addresses=ec2.IpAddresses.cidr(context.config().get_string('cluster.network.vpc_cidr_block')),
                          nat_gateways=context.config().get_int('cluster.network.nat_gateways'),
                          enable_dns_support=True,
                          enable_dns_hostnames=True,
@@ -138,7 +138,7 @@ class Vpc(SocaBaseConstruct, ec2.Vpc):
         return ec2.SubnetConfiguration(
             name='private',
             cidr_mask=cidr_mask,
-            subnet_type=ec2.SubnetType.PRIVATE_WITH_NAT
+            subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
         )
 
     def build_isolated_subnet_config(self) -> Optional[ec2.SubnetConfiguration]:

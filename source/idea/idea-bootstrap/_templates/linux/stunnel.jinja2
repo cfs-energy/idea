@@ -4,11 +4,11 @@
 # https://docs.aws.amazon.com/efs/latest/ug/encryption-in-transit.html
 # Mounts will appear connecting to localhost / '127.0.0.1' as they are tunneled in TLS.
 #
-{%- if context.base_os in ('amazonlinux2', 'centos7', 'rhel7') %}
+{%- if context.base_os in ('amazonlinux2', 'centos7', 'rhel7', 'rhel8', 'rocky8') %}
   function install_stunnel () {
   {%- if context.base_os in ('amazonlinux2') %}
     STUNNEL_CMD='stunnel5'
-  {%- elif context.base_os in ('centos7','rhel7') %}
+  {%- elif context.base_os in ('centos7', 'rhel7', 'rhel8', 'rocky8') %}
     STUNNEL_CMD='stunnel'
   {%- endif %}
   which ${STUNNEL_CMD} > /dev/null 2>&1

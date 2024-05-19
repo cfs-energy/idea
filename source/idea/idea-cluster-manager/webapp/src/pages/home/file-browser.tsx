@@ -137,6 +137,16 @@ const CustomActionTailLogFile = defineFileAction({
     }
 })
 
+/*
+ * Override the Chonky default of showing hidden files.
+ * We want to default to not showing hidden files.
+ */
+const CustomActionToggleHiddenFiles = (
+    JSON.parse(JSON.stringify(ChonkyActions.ToggleHiddenFiles))
+)
+CustomActionToggleHiddenFiles.option.defaultValue = false
+CustomActionToggleHiddenFiles.button.toolbar = true
+
 const ACTIONS = [
     ChonkyActions.OpenFiles,
     ChonkyActions.UploadFiles,
@@ -146,7 +156,8 @@ const ACTIONS = [
     ChonkyActions.DownloadFiles,
     CustomActionFavorite,
     CustomActionRefresh,
-    CustomActionTailLogFile
+    CustomActionTailLogFile,
+    CustomActionToggleHiddenFiles
 ]
 
 const FAVORITE_ACTIONS = [
@@ -904,7 +915,6 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                                     defaultFileViewActionId={ChonkyActions.EnableListView.id}
                                                     disableDefaultFileActions={[
                                                         ChonkyActions.CopyFiles.id,
-                                                        ChonkyActions.ToggleHiddenFiles.id,
                                                         ChonkyActions.ToggleShowFoldersFirst.id
                                                     ]}
 
@@ -946,7 +956,6 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                                     defaultFileViewActionId={ChonkyActions.EnableListView.id}
                                                     disableDefaultFileActions={[
                                                         ChonkyActions.CopyFiles.id,
-                                                        ChonkyActions.ToggleHiddenFiles.id,
                                                         ChonkyActions.ToggleShowFoldersFirst.id
                                                     ]}
                                                 >

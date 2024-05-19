@@ -262,6 +262,32 @@ class VirtualDesktopAPI(BaseAPI):
             session.failure_reason = f'User {session.owner} does not belong in project_id {session.project.project_id}'
             return session, False
 
+        # Check the Project budget if we are enabled for budget enforcement
+        if self.context.config().get_bool('vdc.controller.enforce_project_budgets', default=True):
+            self._logger.info(f"eVDI Project budgets is enabled. Checking budgets.")
+
+            if not session.project.is_budgets_enabled():
+                self._logger.info(f"Project budget disabled or not configured for {session.project.name}")
+            else:
+                project_budget_name = Utils.get_as_string(session.project.budget.budget_name, default=None)
+
+                if project_budget_name:
+                    self._logger.debug(f"Found Budget name: {project_budget_name}")
+                    project_budget = self.context.aws_util().budgets_get_budget(budget_name=project_budget_name)
+
+                    if Utils.is_not_empty(project_budget):
+                        self._logger.debug(f"Budget details: {project_budget}")
+
+                        if project_budget.actual_spend > project_budget.budget_limit:
+                            self._logger.error(f"Budget exceeded. Denying session request")
+                            session.failure_reason = f"Project {project_budget_name} budget has been exceeded. Unable to start session. Contact your Administrator."
+                            return session, False
+
+                        else:
+                            self._logger.debug(f"Budget usage is acceptable. Proceeding")
+        else:
+            self._logger.info(f"VDI Project budgets are disabled (vdc.controller.enforce_project_budgets). Not checking budgets.")
+
         # Validate Software Stack Object
         if Utils.is_empty(session.software_stack):
             session.failure_reason = 'missing session.software_stack'
@@ -321,7 +347,7 @@ class VirtualDesktopAPI(BaseAPI):
                 session.failure_reason = f'OS {session.software_stack.base_os} does not support Instance Hibernation for instances with RAM greater than 16GiB.'
                 return session, False
         else:
-            # amazonlinux2 supports hibernation
+            # amazonlinux2, rhel8, rocky8 support hibernation
             pass
 
         # Technical Validations for Session Type

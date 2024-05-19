@@ -5,7 +5,7 @@ if [[ ! -f "/etc/yum.repos.d/epel.repo" ]]; then
   yum update --security -y
 fi
 {%- endif %}
-{%- if context.base_os == 'centos7' %}
+{%- if context.base_os in ('centos7', 'rocky8') %}
 if [[ ! -f "/etc/yum.repos.d/epel.repo" ]]; then
   yum -y install epel-release
 fi
@@ -13,6 +13,11 @@ fi
 {%- if context.base_os == 'rhel7' %}
 if [[ ! -f "/etc/yum.repos.d/epel.repo" ]]; then
   yum -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm
+fi
+{%- endif %}
+{%- if context.base_os == 'rhel8' %}
+if [[ ! -f "/etc/yum.repos.d/epel.repo" ]]; then
+  yum -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm
 fi
 {%- endif %}
 # End: Install EPEL Repo

@@ -1,12 +1,24 @@
 # BEGIN: DCV Session Manager Agent
 
 DCV_GPG_KEY_DCV_AGENT="{{ context.config.get_string('global-settings.package_config.dcv.gpg_key', required=True) }}"
+{%- if context.base_os in ('amazonlinux2', 'centos7', 'rhel7') %}
 DCV_SESSION_MANAGER_AGENT_X86_64_URL="{{ context.config.get_string('global-settings.package_config.dcv.agent.x86_64.linux.al2_rhel_centos7.url', required=True) }}"
 DCV_SESSION_MANAGER_AGENT_X86_64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.agent.x86_64.linux.al2_rhel_centos7.version', required=True) }}"
 DCV_SESSION_MANAGER_AGENT_X86_64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.agent.x86_64.linux.al2_rhel_centos7.sha256sum', required=True) }}"
 DCV_SESSION_MANAGER_AGENT_AARCH64_URL="{{ context.config.get_string('global-settings.package_config.dcv.agent.aarch64.linux.al2_rhel_centos7.url', required=True) }}"
 DCV_SESSION_MANAGER_AGENT_AARCH64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.agent.aarch64.linux.al2_rhel_centos7.version', required=True) }}"
 DCV_SESSION_MANAGER_AGENT_AARCH64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.agent.aarch64.linux.al2_rhel_centos7.sha256sum', required=True) }}"
+
+{%- elif context.base_os in ('rhel8', 'rocky8') %}
+DCV_SESSION_MANAGER_AGENT_X86_64_URL="{{ context.config.get_string('global-settings.package_config.dcv.agent.x86_64.linux.rhel_centos_rocky8.url', required=True) }}"
+DCV_SESSION_MANAGER_AGENT_X86_64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.agent.x86_64.linux.rhel_centos_rocky8.version', required=True) }}"
+DCV_SESSION_MANAGER_AGENT_X86_64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.agent.x86_64.linux.rhel_centos_rocky8.sha256sum', required=True) }}"
+DCV_SESSION_MANAGER_AGENT_AARCH64_URL="{{ context.config.get_string('global-settings.package_config.dcv.agent.aarch64.linux.rhel_centos_rocky8.url', required=True) }}"
+DCV_SESSION_MANAGER_AGENT_AARCH64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.agent.aarch64.linux.rhel_centos_rocky8.version', required=True) }}"
+DCV_SESSION_MANAGER_AGENT_AARCH64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.agent.aarch64.linux.rhel_centos_rocky8.sha256sum', required=True) }}"
+
+{%- endif %}
+
 
 rpm --import ${DCV_GPG_KEY_DCV_AGENT}
 machine=$(uname -m) #x86_64 or aarch64

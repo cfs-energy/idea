@@ -533,7 +533,7 @@ global-settings:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/2022.1/Clients/nice-dcv-client-Release-portable-2022.1-8261.zip
         macos:
           m1:
-            label: M1 Chip
+            label: Apple Silicon (M1, M2)
             url: https://d1uj6qtbmh3dt5.cloudfront.net/2022.1/Clients/nice-dcv-viewer-2022.1.4279.arm64.dmg
           intel:
             label: Intel Chip

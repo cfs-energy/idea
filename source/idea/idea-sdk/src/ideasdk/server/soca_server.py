@@ -29,13 +29,13 @@ from concurrent.futures import ThreadPoolExecutor, Future
 from threading import Thread, Event
 import pathlib
 import os
+import ssl
 import sanic
 from sanic.server import AsyncioServer, serve as create_server, HttpProtocol
 from sanic.server.protocols.websocket_protocol import WebSocketProtocol
 import sanic.config
 import sanic.signals
 import sanic.router
-import sanic.tls
 from sanic.models.handler_types import RouteHandler
 import socket
 from prometheus_client import generate_latest
@@ -625,15 +625,23 @@ class SocaServer(SocaService):
             )
         return self._unix_app
 
-    def add_route(self, handler: RouteHandler,
+    def add_route(self,
+                  handler: RouteHandler,
                   uri: str,
+                  name: Optional[str] = None,
                   methods: Iterable[str] = frozenset({"GET"})):
+        _method_names = ', '.join(list(methods))
         if self.options.enable_http:
             for path_prefix in self.options.api_path_prefixes:
-                self.http_app.add_route(handler, f'{path_prefix}{uri}', methods)
+                _auto_name = f"http-{path_prefix}-{uri}-{_method_names}"
+                _name = name if Utils.is_not_empty(name) else _auto_name
+                self.http_app.add_route(handler, f'{path_prefix}{uri}', methods, name=_name)
         else:
             for path_prefix in self.options.api_path_prefixes:
-                self.unix_app.add_route(handler, f'{path_prefix}{uri}', methods)
+                _auto_name = f"unix-{path_prefix}-{uri}-{_method_names}"
+                _name = name if Utils.is_not_empty(name) else _auto_name
+                self.unix_app.add_route(handler, f'{path_prefix}{uri}', methods, name=_name)
+
 
     def initialize(self):
 
@@ -671,26 +679,26 @@ class SocaServer(SocaService):
             self.http_app.register_middleware(add_cors_headers, "response")
 
             # health check routes
-            self.http_app.add_route(self.health_check_route, '/healthcheck', methods=['GET'])
-            self.add_route(self.health_check_route, '/healthcheck', methods=['GET'])
+            self.http_app.add_route(self.health_check_route, '/healthcheck', methods=['GET'], name='httpapp_healthcheck')
+            self.add_route(handler=self.health_check_route, uri='/healthcheck', methods=['GET'])
 
             # file transfer routes
             if self.options.enable_http_file_upload:
-                self.add_route(self.file_upload_route, '/api/v1/upload', methods=['PUT'])
-                self.add_route(self.file_upload_route, '/api/v1/<namespace:str>', methods=['PUT'])
-                self.add_route(self.file_download_route, '/api/v1/download', methods=['GET'])
-                self.add_route(self.file_download_route, '/api/v1/<namespace:str>', methods=['GET'])
+                self.add_route(handler=self.file_upload_route, uri='/api/v1/upload', methods=['PUT'])
+                self.add_route(handler=self.file_upload_route, uri='/api/v1/<namespace:str>', methods=['PUT'])
+                self.add_route(handler=self.file_download_route, uri='/api/v1/download', methods=['GET'])
+                self.add_route(handler=self.file_download_route, uri='/api/v1/<namespace:str>', methods=['GET'])
 
             # metrics routes
             if self.options.enable_metrics:
-                self.add_route(self.metrics_route, '/metrics', methods=['GET'])
+                self.add_route(handler=self.metrics_route, uri='/metrics', methods=['GET'])
 
             # open api spec routes
             if self.options.enable_openapi_spec:
-                self.add_route(self.openapi_spec_route, '/api/v1/openapi.yml', methods=['GET'])
+                self.add_route(handler=self.openapi_spec_route, uri='/api/v1/openapi.yml', methods=['GET'])
 
-        self.add_route(self.api_route, '/api/v1', methods=['POST'])
-        self.add_route(self.api_route, '/api/v1/<namespace:str>', methods=['POST'])
+        self.add_route(handler=self.api_route, uri='/api/v1', methods=['POST'])
+        self.add_route(handler=self.api_route, uri='/api/v1/<namespace:str>', methods=['POST'])
 
     async def invoke_api_task(self, http_request):
         result = self._executor.submit(
@@ -853,7 +861,8 @@ class SocaServer(SocaService):
 
             ssl_context = None
             if self.options.enable_tls:
-                ssl_context = sanic.tls.create_context(
+                ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+                ssl_context.load_cert_chain(
                     certfile=self.options.tls_certificate_file,
                     keyfile=self.options.tls_key_file
                 )

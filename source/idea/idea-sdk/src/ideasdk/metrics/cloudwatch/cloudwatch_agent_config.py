@@ -49,7 +49,7 @@ class CloudWatchAgentMetricsOptions(SocaBaseModel):
     @staticmethod
     def default_options(namespace: str, include: List[str] = None, exclude: List[str] = None) -> 'CloudWatchAgentMetricsOptions':
         metrics_collected = []
-        sections = ['cpu', 'disk', 'diskio', 'swap', 'mem', 'net', 'netstat', 'processes']
+        sections = ['cpu', 'disk', 'diskio', 'swap', 'mem', 'net', 'netstat', 'processes', 'statsd']
         for section_name in sections:
             if Utils.is_not_empty(exclude):
                 if section_name in exclude:

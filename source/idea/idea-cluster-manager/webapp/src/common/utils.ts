@@ -579,7 +579,11 @@ class Utils {
             case 'centos7':
                 return 'CentOS 7'
             case 'rhel7':
-                return 'RedHat Enterprise Linux 7'
+                return 'Red Hat Enterprise Linux 7'
+            case 'rhel8':
+                return 'Red Hat Enterprise Linux 8'
+            case 'rocky8':
+                return 'Rocky Linux 8'
             case 'windows':
                 return 'Windows'
         }

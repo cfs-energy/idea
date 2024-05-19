@@ -9,7 +9,7 @@ PyYAML
 orjson
 Click
 botocore
-boto3==1.26.61
+boto3==1.26.138
 requests
 requests-aws4auth
 requests-unixsocket
@@ -25,10 +25,12 @@ blinker
 troposphere
 opensearch-py
 Jinja2
-cryptography
+certifi~=2022.12.07
+cryptography~=38.0.4
 PyJWT
 random-password-generator
 shortuuid
+mako>=1.2.2
 dataset
 prometheus-client
 python-dynamodb-lock

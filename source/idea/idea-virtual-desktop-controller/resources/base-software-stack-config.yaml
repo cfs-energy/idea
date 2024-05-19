@@ -2,530 +2,1019 @@ amazonlinux2:
   arm64:
     default-name: 'Amazon Linux 2 - ARM64'
     default-description: 'Amazon Linux 2 - ARM64'
-    default-min-storage-unit: gb
-    default-min-storage-value: 10
     default-min-ram-unit: gb
     default-min-ram-value: 4
+    default-min-storage-unit: gb
+    default-min-storage-value: 10
     af-south-1:
-    - ami-id: ami-00a45e16508ceefa7
+    - ami-id: ami-03395df693c1fa587
       ss-id-suffix: base
-      name: 'Software Stack Amazon Linux 2 - ARM64' # override default name
-      description: 'Software Stack Amazon Linux 2 - ARM64' # override default description
-      min-storage-unit: gb # override default min-storage-unit
-      min-storage-value: 10 # override default min-storage-value
     ap-east-1:
-    - ami-id: ami-01174e0118c296c37
+    - ami-id: ami-0dd14624e3218db82
       ss-id-suffix: base
     ap-northeast-1:
-    - ami-id: ami-02087d6f3ccd8073f
+    - ami-id: ami-083a4859331c36fd6
       ss-id-suffix: base
     ap-northeast-2:
-    - ami-id: ami-03159e41d5c4d0a31
+    - ami-id: ami-01b2d7e6a01b97691
+      ss-id-suffix: base
+    ap-northeast-3:
+    - ami-id: ami-096577b4c5a626697
       ss-id-suffix: base
     ap-south-1:
-    - ami-id: ami-0fc81ccb6d411c58b
+    - ami-id: ami-07b956f3666e12908
+      ss-id-suffix: base
+    ap-south-2:
+    - ami-id: ami-0fa37c6b93889393f
       ss-id-suffix: base
     ap-southeast-1:
-    - ami-id: ami-05465ed4133f4f04c
+    - ami-id: ami-000aa104bc3dcb590
       ss-id-suffix: base
     ap-southeast-2:
-    - ami-id: ami-0f18530afdf50e2cf
+    - ami-id: ami-0fc9bfd35e8dbf215
       ss-id-suffix: base
     ap-southeast-3:
-    - ami-id: ami-047b91a0561816728
+    - ami-id: ami-03be7b8ad9c1c31b9
+      ss-id-suffix: base
+    ap-southeast-4:
+    - ami-id: ami-0e2cc681db104b787
       ss-id-suffix: base
     ca-central-1:
-    - ami-id: ami-0463527f07939f08c
+    - ami-id: ami-0cfcb9c1b196199b6
       ss-id-suffix: base
     eu-central-1:
-    - ami-id: ami-0965af9995b3a878f
+    - ami-id: ami-099f5db7bb67de61b
+      ss-id-suffix: base
+    eu-central-2:
+    - ami-id: ami-0504d9eae51773ace
       ss-id-suffix: base
     eu-north-1:
-    - ami-id: ami-0cb0c6fa5a3c56cc0
+    - ami-id: ami-0e5896b60f1d998ec
       ss-id-suffix: base
     eu-south-1:
-    - ami-id: ami-06beae21e62330dd0
+    - ami-id: ami-07e69b9aa1191df28
+      ss-id-suffix: base
+    eu-south-2:
+    - ami-id: ami-03c4f0ce9204fb76c
       ss-id-suffix: base
     eu-west-1:
-    - ami-id: ami-05223a36a9748498d
+    - ami-id: ami-0e32a207c50a161a8
       ss-id-suffix: base
     eu-west-2:
-    - ami-id: ami-0d97fa13ebda706b8
+    - ami-id: ami-0acad3eae567fa0d2
       ss-id-suffix: base
     eu-west-3:
-    - ami-id: ami-0e9ca48e27e192f4f
+    - ami-id: ami-0c36d92c295337f81
+      ss-id-suffix: base
+    me-central-1:
+    - ami-id: ami-05325af837bf56fec
       ss-id-suffix: base
     me-south-1:
-    - ami-id: ami-01cbb5e0afe310efe
+    - ami-id: ami-090d88589374c5dd0
       ss-id-suffix: base
     sa-east-1:
-    - ami-id: ami-03616356ac6a80d87
+    - ami-id: ami-097edc9e23fcdbaa5
       ss-id-suffix: base
     us-east-1:
-    - ami-id: ami-0ff3578f8df132330
+    - ami-id: ami-0ef798f5b171a6570
       ss-id-suffix: base
     us-east-2:
-    - ami-id: ami-04ed2b27d86c17f09
-      ss-id-suffix: base
-    us-gov-west-1:
-    - ami-id: ami-029ae49b68d81e045
-      default: Y
+    - ami-id: ami-0f3319722b6bf1e77
       ss-id-suffix: base
     us-west-1:
-    - ami-id: ami-0f36e12deb25112d9
+    - ami-id: ami-04b6208f8e1fa2691
       ss-id-suffix: base
     us-west-2:
-    - ami-id: ami-0bbda02f23a4a8964
+    - ami-id: ami-05099e31945be1dd7
       ss-id-suffix: base
   x86-64:
     default-name: 'Amazon Linux 2 - x86_64'
     default-description: 'Amazon Linux 2 - x86_64'
-    default-min-storage-unit: gb
-    default-min-storage-value: 10
     default-min-ram-unit: gb
     default-min-ram-value: 4
+    default-min-storage-unit: gb
+    default-min-storage-value: 10
     af-south-1:
-    - ami-id: ami-04f95a4a3609e4cf3
+    - ami-id: ami-093ca241e4c72c205
       ss-id-suffix: base
     ap-east-1:
-    - ami-id: ami-051ec00661c466b27
+    - ami-id: ami-0e992f1e63814db10
       ss-id-suffix: base
     ap-northeast-1:
-    - ami-id: ami-0b069de314c9ab4c4
+    - ami-id: ami-0828596b82405edd7
       ss-id-suffix: base
     ap-northeast-2:
-    - ami-id: ami-066d41d96fc160063
+    - ami-id: ami-087af0192368bc87c
+      ss-id-suffix: base
+    ap-northeast-3:
+    - ami-id: ami-0cffa2172948e071e
       ss-id-suffix: base
     ap-south-1:
-    - ami-id: ami-068cda7597e78094b
+    - ami-id: ami-0400aca7799d8cf19
+      ss-id-suffix: base
+    ap-south-2:
+    - ami-id: ami-05bcfd9e35024e1f2
       ss-id-suffix: base
     ap-southeast-1:
-    - ami-id: ami-013586750d303f89d
+    - ami-id: ami-0ba98499caf94125a
       ss-id-suffix: base
     ap-southeast-2:
-    - ami-id: ami-0336d88ead51a9210
+    - ami-id: ami-0849cc8fe4ceaf988
       ss-id-suffix: base
     ap-southeast-3:
-    - ami-id: ami-077238a133cf52716
+    - ami-id: ami-0cf40308729b83366
+      ss-id-suffix: base
+    ap-southeast-4:
+    - ami-id: ami-090ce38dc696f4622
       ss-id-suffix: base
     ca-central-1:
-    - ami-id: ami-0300c413e2de1804e
+    - ami-id: ami-0eb3718c42cb70e52
       ss-id-suffix: base
     eu-central-1:
-    - ami-id: ami-041e64b0129bffca9
+    - ami-id: ami-0f7585ae7a0d9a25a
+      ss-id-suffix: base
+    eu-central-2:
+    - ami-id: ami-0b4b03681a8222e3b
       ss-id-suffix: base
     eu-north-1:
-    - ami-id: ami-0b87edaa84d7c45ce
+    - ami-id: ami-0f58e72599cb99a79
       ss-id-suffix: base
     eu-south-1:
-    - ami-id: ami-07a10ce489fece5f8
+    - ami-id: ami-07b2af763a8b958f3
+      ss-id-suffix: base
+    eu-south-2:
+    - ami-id: ami-060439bdafc77b9d3
       ss-id-suffix: base
     eu-west-1:
-    - ami-id: ami-038e9cdc714b15936
+    - ami-id: ami-047aad752a426ed48
       ss-id-suffix: base
     eu-west-2:
-    - ami-id: ami-0c496e8bea496ed67
+    - ami-id: ami-0dfe6158087b5c0ac
       ss-id-suffix: base
     eu-west-3:
-    - ami-id: ami-002e2b155689f6e23
+    - ami-id: ami-064c70d04ad799d5e
+      ss-id-suffix: base
+    me-central-1:
+    - ami-id: ami-0384959b181e3642a
       ss-id-suffix: base
     me-south-1:
-    - ami-id: ami-090a20e93e6698582
+    - ami-id: ami-0a31e56929248acca
       ss-id-suffix: base
     sa-east-1:
-    - ami-id: ami-058f4e20c17271f68
+    - ami-id: ami-0df67b3c17f090c24
       ss-id-suffix: base
     us-east-1:
-    - ami-id: ami-02538f8925e3aa27a
+    - ami-id: ami-0d52ddcdf3a885741
       ss-id-suffix: base
     us-east-2:
-    - ami-id: ami-0ee5c62243ab25259
-      ss-id-suffix: base
-    us-gov-west-1:
-    - ami-id: ami-02332daf4b2e35b71
-      default: Y
+    - ami-id: ami-04148302a14f7d12b
       ss-id-suffix: base
     us-west-1:
-    - ami-id: ami-0019ad94c6124959d
+    - ami-id: ami-0ee3e1e65adeef858
       ss-id-suffix: base
     us-west-2:
-    - ami-id: ami-07d59d159373b8030
+    - ami-id: ami-0ec021424fb596d6c
       ss-id-suffix: base
 centos7:
   arm64:
-    default-name: 'CentOS7 - ARM64'
-    default-description: 'CentOS7 - ARM64'
-    default-min-storage-unit: gb
-    default-min-storage-value: 10
+    default-name: 'CentOS 7 - ARM64'
+    default-description: 'CentOS 7 - ARM64'
     default-min-ram-unit: gb
     default-min-ram-value: 4
+    default-min-storage-unit: gb
+    default-min-storage-value: 10
     af-south-1:
-    - ami-id: ami-0002d7a67b2047e67
+    - ami-id: ami-0e88079e08c51419c
       ss-id-suffix: base
     ap-east-1:
-    - ami-id: ami-0f18e61452a29247d
+    - ami-id: ami-04b61d6a053ad2539
       ss-id-suffix: base
     ap-northeast-1:
-    - ami-id: ami-0a9d0fdaf6eba3b96
+    - ami-id: ami-0052528bdd809d899
       ss-id-suffix: base
     ap-northeast-2:
-    - ami-id: ami-09e34a2c74d315279
+    - ami-id: ami-052d9a481ce0de50a
       ss-id-suffix: base
     ap-south-1:
-    - ami-id: ami-0b5c298137e260867
+    - ami-id: ami-0a69d3ff816398377
       ss-id-suffix: base
     ap-southeast-1:
-    - ami-id: ami-0a8ab25085477038e
+    - ami-id: ami-091062b883853b295
       ss-id-suffix: base
     ap-southeast-2:
-    - ami-id: ami-014dafc35e50da2f5
+    - ami-id: ami-0cfdc63b39f103cab
       ss-id-suffix: base
     ca-central-1:
-    - ami-id: ami-06cadcf5911e61f49
+    - ami-id: ami-052a1a6ef4db58dd8
       ss-id-suffix: base
     eu-central-1:
-    - ami-id: ami-0a305a7534a53874c
+    - ami-id: ami-0162ae2b9d245b9a5
       ss-id-suffix: base
     eu-north-1:
-    - ami-id: ami-0703d28356ece347c
+    - ami-id: ami-00658799cfc32659e
       ss-id-suffix: base
     eu-south-1:
-    - ami-id: ami-0869c99d1ba8518e8
+    - ami-id: ami-0c28ae8b6a03e9904
       ss-id-suffix: base
     eu-west-1:
-    - ami-id: ami-0e2a2f48fffbaa4fa
+    - ami-id: ami-0c47424ef2c94b774
       ss-id-suffix: base
     eu-west-2:
-    - ami-id: ami-098cdf26bc3c008df
+    - ami-id: ami-02868404201349f83
       ss-id-suffix: base
     eu-west-3:
-    - ami-id: ami-0286c81df9e81730d
+    - ami-id: ami-07dd7b23f721e7bbc
       ss-id-suffix: base
     me-south-1:
-    - ami-id: ami-0aec6b83245d4ccaf
+    - ami-id: ami-02d946c5a59126c32
       ss-id-suffix: base
     sa-east-1:
-    - ami-id: ami-07afdb5b9e57dab5e
+    - ami-id: ami-05b835a95ace17eee
       ss-id-suffix: base
     us-east-1:
-    - ami-id: ami-0b802bd2b502aa382
+    - ami-id: ami-0144a5a84f5699847
       ss-id-suffix: base
     us-east-2:
-    - ami-id: ami-07f692d95b2b9c8c5
+    - ami-id: ami-0fb25f99cfe1c665e
       ss-id-suffix: base
     us-west-1:
-    - ami-id: ami-09748e99ee14e3823
+    - ami-id: ami-0de261f921415431f
       ss-id-suffix: base
     us-west-2:
-    - ami-id: ami-0db02f65655518c52
+    - ami-id: ami-0fbf55055efe5787e
       ss-id-suffix: base
   x86-64:
-    default-name: 'CentOS7 - x86_64'
-    default-description: 'CentOS7 - x86_64'
-    default-min-storage-unit: gb
-    default-min-storage-value: 10
+    default-name: 'CentOS 7 - x86_64'
+    default-description: 'CentOS 7 - x86_64'
     default-min-ram-unit: gb
     default-min-ram-value: 4
+    default-min-storage-unit: gb
+    default-min-storage-value: 10
     af-south-1:
-    - ami-id: ami-0b761332115c38669
+    - ami-id: ami-0cf2f235226a4d1f2
       ss-id-suffix: base
     ap-east-1:
-    - ami-id: ami-09611bd6fa5dd0e3d
+    - ami-id: ami-039ac400e94785a1d
       ss-id-suffix: base
     ap-northeast-1:
-    - ami-id: ami-0ddea5e0f69c193a4
+    - ami-id: ami-06e6d2122baa563c4
       ss-id-suffix: base
     ap-northeast-2:
-    - ami-id: ami-0e4214f08b51e23cc
+    - ami-id: ami-061f5322ab2662c82
       ss-id-suffix: base
     ap-south-1:
-    - ami-id: ami-0ffc7af9c06de0077
+    - ami-id: ami-09f129ee53d3523c0
+      ss-id-suffix: base
+    ap-south-2:
+    - ami-id: ami-0d121f146c20fafa0
       ss-id-suffix: base
     ap-southeast-1:
-    - ami-id: ami-0adfdaea54d40922b
+    - ami-id: ami-03bfba2e75432064e
       ss-id-suffix: base
     ap-southeast-2:
-    - ami-id: ami-03d56f451ca110e99
+    - ami-id: ami-0264ead5294ad1773
+      ss-id-suffix: base
+    ap-southeast-3:
+    - ami-id: ami-0c654ac429998fb1c
+      ss-id-suffix: base
+    ap-southeast-4:
+    - ami-id: ami-0d3bff5ed9ff3e5a4
       ss-id-suffix: base
     ca-central-1:
-    - ami-id: ami-0a7c5b189b6460115
+    - ami-id: ami-01ebef6e00efb2c20
       ss-id-suffix: base
     eu-central-1:
-    - ami-id: ami-08b6d44b4f6f7b279
+    - ami-id: ami-0afcbcee3dfbce929
+      ss-id-suffix: base
+    eu-central-2:
+    - ami-id: ami-0e7ae4065721cafb3
       ss-id-suffix: base
     eu-north-1:
-    - ami-id: ami-0358414bac2039369
+    - ami-id: ami-0e5125a0f19c52a2b
       ss-id-suffix: base
     eu-south-1:
-    - ami-id: ami-0fe3899b62205176a
+    - ami-id: ami-0a3a6d4d737db3bc1
+      ss-id-suffix: base
+    eu-south-2:
+    - ami-id: ami-0f4cbddb1f35cb43c
       ss-id-suffix: base
     eu-west-1:
-    - ami-id: ami-04f5641b0d178a27a
+    - ami-id: ami-00d464afa64e1fc69
       ss-id-suffix: base
     eu-west-2:
-    - ami-id: ami-0b22fcaf3564fb0c9
+    - ami-id: ami-0de2f45684e59282c
       ss-id-suffix: base
     eu-west-3:
-    - ami-id: ami-072ec828dae86abe5
+    - ami-id: ami-051806c39fa542e22
+      ss-id-suffix: base
+    me-central-1:
+    - ami-id: ami-052fe108e664d633f
       ss-id-suffix: base
     me-south-1:
-    - ami-id: ami-0ac17dcdd6f6f4eb6
+    - ami-id: ami-09ce1cd69cab28540
       ss-id-suffix: base
     sa-east-1:
-    - ami-id: ami-02334c45dd95ca1fc
+    - ami-id: ami-015f6bf0657816a2d
       ss-id-suffix: base
     us-east-1:
-    - ami-id: ami-00e87074e52e6c9f9
+    - ami-id: ami-0aedf6b1cb669b4c7
       ss-id-suffix: base
     us-east-2:
-    - ami-id: ami-00f8e2c955f7ffa9b
+    - ami-id: ami-033adaf0b583374d4
       ss-id-suffix: base
     us-west-1:
-    - ami-id: ami-08d2d8b00f270d03b
+    - ami-id: ami-0bcd12d19d926f8e9
       ss-id-suffix: base
     us-west-2:
-    - ami-id: ami-0686851c4e7b1a8e1
+    - ami-id: ami-04f798ca92cc13f74
       ss-id-suffix: base
 rhel7:
   x86-64:
-    default-name: 'RHEL7 - x86_64'
-    default-description: 'RHEL7 - x86_64'
-    default-min-storage-unit: gb
-    default-min-storage-value: 10
+    default-name: 'RHEL 7 - x86_64'
+    default-description: 'RHEL 7 - x86_64'
     default-min-ram-unit: gb
     default-min-ram-value: 4
+    default-min-storage-unit: gb
+    default-min-storage-value: 10
     af-south-1:
-    - ami-id: ami-064aeb2452a82205f
+    - ami-id: ami-0fe7507703898a688
       ss-id-suffix: base
     ap-east-1:
-    - ami-id: ami-0e377c3509b0a1490
+    - ami-id: ami-0d113ed541942504a
       ss-id-suffix: base
     ap-northeast-1:
-    - ami-id: ami-0073b6113281aa32e
+    - ami-id: ami-05016d58118cb4881
       ss-id-suffix: base
     ap-northeast-2:
-    - ami-id: ami-04adf7ab262061270
+    - ami-id: ami-004ed0ba77095ba25
+      ss-id-suffix: base
+    ap-northeast-3:
+    - ami-id: ami-0558aa3a1b91c9d74
       ss-id-suffix: base
     ap-south-1:
-    - ami-id: ami-01dd6bbea8d062bf3
+    - ami-id: ami-0ea2ce8b668f422ce
+      ss-id-suffix: base
+    ap-south-2:
+    - ami-id: ami-06ed2b77cde70d481
       ss-id-suffix: base
     ap-southeast-1:
-    - ami-id: ami-0ee6bfca4452064bc
+    - ami-id: ami-0883712f4e7f557f7
       ss-id-suffix: base
     ap-southeast-2:
-    - ami-id: ami-0bf7d72cc0b127581
+    - ami-id: ami-01edb389be6d2ae7f
+      ss-id-suffix: base
+    ap-southeast-3:
+    - ami-id: ami-0e1bd60bacf164ead
+      ss-id-suffix: base
+    ap-southeast-4:
+    - ami-id: ami-03808fa671587a04f
       ss-id-suffix: base
     ca-central-1:
-    - ami-id: ami-0f1c453d5ca1059f0
+    - ami-id: ami-08ba906b09cdf48ff
       ss-id-suffix: base
     eu-central-1:
-    - ami-id: ami-0a62e33b5dcf31c85
+    - ami-id: ami-058a887d3af3bc23e
+      ss-id-suffix: base
+    eu-central-2:
+    - ami-id: ami-092d941941bc1cb73
       ss-id-suffix: base
     eu-north-1:
-    - ami-id: ami-0a32f8cdd314cf493
+    - ami-id: ami-0930c6515d30d4867
       ss-id-suffix: base
     eu-south-1:
-    - ami-id: ami-0f18d0a883583eaa9
+    - ami-id: ami-03e09da05c106a5bc
+      ss-id-suffix: base
+    eu-south-2:
+    - ami-id: ami-04341b15cf57b1df9
       ss-id-suffix: base
     eu-west-1:
-    - ami-id: ami-06211bde2f9c725e5
+    - ami-id: ami-018e4344af2a62450
       ss-id-suffix: base
     eu-west-2:
-    - ami-id: ami-0a8aebd46fb700315
+    - ami-id: ami-0c2f9865057c3dfe1
       ss-id-suffix: base
     eu-west-3:
-    - ami-id: ami-07185297899bb7755
+    - ami-id: ami-053b42a6733c52f17
+      ss-id-suffix: base
+    me-central-1:
+    - ami-id: ami-068543e4b7405fbb2
       ss-id-suffix: base
     me-south-1:
-    - ami-id: ami-02f76563b3f70c99d
+    - ami-id: ami-0b6a0e920d35d15a7
       ss-id-suffix: base
     sa-east-1:
-    - ami-id: ami-08acb85e5164523d7
+    - ami-id: ami-0562b80a8716922c9
       ss-id-suffix: base
     us-east-1:
-    - ami-id: ami-004fac3d4533a2541
+    - ami-id: ami-045393c081cabeb1f
       ss-id-suffix: base
     us-east-2:
-    - ami-id: ami-0bb2449c2217cb9b0
+    - ami-id: ami-00342897eb8ba6355
       ss-id-suffix: base
     us-west-1:
-    - ami-id: ami-085733fd69e77a079
+    - ami-id: ami-039ca986f21216c27
       ss-id-suffix: base
     us-west-2:
-    - ami-id: ami-027da4fca766221c9
+    - ami-id: ami-01788be7cc93be6ee
+      ss-id-suffix: base
+rhel8:
+  arm64:
+    default-name: 'RHEL 8 - ARM64'
+    default-description: 'RHEL 8 - ARM64'
+    default-min-ram-unit: gb
+    default-min-ram-value: 4
+    default-min-storage-unit: gb
+    default-min-storage-value: 10
+    af-south-1:
+    - ami-id: ami-0eaa0dbee28581453
+      ss-id-suffix: base
+    ap-east-1:
+    - ami-id: ami-0c3d884fcbdfbe118
+      ss-id-suffix: base
+    ap-northeast-1:
+    - ami-id: ami-00ab8352c58715d37
+      ss-id-suffix: base
+    ap-northeast-2:
+    - ami-id: ami-0f65b3681a3b1abff
+      ss-id-suffix: base
+    ap-northeast-3:
+    - ami-id: ami-03eb8ae055004348c
+      ss-id-suffix: base
+    ap-south-1:
+    - ami-id: ami-0b604355e54d0676e
+      ss-id-suffix: base
+    ap-south-2:
+    - ami-id: ami-0b1f864e88c9bf741
+      ss-id-suffix: base
+    ap-southeast-1:
+    - ami-id: ami-05cf2f0d37af6aca2
+      ss-id-suffix: base
+    ap-southeast-2:
+    - ami-id: ami-0aed3130b2dcd5cb6
+      ss-id-suffix: base
+    ap-southeast-3:
+    - ami-id: ami-02b4e3cd7434e8e48
+      ss-id-suffix: base
+    ap-southeast-4:
+    - ami-id: ami-03b450fb83ca5b6fd
+      ss-id-suffix: base
+    ca-central-1:
+    - ami-id: ami-04d0c8cde5842a9fe
+      ss-id-suffix: base
+    eu-central-1:
+    - ami-id: ami-0afa9f8e9c78b245f
+      ss-id-suffix: base
+    eu-central-2:
+    - ami-id: ami-0b9df4feffbddcd65
+      ss-id-suffix: base
+    eu-north-1:
+    - ami-id: ami-0798975eca4958222
+      ss-id-suffix: base
+    eu-south-1:
+    - ami-id: ami-05174aa6e48b5fa39
+      ss-id-suffix: base
+    eu-south-2:
+    - ami-id: ami-06b7549bf9ca392d5
+      ss-id-suffix: base
+    eu-west-1:
+    - ami-id: ami-0acdb1d085a38a313
+      ss-id-suffix: base
+    eu-west-2:
+    - ami-id: ami-0aa679f163ff20cb9
+      ss-id-suffix: base
+    eu-west-3:
+    - ami-id: ami-0b333f9791602588a
+      ss-id-suffix: base
+    me-central-1:
+    - ami-id: ami-09baca3d5f900005a
+      ss-id-suffix: base
+    me-south-1:
+    - ami-id: ami-04f6f0a46e6bc5131
+      ss-id-suffix: base
+    sa-east-1:
+    - ami-id: ami-04baf1899576e5657
+      ss-id-suffix: base
+    us-east-1:
+    - ami-id: ami-05bcb9a3c5cfe07c9
+      ss-id-suffix: base
+    us-east-2:
+    - ami-id: ami-0ea3f28d61bb27a55
+      ss-id-suffix: base
+    us-west-1:
+    - ami-id: ami-096c1818b91a714bf
+      ss-id-suffix: base
+    us-west-2:
+    - ami-id: ami-0971a135642c540c0
+      ss-id-suffix: base
+  x86-64:
+    default-name: 'RHEL 8 - x86_64'
+    default-description: 'RHEL 8 - x86_64'
+    default-min-ram-unit: gb
+    default-min-ram-value: 4
+    default-min-storage-unit: gb
+    default-min-storage-value: 10
+    af-south-1:
+    - ami-id: ami-03b4a7a9322996d1b
+      ss-id-suffix: base
+    ap-east-1:
+    - ami-id: ami-04d69e154b3c66ee5
+      ss-id-suffix: base
+    ap-northeast-1:
+    - ami-id: ami-0c955bbc0d55874fb
+      ss-id-suffix: base
+    ap-northeast-2:
+    - ami-id: ami-05bfdd5b68e278b02
+      ss-id-suffix: base
+    ap-northeast-3:
+    - ami-id: ami-03facf858147a8d5e
+      ss-id-suffix: base
+    ap-south-1:
+    - ami-id: ami-0805b29fbd93e13e5
+      ss-id-suffix: base
+    ap-south-2:
+    - ami-id: ami-0230f07faba0d9f46
+      ss-id-suffix: base
+    ap-southeast-1:
+    - ami-id: ami-0e28ce9494c87c82b
+      ss-id-suffix: base
+    ap-southeast-2:
+    - ami-id: ami-03f264c165b28d963
+      ss-id-suffix: base
+    ap-southeast-3:
+    - ami-id: ami-0d2f2f3c8cce10d90
+      ss-id-suffix: base
+    ap-southeast-4:
+    - ami-id: ami-0d560ffe53f54b59b
+      ss-id-suffix: base
+    ca-central-1:
+    - ami-id: ami-01ba2527c256d3670
+      ss-id-suffix: base
+    eu-central-1:
+    - ami-id: ami-048ce72c9f98c5cc6
+      ss-id-suffix: base
+    eu-central-2:
+    - ami-id: ami-01e4d5af7b9e71cca
+      ss-id-suffix: base
+    eu-north-1:
+    - ami-id: ami-0b1e1c7d2c2a6477a
+      ss-id-suffix: base
+    eu-south-1:
+    - ami-id: ami-06bd15ab0b53afdd1
+      ss-id-suffix: base
+    eu-south-2:
+    - ami-id: ami-0592043efe8b23d6d
+      ss-id-suffix: base
+    eu-west-1:
+    - ami-id: ami-0fa2f7b35eeb82b7a
+      ss-id-suffix: base
+    eu-west-2:
+    - ami-id: ami-0317ca3d7dd91fe40
+      ss-id-suffix: base
+    eu-west-3:
+    - ami-id: ami-07e5c478814a5c77f
+      ss-id-suffix: base
+    me-central-1:
+    - ami-id: ami-096e2ee07e42e15a1
+      ss-id-suffix: base
+    me-south-1:
+    - ami-id: ami-0570bd6ca86d05886
+      ss-id-suffix: base
+    sa-east-1:
+    - ami-id: ami-0b30b754bf79883b1
+      ss-id-suffix: base
+    us-east-1:
+    - ami-id: ami-0b324207d4bcaec61
+      ss-id-suffix: base
+    us-east-2:
+    - ami-id: ami-057094267c651958e
+      ss-id-suffix: base
+    us-west-1:
+    - ami-id: ami-08ca382a3d70d5193
+      ss-id-suffix: base
+    us-west-2:
+    - ami-id: ami-030bea4543b3db5de
+      ss-id-suffix: base
+rocky8:
+  arm64:
+    default-name: 'Rocky Linux 8 - ARM64'
+    default-description: 'Rocky Linux 8 - ARM64'
+    default-min-ram-unit: gb
+    default-min-ram-value: 4
+    default-min-storage-unit: gb
+    default-min-storage-value: 10
+    af-south-1:
+    - ami-id: ami-0b2061d1c3668846b
+      ss-id-suffix: base
+    ap-east-1:
+    - ami-id: ami-00b0caa7421d1eefe
+      ss-id-suffix: base
+    ap-northeast-1:
+    - ami-id: ami-0e3f939d85f892e8a
+      ss-id-suffix: base
+    ap-northeast-2:
+    - ami-id: ami-050460787d148f848
+      ss-id-suffix: base
+    ap-northeast-3:
+    - ami-id: ami-0adc69bb541932489
+      ss-id-suffix: base
+    ap-south-1:
+    - ami-id: ami-0d03aad4ccebbf3b2
+      ss-id-suffix: base
+    ap-south-2:
+    - ami-id: ami-049d1035d8bc22c3d
+      ss-id-suffix: base
+    ap-southeast-1:
+    - ami-id: ami-007c7d0ae60d06cb6
+      ss-id-suffix: base
+    ap-southeast-2:
+    - ami-id: ami-0abeb70c57db43da8
+      ss-id-suffix: base
+    ap-southeast-3:
+    - ami-id: ami-0f424d795dde80236
+      ss-id-suffix: base
+    ap-southeast-4:
+    - ami-id: ami-09db805a5b524e176
+      ss-id-suffix: base
+    ca-central-1:
+    - ami-id: ami-0f1f05db2e0d1e25d
+      ss-id-suffix: base
+    eu-central-1:
+    - ami-id: ami-0397553c76173c00d
+      ss-id-suffix: base
+    eu-central-2:
+    - ami-id: ami-0be6e855baad7ed07
+      ss-id-suffix: base
+    eu-north-1:
+    - ami-id: ami-0c382568f3060e664
+      ss-id-suffix: base
+    eu-south-1:
+    - ami-id: ami-07bcd8dcd25a41a7d
+      ss-id-suffix: base
+    eu-south-2:
+    - ami-id: ami-0cdb696b0bb4fb87e
+      ss-id-suffix: base
+    eu-west-1:
+    - ami-id: ami-0ddf13256eb703053
+      ss-id-suffix: base
+    eu-west-2:
+    - ami-id: ami-0b799870a6cc970b8
+      ss-id-suffix: base
+    eu-west-3:
+    - ami-id: ami-0a45ac0f1f9575269
+      ss-id-suffix: base
+    me-central-1:
+    - ami-id: ami-0d11f20de275e9889
+      ss-id-suffix: base
+    me-south-1:
+    - ami-id: ami-06d89a0e6bf197d51
+      ss-id-suffix: base
+    sa-east-1:
+    - ami-id: ami-0dd265f2ddc0340ef
+      ss-id-suffix: base
+    us-east-1:
+    - ami-id: ami-03e78755379a316f3
+      ss-id-suffix: base
+    us-east-2:
+    - ami-id: ami-0491a50679ee1bc89
+      ss-id-suffix: base
+    us-west-1:
+    - ami-id: ami-030f1c8c455e90484
+      ss-id-suffix: base
+    us-west-2:
+    - ami-id: ami-0a5155a5186d39cb0
+      ss-id-suffix: base
+  x86-64:
+    default-name: 'Rocky Linux 8 - x86_64'
+    default-description: 'Rocky Linux 8 - x86_64'
+    default-min-ram-unit: gb
+    default-min-ram-value: 4
+    default-min-storage-unit: gb
+    default-min-storage-value: 10
+    af-south-1:
+    - ami-id: ami-0a78dfcc5ab18ed1d
+      ss-id-suffix: base
+    ap-east-1:
+    - ami-id: ami-0f3b7342fb12abe7f
+      ss-id-suffix: base
+    ap-northeast-1:
+    - ami-id: ami-0de0a3d1395d33095
+      ss-id-suffix: base
+    ap-northeast-2:
+    - ami-id: ami-0060e750287d7b7f6
+      ss-id-suffix: base
+    ap-northeast-3:
+    - ami-id: ami-0969967bdfccc0ab4
+      ss-id-suffix: base
+    ap-south-1:
+    - ami-id: ami-013451397edf3458d
+      ss-id-suffix: base
+    ap-south-2:
+    - ami-id: ami-04c1d66ac67eb2702
+      ss-id-suffix: base
+    ap-southeast-1:
+    - ami-id: ami-0c76f9941163a0df0
+      ss-id-suffix: base
+    ap-southeast-2:
+    - ami-id: ami-08ad7961abf7fc881
+      ss-id-suffix: base
+    ap-southeast-3:
+    - ami-id: ami-063a0653f0045582a
+      ss-id-suffix: base
+    ap-southeast-4:
+    - ami-id: ami-05a338eca9c2b477c
+      ss-id-suffix: base
+    ca-central-1:
+    - ami-id: ami-0f1b137f1701a0232
+      ss-id-suffix: base
+    eu-central-1:
+    - ami-id: ami-04653eb200e1e1879
+      ss-id-suffix: base
+    eu-central-2:
+    - ami-id: ami-0cb3f908f446bf66f
+      ss-id-suffix: base
+    eu-north-1:
+    - ami-id: ami-059464b63014a9d6a
+      ss-id-suffix: base
+    eu-south-1:
+    - ami-id: ami-0eab7c60b1a9777a4
+      ss-id-suffix: base
+    eu-south-2:
+    - ami-id: ami-032b8706c37ffbd19
+      ss-id-suffix: base
+    eu-west-1:
+    - ami-id: ami-03c212e8567b3fbb4
+      ss-id-suffix: base
+    eu-west-2:
+    - ami-id: ami-07d2b4d8d9980a125
+      ss-id-suffix: base
+    eu-west-3:
+    - ami-id: ami-0ea31728c3d693a46
+      ss-id-suffix: base
+    me-central-1:
+    - ami-id: ami-04994559183ff0e97
+      ss-id-suffix: base
+    me-south-1:
+    - ami-id: ami-03409713eb5f3513e
+      ss-id-suffix: base
+    sa-east-1:
+    - ami-id: ami-07ce4a0c554d4d174
+      ss-id-suffix: base
+    us-east-1:
+    - ami-id: ami-09d91a87b002fc97a
+      ss-id-suffix: base
+    us-east-2:
+    - ami-id: ami-02fb9384e880ed67c
+      ss-id-suffix: base
+    us-west-1:
+    - ami-id: ami-007ccc9f91c5d2146
+      ss-id-suffix: base
+    us-west-2:
+    - ami-id: ami-07bec6df8beb3ee8f
       ss-id-suffix: base
 windows:
   x86-64:
-    default-description: 'Windows - x86_64'
     default-name: 'Windows - x86_64'
-    default-min-storage-unit: gb
-    default-min-storage-value: 30
+    default-description: 'Windows - x86_64'
     default-min-ram-unit: gb
     default-min-ram-value: 4
-    ap-northeast-1:
-    - ami-id: ami-03e9af94a9320bdf6
+    default-min-storage-unit: gb
+    default-min-storage-value: 30
+    af-south-1:
+    - ami-id: ami-0aaa5542936085e22
+      description: Windows
+      name: Windows
       ss-id-suffix: base
-    - ami-id: ami-0f73f5c42d0a2a659
+    - ami-id: ami-0ef1d8df22d090cc3
+      description: Windows - NVIDIA
+      gpu-manufacturer: NVIDIA
+      name: Windows - NVIDIA
+      ss-id-suffix: base-nvidia
+    ap-east-1:
+    - ami-id: ami-08141616d7efc31ec
+      description: Windows
+      name: Windows
+      ss-id-suffix: base
+    - ami-id: ami-0556a30d7d5f763de
+      description: Windows - NVIDIA
+      gpu-manufacturer: NVIDIA
+      name: Windows - NVIDIA
+      ss-id-suffix: base-nvidia
+    ap-northeast-1:
+    - ami-id: ami-0f511342bce63b0ea
+      description: Windows
+      name: Windows
+      ss-id-suffix: base
+    - ami-id: ami-0423ffb1ee8b872b0
       description: Windows - AMD
       gpu-manufacturer: AMD
       name: Windows - AMD
       ss-id-suffix: base-amd
-    - ami-id: ami-0744247159c640e32
+    - ami-id: ami-0e23c4919e5f13d2b
       description: Windows - NVIDIA
       gpu-manufacturer: NVIDIA
       name: Windows - NVIDIA
       ss-id-suffix: base-nvidia
     ap-northeast-2:
-    - ami-id: ami-0348704713bf023f6
+    - ami-id: ami-09fa3f48ec5595769
+      description: Windows
+      name: Windows
       ss-id-suffix: base
-    - ami-id: ami-0cc1538dd3712c9bc
+    - ami-id: ami-041184a3adeb86812
       description: Windows - NVIDIA
       gpu-manufacturer: NVIDIA
       name: Windows - NVIDIA
       ss-id-suffix: base-nvidia
     ap-south-1:
-    - ami-id: ami-0307cbf9fc4c96c3e
+    - ami-id: ami-0032cdd1335015c30
+      description: Windows
+      name: Windows
       ss-id-suffix: base
-    - ami-id: ami-0bed7f8476b0a0f49
+    - ami-id: ami-0ba4346b64f81842b
       description: Windows - NVIDIA
       gpu-manufacturer: NVIDIA
       name: Windows - NVIDIA
       ss-id-suffix: base-nvidia
     ap-southeast-1:
-    - ami-id: ami-04a4a643aca2fb749
+    - ami-id: ami-096f463742e27ac1e
+      description: Windows
+      name: Windows
       ss-id-suffix: base
-    - ami-id: ami-0e190f8939a996caf
+    - ami-id: ami-0bb254ad291d932ab
       description: Windows - NVIDIA
       gpu-manufacturer: NVIDIA
       name: Windows - NVIDIA
       ss-id-suffix: base-nvidia
     ap-southeast-2:
-    - ami-id: ami-0c9120089f9f6eb5d
+    - ami-id: ami-0fb9fcd1f49cfb7a4
+      description: Windows
+      name: Windows
       ss-id-suffix: base
-    - ami-id: ami-0e190f8939a996caf
+    - ami-id: ami-08192fbec3f4055ee
       description: Windows - NVIDIA
       gpu-manufacturer: NVIDIA
       name: Windows - NVIDIA
       ss-id-suffix: base-nvidia
     ca-central-1:
-    - ami-id: ami-016ca4a1fb96ec103
+    - ami-id: ami-0d65794e8af8a81e0
+      description: Windows
+      name: Windows
       ss-id-suffix: base
-    - ami-id: ami-02ce5abc7648ae028
+    - ami-id: ami-0b13b57f8b03f3b7d
       description: Windows - AMD
       gpu-manufacturer: AMD
       name: Windows - AMD
       ss-id-suffix: base-amd
-    - ami-id: ami-024f599e25b98b213
+    - ami-id: ami-08ba5a4d6fbd84073
       description: Windows - NVIDIA
       gpu-manufacturer: NVIDIA
       name: Windows - NVIDIA
       ss-id-suffix: base-nvidia
     eu-central-1:
-    - ami-id: ami-004fd86583eb494ee
+    - ami-id: ami-078eb2f300e442912
+      description: Windows
+      name: Windows
       ss-id-suffix: base
-    - ami-id: ami-01f877801cd06f23f
+    - ami-id: ami-0da7bcdcec1c423f2
       description: Windows - AMD
       gpu-manufacturer: AMD
       name: Windows - AMD
       ss-id-suffix: base-amd
-    - ami-id: ami-0649343058a73af62
+    - ami-id: ami-0f78f61ea6345af5e
       description: Windows - NVIDIA
       gpu-manufacturer: NVIDIA
       name: Windows - NVIDIA
       ss-id-suffix: base-nvidia
     eu-north-1:
-    - ami-id: ami-0db5739e8f768b605
+    - ami-id: ami-0a0639ebfd83e95ac
+      description: Windows
+      name: Windows
       ss-id-suffix: base
-    - ami-id: ami-0745b0d998883f154
+    - ami-id: ami-066990a0f6f1e1f97
+      description: Windows - NVIDIA
+      gpu-manufacturer: NVIDIA
+      name: Windows - NVIDIA
+      ss-id-suffix: base-nvidia
+    eu-south-1:
+    - ami-id: ami-076b6d3230bc02ae3
+      description: Windows
+      name: Windows
+      ss-id-suffix: base
+    - ami-id: ami-084fcd78b00e763c8
       description: Windows - NVIDIA
       gpu-manufacturer: NVIDIA
       name: Windows - NVIDIA
       ss-id-suffix: base-nvidia
     eu-west-1:
-    - ami-id: ami-01643440d0d3abc52
+    - ami-id: ami-05ba01975600d107b
+      description: Windows
+      name: Windows
       ss-id-suffix: base
-    - ami-id: ami-0b79b4e3a40bdf60e
+    - ami-id: ami-0becf053628377602
       description: Windows - AMD
       gpu-manufacturer: AMD
       name: Windows - AMD
       ss-id-suffix: base-amd
-    - ami-id: ami-0bb7bad82b320fcca
+    - ami-id: ami-0d8e02cd82481261c
       description: Windows - NVIDIA
       gpu-manufacturer: NVIDIA
       name: Windows - NVIDIA
       ss-id-suffix: base-nvidia
     eu-west-2:
-    - ami-id: ami-05a79fae5322ddf7b
+    - ami-id: ami-08c8e97731099d45c
+      description: Windows
+      name: Windows
       ss-id-suffix: base
-    - ami-id: ami-049344b657f4fb45c
+    - ami-id: ami-09b390aa26e687099
       description: Windows - AMD
       gpu-manufacturer: AMD
       name: Windows - AMD
       ss-id-suffix: base-amd
-    - ami-id: ami-0be3d5c1d59782960
+    - ami-id: ami-08126ae9b000f9d12
       description: Windows - NVIDIA
       gpu-manufacturer: NVIDIA
       name: Windows - NVIDIA
       ss-id-suffix: base-nvidia
     eu-west-3:
-    - ami-id: ami-09f72979d087b7ef8
+    - ami-id: ami-049ef81f0e5d26941
+      description: Windows
+      name: Windows
       ss-id-suffix: base
-    - ami-id: ami-0395cf74387ac6b14
+    - ami-id: ami-06857c4098ac4c807
+      description: Windows - NVIDIA
+      gpu-manufacturer: NVIDIA
+      name: Windows - NVIDIA
+      ss-id-suffix: base-nvidia
+    me-south-1:
+    - ami-id: ami-019b2c16a828c81f4
+      description: Windows
+      name: Windows
+      ss-id-suffix: base
+    - ami-id: ami-057c2522f5941a7f5
       description: Windows - NVIDIA
       gpu-manufacturer: NVIDIA
       name: Windows - NVIDIA
       ss-id-suffix: base-nvidia
     sa-east-1:
-    - ami-id: ami-082e6f2a2f1b98d29
+    - ami-id: ami-0c2e4bd001bdc8f9b
+      description: Windows
+      name: Windows
       ss-id-suffix: base
-    - ami-id: ami-0cce9af6bed94ceec
+    - ami-id: ami-0d776c22ee19acbd7
       description: Windows - NVIDIA
       gpu-manufacturer: NVIDIA
       name: Windows - NVIDIA
       ss-id-suffix: base-nvidia
     us-east-1:
-    - ami-id: ami-0c40919677111514c
+    - ami-id: ami-0fceec18b58bfda68
+      description: Windows
+      name: Windows
       ss-id-suffix: base
-    - ami-id: ami-09e9fc6b0563179e0
+    - ami-id: ami-05d3c1e8d7f2401bc
       description: Windows - AMD
       gpu-manufacturer: AMD
       name: Windows - AMD
       ss-id-suffix: base-amd
-    - ami-id: ami-0efdf76dd9f899c11
+    - ami-id: ami-0f32d32b08fe60259
       description: Windows - NVIDIA
       gpu-manufacturer: NVIDIA
       name: Windows - NVIDIA
       ss-id-suffix: base-nvidia
     us-east-2:
-    - ami-id: ami-0fa6df9543bc63b69
+    - ami-id: ami-0d8ebcdbdb1b96378
+      description: Windows
+      name: Windows
       ss-id-suffix: base
-    - ami-id: ami-0e9dffe211d55ea3d
+    - ami-id: ami-00f5db175bcde7485
       description: Windows - AMD
       gpu-manufacturer: AMD
       name: Windows - AMD
       ss-id-suffix: base-amd
-    - ami-id: ami-0eb27d66bea34b823
+    - ami-id: ami-0ac825a0cfb844c65
       description: Windows - NVIDIA
       gpu-manufacturer: NVIDIA
       name: Windows - NVIDIA
       ss-id-suffix: base-nvidia
     us-west-1:
-    - ami-id: ami-0f260039dadd23aab
+    - ami-id: ami-00d8bcd4ea61ab790
+      description: Windows
+      name: Windows
       ss-id-suffix: base
-    - ami-id: ami-0a44d985e3ccca06f
+    - ami-id: ami-05572dee4d1b36e50
       description: Windows - NVIDIA
       gpu-manufacturer: NVIDIA
       name: Windows - NVIDIA
       ss-id-suffix: base-nvidia
     us-west-2:
-    - ami-id: ami-0616f509f8c56edd3
+    - ami-id: ami-05da7901ff681da6e
+      description: Windows
+      name: Windows
       ss-id-suffix: base
-    - ami-id: ami-0ca9facae744b755d
+    - ami-id: ami-07e2aac81c0943443
       description: Windows - AMD
       gpu-manufacturer: AMD
       name: Windows - AMD
       ss-id-suffix: base-amd
-    - ami-id: ami-046766e4eef191f5c
+    - ami-id: ami-0dd677b93d5737213
       description: Windows - NVIDIA
       gpu-manufacturer: NVIDIA
       name: Windows - NVIDIA

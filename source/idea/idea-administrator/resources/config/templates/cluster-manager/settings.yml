@@ -70,6 +70,7 @@ ec2:
     base_os: {{base_os}}
     instance_ami: {{instance_ami}}
     volume_size: {{volume_size}}
+    volume_type: {{volume_type}}
     enable_detailed_monitoring: false
     min_capacity: 1
     max_capacity: 3

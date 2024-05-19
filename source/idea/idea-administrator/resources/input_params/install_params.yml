@@ -425,6 +425,7 @@ SocaInputParamSpec:
         - value: t3.large
         - value: m5.large
         - value: m5.xlarge
+        - value: c5.large
       validate:
         required: yes
 

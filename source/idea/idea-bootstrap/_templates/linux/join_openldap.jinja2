@@ -68,6 +68,7 @@ mkdir -p /etc/openldap/cacerts/
 DS_TLS_CERTIFICATE=$(get_secret "${IDEA_DS_TLS_CERTIFICATE_SECRET_ARN}")
 echo -n "${DS_TLS_CERTIFICATE}" > /etc/openldap/cacerts/openldap-server.pem
 
+{%- if context.base_os in ('amazonlinux2', 'centos7', 'rhel7') %}
 authconfig --disablesssd \
            --disablesssdauth \
            --disableldap \
@@ -95,6 +96,18 @@ authconfig --enablesssd \
            --enablemkhomedir \
            --enablecachecreds \
            --updateall
+{%- endif %}
+{%- if context.base_os in ('rhel8', 'rocky8') %}
+openssl rehash /etc/openldap/cacerts
+
+systemctl stop sssd
+sss_cache -E
+
+authselect select sssd with-mkhomedir --force
+
+systemctl enable oddjobd
+systemctl restart oddjobd
+{%- endif %}
 
 systemctl enable sssd
 systemctl restart sssd

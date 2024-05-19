@@ -90,6 +90,13 @@ class AnalyticsStack(IdeaBaseStack):
                 domain_endpoint=f'https://{domain_vpc_endpoint_url}'
             )
             self.build_dashboard_endpoints()
+
+            self.add_nag_suppression(
+                construct=self.stack,
+                suppressions=[
+                    IdeaNagSuppression(rule_id='AwsSolutions-KDS3', reason='Kinesis Data Stream is encrypted with customer-managed KMS key')
+                ]
+            )
         else:
             self.build_opensearch()
             self.build_dashboard_endpoints()

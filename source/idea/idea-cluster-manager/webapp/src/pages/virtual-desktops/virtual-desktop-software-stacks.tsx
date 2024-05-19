@@ -450,8 +450,16 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                                 value: 'centos7'
                             },
                             {
-                                title: 'RHEL 7',
+                                title: 'Red Hat Enterprise Linux 7',
                                 value: 'rhel7'
+                            },
+                            {
+                                title: 'Red Hat Enterprise Linux 8',
+                                value: 'rhel8'
+                            },
+                            {
+                                title: 'Rocky Linux 8',
+                                value: 'rocky8'
                             }
                         ]
                     }
