@@ -1,4 +1,4 @@
-FROM public.ecr.aws/docker/library/python:3.9.19-slim@sha256:fd8693fc6115345452a19654c1388bc9a1029cda7b98e1bce45ede67e74190f0
+FROM public.ecr.aws/docker/library/python:3.9.19-slim@sha256:088d9217202188598aac37f8db0929345e124a82134ac66b8bb50ee9750b045b
 
 ARG TARGETARCH
 
