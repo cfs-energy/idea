@@ -15,3 +15,12 @@ Statement:
     Resource:
       {{ context.utils.to_yaml(context.arns.cluster_config_ddb_arn) | indent(6) }}
     Effect: Allow
+
+    {%- if context.config.get_string('cluster.dynamodb.kms_key_id') %}
+  - Action:
+      - kms:GenerateDataKey
+      - kms:Decrypt
+    Resource:
+      - '{{ context.arns.kms_dynamodb_key_arn }}'
+    Effect: Allow
+    {%- endif %}

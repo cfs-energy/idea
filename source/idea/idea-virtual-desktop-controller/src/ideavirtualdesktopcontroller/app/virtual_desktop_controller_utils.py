@@ -9,6 +9,8 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 import os
+import logging
+import random
 from threading import RLock
 from typing import List, Dict, Optional
 
@@ -117,11 +119,10 @@ class VirtualDesktopControllerUtils:
                 'Setup-WindowsEC2Instance'
             ]
 
-        use_vpc_endpoints = self.context.config().get_bool('cluster.network.use_vpc_endpoints', default=False)
         https_proxy = self.context.config().get_string('cluster.network.https_proxy', required=False, default='')
         no_proxy = self.context.config().get_string('cluster.network.no_proxy', required=False, default='')
         proxy_config = {}
-        if use_vpc_endpoints and Utils.is_not_empty(https_proxy):
+        if Utils.is_not_empty(https_proxy):
             proxy_config = {
                     'http_proxy': https_proxy,
                     'https_proxy': https_proxy,
@@ -172,50 +173,135 @@ class VirtualDesktopControllerUtils:
             })
 
         metadata_http_tokens = self.context.config().get_string('virtual-desktop-controller.dcv_session.metadata_http_tokens', required=True)
-        response = self.ec2_client.run_instances(
-            UserData=self._build_userdata(session),
-            ImageId=session.software_stack.ami_id,
-            InstanceType=session.server.instance_type,
-            TagSpecifications=[
-                {
-                    'ResourceType': 'instance',
-                    'Tags': aws_tags
-                }
-            ],
-            MaxCount=1,
-            MinCount=1,
-            NetworkInterfaces=[
-                {
-                    'DeviceIndex': 0,
-                    'AssociatePublicIpAddress': False,
-                    'SubnetId': session.server.subnet_id,
-                    'Groups': session.server.security_groups
-                }
-            ],
-            IamInstanceProfile={
-                'Arn': session.server.instance_profile_arn
-            },
-            BlockDeviceMappings=[
-                {
-                    'DeviceName': Utils.get_ec2_block_device_name(session.software_stack.base_os.value),
-                    'Ebs': {
-                        'DeleteOnTermination': True,
-                        'VolumeSize': session.server.root_volume_size.int_val(),
-                        'Encrypted': False if Utils.is_empty(session.hibernation_enabled) else session.hibernation_enabled,
-                        'VolumeType': 'gp3'
-                    }
-                }
-            ],
-            KeyName=session.server.key_pair_name,
-            HibernationOptions={
-                'Configured': False if Utils.is_empty(session.hibernation_enabled) else session.hibernation_enabled
-            },
-            MetadataOptions={
-                'HttpTokens': metadata_http_tokens,
-                'HttpEndpoint': 'enabled'
-            }
+
+        kms_key_id = self.context.config().get_string('cluster.ebs.kms_key_id', required=False, default=None)
+        if kms_key_id is None:
+            kms_key_id = 'alias/aws/ebs'
+
+        # Handle subnet processing for eVDI hosts
+
+        randomize_subnet_method = self.context.config().get_bool(
+            'vdc.dcv_session.network.randomize_subnets',
+            default=Utils.get_as_bool(constants.DEFAULT_VDI_RANDOMIZE_SUBNETS, default=False)
         )
-        return Utils.to_dict(response)
+        subnet_autoretry_method = self.context.config().get_bool(
+            'vdc.dcv_session.network.subnet_autoretry',
+            default=Utils.get_as_bool(constants.DEFAULT_VDI_SUBNET_AUTORETRY, default=True)
+        )
+        # Determine if we have a specific list of subnets configured for VDI
+        configured_vdi_subnets = self.context.config().get_list(
+            'vdc.dcv_session.network.private_subnets',
+            default=[]
+        )
+        # Required=True as these should always be available, and we want to error otherwise
+        cluster_private_subnets = self.context.config().get_list(
+            'cluster.network.private_subnets',
+            required=True
+        )
+
+        _attempt_subnets = []
+        # Use a subnet_id if specified
+        if Utils.is_not_empty(session.server.server_id):
+            # this comes in as a string from the API
+            self._logger.debug(f"Using strict requested subnet_id: {session.server.server_id}")
+            _attempt_subnets.append(session.server.server_id)
+        elif configured_vdi_subnets:
+            # A list from the config
+            self._logger.debug(f"Found configured VDI subnets: {', '.join(configured_vdi_subnets)}")
+            _attempt_subnets = configured_vdi_subnets
+        else:
+            # fallback to a list of cluster private_subnets
+            self._logger.debug(f"Fallback to cluster private_subnets: {', '.join(cluster_private_subnets)}")
+            _attempt_subnets = cluster_private_subnets
+
+        # Shuffle the list if configured for random subnet
+        if randomize_subnet_method:
+            random.shuffle(_attempt_subnets)
+            self._logger.debug(f"Applying randomize to subnet list due to configuration.")
+
+        # At this stage _attempt_subnets contains the subnets
+        # we want to attempt in the order that we prefer
+        # (ordered or pre-shuffled)
+
+        self._logger.debug(f"Deployment Attempt Ready - Retry: {subnet_autoretry_method} Attempt_Subnets({len(_attempt_subnets)}): {', '.join(_attempt_subnets)}")
+
+        _deployment_loop = 0
+        _attempt_provision = True
+
+        while _attempt_provision:
+            _deployment_loop += 1
+            # We just .pop(0) since the list has been randomized already if it was requested
+            _subnet_to_try = _attempt_subnets.pop(0)
+            _remainig_subnet_count = len(_attempt_subnets)
+
+            self._logger.info(f"Deployment attempt #{_deployment_loop} subnet_id: {_subnet_to_try} Remaining Subnets: {_remainig_subnet_count}")
+            if _remainig_subnet_count <= 0:
+                # this is our last attempt
+                self._logger.debug(f"Final deployment attempt (_remaining_subnet_count == 0)")
+                _attempt_provision = False
+            else:
+                _attempt_provision = True
+
+            response = None
+
+            try:
+                response = self.ec2_client.run_instances(
+                    UserData=self._build_userdata(session),
+                    ImageId=session.software_stack.ami_id,
+                    InstanceType=session.server.instance_type,
+                    TagSpecifications=[
+                        {
+                            'ResourceType': 'instance',
+                            'Tags': aws_tags
+                        }
+                    ],
+                    MaxCount=1,
+                    MinCount=1,
+                    NetworkInterfaces=[
+                        {
+                            'DeviceIndex': 0,
+                            'AssociatePublicIpAddress': False,
+                            'SubnetId': _subnet_to_try,
+                            'Groups': session.server.security_groups
+                        }
+                    ],
+                    IamInstanceProfile={
+                        'Arn': session.server.instance_profile_arn
+                    },
+                    BlockDeviceMappings=[
+                        {
+                            'DeviceName': Utils.get_ec2_block_device_name(session.software_stack.base_os.value),
+                            'Ebs': {
+                                'DeleteOnTermination': True,
+                                'VolumeSize': session.server.root_volume_size.int_val(),
+                                'Encrypted': Utils.get_as_bool(constants.DEFAULT_VOLUME_ENCRYPTION_VDI, default=True),
+                                'KmsKeyId': kms_key_id,
+                                'VolumeType': Utils.get_as_string(constants.DEFAULT_VOLUME_TYPE_VDI, default='gp3')
+                            }
+                        }
+                    ],
+                    KeyName=session.server.key_pair_name,
+                    HibernationOptions={
+                        'Configured': False if Utils.is_empty(session.hibernation_enabled) else session.hibernation_enabled
+                    },
+                    MetadataOptions={
+                        'HttpTokens': metadata_http_tokens,
+                        'HttpEndpoint': 'enabled'
+                    }
+                )
+            except Exception as err:
+                self._logger.warning(f"Encountered Deployment Exception: {err} / Response: {response}")
+                self._logger.debug(f"Remaining subnets {len(_attempt_subnets)}: {_attempt_subnets}")
+                if subnet_autoretry_method and _attempt_provision:
+                    self._logger.debug(f"Continue with next attempt with remaining subnets..")
+                    continue
+                else:
+                    self._logger.warning(f"Exhausted all deployment attempts. Cannot continue with this request.")
+                    break
+
+            if response:
+                self._logger.debug(f"Returning response: {response}")
+                return Utils.to_dict(response)
 
     def _add_instance_data_to_cache(self):
         with self.instance_types_lock:
@@ -296,6 +382,7 @@ class VirtualDesktopControllerUtils:
 
         # We now have a list of all instance types (Cache has been updated IF it was empty).
         valid_instance_types = []
+        valid_instance_types_names = []
 
         allowed_instance_types = self.context.config().get_list('virtual-desktop-controller.dcv_session.instance_types.allow', default=[])
         allowed_instance_type_names = set()
@@ -315,32 +402,46 @@ class VirtualDesktopControllerUtils:
             else:
                 denied_instance_type_families.add(instance_type)
 
+        if self._logger.isEnabledFor(logging.DEBUG):
+            self._logger.debug(f"get_valid_instance_types() - Instance Allow/Deny Summary")
+            self._logger.debug(f"Allowed instance Families: {allowed_instance_type_families}")
+            self._logger.debug(f"Allowed instances: {allowed_instance_type_names}")
+            self._logger.debug(f"Denied instance Families: {denied_instance_type_families}")
+            self._logger.debug(f"Denied instances: {denied_instance_type_names}")
+
         for instance_type_name in instance_types_names:
             instance_type_family = instance_type_name.split('.')[0]
+            self._logger.debug(f"Processing - Instance Name: {instance_type_name}   Family: {instance_type_family}")
 
             if instance_type_name not in allowed_instance_type_names and instance_type_family not in allowed_instance_type_families:
                 # instance type or instance family is not present in allow list
+                self._logger.debug(f"Found {instance_type_name} ({instance_type_family}) NOT in ALLOW config: ({allowed_instance_type_names} / {allowed_instance_type_families})")
                 continue
 
             if instance_type_name in denied_instance_type_names or instance_type_family in denied_instance_type_families:
                 # instance type or instance family is present in deny list
+                self._logger.debug(f"Found {instance_type_name} ({instance_type_family}) IN DENIED config: ({denied_instance_type_names} / {denied_instance_type_families})")
                 continue
 
             instance_info = instance_info_data[instance_type_name]
             if Utils.is_not_empty(software_stack) and software_stack.min_ram > self.get_instance_ram(instance_type_name):
                 # this instance doesn't have the minimum ram required to support the software stack.
+                self._logger.debug(f"Software stack ({software_stack}) restrictions on RAM ({software_stack.min_ram}): Instance {instance_type_name} lacks enough ({self.get_instance_ram(instance_type_name)}). Skipped.")
                 continue
 
-            hibernation_supported = Utils.get_value_as_bool('HibernationSupported', instance_info, False)
+            hibernation_supported = Utils.get_value_as_bool('HibernationSupported', instance_info, default=False)
             if hibernation_support and not hibernation_supported:
+                self._logger.debug(f"Hibernation ({hibernation_support}) != Instance {instance_type_name} ({hibernation_supported}) Skipped.")
                 continue
 
             supported_archs = Utils.get_value_as_list('SupportedArchitectures', Utils.get_value_as_dict('ProcessorInfo', instance_info, {}), [])
             if Utils.is_not_empty(software_stack) and software_stack.architecture.value not in supported_archs:
                 # not desired architecture
+                self._logger.debug(f"Software Stack arch ({software_stack.architecture.value}) != Instance {instance_type_name} ({supported_archs}) Skipped.")
                 continue
 
             supported_gpus = Utils.get_value_as_list('Gpus', Utils.get_value_as_dict('GpuInfo', instance_info, {}), [])
+            self._logger.debug(f"Instance {instance_type_name} GPU ({supported_gpus})")
             perform_gpu_check = False
             gpu_to_check_against = None
             if Utils.is_not_empty(gpu):
@@ -361,6 +462,7 @@ class VirtualDesktopControllerUtils:
                     # we don't need GPU
                     if len(supported_gpus) > 0:
                         # this instance SHOULD NOT have GPU support, but it does.
+                        self._logger.debug(f"Instance {instance_type_name} Should not have GPU ({supported_gpus}) but it does.")
                         continue
                 else:
                     # we need GPU
@@ -372,9 +474,14 @@ class VirtualDesktopControllerUtils:
 
                     if not gpu_found:
                         # we needed a GPU, but we didn't find any
+                        self._logger.debug(f"Instance {instance_type_name} - Needed a GPU but didn't find one.")
                         continue
 
+            # All checks passed if we make it this far
+            self._logger.debug(f"Instance {instance_type_name} - Added as valid_instance_types")
+            valid_instance_types_names.append(instance_type_name)
             valid_instance_types.append(instance_info)
+        self._logger.debug(f"Returning valid_instance_types: {valid_instance_types_names}")
         return valid_instance_types
 
     def describe_image_id(self, ami_id: str) -> dict:

@@ -50,7 +50,8 @@ from aws_cdk import (
     aws_events_targets as events_targets,
     aws_s3 as s3,
     aws_backup as backup,
-    aws_iam as iam
+    aws_iam as iam,
+    aws_kms as kms
 )
 
 from aws_cdk.aws_events import Schedule
@@ -535,11 +536,10 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
 
         # autoscaling group
         dcv_broker_package_uri = self.stack.node.try_get_context('dcv_broker_bootstrap_package_uri')
-        use_vpc_endpoints = self.context.config().get_bool('cluster.network.use_vpc_endpoints', default=False)
         https_proxy = self.context.config().get_string('cluster.network.https_proxy', required=False, default='')
         no_proxy = self.context.config().get_string('cluster.network.no_proxy', required=False, default='')
         proxy_config = {}
-        if use_vpc_endpoints and Utils.is_not_empty(https_proxy):
+        if Utils.is_not_empty(https_proxy):
             proxy_config = {
                     'http_proxy': https_proxy,
                     'https_proxy': https_proxy,
@@ -639,11 +639,10 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
             component_jinja='virtual-desktop-controller.yml'
         )
 
-        use_vpc_endpoints = self.context.config().get_bool('cluster.network.use_vpc_endpoints', default=False)
         https_proxy = self.context.config().get_string('cluster.network.https_proxy', required=False, default='')
         no_proxy = self.context.config().get_string('cluster.network.no_proxy', required=False, default='')
         proxy_config = {}
-        if use_vpc_endpoints and Utils.is_not_empty(https_proxy):
+        if Utils.is_not_empty(https_proxy):
             proxy_config = {
                     'http_proxy': https_proxy,
                     'https_proxy': https_proxy,
@@ -779,6 +778,13 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
         enable_detailed_monitoring = self.context.config().get_bool(f'virtual-desktop-controller.{self.CONFIG_MAPPING[component_name]}.autoscaling.enable_detailed_monitoring', default=False)
         metadata_http_tokens = self.context.config().get_string(f'virtual-desktop-controller.{self.CONFIG_MAPPING[component_name]}.autoscaling.metadata_http_tokens', required=True)
 
+        kms_key_id = self.context.config().get_string('cluster.ebs.kms_key_id', required=False, default=None)
+        if kms_key_id is not None:
+             kms_key_arn = self.get_kms_key_arn(kms_key_id)
+             ebs_kms_key = kms.Key.from_key_arn(scope=self.stack, id=f'{component_name}-ebs-kms-key', key_arn=kms_key_arn)
+        else:
+             ebs_kms_key = kms.Alias.from_alias_name(scope=self.stack, id=f'{component_name}-ebs-kms-key-default', alias_name='alias/aws/ebs')
+
         launch_template = ec2.LaunchTemplate(
             self.stack, f'{component_name}-lt',
             instance_type=ec2.InstanceType(self.context.config().get_string(f'virtual-desktop-controller.{self.CONFIG_MAPPING[component_name]}.autoscaling.instance_type', required=True)),
@@ -791,6 +797,8 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
             block_devices=[ec2.BlockDevice(
                 device_name=block_device_name,
                 volume=ec2.BlockDeviceVolume(ebs_device=ec2.EbsDeviceProps(
+                    encrypted=True,
+                    kms_key=ebs_kms_key,
                     volume_size=self.context.config().get_int(f'virtual-desktop-controller.{self.CONFIG_MAPPING[component_name]}.autoscaling.volume_size', default=200),
                     volume_type=ec2.EbsDeviceVolumeType.GP3
                 ))
@@ -865,11 +873,10 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
         if Utils.is_empty(dcv_connection_gateway_bootstrap_package_uri):
             dcv_connection_gateway_bootstrap_package_uri = 'not-provided'
 
-        use_vpc_endpoints = self.context.config().get_bool('cluster.network.use_vpc_endpoints', default=False)
         https_proxy = self.context.config().get_string('cluster.network.https_proxy', required=False, default='')
         no_proxy = self.context.config().get_string('cluster.network.no_proxy', required=False, default='')
         proxy_config = {}
-        if use_vpc_endpoints and Utils.is_not_empty(https_proxy):
+        if Utils.is_not_empty(https_proxy):
             proxy_config = {
                     'http_proxy': https_proxy,
                     'https_proxy': https_proxy,
@@ -1087,6 +1094,11 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
         if not self.context.config().get_bool('virtual-desktop-controller.dcv_connection_gateway.certificate.provided', default=False):
             cluster_settings['dcv_connection_gateway.certificate.certificate_secret_arn'] = self.dcv_connection_gateway_self_signed_cert.get_att_string('certificate_secret_arn')
             cluster_settings['dcv_connection_gateway.certificate.private_key_secret_arn'] = self.dcv_connection_gateway_self_signed_cert.get_att_string('private_key_secret_arn')
+        else:
+            cluster_settings['dcv_connection_gateway.certificate.provided'] = self.context.config().get_string('virtual-desktop-controller.dcv_connection_gateway.certificate.provided', required=True)
+            cluster_settings['dcv_connection_gateway.certificate.certificate_secret_arn'] = self.context.config().get_string('virtual-desktop-controller.dcv_connection_gateway.certificate.certificate_secret_arn', required=True)
+            cluster_settings['dcv_connection_gateway.certificate.private_key_secret_arn'] = self.context.config().get_string('virtual-desktop-controller.dcv_connection_gateway.certificate.private_key_secret_arn', required=True)
+            cluster_settings['dcv_connection_gateway.certificate.custom_dns_name'] = self.context.config().get_string('virtual-desktop-controller.dcv_connection_gateway.certificate.custom_dns_name', required=True)
 
         if self.backup_plan is not None:
             cluster_settings['vdi_host_backup.backup_plan.arn'] = self.backup_plan.get_backup_plan_arn()

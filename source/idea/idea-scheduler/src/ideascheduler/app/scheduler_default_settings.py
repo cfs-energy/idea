@@ -252,7 +252,7 @@ class SchedulerDefaultSettings:
                                         },
                                         {
                                             "title": "5 minutes",
-                                            "value": "120"
+                                            "value": "300"
                                         },
                                         {
                                             "title": "10 minutes",

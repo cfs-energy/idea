@@ -29,7 +29,8 @@ from typing import Optional
 import aws_cdk as cdk
 from aws_cdk import (
     aws_ec2 as ec2,
-    aws_route53 as route53
+    aws_route53 as route53,
+    aws_kms as kms
 )
 import constructs
 
@@ -118,16 +119,21 @@ class BastionHostStack(IdeaBaseStack):
         enable_detailed_monitoring = self.context.config().get_bool('bastion-host.ec2.enable_detailed_monitoring', default=False)
         enable_termination_protection = self.context.config().get_bool('bastion-host.ec2.enable_termination_protection', default=False)
         metadata_http_tokens = self.context.config().get_string('bastion-host.ec2.metadata_http_tokens', required=True)
-        use_vpc_endpoints = self.context.config().get_bool('cluster.network.use_vpc_endpoints', default=False)
         https_proxy = self.context.config().get_string('cluster.network.https_proxy', required=False, default='')
         no_proxy = self.context.config().get_string('cluster.network.no_proxy', required=False, default='')
         proxy_config = {}
-        if use_vpc_endpoints and Utils.is_not_empty(https_proxy):
+        if Utils.is_not_empty(https_proxy):
             proxy_config = {
                     'http_proxy': https_proxy,
                     'https_proxy': https_proxy,
                     'no_proxy': no_proxy
                     }
+        kms_key_id = self.context.config().get_string('cluster.ebs.kms_key_id', required=False, default=None)
+        if kms_key_id is not None:
+             kms_key_arn = self.get_kms_key_arn(kms_key_id)
+             ebs_kms_key = kms.Key.from_key_arn(scope=self.stack, id=f'ebs-kms-key', key_arn=kms_key_arn)
+        else:
+             ebs_kms_key = kms.Alias.from_alias_name(scope=self.stack, id=f'ebs-kms-key-default', alias_name='alias/aws/ebs')
 
         instance_profile_name = self.bastion_host_instance_profile.instance_profile_name
         security_group = self.cluster.get_security_group(constants.MODULE_BASTION_HOST)
@@ -160,6 +166,8 @@ class BastionHostStack(IdeaBaseStack):
             block_devices=[ec2.BlockDevice(
                 device_name=block_device_name,
                 volume=ec2.BlockDeviceVolume(ebs_device=ec2.EbsDeviceProps(
+                    encrypted=True,
+                    kms_key=ebs_kms_key,
                     volume_size=volume_size,
                     volume_type=ec2.EbsDeviceVolumeType.GP3
                     )

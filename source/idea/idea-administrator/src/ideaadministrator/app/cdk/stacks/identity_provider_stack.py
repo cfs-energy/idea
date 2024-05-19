@@ -58,7 +58,7 @@ class IdentityProviderStack(IdeaBaseStack):
       * External ALB Endpoint
       * Internal ALB Endpoint
       * Multi-AZ RDS (Aurora)
-      * SecretManager Secrets
+      * SecretsManager Secrets
       * CDK Custom Resource as a shim for down stream modules to register OAuth2 clients, Resource Servers
     """
 

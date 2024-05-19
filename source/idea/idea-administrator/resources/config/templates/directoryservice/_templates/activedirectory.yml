@@ -1,13 +1,13 @@
 # Begin: Microsoft AD Settings (activedirectory)
 
 # Below is a template configuration to connect to your existing "On-Prem" or "Self-Managed" AD on AWS
-# customize below configuration based on your environment requirements - below configuration will not work out of the box.
+# customize the configuration based on your environment requirements - The configuration below will not work out of the box.
 #
 #
 # When using the 'activedirectory' Directory Service back-end - READ-ONLY access is activated in IDEA
 # for User and Group management. All user and group management activities take place in Active Directory directly.
 # READ-WRITE is still required for the creation of Computer objects.
-# SSO is expected to be configured and linked to the same Active Directory back-end.
+# SSO is required to be configured and linked to the same Active Directory back-end.
 #
 
 # The NetBIOS name for your domain
@@ -96,19 +96,16 @@ clusteradmin:
 
 
 #
-# Provide a mapping of the base IDEA groups to Active Directory DN
+# Provide a mapping of the base IDEA groups to Active Directory groups
 #
-# If just the name of the group is supplied, e.g. "cluster-manager-administrators-module-group" is provided, the qualified path will be computed as below:
+# If just the name of the group is supplied, e.g. "default-project-group" is provided, the qualified path will be computed as below:
 # cn=<supplied_value>,<groups.ou>
-# otherwise it is treated as a full DN
-# e.g. cn=cluster-manager-administrators-module-group,OU=Org123,DC=domain,DC=local
-
+# otherwise it will be searched as the distinguishedName (must start with CN=)
+# e.g. cn=default-project-group,OU=Org123,DC=domain,DC=local
 
 group_mapping:
   # idea-required-group is a special mapping
-  # When users SSO for the first time - they do not have cache entries in DDB.
   # The users must be part of this AD group to be considered eligible for the IDEA cluster.
-  # This can be specified to a specific group.
   # The IDEA / AD Administrator is expected to create this group and maintain the proper membership
   # of the users.
   # e.g. CN=IDEAUsers,OU=AADDC Users,DC=idea-admin,DC=cloud

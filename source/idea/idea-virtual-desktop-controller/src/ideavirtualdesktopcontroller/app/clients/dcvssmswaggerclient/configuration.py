@@ -127,7 +127,7 @@ class Configuration(six.with_metaclass(TypeWithDefault, object)):
         if self.__logger_file:
             # If set logging file,
             # then add file handler and remove stream handler.
-            self.logger_file_handler = logging.FileHandler(self.__logger_file)
+            self.logger_file_handler = logging.FileHandler(self.__logger_file, encoding='utf-8')
             self.logger_file_handler.setFormatter(self.logger_formatter)
             for _, logger in six.iteritems(self.logger):
                 logger.addHandler(self.logger_file_handler)

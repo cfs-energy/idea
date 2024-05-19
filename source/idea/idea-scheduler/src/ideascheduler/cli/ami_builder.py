@@ -247,11 +247,10 @@ class ComputeNodeAmiBuilder:
                 Key=bootstrap_package_key
             )
 
-        use_vpc_endpoints = self.context.config().get_bool('cluster.network.use_vpc_endpoints', default=False)
         https_proxy = self.context.config().get_string('cluster.network.https_proxy', required=False, default='')
         no_proxy = self.context.config().get_string('cluster.network.no_proxy', required=False, default='')
         proxy_config = {}
-        if use_vpc_endpoints and Utils.is_not_empty(https_proxy):
+        if Utils.is_not_empty(https_proxy):
             proxy_config = {
                     'http_proxy': https_proxy,
                     'https_proxy': https_proxy,

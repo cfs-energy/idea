@@ -34,7 +34,8 @@ import aws_cdk as cdk
 from aws_cdk import (
     aws_ec2 as ec2,
     aws_route53 as route53,
-    aws_sqs as sqs
+    aws_sqs as sqs,
+    aws_kms as kms
 )
 import constructs
 
@@ -235,16 +236,21 @@ class DirectoryServiceStack(IdeaBaseStack):
         enable_detailed_monitoring = self.context.config().get_bool('directoryservice.ec2.enable_detailed_monitoring', default=False)
         enable_termination_protection = self.context.config().get_bool('directoryservice.ec2.enable_termination_protection', default=False)
         metadata_http_tokens = self.context.config().get_string('directoryservice.ec2.metadata_http_tokens', required=True)
-        use_vpc_endpoints = self.context.config().get_bool('cluster.network.use_vpc_endpoints', default=False)
         https_proxy = self.context.config().get_string('cluster.network.https_proxy', required=False, default='')
         no_proxy = self.context.config().get_string('cluster.network.no_proxy', required=False, default='')
         proxy_config = {}
-        if use_vpc_endpoints and Utils.is_not_empty(https_proxy):
+        if Utils.is_not_empty(https_proxy):
             proxy_config = {
                     'http_proxy': https_proxy,
                     'https_proxy': https_proxy,
                     'no_proxy': no_proxy
                     }
+        kms_key_id = self.context.config().get_string('cluster.ebs.kms_key_id', required=False, default=None)
+        if kms_key_id is not None:
+             kms_key_arn = self.get_kms_key_arn(kms_key_id)
+             ebs_kms_key = kms.Key.from_key_arn(scope=self.stack, id=f'ebs-kms-key', key_arn=kms_key_arn)
+        else:
+             ebs_kms_key = kms.Alias.from_alias_name(scope=self.stack, id=f'ebs-kms-key-default', alias_name='alias/aws/ebs')
 
         if is_public and len(self.cluster.public_subnets) > 0:
             subnet_ids = self.cluster.existing_vpc.get_public_subnet_ids()
@@ -288,6 +294,8 @@ class DirectoryServiceStack(IdeaBaseStack):
             block_devices=[ec2.BlockDevice(
                 device_name=block_device_name,
                 volume=ec2.BlockDeviceVolume(ebs_device=ec2.EbsDeviceProps(
+                    encrypted=True,
+                    kms_key=ebs_kms_key,
                     volume_size=volume_size,
                     volume_type=ec2.EbsDeviceVolumeType.GP3
                     )
@@ -363,11 +371,14 @@ class DirectoryServiceStack(IdeaBaseStack):
         )
 
     def build_ad_automation_sqs_queue(self):
+        kms_key_id = self.context.config().get_string('cluster.sqs.kms_key_id')
+
         self.ad_automation_sqs_queue = SQSQueue(
             self.context, 'ad-automation-sqs-queue', self.stack,
             queue_name=f'{self.cluster_name}-{self.module_id}-ad-automation.fifo',
             fifo=True,
             content_based_deduplication=True,
+            encryption_master_key=kms_key_id,
             dead_letter_queue=sqs.DeadLetterQueue(
                 max_receive_count=30,
                 queue=SQSQueue(
@@ -375,6 +386,7 @@ class DirectoryServiceStack(IdeaBaseStack):
                     queue_name=f'{self.cluster_name}-{self.module_id}-ad-automation-dlq.fifo',
                     fifo=True,
                     content_based_deduplication=True,
+                    encryption_master_key=kms_key_id,
                     is_dead_letter_queue=True
                 )
             )

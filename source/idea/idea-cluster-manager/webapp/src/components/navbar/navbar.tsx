@@ -182,7 +182,7 @@ class IdeaNavbar extends Component<IdeaNavbarProps, IdeaNavbarState> {
 
         const getPasswordExpirationMessage = () => {
             const expiresIn = AppContext.get().auth().getPasswordExpiresInDays()
-            if(expiresIn < 0) {
+            if(expiresIn < 0 || expiresIn > 10) {
                 return
             }
             let expiryText
@@ -198,12 +198,13 @@ class IdeaNavbar extends Component<IdeaNavbarProps, IdeaNavbarState> {
             return expiryText
         }
 
-        let hasNotifications = true
+        let hasNotifications = false
         const getNotifications = () => {
             let passwordExpirationMessage = getPasswordExpirationMessage()
 
             let notifications: any = []
             if(passwordExpirationMessage) {
+                hasNotifications = true
                 notifications.push({
                     id: 'password-expiration',
                     text: passwordExpirationMessage,

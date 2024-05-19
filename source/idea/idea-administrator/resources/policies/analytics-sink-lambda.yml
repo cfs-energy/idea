@@ -12,6 +12,15 @@ Statement:
       - {{ context.arns.get_kinesis_arn() }}
     Effect: Allow
 
+    {%- if context.config.get_string('analytics.kinesis.kms_key_id') %}
+  - Action:
+      - kms:GenerateDataKey
+      - kms:Decrypt
+    Resource:
+      - '{{ context.arns.kms_kinesis_key_arn }}'
+    Effect: Allow
+    {%- endif %}
+
   - Action:
       - logs:CreateLogGroup
       - logs:CreateLogStream
@@ -24,6 +33,15 @@ Statement:
       - es:ESHttpPost
       - es:ESHttpPut
     Resource: '*'
+
+    {%- if context.config.get_string('analytics.opensearch.kms_key_id') %}
+  - Action:
+      - kms:GenerateDataKey
+      - kms:Decrypt
+    Resource:
+      - '{{ context.arns.kms_opensearch_key_arn }}'
+    Effect: Allow
+    {%- endif %}
 
   - Effect: Allow
     Action:

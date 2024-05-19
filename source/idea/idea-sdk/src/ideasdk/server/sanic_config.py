@@ -70,7 +70,7 @@ SANIC_APP_CONFIG = sanic.config.Config({
     "FORWARDED_FOR_HEADER": "X-Forwarded-For",
     "FORWARDED_SECRET": None,
     "GRACEFUL_SHUTDOWN_TIMEOUT": 15.0,  # 15 sec - not used, and is handled by SocaServer
-    "KEEP_ALIVE_TIMEOUT": 5,  # 5 seconds
+    "KEEP_ALIVE_TIMEOUT": 15,  # 15 seconds - give time for follow-up requests
     "KEEP_ALIVE": True,
     "MOTD": True,
     "MOTD_DISPLAY": {},
@@ -81,9 +81,9 @@ SANIC_APP_CONFIG = sanic.config.Config({
     "REQUEST_BUFFER_SIZE": 65536,  # 64 KiB
     "REQUEST_MAX_HEADER_SIZE": 8192,  # 8 KiB, but cannot exceed 16384
     "REQUEST_ID_HEADER": "X-Request-ID",
-    "REQUEST_MAX_SIZE": 100000000,  # 100 megabytes
-    "REQUEST_TIMEOUT": 60,  # 60 seconds
-    "RESPONSE_TIMEOUT": 60,  # 60 seconds
+    "REQUEST_MAX_SIZE": 10_000_000_000,  # 10 Gigabytes
+    "REQUEST_TIMEOUT": 600,  # 10-min - large uploads over slow connections
+    "RESPONSE_TIMEOUT": 600,  # 10-min - large uploads over slow connections
     "USE_UVLOOP": True,
     "WEBSOCKET_MAX_SIZE": 2 ** 20,  # 1 megabyte
     "WEBSOCKET_PING_INTERVAL": 20,

@@ -502,11 +502,9 @@ class VirtualDesktopAPI(BaseAPI):
             # self.default_instance_profile_arn = self.context.app_config.virtual_desktop_dcv_host_profile_arn
             # self.default_security_group = self.context.app_config.virtual_desktop_dcv_host_security_group_id
 
-        if Utils.is_empty(session.server.subnet_id):
-            session.server.subnet_id = random.choice(self.context.config().get_list('cluster.network.private_subnets'))
 
         if Utils.is_empty(session.server.key_pair_name):
-            session.server.key_pair_name = self.context.config().get_string('cluster.network.ssh_key_pair')
+            session.server.key_pair_name = self.context.config().get_string('cluster.network.ssh_key_pair', required=True)
 
         if Utils.is_empty(session.server.security_groups):
             session.server.security_groups = []

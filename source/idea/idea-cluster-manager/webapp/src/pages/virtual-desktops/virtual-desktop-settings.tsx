@@ -201,9 +201,16 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
                                     content: (
                                         <SpaceBetween size={"m"}>
                                             <Container header={<Header variant={"h2"}>General</Header>}>
-                                                <ColumnLayout variant={"text-grid"} columns={3}>
+                                                <ColumnLayout variant={"text-grid"} columns={2}>
                                                     <KeyValue title="QUIC">
                                                         <EnabledDisabledStatusIndicator enabled={Utils.asBoolean(dot.pick('dcv_session.quic_support', this.state.vdcSettings))}/>
+                                                    </KeyValue>
+                                                    <KeyValue title="eVDI Subnets" value={dot.pick('dcv_session.network.private_subnets', this.state.vdcSettings)} clipboard={true}/>
+                                                    <KeyValue title="Subnet AutoRetry">
+                                                        <EnabledDisabledStatusIndicator enabled={Utils.asBoolean(dot.pick('dcv_session.network.subnet_autoretry', this.state.vdcSettings))}/>
+                                                    </KeyValue>
+                                                    <KeyValue title="Randomize Subnets">
+                                                        <EnabledDisabledStatusIndicator enabled={Utils.asBoolean(dot.pick('dcv_session.network.randomize_subnets', this.state.vdcSettings))}/>
                                                     </KeyValue>
                                                 </ColumnLayout>
                                             </Container>

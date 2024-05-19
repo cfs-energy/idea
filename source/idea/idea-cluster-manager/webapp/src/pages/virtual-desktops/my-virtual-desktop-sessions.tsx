@@ -1001,7 +1001,7 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
                             <Button key="launch-new-virtual-desktop" variant="primary" onClick={() => {
                                 this.showCreateSessionForm()
                             }}>
-                                Launch new Virtual Desktop
+                                Launch New Virtual Desktop
                             </Button>
                         </SpaceBetween>
                     }>
@@ -1095,7 +1095,7 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
                         color="inherit">
                         Click the button below to create a new virtual desktop.
                     </Box>
-                    <Button onClick={() => this.showCreateSessionForm()}>Launch new Virtual Desktop</Button>
+                    <Button onClick={() => this.showCreateSessionForm()}>Launch New Virtual Desktop</Button>
                 </Box>
             }
             items={getSessions()}

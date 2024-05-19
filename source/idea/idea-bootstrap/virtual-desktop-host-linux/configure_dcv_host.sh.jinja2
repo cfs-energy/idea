@@ -157,6 +157,14 @@ rotation = 'daily'
   echo -e "idea_session_id=\"${IDEA_SESSION_ID}\"" > /etc/dcv-session-manager-agent/tags/idea_tags.toml
 }
 
+function configure_usb_remotization() {
+  echo "Searching for USB Remotization configurations..."
+  {%- for usb_info in context.config.get_list('vdc.server.usb_remotization', default=[]) %}
+    echo -en "{{ usb_info }}\n" >>/etc/dcv/usb-devices.conf
+  {%- endfor %}
+
+}
+
 function restart_x_server() {
   echo "# restart x server ..."
   sudo systemctl isolate multi-user.target
@@ -305,7 +313,7 @@ install_microphone_redirect
 download_broker_certificate
 configure_dcv_host
 configure_dcv_agent
-
+configure_usb_remotization
 configure_gl
 machine=$(uname -m) #x86_64 or aarch64
 if [[ $machine == "x86_64" ]]; then
