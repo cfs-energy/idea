@@ -354,7 +354,7 @@ class UpdateHpcLicense extends Component<UpdateHpcLicenseProps, UpdateHpcLicense
                                                     <p>
                                                         <b>Edit 1) </b>
                                                         Find the relevant section containing <b>resources</b>.
-                                                        This line tells OpenPBS to honors the requested resources and do not start a job unless all resources requirements have been met.
+                                                        This line tells OpenPBS to honor the requested resources and do not start a job unless all resources requirements have been met.
                                                     </p>
                                                     <p><u>Edit</u> the line as below:</p>
                                                     <p>

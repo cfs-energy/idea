@@ -67,7 +67,7 @@ class OpenPBSJob(SocaBaseModel):
     Hold_Types: Optional[str] = Field(default=None)
     interactive: Optional[str] = Field(default=None)
     jobdir: Optional[str] = Field(default=None)
-    Job_Name: Optional[str] = Field(default=None)
+    Job_Name: Optional[Union[int, str, float]] = Field(default=None)
     Job_Owner: Optional[str] = Field(default=None)
     job_state: Optional[str] = Field(default=None)
     Join_Path: Optional[str] = Field(default=None)

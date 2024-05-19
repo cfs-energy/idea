@@ -209,7 +209,15 @@ class SocaFSxLustreConfig(SocaBaseModel):
 
     @staticmethod
     def allowed_sizes_gb():
-        return [1200, 2400, 3600, 10800]
+        # Begin from 2400 (the smallest multiple of 2400 after 1200)
+        # Continue by incrementing by 2400 and stop before 100800
+        sizes = list(range(2400, 100800, 2400))
+
+        # Manually add 1200 to the list
+        sizes.insert(0, 1200)
+
+        # Return the completed list
+        return sizes
 
     @staticmethod
     def is_allowed_deployment_type(value: str) -> bool:
@@ -680,7 +688,7 @@ class SocaJob(SocaBaseModel):
     job_uid: Optional[str] = Field(default=None)
     job_group: Optional[str] = Field(default=None)
     project: Optional[str] = Field(default=None)
-    name: Optional[str] = Field(default=None)
+    name: Optional[Union[int, str, float]] = Field(default=None)
     queue: Optional[str] = Field(default=None)
     queue_type: Optional[str] = Field(default=None)
     scaling_mode: Optional[SocaScalingMode] = Field(default=None)

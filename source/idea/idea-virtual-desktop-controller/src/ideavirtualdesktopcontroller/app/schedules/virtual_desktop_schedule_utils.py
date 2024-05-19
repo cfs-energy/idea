@@ -30,7 +30,7 @@ class VirtualDesktopScheduleUtils:
         if schedule_type == VirtualDesktopScheduleType.WORKING_HOURS:
             start_up_time = self.context.config().get_string('virtual-desktop-controller.dcv_session.working_hours.start_up_time', required=True)
             shut_down_time = self.context.config().get_string('virtual-desktop-controller.dcv_session.working_hours.shut_down_time', required=True)
-        elif schedule_type == VirtualDesktopScheduleType.STOP_ALL_DAY:
+        elif schedule_type == VirtualDesktopScheduleType.STOP_ON_IDLE:
             start_up_time = '23:59'
             shut_down_time = '00:00'
         elif schedule_type == VirtualDesktopScheduleType.START_ALL_DAY:
@@ -75,7 +75,7 @@ class VirtualDesktopScheduleUtils:
 
         # both are not empty
         if (schedule_a.schedule_type == schedule_b.schedule_type) and (
-            schedule_a.schedule_type == VirtualDesktopScheduleType.STOP_ALL_DAY or schedule_a.schedule_type == VirtualDesktopScheduleType.START_ALL_DAY or schedule_a.schedule_type == VirtualDesktopScheduleType.NO_SCHEDULE or schedule_a.schedule_type == VirtualDesktopScheduleType.WORKING_HOURS):
+            schedule_a.schedule_type == VirtualDesktopScheduleType.STOP_ON_IDLE or schedule_a.schedule_type == VirtualDesktopScheduleType.START_ALL_DAY or schedule_a.schedule_type == VirtualDesktopScheduleType.NO_SCHEDULE or schedule_a.schedule_type == VirtualDesktopScheduleType.WORKING_HOURS):
             self._logger.debug('Both are not empty but are the same static schedule type...')
             return True
 
@@ -224,7 +224,7 @@ class VirtualDesktopScheduleUtils:
         working_hours_start_up_time = self.context.config().get_string('virtual-desktop-controller.dcv_session.working_hours.start_up_time', required=True)
         working_hours_shut_down_time = self.context.config().get_string('virtual-desktop-controller.dcv_session.working_hours.shut_down_time', required=True)
 
-        if VirtualDesktopScheduleType[schedule.schedule_type] == VirtualDesktopScheduleType.STOP_ALL_DAY:
+        if VirtualDesktopScheduleType[schedule.schedule_type] == VirtualDesktopScheduleType.STOP_ON_IDLE:
             should_stop = True
         elif VirtualDesktopScheduleType[schedule.schedule_type] == VirtualDesktopScheduleType.START_ALL_DAY:
             should_resume = True

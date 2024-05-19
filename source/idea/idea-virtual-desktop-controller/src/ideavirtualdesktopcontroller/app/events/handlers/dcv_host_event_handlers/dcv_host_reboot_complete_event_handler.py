@@ -41,8 +41,9 @@ class DCVHostRebootCompleteEventHandler(BaseVirtualDesktopControllerEventHandler
             self.log_error(message_id=message_id, message='Invalid IDEA SESSION ID.')
             return
 
-        if session.server.instance_id != sender_instance_id:
-            raise self.message_source_validation_failed(f'Corrupted sender_id: {sender_id}. Ignoring message')
+        # Validation removed here as it breaks resume from hibernation. In these instances, session.server.instance_id is the hibernated evdi node and sender_instance_id is the vdc controller.  
+        #if session.server.instance_id != sender_instance_id:
+        #    raise self.message_source_validation_failed(f'Corrupted sender_id: {sender_id}. Ignoring message')
 
         # if session is RESUMING/READY/STOPPED/ERROR continue, else ignore
         if session.state not in {VirtualDesktopSessionState.RESUMING, VirtualDesktopSessionState.READY, VirtualDesktopSessionState.ERROR, VirtualDesktopSessionState.STOPPED}:

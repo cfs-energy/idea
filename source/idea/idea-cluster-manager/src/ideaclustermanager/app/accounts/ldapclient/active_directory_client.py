@@ -258,6 +258,8 @@ class ActiveDirectoryClient(AbstractLDAPClient):
                     Utils.to_bytes('organizationalPerson')
                 ]),
                 ('displayName', [Utils.to_bytes(username)]),
+                ('givenName', [Utils.to_bytes(username)]),
+                ('sn', [Utils.to_bytes(username)]),
                 ('mail', [Utils.to_bytes(email)]),
                 ('sAMAccountName', [Utils.to_bytes(username)]),
                 ('userPrincipalName', [Utils.to_bytes(user_principal_name)]),

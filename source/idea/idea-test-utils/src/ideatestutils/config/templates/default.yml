@@ -428,24 +428,24 @@ global-settings:
         - putty
 
     nodejs:
-      version: "16.20.2"
-      nvm_version: "0.39.5"
-      npm_version: "9.8.1"
+      version: "18.20.2"
+      nvm_version: "0.39.7"
+      npm_version: "10.5.2"
       url: "https://raw.githubusercontent.com/nvm-sh/nvm/"
     openmpi:
-      version: "4.1.5"
-      url: "https://download.open-mpi.org/release/open-mpi/v4.1/openmpi-4.1.5.tar.gz"
-      checksum: "ca1bff69624909f16fb6c240cddb7b44236de616dfb6dd68d26cb264654e737457e265c61a78b7e42ec4832cfd6d48a5"
+      version: "5.0.3"
+      url: "https://download.open-mpi.org/release/open-mpi/v5.0/openmpi-5.0.3.tar.gz"
+      checksum: "68788d04c44fe39749e65e6c375fb5886d5c6c64c63711e88559c7f701bd61f6c9c32a4a8d7af0b20ca3487a3dcf626c"
       checksum_method: sha384
     python:
-      version: "3.9.18"
-      url: "https://www.python.org/ftp/python/3.9.18/Python-3.9.18.tgz"
-      checksum: "f713544332479d7fa7080db780703d7728b6002ba23b77885fa87922fab1ce3ee8316900c7de49b502b8624adcffb097"
+      version: "3.9.19"
+      url: "https://www.python.org/ftp/python/3.9.19/Python-3.9.19.tgz"
+      checksum: "9ba5d1ba9c325313dcc1cb9a29175373a77820cfbef08a755b61c811b78c8ef0eb14ad6d52597a1ac85c1d8aa7d7157b"
       checksum_method: sha384
     efa:
-      version: "1.25.1"
-      url: "https://efa-installer.amazonaws.com/aws-efa-installer-1.25.1.tar.gz"
-      checksum: "7e0648a2af37f8d5d18d8a38cb424754476dbbf2a62c9bd573eaec4195e586e8c49b4436246e2a0bd0a181682680d290"
+      version: "1.31.0"
+      url: "https://efa-installer.amazonaws.com/aws-efa-installer-1.31.0.tar.gz"
+      checksum: "413ddbdd8e41ab3e4063c3c9be115fb0d87429fffa76dcc7f41d06ad295cc259f135ef3746dcb3caf5614cef11268ad3"
       checksum_method: sha384
     openpbs:
       version: "23.06.06"
@@ -580,8 +580,8 @@ global-settings:
       - g4dn
       - g4ad
     nvidia_public_driver_versions:
-      ltsb_version: &ltsb_version 470.141.03
-      production_version: &production_version 510.47.03
+      ltsb_version: &ltsb_version 470.239.06
+      production_version: &production_version 550.54.15
       p2: *ltsb_version
       g2: *ltsb_version
       g3: *production_version

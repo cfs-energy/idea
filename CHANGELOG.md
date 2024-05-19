@@ -4,6 +4,75 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.7] - 2024-06-01
+
+### Notes
+* This upgrade does require an update to the global settings. Please review [Global Settings Upgrade](https://docs.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/update-idea-backend-resource#global-settings-backup-and-upgrade) before upgrading.
+* Pre-upgrade script `scripts/pre-upgrade-317.sh` will assist by outputting the cluster settings command to update Base OS AMI as well as rename occurrences in settings for schedule `STOP_ALL_DAY` to `STOP_ON_IDLE`.
+* Schedule Update script included in scripts to be able to update existing sessions to `STOP_ON_IDLE` via API
+
+### Features
+* First truly Open Source IDEA Release!
+* Documentation combined into IDEA monorepo under `docs` folder
+* Multi Architecture Administrator Docker Image
+  * Added build-push-multi task to use buildx to create the IDEA Admin container and auto-push to ECR
+* Added DCV Checks in the eVDI Auto Power off event. This will check CPU, DCV, and SSH connections based on the idle time setup before stopping eVDI hosts
+  * Renamed schedule `STOP_ALL_DAY` to `STOP_ON_IDLE` to better represent stop schedule behavior
+  * Set default schedule for all days to `STOP_ON_IDLE`
+* Login page will show a Login With SSO button when SSO is enabled.
+
+### Changes
+* Update AWS CDK from `2.95.1` to `2.317.0`
+* Update Node from `16.20.2` to `18.20.2`
+* Update Python from `3.9.18` to `3.9.19`
+* Update NVM from `0.39.5` to `0.39.7`
+* Update NPM from `9.8.1` to `10.5.2`
+* Update OpenMPI from `4.1.5` to `5.0.3`
+* Update EFA Driver from `1.25.1` to `1.31.0`
+* Update DCV and components from `2023.0` to `2023.1`
+* Update NVIDIA GPU drivers used during installation
+  * LTSB from  `470.199.02` to `470.239.06`
+  * Production `535.104.05` to `550.54.15`
+* Update all AMIs for Base OS and Software Stacks. Update Amazon Linux 2 AMI to Kernel 5.10
+  * Pre-Upgrade script can assist in updating AMI in DDB Settings. Software Stacks will remain untouched during upgrade
+* Implement Renovate for dependency tracking
+  * Update all applicable Python packages per Renovate best-practices config
+    * `sanic` left at `23.6.0` for socket authorization issues in `ideactl`
+  * Dependency pinning and some dependency updates for Cluster Manager Web App node packages
+* Added gcc and python3-dev to Docker image for building Python requirements
+* Removed AWS Corporate ECR dependency in `idea-admin.sh`
+* New Active Directory users will get their account name applied to the givenName and sn attributes to satisfy directory import syncing with Okta requirements
+* Updated Help menu in Cluster Web App to direct issues to GitHub
+* Update references to old Github Repo
+* Update references to old Docs URL
+* Added AMI update scripts in `scripts/dev` to update AMI versions for base and software stacks. These will be worked into devtool at a later time
+  
+### Bug Fixes
+* Fixed FSx for Lustre allowed size mismatch between AWS and IDEA
+  * This likely needs a re-work for different FSx Lustre types.
+* Fixed NVIDIA GPU Driver install for Amazon Linux 2 with Kernel 5.10
+* Remove trailing whitespace from ENI IDS for tagging in instance bootstrap
+* Fixed HPC Job Name pydantic validation to allow strings, integers, and floats instead of just strings for HPC job names submitted from CLI
+* Set PBS config on eVDI Nodes to use the Rt53 scheduler record instead of the ec2 hostname. This will enable existing eVDI nodes to access PBS with an upgraded scheduler with a new ip.
+* Fix root storage size calculation for new eVDI nodes with hibernation enabled
+* Fix resuming Hibernated eVDI nodes
+* Fixed ID Token claims for SSO enabled clusters. Added Cognito pre token generation Lambda to stuff custom attributes to ID token
+* Fix License Server Check script permissions
+  * Cluster home directory `/apps/idea-<cluster name>` from `700` to `701` to allow traverse to script directory
+* Fix Home Dir permissions for New Users from `700` to `710` to allow file sharing when using `Add User to My Group` feature
+* Fix scratch storage mount permissions for HPC jobs on Linux
+* In `idea-admin.sh` sso configuration, multiple scopes can be submitted seperated by `,` this will be replaced with a space in Cognito
+
+### Known Caveats
+* Data model was updated in 3.1.6, devtool web-portal.typings needs to be re-worked to support changes in Pydantic v2 and IDEA data model
+* Developer documentation needs some re-work / updates
+* When using OpenLDAP and doing an upgrade, replacement of the directoryservice instance removes existing directory entries. This can be avoided by backing up and restoring post upgrade or using ideactl on cluster manager to sync groups and users from DynamoDB into OpenLDAP. Generally there is not an explicit need to upgrade the directoryservice module.
+* After upgrading the scheduler module, job id's reset to 0. This is purely cosmetic and does not affect functionality. However, users tracking analytics by job id may want to be aware of this upon upgrade.
+* Tests need some re-work
+* Node dependencies need updating in more places. Cluster Manager Web App
+* Python needs updating. 3.9 is EOL October 2025
+
+
 ## [3.1.6] - 2023-10-20
 
 ### Features

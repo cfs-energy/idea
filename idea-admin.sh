@@ -28,13 +28,13 @@
 # * IDEA_DEV_MODE - Set to "true" if you are working with IDEA sources
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-IDEA_REVISION=${IDEA_REVISION:-"v3.1.6"}
-IDEA_DOCKER_REPO=${IDEA_DOCKER_REPO:-"public.ecr.aws/h5i3y8y1/idea-administrator"}
+IDEA_REVISION=${IDEA_REVISION:-"v3.1.7"}
+IDEA_DOCKER_REPO=${IDEA_DOCKER_REPO:-"public.ecr.aws/s5o2b4m0/idea-administrator"}
 IDEA_ECR_CREDS_RESET=${IDEA_ECR_CREDS_RESET:-"true"}
 IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER=${IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER:=""}
 IDEA_ADMIN_ENABLE_CDK_NAG_SCAN=${IDEA_ADMIN_ENABLE_CDK_NAG_SCAN:-"true"}
 
-DOCUMENTATION_ERROR="https://ide-on-aws.com"
+DOCUMENTATION_ERROR="https://docs.idea-hpc.com"
 NC="\033[0m" # No Color
 RED="\033[1;31m"
 GREEN="\033[1;32m"

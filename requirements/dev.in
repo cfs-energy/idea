@@ -10,4 +10,4 @@ invoke
 pyfiglet
 openapi-pydantic
 pylint
-wheel~=0.38.1
+wheel~=0.43.0

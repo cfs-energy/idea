@@ -104,7 +104,7 @@ class VirtualDesktopScheduleDB(VirtualDesktopNotifiableDB):
         if schedule_type == VirtualDesktopScheduleType.WORKING_HOURS:
             start_up_time = self.context.config().get_string('virtual-desktop-controller.dcv_session.working_hours.start_up_time', required=True)
             shut_down_time = self.context.config().get_string('virtual-desktop-controller.dcv_session.working_hours.shut_down_time', required=True)
-        elif schedule_type == VirtualDesktopScheduleType.STOP_ALL_DAY:
+        elif schedule_type == VirtualDesktopScheduleType.STOP_ON_IDLE:
             start_up_time = '23:59'
             shut_down_time = '00:00'
         elif schedule_type == VirtualDesktopScheduleType.START_ALL_DAY:

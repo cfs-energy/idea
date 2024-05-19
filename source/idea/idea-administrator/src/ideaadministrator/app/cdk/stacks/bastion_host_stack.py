@@ -185,6 +185,7 @@ class BastionHostStack(IdeaBaseStack):
                 ec2.CfnInstance.BlockDeviceMappingProperty(
                     device_name=block_device_name,
                     ebs=ec2.CfnInstance.EbsProperty(
+                        encrypted=True,
                         volume_size=volume_size,
                         volume_type=block_device_type_string
                     )
