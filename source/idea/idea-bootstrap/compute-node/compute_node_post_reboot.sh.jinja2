@@ -15,11 +15,19 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
 {% include 'compute-node/_templates/scheduler_stop.jinja2' %}
 
+{% include 'compute-node/_templates/scratch_storage.jinja2' %}
+
+mount -a
+
+{%- if context.vars.job.params.enable_efa_support %}
+  {% include 'compute-node/_templates/efa.jinja2' %}
+{%- endif %}
+
 {%- with node_type = 'compute' %}
   {% include '_templates/linux/gpu_drivers.jinja2' %}
 {%- endwith %}
 
-# a reboot may be required if GPU Drivers are installed.
+# a reboot may be required if GPU Drivers or FSx for Lustre client are installed.
 REBOOT_REQUIRED=$(cat /root/bootstrap/reboot_required.txt)
 if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
   reboot

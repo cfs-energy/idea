@@ -42,6 +42,7 @@ Statement:
       - application-autoscaling:RegisterScalableTarget
       - application-autoscaling:PutScalingPolicy
       - application-autoscaling:DescribeScalingPolicies
+      - budgets:ViewBudget
     Resource: '*'
     Effect: Allow
 

@@ -252,6 +252,15 @@ Resources:
             Resource:
               - Fn::Sub: ${StagingBucket.Arn}/logs/*
 
+          - Sid: IdeaAlbAccessLogsOutpostsZones
+            Effect: Allow
+            Principal:
+              Service: logdelivery.elb.{{ aws_dns_suffix }}
+            Action:
+              - s3:PutObject
+            Resource:
+              - Fn::Sub: ${StagingBucket.Arn}/logs/*
+
           # [2] NLB Access Logs
           # refer: https://docs.aws.amazon.com/elasticloadbalancing/latest/network/load-balancer-access-logs.html
           - Sid: IdeaNlbAccessLogs-AWSLogDeliveryWrite

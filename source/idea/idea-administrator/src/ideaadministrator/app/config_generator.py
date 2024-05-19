@@ -232,7 +232,10 @@ class ConfigGenerator:
         return ami_id
 
     def get_volume_size(self) -> int:
-        return Utils.get_value_as_int('volume_size', self.user_values, 200)
+        return Utils.get_value_as_int('volume_size', self.user_values, default=200)
+
+    def get_volume_type_string(self) -> str:
+        return Utils.get_value_as_string('volume_type', self.user_values, default='gp3')
 
     def get_enabled_modules(self) -> List[str]:
         enabled_modules = Utils.get_value_as_list('enabled_modules', self.user_values)
@@ -424,6 +427,7 @@ class ConfigGenerator:
             'base_os': self.get_base_os(),
             'instance_ami': self.get_instance_ami(),
             'volume_size': self.get_volume_size(),
+            'volume_type': self.get_volume_type_string(),
             'enabled_modules': self.get_enabled_modules(),
             'metrics_provider': self.get_metrics_provider(),
             'prometheus_remote_write_url': self.get_prometheus_remote_write_url(),

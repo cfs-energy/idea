@@ -65,7 +65,7 @@ class SocaListingPayload(SocaPayload):
     @property
     def page_size(self) -> int:
         if self.paginator is None:
-            return 20
+            return 50
         return ModelUtils.get_as_int(self.paginator.page_size)
 
     @property

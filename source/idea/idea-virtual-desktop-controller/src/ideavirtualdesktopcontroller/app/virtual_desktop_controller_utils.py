@@ -232,10 +232,10 @@ class VirtualDesktopControllerUtils:
             _deployment_loop += 1
             # We just .pop(0) since the list has been randomized already if it was requested
             _subnet_to_try = _attempt_subnets.pop(0)
-            _remainig_subnet_count = len(_attempt_subnets)
+            _remaining_subnet_count = len(_attempt_subnets)
 
-            self._logger.info(f"Deployment attempt #{_deployment_loop} subnet_id: {_subnet_to_try} Remaining Subnets: {_remainig_subnet_count}")
-            if _remainig_subnet_count <= 0:
+            self._logger.info(f"Deployment attempt #{_deployment_loop} subnet_id: {_subnet_to_try} Remaining Subnets: {_remaining_subnet_count}")
+            if _remaining_subnet_count <= 0:
                 # this is our last attempt
                 self._logger.debug(f"Final deployment attempt (_remaining_subnet_count == 0)")
                 _attempt_provision = False
@@ -415,7 +415,7 @@ class VirtualDesktopControllerUtils:
 
             if instance_type_name not in allowed_instance_type_names and instance_type_family not in allowed_instance_type_families:
                 # instance type or instance family is not present in allow list
-                self._logger.debug(f"Found {instance_type_name} ({instance_type_family}) NOT in ALLOW config: ({allowed_instance_type_names} / {allowed_instance_type_families})")
+                self._logger.debug(f"Found {instance_type_name} ({instance_type_family}) NOT in ALLOW config")
                 continue
 
             if instance_type_name in denied_instance_type_names or instance_type_family in denied_instance_type_families:
@@ -426,7 +426,7 @@ class VirtualDesktopControllerUtils:
             instance_info = instance_info_data[instance_type_name]
             if Utils.is_not_empty(software_stack) and software_stack.min_ram > self.get_instance_ram(instance_type_name):
                 # this instance doesn't have the minimum ram required to support the software stack.
-                self._logger.debug(f"Software stack ({software_stack}) restrictions on RAM ({software_stack.min_ram}): Instance {instance_type_name} lacks enough ({self.get_instance_ram(instance_type_name)}). Skipped.")
+                self._logger.debug(f"Minimum RAM check - Software stack {software_stack.stack_id} requires a minimum RAM of ({software_stack.min_ram}): Instance {instance_type_name} RAM ({self.get_instance_ram(instance_type_name)}). Skipping instance.")
                 continue
 
             hibernation_supported = Utils.get_value_as_bool('HibernationSupported', instance_info, default=False)

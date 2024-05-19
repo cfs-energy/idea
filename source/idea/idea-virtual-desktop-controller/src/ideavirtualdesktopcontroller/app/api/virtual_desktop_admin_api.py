@@ -196,6 +196,9 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
         if Utils.is_empty(software_stack.architecture):
             software_stack.architecture = VirtualDesktopArchitecture(Utils.get_value_as_string('Architecture', image_description, None))
 
+        if Utils.is_empty(software_stack.enabled):
+            software_stack.enabled = True
+
         return software_stack, True
 
     def create_session(self, context: ApiInvocationContext):

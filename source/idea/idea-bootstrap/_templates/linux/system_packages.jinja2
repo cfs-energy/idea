@@ -1,14 +1,36 @@
 # Begin: System Packages Install
 
 SYSTEM_PKGS=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.system', required=True)) }})
+SYSTEM_PKGS_7=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.system_7', required=True)) }})
+SYSTEM_PKGS_8=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.system_8', required=True)) }})
 APPLICATION_PKGS=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.application', required=True)) }})
 SSSD_PKGS=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.sssd', required=True)) }})
+SSSD_PKGS_7=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.sssd_7', required=True)) }})
 OPENLDAP_CLIENT_PKGS=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.openldap_client', required=True)) }})
 
 {%- if context.base_os == 'rhel7' %}
-  yum install -y $(echo ${SYSTEM_PKGS[*]} ${APPLICATION_PKGS[*]} ${SSSD_PKGS[*]} ${OPENLDAP_CLIENT_PKGS[*]}) --enablerepo rhel-7-server-rhui-optional-rpms
+  yum install -y $(echo ${SYSTEM_PKGS[*]} ${SYSTEM_PKGS_7[*]} ${APPLICATION_PKGS[*]} ${SSSD_PKGS[*]} ${SSSD_PKGS_7[*]} ${OPENLDAP_CLIENT_PKGS[*]}) --enablerepo rhel-7-server-rhui-optional-rpms
 {%- elif context.base_os in ('amazonlinux2', 'centos7') %}
-  yum install -y $(echo ${SYSTEM_PKGS[*]} ${APPLICATION_PKGS[*]} ${SSSD_PKGS[*]} ${OPENLDAP_CLIENT_PKGS[*]})
+  yum install -y $(echo ${SYSTEM_PKGS[*]} ${SYSTEM_PKGS_7[*]} ${APPLICATION_PKGS[*]} ${SSSD_PKGS[*]} ${SSSD_PKGS_7[*]} ${OPENLDAP_CLIENT_PKGS[*]})
+{%- elif context.base_os in ('rhel8', 'rocky8') %}
+dnf install -y dnf-plugins-core
+{%- if context.base_os == 'rhel8' %}
+dnf config-manager --set-enabled codeready-builder-for-rhel-8-rhui-rpms
+{%- elif context.base_os == 'rocky8' %}
+dnf config-manager --set-enabled powertools
+{%- endif %}
+EXCLUDE=()
+{%- if context.is_amd_gpu() %}
+# Don't upgrade the kernel and kernel packages to higher versions as AMD GPU driver support is dependent on the kernel version
+EXCLUDE+=('kernel*el8_8*')
+{%- endif %}
+{%- if context.job_has_param('enable_efa_support') %}
+#EFA installer provides an older version of this library
+EXCLUDE+=('libibverbs-44.0-2.el8.1')
+{%- endif %}
+printf -v EXCLUDE_JOINED '%s,' "${EXCLUDE[@]}"
+dnf --exclude=${EXCLUDE_JOINED%,} install -y $(echo ${SYSTEM_PKGS[*]} ${SYSTEM_PKGS_8[*]} ${APPLICATION_PKGS[*]} ${SSSD_PKGS[*]} ${OPENLDAP_CLIENT_PKGS[*]})
+systemctl enable hibinit-agent
 {%- endif %}
 
 # End: System Packages Install

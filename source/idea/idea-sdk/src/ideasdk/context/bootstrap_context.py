@@ -94,7 +94,7 @@ class BootstrapContext:
 
     @property
     def default_system_user(self) -> str:
-        if self.base_os in ('amazonlinux2', 'rhel7'):
+        if self.base_os in ('amazonlinux2', 'rhel7', 'rhel8', 'rocky8'):
             return 'ec2-user'
         if self.base_os == 'centos7':
             return 'centos'
@@ -109,6 +109,29 @@ class BootstrapContext:
                 continue
             if storage['provider'] == provider:
                 return True
+        return False
+
+    def job_has_storage_provider(self, provider: str) -> bool:
+        context_vars = vars(self.vars)
+        if provider == 'fsx_lustre' and 'job' in context_vars:
+            params = self.vars.job.params
+            fsx_lustre = params.fsx_lustre
+            fsx_lustre_enabled = fsx_lustre.__getattribute__('enabled')
+            if fsx_lustre_enabled:
+                return True
+        return False
+
+    def job_has_param(self, parameter: str) -> bool:
+        context_vars = vars(self.vars)
+        if 'job' in context_vars:
+            params = self.vars.job.params
+            if not hasattr (params, parameter):
+                return False
+            param_value = params.__getattribute__(parameter)
+            if isinstance(param_value, bool):
+                return param_value
+            else:
+                return param_value is not None
         return False
 
     def eval_shared_storage_scope(self, shared_storage: Dict) -> bool:

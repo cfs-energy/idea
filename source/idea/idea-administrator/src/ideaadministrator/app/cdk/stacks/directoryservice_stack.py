@@ -231,7 +231,7 @@ class DirectoryServiceStack(IdeaBaseStack):
         base_os = self.context.config().get_string('directoryservice.base_os', required=True)
         instance_ami = self.context.config().get_string('directoryservice.instance_ami', required=True)
         instance_type = self.context.config().get_string('directoryservice.instance_type', required=True)
-        volume_size = self.context.config().get_int('directoryservice.volume_size', 200)
+        volume_size = self.context.config().get_int('directoryservice.volume_size', default=200)
         key_pair_name = self.context.config().get_string('cluster.network.ssh_key_pair', required=True)
         enable_detailed_monitoring = self.context.config().get_bool('directoryservice.ec2.enable_detailed_monitoring', default=False)
         enable_termination_protection = self.context.config().get_bool('directoryservice.ec2.enable_termination_protection', default=False)
@@ -258,6 +258,8 @@ class DirectoryServiceStack(IdeaBaseStack):
             subnet_ids = self.cluster.existing_vpc.get_private_subnet_ids()
 
         block_device_name = Utils.get_ec2_block_device_name(base_os)
+        block_device_type_string = self.context.config().get_string(f'directoryservice.volume_type', default='gp3')
+        block_device_type_volumetype = ec2.EbsDeviceVolumeType.GP3 if block_device_type_string == 'gp3' else ec2.EbsDeviceVolumeType.GP2
 
         user_data = BootstrapUserDataBuilder(
             aws_region=self.aws_region,
@@ -297,7 +299,7 @@ class DirectoryServiceStack(IdeaBaseStack):
                     encrypted=True,
                     kms_key=ebs_kms_key,
                     volume_size=volume_size,
-                    volume_type=ec2.EbsDeviceVolumeType.GP3
+                    volume_type=block_device_type_volumetype
                     )
                 )
             )],
@@ -312,7 +314,7 @@ class DirectoryServiceStack(IdeaBaseStack):
                     device_name=block_device_name,
                     ebs=ec2.CfnInstance.EbsProperty(
                         volume_size=volume_size,
-                        volume_type='gp3'
+                        volume_type=block_device_type_string
                     )
                 )
             ],

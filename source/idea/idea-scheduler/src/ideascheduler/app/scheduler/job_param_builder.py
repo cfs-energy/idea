@@ -1377,17 +1377,19 @@ class SubnetIdsParamBuilder(BaseParamBuilder):
             if self.default_job_params.subnet_ids is not None and len(self.default_job_params.subnet_ids) > 0:
                 default_subnet_ids = self.default_job_params.subnet_ids
 
+        nodes_builder = self.context.get_builder(constants.JOB_PARAM_NODES)
+        nodes = nodes_builder.get()
+        if nodes is None:
+            nodes = nodes_builder.default()
+
         if default_subnet_ids is None or len(default_subnet_ids) == 0:
-            if self.is_spot_capacity() or self.is_mixed_capacity():
+            if self.is_spot_capacity() or self.is_mixed_capacity() or nodes == 1:
                 default_subnet_ids = self.context.soca_context.config().get_list('cluster.network.private_subnets', required=True)
             else:
                 private_subnets = self.context.soca_context.config().get_list('cluster.network.private_subnets', required=True)
                 default_subnet_ids = [random.choice(private_subnets)]
 
         if len(default_subnet_ids) == 1:
-            return default_subnet_ids
-
-        if not self.is_spot_capacity():
             return default_subnet_ids
 
         # if FSx Lustre or single zone FileSystem is enabled, return the first subnet
@@ -1399,7 +1401,7 @@ class SubnetIdsParamBuilder(BaseParamBuilder):
         # if EFA is enabled, multiple subnets cannot be supported.
         enable_efa_support_builder = self.context.get_builder(constants.JOB_PARAM_ENABLE_EFA_SUPPORT)
         enable_efa_support = enable_efa_support_builder.get()
-        if enable_efa_support and len(default_subnet_ids) > 1:
+        if enable_efa_support and len(default_subnet_ids) > 1 and nodes > 1:
             return [random.choice(default_subnet_ids)]
 
         # if PlacementGroup is enabled, multiple subnets cannot be supported.

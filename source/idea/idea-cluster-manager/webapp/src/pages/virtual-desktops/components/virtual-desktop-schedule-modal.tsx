@@ -114,7 +114,7 @@ class VirtualDesktopDayOfWeekSchedule extends Component<VirtualDesktopDayOfWeekS
                     <IdeaTimeRangeSlider
                         ref={this.timeRangeSlider}
                         startTime={this.state.schedule.start_up_time ? this.state.schedule.start_up_time : '09:00'}
-                        endTime={this.state.schedule.shut_down_time ? this.state.schedule.shut_down_time : '18:00'}
+                        endTime={this.state.schedule.shut_down_time ? this.state.schedule.shut_down_time : '17:00'}
                     />
                 }
             </div>

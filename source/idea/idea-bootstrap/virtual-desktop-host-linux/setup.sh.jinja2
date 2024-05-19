@@ -62,7 +62,6 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
 if [[ ! -f ${BOOTSTRAP_DIR}/idea_preinstalled_packages.log ]]; then
   yum install -y deltarpm
-  yum -y upgrade
 
   {% include '_templates/linux/epel_repo.jinja2' %}
 

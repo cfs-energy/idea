@@ -40,6 +40,8 @@ class BaseOS(str, Enum):
     AMAZON_LINUX_2 = 'amazonlinux2'
     CENTOS_7 = 'centos7'
     RHEL_7 = 'rhel7'
+    RHEL_8 = 'rhel8'
+    ROCKY_8 = 'rocky8'
 
     def __str__(self):
         return self.value

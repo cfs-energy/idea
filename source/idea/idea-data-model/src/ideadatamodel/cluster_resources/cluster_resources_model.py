@@ -174,6 +174,13 @@ class SocaSubnet(SocaClusterResource):
         return ModelUtils.get_value_as_string('AvailabilityZone', self.ref)
 
     @property
+    def outpost_arn(self) -> str:
+        return ModelUtils.get_value_as_string('OutpostArn', self.ref, default='')
+
+    def is_outpost(self) -> bool:
+        return len(self.outpost_arn) > 0
+
+    @property
     def sort_order(self) -> int:
         availability_zone = self.availability_zone
         return ord(availability_zone[-1])

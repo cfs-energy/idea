@@ -306,7 +306,14 @@ class AwsResources:
                     availability_zone_id = entry['AvailabilityZoneId']
                     # CidrBlock is only present on IPv4-enable subnets (not on IPv6-only subnets)
                     cidr_block = entry['CidrBlock']
-                    suffix = f'(SubnetId: {subnet_id}, CIDR Block: {cidr_block}, AZ/AZID: {availability_zone}/{availability_zone_id})'
+                    outpost_info = entry.get('OutpostArn', None)
+                    if outpost_info:
+                        outpost_info = outpost_info.split('outpost/')[-1]
+                        outpost_text = f" Outpost: {outpost_info}"
+                    else:
+                        outpost_text = ""
+
+                    suffix = f'(SubnetId: {subnet_id}, CIDR Block: {cidr_block}, AZ/AZID: {availability_zone}/{availability_zone_id}{outpost_text})'
                     if Utils.is_not_empty(title):
                         title = f'{title} {suffix}'
                     else:
@@ -627,7 +634,9 @@ class AwsResources:
                     return ssh_key_pairs
 
             key_pairs_result = self.aws.ec2().describe_key_pairs()
-            key_pairs = Utils.get_value_as_list('KeyPairs', key_pairs_result, [])
+            key_pairs = Utils.get_value_as_list('KeyPairs', key_pairs_result, default=[])
+
+            key_pairs.sort(key=lambda x: x.get('KeyName', ''), reverse=False)
 
             ssh_key_pairs = []
             for key_pair in key_pairs:

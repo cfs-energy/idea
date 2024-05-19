@@ -1,5 +1,5 @@
 # Begin: Install Prometheus Node Exporter
-{%- if context.base_os in ('amazonlinux2', 'centos7', 'rhel7') and context.is_prometheus_exporter_enabled('node_exporter') %}
+{%- if context.base_os in ('amazonlinux2', 'centos7', 'rhel7', 'rhel8', 'rocky8') and context.is_prometheus_exporter_enabled('node_exporter') %}
 PROMETHEUS_NODE_EXPORTER_AMD64_URL="{{ context.config.get_string('global-settings.package_config.prometheus.exporters.node_exporter.linux.x86_64', required=True) }}"
 PROMETHEUS_NODE_EXPORTER_ARM64_URL="{{ context.config.get_string('global-settings.package_config.prometheus.exporters.node_exporter.linux.aarch64', required=True) }}"
 function install_prometheus_node_exporter () {

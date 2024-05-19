@@ -85,7 +85,7 @@ class TaskManager(SocaService):
                 messages = Utils.get_value_as_list('Messages', result, [])
                 if len(messages) == 0:
                     continue
-                self.logger.info(f'received {len(messages)} messages')
+                self.logger.debug(f'received {len(messages)} messages')
                 for message in messages:
                     self.task_executors.submit(lambda message_: self.execute_task(message_), message)
 

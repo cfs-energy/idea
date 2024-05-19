@@ -38,7 +38,7 @@ export type SocaUserInputParamType =
   | "paragraph"
   | "code"
   | "datepicker";
-export type VirtualDesktopBaseOS = "amazonlinux2" | "centos7" | "rhel7" | "windows";
+export type VirtualDesktopBaseOS = "amazonlinux2" | "centos7" | "rhel7" | "rhel8" | "rocky8" | "windows";
 export type SocaMemoryUnit = "bytes" | "kib" | "mib" | "gib" | "tib" | "kb" | "mb" | "gb" | "tb";
 export type VirtualDesktopArchitecture = "x86_64" | "arm64";
 export type VirtualDesktopGPU = "NO_GPU" | "NVIDIA" | "AMD";

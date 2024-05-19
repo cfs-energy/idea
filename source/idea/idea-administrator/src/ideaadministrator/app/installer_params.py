@@ -494,11 +494,21 @@ class SubnetIdsPrompt(DefaultPrompt[str]):
             subnet_ids_alt = self.args.get('private_subnet_ids')
             subnet_ids_alt_title = 'private subnets'
 
+        # If we are installing with Outposts subnets - relax the duplicate AZ and minimum 2 subnet checks
+        is_outpost_installation = False
+        for subnet in selected_subnets:
+            if subnet.is_outpost():
+                self.context.debug(f"Subnet: {subnet.subnet_id} is an AWS Outposts Subnet - setting is_outpost_installation to True")
+                is_outpost_installation = True
+
+        if is_outpost_installation:
+            self.context.debug(f"Detected installation to AWS Outposts")
+
         selected_azs = []
         for subnet in selected_subnets:
-            if subnet.availability_zone in selected_azs:
+            if (subnet.availability_zone in selected_azs) and not is_outpost_installation:
                 raise self.validation_error(
-                    message='Multiple subnet selection from the same Availability Zone is not supported.'
+                    message='Multiple subnet selection from the same Availability Zone is not supported unless using AWS Outposts.'
                 )
             selected_azs.append(subnet.availability_zone)
 
@@ -508,7 +518,7 @@ class SubnetIdsPrompt(DefaultPrompt[str]):
                         message=f'SubnetId: {subnet.subnet_id} is already selected as part of {subnet_ids_alt_title} selection.'
                     )
 
-        if self.param.name == 'private_subnet_ids' and len(selected_subnets) < 2:
+        if (self.param.name == 'private_subnet_ids') and ( (len(selected_subnets) < 2) and not is_outpost_installation):
             raise self.validation_error(
                 message='Minimum 2 subnet selections are required to ensure high availability.'
             )

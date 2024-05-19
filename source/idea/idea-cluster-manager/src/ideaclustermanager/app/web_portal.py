@@ -261,10 +261,10 @@ class WebPortal:
 
     def initialize(self):
         # index route
-        self.server.http_app.add_route(self.index_route, self.web_resources_context_path)
+        self.server.http_app.add_route(self.index_route, self.web_resources_context_path, name='index')
         # sso route
-        self.server.http_app.add_route(self.sso_initiate_route, self.make_route_path('/sso'))
+        self.server.http_app.add_route(self.sso_initiate_route, self.make_route_path('/sso'), name='sso_initiate')
         # sso oauth 2 callback route
-        self.server.http_app.add_route(self.sso_oauth2_callback_route, self.make_route_path('/sso/oauth2/callback'))
+        self.server.http_app.add_route(self.sso_oauth2_callback_route, self.make_route_path('/sso/oauth2/callback'), name='oauth2_callback')
         # add static resources at the end
-        self.server.http_app.static(self.web_resources_context_path, self.web_app_dir)
+        self.server.http_app.static(self.web_resources_context_path, self.web_app_dir, name='static-content')

@@ -775,6 +775,9 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
 
         base_os = self.context.config().get_string(f'virtual-desktop-controller.{self.CONFIG_MAPPING[component_name]}.autoscaling.base_os', required=True)
         block_device_name = Utils.get_ec2_block_device_name(base_os)
+        block_device_type_string = self.context.config().get_string(f'virtual-desktop-controller.volume_type', default='gp3')
+        block_device_type_volumetype = ec2.EbsDeviceVolumeType.GP3 if block_device_type_string == 'gp3' else ec2.EbsDeviceVolumeType.GP2
+
         enable_detailed_monitoring = self.context.config().get_bool(f'virtual-desktop-controller.{self.CONFIG_MAPPING[component_name]}.autoscaling.enable_detailed_monitoring', default=False)
         metadata_http_tokens = self.context.config().get_string(f'virtual-desktop-controller.{self.CONFIG_MAPPING[component_name]}.autoscaling.metadata_http_tokens', required=True)
 
@@ -800,7 +803,7 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
                     encrypted=True,
                     kms_key=ebs_kms_key,
                     volume_size=self.context.config().get_int(f'virtual-desktop-controller.{self.CONFIG_MAPPING[component_name]}.autoscaling.volume_size', default=200),
-                    volume_type=ec2.EbsDeviceVolumeType.GP3
+                    volume_type=block_device_type_volumetype
                 ))
             )],
             role=iam_role,

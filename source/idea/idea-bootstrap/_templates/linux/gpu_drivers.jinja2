@@ -83,13 +83,19 @@ function install_amd_gpu_drivers() {
   mkdir -p /root/bootstrap/gpu_drivers
   pushd /root/bootstrap/gpu_drivers
 
+  {%- if context.base_os in ('rhel7', 'centos7', 'amazonlinux2') %}
   local AWS=$(command -v aws)
   local DRIVER_BUCKET_REGION=$(curl -s --head {{ context.config.get_string('global-settings.gpu_settings.amd.s3_bucket_url', required=True) }} | grep bucket-region | awk '{print $2}' | tr -d '\r\n')
   $AWS --region ${DRIVER_BUCKET_REGION} s3 cp --quiet --recursive {{ context.config.get_string('global-settings.gpu_settings.amd.s3_bucket_path', required=True) }} .
   tar -xf amdgpu-pro-*rhel*.tar.xz
-  cd amdgpu-pro*
+  cd $(find . -maxdepth 1 -mindepth 1 -type d -name "amdgpu-pro*rhel*")
   rpm --import RPM-GPG-KEY-amdgpu
   /bin/sh ./amdgpu-pro-install -y --opencl=pal,legacy
+  {%- elif context.base_os in ('rhel8', 'rocky8') %}
+  local RHEL_ROCKY8_INSTALLER_URL={{ context.config.get_string('global-settings.gpu_settings.amd.rhel_rocky8_installer_url', required=True)}}
+  yum localinstall -y ${RHEL_ROCKY8_INSTALLER_URL}
+  /bin/amdgpu-install --usecase=workstation --vulkan=pro --opencl=rocr --accept-eula -y
+  {%- endif %}
 
   set_reboot_required "Installed AMD GPU Driver"
 
@@ -101,10 +107,12 @@ echo """Section \"ServerLayout\"
     InputDevice     \"Mouse0\" \"CorePointer\"
 EndSection
 Section \"Files\"
+    ModulePath \"/opt/amdgpu/lib64\"
     ModulePath \"/opt/amdgpu/lib64/xorg/modules/drivers\"
     ModulePath \"/opt/amdgpu/lib/xorg/modules\"
     ModulePath \"/opt/amdgpu-pro/lib/xorg/modules/extensions\"
     ModulePath \"/opt/amdgpu-pro/lib64/xorg/modules/extensions\"
+    ModulePath \"/opt/amdgpu-pro/lib64\"
     ModulePath \"/usr/lib64/xorg/modules\"
     ModulePath \"/usr/lib/xorg/modules\"
 EndSection
