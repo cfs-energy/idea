@@ -23,7 +23,8 @@ import constructs
 from aws_cdk import (
     aws_ec2 as ec2,
     aws_iam as iam,
-    aws_opensearchservice as opensearch
+    aws_opensearchservice as opensearch,
+    aws_kms as kms
 )
 
 
@@ -49,6 +50,7 @@ class OpenSearch(SocaBaseConstruct, opensearch.Domain):
         ebs: Optional[opensearch.EbsOptions] = None,
         enable_version_upgrade: Optional[bool] = None,
         encryption_at_rest: Optional[opensearch.EncryptionAtRestOptions] = None,
+        kms_key_arn: Optional[kms.IKey] = None,
         enforce_https: Optional[bool] = None,
         fine_grained_access_control: Optional[opensearch.AdvancedSecurityOptions] = None,
         logging: Optional[opensearch.LoggingOptions] = None,
@@ -88,7 +90,8 @@ class OpenSearch(SocaBaseConstruct, opensearch.Domain):
 
         if encryption_at_rest is None:
             encryption_at_rest = opensearch.EncryptionAtRestOptions(
-                enabled=True
+                enabled=True,
+                kms_key=kms_key_arn
             )
 
         if ebs is None:

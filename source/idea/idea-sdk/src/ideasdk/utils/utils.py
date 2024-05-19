@@ -353,6 +353,7 @@ class Utils:
         generator.minlchars = min_lowercase_chars
         generator.minnumbers = min_numbers
         generator.minschars = min_special_chars
+        generator.excludeschars = "$"
         return generator.generate()
 
     @staticmethod

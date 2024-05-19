@@ -26,9 +26,13 @@ from ideadatamodel import (
     CreateGroupRequest,
     CreateGroupResult,
     DeleteGroupRequest,
-    DeleteGroupResult
-
+    DeleteGroupResult,
+    AddUserToGroupRequest,
+    AddUserToGroupResult,
+    RemoveUserFromGroupRequest,
+    RemoveUserFromGroupResult
 )
+
 from ideaclustermanager.cli import build_cli_context
 from ideasdk.utils import Utils
 from ideaclustermanager.app.accounts.auth_utils import AuthUtils
@@ -216,3 +220,51 @@ def delete_group(groupname: str):
         )
     except exceptions.SocaException as e:
         context.error(e.message)
+
+@groups.command(context_settings=constants.CLICK_SETTINGS)
+@click.option('--username', required=True, multiple=True, help='Username for operation. Can be specified multiple times (-u user1 -u user2)')
+@click.option('--groupname', required=True, help='Groupname to add username(s)')
+def add_user_to_group(username: list[str], groupname: str):
+    """
+    Add username(s) to a group.
+    """
+    context = ClusterManagerUtils.get_soca_cli_context_cluster_manager()
+    result = None
+    try:
+        result = context.unix_socket_client.invoke_alt(
+            namespace='Accounts.AddUserToGroup',
+            payload=AddUserToGroupRequest(
+                usernames=username,
+                group_name=groupname
+            ),
+            result_as=AddUserToGroupResult
+        )
+    except exceptions.SocaException as e:
+        context.error(e.message)
+
+    # Show the groupname in summary?
+    print(result)
+
+@groups.command(context_settings=constants.CLICK_SETTINGS)
+@click.option('--username', required=True, multiple=True, help='Username for operation. Can be specified multiple times (-u user1 -u user2)')
+@click.option('--groupname', required=True, help='Groupname to remove username(s)')
+def remove_user_from_group(username: list[str], groupname: str):
+    """
+    Remove username(s) from a group.
+    """
+    context = ClusterManagerUtils.get_soca_cli_context_cluster_manager()
+    result = None
+    try:
+        result = context.unix_socket_client.invoke_alt(
+            namespace='Accounts.RemoveUserFromGroup',
+            payload=RemoveUserFromGroupRequest(
+                usernames=username,
+                group_name=groupname
+            ),
+            result_as=RemoveUserFromGroupResult
+        )
+    except exceptions.SocaException as e:
+        context.error(e.message)
+
+    # Show the groupname in summary
+    print(result)

@@ -33,7 +33,8 @@ from aws_cdk import (
     aws_cognito as cognito,
     aws_sqs as sqs,
     aws_elasticloadbalancingv2 as elbv2,
-    aws_autoscaling as asg
+    aws_autoscaling as asg,
+    aws_kms as kms
 )
 import constructs
 
@@ -247,16 +248,21 @@ class ClusterManagerStack(IdeaBaseStack):
         rolling_update_min_instances_in_service = self.context.config().get_int('cluster-manager.ec2.autoscaling.rolling_update_policy.min_instances_in_service', default=1)
         rolling_update_pause_time_minutes = self.context.config().get_int('cluster-manager.ec2.autoscaling.rolling_update_policy.pause_time_minutes', default=15)
         metadata_http_tokens = self.context.config().get_string('cluster-manager.ec2.autoscaling.metadata_http_tokens', required=True)
-        use_vpc_endpoints = self.context.config().get_bool('cluster.network.use_vpc_endpoints', default=False)
         https_proxy = self.context.config().get_string('cluster.network.https_proxy', required=False, default='')
         no_proxy = self.context.config().get_string('cluster.network.no_proxy', required=False, default='')
         proxy_config = {}
-        if use_vpc_endpoints and Utils.is_not_empty(https_proxy):
+        if Utils.is_not_empty(https_proxy):
             proxy_config = {
                     'http_proxy': https_proxy,
                     'https_proxy': https_proxy,
                     'no_proxy': no_proxy
                     }
+        kms_key_id = self.context.config().get_string('cluster.ebs.kms_key_id', required=False, default=None)
+        if kms_key_id is not None:
+             kms_key_arn = self.get_kms_key_arn(kms_key_id)
+             ebs_kms_key = kms.Key.from_key_arn(scope=self.stack, id=f'ebs-kms-key', key_arn=kms_key_arn)
+        else:
+             ebs_kms_key = kms.Alias.from_alias_name(scope=self.stack, id=f'ebs-kms-key-default', alias_name='alias/aws/ebs')
 
         if is_public:
             vpc_subnets = ec2.SubnetSelection(
@@ -291,6 +297,8 @@ class ClusterManagerStack(IdeaBaseStack):
             block_devices=[ec2.BlockDevice(
                 device_name=block_device_name,
                 volume=ec2.BlockDeviceVolume(ebs_device=ec2.EbsDeviceProps(
+                    encrypted=True,
+                    kms_key=ebs_kms_key,
                     volume_size=volume_size,
                     volume_type=ec2.EbsDeviceVolumeType.GP3
                 ))

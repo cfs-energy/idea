@@ -28,6 +28,7 @@ from ldap.controls.sss import SSSRequestControl, SSSResponseControl  # noqa
 from ldappool import ConnectionManager  # noqa
 from abc import abstractmethod
 import base64
+import logging
 
 
 class LdapClientOptions(SocaBaseModel):
@@ -85,6 +86,28 @@ class AbstractLDAPClient:
         self.refresh_root_username_password()
 
         # initialize pooled connection manager for LDAP to conserve resources
+        # Set any LDAP options that may be needed
+        self.logger.debug(f"Setting LDAP options..")
+        default_ldap_options = [
+            { 'name': 'Referrals' , 'code': ldap.OPT_REFERRALS, 'value': ldap.OPT_OFF },
+            { 'name': 'Protocol Version', 'code': ldap.OPT_PROTOCOL_VERSION, 'value': ldap.VERSION3 }
+        ]
+        for option in default_ldap_options:
+            self.logger.debug(f"Setting default option: {option.get('name')}({option.get('code')}) -> {option.get('value')}")
+            ldap.set_option(option.get('code'), option.get('value'))
+            self.logger.debug(f"Confirming default option: {option.get('name')}({option.get('code')}) -> {ldap.get_option(option.get('code'))}")
+
+        configured_ldap_options = self.context.config().get_list('directoryservice.ldap_options', default=[])
+        if configured_ldap_options:
+            self.logger.debug(f"Obtained LDAP options from directoryservice.ldap_options: {configured_ldap_options}")
+            for option in configured_ldap_options:
+                opt_d = dict(eval(option))
+                if isinstance(opt_d, dict):
+                    self.logger.debug(f"Setting configured option: {opt_d.get('name')}({opt_d.get('code')}) -> {opt_d.get('value')}")
+                    ldap.set_option(opt_d.get('code'), opt_d.get('value'))
+                    self.logger.debug(f"Confirming configured option: {opt_d.get('name')}({opt_d.get('code')}) -> {ldap.get_option(opt_d.get('code'))}")
+
+        self.logger.debug(f"Starting LDAP connection pool to {self.ldap_uri}")
         self.connection_manager = ConnectionManager(
             uri=self.ldap_uri,
             size=Utils.get_as_int(options.connection_pool_size, DEFAULT_LDAP_CONNECTION_POOL_SIZE),
@@ -93,7 +116,6 @@ class AbstractLDAPClient:
             timeout=Utils.get_as_float(options.connection_timeout, DEFAULT_LDAP_CONNECTION_TIMEOUT),
             use_pool=Utils.get_as_bool(options.connection_pool_enabled, DEFAULT_LDAP_ENABLE_CONNECTION_POOL)
         )
-
     # ldap wrapper methods
     def add_s(self, dn, modlist):
         trace_message = f'ldapadd -x -D "{self.ldap_root_bind}" -H {self.ldap_uri} "{dn}"'
@@ -380,10 +402,15 @@ class AbstractLDAPClient:
         """
         returns an LDAP connection object bound to ROOT user from the connection pool
         """
-        return self.connection_manager.connection(
+        res = self.connection_manager.connection(
             bind=self.ldap_root_bind,
             passwd=self.ldap_root_password
         )
+        if self.logger.isEnabledFor(logging.DEBUG):
+            cm_info = str(self.connection_manager)
+            self.logger.debug(f"LDAP CM returning conn ({res}), CM now:\n{cm_info}")
+
+        return res
 
     @staticmethod
     def convert_ldap_group(ldap_group: Dict) -> Optional[Dict]:
@@ -474,7 +501,11 @@ class AbstractLDAPClient:
     def build_group_filterstr(self, group_name: str = None, username: str = None) -> str:
         filterstr = self.ldap_group_filterstr
         if group_name is not None:
-            filterstr = f'{filterstr}(cn={group_name})'
+            # Check if we have a fully qualified
+            if group_name.upper().startswith('CN='):
+                filterstr = f'{filterstr}(distinguishedName={group_name})'
+            else:
+                filterstr = f'{filterstr}(cn={group_name})'
         if username is not None:
             filterstr = f'{filterstr}(memberUid={username})'
         return f'(&{filterstr})'
@@ -546,6 +577,7 @@ class AbstractLDAPClient:
         return result
 
     def get_group(self, group_name: str) -> Optional[Dict]:
+        self.logger.debug(f"abstract_ldap-get_group(): Attempting to lookup {group_name} . Base: {self.ldap_group_base}")
         result = self.search_s(
             base=self.ldap_group_base,
             filterstr=self.build_group_filterstr(group_name)

@@ -45,6 +45,15 @@ class CleanTool:
     def clean_non_project_items():
         idea.console.print_header_block(f'clean non-project items')
 
+        # lambda assets clean-up (all directories that start with 'idea_')
+        if os.path.isdir(idea.props.project_build_dir):
+            for file in os.listdir(idea.props.project_build_dir):
+                if file.startswith('idea_'):
+                    function_build_dir = os.path.join(idea.props.project_build_dir, file)
+                    if os.path.isdir(function_build_dir):
+                        idea.console.print(f'deleting {function_build_dir} ...')
+                        shutil.rmtree(function_build_dir)
+
         # open source clean-up
         opensource_build_dir = os.path.join(idea.props.project_build_dir, 'open-source')
         if os.path.isdir(opensource_build_dir):

@@ -135,7 +135,9 @@ class ClusterStack(IdeaBaseStack):
 
         self.oauth_credentials_lambda: Optional[LambdaFunction] = None
         self.solution_metrics_lambda: Optional[LambdaFunction] = None
+        self.solution_metrics_lambda_policy: Optional[Policy] = None
         self.cluster_settings_lambda: Optional[LambdaFunction] = None
+        self.cluster_settings_lambda_policy: Optional[Policy] = None
 
         self.ec2_events_sns_topic: Optional[SNSTopic] = None
 
@@ -266,7 +268,7 @@ class ClusterStack(IdeaBaseStack):
         backup_vault_kms_key_id = self.context.config().get_string('cluster.backups.backup_vault.kms_key_id', default=None)
         backup_vault_encryption_key = None
         if Utils.is_not_empty(backup_vault_kms_key_id):
-            backup_vault_encryption_key = kms.Key.from_lookup(self.stack, 'backup-vault-kms-key', self.get_kms_key_arn(key_id=backup_vault_kms_key_id))
+            backup_vault_encryption_key = kms.Key.from_key_arn(self.stack, 'backup-vault-kms-key', self.get_kms_key_arn(key_id=backup_vault_kms_key_id))
         backup_vault = backup.BackupVault(
             self.stack, 'backup-vault',
             backup_vault_name=f'{self.cluster_name}-{self.module_id}-backup-vault',
@@ -565,12 +567,12 @@ class ClusterStack(IdeaBaseStack):
             description=f'Role for cluster-settings lambda function for Cluster: {self.cluster_name}',
             assumed_by=['lambda'])
 
-        cluster_settings_lambda_role.attach_inline_policy(Policy(
+        self.cluster_settings_lambda_policy = Policy(
             context=self.context,
             name=f'{lambda_name}-policy',
             scope=self.stack,
             policy_template_name='custom-resource-update-cluster-settings.yml'
-        ))
+        )
 
         self.cluster_settings_lambda = LambdaFunction(
             context=self.context,
@@ -585,6 +587,8 @@ class ClusterStack(IdeaBaseStack):
             role=cluster_settings_lambda_role,
             log_retention_role=self.roles[app_constants.LOG_RETENTION_ROLE_NAME]
         )
+        cluster_settings_lambda_role.attach_inline_policy(self.cluster_settings_lambda_policy)
+        self.cluster_settings_lambda.node.add_dependency(self.cluster_settings_lambda_policy)
         self.cluster_settings_lambda.node.add_dependency(cluster_settings_lambda_role)
 
     def build_solution_metrics_lambda(self):
@@ -597,12 +601,12 @@ class ClusterStack(IdeaBaseStack):
             description=f'Role for solution-metrics metrics Lambda function for Cluster: {self.cluster_name}',
             assumed_by=['lambda'])
 
-        solution_metrics_lambda_role.attach_inline_policy(Policy(
+        self.solution_metrics_lambda_policy = Policy(
             context=self.context,
             name=f'{lambda_name}-policy',
             scope=self.stack,
             policy_template_name='solution-metrics-lambda-function.yml'
-        ))
+        )
 
         self.solution_metrics_lambda = LambdaFunction(
             context=self.context,
@@ -617,6 +621,9 @@ class ClusterStack(IdeaBaseStack):
             role=solution_metrics_lambda_role,
             log_retention_role=self.roles[app_constants.LOG_RETENTION_ROLE_NAME]
         )
+        solution_metrics_lambda_role.attach_inline_policy(self.solution_metrics_lambda_policy)
+        self.solution_metrics_lambda.node.add_dependency(self.solution_metrics_lambda_policy)
+        self.solution_metrics_lambda.node.add_dependency(solution_metrics_lambda_role)
 
     def build_self_signed_certificates_lambda(self):
         """
@@ -788,7 +795,8 @@ class ClusterStack(IdeaBaseStack):
             environment={
                 'IDEA_EC2_STATE_SNS_TOPIC_ARN': self.ec2_events_sns_topic.topic_arn,
                 'IDEA_CLUSTER_NAME_TAG_KEY': constants.IDEA_TAG_CLUSTER_NAME,
-                'IDEA_CLUSTER_NAME_TAG_VALUE': self.context.cluster_name()
+                'IDEA_CLUSTER_NAME_TAG_VALUE': self.context.cluster_name(),
+                'IDEA_TAG_PREFIX': constants.IDEA_TAG_PREFIX
             },
             timeout_seconds=180,
             role=ec2_state_event_transformation_lambda_role,
@@ -1116,6 +1124,9 @@ class ClusterStack(IdeaBaseStack):
             cluster_settings['load_balancers.external_alb.certificates.certificate_secret_arn'] = self.external_certificate.get_att_string('certificate_secret_arn')
             cluster_settings['load_balancers.external_alb.certificates.private_key_secret_arn'] = self.external_certificate.get_att_string('private_key_secret_arn')
             cluster_settings['load_balancers.external_alb.certificates.acm_certificate_arn'] = self.external_certificate.get_att_string('acm_certificate_arn')
+        else:
+            cluster_settings['load_balancers.external_alb.certificates.provided'] = self.context.config().get_string('cluster.load_balancers.external_alb.certificates.provided', required=True)
+            cluster_settings['load_balancers.external_alb.certificates.acm_certificate_arn'] = self.context.config().get_string('cluster.load_balancers.external_alb.certificates.acm_certificate_arn', required=True)
 
         cluster_settings['load_balancers.internal_alb.certificates.certificate_secret_arn'] = self.internal_certificate.get_att_string('certificate_secret_arn')
         cluster_settings['load_balancers.internal_alb.certificates.private_key_secret_arn'] = self.internal_certificate.get_att_string('private_key_secret_arn')

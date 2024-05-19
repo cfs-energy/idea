@@ -168,8 +168,8 @@ function configure_dcv_connection_gateway() {
 level = \"trace\"
 
 [gateway]
-quic-listen-endpoints = [\"0.0.0.0:8443\"]
-web-listen-endpoints = [\"0.0.0.0:8443\", \"[::]:8445\"]
+quic-listen-endpoints = [\"0.0.0.0:8443\", \"[::]:8443\"]
+web-listen-endpoints = [\"0.0.0.0:8443\", \"[::]:8443\"]
 cert-file = \"/etc/dcv-connection-gateway/certs/default_cert.pem\"
 cert-key-file = \"/etc/dcv-connection-gateway/certs/default_key_pkcs8.pem\"
 

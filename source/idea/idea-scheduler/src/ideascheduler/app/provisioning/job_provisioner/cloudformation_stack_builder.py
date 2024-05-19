@@ -168,11 +168,10 @@ class CloudFormationStackBuilder:
             Key=bootstrap_package_key
         )
 
-        use_vpc_endpoints = self.context.config().get_bool('cluster.network.use_vpc_endpoints', default=False)
         https_proxy = self.context.config().get_string('cluster.network.https_proxy', required=False, default='')
         no_proxy = self.context.config().get_string('cluster.network.no_proxy', required=False, default='')
         proxy_config = {}
-        if use_vpc_endpoints and Utils.is_not_empty(https_proxy):
+        if Utils.is_not_empty(https_proxy):
             proxy_config = {
                     'http_proxy': https_proxy,
                     'https_proxy': https_proxy,
@@ -374,14 +373,19 @@ class CloudFormationStackBuilder:
         user_data = self.build_user_data()
         launch_template_data.UserData = Base64(Sub(user_data))
 
+        kms_key_id = self.context.config().get_string('cluster.ebs.kms_key_id', required=False, default=None)
+        if kms_key_id is None:
+            kms_key_id = 'alias/aws/ebs'
+
         launch_template_data.BlockDeviceMappings = [
             LaunchTemplateBlockDeviceMapping(
                 DeviceName=Utils.get_ec2_block_device_name(base_os=self.job.params.base_os),
                 Ebs=EBSBlockDevice(
                     VolumeSize=self.job.params.root_storage_size.int_val(),
-                    VolumeType='gp3',
+                    VolumeType=constants.DEFAULT_VOLUME_TYPE_COMPUTE,
                     DeleteOnTermination=not self.job.params.keep_ebs_volumes,
-                    Encrypted=True
+                    Encrypted=constants.DEFAULT_VOLUME_ENCRYPTION_COMPUTE,
+                    KmsKeyId=kms_key_id
                 )
             )
         ]
@@ -393,10 +397,11 @@ class CloudFormationStackBuilder:
                     DeviceName='/dev/xvdbx',
                     Ebs=EBSBlockDevice(
                         VolumeSize=self.job.params.scratch_storage_size.int_val(),
-                        VolumeType='io1' if iops > 0 else 'gp3',
+                        VolumeType= Utils.get_as_string(constants.DEFAULT_VOLUME_TYPE_SCRATCH, default='io1') if iops > 0 else Utils.get_as_string(constants.DEFAULT_VOLUME_TYPE_COMPUTE, default='gp3'),
                         Iops=iops if iops > 0 else Ref('AWS::NoValue'),
                         DeleteOnTermination=not self.job.params.keep_ebs_volumes,
-                        Encrypted=True
+                        Encrypted=Utils.get_as_bool(constants.DEFAULT_VOLUME_ENCRYPTION_COMPUTE, default=True),
+                        KmsKeyId=kms_key_id
                     )
                 )
             )

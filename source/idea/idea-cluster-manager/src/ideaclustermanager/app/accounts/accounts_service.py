@@ -594,7 +594,23 @@ class AccountsService:
         password = user.password
         if email_verified:
             if Utils.is_empty(password):
-                raise exceptions.invalid_params('user.password is required')
+                raise exceptions.invalid_params('Password is required')
+
+            user_pool_password_policy = self.user_pool.describe_password_policy()
+            # Validate password compliance versus Cognito user pool password policy
+            # Cognito: https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-settings-policies.html
+            if len(password) < user_pool_password_policy.minimum_length:
+                raise exceptions.invalid_params(f'Password should be greater than {user_pool_password_policy.minimum_length} characters')
+            elif len(password) > 256:
+                raise exceptions.invalid_params(f'Password can be up to 256 characters')
+            elif user_pool_password_policy.require_numbers and re.search('[0-9]', password) is None:
+                raise exceptions.invalid_params('Password should include at least 1 number')
+            elif user_pool_password_policy.require_uppercase and re.search('[A-Z]', password) is None:
+                raise exceptions.invalid_params('Password should include at least 1 uppercase letter')
+            elif user_pool_password_policy.require_lowercase and re.search('[a-z]', password) is None:
+                raise exceptions.invalid_params('Password should include at least 1 lowercase letter')
+            elif user_pool_password_policy.require_symbols and re.search('[\^\$\*\.\[\]{}\(\)\?"!@#%&\/\\,><\':;\|_~`=\+\-]', password) is None:
+                raise exceptions.invalid_params('Password should include at least 1 of these special characters: ^ $ * . [ ] { } ( ) ? " ! @ # % & / \ , > < \' : ; | _ ~ ` = + -')
         else:
             self.logger.debug('create_user() - setting password to random value')
             password = Utils.generate_password(8, 2, 2, 2, 2)

@@ -8,6 +8,7 @@
 #  or in the 'license' file accompanying this file. This file is distributed on an 'AS IS' BASIS, WITHOUT WARRANTIES
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
+import logging
 
 from ideadatamodel import (
     exceptions,
@@ -19,7 +20,8 @@ from ideadatamodel import (
     RespondToAuthChallengeRequest,
     RespondToAuthChallengeResult,
     AuthResult,
-    CognitoUser
+    CognitoUser,
+    CognitoUserPoolPasswordPolicy
 )
 from ideasdk.utils import Utils
 from ideasdk.context import SocaContext
@@ -129,6 +131,8 @@ class CognitoUserPool:
         if user is not None:
             return user
 
+        _api_query_start = Utils.current_time_ms()
+
         try:
             result = self._context.aws().cognito_idp().admin_get_user(
                 UserPoolId=self.user_pool_id,
@@ -139,6 +143,10 @@ class CognitoUserPool:
                 return None
             else:
                 raise e
+
+        _api_query_end = Utils.current_time_ms()
+        if self._logger.isEnabledFor(logging.DEBUG):
+            self._logger.debug(f"Cognito-API query: {_api_query_end - _api_query_start}ms")
 
         user = CognitoUser(**result)
         self._context.cache().short_term().set(cache_key, user)
@@ -528,3 +536,28 @@ class CognitoUserPool:
             ProposedPassword=new_password
         )
         self.password_updated(username)
+
+    def describe_password_policy(self) -> CognitoUserPoolPasswordPolicy:
+        try:
+            describe_result = self._context.aws().cognito_idp().describe_user_pool(
+                UserPoolId=self.user_pool_id
+            )
+        except botocore.exceptions.ClientError as e:
+            raise e
+        user_pool = Utils.get_value_as_dict('UserPool', describe_result)
+        policies = Utils.get_value_as_dict('Policies', user_pool)
+        password_policy = Utils.get_value_as_dict('PasswordPolicy', policies)
+        minimum_length = Utils.get_value_as_int('MinimumLength', password_policy, 8)
+        require_uppercase = Utils.get_value_as_bool('RequireUppercase', password_policy, True)
+        require_lowercase = Utils.get_value_as_bool('RequireLowercase', password_policy, True)
+        require_numbers = Utils.get_value_as_bool('RequireNumbers', password_policy, True)
+        require_symbols = Utils.get_value_as_bool('RequireSymbols', password_policy, True)
+        temporary_password_validity_days = Utils.get_value_as_int('TemporaryPasswordValidityDays', password_policy, 7)
+        return CognitoUserPoolPasswordPolicy(
+            minimum_length=minimum_length,
+            require_uppercase=require_uppercase,
+            require_lowercase=require_lowercase,
+            require_numbers=require_numbers,
+            require_symbols=require_symbols,
+            temporary_password_validity_days=temporary_password_validity_days
+        )

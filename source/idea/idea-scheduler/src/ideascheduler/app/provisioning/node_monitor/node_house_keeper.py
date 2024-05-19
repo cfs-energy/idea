@@ -234,7 +234,7 @@ class NodeHouseKeepingSession:
             if job is not None:
                 return False
 
-        if instance.soca_keep_forever:
+        if instance.soca_keep_forever and instance.soca_terminate_when_idle == 0:
             return False
 
         terminate_when_idle = instance.soca_terminate_when_idle

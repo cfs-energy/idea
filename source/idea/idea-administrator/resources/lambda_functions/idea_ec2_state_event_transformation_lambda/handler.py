@@ -18,6 +18,7 @@ import boto3
 import os
 import json
 import logging
+import re
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -35,6 +36,7 @@ def handler(event, _):
 
         cluster_name_tag_key = os.environ.get('IDEA_CLUSTER_NAME_TAG_KEY')
         cluster_name_tag_value = os.environ.get('IDEA_CLUSTER_NAME_TAG_VALUE')
+        idea_tag_prefix = os.environ.get('IDEA_TAG_PREFIX')
 
         instance_id = event['detail']['instance-id']
         state = event['detail']['state']
@@ -44,11 +46,12 @@ def handler(event, _):
 
         message_attributes = {}
         for tags in ec2instance.tags:
-            event['detail']['tags'][tags["Key"]] = tags["Value"]
-            message_attributes[tags["Key"].replace(':', '_')] = {
-                'DataType': 'String',
-                'StringValue': tags["Value"]
-            }
+            if tags["Key"].startswith(idea_tag_prefix):
+                event['detail']['tags'][tags["Key"]] = tags["Value"]
+                message_attributes[re.sub(r"[^a-zA-Z0-9_\-\.]+","_",tags["Key"]).strip()] = {
+                        'DataType': 'String',
+                        'StringValue': tags["Value"]
+                        }
 
             if tags["Key"] == cluster_name_tag_key and tags["Value"] == cluster_name_tag_value:
                 cluster_match = True

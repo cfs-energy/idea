@@ -1,12 +1,15 @@
 # Begin: Configure OpenPBS Compute Node
 {% include '_templates/linux/openpbs.jinja2' %}
 
+INSTANCE_HOSTNAME=$(hostname)
+
 echo -e "PBS_SERVER={{ context.config.get_string('scheduler.private_dns_name', required=True).split('.')[0] }}
 PBS_START_SERVER=0
 PBS_START_SCHED=0
 PBS_START_COMM=0
 PBS_START_MOM=1
 PBS_EXEC=/opt/pbs
+PBS_LEAF_NAME=$INSTANCE_HOSTNAME
 PBS_HOME=/var/spool/pbs
 PBS_CORE_LIMIT=unlimited
 PBS_SCP=/usr/bin/scp

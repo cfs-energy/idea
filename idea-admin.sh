@@ -28,7 +28,7 @@
 # * IDEA_DEV_MODE - Set to "true" if you are working with IDEA sources
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-IDEA_REVISION=${IDEA_REVISION:-"v3.1.1"}
+IDEA_REVISION=${IDEA_REVISION:-"v3.1.2"}
 IDEA_DOCKER_REPO=${IDEA_DOCKER_REPO:-"public.ecr.aws/g8j8s8q8/idea-administrator"}
 IDEA_ECR_CREDS_RESET=${IDEA_ECR_CREDS_RESET:-"true"}
 IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER=${IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER:=""}
@@ -117,9 +117,9 @@ if [[ $? -ne 0 ]]; then
 fi
 
 # Launch installer
-${DOCKER_BIN} run --rm -it -v ${HOME}/.idea/clusters:/root/.idea/clusters \
-              -e IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER=${IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER} \
-              -e IDEA_ADMIN_ENABLE_CDK_NAG_SCAN=${IDEA_ADMIN_ENABLE_CDK_NAG_SCAN} \
-              -v ~/.aws:/root/.aws ${IDEA_DOCKER_REPO}:${IDEA_REVISION} \
-              idea-admin ${@}
+${DOCKER_BIN} run --rm -it -v "${HOME}/.idea/clusters:/root/.idea/clusters" \
+              -e IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER="${IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER}" \
+              -e IDEA_ADMIN_ENABLE_CDK_NAG_SCAN="${IDEA_ADMIN_ENABLE_CDK_NAG_SCAN}" \
+              -v ~/.aws:/root/.aws "${IDEA_DOCKER_REPO}:${IDEA_REVISION}" \
+              idea-admin "${@}"
 
