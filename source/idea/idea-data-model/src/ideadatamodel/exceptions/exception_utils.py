@@ -42,7 +42,7 @@ def soca_exception(error_code: str, message: str,
 
 
 def exceeded_max_retries(info: Optional[str] = None) -> SocaException:
-    message = f'exceeded max retries'
+    message = 'exceeded max retries'
     if info is not None:
         message += f': {info}'
     return SocaException(
@@ -52,7 +52,7 @@ def exceeded_max_retries(info: Optional[str] = None) -> SocaException:
 
 
 def invalid_job(info: Optional[str] = None) -> SocaException:
-    message = f'Invalid Job'
+    message = 'Invalid Job'
     if info is not None:
         message += f': {info}'
     return SocaException(
@@ -62,7 +62,7 @@ def invalid_job(info: Optional[str] = None) -> SocaException:
 
 
 def invalid_session(info: Optional[str] = None) -> SocaException:
-    message = f'Invalid session'
+    message = 'Invalid session'
     if info is not None:
         message += f': {info}'
     return SocaException(
@@ -72,7 +72,7 @@ def invalid_session(info: Optional[str] = None) -> SocaException:
 
 
 def invalid_params(info: Optional[str] = None) -> SocaException:
-    message = f'Invalid params'
+    message = 'Invalid params'
     if info is not None:
         message += f': {info}'
     return SocaException(
@@ -82,7 +82,7 @@ def invalid_params(info: Optional[str] = None) -> SocaException:
 
 
 def cluster_config_error(info: Optional[str] = None) -> SocaException:
-    message = f'cluster configuration error'
+    message = 'cluster configuration error'
     if info is not None:
         message += f': {info}'
     return SocaException(
@@ -92,7 +92,7 @@ def cluster_config_error(info: Optional[str] = None) -> SocaException:
 
 
 def file_not_found(info: Optional[str] = None) -> SocaException:
-    message = f'File not found'
+    message = 'File not found'
     if info is not None:
         message += f': {info}'
     return SocaException(
@@ -102,7 +102,7 @@ def file_not_found(info: Optional[str] = None) -> SocaException:
 
 
 def not_supported(info: Optional[str] = None) -> SocaException:
-    message = f'Not supported'
+    message = 'Not supported'
     if info is not None:
         message += f': {info}'
     return SocaException(
@@ -112,7 +112,7 @@ def not_supported(info: Optional[str] = None) -> SocaException:
 
 
 def unauthorized_access(info: Optional[str] = None) -> SocaException:
-    message = f'Unauthorized Access'
+    message = 'Unauthorized Access'
     if info is not None:
         message += f': {info}'
     return SocaException(

@@ -306,4 +306,3 @@ class AwsServiceAvailabilityHelper:
             ])
         print(table)
 
-

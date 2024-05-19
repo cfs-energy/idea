@@ -1098,10 +1098,10 @@ class ClusterStack(IdeaBaseStack):
         for name, role in self.roles.items():
             cluster_settings[f'iam.roles.{name}'] = role.role_arn
         # Policy Arns
-        cluster_settings[f'iam.policies.amazon_ssm_managed_instance_core_arn'] = self.amazon_ssm_managed_instance_core_policy.managed_policy_arn
-        cluster_settings[f'iam.policies.cloud_watch_agent_server_arn'] = self.cloud_watch_agent_server_policy.managed_policy_arn
+        cluster_settings['iam.policies.amazon_ssm_managed_instance_core_arn'] = self.amazon_ssm_managed_instance_core_policy.managed_policy_arn
+        cluster_settings['iam.policies.cloud_watch_agent_server_arn'] = self.cloud_watch_agent_server_policy.managed_policy_arn
         if self.amazon_prometheus_remote_write_policy is not None:
-            cluster_settings[f'iam.policies.amazon_prometheus_remote_write_arn'] = self.amazon_prometheus_remote_write_policy.managed_policy_arn
+            cluster_settings['iam.policies.amazon_prometheus_remote_write_arn'] = self.amazon_prometheus_remote_write_policy.managed_policy_arn
 
         cluster_settings['solution.solution_metrics_lambda_arn'] = self.solution_metrics_lambda.function_arn
         cluster_settings['cluster_settings_lambda_arn'] = self.cluster_settings_lambda.function_arn

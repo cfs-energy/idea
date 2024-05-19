@@ -13,6 +13,8 @@ from ideasdk.utils import Utils
 from ideasdk.dynamodb.dynamodb_stream_subscriber import DynamoDBStreamSubscriber
 import botocore.session
 import botocore.exceptions
+import os
+from botocore.config import Config
 from boto3.dynamodb.types import TypeDeserializer
 
 import threading
@@ -40,8 +42,13 @@ class DynamoDBStreamSubscription:
 
         # todo @kulkary - vpc endpoint support
         self.boto_session = Utils.create_boto_session(self.aws_region, self.aws_profile)
+        config = None
+        https_proxy = os.environ.get('https_proxy')
+        if not Utils.is_empty(https_proxy):
+            proxy_definitions = {'https': https_proxy}
+            config = Config(proxies=proxy_definitions)
         self.dynamodb_client = self.boto_session.client(service_name='dynamodb', region_name=self.aws_region)
-        self.dynamodb_streams_client = self.boto_session.client(service_name='dynamodbstreams', region_name=self.aws_region)
+        self.dynamodb_streams_client = self.boto_session.client(service_name='dynamodbstreams', region_name=self.aws_region, config=config)
 
         self.stream_arn: Optional[str] = None
 

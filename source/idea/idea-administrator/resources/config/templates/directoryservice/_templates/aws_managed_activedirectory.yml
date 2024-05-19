@@ -29,7 +29,7 @@ ldap_connection_uri: "ldap://idea.local"
 sssd:
   # By default, the AD provider will rely on POSIX attributes defined in Active Directory.
   # By default, IDEA will populate these values during user/group creation (uidNumber, gidNumber).
-  # If you want to enable ID mapping from the object SID, set ldap_id_mapping = false
+  # If you want to enable ID mapping from the object SID, set ldap_id_mapping = true
   # For further details about ID mapping and the ldap_id_mapping parameter, see the sssd-ldap(8) man page.
   ldap_id_mapping: false
 

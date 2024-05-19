@@ -49,6 +49,14 @@ class VpcEndpointsHelper:
         }
 
         self.interface_endpoints = {
+            'application-autoscaling': {
+                'enabled': True,
+                'endpoint_url': None
+            },
+            'autoscaling': {
+                'enabled': True,
+                'endpoint_url': None
+            },
             'cloudformation': {
                 'enabled': True,
                 'endpoint_url': None

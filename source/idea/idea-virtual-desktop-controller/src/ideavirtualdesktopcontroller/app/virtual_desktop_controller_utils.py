@@ -117,11 +117,23 @@ class VirtualDesktopControllerUtils:
                 'Setup-WindowsEC2Instance'
             ]
 
+        use_vpc_endpoints = self.context.config().get_bool('cluster.network.use_vpc_endpoints', default=False)
+        https_proxy = self.context.config().get_string('cluster.network.https_proxy', required=False, default='')
+        no_proxy = self.context.config().get_string('cluster.network.no_proxy', required=False, default='')
+        proxy_config = {}
+        if use_vpc_endpoints and Utils.is_not_empty(https_proxy):
+            proxy_config = {
+                    'http_proxy': https_proxy,
+                    'https_proxy': https_proxy,
+                    'no_proxy': no_proxy
+                    }
+
         user_data_builder = BootstrapUserDataBuilder(
             base_os=session.software_stack.base_os.value,
             aws_region=self.context.config().get_string('cluster.aws.region', required=True),
             bootstrap_package_uri=self._build_and_upload_bootstrap_package(session),
             install_commands=install_commands,
+            proxy_config=proxy_config,
             substitution_support=False
         )
 
@@ -158,7 +170,7 @@ class VirtualDesktopControllerUtils:
                 'Key': key,
                 'Value': value
             })
-        
+
         metadata_http_tokens = self.context.config().get_string('virtual-desktop-controller.dcv_session.metadata_http_tokens', required=True)
         response = self.ec2_client.run_instances(
             UserData=self._build_userdata(session),

@@ -10,6 +10,8 @@ function get_cloudwatch_agent_download_link() {
   fi
   local DOWNLOAD_LINK_PATTERN="{{ context.config.get_string('global-settings.package_config.amazon_cloudwatch_agent.download_link_pattern', required=True) }}"
   echo -n ${DOWNLOAD_LINK_PATTERN} > ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}/cloudwatch_download_link.txt
+  local AWS_REGION="{{ context.aws_region }}"
+  sed -i "s/%region%/${AWS_REGION}/g" ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}/cloudwatch_download_link.txt
   local BASE_OS="{{ context.base_os }}"
   case $BASE_OS in
     amazonlinux2)

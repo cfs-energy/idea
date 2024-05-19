@@ -75,6 +75,13 @@ cost_estimation:
   fsx_lustre: 0.000194 # GB per hour
 
 job_provisioning:
+  # Determine if AWS Service Quotas should be used:
+  # True (default) - query AWS service quotas API to make sure an incoming job can be deployed.
+  # False          - Do not query service quotas API. Submit the jobs for AWS provisioning.
+  # WARNING:
+  #  Setting this to False can have unintended consequences related to idle or stranded resources.
+  service_quotas: True
+
   # specifies the duration after which the cloud formation stack should be terminated and job provisioning should be retried.
   # this is used to ensure provisioning capacity failures, if any are retried
   stack_provisioning_timeout_seconds: 1800
