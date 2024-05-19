@@ -9,7 +9,7 @@
 * [Git](https://git-scm.com/downloads)
 
 {% hint style="warning" %}
-### Versions
+#### Versions
 
 Replace the variables in the code snippets below with the following values:
 
