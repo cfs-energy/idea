@@ -1216,9 +1216,9 @@
     weekstart "^1.1.0"
 
 "@cloudscape-design/design-tokens@^3.0.4":
-  version "3.0.35"
-  resolved "https://registry.yarnpkg.com/@cloudscape-design/design-tokens/-/design-tokens-3.0.35.tgz#471b4a32e63ac75f1f55d57cd362046a81134c53"
-  integrity sha512-oZk8QBYfn/7+BRsoaXuIvD0NZYvbhqvxGoi8X/jvqU55nzFVMWP3fhZYkOQ3iO9egXGJJuspHru3e1wIsV1ynQ==
+  version "3.0.36"
+  resolved "https://registry.yarnpkg.com/@cloudscape-design/design-tokens/-/design-tokens-3.0.36.tgz#2a4391f9770c6178246813008ab6e0bf0a0981a0"
+  integrity sha512-RwS7z3NsMGGBXllGvdFRvxY+XXSjv4IfuBsMzUShRmtAqGLiVJ65N184UN81nOgAKpioqgIbRaj5yjAFGS8DPA==
 
 "@cloudscape-design/global-styles@^1.0.1":
   version "1.0.27"
@@ -1226,9 +1226,9 @@
   integrity sha512-26/Xt6eVB+xV+WCZJVmckiUUCYKrhQdGIr1t5gzpO/2VvERqjf+8x3buznyxNlFEfXaiKTMBtATnnYe27ARSiw==
 
 "@cloudscape-design/test-utils-core@^1.0.0":
-  version "1.0.30"
-  resolved "https://registry.yarnpkg.com/@cloudscape-design/test-utils-core/-/test-utils-core-1.0.30.tgz#845b9a6025b3ea09eceed31c7310e04a62772412"
-  integrity sha512-ninp9KJUXKjiJRlZvEO+i9PhkvjdDOB92PM5U2vKUMiQm8ENOALV9hyAqiO3pEeVbnZvxVhYZHWyIQzvP33Uqw==
+  version "1.0.31"
+  resolved "https://registry.yarnpkg.com/@cloudscape-design/test-utils-core/-/test-utils-core-1.0.31.tgz#998614b4c2688818589a2041bed12ee9476126d2"
+  integrity sha512-Ht6FMATfdcjOq/yzUhXk5nup7+bVjvMMgtRy2FQ8N+w5fzD7FtiXJiK9RYs0GpTCbwhjdXcuvq9aYkIOlVyXxQ==
   dependencies:
     css-selector-tokenizer "^0.8.0"
     css.escape "^1.5.1"
