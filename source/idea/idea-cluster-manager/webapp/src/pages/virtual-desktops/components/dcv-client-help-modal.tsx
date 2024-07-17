@@ -37,11 +37,11 @@ function downloadDcvClient(os: string) {
     } else if (os === 'linux-suse15') {
         window.open(client_settings.linux.suse15.url)
     } else if (os === 'ubuntu-ubuntu1804') {
-        window.open(client_settings.ubuntu.ubuntu1804.url)
+        window.open(client_settings.linux.ubuntu1804.url)
     } else if (os === 'ubuntu-ubuntu2004') {
-        window.open(client_settings.ubuntu.ubuntu2004.url)
+        window.open(client_settings.linux.ubuntu2004.url)
     } else if (os === 'ubuntu-ubuntu2204') {
-        window.open(client_settings.ubuntu.ubuntu2204.url)
+        window.open(client_settings.linux.ubuntu2204.url)
     }
 }
 
@@ -64,11 +64,11 @@ function getDCVClientLabelForOSFlavor(os: string): string {
     } else if (os === 'linux-suse15') {
         return client_settings.linux.suse15.label
     } else if (os === 'ubuntu-ubuntu1804') {
-        return client_settings.ubuntu.ubuntu1804.label
+        return client_settings.linux.ubuntu1804.label
     } else if (os === 'ubuntu-ubuntu2004') {
-        return client_settings.ubuntu.ubuntu2004.label
+        return client_settings.linux.ubuntu2004.label
     } else if (os === 'ubuntu-ubuntu2204') {
-        return client_settings.ubuntu.ubuntu2204.label
+        return client_settings.linux.ubuntu2204.label
     }
     return ''
 }

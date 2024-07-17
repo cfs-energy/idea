@@ -1,0 +1,4 @@
+{%- if context.base_os in ('ubuntu2204') %}
+echo "DNSStubListener=no" >> /etc/systemd/resolved.conf
+systemctl restart systemd-resolved
+{%- endif %}

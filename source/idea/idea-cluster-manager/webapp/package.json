@@ -1,6 +1,6 @@
 {
   "name": "web-portal", 
-  "version": "3.1.7", 
+  "version": "3.1.8", 
   "private": true,
   "dependencies": {
     "@cloudscape-design/components": "^3.0.82",
@@ -96,9 +96,7 @@
   },
   "browserslist": {
     "production": [
-      ">0.2%",
-      "not dead",
-      "not op_mini all"
+      "defaults"
     ],
     "development": [
       "last 1 chrome version",

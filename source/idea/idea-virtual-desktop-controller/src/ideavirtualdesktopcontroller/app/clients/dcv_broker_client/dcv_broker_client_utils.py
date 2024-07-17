@@ -107,7 +107,7 @@ class DCVBrokerClientUtils:
 
     @staticmethod
     def get_storage_root_for_base_os(base_os: VirtualDesktopBaseOS, owner) -> str:
-        if base_os in (VirtualDesktopBaseOS.AMAZON_LINUX2, VirtualDesktopBaseOS.CENTOS7, VirtualDesktopBaseOS.RHEL7, VirtualDesktopBaseOS.RHEL8, VirtualDesktopBaseOS.RHEL9, VirtualDesktopBaseOS.ROCKY8, VirtualDesktopBaseOS.ROCKY9):
+        if base_os in (VirtualDesktopBaseOS.AMAZON_LINUX2, VirtualDesktopBaseOS.RHEL8, VirtualDesktopBaseOS.RHEL9, VirtualDesktopBaseOS.ROCKY8, VirtualDesktopBaseOS.ROCKY9, VirtualDesktopBaseOS.UBUNTU2204):
             return f'/data/home/{owner}/storage-root'
 
         return f'C:\\session-storage\\{owner}'
@@ -123,6 +123,7 @@ class DCVBrokerClientUtils:
                           f'--owner {session.owner} --storage-root `"{storage_root}`" '
             if Utils.is_not_empty(permissions_content):
                 permissions_folder = f'C:\\Program Files\\NICE\\DCV\\{session.dcv_session_id}\\'
+                command_list.append(f'Start-Sleep -Seconds 10')
                 command_list.append(f'Remove-Item -Recurse -Force "{permissions_folder}"')
                 command_list.append(f'New-Item -Path "{permissions_folder}" -ItemType Directory')
                 command_list.append(f'New-Item -Path "{permissions_folder}" -Name "idea.perm" -ItemType File -Force -Value "{permissions_content}"')
