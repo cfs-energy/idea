@@ -20,6 +20,7 @@ import Utils from "./utils";
 import {Constants} from "./constants";
 import {IdeaAuthenticationContext} from "./authentication-context";
 import {IdeaClients} from "../client";
+import AppLogger from "./app-logger";
 
 export interface AppContextProps {
     httpEndpoint: string
@@ -64,10 +65,16 @@ class AppContext {
     private onLogin?: () => Promise<boolean>
     private onLogout?: () => Promise<boolean>
 
+    private logger: AppLogger
+
     constructor(props: AppContextProps) {
         this.props = props
 
         const authEndpoint = `${props.httpEndpoint}${Utils.getApiContextPath(Constants.MODULE_CLUSTER_MANAGER)}`
+
+        this.logger = new AppLogger({
+            name: 'app-context.ts'
+        })
 
         const initializeServiceWorker = () => {
             if (this.props.serviceWorkerRegistration) {
@@ -119,23 +126,34 @@ class AppContext {
         // 2. check for login status changes and take respective actions
 
         if (IS_LOGGED_IN_INTERVAL != null) {
+            this.logger.debug('Clearing existing IS_LOGGED_IN_INTERVAL.')
             clearInterval(IS_LOGGED_IN_INTERVAL)
         }
-
+        
         IS_LOGGED_IN_INTERVAL = setInterval(() => {
-
+            this.logger.debug('Executing IS_LOGGED_IN_INTERVAL callback.')
+        
             // initializing service worker in this interval ensures that in the event the service worker was stopped and
-            //  started, the service worker knows the authentication endpoints
+            // started, the service worker knows the authentication endpoints
+            this.logger.debug('Initializing service worker.')
             initializeServiceWorker()
-
+        
             // check if the user is logged in. this may query the service worker or authentication context based on current session management mode.
+            this.logger.debug('Checking if the user is logged in.')
             this.authService.isLoggedIn().then((status) => {
+                this.logger.debug(`User logged in status: ${status}`)
                 if (this.isLoggedIn && !status) {
-                    this.authService.logout().finally()
+                    this.logger.debug('User was logged in but now is not. Initiating logout process.')
+                    this.authService.logout().finally(() => {
+                        this.logger.debug('Logout process completed.')
+                    })
                 }
                 this.isLoggedIn = status
+            }).catch(error => {
+                // Optionally handle errors
+                this.logger.error('Error while checking login status:', error)
             })
-        }, 10000)
+        }, 10000)        
     }
 
     static setOnRoute(onRoute: any) {

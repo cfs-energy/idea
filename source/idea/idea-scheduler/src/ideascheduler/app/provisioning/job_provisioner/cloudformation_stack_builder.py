@@ -487,22 +487,27 @@ class CloudFormationStackBuilder:
         metrics.KeepForever = str(self.job.provisioning_options.keep_forever).lower()
         metrics.FsxLustre = str(self.job.params.fsx_lustre.enabled).lower()
 
-        if Utils.get_as_bool(self.job.params.fsx_lustre.enabled, default=False):
-            deployment_type = Utils.get_as_string(self.job.params.fsx_lustre.deployment_type, default=constants.DEFAULT_FSX_LUSTRE_DEPLOYMENT_TYPE).upper()
+        if not self.job.params.fsx_lustre.existing_fsx:
+            if Utils.get_as_bool(self.job.params.fsx_lustre.enabled, default=False):
+                deployment_type = Utils.get_as_string(self.job.params.fsx_lustre.deployment_type, default=constants.DEFAULT_FSX_LUSTRE_DEPLOYMENT_TYPE).upper()
 
-            if deployment_type in constants.FSX_LUSTRE_PER_UNIT_THROUGHPUT_TYPES:
-                per_unit_throughput = Utils.get_as_int(self.job.params.fsx_lustre.per_unit_throughput, default=100)
+                if deployment_type in constants.FSX_LUSTRE_PER_UNIT_THROUGHPUT_TYPES:
+                    per_unit_throughput = Utils.get_as_int(self.job.params.fsx_lustre.per_unit_throughput, default=100)
+                else:
+                    # Scratch filesystems
+                    per_unit_throughput = 200
+
+                metrics.FsxLustreInfo = {
+                    'DeploymentType': deployment_type,
+                    'PerUnitStorageThroughput': per_unit_throughput,
+                    'Size': Utils.get_as_int(self.job.params.fsx_lustre.size.int_val(), default=0)
+                }
             else:
-                # Scratch filesystems
-                per_unit_throughput = 200
-
-            metrics.FsxLustreInfo = {
-                'DeploymentType': deployment_type,
-                'PerUnitStorageThroughput': per_unit_throughput,
-                'Size': Utils.get_as_int(self.job.params.fsx_lustre.size.int_val(), default=0)
-            }
+                metrics.FsxLustreInfo = {}
         else:
-            metrics.FsxLustreInfo = {}
+            metrics.FsxLustreInfo = {
+                'ExistingFSx':self.job.params.fsx_lustre.existing_fsx
+            }
 
         metrics.TerminateWhenIdle = str(self.job.provisioning_options.terminate_when_idle).lower()
         metrics.Dcv = 'false'
@@ -534,7 +539,8 @@ class CloudFormationStackBuilder:
 
         # build fsx for lustre
         if self.job.params.fsx_lustre.enabled:
-            self.template.add_resource(self.build_fsx_lustre())
+            if not self.job.params.fsx_lustre.existing_fsx:
+                self.template.add_resource(self.build_fsx_lustre())
 
         # send anonymous metrics to AWS
         if self.job.params.enable_anonymous_metrics:

@@ -50,6 +50,10 @@ echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
+{% include '_templates/linux/disable_auto_upgrades.jinja2' %}
+
+{% include '_templates/linux/systemd_resolved.jinja2' %}
+
 {% include '_templates/linux/idea_proxy.jinja2' %}
 
 {% include '_templates/linux/idea_service_account.jinja2' %}
@@ -61,7 +65,7 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 {% include '_templates/linux/mount_shared_storage.jinja2' %}
 
 if [[ ! -f ${BOOTSTRAP_DIR}/idea_preinstalled_packages.log ]]; then
-  {%- if context.base_os in ('amazonlinux2', 'centos7', 'rhel7') %}
+  {%- if context.base_os in ('amazonlinux2') %}
   yum install -y deltarpm
   {%- elif context.base_os in ('rhel8', 'rocky8') %}
   #drpm isn't available in rhel9 or rocky9

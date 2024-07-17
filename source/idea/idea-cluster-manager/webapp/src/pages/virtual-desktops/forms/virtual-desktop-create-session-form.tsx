@@ -596,6 +596,9 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
                             } else if (event.value === 'rocky9'){
                                 // Hibernation is supported for Rocky9
                                 hibernation?.disable(false)
+                            } else if (event.value === 'ubuntu2204'){
+                                // Hibernation is supported for Ubuntu 22.04
+                                hibernation?.disable(false)
                             } else {
                                 hibernation?.setValue(false)
                                 hibernation?.disable(true)

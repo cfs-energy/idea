@@ -96,12 +96,11 @@ class VirtualDesktopScheduleType(str, Enum):
 
 class VirtualDesktopBaseOS(str, Enum):
     AMAZON_LINUX2 = constants.OS_AMAZONLINUX2
-    CENTOS7 = constants.OS_CENTOS7
-    RHEL7 = constants.OS_RHEL7
     RHEL8 = constants.OS_RHEL8
     RHEL9 = constants.OS_RHEL9
     ROCKY8 = constants.OS_ROCKY8
     ROCKY9 = constants.OS_ROCKY9
+    UBUNTU2204 = constants.OS_UBUNTU2204
     WINDOWS = constants.OS_WINDOWS
 
 

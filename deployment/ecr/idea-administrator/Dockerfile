@@ -6,15 +6,15 @@ ENV OS_ARCH="${TARGETARCH:-amd64}"
 
 WORKDIR /root
 
-RUN apt-get update && \
-    apt-get -y install \
+RUN apt update && \
+    apt -y install \
     curl \
     tar \
     unzip \
     locales \
     gcc \
     python3-dev \
-    && apt-get clean
+    && apt clean
 
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -39,25 +39,25 @@ RUN if [ "${OS_ARCH}" = "amd64" ]; then \
 
 # install node and npm
 # RUN NODE_MAJOR=16 && rm -f /etc/apt/trusted.gpg.d/nodesource.gpg /etc/apt/sources.list.d/nodesource.list \
-#     && apt-get install -y ca-certificates curl gnupg \
+#     && apt install -y ca-certificates curl gnupg \
 #     && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/trusted.gpg.d/nodesource.gpg \
 #     && echo "deb [signed-by=/etc/apt/trusted.gpg.d/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list \
 #     && echo "Package: nodejs" >> /etc/apt/preferences.d/preferences \
 #     && echo "Pin: origin deb.nodesource.com" >> /etc/apt/preferences.d/preferences \
 #     && echo "Pin-Priority: 1001" >> /etc/apt/preferences.d/preferences\
-#     && apt update && apt-get install -y nodejs
+#     && apt update && apt install -y nodejs
 # install nvm and node
 RUN set -uex && \
-    apt-get update && \
-    apt-get install -y ca-certificates curl gnupg && \
+    apt update && \
+    apt install -y ca-certificates curl gnupg && \
     mkdir -p /etc/apt/keyrings && \
     curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
     | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg && \
     NODE_MAJOR=18 && \
     echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_$NODE_MAJOR.x nodistro main" \
     > /etc/apt/sources.list.d/nodesource.list && \
-    apt-get update && \
-	apt-get install nodejs -y
+    apt update && \
+	apt install nodejs -y
 
 
 

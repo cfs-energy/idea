@@ -41,9 +41,17 @@ IDEA_SESSION_ID="{{ context.vars.idea_session_id }}"
 IDEA_SESSION_OWNER="{{ context.vars.session_owner }}"
 
 function install_microphone_redirect() {
+  {%- if context.base_os in ('amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
   if [[ -z "$(rpm -qa pulseaudio-utils)" ]]; then
+  {%- elif context.base_os in ('ubuntu2204') %}
+  if [[ -z "$(dpkg -l pulseaudio-utils | grep ^ii)" ]]; then
+  {%- endif %}
     echo "Installing microphone redirect..."
+    {%- if context.base_os in ('amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
     yum install -y pulseaudio-utils
+    {%- elif context.base_os in ('ubuntu2204') %}
+    apt install -y pulseaudio-utils
+    {%- endif %}
   else
     log_info "Found pulseaudio-utils pre-installed... skipping installation..."
   fi
@@ -329,6 +337,8 @@ start_and_configure_dcv_agent_service
 if [[ -f ${IDEA_CLUSTER_HOME}/dcv_host/userdata_customizations.sh ]]; then
   /bin/bash ${IDEA_CLUSTER_HOME}/dcv_host/userdata_customizations.sh >> ${BOOTSTRAP_DIR}/logs/userdata_customizations.log 2>&1
 fi
+
+{% include '_templates/linux/system_upgrade.jinja2' %}
 
 # notify controller
 CONTROLLER_EVENTS_QUEUE_URL="{{ context.config.get_string('virtual-desktop-controller.events_sqs_queue_url', required=True) }}"

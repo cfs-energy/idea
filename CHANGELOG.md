@@ -4,6 +4,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.8] - TBD
+
+### Notes
+* This upgrade does require an update to the global settings. Please review [Global Settings Upgrade](https://docs.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/update-idea-backend-resource#global-settings-backup-and-upgrade) before upgrading.
+* Removed `RHEL 7` and `CentOS 7` due to EOL on 6/30/2024
+  * Remove software stacks and existing eVDI deployments that are running `CentOS 7` or `RHEL 7` BEFORE upgrading to IDEA 3.1.8
+
+### Features
+* Support for Ubuntu 22.04.04 in eVDI
+  * Full support for Kernels up to `6.2.0-1018-aws`
+* Added GPU Driver support for `g6` instance types
+
+### Changes
+* Update AWS CDK from `2.137.0` to `2.147.3`
+* Update NVIDIA GPU drivers used during installation
+  * Production `550.54.15` to `550.90.07`
+* Update Python Requirements
+  * Pin `requests` to `2.31` for ideactl
+* Move from `apt-get` to `apt` in Dockerfile
+
+### Bug Fixes
+* Fix `global-settings` indent error for Ubuntu DCV keys
+* NICE DCV GL Package removed from Bootstrap
+* Fix job submissions failing when requesting existing FSx Lustre file systems
+* Fix job designer variable checks for required variables used in Jinja2 conditional statements
+* Fix Windows eVDI instances getting stuck in an initializing state when resuming
+
+### Known Caveats
+* Internal DNS zone uses `.local` which should be reserved for mDNS per RFC6762
+* DCV USB Forwarding not available on 
+  * `RHEL 9`
+  * `Rocky 9`
+  * `Ubuntu 22.04` with kernel newer than `6.2`
+* No Lustre client for Ubuntu with kernel newer than `6.2`
+* When accessing multiple IDEA deployments at once in Safari, SSO logins hang for environemnts that were loaded after the first. Also exists in prior releases.
+* When using SSO and Chrome, inactive tabs time out more quickly than desired. Also exists in prior releases.
+
 ## [3.1.7] - 2024-06-01
 
 ### Notes

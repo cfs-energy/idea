@@ -20,4 +20,7 @@ echo -e "
 
 systemctl start pbs
 systemctl enable pbs
+
+echo 'source /etc/profile.d/pbs.sh >/dev/null 2>&1' >> /etc/bash.bashrc
+
 # End: OpenPBS Client
