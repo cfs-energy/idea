@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * No Lustre client for Ubuntu with kernel newer than `6.2`
 * When accessing multiple IDEA deployments at once in Safari, SSO logins hang for environemnts that were loaded after the first. Also exists in prior releases.
 * When using SSO and Chrome, inactive tabs time out more quickly than desired. Also exists in prior releases.
+* Docs need some updates to reflect addition of Ubuntu and removal of RHEL 7 and CentOS 7
 
 ## [3.1.7] - 2024-06-01
 
