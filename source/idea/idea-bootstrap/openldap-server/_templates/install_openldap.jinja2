@@ -18,7 +18,7 @@ OPENLDAP_SERVER_PKGS_7=({{ ' '.join(context.config.get_list('global-settings.pac
 OPENLDAP_SERVER_PKGS_8=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.openldap_server_8', required=True)) }})
 OPENLDAP_SERVER_PKGS_9=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.openldap_server_9', required=True)) }})
 
-{%- if context.base_os in ('amazonlinux2', 'centos7', 'rhel7') %}
+{%- if context.base_os in ('amazonlinux2') %}
   yum install -y $(echo ${OPENLDAP_SERVER_PKGS[*]} ${OPENLDAP_SERVER_PKGS_7[*]})
 {%- elif context.base_os in ('rhel8', 'rocky8') %}
   dnf install -y $(echo ${OPENLDAP_SERVER_PKGS[*]} ${OPENLDAP_SERVER_PKGS_8[*]})

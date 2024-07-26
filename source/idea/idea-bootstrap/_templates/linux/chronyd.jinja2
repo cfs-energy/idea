@@ -1,6 +1,11 @@
 # Begin: Configure chronyd
-{%- if context.base_os in ('amazonlinux2', 'centos7', 'rhel7', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+{%- if context.base_os in ('amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
 yum remove -y ntp
+{%- endif %}
+{%- if context.base_os in ('ubuntu2204') %}
+apt remove -y ntp
+{%- endif %}
+
 mv /etc/chrony.conf  /etc/chrony.conf.original
 echo -e "
 # use the local instance NTP service, if available
@@ -30,5 +35,5 @@ dumponexit
 dumpdir /var/run/chrony
 " > /etc/chrony.conf
 systemctl enable chronyd
-{%- endif %}
+
 # End: Configure chronyd

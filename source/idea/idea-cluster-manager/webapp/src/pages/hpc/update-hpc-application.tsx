@@ -447,8 +447,13 @@ class UpdateHpcApplication extends Component<UpdateHpcApplicationProps, UpdateHp
 
         const isVariableReferencedInScript = (name: string) => {
             if (this.state.updatedApplication.job_script_type === 'jinja2') {
-                const matches = this.state.jobScriptTemplate.match(`{{.*(\\b${name}\\b).*}}`)
-                if (matches == null || matches.length === 0) {
+                const matches1 = this.state.jobScriptTemplate.match(`{{.*(\\b${name}\\b).*}}`)
+                const matches2 = this.state.jobScriptTemplate.match(`{%.*(\\b${name}\\b).*%}`)
+                const matches = [
+                    ...(matches1 || []),
+                    ...(matches2 || [])
+                  ];
+                if (matches.length === 0) {
                     return false
                 }
                 return matches[1] === name

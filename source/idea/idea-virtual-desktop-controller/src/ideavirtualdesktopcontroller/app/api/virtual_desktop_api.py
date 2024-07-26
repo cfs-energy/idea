@@ -344,16 +344,13 @@ class VirtualDesktopAPI(BaseAPI):
             return session, False
 
         # Technical Validation for Hibernation.
-        if session.hibernation_enabled and session.software_stack.base_os in {VirtualDesktopBaseOS.RHEL7, VirtualDesktopBaseOS.CENTOS7}:
-            session.failure_reason = f'OS {session.software_stack.base_os} does not support Instance Hibernation'
-            return session, False
-        elif session.hibernation_enabled and session.software_stack.base_os is VirtualDesktopBaseOS.WINDOWS:
+        if session.hibernation_enabled and session.software_stack.base_os is VirtualDesktopBaseOS.WINDOWS:
             ram = self.controller_utils.get_instance_ram(session.server.instance_type).as_unit(SocaMemoryUnit.GiB)
             if ram.value > 16:
                 session.failure_reason = f'OS {session.software_stack.base_os} does not support Instance Hibernation for instances with RAM greater than 16GiB.'
                 return session, False
         else:
-            # amazonlinux2, rhel8, rocky8 support hibernation
+            # amazonlinux2, ubuntu2204, rhel8, rocky8 support hibernation
             pass
 
         # Technical Validations for Session Type

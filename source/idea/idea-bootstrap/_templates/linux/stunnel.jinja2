@@ -4,11 +4,11 @@
 # https://docs.aws.amazon.com/efs/latest/ug/encryption-in-transit.html
 # Mounts will appear connecting to localhost / '127.0.0.1' as they are tunneled in TLS.
 #
-{%- if context.base_os in ('amazonlinux2', 'centos7', 'rhel7', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+{%- if context.base_os in ('amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9',) %}
   function install_stunnel () {
   {%- if context.base_os in ('amazonlinux2') %}
     STUNNEL_CMD='stunnel5'
-  {%- elif context.base_os in ('centos7', 'rhel7', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+  {%- elif context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9', 'ubuntu2204') %}
     STUNNEL_CMD='stunnel'
   {%- endif %}
   which ${STUNNEL_CMD} > /dev/null 2>&1
@@ -29,5 +29,17 @@
   fi
 }
 install_stunnel
-{%- endif %}
+
+{% elif context.base_os in ('ubuntu2204',) %}
+
+if [[ -z "$(dpkg -l stunnel4 | grep ^ii)" ]]; then
+  apt update
+  apt install -y stunnel4
+else
+  log_info "Found existing stunnel on system"
+fi
+
+{% endif %}
+
+
 # End: Install stunnel

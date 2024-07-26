@@ -11,7 +11,7 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
 # DCV Broker
 DCV_GPG_KEY="{{ context.config.get_string('global-settings.package_config.dcv.gpg_key', required=True) }}"
-{%- if context.base_os in ('amazonlinux2', 'centos7', 'rhel7') %}
+{%- if context.base_os in ('amazonlinux2') %}
 DCV_SESSION_MANAGER_BROKER_NOARCH_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.broker.linux.al2_rhel_centos7.version', required=True) }}"
 DCV_SESSION_MANAGER_BROKER_URL="{{ context.config.get_string('global-settings.package_config.dcv.broker.linux.al2_rhel_centos7.url', required=True) }}"
 DCV_SESSION_MANAGER_BROKER_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.broker.linux.al2_rhel_centos7.sha256sum', required=True) }}"

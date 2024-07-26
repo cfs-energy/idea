@@ -30,6 +30,10 @@ clientsClaim()
 // eslint-disable-next-line no-restricted-globals
 const ignored = self.__WB_MANIFEST;
 
+setInterval(() => {
+    IDEA_AUTH_CONTEXT.isLoggedIn();
+}, 1000 * 60 * 5);
+
 self.addEventListener('message', (event) => {
     if (event.data && event.data.type) {
         switch (event.data.type) {

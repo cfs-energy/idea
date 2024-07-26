@@ -527,14 +527,6 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                                 value: 'windows'
                             },
                             {
-                                title: 'CentOS 7',
-                                value: 'centos7'
-                            },
-                            {
-                                title: 'Red Hat Enterprise Linux 7',
-                                value: 'rhel7'
-                            },
-                            {
                                 title: 'Red Hat Enterprise Linux 8',
                                 value: 'rhel8'
                             },
@@ -549,6 +541,10 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                             {
                                 title: 'Rocky Linux 9',
                                 value: 'rocky9'
+                            },
+                            {
+                                title: 'Ubuntu 22.04',
+                                value: 'ubuntu2204'
                             }
                         ]
                     }

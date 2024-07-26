@@ -39,7 +39,7 @@ export interface AppLoggerProps {
 }
 
 /***
- * AppLoger class as a central logging function across IDEA frontend components
+ * AppLogger class as a central logging function across IDEA frontend components
  *
  * To enable debug logging in production environments:
  *  1. navigate to browser menu-> developer tools -> console

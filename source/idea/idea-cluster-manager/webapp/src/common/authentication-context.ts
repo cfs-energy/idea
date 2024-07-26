@@ -327,14 +327,18 @@ export class IdeaAuthenticationContext {
      *  this ensures session is not invalidated due to network errors, where the session state is still valid and user does not need to re-login.
      */
     private renewAccessToken(): Promise<boolean> {
-
+        this.logger.debug('Renew access token process started.')
+    
         // before renewing, check if the current in-memory tokens are stale.
         // this can only happen when using local storage, as another tab may renew the access token and update local storage.
         if (this.localStorage != null) {
             // this may need some sort of lock in future as there will be concurrent renewal scenario when multiple tabs are active.
             // since local storage is not recommended for production, this is safe to ignore.
+            this.logger.debug('Local storage is not null, checking for stale tokens.')
             let accessToken = this.localStorage.getItem(KEY_ACCESS_TOKEN)
+            this.logger.debug(`Local storage access token: ${accessToken}`)
             if (accessToken !== this.accessToken) {
+                this.logger.debug('Detected stale in-memory access token, initializing from local storage.')
                 this.initializeFromLocalStorage()
                 if (!this.isAccessTokenExpired()) {
                     this.logger.info('✓ refreshed stale access token')
@@ -342,42 +346,50 @@ export class IdeaAuthenticationContext {
                 }
             }
         }
-
+    
         if (!this.isAccessTokenExpired()) {
+            this.logger.debug('Access token is still valid, no need to renew.')
             return Promise.resolve(true)
         }
-
+    
         if (this.refreshToken == null) {
+            this.logger.debug('No refresh token available, cannot renew access token.')
             return Promise.resolve(false)
         }
-
+    
         this.logger.info('renewing access token ...')
-
+    
         let username
         if (this.claimsProvider == null) {
             if (this.accessToken != null) {
+                this.logger.debug('Parsing claims from access token.')
                 let claims = JwtTokenUtils.parseJwtToken(this.accessToken)
                 username = claims.username
             } else if (this.idToken != null) {
+                this.logger.debug('Parsing claims from ID token.')
                 let claims = JwtTokenUtils.parseJwtToken(this.idToken)
                 username = claims['cognito:username']
             } else {
-                console.info('✗ failed to renew token.')
+                this.logger.info('✗ failed to renew token due to missing tokens.')
                 return Promise.resolve(false)
             }
         } else {
+            this.logger.debug('Fetching username from claims provider.')
             username = this.claimsProvider.getUsername()
         }
-
+    
         if (this.renewalInProgress != null) {
+            this.logger.debug('Renewal already in progress, returning the existing promise.')
             return this.renewalInProgress
         }
-
+    
         let authFlow = 'REFRESH_TOKEN_AUTH'
         if (this.ssoAuth) {
             authFlow = 'SSO_REFRESH_TOKEN_AUTH'
         }
-
+    
+        this.logger.debug(`Auth flow selected: ${authFlow}`)
+    
         let request = {
             header: {
                 namespace: 'Auth.InitiateAuth',
@@ -389,8 +401,12 @@ export class IdeaAuthenticationContext {
                 refresh_token: this.refreshToken
             }
         }
-
+    
+        this.logger.debug(`Auth request payload: ${JSON.stringify(request)}`)
+    
         const authEndpoint = `${this.authEndpoint}/${request.header.namespace}`
+        this.logger.debug(`Auth endpoint: ${authEndpoint}`)
+        
         this.renewalInProgress = this._fetch(authEndpoint, {
             method: 'POST',
             headers: {
@@ -398,12 +414,14 @@ export class IdeaAuthenticationContext {
             },
             body: JSON.stringify(request)
         }).then(result => {
+            this.logger.debug(`Auth response received: ${JSON.stringify(result)}`)
             if (result.success && result.payload.auth) {
                 this.logger.info('✓ access token renewed successfully')
                 this.saveAuthResult(result.payload.auth, this.ssoAuth)
                 return true
             } else {
                 if (result.error_code === NETWORK_TIMEOUT || result.error_code === NETWORK_ERROR || result.error_code === SERVER_ERROR) {
+                    this.logger.debug(`Network or server error encountered: ${result.error_code}`)
                     throw result
                 } else {
                     this.logger.info('✗ failed to renew token.')
@@ -411,11 +429,13 @@ export class IdeaAuthenticationContext {
                 }
             }
         }).finally(() => {
+            this.logger.debug('Renewal process completed, clearing renewalInProgress marker.')
             this.renewalInProgress = null
         })
-
+    
         return this.renewalInProgress
     }
+    
 
     invoke(url: string, request: any, isPublic: boolean = false): Promise<any> {
 

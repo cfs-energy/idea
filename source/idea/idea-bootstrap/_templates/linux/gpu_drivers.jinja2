@@ -33,6 +33,8 @@ function install_nvidia_grid_drivers () {
   log_info "X server configuration for GPU end..."
   set_reboot_required "Installed NVIDIA Grid Driver"
   popd
+  sudo touch /etc/modprobe.d/nvidia.conf
+  echo "options nvidia NVreg_EnableGpuFirmware=0" | tee --append /etc/modprobe.d/nvidia.conf
 }
 
 function install_nvidia_public_drivers() {
@@ -95,8 +97,13 @@ function install_amd_gpu_drivers() {
   #
   mkdir -p /root/bootstrap/gpu_drivers
   pushd /root/bootstrap/gpu_drivers
+  {% if context.base_os == 'ubuntu2204' -%}
+    wget https://repo.radeon.com/amdgpu-install/6.0.2/ubuntu/jammy/amdgpu-install_6.0.60002-1_all.deb
+    DEBIAN_FRONTEND=noninteractive apt install -y ./amdgpu-install_6.0.60002-1_all.deb
 
-  {%- if context.base_os in ('rhel7', 'centos7', 'amazonlinux2') %}
+    amdgpu-install --usecase=workstation --vulkan=pro --opencl=rocr --no-32 -y --accept-eula
+  {%- endif %}
+  {%- if context.base_os in ('amazonlinux2') %}
   local AWS=$(command -v aws)
   local DRIVER_BUCKET_REGION=$(curl -s --head {{ context.config.get_string('global-settings.gpu_settings.amd.s3_bucket_url', required=True) }} | grep bucket-region | awk '{print $2}' | tr -d '\r\n')
   $AWS --region ${DRIVER_BUCKET_REGION} s3 cp --quiet --recursive {{ context.config.get_string('global-settings.gpu_settings.amd.s3_bucket_path', required=True) }} .
@@ -235,6 +242,15 @@ function install_gpu_drivers () {
         install_nvidia_public_drivers
       fi
       ;;
+    g6)
+      log_info "Intel / NVIDIA L4"
+      # Tesla driver: Yes, GRID driver: Yes
+      if [[ ${NODE_TYPE} == "dcv" ]]; then
+        install_nvidia_grid_drivers
+      else
+        install_nvidia_public_drivers
+      fi
+      ;;
     g5g)
       log_info "Arm / NVIDIA T4G"
       # Tesla driver: Yes, GRID driver: No
@@ -270,7 +286,11 @@ function install_gpu_drivers () {
       ;;
   esac
 }
+
 install_gpu_drivers
+{%- if context.base_os in ('ubuntu2204') %}
+sed -i '/^Section\ "Device"/a \ \ \ \ \option \ \ \ \ \ \ \ \ "HardDPMS" "false"' /etc/X11/xorg.conf
+{%- endif %}
 {%- else %}
 log_info "GPU InstanceType not detected. Skip."
 {%- endif %}

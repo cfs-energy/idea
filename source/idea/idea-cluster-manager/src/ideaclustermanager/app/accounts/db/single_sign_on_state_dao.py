@@ -16,7 +16,6 @@ from ideasdk.context import SocaContext
 from typing import Optional, Dict
 from boto3.dynamodb.conditions import Attr
 
-
 class SingleSignOnStateDAO:
 
     def __init__(self, context: SocaContext, logger=None):

@@ -1,0 +1,5 @@
+{% if context.base_os in ('ubuntu2204') %}
+apt update
+apt upgrade -y
+set_reboot_required "Packages Upgraded"
+{% endif %}

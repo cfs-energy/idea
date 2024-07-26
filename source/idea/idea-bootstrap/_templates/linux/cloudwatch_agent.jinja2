@@ -18,13 +18,13 @@ function get_cloudwatch_agent_download_link() {
       sed -i 's/%os%/amazon_linux/g' ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}/cloudwatch_download_link.txt
       sed -i 's/%ext%/rpm/g' ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}/cloudwatch_download_link.txt
       ;;
-    rhel7 | rhel8 | rhel9 | rocky8 | rocky9)
+    rhel8 | rhel9 | rocky8 | rocky9)
       sed -i 's/%os%/redhat/g' ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}/cloudwatch_download_link.txt
       sed -i 's/%ext%/rpm/g' ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}/cloudwatch_download_link.txt
       ;;
-    centos7)
-      sed -i 's/%os%/centos/g' ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}/cloudwatch_download_link.txt
-      sed -i 's/%ext%/rpm/g' ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}/cloudwatch_download_link.txt
+    ubuntu2204)
+      sed -i 's/%os%/ubuntu/g' ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}/cloudwatch_download_link.txt
+      sed -i 's/%ext%/deb/g' ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}/cloudwatch_download_link.txt
       ;;
   esac
   local MACHINE=$(uname -m)
@@ -42,7 +42,13 @@ CLOUDWATCH_AGENT_DOWNLOAD_LINK="$(get_cloudwatch_agent_download_link)"
 CLOUDWATCH_AGENT_PACKAGE_NAME="$(basename ${CLOUDWATCH_AGENT_DOWNLOAD_LINK})"
 pushd ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}
 wget "${CLOUDWATCH_AGENT_DOWNLOAD_LINK}"
+
+{%- if context.base_os in ('amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
 rpm -U ./${CLOUDWATCH_AGENT_PACKAGE_NAME}
+{%- elif context.base_os in ('ubuntu2204') %}
+dpkg -i ./${CLOUDWATCH_AGENT_PACKAGE_NAME}
+{%- endif %}
+
 popd
 
 {%- set cloudwatch_agent_config = context.get_cloudwatch_agent_config(additional_log_files=additional_log_files) %}

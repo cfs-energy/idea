@@ -1507,7 +1507,7 @@ def run_integration_tests(cluster_name: str, aws_region: str, aws_profile: str, 
             --aws-region eu-west-1 \\
             --admin-username YOUR_ADMIN_USER \\
             --admin-password YOUR_ADMIN_PASSWORD \\
-            --param base_os=amazonlinux2,centos7,rhel7 \\
+            --param base_os=amazonlinux2 \\
             --test-case-id SCHEDULER_JOB_TEST_CASES
 
     \b

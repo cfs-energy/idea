@@ -90,6 +90,44 @@ package_config:
       - autoconf
       - automake
       - stress
+        
+    application_deb:
+      # Extra package to install on Scheduler host, including OpenPBS dependencies installed on all Debian Linux OS
+      - htop
+      - hwloc
+      - gcc
+      - make
+      - libtool
+      - libhwloc-dev
+      - libx11-dev
+      - libxt-dev
+      - libedit-dev
+      - libical-dev
+      - ncurses-dev
+      - perl
+      - postgresql-server-dev-all
+      - postgresql-contrib
+      - unzip
+      - python3-dev
+      - tcl-dev
+      - tk-dev
+      - swig
+      - libexpat-dev
+      - libssl-dev
+      - libxext-dev
+      - libxft-dev
+      - autoconf
+      - automake
+      - g++
+      - expat
+      - libedit2
+      - postgresql
+      - python3
+      - sendmail-bin
+      - sudo
+      - tcl
+      - tk
+      - libical3
 
     application_7:
       # Additional packages required for ALI2, centos7, rhel7, and rocky7
@@ -120,6 +158,10 @@ package_config:
 
     openldap_client:
       - openldap-clients
+    
+    openldap_client_deb:
+      - ldap-utils
+      - sssd-ldap
 
     openldap_server:
       # OpenLDAP Server and dependencies installed on all Linux OS
@@ -142,7 +184,6 @@ package_config:
     openldap_server_9:
       # Additional packages required for rhel9, and rocky9
       - openldap-compat
-
 
     sssd:
       # SSSD and dependencies installed on all Linux OS
@@ -187,6 +228,17 @@ package_config:
       - sssd-krb5-common
       - sssd-ldap
       - sssd-proxy
+
+    sssd_deb:
+      # SSSD and dependencies installed on all Debian Linux OS
+      - adcli
+      - sssd-ad
+      - sssd-tools
+      - realmd
+      - libsss-sudo
+      - krb5-user
+      - sssd-krb5
+
     sssd_7:
       # Additional packages required for rhel7, centos7, and amazonlinux2
       - python-sssdconfig
@@ -195,6 +247,7 @@ package_config:
       # Default packages installed on all Linux OS
       - chrony
       - cpp
+      - dkms
       - e2fsprogs
       - e2fsprogs-libs
       - gcc
@@ -295,6 +348,26 @@ package_config:
       - zlib
       - zlib-devel
 
+    system_deb:
+      # Default packages installed on all Linux OS
+      - chrony             # chrony-daemon not found, using base package
+      - build-essential            
+      - htop
+      - libva2
+      - libva-drm2
+      - nfs-common   
+      - policycoreutils   
+      - dkms   
+      - git                
+      - jq                 
+      - openssl           
+      - libssl-dev        
+      - perl               # Consolidating perl packages based on apt output
+      - perl-base           # Consolidating perl packages based on apt output
+      - vim                
+      - wget        
+      - mesa-utils       
+
     system_7:
       # Additional packages required for rhel7, centos7, and amazonlinux2
       - libverto-tevent
@@ -312,7 +385,6 @@ package_config:
     system_9:
       # Additional packages required for rhel9, rocky9
       - ec2-hibinit-agent
-
 
     # used by cluster-manager to convert .pem files to .ppk files
     putty:
@@ -418,7 +490,6 @@ package_config:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.1/Servers/nice-dcv-2023.1-16388-sles15-x86_64.tgz
             sha256sum: a84aa662613c2098d15763a46559dc596541471b030fae544269b51b766d4ef3
           {%- endif %}
-        ubuntu:
           {%- if 'ubuntu1804' in supported_base_os %}
           ubuntu1804:
             version: 2023.0-15065-ubuntu1804-x86_64
@@ -463,7 +534,6 @@ package_config:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.1/Servers/nice-dcv-2023.1-16388-el9-aarch64.tgz
             sha256sum: a74ee7376bf8595b95386352ff3f95eb5886e7bbc8b8512c53a48be1d3ec6282
           {%- endif %}
-        ubuntu:
           {%- if 'ubuntu1804' in supported_base_os %}
           ubuntu1804:
             version: 2023.0-15065-ubuntu1804-aarch64.tgz
@@ -516,7 +586,6 @@ package_config:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.1/SessionManagerAgents/nice-dcv-session-manager-agent-2023.1.732-1.sles15.x86_64.rpm
             sha256sum: 172626e2eda8e7c6b5cd26e96a5102096b1a21dceacddf064870bc6df7b1490d
           {%- endif %}
-        ubuntu:
           {%- if 'ubuntu1804' in supported_base_os %}
           ubuntu1804:
             version: 2023.0.675-1_amd64.ubuntu1804
@@ -555,7 +624,6 @@ package_config:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.1/SessionManagerAgents/nice-dcv-session-manager-agent-2023.1.732-1.el9.aarch64.rpm
             sha256sum: 127bcf74b7d9f5b4ac3a6da037175bb1cefedb15d2abed0ad236a781cfbfe3a8
           {%- endif %}
-        ubuntu:
           {%- if 'ubuntu1804' in supported_base_os %}
           ubuntu1804:
             version: 2023.0.675-1_arm64.ubuntu1804
@@ -589,7 +657,6 @@ package_config:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.1/Gateway/nice-dcv-connection-gateway-2023.1.710-1.el9.x86_64.rpm
             sha256sum: 4b28aa3ecb4d681da5fe5f6a4420c5de032ea224111599384b1cf337084be0c5
           {%- endif %}
-        ubuntu:
           {%- if 'ubuntu1804' in supported_base_os %}
           ubuntu1804:
             version: 2023.0.531-1_amd64.ubuntu1804
@@ -622,7 +689,6 @@ package_config:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.1/Gateway/nice-dcv-connection-gateway-2023.1.710-1.el8.aarch64.rpm
             sha256sum: 63596f532764ecaf023fe3c16ea53c7fbcebfc3c8da13ef378ce4c49ee295bd7
           {%- endif %}
-        ubuntu:
           {%- if 'ubuntu1804' in supported_base_os %}
           ubuntu1804:
             version: 2023.0.531-1_arm64.ubuntu1804
@@ -661,7 +727,6 @@ package_config:
           url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.1/SessionManagerBrokers/nice-dcv-session-manager-broker-2023.1.410-1.el9.noarch.rpm
           sha256sum: 36e67f19f9534c49f4d1c073f619c443cecc34a7bdd624aafc06eeb1db160ba9
         {%- endif %}
-      ubuntu:
         {%- if 'ubuntu1804' in supported_base_os %}
         ubuntu1804:
           version: 2023.0.392-1_all.ubuntu1804
@@ -703,12 +768,11 @@ package_config:
           label: RHEL 8 | CentOS 8 | Rocky Linux 8
           url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.1/Clients/nice-dcv-viewer-2023.1.6203-1.el8.x86_64.rpm
         rhel_centos_rocky9:
-          label: AL2023 | RHEL 9 | CentOS 9 | Rocky Linux 9
+          label: RHEL 9 | CentOS 9 | Rocky Linux 9
           url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.1/Clients/nice-dcv-viewer-2023.1.6203-1.el9.x86_64.rpm
         suse15:
           label: SUSE Enterprise Linux 15
           url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.1/Clients/nice-dcv-viewer-2023.1.6203-1.sles15.x86_64.rpm
-      ubuntu:
         ubuntu1804:
           label: Ubuntu 18.04
           url: https://d1uj6qtbmh3dt5.cloudfront.net/2023.0/Clients/nice-dcv-viewer_2023.0.5483-1_amd64.ubuntu1804.deb
@@ -740,11 +804,12 @@ gpu_settings:
   - g3s
   - g5
   - g5g
+  - g6
   - g4dn
   - g4ad
   nvidia_public_driver_versions:
     ltsb_version: &ltsb_version 470.239.06
-    production_version: &production_version 550.54.15
+    production_version: &production_version 550.90.07
     p2: *ltsb_version
     g2: *ltsb_version
     g3: *production_version
@@ -752,6 +817,7 @@ gpu_settings:
     g4dn: *production_version
     g5: *production_version
     g5g: *production_version
+    g6: *production_version
     p3: *production_version
     p4d: *production_version
     p4de: *production_version

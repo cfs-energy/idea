@@ -18,6 +18,7 @@ import {AUTH_LOGIN_CHALLENGE, AUTH_PASSWORD_RESET_REQUIRED, UNAUTHORIZED_ACCESS}
 import Utils from "../common/utils";
 import {JwtTokenClaims} from "../common/token-utils";
 import {IdeaClients} from "../client";
+import AppLogger from "../common/app-logger";
 
 export interface AuthServiceProps {
     localStorage: LocalStorageService,
@@ -38,10 +39,15 @@ class AuthService {
 
     private activeIsLoggedInPromise: Promise<boolean> | null
 
+    private logger: AppLogger
+
     constructor(props: AuthServiceProps) {
         this.props = props
         this.claims = null
         this.activeIsLoggedInPromise = null
+        this.logger = new AppLogger({
+            name: 'auth-service.ts'
+        })
     }
 
     setHooks(onLogin: () => Promise<boolean>, onLogout: () => Promise<boolean>) {
@@ -269,38 +275,49 @@ class AuthService {
     }
 
     isLoggedIn(): Promise<boolean> {
-
-        if(this.activeIsLoggedInPromise != null) {
+        this.logger.debug('isLoggedIn method invoked.')
+    
+        if (this.activeIsLoggedInPromise != null) {
+            this.logger.debug('Returning existing active isLoggedIn promise.')
             return this.activeIsLoggedInPromise
         }
-
+    
+        this.logger.debug('Creating new isLoggedIn promise.')
         this.activeIsLoggedInPromise = this.props.clients.auth().isLoggedIn().then(status => {
-
+            this.logger.debug(`Auth service reported login status: ${status}`)
+    
             // if already logged in do, nothing
             if (status) {
+                this.logger.debug('User is already logged in. Fetching claims.')
                 return this.props.clients.auth().getClaims().then(claims => {
                     this.claims = claims
+                    this.logger.debug('Claims fetched successfully.')
                     return true
                 })
             }
-
+    
             if (typeof window.idea.app.sso === 'undefined' || !window.idea.app.sso) {
+                this.logger.debug('SSO is not defined or not enabled.')
                 return false
             }
-
+    
             // if SSO is enabled, check for SSO auth
             if (Utils.isSsoEnabled()) {
+                this.logger.debug('SSO is enabled. Checking SSO auth status.')
                 let authStatus = window.idea.app.sso_auth_status
+                this.logger.debug(`SSO auth status: ${authStatus}`)
                 if (authStatus) {
                     if (authStatus === 'SUCCESS' && window.idea.app.sso_auth_code) {
+                        this.logger.debug('SSO auth was successful. Using SSO auth code for login.')
                         return this.login_using_sso_auth_code(window.idea.app.sso_auth_code).then(status => {
                             // discard the sso_auth_code after use as auth code is one time use only.
                             // this also prevents re-triggering SSO auth flow after the user has logged out manually.
                             window.idea.app.sso_auth_code = null
-                            if(status) {
+                            this.logger.debug(`Login using SSO auth code was ${status ? 'successful' : 'unsuccessful'}.`)
+                            if (status) {
                                 return this.props.clients.auth().getClaims().then(claims => {
                                     this.claims = claims
-                                    // console.log("loginSSO claims: ", claims)
+                                    this.logger.debug('Claims fetched successfully after SSO login.')
                                     return true
                                 })
                             } else {
@@ -308,20 +325,25 @@ class AuthService {
                             }
                         })
                     } else {
+                        this.logger.debug('SSO auth status is not SUCCESS or no SSO auth code is available. Redirecting to login page.')
                         // redirect to login page
                         return false
                     }
                 } else {
+                    this.logger.debug('SSO auth status is null. Redirecting to SSO.')
                     window.location.href = '/sso'
                 }
             }
+            this.logger.debug('SSO is not enabled.')
             return false
         }).finally(() => {
+            this.logger.debug('isLoggedIn promise settled. Clearing active isLoggedIn promise.')
             this.activeIsLoggedInPromise = null
         })
-
+    
         return this.activeIsLoggedInPromise
     }
+    
 
     logout() {
         return this.props.clients.auth()

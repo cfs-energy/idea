@@ -43,7 +43,7 @@ mkdir -p ${APP_DIR}
 tar -xvf ${BOOTSTRAP_DIR}/${PACKAGE_ARCHIVE} -C ${APP_DIR}
 
 DCV_GPG_KEY="{{ context.config.get_string('global-settings.package_config.dcv.gpg_key', required=True) }}"
-{%- if context.base_os in ('amazonlinux2', 'centos7', 'rhel7') %}
+{%- if context.base_os in ('amazonlinux2') %}
 DCV_CONNECTION_GATEWAY_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.connection_gateway.x86_64.linux.al2_rhel_centos7.version', required=True) }}"
 DCV_CONNECTION_GATEWAY_URL="{{ context.config.get_string('global-settings.package_config.dcv.connection_gateway.x86_64.linux.al2_rhel_centos7.url', required=True) }}"
 DCV_CONNECTION_GATEWAY_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.connection_gateway.x86_64.linux.al2_rhel_centos7.sha256sum', required=True) }}"
@@ -56,7 +56,7 @@ DCV_CONNECTION_GATEWAY_SHA256_HASH="{{ context.config.get_string('global-setting
 INTERNAL_ALB_ENDPOINT="{{ context.config.get_cluster_internal_endpoint() }}"
 GATEWAY_TO_BROKER_PORT="{{ context.config.get_string("virtual-desktop-controller.dcv_broker.gateway_communication_port", required=True) }}"
 
-{%- if context.base_os in ('amazonlinux2', 'centos7', 'rhel7') %}
+{%- if context.base_os in ('amazonlinux2') %}
 DCV_SERVER_X86_64_URL="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.al2_rhel_centos7.url', required=True) }}"
 DCV_SERVER_X86_64_TGZ="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.al2_rhel_centos7.tgz', required=True) }}"
 DCV_SERVER_X86_64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.al2_rhel_centos7.version', required=True) }}"
@@ -140,7 +140,7 @@ function install_dcv_web_viewer() {
   pushd nice-dcv-${DCV_SERVER_VERSION}
   {% if context.base_os == 'amazonlinux2' -%}
     rpm -ivh nice-dcv-web-viewer-*.${machine}.rpm
-  {% elif context.base_os in ('rhel7', 'centos7', 'rhel8', 'rocky8') -%}
+  {% elif context.base_os in ('rhel8', 'rocky8') -%}
     rpm -ivh nice-dcv-web-viewer-*.${machine}.rpm --nodeps
   {% endif -%}
   popd

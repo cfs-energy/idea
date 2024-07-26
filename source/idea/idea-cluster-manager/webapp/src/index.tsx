@@ -113,38 +113,50 @@ interface InitializeAppProps {
 }
 
 const initializeApp = (props: InitializeAppProps) => {
-    let httpEndpoint
-    let albEndpoint
+    let httpEndpoint;
+    let albEndpoint;
 
     if (currentUrl.origin.startsWith('http://localhost')) {
-        httpEndpoint = process.env.REACT_APP_IDEA_HTTP_ENDPOINT!
-        albEndpoint = process.env.REACT_APP_IDEA_ALB_ENDPOINT!
+        LOGGER.debug('Running in local environment');
+        httpEndpoint = process.env.REACT_APP_IDEA_HTTP_ENDPOINT!;
+        albEndpoint = process.env.REACT_APP_IDEA_ALB_ENDPOINT!;
     } else {
-        httpEndpoint = currentUrl.origin
-        albEndpoint = currentUrl.origin
+        LOGGER.debug('Running in production environment');
+        httpEndpoint = currentUrl.origin;
+        albEndpoint = currentUrl.origin;
     }
 
+    LOGGER.debug('HTTP Endpoint: ', httpEndpoint);
+    LOGGER.debug('ALB Endpoint: ', albEndpoint);
+
     if (window.idea.context == null) {
+        LOGGER.debug('Initializing new AppContext');
         window.idea.context = new AppContext({
             httpEndpoint: httpEndpoint,
             albEndpoint: albEndpoint,
             releaseVersion: IDEA_RELEASE_VERSION,
             app: window.idea.app,
             serviceWorkerRegistration: props.serviceWorkerRegistration
-        })
+        });
+    } else {
+        LOGGER.debug('AppContext already initialized');
     }
 
+    LOGGER.debug('Getting root element for ReactDOM');
     const root = ReactDOM.createRoot(
         document.getElementById('app') as HTMLElement
-    )
+    );
 
+    LOGGER.debug('Rendering the application');
     root.render(
         <HashRouter>
-            <ToastContainer/>
-            <IdeaWebPortal/>
+            <ToastContainer />
+            <IdeaWebPortal />
         </HashRouter>
-    )
-}
+    );
+
+    LOGGER.debug('Application initialized');
+};
 
 
 const sessionManagement = Utils.asString(window.idea.app.session_management, 'local-storage')

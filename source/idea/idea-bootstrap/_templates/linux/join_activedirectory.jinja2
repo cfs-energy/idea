@@ -107,6 +107,10 @@ function ad_automation_wait_for_authorization_and_join () {
   fi
 }
 
+{% if context.base_os in ('ubuntu2204') %}
+sed -i '/kdc_timesync = 1/a\        rdns = false' /etc/krb5.conf
+{% endif %}
+
 ad_automation_request_authorization
 ad_automation_wait_for_authorization_and_join
 # ad_automation_wait_for_authorization_and_join exports IDEA_HOSTNAME for our Kerberos info

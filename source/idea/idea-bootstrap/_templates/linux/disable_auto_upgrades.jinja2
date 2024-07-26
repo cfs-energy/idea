@@ -1,0 +1,12 @@
+{% if context.base_os in ('ubuntu2204') %}
+tee /etc/apt/apt.conf.d/20auto-upgrades > /dev/null << EOF
+APT::Periodic::Update-Package-Lists "0";
+APT::Periodic::Download-Upgradeable-Packages "0";
+APT::Periodic::AutocleanInterval "0";
+APT::Periodic::Unattended-Upgrade "0";
+EOF
+
+
+apt-mark hold linux-image-aws linux-aws linux-headers-aws
+
+{% endif %}

@@ -135,7 +135,11 @@ function install_aws_cli () {
   fi
   which unzip > /dev/null 2>&1
   if [[ "$?" != "0" ]]; then
-    yum install -y unzip
+    if [[ $BASE_OS =~ ^(ubuntu2204)$ ]]; then
+      apt install -y unzip
+    else
+      yum install -y unzip
+    fi
   fi
   unzip -q awscliv2.zip
   ./aws/install --bin-dir /bin --update
@@ -230,7 +234,11 @@ function install_aws_cli () {
   fi
   which unzip > /dev/null 2>&1
   if [[ "$?" != "0" ]]; then
-    yum install -y unzip
+    if [[ $BASE_OS =~ ^(ubuntu2204)$ ]]; then
+      apt install -y unzip
+    else
+      yum install -y unzip
+    fi
   fi
   unzip -q awscliv2.zip
   ./aws/install --bin-dir /bin --update
