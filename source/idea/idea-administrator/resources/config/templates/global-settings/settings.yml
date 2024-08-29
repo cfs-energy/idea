@@ -805,6 +805,7 @@ gpu_settings:
   - g5
   - g5g
   - g6
+  - g6e
   - g4dn
   - g4ad
   nvidia_public_driver_versions:
@@ -818,6 +819,7 @@ gpu_settings:
     g5: *production_version
     g5g: *production_version
     g6: *production_version
+    g6e: *production_version
     p3: *production_version
     p4d: *production_version
     p4de: *production_version

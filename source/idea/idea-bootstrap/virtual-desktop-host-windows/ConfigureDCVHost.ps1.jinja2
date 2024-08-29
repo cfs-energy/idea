@@ -61,6 +61,7 @@ function Bootstrap-DCV-WindowsHost {
   New-ItemProperty -Path "$DCVRegistryPath\connectivity" -Name "idle-timeout" -PropertyType "DWord" -Value $IdleTimeout -Force
   New-ItemProperty -Path "$DCVRegistryPath\connectivity" -Name "idle-timeout-warning" -PropertyType "DWord" -Value $IdleTimeoutWarning -Force
   New-ItemProperty -Path "$DCVRegistryPath\connectivity" -Name "enable-quic-frontend" -PropertyType "DWord" -Value 1 -Force
+  New-ItemProperty -Path "$DCVRegistryPath\connectivity" -Name "enable-datagrams-display" -PropertyType "STRING" -Value "always-off" -Force
 
   # Session Authentication
   New-Item -Path "$DCVRegistryPath\" -Name "security" -Force

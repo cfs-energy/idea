@@ -409,7 +409,10 @@ class Groups extends Component<GroupsProps, GroupsState> {
                             return Promise.resolve({})
                         }
                         return AppContext.get().client().accounts().listUsersInGroup({
-                            group_names: [this.getSelected()!.name!]
+                            group_names: [this.getSelected()!.name!],
+                            paginator: {
+                                page_size: 1000
+                            }
                         })
                     }}
                     selectionType="multi"

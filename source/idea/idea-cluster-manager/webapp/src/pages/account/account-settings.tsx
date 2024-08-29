@@ -93,7 +93,10 @@ class AccountSettings extends Component<AccountSettingsProps, AccountSettingsSta
 
     fetchUsersInGroup() {
         return this.getAuthClient().listUsersInGroup({
-            group_names: [this.state.user?.group_name!]
+            group_names: [this.state.user?.group_name!],
+            paginator: {
+                page_size: 1000
+            }
         }).then(result => {
             this.setState({
                 usersInGroup: result.listing!

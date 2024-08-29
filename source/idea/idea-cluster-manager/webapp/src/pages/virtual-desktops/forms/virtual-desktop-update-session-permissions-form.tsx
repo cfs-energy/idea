@@ -344,7 +344,10 @@ class UpdateSessionPermissionModal extends Component<UpdateSessionPermissionModa
         }).then(response => {
             let users: User[] = []
             this.getAuthClient().listUsersInGroup({
-                group_names: response.project?.ldap_groups!
+                group_names: response.project?.ldap_groups!,
+                paginator: {
+                    page_size: 1000
+                }
             }).then(group_response => {
                 group_response.listing?.forEach(user => {
                     if (AppContext.get().auth().getUsername() === user.username) {

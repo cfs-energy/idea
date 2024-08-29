@@ -136,7 +136,10 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
 
         let groups: string[] = [Utils.getUserGroupName(Utils.getModuleId(Constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER)), Utils.getAdministratorGroup(Utils.getModuleId(Constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER))]
         this.getAuthClient().listUsersInGroup({
-            group_names: groups
+            group_names: groups,
+            paginator: {
+                page_size: 1000
+            }
         }).then(group_response => {
             this.setState({
                 eVDIUsers: group_response.listing!
