@@ -52,15 +52,15 @@ def update_version(c, version):
         with open(idea_admin_ps1, 'w') as f:
             f.write(content)
 
-        print(f'updating integrated-digital-engineering-on-aws.template with version: {version}')
-        cfn_template = os.path.join(idea.props.project_deployment_dir, 'integrated-digital-engineering-on-aws.template')
-        with open(cfn_template, 'r') as f:
-            content = f.read()
-            replace_old = f'IDEA_REVISION="v{old_version}"'
-            replace_new = f'IDEA_REVISION="v{version}"'
-            content = content.replace(replace_old, replace_new)
-        with open(cfn_template, 'w') as f:
-            f.write(content)
+        # print(f'updating integrated-digital-engineering-on-aws.template with version: {version}')
+        # cfn_template = os.path.join(idea.props.project_deployment_dir, 'integrated-digital-engineering-on-aws.template')
+        # with open(cfn_template, 'r') as f:
+        #     content = f.read()
+        #     replace_old = f'IDEA_REVISION="v{old_version}"'
+        #     replace_new = f'IDEA_REVISION="v{version}"'
+        #     content = content.replace(replace_old, replace_new)
+        # with open(cfn_template, 'w') as f:
+        #     f.write(content)
 
 
 @task()

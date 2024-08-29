@@ -4,6 +4,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.9] - 2024-08-29
+
+### Notes
+* DCV session files with no `transport` set have a 1 second timeout where `QUIC` is tried first and then a fallback to `TCP/WS` - In testing, this has found to leverage `QUIC` automatically intermittently when `QUIC` is enabled in IDEA. This will likely be resolved in the future with a customizable timeout to ensure `QUIC` connections complete in time.
+* Docs need updating to reflect Ubuntu usage and removal of EOL OS options.
+
+### Features
+* Added GPU Driver support for `g6e` instance types
+
+### Changes
+* Added default to disable QUIC datagrams in DCV on eVDI nodes
+* Update AWS CDK from `2.147.3` to `2.154.1`
+* Update Python Requirements
+* Update Node from `18.20.2` to `18.20.4`
+* Update NVM from `0.39.7` to `0.40.1`
+
+### Bug Fixes
+* Fixed taskbar not appearing on Ubuntu eVDI nodes
+* Removed non-existant `cfn_template` from devtool `release.update-version`
+* Fixed snap on Ubuntu to use `/data/home` user directory
+* Update firefox.desktop `NoDisplay=false` to show in Ubuntu application launcher
+* Change input method for Ubuntu to `xim` to fix issues with `ibus` not allowing keyboard input in certain apps
+* Only OpenSearch In-Use IPs should be added to the `dashboard` target group
+* Adjusted pagination to `1000` records in `ListUsersInGroup` calls from Cluster Manager Web UI. This should be adjusted in the future to use proper pagination.
+
+### Known Caveats
+
+
 ## [3.1.8] - 2024-07-17
 
 ### Notes

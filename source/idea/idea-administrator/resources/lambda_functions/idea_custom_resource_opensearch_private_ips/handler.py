@@ -44,7 +44,8 @@ def handler(event, context):
         ec2_client = boto3.client('ec2')
         response = ec2_client.describe_network_interfaces(Filters=[
             {'Name': 'description', 'Values': [f'ES {domain_name}']},
-            {'Name': 'requester-id', 'Values': ['amazon-elasticsearch']}
+            {'Name': 'requester-id', 'Values': ['amazon-elasticsearch']},
+            {'Name': 'status', 'Values': ['in-use']}  # Add this filter for in-use ENIs
         ])
 
         network_interfaces = response.get('NetworkInterfaces', [])
@@ -59,7 +60,7 @@ def handler(event, context):
                 result.append(ip_address)
 
         if len(result) == 0:
-            msg = 'No IP addresses found'
+            msg = 'No in-use IP addresses found'
             logger.error(msg)
             http_client.send_cfn_response(CfnResponse(
                 context=context,
@@ -82,7 +83,7 @@ def handler(event, context):
             ))
     except Exception as e:
         logger.exception(f'Failed to get ES Private IP Address: {e}')
-        error_message = f'Exception getting private IP addresses for ES soca-{domain_name}'
+        error_message = f'Exception getting in-use private IP addresses for ES soca-{domain_name}'
         http_client.send_cfn_response(CfnResponse(
             context=context,
             event=event,

@@ -97,6 +97,15 @@ ResultActive=no" > /etc/polkit-1/localauthority/50-local.d/repos.pkla
   echo "/usr/sbin/lightdm" > /etc/X11/default-display-manager
   DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true dpkg-reconfigure lightdm
   echo set shared/default-x-display-manager lightdm | debconf-communicate
+  im-config -n xim
+  tee /etc/X11/Xsession.d/99-fix-taskbar << EOF
+export GNOME_SHELL_SESSION_MODE=ubuntu
+export XDG_CURRENT_DESKTOP=ubuntu:GNOME
+export XDG_CONFIG_DIRS=/etc/xdg/xdg-ubuntu:/etc/xdg
+EOF
+  chmod 644 /etc/X11/Xsession.d/99-fix-taskbar
+  sed -i 's/NoDisplay=true/NoDisplay=false/' /usr/share/applications/firefox.desktop
+  update-desktop-database
 {% endif -%}
 else
   log_info "Found window manager pre-installed... skipping dcv prereq installation..."

@@ -28,7 +28,7 @@
 # * IDEA_DEV_MODE - Set to "true" if you are working with IDEA sources
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-IDEA_REVISION=${IDEA_REVISION:-"v3.1.8"}
+IDEA_REVISION=${IDEA_REVISION:-"v3.1.9"}
 IDEA_DOCKER_REPO=${IDEA_DOCKER_REPO:-"public.ecr.aws/s5o2b4m0/idea-administrator"}
 IDEA_ECR_CREDS_RESET=${IDEA_ECR_CREDS_RESET:-"true"}
 IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER=${IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER:=""}

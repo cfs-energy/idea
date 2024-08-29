@@ -78,7 +78,7 @@ reverse_proxy_server_instance_type: ~
 reverse_proxy_server_volume_size: 200
 
 # dcv_session_quic_support is the flag to control for QUIC support.
-# if dcv_session_quic_support: true, then we can not use internal certificates, turn dcv_session_nlb_custom_certificate_provided to true
+# if dcv_session_quic_support: true, then we can not use internal certificates, set NLB certificates using dcv_connection_gateway_custom_certificate_provided: true and additional required settings
 dcv_session_quic_support: false
 
 # if dcv_connection_gateway_custom_certificate_provided: true, generate your own self signed certificates import the certificate content and private key to 2 separate secrets and provide
