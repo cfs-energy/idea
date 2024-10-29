@@ -432,7 +432,7 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
                     # needs to see all OS's no point adding a filter for OS at this point
                     continue
                 elif listing_filter.key == sessions_constants.USER_SESSION_DB_FILTER_BASE_OS_KEY and listing_filter.value == 'linux':
-                    listing_filter.value = [VirtualDesktopBaseOS.AMAZON_LINUX2.value, VirtualDesktopBaseOS.RHEL8.value, VirtualDesktopBaseOS.RHEL9.value, VirtualDesktopBaseOS.ROCKY8.value, VirtualDesktopBaseOS.ROCKY9.value, VirtualDesktopBaseOS.UBUNTU2204.value]
+                    listing_filter.value = [VirtualDesktopBaseOS.AMAZON_LINUX2.value, VirtualDesktopBaseOS.RHEL8.value, VirtualDesktopBaseOS.RHEL9.value, VirtualDesktopBaseOS.ROCKY8.value, VirtualDesktopBaseOS.ROCKY9.value, VirtualDesktopBaseOS.UBUNTU2204.value, VirtualDesktopBaseOS.UBUNTU2404.value]
 
                 new_filters.append(listing_filter)
 

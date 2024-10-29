@@ -63,7 +63,7 @@ class OpenSearch(SocaBaseConstruct, opensearch.Domain):
         self.context = context
 
         if version is None:
-            version = opensearch.EngineVersion.OPENSEARCH_2_7
+            version = opensearch.EngineVersion.OPENSEARCH_2_15
 
         if vpc_subnets is None:
             vpc_subnets = [ec2.SubnetSelection(

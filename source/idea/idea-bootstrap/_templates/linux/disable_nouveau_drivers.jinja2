@@ -1,6 +1,6 @@
 {%- if context.is_nvidia_gpu() %}
 # Begin: Disable NVIDIA Nouveau Drivers - Is GPU Instance Type: {{ context.is_gpu_instance_type() }}, Is NVIDIA GPU: {{ context.is_nvidia_gpu() }}
-{%- if context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9', 'ubuntu2204') %}
+{%- if context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9', 'ubuntu2204', 'ubuntu2404') %}
 grep -q "rdblacklist=nouveau" /etc/default/grub
 if [[ "$?" != "0" ]]; then
   log_info "Disabling the nouveau open source driver for NVIDIA graphics cards"
@@ -14,7 +14,7 @@ EOF
   echo GRUB_CMDLINE_LINUX="rdblacklist=nouveau" >> /etc/default/grub
   {%- if context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
   grub2-mkconfig -o /boot/grub2/grub.cfg
-  {%- elif context.base_os in ('ubuntu2204') %}
+  {%- elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
   update-grub
   {%- endif %}
   set_reboot_required "Disable NVIDIA Nouveau Drivers"

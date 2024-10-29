@@ -602,6 +602,9 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
                             } else if (event.value === 'ubuntu2204'){
                                 // Hibernation is supported for Ubuntu 22.04
                                 hibernation?.disable(false)
+                            } else if (event.value === 'ubuntu2404'){
+                                // Hibernation is not supported for Ubuntu 24.04
+                                hibernation?.disable(true)
                             } else {
                                 hibernation?.setValue(false)
                                 hibernation?.disable(true)

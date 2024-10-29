@@ -160,7 +160,7 @@ function Setup-WindowsEC2Instance {
   Write-ToLog -Message "mount any applicable shared storage file systems"
   Mount-SharedStorage -DomainUserName $DomainUserName
 
-  Write-ToLog -Message "Install and Configure NICE DCV"
+  Write-ToLog -Message "Install and Configure Amazon DCV"
   Import-Module .\ConfigureDCVHost.ps1
   Bootstrap-DCV-WindowsHost
 

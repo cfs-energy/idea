@@ -1,0 +1,47 @@
+# Begin DCV Certificate Generation. This is required on AL2 with DCV 2024
+
+# Set variables
+DCV_DIR="/etc/dcv"
+HOSTNAME=$(hostname -f)
+IP_ADDRESS=$(hostname -I | awk '{print $1}')
+
+# Create directory if it doesn't exist
+mkdir -p $DCV_DIR
+
+# Generate RSA private key
+openssl genrsa -out $DCV_DIR/dcv.key 2048
+
+# Create a configuration file for the certificate
+cat > $DCV_DIR/dcv_cert.conf << EOF
+[req]
+distinguished_name = req_distinguished_name
+x509_extensions = v3_req
+prompt = no
+[req_distinguished_name]
+C = US
+CN = $HOSTNAME
+[v3_req]
+keyUsage = critical, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
+[alt_names]
+IP.1 = $IP_ADDRESS
+EOF
+
+# Generate CSR
+openssl req -new -key $DCV_DIR/dcv.key -out $DCV_DIR/dcv.csr -config $DCV_DIR/dcv_cert.conf
+
+# Generate self-signed certificate
+openssl x509 -req -days 365 -in $DCV_DIR/dcv.csr -signkey $DCV_DIR/dcv.key -out $DCV_DIR/dcv.pem -extfile $DCV_DIR/dcv_cert.conf -extensions v3_req
+
+# Clean up temporary files
+rm $DCV_DIR/dcv.csr $DCV_DIR/dcv_cert.conf
+
+# Set ownership to dcv user
+chown dcv:dcv $DCV_DIR/dcv.key $DCV_DIR/dcv.pem
+
+# Set permissions
+chmod 600 $DCV_DIR/dcv.key $DCV_DIR/dcv.pem
+
+echo "Certificate and key have been generated and placed in $DCV_DIR"
+echo "Ownership set to dcv user and permissions set to 600"

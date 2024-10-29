@@ -643,6 +643,8 @@ class Utils {
                 return 'Rocky Linux 9'
             case "ubuntu2204":
                 return "Ubuntu 22.04";
+            case "ubuntu2404":
+                return "Ubuntu 24.04";
             case 'windows':
                 return 'Windows'
         }

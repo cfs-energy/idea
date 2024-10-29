@@ -45,6 +45,8 @@ from aws_cdk import (
     aws_logs as logs
 )
 
+import uuid
+
 
 class AnalyticsStack(IdeaBaseStack):
 
@@ -308,12 +310,13 @@ class AnalyticsStack(IdeaBaseStack):
         ).invoke(
             name='opensearch-private-ips',
             properties={
-                'DomainName': domain_name
+                'DomainName': domain_name,
+                'UpdateToken': str(uuid.uuid4())
             }
         )
 
         targets = []
-        for i in range(data_nodes * 3):
+        for i in range(data_nodes):
             targets.append(elbv2.CfnTargetGroup.TargetDescriptionProperty(
                 id=cdk.Fn.select(
                     index=i,
@@ -324,6 +327,7 @@ class AnalyticsStack(IdeaBaseStack):
                 )
             ))
 
+        deployment_id = str(uuid.uuid4())
         dashboard_target_group = elbv2.CfnTargetGroup(
             self.stack,
             f'{self.cluster_name}-dashboard-target-group',
@@ -331,10 +335,15 @@ class AnalyticsStack(IdeaBaseStack):
             protocol='HTTPS',
             target_type='ip',
             vpc_id=self.cluster.vpc.vpc_id,
-            name=self.get_target_group_name('dashboard'),
+            name=f"{self.get_target_group_name('dashboard')}-{deployment_id}"[:32],
             targets=targets,
             health_check_path='/'
         )
+        # Add dependency using the DependsOn property
+        dashboard_target_group.node.add_dependency(opensearch_private_ips)
+
+        cdk.CfnOutput(self.stack, "IPAddresses", value=opensearch_private_ips.get_att_string('IpAddresses'))
+        cdk.CfnOutput(self.stack, "NumberOfTargets", value=str(len(targets)))   
 
         cdk.CustomResource(
             self.stack,

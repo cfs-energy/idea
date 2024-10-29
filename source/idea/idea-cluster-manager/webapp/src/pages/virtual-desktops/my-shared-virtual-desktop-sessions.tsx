@@ -255,6 +255,10 @@ class MySharedVirtualDesktopSessions extends Component<MySharedVirtualDesktopPro
                             {
                                 title: 'Ubuntu 22.04',
                                 value: 'ubuntu2204'
+                            },
+                            {
+                                title: 'Ubuntu 24.04',
+                                value: 'ubuntu2404'
                             }
                         ]
                     }

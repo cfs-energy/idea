@@ -350,7 +350,7 @@ class VirtualDesktopAPI(BaseAPI):
                 session.failure_reason = f'OS {session.software_stack.base_os} does not support Instance Hibernation for instances with RAM greater than 16GiB.'
                 return session, False
         else:
-            # amazonlinux2, ubuntu2204, rhel8, rocky8 support hibernation
+            # amazonlinux2, ubuntu2204, ubuntu2404, rhel8, rocky8 support hibernation
             pass
 
         # Technical Validations for Session Type

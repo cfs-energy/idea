@@ -1,168 +1,168 @@
 af-south-1:
-  amazonlinux2: ami-0078f890ffc3a7243
-  rhel8: ami-03b4a7a9322996d1b
-  rhel9: ami-0f03ab0d77d09f69b
+  amazonlinux2: ami-062442905bfa1ef80
+  rhel8: ami-069762e5b15266d43
+  rhel9: ami-0c2dbe542f807dd37
   rocky8: ami-0a78dfcc5ab18ed1d
   rocky9: ami-01f4e4baf36adc3f8
 ap-east-1:
-  amazonlinux2: ami-0e17d4461e0959544
-  rhel8: ami-04d69e154b3c66ee5
-  rhel9: ami-07e4c5fb3a8c58b86
+  amazonlinux2: ami-05a9704cd9526d788
+  rhel8: ami-0d712f061fdaf9f2b
+  rhel9: ami-07d1cccb2535852bf
   rocky8: ami-0f3b7342fb12abe7f
   rocky9: ami-0a875114b9a10a4f8
 ap-northeast-1:
-  amazonlinux2: ami-0705806411562a051
-  rhel8: ami-0c955bbc0d55874fb
-  rhel9: ami-0c611ef0ef2ab2c7e
+  amazonlinux2: ami-0e56f7ba9d8df2e9f
+  rhel8: ami-02b95e243c468ddec
+  rhel9: ami-05c3bdd7ca8953af8
   rocky8: ami-0de0a3d1395d33095
   rocky9: ami-04ea6cd6212dc29f8
 ap-northeast-2:
-  amazonlinux2: ami-050a4617492ff5822
-  rhel8: ami-05bfdd5b68e278b02
-  rhel9: ami-031d0d21634293534
+  amazonlinux2: ami-08b09b6acd8d62254
+  rhel8: ami-067c4c91481583966
+  rhel9: ami-0e602b19a61c66657
   rocky8: ami-0060e750287d7b7f6
   rocky9: ami-061d100da26bfb9f6
 ap-northeast-3:
-  amazonlinux2: ami-0a4cde46c8ee66595
-  rhel8: ami-03facf858147a8d5e
-  rhel9: ami-01da5762f5841374c
+  amazonlinux2: ami-03ebeabfa1832dd7b
+  rhel8: ami-0723e677bd7e2646f
+  rhel9: ami-05a67ab354370a9d5
   rocky8: ami-0969967bdfccc0ab4
   rocky9: ami-0624d74b1373cea69
 ap-south-1:
-  amazonlinux2: ami-0451f2687182e0411
-  rhel8: ami-0805b29fbd93e13e5
-  rhel9: ami-0afd2363396a19cda
+  amazonlinux2: ami-0e0e417dfa2028266
+  rhel8: ami-08148ea3a1a169331
+  rhel9: ami-042fc8ae71a877195
   rocky8: ami-013451397edf3458d
   rocky9: ami-0b5a2477d702341d6
 ap-south-2:
-  amazonlinux2: ami-07272e8da14db3dfa
-  rhel8: ami-0230f07faba0d9f46
-  rhel9: ami-0f154fee627d322d1
+  amazonlinux2: ami-0a74efd95b7028f59
+  rhel8: ami-0abb66e0f44f801e6
+  rhel9: ami-0c3d41db5ee350462
   rocky8: ami-04c1d66ac67eb2702
   rocky9: ami-0305104288c179d59
 ap-southeast-1:
-  amazonlinux2: ami-0fd77db8c27ba5cc5
-  rhel8: ami-0e28ce9494c87c82b
-  rhel9: ami-0f92bea636dbaf818
+  amazonlinux2: ami-0ef1a6822965893ba
+  rhel8: ami-040b765959ea52e62
+  rhel9: ami-0b5a1bf4d08092af4
   rocky8: ami-0c76f9941163a0df0
   rocky9: ami-06f280d990052aa61
 ap-southeast-2:
-  amazonlinux2: ami-0386c125da6e09148
-  rhel8: ami-03f264c165b28d963
-  rhel9: ami-048a88a89ba8feb52
+  amazonlinux2: ami-084e237ffb23f8f97
+  rhel8: ami-06e1f6cb4da0ab18e
+  rhel9: ami-042c68a0025d3c8ab
   rocky8: ami-08ad7961abf7fc881
   rocky9: ami-061c60691199b23b4
 ap-southeast-3:
-  amazonlinux2: ami-05a2cb5da24dd20c3
-  rhel8: ami-0d2f2f3c8cce10d90
-  rhel9: ami-0860c4f5ded440eab
+  amazonlinux2: ami-02ca42269b3768f46
+  rhel8: ami-079b5252cd50c34bf
+  rhel9: ami-0b31def6627c84f75
   rocky8: ami-063a0653f0045582a
   rocky9: ami-0fe31db6208de6bc7
 ap-southeast-4:
-  amazonlinux2: ami-0f68ab67368add313
-  rhel8: ami-0d560ffe53f54b59b
-  rhel9: ami-0ad11869d58e6513c
+  amazonlinux2: ami-0bca9301171d6c264
+  rhel8: ami-0647d5dd068f9b09f
+  rhel9: ami-004cf8aa3d366e6ee
   rocky9: ami-0c7e453e4139c3918
 ca-central-1:
-  amazonlinux2: ami-044fb30603665a990
-  rhel8: ami-01ba2527c256d3670
-  rhel9: ami-01b3ffd8e30c60eeb
+  amazonlinux2: ami-074c42dd5ddb28c14
+  rhel8: ami-0b236fc8baae79ace
+  rhel9: ami-01d092f13dc2642ec
   rocky8: ami-0f1b137f1701a0232
   rocky9: ami-043547fb13af920aa
 eu-central-1:
-  amazonlinux2: ami-098efcc0d4f80810e
-  rhel8: ami-048ce72c9f98c5cc6
-  rhel9: ami-0c506a86471fc4ee3
+  amazonlinux2: ami-0f3a22468a3535271
+  rhel8: ami-0a398a6985e1dac11
+  rhel9: ami-04d2cbd685964f8a8
   rocky8: ami-04653eb200e1e1879
   rocky9: ami-00297d5e47600069b
 eu-central-2:
-  amazonlinux2: ami-0b9bde5f65ea99f88
-  rhel8: ami-01e4d5af7b9e71cca
-  rhel9: ami-018dc87a94722a3f4
+  amazonlinux2: ami-021539e8c0794b333
+  rhel8: ami-0465dd73703579105
+  rhel9: ami-0a657ccc1a407f24e
   rocky8: ami-0cb3f908f446bf66f
   rocky9: ami-03f794bce8879ddf5
 eu-north-1:
-  amazonlinux2: ami-0f0ec0d37d04440e3
-  rhel8: ami-0b1e1c7d2c2a6477a
-  rhel9: ami-0e0ea049dc7c3f43f
+  amazonlinux2: ami-070fe338fb2265e00
+  rhel8: ami-06edb0b9f2e2ac54b
+  rhel9: ami-0e7e79b2e8244ab3e
   rocky8: ami-059464b63014a9d6a
   rocky9: ami-07c0f40b66e9893c4
 eu-south-1:
-  amazonlinux2: ami-0035ac147615d311a
-  rhel8: ami-06bd15ab0b53afdd1
-  rhel9: ami-0353a3d62ce2a4d34
+  amazonlinux2: ami-0b36ba482af031378
+  rhel8: ami-07978e20c94e12f61
+  rhel9: ami-061fed31488dc7c66
   rocky8: ami-0eab7c60b1a9777a4
   rocky9: ami-02a52521104e7e33c
 eu-south-2:
-  amazonlinux2: ami-03a3458220cc97680
-  rhel8: ami-0592043efe8b23d6d
-  rhel9: ami-0000bfd90e50250bc
+  amazonlinux2: ami-03b6a9bb0a6e233ca
+  rhel8: ami-02c62e457c0fa2bc1
+  rhel9: ami-095049f8f4b9d62ff
   rocky8: ami-032b8706c37ffbd19
   rocky9: ami-0055ed38319871aba
 eu-west-1:
-  amazonlinux2: ami-04149c54d7c56180d
-  rhel8: ami-0fa2f7b35eeb82b7a
-  rhel9: ami-02c220fcee5dab581
+  amazonlinux2: ami-02f64c390601e5f36
+  rhel8: ami-030d5ef5a97008926
+  rhel9: ami-00fd28e214caa02b4
   rocky8: ami-03c212e8567b3fbb4
   rocky9: ami-075deb8a8baba7096
 eu-west-2:
-  amazonlinux2: ami-004961349a19d7a8f
-  rhel8: ami-0317ca3d7dd91fe40
-  rhel9: ami-0f2ebeef87bd0fc55
+  amazonlinux2: ami-03c6b308140d10488
+  rhel8: ami-0d6b34239c33c3fd2
+  rhel9: ami-05446f9b316f0a71c
   rocky8: ami-07d2b4d8d9980a125
   rocky9: ami-0dc67239a7014b5d7
 eu-west-3:
-  amazonlinux2: ami-0720246d895625a23
-  rhel8: ami-07e5c478814a5c77f
-  rhel9: ami-0027189fdc7e828ff
+  amazonlinux2: ami-04a790ca5ad2f097c
+  rhel8: ami-028608af5b5ca4fc4
+  rhel9: ami-07f6d423ba09c0743
   rocky8: ami-0ea31728c3d693a46
   rocky9: ami-055ef9077256948cc
 il-central-1:
-  amazonlinux2: ami-08f5bc8f748969943
-  rhel8: ami-0d8818785f5f7b61b
-  rhel9: ami-09a7b4437373f7437
+  amazonlinux2: ami-0c0c2a08602501c67
+  rhel8: ami-09d2e3126eb806902
+  rhel9: ami-0b5f499e8596ed9b9
 me-central-1:
-  amazonlinux2: ami-0470ab0c1ef0e00d2
-  rhel8: ami-096e2ee07e42e15a1
-  rhel9: ami-0a5c3f649fcb77765
+  amazonlinux2: ami-0b86dbe6b24bd87f6
+  rhel8: ami-0c0e37d2592ccd48f
+  rhel9: ami-027ea53ac6445f7c5
   rocky8: ami-04994559183ff0e97
   rocky9: ami-0328e5d1ac6de47fe
 me-south-1:
-  amazonlinux2: ami-05d40c210353593ff
-  rhel8: ami-0570bd6ca86d05886
-  rhel9: ami-0306f394843a0eec3
+  amazonlinux2: ami-02f037bcb860bac4b
+  rhel8: ami-0599344519318764a
+  rhel9: ami-0de111867c224edc6
   rocky8: ami-03409713eb5f3513e
   rocky9: ami-06081408f1fb50fb5
 sa-east-1:
-  amazonlinux2: ami-013e1515e9ea9d99e
-  rhel8: ami-0b30b754bf79883b1
-  rhel9: ami-0e7880ca9f5adf73f
+  amazonlinux2: ami-05bb854ba6b6c23c9
+  rhel8: ami-080dbe9e6950283ec
+  rhel9: ami-07e76893c181fe0c5
   rocky8: ami-07ce4a0c554d4d174
   rocky9: ami-0af79284ed0d624e0
 us-east-1:
-  amazonlinux2: ami-0a699202e5027c10d
-  rhel8: ami-0b324207d4bcaec61
-  rhel9: ami-0780fb502b20edd73
+  amazonlinux2: ami-0ddc798b3f1a5117e
+  rhel8: ami-0015bce43071c5586
+  rhel9: ami-07052c635abf35b92
   rocky8: ami-09d91a87b002fc97a
   rocky9: ami-09c77dc92e45bc3ea
 us-east-2:
-  amazonlinux2: ami-00cda30cf72311684
-  rhel8: ami-057094267c651958e
-  rhel9: ami-03e7e733aca9df0ff
+  amazonlinux2: ami-0374badf0de443688
+  rhel8: ami-0b7276126d8600ea7
+  rhel9: ami-09d5ee2fe22f85a55
   rocky8: ami-02fb9384e880ed67c
   rocky9: ami-08f7b2cb6f6b78c21
 us-gov-west-1:
-  amazonlinux2: ami-0c4bf799ed0f01f88
+  amazonlinux2: ami-0637d10a41a06bae3
   rhel8: ami-0206165c7b00c4adf
 us-west-1:
-  amazonlinux2: ami-050c61fa1bff25e5a
-  rhel8: ami-08ca382a3d70d5193
-  rhel9: ami-02aa6a38bd99dad6c
+  amazonlinux2: ami-0175bdd48fdb0973b
+  rhel8: ami-04440364efc00a2b2
+  rhel9: ami-08915cc65d5e62a95
   rocky8: ami-007ccc9f91c5d2146
   rocky9: ami-07d56cabf4f83571a
 us-west-2:
-  amazonlinux2: ami-089313d40efd067a9
-  rhel8: ami-030bea4543b3db5de
-  rhel9: ami-0378fd0689802d015
+  amazonlinux2: ami-004a0173a724e2261
+  rhel8: ami-0be094555945a7bff
+  rhel9: ami-05564ca8c9b6e75d4
   rocky8: ami-07bec6df8beb3ee8f
   rocky9: ami-0ca983d9e904a1364

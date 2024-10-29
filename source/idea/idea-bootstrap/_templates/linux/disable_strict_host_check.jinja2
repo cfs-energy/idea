@@ -1,5 +1,5 @@
 # Begin: Disable Strict Host Check
-{%- if context.base_os in ('amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9', 'ubuntu2204') %}
+{%- if context.base_os in ('amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9', 'ubuntu2204', 'ubuntu2404') %}
 echo "StrictHostKeyChecking no" >> /etc/ssh/ssh_config
 echo "UserKnownHostsFile /dev/null" >> /etc/ssh/ssh_config
 {%- endif %}

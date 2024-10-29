@@ -10,7 +10,8 @@ timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
 shutil.copyfile("../../source/idea/idea-administrator/resources/config/region_ami_config.yml", f"region_ami_config_backup_{timestamp}.yml")
 
 # Function to get AMI
-def get_ami(region, ami_type, profile):
+def get_ami(region, ami_type):
+    profile = 'gov' if region == 'us-gov-west-1' else 'idea-dev'
     session = boto3.Session(profile_name=profile)
     ec2 = session.client('ec2', region_name=region)
     try:
@@ -19,9 +20,9 @@ def get_ami(region, ami_type, profile):
         elif ami_type == 'rhel7':
             ami_name = 'RHEL-7.9_HVM-*-x86_64-*'
         elif ami_type == 'rhel8':
-            ami_name = 'RHEL-8.7.0_HVM-*-x86_64-*'
+            ami_name = 'RHEL-8.10.0_HVM-*-x86_64-*'
         elif ami_type == 'rhel9':
-            ami_name = 'RHEL-9.2.0_HVM-*-x86_64-*'
+            ami_name = 'RHEL-9.4.0_HVM-*-x86_64-*'
         elif ami_type == 'rocky8':
             ami_name = 'Rocky-8-EC2-Base-8.7-*.x86_64-*'
         elif ami_type == 'rocky9':
@@ -33,7 +34,7 @@ def get_ami(region, ami_type, profile):
             return None
 
         response = ec2.describe_images(
-            #Owners=['amazon'],
+            Owners=['amazon'],
             Filters=[
                 {'Name': 'name', 'Values': [ami_name]}
             ])
@@ -51,7 +52,7 @@ with open("../../source/idea/idea-administrator/resources/config/region_ami_conf
 for region in data:
     print(f'Processing region: {region}')
     for ami_type in data[region]:
-        ami_id = get_ami(region, ami_type, 'idea-dev')
+        ami_id = get_ami(region, ami_type)
         if ami_id:
             print(f'   New AMI for {ami_type}: {ami_id}')
             data[region][ami_type] = ami_id

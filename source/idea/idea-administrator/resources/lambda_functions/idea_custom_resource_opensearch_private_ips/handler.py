@@ -83,7 +83,7 @@ def handler(event, context):
             ))
     except Exception as e:
         logger.exception(f'Failed to get ES Private IP Address: {e}')
-        error_message = f'Exception getting in-use private IP addresses for ES soca-{domain_name}'
+        error_message = f'Exception getting in-use private IP addresses for ES idea-{domain_name}'
         http_client.send_cfn_response(CfnResponse(
             context=context,
             event=event,

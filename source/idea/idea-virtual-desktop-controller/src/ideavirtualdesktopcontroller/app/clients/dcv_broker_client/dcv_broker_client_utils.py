@@ -107,7 +107,7 @@ class DCVBrokerClientUtils:
 
     @staticmethod
     def get_storage_root_for_base_os(base_os: VirtualDesktopBaseOS, owner) -> str:
-        if base_os in (VirtualDesktopBaseOS.AMAZON_LINUX2, VirtualDesktopBaseOS.RHEL8, VirtualDesktopBaseOS.RHEL9, VirtualDesktopBaseOS.ROCKY8, VirtualDesktopBaseOS.ROCKY9, VirtualDesktopBaseOS.UBUNTU2204):
+        if base_os in (VirtualDesktopBaseOS.AMAZON_LINUX2, VirtualDesktopBaseOS.RHEL8, VirtualDesktopBaseOS.RHEL9, VirtualDesktopBaseOS.ROCKY8, VirtualDesktopBaseOS.ROCKY9, VirtualDesktopBaseOS.UBUNTU2204, VirtualDesktopBaseOS.UBUNTU2404):
             return f'/data/home/{owner}/storage-root'
 
         return f'C:\\session-storage\\{owner}'
