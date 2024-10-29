@@ -108,7 +108,7 @@ authselect select sssd with-mkhomedir --force
 systemctl enable oddjobd
 systemctl restart oddjobd
 {%- endif %}
-{%- if context.base_os in ('ubuntu2204') %}
+{%- if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
 pam-auth-update --enable sss
 {%- endif %}
 

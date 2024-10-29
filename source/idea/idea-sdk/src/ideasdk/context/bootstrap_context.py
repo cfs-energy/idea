@@ -96,7 +96,7 @@ class BootstrapContext:
     def default_system_user(self) -> str:
         if self.base_os in ('amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9'):
             return 'ec2-user'
-        if self.base_os == 'ubuntu2204':
+        if self.base_os in ('ubuntu2204', 'ubuntu2404'):
             return 'ubuntu'
         raise exceptions.general_exception(f'unknown system user name for base_os: {self.base_os}')
 

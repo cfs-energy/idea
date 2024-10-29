@@ -101,6 +101,7 @@ class VirtualDesktopBaseOS(str, Enum):
     ROCKY8 = constants.OS_ROCKY8
     ROCKY9 = constants.OS_ROCKY9
     UBUNTU2204 = constants.OS_UBUNTU2204
+    UBUNTU2404 = constants.OS_UBUNTU2404
     WINDOWS = constants.OS_WINDOWS
 
 

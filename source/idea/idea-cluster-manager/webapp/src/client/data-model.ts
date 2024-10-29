@@ -15,7 +15,7 @@
  * and limitations under the License.
  */
 
-export type VirtualDesktopBaseOS = "amazonlinux2" | "rhel8" | "rhel9" | "rocky8" | "rocky9" | "windows" | "ubuntu2204";
+export type VirtualDesktopBaseOS = "amazonlinux2" | "rhel8" | "rhel9" | "rocky8" | "rocky9" | "windows" | "ubuntu2204" | "ubuntu2404";
 export type VirtualDesktopSessionType = "CONSOLE" | "VIRTUAL";
 export type SocaMemoryUnit = "bytes" | "kib" | "mib" | "gib" | "tib" | "kb" | "mb" | "gb" | "tb";
 export type VirtualDesktopSessionState =

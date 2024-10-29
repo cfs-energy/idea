@@ -43,13 +43,13 @@ IDEA_SESSION_OWNER="{{ context.vars.session_owner }}"
 function install_microphone_redirect() {
   {%- if context.base_os in ('amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
   if [[ -z "$(rpm -qa pulseaudio-utils)" ]]; then
-  {%- elif context.base_os in ('ubuntu2204') %}
+  {%- elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
   if [[ -z "$(dpkg -l pulseaudio-utils | grep ^ii)" ]]; then
   {%- endif %}
     echo "Installing microphone redirect..."
     {%- if context.base_os in ('amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
     yum install -y pulseaudio-utils
-    {%- elif context.base_os in ('ubuntu2204') %}
+    {%- elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
     apt install -y pulseaudio-utils
     {%- endif %}
   else
@@ -227,7 +227,7 @@ function start_and_configure_dcv_service() {
 #  (at your option) any later version.
 
 [Unit]
-Description=NICE DCV server daemon
+Description=Amazon DCV server daemon
 DefaultDependencies=no
 Conflicts=umount.target
 After=network-online.target remote-fs.target
@@ -316,6 +316,10 @@ function verify_x_server_is_up() {
 
 {% include '_templates/linux/dcv_server.jinja2' %}
 {% include '_templates/linux/dcv_session_manager_agent.jinja2' %}
+{%- if context.base_os in ('amazonlinux2') %}
+{% include '_templates/linux/dcv_server_cert.jinja2' %}
+{%- endif %}
+
 install_usb_support
 install_microphone_redirect
 
@@ -341,13 +345,12 @@ fi
 
 {% include '_templates/linux/system_upgrade.jinja2' %}
 
-# notify controller
-CONTROLLER_EVENTS_QUEUE_URL="{{ context.config.get_string('virtual-desktop-controller.events_sqs_queue_url', required=True) }}"
-MESSAGE="{{ context.vars.dcv_host_ready_message }}"
-AWS=$(command -v aws)
-$AWS sqs send-message --queue-url ${CONTROLLER_EVENTS_QUEUE_URL} --message-body ${MESSAGE} --region ${AWS_REGION} --message-group-id ${IDEA_SESSION_ID}
+{%- if context.base_os in ('ubuntu2404') %}
+systemctl disable systemd-networkd-wait-online.service
+{%- endif %}
 
 # set up crontab to notify controller on reboot
+
 REBOOT_REQUIRED=$(cat /root/bootstrap/reboot_required.txt)
 if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
   (crontab -l; echo "@reboot /bin/bash ${SCRIPT_DIR}/configure_dcv_host_post_reboot.sh crontab") | crontab -

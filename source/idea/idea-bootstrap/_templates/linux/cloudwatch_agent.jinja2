@@ -26,6 +26,10 @@ function get_cloudwatch_agent_download_link() {
       sed -i 's/%os%/ubuntu/g' ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}/cloudwatch_download_link.txt
       sed -i 's/%ext%/deb/g' ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}/cloudwatch_download_link.txt
       ;;
+    ubuntu2404)
+      sed -i 's/%os%/ubuntu/g' ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}/cloudwatch_download_link.txt
+      sed -i 's/%ext%/deb/g' ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}/cloudwatch_download_link.txt
+      ;;
   esac
   local MACHINE=$(uname -m)
   case $MACHINE in
@@ -45,7 +49,7 @@ wget "${CLOUDWATCH_AGENT_DOWNLOAD_LINK}"
 
 {%- if context.base_os in ('amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
 rpm -U ./${CLOUDWATCH_AGENT_PACKAGE_NAME}
-{%- elif context.base_os in ('ubuntu2204') %}
+{%- elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
 dpkg -i ./${CLOUDWATCH_AGENT_PACKAGE_NAME}
 {%- endif %}
 

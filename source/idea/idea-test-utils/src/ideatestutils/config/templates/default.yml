@@ -549,9 +549,6 @@ global-settings:
             label: SUSE Enterprise Linux 15
             url: https://d1uj6qtbmh3dt5.cloudfront.net/2022.1/Clients/nice-dcv-viewer-2022.1.4251-1.sles15.x86_64.rpm
         ubuntu:
-          ubuntu1804:
-            label: Ubuntu 18.04
-            url: https://d1uj6qtbmh3dt5.cloudfront.net/2022.1/Clients/nice-dcv-viewer_2022.1.4251-1_amd64.ubuntu1804.deb
           ubuntu2004:
             label: Ubuntu 20.04
             url: https://d1uj6qtbmh3dt5.cloudfront.net/2022.1/Clients/nice-dcv-viewer_2022.1.4251-1_amd64.ubuntu2004.deb

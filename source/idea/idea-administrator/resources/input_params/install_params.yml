@@ -283,7 +283,7 @@ SocaInputParamSpec:
       param_type: confirm
       data_type: bool
       help_text: "VPC endpoints allow traffic to flow between a VPC and other services without ever leaving the AWS network"
-      default: no
+      default: yes
 
     - name: confirm_vpc_endpoints
       title: "VPC Endpoints"

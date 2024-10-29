@@ -545,6 +545,10 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                             {
                                 title: 'Ubuntu 22.04',
                                 value: 'ubuntu2204'
+                            },
+                            {
+                                title: 'Ubuntu 24.04',
+                                value: 'ubuntu2404'
                             }
                         ]
                     }

@@ -6,7 +6,7 @@ if [[ "$?" != "0" ]]; then
   yum install -y jq
 fi
 {%- endif %}
-{%- if context.base_os in ('ubuntu2204') %}
+{%- if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
 which jq > /dev/null 2>&1
 if [[ "$?" != "0" ]]; then
   log_info "installing jq"

@@ -283,7 +283,7 @@ class VirtualDesktopSessionDetail extends Component<VirtualDesktopSessionDetailP
                                     content: (
                                         <Container header={<Header variant={"h2"}>Session Health (Coming Soon)</Header>}>
                                             <li>
-                                                Additional eVDI Session information from NICE DCV Broker will be displayed.
+                                                Additional eVDI Session information from Amazon DCV Broker will be displayed.
                                             </li>
                                         </Container>
                                     )

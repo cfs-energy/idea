@@ -36,12 +36,12 @@ function downloadDcvClient(os: string) {
         window.open(client_settings.linux.rhel_centos_rocky9.url)
     } else if (os === 'linux-suse15') {
         window.open(client_settings.linux.suse15.url)
-    } else if (os === 'ubuntu-ubuntu1804') {
-        window.open(client_settings.linux.ubuntu1804.url)
     } else if (os === 'ubuntu-ubuntu2004') {
         window.open(client_settings.linux.ubuntu2004.url)
     } else if (os === 'ubuntu-ubuntu2204') {
         window.open(client_settings.linux.ubuntu2204.url)
+    } else if (os === 'ubuntu-ubuntu2404') {
+        window.open(client_settings.linux.ubuntu2404.url)
     }
 }
 
@@ -63,12 +63,12 @@ function getDCVClientLabelForOSFlavor(os: string): string {
         return client_settings.linux.rhel_centos_rocky9.label
     } else if (os === 'linux-suse15') {
         return client_settings.linux.suse15.label
-    } else if (os === 'ubuntu-ubuntu1804') {
-        return client_settings.linux.ubuntu1804.label
     } else if (os === 'ubuntu-ubuntu2004') {
         return client_settings.linux.ubuntu2004.label
     } else if (os === 'ubuntu-ubuntu2204') {
         return client_settings.linux.ubuntu2204.label
+    } else if (os === 'ubuntu-ubuntu2404') {
+        return client_settings.linux.ubuntu2404.label
     }
     return ''
 }
@@ -182,9 +182,9 @@ export function DcvClientHelpModal(props: DcvClientHelpModalProps) {
                                 <strong>Step 1)</strong> Download DCV Ubuntu Client.
                             </p>
                             <p>
-                                <Button variant={"link"} onClick={() => downloadDcvClient('ubuntu-ubuntu1804')}><FontAwesomeIcon icon={faDownload}/> {getDCVClientLabelForOSFlavor('ubuntu-ubuntu1804')}</Button>
                                 <Button variant={"link"} onClick={() => downloadDcvClient('ubuntu-ubuntu2004')}><FontAwesomeIcon icon={faDownload}/> {getDCVClientLabelForOSFlavor('ubuntu-ubuntu2004')}</Button>
                                 <Button variant={"link"} onClick={() => downloadDcvClient('ubuntu-ubuntu2204')}><FontAwesomeIcon icon={faDownload}/> {getDCVClientLabelForOSFlavor('ubuntu-ubuntu2204')}</Button>
+                                <Button variant={"link"} onClick={() => downloadDcvClient('ubuntu-ubuntu2404')}><FontAwesomeIcon icon={faDownload}/> {getDCVClientLabelForOSFlavor('ubuntu-ubuntu2404')}</Button>
                             </p>
                             <p>
                                 <strong>Step 2)</strong> Install the DCV client on your computer.

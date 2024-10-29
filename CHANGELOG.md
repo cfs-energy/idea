@@ -4,6 +4,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.10] - 2024-10-29
+
+### Notes
+* This upgrade does require an update to the global settings. Please review [Global Settings Upgrade](https://docs.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/update-idea-backend-resource#global-settings-backup-and-upgrade) before upgrading.
+* You should update the IDEA CDK Bootstrap to fix [CDK Issue #31885](https://github.com/aws/aws-cdk/issues/31885) - This is a security fix and should be addressed on all CDK stacks regardless of IDEA
+  * To update the IDEA CDK Bootstrap for existing deployments, use idea-admin: 
+    ```
+    idea-admin.sh bootstrap --cluster-name <CLUSTER_NAME> --aws-region <CLUSTER_REGION> --aws-profile <AWS_PROFILE>
+    ```
+
+### Features
+* Nice DCV Updated from `2023.1` to `2024.0` and renamed to Amazon DCV
+* Ubuntu 24.04 Support for eVDI
+
+### Changes
+* Update AWS CDK from `2.154.1` to `2.164.1`
+* Update Python Requirements
+* Update NVIDIA Production GPU Drivers from `550.90.07` to `550.127.05`
+* Update Installer and Software Stack AMIs - Raised minimum storage to 20 GB for Linux Stacks on new IDEA installs
+* Update EFA Installer from `1.31.0` to `1.35.0`
+* Default CDK Nag Scan to `false` in `idea-admin.sh`
+* Added owner filtering, GovCloud support, and Ubuntu support to `ami_update_stacks.py` and `ami_update.py`
+* Updated `browserslist` in Cluster Manager Web App
+* Update IDEA `CdkBootstrapVersion` from `18` to `23`
+* Update OpenSearch from `2.7` to `2.15`
+* New installs use VPC Endpoints by default
+
+### Bug Fixes
+* Fixed Ubuntu eVDI nodes attempting Auto-Update - [Issue #177](https://github.com/cfs-energy/idea/issues/177)
+* Fixed CDK version mismatch causing upgrade issues without Dev Mode
+* Fixed Firefox menu entry on Ubuntu
+* Fixed OpenSearch Private IP and Target Group logic
+* Fixed initial eVDI session creation failing when instances requiring reboot take longer than expected
+* Removed `OS_CENTOS7` reference from IDEA Admin Utility
+
+### Known Caveats
+* There is no FSx Lustre client for `Ubuntu 24.04` thus any FSx Lustre mounts will not function with `Ubuntu 24.04` eVDI until AWS releases a client
+* OpenPBS is compiled from latest code in Github repository when using `Ubuntu 24.04`
+* Amazon Windows DCV AMIs are using DCV server `2023.1.17701`
+
 ## [3.1.9] - 2024-08-29
 
 ### Notes

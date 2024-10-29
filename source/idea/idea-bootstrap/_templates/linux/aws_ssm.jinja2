@@ -3,7 +3,7 @@
 sed -i 's/enabled=1/enabled=0/' /etc/yum/pluginconf.d/product-id.conf
 sed -i 's/enabled=1/enabled=0/' /etc/yum/pluginconf.d/subscription-manager.conf
 {%- endif %}
-{%- if context.base_os in ('ubuntu2204') %}
+{%- if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
 set -x
 snap services amazon-ssm-agent
 if [[ "$?" != "0" ]]; then

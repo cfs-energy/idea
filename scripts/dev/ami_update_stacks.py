@@ -13,7 +13,8 @@ shutil.copyfile("../../source/idea/idea-virtual-desktop-controller/resources/bas
 NON_REGION_KEYS = ['default-description', 'default-min-ram-unit', 'default-min-ram-value', 'default-min-storage-unit', 'default-min-storage-value', 'default-name']
 
 # Function to get AMI
-def get_ami(region, ami_type, architecture_type, profile, ss_id_suffix):
+def get_ami(region, ami_type, architecture_type, ss_id_suffix):
+    profile = 'gov' if region == 'us-gov-west-1' else 'idea-dev'
     print(f'Getting AMI for Region: {region}, AMI Type: {ami_type}, Architecture: {architecture_type}, Profile: {profile}, Suffix: {ss_id_suffix}')  # Debug line
 
     try:
@@ -34,16 +35,26 @@ def get_ami(region, ami_type, architecture_type, profile, ss_id_suffix):
         #         ami_name = ''
         #     elif architecture_type == 'x86-64':
         #         ami_name = 'RHEL-7.9_HVM-*-x86_64-*'
-        # elif ami_type == 'rhel8':
-        #     if architecture_type == 'arm64':
-        #         ami_name = 'RHEL-8.7.0_HVM-*-arm64-*'
-        #     elif architecture_type == 'x86-64':
-        #         ami_name = 'RHEL-8.7.0_HVM-*-x86_64-*'
+        elif ami_type == 'rhel8':
+            if architecture_type == 'arm64':
+                ami_name = 'RHEL-8.10.0_HVM-*-arm64-*'
+            elif architecture_type == 'x86-64':
+                ami_name = 'RHEL-8.10.0_HVM-*-x86_64-*'
         elif ami_type == 'rhel9':
             if architecture_type == 'arm64':
-                ami_name = 'RHEL-9.2.0_HVM-*-arm64-*'
+                ami_name = 'RHEL-9.4.0_HVM-*-arm64-*'
             elif architecture_type == 'x86-64':
-                ami_name = 'RHEL-9.2.0_HVM-*-x86_64-*'
+                ami_name = 'RHEL-9.4.0_HVM-*-x86_64-*'
+        elif ami_type == 'ubuntu2204':
+            if architecture_type == 'arm64':
+                ami_name = 'ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-arm64-server-*'
+            elif architecture_type == 'x86-64':
+                ami_name = 'ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*'
+        elif ami_type == 'ubuntu2404':
+            if architecture_type == 'arm64':
+                ami_name = 'ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-arm64-server-*'
+            elif architecture_type == 'x86-64':
+                ami_name = 'ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*'
         # elif ami_type == 'rocky8':
         #     if architecture_type == 'arm64':
         #         ami_name = 'Rocky-8-EC2-Base-8.7-*.aarch64-*'
@@ -68,10 +79,10 @@ def get_ami(region, ami_type, architecture_type, profile, ss_id_suffix):
         session = boto3.Session(profile_name=profile)
         ec2 = session.client('ec2', region_name=region)
         response = ec2.describe_images(
+            Owners=['amazon'],
             Filters=[
-                {'Name': 'name', 'Values': [ami_name]}
+                {'Name': 'name', 'Values': [ami_name]},
             ])
-        #print(f'Initial response from describe_images: {json.dumps(response["Images"], indent=4)}')
 
         if ss_id_suffix == 'base' and ami_type == 'windows':
             valid_amis = [ami for ami in response['Images'] if 'ImageLocation' in ami and 'gaming' not in ami['ImageLocation'] and 
@@ -79,19 +90,14 @@ def get_ami(region, ami_type, architecture_type, profile, ss_id_suffix):
         else:
             valid_amis = [ami for ami in response['Images'] if 'ImageLocation' in ami and 'gaming' not in ami['ImageLocation']]
 
-
-        #print(f'Initial response from describe_images: {json.dumps(valid_amis, indent=4)}')
-        
         ami_id = sorted(valid_amis, key=lambda x: x['CreationDate'], reverse=True)[0]['ImageId']
         return ami_id
     except Exception as e:
         print(f'   Failed to get AMI for {region} - {ami_type}/{architecture_type}. Error: {str(e)}')
         return None   
 
-
 with open("../../source/idea/idea-virtual-desktop-controller/resources/base-software-stack-config.yaml", 'r') as stream:
     data = yaml.safe_load(stream)
-    #print(f'Data from YAML file: {data}')
 
 for ami_type in data:
     for architecture_type in data[ami_type]:
@@ -103,7 +109,7 @@ for ami_type in data:
                 continue
             for item in architecture_data[key]:
                 old_ami_id = item.get('ami-id')
-                new_ami_id = get_ami(key, ami_type, architecture_type, 'idea-dev', item['ss-id-suffix'])
+                new_ami_id = get_ami(key, ami_type, architecture_type, item['ss-id-suffix'])
                 if new_ami_id and new_ami_id != old_ami_id:
                     print(f'  New AMI for {ami_type}/{architecture_type}/{item["ss-id-suffix"]}: {new_ami_id}')
                     item['ami-id'] = new_ami_id

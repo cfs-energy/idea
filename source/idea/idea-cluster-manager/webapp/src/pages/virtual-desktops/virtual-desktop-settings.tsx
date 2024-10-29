@@ -314,7 +314,7 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
                                     id: 'broker',
                                     content: (
                                         <SpaceBetween size={'m'}>
-                                            <Container header={<Header variant={"h2"}>NICE DCV Broker</Header>}>
+                                            <Container header={<Header variant={"h2"}>Amazon DCV Broker</Header>}>
                                                 <ColumnLayout variant={"text-grid"} columns={3}>
                                                     <KeyValue title="Base OS" value={Utils.getOsTitle(dot.pick('dcv_broker.autoscaling.base_os', this.state.vdcSettings))}/>
                                                     <KeyValue title="Instance Type" value={dot.pick('dcv_broker.autoscaling.instance_type', this.state.vdcSettings)}/>
@@ -346,7 +346,7 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
                                     id: 'connection-gateway',
                                     content: (
                                         <SpaceBetween size={'m'}>
-                                            <Container header={<Header variant={"h2"}>NICE DCV Connection Gateway</Header>}>
+                                            <Container header={<Header variant={"h2"}>Amazon DCV Connection Gateway</Header>}>
                                                 <ColumnLayout variant={"text-grid"} columns={3}>
                                                     <KeyValue title="Base OS" value={Utils.getOsTitle(dot.pick('dcv_connection_gateway.autoscaling.base_os', this.state.vdcSettings))}/>
                                                     <KeyValue title="Instance Type" value={dot.pick('dcv_connection_gateway.autoscaling.instance_type', this.state.vdcSettings)}/>

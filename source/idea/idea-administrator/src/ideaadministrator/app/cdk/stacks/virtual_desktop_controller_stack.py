@@ -64,7 +64,7 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
     Virtual Desktop Controller (eVDI) Stack
 
     Provisions infrastructure for eVDI Module:
-    * ASG for Controller, NICE DCV Broker, NICE DCV Connection Gateway
+    * ASG for Controller, Amazon DCV Broker, Amazon DCV Connection Gateway
     * Network Load Balancer
     * Security Groups
     * AWS Backups for eVDI Hosts

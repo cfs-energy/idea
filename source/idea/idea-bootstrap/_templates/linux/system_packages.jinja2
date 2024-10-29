@@ -84,7 +84,7 @@ DEFAULT_PACKAGES_FOR_DEB=$(echo ${SYSTEM_PKGS_DEB[*]} ${APPLICATION_PKGS_DEB[*]}
 {%- endif %}
 
 
-{%- if context.base_os in ('ubuntu2204') %}
+{%- if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
   DEBIAN_FRONTEND=noninteractive apt install -yq $DEFAULT_PACKAGES_FOR_DEB
 
   if [[ $(dpkg -l | grep linux-image | wc -l) -gt "2" ]]; then
