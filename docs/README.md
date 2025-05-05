@@ -26,8 +26,8 @@ IDEA is deployed? Let's see how to interact with it:
 
 IDEA is a framework on which you can deploy multiple independent modules based on your own requirements. Select the module (Scale-Out Workloads, Engineering Virtual Desktops ..) below to learn more.
 
-{% content-ref url="broken-reference" %}
-[Broken link](broken-reference)
+{% content-ref url="https://github.com/cfs-energy-internal/idea/blob/docs/docs/broken-reference/README.md" %}
+[https://github.com/cfs-energy-internal/idea/blob/docs/docs/broken-reference/README.md](https://github.com/cfs-energy-internal/idea/blob/docs/docs/broken-reference/README.md)
 {% endcontent-ref %}
 
 ## Key Features <a href="#easy-installation" id="easy-installation"></a>
@@ -111,7 +111,7 @@ IDEA includes OpenSearch (formerly ElasticSearch) and automatically ingest job a
 
 Don't know where to start? Check out [create-your-own-analytics-visualizations.md](best-practices/analytics/opensearch/create-your-own-analytics-visualizations.md "mention") for some examples
 
-### 100% Customizable <a href="#100-customizable" id="100-customizable"></a>
+### 100% Customizable <a href="#id-100-customizable" id="id-100-customizable"></a>
 
 IDEA is built entirely on top of AWS and can be customized by users as needed. The entire codebase is open-source and available on Github ([https://github.com/cfs-energy/idea)](https://github.com/cfs-energy/idea)
 
