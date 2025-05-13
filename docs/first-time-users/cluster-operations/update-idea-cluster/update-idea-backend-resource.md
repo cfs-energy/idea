@@ -4,6 +4,8 @@
 Use the **Deploy** command if you have made an architecture update outside of core IDEA codebase (e.g: update Lambda function codebase, change ALB listeners, update filesystem mount ..). Refer to [update-idea-configuration.md](update-idea-configuration.md "mention") for other types of updates.
 {% endhint %}
 
+## Standard Upgrade Procedure
+
 After you have made your infrastructure change, run `./idea-admin.sh cdk diff <STACK>` command to preview what infrastructure changes will be performed during the upcoming upgrade deployment.
 
 ```sh
