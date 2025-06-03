@@ -5,4 +5,5 @@ Cluster Manager is a required module automatically installed on your IDEA cluste
 * [users-management.md](users-management.md "mention") - (Manage your IDEA users)
 * [groups-management.md](groups-management.md "mention") - (Manage your IDEA groups)
 * [projects-management.md](projects-management.md "mention") - (Control ACLs and permissions)
+* [data-sharing-between-users.md](data-sharing-between-users.md "mention")- (Sharing results between accounts)
 * [apis.md](apis.md "mention") - (All Cluster Manager APIs)

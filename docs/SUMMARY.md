@@ -50,6 +50,7 @@
     * [Create Web Based Job Submission Worfklows](modules/hpc-workloads/admin-documentation/create-web-based-job-submission-worfklows.md)
     * [Configure Floating License resources](modules/hpc-workloads/admin-documentation/configure-floating-license-resources.md)
 * [Cluster Manager](modules/cluster-manager/README.md)
+  * [Data Sharing Between Users](modules/cluster-manager/data-sharing-between-users.md)
   * [Projects Management](modules/cluster-manager/projects-management.md)
   * [Users Management](modules/cluster-manager/users-management.md)
   * [Groups Management](modules/cluster-manager/groups-management.md)
