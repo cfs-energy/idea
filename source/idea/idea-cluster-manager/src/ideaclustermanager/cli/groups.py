@@ -11,7 +11,6 @@
 
 from ideadatamodel import (
     exceptions,
-    errorcodes,
     constants,
     GetGroupRequest,
     GetGroupResult,
@@ -30,17 +29,15 @@ from ideadatamodel import (
     AddUserToGroupRequest,
     AddUserToGroupResult,
     RemoveUserFromGroupRequest,
-    RemoveUserFromGroupResult
+    RemoveUserFromGroupResult,
 )
 
 from ideaclustermanager.cli import build_cli_context
 from ideasdk.utils import Utils
-from ideaclustermanager.app.accounts.auth_utils import AuthUtils
 from ideaclustermanager.cli.cli_utils import ClusterManagerUtils
 
 from rich.table import Table
 import click
-import csv
 
 
 @click.group()
@@ -60,10 +57,8 @@ def get_group(groupname: str):
     try:
         result = context.unix_socket_client.invoke_alt(
             namespace='Accounts.GetGroup',
-            payload=GetGroupRequest(
-                group_name=groupname
-            ),
-            result_as=GetGroupResult
+            payload=GetGroupRequest(group_name=groupname),
+            result_as=GetGroupResult,
         )
     except exceptions.SocaException as e:
         context.error(e.message)
@@ -81,23 +76,24 @@ def list_groups():
     result = context.unix_socket_client.invoke_alt(
         namespace='Accounts.ListGroups',
         payload=ListGroupsRequest(),
-        result_as=ListGroupsResult
+        result_as=ListGroupsResult,
     )
     group_table = Table()
-    group_table.add_column("Group Name", justify="left", no_wrap=False)
-    group_table.add_column("Group Type", justify="left", no_wrap=False)
-    group_table.add_column("Directory Group Name", justify="left", no_wrap=False)
-    group_table.add_column("GID", justify="left", no_wrap=False)
-    group_table.add_column("Created On", justify="left", no_wrap=False)
-    group_table.add_column("Is Enabled?", justify="left", no_wrap=False)
+    group_table.add_column('Group Name', justify='left', no_wrap=False)
+    group_table.add_column('Group Type', justify='left', no_wrap=False)
+    group_table.add_column('Directory Group Name', justify='left', no_wrap=False)
+    group_table.add_column('GID', justify='left', no_wrap=False)
+    group_table.add_column('Created On', justify='left', no_wrap=False)
+    group_table.add_column('Is Enabled?', justify='left', no_wrap=False)
     for listing in result.listing:
-        group_table.add_row(listing.name,
-                            Utils.get_as_string(listing.group_type),
-                            Utils.get_as_string(listing.ds_name),
-                            Utils.get_as_string(listing.gid),
-                            listing.created_on.strftime("%m/%d/%Y, %H:%M:%S"),
-                            Utils.get_as_string(listing.enabled),
-                            )
+        group_table.add_row(
+            listing.name,
+            Utils.get_as_string(listing.group_type),
+            Utils.get_as_string(listing.ds_name),
+            Utils.get_as_string(listing.gid),
+            listing.created_on.strftime('%m/%d/%Y, %H:%M:%S'),
+            Utils.get_as_string(listing.enabled),
+        )
     context.print(group_table)
 
 
@@ -111,26 +107,25 @@ def list_users(groupname: str):
     context = ClusterManagerUtils.get_soca_cli_context_cluster_manager()
     result = context.unix_socket_client.invoke_alt(
         namespace='Accounts.ListUsersInGroup',
-        payload=ListUsersInGroupRequest(
-            group_names=[groupname]
-        ),
-        result_as=ListUsersInGroupResult
+        payload=ListUsersInGroupRequest(group_names=[groupname]),
+        result_as=ListUsersInGroupResult,
     )
     group_table = Table()
-    group_table.add_column("User Name", justify="left", no_wrap=False)
-    group_table.add_column("User Email", justify="left", no_wrap=False)
-    group_table.add_column("User UID", justify="left", no_wrap=False)
-    group_table.add_column("User GID", justify="left", no_wrap=False)
-    group_table.add_column("Created On", justify="left", no_wrap=False)
-    group_table.add_column("Is Enabled?", justify="left", no_wrap=False)
+    group_table.add_column('User Name', justify='left', no_wrap=False)
+    group_table.add_column('User Email', justify='left', no_wrap=False)
+    group_table.add_column('User UID', justify='left', no_wrap=False)
+    group_table.add_column('User GID', justify='left', no_wrap=False)
+    group_table.add_column('Created On', justify='left', no_wrap=False)
+    group_table.add_column('Is Enabled?', justify='left', no_wrap=False)
     for listing in result.listing:
-        group_table.add_row(listing.username,
-                            Utils.get_as_string(listing.email),
-                            Utils.get_as_string(listing.uid),
-                            Utils.get_as_string(listing.gid),
-                            listing.created_on.strftime("%m/%d/%Y, %H:%M:%S"),
-                            Utils.get_as_string(listing.enabled),
-                            )
+        group_table.add_row(
+            listing.username,
+            Utils.get_as_string(listing.email),
+            Utils.get_as_string(listing.uid),
+            Utils.get_as_string(listing.gid),
+            listing.created_on.strftime('%m/%d/%Y, %H:%M:%S'),
+            Utils.get_as_string(listing.enabled),
+        )
     context.print(group_table)
 
 
@@ -144,10 +139,8 @@ def enable_group(groupname: str):
     try:
         context.unix_socket_client.invoke_alt(
             namespace='Accounts.EnableGroup',
-            payload=EnableGroupRequest(
-                group_name=groupname
-            ),
-            result_as=EnableGroupResult
+            payload=EnableGroupRequest(group_name=groupname),
+            result_as=EnableGroupResult,
         )
     except exceptions.SocaException as e:
         context.error(e.message)
@@ -163,10 +156,8 @@ def disable_group(groupname: str):
     try:
         context.unix_socket_client.invoke_alt(
             namespace='Accounts.DisableGroup',
-            payload=DisableGroupRequest(
-                group_name=groupname
-            ),
-            result_as=DisableGroupResult
+            payload=DisableGroupRequest(group_name=groupname),
+            result_as=DisableGroupResult,
         )
     except exceptions.SocaException as e:
         context.error(e.message)
@@ -199,7 +190,7 @@ def create_group(**kwargs):
     result = context.unix_socket_client.invoke_alt(
         namespace='Accounts.CreateGroup',
         payload=CreateGroupRequest(**request),
-        result_as=CreateGroupResult
+        result_as=CreateGroupResult,
     )
     context.print_json(Utils.to_json(result.group))
 
@@ -214,18 +205,26 @@ def delete_group(groupname: str):
     try:
         context.unix_socket_client.invoke_alt(
             namespace='Accounts.DeleteGroup',
-            payload=DeleteGroupRequest(
-                group_name=groupname
-            ),
-            result_as=DeleteGroupResult
+            payload=DeleteGroupRequest(group_name=groupname),
+            result_as=DeleteGroupResult,
         )
     except exceptions.SocaException as e:
         context.error(e.message)
 
 
 @groups.command(context_settings=constants.CLICK_SETTINGS)
-@click.option('--username', required=True, multiple=True, help='Username for operation. Can be specified multiple times (-u user1 -u user2)')
-@click.option('--groupname', required=True, multiple=True, help='Groupname(s) to add username(s). Can be specified multiple times (-g group1 -g group2). All users will be added to all groups.')
+@click.option(
+    '--username',
+    required=True,
+    multiple=True,
+    help='Username for operation. Can be specified multiple times (-u user1 -u user2)',
+)
+@click.option(
+    '--groupname',
+    required=True,
+    multiple=True,
+    help='Groupname(s) to add username(s). Can be specified multiple times (-g group1 -g group2). All users will be added to all groups.',
+)
 def add_user_to_group(username: list[str], groupname: list[str]):
     """
     Add username(s) to a group or multiple groups
@@ -234,14 +233,13 @@ def add_user_to_group(username: list[str], groupname: list[str]):
     result = None
     try:
         for group_name in groupname:
-            print(f"Processing userlist: {username} to {group_name} for AddUserToGroup")
+            print(f'Processing userlist: {username} to {group_name} for AddUserToGroup')
             result = context.unix_socket_client.invoke_alt(
                 namespace='Accounts.AddUserToGroup',
                 payload=AddUserToGroupRequest(
-                    usernames=username,
-                    group_name=group_name
+                    usernames=username, group_name=group_name
                 ),
-                result_as=AddUserToGroupResult
+                result_as=AddUserToGroupResult,
             )
             print(result)
     except exceptions.SocaException as e:
@@ -249,7 +247,12 @@ def add_user_to_group(username: list[str], groupname: list[str]):
 
 
 @groups.command(context_settings=constants.CLICK_SETTINGS)
-@click.option('--username', required=True, multiple=True, help='Username for operation. Can be specified multiple times (-u user1 -u user2)')
+@click.option(
+    '--username',
+    required=True,
+    multiple=True,
+    help='Username for operation. Can be specified multiple times (-u user1 -u user2)',
+)
 @click.option('--groupname', required=True, help='Groupname to remove username(s)')
 def remove_user_from_group(username: list[str], groupname: str):
     """
@@ -261,10 +264,9 @@ def remove_user_from_group(username: list[str], groupname: str):
         result = context.unix_socket_client.invoke_alt(
             namespace='Accounts.RemoveUserFromGroup',
             payload=RemoveUserFromGroupRequest(
-                usernames=username,
-                group_name=groupname
+                usernames=username, group_name=groupname
             ),
-            result_as=RemoveUserFromGroupResult
+            result_as=RemoveUserFromGroupResult,
         )
     except exceptions.SocaException as e:
         context.error(e.message)

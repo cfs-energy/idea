@@ -22,12 +22,17 @@ from ideaclustermanager.app.projects.projects_service import ProjectsService
 from ideaclustermanager.app.projects.project_tasks import (
     ProjectEnabledTask,
     ProjectDisabledTask,
-    ProjectGroupsUpdatedTask
+    ProjectGroupsUpdatedTask,
 )
 from ideaclustermanager.app.accounts.accounts_service import AccountsService
-from ideaclustermanager.app.accounts.cognito_user_pool import CognitoUserPool, CognitoUserPoolOptions
+from ideaclustermanager.app.accounts.cognito_user_pool import (
+    CognitoUserPool,
+    CognitoUserPoolOptions,
+)
 
-from ideaclustermanager.app.accounts.ldapclient.ldap_client_factory import build_ldap_client
+from ideaclustermanager.app.accounts.ldapclient.ldap_client_factory import (
+    build_ldap_client,
+)
 
 from ideaclustermanager.app.accounts.ad_automation_agent import ADAutomationAgent
 from ideaclustermanager.app.accounts.account_tasks import (
@@ -35,12 +40,16 @@ from ideaclustermanager.app.accounts.account_tasks import (
     CreateUserHomeDirectoryTask,
     SyncGroupInDirectoryServiceTask,
     SyncPasswordInDirectoryServiceTask,
-    GroupMembershipUpdatedTask
+    GroupMembershipUpdatedTask,
 )
 from ideaclustermanager.app.tasks.task_manager import TaskManager
 from ideaclustermanager.app.web_portal import WebPortal
-from ideaclustermanager.app.email_templates.email_templates_service import EmailTemplatesService
-from ideaclustermanager.app.notifications.notifications_service import NotificationsService
+from ideaclustermanager.app.email_templates.email_templates_service import (
+    EmailTemplatesService,
+)
+from ideaclustermanager.app.notifications.notifications_service import (
+    NotificationsService,
+)
 
 from typing import Optional
 
@@ -50,14 +59,18 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
     cluster manager app
     """
 
-    def __init__(self, context: ideaclustermanager.AppContext,
-                 config_file: str,
-                 env_file: str = None,
-                 config_overrides_file: str = None,
-                 validation_level: int = constants.CONFIG_LEVEL_CRITICAL,
-                 **kwargs):
-
-        api_path_prefix = context.config().get_string('cluster-manager.server.api_context_path', f'/{context.module_id()}')
+    def __init__(
+        self,
+        context: ideaclustermanager.AppContext,
+        config_file: str,
+        env_file: str = None,
+        config_overrides_file: str = None,
+        validation_level: int = constants.CONFIG_LEVEL_CRITICAL,
+        **kwargs,
+    ):
+        api_path_prefix = context.config().get_string(
+            'cluster-manager.server.api_context_path', f'/{context.module_id()}'
+        )
         super().__init__(
             context=context,
             config_file=config_file,
@@ -66,29 +79,38 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
             config_overrides_file=config_overrides_file,
             validation_level=validation_level,
             server_options=SocaServerOptions(
-                api_path_prefixes=[
-                    api_path_prefix
-                ],
+                api_path_prefixes=[api_path_prefix],
                 enable_http_file_upload=True,
-                enable_metrics=True
+                enable_metrics=True,
             ),
-            **kwargs
+            **kwargs,
         )
         self.context = context
         self.web_portal: Optional[WebPortal] = None
 
     def app_initialize(self):
-
         # group name helper
         self.context.group_name_helper = GroupNameHelper(self.context)
-        administrators_group_name = self.context.group_name_helper.get_cluster_administrators_group()
-        managers_group_name = self.context.group_name_helper.get_cluster_managers_group()
+        administrators_group_name = (
+            self.context.group_name_helper.get_cluster_administrators_group()
+        )
+        managers_group_name = (
+            self.context.group_name_helper.get_cluster_managers_group()
+        )
 
         # token service
-        domain_url = self.context.config().get_string('identity-provider.cognito.domain_url', required=True)
-        provider_url = self.context.config().get_string('identity-provider.cognito.provider_url', required=True)
-        client_id = self.context.config().get_secret('cluster-manager.client_id', required=True)
-        client_secret = self.context.config().get_secret('cluster-manager.client_secret', required=True)
+        domain_url = self.context.config().get_string(
+            'identity-provider.cognito.domain_url', required=True
+        )
+        provider_url = self.context.config().get_string(
+            'identity-provider.cognito.provider_url', required=True
+        )
+        client_id = self.context.config().get_secret(
+            'cluster-manager.client_id', required=True
+        )
+        client_secret = self.context.config().get_secret(
+            'cluster-manager.client_secret', required=True
+        )
         self.context.token_service = TokenService(
             context=self.context,
             options=TokenServiceOptions(
@@ -97,30 +119,36 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
                 client_id=client_id,
                 client_secret=client_secret,
                 administrators_group_name=administrators_group_name,
-                managers_group_name=managers_group_name
-            )
+                managers_group_name=managers_group_name,
+            ),
         )
 
         # cognito user pool
-        user_pool_id = self.context.config().get_string('identity-provider.cognito.user_pool_id', required=True)
+        user_pool_id = self.context.config().get_string(
+            'identity-provider.cognito.user_pool_id', required=True
+        )
         self.context.user_pool = CognitoUserPool(
             context=self.context,
             options=CognitoUserPoolOptions(
                 user_pool_id=user_pool_id,
                 admin_group_name=administrators_group_name,
                 client_id=client_id,
-                client_secret=client_secret
-            )
+                client_secret=client_secret,
+            ),
         )
 
         # accounts service
-        ds_provider = self.context.config().get_string('directoryservice.provider', required=True)
+        ds_provider = self.context.config().get_string(
+            'directoryservice.provider', required=True
+        )
         self.context.ldap_client = build_ldap_client(self.context)
 
-        if ds_provider in {constants.DIRECTORYSERVICE_AWS_MANAGED_ACTIVE_DIRECTORY, constants.DIRECTORYSERVICE_ACTIVE_DIRECTORY}:
+        if ds_provider in {
+            constants.DIRECTORYSERVICE_AWS_MANAGED_ACTIVE_DIRECTORY,
+            constants.DIRECTORYSERVICE_ACTIVE_DIRECTORY,
+        }:
             self.context.ad_automation_agent = ADAutomationAgent(
-                context=self.context,
-                ldap_client=self.context.ldap_client
+                context=self.context, ldap_client=self.context.ldap_client
             )
 
         # task manager
@@ -134,8 +162,8 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
                 GroupMembershipUpdatedTask(self.context),
                 ProjectEnabledTask(self.context),
                 ProjectDisabledTask(self.context),
-                ProjectGroupsUpdatedTask(self.context)
-            ]
+                ProjectGroupsUpdatedTask(self.context),
+            ],
         )
 
         # account service
@@ -146,33 +174,28 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
             user_pool=self.context.user_pool,
             task_manager=self.context.task_manager,
             evdi_client=evdi_client,
-            token_service=self.context.token_service
+            token_service=self.context.token_service,
         )
 
         # projects service
         self.context.projects = ProjectsService(
             context=self.context,
             accounts_service=self.context.accounts,
-            task_manager=self.context.task_manager
+            task_manager=self.context.task_manager,
         )
 
         # email templates
-        self.context.email_templates = EmailTemplatesService(
-            context=self.context
-        )
+        self.context.email_templates = EmailTemplatesService(context=self.context)
 
         # notifications
         self.context.notifications = NotificationsService(
             context=self.context,
             accounts=self.context.accounts,
-            email_templates=self.context.email_templates
+            email_templates=self.context.email_templates,
         )
 
         # web portal
-        self.web_portal = WebPortal(
-            context=self.context,
-            server=self.server
-        )
+        self.web_portal = WebPortal(context=self.context, server=self.server)
         self.web_portal.initialize()
 
     def app_start(self):
@@ -191,7 +214,6 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
             self.context.distributed_lock().release(key='initialize-defaults')
 
     def app_stop(self):
-
         if self.context.ad_automation_agent is not None:
             self.context.ad_automation_agent.stop()
 

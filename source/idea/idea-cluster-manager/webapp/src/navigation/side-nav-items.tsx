@@ -57,6 +57,11 @@ export const IdeaSideNavItems = (context: AppContext): SideNavigationProps.Item[
             text: 'Completed Jobs',
             href: '#/home/completed-jobs'
         })
+        userNav.items.push({
+            type: 'link',
+            text: 'Script Workbench',
+            href: '#/home/script-workbench'
+        })
     }
 
     if (context.auth().hasModuleAccess(Constants.MODULE_CLUSTER_MANAGER)) {

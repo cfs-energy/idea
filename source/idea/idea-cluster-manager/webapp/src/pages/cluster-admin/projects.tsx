@@ -41,18 +41,25 @@ const PROJECT_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<Project>[] =
     {
         id: 'title',
         header: 'Title',
-        cell: project => project.title
+        cell: project => project.title,
+        sortingField: 'title'
     },
     {
         id: 'name',
         header: 'Project Code',
-        cell: project => project.name
+        cell: project => project.name,
+        sortingField: 'name'
     },
     {
         id: 'enabled',
         header: 'Status',
         cell: project => (project.enabled) ? <StatusIndicator type="success">Enabled</StatusIndicator> :
-            <StatusIndicator type="stopped">Disabled</StatusIndicator>
+            <StatusIndicator type="stopped">Disabled</StatusIndicator>,
+        sortingComparator: (a, b) => {
+            const valueA = a.enabled ? 1 : 0;
+            const valueB = b.enabled ? 1 : 0;
+            return valueA - valueB;
+        }
     },
     {
         id: 'budgets',
@@ -61,6 +68,9 @@ const PROJECT_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<Project>[] =
         cell: project => {
             if (project.enable_budgets) {
                 if (project.budget) {
+                    if (project.budget.is_missing) {
+                        return <StatusIndicator type="error">Budget not found: {project.budget.budget_name}</StatusIndicator>
+                    }
                     const actualSpend = Utils.asNumber(project.budget.actual_spend?.amount, 0)
                     const limit = Utils.asNumber(project.budget.budget_limit?.amount, 0)
                     const usage = (actualSpend / limit) * 100
@@ -68,20 +78,44 @@ const PROJECT_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<Project>[] =
                         <ProgressBar
                             value={usage}
                             additionalInfo={`Limit: ${Utils.getFormattedAmount(project.budget.budget_limit)}, Forecasted: ${Utils.getFormattedAmount(project.budget.forecasted_spend)}`}
-                            description={`Actual Spend for budget: ${project.budget.budget_name}`}
+                            description={`Actual Spend: ${Utils.getFormattedAmount(project.budget.actual_spend)} for budget: ${project.budget.budget_name}`}
                         />
                     )
+                } else {
+                    // Handle when budget is enabled but budget data is missing
+                    return <StatusIndicator type="warning">Budget unavailable</StatusIndicator>
                 }
             } else {
                 return <span style={{color: 'grey'}}> -- </span>
             }
+        },
+        sortingComparator: (a, b) => {
+            // Sort by budget usage percentage
+            if (!a.enable_budgets && !b.enable_budgets) return 0;
+            if (!a.enable_budgets) return -1;
+            if (!b.enable_budgets) return 1;
+
+            // Handle cases where budget is undefined
+            if (!a.budget && !b.budget) return 0;
+            if (!a.budget) return -1;
+            if (!b.budget) return 1;
+
+            const aSpend = Utils.asNumber(a.budget?.actual_spend?.amount, 0);
+            const aLimit = Utils.asNumber(a.budget?.budget_limit?.amount, 0);
+            const bSpend = Utils.asNumber(b.budget?.actual_spend?.amount, 0);
+            const bLimit = Utils.asNumber(b.budget?.budget_limit?.amount, 0);
+
+            const aUsage = aLimit > 0 ? (aSpend / aLimit) : 0;
+            const bUsage = bLimit > 0 ? (bSpend / bLimit) : 0;
+
+            return aUsage - bUsage;
         }
     },
     {
         id: 'ldap-group',
         header: 'Groups',
         cell: (project) => {
-            if (project.ldap_groups) {
+            if (project.ldap_groups && project.ldap_groups.length > 0) {
                 return (
                     <div>
                         {
@@ -92,14 +126,24 @@ const PROJECT_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<Project>[] =
                     </div>
                 )
             } else {
-                return '-'
+                return <span style={{color: 'grey'}}>None</span>
             }
+        },
+        sortingComparator: (a, b) => {
+            const aGroups = a.ldap_groups || [];
+            const bGroups = b.ldap_groups || [];
+            return aGroups.length - bGroups.length;
         }
     },
     {
         id: 'updated_on',
         header: 'Updated On',
-        cell: project => new Date(project.updated_on!).toLocaleString()
+        cell: project => new Date(project.updated_on!).toLocaleString(),
+        sortingComparator: (a, b) => {
+            const dateA = a.updated_on ? new Date(a.updated_on).getTime() : 0;
+            const dateB = b.updated_on ? new Date(b.updated_on).getTime() : 0;
+            return dateA - dateB;
+        }
     }
 ]
 
@@ -296,12 +340,12 @@ class Projects extends Component<ProjectsProps, ProjectsState> {
                           {
                               name: 'ldap_groups',
                               title: 'Groups',
-                              description: 'Select applicable ldap groups for the Project',
+                              description: 'Select applicable ldap groups for the Project (optional)',
                               param_type: 'select',
                               multiple: true,
                               data_type: 'str',
                               validate: {
-                                  required: true
+                                  required: false
                               },
                               dynamic_choices: true
                           },
@@ -542,6 +586,8 @@ class Projects extends Component<ProjectsProps, ProjectsState> {
                 ]}
                 showPaginator={true}
                 showFilters={true}
+                defaultSortingColumn="updated_on"
+                defaultSortingDescending={true}
                 filters={[
                     {
                         key: 'name'

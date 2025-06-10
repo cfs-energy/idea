@@ -22,7 +22,6 @@ from ideascheduler.app.api.scheduler_api import SchedulerAPI
 
 
 class SchedulerApiInvoker(ApiInvokerProtocol):
-
     def __init__(self, context: ideascheduler.AppContext):
         self._context = context
         self.openpbs_api = OpenPBSAPI(context)

@@ -11,11 +11,7 @@
 
 import ideaadministrator
 
-from ideadatamodel import (
-    constants,
-    exceptions,
-    CustomFileLoggerParams
-)
+from ideadatamodel import constants, exceptions, CustomFileLoggerParams
 from ideasdk.utils import Utils, Jinja2Utils
 from ideasdk.shell import ShellInvoker
 from ideasdk.logging import SocaLogging
@@ -23,10 +19,12 @@ from ideasdk.bootstrap import BootstrapPackageBuilder, BootstrapUtils
 from ideasdk.config.cluster_config_db import ClusterConfigDB
 from ideasdk.config.cluster_config import ClusterConfig
 from ideasdk.context import BootstrapContext
-from ideasdk.metrics.cloudwatch.cloudwatch_agent_config import CloudWatchAgentLogFileOptions
+from ideasdk.metrics.cloudwatch.cloudwatch_agent_config import (
+    CloudWatchAgentLogFileOptions,
+)
 from ideasdk.aws import AwsClientProvider, AWSClientProviderOptions
 
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Callable
 import os
 import shutil
 import logging
@@ -87,19 +85,20 @@ class CdkInvoker:
 
     """
 
-    def __init__(self,
-                 cluster_name: str,
-                 aws_region: str,
-                 module_id: str,
-                 module_set: str,
-                 aws_profile: str = None,
-                 deployment_id: str = None,
-                 termination_protection: bool = True,
-                 custom_permissions_boundary: str = None,
-                 cloudformation_execution_policies: str = None,
-                 public_access_block_configuration: bool = True,
-                 rollback: bool = True):
-
+    def __init__(
+        self,
+        cluster_name: str,
+        aws_region: str,
+        module_id: str,
+        module_set: str,
+        aws_profile: str = None,
+        deployment_id: str = None,
+        termination_protection: bool = True,
+        custom_permissions_boundary: str = None,
+        cloudformation_execution_policies: str = None,
+        public_access_block_configuration: bool = True,
+        rollback: bool = True,
+    ):
         self.cluster_name = cluster_name
         self.aws_region = aws_region
         self.module_id = module_id
@@ -121,7 +120,9 @@ class CdkInvoker:
 
         # custom file logging to enable exporting deployment logs for debugging and support
         self.logging = SocaLogging()
-        cluster_logs_dir = ideaadministrator.props.cluster_logs_dir(self.cluster_name, self.aws_region)
+        cluster_logs_dir = ideaadministrator.props.cluster_logs_dir(
+            self.cluster_name, self.aws_region
+        )
         now = arrow.utcnow()
         # noinspection StrFormat
         log_file_name = now.format('YYYY-MM-DD')
@@ -132,20 +133,22 @@ class CdkInvoker:
                 log_file_name=f'cdk_{log_file_name}.log',
                 when='midnight',
                 interval=1,
-                backupCount=10
+                backupCount=10,
             ),
             log_level=logging.INFO,
-            fmt='[%(asctime)s] %(message)s'
+            fmt='[%(asctime)s] %(message)s',
         )
 
-        cluster_deployments_dir = ideaadministrator.props.cluster_deployments_dir(self.cluster_name, self.aws_region)
+        cluster_deployments_dir = ideaadministrator.props.cluster_deployments_dir(
+            self.cluster_name, self.aws_region
+        )
         self.deployment_dir = os.path.join(cluster_deployments_dir, self.deployment_id)
         os.makedirs(self.deployment_dir, exist_ok=True)
 
         self.cluster_config_db = ClusterConfigDB(
             cluster_name=self.cluster_name,
             aws_region=self.aws_region,
-            aws_profile=self.aws_profile
+            aws_profile=self.aws_profile,
         )
 
         if self.module_id == 'bootstrap':
@@ -155,16 +158,17 @@ class CdkInvoker:
             self.module_name = module_info['name']
 
         self.cdk_home = ideaadministrator.props.cluster_cdk_dir(
-            cluster_name=self.cluster_name,
-            aws_region=self.aws_region
+            cluster_name=self.cluster_name, aws_region=self.aws_region
         )
 
         cdk_json = os.path.join(self.cdk_home, 'cdk.json')
         if not os.path.isfile(cdk_json):
-            cdk_json_template = os.path.join(ideaadministrator.props.resources_dir, 'cdk', 'cdk.json')
+            cdk_json_template = os.path.join(
+                ideaadministrator.props.resources_dir, 'cdk', 'cdk.json'
+            )
             shutil.copy(cdk_json_template, cdk_json)
 
-        self.MODULE_MAPPING_INVOKE_MAPPING: Dict[str, ()] = {
+        self.MODULE_MAPPING_INVOKE_MAPPING: Dict[str, Callable] = {
             constants.MODULE_CLUSTER: self.invoke_cluster,
             constants.MODULE_SHARED_STORAGE: self.invoke_shared_storage,
             constants.MODULE_IDENTITY_PROVIDER: self.invoke_identity_provider,
@@ -174,7 +178,7 @@ class CdkInvoker:
             constants.MODULE_BASTION_HOST: self.invoke_bastion_host,
             constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER: self.invoke_virtual_desktop_controller,
             constants.MODULE_ANALYTICS: self.invoke_analytics,
-            constants.MODULE_METRICS: self.invoke_metrics
+            constants.MODULE_METRICS: self.invoke_metrics,
         }
 
     def log(self, message: str):
@@ -186,17 +190,17 @@ class CdkInvoker:
         self.file_logger.info(f'(DeploymentId: {self.deployment_id}) {message}')
 
     def log_invocation_context(self):
-        self.log(f'[InvocationContext] ClusterName: {self.cluster_name}, '
-                 f'Region: {self.aws_region}, '
-                 f'Profile: {self.aws_profile}, '
-                 f'Rollback: {self.rollback}, '
-                 f'ModuleName: {self.module_name}, '
-                 f'ModuleId: {self.module_id}')
+        self.log(
+            f'[InvocationContext] ClusterName: {self.cluster_name}, '
+            f'Region: {self.aws_region}, '
+            f'Profile: {self.aws_profile}, '
+            f'Rollback: {self.rollback}, '
+            f'ModuleName: {self.module_name}, '
+            f'ModuleId: {self.module_id}'
+        )
 
     def exec_shell(self, shell_cmd: str, silent=False, **_):
-
         def callback(line):
-
             line = str(line).rstrip()
             if Utils.is_not_empty(line):
                 self.log(message=line)
@@ -231,7 +235,7 @@ class CdkInvoker:
             callback=callback,
             shell=True,
             env=env,
-            start_new_session=True
+            start_new_session=True,
         )
 
         try:
@@ -264,29 +268,30 @@ class CdkInvoker:
             '--deployment-id',
             self.deployment_id,
             '--termination-protection',
-            str(self.termination_protection).lower()
+            str(self.termination_protection).lower(),
         ]
 
         # bug fix for below error
         # Environment aws://<target-account>/us-east-1 failed bootstrapping: Error: Need to perform AWS calls for account target-account, but the current credentials are for <something-else>
         if Utils.is_not_empty(self.aws_profile):
-            cdk_app_args += [
-                '--aws-profile',
-                self.aws_profile
-            ]
+            cdk_app_args += ['--aws-profile', self.aws_profile]
 
         if ideaadministrator.props.is_dev_mode():
             args = ['cdk', 'cdk-app'] + cdk_app_args
             args_encoded = Utils.base64_encode(Utils.to_json(args))
 
-            cdk_app_cmd = f'invoke ' \
-                          f'--search-root "{ideaadministrator.props.dev_mode_project_root_dir}" ' \
-                          f'cli.admin --args {args_encoded}'
+            cdk_app_cmd = (
+                f'invoke '
+                f'--search-root "{ideaadministrator.props.dev_mode_project_root_dir}" '
+                f'cli.admin --args {args_encoded}'
+            )
 
             args_trace = ' '.join(args)
-            cdk_app_cmd_trace = f'invoke ' \
-                                f'--search-root "{ideaadministrator.props.dev_mode_project_root_dir}" ' \
-                                f'cli.admin --args base64([{args_trace}])'
+            cdk_app_cmd_trace = (
+                f'invoke '
+                f'--search-root "{ideaadministrator.props.dev_mode_project_root_dir}" '
+                f'cli.admin --args base64([{args_trace}])'
+            )
             self.log(f'CDKApp (DevMode): {cdk_app_cmd_trace}')
         else:
             cdk_app_args_s = ' '.join(cdk_app_args)
@@ -297,15 +302,21 @@ class CdkInvoker:
 
     def setup_cluster_cdk_dir(self):
         cluster_cdk_dir = ideaadministrator.props.cluster_cdk_dir(
-            cluster_name=self.cluster_name,
-            aws_region=self.aws_region
+            cluster_name=self.cluster_name, aws_region=self.aws_region
         )
         cdk_json = os.path.join(cluster_cdk_dir, 'cdk.json')
         if not os.path.isfile(cdk_json):
-            cdk_json_template = os.path.join(ideaadministrator.props.resources_dir, 'cdk', 'cdk.json')
+            cdk_json_template = os.path.join(
+                ideaadministrator.props.resources_dir, 'cdk', 'cdk.json'
+            )
             shutil.copy(cdk_json_template, cdk_json)
 
-    def get_cdk_command(self, name: str, params: Optional[List[str]] = None, context_params: Dict[str, str] = None) -> str:
+    def get_cdk_command(
+        self,
+        name: str,
+        params: Optional[List[str]] = None,
+        context_params: Dict[str, str] = None,
+    ) -> str:
         """
         build the cdk command. eg:
         $ cdk deploy --app "idea-admin cdk-app -c user-config.json [--params] [-c [context_param_key]=[context_param_value]]
@@ -331,11 +342,7 @@ class CdkInvoker:
             self.log('CdkInvoker: Begin Synth')
             self.log_invocation_context()
             cdk_app_cmd = self.get_cdk_app_cmd()
-            cdk_cmd = self.get_cdk_command(
-                'synth',
-                params=[
-                    f"--app '{cdk_app_cmd}'"
-                ])
+            cdk_cmd = self.get_cdk_command('synth', params=[f"--app '{cdk_app_cmd}'"])
             self.exec_shell(cdk_cmd, print_cmd=False)
         finally:
             self.log('CdkInvoker: End Synth')
@@ -345,11 +352,7 @@ class CdkInvoker:
             self.log('CdkInvoker: Begin Diff')
             self.log_invocation_context()
             cdk_app_cmd = self.get_cdk_app_cmd()
-            cdk_cmd = self.get_cdk_command(
-                'diff',
-                params=[
-                    f"--app '{cdk_app_cmd}'"
-                ])
+            cdk_cmd = self.get_cdk_command('diff', params=[f"--app '{cdk_app_cmd}'"])
             self.exec_shell(cdk_cmd, print_cmd=False)
         finally:
             self.log('CdkInvoker: End Diff')
@@ -359,20 +362,19 @@ class CdkInvoker:
             self.log('CdkInvoker: Begin Destroy')
             self.log_invocation_context()
             cdk_app_cmd = self.get_cdk_app_cmd()
-            cdk_cmd = self.get_cdk_command(
-                'destroy',
-                params=[
-                    f"--app '{cdk_app_cmd}'"
-                ])
+            cdk_cmd = self.get_cdk_command('destroy', params=[f"--app '{cdk_app_cmd}'"])
             self.exec_shell(cdk_cmd, print_cmd=True)
         finally:
             self.log('CdkInvoker: End Destroy')
 
-    def build_and_upload_bootstrap_package(self, bootstrap_context: BootstrapContext,
-                                           bootstrap_package_basename: str,
-                                           bootstrap_components: List[str],
-                                           force_build=False,
-                                           upload=True) -> str:
+    def build_and_upload_bootstrap_package(
+        self,
+        bootstrap_context: BootstrapContext,
+        bootstrap_package_basename: str,
+        bootstrap_components: List[str],
+        force_build=False,
+        upload=True,
+    ) -> str:
         """
         render the bootstrap package and upload to the cluster's s3 bucket.
         returns the S3 uri of the uploaded bootstrap package
@@ -381,7 +383,9 @@ class CdkInvoker:
         if ideaadministrator.props.is_dev_mode():
             bootstrap_source_dir = ideaadministrator.props.dev_mode_bootstrap_source_dir
         else:
-            bootstrap_source_dir = os.path.join(ideaadministrator.props.resources_dir, 'bootstrap')
+            bootstrap_source_dir = os.path.join(
+                ideaadministrator.props.resources_dir, 'bootstrap'
+            )
 
         builder = BootstrapPackageBuilder(
             bootstrap_context=bootstrap_context,
@@ -389,13 +393,15 @@ class CdkInvoker:
             target_package_basename=bootstrap_package_basename,
             components=bootstrap_components,
             tmp_dir=self.deployment_dir,
-            force_build=force_build
+            force_build=force_build,
         )
         bootstrap_package_archive_file = builder.build()
         session = Utils.create_boto_session(self.aws_region, self.aws_profile)
         s3_client = session.client('s3')
 
-        cluster_s3_bucket = bootstrap_context.config.get_string('cluster.cluster_s3_bucket', required=True)
+        cluster_s3_bucket = bootstrap_context.config.get_string(
+            'cluster.cluster_s3_bucket', required=True
+        )
         bootstrap_package_uri = f's3://{cluster_s3_bucket}/idea/bootstrap/{os.path.basename(bootstrap_package_archive_file)}'
 
         if upload:
@@ -403,11 +409,13 @@ class CdkInvoker:
             s3_client.upload_file(
                 Bucket=cluster_s3_bucket,
                 Filename=bootstrap_package_archive_file,
-                Key=f'idea/bootstrap/{os.path.basename(bootstrap_package_archive_file)}'
+                Key=f'idea/bootstrap/{os.path.basename(bootstrap_package_archive_file)}',
             )
             return bootstrap_package_uri
 
-    def upload_release_package(self, bootstrap_context: BootstrapContext, package_name: str, upload=True) -> str:
+    def upload_release_package(
+        self, bootstrap_context: BootstrapContext, package_name: str, upload=True
+    ) -> str:
         if ideaadministrator.props.is_dev_mode():
             package_dist_dir = ideaadministrator.props.dev_mode_project_dist_dir
         else:
@@ -417,16 +425,22 @@ class CdkInvoker:
         if not Utils.is_file(app_package):
             raise exceptions.general_exception(f'package not found: {app_package}')
 
-        cluster_s3_bucket = bootstrap_context.config.get_string('cluster.cluster_s3_bucket', required=True)
+        cluster_s3_bucket = bootstrap_context.config.get_string(
+            'cluster.cluster_s3_bucket', required=True
+        )
         app_package_uri = f's3://{cluster_s3_bucket}/idea/releases/{package_name}'
 
         if upload:
-            aws_client = AwsClientProvider(options=AWSClientProviderOptions(profile=self.aws_profile, region=self.aws_region))
+            aws_client = AwsClientProvider(
+                options=AWSClientProviderOptions(
+                    profile=self.aws_profile, region=self.aws_region
+                )
+            )
             print(f'uploading release package: {app_package_uri} ...')
             aws_client.s3().upload_file(
                 Bucket=cluster_s3_bucket,
                 Filename=app_package,
-                Key=f'idea/releases/{os.path.basename(app_package)}'
+                Key=f'idea/releases/{os.path.basename(app_package)}',
             )
 
         return app_package_uri
@@ -437,36 +451,54 @@ class CdkInvoker:
             self.log_invocation_context()
 
             # render the cdk toolkit stack in cdk home
-            toolkit_stack_target_file = os.path.join(self.cdk_home, 'cdk_toolkit_stack.yml')
-            aws_client = AwsClientProvider(options=AWSClientProviderOptions(profile=self.aws_profile, region=self.aws_region))
-            cdk_resources_dir = os.path.join(ideaadministrator.props.resources_dir, 'cdk')
-            env = Jinja2Utils.env_using_file_system_loader(search_path=cdk_resources_dir)
+            toolkit_stack_target_file = os.path.join(
+                self.cdk_home, 'cdk_toolkit_stack.yml'
+            )
+            aws_client = AwsClientProvider(
+                options=AWSClientProviderOptions(
+                    profile=self.aws_profile, region=self.aws_region
+                )
+            )
+            cdk_resources_dir = os.path.join(
+                ideaadministrator.props.resources_dir, 'cdk'
+            )
+            env = Jinja2Utils.env_using_file_system_loader(
+                search_path=cdk_resources_dir
+            )
             toolkit_stack_template = env.get_template('cdk_toolkit_stack.yml')
             cluster_config = ClusterConfig(
                 cluster_name=self.cluster_name,
                 aws_region=self.aws_region,
                 aws_profile=self.aws_profile,
                 module_id=constants.MODULE_CLUSTER,
-                module_set=self.module_set
+                module_set=self.module_set,
             )
 
             # find the elb account id for the current region
             with open(ideaadministrator.props.region_elb_account_id_file(), 'r') as f:
                 region_elb_account_id_config = Utils.from_yaml(f.read())
 
-            elb_account_id = Utils.get_value_as_string(self.aws_region, region_elb_account_id_config)
+            elb_account_id = Utils.get_value_as_string(
+                self.aws_region, region_elb_account_id_config
+            )
 
-            toolkit_stack_content = toolkit_stack_template.render(**{
-                'cluster_name': self.cluster_name,
-                'aws_dns_suffix': aws_client.aws_dns_suffix(),
-                'cluster_s3_bucket': cluster_config.get_string('cluster.cluster_s3_bucket', required=True),
-                'config': cluster_config,
-                'aws_elb_account_id': elb_account_id,
-                'input_permissions_boundary': self.custom_permissions_boundary
-            })
+            toolkit_stack_content = toolkit_stack_template.render(
+                **{
+                    'cluster_name': self.cluster_name,
+                    'aws_dns_suffix': aws_client.aws_dns_suffix(),
+                    'cluster_s3_bucket': cluster_config.get_string(
+                        'cluster.cluster_s3_bucket', required=True
+                    ),
+                    'config': cluster_config,
+                    'aws_elb_account_id': elb_account_id,
+                    'input_permissions_boundary': self.custom_permissions_boundary,
+                }
+            )
             with open(toolkit_stack_target_file, 'w') as f:
                 f.write(toolkit_stack_content)
-            print(f'rendered cdk toolkit stack template for cluster: {self.cluster_name}, template: {toolkit_stack_target_file}')
+            print(
+                f'rendered cdk toolkit stack template for cluster: {self.cluster_name}, template: {toolkit_stack_target_file}'
+            )
 
             stack_name = f'{self.cluster_name}-bootstrap'
             cdk_app_command = self.get_cdk_app_cmd()
@@ -479,23 +511,29 @@ class CdkInvoker:
                 f'--toolkit-stack-name {stack_name} '
                 f'--termination-protection {str(self.termination_protection).lower()} '
                 f'--qualifier {cdk_toolkit_qualifier}',
-                f'--template {toolkit_stack_target_file}'
+                f'--template {toolkit_stack_target_file}',
             ]
 
             if Utils.is_not_empty(self.custom_permissions_boundary):
-                cmd.append(f'--custom-permissions-boundary {self.custom_permissions_boundary}')
+                cmd.append(
+                    f'--custom-permissions-boundary {self.custom_permissions_boundary}'
+                )
 
             if Utils.is_not_empty(self.cloudformation_execution_policies):
-                cmd.append(f'--cloudformation-execution-policies {self.cloudformation_execution_policies}')
+                cmd.append(
+                    f'--cloudformation-execution-policies {self.cloudformation_execution_policies}'
+                )
 
             if Utils.is_not_empty(self.public_access_block_configuration):
-                _block_config_value = Utils.get_as_bool(self.public_access_block_configuration, default=True)
-                cmd.append(f'--public-access-block-configuration {str(_block_config_value).lower()}')
+                _block_config_value = Utils.get_as_bool(
+                    self.public_access_block_configuration, default=True
+                )
+                cmd.append(
+                    f'--public-access-block-configuration {str(_block_config_value).lower()}'
+                )
 
             # bootstrap stack tags
-            tags = {
-                constants.IDEA_TAG_CLUSTER_NAME: self.cluster_name
-            }
+            tags = {constants.IDEA_TAG_CLUSTER_NAME: self.cluster_name}
             custom_tags = cluster_config.get_list('global-settings.custom_tags', [])
             custom_tags_dict = Utils.convert_custom_tags_to_key_value_pairs(custom_tags)
             tags = {**custom_tags_dict, **tags}
@@ -506,7 +544,7 @@ class CdkInvoker:
                 cmd.append(f'--profile {self.aws_profile}')
 
             bootstrap_cmd = ' '.join(cmd)
-            print(f"CDK boostrap command: {bootstrap_cmd}")
+            print(f'CDK bootstrap command: {bootstrap_cmd}')
             self.exec_shell(bootstrap_cmd)
         finally:
             self.log('CdkInvoker: Bootstrap End')
@@ -514,51 +552,68 @@ class CdkInvoker:
     def invoke_cluster(self, **_):
         outputs_file = os.path.join(self.deployment_dir, 'cluster-outputs.json')
         cdk_app_cmd = self.get_cdk_app_cmd()
-        cdk_cmd = self.get_cdk_command('deploy', [
-            f"--app '{cdk_app_cmd}' ",
-            f'--outputs-file {outputs_file}',
-            '--require-approval never'
-        ])
+        cdk_cmd = self.get_cdk_command(
+            'deploy',
+            [
+                f"--app '{cdk_app_cmd}' ",
+                f'--outputs-file {outputs_file}',
+                '--require-approval never',
+            ],
+        )
         self.exec_shell(cdk_cmd)
 
     def invoke_shared_storage(self, **_):
         outputs_file = os.path.join(self.deployment_dir, 'shared-storage-outputs.json')
         cdk_app_cmd = self.get_cdk_app_cmd()
-        cdk_cmd = self.get_cdk_command('deploy', [
-            f"--app '{cdk_app_cmd}' ",
-            f'--outputs-file {outputs_file}',
-            '--require-approval never'
-        ])
+        cdk_cmd = self.get_cdk_command(
+            'deploy',
+            [
+                f"--app '{cdk_app_cmd}' ",
+                f'--outputs-file {outputs_file}',
+                '--require-approval never',
+            ],
+        )
         self.exec_shell(cdk_cmd)
 
     def invoke_analytics(self, **_):
         outputs_file = os.path.join(self.deployment_dir, 'analytics-outputs.json')
         cdk_app_cmd = self.get_cdk_app_cmd()
-        cdk_cmd = self.get_cdk_command('deploy', [
-            f"--app '{cdk_app_cmd}' ",
-            f'--outputs-file {outputs_file} ',
-            '--require-approval never'
-        ])
+        cdk_cmd = self.get_cdk_command(
+            'deploy',
+            [
+                f"--app '{cdk_app_cmd}' ",
+                f'--outputs-file {outputs_file} ',
+                '--require-approval never',
+            ],
+        )
         self.exec_shell(cdk_cmd)
 
     def invoke_metrics(self, **_):
         outputs_file = os.path.join(self.deployment_dir, 'metrics-outputs.json')
         cdk_app_cmd = self.get_cdk_app_cmd()
-        cdk_cmd = self.get_cdk_command('deploy', [
-            f"--app '{cdk_app_cmd}' ",
-            f'--outputs-file {outputs_file}',
-            '--require-approval never'
-        ])
+        cdk_cmd = self.get_cdk_command(
+            'deploy',
+            [
+                f"--app '{cdk_app_cmd}' ",
+                f'--outputs-file {outputs_file}',
+                '--require-approval never',
+            ],
+        )
         self.exec_shell(cdk_cmd)
 
     def invoke_identity_provider(self, **_):
-        outputs_file = os.path.join(self.deployment_dir, 'identity-provider-outputs.json')
+        outputs_file = os.path.join(
+            self.deployment_dir, 'identity-provider-outputs.json'
+        )
         cdk_app_cmd = self.get_cdk_app_cmd()
-        cdk_cmd = self.get_cdk_command('deploy', [
-            f"--app '{cdk_app_cmd}' ",
-            f'--outputs-file {outputs_file}',
-            '--require-approval never'
-        ])
+        cdk_cmd = self.get_cdk_command(
+            'deploy',
+            [
+                f"--app '{cdk_app_cmd}' ",
+                f'--outputs-file {outputs_file}',
+                '--require-approval never',
+            ],
+        )
         self.exec_shell(cdk_cmd)
 
     def invoke_directoryservice(self, **kwargs):
@@ -568,42 +623,71 @@ class CdkInvoker:
             module_id = module['module_id']
             status = module['status']
             if module_name == constants.MODULE_CLUSTER and status == 'not-deployed':
-                raise exceptions.general_exception(f'cannot deploy {self.module_id}. module: {module_id} is not yet deployed.')
+                raise exceptions.general_exception(
+                    f'cannot deploy {self.module_id}. module: {module_id} is not yet deployed.'
+                )
 
         cluster_config = ClusterConfig(
             cluster_name=self.cluster_name,
             aws_region=self.aws_region,
             aws_profile=self.aws_profile,
             module_id=self.module_id,
-            module_set=self.module_set
+            module_set=self.module_set,
         )
 
         deploy_stack = Utils.get_value_as_bool('deploy_stack', kwargs, True)
         provider = cluster_config.get_string('directoryservice.provider', required=True)
 
         if provider == constants.DIRECTORYSERVICE_OPENLDAP:
+            render_bootstrap_package = Utils.get_value_as_bool(
+                'render_bootstrap_package', kwargs, True
+            )
+            force_build_bootstrap = Utils.get_value_as_bool(
+                'force_build_bootstrap', kwargs, True
+            )
+            upload_bootstrap_package = Utils.get_value_as_bool(
+                'upload_bootstrap_package', kwargs, True
+            )
 
-            render_bootstrap_package = Utils.get_value_as_bool('render_bootstrap_package', kwargs, True)
-            force_build_bootstrap = Utils.get_value_as_bool('force_build_bootstrap', kwargs, True)
-            upload_bootstrap_package = Utils.get_value_as_bool('upload_bootstrap_package', kwargs, True)
-
-            base_os = cluster_config.get_string('directoryservice.base_os', required=True)
-            instance_type = cluster_config.get_string('directoryservice.instance_type', required=True)
+            base_os = cluster_config.get_string(
+                'directoryservice.base_os', required=True
+            )
+            instance_type = cluster_config.get_string(
+                'directoryservice.instance_type', required=True
+            )
             bootstrap_context = BootstrapContext(
                 config=cluster_config,
                 module_name=self.module_name,
                 module_id=self.module_id,
                 module_set=self.module_set,
                 base_os=base_os,
-                instance_type=instance_type
+                instance_type=instance_type,
             )
 
             BootstrapUtils.check_and_attach_cloudwatch_logging_and_metrics(
                 bootstrap_context=bootstrap_context,
                 metrics_namespace=f'{self.cluster_name}/{self.module_id}/openldap-server',
                 node_type=constants.NODE_TYPE_INFRA,
-                enable_logging=False,
-                log_files=[]
+                enable_logging=cluster_config.get_bool(
+                    'directoryservice.cloudwatch_logs.enabled', False
+                ),
+                log_files=[
+                    CloudWatchAgentLogFileOptions(
+                        file_path='/var/log/messages',
+                        log_group_name=f'/{self.cluster_name}/{self.module_id}/openldap-server',
+                        log_stream_name='system_{ip_address}',
+                    ),
+                    CloudWatchAgentLogFileOptions(
+                        file_path='/var/log/syslog',
+                        log_group_name=f'/{self.cluster_name}/{self.module_id}/openldap-server',
+                        log_stream_name='syslog_{ip_address}',
+                    ),
+                    CloudWatchAgentLogFileOptions(
+                        file_path='/var/log/slapd.log',
+                        log_group_name=f'/{self.cluster_name}/{self.module_id}/openldap-server',
+                        log_stream_name='slapd_{ip_address}',
+                    ),
+                ],
             )
 
             bootstrap_package_uri = None
@@ -611,41 +695,55 @@ class CdkInvoker:
                 bootstrap_package_uri = self.build_and_upload_bootstrap_package(
                     bootstrap_context=bootstrap_context,
                     bootstrap_package_basename=f'bootstrap-{self.module_id}-{self.deployment_id}',
-                    bootstrap_components=[
-                        'common',
-                        'openldap-server'
-                    ],
+                    bootstrap_components=['common', 'openldap-server'],
                     upload=upload_bootstrap_package,
-                    force_build=force_build_bootstrap
+                    force_build=force_build_bootstrap,
                 )
             if upload_bootstrap_package and deploy_stack:
-                outputs_file = os.path.join(self.deployment_dir, 'directoryservice-outputs.json')
+                outputs_file = os.path.join(
+                    self.deployment_dir, 'directoryservice-outputs.json'
+                )
                 cdk_app_cmd = self.get_cdk_app_cmd()
-                cdk_cmd = self.get_cdk_command('deploy', params=[
-                    f"--app '{cdk_app_cmd}' ",
-                    f'--outputs-file {outputs_file} ',
-                    '--require-approval never'
-                ], context_params={
-                    'bootstrap_package_uri': bootstrap_package_uri
-                })
+                cdk_cmd = self.get_cdk_command(
+                    'deploy',
+                    params=[
+                        f"--app '{cdk_app_cmd}' ",
+                        f'--outputs-file {outputs_file} ',
+                        '--require-approval never',
+                    ],
+                    context_params={'bootstrap_package_uri': bootstrap_package_uri},
+                )
                 self.exec_shell(cdk_cmd)
 
         else:
             if deploy_stack:
-                outputs_file = os.path.join(self.deployment_dir, 'directoryservice-outputs.json')
+                outputs_file = os.path.join(
+                    self.deployment_dir, 'directoryservice-outputs.json'
+                )
                 cdk_app_cmd = self.get_cdk_app_cmd()
-                cdk_cmd = self.get_cdk_command('deploy', params=[
-                    f"--app '{cdk_app_cmd}' ",
-                    f'--outputs-file {outputs_file} ',
-                    '--require-approval never'
-                ])
+                cdk_cmd = self.get_cdk_command(
+                    'deploy',
+                    params=[
+                        f"--app '{cdk_app_cmd}' ",
+                        f'--outputs-file {outputs_file} ',
+                        '--require-approval never',
+                    ],
+                )
                 self.exec_shell(cdk_cmd)
 
     def invoke_cluster_manager(self, **kwargs):
-        upload_release_package = Utils.get_value_as_bool('upload_release_package', kwargs, True)
-        render_bootstrap_package = Utils.get_value_as_bool('render_bootstrap_package', kwargs, True)
-        force_build_bootstrap = Utils.get_value_as_bool('force_build_bootstrap', kwargs, True)
-        upload_bootstrap_package = Utils.get_value_as_bool('upload_bootstrap_package', kwargs, True)
+        upload_release_package = Utils.get_value_as_bool(
+            'upload_release_package', kwargs, True
+        )
+        render_bootstrap_package = Utils.get_value_as_bool(
+            'render_bootstrap_package', kwargs, True
+        )
+        force_build_bootstrap = Utils.get_value_as_bool(
+            'force_build_bootstrap', kwargs, True
+        )
+        upload_bootstrap_package = Utils.get_value_as_bool(
+            'upload_bootstrap_package', kwargs, True
+        )
         deploy_stack = Utils.get_value_as_bool('deploy_stack', kwargs, True)
 
         cluster_config = ClusterConfig(
@@ -653,24 +751,28 @@ class CdkInvoker:
             aws_region=self.aws_region,
             aws_profile=self.aws_profile,
             module_id=self.module_id,
-            module_set=self.module_set
+            module_set=self.module_set,
         )
 
-        base_os = cluster_config.get_string('cluster-manager.ec2.autoscaling.base_os', required=True)
-        instance_type = cluster_config.get_string('cluster-manager.ec2.autoscaling.instance_type', required=True)
+        base_os = cluster_config.get_string(
+            'cluster-manager.ec2.autoscaling.base_os', required=True
+        )
+        instance_type = cluster_config.get_string(
+            'cluster-manager.ec2.autoscaling.instance_type', required=True
+        )
         bootstrap_context = BootstrapContext(
             config=cluster_config,
             module_name=self.module_name,
             module_id=self.module_id,
             module_set=self.module_set,
             base_os=base_os,
-            instance_type=instance_type
+            instance_type=instance_type,
         )
 
         app_package_uri = self.upload_release_package(
             bootstrap_context=bootstrap_context,
             package_name=f'idea-cluster-manager-{ideaadministrator.props.current_release_version}.tar.gz',
-            upload=upload_release_package
+            upload=upload_release_package,
         )
         bootstrap_context.vars.app_package_uri = app_package_uri
 
@@ -678,14 +780,26 @@ class CdkInvoker:
             bootstrap_context=bootstrap_context,
             metrics_namespace=f'{self.cluster_name}/{self.module_id}',
             node_type=constants.NODE_TYPE_APP,
-            enable_logging=cluster_config.get_bool('cluster-manager.cloudwatch_logs.enabled', False),
+            enable_logging=cluster_config.get_bool(
+                'cluster-manager.cloudwatch_logs.enabled', False
+            ),
             log_files=[
                 CloudWatchAgentLogFileOptions(
                     file_path='/opt/idea/app/logs/**.log',
                     log_group_name=f'/{self.cluster_name}/{self.module_id}',
-                    log_stream_name='application_{ip_address}'
-                )
-            ]
+                    log_stream_name='application_{ip_address}',
+                ),
+                CloudWatchAgentLogFileOptions(
+                    file_path='/var/log/messages',
+                    log_group_name=f'/{self.cluster_name}/{self.module_id}',
+                    log_stream_name='system_{ip_address}',
+                ),
+                CloudWatchAgentLogFileOptions(
+                    file_path='/var/log/syslog',
+                    log_group_name=f'/{self.cluster_name}/{self.module_id}',
+                    log_stream_name='syslog_{ip_address}',
+                ),
+            ],
         )
 
         bootstrap_package_uri = None
@@ -693,30 +807,40 @@ class CdkInvoker:
             bootstrap_package_uri = self.build_and_upload_bootstrap_package(
                 bootstrap_context=bootstrap_context,
                 bootstrap_package_basename=f'bootstrap-{self.module_id}-{self.deployment_id}',
-                bootstrap_components=[
-                    'cluster-manager'
-                ],
+                bootstrap_components=['cluster-manager'],
                 upload=upload_bootstrap_package,
-                force_build=force_build_bootstrap
+                force_build=force_build_bootstrap,
             )
 
         if upload_release_package and upload_bootstrap_package and deploy_stack:
-            outputs_file = os.path.join(self.deployment_dir, 'cluster-manager-outputs.json')
+            outputs_file = os.path.join(
+                self.deployment_dir, 'cluster-manager-outputs.json'
+            )
             cdk_app_cmd = self.get_cdk_app_cmd()
-            cdk_cmd = self.get_cdk_command('deploy', params=[
-                f"--app '{cdk_app_cmd}' ",
-                f'--outputs-file {outputs_file} ',
-                '--require-approval never'
-            ], context_params={
-                'bootstrap_package_uri': bootstrap_package_uri
-            })
+            cdk_cmd = self.get_cdk_command(
+                'deploy',
+                params=[
+                    f"--app '{cdk_app_cmd}' ",
+                    f'--outputs-file {outputs_file} ',
+                    '--require-approval never',
+                ],
+                context_params={'bootstrap_package_uri': bootstrap_package_uri},
+            )
             self.exec_shell(cdk_cmd)
 
     def invoke_scheduler(self, **kwargs):
-        upload_release_package = Utils.get_value_as_bool('upload_release_package', kwargs, True)
-        render_bootstrap_package = Utils.get_value_as_bool('render_bootstrap_package', kwargs, True)
-        force_build_bootstrap = Utils.get_value_as_bool('force_build_bootstrap', kwargs, True)
-        upload_bootstrap_package = Utils.get_value_as_bool('upload_bootstrap_package', kwargs, True)
+        upload_release_package = Utils.get_value_as_bool(
+            'upload_release_package', kwargs, True
+        )
+        render_bootstrap_package = Utils.get_value_as_bool(
+            'render_bootstrap_package', kwargs, True
+        )
+        force_build_bootstrap = Utils.get_value_as_bool(
+            'force_build_bootstrap', kwargs, True
+        )
+        upload_bootstrap_package = Utils.get_value_as_bool(
+            'upload_bootstrap_package', kwargs, True
+        )
         deploy_stack = Utils.get_value_as_bool('deploy_stack', kwargs, True)
 
         cluster_config = ClusterConfig(
@@ -724,24 +848,26 @@ class CdkInvoker:
             aws_region=self.aws_region,
             aws_profile=self.aws_profile,
             module_id=self.module_id,
-            module_set=self.module_set
+            module_set=self.module_set,
         )
 
         base_os = cluster_config.get_string('scheduler.base_os', required=True)
-        instance_type = cluster_config.get_string('scheduler.instance_type', required=True)
+        instance_type = cluster_config.get_string(
+            'scheduler.instance_type', required=True
+        )
         bootstrap_context = BootstrapContext(
             config=cluster_config,
             module_name=self.module_name,
             module_id=self.module_id,
             module_set=self.module_set,
             base_os=base_os,
-            instance_type=instance_type
+            instance_type=instance_type,
         )
 
         app_package_uri = self.upload_release_package(
             bootstrap_context=bootstrap_context,
             package_name=f'idea-scheduler-{ideaadministrator.props.current_release_version}.tar.gz',
-            upload=upload_release_package
+            upload=upload_release_package,
         )
         bootstrap_context.vars.app_package_uri = app_package_uri
 
@@ -749,33 +875,48 @@ class CdkInvoker:
             CloudWatchAgentLogFileOptions(
                 file_path='/opt/idea/app/logs/**.log',
                 log_group_name=f'/{self.cluster_name}/{self.module_id}',
-                log_stream_name='application_{ip_address}'
-            )
+                log_stream_name='application_{ip_address}',
+            ),
+            CloudWatchAgentLogFileOptions(
+                file_path='/var/log/messages',
+                log_group_name=f'/{self.cluster_name}/{self.module_id}',
+                log_stream_name='system_{ip_address}',
+            ),
+            CloudWatchAgentLogFileOptions(
+                file_path='/var/log/syslog',
+                log_group_name=f'/{self.cluster_name}/{self.module_id}',
+                log_stream_name='syslog_{ip_address}',
+            ),
         ]
-        if cluster_config.get_string('scheduler.provider', required=True) == constants.SCHEDULER_OPENPBS:
+        if (
+            cluster_config.get_string('scheduler.provider', required=True)
+            == constants.SCHEDULER_OPENPBS
+        ):
             log_files += [
                 CloudWatchAgentLogFileOptions(
                     file_path='/var/spool/pbs/server_logs/**.log',
                     log_group_name=f'/{self.cluster_name}/{self.module_id}/openpbs',
-                    log_stream_name='server_logs_{ip_address}'
+                    log_stream_name='server_logs_{ip_address}',
                 ),
                 CloudWatchAgentLogFileOptions(
                     file_path='/var/spool/pbs/sched_logs/**.log',
                     log_group_name=f'/{self.cluster_name}/{self.module_id}/openpbs',
-                    log_stream_name='sched_logs_{ip_address}'
+                    log_stream_name='sched_logs_{ip_address}',
                 ),
                 CloudWatchAgentLogFileOptions(
                     file_path='/var/spool/pbs/server_priv/accounting/**.log',
                     log_group_name=f'/{self.cluster_name}/{self.module_id}/openpbs',
-                    log_stream_name='accounting_logs_{ip_address}'
-                )
+                    log_stream_name='accounting_logs_{ip_address}',
+                ),
             ]
         BootstrapUtils.check_and_attach_cloudwatch_logging_and_metrics(
             bootstrap_context=bootstrap_context,
             metrics_namespace=f'{self.cluster_name}/{self.module_id}',
             node_type=constants.NODE_TYPE_APP,
-            enable_logging=cluster_config.get_bool('scheduler.cloudwatch_logs.enabled', False),
-            log_files=log_files
+            enable_logging=cluster_config.get_bool(
+                'scheduler.cloudwatch_logs.enabled', False
+            ),
+            log_files=log_files,
         )
 
         bootstrap_package_uri = None
@@ -783,30 +924,38 @@ class CdkInvoker:
             bootstrap_package_uri = self.build_and_upload_bootstrap_package(
                 bootstrap_context=bootstrap_context,
                 bootstrap_package_basename=f'bootstrap-{self.module_id}-{self.deployment_id}',
-                bootstrap_components=[
-                    'scheduler'
-                ],
+                bootstrap_components=['scheduler'],
                 upload=upload_bootstrap_package,
-                force_build=force_build_bootstrap
+                force_build=force_build_bootstrap,
             )
 
         if upload_release_package and upload_bootstrap_package and deploy_stack:
             outputs_file = os.path.join(self.deployment_dir, 'scheduler-outputs.json')
             cdk_app_cmd = self.get_cdk_app_cmd()
-            cdk_cmd = self.get_cdk_command('deploy', params=[
-                f"--app '{cdk_app_cmd}' ",
-                f'--outputs-file {outputs_file} ',
-                '--require-approval never'
-            ], context_params={
-                'bootstrap_package_uri': bootstrap_package_uri
-            })
+            cdk_cmd = self.get_cdk_command(
+                'deploy',
+                params=[
+                    f"--app '{cdk_app_cmd}' ",
+                    f'--outputs-file {outputs_file} ',
+                    '--require-approval never',
+                ],
+                context_params={'bootstrap_package_uri': bootstrap_package_uri},
+            )
             self.exec_shell(cdk_cmd)
 
     def invoke_virtual_desktop_controller(self, **kwargs):
-        upload_release_package = Utils.get_value_as_bool('upload_release_package', kwargs, True)
-        render_bootstrap_package = Utils.get_value_as_bool('render_bootstrap_package', kwargs, True)
-        force_build_bootstrap = Utils.get_value_as_bool('force_build_bootstrap', kwargs, True)
-        upload_bootstrap_package = Utils.get_value_as_bool('upload_bootstrap_package', kwargs, True)
+        upload_release_package = Utils.get_value_as_bool(
+            'upload_release_package', kwargs, True
+        )
+        render_bootstrap_package = Utils.get_value_as_bool(
+            'render_bootstrap_package', kwargs, True
+        )
+        force_build_bootstrap = Utils.get_value_as_bool(
+            'force_build_bootstrap', kwargs, True
+        )
+        upload_bootstrap_package = Utils.get_value_as_bool(
+            'upload_bootstrap_package', kwargs, True
+        )
         deploy_stack = Utils.get_value_as_bool('deploy_stack', kwargs, True)
 
         cluster_config = ClusterConfig(
@@ -814,7 +963,7 @@ class CdkInvoker:
             aws_region=self.aws_region,
             aws_profile=self.aws_profile,
             module_id=self.module_id,
-            module_set=self.module_set
+            module_set=self.module_set,
         )
 
         # controller
@@ -823,27 +972,45 @@ class CdkInvoker:
             module_name=self.module_name,
             module_id=self.module_id,
             module_set=self.module_set,
-            base_os=cluster_config.get_string('virtual-desktop-controller.controller.autoscaling.base_os', required=True),
-            instance_type=cluster_config.get_string('virtual-desktop-controller.controller.autoscaling.instance_type', required=True)
+            base_os=cluster_config.get_string(
+                'virtual-desktop-controller.controller.autoscaling.base_os',
+                required=True,
+            ),
+            instance_type=cluster_config.get_string(
+                'virtual-desktop-controller.controller.autoscaling.instance_type',
+                required=True,
+            ),
         )
         app_package_uri = self.upload_release_package(
             bootstrap_context=controller_bootstrap_context,
             package_name=f'idea-virtual-desktop-controller-{ideaadministrator.props.current_release_version}.tar.gz',
-            upload=upload_release_package
+            upload=upload_release_package,
         )
         controller_bootstrap_context.vars.controller_package_uri = app_package_uri
         BootstrapUtils.check_and_attach_cloudwatch_logging_and_metrics(
             bootstrap_context=controller_bootstrap_context,
             metrics_namespace=f'{self.cluster_name}/{self.module_id}/controller',
             node_type=constants.NODE_TYPE_APP,
-            enable_logging=cluster_config.get_bool('virtual-desktop-controller.cloudwatch_logs.enabled', False),
+            enable_logging=cluster_config.get_bool(
+                'virtual-desktop-controller.cloudwatch_logs.enabled', False
+            ),
             log_files=[
                 CloudWatchAgentLogFileOptions(
                     file_path='/opt/idea/app/logs/**.log',
                     log_group_name=f'/{self.cluster_name}/{self.module_id}/controller',
-                    log_stream_name='application_{ip_address}'
-                )
-            ]
+                    log_stream_name='application_{ip_address}',
+                ),
+                CloudWatchAgentLogFileOptions(
+                    file_path='/var/log/messages',
+                    log_group_name=f'/{self.cluster_name}/{self.module_id}/controller',
+                    log_stream_name='system_{ip_address}',
+                ),
+                CloudWatchAgentLogFileOptions(
+                    file_path='/var/log/syslog',
+                    log_group_name=f'/{self.cluster_name}/{self.module_id}/controller',
+                    log_stream_name='syslog_{ip_address}',
+                ),
+            ],
         )
 
         # dcv broker
@@ -852,22 +1019,40 @@ class CdkInvoker:
             module_name=self.module_name,
             module_id=self.module_id,
             module_set=self.module_set,
-            base_os=cluster_config.get_string('virtual-desktop-controller.dcv_broker.autoscaling.base_os', required=True),
-            instance_type=cluster_config.get_string('virtual-desktop-controller.dcv_broker.autoscaling.instance_type', required=True)
+            base_os=cluster_config.get_string(
+                'virtual-desktop-controller.dcv_broker.autoscaling.base_os',
+                required=True,
+            ),
+            instance_type=cluster_config.get_string(
+                'virtual-desktop-controller.dcv_broker.autoscaling.instance_type',
+                required=True,
+            ),
         )
 
         BootstrapUtils.check_and_attach_cloudwatch_logging_and_metrics(
             bootstrap_context=broker_bootstrap_context,
             metrics_namespace=f'{self.cluster_name}/{self.module_id}/dcv-broker',
             node_type=constants.NODE_TYPE_INFRA,
-            enable_logging=cluster_config.get_bool('virtual-desktop-controller.cloudwatch_logs.enabled', False),
+            enable_logging=cluster_config.get_bool(
+                'virtual-desktop-controller.cloudwatch_logs.enabled', False
+            ),
             log_files=[
                 CloudWatchAgentLogFileOptions(
                     file_path='/var/log/dcv-session-manager-broker/**.log',
                     log_group_name=f'/{self.cluster_name}/{self.module_id}/dcv-broker',
-                    log_stream_name='dcv-session-manager-broker_{ip_address}'
-                )
-            ]
+                    log_stream_name='dcv-session-manager-broker_{ip_address}',
+                ),
+                CloudWatchAgentLogFileOptions(
+                    file_path='/var/log/messages',
+                    log_group_name=f'/{self.cluster_name}/{self.module_id}/dcv-broker',
+                    log_stream_name='system_{ip_address}',
+                ),
+                CloudWatchAgentLogFileOptions(
+                    file_path='/var/log/syslog',
+                    log_group_name=f'/{self.cluster_name}/{self.module_id}/dcv-broker',
+                    log_stream_name='syslog_{ip_address}',
+                ),
+            ],
         )
 
         # dcv connection gateway
@@ -876,27 +1061,45 @@ class CdkInvoker:
             module_name=self.module_name,
             module_id=self.module_id,
             module_set=self.module_set,
-            base_os=cluster_config.get_string('virtual-desktop-controller.dcv_connection_gateway.autoscaling.base_os', required=True),
-            instance_type=cluster_config.get_string('virtual-desktop-controller.dcv_connection_gateway.autoscaling.instance_type', required=True)
+            base_os=cluster_config.get_string(
+                'virtual-desktop-controller.dcv_connection_gateway.autoscaling.base_os',
+                required=True,
+            ),
+            instance_type=cluster_config.get_string(
+                'virtual-desktop-controller.dcv_connection_gateway.autoscaling.instance_type',
+                required=True,
+            ),
         )
         dcv_connection_gateway_uri = self.upload_release_package(
             bootstrap_context=dcv_connection_gateway_bootstrap_context,
             package_name=f'idea-dcv-connection-gateway-{ideaadministrator.props.current_release_version}.tar.gz',
-            upload=upload_release_package
+            upload=upload_release_package,
         )
         dcv_connection_gateway_bootstrap_context.vars.dcv_connection_gateway_package_uri = dcv_connection_gateway_uri
         BootstrapUtils.check_and_attach_cloudwatch_logging_and_metrics(
             bootstrap_context=dcv_connection_gateway_bootstrap_context,
             metrics_namespace=f'{self.cluster_name}/{self.module_id}/dcv-connection-gateway',
             node_type=constants.NODE_TYPE_INFRA,
-            enable_logging=cluster_config.get_bool('virtual-desktop-controller.cloudwatch_logs.enabled', False),
+            enable_logging=cluster_config.get_bool(
+                'virtual-desktop-controller.cloudwatch_logs.enabled', False
+            ),
             log_files=[
                 CloudWatchAgentLogFileOptions(
                     file_path='/var/log/dcv-connection-gateway/**.log',
                     log_group_name=f'/{self.cluster_name}/{self.module_id}/dcv-connection-gateway',
-                    log_stream_name='dcv-connection-gateway_{ip_address}'
-                )
-            ]
+                    log_stream_name='dcv-connection-gateway_{ip_address}',
+                ),
+                CloudWatchAgentLogFileOptions(
+                    file_path='/var/log/messages',
+                    log_group_name=f'/{self.cluster_name}/{self.module_id}/dcv-connection-gateway',
+                    log_stream_name='system_{ip_address}',
+                ),
+                CloudWatchAgentLogFileOptions(
+                    file_path='/var/log/syslog',
+                    log_group_name=f'/{self.cluster_name}/{self.module_id}/dcv-connection-gateway',
+                    log_stream_name='syslog_{ip_address}',
+                ),
+            ],
         )
 
         controller_bootstrap_package_uri = None
@@ -906,43 +1109,43 @@ class CdkInvoker:
             controller_bootstrap_package_uri = self.build_and_upload_bootstrap_package(
                 bootstrap_context=controller_bootstrap_context,
                 bootstrap_package_basename=f'bootstrap-{self.module_id}-controller-{self.deployment_id}',
-                bootstrap_components=[
-                    'virtual-desktop-controller'
-                ],
+                bootstrap_components=['virtual-desktop-controller'],
                 upload=upload_bootstrap_package,
-                force_build=force_build_bootstrap
+                force_build=force_build_bootstrap,
             )
             dcv_broker_package_uri = self.build_and_upload_bootstrap_package(
                 bootstrap_context=broker_bootstrap_context,
                 bootstrap_package_basename=f'bootstrap-{self.module_id}-dcv-broker-{self.deployment_id}',
-                bootstrap_components=[
-                    'dcv-broker'
-                ],
+                bootstrap_components=['dcv-broker'],
                 upload=upload_bootstrap_package,
-                force_build=force_build_bootstrap
+                force_build=force_build_bootstrap,
             )
             dcv_connection_gateway_package_uri = self.build_and_upload_bootstrap_package(
                 bootstrap_context=dcv_connection_gateway_bootstrap_context,
                 bootstrap_package_basename=f'bootstrap-{self.module_id}-dcv-connection-gateway-{self.deployment_id}',
-                bootstrap_components=[
-                    'dcv-connection-gateway'
-                ],
+                bootstrap_components=['dcv-connection-gateway'],
                 upload=upload_bootstrap_package,
-                force_build=force_build_bootstrap
+                force_build=force_build_bootstrap,
             )
 
         if upload_release_package and upload_bootstrap_package and deploy_stack:
-            outputs_file = os.path.join(self.deployment_dir, 'virtual-desktop-controller-outputs.json')
+            outputs_file = os.path.join(
+                self.deployment_dir, 'virtual-desktop-controller-outputs.json'
+            )
             cdk_app_cmd = self.get_cdk_app_cmd()
-            cdk_cmd = self.get_cdk_command('deploy', params=[
-                f"--app '{cdk_app_cmd}' ",
-                f'--outputs-file {outputs_file} ',
-                '--require-approval never'
-            ], context_params={
-                'controller_bootstrap_package_uri': controller_bootstrap_package_uri,
-                'dcv_broker_bootstrap_package_uri': dcv_broker_package_uri,
-                'dcv_connection_gateway_package_uri': dcv_connection_gateway_package_uri
-            })
+            cdk_cmd = self.get_cdk_command(
+                'deploy',
+                params=[
+                    f"--app '{cdk_app_cmd}' ",
+                    f'--outputs-file {outputs_file} ',
+                    '--require-approval never',
+                ],
+                context_params={
+                    'controller_bootstrap_package_uri': controller_bootstrap_package_uri,
+                    'dcv_broker_bootstrap_package_uri': dcv_broker_package_uri,
+                    'dcv_connection_gateway_package_uri': dcv_connection_gateway_package_uri,
+                },
+            )
             self.exec_shell(cdk_cmd)
 
     def invoke_bastion_host(self, **kwargs):
@@ -952,11 +1155,19 @@ class CdkInvoker:
             module_id = module['module_id']
             status = module['status']
             if module_name == constants.MODULE_SCHEDULER and status == 'not-deployed':
-                raise exceptions.general_exception(f'cannot deploy {self.module_id}. module: {module_id} is not yet deployed.')
+                raise exceptions.general_exception(
+                    f'cannot deploy {self.module_id}. module: {module_id} is not yet deployed.'
+                )
 
-        render_bootstrap_package = Utils.get_value_as_bool('render_bootstrap_package', kwargs, True)
-        force_build_bootstrap = Utils.get_value_as_bool('force_build_bootstrap', kwargs, True)
-        upload_bootstrap_package = Utils.get_value_as_bool('upload_bootstrap_package', kwargs, True)
+        render_bootstrap_package = Utils.get_value_as_bool(
+            'render_bootstrap_package', kwargs, True
+        )
+        force_build_bootstrap = Utils.get_value_as_bool(
+            'force_build_bootstrap', kwargs, True
+        )
+        upload_bootstrap_package = Utils.get_value_as_bool(
+            'upload_bootstrap_package', kwargs, True
+        )
         deploy_stack = Utils.get_value_as_bool('deploy_stack', kwargs, True)
 
         cluster_config = ClusterConfig(
@@ -964,25 +1175,50 @@ class CdkInvoker:
             aws_region=self.aws_region,
             aws_profile=self.aws_profile,
             module_id=self.module_id,
-            module_set=self.module_set
+            module_set=self.module_set,
         )
 
         base_os = cluster_config.get_string('bastion-host.base_os', required=True)
-        instance_type = cluster_config.get_string('bastion-host.instance_type', required=True)
+        instance_type = cluster_config.get_string(
+            'bastion-host.instance_type', required=True
+        )
         bootstrap_context = BootstrapContext(
             config=cluster_config,
             module_name=self.module_name,
             module_id=self.module_id,
             module_set=self.module_set,
             base_os=base_os,
-            instance_type=instance_type
+            instance_type=instance_type,
         )
         BootstrapUtils.check_and_attach_cloudwatch_logging_and_metrics(
             bootstrap_context=bootstrap_context,
             metrics_namespace=f'{self.cluster_name}/{self.module_id}',
             node_type=constants.NODE_TYPE_INFRA,
-            enable_logging=False,
-            log_files=[]
+            enable_logging=cluster_config.get_bool(
+                'bastion-host.cloudwatch_logs.enabled', False
+            ),
+            log_files=[
+                CloudWatchAgentLogFileOptions(
+                    file_path='/var/log/messages',
+                    log_group_name=f'/{self.cluster_name}/{self.module_id}',
+                    log_stream_name='system_{ip_address}',
+                ),
+                CloudWatchAgentLogFileOptions(
+                    file_path='/var/log/syslog',
+                    log_group_name=f'/{self.cluster_name}/{self.module_id}',
+                    log_stream_name='syslog_{ip_address}',
+                ),
+                CloudWatchAgentLogFileOptions(
+                    file_path='/var/log/secure',
+                    log_group_name=f'/{self.cluster_name}/{self.module_id}',
+                    log_stream_name='secure_{ip_address}',
+                ),
+                CloudWatchAgentLogFileOptions(
+                    file_path='/var/log/auth.log',
+                    log_group_name=f'/{self.cluster_name}/{self.module_id}',
+                    log_stream_name='auth_{ip_address}',
+                ),
+            ],
         )
 
         bootstrap_package_uri = None
@@ -990,28 +1226,28 @@ class CdkInvoker:
             bootstrap_package_uri = self.build_and_upload_bootstrap_package(
                 bootstrap_context=bootstrap_context,
                 bootstrap_package_basename=f'bootstrap-{self.module_id}-{self.deployment_id}',
-                bootstrap_components=[
-                    'common',
-                    'bastion-host'
-                ],
+                bootstrap_components=['common', 'bastion-host'],
                 upload=upload_bootstrap_package,
-                force_build=force_build_bootstrap
+                force_build=force_build_bootstrap,
             )
 
         if upload_bootstrap_package and deploy_stack:
-            outputs_file = os.path.join(self.deployment_dir, 'bastion-host-outputs.json')
+            outputs_file = os.path.join(
+                self.deployment_dir, 'bastion-host-outputs.json'
+            )
             cdk_app_cmd = self.get_cdk_app_cmd()
-            cdk_cmd = self.get_cdk_command('deploy', params=[
-                f"--app '{cdk_app_cmd}' ",
-                f'--outputs-file {outputs_file} ',
-                '--require-approval never'
-            ], context_params={
-                'bootstrap_package_uri': bootstrap_package_uri
-            })
+            cdk_cmd = self.get_cdk_command(
+                'deploy',
+                params=[
+                    f"--app '{cdk_app_cmd}' ",
+                    f'--outputs-file {outputs_file} ',
+                    '--require-approval never',
+                ],
+                context_params={'bootstrap_package_uri': bootstrap_package_uri},
+            )
             self.exec_shell(cdk_cmd)
 
     def invoke(self, **kwargs):
-
         try:
             self.log('CdkInvoker: Begin')
             self.log_invocation_context()

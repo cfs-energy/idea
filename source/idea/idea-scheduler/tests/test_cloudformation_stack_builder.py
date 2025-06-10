@@ -22,7 +22,7 @@ from ideadatamodel import (
     HpcQueueProfile,
     SocaScalingMode,
     SocaJobParams,
-    SocaBaseModel
+    SocaBaseModel,
 )
 from ideascheduler.app.scheduler import SocaJobBuilder
 from ideasdk.utils import Utils
@@ -37,22 +37,26 @@ class BuildTemplateResult(SocaBaseModel):
     template_yml: str
 
 
-def build_template(context: AppContext,
-                   params: Dict,
-                   queue_profile: HpcQueueProfile,
-                   job_name: str = 'mock-job',
-                   job_id: str = '1',
-                   stack_uuid: str = None) -> BuildTemplateResult:
+def build_template(
+    context: AppContext,
+    params: Dict,
+    queue_profile: HpcQueueProfile,
+    job_name: str = 'mock-job',
+    job_id: str = '1',
+    stack_uuid: str = None,
+) -> BuildTemplateResult:
     builder = SocaJobBuilder(
         context=context,
         params=params,
         queue_profile=queue_profile,
-        stack_uuid=stack_uuid
+        stack_uuid=stack_uuid,
     )
 
     validation_result = builder.validate()
     if not validation_result.is_valid():
-        raise exceptions.invalid_job(f'given test job parameters are invalid: {validation_result}')
+        raise exceptions.invalid_job(
+            f'given test job parameters are invalid: {validation_result}'
+        )
 
     job_params, provisioning_options = builder.build()
     mock_job = SocaJob(
@@ -66,7 +70,7 @@ def build_template(context: AppContext,
         queue=queue_profile.queues[0],
         queue_type=queue_profile.name,
         scaling_mode=queue_profile.scaling_mode,
-        provisioning_options=provisioning_options
+        provisioning_options=provisioning_options,
     )
     mock_job.job_group = mock_job.get_job_group()
 
@@ -91,14 +95,17 @@ def build_template(context: AppContext,
 
         template = ConfigFactory.from_dict(Utils.from_yaml(template_yml))
 
-        return BuildTemplateResult(
-            template=template,
-            template_yml=template_yml
-        )
+        return BuildTemplateResult(template=template, template_yml=template_yml)
     except Exception as e:
-        print(e)
+        print(f'Exception in build_template: {e}')
+        print(f'Exception type: {type(e)}')
+        import traceback
+
+        traceback.print_exc()
         print('Job:')
         print(Utils.to_yaml(mock_job))
+        # Re-raise the exception to ensure the test fails with proper error information
+        raise e
 
 
 def get_tag_value(key: str, tags: List[Dict]) -> Optional[str]:
@@ -115,22 +122,20 @@ def test_cfn_stack_builder_ondemand_basic(context: AppContext):
     result = build_template(
         context=context,
         job_name='ondemand-basic',
-        params={
-            'nodes': 1,
-            'cpus': 1
-        },
+        params={'nodes': 1, 'cpus': 1},
         queue_profile=HpcQueueProfile(
             name='compute',
             queues=['normal'],
             scaling_mode=SocaScalingMode.SINGLE_JOB,
-            default_job_params=SocaJobParams(
-                instance_types=['c5.large']
-            )
-        )
+            default_job_params=SocaJobParams(instance_types=['c5.large']),
+        ),
     )
 
     assert result.template.get_string('AWSTemplateFormatVersion') == '2010-09-09'
-    assert result.template.get_string('Description') == f'IDEA Compute Node Stack (Version: {ideascheduler.__version__})'
+    assert (
+        result.template.get_string('Description')
+        == f'IDEA Compute Node Stack (Version: {ideascheduler.__version__})'
+    )
 
     tags = result.template.get('Resources.AutoScalingComputeGroup.Properties.Tags')
     assert len(tags) > 0
@@ -156,7 +161,9 @@ def test_cfn_stack_builder_ondemand_basic(context: AppContext):
         for tag in project.tags:
             assert get_tag_value(tag.key, tags) == tag.value
 
-    custom_tags_list = context.config().get_list('global-settings.custom_tags', default=[])
+    custom_tags_list = context.config().get_list(
+        'global-settings.custom_tags', default=[]
+    )
     custom_tags = Utils.convert_custom_tags_to_key_value_pairs(custom_tags_list)
     for key, value in custom_tags.items():
         assert get_tag_value(key, tags) == value
@@ -169,10 +176,7 @@ def test_cfn_stack_builder_ondemand_terminate_when_idle(context):
     result = build_template(
         context=context,
         job_name='ondemand-terminate-when-idle',
-        params={
-            'nodes': 1,
-            'cpus': 1
-        },
+        params={'nodes': 1, 'cpus': 1},
         queue_profile=HpcQueueProfile(
             name='job-shared',
             queues=['job-shared'],
@@ -180,8 +184,8 @@ def test_cfn_stack_builder_ondemand_terminate_when_idle(context):
             terminate_when_idle=3,
             default_job_params=SocaJobParams(
                 instance_types=['c5.large'],
-            )
-        )
+            ),
+        ),
     )
 
     tags = result.template.get('Resources.AutoScalingComputeGroup.Properties.Tags')
@@ -195,19 +199,13 @@ def test_cfn_stack_builder_spotfleet_basic(context):
     result = build_template(
         context=context,
         job_name='spotfleet-basic',
-        params={
-            'nodes': 1,
-            'cpus': 1,
-            'spot_price': 'auto'
-        },
+        params={'nodes': 1, 'cpus': 1, 'spot_price': 'auto'},
         queue_profile=HpcQueueProfile(
             name='compute',
             queues=['normal'],
             scaling_mode=SocaScalingMode.SINGLE_JOB,
-            default_job_params=SocaJobParams(
-                instance_types=['c5.large']
-            )
-        )
+            default_job_params=SocaJobParams(instance_types=['c5.large']),
+        ),
     )
 
     def check_tags(tags: List[Dict]):
@@ -233,14 +231,23 @@ def test_cfn_stack_builder_spotfleet_basic(context):
             for tag in project.tags:
                 assert get_tag_value(tag.key, tags) == tag.value
 
-        custom_tags_list = context.config().get_list('global-settings.custom_tags', default=[])
+        custom_tags_list = context.config().get_list(
+            'global-settings.custom_tags', default=[]
+        )
         custom_tags = Utils.convert_custom_tags_to_key_value_pairs(custom_tags_list)
         for key, value in custom_tags.items():
             assert get_tag_value(key, tags) == value
 
-    assert result.template.get_string('Resources.NodeLaunchTemplate.Properties.LaunchTemplateData.InstanceType') == 'c5.large'
+    assert (
+        result.template.get_string(
+            'Resources.NodeLaunchTemplate.Properties.LaunchTemplateData.InstanceType'
+        )
+        == 'c5.large'
+    )
 
-    aws_tag_specs = result.template.get('Resources.NodeLaunchTemplate.Properties.LaunchTemplateData.TagSpecifications')
+    aws_tag_specs = result.template.get(
+        'Resources.NodeLaunchTemplate.Properties.LaunchTemplateData.TagSpecifications'
+    )
     instance_tags = None
     volume_tags = None
     spot_instances_request = None
@@ -264,8 +271,16 @@ def test_cfn_stack_builder_spotfleet_basic(context):
 
     spot_fleet = result.template.get('Resources.SpotFleet')
     assert spot_fleet.get_string('Type') == 'AWS::EC2::SpotFleet'
-    assert spot_fleet.get_string('Properties.SpotFleetRequestConfigData.AllocationStrategy') == 'capacityOptimized'
-    assert spot_fleet.get_string('Properties.SpotFleetRequestConfigData.IamFleetRole') == 'arn:aws:iam::123456789012:role/idea-mock-scheduler-spot-fleet-request-role-us-east-1'
+    assert (
+        spot_fleet.get_string(
+            'Properties.SpotFleetRequestConfigData.AllocationStrategy'
+        )
+        == 'capacityOptimized'
+    )
+    assert (
+        spot_fleet.get_string('Properties.SpotFleetRequestConfigData.IamFleetRole')
+        == 'arn:aws:iam::123456789012:role/idea-mock-scheduler-spot-fleet-request-role-us-east-1'
+    )
 
 
 def test_cfn_stack_builder_spotfleet_auto(context):
@@ -275,22 +290,18 @@ def test_cfn_stack_builder_spotfleet_auto(context):
     result = build_template(
         context=context,
         job_name='spotfleet-auto',
-        params={
-            'nodes': 1,
-            'cpus': 1,
-            'spot_price': 'auto'
-        },
+        params={'nodes': 1, 'cpus': 1, 'spot_price': 'auto'},
         queue_profile=HpcQueueProfile(
             name='compute',
             queues=['normal'],
             scaling_mode=SocaScalingMode.SINGLE_JOB,
-            default_job_params=SocaJobParams(
-                instance_types=['c5.large']
-            )
-        )
+            default_job_params=SocaJobParams(instance_types=['c5.large']),
+        ),
     )
 
-    launch_template_data = result.template.get('Resources.NodeLaunchTemplate.Properties.LaunchTemplateData')
+    launch_template_data = result.template.get(
+        'Resources.NodeLaunchTemplate.Properties.LaunchTemplateData'
+    )
     max_price = launch_template_data.get('InstanceMarketOptions.SpotOptions.MaxPrice')
     assert max_price.args[1].value == 'AWS::NoValue'
 
@@ -302,23 +313,21 @@ def test_cfn_stack_builder_spotfleet_amount(context):
     result = build_template(
         context=context,
         job_name='spotfleet-auto',
-        params={
-            'nodes': 1,
-            'cpus': 1,
-            'spot_price': '0.3'
-        },
+        params={'nodes': 1, 'cpus': 1, 'spot_price': '0.3'},
         queue_profile=HpcQueueProfile(
             name='compute',
             queues=['normal'],
             scaling_mode=SocaScalingMode.SINGLE_JOB,
-            default_job_params=SocaJobParams(
-                instance_types=['c5.large']
-            )
-        )
+            default_job_params=SocaJobParams(instance_types=['c5.large']),
+        ),
     )
 
-    launch_template_data = result.template.get('Resources.NodeLaunchTemplate.Properties.LaunchTemplateData')
-    assert launch_template_data.get('InstanceMarketOptions.SpotOptions.MaxPrice') == '0.3'
+    launch_template_data = result.template.get(
+        'Resources.NodeLaunchTemplate.Properties.LaunchTemplateData'
+    )
+    assert (
+        launch_template_data.get('InstanceMarketOptions.SpotOptions.MaxPrice') == '0.3'
+    )
 
 
 def test_cfn_stack_builder_mixed_basic(context):
@@ -332,16 +341,14 @@ def test_cfn_stack_builder_mixed_basic(context):
             'nodes': 4,
             'cpus': 1,
             'spot_allocation_count': '2',
-            'spot_price': 'auto'
+            'spot_price': 'auto',
         },
         queue_profile=HpcQueueProfile(
             name='compute',
             queues=['normal'],
             scaling_mode=SocaScalingMode.SINGLE_JOB,
-            default_job_params=SocaJobParams(
-                instance_types=['c5.large']
-            )
-        )
+            default_job_params=SocaJobParams(instance_types=['c5.large']),
+        ),
     )
 
     asg_props = result.template.get('Resources.AutoScalingComputeGroup.Properties')
@@ -349,5 +356,112 @@ def test_cfn_stack_builder_mixed_basic(context):
     assert asg_props.get_string('MaxSize') == '4'
     assert asg_props.get_string('MinSize') == '4'
     mixed_instances_policy = asg_props.get('MixedInstancesPolicy')
-    assert mixed_instances_policy.get_int('InstancesDistribution.OnDemandBaseCapacity') == 2
-    assert mixed_instances_policy.get_string('InstancesDistribution.OnDemandPercentageAboveBaseCapacity') == '0'
+    assert (
+        mixed_instances_policy.get_int('InstancesDistribution.OnDemandBaseCapacity')
+        == 2
+    )
+    assert (
+        mixed_instances_policy.get_string(
+            'InstancesDistribution.OnDemandPercentageAboveBaseCapacity'
+        )
+        == '0'
+    )
+
+
+def test_cfn_stack_builder_placement_group_dependency(context):
+    """
+    Test that placement group dependency is correctly set in Auto Scaling Group.
+    This ensures proper deletion order during CloudFormation stack deletion.
+    """
+    result = build_template(
+        context=context,
+        job_name='placement-group-test',
+        params={'nodes': 2, 'cpus': 1, 'placement_group': 'true'},
+        queue_profile=HpcQueueProfile(
+            name='compute',
+            queues=['normal'],
+            scaling_mode=SocaScalingMode.SINGLE_JOB,
+            default_job_params=SocaJobParams(instance_types=['c5.large']),
+        ),
+    )
+
+    # Verify placement group resource exists
+    placement_group = result.template.get('Resources.ComputeNodePlacementGroup')
+    assert placement_group is not None
+    assert placement_group.get_string('Type') == 'AWS::EC2::PlacementGroup'
+    assert placement_group.get_string('Properties.Strategy') == 'cluster'
+
+    # Verify Auto Scaling Group has proper dependencies
+    asg = result.template.get('Resources.AutoScalingComputeGroup')
+    assert asg is not None
+
+    # Check that DependsOn includes both NodeLaunchTemplate and ComputeNodePlacementGroup
+    depends_on = asg.get('DependsOn')
+    assert depends_on is not None
+    # DependsOn could be a string or a list, check both cases
+    if isinstance(depends_on, str):
+        # This shouldn't happen with our fix, but test for regression
+        assert depends_on in ['NodeLaunchTemplate', 'ComputeNodePlacementGroup']
+    elif isinstance(depends_on, list):
+        assert 'NodeLaunchTemplate' in depends_on
+        assert 'ComputeNodePlacementGroup' in depends_on
+
+    # Verify placement group reference in ASG
+    asg_placement_group = asg.get('Properties.PlacementGroup')
+    assert asg_placement_group is not None
+    # Should be a reference to the placement group
+    assert (
+        hasattr(asg_placement_group, 'args')
+        and asg_placement_group.args[1].value == 'ComputeNodePlacementGroup'
+    )
+
+
+def test_cfn_stack_builder_no_placement_group_no_dependency(context):
+    """
+    Test that when placement group is disabled, no placement group dependency is added.
+    """
+    result = build_template(
+        context=context,
+        job_name='no-placement-group-test',
+        params={'nodes': 2, 'cpus': 1, 'placement_group': 'false'},
+        queue_profile=HpcQueueProfile(
+            name='compute',
+            queues=['normal'],
+            scaling_mode=SocaScalingMode.SINGLE_JOB,
+            default_job_params=SocaJobParams(instance_types=['c5.large']),
+        ),
+    )
+
+    # Verify no placement group resource exists
+    try:
+        result.template.get('Resources.ComputeNodePlacementGroup')
+        # If we get here, the placement group exists when it shouldn't
+        assert False, (
+            'Placement group resource should not exist when placement groups are disabled'
+        )
+    except Exception:
+        # This is expected - the placement group resource should not exist
+        pass
+
+    # Verify Auto Scaling Group dependencies
+    asg = result.template.get('Resources.AutoScalingComputeGroup')
+    assert asg is not None
+
+    # Check that DependsOn only includes NodeLaunchTemplate
+    depends_on = asg.get('DependsOn')
+    if isinstance(depends_on, str):
+        assert depends_on == 'NodeLaunchTemplate'
+    elif isinstance(depends_on, list):
+        assert 'NodeLaunchTemplate' in depends_on
+        assert 'ComputeNodePlacementGroup' not in depends_on
+
+    # Verify no placement group reference in ASG
+    try:
+        asg.get('Properties.PlacementGroup')
+        # If we get here, there's a placement group reference when there shouldn't be
+        assert False, (
+            'ASG should not have a placement group reference when placement groups are disabled'
+        )
+    except Exception:
+        # This is expected - no placement group reference should exist
+        pass

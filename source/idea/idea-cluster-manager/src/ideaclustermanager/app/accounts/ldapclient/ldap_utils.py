@@ -12,11 +12,10 @@
 from ideasdk.utils import Utils
 
 from typing import Optional, Dict, List
-import crypt
+from passlib.hash import sha512_crypt
 
 
 class LdapUtils:
-
     @staticmethod
     def get_string_value(key: str, ldap_object: Dict) -> Optional[str]:
         """
@@ -76,5 +75,5 @@ class LdapUtils:
         used during: create user, change password, respond to auth challenge flows
         :return: encrypted user password suitable for OpenLDAP userPassword attribute
         """
-        crypt_string = crypt.crypt(word=password, salt=crypt.mksalt(method=crypt.METHOD_SHA512, rounds=10_000))
+        crypt_string = sha512_crypt.using(rounds=10000).hash(password)
         return f'{{CRYPT}}{crypt_string}'

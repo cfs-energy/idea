@@ -12,17 +12,20 @@
 from ideadatamodel import exceptions
 from ideasdk.utils import Utils, EnvironmentUtils
 from ideasdk.context import SocaContextOptions
-from ideaadministrator.app_protocols import (
-    AdministratorContextProtocol
-)
+from ideaadministrator.app_protocols import AdministratorContextProtocol
 from ideaadministrator.app_utils import AdministratorUtils
 
 from typing import Optional
 
 
 class AdministratorContext(AdministratorContextProtocol):
-
-    def __init__(self, cluster_name: str, aws_region: str, aws_profile: Optional[str] = None, module_id: Optional[str] = None):
+    def __init__(
+        self,
+        cluster_name: str,
+        aws_region: str,
+        aws_profile: Optional[str] = None,
+        module_id: Optional[str] = None,
+    ):
         super().__init__(
             options=SocaContextOptions(
                 cluster_name=cluster_name,
@@ -31,14 +34,18 @@ class AdministratorContext(AdministratorContextProtocol):
                 module_id=module_id,
                 enable_aws_client_provider=True,
                 enable_aws_util=True,
-                locale=EnvironmentUtils.get_environment_variable('LC_CTYPE', default='en_US')
+                locale=EnvironmentUtils.get_environment_variable(
+                    'LC_CTYPE', default='en_US'
+                ),
             )
         )
         self._admin_utils = AdministratorUtils()
 
     def get_stack_name(self, module_id: str = None) -> str:
         if Utils.is_empty(module_id):
-            raise exceptions.invalid_params('get_stack_name: cannot create stack name without a module_id')
+            raise exceptions.invalid_params(
+                'get_stack_name: cannot create stack name without a module_id'
+            )
 
         cluster_name = self.config().get_string('cluster.cluster_name')
         return f'{cluster_name}-{module_id}'

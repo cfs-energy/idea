@@ -56,12 +56,12 @@
     "name": "job_name",
     "title": "Job Name",
     "description": "Enter a job name",
-    "help_text": "Job name should not contain any white spaces or special characters",
+    "help_text": "Job name must be 3-50 characters long and contain only letters, numbers, underscores, and hyphens",
     "param_type": "text",
     "data_type": "str",
     "validate": {
       "required": true,
-      "regex": "^([A-Za-z0-9_-]+){3,18}$"
+      "regex": "^([A-Za-z0-9_-]+){3,50}$"
     }
   },
   {
@@ -243,25 +243,25 @@
       "required": true
     },
     "choices": []
+  },
+  {
+    "name": "hello_world",
+    "title": "New section displayed only if previous toggle button is checked",
+    "description": "",
+    "help_text": "",
+    "param_type": "text",
+    "data_type": "str",
+    "multiple": false,
+    "multiline": false,
+    "default": "",
+    "readonly": false,
+    "validate": {
+      "required": true
     },
-    {
-      "name": "hello_world",
-      "title": "New section displayed only if previous toggle button is checked",
-      "description": "",
-      "help_text": "",
-      "param_type": "text",
-      "data_type": "str",
-      "multiple": false,
-      "multiline": false,
-      "default": "",
-      "readonly": false,
-      "validate": {
-        "required": true
-      },
-      "choices": [],
-      "when": {
-        "eq": true,
-        "param": "advanced_mode"
-      }
+    "choices": [],
+    "when": {
+      "eq": true,
+      "param": "advanced_mode"
     }
+  }
 ]

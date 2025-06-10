@@ -11,4 +11,3 @@
 
 from ideasdk.logging.soca_logging import SocaLogging
 from ideasdk.logging.console_logger import ConsoleLogger
-

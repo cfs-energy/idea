@@ -14,13 +14,20 @@ from tasks.tools.open_api_tool import OpenAPITool
 from ideasdk.utils import Utils
 from ideadatamodel import IdeaOpenAPISpecEntry, constants
 
-from invoke import task, Context
+from invoke import task
 import os
 from typing import List
 from pathlib import Path
 
 
-def _build_output(module: str, api_doc_file: str, spec_entries: List[IdeaOpenAPISpecEntry], enable_file_transfer_entries: bool = False, server_url: str = None, output_file: str = None):
+def _build_output(
+    module: str,
+    api_doc_file: str,
+    spec_entries: List[IdeaOpenAPISpecEntry],
+    enable_file_transfer_entries: bool = False,
+    server_url: str = None,
+    output_file: str = None,
+):
     with open(api_doc_file, 'r') as f:
         api_doc = Utils.from_yaml(f.read())
 
@@ -29,10 +36,12 @@ def _build_output(module: str, api_doc_file: str, spec_entries: List[IdeaOpenAPI
         entries=spec_entries,
         server_url=server_url,
         module_version=idea.props.idea_release_version,
-        enable_file_transfer_entries=enable_file_transfer_entries
+        enable_file_transfer_entries=enable_file_transfer_entries,
     )
 
-    output_format = 'json' if output_file is not None and output_file.endswith('.json') else 'yaml'
+    output_format = (
+        'json' if output_file is not None and output_file.endswith('.json') else 'yaml'
+    )
     idea.console.print_header_block(f'Building OpenAPI Spec for module: {module}')
 
     spec_content = tool.generate(output_format=output_format)
@@ -44,14 +53,17 @@ def _build_output(module: str, api_doc_file: str, spec_entries: List[IdeaOpenAPI
 
         with open(output_file, 'w') as f:
             f.write(spec_content)
-        idea.console.print_header_block(f'OpenAPI spec for module: {module} wrote to: {output_file}', style='success')
+        idea.console.print_header_block(
+            f'OpenAPI spec for module: {module} wrote to: {output_file}',
+            style='success',
+        )
     else:
         print(spec_content)
 
 
 @task
 def cluster_manager(_, output_file=None, server_url=None):
-    # type: (Context, str, str) -> None
+    # type: (Context, str, str) -> None # type: ignore
     """
     cluster-manager api spec
     """
@@ -60,7 +72,7 @@ def cluster_manager(_, output_file=None, server_url=None):
         OPEN_API_SPEC_ENTRIES_EMAIL_TEMPLATES,
         OPEN_API_SPEC_ENTRIES_PROJECTS,
         OPEN_API_SPEC_ENTRIES_CLUSTER_SETTINGS,
-        OPEN_API_SPEC_ENTRIES_FILE_BROWSER
+        OPEN_API_SPEC_ENTRIES_FILE_BROWSER,
     )
 
     spec_entries = []
@@ -70,7 +82,9 @@ def cluster_manager(_, output_file=None, server_url=None):
     spec_entries += OPEN_API_SPEC_ENTRIES_CLUSTER_SETTINGS
     spec_entries += OPEN_API_SPEC_ENTRIES_FILE_BROWSER
 
-    api_doc_file = os.path.join(idea.props.cluster_manager_project_dir, 'resources', 'api', 'api_doc.yml')
+    api_doc_file = os.path.join(
+        idea.props.cluster_manager_project_dir, 'resources', 'api', 'api_doc.yml'
+    )
 
     _build_output(
         module=constants.MODULE_CLUSTER_MANAGER,
@@ -78,13 +92,13 @@ def cluster_manager(_, output_file=None, server_url=None):
         spec_entries=spec_entries,
         server_url=server_url,
         output_file=output_file,
-        enable_file_transfer_entries=True
+        enable_file_transfer_entries=True,
     )
 
 
 @task
 def virtual_desktop_controller(_, output_file=None, server_url=None):
-    # type: (Context, str, str) -> None
+    # type: (Context, str, str) -> None # type: ignore
     """
     virtual desktop controller api spec
     """
@@ -92,20 +106,22 @@ def virtual_desktop_controller(_, output_file=None, server_url=None):
 
     spec_entries = OPEN_API_SPEC_ENTRIES_VIRTUAL_DESKTOP
 
-    api_doc_file = os.path.join(idea.props.virtual_desktop_project_dir, 'resources', 'api', 'api_doc.yml')
+    api_doc_file = os.path.join(
+        idea.props.virtual_desktop_project_dir, 'resources', 'api', 'api_doc.yml'
+    )
 
     _build_output(
         module=constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER,
         api_doc_file=api_doc_file,
         spec_entries=spec_entries,
         server_url=server_url,
-        output_file=output_file
+        output_file=output_file,
     )
 
 
 @task
 def scheduler(_, output_file=None, server_url=None):
-    # type: (Context, str, str) -> None
+    # type: (Context, str, str) -> None # type: ignore
     """
     scheduler api spec
     """
@@ -113,30 +129,47 @@ def scheduler(_, output_file=None, server_url=None):
 
     spec_entries = OPEN_API_SPEC_ENTRIES_SCHEDULER
 
-    api_doc_file = os.path.join(idea.props.scheduler_project_dir, 'resources', 'api', 'api_doc.yml')
+    api_doc_file = os.path.join(
+        idea.props.scheduler_project_dir, 'resources', 'api', 'api_doc.yml'
+    )
 
     _build_output(
         module=constants.MODULE_SCHEDULER,
         api_doc_file=api_doc_file,
         spec_entries=spec_entries,
         server_url=server_url,
-        output_file=output_file
+        output_file=output_file,
     )
 
 
 @task(name='all', default=True)
 def build_all(c, target_dir=None):
-    # type: (Context, str) -> None
+    # type: (Context, str) -> None # type: ignore
     """
     build OpenAPI 3.0 spec for all modules
     """
     idea.console.info('building api spec for cluster-manager ...')
-    cluster_manager(c, output_file=f'{os.path.join(target_dir, "cluster-manager.openapi.yml")}' if target_dir else None)
+    cluster_manager(
+        c,
+        output_file=f'{os.path.join(target_dir, "cluster-manager.openapi.yml")}'
+        if target_dir
+        else None,
+    )
 
     idea.console.info('building api spec for virtual-desktop-controller ...')
-    virtual_desktop_controller(c, output_file=f'{os.path.join(target_dir, "virtual-desktop-controller.openapi.yml")}' if target_dir else None)
+    virtual_desktop_controller(
+        c,
+        output_file=f'{os.path.join(target_dir, "virtual-desktop-controller.openapi.yml")}'
+        if target_dir
+        else None,
+    )
 
     idea.console.info('building api spec for scheduler ...')
-    scheduler(c, output_file=f'{os.path.join(target_dir, "scheduler.openapi.yml")}' if target_dir else None)
+    scheduler(
+        c,
+        output_file=f'{os.path.join(target_dir, "scheduler.openapi.yml")}'
+        if target_dir
+        else None,
+    )
 
     idea.console.success('api specs built successfully')

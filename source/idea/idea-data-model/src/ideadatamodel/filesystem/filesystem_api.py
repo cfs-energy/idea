@@ -24,17 +24,18 @@ __all__ = (
     'CreateFileResult',
     'DeleteFilesRequest',
     'DeleteFilesResult',
-    'OPEN_API_SPEC_ENTRIES_FILE_BROWSER'
+    'OPEN_API_SPEC_ENTRIES_FILE_BROWSER',
 )
 
 from pydantic import Field
 
 from ideadatamodel import SocaPayload, SocaListingPayload, IdeaOpenAPISpecEntry
-from ideadatamodel.filesystem.filesystem_model import *
+from ideadatamodel.filesystem.filesystem_model import FileData
 from typing import Optional, List
 
 
 # FileBrowser.ListFiles
+
 
 class ListFilesRequest(SocaListingPayload):
     cwd: Optional[str] = Field(default=None)
@@ -47,6 +48,7 @@ class ListFilesResult(SocaListingPayload):
 
 # FileBrowser.ReadFile
 
+
 class ReadFileRequest(SocaPayload):
     file: Optional[str] = Field(default=None)
 
@@ -58,6 +60,7 @@ class ReadFileResult(SocaPayload):
 
 
 # FileBrowser.TailFile
+
 
 class TailFileRequest(SocaPayload):
     file: Optional[str] = Field(default=None)
@@ -74,6 +77,7 @@ class TailFileResult(SocaPayload):
 
 # FileBrowser.SaveFile
 
+
 class SaveFileRequest(SocaPayload):
     file: Optional[str] = Field(default=None)
     content: Optional[str] = Field(default=None)
@@ -84,6 +88,7 @@ class SaveFileResult(SocaPayload):
 
 
 # FileBrowser.DownloadFiles
+
 
 class DownloadFilesRequest(SocaPayload):
     files: Optional[List[str]] = Field(default=None)
@@ -119,48 +124,48 @@ OPEN_API_SPEC_ENTRIES_FILE_BROWSER = [
         request=ListFilesRequest,
         result=ListFilesResult,
         is_listing=True,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='FileBrowser.ReadFile',
         request=ReadFileRequest,
         result=ReadFileResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='FileBrowser.TailFile',
         request=TailFileRequest,
         result=TailFileResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='FileBrowser.SaveFile',
         request=SaveFileRequest,
         result=SaveFileResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='FileBrowser.DownloadFiles',
         request=DownloadFilesRequest,
         result=DownloadFilesResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='FileBrowser.CreateFile',
         request=CreateFileRequest,
         result=CreateFileResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='FileBrowser.DeleteFiles',
         request=DeleteFilesRequest,
         result=DeleteFilesResult,
         is_listing=False,
-        is_public=False
-    )
+        is_public=False,
+    ),
 ]

@@ -34,8 +34,7 @@ class EC2Instance:
         return self._instance
 
     def __str__(self):
-        s = f'Host: {self.private_dns_name}, ' \
-            f'InstanceId: {self.instance_id}'
+        s = f'Host: {self.private_dns_name}, InstanceId: {self.instance_id}'
         if self.is_idea_compute_node():
             s += f', ComputeStack: {self.soca_compute_stack}'
         return s
@@ -51,17 +50,23 @@ class EC2Instance:
 
     @property
     def reservation_id(self) -> Optional[str]:
-        soca_custom_fields = ModelUtils.get_value_as_dict('SocaCustomFields', self.instance_data())
+        soca_custom_fields = ModelUtils.get_value_as_dict(
+            'SocaCustomFields', self.instance_data()
+        )
         return ModelUtils.get_value_as_string('ReservationId', soca_custom_fields)
 
     @property
     def requester_id(self) -> Optional[str]:
-        soca_custom_fields = ModelUtils.get_value_as_dict('SocaCustomFields', self.instance_data())
+        soca_custom_fields = ModelUtils.get_value_as_dict(
+            'SocaCustomFields', self.instance_data()
+        )
         return ModelUtils.get_value_as_string('RequesterId', soca_custom_fields)
 
     @property
     def owner_id(self) -> Optional[str]:
-        soca_custom_fields = ModelUtils.get_value_as_dict('SocaCustomFields', self.instance_data())
+        soca_custom_fields = ModelUtils.get_value_as_dict(
+            'SocaCustomFields', self.instance_data()
+        )
         return ModelUtils.get_value_as_string('OwnerId', soca_custom_fields)
 
     @property
@@ -215,7 +220,9 @@ class EC2Instance:
 
     @property
     def state_transition_reason(self) -> Optional[str]:
-        return ModelUtils.get_value_as_string('StateTransitionReason', self.instance_data())
+        return ModelUtils.get_value_as_string(
+            'StateTransitionReason', self.instance_data()
+        )
 
     @property
     def subnet_id(self) -> Optional[str]:
@@ -251,12 +258,16 @@ class EC2Instance:
 
     @property
     def iam_instance_profile_arn(self) -> Optional[str]:
-        instance_profile = ModelUtils.get_value_as_dict('IamInstanceProfile', self.instance_data())
+        instance_profile = ModelUtils.get_value_as_dict(
+            'IamInstanceProfile', self.instance_data()
+        )
         return ModelUtils.get_value_as_string('Arn', instance_profile)
 
     @property
     def iam_instance_profile_id(self) -> Optional[str]:
-        instance_profile = ModelUtils.get_value_as_dict('IamInstanceProfile', self.instance_data())
+        instance_profile = ModelUtils.get_value_as_dict(
+            'IamInstanceProfile', self.instance_data()
+        )
         return ModelUtils.get_value_as_string('Id', instance_profile)
 
     @property
@@ -269,12 +280,16 @@ class EC2Instance:
     @property
     def elastic_gpu_associations(self) -> Optional[List[Dict]]:
         # todo - expand this further after testing GPU based use cases
-        return ModelUtils.get_value_as_list('ElasticGpuAssociations', self.instance_data())
+        return ModelUtils.get_value_as_list(
+            'ElasticGpuAssociations', self.instance_data()
+        )
 
     @property
     def elastic_inference_accelerator_associations(self) -> Optional[List[Dict]]:
         # todo - expand this further after testing inference accelerator based use cases
-        return ModelUtils.get_value_as_list('ElasticInferenceAcceleratorAssociations', self.instance_data())
+        return ModelUtils.get_value_as_list(
+            'ElasticInferenceAcceleratorAssociations', self.instance_data()
+        )
 
     @property
     def network_interfaces(self) -> Optional[List[Dict]]:
@@ -304,7 +319,9 @@ class EC2Instance:
 
     @property
     def spot_instance_request_id(self) -> Optional[str]:
-        return ModelUtils.get_value_as_string('SpotInstanceRequestId', self.instance_data())
+        return ModelUtils.get_value_as_string(
+            'SpotInstanceRequestId', self.instance_data()
+        )
 
     @property
     def sriov_net_support(self) -> Optional[str]:
@@ -370,7 +387,9 @@ class EC2Instance:
 
     @property
     def virtualization_type(self) -> Optional[str]:
-        return ModelUtils.get_value_as_string('VirtualizationType', self.instance_data())
+        return ModelUtils.get_value_as_string(
+            'VirtualizationType', self.instance_data()
+        )
 
     @property
     def cpu_options_core_count(self) -> Optional[int]:
@@ -384,7 +403,9 @@ class EC2Instance:
 
     @property
     def capacity_reservation_id(self) -> Optional[str]:
-        return ModelUtils.get_value_as_string('CapacityReservationId', self.instance_data())
+        return ModelUtils.get_value_as_string(
+            'CapacityReservationId', self.instance_data()
+        )
 
     @property
     def capacity_reservation_preference(self) -> Optional[str]:
@@ -397,24 +418,34 @@ class EC2Instance:
             The instance runs in On-Demand capacity.
         :return: preference value
         """
-        spec = ModelUtils.get_value_as_dict('CapacityReservationSpecification', self.instance_data())
+        spec = ModelUtils.get_value_as_dict(
+            'CapacityReservationSpecification', self.instance_data()
+        )
         return ModelUtils.get_value_as_string('CapacityReservationPreference', spec)
 
     @property
     def capacity_reservation_target_id(self) -> Optional[str]:
-        spec = ModelUtils.get_value_as_dict('CapacityReservationSpecification', self.instance_data())
+        spec = ModelUtils.get_value_as_dict(
+            'CapacityReservationSpecification', self.instance_data()
+        )
         target = ModelUtils.get_value_as_dict('CapacityReservationTarget', spec)
         return ModelUtils.get_value_as_string('CapacityReservationId', target)
 
     @property
     def capacity_reservation_target_resource_group_arn(self) -> Optional[str]:
-        spec = ModelUtils.get_value_as_dict('CapacityReservationSpecification', self.instance_data())
+        spec = ModelUtils.get_value_as_dict(
+            'CapacityReservationSpecification', self.instance_data()
+        )
         target = ModelUtils.get_value_as_dict('CapacityReservationTarget', spec)
-        return ModelUtils.get_value_as_string('CapacityReservationResourceGroupArn', target)
+        return ModelUtils.get_value_as_string(
+            'CapacityReservationResourceGroupArn', target
+        )
 
     @property
     def hibernation_options_configured(self) -> Optional[bool]:
-        options = ModelUtils.get_value_as_dict('HibernationOptions', self.instance_data())
+        options = ModelUtils.get_value_as_dict(
+            'HibernationOptions', self.instance_data()
+        )
         return ModelUtils.get_value_as_bool('Configured', options)
 
     @property

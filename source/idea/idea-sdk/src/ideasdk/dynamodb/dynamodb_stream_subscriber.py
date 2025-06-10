@@ -13,15 +13,11 @@ from abc import ABC, abstractmethod
 
 
 class DynamoDBStreamSubscriber(ABC):
+    @abstractmethod
+    def on_create(self, entry: Dict): ...
 
     @abstractmethod
-    def on_create(self, entry: Dict):
-        ...
+    def on_update(self, old_entry: Dict, new_entry: Dict): ...
 
     @abstractmethod
-    def on_update(self, old_entry: Dict, new_entry: Dict):
-        ...
-
-    @abstractmethod
-    def on_delete(self, entry: Dict):
-        ...
+    def on_delete(self, entry: Dict): ...

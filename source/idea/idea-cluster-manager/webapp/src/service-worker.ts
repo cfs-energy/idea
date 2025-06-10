@@ -27,8 +27,8 @@ const IDEA_AUTH_CONTEXT = new IdeaAuthenticationContext({
 clientsClaim()
 
 // precaching disabled
-// eslint-disable-next-line no-restricted-globals
-const ignored = self.__WB_MANIFEST;
+// eslint-disable-next-line no-restricted-globals, @typescript-eslint/no-unused-vars
+const _ignored = self.__WB_MANIFEST;
 
 setInterval(() => {
     IDEA_AUTH_CONTEXT.isLoggedIn();

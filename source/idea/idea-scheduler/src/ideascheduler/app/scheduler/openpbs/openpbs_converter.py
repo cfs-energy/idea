@@ -9,8 +9,22 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 import ideascheduler
-from ideadatamodel import (exceptions, constants, errorcodes, SocaMemory, SocaAmount, SocaComputeNode, SocaComputeNodeState, OpenPBSInfo,
-                           SocaComputeNodeSharing, SocaComputeNodeResources, SocaQueue, SocaQueueStats, SocaJob, SocaScalingMode)
+from ideadatamodel import (
+    exceptions,
+    constants,
+    errorcodes,
+    SocaMemory,
+    SocaAmount,
+    SocaComputeNode,
+    SocaComputeNodeState,
+    OpenPBSInfo,
+    SocaComputeNodeSharing,
+    SocaComputeNodeResources,
+    SocaQueue,
+    SocaQueueStats,
+    SocaJob,
+    SocaScalingMode,
+)
 from ideasdk.utils import Utils
 from ideascheduler.app.scheduler.openpbs.openpbs_model import OpenPBSJob
 
@@ -29,7 +43,9 @@ class OpenPBSConverter:
         self._logger = logger
 
     @staticmethod
-    def to_soca_compute_node_state(state: Optional[str] = None) -> Optional[List[SocaComputeNodeState]]:
+    def to_soca_compute_node_state(
+        state: Optional[str] = None,
+    ) -> Optional[List[SocaComputeNodeState]]:
         if state is None:
             return None
         tokens = state.strip().lower().split(',')
@@ -65,7 +81,7 @@ class OpenPBSConverter:
         if len(result) == 0:
             raise exceptions.SocaException(
                 error_code=errorcodes.SCHEDULER_ERROR,
-                message=f'Unknown SocaComputeNode state: {state}'
+                message=f'Unknown SocaComputeNode state: {state}',
             )
 
         return list(result)
@@ -99,11 +115,13 @@ class OpenPBSConverter:
 
         raise exceptions.SocaException(
             error_code=errorcodes.SCHEDULER_ERROR,
-            message=f'Unknown node state: {state}'
+            message=f'Unknown node state: {state}',
         )
 
     @staticmethod
-    def to_soca_compute_node_sharing(sharing: Optional[str] = None) -> Optional[SocaComputeNodeSharing]:
+    def to_soca_compute_node_sharing(
+        sharing: Optional[str] = None,
+    ) -> Optional[SocaComputeNodeSharing]:
         if sharing is None:
             return None
         if sharing == 'default_excl':
@@ -121,11 +139,13 @@ class OpenPBSConverter:
 
         raise exceptions.SocaException(
             error_code=errorcodes.SCHEDULER_ERROR,
-            message=f'Unknown SocaComputeNodeSharing value: {sharing}'
+            message=f'Unknown SocaComputeNodeSharing value: {sharing}',
         )
 
     @staticmethod
-    def to_soca_compute_node_resources(resources: Optional[Dict]) -> Optional[SocaComputeNodeResources]:
+    def to_soca_compute_node_resources(
+        resources: Optional[Dict],
+    ) -> Optional[SocaComputeNodeResources]:
         if resources is None:
             return None
 
@@ -138,13 +158,11 @@ class OpenPBSConverter:
         cpus = Utils.get_value_as_string('ncpus', resources)
         # todo - gpus, mpiprocs and any additional..
 
-        return SocaComputeNodeResources(
-            memory=memory,
-            cpus=cpus
-        )
+        return SocaComputeNodeResources(memory=memory, cpus=cpus)
 
-    def to_soca_node(self, host: str, node: Optional[Dict] = None) -> Optional[SocaComputeNode]:
-
+    def to_soca_node(
+        self, host: str, node: Optional[Dict] = None
+    ) -> Optional[SocaComputeNode]:
         if node is None:
             return None
 
@@ -153,7 +171,9 @@ class OpenPBSConverter:
             return None
 
         # states
-        states = self.to_soca_compute_node_state(Utils.get_value_as_string('state', node))
+        states = self.to_soca_compute_node_state(
+            Utils.get_value_as_string('state', node)
+        )
 
         pbs_jobs = Utils.get_value_as_list('jobs', node, [])
         jobs = []
@@ -168,7 +188,7 @@ class OpenPBSConverter:
             name=scheduler_name,
             version=scheduler_version,
             mom_private_dns=host,
-            mom_port=mom_port
+            mom_port=mom_port,
         )
         # last_used_time
         last_used_time = Utils.get_value_as_int('last_used_time', node)
@@ -181,7 +201,9 @@ class OpenPBSConverter:
             last_state_changed_time = arrow.get(last_state_changed_time).datetime
 
         # sharing
-        sharing = self.to_soca_compute_node_sharing(Utils.get_value_as_string('sharing', node))
+        sharing = self.to_soca_compute_node_sharing(
+            Utils.get_value_as_string('sharing', node)
+        )
 
         # queue
         queue = Utils.get_value_as_string('queue', node)
@@ -194,44 +216,82 @@ class OpenPBSConverter:
             launch_time = arrow.get(launch_time).datetime
 
         # provisioning_time (millis)
-        provisioning_time = Utils.get_value_as_int('provisioning_time', pbs_resources_available)
+        provisioning_time = Utils.get_value_as_int(
+            'provisioning_time', pbs_resources_available
+        )
         if provisioning_time:
             provisioning_time = arrow.get(provisioning_time).datetime
 
-        compute_stack = Utils.get_value_as_string('compute_node', pbs_resources_available)
+        compute_stack = Utils.get_value_as_string(
+            'compute_node', pbs_resources_available
+        )
         stack_id = Utils.get_value_as_string('stack_id', pbs_resources_available)
 
-        cluster_name = Utils.get_value_as_string('cluster_name', pbs_resources_available)
-        cluster_version = Utils.get_value_as_string('cluster_version', pbs_resources_available)
+        cluster_name = Utils.get_value_as_string(
+            'cluster_name', pbs_resources_available
+        )
+        cluster_version = Utils.get_value_as_string(
+            'cluster_version', pbs_resources_available
+        )
 
         instance_id = Utils.get_value_as_string('instance_id', pbs_resources_available)
-        instance_type = Utils.get_value_as_string('instance_type', pbs_resources_available)
-        availability_zone = Utils.get_value_as_string('availability_zone', pbs_resources_available)
+        instance_type = Utils.get_value_as_string(
+            'instance_type', pbs_resources_available
+        )
+        availability_zone = Utils.get_value_as_string(
+            'availability_zone', pbs_resources_available
+        )
         subnet_id = Utils.get_value_as_string('subnet_id', pbs_resources_available)
-        instance_ami = Utils.get_value_as_string('instance_ami', pbs_resources_available)
-        instance_profile = Utils.get_value_as_string('instance_profile', pbs_resources_available)
-        lifecyle = Utils.get_value_as_string('lifecyle', pbs_resources_available)
+        instance_ami = Utils.get_value_as_string(
+            'instance_ami', pbs_resources_available
+        )
+        instance_profile = Utils.get_value_as_string(
+            'instance_profile', pbs_resources_available
+        )
+        lifecycle = Utils.get_value_as_string('lifecycle', pbs_resources_available)
         tenancy = Utils.get_value_as_string('tenancy', pbs_resources_available)
-        spot_fleet_request = Utils.get_value_as_string('spot_fleet_request', pbs_resources_available)
-        auto_scaling_group = Utils.get_value_as_string('auto_scaling_group', pbs_resources_available)
+        spot_fleet_request = Utils.get_value_as_string(
+            'spot_fleet_request', pbs_resources_available
+        )
+        auto_scaling_group = Utils.get_value_as_string(
+            'auto_scaling_group', pbs_resources_available
+        )
 
         job_id = Utils.get_value_as_string('job_id', pbs_resources_available)
         job_group = Utils.get_value_as_string('job_group', pbs_resources_available)
 
         queue_type = Utils.get_value_as_string('queue_type', pbs_resources_available)
-        scaling_mode = Utils.get_value_as_string('scaling_mode', pbs_resources_available)
+        scaling_mode = Utils.get_value_as_string(
+            'scaling_mode', pbs_resources_available
+        )
         scaling_mode = SocaScalingMode.resolve(scaling_mode)
         keep_forever = Utils.get_value_as_bool('keep_forever', pbs_resources_available)
-        terminate_when_idle = Utils.get_value_as_int('terminate_when_idle', pbs_resources_available)
+        terminate_when_idle = Utils.get_value_as_int(
+            'terminate_when_idle', pbs_resources_available
+        )
         base_os = Utils.get_value_as_string('base_os', pbs_resources_available)
-        enable_placement_group = Utils.get_value_as_string('placement_group', pbs_resources_available)
-        enable_ht_support = Utils.get_value_as_string('ht_support', pbs_resources_available)
+        enable_placement_group = Utils.get_value_as_string(
+            'placement_group', pbs_resources_available
+        )
+        enable_ht_support = Utils.get_value_as_string(
+            'ht_support', pbs_resources_available
+        )
         keep_ebs_volumes = Utils.get_value_as_bool('keep_ebs', pbs_resources_available)
-        scratch_storage_iops = Utils.get_value_as_int('scratch_iops', pbs_resources_available)
-        enable_efa_support = Utils.get_value_as_bool('efa_support', pbs_resources_available)
-        force_reserved_instances = Utils.get_value_as_bool('force_ri', pbs_resources_available)
-        enable_system_metrics = Utils.get_value_as_bool('system_metrics', pbs_resources_available)
-        enable_anonymous_metrics = Utils.get_value_as_bool('anonymous_metrics', pbs_resources_available)
+        scratch_storage_iops = Utils.get_value_as_int(
+            'scratch_iops', pbs_resources_available
+        )
+        enable_efa_support = Utils.get_value_as_bool(
+            'efa_support', pbs_resources_available
+        )
+        force_reserved_instances = Utils.get_value_as_bool(
+            'force_ri', pbs_resources_available
+        )
+        enable_system_metrics = Utils.get_value_as_bool(
+            'system_metrics', pbs_resources_available
+        )
+        enable_anonymous_metrics = Utils.get_value_as_bool(
+            'anonymous_metrics', pbs_resources_available
+        )
 
         spot = False
         spot_price = Utils.get_value_as_string('spot_price', pbs_resources_available)
@@ -246,21 +306,29 @@ class OpenPBSConverter:
             else:
                 spot_price = None
 
-        root_storage_size = Utils.get_value_as_string('root_size', pbs_resources_available)
+        root_storage_size = Utils.get_value_as_string(
+            'root_size', pbs_resources_available
+        )
         if root_storage_size:
             root_storage_size = SocaMemory.resolve(root_storage_size)
 
-        scratch_storage_size = Utils.get_value_as_string('scratch_size', pbs_resources_available)
+        scratch_storage_size = Utils.get_value_as_string(
+            'scratch_size', pbs_resources_available
+        )
         if scratch_storage_size:
             scratch_storage_size = SocaMemory.resolve(scratch_storage_size)
 
         # todo - fsx lustre config
 
         # resources_available
-        resources_available = self.to_soca_compute_node_resources(pbs_resources_available)
+        resources_available = self.to_soca_compute_node_resources(
+            pbs_resources_available
+        )
 
         # resources_assigned
-        resources_assigned = self.to_soca_compute_node_resources(Utils.get_value_as_dict('resources_assigned', node))
+        resources_assigned = self.to_soca_compute_node_resources(
+            Utils.get_value_as_dict('resources_assigned', node)
+        )
 
         return SocaComputeNode(
             host=host,
@@ -288,7 +356,7 @@ class OpenPBSConverter:
             job_group=job_group,
             instance_ami=instance_ami,
             instance_profile=instance_profile,
-            lifecyle=lifecyle,
+            lifecycle=lifecycle,
             tenancy=tenancy,
             spot_fleet_request=spot_fleet_request,
             auto_scaling_group=auto_scaling_group,
@@ -307,11 +375,13 @@ class OpenPBSConverter:
             force_reserved_instances=force_reserved_instances,
             enable_system_metrics=enable_system_metrics,
             enable_anonymous_metrics=enable_anonymous_metrics,
-            jobs=jobs
+            jobs=jobs,
         )
 
     @staticmethod
-    def to_soca_queue(queue_name: str, params: Optional[Dict] = None) -> Optional[SocaQueue]:
+    def to_soca_queue(
+        queue_name: str, params: Optional[Dict] = None
+    ) -> Optional[SocaQueue]:
         if params is None:
             return None
 
@@ -360,16 +430,16 @@ class OpenPBSConverter:
                 waiting=waiting,
                 running=running,
                 exiting=exiting,
-                begun=begun
-            )
+                begun=begun,
+            ),
         )
 
-    def to_soca_job(self, job_id: Optional[str], params: Optional[Dict]) -> Optional[SocaJob]:
+    def to_soca_job(
+        self, job_id: Optional[str], params: Optional[Dict]
+    ) -> Optional[SocaJob]:
         if params is None:
             return None
 
         pbs_job = OpenPBSJob(id=job_id, **params)
 
-        return pbs_job.as_soca_job(
-            context=self._context
-        )
+        return pbs_job.as_soca_job(context=self._context)

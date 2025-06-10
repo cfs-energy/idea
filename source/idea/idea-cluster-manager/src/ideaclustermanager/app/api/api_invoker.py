@@ -25,13 +25,9 @@ from ideadatamodel.auth import (
     ChangePasswordRequest,
     ConfirmForgotPasswordRequest,
     GetUserPrivateKeyResult,
-    SignOutRequest
+    SignOutRequest,
 )
-from ideadatamodel.filesystem import (
-    ReadFileResult,
-    TailFileResult,
-    SaveFileRequest
-)
+from ideadatamodel.filesystem import ReadFileResult, TailFileResult, SaveFileRequest
 
 from ideasdk.app import SocaAppAPI
 from ideasdk.filesystem.filebrowser_api import FileBrowserAPI
@@ -46,7 +42,6 @@ from typing import Optional, Dict
 
 
 class ClusterManagerApiInvoker(ApiInvokerProtocol):
-
     def __init__(self, context: ideaclustermanager.AppContext):
         self._context = context
         self.app_api = SocaAppAPI(context)
@@ -59,15 +54,17 @@ class ClusterManagerApiInvoker(ApiInvokerProtocol):
         self.email_templates_api = EmailTemplatesAPI(context)
         self.max_listings_for_logging = 10
         self.auto_truncate_responses = {
-            "Accounts.ListUsers": ListUsersResult,
-            "Accounts.ListGroups": ListGroupsResult
+            'Accounts.ListUsers': ListUsersResult,
+            'Accounts.ListGroups': ListGroupsResult,
         }
 
     def get_token_service(self) -> Optional[TokenService]:
         return self._context.token_service
 
     # noinspection HardcodedPassword
-    def get_request_logging_payload(self, context: ApiInvocationContext) -> Optional[Dict]:
+    def get_request_logging_payload(
+        self, context: ApiInvocationContext
+    ) -> Optional[Dict]:
         namespace = context.namespace
 
         if namespace == 'Auth.InitiateAuth':
@@ -119,7 +116,9 @@ class ClusterManagerApiInvoker(ApiInvokerProtocol):
             request['payload'] = Utils.to_dict(payload)
             return request
 
-    def get_response_logging_payload(self, context: ApiInvocationContext) -> Optional[Dict]:
+    def get_response_logging_payload(
+        self, context: ApiInvocationContext
+    ) -> Optional[Dict]:
         if not context.is_success():
             return None
 
@@ -169,14 +168,20 @@ class ClusterManagerApiInvoker(ApiInvokerProtocol):
             return response
         elif namespace in self.auto_truncate_responses:
             request = context.get_response(deep_copy=True)
-            payload = context.get_response_payload_as(self.auto_truncate_responses.get(namespace))
-            payload_listing_count = Utils.get_as_int(len(Utils.get_as_list(payload.listing, default=[])), default=0)
+            payload = context.get_response_payload_as(
+                self.auto_truncate_responses.get(namespace)
+            )
+            payload_listing_count = Utils.get_as_int(
+                len(Utils.get_as_list(payload.listing, default=[])), default=0
+            )
 
             if payload_listing_count > self.max_listings_for_logging:
                 # This would normally be a log_debug() but the API response log line comes out as INFO
                 # We want to make sure we do not confuse the admin log-user by showing a truncated list
-                context.log_info(f"Truncated {payload_listing_count - self.max_listings_for_logging} entries from payload logging for {namespace} ({payload_listing_count} non-truncated listings)")
-                payload.listing = payload.listing[0:self.max_listings_for_logging]
+                context.log_info(
+                    f'Truncated {payload_listing_count - self.max_listings_for_logging} entries from payload logging for {namespace} ({payload_listing_count} non-truncated listings)'
+                )
+                payload.listing = payload.listing[0 : self.max_listings_for_logging]
             request['payload'] = Utils.to_dict(payload)
             return request
 

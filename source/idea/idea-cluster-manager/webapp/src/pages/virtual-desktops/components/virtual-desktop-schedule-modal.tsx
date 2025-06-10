@@ -254,8 +254,8 @@ class VirtualDesktopScheduleModal extends Component<VirtualDesktopScheduleModalP
                        <Header variant="h3"
                        description={
                         <>
-                            Setup a schedule to start/stop your virtual desktop to save and manage costs. 
-                            The schedule operates at the cluster timezone setup by your cluster administrator. 
+                            Setup a schedule to start/stop your virtual desktop to save and manage costs.
+                            The schedule operates at the cluster timezone setup by your cluster administrator.
                             <br /><br /><a href="https://docs.idea-hpc.com/modules/virtual-desktop-interfaces/user-documentation/virtual-desktop-scheduling"
                                 target="_blank" rel="noopener noreferrer">See documentation for scheduling explanations</a>.
                         </>
@@ -276,7 +276,7 @@ class VirtualDesktopScheduleModal extends Component<VirtualDesktopScheduleModalP
                     <Alert>
                         <strong>Cluster Time: {this.state.currentTime.tz(AppContext.get().getClusterSettingsService().getClusterTimeZone()).format('LLL')} ({AppContext.get().getClusterSettingsService().getClusterTimeZone()})</strong><br/>
                     </Alert>
-                    
+
                     <Form errorText={this.state.errorMessage}>
                         <ColumnLayout columns={1}>
                             <VirtualDesktopDayOfWeekSchedule

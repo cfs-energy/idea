@@ -25,11 +25,22 @@ from ideadatamodel import (
     EC2InstanceUnitPrice,
     AwsProjectBudget,
     SocaJob,
-    AuthResult
+    AuthResult,
 )
 
 from abc import ABC, abstractmethod
-from typing import Dict, Optional, Tuple, List, Callable, Any, Union, Hashable, Set, TypeVar
+from typing import (
+    Dict,
+    Optional,
+    Tuple,
+    List,
+    Callable,
+    Any,
+    Union,
+    Hashable,
+    Set,
+    TypeVar,
+)
 from logging import Logger
 from cacheout import Cache
 import warnings
@@ -40,7 +51,9 @@ PagingCallback = Callable[..., Any]
 CacheTTL = Union[int, float]
 T = TypeVar('T')
 SocaConfigType = TypeVar('SocaConfigType', bound=SocaConfig)
-SocaContextProtocolType = TypeVar('SocaContextProtocolType', bound='SocaContextProtocol')
+SocaContextProtocolType = TypeVar(
+    'SocaContextProtocolType', bound='SocaContextProtocol'
+)
 
 
 def deprecated(func):
@@ -51,651 +64,556 @@ def deprecated(func):
     @functools.wraps(func)
     def new_func(*args, **kwargs):
         warnings.simplefilter('always', DeprecationWarning)  # turn off filter
-        warnings.warn("Call to deprecated function {}.".format(func.__name__),
-                      category=DeprecationWarning,
-                      stacklevel=2)
+        warnings.warn(
+            'Call to deprecated function {}.'.format(func.__name__),
+            category=DeprecationWarning,
+            stacklevel=2,
+        )
         warnings.simplefilter('default', DeprecationWarning)  # reset filter
         return func(*args, **kwargs)
 
     return new_func
 
 
-class SocaBaseProtocol(ABC):
-    ...
+class SocaBaseProtocol(ABC): ...
 
 
 class SocaPubSubProtocol(SocaBaseProtocol):
+    @abstractmethod
+    def publish(self, sender: str, **kwargs): ...
 
     @abstractmethod
-    def publish(self, sender: str, **kwargs):
-        ...
+    def subscribe(self, listener: SubscriptionListener, sender: Optional[str]): ...
 
     @abstractmethod
-    def subscribe(self, listener: SubscriptionListener, sender: Optional[str]):
-        ...
-
-    @abstractmethod
-    def unsubscribe(self, listener: SubscriptionListener, sender: Optional[str] = None):
-        ...
+    def unsubscribe(
+        self, listener: SubscriptionListener, sender: Optional[str] = None
+    ): ...
 
 
 class AwsClientProviderProtocol(SocaBaseProtocol):
+    @abstractmethod
+    def aws_partition(self) -> str: ...
 
     @abstractmethod
-    def aws_partition(self) -> str:
-        ...
+    def aws_region(self) -> str: ...
 
     @abstractmethod
-    def aws_region(self) -> str:
-        ...
+    def aws_account_id(self) -> str: ...
 
     @abstractmethod
-    def aws_account_id(self) -> str:
-        ...
+    def aws_dns_suffix(self) -> str: ...
 
     @abstractmethod
-    def aws_dns_suffix(self) -> str:
-        ...
+    def aws_profile(self) -> str: ...
 
     @abstractmethod
-    def aws_profile(self) -> str:
-        ...
+    def instance_metadata(self) -> InstanceMetadataUtilProtocol: ...
 
     @abstractmethod
-    def instance_metadata(self) -> InstanceMetadataUtilProtocol:
-        ...
+    def is_running_in_ec2(self) -> bool: ...
 
     @abstractmethod
-    def is_running_in_ec2(self) -> bool:
-        ...
+    def are_credentials_expired(self) -> bool: ...
 
     @abstractmethod
-    def are_credentials_expired(self) -> bool:
-        ...
+    def supported_clients(self) -> List[str]: ...
 
     @abstractmethod
-    def supported_clients(self) -> List[str]:
-        ...
+    def get_client(self, service_name: str, **kwargs): ...
 
     @abstractmethod
-    def get_client(self, service_name: str, **kwargs):
-        ...
+    def s3(self): ...
 
     @abstractmethod
-    def s3(self):
-        ...
+    def ec2(self): ...
 
     @abstractmethod
-    def ec2(self):
-        ...
+    def elbv2(self): ...
 
     @abstractmethod
-    def elbv2(self):
-        ...
+    def iam(self): ...
 
     @abstractmethod
-    def iam(self):
-        ...
+    def cloudformation(self): ...
 
     @abstractmethod
-    def cloudformation(self):
-        ...
+    def autoscaling(self): ...
 
     @abstractmethod
-    def autoscaling(self):
-        ...
+    def secretsmanager(self): ...
 
     @abstractmethod
-    def secretsmanager(self):
-        ...
+    def budgets(self): ...
 
     @abstractmethod
-    def budgets(self):
-        ...
+    def ses(self, region_name: str = None): ...
 
     @abstractmethod
-    def ses(self, region_name: str = None):
-        ...
+    def service_quotas(self): ...
 
     @abstractmethod
-    def service_quotas(self):
-        ...
+    def pricing(self): ...
 
     @abstractmethod
-    def pricing(self):
-        ...
+    def cloudwatch(self): ...
 
     @abstractmethod
-    def cloudwatch(self):
-        ...
+    def efs(self): ...
 
     @abstractmethod
-    def efs(self):
-        ...
+    def fsx(self): ...
 
     @abstractmethod
-    def fsx(self):
-        ...
+    def ds(self): ...
 
     @abstractmethod
-    def ds(self):
-        ...
+    def es(self): ...
 
     @abstractmethod
-    def es(self):
-        ...
+    def sts(self): ...
 
     @abstractmethod
-    def sts(self):
-        ...
+    def acm(self): ...
 
     @abstractmethod
-    def acm(self):
-        ...
+    def dynamodb(self): ...
 
     @abstractmethod
-    def dynamodb(self):
-        ...
+    def dynamodb_table(self): ...
 
     @abstractmethod
-    def dynamodb_table(self):
-        ...
+    def cognito_idp(self): ...
 
     @abstractmethod
-    def cognito_idp(self):
-        ...
+    def kinesis(self): ...
 
     @abstractmethod
-    def kinesis(self):
-        ...
+    def resource_groups_tagging_api(self): ...
 
     @abstractmethod
-    def resource_groups_tagging_api(self):
-        ...
-
-    @abstractmethod
-    def backup(self):
-        ...
+    def backup(self): ...
 
 
-AwsClientProviderType = TypeVar('AwsClientProviderType', bound=AwsClientProviderProtocol)
+AwsClientProviderType = TypeVar(
+    'AwsClientProviderType', bound=AwsClientProviderProtocol
+)
 
 
 class SocaCacheProtocol(SocaBaseProtocol):
+    @property
+    @abstractmethod
+    def cache_backend(self) -> Optional[Cache]: ...
 
     @property
     @abstractmethod
-    def cache_backend(self) -> Optional[Cache]:
-        ...
+    def name(self) -> str: ...
 
     @property
     @abstractmethod
-    def name(self) -> str:
-        ...
+    def size_in_bytes(self) -> int: ...
 
     @property
     @abstractmethod
-    def size_in_bytes(self) -> int:
-        ...
-
-    @property
-    @abstractmethod
-    def size(self) -> int:
-        ...
+    def size(self) -> int: ...
 
     @abstractmethod
-    def get(self, key: Hashable, default: Any = None) -> Any:
-        ...
+    def get(self, key: Hashable, default: Any = None) -> Any: ...
 
     @abstractmethod
-    def set(self, key: Hashable, value: Any, ttl: Optional[CacheTTL] = None) -> None:
-        ...
+    def set(
+        self, key: Hashable, value: Any, ttl: Optional[CacheTTL] = None
+    ) -> None: ...
 
     @abstractmethod
-    def delete(self, key: Hashable) -> int:
-        ...
+    def delete(self, key: Hashable) -> int: ...
 
 
 class CacheProviderProtocol(SocaBaseProtocol):
+    @abstractmethod
+    def long_term(self) -> SocaCacheProtocol: ...
 
     @abstractmethod
-    def long_term(self) -> SocaCacheProtocol:
-        ...
+    def short_term(self) -> SocaCacheProtocol: ...
 
     @abstractmethod
-    def short_term(self) -> SocaCacheProtocol:
-        ...
-
-    @abstractmethod
-    def reload(self, name: str = None) -> SocaCacheProtocol:
-        ...
+    def reload(self, name: str = None) -> SocaCacheProtocol: ...
 
 
 class SocaLoggingProtocol(SocaBaseProtocol):
+    def get_log_dir(self) -> str: ...
 
-    def get_log_dir(self) -> str:
-        ...
+    def get_logger(self, logger_name: str = None) -> Logger: ...
 
-    def get_logger(self, logger_name: str = None) -> Logger:
-        ...
-
-    def get_custom_file_logger(self, params: CustomFileLoggerParams) -> Logger:
-        ...
+    def get_custom_file_logger(self, params: CustomFileLoggerParams) -> Logger: ...
 
 
 class MetricsAccumulatorProtocol(SocaBaseProtocol):
-
     @property
     @abstractmethod
-    def accumulator_id(self):
-        ...
+    def accumulator_id(self): ...
 
     @abstractmethod
-    def publish_metrics(self) -> None:
-        ...
+    def publish_metrics(self) -> None: ...
 
 
 class MetricsServiceProtocol(SocaBaseProtocol):
+    @abstractmethod
+    def publish(self, metric_data: List[Dict]): ...
 
     @abstractmethod
-    def publish(self, metric_data: List[Dict]):
-        ...
+    def register_accumulator(self, accumulator: MetricsAccumulatorProtocol): ...
 
     @abstractmethod
-    def register_accumulator(self, accumulator: MetricsAccumulatorProtocol):
-        ...
+    def start(self): ...
 
     @abstractmethod
-    def start(self):
-        ...
-
-    @abstractmethod
-    def stop(self):
-        ...
+    def stop(self): ...
 
 
 class IamPermissionUtilProtocol(SocaBaseProtocol):
-
     @abstractmethod
-    def has_permission(self, action_names: List[str],
-                       resource_arns: List[str] = None,
-                       context_entries: List[Dict] = None) -> bool:
-        ...
+    def has_permission(
+        self,
+        action_names: List[str],
+        resource_arns: List[str] = None,
+        context_entries: List[Dict] = None,
+    ) -> bool: ...
 
 
 class InstanceMetadataUtilProtocol(SocaBaseProtocol):
+    def get_imds_auth_token(self) -> str: ...
 
-    def get_imds_auth_token(self) -> str:
-        ...
+    def get_imds_auth_header(self) -> str: ...
 
-    def get_imds_auth_header(self) -> str:
-        ...
-
-    def is_running_in_ec2(self) -> bool:
-        ...
+    def is_running_in_ec2(self) -> bool: ...
 
     @abstractmethod
-    def get_instance_identity_document(self) -> EC2InstanceIdentityDocument:
-        ...
+    def get_instance_identity_document(self) -> EC2InstanceIdentityDocument: ...
 
     @abstractmethod
-    def get_iam_security_credentials(self) -> str:
-        ...
+    def get_iam_security_credentials(self) -> str: ...
 
 
 class AWSUtilProtocol(SocaBaseProtocol):
-
     @staticmethod
     @abstractmethod
-    def get_instance_type_class(instance_type: str) -> Tuple[str, bool]:
-        ...
+    def get_instance_type_class(instance_type: str) -> Tuple[str, bool]: ...
 
     @abstractmethod
-    def get_all_instance_types(self) -> Set[str]:
-        ...
+    def get_all_instance_types(self) -> Set[str]: ...
 
     @abstractmethod
-    def get_instance_types_for_class(self, instance_class: str) -> List[str]:
-        ...
+    def get_instance_types_for_class(self, instance_class: str) -> List[str]: ...
 
     @abstractmethod
-    def get_ec2_instance_type(self, instance_type: str) -> EC2InstanceType:
-        ...
+    def get_ec2_instance_type(self, instance_type: str) -> EC2InstanceType: ...
 
     @abstractmethod
-    def is_instance_type_valid(self, instance_type: str) -> bool:
-        ...
+    def is_instance_type_valid(self, instance_type: str) -> bool: ...
 
     @abstractmethod
-    def is_instance_type_efa_supported(self, instance_type: str) -> bool:
-        ...
+    def is_instance_type_efa_supported(self, instance_type: str) -> bool: ...
 
     @abstractmethod
-    def s3_bucket_has_access(self, bucket_name: str) -> Dict:
-        ...
+    def s3_bucket_has_access(self, bucket_name: str) -> Dict: ...
 
     @abstractmethod
-    def invoke_aws_listing(self, fn: Callable, result_cb: Callable[..., List[T]], max_results: int = 1000,
-                           marker_based_paging=False, **result_cb_kwargs) -> List[T]:
-        ...
+    def invoke_aws_listing(
+        self,
+        fn: Callable,
+        result_cb: Callable[..., List[T]],
+        max_results: int = 1000,
+        marker_based_paging=False,
+        **result_cb_kwargs,
+    ) -> List[T]: ...
 
     @abstractmethod
-    def ec2_describe_instances(self, filters: list = None, page_size: int = None,
-                               paging_callback: Optional[PagingCallback] = None) -> Optional[List[EC2Instance]]:
-        ...
+    def ec2_describe_instances(
+        self,
+        filters: list = None,
+        page_size: int = None,
+        paging_callback: Optional[PagingCallback] = None,
+    ) -> Optional[List[EC2Instance]]: ...
 
     @abstractmethod
-    def ec2_describe_compute_instances(self, instance_states: Optional[List[str]], page_size: int = None,
-                                       paging_callback: Optional[PagingCallback] = None) -> Optional[List[EC2Instance]]:
-        ...
+    def ec2_describe_compute_instances(
+        self,
+        instance_states: Optional[List[str]],
+        page_size: int = None,
+        paging_callback: Optional[PagingCallback] = None,
+    ) -> Optional[List[EC2Instance]]: ...
 
     @abstractmethod
-    def ec2_describe_dcv_instances(self, instance_states: Optional[List[str]], page_size: int = None,
-                                   paging_callback: Optional[PagingCallback] = None) -> Optional[List[EC2Instance]]:
-        ...
+    def ec2_describe_dcv_instances(
+        self,
+        instance_states: Optional[List[str]],
+        page_size: int = None,
+        paging_callback: Optional[PagingCallback] = None,
+    ) -> Optional[List[EC2Instance]]: ...
 
     @abstractmethod
-    def ec2_describe_spot_fleet_request(self, spot_fleet_request_id: str) -> Optional[EC2SpotFleetRequestConfig]:
-        ...
+    def ec2_describe_spot_fleet_request(
+        self, spot_fleet_request_id: str
+    ) -> Optional[EC2SpotFleetRequestConfig]: ...
 
     @abstractmethod
-    def ec2_modify_spot_fleet_request(self, spot_fleet_request_id: str, target_capacity: int):
-        ...
+    def ec2_modify_spot_fleet_request(
+        self, spot_fleet_request_id: str, target_capacity: int
+    ): ...
 
     @abstractmethod
-    def ec2_describe_spot_fleet_instances(self,
-                                          spot_fleet_request_id: str, page_size: Optional[int],
-                                          max_results: Optional[int],
-                                          paging_callback: Optional[PagingCallback] = None) -> Optional[List[EC2SpotFleetInstance]]:
-        ...
+    def ec2_describe_spot_fleet_instances(
+        self,
+        spot_fleet_request_id: str,
+        page_size: Optional[int],
+        max_results: Optional[int],
+        paging_callback: Optional[PagingCallback] = None,
+    ) -> Optional[List[EC2SpotFleetInstance]]: ...
 
     @abstractmethod
-    def ec2_terminate_instances(self, instance_ids: List[str]):
-        ...
+    def ec2_terminate_instances(self, instance_ids: List[str]): ...
 
     @abstractmethod
-    def ec2_describe_reserved_instances(self, instance_types: List[str]) -> Optional[Dict[str, int]]:
-        ...
+    def ec2_describe_reserved_instances(
+        self, instance_types: List[str]
+    ) -> Optional[Dict[str, int]]: ...
 
     @abstractmethod
-    def cloudformation_describe_stack(self, stack_name: str) -> Optional[CloudFormationStack]:
-        ...
+    def cloudformation_describe_stack(
+        self, stack_name: str
+    ) -> Optional[CloudFormationStack]: ...
 
     @abstractmethod
-    def cloudformation_describe_stack_resources(self, stack_name: str) -> Optional[CloudFormationStackResources]:
-        ...
+    def cloudformation_describe_stack_resources(
+        self, stack_name: str
+    ) -> Optional[CloudFormationStackResources]: ...
 
     @abstractmethod
-    def cloudformation_delete_stack(self, stack_name: str):
-        ...
+    def cloudformation_delete_stack(self, stack_name: str): ...
 
     @abstractmethod
-    def autoscaling_update_auto_scaling_group(self, auto_scaling_group_name: str, desired_capacity: int,
-                                              min_size: Optional[int] = None,
-                                              max_size: Optional[int] = None):
-        ...
+    def autoscaling_update_auto_scaling_group(
+        self,
+        auto_scaling_group_name: str,
+        desired_capacity: int,
+        min_size: Optional[int] = None,
+        max_size: Optional[int] = None,
+    ): ...
 
     @abstractmethod
-    def autoscaling_describe_auto_scaling_group(self, auto_scaling_group_name: str) -> Optional[AutoScalingGroup]:
-        ...
+    def autoscaling_describe_auto_scaling_group(
+        self, auto_scaling_group_name: str
+    ) -> Optional[AutoScalingGroup]: ...
 
     @abstractmethod
-    def autoscaling_detach_instances(self, auto_scaling_group_name: str, instance_ids: List[str],
-                                     decrement_desired_capacity: bool = False):
-        ...
+    def autoscaling_detach_instances(
+        self,
+        auto_scaling_group_name: str,
+        instance_ids: List[str],
+        decrement_desired_capacity: bool = False,
+    ): ...
 
     @abstractmethod
-    def is_security_group_valid(self, security_group_id: str) -> bool:
-        ...
+    def is_security_group_valid(self, security_group_id: str) -> bool: ...
 
     @abstractmethod
-    def get_instance_profile_arn(self, instance_profile_name: str) -> Dict:
-        ...
+    def get_instance_profile_arn(self, instance_profile_name: str) -> Dict: ...
 
     @abstractmethod
-    def get_purchased_ri_count(self, instance_type: str) -> int:
-        ...
+    def get_purchased_ri_count(self, instance_type: str) -> int: ...
 
     @abstractmethod
-    def get_ec2_instance_type_unit_price(self, instance_type: str) -> EC2InstanceUnitPrice:
-        ...
+    def get_ec2_instance_type_unit_price(
+        self, instance_type: str
+    ) -> EC2InstanceUnitPrice: ...
 
     @abstractmethod
-    def budgets_get_budget(self, budget_name: str) -> Optional[AwsProjectBudget]:
-        ...
+    def budgets_get_budget(self, budget_name: str) -> Optional[AwsProjectBudget]: ...
 
     @abstractmethod
-    def get_soca_job_from_stack(self, stack_name: str) -> Optional[SocaJob]:
-        ...
+    def get_soca_job_from_stack(self, stack_name: str) -> Optional[SocaJob]: ...
 
     @abstractmethod
-    def handle_aws_exception(self, e):
-        ...
+    def handle_aws_exception(self, e): ...
 
     @abstractmethod
-    def create_s3_presigned_url(self, key: str, expires_in=3600) -> str:
-        ...
+    def create_s3_presigned_url(self, key: str, expires_in=3600) -> str: ...
 
     @abstractmethod
-    def dynamodb_check_table_exists(self, table_name: str, wait: bool = False) -> bool:
-        ...
+    def dynamodb_check_table_exists(
+        self, table_name: str, wait: bool = False
+    ) -> bool: ...
 
     @abstractmethod
-    def dynamodb_create_table(self, create_table_request: Dict, wait: bool = False, ttl: bool = False, ttl_attribute_name: str = None) -> bool:
-        ...
+    def dynamodb_create_table(
+        self,
+        create_table_request: Dict,
+        wait: bool = False,
+        ttl: bool = False,
+        ttl_attribute_name: str = None,
+    ) -> bool: ...
 
 
 class SocaContextProtocol(SocaBaseProtocol):
-
     @property
     @abstractmethod
-    def locale(self) -> str:
-        ...
+    def locale(self) -> str: ...
 
     @abstractmethod
-    def logging(self) -> SocaLoggingProtocol:
-        ...
+    def logging(self) -> SocaLoggingProtocol: ...
 
     @abstractmethod
-    def logger(self, name=None) -> Logger:
-        ...
+    def logger(self, name=None) -> Logger: ...
 
     @abstractmethod
-    def config(self) -> SocaConfigType:
-        ...
+    def config(self) -> SocaConfigType: ...
 
     @abstractmethod
-    def encoding(self):
-        ...
+    def encoding(self): ...
 
     @abstractmethod
-    def cluster_name(self) -> str:
-        ...
+    def cluster_name(self) -> str: ...
 
     @abstractmethod
-    def module_set(self) -> Optional[str]:
-        ...
+    def module_set(self) -> Optional[str]: ...
 
     @abstractmethod
-    def module_name(self) -> str:
-        ...
+    def module_name(self) -> str: ...
 
     @abstractmethod
-    def module_id(self) -> str:
-        ...
+    def module_id(self) -> str: ...
 
     @abstractmethod
-    def module_version(self) -> str:
-        ...
+    def module_version(self) -> str: ...
 
     @abstractmethod
-    def cluster_timezone(self) -> str:
-        ...
+    def cluster_timezone(self) -> str: ...
 
     @abstractmethod
-    def get_aws_solution_id(self) -> str:
-        ...
+    def get_aws_solution_id(self) -> str: ...
 
     @abstractmethod
-    def get_cluster_home_dir(self) -> str:
-        ...
+    def get_cluster_home_dir(self) -> str: ...
 
     @abstractmethod
-    def aws(self) -> Optional[AwsClientProviderType]:
-        ...
+    def aws(self) -> Optional[AwsClientProviderType]: ...
 
     @abstractmethod
-    def cache(self) -> Optional[CacheProviderProtocol]:
-        ...
+    def cache(self) -> Optional[CacheProviderProtocol]: ...
 
     @abstractmethod
-    def service_registry(self) -> SocaServiceRegistryProtocol:
-        ...
+    def service_registry(self) -> SocaServiceRegistryProtocol: ...
 
     @abstractmethod
-    def broadcast(self) -> SocaPubSubProtocol:
-        ...
+    def broadcast(self) -> SocaPubSubProtocol: ...
 
     @abstractmethod
-    def iam_permission_util(self) -> IamPermissionUtilProtocol:
-        ...
+    def iam_permission_util(self) -> IamPermissionUtilProtocol: ...
 
     @abstractmethod
-    def ec2_metadata_util(self) -> InstanceMetadataUtilProtocol:
-        ...
+    def ec2_metadata_util(self) -> InstanceMetadataUtilProtocol: ...
 
     @abstractmethod
-    def aws_util(self) -> AWSUtilProtocol:
-        ...
+    def aws_util(self) -> AWSUtilProtocol: ...
 
     @abstractmethod
-    def get_cluster_modules(self) -> List[Dict]:
-        ...
+    def get_cluster_modules(self) -> List[Dict]: ...
 
     @abstractmethod
-    def get_cluster_module_info(self, module_id: str) -> Optional[Dict]:
-        ...
+    def get_cluster_module_info(self, module_id: str) -> Optional[Dict]: ...
 
     @abstractmethod
-    def distributed_lock(self) -> DistributedLockProtocol:
-        ...
+    def distributed_lock(self) -> DistributedLockProtocol: ...
 
     @abstractmethod
-    def is_leader(self) -> bool:
-        ...
+    def is_leader(self) -> bool: ...
 
     @abstractmethod
-    def analytics_service(self) -> AnalyticsServiceProtocol:
-        ...
+    def analytics_service(self) -> AnalyticsServiceProtocol: ...
 
 
 class SocaServiceProtocol(SocaBaseProtocol):
+    @abstractmethod
+    def service_id(self) -> str: ...
 
     @abstractmethod
-    def service_id(self) -> str:
-        ...
+    def start(self): ...
 
     @abstractmethod
-    def start(self):
-        ...
+    def stop(self): ...
 
-    @abstractmethod
-    def stop(self):
-        ...
+    def on_broadcast(self, message: str): ...
 
-    def on_broadcast(self, message: str):
-        ...
-
-    def is_running(self) -> bool:
-        ...
+    def is_running(self) -> bool: ...
 
 
 class SocaServiceRegistryProtocol(SocaBaseProtocol):
+    @abstractmethod
+    def register(self, service: SocaServiceProtocol): ...
 
     @abstractmethod
-    def register(self, service: SocaServiceProtocol):
-        ...
+    def get_service(self, service_id: str) -> Optional[SocaServiceProtocol]: ...
 
     @abstractmethod
-    def get_service(self, service_id: str) -> Optional[SocaServiceProtocol]:
-        ...
-
-    @abstractmethod
-    def services(self):
-        ...
+    def services(self): ...
 
 
 class MetricsProviderProtocol(SocaBaseProtocol):
+    @abstractmethod
+    def log(self, metric_data: List[Dict]): ...
 
     @abstractmethod
-    def log(self, metric_data: List[Dict]):
-        ...
-
-    @abstractmethod
-    def flush(self):
-        ...
+    def flush(self): ...
 
 
 class MetricsProviderFactoryProtocol(SocaBaseProtocol):
-
     @abstractmethod
-    def get_provider(self, namespace: str) -> MetricsProviderProtocol:
-        ...
+    def get_provider(self, namespace: str) -> MetricsProviderProtocol: ...
 
 
 class ApiInvocationContextProtocol(SocaBaseProtocol):
+    @property
+    @abstractmethod
+    def request(self) -> Dict: ...
 
     @property
     @abstractmethod
-    def request(self) -> Dict:
-        ...
+    def response(self) -> Dict: ...
 
     @property
     @abstractmethod
-    def response(self) -> Dict:
-        ...
+    def namespace(self) -> str: ...
 
     @property
     @abstractmethod
-    def namespace(self) -> str:
-        ...
-
-    @property
-    @abstractmethod
-    def context(self) -> SocaContextProtocolType:
-        ...
+    def context(self) -> SocaContextProtocolType: ...
 
 
 class TokenServiceProtocol(SocaBaseProtocol):
+    @abstractmethod
+    def get_access_token_using_client_credentials(self, cached=True) -> AuthResult: ...
 
     @abstractmethod
-    def get_access_token_using_client_credentials(self, cached=True) -> AuthResult:
-        ...
+    def decode_token(self, token: str, verify_exp: Optional[bool] = True) -> Dict: ...
 
     @abstractmethod
-    def decode_token(self, token: str, verify_exp: Optional[bool] = True) -> Dict:
-        ...
+    def is_token_expired(self, token: str) -> bool: ...
 
     @abstractmethod
-    def is_token_expired(self, token: str) -> bool:
-        ...
-
-    @abstractmethod
-    def get_username(self, access_token: str, verify_exp=True) -> Optional[str]:
-        ...
+    def get_username(self, access_token: str, verify_exp=True) -> Optional[str]: ...
 
 
 class ApiInvokerProtocol(SocaBaseProtocol):
+    @abstractmethod
+    def get_token_service(self) -> Optional[TokenServiceProtocol]: ...
 
     @abstractmethod
-    def get_token_service(self) -> Optional[TokenServiceProtocol]:
-        ...
+    def invoke(self, context: ApiInvocationContextProtocol): ...
 
-    @abstractmethod
-    def invoke(self, context: ApiInvocationContextProtocol):
-        ...
-
-    def get_request_logging_payload(self, context: ApiInvocationContextProtocol) -> Optional[Dict]:
+    def get_request_logging_payload(
+        self, context: ApiInvocationContextProtocol
+    ) -> Optional[Dict]:
         """
         implement any applicable redactions / exclusions for the request payload
         :param context: ApiInvocationContext
@@ -703,7 +621,9 @@ class ApiInvokerProtocol(SocaBaseProtocol):
         """
         ...
 
-    def get_response_logging_payload(self, context: ApiInvocationContextProtocol) -> Optional[Dict]:
+    def get_response_logging_payload(
+        self, context: ApiInvocationContextProtocol
+    ) -> Optional[Dict]:
         """
         implement any applicable redactions / exclusions for the response payload
         :param context: ApiInvocationContext
@@ -713,7 +633,6 @@ class ApiInvokerProtocol(SocaBaseProtocol):
 
 
 class DistributedLockProtocol(SocaBaseProtocol):
-
     @abstractmethod
     def acquire(self, key: str):
         pass
@@ -724,7 +643,5 @@ class DistributedLockProtocol(SocaBaseProtocol):
 
 
 class AnalyticsServiceProtocol(SocaBaseProtocol):
-
     @abstractmethod
-    def post_entry(self, document):
-        ...
+    def post_entry(self, document): ...

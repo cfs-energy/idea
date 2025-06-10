@@ -36,8 +36,12 @@ class ProvisioningQueueMetrics(BaseMetrics):
         self.nodes_deleted = self.build_counter(name='nodes_deleted')
         self.instances_running = self.build_counter(name='instances_running')
         self.instances_terminated = self.build_counter(name='instances_terminated')
-        self.spotfleet_capacity_increased = self.build_counter(name='spotfleet_capacity_increased')
-        self.spotfleet_capacity_decreased = self.build_counter(name='spotfleet_capacity_decreased')
+        self.spotfleet_capacity_increased = self.build_counter(
+            name='spotfleet_capacity_increased'
+        )
+        self.spotfleet_capacity_decreased = self.build_counter(
+            name='spotfleet_capacity_decreased'
+        )
         self.asg_capacity_increased = self.build_counter(name='asg_capacity_increased')
         self.asg_capacity_decreased = self.build_counter(name='asg_capacity_decreased')
         self.spotfleet_created = self.build_counter(name='spotfleet_created')
@@ -46,8 +50,12 @@ class ProvisioningQueueMetrics(BaseMetrics):
         self.asg_created = self.build_counter(name='asg_deleted')
         self.stacks_created = self.build_counter(name='stack_created')
         self.stacks_deleted = self.build_counter(name='stack_deleted')
-        self.reserved_capacity_unavailable = self.build_counter(name='reserved_capacity_unavailable')
-        self.service_quota_unavailable = self.build_counter(name='service_quota_unavailable')
+        self.reserved_capacity_unavailable = self.build_counter(
+            name='reserved_capacity_unavailable'
+        )
+        self.service_quota_unavailable = self.build_counter(
+            name='service_quota_unavailable'
+        )
 
 
 class JobProvisioningMetrics(BaseMetrics, BaseAccumulator):
@@ -70,8 +78,12 @@ class JobProvisioningMetrics(BaseMetrics, BaseAccumulator):
         self._nodes_deleted = self.build_counter(name='nodes_deleted')
         self._instances_running = self.build_counter(name='instances_running')
         self._instances_terminated = self.build_counter(name='instances_terminated')
-        self._spotfleet_capacity_increased = self.build_counter(name='spotfleet_capacity_increased')
-        self._spotfleet_capacity_decreased = self.build_counter(name='spotfleet_capacity_decreased')
+        self._spotfleet_capacity_increased = self.build_counter(
+            name='spotfleet_capacity_increased'
+        )
+        self._spotfleet_capacity_decreased = self.build_counter(
+            name='spotfleet_capacity_decreased'
+        )
         self._asg_capacity_increased = self.build_counter(name='asg_capacity_increased')
         self._asg_capacity_decreased = self.build_counter(name='asg_capacity_decreased')
         self._spotfleet_created = self.build_counter(name='spotfleet_created')
@@ -80,8 +92,12 @@ class JobProvisioningMetrics(BaseMetrics, BaseAccumulator):
         self._asg_created = self.build_counter(name='asg_deleted')
         self._stacks_created = self.build_counter(name='stack_created')
         self._stacks_deleted = self.build_counter(name='stack_deleted')
-        self._reserved_capacity_unavailable = self.build_counter(name='reserved_capacity_unavailable')
-        self._service_quota_unavailable = self.build_counter(name='service_quota_unavailable')
+        self._reserved_capacity_unavailable = self.build_counter(
+            name='reserved_capacity_unavailable'
+        )
+        self._service_quota_unavailable = self.build_counter(
+            name='service_quota_unavailable'
+        )
 
         self._queue_type_metrics = {}
         self._queue_type_metrics_lock = RLock()
@@ -100,8 +116,7 @@ class JobProvisioningMetrics(BaseMetrics, BaseAccumulator):
                 return self._queue_type_metrics[queue_type]
 
             queue_type_metrics = ProvisioningQueueMetrics(
-                context=self.context,
-                queue_type=queue_type
+                context=self.context, queue_type=queue_type
             )
             self._queue_type_metrics[queue_type] = queue_type_metrics
             return queue_type_metrics
@@ -159,7 +174,9 @@ class JobProvisioningMetrics(BaseMetrics, BaseAccumulator):
 
     def instances_terminated(self, queue_type: str, count=1):
         self._instances_terminated.increment(count)
-        self.get_queue_metrics(queue_type=queue_type).instances_terminated.increment(count)
+        self.get_queue_metrics(queue_type=queue_type).instances_terminated.increment(
+            count
+        )
 
     def instances_running_duration(self, queue_type: str, duration_secs: int):
         metrics = BaseMetrics(self._context, split_dimensions=True)
@@ -168,19 +185,27 @@ class JobProvisioningMetrics(BaseMetrics, BaseAccumulator):
 
     def spotfleet_capacity_increased(self, queue_type: str, count=1):
         self._spotfleet_capacity_increased.increment(count)
-        self.get_queue_metrics(queue_type=queue_type).spotfleet_capacity_increased.increment(count)
+        self.get_queue_metrics(
+            queue_type=queue_type
+        ).spotfleet_capacity_increased.increment(count)
 
     def spotfleet_capacity_decreased(self, queue_type: str, count=1):
         self._spotfleet_capacity_decreased.increment(count)
-        self.get_queue_metrics(queue_type=queue_type).spotfleet_capacity_decreased.increment(count)
+        self.get_queue_metrics(
+            queue_type=queue_type
+        ).spotfleet_capacity_decreased.increment(count)
 
     def asg_capacity_increased(self, queue_type: str, count=1):
         self._asg_capacity_increased.increment(count)
-        self.get_queue_metrics(queue_type=queue_type).asg_capacity_increased.increment(count)
+        self.get_queue_metrics(queue_type=queue_type).asg_capacity_increased.increment(
+            count
+        )
 
     def asg_capacity_decreased(self, queue_type: str, count=1):
         self._asg_capacity_decreased.increment(count)
-        self.get_queue_metrics(queue_type=queue_type).asg_capacity_decreased.increment(count)
+        self.get_queue_metrics(queue_type=queue_type).asg_capacity_decreased.increment(
+            count
+        )
 
     def spotfleet_created(self, queue_type: str, count=1):
         self._spotfleet_created.increment(count)

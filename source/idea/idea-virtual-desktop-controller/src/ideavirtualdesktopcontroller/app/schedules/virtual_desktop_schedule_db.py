@@ -13,7 +13,9 @@ from typing import List, Dict, Optional
 import ideavirtualdesktopcontroller
 from ideadatamodel import VirtualDesktopSchedule, DayOfWeek, VirtualDesktopScheduleType
 from ideasdk.utils import Utils
-from ideavirtualdesktopcontroller.app.virtual_desktop_notifiable_db import VirtualDesktopNotifiableDB
+from ideavirtualdesktopcontroller.app.virtual_desktop_notifiable_db import (
+    VirtualDesktopNotifiableDB,
+)
 from ideavirtualdesktopcontroller.app.schedules import constants as schedules_constants
 
 
@@ -36,7 +38,9 @@ class VirtualDesktopScheduleDB(VirtualDesktopNotifiableDB):
         return f'{self.context.cluster_name()}.{self.context.module_id()}.controller.schedules'
 
     def initialize(self):
-        exists = self.context.aws_util().dynamodb_check_table_exists(self.table_name, True)
+        exists = self.context.aws_util().dynamodb_check_table_exists(
+            self.table_name, True
+        )
         if not exists:
             self.context.aws_util().dynamodb_create_table(
                 create_table_request={
@@ -44,40 +48,44 @@ class VirtualDesktopScheduleDB(VirtualDesktopNotifiableDB):
                     'AttributeDefinitions': [
                         {
                             'AttributeName': schedules_constants.SCHEDULE_DB_HASH_KEY,
-                            'AttributeType': 'S'
+                            'AttributeType': 'S',
                         },
                         {
                             'AttributeName': schedules_constants.SCHEDULE_DB_RANGE_KEY,
-                            'AttributeType': 'S'
-                        }
+                            'AttributeType': 'S',
+                        },
                     ],
                     'KeySchema': [
                         {
                             'AttributeName': schedules_constants.SCHEDULE_DB_HASH_KEY,
-                            'KeyType': 'HASH'
+                            'KeyType': 'HASH',
                         },
                         {
                             'AttributeName': schedules_constants.SCHEDULE_DB_RANGE_KEY,
-                            'KeyType': 'RANGE'
-                        }
+                            'KeyType': 'RANGE',
+                        },
                     ],
-                    'BillingMode': 'PAY_PER_REQUEST'
+                    'BillingMode': 'PAY_PER_REQUEST',
                 },
-                wait=True
+                wait=True,
             )
 
     @staticmethod
-    def get_empty_schedule(day_of_week: Optional[DayOfWeek] = None) -> VirtualDesktopSchedule:
+    def get_empty_schedule(
+        day_of_week: Optional[DayOfWeek] = None,
+    ) -> VirtualDesktopSchedule:
         return VirtualDesktopSchedule(
             schedule_id='',
             day_of_week=day_of_week,
-            schedule_type=VirtualDesktopScheduleType.NO_SCHEDULE
+            schedule_type=VirtualDesktopScheduleType.NO_SCHEDULE,
         )
 
     @staticmethod
     def convert_schedule_object_to_db_dict(schedule: VirtualDesktopSchedule) -> Dict:
         schedule_dict = {
-            schedules_constants.SCHEDULE_DB_HASH_KEY: f'{schedule.day_of_week}',
+            schedules_constants.SCHEDULE_DB_HASH_KEY: schedule.day_of_week.value
+            if hasattr(schedule.day_of_week, 'value')
+            else schedule.day_of_week,
             schedules_constants.SCHEDULE_DB_RANGE_KEY: schedule.schedule_id,
             schedules_constants.SCHEDULE_DB_IDEA_SESSION_ID_KEY: schedule.idea_session_id,
             schedules_constants.SCHEDULE_DB_IDEA_SESSION_OWNER_KEY: schedule.idea_session_owner,
@@ -85,25 +93,47 @@ class VirtualDesktopScheduleDB(VirtualDesktopNotifiableDB):
         }
 
         if schedule.schedule_type == VirtualDesktopScheduleType.CUSTOM_SCHEDULE:
-            schedule_dict[schedules_constants.SCHEDULE_DB_START_UP_TIME_KEY] = schedule.start_up_time
-            schedule_dict[schedules_constants.SCHEDULE_DB_SHUT_DOWN_TIME_KEY] = schedule.shut_down_time
+            schedule_dict[schedules_constants.SCHEDULE_DB_START_UP_TIME_KEY] = (
+                schedule.start_up_time
+            )
+            schedule_dict[schedules_constants.SCHEDULE_DB_SHUT_DOWN_TIME_KEY] = (
+                schedule.shut_down_time
+            )
         return schedule_dict
 
-    def convert_db_dict_to_schedule_object(self, db_entry: Dict) -> VirtualDesktopSchedule:
+    def convert_db_dict_to_schedule_object(
+        self, db_entry: Dict
+    ) -> VirtualDesktopSchedule:
         if Utils.is_empty(db_entry):
             return self.get_empty_schedule()
 
-        schedule_id = Utils.get_value_as_string(schedules_constants.SCHEDULE_DB_SCHEDULE_ID_KEY, db_entry, None)
+        schedule_id = Utils.get_value_as_string(
+            schedules_constants.SCHEDULE_DB_SCHEDULE_ID_KEY, db_entry, None
+        )
         if Utils.is_empty(schedule_id):
             return self.get_empty_schedule()
 
-        schedule_type = VirtualDesktopScheduleType(Utils.get_value_as_string(schedules_constants.SCHEDULE_DB_SCHEDULE_TYPE_KEY, db_entry))
-        start_up_time = Utils.get_value_as_string(schedules_constants.SCHEDULE_DB_START_UP_TIME_KEY, db_entry, None)
-        shut_down_time = Utils.get_value_as_string(schedules_constants.SCHEDULE_DB_SHUT_DOWN_TIME_KEY, db_entry, None)
+        schedule_type = VirtualDesktopScheduleType(
+            Utils.get_value_as_string(
+                schedules_constants.SCHEDULE_DB_SCHEDULE_TYPE_KEY, db_entry
+            )
+        )
+        start_up_time = Utils.get_value_as_string(
+            schedules_constants.SCHEDULE_DB_START_UP_TIME_KEY, db_entry, None
+        )
+        shut_down_time = Utils.get_value_as_string(
+            schedules_constants.SCHEDULE_DB_SHUT_DOWN_TIME_KEY, db_entry, None
+        )
 
         if schedule_type == VirtualDesktopScheduleType.WORKING_HOURS:
-            start_up_time = self.context.config().get_string('virtual-desktop-controller.dcv_session.working_hours.start_up_time', required=True)
-            shut_down_time = self.context.config().get_string('virtual-desktop-controller.dcv_session.working_hours.shut_down_time', required=True)
+            start_up_time = self.context.config().get_string(
+                'virtual-desktop-controller.dcv_session.working_hours.start_up_time',
+                required=True,
+            )
+            shut_down_time = self.context.config().get_string(
+                'virtual-desktop-controller.dcv_session.working_hours.shut_down_time',
+                required=True,
+            )
         elif schedule_type == VirtualDesktopScheduleType.STOP_ON_IDLE:
             start_up_time = '23:59'
             shut_down_time = '00:00'
@@ -116,29 +146,39 @@ class VirtualDesktopScheduleDB(VirtualDesktopNotifiableDB):
             start_up_time=start_up_time,
             shut_down_time=shut_down_time,
             schedule_type=schedule_type,
-            idea_session_owner=Utils.get_value_as_string(schedules_constants.SCHEDULE_DB_IDEA_SESSION_OWNER_KEY, db_entry),
-            idea_session_id=Utils.get_value_as_string(schedules_constants.SCHEDULE_DB_IDEA_SESSION_ID_KEY, db_entry),
-            day_of_week=Utils.get_value_as_string(schedules_constants.SCHEDULE_DB_HASH_KEY, db_entry),
+            idea_session_owner=Utils.get_value_as_string(
+                schedules_constants.SCHEDULE_DB_IDEA_SESSION_OWNER_KEY, db_entry
+            ),
+            idea_session_id=Utils.get_value_as_string(
+                schedules_constants.SCHEDULE_DB_IDEA_SESSION_ID_KEY, db_entry
+            ),
+            day_of_week=Utils.get_value_as_string(
+                schedules_constants.SCHEDULE_DB_HASH_KEY, db_entry
+            ),
         )
 
     def create(self, schedule: VirtualDesktopSchedule) -> VirtualDesktopSchedule:
         db_entry = self.convert_schedule_object_to_db_dict(schedule)
         db_entry[schedules_constants.SCHEDULE_DB_RANGE_KEY] = Utils.uuid()
-        self._table.put_item(
-            Item=db_entry
+        self._table.put_item(Item=db_entry)
+        super().trigger_create_event(
+            db_entry[schedules_constants.SCHEDULE_DB_HASH_KEY],
+            db_entry[schedules_constants.SCHEDULE_DB_RANGE_KEY],
+            new_entry=db_entry,
         )
-        super().trigger_create_event(db_entry[schedules_constants.SCHEDULE_DB_HASH_KEY], db_entry[schedules_constants.SCHEDULE_DB_RANGE_KEY], new_entry=db_entry)
         return self.convert_db_dict_to_schedule_object(db_entry)
 
     def get(self, day_of_week: DayOfWeek, schedule_id: str) -> VirtualDesktopSchedule:
         if Utils.is_empty(day_of_week) or Utils.is_empty(schedule_id):
-            self._logger.error(f'invalid {day_of_week} {schedule_id} combination. DB entry does\'nt exist, returning No Schedule')
+            self._logger.error(
+                f"invalid {day_of_week} {schedule_id} combination. DB entry does'nt exist, returning No Schedule"
+            )
             return self.get_empty_schedule(day_of_week)
         try:
             result = self._table.get_item(
                 Key={
                     schedules_constants.SCHEDULE_DB_HASH_KEY: day_of_week,
-                    schedules_constants.SCHEDULE_DB_RANGE_KEY: schedule_id
+                    schedules_constants.SCHEDULE_DB_RANGE_KEY: schedule_id,
                 }
             )
             schedule = Utils.get_value_as_dict('Item', result)
@@ -158,7 +198,10 @@ class VirtualDesktopScheduleDB(VirtualDesktopNotifiableDB):
         expression_attr_values = {}
 
         for key, value in db_entry.items():
-            if key in {schedules_constants.SCHEDULE_DB_HASH_KEY, schedules_constants.SCHEDULE_DB_RANGE_KEY}:
+            if key in {
+                schedules_constants.SCHEDULE_DB_HASH_KEY,
+                schedules_constants.SCHEDULE_DB_RANGE_KEY,
+            }:
                 continue
 
             update_expression_tokens.append(f'#{key} = :{key}')
@@ -167,27 +210,36 @@ class VirtualDesktopScheduleDB(VirtualDesktopNotifiableDB):
 
         result = self._table.update_item(
             Key={
-                schedules_constants.SCHEDULE_DB_HASH_KEY: db_entry[schedules_constants.SCHEDULE_DB_HASH_KEY],
-                schedules_constants.SCHEDULE_DB_RANGE_KEY: db_entry[schedules_constants.SCHEDULE_DB_RANGE_KEY]
+                schedules_constants.SCHEDULE_DB_HASH_KEY: db_entry[
+                    schedules_constants.SCHEDULE_DB_HASH_KEY
+                ],
+                schedules_constants.SCHEDULE_DB_RANGE_KEY: db_entry[
+                    schedules_constants.SCHEDULE_DB_RANGE_KEY
+                ],
             },
             UpdateExpression='SET ' + ', '.join(update_expression_tokens),
             ExpressionAttributeNames=expression_attr_names,
             ExpressionAttributeValues=expression_attr_values,
-            ReturnValues='ALL_OLD'
+            ReturnValues='ALL_OLD',
         )
 
         old_db_entry = Utils.get_value_as_dict('Attributes', result, {})
-        super().trigger_update_event(db_entry[schedules_constants.SCHEDULE_DB_HASH_KEY], db_entry[schedules_constants.SCHEDULE_DB_RANGE_KEY], old_entry=old_db_entry, new_entry=db_entry)
+        super().trigger_update_event(
+            db_entry[schedules_constants.SCHEDULE_DB_HASH_KEY],
+            db_entry[schedules_constants.SCHEDULE_DB_RANGE_KEY],
+            old_entry=old_db_entry,
+            new_entry=db_entry,
+        )
         return self.convert_db_dict_to_schedule_object(db_entry)
 
-    def get_schedules_for_day_of_week(self, day_of_week: DayOfWeek) -> List[VirtualDesktopSchedule]:
+    def get_schedules_for_day_of_week(
+        self, day_of_week: DayOfWeek
+    ) -> List[VirtualDesktopSchedule]:
         query_request = {
             'KeyConditions': {
                 schedules_constants.SCHEDULE_DB_HASH_KEY: {
-                    'AttributeValueList': [
-                        day_of_week
-                    ],
-                    'ComparisonOperator': 'EQ'
+                    'AttributeValueList': [day_of_week],
+                    'ComparisonOperator': 'EQ',
                 },
             }
         }
@@ -204,12 +256,33 @@ class VirtualDesktopScheduleDB(VirtualDesktopNotifiableDB):
             self._logger.info('Empty schedule object. Returning.')
             return
 
+        # Convert day_of_week to string more explicitly to handle enum values in Python 3.13
+        day_of_week_str = (
+            schedule.day_of_week.value
+            if hasattr(schedule.day_of_week, 'value')
+            else str(schedule.day_of_week)
+        )
+
         result = self._table.delete_item(
             Key={
-                schedules_constants.SCHEDULE_DB_HASH_KEY: f'{schedule.day_of_week}',
-                schedules_constants.SCHEDULE_DB_RANGE_KEY: schedule.schedule_id
+                schedules_constants.SCHEDULE_DB_HASH_KEY: day_of_week_str,
+                schedules_constants.SCHEDULE_DB_RANGE_KEY: schedule.schedule_id,
             },
-            ReturnValues='ALL_OLD'
+            ReturnValues='ALL_OLD',
         )
         old_db_entry = Utils.get_value_as_dict('Attributes', result, {})
-        super().trigger_delete_event(old_db_entry[schedules_constants.SCHEDULE_DB_HASH_KEY], old_db_entry[schedules_constants.SCHEDULE_DB_RANGE_KEY], deleted_entry=old_db_entry)
+
+        # Add safety check to prevent KeyError when the keys don't exist
+        if (
+            schedules_constants.SCHEDULE_DB_HASH_KEY in old_db_entry
+            and schedules_constants.SCHEDULE_DB_RANGE_KEY in old_db_entry
+        ):
+            super().trigger_delete_event(
+                old_db_entry[schedules_constants.SCHEDULE_DB_HASH_KEY],
+                old_db_entry[schedules_constants.SCHEDULE_DB_RANGE_KEY],
+                deleted_entry=old_db_entry,
+            )
+        else:
+            self._logger.warning(
+                f'Deleted schedule entry did not contain expected keys. Entry: {old_db_entry}'
+            )

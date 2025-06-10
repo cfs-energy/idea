@@ -16,8 +16,8 @@ from ideasdk.context import SocaContext
 from typing import Optional, Dict
 from boto3.dynamodb.conditions import Attr
 
-class SingleSignOnStateDAO:
 
+class SingleSignOnStateDAO:
     def __init__(self, context: SocaContext, logger=None):
         self.context = context
         if logger is not None:
@@ -34,22 +34,14 @@ class SingleSignOnStateDAO:
             create_table_request={
                 'TableName': self.get_table_name(),
                 'AttributeDefinitions': [
-                    {
-                        'AttributeName': 'state',
-                        'AttributeType': 'S'
-                    }
+                    {'AttributeName': 'state', 'AttributeType': 'S'}
                 ],
-                'KeySchema': [
-                    {
-                        'AttributeName': 'state',
-                        'KeyType': 'HASH'
-                    }
-                ],
-                'BillingMode': 'PAY_PER_REQUEST'
+                'KeySchema': [{'AttributeName': 'state', 'KeyType': 'HASH'}],
+                'BillingMode': 'PAY_PER_REQUEST',
             },
             wait=True,
             ttl=True,
-            ttl_attribute_name='ttl'
+            ttl_attribute_name='ttl',
         )
         self.table = self.context.aws().dynamodb_table().Table(self.get_table_name())
 
@@ -61,12 +53,11 @@ class SingleSignOnStateDAO:
                 'refresh_token': Utils.get_value_as_string('refresh_token', sso_state),
                 'id_token': Utils.get_value_as_string('id_token', sso_state),
                 'expires_in': Utils.get_value_as_int('expires_in', sso_state),
-                'token_type': Utils.get_value_as_string('token_type', sso_state)
+                'token_type': Utils.get_value_as_string('token_type', sso_state),
             }
         )
 
     def create_sso_state(self, sso_state: Dict) -> Dict:
-
         state = Utils.get_value_as_string('state', sso_state)
         if Utils.is_empty(state):
             raise exceptions.invalid_params('state is required')
@@ -75,16 +66,14 @@ class SingleSignOnStateDAO:
             **sso_state,
             'ttl': Utils.current_time_ms() + (10 * 60 * 1000),  # 10 minutes
             'created_on': Utils.current_time_ms(),
-            'updated_on': Utils.current_time_ms()
+            'updated_on': Utils.current_time_ms(),
         }
         self.table.put_item(
-            Item=created_state,
-            ConditionExpression=Attr('state').not_exists()
+            Item=created_state, ConditionExpression=Attr('state').not_exists()
         )
         return created_state
 
     def update_sso_state(self, sso_state: Dict) -> Dict:
-
         state = Utils.get_value_as_string('state', sso_state)
         if Utils.is_empty(state):
             raise exceptions.invalid_params('state is required')
@@ -103,14 +92,12 @@ class SingleSignOnStateDAO:
             expression_attr_values[f':{key}'] = value
 
         result = self.table.update_item(
-            Key={
-                'state': state
-            },
+            Key={'state': state},
             ConditionExpression=Attr('state').eq(state),
             UpdateExpression='SET ' + ', '.join(update_expression_tokens),
             ExpressionAttributeNames=expression_attr_names,
             ExpressionAttributeValues=expression_attr_values,
-            ReturnValues='ALL_NEW'
+            ReturnValues='ALL_NEW',
         )
 
         updated_sso_state = result['Attributes']
@@ -120,18 +107,10 @@ class SingleSignOnStateDAO:
     def get_sso_state(self, state: str) -> Optional[Dict]:
         if Utils.is_empty(state):
             raise exceptions.invalid_params('state is required')
-        result = self.table.get_item(
-            Key={
-                'state': state
-            }
-        )
+        result = self.table.get_item(Key={'state': state})
         return Utils.get_value_as_dict('Item', result)
 
     def delete_sso_state(self, state: str):
         if Utils.is_empty(state):
             raise exceptions.invalid_params('state is required')
-        self.table.delete_item(
-            Key={
-                'state': state
-            }
-        )
+        self.table.delete_item(Key={'state': state})

@@ -47,7 +47,9 @@ class EC2SpotFleetRequestConfig:
     def weighted_capacities(self) -> Optional[Dict[str, int]]:
         config = ModelUtils.get_value_as_dict('SpotFleetRequestConfig', self._entry)
 
-        launch_template_configs = ModelUtils.get_value_as_list('LaunchTemplateConfigs', config)
+        launch_template_configs = ModelUtils.get_value_as_list(
+            'LaunchTemplateConfigs', config
+        )
         if launch_template_configs is None or len(launch_template_configs) == 0:
             return None
 
@@ -63,7 +65,9 @@ class EC2SpotFleetRequestConfig:
         weighted_capacities = {}
         for override in overrides:
             instance_type = ModelUtils.get_value_as_string('InstanceType', override)
-            weighted_capacity = ModelUtils.get_value_as_int('WeightedCapacity', override)
+            weighted_capacity = ModelUtils.get_value_as_int(
+                'WeightedCapacity', override
+            )
             weighted_capacities[instance_type] = weighted_capacity
 
         return weighted_capacities

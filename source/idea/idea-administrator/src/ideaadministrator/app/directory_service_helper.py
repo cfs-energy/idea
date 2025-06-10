@@ -26,7 +26,9 @@ class DirectoryServiceHelper:
         self.aws_region = aws_region
         self.aws_profile = aws_profile
 
-    def create_service_account_secrets(self, username: str, password: str, purpose: str, kms_key_id: str = None) -> Dict:
+    def create_service_account_secrets(
+        self, username: str, password: str, purpose: str, kms_key_id: str = None
+    ) -> Dict:
         """
         In order to use an existing AWS Managed Active Directory (or even in case of an On-Prem or Self-Managed AD),
         cluster manager needs to have access to the service account credentials.
@@ -49,43 +51,57 @@ class DirectoryServiceHelper:
                 aws_region=self.aws_region,
                 aws_profile=self.aws_profile,
                 enable_aws_client_provider=True,
-                enable_iam_permission_util=True
+                enable_iam_permission_util=True,
             )
         )
 
-        tags = Utils.convert_tags_dict_to_aws_tags({
-            constants.IDEA_TAG_CLUSTER_NAME: self.cluster_name,
-            constants.IDEA_TAG_MODULE_NAME: constants.MODULE_DIRECTORYSERVICE,
-            constants.IDEA_TAG_MODULE_ID: constants.MODULE_DIRECTORYSERVICE
-        })
+        tags = Utils.convert_tags_dict_to_aws_tags(
+            {
+                constants.IDEA_TAG_CLUSTER_NAME: self.cluster_name,
+                constants.IDEA_TAG_MODULE_NAME: constants.MODULE_DIRECTORYSERVICE,
+                constants.IDEA_TAG_MODULE_ID: constants.MODULE_DIRECTORYSERVICE,
+            }
+        )
 
         # create username secret
         create_username_secret_request = {
             'Name': f'{self.cluster_name}-{constants.MODULE_DIRECTORYSERVICE}-{purpose}-username',
             'Description': f'DirectoryService {purpose} username, Cluster: {self.cluster_name}',
             'SecretString': username,
-            'Tags': tags
+            'Tags': tags,
         }
         if Utils.is_not_empty(kms_key_id):
             create_username_secret_request['KmsKeyId'] = kms_key_id
         # This can produce exception from AWS API for duplicate secret
-        create_username_secret_result = context.aws().secretsmanager().create_secret(**create_username_secret_request)
-        username_secret_arn = Utils.get_value_as_string('ARN', create_username_secret_result)
+        create_username_secret_result = (
+            context.aws()
+            .secretsmanager()
+            .create_secret(**create_username_secret_request)
+        )
+        username_secret_arn = Utils.get_value_as_string(
+            'ARN', create_username_secret_result
+        )
 
         # create password secret
         create_password_secret_request = {
             'Name': f'{self.cluster_name}-{constants.MODULE_DIRECTORYSERVICE}-{purpose}-password',
             'Description': f'DirectoryService {purpose} password, Cluster: {self.cluster_name}',
             'SecretString': password,
-            'Tags': tags
+            'Tags': tags,
         }
         if Utils.is_not_empty(kms_key_id):
             create_password_secret_request['KmsKeyId'] = kms_key_id
         # This can produce exception from AWS API for duplicate secret
-        create_password_secret_result = context.aws().secretsmanager().create_secret(**create_password_secret_request)
-        password_secret_arn = Utils.get_value_as_string('ARN', create_password_secret_result)
+        create_password_secret_result = (
+            context.aws()
+            .secretsmanager()
+            .create_secret(**create_password_secret_request)
+        )
+        password_secret_arn = Utils.get_value_as_string(
+            'ARN', create_password_secret_result
+        )
 
         return {
             'username_secret_arn': username_secret_arn,
-            'password_secret_arn': password_secret_arn
+            'password_secret_arn': password_secret_arn,
         }

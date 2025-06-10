@@ -10,7 +10,13 @@
 #  and limitations under the License.
 
 from ideasdk.utils import Utils
-from ideadatamodel import exceptions, ListGroupsRequest, ListGroupsResult, Group, SocaPaginator
+from ideadatamodel import (
+    exceptions,
+    ListGroupsRequest,
+    ListGroupsResult,
+    Group,
+    SocaPaginator,
+)
 from ideasdk.context import SocaContext
 
 from typing import Optional, Dict
@@ -18,7 +24,6 @@ from boto3.dynamodb.conditions import Attr
 
 
 class GroupDAO:
-
     def __init__(self, context: SocaContext, logger=None):
         self.context = context
         if logger is not None:
@@ -35,20 +40,12 @@ class GroupDAO:
             create_table_request={
                 'TableName': self.get_table_name(),
                 'AttributeDefinitions': [
-                    {
-                        'AttributeName': 'group_name',
-                        'AttributeType': 'S'
-                    }
+                    {'AttributeName': 'group_name', 'AttributeType': 'S'}
                 ],
-                'KeySchema': [
-                    {
-                        'AttributeName': 'group_name',
-                        'KeyType': 'HASH'
-                    }
-                ],
-                'BillingMode': 'PAY_PER_REQUEST'
+                'KeySchema': [{'AttributeName': 'group_name', 'KeyType': 'HASH'}],
+                'BillingMode': 'PAY_PER_REQUEST',
             },
-            wait=True
+            wait=True,
         )
         self.table = self.context.aws().dynamodb_table().Table(self.get_table_name())
 
@@ -64,7 +61,7 @@ class GroupDAO:
                 'enabled': Utils.get_value_as_bool('enabled', group),
                 'group_type': Utils.get_value_as_string('group_type', group),
                 'created_on': Utils.get_value_as_int('created_on', group),
-                'updated_on': Utils.get_value_as_int('updated_on', group)
+                'updated_on': Utils.get_value_as_int('updated_on', group),
             }
         )
 
@@ -92,7 +89,6 @@ class GroupDAO:
         return db_group
 
     def create_group(self, group: Dict) -> Dict:
-
         group_name = Utils.get_value_as_string('group_name', group)
         if Utils.is_empty(group_name):
             raise exceptions.invalid_params('group_name is required')
@@ -100,22 +96,17 @@ class GroupDAO:
         created_group = {
             **group,
             'created_on': Utils.current_time_ms(),
-            'updated_on': Utils.current_time_ms()
+            'updated_on': Utils.current_time_ms(),
         }
         self.table.put_item(
-            Item=created_group,
-            ConditionExpression=Attr('group_name').not_exists()
+            Item=created_group, ConditionExpression=Attr('group_name').not_exists()
         )
         return created_group
 
     def get_group(self, group_name: str) -> Optional[Dict]:
         if Utils.is_empty(group_name):
             raise exceptions.invalid_params('group_name is required')
-        result = self.table.get_item(
-            Key={
-                'group_name': group_name
-            }
-        )
+        result = self.table.get_item(Key={'group_name': group_name})
         return Utils.get_value_as_dict('Item', result)
 
     def update_group(self, group: Dict) -> Optional[Dict]:
@@ -137,14 +128,12 @@ class GroupDAO:
             expression_attr_values[f':{key}'] = value
 
         result = self.table.update_item(
-            Key={
-                'group_name': group_name
-            },
+            Key={'group_name': group_name},
             ConditionExpression=Attr('group_name').eq(group_name),
             UpdateExpression='SET ' + ', '.join(update_expression_tokens),
             ExpressionAttributeNames=expression_attr_names,
             ExpressionAttributeValues=expression_attr_values,
-            ReturnValues='ALL_NEW'
+            ReturnValues='ALL_NEW',
         )
 
         updated_user = result['Attributes']
@@ -154,14 +143,9 @@ class GroupDAO:
     def delete_group(self, group_name: str):
         if Utils.is_empty(group_name):
             raise exceptions.invalid_params('group_name is required')
-        self.table.delete_item(
-            Key={
-                'group_name': group_name
-            }
-        )
+        self.table.delete_item(Key={'group_name': group_name})
 
     def list_groups(self, request: ListGroupsRequest) -> ListGroupsResult:
-
         scan_request = {}
 
         cursor = request.cursor
@@ -178,12 +162,12 @@ class GroupDAO:
                 if filter_.eq is not None:
                     scan_filter[filter_.key] = {
                         'AttributeValueList': [filter_.eq],
-                        'ComparisonOperator': 'EQ'
+                        'ComparisonOperator': 'EQ',
                     }
                 if filter_.like is not None:
                     scan_filter[filter_.key] = {
                         'AttributeValueList': [filter_.like],
-                        'ComparisonOperator': 'CONTAINS'
+                        'ComparisonOperator': 'CONTAINS',
                     }
         if scan_filter is not None:
             scan_request['ScanFilter'] = scan_filter
@@ -202,8 +186,5 @@ class GroupDAO:
             response_cursor = Utils.base64_encode(Utils.to_json(last_evaluated_key))
 
         return ListGroupsResult(
-            listing=groups,
-            paginator=SocaPaginator(
-                cursor=response_cursor
-            )
+            listing=groups, paginator=SocaPaginator(cursor=response_cursor)
         )

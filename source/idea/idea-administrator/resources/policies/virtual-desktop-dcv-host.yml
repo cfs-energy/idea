@@ -51,6 +51,7 @@ Statement:
   - Action:
       - ec2:DescribeVolumes
       - ec2:DescribeNetworkInterfaces
+      - ec2:DescribeInstanceTypes
       - fsx:CreateDataRepositoryTask
       - fsx:DescribeFileSystems
       - tag:GetResources

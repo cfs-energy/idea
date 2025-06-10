@@ -14,16 +14,13 @@ from ideasdk.service import SocaService
 from ideasdk.utils import Utils
 
 from ideadatamodel import exceptions, errorcodes
-from ideadatamodel.scheduler import (
-    HpcQueueProfile,
-    SocaScalingMode
+from ideadatamodel.scheduler import HpcQueueProfile, SocaScalingMode
+from ideascheduler.app.provisioning.job_provisioning_queue.hpc_queue_profiles_dao import (
+    HpcQueueProfilesDAO,
 )
-from ideascheduler.app.provisioning.job_provisioning_queue.hpc_queue_profiles_dao import HpcQueueProfilesDAO
 from ideascheduler.app.scheduler import SocaJobBuilder
 from ideascheduler.app.app_protocols import HpcQueueProfilesServiceProtocol
-from ideascheduler.app.provisioning import (
-    JobProvisioningQueue, JobProvisioner
-)
+from ideascheduler.app.provisioning import JobProvisioningQueue, JobProvisioner
 
 from typing import List, Dict, Optional
 from threading import RLock
@@ -63,7 +60,6 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
         self._provisioning_queue_lock = RLock()
 
     def initialize_job_provisioner(self, queue_profile: HpcQueueProfile):
-
         if Utils.is_false(queue_profile.enabled):
             return
 
@@ -72,14 +68,12 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
             self.stop_job_provisioner(queue_profile)
 
             provisioning_queue = JobProvisioningQueue(
-                context=self.context,
-                queue_profile=queue_profile
+                context=self.context, queue_profile=queue_profile
             )
-            provisioner = JobProvisioner(
-                context=self.context,
-                queue=provisioning_queue
+            provisioner = JobProvisioner(context=self.context, queue=provisioning_queue)
+            self._provisioning_queues[queue_profile.queue_profile_id] = (
+                provisioning_queue
             )
-            self._provisioning_queues[queue_profile.queue_profile_id] = provisioning_queue
             self._provisioners[queue_profile.queue_profile_id] = provisioner
 
             provisioner.start()
@@ -91,7 +85,9 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
                 provisioner.stop()
                 del self._provisioners[queue_profile.queue_profile_id]
 
-            provisioning_queue = self._provisioning_queues.get(queue_profile.queue_profile_id, None)
+            provisioning_queue = self._provisioning_queues.get(
+                queue_profile.queue_profile_id, None
+            )
             if provisioning_queue is not None:
                 del self._provisioning_queues[queue_profile.queue_profile_id]
 
@@ -102,7 +98,9 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
             raise exceptions.invalid_params('queue_profile.name is required')
         if Utils.is_empty(queue_profile.queues):
             raise exceptions.invalid_params('queue_profile.queues is required')
-        if Utils.is_empty(queue_profile.scaling_mode) and not Utils.get_as_bool(queue_profile.keep_forever, False):
+        if Utils.is_empty(queue_profile.scaling_mode) and not Utils.get_as_bool(
+            queue_profile.keep_forever, False
+        ):
             raise exceptions.invalid_params('queue_profile.scaling_mode is required')
         if Utils.is_empty(queue_profile.queue_mode):
             raise exceptions.invalid_params('queue_profile.queue_mode is required')
@@ -113,12 +111,22 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
                 raise exceptions.invalid_params('queue_profile.projects[] is required')
 
         terminate_when_idle = queue_profile.terminate_when_idle
-        if queue_profile.scaling_mode is not None and queue_profile.scaling_mode == SocaScalingMode.BATCH:
+        if (
+            queue_profile.scaling_mode is not None
+            and queue_profile.scaling_mode == SocaScalingMode.BATCH
+        ):
             if terminate_when_idle is None or terminate_when_idle <= 0:
-                raise exceptions.invalid_params('queue_profile.terminate_when_idle must be required and > 0 when scaling_mode == BATCH')
-        elif queue_profile.scaling_mode is not None and queue_profile.scaling_mode == SocaScalingMode.SINGLE_JOB:
+                raise exceptions.invalid_params(
+                    'queue_profile.terminate_when_idle must be required and > 0 when scaling_mode == BATCH'
+                )
+        elif (
+            queue_profile.scaling_mode is not None
+            and queue_profile.scaling_mode == SocaScalingMode.SINGLE_JOB
+        ):
             if terminate_when_idle is not None and terminate_when_idle > 0:
-                raise exceptions.invalid_params('queue_profile.terminate_when_idle must be 0 when scaling_mode == SINGLE_JOB')
+                raise exceptions.invalid_params(
+                    'queue_profile.terminate_when_idle must be 0 when scaling_mode == SINGLE_JOB'
+                )
 
         keep_forever = queue_profile.keep_forever
         if keep_forever is not None and keep_forever:
@@ -130,48 +138,71 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
         else:
             default_job_params = {}
 
-        builder = SocaJobBuilder(
-            context=self.context,
-            params=default_job_params
-        )
+        builder = SocaJobBuilder(context=self.context, params=default_job_params)
 
         validation_result = builder.validate()
         if not validation_result.is_valid():
             raise exceptions.soca_exception(
                 error_code=errorcodes.VALIDATION_FAILED,
                 message='Job Parameter validation failed',
-                ref=validation_result
+                ref=validation_result,
             )
 
-    def cache_get(self, queue_profile_id: str = None,
-                  queue_profile_name: str = None,
-                  queue_name: str = None) -> Optional[HpcQueueProfile]:
+    def cache_get(
+        self,
+        queue_profile_id: str = None,
+        queue_profile_name: str = None,
+        queue_name: str = None,
+    ) -> Optional[HpcQueueProfile]:
         if Utils.is_not_empty(queue_profile_id):
-            return self.context.cache().short_term().get(f'queue-profile.id.{queue_profile_id}')
+            return (
+                self.context.cache()
+                .short_term()
+                .get(f'queue-profile.id.{queue_profile_id}')
+            )
         elif Utils.is_not_empty(queue_profile_name):
-            return self.context.cache().short_term().get(f'queue-profile.name.{queue_profile_name}')
+            return (
+                self.context.cache()
+                .short_term()
+                .get(f'queue-profile.name.{queue_profile_name}')
+            )
         elif Utils.is_not_empty(queue_name):
-            return self.context.cache().short_term().get(f'queue-profile.queue.{queue_name}')
+            return (
+                self.context.cache()
+                .short_term()
+                .get(f'queue-profile.queue.{queue_name}')
+            )
 
     def cache_set(self, queue_profile: HpcQueueProfile):
-        self.context.cache().short_term().set(f'queue-profile.id.{queue_profile.queue_profile_id}', queue_profile)
-        self.context.cache().short_term().set(f'queue-profile.name.{queue_profile.name}', queue_profile)
+        self.context.cache().short_term().set(
+            f'queue-profile.id.{queue_profile.queue_profile_id}', queue_profile
+        )
+        self.context.cache().short_term().set(
+            f'queue-profile.name.{queue_profile.name}', queue_profile
+        )
         for queue in queue_profile.queues:
-            self.context.cache().short_term().set(f'queue-profile.queue.{queue}', queue_profile)
+            self.context.cache().short_term().set(
+                f'queue-profile.queue.{queue}', queue_profile
+            )
 
     def cache_clear(self, queue_profile: HpcQueueProfile):
-        self.context.cache().short_term().delete(f'queue-profile.id.{queue_profile.queue_profile_id}')
-        self.context.cache().short_term().delete(f'queue-profile.name.{queue_profile.name}')
+        self.context.cache().short_term().delete(
+            f'queue-profile.id.{queue_profile.queue_profile_id}'
+        )
+        self.context.cache().short_term().delete(
+            f'queue-profile.name.{queue_profile.name}'
+        )
         for queue in queue_profile.queues:
             self.context.cache().short_term().delete(f'queue-profile.queue.{queue}')
 
     def create_queue_profile(self, queue_profile: HpcQueueProfile) -> HpcQueueProfile:
-
         self.validate_and_sanitize_queue_profile(queue_profile)
 
         existing = self.queue_profile_dao.get_queue_profile_by_name(queue_profile.name)
         if existing is not None:
-            raise exceptions.invalid_params(f'queue profile already exists for queue profile name: {queue_profile.name}')
+            raise exceptions.invalid_params(
+                f'queue profile already exists for queue profile name: {queue_profile.name}'
+            )
 
         # set enabled to explicit false during creation
         queue_profile.enabled = False
@@ -188,41 +219,49 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
 
         return created
 
-    def get_queue_profile(self, queue_profile_id: str = None,
-                          queue_profile_name: str = None,
-                          queue_name: str = None) -> HpcQueueProfile:
-
+    def get_queue_profile(
+        self,
+        queue_profile_id: str = None,
+        queue_profile_name: str = None,
+        queue_name: str = None,
+    ) -> HpcQueueProfile:
         queue_profile = self.cache_get(
             queue_profile_id=queue_profile_id,
             queue_profile_name=queue_profile_name,
-            queue_name=queue_name
+            queue_name=queue_name,
         )
         if queue_profile is not None:
             return queue_profile
 
         db_queue_profile = None
         if Utils.is_not_empty(queue_profile_id):
-            db_queue_profile = self.queue_profile_dao.get_queue_profile_by_id(queue_profile_id)
+            db_queue_profile = self.queue_profile_dao.get_queue_profile_by_id(
+                queue_profile_id
+            )
         elif Utils.is_not_empty(queue_profile_name):
-            db_queue_profile = self.queue_profile_dao.get_queue_profile_by_name(queue_profile_name)
+            db_queue_profile = self.queue_profile_dao.get_queue_profile_by_name(
+                queue_profile_name
+            )
         elif Utils.is_not_empty(queue_name):
-            db_queue_profile = self.queue_profile_dao.get_queue_profile_by_queue(queue_name)
+            db_queue_profile = self.queue_profile_dao.get_queue_profile_by_queue(
+                queue_name
+            )
 
         if db_queue_profile is None:
             if Utils.is_not_empty(queue_profile_id):
                 raise exceptions.soca_exception(
                     error_code=errorcodes.SCHEDULER_QUEUE_PROFILE_NOT_FOUND,
-                    message=f'queue profile not found for id: {queue_profile_id}'
+                    message=f'queue profile not found for id: {queue_profile_id}',
                 )
             if Utils.is_not_empty(queue_profile_name):
                 raise exceptions.soca_exception(
                     error_code=errorcodes.SCHEDULER_QUEUE_PROFILE_NOT_FOUND,
-                    message=f'queue profile not found for name: {queue_profile_name}'
+                    message=f'queue profile not found for name: {queue_profile_name}',
                 )
             if Utils.is_not_empty(queue_name):
                 raise exceptions.soca_exception(
                     error_code=errorcodes.SCHEDULER_QUEUE_PROFILE_NOT_FOUND,
-                    message=f'queue profile not found for queue: {queue_name}'
+                    message=f'queue profile not found for queue: {queue_name}',
                 )
 
         queue_profile = self.queue_profile_dao.convert_from_db(db_queue_profile)
@@ -234,11 +273,15 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
         queue_profiles = []
         db_queue_profiles = self.queue_profile_dao.list_queue_profiles()
         for db_queue_profile in db_queue_profiles:
-            queue_profiles.append(self.queue_profile_dao.convert_from_db(db_queue_profile))
+            queue_profiles.append(
+                self.queue_profile_dao.convert_from_db(db_queue_profile)
+            )
         queue_profiles.sort(key=lambda queue_profile: queue_profile.name)
         return queue_profiles
 
-    def get_provisioning_queue(self, queue_profile_name: str) -> Optional[JobProvisioningQueue]:
+    def get_provisioning_queue(
+        self, queue_profile_name: str
+    ) -> Optional[JobProvisioningQueue]:
         if Utils.is_empty(queue_profile_name):
             return None
         queue_profile = self.get_queue_profile(queue_profile_name=queue_profile_name)
@@ -248,14 +291,16 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
         with self._provisioning_queue_lock:
             return self._provisioning_queues.get(queue_profile.queue_profile_id, None)
 
-    def enable_queue_profile(self, queue_profile_id: str = None, queue_profile_name: str = None):
+    def enable_queue_profile(
+        self, queue_profile_id: str = None, queue_profile_name: str = None
+    ):
         queue_profile = self.get_queue_profile(queue_profile_id, queue_profile_name)
         if Utils.is_true(queue_profile.enabled):
             return
 
         db_queue_profile = {
             'queue_profile_id': queue_profile.queue_profile_id,
-            'enabled': True
+            'enabled': True,
         }
         db_updated = self.queue_profile_dao.update(db_queue_profile)
         updated_queue_profile = self.queue_profile_dao.convert_from_db(db_updated)
@@ -264,14 +309,16 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
 
         self.initialize_job_provisioner(updated_queue_profile)
 
-    def disable_queue_profile(self, queue_profile_id: str = None, queue_profile_name: str = None):
+    def disable_queue_profile(
+        self, queue_profile_id: str = None, queue_profile_name: str = None
+    ):
         queue_profile = self.get_queue_profile(queue_profile_id, queue_profile_name)
         if Utils.is_false(queue_profile.enabled):
             return
 
         db_queue_profile = {
             'queue_profile_id': queue_profile.queue_profile_id,
-            'enabled': False
+            'enabled': False,
         }
         db_updated = self.queue_profile_dao.update(db_queue_profile)
         updated_queue_profile = self.queue_profile_dao.convert_from_db(db_updated)
@@ -281,28 +328,30 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
         self.stop_job_provisioner(updated_queue_profile)
 
     def update_queue_profile(self, queue_profile: HpcQueueProfile) -> HpcQueueProfile:
-
         self.validate_and_sanitize_queue_profile(queue_profile)
 
         if Utils.are_empty(queue_profile.queue_profile_id, queue_profile.name):
-            raise exceptions.invalid_params('Either queue_profile.queue_profile_id or queue_profile.name is required')
+            raise exceptions.invalid_params(
+                'Either queue_profile.queue_profile_id or queue_profile.name is required'
+            )
 
         existing_queue_profile = self.get_queue_profile(
             queue_profile_name=queue_profile.name,
-            queue_profile_id=queue_profile.queue_profile_id
+            queue_profile_id=queue_profile.queue_profile_id,
         )
         if existing_queue_profile is None:
-            raise exceptions.invalid_params(f'queue_profile not found')
+            raise exceptions.invalid_params('queue_profile not found')
 
         db_updates = self.queue_profile_dao.convert_to_db(queue_profile)
 
         # perform db update
-        db_updated_queue_profile = self.queue_profile_dao.update({
-            **db_updates,
-            'queue_profile_id': existing_queue_profile.queue_profile_id
-        })
+        db_updated_queue_profile = self.queue_profile_dao.update(
+            {**db_updates, 'queue_profile_id': existing_queue_profile.queue_profile_id}
+        )
 
-        updated_queue_profile = self.queue_profile_dao.convert_from_db(db_updated_queue_profile)
+        updated_queue_profile = self.queue_profile_dao.convert_from_db(
+            db_updated_queue_profile
+        )
 
         existing_queues = Utils.get_as_list(existing_queue_profile.queues, [])
         new_queues = Utils.get_as_list(updated_queue_profile.queues, [])
@@ -321,7 +370,12 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
 
         return updated_queue_profile
 
-    def delete_queue_profile(self, queue_profile_id: str = None, queue_profile_name: str = None, delete_queues: bool = True):
+    def delete_queue_profile(
+        self,
+        queue_profile_id: str = None,
+        queue_profile_name: str = None,
+        delete_queues: bool = True,
+    ):
         queue_profile = self.get_queue_profile(queue_profile_id, queue_profile_name)
 
         self.stop_job_provisioner(queue_profile)
@@ -332,7 +386,9 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
 
         self.cache_clear(queue_profile)
 
-        self.queue_profile_dao.delete_queue_profile(queue_profile_id=queue_profile.queue_profile_id)
+        self.queue_profile_dao.delete_queue_profile(
+            queue_profile_id=queue_profile.queue_profile_id
+        )
 
     def _create_queues(self, queue_names: List[str]) -> int:
         """
@@ -352,12 +408,14 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
                     raise e
         return created_count
 
-    def create_queues(self, queue_names: List[str],
-                      queue_profile_id: str = None,
-                      queue_profile_name: str = None,
-                      update_db=True,
-                      check_existing_profile=True):
-
+    def create_queues(
+        self,
+        queue_names: List[str],
+        queue_profile_id: str = None,
+        queue_profile_name: str = None,
+        update_db=True,
+        check_existing_profile=True,
+    ):
         if Utils.is_empty(queue_names):
             raise exceptions.invalid_params('queue_names[] is required')
 
@@ -369,7 +427,9 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
                 if existing is None:
                     continue
                 if existing['queue_profile_id'] != queue_profile.queue_profile_id:
-                    raise exceptions.invalid_params(f'queue: {queue_name} is already associated with queue profile: {existing["name"]}')
+                    raise exceptions.invalid_params(
+                        f'queue: {queue_name} is already associated with queue profile: {existing["name"]}'
+                    )
 
         # re-init provisioner if new queue is created in scheduler, or an existing queue is added to the queue profile
         created_count = self._create_queues(queue_names)
@@ -388,10 +448,12 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
         if update_db:
             db_queue_profile = {
                 'queue_profile_id': queue_profile_id,
-                'queues': queue_names
+                'queues': queue_names,
             }
             db_updated_queue_profile = self.queue_profile_dao.update(db_queue_profile)
-            queue_profile = self.queue_profile_dao.convert_from_db(db_updated_queue_profile)
+            queue_profile = self.queue_profile_dao.convert_from_db(
+                db_updated_queue_profile
+            )
             self.cache_set(queue_profile)
 
         self.initialize_job_provisioner(queue_profile)
@@ -411,12 +473,14 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
                 self.logger.error(f'failed to delete scheduler queue: {e}')
         return deleted_queues
 
-    def delete_queues(self, queue_names: List[str],
-                      queue_profile_id: str = None,
-                      queue_profile_name: str = None,
-                      update_db=True,
-                      initialize_job_provisioner=True):
-
+    def delete_queues(
+        self,
+        queue_names: List[str],
+        queue_profile_id: str = None,
+        queue_profile_name: str = None,
+        update_db=True,
+        initialize_job_provisioner=True,
+    ):
         if Utils.is_empty(queue_names):
             raise exceptions.invalid_params('queue_names[] is required')
 
@@ -425,7 +489,9 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
         updated_queues = queue_profile.queues
         for queue_name in queue_names:
             if queue_name not in queue_profile.queues:
-                raise exceptions.invalid_params(f'queue name: {queue_name} is not associated with queue profile: {queue_profile.name}')
+                raise exceptions.invalid_params(
+                    f'queue name: {queue_name} is not associated with queue profile: {queue_profile.name}'
+                )
             updated_queues.remove(queue_name)
 
         self._delete_queues(queue_names)
@@ -433,10 +499,12 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
         if update_db:
             db_queue_profile = {
                 'queue_profile_id': queue_profile_id,
-                'queues': queue_names
+                'queues': queue_names,
             }
             db_updated_queue_profile = self.queue_profile_dao.update(db_queue_profile)
-            queue_profile = self.queue_profile_dao.convert_from_db(db_updated_queue_profile)
+            queue_profile = self.queue_profile_dao.convert_from_db(
+                db_updated_queue_profile
+            )
             self.cache_set(queue_profile)
 
         if initialize_job_provisioner:

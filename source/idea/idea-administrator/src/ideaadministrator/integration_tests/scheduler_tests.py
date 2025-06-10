@@ -10,9 +10,7 @@
 #  and limitations under the License.
 
 from ideasdk.utils import Utils, GroupNameHelper
-from ideadatamodel import (
-    exceptions, errorcodes
-)
+from ideadatamodel import exceptions, errorcodes
 from ideadatamodel import (
     HpcQueueProfile,
     CreateProjectRequest,
@@ -30,12 +28,14 @@ from ideadatamodel import (
     SubmitJobRequest,
     SubmitJobResult,
     DisableQueueProfileRequest,
-    DeleteQueueProfileRequest
+    DeleteQueueProfileRequest,
 )
 
 from ideaadministrator.integration_tests.test_context import TestContext
 from ideaadministrator.integration_tests import test_constants
-from ideaadministrator.integration_tests.scheduler.job_test_case import JobSubmissionHelper
+from ideaadministrator.integration_tests.scheduler.job_test_case import (
+    JobSubmissionHelper,
+)
 
 from typing import Optional, List
 import time
@@ -44,17 +44,23 @@ import time
 TEST_PROJECT_ID: Optional[str] = None
 
 
-def _submit_all_jobs(context: TestContext, helper: JobSubmissionHelper, base_os_names: List[str], test_case_filter: List[str]):
-    all_test_case_configs = Utils.get_value_as_list('test_cases', helper.job_test_case_config)
+def _submit_all_jobs(
+    context: TestContext,
+    helper: JobSubmissionHelper,
+    base_os_names: List[str],
+    test_case_filter: List[str],
+):
+    all_test_case_configs = Utils.get_value_as_list(
+        'test_cases', helper.job_test_case_config
+    )
     job_region = context.cluster_config.get_string('cluster.aws.region')
     job_submission_count = 0
     for base_os in base_os_names:
         for test_case_config in all_test_case_configs:
-
             # check if test case can be skipped
             skip_regions = Utils.get_value_as_list('skip_regions', test_case_config)
             if skip_regions:
-                if job_region in skip_regions or "all" in skip_regions:
+                if job_region in skip_regions or 'all' in skip_regions:
                     continue
 
             name = Utils.get_value_as_string('name', test_case_config)
@@ -78,13 +84,11 @@ def _verify_all_jobs(helper: JobSubmissionHelper):
         current_iteration = 0
 
         while current_iteration <= max_iterations:
-
             current_iteration += 1
 
             for test_case_id in helper.job_test_cases:
                 test_case = helper.job_test_cases[test_case_id]
                 try:
-
                     if test_case.status in ('PASS', 'FAIL'):
                         continue
 
@@ -96,14 +100,18 @@ def _verify_all_jobs(helper: JobSubmissionHelper):
                         test_case.verify_output()
 
                 except Exception as e:
-                    helper.context.error(f'failed to verify status for TestCaseId: {test_case.test_case_id} - {e}')
+                    helper.context.error(
+                        f'failed to verify status for TestCaseId: {test_case.test_case_id} - {e}'
+                    )
 
             helper.print_summary('Job Test Case Progress')
 
             if helper.get_completed_count() >= helper.get_test_case_count():
                 break
 
-            helper.context.info(f'[{current_iteration} of {max_iterations}] Sleeping for {iteration_interval} seconds')
+            helper.context.info(
+                f'[{current_iteration} of {max_iterations}] Sleeping for {iteration_interval} seconds'
+            )
             time.sleep(iteration_interval)
     except KeyboardInterrupt:
         helper.context.error('Job test case verification aborted!')
@@ -125,9 +133,7 @@ def test_jobs(context: TestContext):
     else:
         job_filters = job_filter_string.split(',')
 
-    helper = JobSubmissionHelper(
-        context=context
-    )
+    helper = JobSubmissionHelper(context=context)
     _submit_all_jobs(context, helper, base_os_names, job_filters)
     _verify_all_jobs(helper)
 
@@ -139,7 +145,9 @@ def test_jobs(context: TestContext):
             continue
 
         job_shared_test_case = helper.job_test_cases[job_test_case_id]
-        job_group_key = f'{job_shared_test_case.base_os}.{job_shared_test_case.job_group}'
+        job_group_key = (
+            f'{job_shared_test_case.base_os}.{job_shared_test_case.job_group}'
+        )
 
         if job_group_key in job_groups:
             jobs = job_groups[job_group_key]
@@ -168,7 +176,6 @@ def test_admin_queue_profiles(context: TestContext):
     created_queue_profile: Optional[HpcQueueProfile] = None
 
     try:
-
         test_queue_profile_name = Utils.generate_password(8, 0, 8, 0, 0)
 
         # Create project to associate to the queue
@@ -179,14 +186,16 @@ def test_admin_queue_profiles(context: TestContext):
                     name=test_queue_profile_name,
                     title=f'{test_queue_profile_name} title',
                     description=f'{test_queue_profile_name} description',
-                    ldap_groups=[GroupNameHelper(context.idea_context).get_default_project_group()],
-                    tags=[
-                        SocaKeyValue(key='key', value='value')
-                    ]
+                    ldap_groups=[
+                        GroupNameHelper(
+                            context.idea_context
+                        ).get_default_project_group()
+                    ],
+                    tags=[SocaKeyValue(key='key', value='value')],
                 )
             ),
             result_as=CreateProjectResult,
-            access_token=context.get_admin_access_token()
+            access_token=context.get_admin_access_token(),
         )
 
         # create queue profile
@@ -206,13 +215,17 @@ def test_admin_queue_profiles(context: TestContext):
                     keep_forever=False,
                     default_job_params=SocaJobParams(
                         instance_types=['c5.large'],
-                        base_os=context.cluster_config.get_string('scheduler.compute_node_os', required=True),
-                        instance_ami=context.cluster_config.get_string('scheduler.compute_node_ami', required=True)
-                    )
+                        base_os=context.cluster_config.get_string(
+                            'scheduler.compute_node_os', required=True
+                        ),
+                        instance_ami=context.cluster_config.get_string(
+                            'scheduler.compute_node_ami', required=True
+                        ),
+                    ),
                 )
             ),
             result_as=CreateQueueProfileResult,
-            access_token=context.get_admin_access_token()
+            access_token=context.get_admin_access_token(),
         )
 
         queue_profile = create_queue_profile_result.queue_profile
@@ -226,10 +239,8 @@ def test_admin_queue_profiles(context: TestContext):
         context.info(f'Enable Queue Profile: {test_queue_profile_name}')
         context.get_scheduler_client().invoke_alt(
             namespace='SchedulerAdmin.EnableQueueProfile',
-            payload=EnableQueueProfileRequest(
-                queue_profile_name=queue_profile.name
-            ),
-            access_token=context.get_admin_access_token()
+            payload=EnableQueueProfileRequest(queue_profile_name=queue_profile.name),
+            access_token=context.get_admin_access_token(),
         )
 
         # list queue profiles
@@ -238,14 +249,19 @@ def test_admin_queue_profiles(context: TestContext):
             namespace='SchedulerAdmin.ListQueueProfiles',
             payload=ListQueueProfilesRequest(),
             result_as=ListQueueProfilesResult,
-            access_token=context.get_admin_access_token()
+            access_token=context.get_admin_access_token(),
         )
         assert list_queue_profiles_result.listing is not None
         assert len(list_queue_profiles_result.listing) > 0
         found = False
         for current_queue_profile in list_queue_profiles_result.listing:
-            if current_queue_profile.queue_profile_id == created_queue_profile.queue_profile_id:
-                context.info(f'Found Queue Profile: {test_queue_profile_name} in listing response')
+            if (
+                current_queue_profile.queue_profile_id
+                == created_queue_profile.queue_profile_id
+            ):
+                context.info(
+                    f'Found Queue Profile: {test_queue_profile_name} in listing response'
+                )
                 found = True
         assert found is True
 
@@ -262,10 +278,10 @@ def test_admin_queue_profiles(context: TestContext):
             payload=SubmitJobRequest(
                 job_script_interpreter='pbs',
                 job_script=Utils.base64_encode(job_script_valid),
-                dry_run=True
+                dry_run=True,
             ),
             result_as=SubmitJobResult,
-            access_token=context.get_admin_access_token()
+            access_token=context.get_admin_access_token(),
         )
 
         assert len(submit_job_result.validations.results) == 0
@@ -281,10 +297,10 @@ def test_admin_queue_profiles(context: TestContext):
                 namespace='Scheduler.SubmitJob',
                 payload=SubmitJobRequest(
                     job_script_interpreter='pbs',
-                    job_script=Utils.base64_encode(job_script_invalid_project)
+                    job_script=Utils.base64_encode(job_script_invalid_project),
                 ),
                 result_as=SubmitJobResult,
-                access_token=context.get_admin_access_token()
+                access_token=context.get_admin_access_token(),
             )
             assert False
         except exceptions.SocaException as e:
@@ -295,10 +311,8 @@ def test_admin_queue_profiles(context: TestContext):
         context.info(f'Disable Queue Profile: {test_queue_profile_name}')
         context.get_scheduler_client().invoke_alt(
             namespace='SchedulerAdmin.DisableQueueProfile',
-            payload=DisableQueueProfileRequest(
-                queue_profile_name=queue_profile.name
-            ),
-            access_token=context.get_admin_access_token()
+            payload=DisableQueueProfileRequest(queue_profile_name=queue_profile.name),
+            access_token=context.get_admin_access_token(),
         )
 
         # try submit job on disabled queue profile
@@ -308,17 +322,16 @@ def test_admin_queue_profiles(context: TestContext):
                 payload=SubmitJobRequest(
                     job_script_interpreter='pbs',
                     job_script=Utils.base64_encode(job_script_valid),
-                    dry_run=True
+                    dry_run=True,
                 ),
                 result_as=SubmitJobResult,
-                access_token=context.get_admin_access_token()
+                access_token=context.get_admin_access_token(),
             )
             assert False
         except exceptions.SocaException as e:
             assert e.error_code == 'SCHEDULER_QUEUE_PROFILE_DISABLED'
 
     finally:
-
         if created_queue_profile is not None:
             context.info(f'Delete Queue Profile: {created_queue_profile.name}')
             context.get_scheduler_client().invoke_alt(
@@ -326,17 +339,14 @@ def test_admin_queue_profiles(context: TestContext):
                 payload=DeleteQueueProfileRequest(
                     queue_profile_name=created_queue_profile.name
                 ),
-                access_token=context.get_admin_access_token()
+                access_token=context.get_admin_access_token(),
             )
 
 
 TEST_CASES = [
     {
         'test_case_id': test_constants.SCHEDULER_ADMIN_QUEUE_PROFILES,
-        'test_case': test_admin_queue_profiles
+        'test_case': test_admin_queue_profiles,
     },
-    {
-        'test_case_id': test_constants.SCHEDULER_JOB_TEST_CASES,
-        'test_case': test_jobs
-    }
+    {'test_case_id': test_constants.SCHEDULER_JOB_TEST_CASES, 'test_case': test_jobs},
 ]

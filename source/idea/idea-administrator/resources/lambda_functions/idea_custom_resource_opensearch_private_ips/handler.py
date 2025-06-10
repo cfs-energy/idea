@@ -28,13 +28,15 @@ def handler(event, context):
         request_type = event.get('RequestType')
 
         if request_type == 'Delete':
-            http_client.send_cfn_response(CfnResponse(
-                context=context,
-                event=event,
-                status=CfnResponseStatus.SUCCESS,
-                data={},
-                physical_resource_id=PHYSICAL_RESOURCE_ID
-            ))
+            http_client.send_cfn_response(
+                CfnResponse(
+                    context=context,
+                    event=event,
+                    status=CfnResponseStatus.SUCCESS,
+                    data={},
+                    physical_resource_id=PHYSICAL_RESOURCE_ID,
+                )
+            )
             return
 
         resource_properties = event.get('ResourceProperties', {})
@@ -42,11 +44,16 @@ def handler(event, context):
         logger.info('OpenSearch DomainName: ' + domain_name)
 
         ec2_client = boto3.client('ec2')
-        response = ec2_client.describe_network_interfaces(Filters=[
-            {'Name': 'description', 'Values': [f'ES {domain_name}']},
-            {'Name': 'requester-id', 'Values': ['amazon-elasticsearch']},
-            {'Name': 'status', 'Values': ['in-use']}  # Add this filter for in-use ENIs
-        ])
+        response = ec2_client.describe_network_interfaces(
+            Filters=[
+                {'Name': 'description', 'Values': [f'ES {domain_name}']},
+                {'Name': 'requester-id', 'Values': ['amazon-elasticsearch']},
+                {
+                    'Name': 'status',
+                    'Values': ['in-use'],
+                },  # Add this filter for in-use ENIs
+            ]
+        )
 
         network_interfaces = response.get('NetworkInterfaces', [])
         result = []
@@ -62,36 +69,38 @@ def handler(event, context):
         if len(result) == 0:
             msg = 'No in-use IP addresses found'
             logger.error(msg)
-            http_client.send_cfn_response(CfnResponse(
+            http_client.send_cfn_response(
+                CfnResponse(
+                    context=context,
+                    event=event,
+                    status=CfnResponseStatus.FAILED,
+                    data={'error': msg},
+                    physical_resource_id=PHYSICAL_RESOURCE_ID,
+                )
+            )
+        else:
+            http_client.send_cfn_response(
+                CfnResponse(
+                    context=context,
+                    event=event,
+                    status=CfnResponseStatus.SUCCESS,
+                    data={'IpAddresses': ','.join(result)},
+                    physical_resource_id=PHYSICAL_RESOURCE_ID,
+                )
+            )
+    except Exception as e:
+        logger.exception(f'Failed to get ES Private IP Address: {e}')
+        error_message = (
+            f'Exception getting in-use private IP addresses for ES idea-{domain_name}'
+        )
+        http_client.send_cfn_response(
+            CfnResponse(
                 context=context,
                 event=event,
                 status=CfnResponseStatus.FAILED,
-                data={
-                    'error': msg
-                },
-                physical_resource_id=PHYSICAL_RESOURCE_ID
-            ))
-        else:
-            http_client.send_cfn_response(CfnResponse(
-                context=context,
-                event=event,
-                status=CfnResponseStatus.SUCCESS,
-                data={
-                    'IpAddresses': ','.join(result)
-                },
-                physical_resource_id=PHYSICAL_RESOURCE_ID
-            ))
-    except Exception as e:
-        logger.exception(f'Failed to get ES Private IP Address: {e}')
-        error_message = f'Exception getting in-use private IP addresses for ES idea-{domain_name}'
-        http_client.send_cfn_response(CfnResponse(
-            context=context,
-            event=event,
-            status=CfnResponseStatus.FAILED,
-            data={
-                'error': error_message
-            },
-            physical_resource_id=PHYSICAL_RESOURCE_ID
-        ))
+                data={'error': error_message},
+                physical_resource_id=PHYSICAL_RESOURCE_ID,
+            )
+        )
     finally:
         http_client.destroy()

@@ -21,7 +21,7 @@ from ideadatamodel.email_templates import (
     DeleteEmailTemplateResult,
     ListEmailTemplatesRequest,
     ListEmailTemplatesResult,
-    EmailTemplate
+    EmailTemplate,
 )
 from ideasdk.utils import Utils
 from ideasdk.context import SocaContext
@@ -31,7 +31,6 @@ from ideaclustermanager.app.app_utils import ClusterManagerUtils
 
 
 class EmailTemplatesService:
-
     def __init__(self, context: SocaContext):
         self.context = context
         self.logger = context.logger('email-templates')
@@ -39,7 +38,9 @@ class EmailTemplatesService:
         self.email_templates_dao = EmailTemplatesDAO(context)
         self.email_templates_dao.initialize()
 
-    def create_email_template(self, request: CreateEmailTemplateRequest) -> CreateEmailTemplateResult:
+    def create_email_template(
+        self, request: CreateEmailTemplateRequest
+    ) -> CreateEmailTemplateResult:
         """
         Create a new EmailTemplate
         validate required fields, add the email_template to DynamoDB and Cache.
@@ -59,18 +60,24 @@ class EmailTemplatesService:
 
         existing = self.email_templates_dao.get_email_template(email_template.name)
         if existing is not None:
-            raise exceptions.invalid_params(f'email_template with name: {email_template.name} already exists')
+            raise exceptions.invalid_params(
+                f'email_template with name: {email_template.name} already exists'
+            )
 
         db_email_template = self.email_templates_dao.convert_to_db(email_template)
-        db_created_email_template = self.email_templates_dao.create_email_template(db_email_template)
-
-        created_email_template = self.email_templates_dao.convert_from_db(db_created_email_template)
-
-        return CreateEmailTemplateResult(
-            template=created_email_template
+        db_created_email_template = self.email_templates_dao.create_email_template(
+            db_email_template
         )
 
-    def get_email_template(self, request: GetEmailTemplateRequest) -> GetEmailTemplateResult:
+        created_email_template = self.email_templates_dao.convert_from_db(
+            db_created_email_template
+        )
+
+        return CreateEmailTemplateResult(template=created_email_template)
+
+    def get_email_template(
+        self, request: GetEmailTemplateRequest
+    ) -> GetEmailTemplateResult:
         """
         Retrieve the EmailTemplate
         :param request.email_template_name name of the email_template
@@ -87,14 +94,16 @@ class EmailTemplatesService:
         if db_email_template is None:
             raise exceptions.soca_exception(
                 error_code=errorcodes.EMAIL_TEMPLATE_NOT_FOUND,
-                message=f'email_template not found for name: {request.name}'
+                message=f'email_template not found for name: {request.name}',
             )
 
         return GetEmailTemplateResult(
             template=self.email_templates_dao.convert_from_db(db_email_template)
         )
 
-    def update_email_template(self, request: UpdateEmailTemplateRequest) -> UpdateEmailTemplateResult:
+    def update_email_template(
+        self, request: UpdateEmailTemplateRequest
+    ) -> UpdateEmailTemplateResult:
         """
         Update an EmailTemplate
         :param request:
@@ -109,28 +118,34 @@ class EmailTemplatesService:
         if Utils.are_empty(request.template.template_type):
             raise exceptions.invalid_params('template.template_type is required')
 
-        db_email_template = self.email_templates_dao.get_email_template(request.template.name)
+        db_email_template = self.email_templates_dao.get_email_template(
+            request.template.name
+        )
 
         if db_email_template is None:
             raise exceptions.soca_exception(
                 error_code=errorcodes.EMAIL_TEMPLATE_NOT_FOUND,
-                message=f'email_template not found for name: {request.template.name}'
+                message=f'email_template not found for name: {request.template.name}',
             )
 
-        db_updated = self.email_templates_dao.update_email_template(self.email_templates_dao.convert_to_db(request.template))
+        db_updated = self.email_templates_dao.update_email_template(
+            self.email_templates_dao.convert_to_db(request.template)
+        )
         updated_email_template = self.email_templates_dao.convert_from_db(db_updated)
 
-        return UpdateEmailTemplateResult(
-            template=updated_email_template
-        )
+        return UpdateEmailTemplateResult(template=updated_email_template)
 
-    def delete_email_template(self, request: DeleteEmailTemplateRequest) -> DeleteEmailTemplateResult:
+    def delete_email_template(
+        self, request: DeleteEmailTemplateRequest
+    ) -> DeleteEmailTemplateResult:
         if Utils.is_empty(request.name):
             raise exceptions.invalid_params('name is required')
         self.email_templates_dao.delete_email_template(request.name)
         return DeleteEmailTemplateResult()
 
-    def list_email_templates(self, request: ListEmailTemplatesRequest) -> ListEmailTemplatesResult:
+    def list_email_templates(
+        self, request: ListEmailTemplatesRequest
+    ) -> ListEmailTemplatesResult:
         return self.email_templates_dao.list_email_templates(request)
 
     def create_defaults(self):
@@ -144,4 +159,6 @@ class EmailTemplatesService:
             if existing is not None:
                 continue
             self.logger.info(f'creating default email template: {name} ...')
-            self.create_email_template(CreateEmailTemplateRequest(template=EmailTemplate(**template)))
+            self.create_email_template(
+                CreateEmailTemplateRequest(template=EmailTemplate(**template))
+            )

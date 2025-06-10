@@ -19,8 +19,9 @@ from ideascheduler.app.app_protocols import JobNotificationsProtocol
 
 
 class JobNotifications(JobNotificationsProtocol):
-
-    def __init__(self, context: SocaContext, notifications_client: NotificationsAsyncClient):
+    def __init__(
+        self, context: SocaContext, notifications_client: NotificationsAsyncClient
+    ):
         self.context = context
         self.notifications_client = notifications_client
 
@@ -32,18 +33,20 @@ class JobNotifications(JobNotificationsProtocol):
 
         template_name = job.notifications.job_started_email_template
         if Utils.is_empty(template_name):
-            template_name = self.context.config().get_string('scheduler.notifications.job_started.email_template', required=True)
+            template_name = self.context.config().get_string(
+                'scheduler.notifications.job_started.email_template', required=True
+            )
 
         if Utils.is_empty(template_name):
             return
 
-        self.notifications_client.send_notification(notification=Notification(
-            username=job.owner,
-            template_name=template_name,
-            params={
-                'job': Utils.to_dict(job)
-            }
-        ))
+        self.notifications_client.send_notification(
+            notification=Notification(
+                username=job.owner,
+                template_name=template_name,
+                params={'job': Utils.to_dict(job)},
+            )
+        )
 
     def job_completed(self, job: SocaJob):
         if job.notifications is None:
@@ -53,15 +56,17 @@ class JobNotifications(JobNotificationsProtocol):
 
         template_name = job.notifications.job_completed_email_template
         if Utils.is_empty(template_name):
-            template_name = self.context.config().get_string('scheduler.notifications.job_completed.email_template', required=True)
+            template_name = self.context.config().get_string(
+                'scheduler.notifications.job_completed.email_template', required=True
+            )
 
         if Utils.is_empty(template_name):
             return
 
-        self.notifications_client.send_notification(notification=Notification(
-            username=job.owner,
-            template_name=template_name,
-            params={
-                'job': Utils.to_dict(job)
-            }
-        ))
+        self.notifications_client.send_notification(
+            notification=Notification(
+                username=job.owner,
+                template_name=template_name,
+                params={'job': Utils.to_dict(job)},
+            )
+        )

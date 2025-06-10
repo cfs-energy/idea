@@ -32,12 +32,13 @@ class CfnResponse:
     data: Optional[dict] = None
 
     def build_response_payload(self) -> str:
-
         context = self.context
 
         reason = self.reason
         if reason is None:
-            reason = f'See the details in CloudWatch Log Stream: {context.log_stream_name}'
+            reason = (
+                f'See the details in CloudWatch Log Stream: {context.log_stream_name}'
+            )
 
         physical_resource_id = self.physical_resource_id
         if physical_resource_id is None:
@@ -55,7 +56,7 @@ class CfnResponse:
             'RequestId': request_id,
             'LogicalResourceId': logical_resource_id,
             'NoEcho': self.no_echo,
-            'Data': self.data
+            'Data': self.data,
         }
         return json.dumps(payload)
 

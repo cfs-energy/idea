@@ -30,13 +30,15 @@ def handler(event: dict, context):
 
         request_type = event.get('RequestType', None)
         if request_type == 'Delete':
-            client.send_cfn_response(CfnResponse(
-                context=context,
-                event=event,
-                status=CfnResponseStatus.SUCCESS,
-                data={},
-                physical_resource_id=PHYSICAL_RESOURCE_ID
-            ))
+            client.send_cfn_response(
+                CfnResponse(
+                    context=context,
+                    event=event,
+                    status=CfnResponseStatus.SUCCESS,
+                    data={},
+                    physical_resource_id=PHYSICAL_RESOURCE_ID,
+                )
+            )
             return
 
         resource_properties = event.get('ResourceProperties', {})
@@ -51,8 +53,12 @@ def handler(event: dict, context):
         ec2_client = boto3.client('ec2')
 
         # find all existing entries and check if any entries already exist.
-        prefix_list_paginator = ec2_client.get_paginator('get_managed_prefix_list_entries')
-        prefix_list_iterator = prefix_list_paginator.paginate(PrefixListId=prefix_list_id)
+        prefix_list_paginator = ec2_client.get_paginator(
+            'get_managed_prefix_list_entries'
+        )
+        prefix_list_iterator = prefix_list_paginator.paginate(
+            PrefixListId=prefix_list_id
+        )
         for prefix_list in prefix_list_iterator:
             cidr_entries = prefix_list.get('Entries', [])
             for cidr_entry in cidr_entries:
@@ -73,29 +79,33 @@ def handler(event: dict, context):
             ec2_client.modify_managed_prefix_list(
                 AddEntries=add_entries,
                 PrefixListId=prefix_list_id,
-                CurrentVersion=version
+                CurrentVersion=version,
             )
         else:
             logger.info('no new entries to add. skip.')
 
-        client.send_cfn_response(CfnResponse(
-            context=context,
-            event=event,
-            status=CfnResponseStatus.SUCCESS,
-            data={},
-            physical_resource_id=PHYSICAL_RESOURCE_ID
-        ))
+        client.send_cfn_response(
+            CfnResponse(
+                context=context,
+                event=event,
+                status=CfnResponseStatus.SUCCESS,
+                data={},
+                physical_resource_id=PHYSICAL_RESOURCE_ID,
+            )
+        )
 
     except Exception as e:
         error_message = f'failed to update cluster prefix list: {e}'
         logging.exception(error_message)
-        client.send_cfn_response(CfnResponse(
-            context=context,
-            event=event,
-            status=CfnResponseStatus.FAILED,
-            data={},
-            physical_resource_id=PHYSICAL_RESOURCE_ID,
-            reason=error_message
-        ))
+        client.send_cfn_response(
+            CfnResponse(
+                context=context,
+                event=event,
+                status=CfnResponseStatus.FAILED,
+                data={},
+                physical_resource_id=PHYSICAL_RESOURCE_ID,
+                reason=error_message,
+            )
+        )
     finally:
         client.destroy()

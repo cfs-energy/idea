@@ -37,7 +37,7 @@ from ideadatamodel import (
     DeleteProjectRequest,
     DeleteProjectResult,
     DeleteUserRequest,
-    DeleteUserResult
+    DeleteUserResult,
 )
 from ideasdk.utils import Utils, GroupNameHelper
 from ideadatamodel import exceptions
@@ -66,12 +66,12 @@ def test_admin_create_user(context: TestContext):
                 username=test_username,
                 password=test_password,
                 email=email,
-                additional_groups=["managers-cluster-group"],
+                additional_groups=['managers-cluster-group'],
             ),
-            email_verified=True
+            email_verified=True,
         ),
         result_as=CreateUserResult,
-        access_token=context.get_admin_access_token()
+        access_token=context.get_admin_access_token(),
     )
     global user
     user = result.user
@@ -93,11 +93,9 @@ def test_admin_create_user(context: TestContext):
 def test_admin_get_user(context: TestContext):
     result = context.get_cluster_manager_client().invoke_alt(
         namespace='Accounts.GetUser',
-        payload=GetUserRequest(
-            username=test_username
-        ),
+        payload=GetUserRequest(username=test_username),
         result_as=GetUserResult,
-        access_token=context.get_admin_access_token()
+        access_token=context.get_admin_access_token(),
     )
 
     assert result.user is not None
@@ -106,14 +104,14 @@ def test_admin_get_user(context: TestContext):
 
 def test_get_user_group(context: TestContext):
     assert test_username is not None
-    group_name = GroupNameHelper(context.idea_context).get_user_group(str(test_username))
+    group_name = GroupNameHelper(context.idea_context).get_user_group(
+        str(test_username)
+    )
     result = context.get_cluster_manager_client().invoke_alt(
         namespace='Accounts.GetGroup',
-        payload=GetGroupRequest(
-            group_name=group_name
-        ),
+        payload=GetGroupRequest(group_name=group_name),
         result_as=GetGroupResult,
-        access_token=context.get_admin_access_token()
+        access_token=context.get_admin_access_token(),
     )
     group = result.group
     assert group is not None
@@ -126,9 +124,9 @@ def test_user_initiate_auth(context: TestContext):
         payload=InitiateAuthRequest(
             auth_flow='USER_PASSWORD_AUTH',
             username=test_username,
-            password=test_password
+            password=test_password,
         ),
-        result_as=InitiateAuthResult
+        result_as=InitiateAuthResult,
     )
     assert result.auth is not None
     assert Utils.is_not_empty(result.auth.access_token)
@@ -146,10 +144,10 @@ def test_user_change_password(context: TestContext):
         payload=ChangePasswordRequest(
             username=test_username,
             old_password=old_password,
-            new_password=test_password
+            new_password=test_password,
         ),
         result_as=ChangePasswordResult,
-        access_token=user_auth.access_token
+        access_token=user_auth.access_token,
     )
 
 
@@ -158,7 +156,7 @@ def test_admin_list_users(context: TestContext):
         namespace='Accounts.ListUsers',
         payload=ListUsersRequest(),
         result_as=ListUsersResult,
-        access_token=context.get_admin_access_token()
+        access_token=context.get_admin_access_token(),
     )
     assert len(result.listing) > 0
 
@@ -173,14 +171,14 @@ def test_admin_create_project(context: TestContext):
                 name=project_name,
                 title=f'{project_name} title',
                 description=f'{project_name} description',
-                ldap_groups=[GroupNameHelper(context.idea_context).get_default_project_group()],
-                tags=[
-                    SocaKeyValue(key='key', value='value')
-                ]
+                ldap_groups=[
+                    GroupNameHelper(context.idea_context).get_default_project_group()
+                ],
+                tags=[SocaKeyValue(key='key', value='value')],
             )
         ),
         result_as=CreateProjectResult,
-        access_token=context.get_admin_access_token()
+        access_token=context.get_admin_access_token(),
     )
 
     project = create_project_result.project
@@ -193,10 +191,8 @@ def test_admin_create_project(context: TestContext):
 
     context.get_cluster_manager_client().invoke_alt(
         namespace='Projects.EnableProject',
-        payload=EnableProjectRequest(
-            project_id=project.project_id
-        ),
-        access_token=context.get_admin_access_token()
+        payload=EnableProjectRequest(project_id=project.project_id),
+        access_token=context.get_admin_access_token(),
     )
 
 
@@ -205,11 +201,9 @@ def test_admin_get_project(context: TestContext):
 
     get_project_result = context.get_cluster_manager_client().invoke_alt(
         namespace='Projects.GetProject',
-        payload=GetProjectRequest(
-            project_id=TEST_PROJECT_ID
-        ),
+        payload=GetProjectRequest(project_id=TEST_PROJECT_ID),
         result_as=GetProjectResult,
-        access_token=context.get_admin_access_token()
+        access_token=context.get_admin_access_token(),
     )
 
     assert get_project_result.project is not None
@@ -221,11 +215,9 @@ def test_admin_update_project(context: TestContext):
 
     get_project_result = context.get_cluster_manager_client().invoke_alt(
         namespace='Projects.GetProject',
-        payload=GetProjectRequest(
-            project_id=TEST_PROJECT_ID
-        ),
+        payload=GetProjectRequest(project_id=TEST_PROJECT_ID),
         result_as=GetProjectResult,
-        access_token=context.get_admin_access_token()
+        access_token=context.get_admin_access_token(),
     )
 
     project = get_project_result.project
@@ -234,19 +226,15 @@ def test_admin_update_project(context: TestContext):
 
     context.get_cluster_manager_client().invoke_alt(
         namespace='Projects.UpdateProject',
-        payload=UpdateProjectRequest(
-            project=project
-        ),
-        access_token=context.get_admin_access_token()
+        payload=UpdateProjectRequest(project=project),
+        access_token=context.get_admin_access_token(),
     )
 
     get_updated_project_result = context.get_cluster_manager_client().invoke_alt(
         namespace='Projects.GetProject',
-        payload=GetProjectRequest(
-            project_id=TEST_PROJECT_ID
-        ),
+        payload=GetProjectRequest(project_id=TEST_PROJECT_ID),
         result_as=GetProjectResult,
-        access_token=context.get_admin_access_token()
+        access_token=context.get_admin_access_token(),
     )
 
     assert get_updated_project_result.project.title == updated_title
@@ -259,7 +247,7 @@ def test_admin_list_projects(context: TestContext):
         namespace='Projects.ListProjects',
         payload=ListProjectsRequest(),
         result_as=ListProjectsResult,
-        access_token=context.get_admin_access_token()
+        access_token=context.get_admin_access_token(),
     )
 
     assert list_projects_result.listing is not None
@@ -277,21 +265,17 @@ def test_admin_disable_project(context: TestContext):
 
     context.get_cluster_manager_client().invoke_alt(
         namespace='Projects.DisableProject',
-        payload=DeleteProjectRequest(
-            project_id=TEST_PROJECT_ID
-        ),
+        payload=DeleteProjectRequest(project_id=TEST_PROJECT_ID),
         result_as=DeleteProjectResult,
-        access_token=context.get_admin_access_token()
+        access_token=context.get_admin_access_token(),
     )
 
     try:
         context.get_cluster_manager_client().invoke_alt(
             namespace='Projects.GetProject',
-            payload=GetProjectRequest(
-                project_id=TEST_PROJECT_ID
-            ),
+            payload=GetProjectRequest(project_id=TEST_PROJECT_ID),
             result_as=GetProjectResult,
-            access_token=context.get_admin_access_token()
+            access_token=context.get_admin_access_token(),
         )
     except exceptions.SocaException as e:
         assert e.error_code == 'SCHEDULER_HPC_PROJECT_NOT_FOUND'
@@ -300,65 +284,63 @@ def test_admin_disable_project(context: TestContext):
 def test_admin_disable_user(context: TestContext):
     context.get_cluster_manager_client().invoke_alt(
         namespace='Accounts.DisableUser',
-        payload=DeleteUserRequest(
-            username=test_username
-        ),
+        payload=DeleteUserRequest(username=test_username),
         result_as=DeleteUserResult,
-        access_token=context.get_admin_access_token()
+        access_token=context.get_admin_access_token(),
     )
 
 
 TEST_CASES = [
     {
         'test_case_id': test_constants.ACCOUNTS_CREATE_USER,
-        'test_case': test_admin_create_user
+        'test_case': test_admin_create_user,
     },
     {
         'test_case_id': test_constants.ACCOUNTS_GET_USER,
-        'test_case': test_admin_get_user
+        'test_case': test_admin_get_user,
     },
     {
         'test_case_id': test_constants.ACCOUNTS_GET_USER_GROUP,
-        'test_case': test_get_user_group
+        'test_case': test_get_user_group,
     },
     {
         'test_case_id': test_constants.AUTH_INITIATE_AUTH,
-        'test_case': test_user_initiate_auth
+        'test_case': test_user_initiate_auth,
     },
     {
         'test_case_id': test_constants.AUTH_CHANGE_PASSWORD,
-        'test_case': test_user_change_password
+        'test_case': test_user_change_password,
     },
     {
         'test_case_id': test_constants.ACCOUNTS_LIST_USERS,
-        'test_case': test_admin_list_users
+        'test_case': test_admin_list_users,
     },
     {
         'test_case_id': test_constants.ACCOUNTS_DISABLE_USER,
-        'test_case': test_admin_disable_user
+        'test_case': test_admin_disable_user,
     },
     {
         'test_case_id': test_constants.PROJECTS_CREATE_PROJECT,
-        'test_case': test_admin_create_project
+        'test_case': test_admin_create_project,
     },
     {
         'test_case_id': test_constants.PROJECTS_GET_PROJECT,
-        'test_case': test_admin_get_project
+        'test_case': test_admin_get_project,
     },
     {
         'test_case_id': test_constants.PROJECTS_GET_PROJECT,
-        'test_case': test_admin_get_project
+        'test_case': test_admin_get_project,
     },
     {
         'test_case_id': test_constants.PROJECTS_UPDATE_PROJECT,
-        'test_case': test_admin_update_project
+        'test_case': test_admin_update_project,
     },
     {
         'test_case_id': test_constants.PROJECTS_LIST_PROJECTS,
-        'test_case': test_admin_list_projects
+        'test_case': test_admin_list_projects,
     },
     {
         'test_case_id': test_constants.PROJECTS_DISABLE_PROJECT,
-        'test_case': test_admin_disable_project
-    }
+        'test_case': test_admin_disable_project,
+    },
 ]

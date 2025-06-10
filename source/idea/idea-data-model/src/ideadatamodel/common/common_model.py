@@ -21,10 +21,10 @@ __all__ = (
     'SocaLogEntry',
     'SocaKeyValue',
     'CustomFileLoggerParams',
-    'BaseOS'
+    'BaseOS',
 )
 
-from ideadatamodel import (exceptions, errorcodes, SocaBaseModel)
+from ideadatamodel import exceptions, errorcodes, SocaBaseModel
 from ideadatamodel.model_utils import ModelUtils
 import ideadatamodel.locale as locale
 
@@ -37,7 +37,11 @@ from datetime import datetime
 
 class BaseOS(str, Enum):
     WINDOWS = 'windows'
+    WINDOWS_2019 = 'windows2019'
+    WINDOWS_2022 = 'windows2022'
+    WINDOWS_2025 = 'windows2025'
     AMAZON_LINUX_2 = 'amazonlinux2'
+    AMAZON_LINUX_2023 = 'amazonlinux2023'
     CENTOS_7 = 'centos7'
     RHEL_7 = 'rhel7'
     RHEL_8 = 'rhel8'
@@ -233,10 +237,7 @@ class SocaMemory(SocaBaseModel):
             value = self.bytes()
             desired_unit = SocaMemoryUnit.BYTES
 
-        return SocaMemory(
-            value=value,
-            unit=desired_unit
-        )
+        return SocaMemory(value=value, unit=desired_unit)
 
     def bytes(self) -> int:
         if self.unit == SocaMemoryUnit.BYTES:
@@ -244,19 +245,19 @@ class SocaMemory(SocaBaseModel):
         elif self.unit == SocaMemoryUnit.KiB:
             return int(self.value * 1024)
         elif self.unit == SocaMemoryUnit.MiB:
-            return int(self.value * (1024 ** 2))
+            return int(self.value * (1024**2))
         elif self.unit == SocaMemoryUnit.GiB:
-            return int(self.value * (1024 ** 3))
+            return int(self.value * (1024**3))
         elif self.unit == SocaMemoryUnit.TiB:
-            return int(self.value * (1024 ** 4))
+            return int(self.value * (1024**4))
         elif self.unit == SocaMemoryUnit.KB:
             return int(self.value * 1000)
         elif self.unit == SocaMemoryUnit.MB:
-            return int(self.value * (1000 ** 2))
+            return int(self.value * (1000**2))
         elif self.unit == SocaMemoryUnit.GB:
-            return int(self.value * (1000 ** 3))
+            return int(self.value * (1000**3))
         elif self.unit == SocaMemoryUnit.TB:
-            return int(self.value * (1000 ** 4))
+            return int(self.value * (1000**4))
 
     @staticmethod
     def _value(value: float) -> Union[float, int]:
@@ -279,17 +280,17 @@ class SocaMemory(SocaBaseModel):
     def mib(self) -> Union[float, int]:
         if self.unit == SocaMemoryUnit.MiB:
             return self._value(self.value)
-        return self._value(self.bytes() / (1024 ** 2))
+        return self._value(self.bytes() / (1024**2))
 
     def gib(self) -> Union[float, int]:
         if self.unit == SocaMemoryUnit.GiB:
             return self._value(self.value)
-        return self._value(self.bytes() / (1024 ** 3))
+        return self._value(self.bytes() / (1024**3))
 
     def tib(self) -> Union[float, int]:
         if self.unit == SocaMemoryUnit.TiB:
             return self._value(self.value)
-        return self._value(self.bytes() / (1024 ** 4))
+        return self._value(self.bytes() / (1024**4))
 
     def kb(self) -> Union[float, int]:
         if self.unit == SocaMemoryUnit.KB:
@@ -299,17 +300,17 @@ class SocaMemory(SocaBaseModel):
     def mb(self) -> Union[float, int]:
         if self.unit == SocaMemoryUnit.MB:
             return self._value(self.value)
-        return self._value(self.bytes() / (1000 ** 2))
+        return self._value(self.bytes() / (1000**2))
 
     def gb(self) -> Union[float, int]:
         if self.unit == SocaMemoryUnit.GB:
             return self._value(self.value)
-        return self._value(self.bytes() / (1000 ** 3))
+        return self._value(self.bytes() / (1000**3))
 
     def tb(self) -> Union[float, int]:
         if self.unit == SocaMemoryUnit.TB:
             return self._value(self.value)
-        return self._value(self.bytes() / (1000 ** 4))
+        return self._value(self.bytes() / (1000**4))
 
     def __repr__(self):
         return str(self)
@@ -349,8 +350,7 @@ class SocaMemory(SocaBaseModel):
             larger_unit = other.unit
 
         return SocaMemory(
-            value=self.bytes() - other.bytes(),
-            unit=SocaMemoryUnit.BYTES
+            value=self.bytes() - other.bytes(), unit=SocaMemoryUnit.BYTES
         ).as_unit(larger_unit)
 
     def __add__(self, other: Optional[Union['SocaMemory', str]]):
@@ -365,8 +365,7 @@ class SocaMemory(SocaBaseModel):
             larger_unit = other.unit
 
         return SocaMemory(
-            value=self.bytes() + other.bytes(),
-            unit=SocaMemoryUnit.BYTES
+            value=self.bytes() + other.bytes(), unit=SocaMemoryUnit.BYTES
         ).as_unit(larger_unit)
 
     # see Rich Comparisons: https://portingguide.readthedocs.io/en/latest/comparisons.html#rich-comparisons
@@ -445,7 +444,9 @@ class SocaMemory(SocaBaseModel):
         return SocaMemory(value=0, unit=unit)
 
     @staticmethod
-    def resolve(value: Optional[str], unit: SocaMemoryUnit = None, default: 'SocaMemory' = None) -> Optional['SocaMemory']:
+    def resolve(
+        value: Optional[str], unit: SocaMemoryUnit = None, default: 'SocaMemory' = None
+    ) -> Optional['SocaMemory']:
         if ModelUtils.is_empty(value):
             return default
 
@@ -482,7 +483,7 @@ class SocaMemory(SocaBaseModel):
             if unit is None:
                 raise exceptions.SocaException(
                     error_code=errorcodes.MEMORY_FORMAT_PARSING_FAILED,
-                    message=f'memory string format not supported for value: {value}'
+                    message=f'memory string format not supported for value: {value}',
                 )
             memory = value
 
@@ -490,7 +491,7 @@ class SocaMemory(SocaBaseModel):
         if not ModelUtils.is_int(memory) and not ModelUtils.is_float(memory):
             raise exceptions.SocaException(
                 error_code=errorcodes.MEMORY_FORMAT_PARSING_FAILED,
-                message=f'invalid memory value: {memory}. memory must be an integer or float value.'
+                message=f'invalid memory value: {memory}. memory must be an integer or float value.',
             )
 
         return SocaMemory(value=float(memory), unit=unit)
@@ -512,8 +513,8 @@ class SocaAmount(SocaBaseModel):
             raise exceptions.soca_exception(
                 error_code=errorcodes.INVALID_LOCALE_CONFIGURATION,
                 message=f'Given currency code: {self.unit} does not match the configured '
-                        f'currency code: {locale.get_currency_code()}. Please ensure locale is '
-                        f'configured as per the expected local currency.'
+                f'currency code: {locale.get_currency_code()}. Please ensure locale is '
+                f'configured as per the expected local currency.',
             )
 
     @property

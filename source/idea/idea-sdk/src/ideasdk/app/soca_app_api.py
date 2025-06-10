@@ -13,25 +13,23 @@ from ideasdk.api import BaseAPI
 from ideasdk.protocols import SocaContextProtocol
 from ideasdk.api import ApiInvocationContext
 
-from ideadatamodel.app import (
-    GetModuleInfoResult,
-    ModuleInfo
-)
+from ideadatamodel.app import GetModuleInfoResult, ModuleInfo
 
 
 class SocaAppAPI(BaseAPI):
-
     def __init__(self, context: SocaContextProtocol):
         self.context = context
 
     def get_module_info(self, context: ApiInvocationContext):
-        context.success(GetModuleInfoResult(
-            module=ModuleInfo(
-                module_name=self.context.module_name(),
-                module_version=self.context.module_version(),
-                module_id=self.context.module_id()
+        context.success(
+            GetModuleInfoResult(
+                module=ModuleInfo(
+                    module_name=self.context.module_name(),
+                    module_version=self.context.module_version(),
+                    module_id=self.context.module_id(),
+                )
             )
-        ))
+        )
 
     def invoke(self, context: ApiInvocationContext):
         if context.namespace == 'App.GetModuleInfo':

@@ -13,7 +13,6 @@ from threading import Thread, Event
 
 
 class IdeaThread(Thread):
-
     def __init__(self, thread_number: int, target):
         super().__init__(name=str(thread_number), target=target)
         self.exit = Event()

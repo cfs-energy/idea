@@ -32,12 +32,15 @@ class DistributedLock(SocaService, DistributedLockProtocol):
     DistributedLock is automatically initialized by SocaContext if `options.enable_distributed_lock = True`
     """
 
-    def __init__(self, context: SocaContextProtocol,
-                 heartbeat_period=5,
-                 safe_period=20,
-                 lease_duration=30,
-                 expiry_period=60*60,
-                 heartbeat_tps=-1):
+    def __init__(
+        self,
+        context: SocaContextProtocol,
+        heartbeat_period=5,
+        safe_period=20,
+        lease_duration=30,
+        expiry_period=60 * 60,
+        heartbeat_tps=-1,
+    ):
         """
         :param SocaContext context: Application Context
         :param int heartbeat_period: How often to update DynamoDB to note that the
@@ -74,7 +77,7 @@ class DistributedLock(SocaService, DistributedLockProtocol):
             safe_period=datetime.timedelta(seconds=safe_period),
             lease_duration=datetime.timedelta(seconds=lease_duration),
             expiry_period=datetime.timedelta(seconds=expiry_period),
-            heartbeat_tps=heartbeat_tps
+            heartbeat_tps=heartbeat_tps,
         )
 
         self._lock = RLock()
@@ -84,10 +87,14 @@ class DistributedLock(SocaService, DistributedLockProtocol):
         return SERVICE_ID_DISTRIBUTED_LOCK
 
     def _get_table_name(self) -> str:
-        return f'{self.context.cluster_name()}.{self.context.module_id()}.distributed-lock'
+        return (
+            f'{self.context.cluster_name()}.{self.context.module_id()}.distributed-lock'
+        )
 
     def _initialize_distributed_lock_table(self):
-        exists = self.context.aws_util().dynamodb_check_table_exists(self._get_table_name())
+        exists = self.context.aws_util().dynamodb_check_table_exists(
+            self._get_table_name()
+        )
         if not exists:
             # wait for random duration to avoid race condition for table creation with other nodes
             time.sleep(random.randint(0, 5))
@@ -96,30 +103,18 @@ class DistributedLock(SocaService, DistributedLockProtocol):
             create_table_request={
                 'TableName': self._get_table_name(),
                 'AttributeDefinitions': [
-                    {
-                        'AttributeName': 'lock_key',
-                        'AttributeType': 'S'
-                    },
-                    {
-                        'AttributeName': 'sort_key',
-                        'AttributeType': 'S'
-                    }
+                    {'AttributeName': 'lock_key', 'AttributeType': 'S'},
+                    {'AttributeName': 'sort_key', 'AttributeType': 'S'},
                 ],
                 'KeySchema': [
-                    {
-                        'AttributeName': 'lock_key',
-                        'KeyType': 'HASH'
-                    },
-                    {
-                        'AttributeName': 'sort_key',
-                        'KeyType': 'RANGE'
-                    }
+                    {'AttributeName': 'lock_key', 'KeyType': 'HASH'},
+                    {'AttributeName': 'sort_key', 'KeyType': 'RANGE'},
                 ],
-                'BillingMode': 'PAY_PER_REQUEST'
+                'BillingMode': 'PAY_PER_REQUEST',
             },
             wait=True,
             ttl=True,
-            ttl_attribute_name='expiry_time'
+            ttl_attribute_name='expiry_time',
         )
 
     def acquire(self, key: str):
@@ -130,10 +125,7 @@ class DistributedLock(SocaService, DistributedLockProtocol):
     def release(self, key: str):
         if key not in self._active_locks:
             return
-        self._lock_client.release_lock(
-            lock=self._active_locks[key],
-            best_effort=True
-        )
+        self._lock_client.release_lock(lock=self._active_locks[key], best_effort=True)
         with self._lock:
             del self._active_locks[key]
 

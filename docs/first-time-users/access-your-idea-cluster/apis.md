@@ -17,7 +17,7 @@ TO be rewritten
 API Authorization is available in 4 categories:
 
 * **Public** - As long as client has network access to the endpoint.
-* **Authenticated User** - The calling user must send a valid JWT token issued by the cluster’s Cognito User Pool
+* **Authenticated User** - The calling user must send a valid JWT token issued by the cluster's Cognito User Pool
 * **Manager** - The user must be part of the **managers** Cognito User Group.
 * **Administrator** - The user must be part of the **administrators** Cognito User Group, in addition to the Sudoers LDAP Group.
 
@@ -162,7 +162,7 @@ get_auth_data = {
 ## Prepare Header
 get_auth_headers = {'Content-Type': 'application/json'}
 
-## Submit request and retrieve access token 
+## Submit request and retrieve access token
 get_auth_request = requests.post(f"{IDEA_ENDPOINT}/cluster-manager/api/v1",
                                  headers=get_auth_headers,
                                  data=json.dumps(get_auth_data),
@@ -211,27 +211,27 @@ Response:
 
 ```json
 {
-	'header': {
-		'namespace': 'Accounts.CreateUser',
-		'request_id': '550145c7-93c0-4f3a-96f5-c8b17095c1c0'
-	},
-	'success': True,
-	'payload': {
-		'user': {
-			'username': 'testuser1',
-			'email': 'invalid@email.none',
-			'uid': 5004,
-			'gid': 5012,
-			'group_name': 'testuser1-user-group',
-			'login_shell': '/bin/bash',
-			'home_dir': '/data/home/testuser1',
-			'sudo': False,
-			'status': 'CONFIRMED',
-			'enabled': True,
-			'created_on': '2022-11-01T15:45:27.244000+00:00',
-			'updated_on': '2022-11-01T15:45:27.244000+00:00'
-		}
-	}
+    'header': {
+        'namespace': 'Accounts.CreateUser',
+        'request_id': '550145c7-93c0-4f3a-96f5-c8b17095c1c0'
+    },
+    'success': True,
+    'payload': {
+        'user': {
+            'username': 'testuser1',
+            'email': 'invalid@email.none',
+            'uid': 5004,
+            'gid': 5012,
+            'group_name': 'testuser1-user-group',
+            'login_shell': '/bin/bash',
+            'home_dir': '/data/home/testuser1',
+            'sudo': False,
+            'status': 'CONFIRMED',
+            'enabled': True,
+            'created_on': '2022-11-01T15:45:27.244000+00:00',
+            'updated_on': '2022-11-01T15:45:27.244000+00:00'
+        }
+    }
 }
 ```
 

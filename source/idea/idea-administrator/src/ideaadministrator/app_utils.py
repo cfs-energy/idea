@@ -10,7 +10,7 @@
 #  and limitations under the License.
 
 from ideasdk.utils import Utils, Jinja2Utils
-from ideadatamodel import constants, exceptions, SocaAnyPayload
+from ideadatamodel import exceptions, SocaAnyPayload
 from ideasdk.config.cluster_config import ClusterConfig
 from ideasdk.context.arn_builder import ArnBuilder
 
@@ -26,7 +26,6 @@ import yaml.parser
 
 
 class AdministratorUtils:
-
     @staticmethod
     def detect_client_ip() -> Optional[str]:
         """
@@ -35,7 +34,7 @@ class AdministratorUtils:
         :return: IP Address or None
         """
         try:
-            requests.packages.urllib3.util.connection.HAS_IPV6 = False # noqa
+            requests.packages.urllib3.util.connection.HAS_IPV6 = False  # noqa
             http_result = requests.get('https://checkip.amazonaws.com/', timeout=15)
             if http_result.status_code != 200:
                 return None
@@ -58,13 +57,13 @@ class AdministratorUtils:
         return f'{app_constants.CLUSTER_NAME_PREFIX}{token}'
 
     @staticmethod
-    def get_ssh_connection_string(os_: str, ip_address: str, keypair_name: str) -> Optional[str]:
+    def get_ssh_connection_string(
+        os_: str, ip_address: str, keypair_name: str
+    ) -> Optional[str]:
         # todo - need to check if on windows, .exe or something else needs to be handled
         user = AdministratorUtils.get_ec2_username(os_)
         keypair_path = f'~/.ssh/{keypair_name}.pem'
-        return str(f'ssh '
-                   f'-i {keypair_path} '
-                   f'{user}@{ip_address}')
+        return str(f'ssh -i {keypair_path} {user}@{ip_address}')
 
     @staticmethod
     def get_ec2_username(os_: str) -> str:
@@ -75,7 +74,9 @@ class AdministratorUtils:
         #     return 'ec2-user'
 
     @staticmethod
-    def get_session_manager_url(aws_partition: str, aws_region: str, instance_id: str) -> str:
+    def get_session_manager_url(
+        aws_partition: str, aws_region: str, instance_id: str
+    ) -> str:
         # todo - implement this for other partitions (aws-iso, aws-iso-b)
 
         # console_prefix - comes before 'console' in the URI - including the '.'
@@ -93,9 +94,11 @@ class AdministratorUtils:
             console_prefix = f'{aws_region}.'
             console_suffix = '.aws.amazon.com'
 
-        return str(f'https://{console_prefix}console{console_suffix}'
-                   f'/systems-manager/session-manager'
-                   f'/{instance_id}?region={aws_region}')
+        return str(
+            f'https://{console_prefix}console{console_suffix}'
+            f'/systems-manager/session-manager'
+            f'/{instance_id}?region={aws_region}'
+        )
 
     @staticmethod
     def get_package_build_dir() -> str:
@@ -160,7 +163,11 @@ class AdministratorUtils:
         return False
 
     @staticmethod
-    def cleanup_cluster_region_dir(directory: str, preserve_values_file: bool = False, scope: Tuple[str] = ('config', 'values.yml')):
+    def cleanup_cluster_region_dir(
+        directory: str,
+        preserve_values_file: bool = False,
+        scope: Tuple[str] = ('config', 'values.yml'),
+    ):
         """
         Delete config generation related files and directories if the directory already exists and is not empty
         :param directory:
@@ -185,29 +192,41 @@ class AdministratorUtils:
                 os.remove(file_path)
 
     @staticmethod
-    def render_policy(policy_template_name: str,
-                      cluster_name: str,
-                      module_id: str,
-                      config: ClusterConfig,
-                      vars: SocaAnyPayload = None) -> Dict: # noqa
-        env = Jinja2Utils.env_using_file_system_loader(search_path=ideaadministrator.props.policy_templates_dir)
+    def render_policy(
+        policy_template_name: str,
+        cluster_name: str,
+        module_id: str,
+        config: ClusterConfig,
+        vars: SocaAnyPayload = None,
+    ) -> Dict:  # noqa
+        env = Jinja2Utils.env_using_file_system_loader(
+            search_path=ideaadministrator.props.policy_templates_dir
+        )
         policy_template = env.get_template(policy_template_name)
 
         if vars is None:
-            vars = SocaAnyPayload() # noqa
+            vars = SocaAnyPayload()  # noqa
 
-        policy_content = policy_template.render(context={
-            'cluster_name': cluster_name,
-            'module_id': module_id,
-            'aws_region': config.get_string('cluster.aws.region', required=True),
-            'aws_dns_suffix': config.get_string('cluster.aws.dns_suffix', required=True),
-            'aws_partition': config.get_string('cluster.aws.partition', required=True),
-            'aws_account_id': config.get_string('cluster.aws.account_id', required=True),
-            'config': config,
-            'arns': ArnBuilder(config=config),
-            'vars': vars,
-            'utils': Utils
-        })
+        policy_content = policy_template.render(
+            context={
+                'cluster_name': cluster_name,
+                'module_id': module_id,
+                'aws_region': config.get_string('cluster.aws.region', required=True),
+                'aws_dns_suffix': config.get_string(
+                    'cluster.aws.dns_suffix', required=True
+                ),
+                'aws_partition': config.get_string(
+                    'cluster.aws.partition', required=True
+                ),
+                'aws_account_id': config.get_string(
+                    'cluster.aws.account_id', required=True
+                ),
+                'config': config,
+                'arns': ArnBuilder(config=config),
+                'vars': vars,
+                'utils': Utils,
+            }
+        )
 
         try:
             return Utils.from_yaml(policy_content)
@@ -215,6 +234,8 @@ class AdministratorUtils:
             lines = policy_content.splitlines()
             numbered_lines = []
             for index, line in enumerate(lines):
-                numbered_lines.append('{:>5}: {}'.format(str(index+1), line))
-            print(f'failed to decode policy json: {policy_template_name} - {e}. Content: {os.linesep}{os.linesep.join(numbered_lines)}')
+                numbered_lines.append('{:>5}: {}'.format(str(index + 1), line))
+            print(
+                f'failed to decode policy json: {policy_template_name} - {e}. Content: {os.linesep}{os.linesep.join(numbered_lines)}'
+            )
             raise e

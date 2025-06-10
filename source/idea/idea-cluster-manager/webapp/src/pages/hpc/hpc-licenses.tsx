@@ -39,17 +39,24 @@ const LICENSE_RESOURCES_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<Hp
     {
         id: 'title',
         header: 'Title',
-        cell: resource => resource.title
+        cell: resource => resource.title,
+        sortingField: 'title'
     },
     {
         id: 'name',
         header: 'Name',
-        cell: resource => resource.name
+        cell: resource => resource.name,
+        sortingField: 'name'
     },
     {
         id: 'reserved_count',
         header: 'Reserved Count',
-        cell: resource => (resource.reserved_count) ? resource.reserved_count : 0
+        cell: resource => (resource.reserved_count) ? resource.reserved_count : 0,
+        sortingComparator: (a, b) => {
+            const countA = a.reserved_count || 0;
+            const countB = b.reserved_count || 0;
+            return countA - countB;
+        }
     },
     {
         id: 'available_count',
@@ -59,7 +66,12 @@ const LICENSE_RESOURCES_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<Hp
     {
         id: 'created_on',
         header: 'Created On',
-        cell: resource => new Date(resource.created_on!).toLocaleString()
+        cell: resource => new Date(resource.created_on!).toLocaleString(),
+        sortingComparator: (a, b) => {
+            const dateA = a.created_on ? new Date(a.created_on).getTime() : 0;
+            const dateB = b.created_on ? new Date(b.created_on).getTime() : 0;
+            return dateA - dateB;
+        }
     }
 ]
 
@@ -253,6 +265,8 @@ class HpcLicenses extends Component<HpcLicensesProps, HpcLicensesState> {
                     })
                 }}
                 columnDefinitions={LICENSE_RESOURCES_TABLE_COLUMN_DEFINITIONS}
+                defaultSortingColumn="name"
+                defaultSortingDescending={false}
             />
         )
     }

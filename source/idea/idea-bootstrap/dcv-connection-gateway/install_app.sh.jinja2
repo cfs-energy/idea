@@ -43,20 +43,24 @@ mkdir -p ${APP_DIR}
 tar -xvf ${BOOTSTRAP_DIR}/${PACKAGE_ARCHIVE} -C ${APP_DIR}
 
 DCV_GPG_KEY="{{ context.config.get_string('global-settings.package_config.dcv.gpg_key', required=True) }}"
-{%- if context.base_os in ('amazonlinux2') %}
+{% if context.base_os in ('amazonlinux2', 'amazonlinux2023') %}
 DCV_CONNECTION_GATEWAY_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.connection_gateway.x86_64.linux.al2_rhel_centos7.version', required=True) }}"
 DCV_CONNECTION_GATEWAY_URL="{{ context.config.get_string('global-settings.package_config.dcv.connection_gateway.x86_64.linux.al2_rhel_centos7.url', required=True) }}"
 DCV_CONNECTION_GATEWAY_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.connection_gateway.x86_64.linux.al2_rhel_centos7.sha256sum', required=True) }}"
-{%- elif context.base_os in ('rhel8', 'rocky8') %}
+{% elif context.base_os in ('rhel8', 'rocky8') %}
 DCV_CONNECTION_GATEWAY_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.connection_gateway.x86_64.linux.rhel_centos_rocky8.version', required=True) }}"
 DCV_CONNECTION_GATEWAY_URL="{{ context.config.get_string('global-settings.package_config.dcv.connection_gateway.x86_64.linux.rhel_centos_rocky8.url', required=True) }}"
 DCV_CONNECTION_GATEWAY_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.connection_gateway.x86_64.linux.rhel_centos_rocky8.sha256sum', required=True) }}"
-{%- endif %}
+{% elif context.base_os in ('rhel9', 'rocky9') %}
+DCV_CONNECTION_GATEWAY_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.connection_gateway.x86_64.linux.rhel_centos_rocky9.version', required=True) }}"
+DCV_CONNECTION_GATEWAY_URL="{{ context.config.get_string('global-settings.package_config.dcv.connection_gateway.x86_64.linux.rhel_centos_rocky9.url', required=True) }}"
+DCV_CONNECTION_GATEWAY_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.connection_gateway.x86_64.linux.rhel_centos_rocky9.sha256sum', required=True) }}"
+{% endif %}
 
 INTERNAL_ALB_ENDPOINT="{{ context.config.get_cluster_internal_endpoint() }}"
 GATEWAY_TO_BROKER_PORT="{{ context.config.get_string("virtual-desktop-controller.dcv_broker.gateway_communication_port", required=True) }}"
 
-{%- if context.base_os in ('amazonlinux2') %}
+{% if context.base_os in ('amazonlinux2', 'amazonlinux2023') %}
 DCV_SERVER_X86_64_URL="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.al2_rhel_centos7.url', required=True) }}"
 DCV_SERVER_X86_64_TGZ="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.al2_rhel_centos7.tgz', required=True) }}"
 DCV_SERVER_X86_64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.al2_rhel_centos7.version', required=True) }}"
@@ -66,7 +70,7 @@ DCV_SERVER_AARCH64_URL="{{ context.config.get_string('global-settings.package_co
 DCV_SERVER_AARCH64_TGZ="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.al2_rhel_centos7.tgz', required=True) }}"
 DCV_SERVER_AARCH64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.al2_rhel_centos7.version', required=True) }}"
 DCV_SERVER_AARCH64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.al2_rhel_centos7.sha256sum', required=True) }}"
-{%- elif context.base_os in ('rhel8', 'rocky8') %}
+{% elif context.base_os in ('rhel8', 'rocky8') %}
 DCV_SERVER_X86_64_URL="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.rhel_centos_rocky8.url', required=True) }}"
 DCV_SERVER_X86_64_TGZ="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.rhel_centos_rocky8.tgz', required=True) }}"
 DCV_SERVER_X86_64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.rhel_centos_rocky8.version', required=True) }}"
@@ -76,7 +80,17 @@ DCV_SERVER_AARCH64_URL="{{ context.config.get_string('global-settings.package_co
 DCV_SERVER_AARCH64_TGZ="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.rhel_centos_rocky8.tgz', required=True) }}"
 DCV_SERVER_AARCH64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.rhel_centos_rocky8.version', required=True) }}"
 DCV_SERVER_AARCH64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.rhel_centos_rocky8.sha256sum', required=True) }}"
-{%- endif %}
+{% elif context.base_os in ('rhel9', 'rocky9') %}
+DCV_SERVER_X86_64_URL="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.rhel_centos_rocky9.url', required=True) }}"
+DCV_SERVER_X86_64_TGZ="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.rhel_centos_rocky9.tgz', required=True) }}"
+DCV_SERVER_X86_64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.rhel_centos_rocky9.version', required=True) }}"
+DCV_SERVER_X86_64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.rhel_centos_rocky9.sha256sum', required=True) }}"
+
+DCV_SERVER_AARCH64_URL="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.rhel_centos_rocky9.url', required=True) }}"
+DCV_SERVER_AARCH64_TGZ="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.rhel_centos_rocky9.tgz', required=True) }}"
+DCV_SERVER_AARCH64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.rhel_centos_rocky9.version', required=True) }}"
+DCV_SERVER_AARCH64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.rhel_centos_rocky9.sha256sum', required=True) }}"
+{% endif %}
 
 DCV_WEB_VIEWER_INSTALL_LOCATION="/usr/share/dcv/www"
 
@@ -138,11 +152,11 @@ function install_dcv_web_viewer() {
   tar zxvf ${DCV_SERVER_TGZ}
 
   pushd nice-dcv-${DCV_SERVER_VERSION}
-  {% if context.base_os == 'amazonlinux2' -%}
+  {% if context.base_os in ('amazonlinux2', 'amazonlinux2023') %}
     rpm -ivh nice-dcv-web-viewer-*.${machine}.rpm
-  {% elif context.base_os in ('rhel8', 'rocky8') -%}
+  {% elif context.base_os in ('rhel8', 'rocky8') %}
     rpm -ivh nice-dcv-web-viewer-*.${machine}.rpm --nodeps
-  {% endif -%}
+  {% endif %}
   popd
   rm -rf nice-dcv-${DCV_SERVER_VERSION}
   rm -rf ${DCV_SERVER_TGZ}

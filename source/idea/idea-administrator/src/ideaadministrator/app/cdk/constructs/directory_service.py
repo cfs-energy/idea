@@ -13,14 +13,24 @@ __all__ = (
     'DirectoryServiceCredentials',
     'ActiveDirectory',
     'UserPool',
-    'OAuthClientIdAndSecret'
+    'OAuthClientIdAndSecret',
 )
 
-from ideaadministrator.app.cdk.idea_code_asset import IdeaCodeAsset, SupportedLambdaPlatforms
+from ideaadministrator.app.cdk.idea_code_asset import (
+    IdeaCodeAsset,
+    SupportedLambdaPlatforms,
+)
 from ideadatamodel import constants
 from ideasdk.utils import Utils, GroupNameHelper
 
-from ideaadministrator.app.cdk.constructs import SocaBaseConstruct, ExistingSocaCluster, DNSResolverEndpoint, DNSResolverRule, CustomResource, IdeaNagSuppression
+from ideaadministrator.app.cdk.constructs import (
+    SocaBaseConstruct,
+    ExistingSocaCluster,
+    DNSResolverEndpoint,
+    DNSResolverRule,
+    CustomResource,
+    IdeaNagSuppression,
+)
 from ideaadministrator.app_context import AdministratorContext
 
 from typing import Optional, List
@@ -31,7 +41,7 @@ from aws_cdk import (
     aws_ec2 as ec2,
     aws_directoryservice as ds,
     aws_secretsmanager as secretsmanager,
-    aws_cognito as cognito
+    aws_cognito as cognito,
 )
 
 
@@ -42,19 +52,30 @@ class DirectoryServiceCredentials(SocaBaseConstruct):
     These credentials are initialized once during the initial cluster creation.
     """
 
-    def __init__(self, context: AdministratorContext, name: str, scope: constructs.Construct,
-                 admin_username: str,
-                 admin_password: Optional[str] = None):
+    def __init__(
+        self,
+        context: AdministratorContext,
+        name: str,
+        scope: constructs.Construct,
+        admin_username: str,
+        admin_password: Optional[str] = None,
+    ):
         super().__init__(context, name)
 
-        self.credentials_provided = self.context.config().get_bool('directoryservice.root_credentials_provided', default=False)
+        self.credentials_provided = self.context.config().get_bool(
+            'directoryservice.root_credentials_provided', default=False
+        )
 
         if self.credentials_provided:
             return
 
-        kms_key_id = self.context.config().get_string('cluster.secretsmanager.kms_key_id')
+        kms_key_id = self.context.config().get_string(
+            'cluster.secretsmanager.kms_key_id'
+        )
 
-        ds_provider = self.context.config().get_string('directoryservice.provider', required=True)
+        ds_provider = self.context.config().get_string(
+            'directoryservice.provider', required=True
+        )
 
         admin_username_key = f'{ds_provider}-admin-username'
         self.admin_username = secretsmanager.CfnSecret(
@@ -63,10 +84,12 @@ class DirectoryServiceCredentials(SocaBaseConstruct):
             description=f'{ds_provider} Root Username, Cluster: {self.cluster_name}',
             kms_key_id=kms_key_id,
             name=self.build_resource_name(admin_username_key),
-            secret_string=admin_username
+            secret_string=admin_username,
         )
         # access to the secret is restricted using tags.
-        cdk.Tags.of(self.admin_username).add(constants.IDEA_TAG_MODULE_NAME, constants.MODULE_DIRECTORYSERVICE)
+        cdk.Tags.of(self.admin_username).add(
+            constants.IDEA_TAG_MODULE_NAME, constants.MODULE_DIRECTORYSERVICE
+        )
 
         admin_password_key = f'{ds_provider}-admin-password'
         if Utils.is_empty(admin_password):
@@ -77,9 +100,8 @@ class DirectoryServiceCredentials(SocaBaseConstruct):
                 kms_key_id=kms_key_id,
                 name=self.build_resource_name(admin_password_key),
                 generate_secret_string=secretsmanager.CfnSecret.GenerateSecretStringProperty(
-                    exclude_characters='$@;"\\\'',
-                    password_length=16
-                )
+                    exclude_characters='$@;"\\\'', password_length=16
+                ),
             )
         else:
             self.admin_password = secretsmanager.CfnSecret(
@@ -88,26 +110,39 @@ class DirectoryServiceCredentials(SocaBaseConstruct):
                 description=f'{ds_provider} Root Password, Cluster: {self.cluster_name}',
                 kms_key_id=kms_key_id,
                 name=self.build_resource_name(admin_password_key),
-                secret_string=admin_password
+                secret_string=admin_password,
             )
         # access to the secret is restricted using tags.
-        cdk.Tags.of(self.admin_password).add(constants.IDEA_TAG_MODULE_NAME, constants.MODULE_DIRECTORYSERVICE)
+        cdk.Tags.of(self.admin_password).add(
+            constants.IDEA_TAG_MODULE_NAME, constants.MODULE_DIRECTORYSERVICE
+        )
 
         suppressions = [
-            IdeaNagSuppression(rule_id='AwsSolutions-SMG4', reason='Secret rotation not applicable for DirectoryService credentials.')
+            IdeaNagSuppression(
+                rule_id='AwsSolutions-SMG4',
+                reason='Secret rotation not applicable for DirectoryService credentials.',
+            )
         ]
-        self.add_nag_suppression(construct=self.admin_username, suppressions=suppressions)
-        self.add_nag_suppression(construct=self.admin_password, suppressions=suppressions)
+        self.add_nag_suppression(
+            construct=self.admin_username, suppressions=suppressions
+        )
+        self.add_nag_suppression(
+            construct=self.admin_password, suppressions=suppressions
+        )
 
     def get_username_secret_arn(self) -> str:
         if self.credentials_provided:
-            return self.context.config().get_string('directoryservice.root_username_secret_arn', required=True)
+            return self.context.config().get_string(
+                'directoryservice.root_username_secret_arn', required=True
+            )
         else:
             return self.admin_username.ref
 
     def get_password_secret_arn(self) -> str:
         if self.credentials_provided:
-            return self.context.config().get_string('directoryservice.root_password_secret_arn', required=True)
+            return self.context.config().get_string(
+                'directoryservice.root_password_secret_arn', required=True
+            )
         else:
             return self.admin_password.ref
 
@@ -117,11 +152,15 @@ class OAuthClientIdAndSecret(SocaBaseConstruct):
     Create ClientId and ClientSecret in Secrets Manager
     """
 
-    def __init__(self, context: AdministratorContext,
-                 secret_name_prefix: str,
-                 module_name: str,
-                 scope: constructs.Construct,
-                 client_id: str, client_secret: str):
+    def __init__(
+        self,
+        context: AdministratorContext,
+        secret_name_prefix: str,
+        module_name: str,
+        scope: constructs.Construct,
+        client_id: str,
+        client_secret: str,
+    ):
         """
         :param context:
         :param secret_name_prefix is used to create the secret name.
@@ -135,7 +174,9 @@ class OAuthClientIdAndSecret(SocaBaseConstruct):
         """
         super().__init__(context, secret_name_prefix)
 
-        kms_key_id = self.context.config().get_string('cluster.secretsmanager.kms_key_id')
+        kms_key_id = self.context.config().get_string(
+            'cluster.secretsmanager.kms_key_id'
+        )
 
         client_id_key = f'{secret_name_prefix}-client-id'
         self.client_id = secretsmanager.CfnSecret(
@@ -144,7 +185,7 @@ class OAuthClientIdAndSecret(SocaBaseConstruct):
             description=f'{secret_name_prefix} ClientId, Cluster: {self.cluster_name}',
             kms_key_id=kms_key_id,
             name=self.build_resource_name(client_id_key),
-            secret_string=client_id
+            secret_string=client_id,
         )
         self.client_id.apply_removal_policy(cdk.RemovalPolicy.DESTROY)
         cdk.Tags.of(self.client_id).add(constants.IDEA_TAG_MODULE_NAME, module_name)
@@ -156,24 +197,33 @@ class OAuthClientIdAndSecret(SocaBaseConstruct):
             description=f'{secret_name_prefix} ClientSecret, Cluster: {self.cluster_name}',
             kms_key_id=kms_key_id,
             name=self.build_resource_name(client_secret_key),
-            secret_string=client_secret
+            secret_string=client_secret,
         )
         self.client_secret.apply_removal_policy(cdk.RemovalPolicy.DESTROY)
         cdk.Tags.of(self.client_secret).add(constants.IDEA_TAG_MODULE_NAME, module_name)
 
         suppressions = [
-            IdeaNagSuppression(rule_id='AwsSolutions-SMG4', reason='Secret rotation not applicable for OAuth 2.0 ClientId/Secret')
+            IdeaNagSuppression(
+                rule_id='AwsSolutions-SMG4',
+                reason='Secret rotation not applicable for OAuth 2.0 ClientId/Secret',
+            )
         ]
         self.add_nag_suppression(construct=self.client_id, suppressions=suppressions)
-        self.add_nag_suppression(construct=self.client_secret, suppressions=suppressions)
+        self.add_nag_suppression(
+            construct=self.client_secret, suppressions=suppressions
+        )
 
 
 class ActiveDirectory(SocaBaseConstruct):
-
-    def __init__(self, context: AdministratorContext, name: str, scope: constructs.Construct,
-                 cluster: ExistingSocaCluster,
-                 subnets: Optional[List[ec2.ISubnet]] = None,
-                 enable_sso: Optional[bool] = False):
+    def __init__(
+        self,
+        context: AdministratorContext,
+        name: str,
+        scope: constructs.Construct,
+        cluster: ExistingSocaCluster,
+        subnets: Optional[List[ec2.ISubnet]] = None,
+        enable_sso: Optional[bool] = False,
+    ):
         super().__init__(context, name)
 
         self.scope = scope
@@ -184,9 +234,15 @@ class ActiveDirectory(SocaBaseConstruct):
 
         self.credentials = self.build_credentials(self.ad_admin_username)
 
-        self.ad_name = self.context.config().get_string('directoryservice.name', required=True)
-        self.ad_short_name = self.context.config().get_string('directoryservice.ad_short_name', required=True)
-        self.ad_edition = self.context.config().get_string('directoryservice.ad_edition', required=True)
+        self.ad_name = self.context.config().get_string(
+            'directoryservice.name', required=True
+        )
+        self.ad_short_name = self.context.config().get_string(
+            'directoryservice.ad_short_name', required=True
+        )
+        self.ad_edition = self.context.config().get_string(
+            'directoryservice.ad_edition', required=True
+        )
 
         self.launch_subnets = []
         if subnets is None:
@@ -206,46 +262,42 @@ class ActiveDirectory(SocaBaseConstruct):
             self.context,
             'ds-activedirectory-credentials',
             self.scope,
-            admin_username=username
+            admin_username=username,
         )
 
     def build_ad(self) -> ds.CfnMicrosoftAD:
-
         vpc_settings = ds.CfnMicrosoftAD.VpcSettingsProperty(
-            subnet_ids=self.launch_subnets,
-            vpc_id=self.cluster.vpc.vpc_id)
+            subnet_ids=self.launch_subnets, vpc_id=self.cluster.vpc.vpc_id
+        )
 
         ad = ds.CfnMicrosoftAD(
             self.scope,
             self.construct_id,
             name=self.ad_name,
-            password=cdk.SecretValue.secrets_manager(self.credentials.get_password_secret_arn()).to_string(),
+            password=cdk.SecretValue.secrets_manager(
+                self.credentials.get_password_secret_arn()
+            ).to_string(),
             vpc_settings=vpc_settings,
             edition=self.ad_edition,
             enable_sso=self.enable_sso,
-            short_name=self.ad_short_name)
+            short_name=self.ad_short_name,
+        )
         self.add_common_tags(ad)
         return ad
 
     def build_dns_resolver(self):
-
         get_ad_security_group_result = CustomResource(
             context=self.context,
             name='get-ad-security-group-id',
             scope=self.scope,
             idea_code_asset=IdeaCodeAsset(
                 lambda_package_name='idea_custom_resource_get_ad_security_group',
-                lambda_platform=SupportedLambdaPlatforms.PYTHON
+                lambda_platform=SupportedLambdaPlatforms.PYTHON,
             ),
             lambda_timeout_seconds=15,
             policy_template_name='custom-resource-get-ad-security-group.yml',
-            resource_type='ADSecurityGroupId'
-        ).invoke(
-            name=self.resource_name,
-            properties={
-                'DirectoryId': self.ad.ref
-            }
-        )
+            resource_type='ADSecurityGroupId',
+        ).invoke(name=self.resource_name, properties={'DirectoryId': self.ad.ref})
 
         endpoint = DNSResolverEndpoint(
             context=self.context,
@@ -253,7 +305,9 @@ class ActiveDirectory(SocaBaseConstruct):
             scope=self.scope,
             vpc=self.cluster.vpc,
             subnet_ids=self.launch_subnets,
-            security_group_ids=[get_ad_security_group_result.get_att_string('SecurityGroupId')]
+            security_group_ids=[
+                get_ad_security_group_result.get_att_string('SecurityGroupId')
+            ],
         )
 
         DNSResolverRule(
@@ -265,16 +319,20 @@ class ActiveDirectory(SocaBaseConstruct):
             resolver_endpoint_id=endpoint.resolver_endpoint.attr_resolver_endpoint_id,
             ip_addresses=[
                 cdk.Fn.select(0, self.ad.attr_dns_ip_addresses),
-                cdk.Fn.select(1, self.ad.attr_dns_ip_addresses)
+                cdk.Fn.select(1, self.ad.attr_dns_ip_addresses),
             ],
-            port='53'
+            port='53',
         )
 
 
 class UserPool(SocaBaseConstruct):
-
-    def __init__(self, context: AdministratorContext, name: str, scope: constructs.Construct,
-                 props: cognito.UserPoolProps = None):
+    def __init__(
+        self,
+        context: AdministratorContext,
+        name: str,
+        scope: constructs.Construct,
+        props: cognito.UserPoolProps = None,
+    ):
         super().__init__(context, name)
         self.scope = scope
 
@@ -300,7 +358,7 @@ class UserPool(SocaBaseConstruct):
                 'cluster_name': cognito.StringAttribute(mutable=True),
                 'aws_region': cognito.StringAttribute(mutable=True),
                 'password_last_set': cognito.NumberAttribute(mutable=True),
-                'password_max_age': cognito.NumberAttribute(mutable=True)
+                'password_max_age': cognito.NumberAttribute(mutable=True),
             }
         mfa = props.mfa
         if mfa is None:
@@ -317,7 +375,7 @@ class UserPool(SocaBaseConstruct):
                 require_lowercase=True,
                 require_symbols=True,
                 require_uppercase=True,
-                temp_password_validity=cdk.Duration.days(7)
+                temp_password_validity=cdk.Duration.days(7),
             )
 
         removal_policy = props.removal_policy
@@ -331,10 +389,7 @@ class UserPool(SocaBaseConstruct):
         sign_in_aliases = props.sign_in_aliases
         if sign_in_aliases is None:
             sign_in_aliases = cognito.SignInAliases(
-                username=True,
-                preferred_username=False,
-                phone=False,
-                email=True
+                username=True, preferred_username=False, phone=False, email=True
             )
 
         sign_in_case_sensitive = props.sign_in_case_sensitive
@@ -350,13 +405,13 @@ class UserPool(SocaBaseConstruct):
         if user_invitation is None:
             user_invitation = cognito.UserInvitationConfig(
                 email_subject=f'({self.cluster_name}) Your IDEA Account',
-                email_body=f'''
+                email_body=f"""
                 Hello <b>{{username}}</b>,
                 <br/><br/>
                 You have been invited to join the {self.cluster_name} cluster.
                 <br/>
                 Your temporary password is <b>{{####}}</b>
-                '''
+                """,
             )
 
         user_pool_name = props.user_pool_name
@@ -365,18 +420,30 @@ class UserPool(SocaBaseConstruct):
 
         advanced_security_mode = None
 
-        if self.context.aws().aws_region() in Utils.get_value_as_list('COGNITO_ADVANCED_SECURITY_UNAVAIL_REGION_LIST', constants.CAVEATS):
-            self.context.warning(f'Cognito Advanced security NOT SET - Not available in this region ({self.context.aws().aws_region()})')
+        if self.context.aws().aws_region() in Utils.get_value_as_list(
+            'COGNITO_ADVANCED_SECURITY_UNAVAIL_REGION_LIST', constants.CAVEATS
+        ):
+            self.context.warning(
+                f'Cognito Advanced security NOT SET - Not available in this region ({self.context.aws().aws_region()})'
+            )
             advanced_security_mode = None
         else:
-            advanced_security_mode_cfg = self.context.config().get_string('identity-provider.cognito.advanced_security_mode', default='AUDIT')
+            # Force advanced security mode to OFF regardless of config to avoid "Plus" plan requirement
+            advanced_security_mode = None
+            advanced_security_mode_cfg = self.context.config().get_string(
+                'identity-provider.cognito.advanced_security_mode', default='OFF'
+            )
+            self.context.warning(
+                f'Forcing Cognito Advanced security to OFF to avoid Plus plan requirement. Config value was: {advanced_security_mode_cfg}'
+            )
 
-            if advanced_security_mode_cfg.upper() == 'AUDIT':
-                advanced_security_mode = cognito.AdvancedSecurityMode.AUDIT
-            elif advanced_security_mode_cfg.upper() == 'ENFORCED':
-                advanced_security_mode = cognito.AdvancedSecurityMode.ENFORCED
-            else:
-                advanced_security_mode = cognito.AdvancedSecurityMode.OFF
+            # Original code commented out
+            # if advanced_security_mode_cfg.upper() == 'AUDIT':
+            #     advanced_security_mode = cognito.AdvancedSecurityMode.AUDIT
+            # elif advanced_security_mode_cfg.upper() == 'ENFORCED':
+            #     advanced_security_mode = cognito.AdvancedSecurityMode.ENFORCED
+            # else:
+            #     advanced_security_mode = cognito.AdvancedSecurityMode.OFF
 
         self.user_pool = cognito.UserPool(
             scope=self.scope,
@@ -404,19 +471,31 @@ class UserPool(SocaBaseConstruct):
             standard_attributes=standard_attributes,
             user_invitation=user_invitation,
             user_pool_name=user_pool_name,
-            user_verification=props.user_verification
+            user_verification=props.user_verification,
         )
         self.add_common_tags(self.user_pool)
 
         # MFA
-        self.add_nag_suppression(construct=self.user_pool, suppressions=[
-            IdeaNagSuppression(rule_id='AwsSolutions-COG2', reason='Suppress MFA warning. MFA provided by customer IdP/SSO methods.')
-        ])
+        self.add_nag_suppression(
+            construct=self.user_pool,
+            suppressions=[
+                IdeaNagSuppression(
+                    rule_id='AwsSolutions-COG2',
+                    reason='Suppress MFA warning. MFA provided by customer IdP/SSO methods.',
+                )
+            ],
+        )
 
         # advanced security mode suppression
-        self.add_nag_suppression(construct=self.user_pool, suppressions=[
-            IdeaNagSuppression(rule_id='AwsSolutions-COG3', reason='suppress advanced security rule 1/to save cost, 2/Not supported in GovCloud')
-        ])
+        self.add_nag_suppression(
+            construct=self.user_pool,
+            suppressions=[
+                IdeaNagSuppression(
+                    rule_id='AwsSolutions-COG3',
+                    reason='suppress advanced security rule 1/to save cost, 2/Not supported in GovCloud',
+                )
+            ],
+        )
 
         group_name_helper = GroupNameHelper(self.context)
 
@@ -426,7 +505,7 @@ class UserPool(SocaBaseConstruct):
             description='Administrators group (Sudo Users)',
             group_name=group_name_helper.get_cluster_administrators_group(),
             precedence=1,
-            user_pool_id=self.user_pool.user_pool_id
+            user_pool_id=self.user_pool.user_pool_id,
         )
 
         cognito.CfnUserPoolGroup(
@@ -435,10 +514,12 @@ class UserPool(SocaBaseConstruct):
             description='Managers group with limited administration access.',
             group_name=group_name_helper.get_cluster_managers_group(),
             precedence=2,
-            user_pool_id=self.user_pool.user_pool_id
+            user_pool_id=self.user_pool.user_pool_id,
         )
 
-        domain_url = self.context.config().get_string('identity-provider.cognito.domain_url')
+        domain_url = self.context.config().get_string(
+            'identity-provider.cognito.domain_url'
+        )
         if Utils.is_not_empty(domain_url):
             domain_prefix = domain_url.replace('https://', '').split('.')[0]
         else:
@@ -446,7 +527,5 @@ class UserPool(SocaBaseConstruct):
 
         self.domain = self.user_pool.add_domain(
             id='domain',
-            cognito_domain=cognito.CognitoDomainOptions(
-                domain_prefix=domain_prefix
-            )
+            cognito_domain=cognito.CognitoDomainOptions(domain_prefix=domain_prefix),
         )

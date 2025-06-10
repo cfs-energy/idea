@@ -644,7 +644,7 @@ Resources:
           - PermissionsBoundarySet
           - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${InputPermissionsBoundary}
           - Ref: AWS::NoValue
-  CdkBoostrapPermissionsBoundaryPolicy:
+  CdkBootstrapPermissionsBoundaryPolicy:
     Condition: ShouldCreatePermissionsBoundary
     Type: AWS::IAM::ManagedPolicy
     Properties:
@@ -723,4 +723,3 @@ Outputs:
       Fn::GetAtt:
         - CdkBootstrapVersion
         - Value
-

@@ -23,5 +23,3 @@ export type {
     IdeaWizardCancelEventHandler,
     IdeaWizardOnNavigateResult
 } from "./wizard";
-
-

@@ -1,0 +1,7 @@
+{% if context.base_os in ('amazonlinux2023') %}
+# Install and enable rsyslog
+if ! rpm -q rsyslog >/dev/null 2>&1; then
+    dnf install -y rsyslog
+fi
+systemctl enable rsyslog --now
+{% endif %}

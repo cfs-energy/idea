@@ -18,10 +18,16 @@ __all__ = (
     'SocaEnvelope',
     'SocaAnyPayload',
     'SocaBatchResponsePayload',
-    'IdeaOpenAPISpecEntry'
+    'IdeaOpenAPISpecEntry',
 )
 
-from ideadatamodel import (SocaBaseModel, SocaDateRange, SocaSortBy, SocaPaginator, SocaFilter)
+from ideadatamodel import (
+    SocaBaseModel,
+    SocaDateRange,
+    SocaSortBy,
+    SocaPaginator,
+    SocaFilter,
+)
 from ideadatamodel.model_utils import ModelUtils
 
 from typing import Optional, Union, TypeVar, Type, List, Any
@@ -43,7 +49,9 @@ class SocaBatchResponsePayload(SocaPayload):
 SocaPayloadType = TypeVar('SocaPayloadType', bound='SocaPayload')
 
 
-def get_payload_as(payload: Optional[Union[dict, SocaPayload]], payload_type: Type[SocaPayloadType]) -> Optional[SocaPayloadType]:
+def get_payload_as(
+    payload: Optional[Union[dict, SocaPayload]], payload_type: Type[SocaPayloadType]
+) -> Optional[SocaPayloadType]:
     if payload is None:
         return None
     if isinstance(payload, payload_type):
@@ -113,7 +121,9 @@ class SocaEnvelope(SocaBaseModel):
     message: Optional[str] = Field(default=None)
     payload: Optional[Any] = Field(default=None)
 
-    def payload_as(self, payload_type: Type[SocaPayloadType]) -> Optional[SocaPayloadType]:
+    def payload_as(
+        self, payload_type: Type[SocaPayloadType]
+    ) -> Optional[SocaPayloadType]:
         return get_payload_as(payload=self.payload, payload_type=payload_type)
 
     @property

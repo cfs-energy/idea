@@ -25,7 +25,7 @@ from ideadatamodel.scheduler import (
     JobValidationResult,
     JobValidationDebugEntry,
     JobParameterInfo,
-    HpcQueueProfile
+    HpcQueueProfile,
 )
 
 import ideascheduler
@@ -41,256 +41,226 @@ JOB_PARAM_INFO = {
     constants.JOB_PARAM_NODES: JobParameterInfo(
         name=constants.JOB_PARAM_NODES,
         title='Nodes',
-        description='No. of nodes required for the Job.'
+        description='No. of nodes required for the Job.',
     ),
     constants.JOB_PARAM_CPUS: JobParameterInfo(
         name=constants.JOB_PARAM_CPUS,
         title='CPUs',
-        description='No. of CPUs required for the Job.'
+        description='No. of CPUs required for the Job.',
     ),
     constants.JOB_PARAM_MEMORY: JobParameterInfo(
         name=constants.JOB_PARAM_MEMORY,
         title='Memory',
-        description='Memory required for the Job.'
+        description='Memory required for the Job.',
     ),
     constants.JOB_PARAM_GPUS: JobParameterInfo(
         name=constants.JOB_PARAM_GPUS,
         title='GPUs',
-        description='No. of GPUs required for the Job.'
+        description='No. of GPUs required for the Job.',
     ),
     constants.JOB_PARAM_MPIPROCS: JobParameterInfo(
         name=constants.JOB_PARAM_MPIPROCS,
         title='MPI Processes',
-        description='No. of MPI processes required for the Job.'
+        description='No. of MPI processes required for the Job.',
     ),
     constants.JOB_PARAM_BASE_OS: JobParameterInfo(
         name=constants.JOB_PARAM_BASE_OS,
         title='Base OS',
-        description='OS of the Compute Node.'
+        description='OS of the Compute Node.',
     ),
     constants.JOB_PARAM_INSTANCE_AMI: JobParameterInfo(
         name=constants.JOB_PARAM_INSTANCE_AMI,
         title='Instance AMI ID',
-        description='Custom Amazon Machine Image (AMI) ID.'
+        description='Custom Amazon Machine Image (AMI) ID.',
     ),
     constants.JOB_PARAM_INSTANCE_TYPES: JobParameterInfo(
         name=constants.JOB_PARAM_INSTANCE_TYPES,
         title='EC2 Instance Types',
         description='Applicable EC2 Instance Types for the Job.',
-        provider_names={
-            constants.SCHEDULER_OPENPBS: 'instance_type'
-        }
+        provider_names={constants.SCHEDULER_OPENPBS: 'instance_type'},
     ),
     constants.JOB_PARAM_FORCE_RESERVED_INSTANCES: JobParameterInfo(
         name=constants.JOB_PARAM_FORCE_RESERVED_INSTANCES,
         title='Force Reserved Instances',
         description='Ensures Job will be provisioned only if Reserved EC2 Instances are purchased and available',
-        provider_names={
-            constants.SCHEDULER_OPENPBS: 'force_ri'
-        }
+        provider_names={constants.SCHEDULER_OPENPBS: 'force_ri'},
     ),
     constants.JOB_PARAM_SPOT_PRICE: JobParameterInfo(
         name=constants.JOB_PARAM_SPOT_PRICE,
         title='Spot Price',
         description='Indicates if EC2 Spot capacity is required for the Job. Spot price value can be (auto) or a '
-                    '[float] value.'
+        '[float] value.',
     ),
     constants.JOB_PARAM_SPOT_ALLOCATION_COUNT: JobParameterInfo(
         name=constants.JOB_PARAM_SPOT_ALLOCATION_COUNT,
         title='Spot Allocation Count',
         description='If provided, CapacityType is MIXED. If SpotAllocationCount value is provided, it indicates how '
-                    'many instances from of the desired job capacity should be Spot instances.'
+        'many instances from of the desired job capacity should be Spot instances.',
     ),
     constants.JOB_PARAM_SPOT_ALLOCATION_STRATEGY: JobParameterInfo(
         name=constants.JOB_PARAM_SPOT_ALLOCATION_STRATEGY,
         title='Spot Allocation Strategy',
         description='Spot allocation strategies determine how the Spot Instances in your fleet are fulfilled from '
-                    'Spot Instance pools.'
+        'Spot Instance pools.',
     ),
     constants.JOB_PARAM_SUBNET_IDS: JobParameterInfo(
         name=constants.JOB_PARAM_SUBNET_IDS,
         title='AWS Subnet IDs',
         description='Specifies SubnetIds in which the Job resources should be provisioned.',
-        provider_names={
-            constants.SCHEDULER_OPENPBS: 'subnet_id'
-        }
+        provider_names={constants.SCHEDULER_OPENPBS: 'subnet_id'},
     ),
     constants.JOB_PARAM_SECURITY_GROUPS: JobParameterInfo(
         name=constants.JOB_PARAM_SECURITY_GROUPS,
         title='SecurityGroup IDs',
-        description='Specifies Security Group IDs to be attached to Job compute nodes.'
+        description='Specifies Security Group IDs to be attached to Job compute nodes.',
     ),
     constants.JOB_PARAM_INSTANCE_PROFILE: JobParameterInfo(
         name=constants.JOB_PARAM_INSTANCE_PROFILE,
         title='IAM Instance Profile',
-        description='Specifies a IAM Instance Profile Name to be attached to Job compute nodes.'
+        description='Specifies a IAM Instance Profile Name to be attached to Job compute nodes.',
     ),
     constants.JOB_PARAM_KEEP_EBS_VOLUMES: JobParameterInfo(
         name=constants.JOB_PARAM_KEEP_EBS_VOLUMES,
         title='Keep EBS Volumes after Termination',
         description='Indicates if EBS volumes should be terminated after compute nodes are terminated.',
-        provider_names={
-            constants.SCHEDULER_OPENPBS: 'keep_ebs'
-        }
+        provider_names={constants.SCHEDULER_OPENPBS: 'keep_ebs'},
     ),
     constants.JOB_PARAM_ROOT_STORAGE_SIZE: JobParameterInfo(
         name=constants.JOB_PARAM_ROOT_STORAGE_SIZE,
         title='Root Storage Size',
         description='Specifies the size (in GB) of the Root Storage volume.',
-        provider_names={
-            constants.SCHEDULER_OPENPBS: 'root_size'
-        }
+        provider_names={constants.SCHEDULER_OPENPBS: 'root_size'},
     ),
     constants.JOB_PARAM_SCRATCH_STORAGE_SIZE: JobParameterInfo(
         name=constants.JOB_PARAM_SCRATCH_STORAGE_SIZE,
         title='Scratch Storage Size',
         description='Specifies the size (in GB) of the Scratch Storage volume.',
-        provider_names={
-            constants.SCHEDULER_OPENPBS: 'scratch_size'
-        }
+        provider_names={constants.SCHEDULER_OPENPBS: 'scratch_size'},
     ),
     constants.JOB_PARAM_SCRATCH_IOPS: JobParameterInfo(
         name=constants.JOB_PARAM_SCRATCH_IOPS,
         title='Scratch Storage IOPS',
         description='Specifies provisioned IOPS for Scratch Storage.',
-        provider_names={
-            constants.SCHEDULER_OPENPBS: 'scratch_iops'
-        }
+        provider_names={constants.SCHEDULER_OPENPBS: 'scratch_iops'},
     ),
     constants.JOB_PARAM_FSX_LUSTRE: JobParameterInfo(
         name=constants.JOB_PARAM_FSX_LUSTRE,
         title='FSx for Lustre - Enabled',
-        description='Indicates if FSx Lustre should be provisioned as Scratch Storage instead of EBS.'
+        description='Indicates if FSx Lustre should be provisioned as Scratch Storage instead of EBS.',
     ),
     constants.JOB_PARAM_FSX_LUSTRE_S3_BACKEND: JobParameterInfo(
         name=None,
         title='FSx for Lustre - S3 Backend',
-        description='Specifies an S3 Bucket to create and mount a new FSx for Lustre.'
+        description='Specifies an S3 Bucket to create and mount a new FSx for Lustre.',
     ),
     constants.JOB_PARAM_FSX_LUSTRE_EXISTING_FSX: JobParameterInfo(
         name=None,
         title='FSx for Lustre - Existing FSx ID',
-        description='Specifies an existing FSx for Lustre ID instead of creating a new one.'
+        description='Specifies an existing FSx for Lustre ID instead of creating a new one.',
     ),
     constants.JOB_PARAM_FSX_LUSTRE_IMPORT_PATH: JobParameterInfo(
         name=None,
         title='FSx for Lustre - Import Path',
-        description='Specifies an import path for FSx for Lustre.'
+        description='Specifies an import path for FSx for Lustre.',
     ),
     constants.JOB_PARAM_FSX_LUSTRE_EXPORT_PATH: JobParameterInfo(
         name=None,
         title='FSx for Lustre - Export Path',
-        description='Specifies the export path for FSx for Lustre.'
+        description='Specifies the export path for FSx for Lustre.',
     ),
     constants.JOB_PARAM_FSX_LUSTRE_DEPLOYMENT_TYPE: JobParameterInfo(
         name=constants.JOB_PARAM_FSX_LUSTRE_DEPLOYMENT_TYPE,
         title='FSx for Lustre - Deployment Type',
-        description='Specifies the deployment type'
+        description='Specifies the deployment type',
     ),
     constants.JOB_PARAM_FSX_LUSTRE_PER_UNIT_THROUGHPUT: JobParameterInfo(
         name=constants.JOB_PARAM_FSX_LUSTRE_PER_UNIT_THROUGHPUT,
         title='FSx for Lustre - Per Unit Throughput',
-        description='Specifies the baseline desk throughput of FSx for Lustre.'
+        description='Specifies the baseline desk throughput of FSx for Lustre.',
     ),
     constants.JOB_PARAM_FSX_LUSTRE_SIZE: JobParameterInfo(
         name=constants.JOB_PARAM_FSX_LUSTRE_SIZE,
         title='FSx for Lustre - Size',
-        description='Specifies the size of of FSx for Lustre.'
+        description='Specifies the size of of FSx for Lustre.',
     ),
     constants.JOB_PARAM_ENABLE_INSTANCE_STORE: JobParameterInfo(
         name=constants.JOB_PARAM_ENABLE_INSTANCE_STORE,
         title='Enable Instance Store',
-        description='Indicates if Instance Store volume should be provisioned.'
+        description='Indicates if Instance Store volume should be provisioned.',
     ),
     constants.JOB_PARAM_ENABLE_EFA_SUPPORT: JobParameterInfo(
         name=constants.JOB_PARAM_ENABLE_EFA_SUPPORT,
         title='Enable EFA Support',
         description='Provision AWS Elastic Fabric Adapter (EFA) on applicable instance types.',
-        provider_names={
-            constants.SCHEDULER_OPENPBS: 'efa_support'
-        }
+        provider_names={constants.SCHEDULER_OPENPBS: 'efa_support'},
     ),
     constants.JOB_PARAM_ENABLE_HT_SUPPORT: JobParameterInfo(
         name=constants.JOB_PARAM_ENABLE_HT_SUPPORT,
         title='Enable Hyper-Threading',
         description='Indicates if hyper-threading should be enabled for the Job.',
-        provider_names={
-            constants.SCHEDULER_OPENPBS: 'ht_support'
-        }
+        provider_names={constants.SCHEDULER_OPENPBS: 'ht_support'},
     ),
     constants.JOB_PARAM_ENABLE_PLACEMENT_GROUP: JobParameterInfo(
         name=constants.JOB_PARAM_ENABLE_PLACEMENT_GROUP,
         title='Enable EC2 Placement Group',
         description='Indicates if EC2 Placement Groups should be enabled for the Job.',
-        provider_names={
-            constants.SCHEDULER_OPENPBS: 'placement_group'
-        }
+        provider_names={constants.SCHEDULER_OPENPBS: 'placement_group'},
     ),
     constants.JOB_PARAM_ENABLE_SYSTEM_METRICS: JobParameterInfo(
         name=constants.JOB_PARAM_ENABLE_SYSTEM_METRICS,
         title='Enable System Metrics',
         description='Indicates if System Metrics should be collected from Compute Notes and published for Analytics.',
-        provider_names={
-            constants.SCHEDULER_OPENPBS: 'system_metrics'
-        }
+        provider_names={constants.SCHEDULER_OPENPBS: 'system_metrics'},
     ),
     constants.JOB_PARAM_ENABLE_ANONYMOUS_METRICS: JobParameterInfo(
         name=constants.JOB_PARAM_ENABLE_ANONYMOUS_METRICS,
         title='Enable Anonymous Metrics',
         description='Indicates if anonymous metrics can be posted to AWS.',
-        provider_names={
-            constants.SCHEDULER_OPENPBS: 'anonymous_metrics'
-        }
+        provider_names={constants.SCHEDULER_OPENPBS: 'anonymous_metrics'},
     ),
     constants.JOB_PARAM_LICENSES: JobParameterInfo(
         name=constants.JOB_PARAM_LICENSES,
         title='License Requirements',
-        description='Specifies the license names and their counts applicable for the Job.'
+        description='Specifies the license names and their counts applicable for the Job.',
     ),
     constants.JOB_PARAM_WALLTIME: JobParameterInfo(
         name=constants.JOB_PARAM_WALLTIME,
         title='Walltime',
-        description='Specifies the total time the Job should run.'
+        description='Specifies the total time the Job should run.',
     ),
     constants.JOB_PARAM_COMPUTE_STACK: JobParameterInfo(
         name=constants.JOB_PARAM_COMPUTE_STACK,
         title='Compute Stack',
-        description='Specifies the AWS CloudFormation Stack Name under which Job resources are provisioned.'
+        description='Specifies the AWS CloudFormation Stack Name under which Job resources are provisioned.',
     ),
     constants.JOB_PARAM_JOB_GROUP: JobParameterInfo(
         name=constants.JOB_PARAM_JOB_GROUP,
         title='Job Group',
-        description='Specifies similar or related Jobs that can be provisioned on the same compute stack.'
+        description='Specifies similar or related Jobs that can be provisioned on the same compute stack.',
     ),
     constants.JOB_PARAM_CUSTOM_PARAMS: JobParameterInfo(
-        name=None,
-        title=None,
-        description=None
+        name=None, title=None, description=None
     ),
     constants.JOB_OPTION_TERMINATE_WHEN_IDLE: JobParameterInfo(
         name=constants.JOB_OPTION_TERMINATE_WHEN_IDLE,
         title='Compute Node: Terminate When Idle',
-        description='Specifies the no. of minutes the Compute node can stay idle, after which it can be terminated.'
+        description='Specifies the no. of minutes the Compute node can stay idle, after which it can be terminated.',
     ),
     constants.JOB_OPTION_KEEP_FOREVER: JobParameterInfo(
         name=constants.JOB_OPTION_KEEP_FOREVER,
         title='Compute Node: Keep Forever',
-        description='Indicates if the compute node can be terminated or not.'
+        description='Indicates if the compute node can be terminated or not.',
     ),
     constants.JOB_OPTION_TAGS: JobParameterInfo(
-        name=None,
-        title=None,
-        description=None
-    )
+        name=None, title=None, description=None
+    ),
 }
 
 
 class ParamBuilderProtocol(ABC):
-
     @property
     @abstractmethod
-    def builder_id(self) -> str:
-        ...
+    def builder_id(self) -> str: ...
 
     @abstractmethod
     def validate(self) -> bool:
@@ -333,47 +303,37 @@ ParamBuilderType = TypeVar('ParamBuilderType', bound=ParamBuilderProtocol)
 
 
 class JobParamsBuilderContextProtocol(ABC):
+    @property
+    @abstractmethod
+    def params(self) -> Dict[str, Any]: ...
 
     @property
     @abstractmethod
-    def params(self) -> Dict[str, Any]:
-        ...
+    def job_params(self) -> SocaJobParams: ...
 
     @property
     @abstractmethod
-    def job_params(self) -> SocaJobParams:
-        ...
+    def provisioning_options(self) -> SocaJobProvisioningOptions: ...
+
+    @abstractmethod
+    def get_builder(self, name: str) -> Optional[ParamBuilderType]: ...
 
     @property
     @abstractmethod
-    def provisioning_options(self) -> SocaJobProvisioningOptions:
-        ...
+    def soca_context(self) -> ideascheduler.AppContext: ...
 
     @abstractmethod
-    def get_builder(self, name: str) -> Optional[ParamBuilderType]:
-        ...
-
-    @property
-    @abstractmethod
-    def soca_context(self) -> ideascheduler.AppContext:
-        ...
+    def is_failed(self, *params: str) -> bool: ...
 
     @abstractmethod
-    def is_failed(self, *params: str) -> bool:
-        ...
+    def add_validation_entry(self, param: str, message: str): ...
 
     @abstractmethod
-    def add_validation_entry(self, param: str, message: str):
-        ...
-
-    @abstractmethod
-    def has_queue(self) -> bool:
-        ...
+    def has_queue(self) -> bool: ...
 
     @property
     @abstractmethod
-    def queue(self) -> Optional[HpcQueueProfile]:
-        ...
+    def queue(self) -> Optional[HpcQueueProfile]: ...
 
 
 class BaseParamBuilder(ParamBuilderProtocol, ABC):
@@ -422,12 +382,13 @@ class BaseParamBuilder(ParamBuilderProtocol, ABC):
             return True
 
         self.add_validation_entry(
-            param=param,
-            message=f'Job parameter: [{param}] is required.'
+            param=param, message=f'Job parameter: [{param}] is required.'
         )
         return False
 
-    def eval_positive_nonzero_int(self, param: str, value: Union[int, float, SocaMemory] = None):
+    def eval_positive_nonzero_int(
+        self, param: str, value: Union[int, float, SocaMemory] = None
+    ):
         if value is None:
             return True
 
@@ -435,8 +396,7 @@ class BaseParamBuilder(ParamBuilderProtocol, ABC):
             return True
 
         self.add_validation_entry(
-            param=param,
-            message=f'{param} must be greater than 0: ({value})'
+            param=param, message=f'{param} must be greater than 0: ({value})'
         )
         return False
 
@@ -445,8 +405,7 @@ class BaseParamBuilder(ParamBuilderProtocol, ABC):
             return True
 
         self.add_validation_entry(
-            param=param,
-            message=f'{param} must be a positive number: ({value})'
+            param=param, message=f'{param} must be a positive number: ({value})'
         )
         return False
 
@@ -454,7 +413,11 @@ class BaseParamBuilder(ParamBuilderProtocol, ABC):
         return None
 
     def get_capacity_type(self) -> Optional[SocaCapacityType]:
-        if self.context.is_failed(constants.JOB_PARAM_NODES, constants.JOB_PARAM_SPOT, constants.JOB_PARAM_SPOT_ALLOCATION_COUNT):
+        if self.context.is_failed(
+            constants.JOB_PARAM_NODES,
+            constants.JOB_PARAM_SPOT,
+            constants.JOB_PARAM_SPOT_ALLOCATION_COUNT,
+        ):
             return None
 
         nodes_builder = self.context.get_builder(constants.JOB_PARAM_NODES)
@@ -462,12 +425,16 @@ class BaseParamBuilder(ParamBuilderProtocol, ABC):
         if nodes is None:
             return None
 
-        spot_param_builder: SpotParamBuilder = self.context.get_builder(constants.JOB_PARAM_SPOT)
+        spot_param_builder: SpotParamBuilder = self.context.get_builder(
+            constants.JOB_PARAM_SPOT
+        )
         spot = spot_param_builder.get()
-        if Utils.is_false(spot):
+        if not Utils.is_true(spot):
             return SocaCapacityType.ONDEMAND
 
-        spot_allocation_count_builder = self.context.get_builder(constants.JOB_PARAM_SPOT_ALLOCATION_COUNT)
+        spot_allocation_count_builder = self.context.get_builder(
+            constants.JOB_PARAM_SPOT_ALLOCATION_COUNT
+        )
         spot_allocation_count = spot_allocation_count_builder.get()
 
         if spot_allocation_count is None or spot_allocation_count <= 0:
@@ -515,22 +482,30 @@ class BaseParamBuilder(ParamBuilderProtocol, ABC):
         if param_name in JOB_PARAM_INFO:
             param_info = JOB_PARAM_INFO[param_name]
             if param_info.provider_names is not None:
-                provider_name = self.context.soca_context.config().get_string('scheduler.provider', required=True)
-                provider_param_name = Utils.get_value_as_string(provider_name, param_info.provider_names)
+                provider_name = self.context.soca_context.config().get_string(
+                    'scheduler.provider', required=True
+                )
+                provider_param_name = Utils.get_value_as_string(
+                    provider_name, param_info.provider_names
+                )
 
         def check_restricted_param(param_name_to_check: str) -> bool:
-            if self.queue_management.is_restricted_parameter(param_name=param_name_to_check):
+            if self.queue_management.is_restricted_parameter(
+                param_name=param_name_to_check
+            ):
                 self.add_validation_entry(
                     param=param_name_to_check,
                     message=f'{param_name_to_check} is restricted for queue: ({job_queue}) '
-                            f'and cannot be submitted as a job parameter by the user.'
+                    f'and cannot be submitted as a job parameter by the user.',
                 )
                 return True
             return False
 
         if check_restricted_param(param_name):
             return True
-        if Utils.is_not_empty(provider_param_name) and check_restricted_param(provider_param_name):
+        if Utils.is_not_empty(provider_param_name) and check_restricted_param(
+            provider_param_name
+        ):
             return True
 
         return False
@@ -549,7 +524,9 @@ class NodesParamBuilder(BaseParamBuilder):
         if self.is_restricted_parameter():
             return False
 
-        if not self.eval_positive_nonzero_int(param=constants.JOB_PARAM_NODES, value=nodes):
+        if not self.eval_positive_nonzero_int(
+            param=constants.JOB_PARAM_NODES, value=nodes
+        ):
             return False
 
         return True
@@ -582,25 +559,35 @@ class CpusParamBuilder(BaseParamBuilder):
         if self.is_restricted_parameter():
             return False
 
-        if not self.eval_positive_nonzero_int(param=constants.JOB_PARAM_CPUS, value=cpus):
+        if not self.eval_positive_nonzero_int(
+            param=constants.JOB_PARAM_CPUS, value=cpus
+        ):
             return False
 
-        if self.context.is_failed(constants.JOB_PARAM_INSTANCE_TYPES, constants.JOB_PARAM_ENABLE_HT_SUPPORT):
+        if self.context.is_failed(
+            constants.JOB_PARAM_INSTANCE_TYPES, constants.JOB_PARAM_ENABLE_HT_SUPPORT
+        ):
             return False
 
-        instance_types_builder = self.context.get_builder(constants.JOB_PARAM_INSTANCE_TYPES)
+        instance_types_builder = self.context.get_builder(
+            constants.JOB_PARAM_INSTANCE_TYPES
+        )
         instance_types = instance_types_builder.get()
         if Utils.is_empty(instance_types):
             instance_types = instance_types_builder.default()
 
-        enable_ht_support_builder = self.context.get_builder(constants.JOB_PARAM_ENABLE_HT_SUPPORT)
+        enable_ht_support_builder = self.context.get_builder(
+            constants.JOB_PARAM_ENABLE_HT_SUPPORT
+        )
         enable_ht_support = enable_ht_support_builder.get()
         if enable_ht_support is None:
             enable_ht_support = enable_ht_support_builder.default()
 
         min_cpus = 9999999  # choose some arbitrary max value
         for instance_type in instance_types:
-            ec2_instance_type = self.soca_context.aws_util().get_ec2_instance_type(instance_type=instance_type)
+            ec2_instance_type = self.soca_context.aws_util().get_ec2_instance_type(
+                instance_type=instance_type
+            )
             if enable_ht_support:
                 instance_type_cpus = ec2_instance_type.vcpu_info_default_vcpus
             else:
@@ -611,7 +598,7 @@ class CpusParamBuilder(BaseParamBuilder):
             self.add_validation_entry(
                 param=constants.JOB_PARAM_CPUS,
                 message=f'Invalid {constants.JOB_PARAM_CPUS}: ({cpus}). One of the instance types: [{",".join(instance_types)}]'
-                        f' do not have enough CPUs: ({min_cpus}). ht_support={enable_ht_support}'
+                f' do not have enough CPUs: ({min_cpus}). ht_support={enable_ht_support}',
             )
             return False
 
@@ -637,13 +624,12 @@ class MemoryParamBuilder(BaseParamBuilder):
         super().__init__(context, job_param)
 
     def validate(self) -> bool:
-
         try:
             memory = self.get(raise_exc=True)
         except exceptions.SocaException as e:
             self.add_validation_entry(
                 param=constants.JOB_PARAM_MEMORY,
-                message=f'failed to parse memory value. {e.message}'
+                message=f'failed to parse memory value. {e.message}',
             )
             return False
 
@@ -653,21 +639,29 @@ class MemoryParamBuilder(BaseParamBuilder):
         if self.is_restricted_parameter():
             return False
 
-        if not self.eval_positive_nonzero_int(param=constants.JOB_PARAM_CPUS, value=memory):
+        if not self.eval_positive_nonzero_int(
+            param=constants.JOB_PARAM_CPUS, value=memory
+        ):
             return False
 
         if self.context.is_failed(constants.JOB_PARAM_INSTANCE_TYPES):
             return False
 
-        instance_types_builder = self.context.get_builder(constants.JOB_PARAM_INSTANCE_TYPES)
+        instance_types_builder = self.context.get_builder(
+            constants.JOB_PARAM_INSTANCE_TYPES
+        )
         instance_types = instance_types_builder.get()
         if Utils.is_empty(instance_types):
             instance_types = instance_types_builder.default()
 
         memory_values = []
         for instance_type in instance_types:
-            ec2_instance_type = self.soca_context.aws_util().get_ec2_instance_type(instance_type=instance_type)
-            instance_type_memory = SocaMemory(value=ec2_instance_type.memory_info_size_in_mib, unit=SocaMemoryUnit.MiB)
+            ec2_instance_type = self.soca_context.aws_util().get_ec2_instance_type(
+                instance_type=instance_type
+            )
+            instance_type_memory = SocaMemory(
+                value=ec2_instance_type.memory_info_size_in_mib, unit=SocaMemoryUnit.MiB
+            )
             memory_values.append(instance_type_memory)
 
         min_memory = min(memory_values)
@@ -675,7 +669,7 @@ class MemoryParamBuilder(BaseParamBuilder):
             self.add_validation_entry(
                 param=constants.JOB_PARAM_MEMORY,
                 message=f'applicable instance types do not have sufficient memory requested for this job. '
-                        f'requested memory: {memory}, instance type memory (min): {min_memory}'
+                f'requested memory: {memory}, instance type memory (min): {min_memory}',
             )
             return False
 
@@ -712,7 +706,6 @@ class GpusParamBuilder(BaseParamBuilder):
         super().__init__(context, job_param)
 
     def validate(self) -> bool:
-
         gpus = self.get()
 
         if gpus is None:
@@ -721,7 +714,9 @@ class GpusParamBuilder(BaseParamBuilder):
         if self.is_restricted_parameter():
             return False
 
-        if not self.eval_positive_nonzero_int(param=constants.JOB_PARAM_GPUS, value=gpus):
+        if not self.eval_positive_nonzero_int(
+            param=constants.JOB_PARAM_GPUS, value=gpus
+        ):
             return False
 
         return True
@@ -746,7 +741,6 @@ class MpiprocsParamBuilder(BaseParamBuilder):
         super().__init__(context, job_param)
 
     def validate(self) -> bool:
-
         mpiprocs = self.get()
 
         if mpiprocs is None:
@@ -755,7 +749,9 @@ class MpiprocsParamBuilder(BaseParamBuilder):
         if self.is_restricted_parameter():
             return False
 
-        if not self.eval_positive_nonzero_int(param=constants.JOB_PARAM_MPIPROCS, value=mpiprocs):
+        if not self.eval_positive_nonzero_int(
+            param=constants.JOB_PARAM_MPIPROCS, value=mpiprocs
+        ):
             return False
 
         return True
@@ -792,7 +788,7 @@ class BaseOsParamBuilder(BaseParamBuilder):
             self.add_validation_entry(
                 param=constants.JOB_PARAM_BASE_OS,
                 message=f'base_os: ({base_os}) must be one of '
-                        f'the following values: {", ".join(constants.ALLOWED_BASEOS)}'
+                f'the following values: {", ".join(constants.ALLOWED_BASEOS)}',
             )
 
         return True
@@ -811,7 +807,9 @@ class BaseOsParamBuilder(BaseParamBuilder):
     def default(self) -> str:
         if self.default_job_params and self.default_job_params.base_os is not None:
             return self.default_job_params.base_os
-        return self.context.soca_context.config().get_string('scheduler.compute_node_os')
+        return self.context.soca_context.config().get_string(
+            'scheduler.compute_node_os'
+        )
 
 
 class InstanceAmiParamBuilder(BaseParamBuilder):
@@ -830,14 +828,16 @@ class InstanceAmiParamBuilder(BaseParamBuilder):
         if not instance_ami.startswith('ami-'):
             self.add_validation_entry(
                 param=constants.JOB_PARAM_INSTANCE_AMI,
-                message=f'invalid instance_ami: ({instance_ami})'
+                message=f'invalid instance_ami: ({instance_ami})',
             )
             return False
 
         return True
 
     def get(self) -> Optional[str]:
-        return Utils.get_value_as_string(key='instance_ami', obj=self.params, default=None)
+        return Utils.get_value_as_string(
+            key='instance_ami', obj=self.params, default=None
+        )
 
     def apply(self):
         instance_ami = self.get()
@@ -850,7 +850,9 @@ class InstanceAmiParamBuilder(BaseParamBuilder):
     def default(self) -> str:
         if self.default_job_params and self.default_job_params.instance_ami is not None:
             return self.default_job_params.instance_ami
-        return self.context.soca_context.config().get_string('scheduler.compute_node_ami')
+        return self.context.soca_context.config().get_string(
+            'scheduler.compute_node_ami'
+        )
 
 
 class InstanceTypesParamBuilder(BaseParamBuilder):
@@ -858,7 +860,6 @@ class InstanceTypesParamBuilder(BaseParamBuilder):
         super().__init__(context, job_param)
 
     def validate(self) -> bool:
-
         instance_types = self.get()
 
         if instance_types is None:
@@ -873,7 +874,6 @@ class InstanceTypesParamBuilder(BaseParamBuilder):
         not_allowed = []
         excluded = []
         for instance_type in instance_types:
-
             # local checks before making network call
 
             if instance_type not in all_instance_types:
@@ -881,14 +881,17 @@ class InstanceTypesParamBuilder(BaseParamBuilder):
                 continue
 
             if self.queue_management:
-
                 check_failed = False
 
-                if not self.queue_management.is_allowed_instance_type(instance_type=instance_type):
+                if not self.queue_management.is_allowed_instance_type(
+                    instance_type=instance_type
+                ):
                     not_allowed.append(instance_type)
                     check_failed = True
 
-                if self.queue_management.is_excluded_instance_type(instance_type=instance_type):
+                if self.queue_management.is_excluded_instance_type(
+                    instance_type=instance_type
+                ):
                     excluded.append(instance_type)
                     check_failed = True
 
@@ -897,7 +900,9 @@ class InstanceTypesParamBuilder(BaseParamBuilder):
 
             # make network call
 
-            is_valid = self.soca_context.aws_util().is_instance_type_valid(instance_type=instance_type)
+            is_valid = self.soca_context.aws_util().is_instance_type_valid(
+                instance_type=instance_type
+            )
             if not is_valid:
                 invalid.append(instance_type)
 
@@ -905,7 +910,7 @@ class InstanceTypesParamBuilder(BaseParamBuilder):
         if len(invalid) > 0:
             self.add_validation_entry(
                 param=constants.JOB_PARAM_INSTANCE_TYPES,
-                message=f'Instance types invalid or not found: [{", ".join(invalid)}]'
+                message=f'Instance types invalid or not found: [{", ".join(invalid)}]',
             )
             success = False
 
@@ -913,7 +918,7 @@ class InstanceTypesParamBuilder(BaseParamBuilder):
             self.add_validation_entry(
                 param=constants.JOB_PARAM_INSTANCE_TYPES,
                 message=f'Instance types not allowed for this queue: [{", ".join(not_allowed)}]. '
-                        f'Allowed instance types are: [{", ".join(self.queue_management.allowed_instance_types)}]'
+                f'Allowed instance types are: [{", ".join(self.queue_management.allowed_instance_types)}]',
             )
             success = False
 
@@ -921,7 +926,7 @@ class InstanceTypesParamBuilder(BaseParamBuilder):
             self.add_validation_entry(
                 param=constants.JOB_PARAM_INSTANCE_TYPES,
                 message=f'One of more of given instance types are excluded for this queue: [{", ".join(excluded)}]. '
-                        f'Excluded instance types are: [{", ".join(self.queue_management.excluded_instance_types)}]'
+                f'Excluded instance types are: [{", ".join(self.queue_management.excluded_instance_types)}]',
             )
             success = False
 
@@ -949,7 +954,6 @@ class InstanceTypesParamBuilder(BaseParamBuilder):
         return result
 
     def apply(self):
-
         instance_types = self.get()
 
         if instance_types is None:
@@ -958,18 +962,23 @@ class InstanceTypesParamBuilder(BaseParamBuilder):
         if instance_types is None or len(instance_types) == 0:
             raise exceptions.SocaException(
                 error_code=errorcodes.INVALID_PARAMS,
-                message=f'{constants.JOB_PARAM_INSTANCE_TYPES} is a required job parameter.'
+                message=f'{constants.JOB_PARAM_INSTANCE_TYPES} is a required job parameter.',
             )
 
         self.result.instance_types = instance_types
-        instance_type_options = self.get_instance_type_options(instance_types=instance_types)
+        instance_type_options = self.get_instance_type_options(
+            instance_types=instance_types
+        )
         self.provisioning_options.instance_types = instance_type_options
 
-    def get_instance_type_options(self, instance_types: List[str], enable_ht_support=False) -> List[SocaInstanceTypeOptions]:
-
+    def get_instance_type_options(
+        self, instance_types: List[str], enable_ht_support=False
+    ) -> List[SocaInstanceTypeOptions]:
         result = []
         for instance_type in instance_types:
-            ec2_instance_type = self.soca_context.aws_util().get_ec2_instance_type(instance_type=instance_type)
+            ec2_instance_type = self.soca_context.aws_util().get_ec2_instance_type(
+                instance_type=instance_type
+            )
 
             if ec2_instance_type.is_cpu_options_supported is True:
                 cpu_options_supported = True
@@ -979,7 +988,9 @@ class InstanceTypesParamBuilder(BaseParamBuilder):
             # core_count
             default_core_count = ec2_instance_type.vcpu_info_default_cores
             default_vcpu_count = ec2_instance_type.vcpu_info_default_vcpus
-            default_threads_per_core = ec2_instance_type.vcpu_info_default_threads_per_core
+            default_threads_per_core = (
+                ec2_instance_type.vcpu_info_default_threads_per_core
+            )
 
             # threads_per_core will be overridden in EnableHtSupportParamBuilder if enable_ht_support = True.
             if enable_ht_support:
@@ -1000,7 +1011,9 @@ class InstanceTypesParamBuilder(BaseParamBuilder):
                 ebs_optimized = False
 
             # memory
-            memory = SocaMemory(value=ec2_instance_type.memory_info_size_in_mib, unit=SocaMemoryUnit.MiB)
+            memory = SocaMemory(
+                value=ec2_instance_type.memory_info_size_in_mib, unit=SocaMemoryUnit.MiB
+            )
 
             options = SocaInstanceTypeOptions(
                 name=instance_type,
@@ -1011,14 +1024,17 @@ class InstanceTypesParamBuilder(BaseParamBuilder):
                 threads_per_core=threads_per_core,
                 ebs_optimized=ebs_optimized,
                 weighted_capacity=weighted_capacity,
-                memory=memory
+                memory=memory,
             )
             result.append(options)
 
         return result
 
     def default(self) -> Optional[List[str]]:
-        if self.default_job_params and self.default_job_params.instance_types is not None:
+        if (
+            self.default_job_params
+            and self.default_job_params.instance_types is not None
+        ):
             return self.default_job_params.instance_types
         return None
 
@@ -1028,7 +1044,6 @@ class ForceReservedInstancesParamBuilder(BaseParamBuilder):
         super().__init__(context, job_param)
 
     def validate(self) -> bool:
-
         force_ri = self.get()
 
         if force_ri is None:
@@ -1043,7 +1058,9 @@ class ForceReservedInstancesParamBuilder(BaseParamBuilder):
         # backward compatibility
         value = Utils.get_value_as_bool(key='force_ri', obj=self.params, default=None)
         if value is None:
-            value = Utils.get_value_as_bool(key='force_reserved_instances', obj=self.params, default=None)
+            value = Utils.get_value_as_bool(
+                key='force_reserved_instances', obj=self.params, default=None
+            )
 
         return value
 
@@ -1054,7 +1071,10 @@ class ForceReservedInstancesParamBuilder(BaseParamBuilder):
         self.result.force_reserved_instances = force_reserved_instances
 
     def default(self) -> bool:
-        if self.default_job_params and self.default_job_params.force_reserved_instances is not None:
+        if (
+            self.default_job_params
+            and self.default_job_params.force_reserved_instances is not None
+        ):
             return self.default_job_params.force_reserved_instances
         return constants.DEFAULT_FORCE_RESERVED_INSTANCES
 
@@ -1107,7 +1127,9 @@ class SpotPriceParamBuilder(BaseParamBuilder):
             return False
 
         if isinstance(spot_price, float):
-            if not self.eval_positive_nonzero_int(param=constants.JOB_PARAM_SPOT_PRICE, value=spot_price):
+            if not self.eval_positive_nonzero_int(
+                param=constants.JOB_PARAM_SPOT_PRICE, value=spot_price
+            ):
                 return False
             return True
 
@@ -1117,7 +1139,7 @@ class SpotPriceParamBuilder(BaseParamBuilder):
 
         self.add_validation_entry(
             param=constants.JOB_PARAM_SPOT_PRICE,
-            message=f'invalid spot price: {spot_price}. spot_price must be (auto) or a [float] value.'
+            message=f'invalid spot price: {spot_price}. spot_price must be (auto) or a [float] value.',
         )
         return False
 
@@ -1130,10 +1152,14 @@ class SpotPriceParamBuilder(BaseParamBuilder):
             else:
                 return amount
 
-        value = Utils.get_value_as_float(key='spot_price', obj=self.params, default=None)
+        value = Utils.get_value_as_float(
+            key='spot_price', obj=self.params, default=None
+        )
         if value is not None:
             return value
-        value = Utils.get_value_as_string(key='spot_price', obj=self.params, default=None)
+        value = Utils.get_value_as_string(
+            key='spot_price', obj=self.params, default=None
+        )
         if value is None:
             return None
         return value
@@ -1167,10 +1193,14 @@ class SpotAllocationCountParamBuilder(BaseParamBuilder):
         if self.is_restricted_parameter():
             return False
 
-        if self.context.is_failed(constants.JOB_PARAM_NODES, constants.JOB_PARAM_SPOT_PRICE):
+        if self.context.is_failed(
+            constants.JOB_PARAM_NODES, constants.JOB_PARAM_SPOT_PRICE
+        ):
             return False
 
-        if not self.eval_positive_int(param=constants.JOB_PARAM_SPOT_ALLOCATION_COUNT, value=value):
+        if not self.eval_positive_int(
+            param=constants.JOB_PARAM_SPOT_ALLOCATION_COUNT, value=value
+        ):
             return False
 
         spot_price_builder = self.context.get_builder(constants.JOB_PARAM_SPOT_PRICE)
@@ -1182,7 +1212,7 @@ class SpotAllocationCountParamBuilder(BaseParamBuilder):
         if spot_price is None:
             self.add_validation_entry(
                 param=constants.JOB_PARAM_SPOT_ALLOCATION_COUNT,
-                message=f'{constants.JOB_PARAM_SPOT_PRICE} is required if {constants.JOB_PARAM_SPOT_ALLOCATION_COUNT} is provided.'
+                message=f'{constants.JOB_PARAM_SPOT_PRICE} is required if {constants.JOB_PARAM_SPOT_ALLOCATION_COUNT} is provided.',
             )
             return False
 
@@ -1193,15 +1223,17 @@ class SpotAllocationCountParamBuilder(BaseParamBuilder):
             self.add_validation_entry(
                 param=constants.JOB_PARAM_SPOT_ALLOCATION_COUNT,
                 message=f'{constants.JOB_PARAM_SPOT_ALLOCATION_COUNT}: ({value}) must be '
-                        f'lower than the number of nodes to be provisioned for '
-                        f'this job: ({nodes})'
+                f'lower than the number of nodes to be provisioned for '
+                f'this job: ({nodes})',
             )
             return False
 
         return True
 
     def get(self) -> Optional[int]:
-        value = Utils.get_value_as_int(key='spot_allocation_count', obj=self.params, default=None)
+        value = Utils.get_value_as_int(
+            key='spot_allocation_count', obj=self.params, default=None
+        )
         if value is None:
             return None
         if value == 0:
@@ -1215,7 +1247,10 @@ class SpotAllocationCountParamBuilder(BaseParamBuilder):
         self.result.spot_allocation_count = spot_allocation_count
 
     def default(self) -> Optional[Union[float, str]]:
-        if self.default_job_params and self.default_job_params.spot_allocation_count is not None:
+        if (
+            self.default_job_params
+            and self.default_job_params.spot_allocation_count is not None
+        ):
             return self.default_job_params.spot_allocation_count
         return None
 
@@ -1229,8 +1264,7 @@ class SpotAllocationStrategyParamBuilder(BaseParamBuilder):
             spot_allocation_strategy = self.get(raise_exc=True)
         except exceptions.SocaException as e:
             self.add_validation_entry(
-                param=constants.JOB_PARAM_SPOT_ALLOCATION_STRATEGY,
-                message=e.message
+                param=constants.JOB_PARAM_SPOT_ALLOCATION_STRATEGY, message=e.message
             )
             return False
 
@@ -1252,7 +1286,9 @@ class SpotAllocationStrategyParamBuilder(BaseParamBuilder):
         if Utils.is_false(spot):
             return None
 
-        value = Utils.get_value_as_string('spot_allocation_strategy', self.params, default=None)
+        value = Utils.get_value_as_string(
+            'spot_allocation_strategy', self.params, default=None
+        )
         if value is None:
             return None
 
@@ -1262,7 +1298,7 @@ class SpotAllocationStrategyParamBuilder(BaseParamBuilder):
                 raise exceptions.SocaException(
                     error_code=errorcodes.INVALID_PARAMS,
                     message=f'Invalid {constants.JOB_PARAM_SPOT_ALLOCATION_STRATEGY}: ({value}). '
-                            f'Must be one of: [{", ".join(SocaSpotAllocationStrategy.valid_values())}]'
+                    f'Must be one of: [{", ".join(SocaSpotAllocationStrategy.valid_values())}]',
                 )
             else:
                 return None
@@ -1276,9 +1312,14 @@ class SpotAllocationStrategyParamBuilder(BaseParamBuilder):
 
     def default(self) -> Optional[SocaSpotAllocationStrategy]:
         if self.is_mixed_capacity() or self.is_spot_capacity():
-            if self.default_job_params and self.default_job_params.spot_allocation_strategy is not None:
+            if (
+                self.default_job_params
+                and self.default_job_params.spot_allocation_strategy is not None
+            ):
                 return self.default_job_params.spot_allocation_strategy
-            return SocaSpotAllocationStrategy.resolve(constants.DEFAULT_SPOT_ALLOCATION_STRATEGY)
+            return SocaSpotAllocationStrategy.resolve(
+                constants.DEFAULT_SPOT_ALLOCATION_STRATEGY
+            )
         return None
 
 
@@ -1287,13 +1328,11 @@ class SubnetIdsParamBuilder(BaseParamBuilder):
         super().__init__(context, job_param)
 
     def validate(self) -> bool:
-
         try:
             subnet_ids = self.get(raise_exc=True)
         except exceptions.SocaException as e:
             self.add_validation_entry(
-                param=constants.JOB_PARAM_SUBNET_IDS,
-                message=e.message
+                param=constants.JOB_PARAM_SUBNET_IDS, message=e.message
             )
             return False
 
@@ -1303,7 +1342,10 @@ class SubnetIdsParamBuilder(BaseParamBuilder):
         if self.is_restricted_parameter():
             return False
 
-        if self.context.is_failed(constants.JOB_PARAM_ENABLE_PLACEMENT_GROUP, constants.JOB_PARAM_ENABLE_EFA_SUPPORT):
+        if self.context.is_failed(
+            constants.JOB_PARAM_ENABLE_PLACEMENT_GROUP,
+            constants.JOB_PARAM_ENABLE_EFA_SUPPORT,
+        ):
             return False
 
         success = True
@@ -1314,22 +1356,26 @@ class SubnetIdsParamBuilder(BaseParamBuilder):
         # prior to 3.0, if placement group was enabled, and user provided more than 1 subnet,
         #   subnets were automatically corrected to 1 subnet. user input should not be corrected automatically
         #   and should return an error
-        enable_placement_group_builder = self.context.get_builder(constants.JOB_PARAM_ENABLE_PLACEMENT_GROUP)
+        enable_placement_group_builder = self.context.get_builder(
+            constants.JOB_PARAM_ENABLE_PLACEMENT_GROUP
+        )
         enable_placement_group = enable_placement_group_builder.get()
 
         if Utils.is_true(enable_placement_group) and len(subnet_ids) > 1:
             self.add_validation_entry(
                 param=constants.JOB_PARAM_SUBNET_IDS,
-                message=f'When placement group is enabled, no. of {constants.JOB_PARAM_SUBNET_IDS} cannot be more than (1).'
+                message=f'When placement group is enabled, no. of {constants.JOB_PARAM_SUBNET_IDS} cannot be more than (1).',
             )
             success = False
 
-        enable_efa_support_builder = self.context.get_builder(constants.JOB_PARAM_ENABLE_EFA_SUPPORT)
+        enable_efa_support_builder = self.context.get_builder(
+            constants.JOB_PARAM_ENABLE_EFA_SUPPORT
+        )
         enable_efa_support = enable_efa_support_builder.get()
         if Utils.is_true(enable_efa_support) and len(subnet_ids) > 1:
             self.add_validation_entry(
                 param=constants.JOB_PARAM_SUBNET_IDS,
-                message=f'When EFA support is enabled, no. of {constants.JOB_PARAM_SUBNET_IDS} cannot be more than (1).'
+                message=f'When EFA support is enabled, no. of {constants.JOB_PARAM_SUBNET_IDS} cannot be more than (1).',
             )
             success = False
 
@@ -1346,13 +1392,15 @@ class SubnetIdsParamBuilder(BaseParamBuilder):
 
         if Utils.is_int(value):
             value = Utils.get_as_int(value)
-            private_subnets = self.context.soca_context.config().get_list('cluster.network.private_subnets', required=True)
+            private_subnets = self.context.soca_context.config().get_list(
+                'cluster.network.private_subnets', required=True
+            )
             max_subnets = len(private_subnets)
             if not (0 < value <= max_subnets):
                 if raise_exc:
                     raise exceptions.SocaException(
                         error_code=errorcodes.INVALID_PARAMS,
-                        message=f'{constants.JOB_PARAM_SUBNET_IDS} value must be between 1 and {max_subnets}'
+                        message=f'{constants.JOB_PARAM_SUBNET_IDS} value must be between 1 and {max_subnets}',
                     )
                 else:
                     return None
@@ -1371,10 +1419,12 @@ class SubnetIdsParamBuilder(BaseParamBuilder):
         self.result.subnet_ids = subnet_ids
 
     def default(self) -> List[str]:
-
         default_subnet_ids = None
         if self.default_job_params:
-            if self.default_job_params.subnet_ids is not None and len(self.default_job_params.subnet_ids) > 0:
+            if (
+                self.default_job_params.subnet_ids is not None
+                and len(self.default_job_params.subnet_ids) > 0
+            ):
                 default_subnet_ids = self.default_job_params.subnet_ids
 
         nodes_builder = self.context.get_builder(constants.JOB_PARAM_NODES)
@@ -1384,28 +1434,38 @@ class SubnetIdsParamBuilder(BaseParamBuilder):
 
         if default_subnet_ids is None or len(default_subnet_ids) == 0:
             if self.is_spot_capacity() or self.is_mixed_capacity() or nodes == 1:
-                default_subnet_ids = self.context.soca_context.config().get_list('cluster.network.private_subnets', required=True)
+                default_subnet_ids = self.context.soca_context.config().get_list(
+                    'cluster.network.private_subnets', required=True
+                )
             else:
-                private_subnets = self.context.soca_context.config().get_list('cluster.network.private_subnets', required=True)
+                private_subnets = self.context.soca_context.config().get_list(
+                    'cluster.network.private_subnets', required=True
+                )
                 default_subnet_ids = [random.choice(private_subnets)]
 
         if len(default_subnet_ids) == 1:
             return default_subnet_ids
 
         # if FSx Lustre or single zone FileSystem is enabled, return the first subnet
-        fsx_lustre_param_builder: FsxLustreParamBuilder = self.context.get_builder(constants.JOB_PARAM_FSX_LUSTRE)
+        fsx_lustre_param_builder: FsxLustreParamBuilder = self.context.get_builder(
+            constants.JOB_PARAM_FSX_LUSTRE
+        )
         fsx_lustre = fsx_lustre_param_builder.get()
         if fsx_lustre is not None and fsx_lustre.enabled:
             return [default_subnet_ids[0]]
 
         # if EFA is enabled, multiple subnets cannot be supported.
-        enable_efa_support_builder = self.context.get_builder(constants.JOB_PARAM_ENABLE_EFA_SUPPORT)
+        enable_efa_support_builder = self.context.get_builder(
+            constants.JOB_PARAM_ENABLE_EFA_SUPPORT
+        )
         enable_efa_support = enable_efa_support_builder.get()
         if enable_efa_support and len(default_subnet_ids) > 1 and nodes > 1:
             return [random.choice(default_subnet_ids)]
 
         # if PlacementGroup is enabled, multiple subnets cannot be supported.
-        enable_placement_group_builder = self.context.get_builder(constants.JOB_PARAM_ENABLE_PLACEMENT_GROUP)
+        enable_placement_group_builder = self.context.get_builder(
+            constants.JOB_PARAM_ENABLE_PLACEMENT_GROUP
+        )
         enable_placement_group = enable_placement_group_builder.get()
         if enable_placement_group and len(default_subnet_ids) > 1:
             return [random.choice(default_subnet_ids)]
@@ -1418,7 +1478,6 @@ class SecurityGroupsParamBuilder(BaseParamBuilder):
         super().__init__(context, job_param)
 
     def validate(self) -> bool:
-
         security_groups = self.get()
 
         if security_groups is None:
@@ -1430,14 +1489,13 @@ class SecurityGroupsParamBuilder(BaseParamBuilder):
         if len(security_groups) > constants.MAX_SECURITY_GROUPS:
             self.add_validation_entry(
                 param=constants.JOB_PARAM_SECURITY_GROUPS,
-                message=f'{constants.JOB_PARAM_SECURITY_GROUPS} cannot be more than {constants.MAX_SECURITY_GROUPS}'
+                message=f'{constants.JOB_PARAM_SECURITY_GROUPS} cannot be more than {constants.MAX_SECURITY_GROUPS}',
             )
             return False
 
         blocked_security_groups = []
         invalid_security_groups = []
         for security_group in security_groups:
-
             # local checks
 
             if not security_group.startswith('sg-'):
@@ -1462,16 +1520,16 @@ class SecurityGroupsParamBuilder(BaseParamBuilder):
             self.add_validation_entry(
                 param=constants.JOB_PARAM_SECURITY_GROUPS,
                 message=f'Security groups [{",".join(blocked_security_groups)}] are not authorized '
-                        f'for queue: ({self.context.queue.name}). '
-                        f'List of valid security groups for this queue are: '
-                        f'[{", ".join(self.queue_management.allowed_security_groups)}].'
+                f'for queue: ({self.context.queue.name}). '
+                f'List of valid security groups for this queue are: '
+                f'[{", ".join(self.queue_management.allowed_security_groups)}].',
             )
             success = False
 
         if len(invalid_security_groups) > 0:
             self.add_validation_entry(
                 param=constants.JOB_PARAM_SECURITY_GROUPS,
-                message=f'Security groups not found or invalid: [{", ".join(invalid_security_groups)}]'
+                message=f'Security groups not found or invalid: [{", ".join(invalid_security_groups)}]',
             )
             success = False
 
@@ -1493,14 +1551,21 @@ class SecurityGroupsParamBuilder(BaseParamBuilder):
         if additional_security_groups is None:
             security_groups = default_security_groups
         else:
-            security_groups = list(set(default_security_groups + additional_security_groups))
+            security_groups = list(
+                set(default_security_groups + additional_security_groups)
+            )
         self.result.security_groups = security_groups
 
     def default(self) -> List[str]:
         if self.default_job_params:
-            if self.default_job_params.security_groups is not None and len(self.default_job_params.security_groups) > 0:
+            if (
+                self.default_job_params.security_groups is not None
+                and len(self.default_job_params.security_groups) > 0
+            ):
                 return self.default_job_params.security_groups
-        return self.soca_context.config().get_list('scheduler.compute_node_security_group_ids', [])
+        return self.soca_context.config().get_list(
+            'scheduler.compute_node_security_group_ids', []
+        )
 
 
 class InstanceProfileParamBuilder(BaseParamBuilder):
@@ -1508,7 +1573,6 @@ class InstanceProfileParamBuilder(BaseParamBuilder):
         super().__init__(context, job_param)
 
     def validate(self) -> bool:
-
         instance_profile = self.get()
         if instance_profile is None:
             return True
@@ -1516,24 +1580,29 @@ class InstanceProfileParamBuilder(BaseParamBuilder):
         if self.is_restricted_parameter():
             return False
 
-        if self.queue_management and not self.queue_management.is_allowed_instance_profile(instance_profile):
+        if (
+            self.queue_management
+            and not self.queue_management.is_allowed_instance_profile(instance_profile)
+        ):
             self.add_validation_entry(
                 param=constants.JOB_PARAM_INSTANCE_PROFILE,
                 message=f'IAM instance profile: ({instance_profile}) is not authorized '
-                        f'for queue: ({self.context.queue.name}). '
-                        f'List of valid instance profiles for this queue are: '
-                        f'[{", ".join(self.queue_management.allowed_instance_profiles)}].'
+                f'for queue: ({self.context.queue.name}). '
+                f'List of valid instance profiles for this queue are: '
+                f'[{", ".join(self.queue_management.allowed_instance_profiles)}].',
             )
             return False
 
         if instance_profile.startswith('arn:'):
             instance_profile = instance_profile.split(':instance-profile/')[1]
 
-        result = self.soca_context.aws_util().get_instance_profile_arn(instance_profile_name=instance_profile)
+        result = self.soca_context.aws_util().get_instance_profile_arn(
+            instance_profile_name=instance_profile
+        )
         if not result['success']:
             self.add_validation_entry(
                 param=constants.JOB_PARAM_INSTANCE_PROFILE,
-                message=f'{constants.JOB_PARAM_INSTANCE_PROFILE} not found: ({instance_profile})'
+                message=f'{constants.JOB_PARAM_INSTANCE_PROFILE} not found: ({instance_profile})',
             )
             return False
 
@@ -1543,13 +1612,15 @@ class InstanceProfileParamBuilder(BaseParamBuilder):
         return Utils.get_value_as_string('instance_profile', self.params)
 
     def get_arn(self, instance_profile: str):
-        result = self.soca_context.aws_util().get_instance_profile_arn(instance_profile_name=instance_profile)
+        result = self.soca_context.aws_util().get_instance_profile_arn(
+            instance_profile_name=instance_profile
+        )
         if not result['success']:
             # this will only happen if the instance profile is deleted after job is queued
             # in normal scenarios, validation will cover this scenario
             raise exceptions.SocaException(
                 error_code=errorcodes.GENERAL_ERROR,
-                message=f'Instance profile not found: ({instance_profile})'
+                message=f'Instance profile not found: ({instance_profile})',
             )
         return result['arn']
 
@@ -1566,9 +1637,14 @@ class InstanceProfileParamBuilder(BaseParamBuilder):
         self.result.instance_profile = instance_profile_arn
 
     def default(self) -> str:
-        if self.default_job_params and self.default_job_params.instance_profile is not None:
+        if (
+            self.default_job_params
+            and self.default_job_params.instance_profile is not None
+        ):
             return self.default_job_params.instance_profile
-        return self.soca_context.config().get_string('scheduler.compute_node_instance_profile_arn')
+        return self.soca_context.config().get_string(
+            'scheduler.compute_node_instance_profile_arn'
+        )
 
 
 class KeepEbsVolumesParamBuilder(BaseParamBuilder):
@@ -1590,7 +1666,9 @@ class KeepEbsVolumesParamBuilder(BaseParamBuilder):
         # backward compatibility
         value = Utils.get_value_as_bool('keep_ebs', self.params, default=None)
         if value is None:
-            value = Utils.get_value_as_bool('keep_ebs_volumes', self.params, default=None)
+            value = Utils.get_value_as_bool(
+                'keep_ebs_volumes', self.params, default=None
+            )
         return value
 
     def apply(self):
@@ -1600,7 +1678,10 @@ class KeepEbsVolumesParamBuilder(BaseParamBuilder):
         self.result.keep_ebs_volumes = value
 
     def default(self) -> bool:
-        if self.default_job_params and self.default_job_params.keep_ebs_volumes is not None:
+        if (
+            self.default_job_params
+            and self.default_job_params.keep_ebs_volumes is not None
+        ):
             return self.default_job_params.keep_ebs_volumes
         return constants.DEFAULT_KEEP_EBS_VOLUMES
 
@@ -1618,7 +1699,9 @@ class RootStorageSizeParamBuilder(BaseParamBuilder):
         if self.is_restricted_parameter():
             return False
 
-        if not self.eval_positive_nonzero_int(param=constants.JOB_PARAM_ROOT_STORAGE_SIZE, value=value):
+        if not self.eval_positive_nonzero_int(
+            param=constants.JOB_PARAM_ROOT_STORAGE_SIZE, value=value
+        ):
             return False
 
         return True
@@ -1644,9 +1727,14 @@ class RootStorageSizeParamBuilder(BaseParamBuilder):
         self.result.root_storage_size = value
 
     def default(self) -> SocaMemory:
-        if self.default_job_params and self.default_job_params.root_storage_size is not None:
+        if (
+            self.default_job_params
+            and self.default_job_params.root_storage_size is not None
+        ):
             return self.default_job_params.root_storage_size
-        return SocaMemory(value=constants.DEFAULT_ROOT_STORAGE_SIZE, unit=SocaMemoryUnit.GB)
+        return SocaMemory(
+            value=constants.DEFAULT_ROOT_STORAGE_SIZE, unit=SocaMemoryUnit.GB
+        )
 
 
 class ScratchStorageSizeParamBuilder(BaseParamBuilder):
@@ -1662,7 +1750,9 @@ class ScratchStorageSizeParamBuilder(BaseParamBuilder):
         if self.is_restricted_parameter():
             return False
 
-        if not self.eval_positive_int(param=constants.JOB_PARAM_SCRATCH_STORAGE_SIZE, value=value):
+        if not self.eval_positive_int(
+            param=constants.JOB_PARAM_SCRATCH_STORAGE_SIZE, value=value
+        ):
             return False
 
         return True
@@ -1690,9 +1780,14 @@ class ScratchStorageSizeParamBuilder(BaseParamBuilder):
             self.result.scratch_provider = 'ebs'
 
     def default(self) -> SocaMemory:
-        if self.default_job_params and self.default_job_params.scratch_storage_size is not None:
+        if (
+            self.default_job_params
+            and self.default_job_params.scratch_storage_size is not None
+        ):
             return self.default_job_params.scratch_storage_size
-        return SocaMemory(value=constants.DEFAULT_SCRATCH_STORAGE_SIZE, unit=SocaMemoryUnit.GB)
+        return SocaMemory(
+            value=constants.DEFAULT_SCRATCH_STORAGE_SIZE, unit=SocaMemoryUnit.GB
+        )
 
 
 class ScratchIopsParamBuilder(BaseParamBuilder):
@@ -1707,13 +1802,17 @@ class ScratchIopsParamBuilder(BaseParamBuilder):
             if self.is_restricted_parameter():
                 return False
 
-            if not self.eval_positive_int(param=constants.JOB_PARAM_SCRATCH_IOPS, value=value):
+            if not self.eval_positive_int(
+                param=constants.JOB_PARAM_SCRATCH_IOPS, value=value
+            ):
                 return False
 
         if value is None:
             value = self.default()
 
-        scratch_storage_size: ScratchStorageSizeParamBuilder = self.context.get_builder(constants.JOB_PARAM_SCRATCH_STORAGE_SIZE)
+        scratch_storage_size: ScratchStorageSizeParamBuilder = self.context.get_builder(
+            constants.JOB_PARAM_SCRATCH_STORAGE_SIZE
+        )
         storage_value = scratch_storage_size.get()
         if storage_value is None:
             storage_value = scratch_storage_size.default()
@@ -1724,7 +1823,7 @@ class ScratchIopsParamBuilder(BaseParamBuilder):
                 self.add_validation_entry(
                     param=constants.JOB_PARAM_SCRATCH_IOPS,
                     message=f'Iops to volume size ratio of {iops_to_volume_size_ratio} is too high; maximum is 50. '
-                            f'Either reduce the Iops or increase the scratch storage volume size.'
+                    f'Either reduce the Iops or increase the scratch storage volume size.',
                 )
                 return False
 
@@ -1734,7 +1833,9 @@ class ScratchIopsParamBuilder(BaseParamBuilder):
         # backward compatibility
         scratch_storage_iops = Utils.get_value_as_int('scratch_iops', self.params)
         if scratch_storage_iops is None:
-            scratch_storage_iops = Utils.get_value_as_int('scratch_storage_iops', self.params)
+            scratch_storage_iops = Utils.get_value_as_int(
+                'scratch_storage_iops', self.params
+            )
         return scratch_storage_iops
 
     def apply(self):
@@ -1744,7 +1845,10 @@ class ScratchIopsParamBuilder(BaseParamBuilder):
         self.result.scratch_storage_iops = value
 
     def default(self) -> int:
-        if self.default_job_params and self.default_job_params.scratch_storage_iops is not None:
+        if (
+            self.default_job_params
+            and self.default_job_params.scratch_storage_iops is not None
+        ):
             return self.default_job_params.scratch_storage_iops
         return constants.DEFAULT_SCRATCH_IOPS
 
@@ -1754,7 +1858,6 @@ class FsxLustreParamBuilder(BaseParamBuilder):
         super().__init__(context, job_param)
 
     def validate(self) -> bool:
-
         success = True
 
         fsx_lustre = self.get()
@@ -1768,87 +1871,114 @@ class FsxLustreParamBuilder(BaseParamBuilder):
         if self.is_restricted_parameter(param_name=constants.JOB_PARAM_FSX_LUSTRE):
             return False
         if fsx_lustre.size is not None:
-            if self.is_restricted_parameter(param_name=constants.JOB_PARAM_FSX_LUSTRE_SIZE):
+            if self.is_restricted_parameter(
+                param_name=constants.JOB_PARAM_FSX_LUSTRE_SIZE
+            ):
                 return False
         if fsx_lustre.deployment_type is not None:
-            if self.is_restricted_parameter(param_name=constants.JOB_PARAM_FSX_LUSTRE_DEPLOYMENT_TYPE):
+            if self.is_restricted_parameter(
+                param_name=constants.JOB_PARAM_FSX_LUSTRE_DEPLOYMENT_TYPE
+            ):
                 return False
         if fsx_lustre.per_unit_throughput is not None:
-            if self.is_restricted_parameter(param_name=constants.JOB_PARAM_FSX_LUSTRE_PER_UNIT_THROUGHPUT):
+            if self.is_restricted_parameter(
+                param_name=constants.JOB_PARAM_FSX_LUSTRE_PER_UNIT_THROUGHPUT
+            ):
                 return False
 
         # get_as_int will eat the value provided by user if it's not a valid integer
         # check if user provided a size value and handle appropriately
-        size_gb_str = Utils.get_value_as_string(constants.JOB_PARAM_FSX_LUSTRE_SIZE, self.params)
+        size_gb_str = Utils.get_value_as_string(
+            constants.JOB_PARAM_FSX_LUSTRE_SIZE, self.params
+        )
         if fsx_lustre.size is None and size_gb_str is not None:
             self.add_validation_entry(
                 param=constants.JOB_PARAM_FSX_LUSTRE_SIZE,
-                message=f'{constants.JOB_PARAM_FSX_LUSTRE_SIZE} must be a valid integer: ({size_gb_str})'
+                message=f'{constants.JOB_PARAM_FSX_LUSTRE_SIZE} must be a valid integer: ({size_gb_str})',
             )
             success = False
 
-        if fsx_lustre.size is not None and not SocaFSxLustreConfig.is_allowed_size(int(fsx_lustre.size.value)):
+        if fsx_lustre.size is not None and not SocaFSxLustreConfig.is_allowed_size(
+            int(fsx_lustre.size.value)
+        ):
             self.add_validation_entry(
                 param=constants.JOB_PARAM_FSX_LUSTRE_SIZE,
                 message=f'Invalid {constants.JOB_PARAM_FSX_LUSTRE_SIZE}: ({size_gb_str}). '
-                        f'Allowed values: '
-                        f'[{", ".join([str(x) for x in SocaFSxLustreConfig.allowed_sizes_gb()])}]'
+                f'Allowed values: '
+                f'[{", ".join([str(x) for x in SocaFSxLustreConfig.allowed_sizes_gb()])}]',
             )
             success = False
 
-        if fsx_lustre.deployment_type is not None and \
-            not SocaFSxLustreConfig.is_allowed_deployment_type(fsx_lustre.deployment_type):
+        if (
+            fsx_lustre.deployment_type is not None
+            and not SocaFSxLustreConfig.is_allowed_deployment_type(
+                fsx_lustre.deployment_type
+            )
+        ):
             self.add_validation_entry(
                 param=constants.JOB_PARAM_FSX_LUSTRE_DEPLOYMENT_TYPE,
                 message=f'Invalid {constants.JOB_PARAM_FSX_LUSTRE_DEPLOYMENT_TYPE}: ({fsx_lustre.deployment_type}). '
-                        f'Allowed values: '
-                        f'[{", ".join(SocaFSxLustreConfig.allowed_deployment_types())}]'
+                f'Allowed values: '
+                f'[{", ".join(SocaFSxLustreConfig.allowed_deployment_types())}]',
             )
             success = False
 
-        if fsx_lustre.deployment_type == constants.FSX_LUSTRE_DEPLOYMENT_TYPE_PERSISTENT_1:
+        if (
+            fsx_lustre.deployment_type
+            == constants.FSX_LUSTRE_DEPLOYMENT_TYPE_PERSISTENT_1
+        ):
             # get_as_int will eat the value provided by user if it's not a valid integer
             # check if user provided a throughput value and handle appropriately
-            per_unit_throughput_str = Utils.get_value_as_string(constants.JOB_PARAM_FSX_LUSTRE_PER_UNIT_THROUGHPUT, self.params)
-            if fsx_lustre.per_unit_throughput is None and per_unit_throughput_str is not None:
+            per_unit_throughput_str = Utils.get_value_as_string(
+                constants.JOB_PARAM_FSX_LUSTRE_PER_UNIT_THROUGHPUT, self.params
+            )
+            if (
+                fsx_lustre.per_unit_throughput is None
+                and per_unit_throughput_str is not None
+            ):
                 self.add_validation_entry(
                     param=constants.JOB_PARAM_FSX_LUSTRE_PER_UNIT_THROUGHPUT,
                     message=f'{constants.JOB_PARAM_FSX_LUSTRE_PER_UNIT_THROUGHPUT} must be a valid integer: '
-                            f'({per_unit_throughput_str}).'
+                    f'({per_unit_throughput_str}).',
                 )
                 success = False
 
-            if fsx_lustre.per_unit_throughput is not None and \
-                not SocaFSxLustreConfig.is_allowed_per_unit_throughput(fsx_lustre.per_unit_throughput):
+            if (
+                fsx_lustre.per_unit_throughput is not None
+                and not SocaFSxLustreConfig.is_allowed_per_unit_throughput(
+                    fsx_lustre.per_unit_throughput
+                )
+            ):
                 self.add_validation_entry(
                     param=constants.JOB_PARAM_FSX_LUSTRE_PER_UNIT_THROUGHPUT,
                     message=f'Invalid {constants.JOB_PARAM_FSX_LUSTRE_PER_UNIT_THROUGHPUT}: ({fsx_lustre.per_unit_throughput}). '
-                            f'Allowed values: '
-                            f'[{", ".join([str(x) for x in SocaFSxLustreConfig.allowed_per_unit_throughputs()])}]'
+                    f'Allowed values: '
+                    f'[{", ".join([str(x) for x in SocaFSxLustreConfig.allowed_per_unit_throughputs()])}]',
                 )
                 success = False
 
         if fsx_lustre.s3_backend:
             bucket_name = fsx_lustre.s3_backend.split('s3://')[-1]
-            result = self.soca_context.aws_util().s3_bucket_has_access(bucket_name=bucket_name)
+            result = self.soca_context.aws_util().s3_bucket_has_access(
+                bucket_name=bucket_name
+            )
             if not result['success']:
                 error_code = result['error_code']
                 if error_code == 'AccessDenied':
                     self.add_validation_entry(
                         param=constants.JOB_PARAM_FSX_LUSTRE_S3_BACKEND,
-                        message=f'IDEA does not have access to this bucket: {bucket_name}.'
+                        message=f'IDEA does not have access to this bucket: {bucket_name}.',
                     )
                 elif error_code == 'NoSuchBucket':
                     self.add_validation_entry(
                         param=constants.JOB_PARAM_FSX_LUSTRE_S3_BACKEND,
-                        message=f'Invalid {constants.JOB_PARAM_FSX_LUSTRE_S3_BACKEND}: ({bucket_name}). Bucket does not exist.'
+                        message=f'Invalid {constants.JOB_PARAM_FSX_LUSTRE_S3_BACKEND}: ({bucket_name}). Bucket does not exist.',
                     )
             success = False
 
         return success
 
     def get(self) -> Optional[SocaFSxLustreConfig]:
-
         fsx_lustre_config = Utils.get_any_value('fsx_lustre', self.params)
         fsx_lustre_bool_value = Utils.get_value_as_bool('fsx_lustre', self.params)
         fsx_lustre_string_value = Utils.get_value_as_string('fsx_lustre', self.params)
@@ -1862,11 +1992,17 @@ class FsxLustreParamBuilder(BaseParamBuilder):
             if isinstance(size_gb, dict):
                 size = SocaMemory(**size_gb)
             else:
-                size = SocaMemory(value=Utils.get_as_int(size_gb), unit=SocaMemoryUnit.GB)
+                size = SocaMemory(
+                    value=Utils.get_as_int(size_gb), unit=SocaMemoryUnit.GB
+                )
 
-        per_unit_throughput = Utils.get_value_as_int('fsx_lustre_per_unit_throughput', self.params)
+        per_unit_throughput = Utils.get_value_as_int(
+            'fsx_lustre_per_unit_throughput', self.params
+        )
 
-        deployment_type = Utils.get_value_as_string('fsx_lustre_deployment_type', self.params)
+        deployment_type = Utils.get_value_as_string(
+            'fsx_lustre_deployment_type', self.params
+        )
         if deployment_type is not None:
             deployment_type = deployment_type.lower()
 
@@ -1876,9 +2012,7 @@ class FsxLustreParamBuilder(BaseParamBuilder):
 
         # if bool value is False, user has explicitly called out to disable FSxLustre
         if fsx_lustre_bool_value is False:
-            return SocaFSxLustreConfig(
-                enabled=False
-            )
+            return SocaFSxLustreConfig(enabled=False)
 
         # if bool value is True, return FSxLustreConfig with any other parameters supplied by user
         # defaults should take care of other values
@@ -1887,27 +2021,21 @@ class FsxLustreParamBuilder(BaseParamBuilder):
                 enabled=True,
                 size=size,
                 per_unit_throughput=per_unit_throughput,
-                deployment_type=deployment_type
+                deployment_type=deployment_type,
             )
 
         # bool value is taken care of at this point, let's take a look at string value
 
         # if string value is none, other values do not matter, disable fsx lustre
         if fsx_lustre_string_value is None:
-            return SocaFSxLustreConfig(
-                enabled=False
-            )
+            return SocaFSxLustreConfig(enabled=False)
 
         # if existing file system is provided, return as so..
-        if (
-            fsx_lustre_string_value.startswith('fs-') or
-            fsx_lustre_string_value.startswith('fc-')
-        ):
+        if fsx_lustre_string_value.startswith(
+            'fs-'
+        ) or fsx_lustre_string_value.startswith('fc-'):
             existing_fsx = fsx_lustre_string_value
-            return SocaFSxLustreConfig(
-                enabled=True,
-                existing_fsx=existing_fsx
-            )
+            return SocaFSxLustreConfig(enabled=True, existing_fsx=existing_fsx)
 
         # parse the tokens from string value and identify <bucket_name>+<export_path>+<import_path>
         tokens = fsx_lustre_string_value.split('+')
@@ -1930,7 +2058,7 @@ class FsxLustreParamBuilder(BaseParamBuilder):
             import_path=import_path,
             per_unit_throughput=per_unit_throughput,
             deployment_type=deployment_type,
-            size=size
+            size=size,
         )
 
     def apply(self):
@@ -1938,16 +2066,12 @@ class FsxLustreParamBuilder(BaseParamBuilder):
 
         if fsx_config is None:
             # disable fsx config
-            self.result.fsx_lustre = SocaFSxLustreConfig(
-                enabled=False
-            )
+            self.result.fsx_lustre = SocaFSxLustreConfig(enabled=False)
             return
 
         if fsx_config.enabled is False:
             # if user as explicitly called out to disable fsx_lustre
-            self.result.fsx_lustre = SocaFSxLustreConfig(
-                enabled=False
-            )
+            self.result.fsx_lustre = SocaFSxLustreConfig(enabled=False)
             return
 
         if fsx_config.existing_fsx is not None:
@@ -1988,9 +2112,7 @@ class FsxLustreParamBuilder(BaseParamBuilder):
         # admin may configure existing fsx at queue level
         # if so, no other parameters are applicable for defaults
         if default_fsx_config.existing_fsx is not None:
-            return SocaFSxLustreConfig(
-                existing_fsx=default_fsx_config.existing_fsx
-            )
+            return SocaFSxLustreConfig(existing_fsx=default_fsx_config.existing_fsx)
 
         deployment_type = default_fsx_config.deployment_type
         if deployment_type is None:
@@ -2002,7 +2124,9 @@ class FsxLustreParamBuilder(BaseParamBuilder):
 
         size = default_fsx_config.size
         if size is None:
-            size = SocaMemory(value=constants.DEFAULT_FSX_LUSTRE_SIZE_GB, unit=SocaMemoryUnit.GB)
+            size = SocaMemory(
+                value=constants.DEFAULT_FSX_LUSTRE_SIZE_GB, unit=SocaMemoryUnit.GB
+            )
 
         if s3_backend is None:
             s3_backend = default_fsx_config.s3_backend
@@ -2011,7 +2135,7 @@ class FsxLustreParamBuilder(BaseParamBuilder):
             s3_backend=s3_backend,
             deployment_type=deployment_type,
             per_unit_throughput=per_unit_throughput,
-            size=size
+            size=size,
         )
 
 
@@ -2031,15 +2155,18 @@ class EnableScratchParamBuilder(BaseParamBuilder):
         return True
 
     def get(self) -> Optional[bool]:
-
         enable_scratch = Utils.get_value_as_bool('enable_scratch', self.params)
         if enable_scratch is not None:
             return enable_scratch
 
-        scratch_storage_size_builder: ScratchStorageSizeParamBuilder = self.context.get_builder(constants.JOB_PARAM_SCRATCH_STORAGE_SIZE)
+        scratch_storage_size_builder: ScratchStorageSizeParamBuilder = (
+            self.context.get_builder(constants.JOB_PARAM_SCRATCH_STORAGE_SIZE)
+        )
         scratch_storage_size = scratch_storage_size_builder.get()
 
-        fsx_lustre_builder: FsxLustreParamBuilder = self.context.get_builder(constants.JOB_PARAM_FSX_LUSTRE)
+        fsx_lustre_builder: FsxLustreParamBuilder = self.context.get_builder(
+            constants.JOB_PARAM_FSX_LUSTRE
+        )
         fsx_lustre = fsx_lustre_builder.get()
 
         if scratch_storage_size is not None and scratch_storage_size > 0:
@@ -2056,7 +2183,10 @@ class EnableScratchParamBuilder(BaseParamBuilder):
         self.result.enable_scratch = enable_scratch
 
     def default(self) -> bool:
-        if self.default_job_params and self.default_job_params.enable_scratch is not None:
+        if (
+            self.default_job_params
+            and self.default_job_params.enable_scratch is not None
+        ):
             return self.default_job_params.enable_scratch
         return constants.DEFAULT_ENABLE_SCRATCH
 
@@ -2069,7 +2199,8 @@ class EnableEfaParamBuilder(BaseParamBuilder):
         enable_efa_support = self.get()
 
         if enable_efa_support is None:
-            return True
+            # Check if EFA is enabled by default in the queue profile
+            enable_efa_support = self.default()
 
         if self.is_restricted_parameter():
             return False
@@ -2078,17 +2209,25 @@ class EnableEfaParamBuilder(BaseParamBuilder):
             # if it's false, we have no further validations to be performed. return True
             return True
 
-        if self.context.is_failed(constants.JOB_PARAM_INSTANCE_TYPES, constants.JOB_PARAM_SPOT_PRICE):
+        if self.context.is_failed(
+            constants.JOB_PARAM_INSTANCE_TYPES, constants.JOB_PARAM_SPOT_PRICE
+        ):
             return False
 
-        instance_type_builder = self.context.get_builder(constants.JOB_PARAM_INSTANCE_TYPES)
+        instance_type_builder = self.context.get_builder(
+            constants.JOB_PARAM_INSTANCE_TYPES
+        )
         instance_types = instance_type_builder.get()
         if instance_types is None:
             instance_types = instance_type_builder.default()
 
         invalid_instances = []
         for instance_type in instance_types:
-            has_efa_support = self.soca_context.aws_util().is_instance_type_efa_supported(instance_type=instance_type)
+            has_efa_support = (
+                self.soca_context.aws_util().is_instance_type_efa_supported(
+                    instance_type=instance_type
+                )
+            )
             if not has_efa_support:
                 invalid_instances.append(instance_type)
 
@@ -2096,7 +2235,7 @@ class EnableEfaParamBuilder(BaseParamBuilder):
             self.add_validation_entry(
                 param=constants.JOB_PARAM_ENABLE_EFA_SUPPORT,
                 message=f'You have requested EFA support but given '
-                        f'instance types [{", ".join(invalid_instances)}] do not support EFA.'
+                f'instance types [{", ".join(invalid_instances)}] do not support EFA.',
             )
             return False
 
@@ -2106,7 +2245,9 @@ class EnableEfaParamBuilder(BaseParamBuilder):
         # backward compatibility
         enable_efa_support = Utils.get_value_as_bool(key='efa_support', obj=self.params)
         if enable_efa_support is None:
-            enable_efa_support = Utils.get_value_as_bool(key='enable_efa_support', obj=self.params)
+            enable_efa_support = Utils.get_value_as_bool(
+                key='enable_efa_support', obj=self.params
+            )
         return enable_efa_support
 
     def apply(self):
@@ -2116,7 +2257,10 @@ class EnableEfaParamBuilder(BaseParamBuilder):
         self.result.enable_efa_support = value
 
     def default(self) -> bool:
-        if self.default_job_params and self.default_job_params.enable_efa_support is not None:
+        if (
+            self.default_job_params
+            and self.default_job_params.enable_efa_support is not None
+        ):
             return self.default_job_params.enable_efa_support
         return constants.DEFAULT_ENABLE_EFA_SUPPORT
 
@@ -2134,7 +2278,9 @@ class EnableHtSupportParamBuilder(BaseParamBuilder):
         if self.is_restricted_parameter():
             return False
 
-        if enable_ht_support and self.context.is_failed(constants.JOB_PARAM_INSTANCE_TYPES):
+        if enable_ht_support and self.context.is_failed(
+            constants.JOB_PARAM_INSTANCE_TYPES
+        ):
             return False
 
         if enable_ht_support is True:
@@ -2143,11 +2289,12 @@ class EnableHtSupportParamBuilder(BaseParamBuilder):
         return True
 
     def get(self) -> Optional[bool]:
-
         # backward compatibility
         enable_ht_support = Utils.get_value_as_bool('ht_support', self.params)
         if enable_ht_support is None:
-            enable_ht_support = Utils.get_value_as_bool('enable_ht_support', self.params)
+            enable_ht_support = Utils.get_value_as_bool(
+                'enable_ht_support', self.params
+            )
         return enable_ht_support
 
     def apply(self):
@@ -2158,7 +2305,6 @@ class EnableHtSupportParamBuilder(BaseParamBuilder):
         self.override_provisioning_options(enable_ht_support=enable_ht_support)
 
     def override_provisioning_options(self, enable_ht_support: bool):
-
         # if hyper-threading is disabled, leave the existing options as is
         #   as they are already setup in InstanceTypesParamBuilder
         if not enable_ht_support:
@@ -2170,7 +2316,10 @@ class EnableHtSupportParamBuilder(BaseParamBuilder):
             option.weighted_capacity = option.default_vcpu_count
 
     def default(self) -> bool:
-        if self.default_job_params and self.default_job_params.enable_ht_support is not None:
+        if (
+            self.default_job_params
+            and self.default_job_params.enable_ht_support is not None
+        ):
             return self.default_job_params.enable_ht_support
 
         return constants.DEFAULT_ENABLE_HT_SUPPORT
@@ -2181,39 +2330,67 @@ class EnablePlacementGroupParamBuilder(BaseParamBuilder):
         super().__init__(context, job_param)
 
     def validate(self) -> bool:
-
         enable_placement_group = self.get()
         if enable_placement_group is not None:
-
             if self.is_restricted_parameter():
                 return False
 
         else:
             # to find placement group default value, all of these need to be validated first..
-            dependencies_failed = self.context.is_failed(constants.JOB_PARAM_NODES,
-                                                         constants.JOB_PARAM_SUBNET_IDS,
-                                                         constants.JOB_PARAM_INSTANCE_TYPES)
+            dependencies_failed = self.context.is_failed(
+                constants.JOB_PARAM_NODES,
+                constants.JOB_PARAM_SUBNET_IDS,
+                constants.JOB_PARAM_INSTANCE_TYPES,
+            )
             if dependencies_failed:
+                self.soca_context.logger().debug(
+                    'Placement group validation deferred - dependencies failed'
+                )
                 return False
 
             enable_placement_group = self.default()
 
         if enable_placement_group is False:
+            self.soca_context.logger().debug(
+                'Placement group validation passed - disabled by configuration'
+            )
             return True  # valid, as nothing needs to be checked.
 
-        instance_types_builder = self.context.get_builder(constants.JOB_PARAM_INSTANCE_TYPES)
+        instance_types_builder = self.context.get_builder(
+            constants.JOB_PARAM_INSTANCE_TYPES
+        )
         instance_types = instance_types_builder.get()
         if Utils.is_empty(instance_types):
             instance_types = instance_types_builder.default()
 
+        self.soca_context.logger().debug(
+            f'Validating placement group support for instance types: {instance_types}'
+        )
+
         invalid_instance_types = []
         for instance_type in instance_types:
-            ec2_instance_type = self.soca_context.aws_util().get_ec2_instance_type(instance_type=instance_type)
-            placement_group_strategies = ec2_instance_type.placement_group_info_supported_strategies
-            if placement_group_strategies is None or len(placement_group_strategies) == 0:
+            ec2_instance_type = self.soca_context.aws_util().get_ec2_instance_type(
+                instance_type=instance_type
+            )
+            placement_group_strategies = (
+                ec2_instance_type.placement_group_info_supported_strategies
+            )
+            if (
+                placement_group_strategies is None
+                or len(placement_group_strategies) == 0
+            ):
+                self.soca_context.logger().debug(
+                    f'Instance type {instance_type} does not support any placement group strategies'
+                )
                 invalid_instance_types.append(instance_type)
                 continue
-            if constants.EC2_PLACEMENT_GROUP_STRATEGY_CLUSTER not in placement_group_strategies:
+            if (
+                constants.EC2_PLACEMENT_GROUP_STRATEGY_CLUSTER
+                not in placement_group_strategies
+            ):
+                self.soca_context.logger().debug(
+                    f'Instance type {instance_type} does not support cluster placement group strategy'
+                )
                 invalid_instance_types.append(instance_type)
                 continue
 
@@ -2221,18 +2398,27 @@ class EnablePlacementGroupParamBuilder(BaseParamBuilder):
             self.add_validation_entry(
                 param=constants.JOB_PARAM_ENABLE_PLACEMENT_GROUP,
                 message=f'Placement group is enabled, but given instance types: [{",".join(invalid_instance_types)}] '
-                        f'do not support placement group strategy: {constants.EC2_PLACEMENT_GROUP_STRATEGY_CLUSTER}'
+                f'do not support placement group strategy: {constants.EC2_PLACEMENT_GROUP_STRATEGY_CLUSTER}',
             )
             return False
 
+        self.soca_context.logger().debug(
+            'Placement group validation passed - all instance types support cluster placement group'
+        )
         return True
 
     def get(self) -> Optional[bool]:
         # backward compatibility
         enable_placement_group = Utils.get_value_as_bool('placement_group', self.params)
         if enable_placement_group is None:
-            enable_placement_group = Utils.get_value_as_bool('enable_placement_group', self.params)
+            enable_placement_group = Utils.get_value_as_bool(
+                'enable_placement_group', self.params
+            )
 
+        if enable_placement_group is not None:
+            self.soca_context.logger().info(
+                f'User explicitly set placement group: {enable_placement_group}'
+            )
         return enable_placement_group
 
     def apply(self):
@@ -2240,29 +2426,55 @@ class EnablePlacementGroupParamBuilder(BaseParamBuilder):
         if enable_placement_group is None:
             enable_placement_group = self.default()
         self.result.enable_placement_group = enable_placement_group
+        self.soca_context.logger().info(
+            f'Final placement group setting: {enable_placement_group}'
+        )
 
     def default(self) -> bool:
-
         # no. of nodes == 1, and placement group is specified, provisioning will fail.
         #   default enable_placement_group = False
         nodes_builder = self.context.get_builder(constants.JOB_PARAM_NODES)
         nodes = nodes_builder.get()
         if nodes == 1:
+            self.soca_context.logger().info(
+                'Placement group disabled - single node job (nodes=1)'
+            )
             return False
 
         # if user has explicitly provided multiple subnets, disable placement group
         subnet_ids_builder = self.context.get_builder(constants.JOB_PARAM_SUBNET_IDS)
         subnet_ids = subnet_ids_builder.get()
-        if subnet_ids is not None and len(subnet_ids) > 0:
+        if subnet_ids is not None and len(subnet_ids) > 1:
+            self.soca_context.logger().info(
+                f'Placement group disabled - multiple subnets specified: {subnet_ids}'
+            )
             return False
 
         # if a spot fleet is requested
         #   disable placement groups
-        if self.is_spot_capacity() or self.is_mixed_capacity():
+        if self.is_spot_capacity():
+            self.soca_context.logger().info(
+                'Placement group disabled - capacity type is SPOT'
+            )
+            return False
+        elif self.is_mixed_capacity():
+            self.soca_context.logger().info(
+                'Placement group disabled - capacity type is MIXED'
+            )
             return False
 
-        if self.default_job_params and self.default_job_params.enable_placement_group is not None:
+        if (
+            self.default_job_params
+            and self.default_job_params.enable_placement_group is not None
+        ):
+            self.soca_context.logger().info(
+                f'Using queue default placement group setting: {self.default_job_params.enable_placement_group}'
+            )
             return self.default_job_params.enable_placement_group
+
+        self.soca_context.logger().info(
+            f'Using global default placement group setting: {constants.DEFAULT_ENABLE_PLACEMENT_GROUP}'
+        )
         return constants.DEFAULT_ENABLE_PLACEMENT_GROUP
 
 
@@ -2285,7 +2497,9 @@ class EnableSystemMetricsParamBuilder(BaseParamBuilder):
         # backward compatibility
         enable_system_metrics = Utils.get_value_as_bool('system_metrics', self.params)
         if enable_system_metrics is None:
-            enable_system_metrics = Utils.get_value_as_bool('enable_system_metrics', self.params)
+            enable_system_metrics = Utils.get_value_as_bool(
+                'enable_system_metrics', self.params
+            )
         return enable_system_metrics
 
     def apply(self):
@@ -2295,7 +2509,10 @@ class EnableSystemMetricsParamBuilder(BaseParamBuilder):
         self.result.enable_system_metrics = enable_system_metrics
 
     def default(self) -> bool:
-        if self.default_job_params and self.default_job_params.enable_system_metrics is not None:
+        if (
+            self.default_job_params
+            and self.default_job_params.enable_system_metrics is not None
+        ):
             return self.default_job_params.enable_system_metrics
         return constants.DEFAULT_ENABLE_SYSTEM_METRICS
 
@@ -2317,9 +2534,13 @@ class EnableAnonymousMetricsParamBuilder(BaseParamBuilder):
 
     def get(self) -> Optional[bool]:
         # backward compatibility
-        enable_anonymous_metrics = Utils.get_value_as_bool('anonymous_metrics', self.params)
+        enable_anonymous_metrics = Utils.get_value_as_bool(
+            'anonymous_metrics', self.params
+        )
         if enable_anonymous_metrics is None:
-            enable_anonymous_metrics = Utils.get_value_as_bool('enable_anonymous_metrics', self.params)
+            enable_anonymous_metrics = Utils.get_value_as_bool(
+                'enable_anonymous_metrics', self.params
+            )
         return enable_anonymous_metrics
 
     def apply(self):
@@ -2329,9 +2550,14 @@ class EnableAnonymousMetricsParamBuilder(BaseParamBuilder):
         self.result.enable_anonymous_metrics = enable_anonymous_metrics
 
     def default(self) -> bool:
-        if self.default_job_params and self.default_job_params.enable_anonymous_metrics is not None:
+        if (
+            self.default_job_params
+            and self.default_job_params.enable_anonymous_metrics is not None
+        ):
             return self.default_job_params.enable_anonymous_metrics
-        return self.soca_context.config().get_bool('cluster.solution.enable_solution_metrics', True)
+        return self.soca_context.config().get_bool(
+            'cluster.solution.enable_solution_metrics', True
+        )
 
 
 class LicensesParamBuilder(BaseParamBuilder):
@@ -2346,7 +2572,6 @@ class LicensesParamBuilder(BaseParamBuilder):
         restricted_licences = []
         invalid_licenses = {}
         for license_ask in licenses:
-
             if self.is_restricted_parameter(param_name=license_ask.name):
                 restricted_licences.append(license_ask.name)
                 continue
@@ -2363,7 +2588,7 @@ class LicensesParamBuilder(BaseParamBuilder):
         if len(invalid_licenses) > 0:
             self.add_validation_entry(
                 param=constants.JOB_PARAM_LICENSES,
-                message=f'Invalid license values: {invalid_licenses}. License values must be a valid non-zero int.'
+                message=f'Invalid license values: {invalid_licenses}. License values must be a valid non-zero int.',
             )
             success = False
 
@@ -2398,7 +2623,9 @@ class TerminateWhenIdleOptionBuilder(BaseParamBuilder):
         if terminate_when_idle is None:
             return True
 
-        if not self.eval_positive_int(constants.JOB_OPTION_TERMINATE_WHEN_IDLE, terminate_when_idle):
+        if not self.eval_positive_int(
+            constants.JOB_OPTION_TERMINATE_WHEN_IDLE, terminate_when_idle
+        ):
             return False
 
         return True
@@ -2416,7 +2643,10 @@ class TerminateWhenIdleOptionBuilder(BaseParamBuilder):
 
     def default(self) -> int:
         if self.context.queue:
-            return Utils.get_as_int(self.context.queue.terminate_when_idle, constants.DEFAULT_TERMINATE_WHEN_IDLE)
+            return Utils.get_as_int(
+                self.context.queue.terminate_when_idle,
+                constants.DEFAULT_TERMINATE_WHEN_IDLE,
+            )
         return constants.DEFAULT_TERMINATE_WHEN_IDLE
 
 
@@ -2438,7 +2668,9 @@ class KeepForeverOptionBuilder(BaseParamBuilder):
 
     def default(self) -> bool:
         if self.context.queue:
-            return Utils.get_as_bool(self.context.queue.keep_forever, constants.DEFAULT_KEEP_FOREVER)
+            return Utils.get_as_bool(
+                self.context.queue.keep_forever, constants.DEFAULT_KEEP_FOREVER
+            )
         return constants.DEFAULT_KEEP_FOREVER
 
 
@@ -2452,8 +2684,7 @@ class TagsOptionBuilder(BaseParamBuilder):
             return True
         except exceptions.SocaException as e:
             self.add_validation_entry(
-                param=constants.JOB_OPTION_TAGS,
-                message=e.message
+                param=constants.JOB_OPTION_TAGS, message=e.message
             )
             return False
 
@@ -2467,7 +2698,7 @@ class TagsOptionBuilder(BaseParamBuilder):
             if raise_exc:
                 raise exceptions.SocaException(
                     error_code=errorcodes.INVALID_PARAMS,
-                    message=f'{constants.JOB_OPTION_TAGS} should be a valid dictionary. Error: {e}'
+                    message=f'{constants.JOB_OPTION_TAGS} should be a valid dictionary. Error: {e}',
                 )
 
     def apply(self):
@@ -2500,7 +2731,7 @@ class ComputeStackParamBuilder(BaseParamBuilder):
         if not match:
             self.add_validation_entry(
                 param=constants.JOB_PARAM_COMPUTE_STACK,
-                message=f'stack_id must match the pattern: /{pattern}/g'
+                message=f'stack_id must match the pattern: /{pattern}/g',
             )
             return False
 
@@ -2519,13 +2750,15 @@ class ComputeStackParamBuilder(BaseParamBuilder):
         self.result.compute_stack = compute_stack
 
     def default(self) -> Optional[str]:
-        if self.default_job_params is not None and self.default_job_params.compute_stack is not None:
+        if (
+            self.default_job_params is not None
+            and self.default_job_params.compute_stack is not None
+        ):
             return self.default_job_params.compute_stack
         return None
 
 
 class StackIdParamBuilder(BaseParamBuilder):
-
     # todo - make this parameter restricted by default. should be set only by JobProvisioner after
     #   cloud formation stack is created.
 
@@ -2552,7 +2785,10 @@ class StackIdParamBuilder(BaseParamBuilder):
         self.result.stack_id = stack_id
 
     def default(self) -> Optional[str]:
-        if self.default_job_params is not None and self.default_job_params.stack_id is not None:
+        if (
+            self.default_job_params is not None
+            and self.default_job_params.stack_id is not None
+        ):
             return self.default_job_params.stack_id
         return None
 
@@ -2576,7 +2812,7 @@ class JobGroupParamBuilder(BaseParamBuilder):
         if not match:
             self.add_validation_entry(
                 param=constants.JOB_PARAM_COMPUTE_STACK,
-                message=f'stack_id must match the pattern: /{pattern}/g'
+                message=f'stack_id must match the pattern: /{pattern}/g',
             )
             return False
 
@@ -2592,7 +2828,10 @@ class JobGroupParamBuilder(BaseParamBuilder):
         self.result.job_group = job_group
 
     def default(self) -> Optional[str]:
-        if self.default_job_params is not None and self.default_job_params.job_group is not None:
+        if (
+            self.default_job_params is not None
+            and self.default_job_params.job_group is not None
+        ):
             return self.default_job_params.job_group
         return None
 
@@ -2656,7 +2895,6 @@ class WalltimeParamBuilder(BaseParamBuilder):
         super().__init__(context, job_param)
 
     def validate(self) -> bool:
-
         walltime = self.get()
         if walltime is None:
             return True
@@ -2669,7 +2907,7 @@ class WalltimeParamBuilder(BaseParamBuilder):
             self.add_validation_entry(
                 param=constants.JOB_PARAM_WALLTIME,
                 message=f'Invalid walltime: {walltime}. Walltime must be of format - hours:minutes:seconds. '
-                        f'eg. 02:30:00'
+                f'eg. 02:30:00',
             )
             return False
 
@@ -2688,7 +2926,10 @@ class WalltimeParamBuilder(BaseParamBuilder):
         self.result.walltime = walltime
 
     def default(self) -> Optional[str]:
-        if self.default_job_params is not None and self.default_job_params.walltime is not None:
+        if (
+            self.default_job_params is not None
+            and self.default_job_params.walltime is not None
+        ):
             return self.default_job_params.walltime
         return None
 
@@ -2708,8 +2949,13 @@ class CustomParamsParamBuilder(BaseParamBuilder):
 
 
 class JobParamsBuilderContext(JobParamsBuilderContextProtocol):
-    def __init__(self, context: ideascheduler.AppContext, params: Dict[str, Any],
-                 queue_profile: Optional[HpcQueueProfile] = None, stack_uuid: Optional[str] = None):
+    def __init__(
+        self,
+        context: ideascheduler.AppContext,
+        params: Dict[str, Any],
+        queue_profile: Optional[HpcQueueProfile] = None,
+        stack_uuid: Optional[str] = None,
+    ):
         self._params = params
 
         if Utils.is_empty(stack_uuid) and queue_profile is not None:
@@ -2718,9 +2964,7 @@ class JobParamsBuilderContext(JobParamsBuilderContextProtocol):
         if Utils.is_empty(stack_uuid):
             stack_uuid = Utils.uuid()
 
-        self._provisioning_options = SocaJobProvisioningOptions(
-            stack_uuid=stack_uuid
-        )
+        self._provisioning_options = SocaJobProvisioningOptions(stack_uuid=stack_uuid)
 
         self._job_params = SocaJobParams()
         self.builders = OrderedDict()
@@ -2744,51 +2988,179 @@ class JobParamsBuilderContext(JobParamsBuilderContextProtocol):
         > placement_group must be validated before subnet_ids
         > and so on ...
         """
-        self.add_builder(NodesParamBuilder(job_param=constants.JOB_PARAM_NODES, context=self))
-        self.add_builder(InstanceTypesParamBuilder(job_param=constants.JOB_PARAM_INSTANCE_TYPES, context=self))
-        self.add_builder(EnableHtSupportParamBuilder(job_param=constants.JOB_PARAM_ENABLE_HT_SUPPORT, context=self))
-        self.add_builder(CpusParamBuilder(job_param=constants.JOB_PARAM_CPUS, context=self))
-        self.add_builder(MemoryParamBuilder(job_param=constants.JOB_PARAM_MEMORY, context=self))
-        self.add_builder(GpusParamBuilder(job_param=constants.JOB_PARAM_GPUS, context=self))
-        self.add_builder(MpiprocsParamBuilder(job_param=constants.JOB_PARAM_MPIPROCS, context=self))
-        self.add_builder(BaseOsParamBuilder(job_param=constants.JOB_PARAM_BASE_OS, context=self))
-        self.add_builder(InstanceAmiParamBuilder(job_param=constants.JOB_PARAM_INSTANCE_AMI, context=self))
-        self.add_builder(EnablePlacementGroupParamBuilder(job_param=constants.JOB_PARAM_ENABLE_PLACEMENT_GROUP, context=self))
-        self.add_builder(SpotParamBuilder(job_param=constants.JOB_PARAM_SPOT, context=self))
-        self.add_builder(SpotPriceParamBuilder(job_param=constants.JOB_PARAM_SPOT_PRICE, context=self))
-        self.add_builder(SpotAllocationCountParamBuilder(job_param=constants.JOB_PARAM_SPOT_ALLOCATION_COUNT, context=self))
-        self.add_builder(SpotAllocationStrategyParamBuilder(job_param=constants.JOB_PARAM_SPOT_ALLOCATION_STRATEGY, context=self))
-        self.add_builder(ForceReservedInstancesParamBuilder(job_param=constants.JOB_PARAM_FORCE_RESERVED_INSTANCES, context=self))
-        self.add_builder(EnableEfaParamBuilder(job_param=constants.JOB_PARAM_ENABLE_EFA_SUPPORT, context=self))
-        self.add_builder(FsxLustreParamBuilder(job_param=constants.JOB_PARAM_FSX_LUSTRE, context=self))
-        self.add_builder(SubnetIdsParamBuilder(job_param=constants.JOB_PARAM_SUBNET_IDS, context=self))
-        self.add_builder(SecurityGroupsParamBuilder(job_param=constants.JOB_PARAM_SECURITY_GROUPS, context=self))
-        self.add_builder(InstanceProfileParamBuilder(job_param=constants.JOB_PARAM_INSTANCE_PROFILE, context=self))
-        self.add_builder(KeepEbsVolumesParamBuilder(job_param=constants.JOB_PARAM_KEEP_EBS_VOLUMES, context=self))
-        self.add_builder(RootStorageSizeParamBuilder(job_param=constants.JOB_PARAM_ROOT_STORAGE_SIZE, context=self))
-        self.add_builder(ScratchStorageSizeParamBuilder(job_param=constants.JOB_PARAM_SCRATCH_STORAGE_SIZE, context=self))
-        self.add_builder(ScratchIopsParamBuilder(job_param=constants.JOB_PARAM_SCRATCH_IOPS, context=self))
-        self.add_builder(EnableScratchParamBuilder(job_param=constants.JOB_PARAM_ENABLE_SCRATCH, context=self))
-        self.add_builder(EnableSystemMetricsParamBuilder(job_param=constants.JOB_PARAM_ENABLE_SYSTEM_METRICS, context=self))
-        self.add_builder(EnableAnonymousMetricsParamBuilder(job_param=constants.JOB_PARAM_ENABLE_ANONYMOUS_METRICS, context=self))
-        self.add_builder(KeepForeverOptionBuilder(job_param=constants.JOB_OPTION_KEEP_FOREVER, context=self))
-        self.add_builder(TerminateWhenIdleOptionBuilder(job_param=constants.JOB_OPTION_TERMINATE_WHEN_IDLE, context=self))
-        self.add_builder(TagsOptionBuilder(job_param=constants.JOB_OPTION_TAGS, context=self))
-        self.add_builder(LicensesParamBuilder(job_param=constants.JOB_PARAM_LICENSES, context=self))
-        self.add_builder(ComputeStackParamBuilder(job_param=constants.JOB_PARAM_COMPUTE_STACK, context=self))
-        self.add_builder(StackIdParamBuilder(job_param=constants.JOB_PARAM_STACK_ID, context=self))
-        self.add_builder(JobGroupParamBuilder(job_param=constants.JOB_PARAM_JOB_GROUP, context=self))
-        self.add_builder(JobStartedEmailTemplateParamBuilder(job_param=constants.JOB_PARAM_JOB_STARTED_EMAIL_TEMPLATE, context=self))
-        self.add_builder(JobCompletedEmailTemplateParamBuilder(job_param=constants.JOB_PARAM_JOB_COMPLETED_EMAIL_TEMPLATE, context=self))
-        self.add_builder(WalltimeParamBuilder(job_param=constants.JOB_PARAM_WALLTIME, context=self))
-        self.add_builder(CustomParamsParamBuilder(job_param=constants.JOB_PARAM_CUSTOM_PARAMS, context=self))
+        self.add_builder(
+            NodesParamBuilder(job_param=constants.JOB_PARAM_NODES, context=self)
+        )
+        self.add_builder(
+            InstanceTypesParamBuilder(
+                job_param=constants.JOB_PARAM_INSTANCE_TYPES, context=self
+            )
+        )
+        self.add_builder(
+            EnableHtSupportParamBuilder(
+                job_param=constants.JOB_PARAM_ENABLE_HT_SUPPORT, context=self
+            )
+        )
+        self.add_builder(
+            CpusParamBuilder(job_param=constants.JOB_PARAM_CPUS, context=self)
+        )
+        self.add_builder(
+            MemoryParamBuilder(job_param=constants.JOB_PARAM_MEMORY, context=self)
+        )
+        self.add_builder(
+            GpusParamBuilder(job_param=constants.JOB_PARAM_GPUS, context=self)
+        )
+        self.add_builder(
+            MpiprocsParamBuilder(job_param=constants.JOB_PARAM_MPIPROCS, context=self)
+        )
+        self.add_builder(
+            BaseOsParamBuilder(job_param=constants.JOB_PARAM_BASE_OS, context=self)
+        )
+        self.add_builder(
+            InstanceAmiParamBuilder(
+                job_param=constants.JOB_PARAM_INSTANCE_AMI, context=self
+            )
+        )
+        self.add_builder(
+            EnablePlacementGroupParamBuilder(
+                job_param=constants.JOB_PARAM_ENABLE_PLACEMENT_GROUP, context=self
+            )
+        )
+        self.add_builder(
+            SpotParamBuilder(job_param=constants.JOB_PARAM_SPOT, context=self)
+        )
+        self.add_builder(
+            SpotPriceParamBuilder(
+                job_param=constants.JOB_PARAM_SPOT_PRICE, context=self
+            )
+        )
+        self.add_builder(
+            SpotAllocationCountParamBuilder(
+                job_param=constants.JOB_PARAM_SPOT_ALLOCATION_COUNT, context=self
+            )
+        )
+        self.add_builder(
+            SpotAllocationStrategyParamBuilder(
+                job_param=constants.JOB_PARAM_SPOT_ALLOCATION_STRATEGY, context=self
+            )
+        )
+        self.add_builder(
+            ForceReservedInstancesParamBuilder(
+                job_param=constants.JOB_PARAM_FORCE_RESERVED_INSTANCES, context=self
+            )
+        )
+        self.add_builder(
+            EnableEfaParamBuilder(
+                job_param=constants.JOB_PARAM_ENABLE_EFA_SUPPORT, context=self
+            )
+        )
+        self.add_builder(
+            FsxLustreParamBuilder(
+                job_param=constants.JOB_PARAM_FSX_LUSTRE, context=self
+            )
+        )
+        self.add_builder(
+            SubnetIdsParamBuilder(
+                job_param=constants.JOB_PARAM_SUBNET_IDS, context=self
+            )
+        )
+        self.add_builder(
+            SecurityGroupsParamBuilder(
+                job_param=constants.JOB_PARAM_SECURITY_GROUPS, context=self
+            )
+        )
+        self.add_builder(
+            InstanceProfileParamBuilder(
+                job_param=constants.JOB_PARAM_INSTANCE_PROFILE, context=self
+            )
+        )
+        self.add_builder(
+            KeepEbsVolumesParamBuilder(
+                job_param=constants.JOB_PARAM_KEEP_EBS_VOLUMES, context=self
+            )
+        )
+        self.add_builder(
+            RootStorageSizeParamBuilder(
+                job_param=constants.JOB_PARAM_ROOT_STORAGE_SIZE, context=self
+            )
+        )
+        self.add_builder(
+            ScratchStorageSizeParamBuilder(
+                job_param=constants.JOB_PARAM_SCRATCH_STORAGE_SIZE, context=self
+            )
+        )
+        self.add_builder(
+            ScratchIopsParamBuilder(
+                job_param=constants.JOB_PARAM_SCRATCH_IOPS, context=self
+            )
+        )
+        self.add_builder(
+            EnableScratchParamBuilder(
+                job_param=constants.JOB_PARAM_ENABLE_SCRATCH, context=self
+            )
+        )
+        self.add_builder(
+            EnableSystemMetricsParamBuilder(
+                job_param=constants.JOB_PARAM_ENABLE_SYSTEM_METRICS, context=self
+            )
+        )
+        self.add_builder(
+            EnableAnonymousMetricsParamBuilder(
+                job_param=constants.JOB_PARAM_ENABLE_ANONYMOUS_METRICS, context=self
+            )
+        )
+        self.add_builder(
+            KeepForeverOptionBuilder(
+                job_param=constants.JOB_OPTION_KEEP_FOREVER, context=self
+            )
+        )
+        self.add_builder(
+            TerminateWhenIdleOptionBuilder(
+                job_param=constants.JOB_OPTION_TERMINATE_WHEN_IDLE, context=self
+            )
+        )
+        self.add_builder(
+            TagsOptionBuilder(job_param=constants.JOB_OPTION_TAGS, context=self)
+        )
+        self.add_builder(
+            LicensesParamBuilder(job_param=constants.JOB_PARAM_LICENSES, context=self)
+        )
+        self.add_builder(
+            ComputeStackParamBuilder(
+                job_param=constants.JOB_PARAM_COMPUTE_STACK, context=self
+            )
+        )
+        self.add_builder(
+            StackIdParamBuilder(job_param=constants.JOB_PARAM_STACK_ID, context=self)
+        )
+        self.add_builder(
+            JobGroupParamBuilder(job_param=constants.JOB_PARAM_JOB_GROUP, context=self)
+        )
+        self.add_builder(
+            JobStartedEmailTemplateParamBuilder(
+                job_param=constants.JOB_PARAM_JOB_STARTED_EMAIL_TEMPLATE, context=self
+            )
+        )
+        self.add_builder(
+            JobCompletedEmailTemplateParamBuilder(
+                job_param=constants.JOB_PARAM_JOB_COMPLETED_EMAIL_TEMPLATE, context=self
+            )
+        )
+        self.add_builder(
+            WalltimeParamBuilder(job_param=constants.JOB_PARAM_WALLTIME, context=self)
+        )
+        self.add_builder(
+            CustomParamsParamBuilder(
+                job_param=constants.JOB_PARAM_CUSTOM_PARAMS, context=self
+            )
+        )
 
     def get_builder(self, param: str) -> Optional[BaseParamBuilder]:
         if param in self.builders:
             return self.builders[param]
         raise exceptions.SocaException(
             error_code=errorcodes.GENERAL_ERROR,
-            message=f'job param builder not found for param: {param}'
+            message=f'job param builder not found for param: {param}',
         )
 
     @property
@@ -2823,22 +3195,25 @@ class JobParamsBuilderContext(JobParamsBuilderContextProtocol):
     def add_validation_entry(self, param: str, message: str):
         if self.is_failed(param):
             return
-        self.validation_results.append(JobValidationResultEntry(
-            error_code=param,
-            message=message
-        ))
+        self.validation_results.append(
+            JobValidationResultEntry(error_code=param, message=message)
+        )
         self._failed_params.add(param)
 
 
 class SocaJobBuilder:
-    def __init__(self, context: ideascheduler.AppContext, params: Dict[str, Any],
-                 queue_profile: HpcQueueProfile = None,
-                 stack_uuid: Optional[str] = None):
+    def __init__(
+        self,
+        context: ideascheduler.AppContext,
+        params: Dict[str, Any],
+        queue_profile: HpcQueueProfile = None,
+        stack_uuid: Optional[str] = None,
+    ):
         self._context = JobParamsBuilderContext(
             context=context,
             params=params,
             queue_profile=queue_profile,
-            stack_uuid=stack_uuid
+            stack_uuid=stack_uuid,
         )
 
     def validate(self) -> JobValidationResult:
@@ -2853,7 +3228,6 @@ class SocaJobBuilder:
 
     @staticmethod
     def _get_param_info(param_name: str) -> Optional[JobParameterInfo]:
-
         if param_name not in JOB_PARAM_INFO:
             return None
 
@@ -2868,17 +3242,21 @@ class SocaJobBuilder:
 
         if name is None:
             return JobParameterInfo(
-                name='[computed]',
-                title=title,
-                description=description
+                name='[computed]', title=title, description=description
             )
 
-        if name in (constants.JOB_OPTION_TAGS, constants.JOB_OPTION_KEEP_FOREVER, constants.JOB_OPTION_TERMINATE_WHEN_IDLE):
+        if name in (
+            constants.JOB_OPTION_TAGS,
+            constants.JOB_OPTION_KEEP_FOREVER,
+            constants.JOB_OPTION_TERMINATE_WHEN_IDLE,
+        ):
             return None
 
         return info
 
-    def _fsx_lustre_debug_entries(self, builder: FsxLustreParamBuilder) -> List[JobValidationDebugEntry]:
+    def _fsx_lustre_debug_entries(
+        self, builder: FsxLustreParamBuilder
+    ) -> List[JobValidationDebugEntry]:
         result = []
 
         fsx_lustre_params = [
@@ -2889,7 +3267,7 @@ class SocaJobBuilder:
             constants.JOB_PARAM_FSX_LUSTRE_SIZE,
             constants.JOB_PARAM_FSX_LUSTRE_PER_UNIT_THROUGHPUT,
             constants.JOB_PARAM_FSX_LUSTRE_IMPORT_PATH,
-            constants.JOB_PARAM_FSX_LUSTRE_EXPORT_PATH
+            constants.JOB_PARAM_FSX_LUSTRE_EXPORT_PATH,
         ]
 
         fsx_lustre_user = builder.get()
@@ -2899,12 +3277,14 @@ class SocaJobBuilder:
         fsx_lustre_default = builder.default(s3_backend=fsx_lustre_job.s3_backend)
 
         for job_param in fsx_lustre_params:
-
             info = self._get_param_info(param_name=job_param)
             if info is None:
                 continue
 
-            if fsx_lustre_user.enabled is False and job_param != constants.JOB_PARAM_FSX_LUSTRE:
+            if (
+                fsx_lustre_user.enabled is False
+                and job_param != constants.JOB_PARAM_FSX_LUSTRE
+            ):
                 continue
 
             title = info.title
@@ -2923,21 +3303,22 @@ class SocaJobBuilder:
                 job_value = str(job_value).split('.')[0]
             default_value = getattr(fsx_lustre_default, fsx_lustre_key, None)
 
-            result.append(JobValidationDebugEntry(
-                title=title,
-                name=name,
-                description=description,
-                valid=valid,
-                user_value=user_value,
-                job_value=job_value,
-                default_value=default_value
-            ))
+            result.append(
+                JobValidationDebugEntry(
+                    title=title,
+                    name=name,
+                    description=description,
+                    valid=valid,
+                    user_value=user_value,
+                    job_value=job_value,
+                    default_value=default_value,
+                )
+            )
         return result
 
     def debug(self) -> List[JobValidationDebugEntry]:
         result = []
         for builder in self._context.builders.values():
-
             job_param = builder.job_param
             info = self._get_param_info(param_name=job_param)
             if info is None:
@@ -2956,14 +3337,16 @@ class SocaJobBuilder:
             job_value = getattr(self._context.job_params, builder.job_param)
             default_value = builder.default()
 
-            result.append(JobValidationDebugEntry(
-                title=title,
-                name=name,
-                description=description,
-                valid=valid,
-                user_value=user_value,
-                job_value=job_value,
-                default_value=default_value
-            ))
+            result.append(
+                JobValidationDebugEntry(
+                    title=title,
+                    name=name,
+                    description=description,
+                    valid=valid,
+                    user_value=user_value,
+                    job_value=job_value,
+                    default_value=default_value,
+                )
+            )
 
         return result

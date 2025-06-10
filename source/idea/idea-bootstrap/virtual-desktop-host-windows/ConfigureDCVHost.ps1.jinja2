@@ -1,37 +1,3 @@
-function Write-ToLog {
-    # LOG: IDEA Bootstrap Log: Get-Content C:\ProgramData\Amazon\EC2-Windows\Launch\Log\UserdataExecutionIDEA.log
-    # LOG: Default User Data: Get-Content C:\ProgramData\Amazon\EC2-Windows\Launch\Log\UserdataExecution.log
-
-    Param (
-        [ValidateNotNullOrEmpty()]
-        [Parameter(Mandatory=$true)]
-        [String] $Message,
-        [String] $LogFile = ('{0}\ProgramData\Amazon\EC2-Windows\Launch\Log\UserdataExecutionIDEA.log' -f $env:SystemDrive),
-        [ValidateSet('Error','Warn','Info')]
-        [string] $Level = 'Info'
-    )
-
-    if (-not(Test-Path -Path $LogFile)) {
-        $null = New-Item -Path $LogFile -ItemType File -Force
-    }
-
-
-    $FormattedDate = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-    switch ($Level) {
-        'Error' {
-            $LevelText = 'ERROR:'
-        }
-        'Warn' {
-            $LevelText = 'WARNING:'
-        }
-        'Info' {
-            $LevelText = 'INFO:'
-        }
-    }
-    # If Level == Error send ses message ?
-    "$FormattedDate $LevelText $Message" | Out-File -FilePath $LogFile -Append
-}
-
 function Bootstrap-DCV-WindowsHost {
   Param ()
 
@@ -42,6 +8,7 @@ function Bootstrap-DCV-WindowsHost {
   $BrokerAgentConnectionPort = "{{ context.config.get_int('virtual-desktop-controller.dcv_broker.agent_communication_port', required=True) }}"
   $IdleTimeout = "{{ context.config.get_string('virtual-desktop-controller.dcv_session.idle_timeout', required=True) }}"
   $IdleTimeoutWarning = "{{ context.config.get_string('virtual-desktop-controller.dcv_session.idle_timeout_warning', required=True) }}"
+  $DCVSelfSignedCertificateDir = "C:\Windows\system32\config\systemprofile\AppData\Local\NICE\dcv"
 
   # On Windows Machines a Console Session with session-id = console IS ALWAYS CREATED by default. That we need to close.
   $CurrentLocation = Get-Location
@@ -125,10 +92,10 @@ rotation = 'daily'
   # Determine if we have any additional USB remotization configurations
   $UsbDevicesConfFile = "C:\Program Files\NICE\DCV\Server\conf\usb-devices.conf"
 
-  {%- for usb_info in context.config.get_list('vdc.server.usb_remotization', default=[]) %}
+  {% for usb_info in context.config.get_list('vdc.server.usb_remotization', default=[]) %}
     Add-Content $UsbDevicesConfFile -Value "{{ usb_info }}"
-  {%- endfor %}
-{%- if context.config.get_string('directoryservice.provider', required=True) in ['aws_managed_activedirectory', 'activedirectory'] %}
+  {% endfor %}
+{% if context.config.get_string('directoryservice.provider', required=True) in ['aws_managed_activedirectory', 'activedirectory'] %}
   # if ActiveDirectory, add the user to local Administrators group.
   # todo: need to have a broader discussion with the group on this. this will work well as long as no shared storage is mounted automatically.
   # once support for NETAPP OnTAP is added and if NETAPP OnTAP is used for /apps, this potentially introduces a data security risk.
@@ -144,12 +111,18 @@ New-ItemProperty -Path `"$DCVRegistryPath\session-management\automatic-console-s
 New-ItemProperty -Path `"$DCVRegistryPath\session-management\automatic-console-session`" -Name `"storage-root`" -PropertyType `"String`" -Value `"C:\session-storage\$LocalUser`" -Force
 
 # remove scheduled task after executing once
-Unregister-ScheduledTask -TaskName PostBootstrapRebootExecuteOnce -Confirm:`$false
+schtasks /delete /tn PostBootstrapRebootExecuteOnce /f
 "
 
   New-Item -Path $IdeaScriptsDirectory -Name "PostBootstrapRebootExecuteOnce.ps1" -ItemType File -Force -Value "$PostBootstrapRebootExecuteOnceContent"
-  Register-ScheduledTask -TaskName PostBootstrapRebootExecuteOnce -AtStartup -User Administrator
-{%- endif %}
+  schtasks /create /sc onstart /tn PostBootstrapRebootExecuteOnce /tr "powershell -ExecutionPolicy Bypass -File $IdeaScriptsDirectory\PostBootstrapRebootExecuteOnce.ps1" /ru system /f
+{% endif %}
+
+  # Remove the existing self-signed certificate that's used to secure traffic between the NICE DCV client and NICE DCV server
+  # since the cert from base AMI might have been expired. The DCV server will regenerate the cert at launch.
+  if (Test-Path -LiteralPath $DCVSelfSignedCertificateDir) {
+    Remove-Item -LiteralPath $DCVSelfSignedCertificateDir -Recurse
+  }
 
   # Restart Services
   Start-Service dcvserver

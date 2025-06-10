@@ -328,7 +328,7 @@ export class IdeaAuthenticationContext {
      */
     private renewAccessToken(): Promise<boolean> {
         this.logger.debug('Renew access token process started.')
-    
+
         // before renewing, check if the current in-memory tokens are stale.
         // this can only happen when using local storage, as another tab may renew the access token and update local storage.
         if (this.localStorage != null) {
@@ -346,19 +346,19 @@ export class IdeaAuthenticationContext {
                 }
             }
         }
-    
+
         if (!this.isAccessTokenExpired()) {
             this.logger.debug('Access token is still valid, no need to renew.')
             return Promise.resolve(true)
         }
-    
+
         if (this.refreshToken == null) {
             this.logger.debug('No refresh token available, cannot renew access token.')
             return Promise.resolve(false)
         }
-    
+
         this.logger.info('renewing access token ...')
-    
+
         let username
         if (this.claimsProvider == null) {
             if (this.accessToken != null) {
@@ -377,19 +377,19 @@ export class IdeaAuthenticationContext {
             this.logger.debug('Fetching username from claims provider.')
             username = this.claimsProvider.getUsername()
         }
-    
+
         if (this.renewalInProgress != null) {
             this.logger.debug('Renewal already in progress, returning the existing promise.')
             return this.renewalInProgress
         }
-    
+
         let authFlow = 'REFRESH_TOKEN_AUTH'
         if (this.ssoAuth) {
             authFlow = 'SSO_REFRESH_TOKEN_AUTH'
         }
-    
+
         this.logger.debug(`Auth flow selected: ${authFlow}`)
-    
+
         let request = {
             header: {
                 namespace: 'Auth.InitiateAuth',
@@ -401,12 +401,12 @@ export class IdeaAuthenticationContext {
                 refresh_token: this.refreshToken
             }
         }
-    
+
         this.logger.debug(`Auth request payload: ${JSON.stringify(request)}`)
-    
+
         const authEndpoint = `${this.authEndpoint}/${request.header.namespace}`
         this.logger.debug(`Auth endpoint: ${authEndpoint}`)
-        
+
         this.renewalInProgress = this._fetch(authEndpoint, {
             method: 'POST',
             headers: {
@@ -432,10 +432,10 @@ export class IdeaAuthenticationContext {
             this.logger.debug('Renewal process completed, clearing renewalInProgress marker.')
             this.renewalInProgress = null
         })
-    
+
         return this.renewalInProgress
     }
-    
+
 
     invoke(url: string, request: any, isPublic: boolean = false): Promise<any> {
 

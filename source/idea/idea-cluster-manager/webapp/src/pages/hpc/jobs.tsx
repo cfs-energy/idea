@@ -31,27 +31,32 @@ export const JOB_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<SocaJob>[
     {
         id: 'id',
         header: 'Job Id',
-        cell: job => job.job_id
+        cell: job => job.job_id,
+        sortingField: 'job_id'
     },
     {
         id: 'name',
         header: 'Name',
-        cell: job => job.name
+        cell: job => job.name,
+        sortingField: 'name'
     },
     {
         id: 'owner',
         header: 'Owner',
-        cell: job => job.owner
+        cell: job => job.owner,
+        sortingField: 'owner'
     },
     {
         id: 'queue',
         header: 'Queue',
-        cell: job => job.queue
+        cell: job => job.queue,
+        sortingField: 'queue'
     },
     {
         id: 'project',
         header: 'Project',
-        cell: job => job.project
+        cell: job => job.project,
+        sortingField: 'project'
     },
     {
         id: 'status',
@@ -78,16 +83,26 @@ export const JOB_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<SocaJob>[
                     return <StatusIndicator type="in-progress" colorOverride="blue">Provisioning</StatusIndicator>
                 } else if (job.state === 'running') {
                     return <StatusIndicator type="success">Running</StatusIndicator>
+                } else if (job.state === 'exit') {
+                    return <StatusIndicator type="error" colorOverride="red">Exit ({job.exit_status})</StatusIndicator>
+                } else if (job.state === 'held') {
+                    return <StatusIndicator type="error" colorOverride="red">({job.comment})</StatusIndicator>
                 } else {
                     return <StatusIndicator type="success" colorOverride="grey">Finished</StatusIndicator>
                 }
             }
-        }
+        },
+        sortingField: 'state'
     },
     {
         id: 'queued-on',
         header: 'Queue Time',
-        cell: job => new Date(job.queue_time!).toLocaleString()
+        cell: job => new Date(job.queue_time!).toLocaleString(),
+        sortingComparator: (a, b) => {
+            const dateA = a.queue_time ? new Date(a.queue_time).getTime() : 0;
+            const dateB = b.queue_time ? new Date(b.queue_time).getTime() : 0;
+            return dateA - dateB;
+        }
     }
 ]
 
@@ -151,7 +166,8 @@ class Jobs extends Component<JobsProps, JobsState> {
             columnDefinitions.push({
                 id: 'exit_code',
                 header: 'Exit Status',
-                cell: job => job.exit_status
+                cell: job => job.exit_status,
+                sortingField: 'exit_status'
             })
         }
         return (
@@ -162,14 +178,75 @@ class Jobs extends Component<JobsProps, JobsState> {
                 title={(this.isActiveJobs()) ? 'Active Jobs' : 'Completed Jobs'}
                 description={(this.isActiveJobs()) ? 'All active Jobs' : 'All completed Jobs'}
                 selectionType="single"
+                enableExportToCsv={this.isCompletedJobs()}
+                csvFilename={() => `completed_jobs_export_${new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').split('Z')[0]}.csv`}
+                onExportAllRecords={this.isCompletedJobs() ? async () => {
+                    try {
+                        console.log('Starting CSV export for jobs...');
+
+                        // Get current filters and date range, with fallbacks
+                        const filters = this.getListing()?.getFilters() || [];
+                        const dateRange = this.getListing()?.getDateRange();
+
+                        console.log('Filters:', filters);
+                        console.log('Date range:', dateRange);
+
+                        const requestParams = {
+                            filters: filters,
+                            paginator: {
+                                start: 0,
+                                page_size: 10000 // Maximum allowed by Elasticsearch/OpenSearch
+                            },
+                            date_range: dateRange ? {
+                                ...dateRange,
+                                key: 'queue_time'
+                            } : undefined
+                        };
+
+                        console.log('Request params:', requestParams);
+
+                        // Fetch all completed jobs with current filters but no pagination limit
+                        const result = this.props.scope === 'user'
+                            ? await this.scheduler().listCompletedJobs(requestParams)
+                            : await this.schedulerAdmin().listCompletedJobs(requestParams);
+
+                        console.log('Export result:', result);
+
+                        const records = result.listing || [];
+
+                        // Show success message after export
+                        setTimeout(() => {
+                            const message = records.length === 10000
+                                ? `Successfully exported ${records.length} completed jobs to CSV (maximum allowed per export).`
+                                : `Successfully exported ${records.length} completed jobs to CSV.`;
+                            this.props.onFlashbarChange({
+                                items: [
+                                    {
+                                        content: message,
+                                        type: 'success',
+                                        dismissible: true
+                                    }
+                                ]
+                            });
+                        }, 500);
+
+                        return records;
+                    } catch (error) {
+                        console.error('CSV Export error:', error);
+                        const errorMessage = error instanceof Error ? error.message : String(error);
+                        this.props.onFlashbarChange({
+                            items: [
+                                {
+                                    content: `Failed to export CSV: ${errorMessage}`,
+                                    type: 'error',
+                                    dismissible: true
+                                }
+                            ]
+                        });
+                        throw error;
+                    }
+                } : undefined}
                 // todo - commented until file picker UI is implemented in submit job form
-                // primaryAction={{
-                //     id: 'submit-job',
-                //     text: 'Submit Job',
-                //     onClick: () => {
-                //         this.props.history.push('/soca/jobs/submit-job')
-                //     }
-                // }}
                 secondaryActionsDisabled={this.isCompletedJobs()}
                 secondaryActions={[
                     {
@@ -311,6 +388,8 @@ class Jobs extends Component<JobsProps, JobsState> {
                     }
                 }}
                 columnDefinitions={columnDefinitions}
+                defaultSortingColumn="queue_time"
+                defaultSortingDescending={true}
             />
         )
     }

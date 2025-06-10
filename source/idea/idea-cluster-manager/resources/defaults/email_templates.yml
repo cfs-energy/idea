@@ -12,8 +12,8 @@ templates:
       <ul>
           <li> Job Id: {{job.job_id}}</li>
           <li> Job Name: {{job.name}}</li>
-          <li> Job Queue: {{job.queue_type}}</li>
-      </ul>
+          <li> Job Queue: {{job.queue}}</li>
+          <li> Queue Profile: {{job.queue_type}}</li>
       <hr>
       <i> This is an automated email, please do not respond.</i>
   - name: "scheduler.job-completed"
@@ -28,7 +28,9 @@ templates:
       <ul>
           <li> Job Id: {{job.job_id}}</li>
           <li> Job Name: {{job.name}}</li>
-          <li> Job Queue: {{job.queue_type}}</li>
+          <li> Job Queue: {{job.queue}}</li>
+          <li> Queue Profile: {{job.queue_type}}</li>
+          {% if job.exit_status is not none %}<li> Exit Code: {{job.exit_status}}</li>{% endif %}
       </ul>
       <hr>
       <i> This is an automated email, please do not respond.</i>

@@ -14,10 +14,10 @@ from tasks.tools.build_tool import BuildTool
 from tasks.apispec import (
     cluster_manager as apispec_cluster_manager,
     scheduler as apispec_scheduler,
-    virtual_desktop_controller as apispec_virtual_desktop_controller
+    virtual_desktop_controller as apispec_virtual_desktop_controller,
 )
 
-from invoke import task, Context
+from invoke import task
 import os
 import shutil
 
@@ -32,7 +32,7 @@ def data_model(c):
 
 @task
 def sdk(c):
-    # type: (Context) -> None
+    # type: (Context) -> None # type: ignore
     """
     build sdk
     """
@@ -41,18 +41,20 @@ def sdk(c):
 
 @task
 def scheduler(c):
-    # type: (Context) -> None
+    # type: (Context) -> None # type: ignore
     """
     build scheduler
     """
     tool = BuildTool(c, 'idea-scheduler')
     tool.build()
-    apispec_scheduler(c, output_file=os.path.join(tool.output_dir, 'resources', 'api', 'openapi.yml'))
+    apispec_scheduler(
+        c, output_file=os.path.join(tool.output_dir, 'resources', 'api', 'openapi.yml')
+    )
 
 
 @task
 def administrator(c):
-    # type: (Context) -> None
+    # type: (Context) -> None # type: ignore
     """
     build administrator
     """
@@ -61,17 +63,19 @@ def administrator(c):
 
 @task
 def cluster_manager(c):
-    # type: (Context) -> None
+    # type: (Context) -> None # type: ignore
     """
     build cluster manager
     """
     tool = BuildTool(c, 'idea-cluster-manager')
     tool.build()
-    apispec_cluster_manager(c, output_file=os.path.join(tool.output_dir, 'resources', 'api', 'openapi.yml'))
+    apispec_cluster_manager(
+        c, output_file=os.path.join(tool.output_dir, 'resources', 'api', 'openapi.yml')
+    )
 
 
 def dcv_connection_gateway(c):
-    # type: (Context) -> None
+    # type: (Context) -> None # type: ignore
     """
     build dcv connection gateway
     """
@@ -79,24 +83,29 @@ def dcv_connection_gateway(c):
     output_dir = tool.output_dir
     shutil.rmtree(output_dir, ignore_errors=True)
     os.makedirs(output_dir, exist_ok=True)
-    shutil.copytree(idea.props.dcv_connection_gateway_dir, os.path.join(tool.output_dir, 'static_resources'))
+    shutil.copytree(
+        idea.props.dcv_connection_gateway_dir,
+        os.path.join(tool.output_dir, 'static_resources'),
+    )
 
 
 @task
 def virtual_desktop_controller(c):
-    # type: (Context) -> None
+    # type: (Context) -> None # type: ignore
     """
     build virtual desktop controller
     """
     tool = BuildTool(c, 'idea-virtual-desktop-controller')
     tool.build()
-    apispec_virtual_desktop_controller(c, output_file=os.path.join(tool.output_dir, 'resources', 'api', 'openapi.yml'))
+    apispec_virtual_desktop_controller(
+        c, output_file=os.path.join(tool.output_dir, 'resources', 'api', 'openapi.yml')
+    )
     dcv_connection_gateway(c)
 
 
 @task(name='all', default=True)
 def build_all(c):
-    # type: (Context) -> None
+    # type: (Context) -> None # type: ignore
     """
     build all
     """

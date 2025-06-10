@@ -13,12 +13,10 @@ APPLICATION_PKGS_DEB=({{ ' '.join(context.config.get_list('global-settings.packa
 APPLICATION_PKGS_7=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.application_7', required=True)) }})
 APPLICATION_PKGS_8=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.application_8', required=True)) }})
 
-
 SSSD_PKGS=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.sssd', required=True)) }})
 SSSD_PKGS_DEB=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.sssd_deb', required=True)) }})
 
 SSSD_PKGS_7=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.sssd_7', required=True)) }})
-
 
 OPENLDAP_CLIENT_PKGS=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.openldap_client', required=True)) }})
 OPENLDAP_CLIENT_PKGS_DEB=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.openldap_client_deb', required=True)) }})
@@ -26,41 +24,43 @@ OPENLDAP_CLIENT_PKGS_DEB=({{ ' '.join(context.config.get_list('global-settings.p
 DEFAULT_PACKAGES_FOR_RPM=$(echo ${SYSTEM_PKGS[*]} ${APPLICATION_PKGS[*]} ${SSSD_PKGS[*]} ${OPENLDAP_CLIENT_PKGS[*]})
 DEFAULT_PACKAGES_FOR_DEB=$(echo ${SYSTEM_PKGS_DEB[*]} ${APPLICATION_PKGS_DEB[*]} ${SSSD_PKGS_DEB[*]} ${OPENLDAP_CLIENT_PKGS_DEB[*]})
 
-{%- if context.base_os in ('amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
-  {%- if context.base_os in ('amazonlinux2') %}
-    yum install -y $DEFAULT_PACKAGES_FOR_RPM $(echo ${SYSTEM_PKGS_7[*]} ${APPLICATION_PKGS_7[*]} ${SSSD_PKGS_7[*]})
-  {%- elif context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+EXCLUDE=()
+
+{% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+  {% if context.base_os in ('amazonlinux2', 'amazonlinux2023') %}
+    yum install --skip-broken -y $DEFAULT_PACKAGES_FOR_RPM $(echo ${SYSTEM_PKGS_7[*]} ${APPLICATION_PKGS_7[*]} ${SSSD_PKGS_7[*]})
+  {% elif context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
     dnf install -y dnf-plugins-core
 
-    {%- if context.base_os == 'rhel8' %}
+    {% if context.base_os == 'rhel8' %}
       dnf config-manager --set-enabled codeready-builder-for-rhel-8-rhui-rpms
       ADDITIONAL_PKGS_TO_INSTALL=$(echo ${SYSTEM_PKGS_8[*]} ${APPLICATION_PKGS_8[*]})
 
-    {%- elif context.base_os == 'rhel9' %}
+    {% elif context.base_os == 'rhel9' %}
       dnf config-manager --set-enabled codeready-builder-for-rhel-9-rhui-rpms
       ADDITIONAL_PKGS_TO_INSTALL=$(echo ${SYSTEM_PKGS_9[*]})
+      EXCLUDE+=('kernel*el9_6*')
 
-    {%- elif context.base_os == 'rocky8' %}
+    {% elif context.base_os == 'rocky8' %}
       dnf config-manager --set-enabled powertools
       ADDITIONAL_PKGS_TO_INSTALL=$(echo ${SYSTEM_PKGS_8[*]} ${APPLICATION_PKGS_8[*]})
 
-    {%- elif context.base_os == 'rocky9' %}
+    {% elif context.base_os == 'rocky9' %}
       # PowerTool is known as crb on Rocky9 https://wiki.rockylinux.org/rocky/repo/#notes-on-crb
       dnf config-manager --set-enabled crb
       ADDITIONAL_PKGS_TO_INSTALL=$(echo ${SYSTEM_PKGS_9[*]})
-    {%- endif %}
+      EXCLUDE+=('kernel*el9_6*')
+    {% endif %}
 
-    EXCLUDE=()
-
-    {%- if context.is_amd_gpu() %}
+    {% if context.is_amd_gpu() %}
       # Don't upgrade the kernel and kernel packages to higher versions as AMD GPU driver support is dependent on the kernel version
       EXCLUDE+=('kernel*el8_8*' 'kernel*el9_2*')
-    {%- endif %}
+    {% endif %}
 
-    {%- if context.job_has_param('enable_efa_support') %}
+    {% if context.job_has_param('enable_efa_support') %}
       # EFA installer provides an older version of this library
       EXCLUDE+=()
-    {%- endif %}
+    {% endif %}
 
     printf -v EXCLUDE_JOINED '%s,' "${EXCLUDE[@]}"
     command="dnf --exclude=${EXCLUDE_JOINED%,} install -y $DEFAULT_PACKAGES_FOR_RPM $ADDITIONAL_PKGS_TO_INSTALL"
@@ -76,25 +76,23 @@ DEFAULT_PACKAGES_FOR_DEB=$(echo ${SYSTEM_PKGS_DEB[*]} ${APPLICATION_PKGS_DEB[*]}
       sleep $SLEEP_INTERVAL
     done
     systemctl enable hibinit-agent
-  {%- endif %}
+  {% endif %}
 
   if [[ $(rpm -qa kernel | wc -l) -gt "1" ]]; then
     set_reboot_required "Updated kernel installed"
   fi
-{%- endif %}
+{% endif %}
 
-
-{%- if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
   DEBIAN_FRONTEND=noninteractive apt install -yq $DEFAULT_PACKAGES_FOR_DEB
 
   if [[ $(dpkg -l | grep linux-image | wc -l) -gt "2" ]]; then
     set_reboot_required "Updated kernel installed"
   fi
 
-{%- endif %}
+{% endif %}
 
 
 
 
 # End: System Packages Install
-

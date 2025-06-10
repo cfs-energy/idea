@@ -13,14 +13,14 @@ import time
 import tasks.idea as idea
 from tasks.tools.package_tool import PackageTool
 
-from invoke import task, Context
+from invoke import task
 import os
 import shutil
 
 
 @task
 def scheduler(c):
-    # type: (Context) -> None
+    # type: (Context) -> None # type: ignore
     """
     package scheduler
     """
@@ -31,7 +31,7 @@ def scheduler(c):
 
 @task
 def administrator(c):
-    # type: (Context) -> None
+    # type: (Context) -> None # type: ignore
     """
     package administrator
     """
@@ -42,7 +42,6 @@ def administrator(c):
     # uvloop is not available on windows, so we remove the uvloop from requirements and create
     # a separate requirements file for windows
     def requirements_handler(tool: PackageTool):
-
         requirements_file = tool.find_requirements_file()
 
         # linux/mac
@@ -58,18 +57,22 @@ def administrator(c):
                 if line.startswith('uvloop=='):
                     continue
                 admin_requirements_txt_windows.append(line)
-        admin_requirements_txt_dest_windows = os.path.join(tool.output_dir, 'requirements-windows.txt')
+        admin_requirements_txt_dest_windows = os.path.join(
+            tool.output_dir, 'requirements-windows.txt'
+        )
         with open(admin_requirements_txt_dest_windows, 'w') as f:
             f.write(''.join(admin_requirements_txt_windows))
 
-    package_tool = PackageTool(c, 'idea-administrator', requirements_handler=requirements_handler)
+    package_tool = PackageTool(
+        c, 'idea-administrator', requirements_handler=requirements_handler
+    )
     package_tool.package()
     idea.console.success(f'distribution created: {package_tool.output_archive_name}')
 
 
 @task
 def cluster_manager(c):
-    # type: (Context) -> None
+    # type: (Context) -> None # type: ignore
     """
     package cluster manager
     """
@@ -80,7 +83,7 @@ def cluster_manager(c):
 
 @task
 def virtual_desktop_controller(c):
-    # type: (Context) -> None
+    # type: (Context) -> None # type: ignore
     """
     package virtual desktop controller
     """
@@ -95,7 +98,7 @@ def virtual_desktop_controller(c):
 
 @task
 def make_all_archive(c):
-    # type: (Context) -> None
+    # type: (Context) -> None # type: ignore
     """
     build an all archive containing all package archived
     """
@@ -129,7 +132,7 @@ def make_all_archive(c):
 
 @task(name='all', default=True)
 def package_all(c):
-    # type: (Context) -> None
+    # type: (Context) -> None # type: ignore
     """
     package all components
     """
@@ -152,4 +155,7 @@ def package_all(c):
     _stop_packaging = time.time()
     _tdiff = _stop_packaging - _start_packaging
 
-    idea.console.print_header_block(f'end: package all {time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())} (took {_tdiff:.2f}s)', style='main')
+    idea.console.print_header_block(
+        f'end: package all {time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())} (took {_tdiff:.2f}s)',
+        style='main',
+    )

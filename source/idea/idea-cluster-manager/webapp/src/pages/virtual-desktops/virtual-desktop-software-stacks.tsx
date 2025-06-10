@@ -26,9 +26,17 @@ import {Link, StatusIndicator} from "@cloudscape-design/components";
 import VirtualDesktopSoftwareStackEditForm from "./forms/virtual-desktop-software-stack-edit-form";
 import {withRouter} from "../../navigation/navigation-utils";
 import VirtualDesktopUtilsClient from "../../client/virtual-desktop-utils-client";
+import IdeaConfirm from "../../components/modals";
 
 export interface VirtualDesktopSoftwareStacksProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
 
+}
+
+export interface SoftwareStackConfirmModalActionProps {
+    actionTitle: string
+    onConfirm: () => void
+    actionText: string | React.ReactNode
+    onCancel: () => void
 }
 
 export interface VirtualDesktopSoftwareStacksState {
@@ -39,13 +47,18 @@ export interface VirtualDesktopSoftwareStacksState {
     tenancyChoices: SocaUserInputChoice[]
     showCreateSoftwareStackForm: boolean
     showEditSoftwareStackForm: boolean
+    availableInstanceTypes: SocaUserInputChoice[]
+    confirmAction: SoftwareStackConfirmModalActionProps
+    selectedSoftwareStack: VirtualDesktopSoftwareStack | undefined
+    clonedSoftwareStack: VirtualDesktopSoftwareStack | undefined
 }
 
 const VIRTUAL_DESKTOP_SOFTWARE_STACKS_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<VirtualDesktopSoftwareStack>[] = [
     {
         id: 'name',
         header: 'Name',
-        cell: e => <Link href={`/#/virtual-desktop/software-stacks/${e.stack_id}`}>{e.name}</Link>
+        cell: e => <Link href={`/#/virtual-desktop/software-stacks/${e.stack_id}`}>{e.name}</Link>,
+        sortingField: 'name'
     },
     {
         id: 'enabled',
@@ -53,42 +66,56 @@ const VIRTUAL_DESKTOP_SOFTWARE_STACKS_TABLE_COLUMN_DEFINITIONS: TableProps.Colum
         cell: e => {
             return (e.enabled) ? <StatusIndicator type="success">Enabled</StatusIndicator> :
                 <StatusIndicator type="stopped">Disabled</StatusIndicator>
+        },
+        sortingComparator: (a, b) => {
+            const valueA = a.enabled ? 1 : 0;
+            const valueB = b.enabled ? 1 : 0;
+            return valueA - valueB;
         }
     },
     {
         id: 'description',
         header: 'Description',
-        cell: e => e.description
+        cell: e => e.description,
+        sortingField: 'description'
     },
     {
         id: 'ami_id',
         header: 'AMI ID',
-        cell: e => e.ami_id
+        cell: e => e.ami_id,
+        sortingField: 'ami_id'
     },
     {
         id: 'os',
         header: 'Base OS',
-        cell: e => Utils.getOsTitle(e.base_os)
+        cell: e => Utils.getOsTitle(e.base_os),
+        sortingComparator: (a, b) => (a.base_os || '').localeCompare(b.base_os || '')
     },
     {
         id: 'root_volume_size',
         header: 'Root Volume Size',
-        cell: e => Utils.getFormattedMemory(e.min_storage)
+        cell: e => Utils.getFormattedMemory(e.min_storage),
+        sortingComparator: (a, b) => {
+            const valueA = a.min_storage?.value || 0;
+            const valueB = b.min_storage?.value || 0;
+            return valueA - valueB;
+        }
     },
     {
         id: 'min_ram',
         header: 'Min RAM',
-        cell: e => Utils.getFormattedMemory(e.min_ram)
-    },
-    {
-        id: 'gpu_manufacturer',
-        header: 'GPU Manufacturer',
-        cell: e => Utils.getFormattedGPUManufacturer(e.gpu)
+        cell: e => Utils.getFormattedMemory(e.min_ram),
+        sortingComparator: (a, b) => {
+            const valueA = a.min_ram?.value || 0;
+            const valueB = b.min_ram?.value || 0;
+            return valueA - valueB;
+        }
     },
     {
         id: 'launch_tenancy',
         header: 'Launch Tenancy',
-        cell: e => Utils.getFormattedTenancy(e.launch_tenancy)
+        cell: e => Utils.getFormattedTenancy(e.launch_tenancy),
+        sortingComparator: (a, b) => (a.launch_tenancy || '').localeCompare(b.launch_tenancy || '')
     },
 /*    {
         id: 'pool_enabled',
@@ -101,7 +128,13 @@ const VIRTUAL_DESKTOP_SOFTWARE_STACKS_TABLE_COLUMN_DEFINITIONS: TableProps.Colum
     {
         id: 'created_on',
         header: 'Created On',
-        cell: e => new Date(e.created_on!).toLocaleString()
+        cell: e => new Date(e.created_on!).toLocaleString(),
+        sortingField: 'created_on',
+        sortingComparator: (a, b) => {
+            const dateA = a.created_on ? new Date(a.created_on).getTime() : 0;
+            const dateB = b.created_on ? new Date(b.created_on).getTime() : 0;
+            return dateA - dateB;
+        }
     }
 ]
 
@@ -110,12 +143,14 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
     listing: RefObject<IdeaListView>
     createSoftwareStackForm: RefObject<IdeaForm>
     editSoftwareStackForm: RefObject<VirtualDesktopSoftwareStackEditForm>
+    softwareStackActionConfirmModal: RefObject<IdeaConfirm>
 
     constructor(props: VirtualDesktopSoftwareStacksProps) {
         super(props);
         this.listing = React.createRef()
         this.createSoftwareStackForm = React.createRef()
         this.editSoftwareStackForm = React.createRef()
+        this.softwareStackActionConfirmModal = React.createRef()
         this.state = {
             softwareStackSelected: false,
             supportedOsChoices: [],
@@ -123,7 +158,16 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
             projectChoices: [],
             tenancyChoices: [],
             showCreateSoftwareStackForm: false,
-            showEditSoftwareStackForm: false
+            showEditSoftwareStackForm: false,
+            availableInstanceTypes: [],
+            selectedSoftwareStack: undefined,
+            clonedSoftwareStack: undefined,
+            confirmAction: {
+                actionTitle: '',
+                actionText: '',
+                onConfirm: () => {},
+                onCancel: () => {}
+            }
         }
     }
 
@@ -143,9 +187,9 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
             })
         })
 
-        this.getProjectsClient().getUserProjects({}).then(result => {
+        this.getProjectsClient().listProjects({}).then(result => {
             let projectChoices: SocaUserInputChoice[] = []
-            result.projects?.forEach(project => {
+            result.listing?.forEach(project => {
                 projectChoices.push({
                     title: project.title,
                     value: project.project_id,
@@ -160,6 +204,28 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                 })
             })
         })
+
+        // Fetch available instance types
+        this.getVirtualDesktopUtilsClient().listAllowedInstanceTypes({}).then((result) => {
+            const instanceTypeOptions: SocaUserInputChoice[] = [];
+            if (result.listing) {
+                // Simple array transformation without any complex filtering
+                result.listing.forEach((instance: any) => {
+                    if (instance.instance_type) {
+                        instanceTypeOptions.push({
+                            title: instance.instance_type,
+                            value: instance.instance_type
+                        });
+                    }
+                });
+            }
+
+            this.setState({
+                availableInstanceTypes: instanceTypeOptions
+            });
+        }).catch((error: any) => {
+            console.error("Failed to fetch instance types:", error);
+        });
     }
 
     getListing(): IdeaListView {
@@ -196,8 +262,40 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
 
     hideCreateSoftwareStackForm() {
         this.setState({
-            showCreateSoftwareStackForm: false
+            showCreateSoftwareStackForm: false,
+            clonedSoftwareStack: undefined
         })
+    }
+
+    cloneSoftwareStack = () => {
+        const selectedStack = this.getSelectedSoftwareStack();
+        if (!selectedStack) {
+            return;
+        }
+
+        // Create a cloned version of the stack with a new name
+        this.setState({
+            clonedSoftwareStack: selectedStack
+        }, () => {
+            this.showCreateSoftwareStackForm();
+
+            // Use setTimeout to ensure the form is rendered before we set values
+            setTimeout(() => {
+                const form = this.getCreateSoftwareStackForm();
+                if (form && selectedStack) {
+                    // Set default values for the create form from the selected stack
+                    form.getFormField('name')?.setValue(`${selectedStack.name} (Clone)`);
+                    form.getFormField('description')?.setValue(selectedStack.description);
+                    form.getFormField('ami_id')?.setValue(selectedStack.ami_id);
+                    form.getFormField('base_os')?.setValue(selectedStack.base_os);
+                    form.getFormField('root_storage_size')?.setValue(selectedStack.min_storage?.value);
+                    form.getFormField('ram_size')?.setValue(selectedStack.min_ram?.value);
+                    form.getFormField('projects')?.setValue(selectedStack.projects?.map(p => p.project_id) || []);
+                    form.getFormField('launch_tenancy')?.setValue(selectedStack.launch_tenancy);
+                    form.getFormField('allowed_instance_types')?.setValue(selectedStack.allowed_instance_types || []);
+                }
+            }, 100);
+        });
     }
 
     buildCreateSoftwareStackForm() {
@@ -205,7 +303,7 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
             ref={this.createSoftwareStackForm}
             name="create-software-stack"
             modal={true}
-            title="Register new Software Stack"
+            title={this.state.clonedSoftwareStack ? "Clone Software Stack" : "Register new Software Stack"}
             modalSize="medium"
             onSubmit={() => {
                 this.getCreateSoftwareStackForm().clearError()
@@ -220,13 +318,15 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                     })
                 })
 
+                const allowedInstanceTypes = values.allowed_instance_types || [];
+
                 this.getVirtualDesktopAdminClient().createSoftwareStack({
                         software_stack: {
                             name: values.name,
                             description: values.description,
                             ami_id: values.ami_id.toLowerCase().trim(),
                             base_os: values.base_os,
-                            gpu: values.gpu,
+                            gpu: 'NO_GPU',
                             min_storage: {
                                 value: values.root_storage_size,
                                 unit: 'gb'
@@ -239,20 +339,35 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                             pool_enabled: values.pool_enabled,
                             pool_asg_name: values.pool_asg_name,
                             launch_tenancy: values.launch_tenancy,
+                            allowed_instance_types: allowedInstanceTypes
                         }
                     }
                 ).then(() => {
                     this.hideCreateSoftwareStackForm()
                     this.setFlashMessage(
-                        <p key={values.name}>Software Stack: {values.name}, Create request submitted</p>, "success"
+                        <>Software Stack: {values.name}, Create request submitted</>, "success"
                     )
-                    this.getListing().fetchRecords()
+                    // Reset selection and refresh the listing after a short delay
+                    this.setState({
+                        softwareStackSelected: false,
+                        clonedSoftwareStack: undefined
+                    }, () => {
+                        setTimeout(() => {
+                            this.getListing().fetchRecords();
+                        }, 3000); // Wait 3 seconds before refreshing
+                    });
                 }).catch(error => {
                     this.getCreateSoftwareStackForm().setError(error.errorCode, error.message)
                 })
             }}
             onCancel={() => {
                 this.hideCreateSoftwareStackForm()
+            }}
+            onFetchOptions={(request) => {
+                // Nothing needed for allowed_instance_types now that it's a text field
+                return Promise.resolve({
+                    listing: []
+                });
             }}
             params={[
                 {
@@ -278,9 +393,9 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                 },
                 {
                     name: 'ami_id',
-                    title: 'AMI Id',
-                    description: 'Enter the AMI Id',
-                    help_text: 'AMI Id must start with ami-xxx',
+                    title: 'AMI ID',
+                    description: 'Enter the AMI ID',
+                    help_text: 'AMI ID must start with ami-xxx',
                     data_type: 'str',
                     param_type: 'text',
                     validate: {
@@ -296,20 +411,8 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                     validate: {
                         required: true
                     },
-                    default: 'amazonlinux2',
+                    default: 'amazonlinux2023',
                     choices: this.state.supportedOsChoices
-                },
-                {
-                    name: 'gpu',
-                    title: 'GPU Manufacturer',
-                    description: 'Select the GPU Manufacturer for the software stack',
-                    data_type: 'str',
-                    param_type: 'select',
-                    validate: {
-                        required: true
-                    },
-                    default: 'NO_GPU',
-                    choices: this.state.supportedGPUChoices
                 },
                 {
                     name: 'root_storage_size',
@@ -328,7 +431,7 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                     description: 'Enter the min. ram for your virtual desktop in GBs',
                     data_type: 'int',
                     param_type: 'text',
-                    default: 10,
+                    default: 4,
                     validate: {
                         required: true
                     }
@@ -384,9 +487,20 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                         eq: true
                     }
                 }*/
+                {
+                    name: 'allowed_instance_types',
+                    title: 'Allowed Instance Families/Types',
+                    description: 'Enter the instance families or specific types to allow with this software stack',
+                    data_type: 'str',
+                    param_type: 'text',
+                    multiple: true,
+                    help_text: 'You can enter specific instance types (e.g., t3.xlarge) or families (e.g., g4dn, t3). Leave empty to use global settings.',
+                    validate: {
+                        required: false
+                    }
+                }
             ]}
         />
-
     }
 
     hideEditSoftwareStackForm() {
@@ -395,7 +509,135 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
         })
     }
 
-    setFlashMessage = (content: React.ReactNode, type: 'success' | 'info' | 'error') => {
+    getActionConfirmModal(): IdeaConfirm {
+        return this.softwareStackActionConfirmModal.current!
+    }
+
+    getSelectedSoftwareStacks(): VirtualDesktopSoftwareStack[] {
+        if (this.getListing() == null) {
+            return []
+        }
+        return this.getListing().getSelectedItems() as VirtualDesktopSoftwareStack[]
+    }
+
+    getSelectedSoftwareStack(): VirtualDesktopSoftwareStack | undefined {
+        const selectedStacks = this.getSelectedSoftwareStacks();
+        return selectedStacks.length > 0 ? selectedStacks[0] : undefined
+    }
+
+    deleteSoftwareStack = () => {
+        const selectedSoftwareStacks = this.getSelectedSoftwareStacks();
+        if (selectedSoftwareStacks.length === 0) {
+            return;
+        }
+
+        const plural = selectedSoftwareStacks.length > 1;
+        const stackNames = selectedSoftwareStacks.map(stack => stack.name).join(", ");
+
+        this.setState({
+            selectedSoftwareStack: selectedSoftwareStacks.length === 1 ? selectedSoftwareStacks[0] : undefined,
+            confirmAction: {
+                actionTitle: `Delete Software Stack${plural ? 's' : ''}`,
+                actionText: (
+                    <div>
+                        Are you sure you want to delete the following software stack{plural ? 's' : ''}: <strong>{stackNames}</strong>?
+                        <br /><br />
+                        This will <strong>permanently delete</strong> the software stack{plural ? 's' : ''} and {plural ? 'they' : 'it'} will no longer be available for launching virtual desktops.
+                    </div>
+                ),
+                onConfirm: () => {
+                    // Create an array of software stacks with just the necessary fields for deletion
+                    const stacksToDelete = selectedSoftwareStacks.map(stack => ({
+                        stack_id: stack.stack_id,
+                        base_os: stack.base_os
+                    }));
+
+                    let requestPayload;
+                    if (stacksToDelete.length === 1) {
+                        // For a single stack, use software_stack to increase compatibility
+                        requestPayload = {
+                            software_stack: stacksToDelete[0]
+                        };
+                    } else {
+                        // For multiple stacks, use software_stacks array
+                        requestPayload = {
+                            software_stacks: stacksToDelete
+                        };
+                    }
+
+                    this.getVirtualDesktopAdminClient().deleteSoftwareStack(requestPayload)
+                        .then(response => {
+                            // Determine success count from the response
+                            let successCount = 0;
+                            if (response.success_list && response.success_list.length > 0) {
+                                successCount = response.success_list.length;
+                            } else if (response.software_stacks && response.software_stacks.length > 0) {
+                                successCount = response.software_stacks.length;
+                            } else if (response.software_stack) {
+                                successCount = 1;
+                            } else if (response.success) {
+                                // If we know it was successful but don't have details, use original selection count
+                                successCount = stacksToDelete.length;
+                            }
+
+                            // Determine failure count
+                            const failedCount = response.failed_list ? response.failed_list.length : 0;
+
+                            if (response.success) {
+                                if (failedCount === 0) {
+                                    // All stacks deleted successfully
+                                    this.setFlashMessage(
+                                        <>Successfully deleted {successCount} software stack{successCount !== 1 ? 's' : ''}</>,
+                                        'success'
+                                    );
+                                } else if (successCount === 0) {
+                                    // All stacks failed to delete
+                                    this.setFlashMessage(
+                                        <>Failed to delete any software stacks.</>,
+                                        'error'
+                                    );
+                                } else {
+                                    // Some stacks deleted, some failed
+                                    this.setFlashMessage(
+                                        <>Deleted {successCount} stack{successCount !== 1 ? 's' : ''}, but failed to delete {failedCount} stack{failedCount !== 1 ? 's' : ''}</>,
+                                        'warning'
+                                    );
+                                }
+
+                                // Reset selection and refresh the listing after a short delay
+                                this.setState({
+                                    softwareStackSelected: false
+                                }, () => {
+                                    setTimeout(() => {
+                                        this.getListing().fetchRecords();
+                                    }, 3000); // Wait 3 seconds before refreshing
+                                });
+                            } else {
+                                this.setFlashMessage(
+                                    <>Failed to delete software stack{plural ? 's' : ''}: {response.software_stack?.failure_reason || 'Unknown error'}</>,
+                                    'error'
+                                );
+                            }
+                        })
+                        .catch(error => {
+                            this.setFlashMessage(
+                                <>Error deleting software stack{plural ? 's' : ''}: {error.message}</>,
+                                'error'
+                            );
+                        });
+                },
+                onCancel: () => {
+                    this.setState({
+                        selectedSoftwareStack: undefined
+                    });
+                }
+            }
+        }, () => {
+            this.getActionConfirmModal().show();
+        });
+    }
+
+    setFlashMessage = (content: React.ReactNode, type: 'success' | 'info' | 'error' | 'warning') => {
         this.props.onFlashbarChange({
             items: [
                 {
@@ -433,7 +675,11 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                     projects: Project[],
                     pool_enabled: boolean,
                     pool_asg_name: string,
-                    launch_tenancy: VirtualDesktopTenancy
+                    launch_tenancy: VirtualDesktopTenancy,
+                    allowed_instance_types?: string[],
+                    ami_id?: string,
+                    min_ram?: number,
+                    min_storage?: number
                 ) => {
                     return this.getVirtualDesktopAdminClient().updateSoftwareStack({
                             software_stack: {
@@ -444,32 +690,58 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                                 projects: projects,
                                 pool_enabled: pool_enabled,
                                 pool_asg_name: pool_asg_name,
-                                launch_tenancy: launch_tenancy
+                                launch_tenancy: launch_tenancy,
+                                allowed_instance_types: allowed_instance_types,
+                                ami_id: ami_id,
+                                min_ram: min_ram ? {
+                                    value: min_ram,
+                                    unit: 'gb'
+                                } : undefined,
+                                min_storage: min_storage ? {
+                                    value: min_storage,
+                                    unit: 'gb'
+                                } : undefined
                             }
                         }
                     ).then(_ => {
                         this.setFlashMessage(
-                            <p key={stack_id}>Software Stack: {name}, Edit request submitted</p>, "success"
+                            <>Software Stack: {name}, Edit request submitted</>, "success"
                         )
+                        // Clear selection and properly refresh the list
+                        this.hideEditSoftwareStackForm();
+                        this.setState({
+                            softwareStackSelected: false
+                        }, () => {
+                            setTimeout(() => {
+                                this.getListing().fetchRecords();
+                            }, 3000); // Wait 3 seconds before refreshing
+                        });
                         return Promise.resolve(true)
                     }).catch(error => {
-                        this.getEditSoftwareStackForm().setError(error.errorCode, error.message)
+                        this.props.onFlashbarChange({
+                            items: [
+                                {
+                                    type: 'error',
+                                    content: `Failed to update software stack: ${error.message}`,
+                                    dismissible: true
+                                }
+                            ]
+                        })
                         return Promise.resolve(false)
                     })
                 }}
                 onDismiss={() => {
                     this.hideEditSoftwareStackForm()
-                    this.getListing().fetchRecords()
+                    this.setState({
+                        softwareStackSelected: false
+                    }, () => {
+                        setTimeout(() => {
+                            this.getListing().fetchRecords();
+                        }, 3000); // Wait 3 seconds before refreshing
+                    });
                 }}
             />
         )
-    }
-
-    getSelectedSoftwareStack(): VirtualDesktopSoftwareStack | undefined {
-        if (this.getListing() == null) {
-            return undefined
-        }
-        return this.getListing().getSelectedItems()[0]
     }
 
     buildListing() {
@@ -480,7 +752,7 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                 preferencesKey={'software-stack'}
                 showPreferences={true}
                 description="Manage your Virtual Desktop Software Stacks"
-                selectionType="single"
+                selectionType="multi"
                 primaryAction={{
                     id: 'create-software-stack',
                     text: 'Create Software Stack',
@@ -493,7 +765,8 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                     {
                         id: 'edit-software-stack',
                         text: 'Edit Stack',
-                        disabled: !this.isSelected(),
+                        disabled: !this.isSelected() || this.getSelectedSoftwareStacks().length > 1,
+                        disabledReason: this.getSelectedSoftwareStacks().length > 1 ? 'Select only one stack to edit' : undefined,
                         onClick: () => {
                             this.setState({
                                     showEditSoftwareStackForm: true
@@ -502,11 +775,32 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                                 }
                             )
                         }
+                    },
+                    {
+                        id: 'clone-software-stack',
+                        text: 'Clone Stack',
+                        disabled: !this.isSelected() || this.getSelectedSoftwareStacks().length > 1,
+                        disabledReason: this.getSelectedSoftwareStacks().length > 1 ? 'Select only one stack to clone' : undefined,
+                        onClick: this.cloneSoftwareStack
+                    },
+                    {
+                        id: 'toggle-software-stack',
+                        text: this.getToggleActionText(),
+                        disabled: !this.isSelected(),
+                        onClick: this.toggleSoftwareStackEnabled
+                    },
+                    {
+                        id: 'delete-software-stack',
+                        text: this.getDeleteActionText(),
+                        disabled: !this.isSelected() || (this.getSelectedSoftwareStack()?.stack_id?.startsWith('base-') ?? false),
+                        onClick: this.deleteSoftwareStack
                     }
                 ]}
                 showPaginator={true}
                 showFilters={true}
                 filterType="select"
+                defaultSortingColumn="name"
+                defaultSortingDescending={false}
                 selectFilters={[
                     {
                         name: '$all',
@@ -519,12 +813,24 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                                 value: ''
                             },
                             {
+                                title: 'Amazon Linux 2023',
+                                value: 'amazonlinux2023'
+                            },
+                            {
                                 title: 'Amazon Linux 2',
                                 value: 'amazonlinux2'
                             },
                             {
-                                title: 'Windows',
-                                value: 'windows'
+                                title: 'Windows 2019',
+                                value: 'windows2019'
+                            },
+                            {
+                                title: 'Windows 2022',
+                                value: 'windows2022'
+                            },
+                            {
+                                title: 'Windows 2025',
+                                value: 'windows2025'
                             },
                             {
                                 title: 'Red Hat Enterprise Linux 8',
@@ -591,6 +897,107 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
         )
     }
 
+    buildActionConfirmModal() {
+        return (
+            <IdeaConfirm
+                ref={this.softwareStackActionConfirmModal}
+                title={this.state.confirmAction.actionTitle}
+                onConfirm={this.state.confirmAction.onConfirm}
+                onCancel={this.state.confirmAction.onCancel}
+                dangerConfirm={true}
+            >
+                {this.state.confirmAction.actionText}
+            </IdeaConfirm>
+        );
+    }
+
+    toggleSoftwareStackEnabled = () => {
+        const selectedSoftwareStacks = this.getSelectedSoftwareStacks();
+        if (selectedSoftwareStacks.length === 0) {
+            return;
+        }
+
+        // Determine if we're enabling or disabling based on the first selected stack
+        // Default to disabling (setting enabled=false) if stacks have mixed states
+        const allEnabled = selectedSoftwareStacks.every(stack => stack.enabled);
+        const newEnabledState = !allEnabled;
+        const action = newEnabledState ? 'enable' : 'disable';
+        const plural = selectedSoftwareStacks.length > 1;
+        const stackNames = selectedSoftwareStacks.map(stack => stack.name).join(", ");
+
+        this.setState({
+            confirmAction: {
+                actionTitle: `${action.charAt(0).toUpperCase() + action.slice(1)} Software Stack${plural ? 's' : ''}`,
+                actionText: (
+                    <div>
+                        Are you sure you want to {action} the following software stack{plural ? 's' : ''}: <strong>{stackNames}</strong>?
+                    </div>
+                ),
+                onConfirm: () => {
+                    // Process each stack individually
+                    const promises = selectedSoftwareStacks.map(softwareStack => {
+                        return this.getVirtualDesktopAdminClient().updateSoftwareStack({
+                            software_stack: {
+                                ...softwareStack,
+                                enabled: newEnabledState
+                            }
+                        });
+                    });
+
+                    Promise.all(promises)
+                        .then(() => {
+                            this.setFlashMessage(
+                                <>Successfully {action}d {selectedSoftwareStacks.length} software stack{plural ? 's' : ''}</>,
+                                "success"
+                            );
+                            // Reset selection and refresh the listing after a short delay
+                            this.setState({
+                                softwareStackSelected: false
+                            }, () => {
+                                setTimeout(() => {
+                                    this.getListing().fetchRecords();
+                                }, 3000); // Wait 3 seconds before refreshing
+                            });
+                        })
+                        .catch(error => {
+                            this.setFlashMessage(
+                                <>Error {action}ing software stack{plural ? 's' : ''}: {error.message}</>,
+                                "error"
+                            );
+                        });
+                },
+                onCancel: () => {
+                    // No action needed
+                }
+            }
+        }, () => {
+            this.getActionConfirmModal().show();
+        });
+    }
+
+    getToggleActionText(): string {
+        const selectedStacks = this.getSelectedSoftwareStacks();
+        if (selectedStacks.length === 0) {
+            return 'Enable/Disable Stack';
+        }
+
+        const allEnabled = selectedStacks.every(stack => stack.enabled);
+        const action = allEnabled ? 'Disable' : 'Enable';
+        const plural = selectedStacks.length > 1 ? 's' : '';
+
+        return `${action} Stack${plural}`;
+    }
+
+    getDeleteActionText(): string {
+        const selectedStacks = this.getSelectedSoftwareStacks();
+        if (selectedStacks.length === 0) {
+            return 'Delete Stack';
+        }
+
+        const plural = selectedStacks.length > 1 ? 's' : '';
+        return `Delete Stack${plural}`;
+    }
+
     render() {
         return (
             <IdeaAppLayout
@@ -622,6 +1029,7 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                     <div>
                         {this.state.showCreateSoftwareStackForm && this.buildCreateSoftwareStackForm()}
                         {this.state.showEditSoftwareStackForm && this.buildEditSoftwareStackForm()}
+                        {this.buildActionConfirmModal()}
                         {this.buildListing()}
                     </div>
                 }/>

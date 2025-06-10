@@ -20,14 +20,24 @@ class VirtualDesktopEventType(str, Enum):
     VALIDATE_SOFTWARE_STACK_CREATION_EVENT = 'VALIDATE_SOFTWARE_STACK_CREATION_EVENT'
     VALIDATE_DCV_SESSION_DELETION_EVENT = 'VALIDATE_DCV_SESSION_DELETION_EVENT'
     VALIDATE_DCV_SESSION_CREATION_EVENT = 'VALIDATE_DCV_SESSION_CREATION_EVENT'
-    IDEA_SESSION_RESUME_SESSION_COMMAND_PROGRESS_EVENT = 'IDEA_SESSION_RESUME_SESSION_COMMAND_PROGRESS_EVENT'
-    IDEA_SESSION_CPU_UTILIZATION_COMMAND_PROGRESS_EVENT = 'IDEA_SESSION_CPU_UTILIZATION_COMMAND_PROGRESS_EVENT'
-    ENABLE_USERDATA_WINDOWS_COMMAND_PROGRESS_EVENT = 'ENABLE_USERDATA_WINDOWS_COMMAND_PROGRESS_EVENT'
-    DISABLE_USERDATA_WINDOWS_COMMAND_PROGRESS_EVENT = 'DISABLE_USERDATA_WINDOWS_COMMAND_PROGRESS_EVENT'
+    IDEA_SESSION_RESUME_SESSION_COMMAND_PROGRESS_EVENT = (
+        'IDEA_SESSION_RESUME_SESSION_COMMAND_PROGRESS_EVENT'
+    )
+    IDEA_SESSION_CPU_UTILIZATION_COMMAND_PROGRESS_EVENT = (
+        'IDEA_SESSION_CPU_UTILIZATION_COMMAND_PROGRESS_EVENT'
+    )
+    ENABLE_USERDATA_WINDOWS_COMMAND_PROGRESS_EVENT = (
+        'ENABLE_USERDATA_WINDOWS_COMMAND_PROGRESS_EVENT'
+    )
+    DISABLE_USERDATA_WINDOWS_COMMAND_PROGRESS_EVENT = (
+        'DISABLE_USERDATA_WINDOWS_COMMAND_PROGRESS_EVENT'
+    )
     IDEA_SESSION_SCHEDULED_RESUME_EVENT = 'IDEA_SESSION_SCHEDULED_RESUME_EVENT'
     IDEA_SESSION_SCHEDULED_STOP_EVENT = 'IDEA_SESSION_SCHEDULED_STOP_EVENT'
     IDEA_SESSION_TERMINATE_EVENT = 'IDEA_SESSION_TERMINATE_EVENT'
-    IDEA_SESSION_SOFTWARE_STACK_UPDATED_EVENT = 'IDEA_SESSION_SOFTWARE_STACK_UPDATED_EVENT'
+    IDEA_SESSION_SOFTWARE_STACK_UPDATED_EVENT = (
+        'IDEA_SESSION_SOFTWARE_STACK_UPDATED_EVENT'
+    )
     IDEA_SESSION_PERMISSIONS_ENFORCE_EVENT = 'IDEA_SESSION_PERMISSIONS_ENFORCE_EVENT'
     IDEA_SESSION_PERMISSIONS_UPDATE_EVENT = 'IDEA_SESSION_PERMISSIONS_UPDATE_EVENT'
     EC2_INSTANCE_STATE_CHANGED_EVENT = 'EC2_INSTANCE_STATE_CHANGED_EVENT'
@@ -36,7 +46,9 @@ class VirtualDesktopEventType(str, Enum):
     DB_ENTRY_DELETED_EVENT = 'DB_ENTRY_DELETED_EVENT'
     DCV_HOST_READY_EVENT = 'DCV_HOST_READY_EVENT'
     DCV_HOST_REBOOT_COMPLETE_EVENT = 'DCV_HOST_REBOOT_COMPLETE_EVENT'
-    DCV_BROKER_USERDATA_EXECUTION_COMPLETE_EVENT = 'DCV_BROKER_USERDATA_EXECUTION_COMPLETE_EVENT'
+    DCV_BROKER_USERDATA_EXECUTION_COMPLETE_EVENT = (
+        'DCV_BROKER_USERDATA_EXECUTION_COMPLETE_EVENT'
+    )
     SCHEDULED_EVENT = 'SCHEDULED_EVENT'
     USER_CREATED_EVENT = 'USER_CREATED_EVENT'
     USER_DISABLED_EVENT = 'USER_DISABLED_EVENT'
@@ -47,9 +59,16 @@ class VirtualDesktopEvent(SocaBaseModel):
     event_type: Optional[VirtualDesktopEventType] = Field(default=None)
     detail: Optional[Dict] = Field(default=None)
 
+    def model_dump(self, **kwargs):
+        """Override model_dump to ensure correct serialization of enum values"""
+        data = super().model_dump(**kwargs)
+        if data.get('event_type') is not None:
+            # Ensure event_type is serialized as the string value, not the enum representation
+            data['event_type'] = str(data['event_type'])
+        return data
+
 
 class EventsClient:
-
     def __init__(self, context: SocaContextProtocol):
         """
         :param context: Application Context
@@ -61,12 +80,17 @@ class EventsClient:
         if Utils.is_empty(event):
             return
 
-        events_sqs_queue_url = self.context.config().get_string('virtual-desktop-controller.events_sqs_queue_url', default=None)
+        events_sqs_queue_url = self.context.config().get_string(
+            'virtual-desktop-controller.events_sqs_queue_url', default=None
+        )
         if Utils.is_empty(events_sqs_queue_url):
             return
 
+        # Use model_dump to ensure correct serialization of enum values
+        event_data = event.model_dump()
+
         self.context.aws().sqs().send_message(
             QueueUrl=events_sqs_queue_url,
-            MessageBody=Utils.to_json(event),
-            MessageGroupId=event.event_group_id.replace(' ', '_')
+            MessageBody=Utils.to_json(event_data),
+            MessageGroupId=event.event_group_id.replace(' ', '_'),
         )

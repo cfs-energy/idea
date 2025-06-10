@@ -20,12 +20,10 @@ setup(
     author='Amazon',
     license='Apache License, Version 2.0',
     packages=find_packages(),
-    package_dir={
-        'ideaclustermanager': 'ideaclustermanager'
-    },
-    entry_points='''
+    package_dir={'ideaclustermanager': 'ideaclustermanager'},
+    entry_points="""
         [console_scripts]
         ideactl=ideaclustermanager.cli.cli_main:main
         ideaserver=ideaclustermanager.app.app_main:main
-    '''
+    """,
 )

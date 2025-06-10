@@ -28,7 +28,7 @@
 # * IDEA_DEV_MODE - Set to "true" if you are working with IDEA sources
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-IDEA_REVISION=${IDEA_REVISION:-"v3.1.10"}
+IDEA_REVISION=${IDEA_REVISION:-"v25.06.1"}
 IDEA_DOCKER_REPO=${IDEA_DOCKER_REPO:-"public.ecr.aws/s5o2b4m0/idea-administrator"}
 IDEA_ECR_CREDS_RESET=${IDEA_ECR_CREDS_RESET:-"true"}
 IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER=${IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER:=""}
@@ -55,14 +55,15 @@ if [[ "${IDEA_DEV_MODE}" == "true" ]]; then
   fi
   if [[ -z "${VIRTUAL_ENV}" ]]; then
     if [[ -d ${SCRIPT_DIR}/venv ]]; then
-      source ${SCRIPT_DIR}/venv/bin/activate
+      # shellcheck disable=SC1091
+      source "${SCRIPT_DIR}"/venv/bin/activate
     else
       echo -e "${RED}Python Virtual Environment not detected. Install virtual environment to execute idea-admin.sh in developer mode."
       exit 1
     fi
   fi
   IDEA_SKIP_WEB_BUILD=${IDEA_SKIP_WEB_BUILD:-'0'}
-  TOKENS=$(echo $(printf ",\"%s\"" "${@}"))
+  TOKENS=$(printf ",\"%s\"" "${@}")
   TOKENS=${TOKENS:1}
   if [[ $(uname -s) == "Linux" ]]; then
     ARGS=$(echo "[${TOKENS}]" | base64 -w0)
@@ -74,54 +75,67 @@ if [[ "${IDEA_DEV_MODE}" == "true" ]]; then
   IDEA_SKIP_WEB_BUILD=${IDEA_SKIP_WEB_BUILD} \
   IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER=${IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER} \
   IDEA_ADMIN_ENABLE_CDK_NAG_SCAN=${IDEA_ADMIN_ENABLE_CDK_NAG_SCAN} \
-  eval $CMD
+  AWS_SDK_LOAD_CONFIG=1 \
+  eval "$CMD"
 
   exit $?
 fi
 
-cd "${SCRIPT_DIR}"
+cd "${SCRIPT_DIR}" || exit
 
 # Check if Docker is installed
 DOCKER_BIN=$(command -v docker)
 verify_command "Docker not detected. Download and install it from https://docs.docker.com/get-docker/. Read the Docker Subscription Service Agreement first (https://www.docker.com/legal/docker-subscription-service-agreement/)."
+echo -e "${GREEN}✓ Docker detected${NC}"
 
 # Check if aws cli (https://aws.amazon.com/cli/) is installed
-AWSCLI_BIN=$(command -v aws)
+command -v aws > /dev/null
 verify_command "awscli not detected. Download and install it from https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
+echo -e "${GREEN}✓ AWS CLI detected${NC}"
 
 # Create folder hierarchy
 MKDIR_BIN=$(command -v mkdir)
-${MKDIR_BIN} -p ${HOME}/.idea/clusters
+${MKDIR_BIN} -p "${HOME}"/.idea/clusters
 verify_command "Unable to create ${HOME}/.idea/clusters. Verify path and permissions."
+echo -e "${GREEN}✓ Created directory structure${NC}"
 
 # Check if Docker is running
 ${DOCKER_BIN} info >> /dev/null 2>&1
 verify_command "Docker is installed on the system but it does not seems to be running. Start Docker first."
+echo -e "${GREEN}✓ Docker is running${NC}"
 
 # Reset ECR credentials
 if [[ "${IDEA_ECR_CREDS_RESET}" == "true" ]]; then
+  echo -e "${YELLOW}[INFO] Resetting ECR credentials...${NC}"
   # Check if user is connected to internet an can ping ECR repo
   DIG_BIN=$(command -v dig)
   IDEA_DOCKER_REPO_HOSTNAME=$(echo "${IDEA_DOCKER_REPO}" | cut -d '/' -f 1)
-  ${DIG_BIN} +tries=1 +time=3 ${IDEA_DOCKER_REPO_HOSTNAME} >> /dev/null 2>&1
+  ${DIG_BIN} +tries=1 +time=3 "${IDEA_DOCKER_REPO_HOSTNAME}" >> /dev/null 2>&1
   verify_command "Unable to query ECR host ${IDEA_DOCKER_REPO_HOSTNAME} . Are you connected to internet?"
 
   ${DOCKER_BIN} logout public.ecr.aws >> /dev/null 2>&1
   verify_command "Failed to refresh ECR credentials. docker logout public.ecr.aws failed"
+  echo -e "${GREEN}✓ ECR credentials reset${NC}"
+else
+  echo -e "${YELLOW}[INFO] Skipping ECR credentials reset (IDEA_ECR_CREDS_RESET=false)${NC}"
 fi
 
 # Pull IDEA docker image if needed
-${DOCKER_BIN} images | grep "${IDEA_DOCKER_REPO}" | grep -q "${IDEA_REVISION}"
-if [[ $? -ne 0 ]]; then
-  ${DOCKER_BIN} pull ${IDEA_DOCKER_REPO}:${IDEA_REVISION}
+if ! ${DOCKER_BIN} images | grep "${IDEA_DOCKER_REPO}" | grep -q "${IDEA_REVISION}"; then
+  echo -e "${YELLOW}[INFO] Pulling IDEA Docker image: ${IDEA_DOCKER_REPO}:${IDEA_REVISION}${NC}"
+  ${DOCKER_BIN} pull "${IDEA_DOCKER_REPO}":"${IDEA_REVISION}"
   verify_command "Unable to download IDEA container image. Refer to the error above."
+  echo -e "${GREEN}✓ Docker image downloaded${NC}"
+else
+  echo -e "${GREEN}✓ Docker image already available${NC}"
 fi
 
+echo -e "${YELLOW}[INFO] Launching IDEA administrator...${NC}"
 # Launch installer
 ${DOCKER_BIN} run --rm -it -v "${HOME}/.idea/clusters:/root/.idea/clusters" \
-              -e AWS_SESSION_TOKEN -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
+              -e AWS_SESSION_TOKEN -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_PROFILE \
+              -e AWS_SDK_LOAD_CONFIG=1 \
               -e IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER="${IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER}" \
               -e IDEA_ADMIN_ENABLE_CDK_NAG_SCAN="${IDEA_ADMIN_ENABLE_CDK_NAG_SCAN}" \
               -v ~/.aws:/root/.aws "${IDEA_DOCKER_REPO}:${IDEA_REVISION}" \
               idea-admin "${@}"
-

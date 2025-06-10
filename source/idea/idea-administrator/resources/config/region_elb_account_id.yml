@@ -3,7 +3,6 @@
 # * AWS Outpost are not supported.
 # * refer to implementation in CdkInvoker -> bootstrap_cluster() for implementation details
 # * refer: https://docs.aws.amazon.com/elasticloadbalancing/latest/application/enable-access-logging.html for more details
-
 us-east-1: 127311923021
 us-east-2: 033677994240
 us-west-1: 027434742980
@@ -28,4 +27,3 @@ me-south-1: 076674570225
 sa-east-1: 507241528517
 us-gov-east-1: 190560391635
 us-gov-west-1: 048591011584
-

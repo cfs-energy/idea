@@ -36,12 +36,11 @@ class SocaConfig:
         if isinstance(e, KeyError):
             raise exceptions.soca_exception(
                 error_code=errorcodes.CONFIG_KEY_NOT_FOUND,
-                message=f'{str(e)}, key: {key}'
+                message=f'{str(e)}, key: {key}',
             )
         elif isinstance(e, ConfigException):
             raise exceptions.soca_exception(
-                error_code=errorcodes.CONFIG_TYPE_ERROR,
-                message=str(e)
+                error_code=errorcodes.CONFIG_TYPE_ERROR, message=str(e)
             )
         else:
             raise e
@@ -62,7 +61,6 @@ class SocaConfig:
 
     def get_string(self, key, default=None, required=False, **kwargs) -> Optional[str]:
         try:
-
             if required:
                 value = self._config.get_string(key)
             else:
@@ -90,7 +88,6 @@ class SocaConfig:
 
     def get_float(self, key, default=None, required=False, **kwargs) -> Optional[float]:
         try:
-
             if required:
                 value = self._config.get_float(key)
             else:
@@ -105,7 +102,6 @@ class SocaConfig:
 
     def get_bool(self, key, default=None, required=False, **kwargs) -> Optional[bool]:
         try:
-
             if required:
                 value = self._config.get_bool(key)
             else:
@@ -120,7 +116,6 @@ class SocaConfig:
 
     def get_list(self, key, default=None, required=False, **kwargs) -> Optional[List]:
         try:
-
             if required:
                 value = self._config.get_list(key)
             else:
@@ -133,9 +128,10 @@ class SocaConfig:
         except Exception as e:
             self.handle_exception(e, key)
 
-    def get_config(self, key, default=None, required=False, **kwargs) -> Optional[ConfigTree]:
+    def get_config(
+        self, key, default=None, required=False, **kwargs
+    ) -> Optional[ConfigTree]:
         try:
-
             if required:
                 value = self._config.get_config(key)
             else:
@@ -150,19 +146,29 @@ class SocaConfig:
             self.handle_exception(e, key)
 
     def get_secret(self, key, default=None, required=False, **kwargs) -> Optional[str]:
-        raise exceptions.not_supported('get_secret() not supported on config base class')
+        raise exceptions.not_supported(
+            'get_secret() not supported on config base class'
+        )
 
     def get_cluster_external_endpoint(self) -> str:
-        raise exceptions.not_supported('get_cluster_external_endpoint() not supported on config base class')
+        raise exceptions.not_supported(
+            'get_cluster_external_endpoint() not supported on config base class'
+        )
 
     def get_cluster_internal_endpoint(self) -> str:
-        raise exceptions.not_supported('get_cluster_internal_endpoint() not supported on config base class')
+        raise exceptions.not_supported(
+            'get_cluster_internal_endpoint() not supported on config base class'
+        )
 
     def get_module_id(self, module_name: str) -> str:
-        raise exceptions.not_supported('get_module_id() not supported on config base class')
+        raise exceptions.not_supported(
+            'get_module_id() not supported on config base class'
+        )
 
     def is_module_enabled(self, module_name: str) -> bool:
-        raise exceptions.not_supported('is_module_enabled() not supported on config base class')
+        raise exceptions.not_supported(
+            'is_module_enabled() not supported on config base class'
+        )
 
     def as_yaml(self):
         return tool.HOCONConverter().to_yaml(self._config)

@@ -18,7 +18,7 @@ from ideasdk.utils import Utils
 
 
 from enum import Enum
-from typing import Dict
+from typing import Dict, Callable
 import os
 import pathlib
 import shutil
@@ -32,27 +32,34 @@ class IdeaCodeAsset:
     """
     Used to build lambda code assets with applicable package dependencies
     """
+
     SOURCE_CODE_CHECKSUM_FILE = 'source.checksum.sha'
     PKG_DIR = 'pkg'
     PKG_DIR_CHECKSUM_FILE = 'pkg.checksum.sha'
 
-    def __init__(self, lambda_platform: SupportedLambdaPlatforms, lambda_package_name: str):
+    def __init__(
+        self, lambda_platform: SupportedLambdaPlatforms, lambda_package_name: str
+    ):
         self._lambda_platform = lambda_platform
         self._lambda_package_name = lambda_package_name
-        self._build_location = os.path.join(AdministratorUtils.get_package_build_dir(), self.lambda_package_name)
+        self._build_location = os.path.join(
+            AdministratorUtils.get_package_build_dir(), self.lambda_package_name
+        )
         self._common_code_location = ideaadministrator.props.lambda_function_commons_dir
 
-        self.PLATFORM_MANAGE_REQUIREMENTS_MAP: Dict[SupportedLambdaPlatforms, ()] = {
-            SupportedLambdaPlatforms.PYTHON: self._manage_python_requirements
-        }
+        self.PLATFORM_MANAGE_REQUIREMENTS_MAP: Dict[
+            SupportedLambdaPlatforms, Callable[[str, str], None]
+        ] = {SupportedLambdaPlatforms.PYTHON: self._manage_python_requirements}
 
-        self.PLATFORM_BUILD_MAP: Dict[SupportedLambdaPlatforms, ()] = {
-            SupportedLambdaPlatforms.PYTHON: self._build_python_lambda
-        }
+        self.PLATFORM_BUILD_MAP: Dict[
+            SupportedLambdaPlatforms, Callable[[str], None]
+        ] = {SupportedLambdaPlatforms.PYTHON: self._build_python_lambda}
 
     @property
     def asset_hash(self) -> str:
-        return Utils.compute_checksum_for_dir(os.path.join(self._build_location, self.PKG_DIR))
+        return Utils.compute_checksum_for_dir(
+            os.path.join(self._build_location, self.PKG_DIR)
+        )
 
     @property
     def lambda_handler(self) -> str:
@@ -64,7 +71,9 @@ class IdeaCodeAsset:
 
     @property
     def source_code_location(self) -> str:
-        return os.path.join(ideaadministrator.props.lambda_functions_dir, self.lambda_package_name)
+        return os.path.join(
+            ideaadministrator.props.lambda_functions_dir, self.lambda_package_name
+        )
 
     @property
     def lambda_package_name(self) -> str:
@@ -72,7 +81,9 @@ class IdeaCodeAsset:
 
     @staticmethod
     def _manage_python_requirements(build_src: str, lambda_package_name: str):
-        requirements_file = os.path.join(build_src, lambda_package_name, 'requirements.txt')
+        requirements_file = os.path.join(
+            build_src, lambda_package_name, 'requirements.txt'
+        )
         if Utils.is_file(requirements_file):
             shutil.move(requirements_file, build_src)
 
@@ -84,8 +95,10 @@ class IdeaCodeAsset:
         shell = ShellInvoker(cwd=build_location)
         response = shell.invoke(
             shell=True,
-            cmd=['pip install -r requirements.txt --platform manylinux2014_x86_64 --only-binary=:all: --target . --upgrade'],
-            env=ideaadministrator.props.get_env()
+            cmd=[
+                'pip install -r requirements.txt --platform manylinux2014_x86_64 --only-binary=:all: --target . --upgrade'
+            ],
+            env=ideaadministrator.props.get_env(),
         )
         if response.returncode != 0:
             raise exceptions.general_exception(f'Issue building the lambda: {response}')
@@ -97,11 +110,17 @@ class IdeaCodeAsset:
         if not Utils.is_dir(self._common_code_location):
             return False
 
-        if not Utils.is_file(os.path.join(self._build_location, self.SOURCE_CODE_CHECKSUM_FILE)):
+        if not Utils.is_file(
+            os.path.join(self._build_location, self.SOURCE_CODE_CHECKSUM_FILE)
+        ):
             return False
 
-        checksum = Utils.compute_checksum_for_dirs([self.source_code_location, self._common_code_location])
-        with open(os.path.join(self._build_location, self.SOURCE_CODE_CHECKSUM_FILE)) as f:
+        checksum = Utils.compute_checksum_for_dirs(
+            [self.source_code_location, self._common_code_location]
+        )
+        with open(
+            os.path.join(self._build_location, self.SOURCE_CODE_CHECKSUM_FILE)
+        ) as f:
             existing_checksum = str(f.read().strip())
 
         return existing_checksum == checksum
@@ -110,7 +129,9 @@ class IdeaCodeAsset:
         if not Utils.is_dir(os.path.join(self._build_location, self.PKG_DIR)):
             return False
 
-        if not Utils.is_file(os.path.join(self._build_location, self.PKG_DIR_CHECKSUM_FILE)):
+        if not Utils.is_file(
+            os.path.join(self._build_location, self.PKG_DIR_CHECKSUM_FILE)
+        ):
             return False
 
         with open(os.path.join(self._build_location, self.PKG_DIR_CHECKSUM_FILE)) as f:
@@ -120,14 +141,18 @@ class IdeaCodeAsset:
 
     def build_lambda(self):
         if self.lambda_platform not in self.PLATFORM_BUILD_MAP.keys():
-            raise exceptions.general_exception(f'Invalid lambda_platform: {self.lambda_platform}. Supported only {self.PLATFORM_BUILD_MAP.keys()}')
+            raise exceptions.general_exception(
+                f'Invalid lambda_platform: {self.lambda_platform}. Supported only {self.PLATFORM_BUILD_MAP.keys()}'
+            )
 
         if Utils.is_dir(self._build_location):
             if not self._validate_checksum_for_source_code():
                 print(f'source updated for {self.lambda_package_name}...')
                 shutil.rmtree(self._build_location)
             elif not self._validate_checksum_for_package():
-                print(f'existing package corrupted for lambda: {self.lambda_package_name} ...')
+                print(
+                    f'existing package corrupted for lambda: {self.lambda_package_name} ...'
+                )
                 shutil.rmtree(self._build_location)
             else:
                 print(f're-use code assets for lambda: {self.lambda_package_name} ...')
@@ -140,17 +165,21 @@ class IdeaCodeAsset:
             os.makedirs(parent)
 
         # if we have reached here, then we need to build the code again
-        shutil.copytree(self._common_code_location, os.path.join(build_src, ideaadministrator.props.lambda_function_commons_package_name))
-        shutil.copytree(self.source_code_location, os.path.join(build_src, self.lambda_package_name))
+        shutil.copytree(
+            self._common_code_location,
+            os.path.join(
+                build_src, ideaadministrator.props.lambda_function_commons_package_name
+            ),
+        )
+        shutil.copytree(
+            self.source_code_location, os.path.join(build_src, self.lambda_package_name)
+        )
 
         self.PLATFORM_MANAGE_REQUIREMENTS_MAP[self.lambda_platform](
-            build_src=build_src,
-            lambda_package_name=self.lambda_package_name
+            build_src=build_src, lambda_package_name=self.lambda_package_name
         )
 
-        self.PLATFORM_BUILD_MAP[self.lambda_platform](
-            build_location=build_src
-        )
+        self.PLATFORM_BUILD_MAP[self.lambda_platform](build_location=build_src)
 
         shell = ShellInvoker(cwd=self._build_location)
         shell.invoke(
@@ -159,7 +188,9 @@ class IdeaCodeAsset:
             env=ideaadministrator.props.get_env(),
         )
 
-        checksum = Utils.compute_checksum_for_dirs([self.source_code_location, self._common_code_location])
+        checksum = Utils.compute_checksum_for_dirs(
+            [self.source_code_location, self._common_code_location]
+        )
         shell.invoke(
             shell=True,
             cmd=[f'echo {checksum} > {self.SOURCE_CODE_CHECKSUM_FILE}'],

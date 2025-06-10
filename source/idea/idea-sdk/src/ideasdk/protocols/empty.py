@@ -9,18 +9,19 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
-from ideasdk.protocols import \
-    SocaMetricsServiceProtocol, \
-    SocaMetricsAccumulator, \
-    CacheProviderProtocol, \
-    SocaCacheProtocol, CacheTTL
+from ideasdk.protocols import (
+    SocaMetricsServiceProtocol,
+    SocaMetricsAccumulator,
+    CacheProviderProtocol,
+    SocaCacheProtocol,
+    CacheTTL,
+)
 
 from typing import List, Dict, Optional, Hashable, Any
 from cacheout import Cache
 
 
 class EmptyMetricsService(SocaMetricsServiceProtocol):
-
     def register_accumulator(self, accumulator: SocaMetricsAccumulator):
         pass
 
@@ -35,7 +36,6 @@ class EmptyMetricsService(SocaMetricsServiceProtocol):
 
 
 class EmptySocaCache(SocaCacheProtocol):
-
     @property
     def name(self) -> str:
         return ''
@@ -60,7 +60,6 @@ class EmptySocaCache(SocaCacheProtocol):
 
 
 class EmptyCacheProvider(CacheProviderProtocol):
-
     def __init__(self):
         self._cache = EmptySocaCache()
 

@@ -15,7 +15,7 @@ To share your session, click "**Actions**" **>** "**Session Permissions**" on th
 <figure><img src="../../../.gitbook/assets/mods_vdi_user_share_menu.webp" alt=""><figcaption><p>Select the IDEA user you want to share your session with along with the permissions and the expiration time</p></figcaption></figure>
 
 {% hint style="info" %}
-Permissions profiles are customizable by the IDEA administrator. Refer to [permissions-management.md](../admin-documentation/permissions-management.md "mention") for more informations
+Permissions profiles are customizable by the IDEA administrator. Refer to [permissions-management.md](../admin-documentation/permissions-management.md "mention") for more information
 {% endhint %}
 
 ## How to access a shared session

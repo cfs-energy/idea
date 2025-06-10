@@ -40,8 +40,7 @@ class InstanceMonitor(SocaService):
 
     def _initialize(self):
         self._instance_monitor_thread = Thread(
-            name='instance-monitor',
-            target=self._monitor_instances
+            name='instance-monitor', target=self._monitor_instances
         )
         self._topic = SocaPubSub(constants.TOPIC_EC2_INSTANCE_MONITOR_EVENTS)
         self._exit = Event()
@@ -56,17 +55,19 @@ class InstanceMonitor(SocaService):
                     page_size=PAGE_SIZE,
                     paging_callback=lambda instances: self._instance_cache.sync(
                         instances=instances
-                    )
+                    ),
                 )
                 self._instance_cache.sync_commit(session_key=session_key)
                 self._topic.publish(
                     sender='instance-monitor',
                     message=EC2InstanceMonitorEvent(
                         type=constants.EC2_INSTANCE_MONITOR_EVENT_CACHE_REFRESH
-                    )
+                    ),
                 )
             except Exception as e:
-                self._logger.exception('ec2 instance monitor iteration failed', exc_info=e)
+                self._logger.exception(
+                    'ec2 instance monitor iteration failed', exc_info=e
+                )
                 self._instance_cache.sync_abort(session_key=session_key)
             finally:
                 self._exit.wait(INSTANCE_MONITOR_INTERVAL_SECS)

@@ -20,11 +20,7 @@ from ideasdk.auth import TokenService
 
 from ideatestutils.config.mock_config import MockConfig
 
-from ideadatamodel import (
-    constants,
-    exceptions,
-    errorcodes
-)
+from ideadatamodel import constants, exceptions, errorcodes
 
 from typing import Dict
 import pytest
@@ -33,14 +29,16 @@ import pytest
 @pytest.fixture(scope='session')
 def context():
     mock_config = MockConfig()
-    return SocaContext(
-        options=SocaContextOptions(
-            config=mock_config.get_config()
-        )
-    )
+    return SocaContext(options=SocaContextOptions(config=mock_config.get_config()))
 
 
-def build_invocation_context(context: SocaContext, payload: Dict, invocation_source: str = None, token: Dict = None, token_service: TokenService = None) -> ApiInvocationContext:
+def build_invocation_context(
+    context: SocaContext,
+    payload: Dict,
+    invocation_source: str = None,
+    token: Dict = None,
+    token_service: TokenService = None,
+) -> ApiInvocationContext:
     if Utils.is_empty(invocation_source):
         invocation_source = constants.API_INVOCATION_SOURCE_HTTP
 
@@ -51,7 +49,7 @@ def build_invocation_context(context: SocaContext, payload: Dict, invocation_sou
         group_name_helper=GroupNameHelper(context=context),
         logger=context.logger(),
         token=token,
-        token_service=token_service
+        token_service=token_service,
     )
 
 
@@ -62,12 +60,9 @@ def test_api_invocation_context_validate_request_valid(context):
     api_context = build_invocation_context(
         context=context,
         payload={
-            'header': {
-                'namespace': 'Hello.World',
-                'request_id': Utils.uuid()
-            },
-            'payload': {}
-        }
+            'header': {'namespace': 'Hello.World', 'request_id': Utils.uuid()},
+            'payload': {},
+        },
     )
 
     # should not raise any exceptions
@@ -81,12 +76,9 @@ def test_api_invocation_context_validate_request_invalid(context):
     api_context = build_invocation_context(
         context=context,
         payload={
-            'header': {
-                'namespace': 'Hello.\n\nWorld',
-                'request_id': Utils.uuid()
-            },
-            'payload': {}
-        }
+            'header': {'namespace': 'Hello.\n\nWorld', 'request_id': Utils.uuid()},
+            'payload': {},
+        },
     )
 
     with pytest.raises(exceptions.SocaException) as exc_info:

@@ -22,28 +22,28 @@ description: How to share your result files on IDEA
 
 <figure><img src="../../.gitbook/assets/6509b2be-19e1-423f-9a16-150c43dcdc83.png" alt=""><figcaption></figcaption></figure>
 
-* Open SSH client > connect to HPC IDEA Cluster. Note: If you haven’t set this up yet, follow the tutorial here: [https://cidea.cfsenergy.com/#/home/ssh-access](https://cidea.cfsenergy.com/#/home/ssh-access)
+* Open SSH client > connect to HPC IDEA Cluster. Note: If you haven't set this up yet, follow the tutorial here: [https://cidea.cfsenergy.com/#/home/ssh-access](https://cidea.cfsenergy.com/#/home/ssh-access)
 
 <figure><img src="../../.gitbook/assets/00fe6a60-2b44-4820-a641-4b642408f40f.png" alt=""><figcaption></figcaption></figure>
 
 &#x20;
 
-* Ensure you are in your username’s directory (use “pwd”)
+* Ensure you are in your username's directory (use "pwd")
 
 <figure><img src="../../.gitbook/assets/a6db70b7-3ec8-41b2-96c7-0031302a3fc5.png" alt=""><figcaption></figcaption></figure>
 
-* Type "chmod g+rx ." (no quotes, don’t forget the period) to update permissions for your username’s directory
+* Type "chmod g+rx ." (no quotes, don't forget the period) to update permissions for your username's directory
 
 <figure><img src="../../.gitbook/assets/6c46be0c-0566-4819-aa34-9adf6d445fad.png" alt=""><figcaption></figcaption></figure>
 
-* Type “cd ..” (no quotes) to navigate to the next level up in the directory hierarchy
+* Type "cd .." (no quotes) to navigate to the next level up in the directory hierarchy
 
 <figure><img src="../../.gitbook/assets/6660c089-1bf7-4686-af8e-53ac7ffb469c.png" alt=""><figcaption></figcaption></figure>
 
-* Type “ls -al” (no quotes) and verify your directory has “drwxr-x---” permissions
+* Type "ls -al" (no quotes) and verify your directory has "drwxr-x---" permissions
 
 <figure><img src="../../.gitbook/assets/0824a414-8dbd-4f06-80e9-2eb16d95f9e4.png" alt=""><figcaption></figcaption></figure>
 
-Those who you’ve shared with should now be able to download files from your directory!
+Those who you've shared with should now be able to download files from your directory!
 
 \

@@ -1,3 +1,4 @@
+#!/bin/bash
 #  Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #
 #  Licensed under the Apache License, Version 2.0 (the "License"). You may not use this file except in compliance
@@ -57,30 +58,36 @@ function imds_get () {
   local URL="${IMDS_HOST}${SLASH}${1}"
 
   # Get an Auth token
-  local TOKEN=$(curl --silent -X PUT "${IMDS_HOST}/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: ${IMDS_TTL}")
+  local TOKEN
+  TOKEN=$(curl --silent -X PUT "${IMDS_HOST}/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: ${IMDS_TTL}")
 
   # Get the requested value and echo it back
-  local OUTPUT=$(curl --silent -H "X-aws-ec2-metadata-token: ${TOKEN}" "${URL}")
+  local OUTPUT
+  OUTPUT=$(curl --silent -H "X-aws-ec2-metadata-token: ${TOKEN}" "${URL}")
   echo -n "${OUTPUT}"
 }
 
 function instance_type () {
-  local INSTANCE_TYPE=$(imds_get /latest/meta-data/instance-type)
+  local INSTANCE_TYPE
+  INSTANCE_TYPE=$(imds_get /latest/meta-data/instance-type)
   echo -n "${INSTANCE_TYPE}"
 }
 
 function instance_family () {
-  local INSTANCE_FAMILY=$(imds_get /latest/meta-data/instance-type | cut -d. -f1)
+  local INSTANCE_FAMILY
+  INSTANCE_FAMILY=$(imds_get /latest/meta-data/instance-type | cut -d. -f1)
   echo -n "${INSTANCE_FAMILY}"
 }
 
 function instance_id () {
-  local INSTANCE_ID=$(imds_get /latest/meta-data/instance-id)
+  local INSTANCE_ID
+  INSTANCE_ID=$(imds_get /latest/meta-data/instance-id)
   echo -n "${INSTANCE_ID}"
 }
 
 function instance_region () {
-  local INSTANCE_REGION=$(imds_get /latest/meta-data/placement/region)
+  local INSTANCE_REGION
+  INSTANCE_REGION=$(imds_get /latest/meta-data/placement/region)
   echo -n "${INSTANCE_REGION}"
 }
 
@@ -89,7 +96,8 @@ function get_secret() {
     local MAX_ATTEMPT=10
     local CURRENT_ATTEMPT=0
     local SLEEP_INTERVAL=180
-    local AWS=$(which aws)
+    local AWS
+    AWS=$(which aws)
     local command="${AWS} secretsmanager get-secret-value --secret-id ${SECRET_ID} --query SecretString --region ${AWS_DEFAULT_REGION} --output text"
     while ! secret=$($command); do
         ((CURRENT_ATTEMPT=CURRENT_ATTEMPT+1))
@@ -108,15 +116,16 @@ function get_server_ip() {
   # This may return multiple IP addresses
   # So we store an array (SERVER_IP_ARRAY) for them and set the SERVER_IP to the first encountered IPv4 address
   # for any future needs in the script for the canonical IPv4 host IP
-  local SERVER_IP_ARRAY=($(hostname -I))
+  local SERVER_IP_ARRAY
+  mapfile -t SERVER_IP_ARRAY < <(hostname -I)
   local SERVER_IP=""
-  for ip in ${!SERVER_IP_ARRAY[@]}; do
+  for ip in "${!SERVER_IP_ARRAY[@]}"; do
       # Only consider IPv4 as SERVER_IP for now due to PBS interactions with IPv6 addresses.
       # We don't have to worry about the regex false matching on an IPv6 address
       # with an embedded IPv4 address since this is not user input validation.
       # This is just validation from the hostname command outputs.
       # Example 2001:db8::10.0.0.1 becomes 2001:db::a00:1 in-kernel and from hostname command output
-      IPV4_COUNT=$(echo ${SERVER_IP_ARRAY[$ip]} | grep -Ec "(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)")
+      IPV4_COUNT=$(echo "${SERVER_IP_ARRAY[$ip]}" | grep -Ec "(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)")
       if [[ -z "${SERVER_IP}" && "${IPV4_COUNT}" -eq '1' ]]; then
           SERVER_IP=${SERVER_IP_ARRAY[$ip]}
       fi
@@ -128,19 +137,22 @@ function get_server_ip() {
 function get_shake256() {
   local STR="${1}"
   local SHAKE_LEN="${2}"
-  local IDEA_PYTHON=$(command -v idea_python)
-  local SHAKE_VAL=$(${IDEA_PYTHON} -c "import sys; import hashlib; print(hashlib.shake_256(''.join(sys.argv[1]).encode('utf-8')).hexdigest(int(sys.argv[2])))" "${STR}" "${SHAKE_LEN}")
+  local IDEA_PYTHON
+  IDEA_PYTHON=$(command -v idea_python)
+  local SHAKE_VAL
+  SHAKE_VAL=$(${IDEA_PYTHON} -c "import sys; import hashlib; print(hashlib.shake_256(''.join(sys.argv[1]).encode('utf-8')).hexdigest(int(sys.argv[2])))" "${STR}" "${SHAKE_LEN}")
   echo -n "${SHAKE_VAL}"
 }
 
 function get_shake256_hostname() {
-  local HOSTNAME=$(hostname -s)
+  local HOSTNAME
+  HOSTNAME=$(hostname -s)
   local HOSTNAME_PREFIX="IDEA-"
   # This is the overall max len in chars. Generally this will be 15
   # for NetBIOS legacy reasons
   local MAX_LENGTH=15
   # /2 as get_shake256 takes number of hex bytes - which are 2 ASCII char to display
-  local ALLOWED_LEN_BYTES=$(((${MAX_LENGTH} - ${#HOSTNAME_PREFIX})/2))
+  local ALLOWED_LEN_BYTES=$(((MAX_LENGTH - ${#HOSTNAME_PREFIX})/2))
   SHAKE_HOSTNAME=$(get_shake256 "${HOSTNAME}" "${ALLOWED_LEN_BYTES}")
   echo -n "${HOSTNAME_PREFIX}${SHAKE_HOSTNAME}"
 }
@@ -156,20 +168,21 @@ function add_fsx_lustre_to_fstab () {
     MOUNT_OPTIONS="lustre defaults,noatime,flock,_netdev 0 0"
   fi
 
-  grep -q " ${MOUNT_DIR}/" /etc/fstab
-  if [[ "$?" == "0" ]]; then
+  if grep -q " ${MOUNT_DIR}/" /etc/fstab; then
     log_info "skip add_fsx_lustre_to_fstab: existing entry found for mount dir: ${MOUNT_DIR}"
     return 0
   fi
 
   # handle cases for scratch file systems during SOCA job submission
   if [[ -z "${FS_MOUNT_NAME}" ]]; then
-    local FSX_ID=$(echo "${FS_DOMAIN}" | cut -d. -f1)
-    local AWS=$(command -v aws)
+    local FSX_ID
+    FSX_ID=$(echo "${FS_DOMAIN}" | cut -d. -f1)
+    local AWS
+    AWS=$(command -v aws)
     FS_MOUNT_NAME=$($AWS fsx describe-file-systems \
-                              --file-system-ids ${FSX_ID}  \
+                              --file-system-ids "${FSX_ID}"  \
                               --query FileSystems[].LustreConfiguration.MountName \
-                              --region ${AWS_DEFAULT_REGION} \
+                              --region "${AWS_DEFAULT_REGION}" \
                               --output text)
   fi
   echo "${FS_DOMAIN}@tcp:/${FS_MOUNT_NAME} ${MOUNT_DIR}/ ${MOUNT_OPTIONS}" >> /etc/fstab
@@ -192,8 +205,7 @@ function add_efs_to_fstab () {
     MOUNT_OPTIONS="nfs4 nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport 0 0"
   fi
 
-  grep -q " ${MOUNT_DIR}/" /etc/fstab
-  if [[ "$?" == "0" ]]; then
+  if grep -q " ${MOUNT_DIR}/" /etc/fstab; then
     log_info "skip add_efs_to_fstab: existing entry found for mount dir: ${MOUNT_DIR}"
     return 0
   fi
@@ -217,8 +229,7 @@ function add_fsx_openzfs_to_fstab () {
     MOUNT_OPTIONS="nfs4 nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport 0 0"
   fi
 
-  grep -q " ${MOUNT_DIR}/" /etc/fstab
-  if [[ "$?" == "0" ]]; then
+  if grep -q " ${MOUNT_DIR}/" /etc/fstab; then
     log_info "skip add_openzfs_to_fstab: existing entry found for mount dir: ${MOUNT_DIR}"
     return 0
   fi
@@ -243,8 +254,7 @@ function add_fsx_netapp_ontap_to_fstab () {
     MOUNT_OPTIONS="nfs4 nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport 0 0"
   fi
 
-  grep -q " ${MOUNT_DIR}/" /etc/fstab
-  if [[ "$?" == "0" ]]; then
+  if grep -q " ${MOUNT_DIR}/" /etc/fstab; then
     log_info "skip add_netapp_ontap_to_fstab: existing entry found for mount dir: ${MOUNT_DIR}"
     return 0
   fi
@@ -259,22 +269,22 @@ function remove_fsx_netapp_ontap_from_fstab () {
 }
 
 function create_jq_ddb_filter () {
-  echo '
+  echo "
 def convert_from_dynamodb_object:
-    def get_property($key): select(keys == [$key])[$key];
-       ((objects | { value: get_property("S") })
-    // (objects | { value: get_property("N") | tonumber })
-    // (objects | { value: get_property("B") })
-    // (objects | { value: get_property("M") | map_values(convert_from_dynamodb_object) })
-    // (objects | { value: get_property("L") | map(convert_from_dynamodb_object) })
-    // (objects | { value: get_property("SS") })
-    // (objects | { value: get_property("NS") | map(tonumber) })
-    // (objects | { value: get_property("BOOL") })
-    // (objects | { value: get_property("BS") })
+    def get_property(\$key): select(keys == [\$key])[\$key];
+       ((objects | { value: get_property(\"S\") })
+    // (objects | { value: get_property(\"N\") | tonumber })
+    // (objects | { value: get_property(\"B\") })
+    // (objects | { value: get_property(\"M\") | map_values(convert_from_dynamodb_object) })
+    // (objects | { value: get_property(\"L\") | map(convert_from_dynamodb_object) })
+    // (objects | { value: get_property(\"SS\") })
+    // (objects | { value: get_property(\"NS\") | map(tonumber) })
+    // (objects | { value: get_property(\"BOOL\") })
+    // (objects | { value: get_property(\"BS\") })
     // (objects | { value: map_values(convert_from_dynamodb_object) })
     // (arrays | { value: map(convert_from_dynamodb_object) })
     // { value: . }).value
     ;
 convert_from_dynamodb_object
-' > /root/.convert_from_dynamodb_object.jq
+" > /root/.convert_from_dynamodb_object.jq
 }

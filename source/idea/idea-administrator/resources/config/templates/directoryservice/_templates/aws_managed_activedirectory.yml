@@ -1,12 +1,12 @@
 # Begin: AWS Managed Microsoft AD Settings (aws_managed_activedirectory)
 
-{%- if use_existing_directory_service %}
+{% if use_existing_directory_service %}
 # Indicates if the AWS Managed Microsoft AD is already provisioned and a new AD should not be provisioned.
 use_existing: true
 
 # The DirectoryId of the existing AWS Managed Microsoft AD.
 directory_id: {{ directory_id or '~' }}
-{%- endif %}
+{% endif %}
 
 # The NetBIOS name for your domain
 ad_short_name: "IDEA"

@@ -18,7 +18,7 @@ You can choose from multiple HTML components such as:
 - Number
 - Select
 - Text
-- Toogle
+- Toggle
 - Password
 
 #### Edit a form field
@@ -109,7 +109,7 @@ You can choose whether you want your script to be executed as a regular Linux Sh
 
 #### Script Template Type
 
-In the **Simple** mode, you can substitute the variables returned by the HMTL form using **%variable%**. For example, if you have one HTML field named **ncpus**, you can retrieve the value entered by the user via **%ncpus%**.
+In the **Simple** mode, you can substitute the variables returned by the HTML form using **%variable%**. For example, if you have one HTML field named **ncpus**, you can retrieve the value entered by the user via **%ncpus%**.
 
 In the **Advanced** mode, you can leverage Jinja templating to build advanced logic. For example, **{{ job | upper }}** will retrieve the HTML field named **job** and enforce uppercase.
 
@@ -126,5 +126,3 @@ This is where you will add the logic you want to be executed.
 Once your HTML form and job script are ready, choose a name for your application and upload a thumbnail.
 
 </details>
-
-

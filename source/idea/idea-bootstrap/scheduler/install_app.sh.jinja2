@@ -36,7 +36,7 @@ PACKAGE_DIR="${BOOTSTRAP_DIR}/${PACKAGE_NAME}"
 mkdir -p ${PACKAGE_DIR}
 tar -xvf ${BOOTSTRAP_DIR}/${PACKAGE_ARCHIVE} -C ${PACKAGE_DIR}
 idea_pip install -r ${PACKAGE_DIR}/requirements.txt
-idea_pip install $(ls ${PACKAGE_DIR}/*-lib.tar.gz)
+idea_pip install ${PACKAGE_DIR}/*-lib.tar.gz
 mkdir -p ${IDEA_APP_DEPLOY_DIR}/${APP_NAME}
 mkdir -p ${IDEA_APP_DEPLOY_DIR}/logs
 if [[ -d "${IDEA_APP_DEPLOY_DIR}/${APP_NAME}/resources" ]]; then
@@ -58,6 +58,9 @@ cp -r ${PACKAGE_DIR}/resources ${IDEA_APP_DEPLOY_DIR}/${APP_NAME}
 /opt/pbs/bin/qmgr -c "import hook validate_job application/x-python default ${IDEA_APP_DEPLOY_DIR}/${APP_NAME}/resources/openpbs/hooks/openpbs_hook_handler.py"
 /opt/pbs/bin/qmgr -c "create hook job_status event='runjob,execjob_begin,execjob_end'"
 /opt/pbs/bin/qmgr -c "import hook job_status application/x-python default ${IDEA_APP_DEPLOY_DIR}/${APP_NAME}/resources/openpbs/hooks/openpbs_hook_handler.py"
+/opt/pbs/bin/qmgr -c "create hook calculate_ncpus event='queuejob'"
+/opt/pbs/bin/qmgr -c "import hook calculate_ncpus application/x-python default ${IDEA_APP_DEPLOY_DIR}/${APP_NAME}/resources/openpbs/hooks/calculate_ncpus_hook.py"
+/opt/pbs/bin/qmgr -c "set hook calculate_ncpus order=2"
 {% endif %}
 
 # since floating license resource checks will be performed by scheduler on compute nodes,

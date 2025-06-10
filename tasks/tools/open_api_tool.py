@@ -9,12 +9,27 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
-from openapi_pydantic import *
-from ideadatamodel import (
-    constants,
-    IdeaOpenAPISpecEntry,
-    SocaEnvelope
+from openapi_pydantic import (
+    Tag,
+    ExternalDocumentation,
+    Schema,
+    OpenAPI,
+    Paths,
+    DataType,
+    PathItem,
+    Operation,
+    Parameter,
+    ParameterLocation,
+    RequestBody,
+    MediaType,
+    Response,
+    Example,
+    Info,
+    Server,
+    Components,
+    SecurityScheme,
 )
+from ideadatamodel import constants, IdeaOpenAPISpecEntry, SocaEnvelope
 
 from tasks import idea
 from ideasdk.utils import Utils
@@ -29,21 +44,27 @@ class OpenAPITool:
     Refer: https://github.com/OAI/OpenAPI-Specification and https://swagger.io/docs/specification/about/ for more details on OpenAPI 3.0 Specification
     """
 
-    def __init__(self, entries: List[IdeaOpenAPISpecEntry],
-                 api_doc: Optional[Dict],
-                 enable_file_transfer_entries: bool = False,
-                 module_id: str = None,
-                 module_version: str = None,
-                 server_url: str = None):
-
+    def __init__(
+        self,
+        entries: List[IdeaOpenAPISpecEntry],
+        api_doc: Optional[Dict],
+        enable_file_transfer_entries: bool = False,
+        module_id: str = None,
+        module_version: str = None,
+        server_url: str = None,
+    ):
         self.entries = entries
 
         # dynamic variables rendered by SocaServer at run time based on request.
         self.module_id = Utils.get_as_string(module_id, '{{ module_id }}')
-        self.module_version = Utils.get_as_string(module_version, '{{ module_version }}')
+        self.module_version = Utils.get_as_string(
+            module_version, '{{ module_version }}'
+        )
         self.server_url = Utils.get_as_string(server_url, '{{ server_url }}')
 
-        self.enable_file_transfer_entries = Utils.get_as_bool(enable_file_transfer_entries, False)
+        self.enable_file_transfer_entries = Utils.get_as_bool(
+            enable_file_transfer_entries, False
+        )
 
         # spec - top level - enforce mandatory items
         self.api_doc_spec = api_doc['spec']
@@ -54,17 +75,18 @@ class OpenAPITool:
         self.spec_tags: List[Tag] = []
         doc_tags = Utils.get_value_as_list('tags', self.api_doc_spec, [])
         for doc_tag in doc_tags:
-            spec_tag = Tag(
-                name=doc_tag['name'],
-                description=doc_tag['description']
-            )
+            spec_tag = Tag(name=doc_tag['name'], description=doc_tag['description'])
             external_docs = Utils.get_value_as_dict('external_docs', doc_tag)
             if external_docs is not None:
                 external_doc_url = external_docs['url']
-                external_doc_description = Utils.get_value_as_string('description', external_docs)
+                external_doc_description = Utils.get_value_as_string(
+                    'description', external_docs
+                )
                 spec_tag.externalDocs = ExternalDocumentation(
-                    url=AnyHttpUrl(url=external_doc_url, scheme=external_doc_url.split(':')[0]),
-                    description=external_doc_description
+                    url=AnyHttpUrl(
+                        url=external_doc_url, scheme=external_doc_url.split(':')[0]
+                    ),
+                    description=external_doc_description,
                 )
             self.spec_tags.append(spec_tag)
 
@@ -89,7 +111,9 @@ class OpenAPITool:
         """
         return Utils.deep_copy(model.model_json_schema())
 
-    def build_schema(self, payload_type: Type[BaseModel], request: bool, listing: bool) -> Dict:
+    def build_schema(
+        self, payload_type: Type[BaseModel], request: bool, listing: bool
+    ) -> Dict:
         """
         convert a request or response payload to OpenAPI Spec request or response operation component
 
@@ -115,7 +139,7 @@ class OpenAPITool:
         del envelope_schema['$defs']
 
         api_schema = self.get_mutable_json_schema(payload_type)
-        request_title = api_schema["title"]
+        request_title = api_schema['title']
         if '$defs' in api_schema:
             for name, value in api_schema['$defs'].items():
                 self.schemas[name] = Schema(**value)
@@ -143,16 +167,10 @@ class OpenAPITool:
         response_json = Schema(
             type=DataType.OBJECT,
             properties={
-                'error_code': Schema(
-                    type=DataType.STRING
-                ),
-                'success': Schema(
-                    type=DataType.BOOLEAN
-                ),
-                'message': Schema(
-                    type=DataType.STRING
-                )
-            }
+                'error_code': Schema(type=DataType.STRING),
+                'success': Schema(type=DataType.BOOLEAN),
+                'message': Schema(type=DataType.STRING),
+            },
         )
 
         # file upload
@@ -160,16 +178,14 @@ class OpenAPITool:
             put=Operation(
                 tags=['FileBrowser'],
                 operationId='FileBrowser.UploadFile',
-                security=[{
-                    'BearerToken': []
-                }],
+                security=[{'BearerToken': []}],
                 parameters=[
                     Parameter(
                         name='cwd',
                         description='Current Working Directory',
                         required=True,
                         param_in=ParameterLocation.QUERY,
-                        param_schema=Schema(type=DataType.STRING)
+                        param_schema=Schema(type=DataType.STRING),
                     )
                 ],
                 requestBody=RequestBody(
@@ -181,11 +197,10 @@ class OpenAPITool:
                                     'files[]': Schema(
                                         type=DataType.ARRAY,
                                         items=Schema(
-                                            type=DataType.STRING,
-                                            schema_format='binary'
-                                        )
+                                            type=DataType.STRING, schema_format='binary'
+                                        ),
                                     )
-                                }
+                                },
                             )
                         )
                     }
@@ -197,9 +212,9 @@ class OpenAPITool:
                             'application/json': MediaType(
                                 media_type_schema=response_json
                             )
-                        }
+                        },
                     )
-                }
+                },
             )
         )
 
@@ -208,16 +223,14 @@ class OpenAPITool:
             get=Operation(
                 tags=['FileBrowser'],
                 operationId='FileBrowser.DownloadFile',
-                security=[{
-                    'BearerToken': []
-                }],
+                security=[{'BearerToken': []}],
                 parameters=[
                     Parameter(
                         name='file',
                         description='Path of the file to download',
                         required=True,
                         param_in=ParameterLocation.QUERY,
-                        param_schema=Schema(type=DataType.STRING)
+                        param_schema=Schema(type=DataType.STRING),
                     )
                 ],
                 responses={
@@ -228,34 +241,30 @@ class OpenAPITool:
                                 media_type_schema=response_json
                             ),
                             'text/plain': MediaType(
-                                media_type_schema=Schema(
-                                    type=DataType.STRING
-                                )
+                                media_type_schema=Schema(type=DataType.STRING)
                             ),
                             'application/xml': MediaType(
-                                media_type_schema=Schema(
-                                    type=DataType.STRING
-                                )
+                                media_type_schema=Schema(type=DataType.STRING)
                             ),
                             'image/*': MediaType(
                                 media_type_schema=Schema(
-                                    type=DataType.STRING,
-                                    schema_format='binary'
+                                    type=DataType.STRING, schema_format='binary'
                                 )
                             ),
                             '*/*': MediaType(
                                 media_type_schema=Schema(
-                                    type=DataType.STRING,
-                                    schema_format='binary'
+                                    type=DataType.STRING, schema_format='binary'
                                 )
-                            )
-                        }
+                            ),
+                        },
                     )
-                }
+                },
             )
         )
 
-    def get_examples(self, namespace: str, is_request: bool) -> Optional[Dict[str, Example]]:
+    def get_examples(
+        self, namespace: str, is_request: bool
+    ) -> Optional[Dict[str, Example]]:
         api_doc_entry = Utils.get_value_as_dict(namespace, self.api_doc_entries)
         if api_doc_entry is None:
             return None
@@ -278,11 +287,13 @@ class OpenAPITool:
             try:
                 result[example_name] = Example(
                     summary=Utils.get_value_as_string('description', example_entry),
-                    value=Utils.from_json(example_entry['value'])
+                    value=Utils.from_json(example_entry['value']),
                 )
             except Exception as e:
                 operation_tag = 'request' if is_request else 'response'
-                idea.console.warning(f'[{namespace}] ({operation_tag}) failed to parse json value for example: {example_name}, {e}')
+                idea.console.warning(
+                    f'[{namespace}] ({operation_tag}) failed to parse json value for example: {example_name}, {e}'
+                )
 
         if len(result) == 0:
             return None
@@ -299,45 +310,47 @@ class OpenAPITool:
             path = f'/{entry.namespace}'
             component_tag = entry.namespace.split('.')[0]
             operation_title_prefix = entry.namespace.split('.')[-1]
-            request_schema = Schema(**self.build_schema(
-                payload_type=entry.request,
-                request=True,
-                listing=entry.is_listing
-            ))
-            result_schema = Schema(**self.build_schema(
-                payload_type=entry.result,
-                request=False,
-                listing=entry.is_listing
-            ))
+            request_schema = Schema(
+                **self.build_schema(
+                    payload_type=entry.request, request=True, listing=entry.is_listing
+                )
+            )
+            result_schema = Schema(
+                **self.build_schema(
+                    payload_type=entry.result, request=False, listing=entry.is_listing
+                )
+            )
 
             spec_paths[path] = PathItem(
                 post=Operation(
                     operationId=entry.namespace,
                     tags=[component_tag],
-                    security=[] if entry.is_public else [{
-                        'BearerToken': []
-                    }],
+                    security=[] if entry.is_public else [{'BearerToken': []}],
                     requestBody=RequestBody(
                         description=f'{operation_title_prefix} Request',
                         content={
                             'application/json': MediaType(
                                 media_type_schema=request_schema,
-                                examples=self.get_examples(namespace=entry.namespace, is_request=True)
+                                examples=self.get_examples(
+                                    namespace=entry.namespace, is_request=True
+                                ),
                             )
                         },
-                        required=True
+                        required=True,
                     ),
                     responses={
-                        "200": Response(
+                        '200': Response(
                             description=f'{operation_title_prefix} Response',
                             content={
                                 'application/json': MediaType(
                                     media_type_schema=result_schema,
-                                    examples=self.get_examples(namespace=entry.namespace, is_request=False)
+                                    examples=self.get_examples(
+                                        namespace=entry.namespace, is_request=False
+                                    ),
                                 )
-                            }
+                            },
                         )
-                    }
+                    },
                 )
             )
 
@@ -347,32 +360,25 @@ class OpenAPITool:
         return spec_paths
 
     def build(self) -> OpenAPI:
-
         return OpenAPI(
             info=Info(
                 title=self.title,
                 description=f'{self.description} (ModuleId: {self.module_id})',
                 version=self.module_version,
             ),
-            servers=[
-                Server(url=self.server_url)
-            ],
+            servers=[Server(url=self.server_url)],
             tags=self.spec_tags,
             openapi=constants.OPEN_API_SPEC_VERSION,
             paths=self.build_paths(),
             components=Components(
                 securitySchemes={
-                    'BearerToken': SecurityScheme(
-                        type='http',
-                        scheme='bearer'
-                    )
+                    'BearerToken': SecurityScheme(type='http', scheme='bearer')
                 },
-                schemas=self.schemas
-            )
+                schemas=self.schemas,
+            ),
         )
 
     def generate(self, output_format: str = 'yaml') -> str:
-
         if self.open_api_spec is None:
             idea.console.print('processing openapi spec entries and documentation ...')
             self.open_api_spec = self.build()

@@ -14,7 +14,7 @@ DynamoDB Local Server for Unit Tests
 """
 
 from ideasdk.shell import ShellInvoker, StreamInvocationProcess
-from ideasdk.utils import Utils, EnvironmentUtils
+from ideasdk.utils import Utils
 from ideatestutils import IdeaTestProps
 
 import os
@@ -24,8 +24,12 @@ import pathlib
 from threading import Thread
 from typing import Optional
 
-DYNAMODB_LOCAL_PACKAGE_URL = 'https://s3.us-west-2.amazonaws.com/dynamodb-local/dynamodb_local_latest.zip'
-DYNAMODB_LOCAL_PACKAGE_SHA256_CHECKSUM = '7ec2f8d538f4b026dacecc944ef68dc5a39878b702c866365f286c8e349d81e1'
+DYNAMODB_LOCAL_PACKAGE_URL = (
+    'https://d1ni2b6xgvw0s0.cloudfront.net/v2.x/dynamodb_local_latest.zip'
+)
+DYNAMODB_LOCAL_PACKAGE_SHA256_CHECKSUM = (
+    '06e7bdd5d03262d8373696282f79867f9f6beb94b76e230b49da135be080558c'
+)
 
 
 class DynamoDBLocal:
@@ -35,7 +39,13 @@ class DynamoDBLocal:
     * exposes start and stop methods to manage server life-cycle based on unit test scope
     """
 
-    def __init__(self, db_name: str = None, port: int = 9000, reset: bool = False, cleanup: bool = False):
+    def __init__(
+        self,
+        db_name: str = None,
+        port: int = 9000,
+        reset: bool = False,
+        cleanup: bool = False,
+    ):
         """
         :param db_dir: the directory where the database will be initialized. defaults to ~/.idea/tests/ddb
         :param port: the port on which ddb local can be accessible. ddb endpoint url will be: http://localhost:9000
@@ -56,10 +66,7 @@ class DynamoDBLocal:
         self.db_dir = os.path.join(base_db_dir, self.db_name)
 
         self.process: Optional[StreamInvocationProcess] = None
-        self.loop = Thread(
-            target=self._run_ddb_local,
-            name='ddb-local'
-        )
+        self.loop = Thread(target=self._run_ddb_local, name='ddb-local')
 
     def get_ddb_local_download_dir(self) -> str:
         idea_user_home_dir = self.props.get_idea_user_home_dir()
@@ -89,9 +96,11 @@ class DynamoDBLocal:
         """
 
         # check pre-requisites
-        which_java = self.shell.invoke(['command', '-v', 'java'])
+        which_java = self.shell.invoke(['which', 'java'])
         if which_java.returncode != 0:
-            print('dynamodb local cannot be initialized. Java Runtime Environment (JRE) is required.')
+            print(
+                'dynamodb local cannot be initialized. Java Runtime Environment (JRE) is required.'
+            )
             return False
 
         # download and install (if not already installed)
@@ -119,6 +128,7 @@ class DynamoDBLocal:
 
         print('installing ddb local ...')
         shutil.unpack_archive(ddb_local_zip_file, self.get_ddb_local_lib_dir(), 'zip')
+        return True
 
     def _run_ddb_local(self):
         cmd = [
@@ -130,12 +140,11 @@ class DynamoDBLocal:
             f'{self.port}',
             '-dbPath',
             self.db_dir,
-            '-sharedDb'
+            '-sharedDb',
         ]
         print(' '.join(cmd))
         self.process = self.shell.invoke_stream(
-            cmd=cmd,
-            callback=lambda line: print(line, end='')
+            cmd=cmd, callback=lambda line: print(line, end='')
         )
 
         print(f'dynamodb local started. endpoint url: http://localhost:{self.port}')
@@ -171,10 +180,7 @@ class DynamoDBLocal:
 
 
 if __name__ == '__main__':
-    db = DynamoDBLocal(
-        db_name='cluster-manager',
-        reset=True
-    )
+    db = DynamoDBLocal(db_name='cluster-manager', reset=True)
 
     import time
 

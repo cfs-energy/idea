@@ -98,6 +98,21 @@ class SSHAccess extends Component<SSHAccessProps, SSHAccessState> {
             return AppContext.get().auth().getAwsRegion()
         }
 
+        // Create a custom CommandBox component using CloudScape Box with appropriate props
+        const CommandBox = (props: any) => (
+            <Box
+                variant="code"
+                padding="s"
+                fontSize="body-s"
+                fontWeight="normal"
+                color="text-status-info"
+                display="block"
+                className="ssh-command-box"
+            >
+                {props.children}
+            </Box>
+        );
+
         return (
             <IdeaAppLayout
                 ideaPageId={this.props.ideaPageId}
@@ -158,17 +173,15 @@ class SSHAccess extends Component<SSHAccessProps, SSHAccessState> {
                                 </Box>
                                 <Box>
                                     <h3>Step 2: Modify key permissions</h3>
-                                    Run: &nbsp;
-                                    <Box variant={"code"}>
+                                    <CommandBox>
                                         chmod 600 ~/.ssh/{getKeyName('pem')}
-                                    </Box>
+                                    </CommandBox>
                                 </Box>
                                 <Box>
                                     <h3>Step 3: Connect to the cluster</h3>
-                                    Run: &nbsp;
-                                    <Box variant={"code"}>
+                                    <CommandBox>
                                         ssh -i ~/.ssh/{getKeyName('pem')} {getUsername()}@{this.state.sshHostIp}
-                                    </Box>
+                                    </CommandBox>
                                 </Box>
                                 <Box>
                                     <h3><Badge color="green">Optional</Badge> Step 4: Create SSH config</h3>
@@ -178,18 +191,18 @@ class SSHAccess extends Component<SSHAccessProps, SSHAccessState> {
                                         edit: <code>~/.ssh/config</code> and add:
                                     </p>
 
-                                    <Box variant={"code"}>
+                                    <CommandBox>
                                         Host {getClusterName()}-{getAwsRegion()}<br/>
                                         &nbsp;&nbsp;User {getUsername()}<br/>
                                         &nbsp;&nbsp;Hostname {this.state.sshHostIp}<br/>
                                         &nbsp;&nbsp;ServerAliveInterval 10<br/>
                                         &nbsp;&nbsp;ServerAliveCountMax 2<br/>
                                         &nbsp;&nbsp;IdentityFile ~/.ssh/{getKeyName('pem')}
-                                    </Box>
+                                    </CommandBox>
 
                                     <p>
                                         Once updated, you can simply run below to connect to your cluster: <br/>
-                                        <Box variant={"code"}>ssh {getClusterName()}-{getAwsRegion()}</Box>
+                                        <CommandBox>ssh {getClusterName()}-{getAwsRegion()}</CommandBox>
                                     </p>
                                 </Box>
                             </SpaceBetween>

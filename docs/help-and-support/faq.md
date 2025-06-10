@@ -34,7 +34,7 @@ Alternatively, you can run the following `idea-admin.sh` command:
 ./idea-admin.sh utils cluster-prefix-list add-entry
   --cluster-name <CLUSTER_NAME> \
   --aws-region <REGION> \
-  --cidr x.x.x.x/x \ 
+  --cidr x.x.x.x/x \
   --description '<DESCRIPTION>'
 ```
 
@@ -197,7 +197,7 @@ set Key=cluster-manager.web_portal.logo,Type=string,Value=assets/logo.png \
 Title can be customized by running the below command:
 
 ```bash
-./idea-admin.sh config \ 
+./idea-admin.sh config \
   set "Key=cluster-manager.web_portal.title,Type=string,Value=My Company" \
   --cluster-name <CLUSTER_NAME> \
   --aws-region <REGION>
@@ -262,12 +262,12 @@ IDEA create a route53 private hosted zone.
 If you try to curl any DNS from this Route53 Zone,and get no result, even though the Private Zone is assigned to the VPC
 
 ```
-# nslookup 
+# nslookup
 internal-alb.idea-demo.us
 -east-2.local
 Server: 10.110.0.2
 Address: 10.110.0.2#53
-** server can't find 
+** server can't find
 internal-alb.idea-demo.us
 -east-2.local: NXDOMAIN
 ```
@@ -310,7 +310,7 @@ Logging can configured per application server using IDEA Cluster Configuration. 
 
 <summary>How to debug a module not starting correctly</summary>
 
-1 - Log in to the EC2 machine and check the logs under **/root/boostrap/logs.**
+1 - Log in to the EC2 machine and check the logs under **/root/bootstrap/logs.**
 
 Try to find some potential issue(s) by looking for keywords like:
 

@@ -2,7 +2,7 @@ owner_profile:
   profile_title: Owner Profile
   profile_description: This profile grants the same access as the Session Owner on the DCV Session
   builtin: true # Setting this as true will override ALL the below permissions, and grant all permissions to the user.
-                # Set this true, if you want to ensure that all the new permissions introduced by DCV are applied to the session owner.
+  # Set this true, if you want to ensure that all the new permissions introduced by DCV are applied to the session owner.
   display: true
   clipboard_copy: true
   clipboard_paste: true
@@ -23,12 +23,11 @@ owner_profile:
   screenshot: true
   unsupervised_access: true
   gamepad: true
-
 admin_profile:
   profile_title: Admin Profile
   profile_description: This profile grants the same access as the Admin on the DCV Session
   builtin: true # Setting this as true will override ALL the below permissions, and grant all permissions to the user.
-                # Set this true, if you want to ensure that all the new permissions introduced by DCV are applied to the session owner.
+  # Set this true, if you want to ensure that all the new permissions introduced by DCV are applied to the session owner.
   display: true
   clipboard_copy: true
   clipboard_paste: true
@@ -49,12 +48,11 @@ admin_profile:
   screenshot: true
   unsupervised_access: true
   gamepad: true
-
 observer_profile:
   profile_title: View Only Profile
   profile_description: This profile grants view only access on the DCV Session. Can see screen only. Can not control session
   builtin: false # Setting this as true will override ALL the below permissions, and grant all permissions to the user.
-                 # Set this true, if you want to ensure that all the new permissions introduced by DCV are applied to the session owner.
+  # Set this true, if you want to ensure that all the new permissions introduced by DCV are applied to the session owner.
   display: true
   clipboard_copy: false
   clipboard_paste: false
@@ -75,12 +73,11 @@ observer_profile:
   screenshot: false
   unsupervised_access: false
   gamepad: false
-
 collaborator_profile:
   profile_title: Collaboration Profile
   profile_description: This profile grants certain access on the DCV Session. Can see screen, control mouse and keyboard.
   builtin: false # Setting this as true will override ALL the below permissions, and grant all permissions to the user.
-                 # Set this true, if you want to ensure that all the new permissions introduced by DCV are applied to the session owner.
+  # Set this true, if you want to ensure that all the new permissions introduced by DCV are applied to the session owner.
   display: true
   clipboard_copy: false
   clipboard_paste: false

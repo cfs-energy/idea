@@ -18,8 +18,17 @@ from ideavirtualdesktopcontroller.cli.logs import logs
 import sys
 import click
 
-from ideavirtualdesktopcontroller.cli.sessions import reindex_user_sessions, batch_create_sessions
-from ideavirtualdesktopcontroller.cli.software_stacks import reindex_software_stacks
+from ideavirtualdesktopcontroller.cli.sessions import (
+    reindex_user_sessions,
+    batch_create_sessions,
+    cleanup_orphaned_schedules,
+    terminate_sessions,
+)
+from ideavirtualdesktopcontroller.cli.software_stacks import (
+    reindex_software_stacks,
+    merge_software_stacks,
+    update_base_stacks,
+)
 from ideavirtualdesktopcontroller.cli.module import app_module_clean_up
 
 
@@ -35,7 +44,11 @@ def main():
 main.add_command(logs)
 main.add_command(reindex_user_sessions)
 main.add_command(batch_create_sessions)
+main.add_command(cleanup_orphaned_schedules)
+main.add_command(terminate_sessions)
 main.add_command(reindex_software_stacks)
+main.add_command(merge_software_stacks)
+main.add_command(update_base_stacks)
 main.add_command(app_module_clean_up)
 
 # used only for local testing

@@ -21,20 +21,21 @@ PHYSICAL_RESOURCE_ID = 'ad-controller-security-group-id'
 
 
 def handler(event, context):
-
     http_client = HttpClient()
     try:
         logger.info(f'ReceivedEvent: {json.dumps(event)}')
         request_type = event.get('RequestType')
 
         if request_type == 'Delete':
-            http_client.send_cfn_response(CfnResponse(
-                context=context,
-                event=event,
-                status=CfnResponseStatus.SUCCESS,
-                data={},
-                physical_resource_id=PHYSICAL_RESOURCE_ID
-            ))
+            http_client.send_cfn_response(
+                CfnResponse(
+                    context=context,
+                    event=event,
+                    status=CfnResponseStatus.SUCCESS,
+                    data={},
+                    physical_resource_id=PHYSICAL_RESOURCE_ID,
+                )
+            )
             return
 
         resource_properties = event.get('ResourceProperties', {})
@@ -42,9 +43,7 @@ def handler(event, context):
         logger.info('AD DirectoryId: ' + directory_id)
 
         ds_client = boto3.client('ds')
-        response = ds_client.describe_directories(
-            DirectoryIds=[directory_id]
-        )
+        response = ds_client.describe_directories(DirectoryIds=[directory_id])
 
         directories = response.get('DirectoryDescriptions', [])
 
@@ -57,36 +56,36 @@ def handler(event, context):
         if security_group_id is None:
             msg = f'Could not find SecurityGroupId for DirectoryId: {directory_id}'
             logger.error(msg)
-            http_client.send_cfn_response(CfnResponse(
-                context=context,
-                event=event,
-                status=CfnResponseStatus.FAILED,
-                data={
-                    'error': msg
-                },
-                physical_resource_id=PHYSICAL_RESOURCE_ID
-            ))
+            http_client.send_cfn_response(
+                CfnResponse(
+                    context=context,
+                    event=event,
+                    status=CfnResponseStatus.FAILED,
+                    data={'error': msg},
+                    physical_resource_id=PHYSICAL_RESOURCE_ID,
+                )
+            )
         else:
-            http_client.send_cfn_response(CfnResponse(
-                context=context,
-                event=event,
-                status=CfnResponseStatus.SUCCESS,
-                data={
-                    'SecurityGroupId': security_group_id
-                },
-                physical_resource_id=PHYSICAL_RESOURCE_ID
-            ))
+            http_client.send_cfn_response(
+                CfnResponse(
+                    context=context,
+                    event=event,
+                    status=CfnResponseStatus.SUCCESS,
+                    data={'SecurityGroupId': security_group_id},
+                    physical_resource_id=PHYSICAL_RESOURCE_ID,
+                )
+            )
     except Exception as e:
         error_message = f'Failed to get SecurityGroupId for Directory: {e}'
         logger.exception(error_message)
-        http_client.send_cfn_response(CfnResponse(
-            context=context,
-            event=event,
-            status=CfnResponseStatus.FAILED,
-            data={
-                'error': error_message
-            },
-            physical_resource_id=PHYSICAL_RESOURCE_ID
-        ))
+        http_client.send_cfn_response(
+            CfnResponse(
+                context=context,
+                event=event,
+                status=CfnResponseStatus.FAILED,
+                data={'error': error_message},
+                physical_resource_id=PHYSICAL_RESOURCE_ID,
+            )
+        )
     finally:
         http_client.destroy()

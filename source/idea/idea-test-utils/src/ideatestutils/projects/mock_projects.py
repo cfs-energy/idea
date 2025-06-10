@@ -16,12 +16,10 @@ from typing import List
 
 
 class MockProjects:
-
     @staticmethod
     def get_project_by_template(template: str = 'default') -> Project:
         env = Jinja2Utils.env_using_package_loader(
-            package_name='ideatestutils.projects',
-            package_path='templates'
+            package_name='ideatestutils.projects', package_path='templates'
         )
         template = env.get_template(f'{template}.json')
         content = template.render()
@@ -29,12 +27,8 @@ class MockProjects:
 
     def get_project(self, _: GetProjectRequest) -> GetProjectResult:
         project = MockProjects.get_project_by_template()
-        return GetProjectResult(
-            project=project
-        )
+        return GetProjectResult(project=project)
 
     def get_user_projects(self, _: str) -> List[Project]:
         project = MockProjects.get_project_by_template()
-        return [
-            project
-        ]
+        return [project]

@@ -1,4 +1,4 @@
-FROM public.ecr.aws/docker/library/python:3.9.19-slim@sha256:fd8693fc6115345452a19654c1388bc9a1029cda7b98e1bce45ede67e74190f0
+FROM public.ecr.aws/docker/library/python:3.13.3-slim@sha256:21e39cf1815802d4c6f89a0d3a166cc67ce58f95b6d1639e68a394c99310d2e5
 
 ARG TARGETARCH
 
@@ -6,15 +6,16 @@ ENV OS_ARCH="${TARGETARCH:-amd64}"
 
 WORKDIR /root
 
-RUN apt update && \
-    apt -y install \
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
     curl \
     tar \
     unzip \
     locales \
     gcc \
     python3-dev \
-    && apt clean
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -47,17 +48,20 @@ RUN if [ "${OS_ARCH}" = "amd64" ]; then \
 #     && echo "Pin-Priority: 1001" >> /etc/apt/preferences.d/preferences\
 #     && apt update && apt install -y nodejs
 # install nvm and node
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN set -uex && \
-    apt update && \
-    apt install -y ca-certificates curl gnupg && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates curl gnupg && \
     mkdir -p /etc/apt/keyrings && \
     curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
     | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg && \
-    NODE_MAJOR=18 && \
+    NODE_MAJOR=22 && \
     echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_$NODE_MAJOR.x nodistro main" \
     > /etc/apt/sources.list.d/nodesource.list && \
-    apt update && \
-	apt install nodejs -y
+    apt-get update && \
+    apt-get install -y --no-install-recommends nodejs && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
 
 
@@ -73,5 +77,3 @@ RUN mkdir -p /root/.idea/downloads/idea-administrator-${PUBLIC_ECR_TAG} && \
     rm -rf /root/.idea/downloads/idea-administrator-${PUBLIC_ECR_TAG}
 
 CMD ["bash"]
-
-

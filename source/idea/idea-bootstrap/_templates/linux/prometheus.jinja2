@@ -1,5 +1,5 @@
 # Begin: Install Prometheus
-{%- if context.base_os in ('amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9', 'ubuntu2204', 'ubuntu2404') %}
+{% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9', 'ubuntu2204', 'ubuntu2404') %}
 PROMETHEUS_AMD64_URL="{{ context.config.get_string('global-settings.package_config.prometheus.installer.linux.x86_64', required=True) }}"
 PROMETHEUS_ARM64_URL="{{ context.config.get_string('global-settings.package_config.prometheus.installer.linux.aarch64', required=True) }}"
 function install_prometheus () {
@@ -37,22 +37,20 @@ WantedBy=multi-user.target
 }
 install_prometheus
 mkdir -p /opt/prometheus/data
-{%- if context.is_prometheus_exporter_enabled('app_exporter') %}
+{% if context.is_prometheus_exporter_enabled('app_exporter') %}
 if [[ ! -f /root/metrics_api_token.txt ]]; then
   echo -n "${RANDOM}-${RANDOM}${RANDOM}${RANDOM}-${RANDOM}" > /root/metrics_api_token.txt
 fi
-{%- endif %}
-{%- set prometheus_config = context.get_prometheus_config(additional_scrape_configs=additional_scrape_configs) %}
-{%- if prometheus_config %}
+{% endif %}
+{% set prometheus_config = context.get_prometheus_config(additional_scrape_configs=additional_scrape_configs) %}
+{% if prometheus_config %}
 mkdir -p /etc/prometheus
 echo '{{ context.utils.to_yaml(prometheus_config) }}' > /etc/prometheus/prometheus.yml
 setup_prometheus_service
 systemctl enable prometheus
 systemctl start prometheus
-{%- else %}
+{% else %}
 log_warning "Install Prometheus: prometheus_config not provided."
-{%- endif %}
-{%- endif %}
+{% endif %}
+{% endif %}
 # End: Install Prometheus
-
-

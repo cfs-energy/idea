@@ -129,15 +129,15 @@ class AppContext {
             this.logger.debug('Clearing existing IS_LOGGED_IN_INTERVAL.')
             clearInterval(IS_LOGGED_IN_INTERVAL)
         }
-        
+
         IS_LOGGED_IN_INTERVAL = setInterval(() => {
             this.logger.debug('Executing IS_LOGGED_IN_INTERVAL callback.')
-        
+
             // initializing service worker in this interval ensures that in the event the service worker was stopped and
             // started, the service worker knows the authentication endpoints
             this.logger.debug('Initializing service worker.')
             initializeServiceWorker()
-        
+
             // check if the user is logged in. this may query the service worker or authentication context based on current session management mode.
             this.logger.debug('Checking if the user is logged in.')
             this.authService.isLoggedIn().then((status) => {
@@ -153,7 +153,110 @@ class AppContext {
                 // Optionally handle errors
                 this.logger.error('Error while checking login status:', error)
             })
-        }, 10000)        
+        }, 10000)
+
+        // Add another heartbeat specifically for when the tab is backgrounded
+        // This uses a different technique to stay active during background state
+        if (typeof window !== 'undefined') {
+            // Create a dedicated worker for ping assistance if possible
+            let pingWorker: any = null;
+
+            try {
+                // Create a simple worker that will help ping the service worker
+                const workerCode = `
+                    // Simple ping worker to keep service worker alive
+                    let pingInterval = null;
+
+                    self.onmessage = function(e) {
+                        if (e.data.action === 'start') {
+                            if (pingInterval) clearInterval(pingInterval);
+
+                            // Send pings at specified interval
+                            pingInterval = setInterval(() => {
+                                self.postMessage('ping');
+                            }, e.data.interval || 2000);
+                        } else if (e.data.action === 'stop') {
+                            if (pingInterval) clearInterval(pingInterval);
+                            pingInterval = null;
+                        }
+                    };
+                `;
+
+                // Create a blob from the worker code
+                const blob = new Blob([workerCode], { type: 'application/javascript' });
+                const workerUrl = URL.createObjectURL(blob);
+
+                // Create the worker
+                pingWorker = new Worker(workerUrl);
+
+                // Listen for pings from the worker
+                pingWorker.onmessage = () => {
+                    // Forward ping to the service worker
+                    initializeServiceWorker();
+
+                    // Also check login status occasionally
+                    if (Math.random() < 0.2) { // 20% chance
+                        this.authService.isLoggedIn().catch(e => {
+                            this.logger.error('Background ping worker error:', e);
+                        });
+                    }
+                };
+
+                // Clean up
+                URL.revokeObjectURL(workerUrl);
+            } catch (e) {
+                this.logger.warn('Failed to create ping worker', e);
+            }
+
+            // Add visibility change listener to increase heartbeat frequency when backgrounded
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'hidden') {
+                    // Tab is hidden/backgrounded - increase heartbeat frequency
+                    if (IS_LOGGED_IN_INTERVAL) {
+                        clearInterval(IS_LOGGED_IN_INTERVAL);
+                    }
+
+                    // Start the ping worker if available
+                    if (pingWorker) {
+                        pingWorker.postMessage({ action: 'start', interval: 2000 });
+                    }
+
+                    // When backgrounded, ping every 2 seconds
+                    IS_LOGGED_IN_INTERVAL = setInterval(() => {
+                        this.logger.debug('Background heartbeat to service worker');
+                        initializeServiceWorker();
+                        this.authService.isLoggedIn().catch(e => {
+                            this.logger.error('Background heartbeat error:', e);
+                        });
+                    }, 2000);
+                } else if (document.visibilityState === 'visible') {
+                    // Tab is visible again - restore normal heartbeat frequency
+                    if (IS_LOGGED_IN_INTERVAL) {
+                        clearInterval(IS_LOGGED_IN_INTERVAL);
+                    }
+
+                    // Stop the ping worker
+                    if (pingWorker) {
+                        pingWorker.postMessage({ action: 'stop' });
+                    }
+
+                    IS_LOGGED_IN_INTERVAL = setInterval(() => {
+                        this.logger.debug('Executing IS_LOGGED_IN_INTERVAL callback.');
+                        initializeServiceWorker();
+                        this.authService.isLoggedIn().then((status) => {
+                            this.logger.debug(`User logged in status: ${status}`);
+                            if (this.isLoggedIn && !status) {
+                                this.logger.debug('User was logged in but now is not. Initiating logout process.');
+                                this.authService.logout();
+                            }
+                            this.isLoggedIn = status;
+                        }).catch(error => {
+                            this.logger.error('Error while checking login status:', error);
+                        });
+                    }, 5000);
+                }
+            });
+        }
     }
 
     static setOnRoute(onRoute: any) {
@@ -184,7 +287,7 @@ class AppContext {
     }
 
     isDarkMode(): boolean {
-        return Utils.asBoolean(AppContext.get().localStorage().getItem(DARK_MODE_KEY), false)
+        return Utils.asBoolean(AppContext.get().localStorage().getItem(DARK_MODE_KEY), true)
     }
 
     setCompactMode(compactMode: boolean) {

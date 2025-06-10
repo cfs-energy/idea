@@ -25,6 +25,7 @@ import {
     Tabs
 } from "@cloudscape-design/components";
 import {SocaUserInputChoice, SocaUserInputParamMetadata} from "../../client/data-model";
+import {AppContext} from "../../common";
 import IdeaForm from "../../components/form";
 import {IdeaFormField} from '../../components/form-field'
 import Utils from "../../common/utils";
@@ -34,6 +35,8 @@ import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
 import {CodeEditorProps} from "@cloudscape-design/components/code-editor/interfaces";
 import 'ace-builds/css/ace.css';
 import 'ace-builds/css/theme/dawn.css';
+import 'ace-builds/css/theme/github_light_default.css';
+import 'ace-builds/css/theme/github_dark.css';
 
 const DragDropContextAlt: any = DragDropContext;
 const DroppableAlt: any = Droppable;
@@ -558,8 +561,21 @@ class SocaFormBuilder extends Component<IdeaFormBuilderProps, IdeaFormBuilderSta
             import('ace-builds/webpack-resolver').then(() => {
                 ace.config.set('useStrictCSP', true)
                 ace.config.set('loadWorkerFromBlob', false)
+
+                // Detect current mode and set appropriate theme
+                const isDarkMode = AppContext.get().isDarkMode();
+                const editorTheme = isDarkMode ? 'github_dark' : 'github_light_default';
+
                 this.setState({
-                    ace: ace
+                    ace: ace,
+                    preferences: {
+                        wrapLines: true,
+                        theme: editorTheme,
+                        showGutter: true,
+                        showLineNumbers: true,
+                        showInvisibles: false,
+                        showPrintMargin: false
+                    }
                 })
             })
         })
@@ -771,6 +787,14 @@ class SocaFormBuilder extends Component<IdeaFormBuilderProps, IdeaFormBuilderSta
                 }
             }}
             loading={false}
+            themes={{
+                light: [
+                    'github_light_default'
+                ],
+                dark: [
+                    'github_dark'
+                ]
+            }}
             i18nStrings={{
                 loadingState: "Loading code editor",
                 errorState:

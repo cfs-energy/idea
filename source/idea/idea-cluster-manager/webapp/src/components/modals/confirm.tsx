@@ -20,6 +20,8 @@ export interface IdeaConfirmProps {
     onConfirm?: () => void
     cancelLabel?: string
     onCancel?: () => void
+    confirmButtonVariant?: "primary" | "normal" | "link"
+    dangerConfirm?: boolean
     children: React.ReactNode
 }
 
@@ -80,12 +82,30 @@ class IdeaConfirm extends Component<IdeaConfirmProps, IdeaConfirmState> {
                                <Button variant="link" onClick={() => {
                                    this.hide()
                                }}>{this.getCancelLabel()}</Button>
-                               <Button variant="primary" onClick={() => {
-                                   this.hide()
-                                   if (this.props.onConfirm) {
-                                       this.props.onConfirm()
-                                   }
-                               }}>{this.getConfirmLabel()}</Button>
+
+                               {/* Render custom styled div with danger styling when dangerConfirm is true */}
+                               {this.props.dangerConfirm ?
+                                   (<div className="danger-confirm-button-container">
+                                       <Button
+                                           variant={this.props.confirmButtonVariant || "primary"}
+                                           onClick={() => {
+                                               this.hide()
+                                               if (this.props.onConfirm) {
+                                                   this.props.onConfirm()
+                                               }
+                                           }}
+                                       >{this.getConfirmLabel()}</Button>
+                                   </div>) :
+                                   (<Button
+                                       variant={this.props.confirmButtonVariant || "primary"}
+                                       onClick={() => {
+                                           this.hide()
+                                           if (this.props.onConfirm) {
+                                               this.props.onConfirm()
+                                           }
+                                       }}
+                                   >{this.getConfirmLabel()}</Button>)
+                               }
                            </SpaceBetween>
                        </Box>
                    }

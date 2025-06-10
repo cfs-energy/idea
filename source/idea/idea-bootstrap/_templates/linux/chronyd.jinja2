@@ -1,10 +1,10 @@
 # Begin: Configure chronyd
-{%- if context.base_os in ('amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+{% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
 yum remove -y ntp
-{%- endif %}
-{%- if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% endif %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
 apt remove -y ntp
-{%- endif %}
+{% endif %}
 
 mv /etc/chrony.conf  /etc/chrony.conf.original
 echo -e "

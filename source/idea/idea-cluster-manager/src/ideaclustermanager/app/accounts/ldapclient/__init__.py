@@ -9,6 +9,11 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
-from ideaclustermanager.app.accounts.ldapclient.abstract_ldap_client import AbstractLDAPClient, LdapClientOptions
+from ideaclustermanager.app.accounts.ldapclient.abstract_ldap_client import (
+    AbstractLDAPClient,
+    LdapClientOptions,
+)
 from ideaclustermanager.app.accounts.ldapclient.openldap_client import OpenLDAPClient
-from ideaclustermanager.app.accounts.ldapclient.active_directory_client import ActiveDirectoryClient
+from ideaclustermanager.app.accounts.ldapclient.active_directory_client import (
+    ActiveDirectoryClient,
+)

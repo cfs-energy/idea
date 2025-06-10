@@ -10,4 +10,3 @@
 #  and limitations under the License.
 
 # lambda functions to be deployed. should not contain any SDK dependencies.
-

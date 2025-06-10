@@ -30,15 +30,22 @@ __all__ = (
     'VirtualDesktopPermissionProfile',
     'VirtualDesktopSessionPermission',
     'VirtualDesktopSessionPermissionActorType',
-    'VirtualDesktopSessionBatchResponsePayload'
+    'VirtualDesktopSessionBatchResponsePayload',
 )
 
-from ideadatamodel import SocaBaseModel, SocaMemory, SocaBatchResponsePayload, Project, constants
+from ideadatamodel import (
+    SocaBaseModel,
+    SocaMemory,
+    SocaBatchResponsePayload,
+    Project,
+    constants,
+)
 
 from typing import Optional, List
 from datetime import datetime
 from enum import Enum
 from pydantic import Field
+
 
 class VirtualDesktopSessionState(str, Enum):
     PROVISIONING = 'PROVISIONING'
@@ -88,7 +95,6 @@ class DayOfWeek(str, Enum):
 class VirtualDesktopScheduleType(str, Enum):
     WORKING_HOURS = 'WORKING_HOURS'
     STOP_ON_IDLE = 'STOP_ON_IDLE'
-    STOP_ALL_DAY = 'STOP_ALL_DAY'
     START_ALL_DAY = 'START_ALL_DAY'
     CUSTOM_SCHEDULE = 'CUSTOM_SCHEDULE'
     NO_SCHEDULE = 'NO_SCHEDULE'
@@ -96,6 +102,7 @@ class VirtualDesktopScheduleType(str, Enum):
 
 class VirtualDesktopBaseOS(str, Enum):
     AMAZON_LINUX2 = constants.OS_AMAZONLINUX2
+    AMAZON_LINUX2023 = constants.OS_AMAZONLINUX2023
     RHEL8 = constants.OS_RHEL8
     RHEL9 = constants.OS_RHEL9
     ROCKY8 = constants.OS_ROCKY8
@@ -103,6 +110,9 @@ class VirtualDesktopBaseOS(str, Enum):
     UBUNTU2204 = constants.OS_UBUNTU2204
     UBUNTU2404 = constants.OS_UBUNTU2404
     WINDOWS = constants.OS_WINDOWS
+    WINDOWS2019 = constants.OS_WINDOWS2019
+    WINDOWS2022 = constants.OS_WINDOWS2022
+    WINDOWS2025 = constants.OS_WINDOWS2025
 
 
 class VirtualDesktopSessionPermissionActorType(str, Enum):
@@ -149,11 +159,12 @@ class VirtualDesktopSoftwareStack(SocaBaseModel):
     pool_enabled: Optional[bool] = Field(default=None)
     pool_asg_name: Optional[str] = Field(default=None)
     launch_tenancy: Optional[VirtualDesktopTenancy] = Field(default=None)
+    allowed_instance_types: Optional[List[str]] = Field(default=None)
 
 
 class VirtualDesktopServer(SocaBaseModel):
     server_id: Optional[str] = Field(default=None)
-    idea_sesssion_id: Optional[str] = Field(default=None)
+    idea_session_id: Optional[str] = Field(default=None)
     idea_session_owner: Optional[str] = Field(default=None)
     instance_id: Optional[str] = Field(default=None)
     instance_type: Optional[str] = Field(default=None)

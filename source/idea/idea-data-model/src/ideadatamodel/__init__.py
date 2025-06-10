@@ -25,3 +25,4 @@ from .cluster_settings import *
 from .analytics import *
 from .email_templates import *
 from .notifications import *
+from .exceptions import *

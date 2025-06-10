@@ -12,8 +12,11 @@
 import ideascheduler
 from ideasdk.utils import Utils
 from ideadatamodel import (
-    exceptions, errorcodes, constants,
-    CheckServiceQuotaResult, ServiceQuota
+    exceptions,
+    errorcodes,
+    constants,
+    CheckServiceQuotaResult,
+    ServiceQuota,
 )
 
 from typing import Optional, List, Dict, Tuple, Set
@@ -23,7 +26,7 @@ MAX_RESULTS = 100
 
 class EC2ServiceQuotaHelper:
     """
-    Helper class to find if capacity is available for a given instance type to check agaisnt EC2 service quotas.
+    Helper class to find if capacity is available for a given instance type to check against EC2 service quotas.
 
     > for on-demand capacity:
         EC2ServiceQuotaHelper(
@@ -52,10 +55,13 @@ class EC2ServiceQuotaHelper:
         > dedicated instances will result in separate checks as quota for each instance family is different.
     """
 
-    def __init__(self, context: ideascheduler.AppContext,
-                 instance_types: List[str],
-                 quota_type: int,
-                 desired_capacity: int = 0):
+    def __init__(
+        self,
+        context: ideascheduler.AppContext,
+        instance_types: List[str],
+        quota_type: int,
+        desired_capacity: int = 0,
+    ):
         self._context = context
         self._logger = context.logger()
         self.instance_types = instance_types
@@ -86,17 +92,19 @@ class EC2ServiceQuotaHelper:
         has_more = True
         next_token = None
         while has_more:
-
             if next_token:
-                response = self._context.aws().service_quotas().list_service_quotas(
-                    ServiceCode='ec2',
-                    MaxResults=MAX_RESULTS,
-                    NextToken=next_token
+                response = (
+                    self._context.aws()
+                    .service_quotas()
+                    .list_service_quotas(
+                        ServiceCode='ec2', MaxResults=MAX_RESULTS, NextToken=next_token
+                    )
                 )
             else:
-                response = self._context.aws().service_quotas().list_service_quotas(
-                    ServiceCode='ec2',
-                    MaxResults=MAX_RESULTS
+                response = (
+                    self._context.aws()
+                    .service_quotas()
+                    .list_service_quotas(ServiceCode='ec2', MaxResults=MAX_RESULTS)
                 )
 
             if 'Quotas' in response:
@@ -111,7 +119,9 @@ class EC2ServiceQuotaHelper:
         self._context.cache().long_term().set(key=cache_key, value=result)
         return result
 
-    def get_instance_classes_from_quota(self, quota: Dict) -> Tuple[Optional[List[str]], Optional[int]]:
+    def get_instance_classes_from_quota(
+        self, quota: Dict
+    ) -> Tuple[Optional[List[str]], Optional[int]]:
         """
         given a service quota, returns the instance class
         refer to response of:
@@ -130,6 +140,10 @@ class EC2ServiceQuotaHelper:
         metric_dimensions = Utils.get_value_as_dict('MetricDimensions', usage_metric)
         metric_cls = Utils.get_value_as_string('Class', metric_dimensions)
 
+        # Add debug logging for quota details
+        self._logger.debug(f'Processing quota: {quota_name}')
+        self._logger.debug(f'Metric class: {metric_cls}')
+
         if metric_cls is not None:
             if metric_cls.startswith('Standard/'):
                 # metric_cls examples:
@@ -138,9 +152,16 @@ class EC2ServiceQuotaHelper:
                 # quota_name examples:
                 # > "Running On-Demand Standard (A, C, D, H, I, M, R, T, Z) instances"
                 # > "All Standard (A, C, D, H, I, M, R, T, Z) Spot Instance Requests"
-                quota_type = constants.EC2_SERVICE_QUOTA_SPOT if 'Spot' in metric_cls else constants.EC2_SERVICE_QUOTA_ONDEMAND
-                token = quota_name[quota_name.index('(') + 1:quota_name.index(')')]
+                quota_type = (
+                    constants.EC2_SERVICE_QUOTA_SPOT
+                    if 'Spot' in metric_cls
+                    else constants.EC2_SERVICE_QUOTA_ONDEMAND
+                )
+                token = quota_name[quota_name.index('(') + 1 : quota_name.index(')')]
                 instance_classes = token.replace(' ', '').split(',')
+                self._logger.debug(
+                    f'Standard quota - instance classes: {instance_classes}, type: {quota_type}'
+                )
                 return instance_classes, quota_type
             else:
                 # metric_cls examples:
@@ -150,23 +171,68 @@ class EC2ServiceQuotaHelper:
                 # > Inf/Spot
                 tokens = metric_cls.split('/')
                 if len(tokens) == 2:
-                    quota_type = constants.EC2_SERVICE_QUOTA_SPOT if 'Spot' in metric_cls else constants.EC2_SERVICE_QUOTA_ONDEMAND
+                    quota_type = (
+                        constants.EC2_SERVICE_QUOTA_SPOT
+                        if 'Spot' in metric_cls
+                        else constants.EC2_SERVICE_QUOTA_ONDEMAND
+                    )
                     if tokens[0] == 'G':
+                        self._logger.debug(
+                            f"G-type quota - returning classes: ['G', 'VT'], type: {quota_type}"
+                        )
                         return ['G', 'VT'], quota_type
                     else:
+                        self._logger.debug(
+                            f'Non-G quota - returning class: [{tokens[0]}], type: {quota_type}'
+                        )
                         return [metric_cls.split('/')[0]], quota_type
                 else:
+                    self._logger.debug(f'Invalid metric class format: {metric_cls}')
                     return None, None
 
         elif 'Dedicated' in quota_name:
             # examples:
             # > "Running Dedicated u-6tb1 Hosts"
             # > "Running Dedicated p4d Hosts"
-            family = quota_name.split(' ')[2]
-            instance_class, _ = self._context.aws_util().get_instance_type_class(instance_type=family)
-            if instance_class is not None:
-                return [instance_class], constants.EC2_SERVICE_QUOTA_DEDICATED
+            # > "Running Dedicated c7g Hosts"
+            try:
+                family = quota_name.split(' ')[2]
+                self._logger.debug(f'Processing dedicated quota for family: {family}')
 
+                instance_class_result = (
+                    self._context.aws_util().get_instance_type_class(
+                        instance_type=family
+                    )
+                )
+                self._logger.debug(
+                    f'get_instance_type_class result for {family}: {instance_class_result}'
+                )
+
+                # Handle case where get_instance_type_class returns None
+                if instance_class_result is None:
+                    self._logger.warning(
+                        f'No instance class found for family: {family}'
+                    )
+                    return None, None
+
+                instance_class, _ = instance_class_result
+                if instance_class is not None:
+                    self._logger.debug(
+                        f'Dedicated quota - returning class: [{instance_class}]'
+                    )
+                    return [instance_class], constants.EC2_SERVICE_QUOTA_DEDICATED
+                else:
+                    self._logger.warning(f'Instance class is None for family: {family}')
+                    return None, None
+
+            except (IndexError, TypeError) as e:
+                # Handle cases where quota_name split fails or unpacking fails
+                self._logger.error(
+                    f"Error processing dedicated quota '{quota_name}': {str(e)}"
+                )
+                return None, None
+
+        self._logger.debug(f'No matching quota type found for quota: {quota_name}')
         return None, None
 
     def get_applicable_quotas(self) -> Optional[List[Dict]]:
@@ -198,17 +264,30 @@ class EC2ServiceQuotaHelper:
         """
 
         quotas = self.get_ec2_service_quotas()
+        self._logger.debug(f'Processing {len(quotas)} EC2 service quotas')
 
         instance_classes = set()
         for instance_type in self.instance_types:
-            instance_class, _ = self._context.aws_util().get_instance_type_class(instance_type=instance_type)
+            instance_class_result = self._context.aws_util().get_instance_type_class(
+                instance_type=instance_type
+            )
+            if instance_class_result is None:
+                self._logger.warning(
+                    f'No instance class found for type: {instance_type}'
+                )
+                continue
+            instance_class, _ = instance_class_result
             instance_classes.add(instance_class)
 
+        self._logger.debug(
+            f'Looking for quotas matching instance classes: {instance_classes}'
+        )
         existing = set()
         result = []
         for quota in quotas:
-
-            quota_classes, quota_type = self.get_instance_classes_from_quota(quota=quota)
+            quota_classes, quota_type = self.get_instance_classes_from_quota(
+                quota=quota
+            )
 
             if quota_classes is None or quota_type is None:
                 continue
@@ -224,15 +303,19 @@ class EC2ServiceQuotaHelper:
                     result.append(quota)
                     existing.add(quota_code)
 
+        self._logger.debug(f'Found {len(result)} applicable quotas')
         return result
 
     def get_active_vcpu_count(self, instance_types: Set[str]) -> int:
-
         vcpu_count = 0
         instances = self._context.instance_cache.list_instances()
         for instance in instances:
-
-            if instance.state not in ('running', 'pending', 'stopping', 'shutting-down'):
+            if instance.state not in (
+                'running',
+                'pending',
+                'stopping',
+                'shutting-down',
+            ):
                 continue
 
             if instance.instance_type not in instance_types:
@@ -248,7 +331,9 @@ class EC2ServiceQuotaHelper:
                 if instance.placement_tenancy != 'dedicated':
                     continue
 
-            ec2_instance_type = self._context.aws_util().get_ec2_instance_type(instance_type=instance.instance_type)
+            ec2_instance_type = self._context.aws_util().get_ec2_instance_type(
+                instance_type=instance.instance_type
+            )
             vcpu_count += ec2_instance_type.vcpu_info_default_vcpus
 
         return vcpu_count
@@ -267,7 +352,7 @@ class EC2ServiceQuotaHelper:
             raise exceptions.SocaException(
                 error_code=errorcodes.SERVICE_QUOTA_NOT_FOUND,
                 message=f'failed to find quota for instance_types: {self.instance_types}, '
-                        f'quota_type: {self.get_quota_type_name()}'
+                f'quota_type: {self.get_quota_type_name()}',
             )
 
         result = CheckServiceQuotaResult(quotas=[])
@@ -276,9 +361,11 @@ class EC2ServiceQuotaHelper:
             instance_types = set()
             instance_classes, _ = self.get_instance_classes_from_quota(quota=quota)
             for instance_class in instance_classes:
-                instance_types |= set(self._context.aws_util().get_instance_types_for_class(
-                    instance_class=instance_class
-                ))
+                instance_types |= set(
+                    self._context.aws_util().get_instance_types_for_class(
+                        instance_class=instance_class
+                    )
+                )
 
             vcpu_count = self.get_active_vcpu_count(instance_types=instance_types)
 
@@ -286,11 +373,13 @@ class EC2ServiceQuotaHelper:
             # note: this could cause problems with weighted capacities, as not all instances
             #   will be launched
             # caller can decide to send only one instance type instead of multiple
-            result.quotas.append(ServiceQuota(
-                quota_name=quota['QuotaName'],
-                available=int(quota['Value']),
-                consumed=vcpu_count,
-                desired=self.desired_capacity
-            ))
+            result.quotas.append(
+                ServiceQuota(
+                    quota_name=quota['QuotaName'],
+                    available=int(quota['Value']),
+                    consumed=vcpu_count,
+                    desired=self.desired_capacity,
+                )
+            )
 
         return result

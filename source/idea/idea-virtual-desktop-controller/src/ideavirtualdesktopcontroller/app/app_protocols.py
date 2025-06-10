@@ -14,67 +14,74 @@ from typing import Dict, List
 from ideadatamodel import (
     VirtualDesktopSession,
     VirtualDesktopSessionConnectionInfo,
-    VirtualDesktopSessionScreenshot
+    VirtualDesktopSessionScreenshot,
 )
 from ideasdk.protocols import SocaBaseProtocol
 
 
 class DCVClientProtocol(SocaBaseProtocol):
+    @abstractmethod
+    def get_active_counts_for_sessions(
+        self, sessions: List[VirtualDesktopSession]
+    ) -> List[VirtualDesktopSession]: ...
 
     @abstractmethod
-    def get_active_counts_for_sessions(self, sessions: List[VirtualDesktopSession]) -> List[VirtualDesktopSession]:
-        ...
+    def describe_sessions(self, sessions: List[VirtualDesktopSession]) -> Dict: ...
 
     @abstractmethod
-    def describe_sessions(self, sessions: List[VirtualDesktopSession]) -> Dict:
-        ...
+    def describe_servers(self) -> Dict: ...
 
     @abstractmethod
-    def describe_servers(self) -> Dict:
-        ...
+    def create_session(
+        self, session: VirtualDesktopSession
+    ) -> VirtualDesktopSession: ...
 
     @abstractmethod
-    def create_session(self, session: VirtualDesktopSession) -> VirtualDesktopSession:
-        ...
+    def resume_session(
+        self, session: VirtualDesktopSession
+    ) -> VirtualDesktopSession: ...
 
     @abstractmethod
-    def resume_session(self, session: VirtualDesktopSession) -> VirtualDesktopSession:
-        ...
+    def get_session_connection_data(
+        self, dcv_session_id: str, username: str
+    ) -> VirtualDesktopSessionConnectionInfo: ...
 
     @abstractmethod
-    def get_session_connection_data(self, dcv_session_id: str, username: str) -> VirtualDesktopSessionConnectionInfo:
-        ...
+    def get_session_screenshots(
+        self, screenshots: List[VirtualDesktopSessionScreenshot]
+    ) -> tuple[
+        List[VirtualDesktopSessionScreenshot],
+        List[VirtualDesktopSessionScreenshot],
+    ]: ...
 
     @abstractmethod
-    def get_session_screenshots(self, screenshots: List[VirtualDesktopSessionScreenshot]) -> (List[VirtualDesktopSessionScreenshot], List[VirtualDesktopSessionScreenshot]):
-        ...
+    def delete_sessions(
+        self, sessions: List[VirtualDesktopSession]
+    ) -> tuple[List[VirtualDesktopSession], List[VirtualDesktopSession]]: ...
 
     @abstractmethod
-    def delete_sessions(self, sessions: List[VirtualDesktopSession]) -> (List[VirtualDesktopSession], List[VirtualDesktopSession]):
-        ...
-
-    @abstractmethod
-    def enforce_session_permissions(self, session: VirtualDesktopSession):
-        ...
+    def enforce_session_permissions(self, session: VirtualDesktopSession): ...
 
 
 class VirtualDesktopQueueMessageHandlerProtocol(SocaBaseProtocol):
-
     @abstractmethod
-    def handle_event(self, message_id: str, sender_id: str, message_body: Dict) -> bool:
-        ...
+    def handle_event(
+        self, message_id: str, sender_id: str, message_body: Dict
+    ) -> bool: ...
 
 
 class VirtualDesktopNotifiableDBProtocol(SocaBaseProtocol):
+    @abstractmethod
+    def trigger_update_event(
+        self, hash_key: str, range_key: str, old_entry: dict, new_entry: dict
+    ) -> dict: ...
 
     @abstractmethod
-    def trigger_update_event(self, hash_key: str, range_key: str, old_entry: dict, new_entry: dict) -> dict:
-        ...
+    def trigger_delete_event(
+        self, hash_key: str, range_key: str, deleted_entry: dict
+    ) -> dict: ...
 
     @abstractmethod
-    def trigger_delete_event(self, hash_key: str, range_key: str, deleted_entry: dict) -> dict:
-        ...
-
-    @abstractmethod
-    def trigger_create_event(self, hash_key: str, range_key: str, new_entry: dict) -> dict:
-        ...
+    def trigger_create_event(
+        self, hash_key: str, range_key: str, new_entry: dict
+    ) -> dict: ...

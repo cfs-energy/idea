@@ -13,7 +13,10 @@ from ideadatamodel import constants, exceptions, errorcodes
 
 from ideaadministrator.integration_tests.test_context import TestContext
 from ideaadministrator.integration_tests import cluster_manager_tests
-from ideaadministrator.integration_tests import scheduler_tests, virtual_desktop_controller_tests
+from ideaadministrator.integration_tests import (
+    scheduler_tests,
+    virtual_desktop_controller_tests,
+)
 
 from typing import List
 import traceback
@@ -27,12 +30,11 @@ class TestInvoker:
         self.module_test_cases = {
             constants.MODULE_CLUSTER_MANAGER: cluster_manager_tests.TEST_CASES,
             constants.MODULE_SCHEDULER: scheduler_tests.TEST_CASES,
-            constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER: virtual_desktop_controller_tests.TEST_CASES
+            constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER: virtual_desktop_controller_tests.TEST_CASES,
         }
 
     def invoke(self):
         for module_id in self.module_ids:
-
             # set current module_id in cluster config so that module setting keys for
             # module test cases are resolved correctly
             self.test_context.cluster_config.set_module_id(module_id)
@@ -40,13 +42,17 @@ class TestInvoker:
             module_info = self.test_context.cluster_config.module_info
             module_status = module_info['status']
             if module_status != 'deployed':
-                raise exceptions.general_exception(f'module id: {module_id} is not deployed yet.')
+                raise exceptions.general_exception(
+                    f'module id: {module_id} is not deployed yet.'
+                )
 
             module_name = module_info['name']
 
             test_cases = self.module_test_cases.get(module_name)
             if test_cases is None:
-                self.test_context.warning(f'no test cases found for module: {module_name}')
+                self.test_context.warning(
+                    f'no test cases found for module: {module_name}'
+                )
                 continue
 
             total_count = 0
@@ -61,7 +67,6 @@ class TestInvoker:
                         continue
 
                 try:
-
                     total_count += 1
 
                     self.test_context.begin_test_case(test_case_id)
@@ -82,5 +87,5 @@ class TestInvoker:
                 success_percent = (success_count / total_count) * 100
                 raise exceptions.soca_exception(
                     error_code=errorcodes.INTEGRATION_TEST_FAILED,
-                    message=f'{fail_count} of {total_count} test cases failed. success rate: {round(success_percent, 2)}%'
+                    message=f'{fail_count} of {total_count} test cases failed. success rate: {round(success_percent, 2)}%',
                 )

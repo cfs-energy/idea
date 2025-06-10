@@ -12,7 +12,13 @@
 import ideascheduler
 
 from ideadatamodel import exceptions, errorcodes
-from ideadatamodel.scheduler import SocaJob, SocaQueue, SocaComputeNodeState, SocaComputeNode, SocaJobState
+from ideadatamodel.scheduler import (
+    SocaJob,
+    SocaQueue,
+    SocaComputeNodeState,
+    SocaComputeNode,
+    SocaJobState,
+)
 from ideasdk.shell import ShellInvoker
 from ideasdk.utils import Utils
 from ideascheduler.app.scheduler.openpbs import OpenPBSConverter, OpenPBSQStat
@@ -64,13 +70,11 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
             # It will return with a 0 even if nodes are not found
             # Need to parse the output when requesting a specific node/host
             if result.returncode != 0:
-
                 if 'Server has no node list' in result.stderr:
                     return []
 
                 raise exceptions.SocaException(
-                    error_code=errorcodes.SCHEDULER_ERROR,
-                    message=f'{result}'
+                    error_code=errorcodes.SCHEDULER_ERROR, message=f'{result}'
                 )
 
             json_data = result.stdout
@@ -81,22 +85,43 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
 
             response = []
             for host, node in nodes.items():
+                self._logger.debug(f'Converting node data for host: {host}')
+
+                # Handle both PBS error formats for unknown nodes
+                if isinstance(node, dict):
+                    # Check for old format with "Error" key
+                    if 'Error' in node and 'Unknown node' in node['Error']:
+                        self._logger.debug(f'Node {host} not found (old format)')
+                        continue
+                    # Check for new format with hostname as key
+                    if host in node and 'Unknown node' in node[host]:
+                        self._logger.debug(f'Node {host} not found (new format)')
+                        continue
+
                 soca_node = self._converter.to_soca_node(host=host, node=node)
                 if soca_node is None:
+                    self._logger.warning(
+                        f'Failed to convert node data for host: {host}'
+                    )
                     continue
                 response.append(soca_node)
             return response
         except orjson.JSONDecodeError as e:
-            self._logger.error(f'failed to parse json data during pbs list nodes: {json_data}')
+            self._logger.error(
+                f'failed to parse json data during pbs list nodes: {json_data}'
+            )
             raise e
 
     def create_node(self, node: SocaComputeNode) -> bool:
-        cmd = [openpbs_constants.QMGR, "-c", f"create node {node.host} queue={node.queue}"]
+        cmd = [
+            openpbs_constants.QMGR,
+            '-c',
+            f'create node {node.host} queue={node.queue}',
+        ]
         result = self._shell.invoke(cmd)
         if result.returncode != 0:
             raise exceptions.SocaException(
-                error_code=errorcodes.SCHEDULER_ERROR,
-                message=f'{result}'
+                error_code=errorcodes.SCHEDULER_ERROR, message=f'{result}'
             )
 
         launch_time = None
@@ -124,7 +149,7 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
             'scaling_mode': node.scaling_mode,
             'instance_ami': node.instance_ami,
             'instance_profile': node.instance_profile,
-            'lifecyle': node.lifecyle,
+            'lifecycle': node.lifecycle,
             'tenancy': node.tenancy,
             'spot_fleet_request': node.spot_fleet_request,
             'auto_scaling_group': node.auto_scaling_group,
@@ -144,7 +169,7 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
             'anonymous_metrics': node.enable_anonymous_metrics,
             'compute_node': node.compute_stack,
             'stack_id': node.stack_id,
-            'provisioning_time': Utils.current_time_ms()
+            'provisioning_time': Utils.current_time_ms(),
         }
 
         if node.fsx_lustre:
@@ -152,10 +177,7 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
             for param in params:
                 attributes[param] = params[param]
 
-        self.set_node_attributes(
-            host=node.host,
-            attributes=attributes
-        )
+        self.set_node_attributes(host=node.host, attributes=attributes)
 
         return True
 
@@ -166,30 +188,27 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
         return nodes[0]
 
     def delete_node(self, host: str) -> bool:
-        cmd = [openpbs_constants.QMGR, "-c", "delete node " + host]
+        cmd = [openpbs_constants.QMGR, '-c', 'delete node ' + host]
         result = self._shell.invoke(cmd=cmd)
         if result.returncode != 0:
             if result.returncode == openpbs_constants.QMGR_ERROR_CODE_OBJECT_BUSY:
                 raise exceptions.SocaException(
-                    error_code=errorcodes.SCHEDULER_NODE_BUSY,
-                    message=f'{result}'
+                    error_code=errorcodes.SCHEDULER_NODE_BUSY, message=f'{result}'
                 )
             else:
                 raise exceptions.SocaException(
-                    error_code=errorcodes.SCHEDULER_ERROR,
-                    message=f'{result}'
+                    error_code=errorcodes.SCHEDULER_ERROR, message=f'{result}'
                 )
         return True
 
     def set_node_state(self, host: str, state: SocaComputeNodeState) -> bool:
         pbs_state = self._converter.from_soca_compute_node_state(state)
-        cmd = [openpbs_constants.QMGR, '-c', f"set node {host} state={pbs_state}"]
+        cmd = [openpbs_constants.QMGR, '-c', f'set node {host} state={pbs_state}']
         result = self._shell.invoke(cmd)
 
         if result.returncode != 0:
             raise exceptions.SocaException(
-                error_code=errorcodes.SCHEDULER_ERROR,
-                message=f'{result}'
+                error_code=errorcodes.SCHEDULER_ERROR, message=f'{result}'
             )
 
         return True
@@ -205,13 +224,12 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
             tokens.append(f'resources_available.{attr}={value}')
 
         args = ','.join(tokens)
-        cmd.append(f"set node {host} {args}")
+        cmd.append(f'set node {host} {args}')
         result = self._shell.invoke(cmd)
 
         if result.returncode != 0:
             raise exceptions.SocaException(
-                error_code=errorcodes.SCHEDULER_ERROR,
-                message=f'{result}'
+                error_code=errorcodes.SCHEDULER_ERROR, message=f'{result}'
             )
 
         return True
@@ -224,15 +242,19 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
                 found = existing_queue
 
         if found is None:
-            result = self._shell.invoke([openpbs_constants.QMGR, "-c", f"create queue {queue_name}"], skip_error_logging=True)
+            result = self._shell.invoke(
+                [openpbs_constants.QMGR, '-c', f'create queue {queue_name}'],
+                skip_error_logging=True,
+            )
             if result.returncode != 0:
                 raise exceptions.SocaException(
-                    error_code=errorcodes.SCHEDULER_ERROR,
-                    message=f'{result}'
+                    error_code=errorcodes.SCHEDULER_ERROR, message=f'{result}'
                 )
             is_enabled = False
         else:
-            is_enabled = Utils.is_true(found.enabled, False) and Utils.is_false(found.started, False)
+            is_enabled = Utils.is_true(found.enabled, False) and Utils.is_false(
+                found.started, False
+            )
 
         if not is_enabled:
             self.set_queue_attributes(
@@ -240,8 +262,8 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
                 attributes={
                     'queue_type': 'Execution',
                     'started': True,
-                    'enabled': True
-                }
+                    'enabled': True,
+                },
             )
 
     def set_queue_attributes(self, queue_name: str, attributes: Dict[str, Any]):
@@ -255,13 +277,12 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
             tokens.append(f'{attr}={value}')
 
         args = ','.join(tokens)
-        cmd.append(f"set queue {queue_name} {args}")
+        cmd.append(f'set queue {queue_name} {args}')
         result = self._shell.invoke(cmd)
 
         if result.returncode != 0:
             raise exceptions.SocaException(
-                error_code=errorcodes.SCHEDULER_ERROR,
-                message=f'{result}'
+                error_code=errorcodes.SCHEDULER_ERROR, message=f'{result}'
             )
 
     def list_queues(self, queue: Optional[str] = None) -> List[SocaQueue]:
@@ -274,15 +295,17 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
             result = self._shell.invoke(cmd, skip_error_logging=True)
 
             if result.returncode != 0:
-                if result.returncode == openpbs_constants.QSTAT_ERROR_CODE_UNKNOWN_QUEUE:
+                if (
+                    result.returncode
+                    == openpbs_constants.QSTAT_ERROR_CODE_UNKNOWN_QUEUE
+                ):
                     raise exceptions.SocaException(
                         error_code=errorcodes.SCHEDULER_QUEUE_NOT_FOUND,
-                        message=f'{result}'
+                        message=f'{result}',
                     )
                 else:
                     raise exceptions.SocaException(
-                        error_code=errorcodes.SCHEDULER_ERROR,
-                        message=f'{result}'
+                        error_code=errorcodes.SCHEDULER_ERROR, message=f'{result}'
                     )
 
             json_response = Utils.from_json(result.stdout)
@@ -292,14 +315,18 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
 
             response = []
             for queue_name, params in queues.items():
-                soca_queue = self._converter.to_soca_queue(queue_name=queue_name, params=params)
+                soca_queue = self._converter.to_soca_queue(
+                    queue_name=queue_name, params=params
+                )
                 if soca_queue is None:
                     continue
                 response.append(soca_queue)
 
             return response
         except orjson.JSONDecodeError as e:
-            self._logger.error(f'failed to parse json data during pbs list queues: {json_data}')
+            self._logger.error(
+                f'failed to parse json data during pbs list queues: {json_data}'
+            )
             raise e
 
     def delete_queue(self, queue_name: str):
@@ -311,24 +338,23 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
             else:
                 raise e
 
-        if Utils.is_true(existing_queue.enabled) or Utils.is_true(existing_queue.started):
-            self.set_queue_attributes(queue_name, attributes={
-                'enabled': False,
-                'started': False
-            })
+        if Utils.is_true(existing_queue.enabled) or Utils.is_true(
+            existing_queue.started
+        ):
+            self.set_queue_attributes(
+                queue_name, attributes={'enabled': False, 'started': False}
+            )
 
         cmd = [openpbs_constants.QMGR, '-c', f'delete queue {queue_name}']
         result = self._shell.invoke(cmd=cmd)
         if result.returncode != 0:
             if result.returncode == openpbs_constants.QMGR_ERROR_CODE_OBJECT_BUSY:
                 raise exceptions.SocaException(
-                    error_code=errorcodes.SCHEDULER_QUEUE_BUSY,
-                    message=f'{result}'
+                    error_code=errorcodes.SCHEDULER_QUEUE_BUSY, message=f'{result}'
                 )
             else:
                 raise exceptions.SocaException(
-                    error_code=errorcodes.SCHEDULER_ERROR,
-                    message=f'{result}'
+                    error_code=errorcodes.SCHEDULER_ERROR, message=f'{result}'
                 )
 
     def get_queue(self, queue: str) -> Optional[SocaQueue]:
@@ -349,11 +375,16 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
             return False
         return soca_queue.enabled and soca_queue.started
 
-    def list_jobs(self, queue: Optional[str] = None, job_ids: Optional[List[str]] = None,
-                  owners: Optional[List[str]] = None, job_state: Optional[SocaJobState] = None,
-                  queued_after: Optional[arrow.Arrow] = None,
-                  max_jobs: int = -1,
-                  stack_id: str = None) -> List[SocaJob]:
+    def list_jobs(
+        self,
+        queue: Optional[str] = None,
+        job_ids: Optional[List[str]] = None,
+        owners: Optional[List[str]] = None,
+        job_state: Optional[SocaJobState] = None,
+        queued_after: Optional[arrow.Arrow] = None,
+        max_jobs: int = -1,
+        stack_id: str = None,
+    ) -> List[SocaJob]:
         return OpenPBSQStat(
             context=self._context,
             logger=self._logger,
@@ -365,14 +396,19 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
             job_state=job_state,
             queued_after=queued_after,
             max_jobs=max_jobs,
-            stack_id=stack_id
+            stack_id=stack_id,
         ).list_jobs()
 
-    def job_iterator(self, queue: Optional[str] = None, job_ids: Optional[List[str]] = None,
-                     owners: Optional[List[str]] = None, job_state: Optional[SocaJobState] = None,
-                     queued_after: Optional[arrow.Arrow] = None,
-                     max_jobs: int = -1,
-                     stack_id: str = None) -> Generator[SocaJob, None, None]:
+    def job_iterator(
+        self,
+        queue: Optional[str] = None,
+        job_ids: Optional[List[str]] = None,
+        owners: Optional[List[str]] = None,
+        job_state: Optional[SocaJobState] = None,
+        queued_after: Optional[arrow.Arrow] = None,
+        max_jobs: int = -1,
+        stack_id: str = None,
+    ) -> Generator[SocaJob, None, None]:
         return OpenPBSQStat(
             context=self._context,
             logger=self._logger,
@@ -384,7 +420,7 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
             job_state=job_state,
             queued_after=queued_after,
             max_jobs=max_jobs,
-            stack_id=stack_id
+            stack_id=stack_id,
         ).job_iterator()
 
     def get_job(self, job_id: str) -> Optional[SocaJob]:
@@ -393,13 +429,23 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
             logger=self._logger,
             shell=self._shell,
             converter=self._converter,
-            job_ids=[job_id]
+            job_ids=[job_id],
         ).get_job()
 
     def delete_job(self, job_id: str):
-        result = self._shell.invoke(['su', str(self.get_job(job_id=job_id).owner), '-c', f'{openpbs_constants.QDEL} {job_id}'], skip_error_logging=True)
+        result = self._shell.invoke(
+            [
+                'su',
+                str(self.get_job(job_id=job_id).owner),
+                '-c',
+                f'{openpbs_constants.QDEL} {job_id}',
+            ],
+            skip_error_logging=True,
+        )
         if result.returncode != 0:
-            raise exceptions.soca_exception(errorcodes.SCHEDULER_ERROR, f'Failed to delete job: {result}')
+            raise exceptions.soca_exception(
+                errorcodes.SCHEDULER_ERROR, f'Failed to delete job: {result}'
+            )
 
     def is_job_active(self, job_id: str) -> bool:
         cmd = [openpbs_constants.QSTAT, job_id]
@@ -412,8 +458,7 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
             return False
 
         raise exceptions.SocaException(
-            error_code=errorcodes.SCHEDULER_ERROR,
-            message=f'{result}'
+            error_code=errorcodes.SCHEDULER_ERROR, message=f'{result}'
         )
 
     def get_finished_job(self, job_id: str) -> Optional[SocaJob]:
@@ -423,7 +468,7 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
             shell=self._shell,
             converter=self._converter,
             job_ids=[job_id],
-            job_state=SocaJobState.FINISHED
+            job_state=SocaJobState.FINISHED,
         ).get_job()
 
     def is_job_queued_or_running(self, job_id: str) -> bool:
@@ -446,20 +491,18 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
                     # replace all ";" as the accounting log file splits log entry using ";"
                     error_message = error_message.replace(';', '_')
                     # replace other cases
-                    error_message = error_message.replace('\'', '_').replace('"', '_')
+                    error_message = error_message.replace("'", '_').replace('"', '_')
                     value = error_message
                 cmd.append(f'{attr}={value}')
         cmd.append(job_id)
         result = self._shell.invoke(cmd)
         if result.returncode != 0:
             raise exceptions.SocaException(
-                error_code=errorcodes.SCHEDULER_ERROR,
-                message=f'{result}'
+                error_code=errorcodes.SCHEDULER_ERROR, message=f'{result}'
             )
         return True
 
-    def provision_job(self, job: SocaJob,
-                      stack_id: str) -> int:
+    def provision_job(self, job: SocaJob, stack_id: str) -> int:
         try:
             select = job.params.custom_params['select'].split(':compute_node')[0]
             select += f':compute_node={job.get_compute_stack()}'
@@ -469,8 +512,8 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
                 attributes={
                     'select': select,
                     'stack_id': stack_id,
-                    'provisioning_time': provisioning_time
-                }
+                    'provisioning_time': provisioning_time,
+                },
             )
             return provisioning_time
         except exceptions.SocaException as e:
@@ -483,7 +526,7 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
         try:
             job = self.get_job(job_id=job_id)
             select = job.params.custom_params['select'].split(':compute_node')[0]
-            select += f':compute_node=tbd'
+            select += ':compute_node=tbd'
 
             # do not delete job group
             return self.set_job_attributes(
@@ -491,8 +534,8 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
                 attributes={
                     'select': select,
                     'stack_id': 'tbd',
-                    'provisioning_time': None
-                }
+                    'provisioning_time': None,
+                },
             )
         except exceptions.SocaException as e:
             if e.error_code == errorcodes.SCHEDULER_JOB_FINISHED:

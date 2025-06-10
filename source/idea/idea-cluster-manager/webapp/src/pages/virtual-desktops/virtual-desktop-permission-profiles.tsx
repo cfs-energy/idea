@@ -42,21 +42,29 @@ const VIRTUAL_DESKTOP_PERMISSION_PROFILE_TABLE_COLUMN_DEFINITIONS: TableProps.Co
         id: 'profile_id',
         header: 'Profile ID',
         cell: e => <Link href={`/#/virtual-desktop/permission-profiles/${e.profile_id}`}>{e.profile_id}</Link>,
+        sortingField: 'profile_id'
     },
     {
         id: 'title',
         header: 'Title',
-        cell: e => e.title
+        cell: e => e.title,
+        sortingField: 'title'
     },
     {
         id: 'description',
         header: 'Description',
-        cell: e => e.description
+        cell: e => e.description,
+        sortingField: 'description'
     },
     {
         id: 'created_on',
         header: 'Created On',
-        cell: e => new Date(e.created_on!).toLocaleString()
+        cell: e => new Date(e.created_on!).toLocaleString(),
+        sortingComparator: (a, b) => {
+            const dateA = a.created_on ? new Date(a.created_on).getTime() : 0;
+            const dateB = b.created_on ? new Date(b.created_on).getTime() : 0;
+            return dateA - dateB;
+        }
     }
 ]
 
@@ -254,6 +262,8 @@ class VirtualDesktopPermissionProfiles extends Component<VirtualDesktopPermissio
                 ]}
                 showPaginator={true}
                 showFilters={true}
+                defaultSortingColumn="created_on"
+                defaultSortingDescending={true}
                 filterType="select"
                 selectFilters={[
                     {

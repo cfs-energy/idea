@@ -1,9 +1,9 @@
 version: 40
-index_patterns: [ ]
+index_patterns: []
 settings:
   number_of_shards: 2
   number_of_replicas: 1
-aliases: { }
+aliases: {}
 mappings:
   _source:
     enabled: true

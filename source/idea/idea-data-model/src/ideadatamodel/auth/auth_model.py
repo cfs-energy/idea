@@ -9,12 +9,7 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
-__all__ = (
-    'User',
-    'Group',
-    'AuthResult',
-    'DecodedToken'
-)
+__all__ = ('User', 'Group', 'AuthResult', 'DecodedToken')
 
 from pydantic import Field
 

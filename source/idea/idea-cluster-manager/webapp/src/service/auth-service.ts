@@ -276,16 +276,16 @@ class AuthService {
 
     isLoggedIn(): Promise<boolean> {
         this.logger.debug('isLoggedIn method invoked.')
-    
+
         if (this.activeIsLoggedInPromise != null) {
             this.logger.debug('Returning existing active isLoggedIn promise.')
             return this.activeIsLoggedInPromise
         }
-    
+
         this.logger.debug('Creating new isLoggedIn promise.')
         this.activeIsLoggedInPromise = this.props.clients.auth().isLoggedIn().then(status => {
             this.logger.debug(`Auth service reported login status: ${status}`)
-    
+
             // if already logged in do, nothing
             if (status) {
                 this.logger.debug('User is already logged in. Fetching claims.')
@@ -295,12 +295,12 @@ class AuthService {
                     return true
                 })
             }
-    
+
             if (typeof window.idea.app.sso === 'undefined' || !window.idea.app.sso) {
                 this.logger.debug('SSO is not defined or not enabled.')
                 return false
             }
-    
+
             // if SSO is enabled, check for SSO auth
             if (Utils.isSsoEnabled()) {
                 this.logger.debug('SSO is enabled. Checking SSO auth status.')
@@ -340,10 +340,10 @@ class AuthService {
             this.logger.debug('isLoggedIn promise settled. Clearing active isLoggedIn promise.')
             this.activeIsLoggedInPromise = null
         })
-    
+
         return this.activeIsLoggedInPromise
     }
-    
+
 
     logout() {
         return this.props.clients.auth()
@@ -420,4 +420,3 @@ class AuthService {
 }
 
 export default AuthService
-

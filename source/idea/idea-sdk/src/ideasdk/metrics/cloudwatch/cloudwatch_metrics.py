@@ -22,7 +22,13 @@ class CloudWatchMetrics(MetricsProviderProtocol):
     Publish IDEA Custom Metrics to CloudWatch
     """
 
-    def __init__(self, context: SocaContextProtocol, namespace: str, storage_resolution: int = None, max_items=PAGE_SIZE * 5):
+    def __init__(
+        self,
+        context: SocaContextProtocol,
+        namespace: str,
+        storage_resolution: int = None,
+        max_items=PAGE_SIZE * 5,
+    ):
         """
         :param context: ApplicationContext
         :param namespace: metrics namespace
@@ -55,7 +61,9 @@ class CloudWatchMetrics(MetricsProviderProtocol):
         num_allowed = self.max_items - size
         if num_allowed < len(metric_data):
             num_dropped = len(metric_data) - num_allowed
-            self._logger.warning(f'Dropping {num_dropped} out of {len(metric_data)} metrics')
+            self._logger.warning(
+                f'Dropping {num_dropped} out of {len(metric_data)} metrics'
+            )
 
         buffer = self.buffers.get(self.namespace, [])
         self.buffers[self.namespace] = buffer  # in case it wasn't set
@@ -94,7 +102,9 @@ class CloudWatchMetrics(MetricsProviderProtocol):
                 if len(page) > 0:
                     # ship it
                     self._send_metrics_to_cloudwatch(page)
-                    self._logger.debug(f'published {len(page)} metrics to cloudwatch (partial)')
+                    self._logger.debug(
+                        f'published {len(page)} metrics to cloudwatch (partial)'
+                    )
 
                 # clear buffer
                 self.buffers[namespace] = []

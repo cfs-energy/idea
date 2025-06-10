@@ -31,7 +31,7 @@ from ideadatamodel.auth import (
     SignOutRequest,
     SignOutResult,
     GlobalSignOutRequest,
-    GlobalSignOutResult
+    GlobalSignOutResult,
 )
 from ideadatamodel import exceptions
 from ideasdk.utils import Utils
@@ -41,7 +41,6 @@ from ideaclustermanager.app.accounts.user_home_directory import UserHomeDirector
 
 
 class AuthAPI(BaseAPI):
-
     def __init__(self, context: ideaclustermanager.AppContext):
         self.context = context
 
@@ -63,9 +62,7 @@ class AuthAPI(BaseAPI):
     def confirm_forgot_password(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(ConfirmForgotPasswordRequest)
         self.context.accounts.confirm_forgot_password(
-            request.username,
-            request.password,
-            request.confirmation_code
+            request.username, request.password, request.confirmation_code
         )
         context.success(ConfirmForgotPasswordResult())
 
@@ -75,7 +72,9 @@ class AuthAPI(BaseAPI):
             raise exceptions.unauthorized_access()
 
         request = context.get_request_payload_as(ChangePasswordRequest)
-        self.context.accounts.change_password(context.access_token, username, request.old_password, request.new_password)
+        self.context.accounts.change_password(
+            context.access_token, username, request.old_password, request.new_password
+        )
 
         context.success(ChangePasswordResult())
 
@@ -85,9 +84,7 @@ class AuthAPI(BaseAPI):
             raise exceptions.unauthorized_access()
 
         user = self.context.accounts.get_user(username)
-        context.success(GetUserResult(
-            user=user
-        ))
+        context.success(GetUserResult(user=user))
 
     def get_user_group(self, context: ApiInvocationContext):
         username = context.get_username()
@@ -96,9 +93,7 @@ class AuthAPI(BaseAPI):
 
         group_name = self.context.accounts.group_name_helper.get_user_group(username)
         group = self.context.accounts.get_group(group_name)
-        context.success(GetGroupResult(
-            group=group
-        ))
+        context.success(GetGroupResult(group=group))
 
     def add_user_to_group(self, context: ApiInvocationContext):
         username = context.get_username()
@@ -131,7 +126,7 @@ class AuthAPI(BaseAPI):
         request = context.get_request_payload_as(SignOutRequest)
         self.context.accounts.sign_out(
             refresh_token=request.refresh_token,
-            sso_auth=Utils.get_as_bool(request.sso_auth, False)
+            sso_auth=Utils.get_as_bool(request.sso_auth, False),
         )
 
         context.success(SignOutResult())
@@ -141,7 +136,10 @@ class AuthAPI(BaseAPI):
             raise exceptions.unauthorized_access()
 
         request = context.get_request_payload_as(GlobalSignOutRequest)
-        if Utils.is_not_empty(request.username) and request.username != context.get_username():
+        if (
+            Utils.is_not_empty(request.username)
+            and request.username != context.get_username()
+        ):
             raise exceptions.unauthorized_access()
 
         self.context.accounts.global_sign_out(username=context.get_username())
@@ -162,10 +160,9 @@ class AuthAPI(BaseAPI):
         key_name = home_dir.get_key_name(key_format)
         key_material = home_dir.get_key_material(key_format, platform)
 
-        context.success(GetUserPrivateKeyResult(
-            name=key_name,
-            key_material=key_material
-        ))
+        context.success(
+            GetUserPrivateKeyResult(name=key_name, key_material=key_material)
+        )
 
     def list_users_in_group(self, context: ApiInvocationContext):
         if not context.is_authenticated():

@@ -295,6 +295,8 @@ class Groups extends Component<GroupsProps, GroupsState> {
                 preferencesKey={'groups'}
                 showPreferences={false}
                 description="Cluster user group management"
+                enableExportToCsv={true}
+                csvFilename={`idea_groups_export_${new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').split('Z')[0]}.csv`}
                 primaryAction={{
                     id: 'create-group',
                     text: 'Create Group',
@@ -358,31 +360,41 @@ class Groups extends Component<GroupsProps, GroupsState> {
                     {
                         id: 'title',
                         header: 'Title',
-                        cell: e => e.title
+                        cell: e => e.title,
+                        sortingField: 'title'
                     },
                     {
                         id: 'name',
                         header: 'Group Name',
-                        cell: e => e.name
+                        cell: e => e.name,
+                        sortingField: 'name'
                     },
                     {
                         id: 'group_type',
                         header: 'Type',
-                        cell: e => e.group_type
+                        cell: e => e.group_type,
+                        sortingField: 'group_type'
                     },
                     {
                         id: 'enabled',
                         header: 'Status',
                         cell: e => (e.enabled) ? <StatusIndicator type="success">Enabled</StatusIndicator> :
-                            <StatusIndicator type="stopped">Disabled</StatusIndicator>
+                            <StatusIndicator type="stopped">Disabled</StatusIndicator>,
+                        sortingComparator: (a, b) => {
+                            const valueA = a.enabled ? 1 : 0;
+                            const valueB = b.enabled ? 1 : 0;
+                            return valueA - valueB;
+                        }
                     },
                     {
                         id: 'gid',
                         header: 'GID',
-                        cell: e => e.gid
+                        cell: e => e.gid,
+                        sortingField: 'gid'
                     }
                 ]}
-
+                defaultSortingColumn="name"
+                defaultSortingDescending={false}
             />
         )
     }
@@ -396,6 +408,8 @@ class Groups extends Component<GroupsProps, GroupsState> {
                     ref={this.userListing}
                     variant={'embedded'}
                     stickyHeader={false}
+                    enableExportToCsv={true}
+                    csvFilename={() => `users_in_${this.getSelected()?.name}_export_${new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').split('Z')[0]}.csv`}
                     primaryAction={{
                         id: 'remove-from-group',
                         text: 'Remove from Group',

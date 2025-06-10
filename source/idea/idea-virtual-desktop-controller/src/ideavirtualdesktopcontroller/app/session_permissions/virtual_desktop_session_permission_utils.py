@@ -12,64 +12,102 @@ import logging
 from typing import List, Union
 
 import ideavirtualdesktopcontroller
-from ideadatamodel import VirtualDesktopSessionPermission, VirtualDesktopSession, VirtualDesktopBaseOS, UpdateSessionPermissionRequest, UpdateSessionPermissionResponse
-from ideasdk.analytics.analytics_service import AnalyticsEntry, EntryAction, EntryContent
+from ideadatamodel import (
+    VirtualDesktopSessionPermission,
+    VirtualDesktopSession,
+    UpdateSessionPermissionRequest,
+    UpdateSessionPermissionResponse,
+)
+from ideasdk.analytics.analytics_service import (
+    AnalyticsEntry,
+    EntryAction,
+    EntryContent,
+)
 from ideasdk.utils import Utils
 from ideavirtualdesktopcontroller.app.events.events_utils import EventsUtils
-from ideavirtualdesktopcontroller.app.permission_profiles.virtual_desktop_permission_profile_db import VirtualDesktopPermissionProfileDB
-from ideavirtualdesktopcontroller.app.session_permissions.virtual_desktop_session_permission_db import VirtualDesktopSessionPermissionDB
-from ideavirtualdesktopcontroller.app.virtual_desktop_controller_utils import VirtualDesktopControllerUtils
+from ideavirtualdesktopcontroller.app.permission_profiles.virtual_desktop_permission_profile_db import (
+    VirtualDesktopPermissionProfileDB,
+)
+from ideavirtualdesktopcontroller.app.session_permissions.virtual_desktop_session_permission_db import (
+    VirtualDesktopSessionPermissionDB,
+)
+from ideavirtualdesktopcontroller.app.virtual_desktop_controller_utils import (
+    VirtualDesktopControllerUtils,
+)
 
 
 class VirtualDesktopSessionPermissionUtils:
     WINDOWS_POWERSHELL_NEW_LINE = '`r`n'
     LINUX_CMD_NEW_LINE = '\n'
 
-    def __init__(self, context: ideavirtualdesktopcontroller.AppContext, db: VirtualDesktopSessionPermissionDB, permission_profile_db: VirtualDesktopPermissionProfileDB):
+    def __init__(
+        self,
+        context: ideavirtualdesktopcontroller.AppContext,
+        db: VirtualDesktopSessionPermissionDB,
+        permission_profile_db: VirtualDesktopPermissionProfileDB,
+    ):
         self.context = context
         self._logger = self.context.logger('virtual-desktop-session-permission-utils')
         self._session_permission_db = db
         self._permission_profile_db = permission_profile_db
         self.events_utils: EventsUtils = EventsUtils(context=self.context)
-        self.controller_utils: VirtualDesktopControllerUtils = VirtualDesktopControllerUtils(self.context)
+        self.controller_utils: VirtualDesktopControllerUtils = (
+            VirtualDesktopControllerUtils(self.context)
+        )
 
     @staticmethod
     def _generate_entry_id(session_permission: VirtualDesktopSessionPermission) -> str:
         return f'permission-{session_permission.idea_session_id}-{session_permission.actor_name}'
 
-    def index_session_permission_to_opensearch(self, session_permission: VirtualDesktopSessionPermission):
-        index_name = f"{self.context.config().get_string('virtual-desktop-controller.opensearch.session_permission.alias', required=True)}-{self.context.session_permission_template_version}"
-        self.context.analytics_service().post_entry(AnalyticsEntry(
-            entry_id=self._generate_entry_id(session_permission),
-            entry_action=EntryAction.CREATE_ENTRY,
-            entry_content=EntryContent(
-                index_id=index_name,
-                entry_record=self._session_permission_db.convert_session_permission_object_to_db_dict(session_permission)
+    def index_session_permission_to_opensearch(
+        self, session_permission: VirtualDesktopSessionPermission
+    ):
+        index_name = f'{self.context.config().get_string("virtual-desktop-controller.opensearch.session_permission.alias", required=True)}-{self.context.session_permission_template_version}'
+        self.context.analytics_service().post_entry(
+            AnalyticsEntry(
+                entry_id=self._generate_entry_id(session_permission),
+                entry_action=EntryAction.CREATE_ENTRY,
+                entry_content=EntryContent(
+                    index_id=index_name,
+                    entry_record=self._session_permission_db.convert_session_permission_object_to_db_dict(
+                        session_permission
+                    ),
+                ),
             )
-        ))
+        )
 
-    def delete_session_entry_from_opensearch(self, session_permission: VirtualDesktopSessionPermission):
-        index_name = f"{self.context.config().get_string('virtual-desktop-controller.opensearch.session_permission.alias', required=True)}-{self.context.session_permission_template_version}"
-        self.context.analytics_service().post_entry(AnalyticsEntry(
-            entry_id=self._generate_entry_id(session_permission),
-            entry_action=EntryAction.DELETE_ENTRY,
-            entry_content=EntryContent(
-                index_id=index_name
+    def delete_session_entry_from_opensearch(
+        self, session_permission: VirtualDesktopSessionPermission
+    ):
+        index_name = f'{self.context.config().get_string("virtual-desktop-controller.opensearch.session_permission.alias", required=True)}-{self.context.session_permission_template_version}'
+        self.context.analytics_service().post_entry(
+            AnalyticsEntry(
+                entry_id=self._generate_entry_id(session_permission),
+                entry_action=EntryAction.DELETE_ENTRY,
+                entry_content=EntryContent(index_id=index_name),
             )
-        ))
+        )
 
-    def update_session_entry_to_opensearch(self, session_permission: VirtualDesktopSessionPermission):
-        index_name = f"{self.context.config().get_string('virtual-desktop-controller.opensearch.session_permission.alias', required=True)}-{self.context.session_permission_template_version}"
-        self.context.analytics_service().post_entry(AnalyticsEntry(
-            entry_id=self._generate_entry_id(session_permission),
-            entry_action=EntryAction.UPDATE_ENTRY,
-            entry_content=EntryContent(
-                index_id=index_name,
-                entry_record=self._session_permission_db.convert_session_permission_object_to_db_dict(session_permission)
+    def update_session_entry_to_opensearch(
+        self, session_permission: VirtualDesktopSessionPermission
+    ):
+        index_name = f'{self.context.config().get_string("virtual-desktop-controller.opensearch.session_permission.alias", required=True)}-{self.context.session_permission_template_version}'
+        self.context.analytics_service().post_entry(
+            AnalyticsEntry(
+                entry_id=self._generate_entry_id(session_permission),
+                entry_action=EntryAction.UPDATE_ENTRY,
+                entry_content=EntryContent(
+                    index_id=index_name,
+                    entry_record=self._session_permission_db.convert_session_permission_object_to_db_dict(
+                        session_permission
+                    ),
+                ),
             )
-        ))
+        )
 
-    def _retrieve_permission_profile_values(self, profile_id) -> (List[str], List[str]):
+    def _retrieve_permission_profile_values(
+        self, profile_id
+    ) -> tuple[List[str], List[str]]:
         allow_permissions: List[str] = []
         deny_permissions: List[str] = []
 
@@ -81,35 +119,54 @@ class VirtualDesktopSessionPermissionUtils:
         else:
             for permission in self._permission_profile_db.permission_types:
                 permission_entry = permission_profile.get_permission(permission.key)
-                self._logger.debug(f"Found permission entry: {permission_entry}")
+                self._logger.debug(f'Found permission entry: {permission_entry}')
 
                 if permission_entry.enabled:
-                    self._logger.debug(f"Applying allow permission for {permission_entry.key}")
+                    self._logger.debug(
+                        f'Applying allow permission for {permission_entry.key}'
+                    )
                     allow_permissions.append(permission.key.replace('_', '-'))
                 else:
                     if permission_entry.key.lower() in {'builtin'}:
-                        self._logger.debug(f"Skipping deny permission for \'builtin\'")
+                        self._logger.debug("Skipping deny permission for 'builtin'")
                         continue
                     else:
-                        self._logger.debug(f"Applying deny permission for {permission_entry.key}")
+                        self._logger.debug(
+                            f'Applying deny permission for {permission_entry.key}'
+                        )
                         deny_permissions.append(permission.key.replace('_', '-'))
 
         if self._logger.isEnabledFor(logging.DEBUG):
-            self._logger.debug(f"Final permissions returning: Allow: {allow_permissions}   Deny: {deny_permissions}")
+            self._logger.debug(
+                f'Final permissions returning: Allow: {allow_permissions}   Deny: {deny_permissions}'
+            )
 
         return allow_permissions, deny_permissions
 
-    def generate_permissions_for_session(self, session: VirtualDesktopSession, for_broker: bool) -> Union[str, None]:
-        admin_username = self.context.config().get_string('cluster.administrator_username', required=True) if session.software_stack.base_os != VirtualDesktopBaseOS.WINDOWS else 'Administrator'
+    def generate_permissions_for_session(
+        self, session: VirtualDesktopSession, for_broker: bool
+    ) -> Union[str, None]:
+        # Simplified Windows detection to match all Windows variations
+        is_windows = 'windows' in str(session.software_stack.base_os).lower()
 
-        if for_broker or session.software_stack.base_os != VirtualDesktopBaseOS.WINDOWS:
+        admin_username = (
+            self.context.config().get_string(
+                'cluster.administrator_username', required=True
+            )
+            if not is_windows
+            else 'Administrator'
+        )
+
+        if for_broker or not is_windows:
             new_line_char = self.LINUX_CMD_NEW_LINE
         else:
             new_line_char = self.WINDOWS_POWERSHELL_NEW_LINE
 
-        self._logger.debug(f"Generating Permissions for session - Admin: {admin_username}  BaseOS: {session.software_stack.base_os}")
+        self._logger.debug(
+            f'Generating Permissions for session - Admin: {admin_username}  BaseOS: {session.software_stack.base_os}'
+        )
         permission = f'[groups]{new_line_char}'
-        if session.software_stack.base_os == VirtualDesktopBaseOS.WINDOWS:
+        if is_windows:
             permission += f'group:ideaadmin=user:{admin_username}{new_line_char}'
         else:
             permission += f'group:ideaadmin=user:{admin_username}, osgroup:{self.controller_utils.get_virtual_desktop_admin_group()}{new_line_char}'
@@ -118,27 +175,43 @@ class VirtualDesktopSessionPermissionUtils:
         permission_profiles = set()
         profile_cache = {}
 
-        admin_profile = self.context.config().get_string('virtual-desktop-controller.dcv_session.default_profiles.admin', required=True)
-        owner_profile = self.context.config().get_string('virtual-desktop-controller.dcv_session.default_profiles.owner', required=True)
+        admin_profile = self.context.config().get_string(
+            'virtual-desktop-controller.dcv_session.default_profiles.admin',
+            required=True,
+        )
+        owner_profile = self.context.config().get_string(
+            'virtual-desktop-controller.dcv_session.default_profiles.owner',
+            required=True,
+        )
         permission_profiles.add(admin_profile)
         permission_profiles.add(owner_profile)
 
-        session_permissions = self._session_permission_db.get_for_session(session.idea_session_id)
+        session_permissions = self._session_permission_db.get_for_session(
+            session.idea_session_id
+        )
         for session_permission in session_permissions:
             permission_profiles.add(session_permission.permission_profile.profile_id)
 
         for profile in permission_profiles:
-            self._logger.debug(f"Processing permissions profile {profile}")
-            allow_permissions, deny_permissions = self._retrieve_permission_profile_values(profile)
-            self._logger.debug(f"Retrieved profile permissions: Allow: {allow_permissions}   Deny: {deny_permissions}")
+            self._logger.debug(f'Processing permissions profile {profile}')
+            allow_permissions, deny_permissions = (
+                self._retrieve_permission_profile_values(profile)
+            )
+            self._logger.debug(
+                f'Retrieved profile permissions: Allow: {allow_permissions}   Deny: {deny_permissions}'
+            )
             if Utils.is_not_empty(allow_permissions):
-                permission += f'{profile}-allow={", ".join(allow_permissions)}{new_line_char}'
+                permission += (
+                    f'{profile}-allow={", ".join(allow_permissions)}{new_line_char}'
+                )
             if Utils.is_not_empty(deny_permissions):
-                permission += f'{profile}-deny={", ".join(deny_permissions)}{new_line_char}'
+                permission += (
+                    f'{profile}-deny={", ".join(deny_permissions)}{new_line_char}'
+                )
 
             profile_cache[profile] = {
                 'allow': allow_permissions,
-                'deny': deny_permissions
+                'deny': deny_permissions,
             }
 
         permission += f'[permissions]{new_line_char}'
@@ -164,21 +237,38 @@ class VirtualDesktopSessionPermissionUtils:
             permission += f'%owner% deny {owner_profile}-deny{new_line_char}'
 
         if self._logger.isEnabledFor(logging.DEBUG):
-            self._logger.debug(f"Returning permissions content {permission}")
+            self._logger.debug(f'Returning permissions content {permission}')
         return permission
 
-    def update_permission_for_sessions(self, request: UpdateSessionPermissionRequest) -> UpdateSessionPermissionResponse:
+    def update_permission_for_sessions(
+        self, request: UpdateSessionPermissionRequest
+    ) -> UpdateSessionPermissionResponse:
         response = []
         sessions_info = set()
         for session_permission in request.create:
             response.append(self._session_permission_db.create(session_permission))
-            sessions_info.add((session_permission.idea_session_id, session_permission.idea_session_owner))
+            sessions_info.add(
+                (
+                    session_permission.idea_session_id,
+                    session_permission.idea_session_owner,
+                )
+            )
         for session_permission in request.update:
             response.append(self._session_permission_db.update(session_permission))
-            sessions_info.add((session_permission.idea_session_id, session_permission.idea_session_owner))
+            sessions_info.add(
+                (
+                    session_permission.idea_session_id,
+                    session_permission.idea_session_owner,
+                )
+            )
         for session_permission in request.delete:
             self._session_permission_db.delete(session_permission)
-            sessions_info.add((session_permission.idea_session_id, session_permission.idea_session_owner))
+            sessions_info.add(
+                (
+                    session_permission.idea_session_id,
+                    session_permission.idea_session_owner,
+                )
+            )
 
         for session_info in sessions_info:
             self.events_utils.publish_enforce_session_permissions_event(
@@ -186,12 +276,12 @@ class VirtualDesktopSessionPermissionUtils:
                 idea_session_owner=session_info[1],
             )
 
-        return UpdateSessionPermissionResponse(
-            permissions=response
-        )
+        return UpdateSessionPermissionResponse(permissions=response)
 
     def delete_permissions_for_session(self, session: VirtualDesktopSession):
-        session_permissions = self._session_permission_db.get_for_session(session.idea_session_id)
+        session_permissions = self._session_permission_db.get_for_session(
+            session.idea_session_id
+        )
         if Utils.is_empty(session_permissions):
             return
         for session_permission in session_permissions:

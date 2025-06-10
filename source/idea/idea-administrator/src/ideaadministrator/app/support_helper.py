@@ -14,11 +14,12 @@ from ideasdk.context import SocaCliContext
 from ideasdk.utils import Utils
 from ideasdk.config.cluster_config import ClusterConfig
 from ideadatamodel import (
-    exceptions, errorcodes,
+    exceptions,
+    errorcodes,
     SocaUserInputParamMetadata,
     SocaUserInputParamType,
     SocaUserInputValidate,
-    SocaUserInputChoice
+    SocaUserInputChoice,
 )
 
 from typing import Dict
@@ -41,7 +42,9 @@ class SupportHelper:
     will be extended further to implement/export support packages for individual modules using SSM + S3
     """
 
-    def __init__(self, cluster_name: str, aws_region: str, aws_profile: str, module_set: str):
+    def __init__(
+        self, cluster_name: str, aws_region: str, aws_profile: str, module_set: str
+    ):
         self.cluster_name = cluster_name
         self.aws_region = aws_region
         self.aws_profile = aws_profile
@@ -49,7 +52,6 @@ class SupportHelper:
         self.context = SocaCliContext()
 
     def get_deployment_debug_user_input(self) -> Dict:
-
         result = self.context.ask(
             title='IDEA Deployment Support',
             description='Use deployment support to gather all applicable artifacts to build a support package (zip file) to be sent to IDEA Support team.',
@@ -65,54 +67,82 @@ class SupportHelper:
                         PKG_CONTENTS_DEPLOYMENT_LOGS,
                         PKG_CONTENTS_CONFIG_VALUES_FILE,
                         PKG_CONTENTS_CLUSTER_CONFIG_DB,
-                        PKG_CONTENTS_CLUSTER_CONFIG_LOCAL
+                        PKG_CONTENTS_CLUSTER_CONFIG_LOCAL,
                         # PKG_CONTENTS_DEPLOYMENTS_DIR is not added by design. contents can get a bit large.
                         # after @madbajaj completes P70264990, this can be added.
                     ],
                     choices=[
-                        SocaUserInputChoice(title='Deployment Logs', value=PKG_CONTENTS_DEPLOYMENT_LOGS),
-                        SocaUserInputChoice(title='Configuration (values.yml)', value=PKG_CONTENTS_CONFIG_VALUES_FILE),
-                        SocaUserInputChoice(title='Cluster Configuration (DB)', value=PKG_CONTENTS_CLUSTER_CONFIG_DB),
-                        SocaUserInputChoice(title='Cluster Configuration (Local)', value=PKG_CONTENTS_CLUSTER_CONFIG_LOCAL),
-                        SocaUserInputChoice(title='Bootstrap Packages', value=PKG_CONTENTS_DEPLOYMENTS_DIR)
+                        SocaUserInputChoice(
+                            title='Deployment Logs', value=PKG_CONTENTS_DEPLOYMENT_LOGS
+                        ),
+                        SocaUserInputChoice(
+                            title='Configuration (values.yml)',
+                            value=PKG_CONTENTS_CONFIG_VALUES_FILE,
+                        ),
+                        SocaUserInputChoice(
+                            title='Cluster Configuration (DB)',
+                            value=PKG_CONTENTS_CLUSTER_CONFIG_DB,
+                        ),
+                        SocaUserInputChoice(
+                            title='Cluster Configuration (Local)',
+                            value=PKG_CONTENTS_CLUSTER_CONFIG_LOCAL,
+                        ),
+                        SocaUserInputChoice(
+                            title='Bootstrap Packages',
+                            value=PKG_CONTENTS_DEPLOYMENTS_DIR,
+                        ),
                     ],
-                    validate=SocaUserInputValidate(
-                        required=True
-                    )
+                    validate=SocaUserInputValidate(required=True),
                 )
-            ])
+            ],
+        )
         return result
 
     def get_deployment_debug_package_dir(self) -> str:
-        support_dir = ideaadministrator.props.cluster_support_dir(cluster_name=self.cluster_name, aws_region=self.aws_region)
-        support_package_dir = os.path.join(support_dir, f'idea-deployment-debug-pkg-{Utils.file_system_friendly_timestamp()}')
+        support_dir = ideaadministrator.props.cluster_support_dir(
+            cluster_name=self.cluster_name, aws_region=self.aws_region
+        )
+        support_package_dir = os.path.join(
+            support_dir,
+            f'idea-deployment-debug-pkg-{Utils.file_system_friendly_timestamp()}',
+        )
         os.makedirs(support_package_dir, exist_ok=True)
         return support_package_dir
 
     def add_deployment_logs(self, target_dir: str):
-        logs_dir = ideaadministrator.props.cluster_logs_dir(self.cluster_name, self.aws_region)
+        logs_dir = ideaadministrator.props.cluster_logs_dir(
+            self.cluster_name, self.aws_region
+        )
         self.context.info(f'copying deployment logs: {logs_dir} ...')
         shutil.copytree(logs_dir, os.path.join(target_dir, 'logs'))
 
     def add_cdk_config_dir(self, target_dir: str):
-        cdk_dir = ideaadministrator.props.cluster_cdk_dir(self.cluster_name, self.aws_region)
+        cdk_dir = ideaadministrator.props.cluster_cdk_dir(
+            self.cluster_name, self.aws_region
+        )
         self.context.info(f'copying cdk config: {cdk_dir} ...')
         shutil.copytree(cdk_dir, os.path.join(target_dir, '_cdk'))
 
     def add_deployments_dir(self, target_dir: str):
-        deployments_dir = ideaadministrator.props.cluster_deployments_dir(self.cluster_name, self.aws_region)
+        deployments_dir = ideaadministrator.props.cluster_deployments_dir(
+            self.cluster_name, self.aws_region
+        )
         self.context.info(f'copying deployments: {deployments_dir} ...')
         shutil.copytree(deployments_dir, os.path.join(target_dir, 'deployments'))
 
     def add_values_file(self, target_dir: str):
-        values_file = ideaadministrator.props.values_file(self.cluster_name, self.aws_region)
+        values_file = ideaadministrator.props.values_file(
+            self.cluster_name, self.aws_region
+        )
         if not Utils.is_file(values_file):
             return
         self.context.info(f'copying values.yml: {values_file} ...')
         shutil.copy(values_file, target_dir)
 
     def add_cluster_config_local(self, target_dir: str):
-        config_dir = ideaadministrator.props.cluster_config_dir(self.cluster_name, self.aws_region)
+        config_dir = ideaadministrator.props.cluster_config_dir(
+            self.cluster_name, self.aws_region
+        )
         if not Utils.is_dir(config_dir):
             return
         self.context.info(f'copying cluster config (local): {config_dir} ...')
@@ -124,7 +154,7 @@ class SupportHelper:
                 cluster_name=self.cluster_name,
                 aws_region=self.aws_region,
                 aws_profile=self.aws_profile,
-                module_set=self.module_set
+                module_set=self.module_set,
             )
         except exceptions.SocaException as e:
             if e.error_code == errorcodes.CLUSTER_CONFIG_NOT_INITIALIZED:
@@ -147,14 +177,13 @@ class SupportHelper:
             f.write(Utils.to_yaml(cluster_modules))
 
     def build_deployment_debug_package(self, user_input: Dict) -> str:
-
         package_dir = self.get_deployment_debug_package_dir()
 
         with open(os.path.join(package_dir, 'package.yml'), 'w') as f:
             package_data = {
                 'type': 'deployment-debug',
                 'created_on': arrow.utcnow().format(),
-                'options': user_input
+                'options': user_input,
             }
             f.write(Utils.to_yaml(package_data))
 
@@ -189,10 +218,14 @@ class SupportHelper:
         self.context.new_line()
         self.context.print_rule('IDEA Support')
         self.context.new_line()
-        self.context.print_title('Step 1) Upload the below package (zip file) to a secured location accessible by IDEA support team.')
+        self.context.print_title(
+            'Step 1) Upload the below package (zip file) to a secured location accessible by IDEA support team.'
+        )
         self.context.info(f'Debug Package: {package_file}')
         self.context.new_line()
-        self.context.print_title('Step 2) Send an email to idea-support@amazon.com with below details')
+        self.context.print_title(
+            'Step 2) Send an email to support@cfs.energy with below details'
+        )
         self.context.info('* Subject: [Deployment] {short description of your problem}')
         self.context.info('* Description: {Describe your use-case and the problem}')
         self.context.info('* Debug Package Download Link: {package download link}')
@@ -201,6 +234,5 @@ class SupportHelper:
         self.context.info('* Company Name: ')
         self.context.info('* City: ')
         self.context.info('* Country: ')
-        self.context.info('* AWS Business Development or AWS Partner Network SA Contact: ')
         self.context.new_line()
         self.context.print_rule()

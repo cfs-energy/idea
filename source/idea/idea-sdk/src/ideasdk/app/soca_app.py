@@ -34,9 +34,13 @@ class SignalOrchestrator:
         return self.app.app_name
 
     def termination_handler(self, signum, _):
-        self.app.logger.info(f'Received termination signal: ({signal.Signals(signum).name})')
+        self.app.logger.info(
+            f'Received termination signal: ({signal.Signals(signum).name})'
+        )
         if not self.app.is_running():
-            self.app.logger.warning(f'{self.app_name} termination is already in progress.')
+            self.app.logger.warning(
+                f'{self.app_name} termination is already in progress.'
+            )
             return
         self.app.on_terminate_signal()
 
@@ -52,15 +56,13 @@ class SignalOrchestrator:
             signal.SIGINT,
             signal.SIGTERM,
             signal.SIGQUIT,
-            signal.SIGHUP
+            signal.SIGHUP,
         ]
         for termination_signal in termination_signals:
             signal.signal(termination_signal, self.termination_handler)
 
     def setup_reload(self):
-        reload_signals = [
-            signal.SIGUSR1
-        ]
+        reload_signals = [signal.SIGUSR1]
 
         for reload_signal in reload_signals:
             signal.signal(reload_signal, self.reload_handler)
@@ -73,10 +75,13 @@ class SocaApp(SocaBaseProtocol):
     Applications are expected to extend SocaApp to initialize application specific context and functionality.
     """
 
-    def __init__(self, context: SocaContextProtocol,
-                 api_invoker: ApiInvokerProtocol,
-                 server_options: SocaServerOptions = None,
-                 **kwargs):
+    def __init__(
+        self,
+        context: SocaContextProtocol,
+        api_invoker: ApiInvokerProtocol,
+        server_options: SocaServerOptions = None,
+        **kwargs,
+    ):
         self.context = context
         self.logger = context.logger(name=f'{context.module_id()}-app')
         self._api_invoker = api_invoker
@@ -111,7 +116,6 @@ class SocaApp(SocaBaseProtocol):
         self._is_reload.set()
 
     def warm_up(self, delay=0.1, max_retries=3, error_wait_seconds=5):
-
         success = False
         retry_count = 0
 
@@ -119,11 +123,12 @@ class SocaApp(SocaBaseProtocol):
         start = 0
         while not success and retry_count <= max_retries:
             try:
-
                 if retry_count == 0:
                     self.logger.info(f'warm-up {self.app_name} dependencies ...')
                 else:
-                    self.logger.info(f'warm-up {self.app_name} dependencies - retry attempt: ({retry_count})')
+                    self.logger.info(
+                        f'warm-up {self.app_name} dependencies - retry attempt: ({retry_count})'
+                    )
 
                 retry_count += 1
 
@@ -141,13 +146,15 @@ class SocaApp(SocaBaseProtocol):
 
                 success = True
             except Exception as e:
-                self.logger.error(f'warm-up failed: {e}. Retrying in ({error_wait_seconds}) seconds ...')
+                self.logger.error(
+                    f'warm-up failed: {e}. Retrying in ({error_wait_seconds}) seconds ...'
+                )
                 time.sleep(error_wait_seconds)
 
         if not success:
             raise exceptions.SocaException(
                 error_code=errorcodes.GENERAL_ERROR,
-                message=f'Failed to warm-up dependencies after ({max_retries}) retries. Exit.'
+                message=f'Failed to warm-up dependencies after ({max_retries}) retries. Exit.',
             )
 
     def app_warmup(self):
@@ -155,7 +162,9 @@ class SocaApp(SocaBaseProtocol):
         pass
 
     def initialize(self):
-        self.logger.info(f'Initializing {self.app_name} with configuration: {os.linesep}{self.context.config().as_yaml()}')
+        self.logger.info(
+            f'Initializing {self.app_name} with configuration: {os.linesep}{self.context.config().as_yaml()}'
+        )
 
         # warm up dependencies
         self.warm_up()
@@ -163,7 +172,7 @@ class SocaApp(SocaBaseProtocol):
         self.server = SocaServer(
             context=self.context,
             api_invoker=self._api_invoker,
-            options=self._server_options
+            options=self._server_options,
         )
         self.server.initialize()
 
@@ -174,7 +183,6 @@ class SocaApp(SocaBaseProtocol):
         pass
 
     def start(self):
-
         try:
             self.logger.info(f'Starting {self.app_name} ...')
 
@@ -192,13 +200,10 @@ class SocaApp(SocaBaseProtocol):
             raise e
 
     @abstractmethod
-    def app_start(self):
-        ...
+    def app_start(self): ...
 
     def stop(self):
-
         try:
-
             self.logger.info(f'Stopping {self.app_name} ...')
 
             if self.server is not None:
@@ -208,19 +213,27 @@ class SocaApp(SocaBaseProtocol):
 
             self.app_stop()
 
-            analytics_service = self.context.service_registry().get_service(constants.SERVICE_ID_ANALYTICS)
+            analytics_service = self.context.service_registry().get_service(
+                constants.SERVICE_ID_ANALYTICS
+            )
             if analytics_service is not None:
                 analytics_service.stop()
 
-            leader_election_service = self.context.service_registry().get_service(constants.SERVICE_ID_LEADER_ELECTION)
+            leader_election_service = self.context.service_registry().get_service(
+                constants.SERVICE_ID_LEADER_ELECTION
+            )
             if leader_election_service is not None:
                 leader_election_service.stop()
 
-            distributed_lock_service = self.context.service_registry().get_service(constants.SERVICE_ID_DISTRIBUTED_LOCK)
+            distributed_lock_service = self.context.service_registry().get_service(
+                constants.SERVICE_ID_DISTRIBUTED_LOCK
+            )
             if distributed_lock_service is not None:
                 distributed_lock_service.stop()
 
-            metrics_service = self.context.service_registry().get_service(constants.SERVICE_ID_METRICS)
+            metrics_service = self.context.service_registry().get_service(
+                constants.SERVICE_ID_METRICS
+            )
             if metrics_service is not None:
                 metrics_service.stop()
 
@@ -234,15 +247,12 @@ class SocaApp(SocaBaseProtocol):
             raise e
 
     @abstractmethod
-    def app_stop(self):
-        ...
+    def app_stop(self): ...
 
     def launch(self):
-
         success = False
 
         try:
-
             self.initialize()
 
             signal_orchestrator = SignalOrchestrator(app=self)

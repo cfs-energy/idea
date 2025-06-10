@@ -7,10 +7,11 @@ IDEA made job submission on EC2 very easy and is fully integrated with EC2. Belo
 #### **base\_os**
 
 * Description: Reference to the base OS of the AMI you are using
-* Allowed Values: `amazonlinux2` `centos7` `rhel7`
+* Allowed Values: `amazonlinux2` `amazonlinux2023` `rhel7` `rhel8` `rhel9` `rocky8` `rocky9` `ubuntu2204` `ubuntu2404`
 * Default: If not specified, value default to the OS of the install AMI
 * Examples:
-  * `-l base_os=centos7`: Instances provisioned will be deployed against CentOS manifest
+  * `-l base_os=amazonlinux2023`: Instances provisioned will be deployed against Amazon Linux 2023 manifest
+  * `-l base_os=ubuntu2404`: Instances provisioned will be deployed against Ubuntu 24.04 manifest
 
 #### **ht\_support**
 
@@ -108,7 +109,7 @@ This parameter is ignored if `spot_price` is not specified `spot_allocation_coun
 #### **spot\_allocation\_strategy**
 
 * Description: Choose allocation strategy when using multiple SPOT instances type
-* Allowed Valuess: `capacity-optimized` or `lowest-price` or `diversified` (only for SpotFleet deployments)
+* Allowed Values: `capacity-optimized` or `lowest-price` or `diversified` (only for SpotFleet deployments)
 * Default Value: `capacity-optimized`
 * Examples:
   * `-l spot_allocation_strategy=capacity-optimized`: AWS will provision Spot compute nodes for both EC2 Auto Scaling and EC2 Fleet from the most-available Spot Instance pools by analyzing capacity metrics.
@@ -197,7 +198,7 @@ It is recommended to set the IOPs to 3x storage capacity of your EBS disk
 
 **WITH NO S3 BACKEND**
 
-* Example: `-l fsx_lustre=True`: Create a new FSx for Lustre and mount it accross all nodes
+* Example: `-l fsx_lustre=True`: Create a new FSx for Lustre and mount it across all nodes
 
 {% hint style="info" %}
 * FSx partitions are mounted as `/fsx`. This can be changed if needed
@@ -224,7 +225,7 @@ It is recommended to set the IOPs to 3x storage capacity of your EBS disk
 {% hint style="info" %}
 * FSx partitions are mounted as `/fsx`. This can be changed if needed
 * Make sure your FSx for Luster configuration is correct (use IDEA VPC and correct IAM roles)
-* [Make sure to use the Filesytem's DNS name](https://awslabs.github.io/scale-out-computing-on-aws/storage/launch-job-with-fsx/#how-to-connect-to-a-permanentexisting-fsx)
+* [Make sure to use the Filesystem's DNS name](https://awslabs.github.io/scale-out-computing-on-aws/storage/launch-job-with-fsx/#how-to-connect-to-a-permanentexisting-fsx)
 {% endhint %}
 
 #### **fsx\_lustre\_size**
@@ -244,7 +245,7 @@ This parameter is ignored unless you have specified `fsx_lustre=True`
 #### **fsx\_lustre\_deployment\_type**
 
 * Description: Choose what type of FSx for Lustre you want to deploy
-* Allowed Valuess: `SCRATCH_1` `SCRATCH_2` `PERSISTENT_1` (case insensitive)
+* Allowed Values: `SCRATCH_1` `SCRATCH_2` `PERSISTENT_1` (case insensitive)
 * Default Value: `SCRATCH_2`
 * Example: `-l fsx_lustre_deployment_type=scratch_2`: Provision a FSx for Lustre with SCRATCH\_2 type
 
@@ -264,7 +265,7 @@ This parameter is ignored unless you have specified `fsx_lustre=True`
 * Example: `-l fsx_lustre_per_unit_throughput=250`:
 
 {% hint style="info" %}
-Per Unit Throughput is only avaible when using `PERSISTENT_1` FSx for Lustre
+Per Unit Throughput is only available when using `PERSISTENT_1` FSx for Lustre
 {% endhint %}
 
 {% hint style="warning" %}

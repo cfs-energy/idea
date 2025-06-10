@@ -29,12 +29,15 @@ import {
     FileList,
     FileContextMenu,
     defineFileAction
-} from "chonky";
+} from "@aperturerobotics/chonky";
 
 import 'ace-builds/css/ace.css';
 import 'ace-builds/css/theme/dawn.css';
+import 'ace-builds/css/theme/github_light_default.css';
+import 'ace-builds/css/theme/github_dark.css';
+
 import {CodeEditorProps} from "@cloudscape-design/components/code-editor/interfaces";
-import {faDownload, faMicrochip, faRedo, faStar, faTerminal, faTrash} from "@fortawesome/free-solid-svg-icons";
+import {faDownload, faMicrochip, faRedo, faStar, faTerminal, faTrash, faEdit} from "@fortawesome/free-solid-svg-icons";
 import Uppy from "@uppy/core";
 import XHRUpload from "@uppy/xhr-upload";
 import Dashboard from "@uppy/dashboard";
@@ -48,6 +51,16 @@ import {KeyValue} from "../../components/key-value";
 import {Constants} from "../../common/constants";
 import IdeaConfirm from "../../components/modals";
 import {withRouter} from "../../navigation/navigation-utils";
+
+// Filter out JSS-related warning messages
+const originalConsoleWarn = console.warn;
+console.warn = function filterWarnings(msg, ...args) {
+    // Check if the message includes the JSS warning we want to hide
+    if (typeof msg === 'string' && msg.includes('[JSS] <Hook />\'s styles function doesn\'t rely on the "theme" argument')) {
+        return;
+    }
+    originalConsoleWarn(msg, ...args);
+};
 
 export interface IdeaFileBrowserProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
 
@@ -94,6 +107,16 @@ const CustomActionSubmitJob = defineFileAction({
         toolbar: true,
         contextMenu: true,
         icon: faMicrochip
+    }
+})
+
+const CustomActionOpenInScriptEditor = defineFileAction({
+    id: 'soca_open_in_script_workbench',
+    button: {
+        name: 'Open in Script Workbench',
+        toolbar: false,
+        contextMenu: true,
+        icon: faEdit
     }
 })
 
@@ -157,6 +180,7 @@ const ACTIONS = [
     CustomActionFavorite,
     CustomActionRefresh,
     CustomActionTailLogFile,
+    CustomActionOpenInScriptEditor,
     CustomActionToggleHiddenFiles
 ]
 
@@ -186,8 +210,21 @@ class IdeaFileEditorModal extends Component<IdeaFileEditorProps, IdeaFileEditorS
             import('ace-builds/webpack-resolver').then(() => {
                 ace.config.set('useStrictCSP', true)
                 ace.config.set('loadWorkerFromBlob', false)
+
+                // Detect current mode and set appropriate theme
+                const isDarkMode = AppContext.get().isDarkMode();
+                const editorTheme = isDarkMode ? 'github_dark' : 'github_light_default';
+
                 this.setState({
-                    ace: ace
+                    ace: ace,
+                    preferences: {
+                        wrapLines: true,
+                        theme: editorTheme,
+                        showGutter: true,
+                        showLineNumbers: true,
+                        showInvisibles: false,
+                        showPrintMargin: false
+                    }
                 })
             })
         })
@@ -200,7 +237,7 @@ class IdeaFileEditorModal extends Component<IdeaFileEditorProps, IdeaFileEditorS
         })
     }
 
-    setLangauge(language: CodeEditorProps.Language) {
+    setLanguage(language: CodeEditorProps.Language) {
         this.setState({
             language: language
         })
@@ -270,6 +307,14 @@ class IdeaFileEditorModal extends Component<IdeaFileEditorProps, IdeaFileEditorS
                     })
                 }}
                 loading={false}
+                themes={{
+                    light: [
+                        'github_light_default'
+                    ],
+                    dark: [
+                        'github_dark'
+                    ]
+                }}
                 i18nStrings={{
                     loadingState: "Loading code editor",
                     errorState:
@@ -428,6 +473,16 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
             }
         }
         return '/' + tokens.join('/')
+    }
+
+    checkFileSize(file: FileData): boolean {
+        const maxFileSize = 5 * 1024 * 1024; // 5MB in bytes
+        if (file.size && file.size > maxFileSize) {
+            const fileSizeMB = (file.size / (1024 * 1024)).toFixed(2);
+            this.showToast('file-too-large', `File is too large (${fileSizeMB}MB). Only files 5MB or smaller can be opened in the editor.`);
+            return false;
+        }
+        return true;
     }
 
     showToast(id: string, message: string, type: 'warning' | 'info' = 'warning') {
@@ -638,12 +693,17 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
     }
 
     openFile(file: FileData) {
+        // Check file size before attempting to open
+        if (!this.checkFileSize(file)) {
+            return;
+        }
+
         const path = this.getFilePath(file)
         this.fileBrowserClient().readFile({
             file: path
         }).then(result => {
             this.fileEditor.current?.setContent(path, atob(result.content!))
-            this.fileEditor.current?.setLangauge('text')
+            this.fileEditor.current?.setLanguage('sh')
             this.setState({
                 editorOpen: true
             })
@@ -652,6 +712,28 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                 this.downloadFiles([file])
             } else {
                 toast(error.message)
+            }
+        })
+    }
+
+    openFileInScriptWorkbench(file: FileData) {
+        // Check file size before attempting to open
+        if (!this.checkFileSize(file)) {
+            return;
+        }
+
+        const path = this.getFilePath(file)
+        // First validate that the file is a text file to avoid crashing the server
+        this.fileBrowserClient().readFile({
+            file: path
+        }).then(result => {
+            // If successful, the file is a text file and safe to open in script workbench
+            this.props.navigate(`/home/script-workbench?file=${path}`)
+        }).catch(error => {
+            if (error.errorCode === 'NOT_A_TEXT_FILE') {
+                this.showToast('binary-file-error', 'Cannot open binary files in Script Workbench. Only text files are supported.')
+            } else {
+                this.showToast(error.errorCode, `Failed to open file: ${error.message}`)
             }
         })
     }
@@ -729,7 +811,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
         return this.deleteFileConfirmModal.current!
     }
 
-    buidlDeleteFileConfirmModal() {
+    buildDeleteFileConfirmModal() {
         return (
             <IdeaConfirm
                 ref={this.deleteFileConfirmModal}
@@ -847,7 +929,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                 disableContentHeaderOverlap={true}
                 content={
                     <div style={{marginTop: '20px'}}>
-                        {this.state.showDeleteConfirmModal && this.buidlDeleteFileConfirmModal()}
+                        {this.state.showDeleteConfirmModal && this.buildDeleteFileConfirmModal()}
                         {this.buildCreateFolderForm()}
                         {this.buildFileEditor()}
                         {/*<Container>*/}
@@ -908,6 +990,10 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                                         } else if (eventId === 'soca_tail_log_file') {
                                                             if (event.state.selectedFiles && event.state.selectedFiles.length > 0) {
                                                                 Utils.openNewTab(`/#/home/file-browser/tail?file=${this.getCwd(-1)}/${event.state.selectedFiles[0].name}&cwd=${this.getCwd(-1)}`)
+                                                            }
+                                                        } else if (eventId === 'soca_open_in_script_workbench') {
+                                                            if (event.state.selectedFiles && event.state.selectedFiles.length > 0) {
+                                                                this.openFileInScriptWorkbench(event.state.selectedFiles[0])
                                                             }
                                                         }
                                                     }}

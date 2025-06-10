@@ -15,7 +15,6 @@ from typing import List, Dict
 
 
 class NullMetrics(MetricsProviderProtocol):
-
     def __init__(self, context: SocaContextProtocol):
         self.context = context
 

@@ -20,11 +20,11 @@ DEFAULT_MOCK_CLUSTER_NAME = 'idea-mock'
 
 
 class MockConfig:
-
-    def get_config(self, template: str = 'default', cluster_name: str = DEFAULT_MOCK_CLUSTER_NAME) -> Dict:
+    def get_config(
+        self, template: str = 'default', cluster_name: str = DEFAULT_MOCK_CLUSTER_NAME
+    ) -> Dict:
         env = Jinja2Utils.env_using_package_loader(
-            package_name='ideatestutils.config',
-            package_path='templates'
+            package_name='ideatestutils.config', package_path='templates'
         )
         template = env.get_template(f'{template}.yml')
 
@@ -36,10 +36,12 @@ class MockConfig:
         data_mount_dir = os.path.join(tests_dir, 'data')
         cluster_home_dir = os.path.join(apps_mount_dir, cluster_name)
 
-        content = template.render(context={
-            'cluster_name': cluster_name,
-            'cluster_home_dir': cluster_home_dir,
-            'apps_mount_dir': apps_mount_dir,
-            'data_mount_dir': data_mount_dir
-        })
+        content = template.render(
+            context={
+                'cluster_name': cluster_name,
+                'cluster_home_dir': cluster_home_dir,
+                'apps_mount_dir': apps_mount_dir,
+                'data_mount_dir': data_mount_dir,
+            }
+        )
         return Utils.from_yaml(content)

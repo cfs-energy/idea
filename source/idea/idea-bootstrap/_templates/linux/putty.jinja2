@@ -1,0 +1,88 @@
+# Begin: Install PuTTY from source
+
+PUTTY_VERSION="{{ context.config.get_string('global-settings.package_config.putty.version', '') }}"
+PUTTY_URL="{{ context.config.get_string('global-settings.package_config.putty.url', '') }}"
+PUTTY_HASH="{{ context.config.get_string('global-settings.package_config.putty.checksum', '') }}"
+{% set putty_hash = context.config.get_string('global-settings.package_config.putty.checksum', '') %}
+{% if putty_hash %}
+PUTTY_HASH="{{ putty_hash.lower().strip() }}"
+{% endif %}
+PUTTY_HASH_METHOD="{{ context.config.get_string('global-settings.package_config.putty.checksum_method', 'sha384') }}"
+{% set putty_url = context.config.get_string('global-settings.package_config.putty.url', '') %}
+PUTTY_TGZ="{{ putty_url.split('/')[-1] if putty_url else 'putty.tar.gz' }}"
+
+PUTTY_WORK_DIR="/root/bootstrap/putty"
+PUTTY_INSTALL_DIR="/usr/local"
+mkdir -p "${PUTTY_WORK_DIR}"
+
+log_info "Installing PuTTY from source..."
+
+SHOULD_INSTALL_PUTTY=true
+if command -v puttygen &> /dev/null; then
+  log_info "PuTTY already installed. Checking version..."
+  CURRENT_VERSION=$(puttygen --version | head -n 1 | grep -o -E "[0-9]+\.[0-9]+")
+  if [[ "${CURRENT_VERSION}" == "${PUTTY_VERSION}" ]]; then
+    log_info "PuTTY is already at the correct version ${PUTTY_VERSION}."
+    SHOULD_INSTALL_PUTTY=false
+  fi
+fi
+
+if [[ "${SHOULD_INSTALL_PUTTY}" == true ]]; then
+  pushd "${PUTTY_WORK_DIR}"
+
+  # Download PuTTY source
+  if [[ -z "${PUTTY_URL}" ]]; then
+    log_info "PuTTY URL not specified in settings. Skipping installation."
+  else
+    log_info "Downloading PuTTY source from ${PUTTY_URL}..."
+    wget "${PUTTY_URL}" -O "${PUTTY_TGZ}"
+
+    # Verify checksum if provided
+    if [[ -n "${PUTTY_HASH}" ]]; then
+      log_info "Verifying checksum..."
+      if [[ $(openssl ${PUTTY_HASH_METHOD} "${PUTTY_TGZ}" | awk '{print $2}') != "${PUTTY_HASH}" ]]; then
+        echo -e "FATAL ERROR: ${PUTTY_HASH_METHOD} Checksum for PuTTY failed. File may be compromised." > /etc/motd
+        exit 1
+      else
+        log_info "Checksum verification successful."
+      fi
+    else
+      log_info "No checksum provided. Skipping verification."
+    fi
+
+    # Extract and build PuTTY
+    log_info "Extracting PuTTY source..."
+    tar xzf "${PUTTY_TGZ}"
+
+    if [[ -n "${PUTTY_VERSION}" ]]; then
+      cd "putty-${PUTTY_VERSION}"
+    else
+      # Try to find the directory created by extraction
+      PUTTY_DIR=$(find . -maxdepth 1 -type d -name "putty-*" | head -1)
+      if [[ -n "${PUTTY_DIR}" ]]; then
+        cd "${PUTTY_DIR}"
+      else
+        log_info "Could not find PuTTY directory after extraction. Exiting."
+        exit 1
+      fi
+    fi
+
+    log_info "Building PuTTY with CMake..."
+    mkdir build
+    cd build
+    cmake .. -DCMAKE_INSTALL_PREFIX="${PUTTY_INSTALL_DIR}"
+
+    log_info "Compiling PuTTY..."
+    NUM_PROCS=$(nproc --all)
+    make -j${NUM_PROCS}
+
+    log_info "Installing PuTTY..."
+    make install
+
+    log_info "PuTTY installed successfully."
+
+    popd
+  fi
+fi
+
+# End: Install PuTTY from source

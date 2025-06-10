@@ -13,7 +13,6 @@ import os
 
 
 class EnvironmentUtils:
-
     @staticmethod
     def get_environment_variable(key, required=False, default=None):
         if required:
@@ -26,63 +25,47 @@ class EnvironmentUtils:
     @staticmethod
     def idea_dev_mode(required=False, default=None):
         return EnvironmentUtils.get_environment_variable(
-            key='IDEA_DEV_MODE',
-            required=required,
-            default=default
+            key='IDEA_DEV_MODE', required=required, default=default
         )
 
     @staticmethod
     def idea_cluster_name(required=False, default=None):
         return EnvironmentUtils.get_environment_variable(
-            key='IDEA_CLUSTER_NAME',
-            required=required,
-            default=default
+            key='IDEA_CLUSTER_NAME', required=required, default=default
         )
 
     @staticmethod
     def idea_cluster_home(required=False, default=None):
         return EnvironmentUtils.get_environment_variable(
-            key='IDEA_CLUSTER_HOME',
-            required=required,
-            default=default
+            key='IDEA_CLUSTER_HOME', required=required, default=default
         )
 
     @staticmethod
     def idea_module_name(required=False, default=None):
         return EnvironmentUtils.get_environment_variable(
-            key='IDEA_MODULE_NAME',
-            required=required,
-            default=default
+            key='IDEA_MODULE_NAME', required=required, default=default
         )
 
     @staticmethod
     def idea_module_id(required=False, default=None):
         return EnvironmentUtils.get_environment_variable(
-            key='IDEA_MODULE_ID',
-            required=required,
-            default=default
+            key='IDEA_MODULE_ID', required=required, default=default
         )
 
     @staticmethod
     def idea_module_set(required=False, default=None):
         return EnvironmentUtils.get_environment_variable(
-            key='IDEA_MODULE_SET',
-            required=required,
-            default=default
+            key='IDEA_MODULE_SET', required=required, default=default
         )
 
     @staticmethod
     def idea_app_deploy_dir(required=False, default=None):
         return EnvironmentUtils.get_environment_variable(
-            key='IDEA_APP_DEPLOY_DIR',
-            required=required,
-            default=default
+            key='IDEA_APP_DEPLOY_DIR', required=required, default=default
         )
 
     @staticmethod
     def aws_default_region(required=False, default=None):
         return EnvironmentUtils.get_environment_variable(
-            key='AWS_DEFAULT_REGION',
-            required=required,
-            default=default
+            key='AWS_DEFAULT_REGION', required=required, default=default
         )

@@ -10,33 +10,40 @@
 #  and limitations under the License.
 
 from ideasdk.context import SocaContext
-from ideasdk.utils import Utils, GroupNameHelper
+from ideasdk.utils import Utils
 from ideadatamodel import exceptions, errorcodes, constants
 
-from ideaclustermanager.app.accounts.ldapclient.abstract_ldap_client import AbstractLDAPClient, LdapClientOptions
-from ideaclustermanager.app.accounts.ldapclient.ldap_utils import LdapUtils
+from ideaclustermanager.app.accounts.ldapclient.abstract_ldap_client import (
+    AbstractLDAPClient,
+    LdapClientOptions,
+)
 
 from typing import Dict, Optional
 import ldap  # noqa
 import time
-from typing import Optional, List
+from typing import List
 
 
 class ActiveDirectoryClient(AbstractLDAPClient):
-
     def __init__(self, context: SocaContext, options: LdapClientOptions, logger=None):
         if logger is None:
             logger = context.logger('active-directory-client')
         super().__init__(context, options, logger=logger)
 
-        if Utils.is_empty(self.directory_id) and (self.ds_provider == constants.DIRECTORYSERVICE_AWS_MANAGED_ACTIVE_DIRECTORY):
-            raise exceptions.general_exception(f'options.directory_id is required when using {constants.DIRECTORYSERVICE_AWS_MANAGED_ACTIVE_DIRECTORY}')
+        if Utils.is_empty(self.directory_id) and (
+            self.ds_provider == constants.DIRECTORYSERVICE_AWS_MANAGED_ACTIVE_DIRECTORY
+        ):
+            raise exceptions.general_exception(
+                f'options.directory_id is required when using {constants.DIRECTORYSERVICE_AWS_MANAGED_ACTIVE_DIRECTORY}'
+            )
         if Utils.is_empty(self.ad_netbios):
             raise exceptions.general_exception('options.ad_netbios is required')
 
     @property
     def ds_provider(self) -> str:
-        return self.context.config().get_string('directoryservice.provider', required=True)
+        return self.context.config().get_string(
+            'directoryservice.provider', required=True
+        )
 
     @property
     def directory_id(self) -> str:
@@ -58,14 +65,18 @@ class ActiveDirectoryClient(AbstractLDAPClient):
 
     @property
     def ldap_computers_base(self) -> str:
-        ou_computers = self.context.config().get_string('directoryservice.computers.ou', required=True)
+        ou_computers = self.context.config().get_string(
+            'directoryservice.computers.ou', required=True
+        )
         if '=' in ou_computers:
             return ou_computers
         return f'ou={ou_computers},ou={self.ad_netbios},{self.ldap_base}'
 
     @property
     def ldap_user_base(self) -> str:
-        ou_users = self.context.config().get_string('directoryservice.users.ou', required=True)
+        ou_users = self.context.config().get_string(
+            'directoryservice.users.ou', required=True
+        )
         if '=' in ou_users:
             return ou_users
         return f'ou={ou_users},ou={self.ad_netbios},{self.ldap_base}'
@@ -76,7 +87,9 @@ class ActiveDirectoryClient(AbstractLDAPClient):
 
     @property
     def ldap_group_base(self) -> str:
-        ou_groups = self.context.config().get_string('directoryservice.groups.ou', required=True)
+        ou_groups = self.context.config().get_string(
+            'directoryservice.groups.ou', required=True
+        )
         if '=' in ou_groups:
             return ou_groups
         return f'ou={ou_groups},ou={self.ad_netbios},{self.ldap_base}'
@@ -87,10 +100,10 @@ class ActiveDirectoryClient(AbstractLDAPClient):
 
     @property
     def ldap_sudoers_group_dn(self) -> str:
-        sudoers_group_name = self.context.config().get_string('directoryservice.sudoers.group_name', required=True)
-        tokens = [
-            f'cn={sudoers_group_name}'
-        ]
+        sudoers_group_name = self.context.config().get_string(
+            'directoryservice.sudoers.group_name', required=True
+        )
+        tokens = [f'cn={sudoers_group_name}']
         ou_sudoers = self.context.config().get_string('directoryservice.sudoers.ou')
         if Utils.is_not_empty(ou_sudoers):
             if '=' in ou_sudoers:
@@ -114,23 +127,32 @@ class ActiveDirectoryClient(AbstractLDAPClient):
     def build_samaccountname_filterstr(self, username: str) -> str:
         return f'(&{self.ldap_user_filterstr}(sAMAccountName={username}))'
 
-    def build_nestedgroup_membership_filterstr(self, username: str, groupname: str) -> str:
-        return f"(&(memberOf:1.2.840.113556.1.4.1941:={self.build_group_dn(group_name=groupname)})(objectCategory=person)(objectClass=user)(sAMAccountName={username}))"
+    def build_nestedgroup_membership_filterstr(
+        self, username: str, groupname: str
+    ) -> str:
+        return f'(&(memberOf:1.2.840.113556.1.4.1941:={self.build_group_dn(group_name=groupname)})(objectCategory=person)(objectClass=user)(sAMAccountName={username}))'
 
     def build_email_filterstr(self, email: str) -> str:
         return f'(&{self.ldap_user_filterstr}(mail={email}))'
 
-    def build_nestedgroup_email_membership_filterstr(self, email: str, groupname: str) -> str:
-        return f"(&(memberOf:1.2.840.113556.1.4.1941:={self.build_group_dn(group_name=groupname)})(objectCategory=person)(objectClass=user)(mail={email}))"
+    def build_nestedgroup_email_membership_filterstr(
+        self, email: str, groupname: str
+    ) -> str:
+        return f'(&(memberOf:1.2.840.113556.1.4.1941:={self.build_group_dn(group_name=groupname)})(objectCategory=person)(objectClass=user)(mail={email}))'
 
-    def get_user(self, username: str, required_group=None, trace=True) -> Optional[Dict]:
-
+    def get_user(
+        self, username: str, required_group=None, trace=True
+    ) -> Optional[Dict]:
         # required_group will recursively validate user in a group
         # only works in MS-AD LDAP environments
         results = self.search_s(
             base=self.ldap_user_base,
-            filterstr=self.build_nestedgroup_membership_filterstr(username=username, groupname=required_group) if required_group else self.build_samaccountname_filterstr(username=username),
-            trace=trace
+            filterstr=self.build_nestedgroup_membership_filterstr(
+                username=username, groupname=required_group
+            )
+            if required_group
+            else self.build_samaccountname_filterstr(username=username),
+            trace=trace,
         )
 
         if len(results) == 0:
@@ -138,14 +160,19 @@ class ActiveDirectoryClient(AbstractLDAPClient):
 
         return self.convert_ldap_user(results[0][1])
 
-    def get_user_by_email(self, email: str, required_group=None, trace=True) -> Optional[Dict]:
-
+    def get_user_by_email(
+        self, email: str, required_group=None, trace=True
+    ) -> Optional[Dict]:
         # required_group will recursively validate user in a group
         # only works in MS-AD LDAP environments
         results = self.search_s(
             base=self.ldap_user_base,
-            filterstr=self.build_nestedgroup_email_membership_filterstr(email=email, groupname=required_group) if required_group else self.build_email_filterstr(email=email),
-            trace=trace
+            filterstr=self.build_nestedgroup_email_membership_filterstr(
+                email=email, groupname=required_group
+            )
+            if required_group
+            else self.build_email_filterstr(email=email),
+            trace=trace,
         )
 
         if len(results) == 0:
@@ -154,11 +181,14 @@ class ActiveDirectoryClient(AbstractLDAPClient):
         return self.convert_ldap_user(results[0][1])
 
     def change_password(self, username: str, password: str):
-
-        ad_provider = self.context.config().get_string('directoryservice.provider', required=True)
+        ad_provider = self.context.config().get_string(
+            'directoryservice.provider', required=True
+        )
 
         if ad_provider == constants.DIRECTORYSERVICE_ACTIVE_DIRECTORY:
-            self.logger.info(f'change_passwd() for Active Directory provider {ad_provider} - NOOP')
+            self.logger.info(
+                f'change_passwd() for Active Directory provider {ad_provider} - NOOP'
+            )
             return
 
         elif ad_provider == constants.DIRECTORYSERVICE_AWS_MANAGED_ACTIVE_DIRECTORY:
@@ -166,17 +196,17 @@ class ActiveDirectoryClient(AbstractLDAPClient):
                 self.context.aws().ds().reset_user_password(
                     DirectoryId=self.directory_id,
                     UserName=username,
-                    NewPassword=password
+                    NewPassword=password,
                 )
             except self.context.aws().ds().exceptions.UserDoesNotExistException:
                 raise exceptions.soca_exception(
                     error_code=errorcodes.AUTH_USER_NOT_FOUND,
-                    message=f'{username} is not yet synced with AD Domain Controllers. Please wait for a few minutes and try again.'
+                    message=f'{username} is not yet synced with AD Domain Controllers. Please wait for a few minutes and try again.',
                 )
         else:
             raise exceptions.soca_exception(
                 error_code=errorcodes.VALIDATION_FAILED,
-                message=f'Unable to update password. Active Directory provider is unsupported: {ad_provider}'
+                message=f'Unable to update password. Active Directory provider is unsupported: {ad_provider}',
             )
 
     def create_service_account(self, username: str, password: str) -> Dict:
@@ -194,17 +224,20 @@ class ActiveDirectoryClient(AbstractLDAPClient):
                 raise exceptions.invalid_params(f'username already exists: {username}')
 
         user_attrs = [
-            ('objectClass', [
-                Utils.to_bytes('top'),
-                Utils.to_bytes('person'),
-                Utils.to_bytes('user'),
-                Utils.to_bytes('organizationalPerson')
-            ]),
+            (
+                'objectClass',
+                [
+                    Utils.to_bytes('top'),
+                    Utils.to_bytes('person'),
+                    Utils.to_bytes('user'),
+                    Utils.to_bytes('organizationalPerson'),
+                ],
+            ),
             ('displayName', [Utils.to_bytes(username)]),
             ('sAMAccountName', [Utils.to_bytes(username)]),
             ('userPrincipalName', [Utils.to_bytes(user_principal_name)]),
             ('cn', [Utils.to_bytes(username)]),
-            ('uid', [Utils.to_bytes(username)])
+            ('uid', [Utils.to_bytes(username)]),
         ]
         self.add_s(user_dn, user_attrs)
         self.wait_for_user_creation(username, interval=5, min_success=5)
@@ -212,17 +245,19 @@ class ActiveDirectoryClient(AbstractLDAPClient):
         self.add_sudo_user(username=username)
         return self.get_user(username)
 
-    def sync_user(self, *,
-                  uid: int,
-                  gid: int,
-                  username: str,
-                  email: str,
-                  login_shell: str,
-                  home_dir: str) -> Dict:
-
+    def sync_user(
+        self,
+        *,
+        uid: int,
+        gid: int,
+        username: str,
+        email: str,
+        login_shell: str,
+        home_dir: str,
+    ) -> Dict:
         _ds_sync_user_start = Utils.current_time_ms()
 
-        self.logger.debug(f"Starting active_directory sync_user() for {username}")
+        self.logger.debug(f'Starting active_directory sync_user() for {username}')
 
         user_principal_name = f'{username}@{self.domain_name}'
 
@@ -233,7 +268,9 @@ class ActiveDirectoryClient(AbstractLDAPClient):
 
         if readonly:
             if existing:
-                self.logger.info(f'Working with existing user / read-only DS: {username}')
+                self.logger.info(
+                    f'Working with existing user / read-only DS: {username}'
+                )
                 # TODO - validate the fetched user has the required attributes
                 # TODO - update the DynamoDB with the fetched uid/gid/info
                 return self.get_user(username)
@@ -247,16 +284,19 @@ class ActiveDirectoryClient(AbstractLDAPClient):
                 ('uidNumber', [Utils.to_bytes(str(uid))]),
                 ('gidNumber', [Utils.to_bytes(str(gid))]),
                 ('loginShell', [Utils.to_bytes(login_shell)]),
-                ('homeDirectory', [Utils.to_bytes(home_dir)])
+                ('homeDirectory', [Utils.to_bytes(home_dir)]),
             ]
         else:
             user_attrs = [
-                ('objectClass', [
-                    Utils.to_bytes('top'),
-                    Utils.to_bytes('person'),
-                    Utils.to_bytes('user'),
-                    Utils.to_bytes('organizationalPerson')
-                ]),
+                (
+                    'objectClass',
+                    [
+                        Utils.to_bytes('top'),
+                        Utils.to_bytes('person'),
+                        Utils.to_bytes('user'),
+                        Utils.to_bytes('organizationalPerson'),
+                    ],
+                ),
                 ('displayName', [Utils.to_bytes(username)]),
                 ('givenName', [Utils.to_bytes(username)]),
                 ('sn', [Utils.to_bytes(username)]),
@@ -268,7 +308,7 @@ class ActiveDirectoryClient(AbstractLDAPClient):
                 ('uidNumber', [Utils.to_bytes(str(uid))]),
                 ('gidNumber', [Utils.to_bytes(str(gid))]),
                 ('loginShell', [Utils.to_bytes(login_shell)]),
-                ('homeDirectory', [Utils.to_bytes(home_dir)])
+                ('homeDirectory', [Utils.to_bytes(home_dir)]),
             ]
 
         if existing:
@@ -290,11 +330,15 @@ class ActiveDirectoryClient(AbstractLDAPClient):
                 ]
                 self.modify_s(user_dn, enable_attrs)
             else:
-                self.logger.warn(f"Unable to set userAccountControl for username {username} on non-LDAPS AD connection ({self.ldap_uri})")
+                self.logger.warn(
+                    f'Unable to set userAccountControl for username {username} on non-LDAPS AD connection ({self.ldap_uri})'
+                )
 
             self.wait_for_user_creation(username)
         _ds_sync_user_end = Utils.current_time_ms()
-        self.logger.info(f"Completed active_directory sync_user() for {username} in {_ds_sync_user_end - _ds_sync_user_start}ms")
+        self.logger.info(
+            f'Completed active_directory sync_user() for {username} in {_ds_sync_user_end - _ds_sync_user_start}ms'
+        )
         return self.get_user(username)
 
     def sync_group(self, group_name: str, gid: int) -> Dict:
@@ -308,23 +352,20 @@ class ActiveDirectoryClient(AbstractLDAPClient):
                 self.logger.info(f'Read-only DS - returning {group_name} lookup')
                 return self.get_group(group_name)
             else:
-                self.logger.error(f'Unable to find existing group [{group_name}] in read-only Directory Service. Has it been created?')
+                self.logger.error(
+                    f'Unable to find existing group [{group_name}] in read-only Directory Service. Has it been created?'
+                )
                 # fall back to default group?
                 # todo how to notify the caller?
 
         if existing:
-            group_attrs = [
-                ('gidNumber', [Utils.to_bytes(str(gid))])
-            ]
+            group_attrs = [('gidNumber', [Utils.to_bytes(str(gid))])]
         else:
             group_attrs = [
-                ('objectClass', [
-                    Utils.to_bytes('top'),
-                    Utils.to_bytes('group')
-                ]),
+                ('objectClass', [Utils.to_bytes('top'), Utils.to_bytes('group')]),
                 ('gidNumber', [Utils.to_bytes(str(gid))]),
                 ('sAMAccountName', [Utils.to_bytes(group_name)]),
-                ('cn', [Utils.to_bytes(group_name)])
+                ('cn', [Utils.to_bytes(group_name)]),
             ]
 
         if existing:
@@ -345,18 +386,35 @@ class ActiveDirectoryClient(AbstractLDAPClient):
             group_dn = self.build_group_dn(group_name)
             group_attrs = []
             for username in usernames:
-                group_attrs.append((ldap.MOD_ADD, 'member', [Utils.to_bytes(self.build_user_dn(username))]))
+                group_attrs.append(
+                    (
+                        ldap.MOD_ADD,
+                        'member',
+                        [Utils.to_bytes(self.build_user_dn(username))],
+                    )
+                )
             self.modify_s(group_dn, group_attrs)
         except ldap.TYPE_OR_VALUE_EXISTS:
             pass
+
+    def remove_user_from_group(self, usernames: List[str], group_name: str):
+        group_dn = self.build_group_dn(group_name)
+        mod_attrs = []
+        for username in usernames:
+            mod_attrs.append(
+                (
+                    ldap.MOD_DELETE,
+                    'member',
+                    [Utils.to_bytes(self.build_user_dn(username))],
+                )
+            )
+        self.modify_s(group_dn, mod_attrs)
 
     def add_sudo_user(self, username: str):
         user_dn = self.build_user_dn(username)
         sudoer_group_dn = self.ldap_sudoers_group_dn
 
-        group_attrs = [
-            (ldap.MOD_ADD, 'member', [Utils.to_bytes(user_dn)])
-        ]
+        group_attrs = [(ldap.MOD_ADD, 'member', [Utils.to_bytes(user_dn)])]
 
         self.modify_s(sudoer_group_dn, group_attrs)
 
@@ -364,13 +422,17 @@ class ActiveDirectoryClient(AbstractLDAPClient):
         user_dn = self.build_user_dn(username)
         sudoer_group_dn = self.ldap_sudoers_group_dn
 
-        group_attrs = [
-            (ldap.MOD_DELETE, 'member', [Utils.to_bytes(user_dn)])
-        ]
+        group_attrs = [(ldap.MOD_DELETE, 'member', [Utils.to_bytes(user_dn)])]
 
         self.modify_s(sudoer_group_dn, group_attrs)
 
-    def wait_for_group_creation(self, group_name: str, interval: float = 2, max_attempts: int = 15, min_success: int = 3):
+    def wait_for_group_creation(
+        self,
+        group_name: str,
+        interval: float = 2,
+        max_attempts: int = 15,
+        min_success: int = 3,
+    ):
         """
         wait for group to be replicated across domain controllers.
         :param group_name:
@@ -390,7 +452,13 @@ class ActiveDirectoryClient(AbstractLDAPClient):
                     break
             time.sleep(interval)
 
-    def wait_for_user_creation(self, username: str, interval: float = 2, max_attempts: int = 15, min_success: int = 3):
+    def wait_for_user_creation(
+        self,
+        username: str,
+        interval: float = 2,
+        max_attempts: int = 15,
+        min_success: int = 3,
+    ):
         """
         wait for user to be replicated across domain controllers.
         :param username:
@@ -409,3 +477,35 @@ class ActiveDirectoryClient(AbstractLDAPClient):
                 if current_success == min_success:
                     break
             time.sleep(interval)
+
+    def delete_computer(self, computer_name: str):
+        """
+        Delete a computer object from Active Directory
+        :param computer_name: Name of the computer to delete
+        """
+        self.logger.info(f'Deleting computer object: {computer_name}')
+
+        # Build the computer DN
+        computer_dn = f'CN={computer_name},{self.ldap_computers_base}'
+
+        try:
+            # Check if the computer exists first
+            results = self.search_s(
+                base=self.ldap_computers_base,
+                filterstr=f'(cn={computer_name})',
+                trace=True,
+            )
+
+            if len(results) == 0:
+                self.logger.info(f'Computer object not found: {computer_name}')
+                return
+
+            # Delete the computer object
+            self.delete_s(computer_dn)
+            self.logger.info(f'Successfully deleted computer object: {computer_name}')
+
+        except ldap.NO_SUCH_OBJECT:
+            self.logger.info(f'Computer object not found: {computer_name}')
+        except Exception as e:
+            self.logger.error(f'Failed to delete computer object {computer_name}: {e}')
+            raise

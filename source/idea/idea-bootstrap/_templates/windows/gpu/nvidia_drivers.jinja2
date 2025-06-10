@@ -1,0 +1,66 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Begin - Install NVIDIA Drivers
+function Install-NvidiaGpuDrivers {
+    $keyPrefix = $false
+    $s3Path = $false
+    $operatingSystem = (Get-ComputerInfo).OsName.ToLower()
+
+    if ($operatingSystem -like "*windows server 2019*") {
+       $keyPrefix = "*_grid_*_server2019_*.exe"
+       $s3Path = "s3://ec2-windows-nvidia-drivers/grid-18.0/"
+    }
+    elseif ($operatingSystem -like "*windows server 2022*") {
+       $keyPrefix = "*_grid_*_server2022_*.exe"
+       $s3Path = "{{ context.config.get_string('global-settings.gpu_settings.nvidia.windows.s3_bucket_path', required=True) }}"
+    }
+    elseif ($operatingSystem -like "*windows server 2025*") {
+       $keyPrefix = "*_grid_*_server2025_*.exe"
+       $s3Path = "{{ context.config.get_string('global-settings.gpu_settings.nvidia.windows.s3_bucket_path', required=True) }}"
+    }
+    else {
+        Write-ToLog -Message "BaseOS must be windows2019, windows2022 or windows2025, detected  ${operatingSystem}, skipping GPU Drivers install" -Level Warn
+    }
+
+    if ($keyPrefix -ne $false) {
+        $checkExistingDrivers = Get-WmiObject Win32_PnPSignedDriver | Where-Object { $_.DeviceName -like "*NVIDIA*" }
+        if ($checkExistingDrivers) {
+            Write-ToLog -Message "NVIDIA drivers are already installed on this machine"
+        }
+        else {
+            Write-ToLog -Message "About to install NVIDIA Grid drivers"
+            $bucketUrl = "{{ context.config.get_string('global-settings.gpu_settings.nvidia.windows.s3_bucket_url', required=True) }}"
+            $bucketRegion = (Invoke-WebRequest -Method Head -Uri $bucketUrl -UseBasicParsing).Headers["x-amz-bucket-region"]
+            $installerFolderPrefix = "nvidia_grid_driver"
+            Write-ToLog -Message "Downloading Nvidia Drivers from S3"
+            $env:Path += ";C:\Program Files\Amazon\AWSCLIV2\"
+
+            aws s3 cp --region $bucketRegion --quiet $s3Path "C:\IDEA\Assets\${installerFolderPrefix}" --recursive --exclude "*" --include "$keyPrefix*"
+
+            Write-ToLog -Message "Disabling Licensing Page"
+            reg add "HKLM\SOFTWARE\NVIDIA Corporation\Global\GridLicensing" /v NvCplDisableManageLicensePage /t REG_DWORD /d 1 /f
+
+            # https://enterprise-support.nvidia.com/s/article/Silent-Install-of-GRID-VM-Driver-for-Windows
+            Write-ToLog -Message "Installing Nvidia Drivers"
+            $driverFileName = (Get-ChildItem -Path "C:\IDEA\Assets\${installerFolderPrefix}" -Filter $keyPrefix).Name
+            Set-ExecutionPolicy RemoteSigned -Scope Process
+
+            # Extract Driver Content from the self-extractubg executable
+            Write-ToLog -Message "Extracting driver files"
+
+            $env:Path += ";C:\Program Files\7-Zip\"
+            7z x "C:\IDEA\Assets\${installerFolderPrefix}\$keyPrefix" -o"C:\IDEA\Assets\${installerFolderPrefix}" -y
+
+            # Install Driver
+            Write-ToLog -Message "About to execute C:\IDEA\Assets\${installerFolderPrefix}\setup.exe with Arguments -n -s"
+            $installDriver = Start-Process -FilePath "C:\IDEA\Assets\${installerFolderPrefix}\setup.exe" -ArgumentList "-n", "-s" -Wait -PassThru
+            $exitCode = $installDriver.ExitCode
+            Write-ToLog -Message "Exit Code ${exitCode}"
+
+            Write-ToLog -Message "NVIDIA Grid driver installed, reboot will be done at the end of the bootstrap sequence"
+        }
+    }
+}
+Install-NvidiaGpuDrivers
+# End - Install NVIDIA Drivers

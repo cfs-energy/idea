@@ -29,9 +29,15 @@ def handler(event, _):
     now = datetime.datetime.now()
     start_time = now - datetime.timedelta(seconds=300)
     end_time = min(now, start_time + datetime.timedelta(seconds=300))
-    response = cw_client.get_metric_statistics(Namespace='AWS/EFS', MetricName='BurstCreditBalance',
-                                               Dimensions=[{'Name': 'FileSystemId', 'Value': file_system_id}],
-                                               Period=60, StartTime=start_time, EndTime=end_time, Statistics=['Average'])
+    response = cw_client.get_metric_statistics(
+        Namespace='AWS/EFS',
+        MetricName='BurstCreditBalance',
+        Dimensions=[{'Name': 'FileSystemId', 'Value': file_system_id}],
+        Period=60,
+        StartTime=start_time,
+        EndTime=end_time,
+        Statistics=['Average'],
+    )
     efs_average_burst_credit_balance = response['Datapoints'][0]['Average']
     logger.info(f'EFS AverageBurstCreditBalance: {efs_average_burst_credit_balance}')
 
@@ -46,13 +52,22 @@ def handler(event, _):
             efs_client.update_file_system(
                 FileSystemId=file_system_id,
                 ThroughputMode='provisioned',
-                ProvisionedThroughputInMibps=5.0)
-            logger.info('Updating EFS: ' + file_system_id + ' to Provisioned ThroughputMode with 5 MiB/sec')
-    elif efs_average_burst_credit_balance > int(os.environ['EFSBurstCreditHighThreshold']):
+                ProvisionedThroughputInMibps=5.0,
+            )
+            logger.info(
+                'Updating EFS: '
+                + file_system_id
+                + ' to Provisioned ThroughputMode with 5 MiB/sec'
+            )
+    elif efs_average_burst_credit_balance > int(
+        os.environ['EFSBurstCreditHighThreshold']
+    ):
         # CreditBalance is greater than HighThreshold --> Change to Bursting
         if throughput_mode == 'provisioned':
             # Update filesystem to Bursting
             efs_client.update_file_system(
-                FileSystemId=file_system_id,
-                ThroughputMode='bursting')
-            logger.info('Updating EFS: ' + file_system_id + ' to Bursting ThroughputMode')
+                FileSystemId=file_system_id, ThroughputMode='bursting'
+            )
+            logger.info(
+                'Updating EFS: ' + file_system_id + ' to Bursting ThroughputMode'
+            )

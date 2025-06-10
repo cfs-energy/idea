@@ -13,6 +13,7 @@ Scheduled event transformer
 This function is triggered by an event-bridge event rule periodically. It repackages the event and forwards it to the
 Controller Events Queue.
 """
+
 import json
 import boto3
 import os
@@ -34,16 +35,14 @@ def handler(event, _):
         forwarding_event = {
             'event_group_id': 'SCHEDULED_EVENT',
             'event_type': 'SCHEDULED_EVENT',
-            'detail': {
-                'time': event['time']
-            }
+            'detail': {'time': event['time']},
         }
 
         logger.info('Forwarding scheduled event to Controller')
         response = sqs_client.send_message(
             QueueUrl=os.environ.get('IDEA_CONTROLLER_EVENTS_QUEUE_URL'),
             MessageBody=json.dumps(forwarding_event),
-            MessageGroupId='SCHEDULED_EVENT'
+            MessageGroupId='SCHEDULED_EVENT',
         )
         logger.info(response)
     except Exception as e:

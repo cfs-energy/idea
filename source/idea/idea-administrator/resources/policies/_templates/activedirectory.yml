@@ -1,4 +1,4 @@
-  {%- if context.config.get_string('directoryservice.provider') == 'activedirectory' %}
+  {% if context.config.get_string('directoryservice.provider') == 'activedirectory' %}
   - Action:
       - sqs:SendMessage
     Resource:
@@ -10,4 +10,4 @@
     Resource: '{{ context.arns.get_ad_automation_ddb_table_arn() }}'
     Effect: Allow
     Sid: ADAutomationDDB
-  {%- endif %}
+  {% endif %}

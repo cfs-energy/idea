@@ -29,14 +29,17 @@ class BootstrapPackageBuilder:
     The caller is responsible to clean up the temporary package after uploading to S3.
     """
 
-    def __init__(self, bootstrap_context: BootstrapContext,
-                 source_directory: str,
-                 target_package_basename: str,
-                 components: List[str],
-                 tmp_dir: str = None,
-                 force_build: bool = False,
-                 base_os: str = None,
-                 logger=None):
+    def __init__(
+        self,
+        bootstrap_context: BootstrapContext,
+        source_directory: str,
+        target_package_basename: str,
+        components: List[str],
+        tmp_dir: str = None,
+        force_build: bool = False,
+        base_os: str = None,
+        logger=None,
+    ):
         """
         :param bootstrap_context: template rendering context.
 
@@ -57,7 +60,7 @@ class BootstrapPackageBuilder:
 
         if 'common' not in components:
             if Utils.is_not_empty(base_os):
-                if base_os.lower() != 'windows':
+                if 'windows' not in base_os.lower():
                     components.insert(0, 'common')
             else:
                 components.insert(0, 'common')
@@ -90,9 +93,13 @@ class BootstrapPackageBuilder:
                     self.log(f'deleting existing directory: {target_dir} ...')
                     shutil.rmtree(target_dir)
                 else:
-                    self.log(f'found existing bootstrap directory: {target_dir}. use force_build=True to '
-                             f'rebuild the bootstrap package.')
-                    target_archive = os.path.join(tmp_dir, f'{self.target_package_basename}.tar.gz')
+                    self.log(
+                        f'found existing bootstrap directory: {target_dir}. use force_build=True to '
+                        f'rebuild the bootstrap package.'
+                    )
+                    target_archive = os.path.join(
+                        tmp_dir, f'{self.target_package_basename}.tar.gz'
+                    )
                     if Utils.is_file(target_archive):
                         os.remove(target_archive)
                     shutil.make_archive(target_dir, 'gztar', target_dir)
@@ -117,7 +124,9 @@ class BootstrapPackageBuilder:
                     if file.endswith('.jinja2'):
                         template = env.get_template(f'{component}/{file}')
                         content = template.render(context=self.bootstrap_context)
-                        target_file = os.path.join(target_component_dir, file.replace('.jinja2', ''))
+                        target_file = os.path.join(
+                            target_component_dir, file.replace('.jinja2', '')
+                        )
                         self.log(f'rendered template: {target_file}')
                         with open(target_file, 'w') as f:
                             f.write(content)

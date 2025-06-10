@@ -19,8 +19,9 @@ from python_dynamodb_lock.python_dynamodb_lock import DynamoDBLockError
 
 
 class LeaderElection(SocaService):
-
-    def __init__(self, context: SocaContextProtocol, leader_election_interval: int = 30):
+    def __init__(
+        self, context: SocaContextProtocol, leader_election_interval: int = 30
+    ):
         super().__init__(context)
         self.context = context
         self.logger = context.logger('leader-election')
@@ -34,10 +35,7 @@ class LeaderElection(SocaService):
 
         self.shell = ShellInvoker()
 
-        self.leader_election_thread = Thread(
-            target=self.loop,
-            name='leader-election'
-        )
+        self.leader_election_thread = Thread(target=self.loop, name='leader-election')
         self.leader_election_thread.start()
 
     def service_id(self) -> str:
@@ -45,16 +43,19 @@ class LeaderElection(SocaService):
 
     def _set_leader(self):
         self._is_leader.set()
-        self.context.broadcast().publish(self.service_id(), message=leader_election_constants.LEADER_APPOINTED)
+        self.context.broadcast().publish(
+            self.service_id(), message=leader_election_constants.LEADER_APPOINTED
+        )
 
     def _unset_leader(self):
         self._is_leader.clear()
-        self.context.broadcast().publish(self.service_id(), message=leader_election_constants.LEADER_DISMISSED)
+        self.context.broadcast().publish(
+            self.service_id(), message=leader_election_constants.LEADER_DISMISSED
+        )
 
     def loop(self):
         while not self._exit.is_set():
             try:
-
                 if self.is_leader():
                     continue
 

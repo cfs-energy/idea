@@ -17,15 +17,14 @@ import ideaadministrator
 
 from tasks import cli
 
-from invoke import task, Context
-from typing import Optional
+from invoke import task
 import os
 import prettytable
 
 
 @task
 def test_iam_policies(c, cluster_name, aws_region, aws_profile=None):
-    # type: (Context, str, str, Optional[str]) -> None
+    # type: (Context, str, str, Optional[str]) -> None # type: ignore
     """
     test and render all IAM policy documents
     """
@@ -40,45 +39,35 @@ def test_iam_policies(c, cluster_name, aws_region, aws_profile=None):
                 'custom-resource-update-cluster-settings.yml',
                 'log-retention.yml',
                 'solution-metrics-lambda-function.yml',
-            ]
+            ],
         },
         {
             'module_name': constants.MODULE_SHARED_STORAGE,
-            'templates': [
-                'efs-throughput-lambda.yml'
-            ]
+            'templates': ['efs-throughput-lambda.yml'],
         },
         {
             'module_name': constants.MODULE_IDENTITY_PROVIDER,
-            'templates': [
-                'custom-resource-get-user-pool-client-secret.yml'
-            ]
+            'templates': ['custom-resource-get-user-pool-client-secret.yml'],
         },
         {
             'module_name': constants.MODULE_ANALYTICS,
-            'templates': [
-                'analytics-stream-processing-lambda.yml'
-            ]
+            'templates': ['analytics-stream-processing-lambda.yml'],
         },
         {
             'module_name': constants.MODULE_DIRECTORYSERVICE,
-            'templates': [
-                'openldap-server.yml'
-            ]
+            'templates': ['openldap-server.yml'],
         },
         {
             'module_name': constants.MODULE_CLUSTER_MANAGER,
-            'templates': [
-                'cluster-manager.yml'
-            ]
+            'templates': ['cluster-manager.yml'],
         },
         {
             'module_name': constants.MODULE_SCHEDULER,
             'templates': [
                 'scheduler.yml',
                 'compute-node.yml',
-                'spot-fleet-request.yml'
-            ]
+                'spot-fleet-request.yml',
+            ],
         },
         {
             'module_name': constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER,
@@ -88,24 +77,24 @@ def test_iam_policies(c, cluster_name, aws_region, aws_profile=None):
                 'virtual-desktop-dcv-connection-gateway.yml',
                 'virtual-desktop-dcv-host.yml',
                 'controller-scheduled-event-transformer-lambda.yml',
-                'controller-ssm-command-pass-role.yml'
-            ]
+                'controller-ssm-command-pass-role.yml',
+            ],
         },
         {
             'module_name': constants.MODULE_BASTION_HOST,
-            'templates': [
-                'bastion-host.yml'
-            ]
-        }
+            'templates': ['bastion-host.yml'],
+        },
     ]
 
-    context = SocaCliContext(options=SocaContextOptions(
-        cluster_name=cluster_name,
-        aws_region=aws_region,
-        aws_profile=aws_profile,
-        enable_aws_client_provider=True,
-        enable_aws_util=True
-    ))
+    context = SocaCliContext(
+        options=SocaContextOptions(
+            cluster_name=cluster_name,
+            aws_region=aws_region,
+            aws_profile=aws_profile,
+            enable_aws_client_provider=True,
+            enable_aws_util=True,
+        )
+    )
 
     for module in all_modules:
         module_name = module['module_name']
@@ -121,7 +110,7 @@ def test_iam_policies(c, cluster_name, aws_region, aws_profile=None):
                 policy_template_name=policy_template_name,
                 cluster_name=cluster_name,
                 module_id=module_id,
-                config=context.config()
+                config=context.config(),
             )
             context.print_json(policy)
         context.new_line(2)
@@ -129,23 +118,22 @@ def test_iam_policies(c, cluster_name, aws_region, aws_profile=None):
 
 @task
 def cdk_nag_scan(c, cluster_name, aws_region, aws_profile=None, module_name=None):
-    # type: (Context, str, str, Optional[str], Optional[str]) -> None
+    # type: (Context, str, str, Optional[str], Optional[str]) -> None # type: ignore
     """
     perform cdk nag scan on all applicable cdk stacks
     """
 
-    ignore_modules = [
-        constants.MODULE_BOOTSTRAP,
-        constants.MODULE_GLOBAL_SETTINGS
-    ]
+    ignore_modules = [constants.MODULE_BOOTSTRAP, constants.MODULE_GLOBAL_SETTINGS]
 
-    context = SocaCliContext(options=SocaContextOptions(
-        cluster_name=cluster_name,
-        aws_region=aws_region,
-        aws_profile=aws_profile,
-        enable_aws_client_provider=True,
-        enable_aws_util=True
-    ))
+    context = SocaCliContext(
+        options=SocaContextOptions(
+            cluster_name=cluster_name,
+            aws_region=aws_region,
+            aws_profile=aws_profile,
+            enable_aws_client_provider=True,
+            enable_aws_util=True,
+        )
+    )
 
     cluster_config: ClusterConfig = context.config()
 
@@ -169,7 +157,9 @@ def cdk_nag_scan(c, cluster_name, aws_region, aws_profile=None, module_name=None
 
         module_id = cluster_config.get_module_id(current_module_name)
 
-        with context.spinner(f'running cdk_nag scan for module: {current_module_name}, module_id: {module_id} ...'):
+        with context.spinner(
+            f'running cdk_nag scan for module: {current_module_name}, module_id: {module_id} ...'
+        ):
             invoke_args = [
                 'cdk',
                 'synth',
@@ -177,13 +167,10 @@ def cdk_nag_scan(c, cluster_name, aws_region, aws_profile=None, module_name=None
                 '--cluster-name',
                 cluster_name,
                 '--aws-region',
-                aws_region
+                aws_region,
             ]
             if aws_profile is not None:
-                invoke_args += [
-                    '--aws-profile',
-                    aws_profile
-                ]
+                invoke_args += ['--aws-profile', aws_profile]
 
             success = False
             try:
@@ -191,13 +178,19 @@ def cdk_nag_scan(c, cluster_name, aws_region, aws_profile=None, module_name=None
                     c=c,
                     app_name='idea-admin',
                     module_name='ideaadministrator.app_main',
-                    invoke_args=invoke_args
+                    invoke_args=invoke_args,
                 )
             except SystemExit as e:
                 success = e.code == 0
 
-            cluster_cdk_dir = ideaadministrator.props.cluster_cdk_dir(cluster_name=cluster_name, aws_region=aws_region)
-            report_file = os.path.join(cluster_cdk_dir, 'cdk.out', f'AwsSolutions-{cluster_name}-{module_id}-NagReport.csv')
+            cluster_cdk_dir = ideaadministrator.props.cluster_cdk_dir(
+                cluster_name=cluster_name, aws_region=aws_region
+            )
+            report_file = os.path.join(
+                cluster_cdk_dir,
+                'cdk.out',
+                f'AwsSolutions-{cluster_name}-{module_id}-NagReport.csv',
+            )
 
             if success:
                 if not os.path.isfile(report_file):
@@ -205,18 +198,26 @@ def cdk_nag_scan(c, cluster_name, aws_region, aws_profile=None, module_name=None
                     report_file = None
 
             if success:
-                context.success(f'cdk_nag scan for module: {current_module_name}, module_id: {module_id} succeeded: {report_file}')
+                context.success(
+                    f'cdk_nag scan for module: {current_module_name}, module_id: {module_id} succeeded: {report_file}'
+                )
             else:
                 if report_file:
-                    context.error(f'cdk_nag scan for module: {current_module_name}, module_id: {module_id} failed: {report_file}')
+                    context.error(
+                        f'cdk_nag scan for module: {current_module_name}, module_id: {module_id} failed: {report_file}'
+                    )
                 else:
-                    context.error(f'cdk synth for module: {current_module_name}, module_id: {module_id} failed.')
+                    context.error(
+                        f'cdk synth for module: {current_module_name}, module_id: {module_id} failed.'
+                    )
 
-            summary.append({
-                'module_name': current_module_name,
-                'status': success,
-                'report_csv': report_file
-            })
+            summary.append(
+                {
+                    'module_name': current_module_name,
+                    'status': success,
+                    'report_csv': report_file,
+                }
+            )
 
     context.new_line()
     context.print_title('cdk_nag scan summary')

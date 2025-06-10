@@ -11,12 +11,22 @@
 from logging import Logger
 
 import ideavirtualdesktopcontroller
-from ideavirtualdesktopcontroller.app.app_protocols import VirtualDesktopNotifiableDBProtocol
-from ideavirtualdesktopcontroller.app.clients.events_client.events_client import VirtualDesktopEvent, VirtualDesktopEventType
+from ideavirtualdesktopcontroller.app.app_protocols import (
+    VirtualDesktopNotifiableDBProtocol,
+)
+from ideavirtualdesktopcontroller.app.clients.events_client.events_client import (
+    VirtualDesktopEvent,
+    VirtualDesktopEventType,
+)
 
 
 class VirtualDesktopNotifiableDB(VirtualDesktopNotifiableDBProtocol):
-    def __init__(self, context: ideavirtualdesktopcontroller.AppContext, table_name: str, logger: Logger):
+    def __init__(
+        self,
+        context: ideavirtualdesktopcontroller.AppContext,
+        table_name: str,
+        logger: Logger,
+    ):
         self.context = context
         self._logger = logger
         self._table_name = table_name
@@ -31,8 +41,8 @@ class VirtualDesktopNotifiableDB(VirtualDesktopNotifiableDBProtocol):
                     'hash_key': hash_key,
                     'range_key': range_key,
                     'deleted_value': deleted_entry,
-                    'table_name': self._table_name
-                }
+                    'table_name': self._table_name,
+                },
             )
         )
 
@@ -45,12 +55,14 @@ class VirtualDesktopNotifiableDB(VirtualDesktopNotifiableDBProtocol):
                     'hash_key': hash_key,
                     'range_key': range_key,
                     'new_value': new_entry,
-                    'table_name': self._table_name
-                }
+                    'table_name': self._table_name,
+                },
             )
         )
 
-    def trigger_update_event(self, hash_key: str, range_key: str, old_entry: dict, new_entry: dict):
+    def trigger_update_event(
+        self, hash_key: str, range_key: str, old_entry: dict, new_entry: dict
+    ):
         self.context.events_client.publish_event(
             event=VirtualDesktopEvent(
                 event_group_id=f'{hash_key}-{range_key}',
@@ -60,7 +72,7 @@ class VirtualDesktopNotifiableDB(VirtualDesktopNotifiableDBProtocol):
                     'range_key': range_key,
                     'old_value': old_entry,
                     'new_value': new_entry,
-                    'table_name': self._table_name
-                }
+                    'table_name': self._table_name,
+                },
             )
         )

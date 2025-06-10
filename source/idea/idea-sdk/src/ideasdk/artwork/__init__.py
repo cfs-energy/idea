@@ -23,7 +23,11 @@ BANNER = """
 """
 
 
-def ascii_banner(title: str = 'Integrated Digital Engineering on AWS', meta_info: Optional[List[SocaKeyValue]] = None, rich=False) -> Union[Text, str]:
+def ascii_banner(
+    title: str = 'Integrated Digital Engineering on AWS',
+    meta_info: Optional[List[SocaKeyValue]] = None,
+    rich=False,
+) -> Union[Text, str]:
     banner_lines = BANNER.splitlines()
     banner_width = len(banner_lines[2])
     banner_lines.append(str.center(title, banner_width))
@@ -44,7 +48,7 @@ def ascii_banner(title: str = 'Integrated Digital Engineering on AWS', meta_info
 
     banner_text = Text(banner_content)
     banner_text.highlight_words(['.', ':'], style='orange1 dim')
-    banner_text.highlight_words(['\''], style='white')
+    banner_text.highlight_words(["'"], style='white')
     banner_text.highlight_words([title, '#'], style='bright_white')
 
     if not meta_info:

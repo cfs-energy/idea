@@ -66,15 +66,30 @@ __all__ = (
     'ListHpcLicenseResourcesResult',
     'CheckHpcLicenseResourceAvailabilityRequest',
     'CheckHpcLicenseResourceAvailabilityResult',
-    'OPEN_API_SPEC_ENTRIES_SCHEDULER'
+    'OPEN_API_SPEC_ENTRIES_SCHEDULER',
 )
 
 from ideadatamodel import SocaPayload, SocaListingPayload, IdeaOpenAPISpecEntry
 from ideadatamodel.aws import ServiceQuota
-from ideadatamodel.scheduler.scheduler_model import *
+from ideadatamodel.scheduler.scheduler_model import (
+    SocaComputeNodeState,
+    SocaComputeNode,
+    SocaJobState,
+    SocaJob,
+    HpcQueueProfile,
+    JobValidationResult,
+    SocaInstanceTypeOptions,
+    DryRunOption,
+    SocaJobEstimatedBOMCost,
+    SocaJobEstimatedBudgetUsage,
+    HpcApplication,
+    SocaJobParams,
+    HpcLicenseResource,
+)
 
 from typing import Optional, Set, List
 from pydantic import Field
+
 
 class ListNodesRequest(SocaListingPayload):
     instance_ids: Optional[List[str]] = Field(default=None)
@@ -102,6 +117,7 @@ class ListJobsResult(SocaListingPayload):
 
 # SchedulerAdmin.CreateQueueProfile
 
+
 class CreateQueueProfileRequest(SocaPayload):
     queue_profile: Optional[HpcQueueProfile] = Field(default=None)
 
@@ -112,6 +128,7 @@ class CreateQueueProfileResult(SocaPayload):
 
 
 # SchedulerAdmin.GetQueueProfile
+
 
 class GetQueueProfileRequest(SocaPayload):
     queue_profile_name: Optional[str] = Field(default=None)
@@ -125,6 +142,7 @@ class GetQueueProfileResult(SocaPayload):
 
 # SchedulerAdmin.UpdateQueueProfile
 
+
 class UpdateQueueProfileRequest(SocaPayload):
     queue_profile: Optional[HpcQueueProfile] = Field(default=None)
 
@@ -134,6 +152,7 @@ class UpdateQueueProfileResult(SocaPayload):
 
 
 # SchedulerAdmin.EnableQueueProfile
+
 
 class EnableQueueProfileRequest(SocaPayload):
     queue_profile_id: Optional[str] = Field(default=None)
@@ -146,6 +165,7 @@ class EnableQueueProfileResult(SocaPayload):
 
 # SchedulerAdmin.DisableQueueProfile
 
+
 class DisableQueueProfileRequest(SocaPayload):
     queue_profile_id: Optional[str] = Field(default=None)
     queue_profile_name: Optional[str] = Field(default=None)
@@ -156,6 +176,7 @@ class DisableQueueProfileResult(SocaPayload):
 
 
 # SchedulerAdmin.DeleteQueueProfile
+
 
 class DeleteQueueProfileRequest(SocaPayload):
     queue_profile_id: Optional[str] = Field(default=None)
@@ -169,6 +190,7 @@ class DeleteQueueProfileResult(SocaPayload):
 
 # SchedulerAdmin.CreateQueues
 
+
 class CreateQueuesRequest(SocaPayload):
     queue_profile_id: Optional[str] = Field(default=None)
     queue_profile_name: Optional[str] = Field(default=None)
@@ -181,6 +203,7 @@ class CreateQueuesResult(SocaPayload):
 
 # SchedulerAdmin.DeleteQueues
 
+
 class DeleteQueuesRequest(SocaPayload):
     queue_profile_id: Optional[str] = Field(default=None)
     queue_profile_name: Optional[str] = Field(default=None)
@@ -192,6 +215,7 @@ class DeleteQueuesResult(SocaPayload):
 
 
 # SchedulerAdmin.ListQueueProfiles
+
 
 class ListQueueProfilesRequest(SocaListingPayload):
     lite: Optional[bool] = Field(default=None)
@@ -215,12 +239,15 @@ class GetInstanceTypeOptionsResult(SocaPayload):
 
 # Scheduler.SubmitJob
 
+
 class SubmitJobRequest(SocaPayload):
     job_owner: Optional[str] = Field(default=None)
     project: Optional[str] = Field(default=None)
     dry_run: Optional[bool] = Field(default=None)
     job_script_interpreter: Optional[str] = Field(default=None)
-    job_script: Optional[str] = Field(default=None)  # base64 encoded job data shell script
+    job_script: Optional[str] = Field(
+        default=None
+    )  # base64 encoded job data shell script
 
 
 class SubmitJobResult(SocaPayload):
@@ -262,6 +289,7 @@ class GetJobResult(SocaPayload):
 
 # SchedulerAdmin.CreateHpcApplication
 
+
 class CreateHpcApplicationRequest(SocaPayload):
     application: Optional[HpcApplication] = Field(default=None)
 
@@ -271,6 +299,7 @@ class CreateHpcApplicationResult(SocaPayload):
 
 
 # SchedulerAdmin.GetHpcApplication
+
 
 class GetHpcApplicationRequest(SocaPayload):
     application_id: Optional[str] = Field(default=None)
@@ -293,6 +322,7 @@ class UpdateHpcApplicationResult(SocaPayload):
 
 # SchedulerAdmin.DeleteHpcApplication
 
+
 class DeleteHpcApplicationRequest(SocaPayload):
     application_id: Optional[str] = Field(default=None)
 
@@ -302,6 +332,7 @@ class DeleteHpcApplicationResult(SocaPayload):
 
 
 # SchedulerAdmin.ListHpcApplications
+
 
 class ListHpcApplicationsRequest(SocaListingPayload):
     lite: Optional[bool] = Field(default=None)
@@ -327,6 +358,7 @@ class ProvisionAlwaysOnNodesResult(SocaPayload):
 
 # SchedulerAdmin.GetUserApplications
 
+
 class GetUserApplicationsRequest(SocaPayload):
     username: Optional[str] = Field(default=None)
     application_ids: Optional[List[str]] = Field(default=None)
@@ -337,6 +369,7 @@ class GetUserApplicationsResult(SocaPayload):
 
 
 # SchedulerAdmin.CreateHpcLicenseResource
+
 
 class CreateHpcLicenseResourceRequest(SocaPayload):
     license_resource: Optional[HpcLicenseResource] = Field(default=None)
@@ -399,216 +432,216 @@ OPEN_API_SPEC_ENTRIES_SCHEDULER = [
         request=ListJobsRequest,
         result=ListJobsResult,
         is_listing=True,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Scheduler.ListCompletedJobs',
         request=ListJobsRequest,
         result=ListJobsResult,
         is_listing=True,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Scheduler.GetUserApplications',
         request=GetUserApplicationsRequest,
         result=GetUserApplicationsResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Scheduler.SubmitJob',
         request=SubmitJobRequest,
         result=SubmitJobResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Scheduler.DeleteJob',
         request=DeleteJobRequest,
         result=DeleteJobResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Scheduler.GetActiveJob',
         request=GetJobRequest,
         result=GetJobResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Scheduler.GetCompletedJob',
         request=GetJobRequest,
         result=GetJobResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Scheduler.GetInstanceTypeOptions',
         request=GetInstanceTypeOptionsRequest,
         result=GetInstanceTypeOptionsResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='SchedulerAdmin.ListActiveJobs',
         request=ListJobsRequest,
         result=ListJobsResult,
         is_listing=True,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='SchedulerAdmin.ListCompletedJobs',
         request=ListJobsRequest,
         result=ListJobsResult,
         is_listing=True,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='SchedulerAdmin.ListNodes',
         request=ListNodesRequest,
         result=ListNodesResult,
         is_listing=True,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='SchedulerAdmin.CreateQueueProfile',
         request=CreateQueueProfileRequest,
         result=CreateQueueProfileResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='SchedulerAdmin.GetQueueProfile',
         request=GetQueueProfileRequest,
         result=GetQueueProfileResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='SchedulerAdmin.UpdateQueueProfile',
         request=UpdateQueueProfileRequest,
         result=UpdateQueueProfileResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='SchedulerAdmin.EnableQueueProfile',
         request=EnableQueueProfileRequest,
         result=EnableQueueProfileResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='SchedulerAdmin.DisableQueueProfile',
         request=DisableQueueProfileRequest,
         result=DisableQueueProfileResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='SchedulerAdmin.DeleteQueueProfile',
         request=DeleteQueueProfileRequest,
         result=DeleteQueueProfileResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='SchedulerAdmin.ListQueueProfiles',
         request=ListQueueProfilesRequest,
         result=ListQueueProfilesResult,
         is_listing=True,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='SchedulerAdmin.CreateHpcApplication',
         request=CreateHpcApplicationRequest,
         result=CreateHpcApplicationResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='SchedulerAdmin.GetHpcApplication',
         request=GetHpcApplicationRequest,
         result=GetHpcApplicationResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='SchedulerAdmin.UpdateHpcApplication',
         request=UpdateHpcApplicationRequest,
         result=UpdateHpcApplicationResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='SchedulerAdmin.DeleteHpcApplication',
         request=DeleteHpcApplicationRequest,
         result=DeleteHpcApplicationResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='SchedulerAdmin.ListHpcApplications',
         request=ListHpcApplicationsRequest,
         result=ListHpcApplicationsResult,
         is_listing=True,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='SchedulerAdmin.GetUserApplications',
         request=GetUserApplicationsRequest,
         result=GetUserApplicationsResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='SchedulerAdmin.ProvisionAlwaysOnNodes',
         request=ProvisionAlwaysOnNodesRequest,
         result=ProvisionAlwaysOnNodesResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='SchedulerAdmin.CreateHpcLicenseResource',
         request=CreateHpcLicenseResourceRequest,
         result=CreateHpcLicenseResourceResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='SchedulerAdmin.GetHpcLicenseResource',
         request=GetHpcLicenseResourceRequest,
         result=GetHpcLicenseResourceResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='SchedulerAdmin.UpdateHpcLicenseResource',
         request=UpdateHpcLicenseResourceRequest,
         result=UpdateHpcLicenseResourceResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='SchedulerAdmin.DeleteHpcLicenseResource',
         request=DeleteHpcLicenseResourceRequest,
         result=DeleteHpcLicenseResourceResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='SchedulerAdmin.ListHpcLicenseResources',
         request=ListHpcLicenseResourcesRequest,
         result=ListHpcLicenseResourcesResult,
         is_listing=True,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='SchedulerAdmin.CheckHpcLicenseResourceAvailability',
         request=CheckHpcLicenseResourceAvailabilityRequest,
         result=CheckHpcLicenseResourceAvailabilityResult,
         is_listing=False,
-        is_public=False
-    )
+        is_public=False,
+    ),
 ]

@@ -37,7 +37,7 @@ network:
     {{ utils.to_yaml(client_ip) | indent(4) }}
   ssh_key_pair: "{{ssh_key_pair_name}}"
 
-  {%- if use_existing_vpc %}
+  {% if use_existing_vpc %}
   use_existing_vpc: true
   vpc_id: "{{vpc_id}}"
 
@@ -45,7 +45,7 @@ network:
     {{ utils.to_yaml(private_subnet_ids) | indent(4) }}
   public_subnets:
     {{ utils.to_yaml(public_subnet_ids) | indent(4) }}
-  {%- else %}
+  {% else %}
   max_azs: 3
   nat_gateways: 1
   subnet_config:
@@ -55,10 +55,10 @@ network:
       cidr_mask: 18
   vpc_cidr_block: "{{vpc_cidr_block}}"
   vpc_flow_logs: true
-  {%- endif %}
+  {% endif %}
 
   use_vpc_endpoints: {{use_vpc_endpoints | lower}}
-  {%- if use_vpc_endpoints %}
+  {% if use_vpc_endpoints %}
   # provide VPC Interface and Gateway Endpoints below if use_vpc_endpoints = True.
 
   # enabled: true/false config entry in interface endpoint can be used to specify if the endpoint can be used in the boto3 client across all IDEA modules.
@@ -89,11 +89,11 @@ network:
   # https_proxy expected format is http://<hostname>:<port>
   https_proxy: ""
   no_proxy: "127.0.0.1,169.254.169.254,localhost,{{ aws_region }}.local,{{ aws_region }}.vpce.{{ aws_dns_suffix }},s3.{{ aws_region }}.{{ aws_dns_suffix }},s3.dualstack.{{ aws_region }}.{{ aws_dns_suffix }},dynamodb.{{ aws_region }}.{{ aws_dns_suffix }},{{ aws_region }}.es.{{ aws_dns_suffix }},sqs.{{ aws_region }}.{{ aws_dns_suffix }},ec2.{{ aws_region }}.{{ aws_dns_suffix }},secretsmanager.{{ aws_region }}.{{ aws_dns_suffix }},sns.{{ aws_region }}.{{ aws_dns_suffix }},cloudformation.{{ aws_region }}.{{ aws_dns_suffix }},elasticloadbalancing.{{ aws_region }}.{{ aws_dns_suffix }},monitoring.{{ aws_region }}.{{ aws_dns_suffix }},logs.{{ aws_region }}.{{ aws_dns_suffix }},ssm.{{ aws_region }}.{{ aws_dns_suffix }},application-autoscaling.{{ aws_region }}.{{ aws_dns_suffix }},events.{{ aws_region }}.{{ aws_dns_suffix }},kinesis.{{ aws_region }}.{{ aws_dns_suffix }},{{ aws_region }}.elb.{{ aws_dns_suffix }},autoscaling.{{ aws_region }}.{{ aws_dns_suffix }}"
-  {%- else %}
+  {% else %}
   # https_proxy expected format is http://<hostname>:<port>
   https_proxy: ""
   no_proxy: "127.0.0.1,169.254.169.254,localhost,{{ aws_region }}.local,{{ aws_region }}.elb.{{ aws_dns_suffix }},{{ aws_region }}.es.{{ aws_dns_suffix }}"
-  {%- endif %}
+  {% endif %}
 
 # AWS Key Management Service
 kms:

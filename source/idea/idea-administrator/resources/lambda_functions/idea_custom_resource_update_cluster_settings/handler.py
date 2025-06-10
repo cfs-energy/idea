@@ -33,7 +33,6 @@ def handler(event: dict, context):
     physical_resource_id = f'{cluster_name}-{module_id}-settings'
     client = HttpClient()
     try:
-
         dynamodb = boto3.resource('dynamodb')
 
         cluster_settings_table_name = f'{cluster_name}.cluster-settings'
@@ -44,20 +43,13 @@ def handler(event: dict, context):
         modules_table = dynamodb.Table(modules_table_name)
 
         if request_type == 'Delete':
-
             for key in settings:
                 config_key = f'{module_id}.{key}'
                 logger.info(f'deleting config: {config_key}')
-                cluster_settings_table.delete_item(
-                    Key={
-                        'key': config_key
-                    }
-                )
+                cluster_settings_table.delete_item(Key={'key': config_key})
 
             modules_table.update_item(
-                Key={
-                    'module_id': module_id
-                },
+                Key={'module_id': module_id},
                 UpdateExpression='SET #status=:status, #stack_name=:stack_name, #version=:version',
                 ExpressionAttributeNames={
                     '#status': 'status',
@@ -67,38 +59,33 @@ def handler(event: dict, context):
                 ExpressionAttributeValues={
                     ':status': 'not-deployed',
                     ':stack_name': None,
-                    ':version': None
-                }
+                    ':version': None,
+                },
             )
 
         else:
-
             for key in settings:
                 value = settings[key]
 
                 config_key = f'{module_id}.{key}'
                 logger.info(f'updating config: {config_key} = {value}')
                 cluster_settings_table.update_item(
-                    Key={
-                        'key': config_key
-                    },
+                    Key={'key': config_key},
                     UpdateExpression='SET #value=:value, #source=:source ADD #version :version',
                     ExpressionAttributeNames={
                         '#value': 'value',
                         '#version': 'version',
-                        '#source': 'source'
+                        '#source': 'source',
                     },
                     ExpressionAttributeValues={
                         ':value': value,
                         ':source': 'stack',
-                        ':version': 1
-                    }
+                        ':version': 1,
+                    },
                 )
 
             modules_table.update_item(
-                Key={
-                    'module_id': module_id
-                },
+                Key={'module_id': module_id},
                 UpdateExpression='SET #status=:status, #stack_name=:stack_name, #version=:version',
                 ExpressionAttributeNames={
                     '#status': 'status',
@@ -108,8 +95,8 @@ def handler(event: dict, context):
                 ExpressionAttributeValues={
                     ':status': 'deployed',
                     ':stack_name': stack_name,
-                    ':version': version
-                }
+                    ':version': version,
+                },
             )
 
             # in case of a stack Update event, compute a delta using OldResourceProperties
@@ -125,28 +112,30 @@ def handler(event: dict, context):
                     for key in settings_to_delete:
                         config_key = f'{module_id}.{key}'
                         logger.info(f'deleting config: {config_key}')
-                        cluster_settings_table.delete_item(
-                            Key={
-                                'key': config_key
-                            }
-                        )
+                        cluster_settings_table.delete_item(Key={'key': config_key})
 
-        client.send_cfn_response(CfnResponse(
-            context=context,
-            event=event,
-            status=CfnResponseStatus.SUCCESS,
-            data={},
-            physical_resource_id=physical_resource_id
-        ))
+        client.send_cfn_response(
+            CfnResponse(
+                context=context,
+                event=event,
+                status=CfnResponseStatus.SUCCESS,
+                data={},
+                physical_resource_id=physical_resource_id,
+            )
+        )
 
     except Exception as e:
-        logger.exception(f'failed to update cluster settings for module: {module_id} - {e}')
-        client.send_cfn_response(CfnResponse(
-            context=context,
-            event=event,
-            status=CfnResponseStatus.FAILED,
-            data={},
-            physical_resource_id=physical_resource_id
-        ))
+        logger.exception(
+            f'failed to update cluster settings for module: {module_id} - {e}'
+        )
+        client.send_cfn_response(
+            CfnResponse(
+                context=context,
+                event=event,
+                status=CfnResponseStatus.FAILED,
+                data={},
+                physical_resource_id=physical_resource_id,
+            )
+        )
     finally:
         client.destroy()

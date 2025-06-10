@@ -16,7 +16,6 @@ from ideadatamodel import Notification
 
 
 class NotificationsAsyncClient:
-
     def __init__(self, context: SocaContextProtocol):
         """
         :param context: Application Context
@@ -25,10 +24,12 @@ class NotificationsAsyncClient:
         self._logger = context.logger('async-notifications-client')
 
     def send_notification(self, notification: Notification):
-        sqs_queue_url = self.context.config().get_string('cluster-manager.notifications_queue_url', required=True)
+        sqs_queue_url = self.context.config().get_string(
+            'cluster-manager.notifications_queue_url', required=True
+        )
         self.context.aws().sqs().send_message(
             QueueUrl=sqs_queue_url,
             MessageBody=Utils.to_json(notification),
             MessageDeduplicationId=Utils.uuid(),
-            MessageGroupId=self.context.module_id()
+            MessageGroupId=self.context.module_id(),
         )

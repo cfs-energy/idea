@@ -13,7 +13,6 @@ import arrow
 
 
 class MetricTimer:
-
     def __init__(self):
         self.start = arrow.utcnow()
 

@@ -12,16 +12,27 @@
 import ideascheduler
 
 from ideadatamodel import (
-    constants, exceptions, errorcodes,
+    constants,
+    exceptions,
+    errorcodes,
     SocaBaseModel,
-    SocaJob, SocaScalingMode, HpcQueueProfile,
-    ProvisioningStatus, ProvisioningCapacityInfo,
-    CloudFormationStack, CloudFormationStackResources, EC2SpotFleetRequestConfig, AutoScalingGroup, CheckServiceQuotaResult
+    SocaJob,
+    SocaScalingMode,
+    HpcQueueProfile,
+    ProvisioningStatus,
+    ProvisioningCapacityInfo,
+    CloudFormationStack,
+    CloudFormationStackResources,
+    EC2SpotFleetRequestConfig,
+    AutoScalingGroup,
+    CheckServiceQuotaResult,
 )
 from ideasdk.utils import Utils
 
 from ideascheduler.app.aws import EC2ServiceQuotaHelper, AwsBudgetsHelper
-from ideascheduler.app.provisioning.job_provisioner.batch_capacity_helper import BatchCapacityHelper
+from ideascheduler.app.provisioning.job_provisioner.batch_capacity_helper import (
+    BatchCapacityHelper,
+)
 from pydantic import Field
 from botocore.exceptions import ClientError
 from typing import Optional, List
@@ -48,7 +59,12 @@ class JobProvisioningUtil:
     This class is not thread safe.
     """
 
-    def __init__(self, context: ideascheduler.AppContext, jobs: List[SocaJob], logger: logging.Logger = None):
+    def __init__(
+        self,
+        context: ideascheduler.AppContext,
+        jobs: List[SocaJob],
+        logger: logging.Logger = None,
+    ):
         self.context = context
         if logger is None:
             self._logger = context.logger()
@@ -98,7 +114,10 @@ class JobProvisioningUtil:
 
     @property
     def stack_provisioning_timeout_secs(self) -> int:
-        return self.config.get_int('scheduler.job_provisioning.stack_provisioning_timeout_seconds', default=1800)
+        return self.config.get_int(
+            'scheduler.job_provisioning.stack_provisioning_timeout_seconds',
+            default=1800,
+        )
 
     @property
     def aws_util(self):
@@ -123,8 +142,10 @@ class JobProvisioningUtil:
     @property
     def stack_resources(self) -> CloudFormationStackResources:
         if self._stack_resources is None:
-            self._stack_resources = self.aws_util.cloudformation_describe_stack_resources(
-                stack_name=self.stack_name
+            self._stack_resources = (
+                self.aws_util.cloudformation_describe_stack_resources(
+                    stack_name=self.stack_name
+                )
             )
         return self._stack_resources
 
@@ -153,8 +174,10 @@ class JobProvisioningUtil:
         if auto_scaling_group_name is None:
             return None
 
-        self._auto_scaling_group = self.aws_util.autoscaling_describe_auto_scaling_group(
-            auto_scaling_group_name=auto_scaling_group_name
+        self._auto_scaling_group = (
+            self.aws_util.autoscaling_describe_auto_scaling_group(
+                auto_scaling_group_name=auto_scaling_group_name
+            )
         )
         return self._auto_scaling_group
 
@@ -163,7 +186,6 @@ class JobProvisioningUtil:
         return self.job.is_spot_capacity()
 
     def can_update_spot_fleet_capacity(self) -> bool:
-
         status = self.spot_fleet.activity_status
         if status not in ('fulfilled', 'pending_fulfillment'):
             return False
@@ -185,13 +207,12 @@ class JobProvisioningUtil:
         return 0
 
     def update_capacity(self) -> ProvisionCapacityResult:
-
         job = self.job
 
         result = BatchCapacityHelper(
             context=self.context,
             jobs=self.jobs,
-            provisioned_capacity=self.provisioned_capacity
+            provisioned_capacity=self.provisioned_capacity,
         ).invoke()
         provisioned_jobs = result.provisioned_jobs
         unprovisioned_jobs = result.unprovisioned_jobs
@@ -202,35 +223,33 @@ class JobProvisioningUtil:
             return ProvisionCapacityResult(
                 provisioned_jobs=provisioned_jobs,
                 unprovisioned_jobs=unprovisioned_jobs,
-                capacity_info=capacity
+                capacity_info=capacity,
             )
 
         if job.is_spot_capacity():
-
             if not self.can_update_spot_fleet_capacity():
                 raise exceptions.SocaException(
                     error_code=errorcodes.SPOT_FLEET_CAPACITY_UPDATE_IN_PROGRESS,
-                    message=f'Spot fleet capacity cannot can not be updated at this time. '
-                            f'Provisioning will be retried.'
+                    message='Spot fleet capacity cannot can not be updated at this time. '
+                    'Provisioning will be retried.',
                 )
 
             self.aws_util.ec2_modify_spot_fleet_request(
                 spot_fleet_request_id=self.stack_resources.get_spot_fleet_request_id(),
-                target_capacity=capacity.target_capacity
+                target_capacity=capacity.target_capacity,
             )
 
         else:
-
             # todo: handle scenario when a new shared job requested for spot capacity to be increased.
             self.aws_util.autoscaling_update_auto_scaling_group(
                 auto_scaling_group_name=self.stack_resources.get_auto_scaling_group_name(),
-                desired_capacity=capacity.target_capacity
+                desired_capacity=capacity.target_capacity,
             )
 
         return ProvisionCapacityResult(
             provisioned_jobs=provisioned_jobs,
             unprovisioned_jobs=unprovisioned_jobs,
-            capacity_info=capacity
+            capacity_info=capacity,
         )
 
     def is_provisioning_timeout(self) -> bool:
@@ -260,7 +279,6 @@ class JobProvisioningUtil:
         """
 
         try:
-
             stack = self.stack
             if stack is None:
                 return ProvisioningStatus.NOT_PROVISIONED
@@ -268,35 +286,29 @@ class JobProvisioningUtil:
             stack_status = self.stack.stack_status
 
             if stack_status == 'CREATE_COMPLETE':
-
                 # if is keep forever or terminate when idle, stack becomes a shared resource,
                 # and provisioning should not timeout.
                 if self.is_stack_a_shared_resource():
-
                     return ProvisioningStatus.COMPLETED
 
                 else:
-
                     if self.is_provisioning_timeout():
-
                         return ProvisioningStatus.TIMEOUT
 
                     else:
-
                         return ProvisioningStatus.COMPLETED
 
             elif stack_status == 'CREATE_IN_PROGRESS':
-
                 return ProvisioningStatus.IN_PROGRESS
 
             elif stack_status == 'DELETE_IN_PROGRESS':
-
                 return ProvisioningStatus.DELETE_IN_PROGRESS
 
-            elif stack_status in ['CREATE_FAILED',
-                                  'ROLLBACK_COMPLETE',
-                                  'ROLLBACK_FAILED']:
-
+            elif stack_status in [
+                'CREATE_FAILED',
+                'ROLLBACK_COMPLETE',
+                'ROLLBACK_FAILED',
+            ]:
                 return ProvisioningStatus.FAILED
 
         except ClientError as exc:
@@ -317,15 +329,17 @@ class JobProvisioningUtil:
                     MinCount=self.job.params.nodes,
                     BlockDeviceMappings=[
                         {
-                            'DeviceName': Utils.get_ec2_block_device_name(base_os=self.job.params.base_os),
+                            'DeviceName': Utils.get_ec2_block_device_name(
+                                base_os=self.job.params.base_os
+                            ),
                             'Ebs': {
                                 'Encrypted': constants.DEFAULT_VOLUME_ENCRYPTION_COMPUTE,
                                 'VolumeType': constants.DEFAULT_VOLUME_TYPE_COMPUTE,
-                                'DeleteOnTermination': constants.DEFAULT_KEEP_EBS_VOLUMES
-                            }
+                                'DeleteOnTermination': constants.DEFAULT_KEEP_EBS_VOLUMES,
+                            },
                         }
                     ],
-                    DryRun=True
+                    DryRun=True,
                 )
             except ClientError as e:
                 if e.response['Error'].get('Code') == 'DryRunOperation':
@@ -333,17 +347,18 @@ class JobProvisioningUtil:
                 else:
                     raise exceptions.SocaException(
                         error_code=errorcodes.EC2_DRY_RUN_FAILED,
-                        message=f'EC2 dry run failed for instance_type: {instance_type}, Err: {e}'
+                        message=f'EC2 dry run failed for instance_type: {instance_type}, Err: {e}',
                     )
 
     def check_service_quota(self) -> CheckServiceQuotaResult:
         result = CheckServiceQuotaResult(quotas=[])
-        enable_service_quota_check = self.context.config().get_bool('scheduler.job_provisioning.service_quotas', default=True)
+        enable_service_quota_check = self.context.config().get_bool(
+            'scheduler.job_provisioning.service_quotas', default=True
+        )
         if not enable_service_quota_check:
             return result
 
         if self.job.is_spot_capacity():
-
             desired_capacity = 0
             for job in self.jobs:
                 desired_capacity += job.spot_nodes() * job.default_vcpus()
@@ -351,12 +366,11 @@ class JobProvisioningUtil:
             quota = self.get_service_quota(
                 instance_types=self.job.params.instance_types,
                 quota_type=constants.EC2_SERVICE_QUOTA_SPOT,
-                desired_capacity=desired_capacity
+                desired_capacity=desired_capacity,
             )
             result.quotas += quota.quotas
 
         elif self.job.is_mixed_capacity():
-
             desired_ondemand_capacity = 0
             for job in self.jobs:
                 desired_ondemand_capacity += job.ondemand_nodes() * job.default_vcpus()
@@ -364,7 +378,7 @@ class JobProvisioningUtil:
             quota = self.get_service_quota(
                 instance_types=self.job.params.instance_types,
                 quota_type=constants.EC2_SERVICE_QUOTA_ONDEMAND,
-                desired_capacity=desired_ondemand_capacity
+                desired_capacity=desired_ondemand_capacity,
             )
             result.quotas += quota.quotas
 
@@ -374,11 +388,10 @@ class JobProvisioningUtil:
             quota = self.get_service_quota(
                 instance_types=self.job.params.instance_types,
                 quota_type=constants.EC2_SERVICE_QUOTA_SPOT,
-                desired_capacity=desired_spot_capacity
+                desired_capacity=desired_spot_capacity,
             )
             result.quotas += quota.quotas
         else:
-
             desired_capacity = 0
             for job in self.jobs:
                 desired_capacity += job.ondemand_nodes() * job.default_vcpus()
@@ -386,7 +399,7 @@ class JobProvisioningUtil:
             quota = self.get_service_quota(
                 instance_types=self.job.params.instance_types,
                 quota_type=constants.EC2_SERVICE_QUOTA_ONDEMAND,
-                desired_capacity=desired_capacity
+                desired_capacity=desired_capacity,
             )
             result.quotas += quota.quotas
 
@@ -394,7 +407,7 @@ class JobProvisioningUtil:
             raise exceptions.SocaException(
                 error_code=errorcodes.SERVICE_QUOTA_NOT_AVAILABLE,
                 message=f'service quota not available for instance_types: {self.job.params.instance_types}',
-                ref=result
+                ref=result,
             )
 
         return result
@@ -458,14 +471,13 @@ class JobProvisioningUtil:
         if len(not_purchased) > 0:
             raise exceptions.SocaException(
                 error_code=errorcodes.EC2_RESERVED_INSTANCES_NOT_PURCHASED,
-                message=f'could not find any reservations purchased for instance types: [{", ".join(not_purchased)}]'
+                message=f'could not find any reservations purchased for instance types: [{", ".join(not_purchased)}]',
             )
 
         base_weight = self.job.default_instance_type_option.weighted_capacity
 
         not_enough_ri = []
         for option in self.job.provisioning_options.instance_types:
-
             instance_type = option.name
             purchased_count = purchased_ri_result[instance_type]
 
@@ -473,8 +485,7 @@ class JobProvisioningUtil:
             weighted_capacity = option.weighted_capacity
 
             instances = self.instance_cache.list_instances(
-                instance_types=[instance_type],
-                state=['pending', 'running']
+                instance_types=[instance_type], state=['pending', 'running']
             )
 
             total_running_instances = len(instances)
@@ -483,25 +494,30 @@ class JobProvisioningUtil:
             desired_count = max(1, desired_count)
 
             if total_running_instances + desired_count > purchased_count:
-                not_enough_ri.append(NotEnoughReservedInstances(
-                    instance_type=instance_type,
-                    purchased_count=purchased_count,
-                    instances_count=total_running_instances,
-                    desired_count=desired_count
-                ))
+                not_enough_ri.append(
+                    NotEnoughReservedInstances(
+                        instance_type=instance_type,
+                        purchased_count=purchased_count,
+                        instances_count=total_running_instances,
+                        desired_count=desired_count,
+                    )
+                )
 
         if len(not_enough_ri) > 0:
             message = f'Not enough reserved capacity available: {os.linesep}'
             for entry in not_enough_ri:
-                message += f'InstanceType: {entry.instance_type}, Purchased: {entry.purchased_count}, ' \
-                           f'RunningInstances: {entry.instances_count}, Desired: {entry.desired_count}'
+                message += (
+                    f'InstanceType: {entry.instance_type}, Purchased: {entry.purchased_count}, '
+                    f'RunningInstances: {entry.instances_count}, Desired: {entry.desired_count}'
+                )
             raise exceptions.SocaException(
                 error_code=errorcodes.EC2_RESERVED_INSTANCES_NOT_AVAILABLE,
-                message=message
+                message=message,
             )
 
-    def get_service_quota(self, instance_types: List[str],
-                          quota_type: int, desired_capacity: int) -> CheckServiceQuotaResult:
+    def get_service_quota(
+        self, instance_types: List[str], quota_type: int, desired_capacity: int
+    ) -> CheckServiceQuotaResult:
         """
         > for SPOT + ONDEMAND or ONDEMAND + DEDICATED or SPOT + DEDICATED capacity, this API should be invoked twice.
         > SPOT + ONDEMAND + DEDICATED, this API should be invoked three times
@@ -520,7 +536,7 @@ class JobProvisioningUtil:
             context=self.context,
             instance_types=instance_types,
             quota_type=quota_type,
-            desired_capacity=desired_capacity
+            desired_capacity=desired_capacity,
         ).check_service_quota()
 
     @staticmethod
@@ -534,8 +550,7 @@ class JobProvisioningUtil:
     def check_budgets(self):
         for job in self.jobs:
             return AwsBudgetsHelper(
-                context=self.context,
-                job=job
+                context=self.context, job=job
             ).check_budget_availability()
 
     def check_licenses(self):
@@ -543,25 +558,35 @@ class JobProvisioningUtil:
             if job.params.licenses is None or len(job.params.licenses) == 0:
                 continue
             for license_ask in job.params.licenses:
-                available = self.context.license_service.get_available_licenses(license_resource_name=license_ask.name)
-                active_license_usage_count = self.context.job_cache.get_active_license_count(license_name=license_ask.name)
+                available = self.context.license_service.get_available_licenses(
+                    license_resource_name=license_ask.name
+                )
+                active_license_usage_count = (
+                    self.context.job_cache.get_active_license_count(
+                        license_name=license_ask.name
+                    )
+                )
                 total_required = active_license_usage_count + license_ask.count
                 if available < total_required:
                     raise exceptions.SocaException(
                         error_code=errorcodes.NOT_ENOUGH_LICENSES,
                         message=f'Not enough licenses available for: {license_ask.name}. '
-                                f'licenses available: {available}, '
-                                f'total required: {total_required}, '
-                                f'job required: {license_ask.count}')
+                        f'licenses available: {available}, '
+                        f'total required: {total_required}, '
+                        f'job required: {license_ask.count}',
+                    )
                 else:
-                    self._logger.info(f'{job.log_tag} - {license_ask.name} - '
-                                      f'licenses available: {available}, '
-                                      f'total required: {total_required}, '
-                                      f'job required: {license_ask.count}')
+                    self._logger.info(
+                        f'{job.log_tag} - {license_ask.name} - '
+                        f'licenses available: {available}, '
+                        f'total required: {total_required}, '
+                        f'job required: {license_ask.count}'
+                    )
 
     def check_acls(self) -> bool:
-
-        user_projects = self.context.projects_client.get_user_projects(username=self.job.owner)
+        user_projects = self.context.projects_client.get_user_projects(
+            username=self.job.owner
+        )
         project_name = self.job.project
 
         current_project = None
@@ -573,7 +598,7 @@ class JobProvisioningUtil:
         if current_project is None:
             raise exceptions.soca_exception(
                 error_code=errorcodes.UNAUTHORIZED_ACCESS,
-                message=f'User: {self.job.owner} is not authorized to submit jobs for project: {project_name} on queue: {self.job.queue}.'
+                message=f'User: {self.job.owner} is not authorized to submit jobs for project: {project_name} on queue: {self.job.queue}.',
             )
 
         return True

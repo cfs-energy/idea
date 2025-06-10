@@ -20,12 +20,14 @@ import logging
 
 
 class OpenPBSQSelect:
-
-    def __init__(self, context: ideascheduler.AppContext,
-                 shell: ShellInvoker = None,
-                 log_tag: str = None,
-                 logger: logging.Logger = None,
-                 **kwargs):
+    def __init__(
+        self,
+        context: ideascheduler.AppContext,
+        shell: ShellInvoker = None,
+        log_tag: str = None,
+        logger: logging.Logger = None,
+        **kwargs,
+    ):
         self._context = context
         if shell is None:
             shell = ShellInvoker(logger=logger)
@@ -128,7 +130,7 @@ class OpenPBSQSelect:
             self._logger.info(log_msg)
 
         if self.max_jobs > 0:
-            return job_ids[0:self.max_jobs]
+            return job_ids[0 : self.max_jobs]
         else:
             return job_ids
 

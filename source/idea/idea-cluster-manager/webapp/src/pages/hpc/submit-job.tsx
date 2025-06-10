@@ -41,7 +41,6 @@ import IdeaException from '../../common/exceptions'
 import {AppContext} from "../../common";
 import Utils from "../../common/utils";
 import {TableProps} from "@cloudscape-design/components/table/interfaces";
-import {KeyValue} from "../../components/key-value";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import {JobTemplate} from "../../service/job-templates-service";
 import IdeaAppLayout, {IdeaAppLayoutProps} from "../../components/app-layout";
@@ -206,7 +205,11 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
             jobSubmissionParameters = {
                 ...jobSubmissionParameters,
                 input_file: inputFile,
-                job_name: inputFile.substring(inputFile.lastIndexOf('/') + 1, inputFile.length).replaceAll(`.`, '_'),
+                job_name: inputFile.substring(inputFile.lastIndexOf('/') + 1, inputFile.length)
+                    .replaceAll(`.`, '_')
+                    .replaceAll(/\s+/g, '_')  // Replace spaces with underscores
+                    .replace(/[^A-Za-z0-9_-]/g, '')  // Remove any other invalid characters
+                    .substring(0, 50),  // Limit to 50 characters to match backend validation
             }
         }
 
@@ -850,44 +853,122 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
             return typeof this.state.submitJobResult?.budget_usage !== 'undefined'
         }
 
+        const hasBudgetError = () => {
+            if (!this.state.submitJobResult?.incidentals?.results) return false;
+            return this.state.submitJobResult.incidentals.results.some(result =>
+                result.error_code === 'Budgets.LimitExceeded' &&
+                result.message && result.message.includes('Budget not found')
+            );
+        }
+
         if (this.isSubmitted()) {
-            if (hasBudget()) {
+            if (hasBudgetError()) {
+                return <Box color="text-status-error">
+                    <StatusIndicator type="error">
+                        Budget not found for project: <strong>{this.state.selectedProject?.label}</strong>.
+                        The configured budget no longer exists in AWS Budgets.
+                    </StatusIndicator>
+                </Box>
+            } else if (hasBudget()) {
                 const budget = this.state.submitJobResult?.budget_usage!
+
+                if ((budget as any).is_missing) {
+                    return <Box color="text-status-error">
+                        <StatusIndicator type="error">
+                            Budget not found: <strong>{budget.budget_name}</strong>.
+                            The configured budget no longer exists in AWS Budgets.
+                        </StatusIndicator>
+                    </Box>
+                }
+
                 return (
-                    <ColumnLayout columns={2}>
-                        <div>
-                            <KeyValue title="Budget Name" value={budget.budget_name}/>
-                            <KeyValue title="Budget Limit" value={budget.budget_limit} type="amount"/>
-                            <KeyValue title="Actual Spend" value={budget.actual_spend} type="amount"/>
-                            <KeyValue title="Forecasted Spend" value={budget.forecasted_spend} type="amount"/>
-                        </div>
-                        <div>
-                            <PieChart
-                                hideFilter={true}
-                                data={[
-                                    {
-                                        title: "Budget Limit",
-                                        value: 60,
-                                        lastUpdate: "Dec 7, 2020"
-                                    },
-                                    {
-                                        title: "Failed",
-                                        value: 30,
-                                        lastUpdate: "Dec 6, 2020"
-                                    },
-                                    {
-                                        title: "In-progress",
-                                        value: 10,
-                                        lastUpdate: "Dec 6, 2020"
-                                    },
-                                    {
-                                        title: "Pending",
-                                        value: 0,
-                                        lastUpdate: "Dec 7, 2020"
-                                    }
-                                ]}/>
-                        </div>
-                    </ColumnLayout>
+                    <Container>
+                        <Grid gridDefinition={[{ colspan: { default: 12, xxs: 12 } }]}>
+                            <div className="budget-summary-container">
+                                <Header variant="h2">Budget Overview</Header>
+                                <Box padding={{ top: 'l' }}>
+                                    <Grid gridDefinition={[
+                                        { colspan: { default: 7, xxs: 12 } },
+                                        { colspan: { default: 5, xxs: 12 } }
+                                    ]}>
+                                        <div>
+                                            <SpaceBetween size="l">
+                                                <Container
+                                                    header={<Header variant="h3">Budget Details</Header>}
+                                                >
+                                                    <ColumnLayout columns={2} variant="text-grid">
+                                                        <div>
+                                                            <Box variant="awsui-key-label">Budget Name</Box>
+                                                            <div>{budget.budget_name}</div>
+                                                        </div>
+                                                        <div>
+                                                            <Box variant="awsui-key-label">Budget Limit</Box>
+                                                            <div>{Utils.getFormattedAmount(budget.budget_limit)}</div>
+                                                        </div>
+                                                        <div>
+                                                            <Box variant="awsui-key-label">Actual Spend</Box>
+                                                            <div>{Utils.getFormattedAmount(budget.actual_spend)}</div>
+                                                        </div>
+                                                        <div>
+                                                            <Box variant="awsui-key-label">Forecasted Spend</Box>
+                                                            <div>{Utils.getFormattedAmount(budget.forecasted_spend)}</div>
+                                                        </div>
+                                                        <div>
+                                                            <Box variant="awsui-key-label">Remaining Budget</Box>
+                                                            <div>
+                                                                {Utils.getFormattedAmount({
+                                                                    amount: Math.max(0, (budget.budget_limit?.amount || 0) - (budget.forecasted_spend?.amount || 0)),
+                                                                    unit: budget.budget_limit?.unit
+                                                                })}
+                                                            </div>
+                                                        </div>
+                                                        <div>
+                                                            {budget.job_usage_percent !== undefined && (
+                                                                <>
+                                                                    <Box variant="awsui-key-label">Job Budget Impact</Box>
+                                                                    <div>{budget.job_usage_percent.toFixed(2)}%</div>
+                                                                </>
+                                                            )}
+                                                        </div>
+                                                    </ColumnLayout>
+                                                </Container>
+                                            </SpaceBetween>
+                                        </div>
+                                        <div>
+                                            <Container
+                                                header={<Header variant="h3">Budget Allocation</Header>}
+                                            >
+                                                <PieChart
+                                                    hideFilter={true}
+                                                    data={[
+                                                        {
+                                                            title: "Actual Spend",
+                                                            value: Number((budget.actual_spend?.amount || 0).toFixed(2)),
+                                                            lastUpdate: new Date().toISOString()
+                                                        },
+                                                        {
+                                                            title: "Forecasted Additional Spend",
+                                                            value: Number(Math.max(0, (budget.forecasted_spend?.amount || 0) - (budget.actual_spend?.amount || 0)).toFixed(2)),
+                                                            lastUpdate: new Date().toISOString()
+                                                        },
+                                                        {
+                                                            title: "Remaining Budget",
+                                                            value: Number(Math.max(0, (budget.budget_limit?.amount || 0) - (budget.forecasted_spend?.amount || 0)).toFixed(2)),
+                                                            lastUpdate: new Date().toISOString()
+                                                        }
+                                                    ]}
+                                                    segmentDescription={(datum, sum) => {
+                                                        const percentage = (datum.value / sum * 100).toFixed(1);
+                                                        return `${datum.title}: ${Utils.getFormattedAmount({ amount: datum.value, unit: budget.budget_limit?.unit })} (${percentage}%)`;
+                                                    }}
+                                                />
+                                            </Container>
+                                        </div>
+                                    </Grid>
+                                </Box>
+                            </div>
+                        </Grid>
+                    </Container>
                 )
             } else {
                 return <Box color="text-body-secondary">
@@ -934,7 +1015,7 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                 <ul>
                     <li><Link onFollow={() => this.showTab(TAB_COST_ESTIMATES)}>Show Cost Estimates</Link></li>
                     <li><Link onFollow={() => this.showTab(TAB_SERVICE_QUOTAS)}>Show Service Quota Usage</Link></li>
-                    {/*<li><Link onFollow={() => this.showTab(TAB_BUDGET_USAGE)}>Show Budget Usage</Link></li>*/}
+                    <li><Link onFollow={() => this.showTab(TAB_BUDGET_USAGE)}>Show Budget Usage</Link></li>
                     <li><Link onFollow={() => this.showTab(TAB_JOB_SCRIPT)}>Show Job Script</Link></li>
                     <li><Link onFollow={() => this.showTab(TAB_JOB_PARAMETERS)}>Show Job Parameters</Link></li>
                 </ul>
@@ -1350,23 +1431,78 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                                         label: 'AWS Service Quotas',
                                         content: this.buildServiceQuotas()
                                     },
-                                    // {
-                                    //     id: TAB_BUDGET_USAGE,
-                                    //     disabled: !this.isSubmitted(),
-                                    //     label: 'Budget Usage',
-                                    //     content: this.buildBudgetUsage()
-                                    // },
+                                    {
+                                        id: TAB_BUDGET_USAGE,
+                                        disabled: !this.isSubmitted(),
+                                        label: 'Budget Usage',
+                                        content: this.buildBudgetUsage()
+                                    },
                                     {
                                         id: TAB_JOB_SCRIPT,
                                         disabled: !this.isSubmitted(),
                                         label: 'Job Script',
                                         content: (
                                             <div className={"job-script"}>
-                                                <Box variant="code">
-                                <pre style={{padding: '8px'}}>
-                                    {this.state.jobScript}
-                                </pre>
-                                                </Box>
+                                                <Container>
+                                                    <SpaceBetween size="l" direction="vertical">
+                                                        <ColumnLayout columns={2}>
+                                                            <Box>
+                                                                <Header variant="h3">PBS Job Script</Header>
+                                                                <p>
+                                                                    This is the PBS job script generated based on your inputs.
+                                                                    This script will be used to submit your job to the scheduler.
+                                                                </p>
+                                                                {this.isDryRun() && (
+                                                                    <StatusIndicator type="success">
+                                                                        This script has been validated and is ready for submission.
+                                                                    </StatusIndicator>
+                                                                )}
+                                                            </Box>
+                                                            <Box textAlign="right">
+                                                                <SpaceBetween size="m" direction="vertical">
+                                                                    <div>
+                                                                        <Button
+                                                                            iconName="external"
+                                                                            variant="primary"
+                                                                            onClick={() => {
+                                                                                if (this.state.submitJobResult?.job) {
+                                                                                    const job = this.state.submitJobResult.job;
+                                                                                    const jobName = job.name || '';
+                                                                                    const jobUid = job.job_uid || '';
+                                                                                    const username = job.owner || AppContext.get().auth().getUsername() || 'clusteradmin';
+                                                                                    const filePath = `/data/home/${username}/jobs/${jobName}_${jobUid}.que`;
+                                                                                    window.location.href = `/#/home/script-workbench?file=${encodeURIComponent(filePath)}`;
+                                                                                }
+                                                                            }}
+                                                                        >
+                                                                            Open in Script Workbench
+                                                                        </Button>
+                                                                    </div>
+                                                                    {this.isDryRun() && (
+                                                                        <Alert type="info">
+                                                                            You can edit this script before final submission by opening it in the Script Workbench.
+                                                                        </Alert>
+                                                                    )}
+                                                                </SpaceBetween>
+                                                            </Box>
+                                                        </ColumnLayout>
+
+                                                        <Container header={<Header variant="h3">Script Contents</Header>}>
+                                                            <Box variant="code" padding="m" color="text-body-secondary">
+                                                                <pre style={{
+                                                                    padding: '12px',
+                                                                    margin: 0,
+                                                                    overflowX: 'auto',
+                                                                    fontFamily: 'monospace',
+                                                                    lineHeight: '1.4',
+                                                                    maxHeight: '600px'
+                                                                }}>
+                                                                    {this.state.jobScript}
+                                                                </pre>
+                                                            </Box>
+                                                        </Container>
+                                                    </SpaceBetween>
+                                                </Container>
                                             </div>
                                         )
                                     },

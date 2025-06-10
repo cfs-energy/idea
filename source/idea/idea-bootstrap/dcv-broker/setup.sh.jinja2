@@ -13,7 +13,7 @@
 
 set -x
 
-{% set PATH = '/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin' %}
+{% set path = '/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin' %}
 echo -e "
 ## [BEGIN] IDEA Environment Configuration - Do Not Delete
 AWS_DEFAULT_REGION={{ context.aws_region }}
@@ -41,12 +41,25 @@ PATH=/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin
 
 source /etc/environment
 
+{% if context.base_os in ('amazonlinux2023') %}
+dnf -y install cronie
+systemctl enable crond
+systemctl start crond
+{% endif %}
+
+SOURCE="${1}"
+if [[ "${SOURCE}" == "crontab" ]]; then
+  # clean crontab, remove current file from reboot commands
+  crontab -l | grep -v 'setup.sh' | crontab -
+fi
 echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
 {% include '_templates/linux/idea_proxy.jinja2' %}
+
+{% include '_templates/linux/rsyslog.jinja2' %}
 
 {% include '_templates/linux/idea_service_account.jinja2' %}
 
@@ -56,34 +69,34 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
 {% include '_templates/linux/system_packages.jinja2' %}
 
-{%- include '_templates/linux/cloudwatch_agent.jinja2' %}
+{% include '_templates/linux/cloudwatch_agent.jinja2' %}
 
-{%- include '_templates/linux/restrict_ssh.jinja2' %}
+{% include '_templates/linux/restrict_ssh.jinja2' %}
 
-{%- if context.is_metrics_provider_prometheus() %}
-  {%- include '_templates/linux/prometheus.jinja2' %}
-  {%- include '_templates/linux/prometheus_node_exporter.jinja2' %}
-{%- endif %}
+{% if context.is_metrics_provider_prometheus() %}
+     {% include '_templates/linux/prometheus.jinja2' %}
+     {% include '_templates/linux/prometheus_node_exporter.jinja2' %}
+{% endif %}
 
 {% include '_templates/linux/jq.jinja2' %}
 
-{%- with  ebs_volume_tags = [
+{% with  ebs_volume_tags = [
   {'Key':'idea:ClusterName', 'Value': context.cluster_name },
   {'Key':'idea:ModuleName', 'Value': context.module_name },
   {'Key':'idea:ModuleId', 'Value': context.module_id },
   {'Key':'Name', 'Value': context.cluster_name + '/' + context.module_id + ' Root Volume' }
 ] %}
   {% include '_templates/linux/tag_ebs_volumes.jinja2' %}
-{%- endwith %}
+{% endwith %}
 
-{%- with  network_interface_tags = [
+{% with  network_interface_tags = [
   {'Key':'idea:ClusterName', 'Value': context.cluster_name },
   {'Key':'idea:ModuleName', 'Value': context.module_name },
   {'Key':'idea:ModuleId', 'Value': context.module_id },
   {'Key':'Name', 'Value': context.cluster_name + '/' + context.module_id + ' Network Interface' }
 ] %}
   {% include '_templates/linux/tag_network_interface.jinja2' %}
-{%- endwith %}
+{% endwith %}
 
 {% include '_templates/linux/chronyd.jinja2' %}
 
@@ -93,14 +106,14 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
 {% include '_templates/linux/disable_motd_update.jinja2' %}
 
-{%- with secure_path = PATH %}
+{% with secure_path = path %}
   {% include '_templates/linux/sudoer_secure_path.jinja2' %}
-{%- endwith %}
+{% endwith %}
 
-{%- with messages = [
+{% with messages = [
   context.module_name + ' (v'+context.module_version+'), Cluster: ' + context.cluster_name
 ] %}
   {% include '_templates/linux/motd.jinja2' %}
-{%- endwith %}
+{% endwith %}
 
 /bin/bash ${SCRIPT_DIR}/install_app.sh

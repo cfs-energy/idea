@@ -9,9 +9,19 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
-from ideavirtualdesktopcontroller.app.api.virtual_desktop_api_invoker import VirtualDesktopApiInvoker
+from ideavirtualdesktopcontroller.app.api.virtual_desktop_api_invoker import (
+    VirtualDesktopApiInvoker,
+)
 from ideavirtualdesktopcontroller.app.api.virtual_desktop_api import VirtualDesktopAPI
-from ideavirtualdesktopcontroller.app.api.virtual_desktop_admin_api import VirtualDesktopAdminAPI
-from ideavirtualdesktopcontroller.app.api.virtual_desktop_dcv_api import VirtualDesktopDCVAPI
-from ideavirtualdesktopcontroller.app.api.virtual_desktop_user_api import VirtualDesktopUserAPI
-from ideavirtualdesktopcontroller.app.api.virtual_desktop_utils_api import VirtualDesktopUtilsAPI
+from ideavirtualdesktopcontroller.app.api.virtual_desktop_admin_api import (
+    VirtualDesktopAdminAPI,
+)
+from ideavirtualdesktopcontroller.app.api.virtual_desktop_dcv_api import (
+    VirtualDesktopDCVAPI,
+)
+from ideavirtualdesktopcontroller.app.api.virtual_desktop_user_api import (
+    VirtualDesktopUserAPI,
+)
+from ideavirtualdesktopcontroller.app.api.virtual_desktop_utils_api import (
+    VirtualDesktopUtilsAPI,
+)

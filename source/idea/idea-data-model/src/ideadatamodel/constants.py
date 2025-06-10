@@ -34,7 +34,7 @@ SUPPORTED_STORAGE_PROVIDERS = [
     STORAGE_PROVIDER_FSX_LUSTRE,
     STORAGE_PROVIDER_FSX_NETAPP_ONTAP,
     STORAGE_PROVIDER_FSX_OPENZFS,
-    STORAGE_PROVIDER_FSX_WINDOWS_FILE_SERVER
+    STORAGE_PROVIDER_FSX_WINDOWS_FILE_SERVER,
 ]
 
 # Volume Type strings
@@ -72,7 +72,16 @@ SCALING_MODE_SINGLE_JOB = 'single-job'
 SCALING_MODE_MULTIPLE_JOBS = 'batch'
 DEFAULT_SCALING_MODE = SCALING_MODE_SINGLE_JOB
 
-ALLOWED_BASEOS = ['amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9', 'ubuntu2204', 'ubuntu2404']
+ALLOWED_BASEOS = [
+    'amazonlinux2',
+    'amazonlinux2023',
+    'rhel8',
+    'rhel9',
+    'rocky8',
+    'rocky9',
+    'ubuntu2204',
+    'ubuntu2404',
+]
 
 TOPIC_BROADCAST = 'idea.app.broadcast'
 MESSAGE_RELOAD = 'app.reload'
@@ -111,6 +120,7 @@ IDEA_TAG_JOB_ID = IDEA_TAG_PREFIX + 'JobId'
 IDEA_TAG_JOB_GROUP = IDEA_TAG_PREFIX + 'JobGroup'
 IDEA_TAG_JOB_NAME = IDEA_TAG_PREFIX + 'JobName'
 IDEA_TAG_JOB_OWNER = IDEA_TAG_PREFIX + 'JobOwner'
+IDEA_TAG_JOB_OWNER_EMAIL = IDEA_TAG_PREFIX + 'JobOwnerEmail'
 IDEA_TAG_JOB_QUEUE = IDEA_TAG_PREFIX + 'JobQueue'
 IDEA_TAG_KEEP_FOREVER = IDEA_TAG_PREFIX + 'KeepForever'
 IDEA_TAG_TERMINATE_WHEN_IDLE = IDEA_TAG_PREFIX + 'TerminateWhenIdle'
@@ -213,7 +223,10 @@ FSX_LUSTRE_DEPLOYMENT_TYPE_PERSISTENT_2 = 'persistent_2'
 FSX_LUSTRE_DEPLOYMENT_TYPE_SCRATCH_1 = 'scratch_1'
 FSX_LUSTRE_DEPLOYMENT_TYPE_SCRATCH_2 = 'scratch_2'
 DEFAULT_FSX_LUSTRE_DEPLOYMENT_TYPE = FSX_LUSTRE_DEPLOYMENT_TYPE_SCRATCH_2
-FSX_LUSTRE_PER_UNIT_THROUGHPUT_TYPES = (FSX_LUSTRE_DEPLOYMENT_TYPE_PERSISTENT_1, FSX_LUSTRE_DEPLOYMENT_TYPE_PERSISTENT_2)
+FSX_LUSTRE_PER_UNIT_THROUGHPUT_TYPES = (
+    FSX_LUSTRE_DEPLOYMENT_TYPE_PERSISTENT_1,
+    FSX_LUSTRE_DEPLOYMENT_TYPE_PERSISTENT_2,
+)
 
 DEFAULT_ENABLE_EFA_SUPPORT = False
 DEFAULT_ENABLE_HT_SUPPORT = False
@@ -234,6 +247,7 @@ SELECT_CHOICE_OTHER = 'other'
 
 # Supported OS
 OS_AMAZONLINUX2 = 'amazonlinux2'
+OS_AMAZONLINUX2023 = 'amazonlinux2023'
 OS_RHEL8 = 'rhel8'
 OS_RHEL9 = 'rhel9'
 OS_ROCKY8 = 'rocky8'
@@ -241,21 +255,44 @@ OS_ROCKY9 = 'rocky9'
 OS_UBUNTU2204 = 'ubuntu2204'
 OS_UBUNTU2404 = 'ubuntu2404'
 OS_WINDOWS = 'windows'
-SUPPORTED_OS = (OS_AMAZONLINUX2, OS_RHEL8, OS_RHEL9, OS_WINDOWS, OS_ROCKY8, OS_ROCKY9, OS_UBUNTU2204, OS_UBUNTU2404)
-SUPPORTED_LINUX_OS = (OS_AMAZONLINUX2, OS_RHEL8, OS_RHEL9, OS_ROCKY8, OS_ROCKY9, OS_UBUNTU2204, OS_UBUNTU2404)
+OS_WINDOWS2019 = 'windows2019'
+OS_WINDOWS2022 = 'windows2022'
+OS_WINDOWS2025 = 'windows2025'
+SUPPORTED_OS = (
+    OS_AMAZONLINUX2,
+    OS_AMAZONLINUX2023,
+    OS_RHEL8,
+    OS_RHEL9,
+    OS_WINDOWS,
+    OS_WINDOWS2019,
+    OS_WINDOWS2022,
+    OS_WINDOWS2025,
+    OS_ROCKY8,
+    OS_ROCKY9,
+    OS_UBUNTU2204,
+    OS_UBUNTU2404,
+)
+SUPPORTED_LINUX_OS = (
+    OS_AMAZONLINUX2,
+    OS_AMAZONLINUX2023,
+    OS_RHEL8,
+    OS_RHEL9,
+    OS_ROCKY8,
+    OS_ROCKY9,
+    OS_UBUNTU2204,
+    OS_UBUNTU2404,
+)
 
 # Platforms
 PLATFORM_LINUX = 'linux'
 PLATFORM_WINDOWS = 'windows'
 
-CLICK_SETTINGS = dict(
-    help_option_names=['-h', '--help'],
-    max_content_width=1200)
+CLICK_SETTINGS = dict(help_option_names=['-h', '--help'], max_content_width=1200)
 
 AWS_SOLUTION_ID = 'SO0072'
 DEFAULT_ENCODING = 'utf-8'
 DEFAULT_LOCALE = 'en_US'
-DEFAULT_TIMEZONE = 'America/Los_Angeles'
+DEFAULT_TIMEZONE = 'America/New_York'
 
 # modules
 MODULE_BOOTSTRAP = 'bootstrap'
@@ -282,7 +319,7 @@ ALL_MODULES = [
     MODULE_CLUSTER_MANAGER,
     MODULE_VIRTUAL_DESKTOP_CONTROLLER,
     MODULE_BASTION_HOST,
-    MODULE_METRICS
+    MODULE_METRICS,
 ]
 
 # module types
@@ -299,13 +336,15 @@ ALL_GROUP_TYPES = [
     GROUP_TYPE_USER,
     GROUP_TYPE_PROJECT,
     GROUP_TYPE_MODULE,
-    GROUP_TYPE_CLUSTER
+    GROUP_TYPE_CLUSTER,
 ]
 
 # project defaults
 DEFAULT_PROJECT = 'default'
 
-DEFAULT_COPYRIGHT_TEXT = 'Copyright {year} Amazon.com, Inc. or its affiliates. All Rights Reserved.'
+DEFAULT_COPYRIGHT_TEXT = (
+    'Copyright {year} Amazon.com, Inc. or its affiliates. All Rights Reserved.'
+)
 
 # metrics
 METRICS_PROVIDER_CLOUDWATCH = 'cloudwatch'
@@ -360,8 +399,8 @@ CAVEATS['SSM_DISCOVERY_RESTRICTED_REGION_LIST'] = [
     'me-central-1',
     'me-south-1',
     'us-gov-east-1',
-    'us-gov-west-1'
-    ]
+    'us-gov-west-1',
+]
 CAVEATS['SSM_DISCOVERY_FALLBACK_REGION'] = 'us-east-1'
 
 
@@ -370,7 +409,7 @@ CAVEATS['SSM_DISCOVERY_FALLBACK_REGION'] = 'us-east-1'
 #
 CAVEATS['KINESIS_STREAMS_CLOUDFORMATION_UNSUPPORTED_STREAMMODEDETAILS_REGION_LIST'] = [
     'us-gov-east-1',
-    'us-gov-west-1'
+    'us-gov-west-1',
 ]
 
 #
@@ -379,7 +418,7 @@ CAVEATS['KINESIS_STREAMS_CLOUDFORMATION_UNSUPPORTED_STREAMMODEDETAILS_REGION_LIS
 #
 CAVEATS['ROUTE53_CROSS_ZONE_ALIAS_RESTRICTED_REGION_LIST'] = [
     'us-gov-east-1',
-    'us-gov-west-1'
+    'us-gov-west-1',
 ]
 
 #
@@ -387,7 +426,7 @@ CAVEATS['ROUTE53_CROSS_ZONE_ALIAS_RESTRICTED_REGION_LIST'] = [
 #
 CAVEATS['COGNITO_REQUIRE_FIPS_ENDPOINT_REGION_LIST'] = [
     'us-gov-east-1',
-    'us-gov-west-1'
+    'us-gov-west-1',
 ]
 
 #
@@ -395,24 +434,18 @@ CAVEATS['COGNITO_REQUIRE_FIPS_ENDPOINT_REGION_LIST'] = [
 #
 CAVEATS['COGNITO_ADVANCED_SECURITY_UNAVAIL_REGION_LIST'] = [
     'us-gov-east-1',
-    'us-gov-west-1'
+    'us-gov-west-1',
 ]
 
 #
 # No SQS FIFO queues
 #
-CAVEATS['SQS_NO_FIFO_SUPPORT_REGION_LIST'] = [
-    'us-gov-east-1',
-    'us-gov-west-1'
-]
+CAVEATS['SQS_NO_FIFO_SUPPORT_REGION_LIST'] = ['us-gov-east-1', 'us-gov-west-1']
 
 #
 # No SNS FIFO queues
 #
-CAVEATS['SNS_NO_FIFO_SUPPORT_REGION_LIST'] = [
-    'us-gov-east-1',
-    'us-gov-west-1'
-]
+CAVEATS['SNS_NO_FIFO_SUPPORT_REGION_LIST'] = ['us-gov-east-1', 'us-gov-west-1']
 
 # module set
 DEFAULT_MODULE_SET = 'default'

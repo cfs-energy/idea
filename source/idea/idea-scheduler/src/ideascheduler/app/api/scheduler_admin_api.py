@@ -46,16 +46,20 @@ from ideadatamodel.scheduler import (
     DeleteJobResult,
     HpcQueueProfile,
     SocaJob,
-    SocaScalingMode
+    SocaScalingMode,
 )
 from ideasdk.api import BaseAPI, ApiInvocationContext
 from ideasdk.utils import Utils
 
 import ideascheduler
 
-from ideascheduler.app.provisioning.job_provisioning_queue.job_provisioning_queue import JobProvisioningQueue
+from ideascheduler.app.provisioning.job_provisioning_queue.job_provisioning_queue import (
+    JobProvisioningQueue,
+)
 from ideascheduler.app.scheduler.job_param_builder import SocaJobBuilder
-from ideascheduler.app.provisioning.job_provisioner.cloudformation_stack_builder import CloudFormationStackBuilder
+from ideascheduler.app.provisioning.job_provisioner.cloudformation_stack_builder import (
+    CloudFormationStackBuilder,
+)
 
 from typing import Optional
 
@@ -71,100 +75,100 @@ class SchedulerAdminAPI(BaseAPI):
         self.acl = {
             'SchedulerAdmin.ListActiveJobs': {
                 'scope': self.SCOPE_READ,
-                'method': self.list_active_jobs
+                'method': self.list_active_jobs,
             },
             'SchedulerAdmin.ListCompletedJobs': {
                 'scope': self.SCOPE_READ,
-                'method': self.list_completed_jobs
+                'method': self.list_completed_jobs,
             },
             'SchedulerAdmin.ListNodes': {
                 'scope': self.SCOPE_READ,
-                'method': self.list_nodes
+                'method': self.list_nodes,
             },
             'SchedulerAdmin.CreateQueueProfile': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.create_queue_profile
+                'method': self.create_queue_profile,
             },
             'SchedulerAdmin.GetQueueProfile': {
                 'scope': self.SCOPE_READ,
-                'method': self.get_queue_profile
+                'method': self.get_queue_profile,
             },
             'SchedulerAdmin.UpdateQueueProfile': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.update_queue_profile
+                'method': self.update_queue_profile,
             },
             'SchedulerAdmin.EnableQueueProfile': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.enable_queue_profile
+                'method': self.enable_queue_profile,
             },
             'SchedulerAdmin.DisableQueueProfile': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.disable_queue_profile
+                'method': self.disable_queue_profile,
             },
             'SchedulerAdmin.DeleteQueueProfile': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.delete_queue_profile
+                'method': self.delete_queue_profile,
             },
             'SchedulerAdmin.ListQueueProfiles': {
                 'scope': self.SCOPE_READ,
-                'method': self.list_queue_profiles
+                'method': self.list_queue_profiles,
             },
             'SchedulerAdmin.CreateHpcApplication': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.create_hpc_application
+                'method': self.create_hpc_application,
             },
             'SchedulerAdmin.GetHpcApplication': {
                 'scope': self.SCOPE_READ,
-                'method': self.get_hpc_application
+                'method': self.get_hpc_application,
             },
             'SchedulerAdmin.UpdateHpcApplication': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.update_hpc_application
+                'method': self.update_hpc_application,
             },
             'SchedulerAdmin.DeleteHpcApplication': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.delete_hpc_application
+                'method': self.delete_hpc_application,
             },
             'SchedulerAdmin.ListHpcApplications': {
                 'scope': self.SCOPE_READ,
-                'method': self.list_hpc_applications
+                'method': self.list_hpc_applications,
             },
             'SchedulerAdmin.GetUserApplications': {
                 'scope': self.SCOPE_READ,
-                'method': self.get_user_applications
+                'method': self.get_user_applications,
             },
             'SchedulerAdmin.ProvisionAlwaysOnNodes': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.provision_always_on_nodes
+                'method': self.provision_always_on_nodes,
             },
             'SchedulerAdmin.CreateHpcLicenseResource': {
                 'scope': self.SCOPE_READ,
-                'method': self.create_license_resource
+                'method': self.create_license_resource,
             },
             'SchedulerAdmin.GetHpcLicenseResource': {
                 'scope': self.SCOPE_READ,
-                'method': self.get_license_resource
+                'method': self.get_license_resource,
             },
             'SchedulerAdmin.UpdateHpcLicenseResource': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.update_license_resource
+                'method': self.update_license_resource,
             },
             'SchedulerAdmin.DeleteHpcLicenseResource': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.delete_license_resource
+                'method': self.delete_license_resource,
             },
             'SchedulerAdmin.ListHpcLicenseResources': {
                 'scope': self.SCOPE_READ,
-                'method': self.list_license_resources
+                'method': self.list_license_resources,
             },
             'SchedulerAdmin.CheckHpcLicenseResourceAvailability': {
                 'scope': self.SCOPE_READ,
-                'method': self.check_license_resource_availability
+                'method': self.check_license_resource_availability,
             },
             'SchedulerAdmin.DeleteJob': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.delete_job
-            }
+                'method': self.delete_job,
+            },
         }
 
     def list_active_jobs(self, context: ApiInvocationContext):
@@ -173,19 +177,18 @@ class SchedulerAdminAPI(BaseAPI):
         page_start = payload.page_start
 
         entries = self.context.job_cache.list_jobs(_limit=page_size, _offset=page_start)
-        total = self.context.job_cache.get_count() - 1
+        total = self.context.job_cache.get_count()
 
-        context.success(ListJobsResult(
-            paginator=SocaPaginator(
-                total=total,
-                page_size=payload.page_size,
-                start=payload.page_start
-            ),
-            listing=entries
-        ))
+        context.success(
+            ListJobsResult(
+                paginator=SocaPaginator(
+                    total=total, page_size=payload.page_size, start=payload.page_start
+                ),
+                listing=entries,
+            )
+        )
 
     def list_completed_jobs(self, context: ApiInvocationContext):
-
         payload = context.get_request_payload_as(ListJobsRequest)
 
         if self.context.document_store.is_enabled():
@@ -195,17 +198,21 @@ class SchedulerAdminAPI(BaseAPI):
             page_size = payload.page_size
             page_start = payload.page_start
 
-            entries = self.context.job_cache.list_completed_jobs(_limit=page_size, _offset=page_start)
+            entries = self.context.job_cache.list_completed_jobs(
+                _limit=page_size, _offset=page_start
+            )
             total = self.context.job_cache.get_completed_jobs_count()
 
-            context.success(ListJobsResult(
-                paginator=SocaPaginator(
-                    total=total,
-                    page_size=payload.page_size,
-                    start=payload.page_start
-                ),
-                listing=entries
-            ))
+            context.success(
+                ListJobsResult(
+                    paginator=SocaPaginator(
+                        total=total,
+                        page_size=payload.page_size,
+                        start=payload.page_start,
+                    ),
+                    listing=entries,
+                )
+            )
 
     # nodes
     def list_nodes(self, context: ApiInvocationContext):
@@ -220,14 +227,14 @@ class SchedulerAdminAPI(BaseAPI):
             payload = context.get_request_payload_as(CreateQueueProfileRequest)
             queue_profile = payload.queue_profile
             created = self.context.queue_profiles.create_queue_profile(queue_profile)
-            context.success(CreateQueueProfileResult(
-                queue_profile=created
-            ))
+            context.success(CreateQueueProfileResult(queue_profile=created))
         except exceptions.SocaException as e:
             if e.error_code == errorcodes.VALIDATION_FAILED:
-                context.fail(e.error_code, e.message, CreateQueueProfileResult(
-                    validation_errors=e.ref
-                ))
+                context.fail(
+                    e.error_code,
+                    e.message,
+                    CreateQueueProfileResult(validation_errors=e.ref),
+                )
             else:
                 raise e
 
@@ -236,14 +243,14 @@ class SchedulerAdminAPI(BaseAPI):
             payload = context.get_request_payload_as(UpdateQueueProfileRequest)
             queue_profile = payload.queue_profile
             created = self.context.queue_profiles.update_queue_profile(queue_profile)
-            context.success(UpdateQueueProfileResult(
-                queue_profile=created
-            ))
+            context.success(UpdateQueueProfileResult(queue_profile=created))
         except exceptions.SocaException as e:
             if e.error_code == errorcodes.VALIDATION_FAILED:
-                context.fail(e.error_code, e.message, CreateQueueProfileResult(
-                    validation_errors=e.ref
-                ))
+                context.fail(
+                    e.error_code,
+                    e.message,
+                    CreateQueueProfileResult(validation_errors=e.ref),
+                )
             else:
                 raise e
 
@@ -252,11 +259,9 @@ class SchedulerAdminAPI(BaseAPI):
         queue_profile = self.context.queue_profiles.get_queue_profile(
             queue_profile_name=payload.queue_profile_name,
             queue_profile_id=payload.queue_profile_id,
-            queue_name=payload.queue_name
+            queue_name=payload.queue_name,
         )
-        context.success(GetQueueProfileResult(
-            queue_profile=queue_profile
-        ))
+        context.success(GetQueueProfileResult(queue_profile=queue_profile))
 
     def list_queue_profiles(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(ListQueueProfilesRequest)
@@ -264,25 +269,30 @@ class SchedulerAdminAPI(BaseAPI):
         queue_profiles = self.context.queue_profiles.list_queue_profiles()
         result = []
         for queue_profile in queue_profiles:
-
             if lite:
-                result.append(HpcQueueProfile(
-                    queue_profile_id=queue_profile.queue_profile_id,
-                    name=queue_profile.name,
-                    enabled=queue_profile.enabled,
-                    title=queue_profile.title
-                ))
+                result.append(
+                    HpcQueueProfile(
+                        queue_profile_id=queue_profile.queue_profile_id,
+                        name=queue_profile.name,
+                        enabled=queue_profile.enabled,
+                        title=queue_profile.title,
+                    )
+                )
                 continue
 
             # get projects
             for current_project in queue_profile.projects:
-                project = self.context.projects_client.get_project_by_id(current_project.project_id)
+                project = self.context.projects_client.get_project_by_id(
+                    current_project.project_id
+                )
                 current_project.title = project.title
                 current_project.name = project.name
 
             # real time fields and metrics
-            provisioning_queue: Optional[JobProvisioningQueue] = self.context.queue_profiles.get_provisioning_queue(
-                queue_profile_name=queue_profile.name
+            provisioning_queue: Optional[JobProvisioningQueue] = (
+                self.context.queue_profiles.get_provisioning_queue(
+                    queue_profile_name=queue_profile.name
+                )
             )
 
             if provisioning_queue is not None:
@@ -300,15 +310,13 @@ class SchedulerAdminAPI(BaseAPI):
 
             result.append(queue_profile)
 
-        context.success(ListQueueProfilesResult(
-            listing=result
-        ))
+        context.success(ListQueueProfilesResult(listing=result))
 
     def enable_queue_profile(self, context: ApiInvocationContext):
         payload = context.get_request_payload_as(EnableQueueProfileRequest)
         self.context.queue_profiles.enable_queue_profile(
             queue_profile_id=payload.queue_profile_id,
-            queue_profile_name=payload.queue_profile_name
+            queue_profile_name=payload.queue_profile_name,
         )
         context.success(EnableQueueProfileResult())
 
@@ -316,7 +324,7 @@ class SchedulerAdminAPI(BaseAPI):
         payload = context.get_request_payload_as(DisableQueueProfileRequest)
         self.context.queue_profiles.disable_queue_profile(
             queue_profile_id=payload.queue_profile_id,
-            queue_profile_name=payload.queue_profile_name
+            queue_profile_name=payload.queue_profile_name,
         )
         context.success(DisableQueueProfileResult())
 
@@ -325,7 +333,7 @@ class SchedulerAdminAPI(BaseAPI):
         self.context.queue_profiles.delete_queue_profile(
             queue_profile_id=payload.queue_profile_id,
             queue_profile_name=payload.queue_profile_name,
-            delete_queues=payload.delete_queues
+            delete_queues=payload.delete_queues,
         )
         context.success(DeleteQueueProfileResult())
 
@@ -379,18 +387,26 @@ class SchedulerAdminAPI(BaseAPI):
         if Utils.is_empty(queue_profile_name):
             raise exceptions.invalid_params('queue_profile_name is required')
 
-        queue_profile = self.context.queue_profiles.get_queue_profile(queue_profile_name=queue_profile_name)
+        queue_profile = self.context.queue_profiles.get_queue_profile(
+            queue_profile_name=queue_profile_name
+        )
         if not Utils.get_as_bool(queue_profile.keep_forever, False):
-            raise exceptions.invalid_params(f'queue profile: {queue_profile_name} does not support always on provisioning.')
+            raise exceptions.invalid_params(
+                f'queue profile: {queue_profile_name} does not support always on provisioning.'
+            )
         if Utils.is_empty(queue_profile.stack_uuid):
-            raise exceptions.invalid_params(f'queue profile: {queue_profile_name} is not valid. stack_uuid is not configured.')
+            raise exceptions.invalid_params(
+                f'queue profile: {queue_profile_name} is not valid. stack_uuid is not configured.'
+            )
 
         queue_name = request.queue_name
         if Utils.is_empty(queue_name):
             queue_name = queue_profile.queues[0]
 
         if Utils.is_empty(queue_name):
-            raise exceptions.invalid_params('unable to find a queue name in queue profile or request parameters.')
+            raise exceptions.invalid_params(
+                'unable to find a queue name in queue profile or request parameters.'
+            )
 
         job_params = request.params
         if Utils.is_empty(job_params):
@@ -400,7 +416,7 @@ class SchedulerAdminAPI(BaseAPI):
             context=self.context,
             params=Utils.to_dict(job_params),
             queue_profile=queue_profile,
-            stack_uuid=queue_profile.stack_uuid
+            stack_uuid=queue_profile.stack_uuid,
         )
         params, provisioning_options = builder.build()
 
@@ -418,24 +434,27 @@ class SchedulerAdminAPI(BaseAPI):
             provisioning_options=provisioning_options,
         )
 
-        self.logger.info(f'provisioning always on nodes: job configuration - {Utils.to_json(job, indent=True)}')
+        self.logger.info(
+            f'provisioning always on nodes: job configuration - {Utils.to_json(job, indent=True)}'
+        )
 
-        stack = self.context.aws_util().cloudformation_describe_stack(job.get_compute_stack())
+        stack = self.context.aws_util().cloudformation_describe_stack(
+            job.get_compute_stack()
+        )
         if stack is not None:
-            raise exceptions.general_exception(f'cloud formation stack: {job.get_compute_stack()} already exists for queue profile: '
-                                               f'{queue_profile_name}')
+            raise exceptions.general_exception(
+                f'cloud formation stack: {job.get_compute_stack()} already exists for queue profile: '
+                f'{queue_profile_name}'
+            )
 
         try:
+            stack_id = CloudFormationStackBuilder(context=self.context, job=job).build()
 
-            stack_id = CloudFormationStackBuilder(
-                context=self.context,
-                job=job
-            ).build()
-
-            context.success(ProvisionAlwaysOnNodesResult(
-                stack_name=job.get_compute_stack(),
-                stack_id=stack_id
-            ))
+            context.success(
+                ProvisionAlwaysOnNodesResult(
+                    stack_name=job.get_compute_stack(), stack_id=stack_id
+                )
+            )
         except Exception as e:
             self.logger.exception(f'failed to provision cloudformation stack: {e}')
             raise e
@@ -466,26 +485,30 @@ class SchedulerAdminAPI(BaseAPI):
         context.success(result)
 
     def check_license_resource_availability(self, context: ApiInvocationContext):
-        request = context.get_request_payload_as(CheckHpcLicenseResourceAvailabilityRequest)
-        result = self.context.license_service.check_license_resource_availability(request)
+        request = context.get_request_payload_as(
+            CheckHpcLicenseResourceAvailabilityRequest
+        )
+        result = self.context.license_service.check_license_resource_availability(
+            request
+        )
         context.success(result)
 
     def delete_job(self, context: ApiInvocationContext):
-
         request = context.get_request_payload_as(DeleteJobRequest)
         if Utils.is_empty(request.job_id):
             raise exceptions.invalid_params('job_id is required')
 
         job = self.context.scheduler.get_job(job_id=request.job_id)
         if job is None:
-            raise exceptions.soca_exception(errorcodes.JOB_NOT_FOUND, f'Job not found for Job Id: {request.job_id}')
+            raise exceptions.soca_exception(
+                errorcodes.JOB_NOT_FOUND, f'Job not found for Job Id: {request.job_id}'
+            )
 
         self.context.scheduler.delete_job(job.job_id)
 
         context.success(DeleteJobResult())
 
     def invoke(self, context: ApiInvocationContext):
-
         namespace = context.namespace
 
         acl_entry = Utils.get_value_as_dict(namespace, self.acl)
@@ -493,7 +516,9 @@ class SchedulerAdminAPI(BaseAPI):
             raise exceptions.unauthorized_access()
 
         acl_entry_scope = Utils.get_value_as_string('scope', acl_entry)
-        is_authorized = context.is_authorized(elevated_access=True, scopes=[acl_entry_scope])
+        is_authorized = context.is_authorized(
+            elevated_access=True, scopes=[acl_entry_scope]
+        )
 
         if is_authorized:
             acl_entry['method'](context)

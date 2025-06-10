@@ -1,7 +1,7 @@
 # BEGIN: DCV Session Manager Agent
 
 DCV_GPG_KEY_DCV_AGENT="{{ context.config.get_string('global-settings.package_config.dcv.gpg_key', required=True) }}"
-{%- if context.base_os in ('amazonlinux2') %}
+{% if context.base_os in ('amazonlinux2') %}
 DCV_SESSION_MANAGER_AGENT_X86_64_URL="{{ context.config.get_string('global-settings.package_config.dcv.agent.x86_64.linux.al2_rhel_centos7.url', required=True) }}"
 DCV_SESSION_MANAGER_AGENT_X86_64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.agent.x86_64.linux.al2_rhel_centos7.version', required=True) }}"
 DCV_SESSION_MANAGER_AGENT_X86_64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.agent.x86_64.linux.al2_rhel_centos7.sha256sum', required=True) }}"
@@ -9,7 +9,15 @@ DCV_SESSION_MANAGER_AGENT_AARCH64_URL="{{ context.config.get_string('global-sett
 DCV_SESSION_MANAGER_AGENT_AARCH64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.agent.aarch64.linux.al2_rhel_centos7.version', required=True) }}"
 DCV_SESSION_MANAGER_AGENT_AARCH64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.agent.aarch64.linux.al2_rhel_centos7.sha256sum', required=True) }}"
 
-{%- elif context.base_os in ('rhel8', 'rocky8') %}
+{% elif context.base_os in ('amazonlinux2023') %}
+DCV_SESSION_MANAGER_AGENT_X86_64_URL="{{ context.config.get_string('global-settings.package_config.dcv.agent.x86_64.linux.al2023.url', required=True) }}"
+DCV_SESSION_MANAGER_AGENT_X86_64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.agent.x86_64.linux.al2023.version', required=True) }}"
+DCV_SESSION_MANAGER_AGENT_X86_64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.agent.x86_64.linux.al2023.sha256sum', required=True) }}"
+DCV_SESSION_MANAGER_AGENT_AARCH64_URL="{{ context.config.get_string('global-settings.package_config.dcv.agent.aarch64.linux.al2023.url', required=True) }}"
+DCV_SESSION_MANAGER_AGENT_AARCH64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.agent.aarch64.linux.al2023.version', required=True) }}"
+DCV_SESSION_MANAGER_AGENT_AARCH64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.agent.aarch64.linux.al2023.sha256sum', required=True) }}"
+
+{% elif context.base_os in ('rhel8', 'rocky8') %}
 DCV_SESSION_MANAGER_AGENT_X86_64_URL="{{ context.config.get_string('global-settings.package_config.dcv.agent.x86_64.linux.rhel_centos_rocky8.url', required=True) }}"
 DCV_SESSION_MANAGER_AGENT_X86_64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.agent.x86_64.linux.rhel_centos_rocky8.version', required=True) }}"
 DCV_SESSION_MANAGER_AGENT_X86_64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.agent.x86_64.linux.rhel_centos_rocky8.sha256sum', required=True) }}"
@@ -17,7 +25,7 @@ DCV_SESSION_MANAGER_AGENT_AARCH64_URL="{{ context.config.get_string('global-sett
 DCV_SESSION_MANAGER_AGENT_AARCH64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.agent.aarch64.linux.rhel_centos_rocky8.version', required=True) }}"
 DCV_SESSION_MANAGER_AGENT_AARCH64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.agent.aarch64.linux.rhel_centos_rocky8.sha256sum', required=True) }}"
 
-{%- elif context.base_os in ('rhel9', 'rocky9') %}
+{% elif context.base_os in ('rhel9', 'rocky9') %}
 DCV_SESSION_MANAGER_AGENT_X86_64_URL="{{ context.config.get_string('global-settings.package_config.dcv.agent.x86_64.linux.rhel_centos_rocky9.url', required=True) }}"
 DCV_SESSION_MANAGER_AGENT_X86_64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.agent.x86_64.linux.rhel_centos_rocky9.version', required=True) }}"
 DCV_SESSION_MANAGER_AGENT_X86_64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.agent.x86_64.linux.rhel_centos_rocky9.sha256sum', required=True) }}"
@@ -25,7 +33,7 @@ DCV_SESSION_MANAGER_AGENT_AARCH64_URL="{{ context.config.get_string('global-sett
 DCV_SESSION_MANAGER_AGENT_AARCH64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.agent.aarch64.linux.rhel_centos_rocky9.version', required=True) }}"
 DCV_SESSION_MANAGER_AGENT_AARCH64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.agent.aarch64.linux.rhel_centos_rocky9.sha256sum', required=True) }}"
 
-{%- elif context.base_os in ('ubuntu2204') %}
+{% elif context.base_os in ('ubuntu2204') %}
 DCV_SESSION_MANAGER_AGENT_X86_64_URL="{{ context.config.get_string('global-settings.package_config.dcv.agent.x86_64.linux.ubuntu2204.url', required=True) }}"
 DCV_SESSION_MANAGER_AGENT_X86_64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.agent.x86_64.linux.ubuntu2204.version', required=True) }}"
 DCV_SESSION_MANAGER_AGENT_X86_64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.agent.x86_64.linux.ubuntu2204.sha256sum', required=True) }}"
@@ -33,7 +41,7 @@ DCV_SESSION_MANAGER_AGENT_AARCH64_URL="{{ context.config.get_string('global-sett
 DCV_SESSION_MANAGER_AGENT_AARCH64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.agent.aarch64.linux.ubuntu2204.version', required=True) }}"
 DCV_SESSION_MANAGER_AGENT_AARCH64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.agent.aarch64.linux.ubuntu2204.sha256sum', required=True) }}"
 
-{%- elif context.base_os in ('ubuntu2404') %}
+{% elif context.base_os in ('ubuntu2404') %}
 DCV_SESSION_MANAGER_AGENT_X86_64_URL="{{ context.config.get_string('global-settings.package_config.dcv.agent.x86_64.linux.ubuntu2404.url', required=True) }}"
 DCV_SESSION_MANAGER_AGENT_X86_64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.agent.x86_64.linux.ubuntu2404.version', required=True) }}"
 DCV_SESSION_MANAGER_AGENT_X86_64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.agent.x86_64.linux.ubuntu2404.sha256sum', required=True) }}"
@@ -41,14 +49,14 @@ DCV_SESSION_MANAGER_AGENT_AARCH64_URL="{{ context.config.get_string('global-sett
 DCV_SESSION_MANAGER_AGENT_AARCH64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.agent.aarch64.linux.ubuntu2404.version', required=True) }}"
 DCV_SESSION_MANAGER_AGENT_AARCH64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.agent.aarch64.linux.ubuntu2404.sha256sum', required=True) }}"
 
-{%- endif %}
+{% endif %}
 
 
-{%- if context.base_os in ('amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+{% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
 rpm --import ${DCV_GPG_KEY_DCV_SERVER}
-{%- elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
 curl -fsSL "${DCV_GPG_KEY_DCV_SERVER}" | gpg --dearmor | sudo tee /usr/share/keyrings/dcv.gpg > /dev/null
-{%- endif %}
+{% endif %}
 
 machine=$(uname -m) #x86_64 or aarch64
 AGENT_URL=""
@@ -66,25 +74,25 @@ else
   AGENT_SHA256_HASH=${DCV_SESSION_MANAGER_AGENT_AARCH64_SHA256_HASH}
 fi
 
-{%- if context.base_os in ('amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+{% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
 if [[ -z "$(rpm -qa nice-dcv-session-manager-agent)" ]]; then
-{%- elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
 if [[ -z "$(dpkg -l nice-dcv-session-manager-agent | grep ^ii)" ]]; then
-{%- endif %}
+{% endif %}
   wget ${AGENT_URL}
-  {%- if context.base_os in ('amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+  {% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
   if [[ $(sha256sum nice-dcv-session-manager-agent-${AGENT_VERSION}.rpm | awk '{print $1}') != ${AGENT_SHA256_HASH} ]];  then
-  {%- elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+  {% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
   if [[ $(sha256sum nice-dcv-session-manager-agent_${AGENT_VERSION}.deb | awk '{print $1}') != ${AGENT_SHA256_HASH} ]];  then
-  {%- endif %}
+  {% endif %}
       echo -e "FATAL ERROR: Checksum for DCV Session Manager Agent failed. File may be compromised." > /etc/motd
       exit 1
   fi
-  {%- if context.base_os in ('amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+  {% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
   yum install -y nice-dcv-session-manager-agent-${AGENT_VERSION}.rpm
-  {%- elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+  {% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
   dpkg -i nice-dcv-session-manager-agent_${AGENT_VERSION}.deb
-  {%- endif %}
+  {% endif %}
 else
   log_info "Found nice-dcv-session-manager-agent pre-installed... skipping installation..."
 fi

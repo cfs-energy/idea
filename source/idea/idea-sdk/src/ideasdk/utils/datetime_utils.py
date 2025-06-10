@@ -104,9 +104,7 @@ class DateTimeUtils:
     @staticmethod
     def compare_to_now(date: datetime, offset_secs: int = None):
         return DateTimeUtils.compare(
-            d1=DateTimeUtils.current_datetime(),
-            d2=date,
-            offset_secs=offset_secs
+            d1=DateTimeUtils.current_datetime(), d2=date, offset_secs=offset_secs
         )
 
     @staticmethod

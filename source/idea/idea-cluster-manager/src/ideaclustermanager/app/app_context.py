@@ -16,21 +16,25 @@ from ideasdk.utils import GroupNameHelper
 from ideaclustermanager.app.projects.projects_service import ProjectsService
 from ideaclustermanager.app.accounts.accounts_service import AccountsService
 from ideaclustermanager.app.accounts.cognito_user_pool import CognitoUserPool
-from ideaclustermanager.app.accounts.ldapclient import OpenLDAPClient, ActiveDirectoryClient
+from ideaclustermanager.app.accounts.ldapclient import (
+    OpenLDAPClient,
+    ActiveDirectoryClient,
+)
 from ideaclustermanager.app.accounts.ad_automation_agent import ADAutomationAgent
-from ideaclustermanager.app.email_templates.email_templates_service import EmailTemplatesService
-from ideaclustermanager.app.notifications.notifications_service import NotificationsService
+from ideaclustermanager.app.email_templates.email_templates_service import (
+    EmailTemplatesService,
+)
+from ideaclustermanager.app.notifications.notifications_service import (
+    NotificationsService,
+)
 from ideaclustermanager.app.tasks.task_manager import TaskManager
 
 from typing import Optional, Union
 
 
 class ClusterManagerAppContext(SocaContext):
-
     def __init__(self, options: SocaContextOptions):
-        super().__init__(
-            options=options
-        )
+        super().__init__(options=options)
 
         self.token_service: Optional[TokenService] = None
         self.projects: Optional[ProjectsService] = None

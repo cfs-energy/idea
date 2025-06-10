@@ -98,7 +98,7 @@ Options:
 ```
 ./idea-admin.sh shared-storage add-file-system \
    --aws-region <REGION>  \
-   --cluster-name <CLUSTER_NAME>  
+   --cluster-name <CLUSTER_NAME>
 Add Shared Storage to an IDEA Cluster
 
 Shared Storage Settings
@@ -167,7 +167,7 @@ First, run the `idea-admin.sh cdk diff` to confirm the new EFS will be created:
 ```
 ./idea-admin.sh cdk diff shared-storage \
    --cluster-name <CLUSTER_NAME> \
-   --aws-region <REGION> 
+   --aws-region <REGION>
 Stack <CLUSTER_NAME>-shared-storage
 IAM Statement Changes
 ┌───┬────────────────────────────┬────────┬────────────────────────────────────┬───────────┬──────────────────────────────────────────────────────┐
@@ -198,7 +198,7 @@ This command confirmed the change and CDK will proceed to the EFS creation once 
 ```
 $ ./idea-admin.sh deploy shared-storage \
    --cluster-name <CLUSTER_NAME> \
-   --aws-region <REGION> \ 
+   --aws-region <REGION> \
    --upgrade
 deploying module: shared-storage, module id: shared-storage
 
@@ -409,6 +409,23 @@ demo:
 
 ### Amazon FSx for Lustre
 
+IDEA now supports FSx for Lustre as backend storage for high performance computing. IDEA supports the automation of the FSx for Lustre client installation on all supported operating systems:
+
+* Amazon Linux 2
+* Amazon Linux 2023
+* RHEL 8
+* RHEL 9
+* Rocky Linux 8
+* Rocky Linux 9
+* Ubuntu 22.04
+* Ubuntu 24.04
+
+{% hint style="info" %}
+FSx Lustre provides high-performance storage suitable for data-intensive applications, offering throughput of hundreds of GB/s and sub-millisecond latencies.
+{% endhint %}
+
+To attach an existing FSX for Lustre filesystem or create a new one, click "Create Storage" button and choose "FSx for Lustre"
+
 #### Existing FSx for Lustre Configuration
 
 ```
@@ -518,10 +535,10 @@ $ ./idea-admin.sh config show --query "shared-storage.*" \
    --cluster-name <CLUSTER_NAME> \
   --aws-region <REGION> \
    --format yaml
-   
-shared-storage: 
-  apps: 
-    efs: 
+
+shared-storage:
+  apps:
+    efs:
       cloudwatch_monitoring: true
       dns: fs-07db0063b17b52abd.efs.us-east-1.amazonaws.com
       encrypted: true
@@ -533,8 +550,8 @@ shared-storage:
       transition_to_ia: null
     mount_dir: /apps
     provider: efs
-  data: 
-    efs: 
+  data:
+    efs:
       cloudwatch_monitoring: false
       dns: fs-0de603380ef4bb8a0.efs.us-east-1.amazonaws.com
       encrypted: true
@@ -546,8 +563,8 @@ shared-storage:
       transition_to_ia: AFTER_30_DAYS
     mount_dir: /data
     provider: efs
-  demo: 
-    efs: 
+  demo:
+    efs:
       dns: fs-05b067d4a78e0fb29.efs.us-east-1.amazonaws.com
       encrypted: true
       file_system_dns: fs-05b067d4a78e0fb29.efs.us-east-1.amazonaws.com
@@ -556,12 +573,12 @@ shared-storage:
     mount_dir: /demo
     mount_options: nfs4 nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport 0 0
     provider: efs
-    scope: 
+    scope:
       - cluster
     title: Demo FS
   deployment_id: 9cd9615d-03d0-4402-996e-b78c5a13b660
-  lustre: 
-    fsx_lustre: 
+  lustre:
+    fsx_lustre:
       dns: fs-01a2ccc035f0f007c.fsx.us-east-1.amazonaws.com
       file_system_id: fs-01a2ccc035f0f007c
       mount_name: drohpbev
@@ -570,20 +587,20 @@ shared-storage:
     mount_dir: /fsx-lustre
     mount_options: lustre defaults,noatime,flock,_netdev 0 0
     provider: fsx_lustre
-    scope: 
+    scope:
       - cluster
     title: FSx Lustre Demo
-  ontap: 
-    fsx_netapp_ontap: 
+  ontap:
+    fsx_netapp_ontap:
       file_system_id: fs-08b38f09448c07cb2
-      svm: 
+      svm:
         iscsi_dns: iscsi.svm-0132d31f6667399a7.fs-08b38f09448c07cb2.fsx.us-east-1.amazonaws.com
         management_dns: svm-0132d31f6667399a7.fs-08b38f09448c07cb2.fsx.us-east-1.amazonaws.com
         nfs_dns: svm-0132d31f6667399a7.fs-08b38f09448c07cb2.fsx.us-east-1.amazonaws.com
         smb_dns: IDEA-DEV-SVM1.idea.local
         svm_id: svm-0132d31f6667399a7
       use_existing_fs: true
-      volume: 
+      volume:
         security_style: MIXED
         volume_id: fsvol-0d4e5200c01a7b533
         volume_path: /vol1
@@ -591,11 +608,11 @@ shared-storage:
     mount_drive: Z
     mount_options: nfs4 nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport 0 0
     provider: fsx_netapp_ontap
-    scope: 
+    scope:
       - cluster
     title: FSx for NetApp ONTAP
-  openzfs: 
-    fsx_openzfs: 
+  openzfs:
+    fsx_openzfs:
       dns: fs-09e1b30aab982aa34.fsx.us-east-1.amazonaws.com
       file_system_id: fs-09e1b30aab982aa34
       use_existing_fs: true
@@ -604,24 +621,24 @@ shared-storage:
     mount_dir: /fsx-openzfs
     mount_options: nfs4 nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport 0 0
     provider: fsx_openzfs
-    scope: 
+    scope:
       - cluster
     title: FSx for OpenZFS
   security_group_id: sg-0ad8671840e2ed4e6
-  windows_file_server: 
-    fsx_windows_file_server: 
+  windows_file_server:
+    fsx_windows_file_server:
       dns: amznfsx0wallrm9.idea.local
       file_system_id: fs-0c1f74968df26462e
       preferred_file_server_ip: 10.0.113.174
       use_existing_fs: true
     mount_drive: P
-    projects: 
+    projects:
       - default
     provider: fsx_windows_file_server
-    scope: 
+    scope:
       - project
     title: FSx Windows File Server
-    
+
 ```
 
 ***

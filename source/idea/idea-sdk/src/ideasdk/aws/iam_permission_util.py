@@ -14,14 +14,16 @@ from typing import List, Dict
 
 
 class IamPermissionUtil(IamPermissionUtilProtocol):
-
     def __init__(self, context: SocaContextProtocol):
         self._context = context
         self._logger = context.logger()
 
-    def has_permission(self, action_names: List[str],
-                       resource_arns: List[str] = None,
-                       context_entries: List[Dict] = None):
+    def has_permission(
+        self,
+        action_names: List[str],
+        resource_arns: List[str] = None,
+        context_entries: List[Dict] = None,
+    ):
         """
         Checks if the current scheduler instance has given permissions
         This method assumes Scheduler is run using InstanceProfile credentials
@@ -65,8 +67,12 @@ class IamPermissionUtil(IamPermissionUtilProtocol):
         """
 
         document = self._context.ec2_metadata_util().get_instance_identity_document()
-        security_credentials = self._context.ec2_metadata_util().get_iam_security_credentials()
-        instance_profile_role_arn = f'arn:aws:iam::{document.accountId}:role/{security_credentials}'
+        security_credentials = (
+            self._context.ec2_metadata_util().get_iam_security_credentials()
+        )
+        instance_profile_role_arn = (
+            f'arn:aws:iam::{document.accountId}:role/{security_credentials}'
+        )
 
         if resource_arns is None:
             resource_arns = []
@@ -74,11 +80,15 @@ class IamPermissionUtil(IamPermissionUtilProtocol):
         if context_entries is None:
             context_entries = []
 
-        simulate_result = self._context.aws().iam().simulate_principal_policy(
-            PolicySourceArn=instance_profile_role_arn,
-            ActionNames=action_names,
-            ResourceArns=resource_arns,
-            ContextEntries=context_entries
+        simulate_result = (
+            self._context.aws()
+            .iam()
+            .simulate_principal_policy(
+                PolicySourceArn=instance_profile_role_arn,
+                ActionNames=action_names,
+                ResourceArns=resource_arns,
+                ContextEntries=context_entries,
+            )
         )
 
         if 'EvaluationResults' not in simulate_result:

@@ -247,3 +247,53 @@ spec:
                   "request_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6"
                 }
               }
+    - namespace: VirtualDesktopAdmin.DeleteSoftwareStack
+      request:
+        examples:
+          - name: Delete Software Stack
+            value: |
+              {
+                "header": {
+                  "namespace": "VirtualDesktopAdmin.DeleteSoftwareStack",
+                  "request_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                  "version": 1
+                },
+                "payload": {
+                  "software_stack": {
+                    "stack_id": "ss-12345678-abcd-1234-efgh-123456789012"
+                  }
+                }
+              }
+      response:
+        examples:
+          - name: Delete Software Stack Success
+            value: |
+              {
+                "success": true,
+                "header": {
+                  "namespace": "VirtualDesktopAdmin.DeleteSoftwareStack",
+                  "request_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                },
+                "payload": {
+                  "software_stack": {
+                    "stack_id": "ss-12345678-abcd-1234-efgh-123456789012",
+                    "name": "My Custom Software Stack",
+                    "description": "Custom software stack for data science",
+                    "base_os": "amazonlinux2",
+                    "created_on": "2022-08-24T21:08:03.179000+00:00",
+                    "updated_on": "2022-08-24T21:08:03.180000+00:00"
+                  },
+                  "success": true
+                }
+              }
+          - name: Delete Software Stack Failure
+            value: |
+              {
+                "success": false,
+                "header": {
+                  "namespace": "VirtualDesktopAdmin.DeleteSoftwareStack",
+                  "request_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                  "error_code": "USER_NOT_AUTHORIZED",
+                  "error_message": "User is not authorized to delete software stacks"
+                }
+              }

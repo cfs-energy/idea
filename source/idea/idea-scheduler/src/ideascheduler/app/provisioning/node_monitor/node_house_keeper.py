@@ -12,9 +12,12 @@
 import ideascheduler
 from ideadatamodel import (
     exceptions,
-    SocaCapacityType, SocaComputeNode, SocaComputeNodeState, SocaJobState,
+    SocaCapacityType,
+    SocaComputeNode,
+    SocaComputeNodeState,
+    SocaJobState,
     ProvisioningStatus,
-    EC2Instance
+    EC2Instance,
 )
 from ideasdk.utils import Utils
 from ideasdk.metrics import BaseMetrics
@@ -118,8 +121,11 @@ class NodeHouseKeepingSession:
         return s
 
     @staticmethod
-    def _get_desired_capacity(current_capacity: int, weighted_capacities: Optional[Dict[str, int]],
-                              instances: List[EC2Instance]) -> int:
+    def _get_desired_capacity(
+        current_capacity: int,
+        weighted_capacities: Optional[Dict[str, int]],
+        instances: List[EC2Instance],
+    ) -> int:
         if weighted_capacities is None:
             desired_capacity = current_capacity - len(instances)
         else:
@@ -130,8 +136,9 @@ class NodeHouseKeepingSession:
         return max(0, int(desired_capacity))
 
     @staticmethod
-    def _get_present_capacity(weighted_capacities: Optional[Dict[str, int]],
-                              instances: List[EC2Instance]) -> int:
+    def _get_present_capacity(
+        weighted_capacities: Optional[Dict[str, int]], instances: List[EC2Instance]
+    ) -> int:
         if weighted_capacities is None:
             present_capacity = len(instances)
         else:
@@ -141,8 +148,9 @@ class NodeHouseKeepingSession:
             present_capacity = weighted_capacity
         return present_capacity
 
-    def _compute_spot_fleet_capacities(self, spot_fleet_request_id: str, instances: List[EC2Instance], desired=True):
-
+    def _compute_spot_fleet_capacities(
+        self, spot_fleet_request_id: str, instances: List[EC2Instance], desired=True
+    ):
         result = self.aws_util.ec2_describe_spot_fleet_request(
             spot_fleet_request_id=spot_fleet_request_id
         )
@@ -160,18 +168,21 @@ class NodeHouseKeepingSession:
             desired_capacity = self._get_desired_capacity(
                 current_capacity=current_capacity,
                 weighted_capacities=weighted_capacities,
-                instances=instances
+                instances=instances,
             )
-            self.spot_fleet_desired_capacities[spot_fleet_request_id] = (current_capacity, desired_capacity)
+            self.spot_fleet_desired_capacities[spot_fleet_request_id] = (
+                current_capacity,
+                desired_capacity,
+            )
         else:
             present_capacity = self._get_present_capacity(
-                weighted_capacities=weighted_capacities,
-                instances=instances
+                weighted_capacities=weighted_capacities, instances=instances
             )
             self.spot_fleet_present_capacities[spot_fleet_request_id] = present_capacity
 
-    def _compute_auto_scaling_group_capacities(self, auto_scaling_group_name: str,
-                                               instances: List[EC2Instance], desired=True):
+    def _compute_auto_scaling_group_capacities(
+        self, auto_scaling_group_name: str, instances: List[EC2Instance], desired=True
+    ):
         result = self.aws_util.autoscaling_describe_auto_scaling_group(
             auto_scaling_group_name=auto_scaling_group_name
         )
@@ -186,15 +197,19 @@ class NodeHouseKeepingSession:
             desired_capacity = self._get_desired_capacity(
                 current_capacity=current_capacity,
                 weighted_capacities=weighted_capacities,
-                instances=instances
+                instances=instances,
             )
-            self.auto_scaling_group_desired_capacities[auto_scaling_group_name] = (current_capacity, desired_capacity)
+            self.auto_scaling_group_desired_capacities[auto_scaling_group_name] = (
+                current_capacity,
+                desired_capacity,
+            )
         else:
             present_capacity = self._get_present_capacity(
-                weighted_capacities=weighted_capacities,
-                instances=instances
+                weighted_capacities=weighted_capacities, instances=instances
             )
-            self.auto_scaling_group_present_capacities[auto_scaling_group_name] = present_capacity
+            self.auto_scaling_group_present_capacities[auto_scaling_group_name] = (
+                present_capacity
+            )
 
     def _add_to_job_group(self, instance: EC2Instance):
         job_group = instance.soca_job_group
@@ -239,7 +254,6 @@ class NodeHouseKeepingSession:
 
         terminate_when_idle = instance.soca_terminate_when_idle
         if terminate_when_idle > 0:
-
             last_used = node.last_used_time
 
             if last_used is None and node.has_state(SocaComputeNodeState.FREE):
@@ -257,31 +271,36 @@ class NodeHouseKeepingSession:
                 # (JobId: 1034, Host: ip-10-0-79-226) node was last used 5 seconds ago. terminate when idle: 3 minutes.
                 if minutes(seconds=terminate_after_delta.seconds) % 5 == 0:
                     terminate = arrow.utcnow().shift(minutes=terminate_when_idle)
-                    self._logger.info(f'{self.log_tag(instance)} node was last used {last_used.humanize()}. '
-                                      f'terminate when idle: {terminate.humanize(only_distance=True)}.')
+                    self._logger.info(
+                        f'{self.log_tag(instance)} node was last used {last_used.humanize()}. '
+                        f'terminate when idle: {terminate.humanize(only_distance=True)}.'
+                    )
                 return False
 
             pending_jobs = OpenPBSQSelect(
                 context=self._context,
                 logger=self._logger,
                 job_group=node.job_group,
-                job_state=[SocaJobState.QUEUED, SocaJobState.HELD]
+                job_state=[SocaJobState.QUEUED, SocaJobState.HELD],
             ).get_count()
             if pending_jobs > 0:
-                self._logger.info(f'{self.log_tag(instance)} {pending_jobs} jobs waiting to be executed. skip termination.')
+                self._logger.info(
+                    f'{self.log_tag(instance)} {pending_jobs} jobs waiting to be executed. skip termination.'
+                )
                 return False
 
             if minutes(terminate_after_delta.seconds) > 5:
                 if minutes(seconds=terminate_after_delta.seconds) % 5 == 0:
                     terminate = arrow.utcnow().shift(minutes=terminate_when_idle)
-                    self._logger.info(f'{self.log_tag(instance)} node was last used {last_used.humanize()}, '
-                                      f'but is not deleted yet.'
-                                      f'terminate when idle: {terminate.humanize(only_distance=True)}.')
+                    self._logger.info(
+                        f'{self.log_tag(instance)} node was last used {last_used.humanize()}, '
+                        f'but is not deleted yet.'
+                        f'terminate when idle: {terminate.humanize(only_distance=True)}.'
+                    )
 
         return True
 
     def _add_candidate_for_deletion(self, instance: EC2Instance):
-
         if instance.soca_capacity_type == SocaCapacityType.SPOT:
             spot_fleet_request_id = instance.aws_ec2spot_fleet_request_id
             if Utils.is_empty(spot_fleet_request_id):
@@ -333,7 +352,6 @@ class NodeHouseKeepingSession:
         nodes = self._context.scheduler.list_nodes()
 
         for node in nodes:
-
             if not node.is_provisioned():
                 continue
 
@@ -388,14 +406,17 @@ class NodeHouseKeepingSession:
             self._compute_spot_fleet_capacities(
                 spot_fleet_request_id=spot_fleet_request_id,
                 instances=instances,
-                desired=False
+                desired=False,
             )
 
-        for auto_scaling_group_name, instances in self.auto_scaling_group_instances.items():
+        for (
+            auto_scaling_group_name,
+            instances,
+        ) in self.auto_scaling_group_instances.items():
             self._compute_auto_scaling_group_capacities(
                 auto_scaling_group_name=auto_scaling_group_name,
                 instances=instances,
-                desired=False
+                desired=False,
             )
 
     def pass3_filter_deletion_candidates(self):
@@ -409,25 +430,38 @@ class NodeHouseKeepingSession:
         This can happen when capacity is still being provisioned.
         """
         for job_group, instances in self.job_groups.items():
-
             ref = instances[0]
             if ref.is_soca_ephemeral_capacity:
                 continue
 
-            required_capacity = self._context.job_cache.get_desired_capacity(job_group=ref.soca_job_group)
+            required_capacity = self._context.job_cache.get_desired_capacity(
+                job_group=ref.soca_job_group
+            )
 
             if ref.soca_capacity_type == SocaCapacityType.SPOT:
-                if ref.aws_ec2spot_fleet_request_id not in self.spot_fleet_present_capacities:
+                if (
+                    ref.aws_ec2spot_fleet_request_id
+                    not in self.spot_fleet_present_capacities
+                ):
                     continue
-                present_capacity = self.spot_fleet_present_capacities[ref.aws_ec2spot_fleet_request_id]
+                present_capacity = self.spot_fleet_present_capacities[
+                    ref.aws_ec2spot_fleet_request_id
+                ]
                 if present_capacity < required_capacity:
                     del self.spot_fleet_instances[ref.aws_ec2spot_fleet_request_id]
             else:
-                if ref.aws_autoscaling_group_name not in self.auto_scaling_group_present_capacities:
+                if (
+                    ref.aws_autoscaling_group_name
+                    not in self.auto_scaling_group_present_capacities
+                ):
                     continue
-                present_capacity = self.auto_scaling_group_present_capacities[ref.aws_autoscaling_group_name]
+                present_capacity = self.auto_scaling_group_present_capacities[
+                    ref.aws_autoscaling_group_name
+                ]
                 if present_capacity < required_capacity:
-                    del self.auto_scaling_group_instances[ref.aws_autoscaling_group_name]
+                    del self.auto_scaling_group_instances[
+                        ref.aws_autoscaling_group_name
+                    ]
 
     def pass4_set_offline(self):
         """
@@ -448,7 +482,9 @@ class NodeHouseKeepingSession:
                 node = self._context.scheduler.get_node(host=instance.private_dns_name)
                 if node is None:
                     continue
-                if node.has_state(SocaComputeNodeState.BUSY, SocaComputeNodeState.JOB_BUSY):
+                if node.has_state(
+                    SocaComputeNodeState.BUSY, SocaComputeNodeState.JOB_BUSY
+                ):
                     continue
                 nodes_to_set_offline.add(instance)
 
@@ -457,15 +493,16 @@ class NodeHouseKeepingSession:
                 node = self._context.scheduler.get_node(host=instance.private_dns_name)
                 if node is None:
                     continue
-                if node.has_state(SocaComputeNodeState.BUSY, SocaComputeNodeState.JOB_BUSY):
+                if node.has_state(
+                    SocaComputeNodeState.BUSY, SocaComputeNodeState.JOB_BUSY
+                ):
                     continue
                 nodes_to_set_offline.add(instance)
 
         for node in nodes_to_set_offline:
             self._logger.info(f'{self.log_tag(node)} set offline')
             self._context.scheduler.set_node_state(
-                host=node.private_dns_name,
-                state=SocaComputeNodeState.OFFLINE
+                host=node.private_dns_name, state=SocaComputeNodeState.OFFLINE
             )
 
         # filter the updated instances from ASG and SpotFleet
@@ -473,18 +510,25 @@ class NodeHouseKeepingSession:
         skip_asgs = set()
 
         for spot_fleet in self.spot_fleet_instances:
-            instances = set(self.spot_fleet_instances[spot_fleet]) & nodes_to_set_offline
+            instances = (
+                set(self.spot_fleet_instances[spot_fleet]) & nodes_to_set_offline
+            )
             if len(instances) == 0:
                 skip_spot_fleets.add(spot_fleet)
             else:
                 self.spot_fleet_instances[spot_fleet] = list(instances)
 
         for auto_scale_group_name in self.auto_scaling_group_instances:
-            instances = set(self.auto_scaling_group_instances[auto_scale_group_name]) & nodes_to_set_offline
+            instances = (
+                set(self.auto_scaling_group_instances[auto_scale_group_name])
+                & nodes_to_set_offline
+            )
             if len(instances) == 0:
                 skip_asgs.add(auto_scale_group_name)
             else:
-                self.auto_scaling_group_instances[auto_scale_group_name] = list(instances)
+                self.auto_scaling_group_instances[auto_scale_group_name] = list(
+                    instances
+                )
 
         for spot_fleet in skip_spot_fleets:
             del self.spot_fleet_instances[spot_fleet]
@@ -502,14 +546,17 @@ class NodeHouseKeepingSession:
             self._compute_spot_fleet_capacities(
                 spot_fleet_request_id=spot_fleet_request_id,
                 instances=instances,
-                desired=True
+                desired=True,
             )
 
-        for auto_scaling_group_name, instances in self.auto_scaling_group_instances.items():
+        for (
+            auto_scaling_group_name,
+            instances,
+        ) in self.auto_scaling_group_instances.items():
             self._compute_auto_scaling_group_capacities(
                 auto_scaling_group_name=auto_scaling_group_name,
                 instances=instances,
-                desired=True
+                desired=True,
             )
 
     def pass6_finalize_resources_to_delete(self):
@@ -520,8 +567,10 @@ class NodeHouseKeepingSession:
         capacity needs to be updated.
         """
 
-        for spot_fleet_request_id, capacity in self.spot_fleet_desired_capacities.items():
-
+        for (
+            spot_fleet_request_id,
+            capacity,
+        ) in self.spot_fleet_desired_capacities.items():
             instances = self.spot_fleet_instances[spot_fleet_request_id]
 
             for instance in instances:
@@ -532,15 +581,22 @@ class NodeHouseKeepingSession:
             current_capacity, desired_capacity = capacity
 
             if desired_capacity == 0:
-                self.stack_info[ref.soca_compute_stack] = ref.soca_queue_type, self.log_info(ref, 'Stack',
-                                                                                             ref.soca_compute_stack)
+                self.stack_info[ref.soca_compute_stack] = (
+                    ref.soca_queue_type,
+                    self.log_info(ref, 'Stack', ref.soca_compute_stack),
+                )
                 self.stacks_to_delete.add(ref.soca_compute_stack)
             else:
-                self.spot_fleet_info[spot_fleet_request_id] = ref.soca_queue_type, self.log_info(ref, 'SpotFleet',
-                                                                                                 spot_fleet_request_id)
+                self.spot_fleet_info[spot_fleet_request_id] = (
+                    ref.soca_queue_type,
+                    self.log_info(ref, 'SpotFleet', spot_fleet_request_id),
+                )
                 self.spot_fleet_update_capacities[spot_fleet_request_id] = capacity
 
-        for auto_scaling_group_name, capacity in self.auto_scaling_group_desired_capacities.items():
+        for (
+            auto_scaling_group_name,
+            capacity,
+        ) in self.auto_scaling_group_desired_capacities.items():
             instances = self.auto_scaling_group_instances[auto_scaling_group_name]
 
             instance_ids = []
@@ -553,15 +609,22 @@ class NodeHouseKeepingSession:
             current_capacity, desired_capacity = capacity
 
             if desired_capacity == 0:
-                self.stack_info[ref.soca_compute_stack] = ref.soca_queue_type, self.log_info(ref, 'Stack',
-                                                                                             ref.soca_compute_stack)
+                self.stack_info[ref.soca_compute_stack] = (
+                    ref.soca_queue_type,
+                    self.log_info(ref, 'Stack', ref.soca_compute_stack),
+                )
                 self.stacks_to_delete.add(ref.soca_compute_stack)
             else:
-                self.auto_scaling_group_info[auto_scaling_group_name] = ref.soca_queue_type, self.log_info(
-                    ref, 'ASG',
-                    auto_scaling_group_name)
-                self.auto_scaling_group_update_capacities[auto_scaling_group_name] = capacity
-                self.auto_scaling_group_detach_instances[auto_scaling_group_name] = instance_ids
+                self.auto_scaling_group_info[auto_scaling_group_name] = (
+                    ref.soca_queue_type,
+                    self.log_info(ref, 'ASG', auto_scaling_group_name),
+                )
+                self.auto_scaling_group_update_capacities[auto_scaling_group_name] = (
+                    capacity
+                )
+                self.auto_scaling_group_detach_instances[auto_scaling_group_name] = (
+                    instance_ids
+                )
 
     def cleanup(self):
         """
@@ -569,6 +632,7 @@ class NodeHouseKeepingSession:
             - scheduler nodes
             - terminates ec2 instances
             - deletes cloudformation stacks
+            - deletes AD computer objects
             - detach applicable instances and update auto scaling group capacities
             - updates spot fleet capacities
         """
@@ -591,63 +655,207 @@ class NodeHouseKeepingSession:
                 deletion_failed_instances.add(node.instance_id)
 
         for instance in self.instances_to_terminate:
-
             if instance.instance_id in deletion_failed_instances:
-                self._logger.warning(f'{self.log_tag(instance)} deletion failed. skip instance termination.')
+                self._logger.warning(
+                    f'{self.log_tag(instance)} deletion failed. skip instance termination.'
+                )
                 continue
 
             self._logger.info(f'{self.log_tag(instance)} terminating ec2 instance')
-            self.aws_util.ec2_terminate_instances(
-                instance_ids=[instance.instance_id]
-            )
+            self.aws_util.ec2_terminate_instances(instance_ids=[instance.instance_id])
 
-            self._context.metrics.instances_terminated(queue_type=instance.soca_queue_type)
+            self._context.metrics.instances_terminated(
+                queue_type=instance.soca_queue_type
+            )
 
             duration = instance.launch_time - arrow.utcnow()
             self._context.metrics.instances_running_duration(
-                queue_type=instance.soca_queue_type,
-                duration_secs=duration.seconds
+                queue_type=instance.soca_queue_type, duration_secs=duration.seconds
             )
+
+            # Send AD automation event to delete the computer object
+            try:
+                # First check if directory service is properly configured
+                provider = self._context.config().get_string(
+                    'directoryservice.provider', default=None
+                )
+                if not provider or provider not in [
+                    'aws_managed_activedirectory',
+                    'activedirectory',
+                ]:
+                    self._logger.debug(
+                        f'Skipping AD computer deletion for {instance.instance_id}, directory service provider is {provider}'
+                    )
+                    continue
+
+                # Get AD automation queue URL from config - fail early if not configured
+                ad_automation_queue_url = self._context.config().get_string(
+                    'directoryservice.ad_automation.sqs_queue_url', default=None
+                )
+                if not ad_automation_queue_url:
+                    self._logger.warning(
+                        'AD automation queue URL not configured. Skipping AD computer deletion.'
+                    )
+                    continue
+
+                # Try to determine the computer name for this instance
+                computer_name = None
+
+                # First try standard methods to get hostname
+                if hasattr(instance, 'private_dns_name') and instance.private_dns_name:
+                    # Extract hostname from private DNS name (e.g., ip-10-0-0-1.ec2.internal -> ip-10-0-0-1)
+                    computer_name = instance.private_dns_name.split('.')[0]
+                    self._logger.debug(
+                        f'Using private_dns_name derived hostname: {computer_name}'
+                    )
+                elif hasattr(instance, 'host') and instance.host:
+                    computer_name = instance.host
+                    self._logger.debug(f'Using host as hostname: {computer_name}')
+
+                # For Windows instances or when hostname couldn't be determined, generate using standard algorithm
+                if not computer_name:
+                    try:
+                        # Get cluster config values for hostname generation
+                        aws_region = self._context.config().get_string(
+                            'cluster.aws.region', required=True
+                        )
+                        aws_account = self._context.config().get_string(
+                            'cluster.aws.account_id', required=True
+                        )
+                        cluster_name = self._context.config().get_string(
+                            'cluster.cluster_name', required=True
+                        )
+
+                        hostname_data = f'{aws_region}|{aws_account}|{cluster_name}|{instance.instance_id}'
+                        hostname_prefix = self._context.config().get_string(
+                            'directoryservice.ad_automation.hostname_prefix',
+                            default='IDEA-',
+                        )
+
+                        # Calculate available characters (max length of AD computer name is 15)
+                        avail_chars = 15 - len(hostname_prefix)
+                        if avail_chars < 4:
+                            self._logger.warning(
+                                f'Hostname prefix too long: {hostname_prefix}, using default IDEA-'
+                            )
+                            hostname_prefix = 'IDEA-'
+                            avail_chars = 10  # 15 - 5
+
+                        # Take the last n-chars from the resulting shake256 bucket of 256
+                        shake_value = Utils.shake_256(hostname_data, 256)[
+                            (avail_chars * -1) :
+                        ]
+                        computer_name = f'{hostname_prefix}{shake_value}'.upper()
+
+                        self._logger.info(
+                            f'Generated hostname for instance {instance.instance_id}: {computer_name}'
+                        )
+                    except Exception as e:
+                        self._logger.error(
+                            f'Failed to generate hostname for instance: {str(e)}'
+                        )
+
+                if not computer_name:
+                    self._logger.warning(
+                        f'Unable to determine computer name for instance {instance.instance_id}. Skipping AD computer deletion.'
+                    )
+                    continue
+
+                self._logger.info(
+                    f'Sending AD automation delete event for computer: {computer_name}, instance: {instance.instance_id}'
+                )
+
+                # Create the AD automation request
+                request = {
+                    'header': {'namespace': 'ADAutomation.DeleteComputer'},
+                    'payload': {
+                        'computer_name': computer_name,
+                        'instance_id': instance.instance_id,
+                    },
+                }
+
+                # Send the message to SQS - always using FIFO parameters since AD automation queue is always FIFO
+                message_deduplication_id = (
+                    f'{instance.instance_id}-{Utils.current_time_ms()}'
+                )
+                self._logger.debug(
+                    f'Using message deduplication ID: {message_deduplication_id}'
+                )
+
+                sqs_response = (
+                    self._context.aws()
+                    .sqs()
+                    .send_message(
+                        QueueUrl=ad_automation_queue_url,
+                        MessageBody=Utils.to_json(request),
+                        MessageGroupId='ADAutomation.DeleteComputer',
+                        MessageDeduplicationId=message_deduplication_id,
+                    )
+                )
+
+                self._logger.info(
+                    f'Successfully sent AD delete request for {computer_name}, SQS MessageId: {sqs_response.get("MessageId", "unknown")}'
+                )
+            except Exception as e:
+                self._logger.warning(
+                    f'Failed to send AD automation delete event: {str(e)}',
+                    exc_info=True,
+                )
 
         # todo - refactor this implementation to create a NodeHouseKeeperContext:
         #  - get rid of all the tuple returns and simplify the code.
         #  - if node deletion failed, find all the ASGs or SpotFleets which need not be updated.
         #  - find all the stacks that cannot be deleted.
 
-        for spot_fleet_request_id, capacity in self.spot_fleet_update_capacities.items():
+        for (
+            spot_fleet_request_id,
+            capacity,
+        ) in self.spot_fleet_update_capacities.items():
             current_capacity, target_capacity = capacity
             queue_type, info = self.spot_fleet_info[spot_fleet_request_id]
-            self._logger.info(f'{info} updating capacity: {current_capacity} -> {target_capacity}')
+            self._logger.info(
+                f'{info} updating capacity: {current_capacity} -> {target_capacity}'
+            )
             self.aws_util.ec2_modify_spot_fleet_request(
                 spot_fleet_request_id=spot_fleet_request_id,
-                target_capacity=target_capacity
+                target_capacity=target_capacity,
             )
-            self._context.metrics.spotfleet_capacity_decreased(queue_type, current_capacity - target_capacity)
+            self._context.metrics.spotfleet_capacity_decreased(
+                queue_type, current_capacity - target_capacity
+            )
 
-        for auto_scaling_group_name, instance_ids in self.auto_scaling_group_detach_instances.items():
+        for (
+            auto_scaling_group_name,
+            instance_ids,
+        ) in self.auto_scaling_group_detach_instances.items():
             queue_type, info = self.auto_scaling_group_info[auto_scaling_group_name]
             self._logger.info(f'{info} detaching {len(instance_ids)} instance(s)')
             self.aws_util.autoscaling_detach_instances(
                 auto_scaling_group_name=auto_scaling_group_name,
-                instance_ids=instance_ids
+                instance_ids=instance_ids,
             )
 
-        for auto_scaling_group_name, capacity in self.auto_scaling_group_update_capacities.items():
+        for (
+            auto_scaling_group_name,
+            capacity,
+        ) in self.auto_scaling_group_update_capacities.items():
             current_capacity, desired_capacity = capacity
             queue_type, info = self.auto_scaling_group_info[auto_scaling_group_name]
-            self._logger.info(f'{info} updating capacity: {current_capacity} -> {desired_capacity}')
+            self._logger.info(
+                f'{info} updating capacity: {current_capacity} -> {desired_capacity}'
+            )
             self.aws_util.autoscaling_update_auto_scaling_group(
                 auto_scaling_group_name=auto_scaling_group_name,
-                desired_capacity=desired_capacity
+                desired_capacity=desired_capacity,
             )
-            self._context.metrics.asg_capacity_decreased(queue_type, current_capacity - desired_capacity)
+            self._context.metrics.asg_capacity_decreased(
+                queue_type, current_capacity - desired_capacity
+            )
 
         for stack_name in self.stacks_to_delete:
             queue_type, info = self.stack_info[stack_name]
             self._logger.info(f'{info} deleting stack')
-            self.aws_util.cloudformation_delete_stack(
-                stack_name=stack_name
-            )
+            self.aws_util.cloudformation_delete_stack(stack_name=stack_name)
             time.sleep(0.3)
             self._context.metrics.stacks_deleted(queue_type)
 
@@ -663,14 +871,15 @@ class NodeHouseKeepingSession:
 
         jobs_table = self._context.job_cache.get_jobs_table()
         queued_jobs = jobs_table.find(state=(SocaJobState.QUEUED, SocaJobState.HELD))
-        stack_provisioning_timeout_secs = self.config.get_int('scheduler.job_provisioning.stack_provisioning_timeout_seconds')
+        stack_provisioning_timeout_secs = self.config.get_int(
+            'scheduler.job_provisioning.stack_provisioning_timeout_seconds'
+        )
 
         compute_stacks = {}
 
         for entry in queued_jobs:
             job = None
             try:
-
                 job = self._context.job_cache.convert_db_entry_to_job(entry)
                 if job is None:
                     continue
@@ -680,21 +889,25 @@ class NodeHouseKeepingSession:
                     job = self._context.scheduler.get_job(job_id=job.job_id)
                     if job.state == SocaJobState.HELD:
                         continue
-                    self._logger.info(f'queue previously held job: {job.log_tag}, state: {job.state}')
+                    self._logger.info(
+                        f'queue previously held job: {job.log_tag}, state: {job.state}'
+                    )
                     self._context.job_monitor.job_modified(job=job)
                     continue
 
                 if not job.is_provisioned():
-                    provisioning_queue = self._context.queue_profiles.get_provisioning_queue(queue_profile_name=job.queue_type)
+                    provisioning_queue = (
+                        self._context.queue_profiles.get_provisioning_queue(
+                            queue_profile_name=job.queue_type
+                        )
+                    )
                     if provisioning_queue is None:
                         continue
                     provisioning_queue.put(job=job)
                     continue
 
                 provisioning_util = JobProvisioningUtil(
-                    context=self._context,
-                    jobs=[job],
-                    logger=self._logger
+                    context=self._context, jobs=[job], logger=self._logger
                 )
 
                 # when batch jobs are being submitted and cloud formation stack is being provisioned, we need to ensure we don't create a flood of describe stack requests
@@ -707,19 +920,26 @@ class NodeHouseKeepingSession:
                     provisioning_status = provisioning_util.check_status()
                     compute_stacks[compute_stack] = provisioning_status
 
-                if provisioning_status in (ProvisioningStatus.IN_PROGRESS, ProvisioningStatus.DELETE_IN_PROGRESS):
-                    self._logger.info(f'{job.log_tag} '
-                                      f'Stack: {job.get_compute_stack()}, '
-                                      f'ProvisioningStatus: {provisioning_status}')
+                if provisioning_status in (
+                    ProvisioningStatus.IN_PROGRESS,
+                    ProvisioningStatus.DELETE_IN_PROGRESS,
+                ):
+                    self._logger.info(
+                        f'{job.log_tag} '
+                        f'Stack: {job.get_compute_stack()}, '
+                        f'ProvisioningStatus: {provisioning_status}'
+                    )
                     continue
 
-                if job.is_shared_capacity() and provisioning_status == ProvisioningStatus.COMPLETED:
+                if (
+                    job.is_shared_capacity()
+                    and provisioning_status == ProvisioningStatus.COMPLETED
+                ):
                     continue
 
                 delete_stack = False
 
                 if provisioning_status == ProvisioningStatus.COMPLETED:
-
                     creation_time = provisioning_util.stack.creation_time
                     if creation_time is None:
                         continue
@@ -729,38 +949,47 @@ class NodeHouseKeepingSession:
                     if delta.seconds < stack_provisioning_timeout_secs:
                         # print log message only after 5 mins have elapsed.
                         if minutes(seconds=delta.seconds) % 5 == 0:
-                            timeout_in_secs = stack_provisioning_timeout_secs - delta.seconds
+                            timeout_in_secs = (
+                                stack_provisioning_timeout_secs - delta.seconds
+                            )
                             timeout = arrow.utcnow().shift(seconds=timeout_in_secs)
-                            self._logger.info(f'{job.log_tag} ComputeStack: {job.get_compute_stack()} will be deleted '
-                                              f'and retried if job does not start {timeout.humanize()}')
+                            self._logger.info(
+                                f'{job.log_tag} ComputeStack: {job.get_compute_stack()} will be deleted '
+                                f'and retried if job does not start {timeout.humanize()}'
+                            )
                         continue
 
                     delete_stack = True
 
-                elif provisioning_status in (ProvisioningStatus.FAILED, ProvisioningStatus.TIMEOUT):
-
+                elif provisioning_status in (
+                    ProvisioningStatus.FAILED,
+                    ProvisioningStatus.TIMEOUT,
+                ):
                     delete_stack = True
 
                 if delete_stack:
                     stack_name = job.get_compute_stack()
 
-                    self._logger.info(f'Deleting ComputeStack: {stack_name}, Retry provisioning ...')
-
-                    self.aws_util.cloudformation_delete_stack(
-                        stack_name=stack_name
+                    self._logger.info(
+                        f'Deleting ComputeStack: {stack_name}, Retry provisioning ...'
                     )
+
+                    self.aws_util.cloudformation_delete_stack(stack_name=stack_name)
 
                 self._context.scheduler.reset_job(job_id=job.job_id)
 
                 self._context.job_monitor.job_modified(job=job)
 
-                self._logger.warning(f'{job.log_tag} CloudFormation Stack provisioning failed or timed-out. '
-                                     f'Job provisioning will be re-tried.')
+                self._logger.warning(
+                    f'{job.log_tag} CloudFormation Stack provisioning failed or timed-out. '
+                    f'Job provisioning will be re-tried.'
+                )
             except Exception as e:
-                self._logger.exception(f'{job.log_tag} provisioning retry clean-up failed. error: {e}')
+                self._logger.exception(
+                    f'{job.log_tag} provisioning retry clean-up failed. error: {e}'
+                )
 
     def publish_cluster_metrics_and_index_in_opensearch(self):
-
         nodes = self._context.scheduler.list_nodes()
         if Utils.is_empty(nodes):
             return
@@ -771,7 +1000,11 @@ class NodeHouseKeepingSession:
             instance_type_vcpus = {}
             instance_type_ht_support_cpus = {}
             for node in nodes:
-                if node.has_state(SocaComputeNodeState.BUSY, SocaComputeNodeState.JOB_BUSY, SocaComputeNodeState.FREE) and not node.has_state(SocaComputeNodeState.DOWN):
+                if node.has_state(
+                    SocaComputeNodeState.BUSY,
+                    SocaComputeNodeState.JOB_BUSY,
+                    SocaComputeNodeState.FREE,
+                ) and not node.has_state(SocaComputeNodeState.DOWN):
                     resources_available = node.resources_available
                     cpus = 0
                     if resources_available is not None:
@@ -779,52 +1012,67 @@ class NodeHouseKeepingSession:
                         total_cpus += cpus
 
                     # instance type counts
-                    instance_type_count = Utils.get_value_as_int(node.instance_type, instance_type_counts, 0)
+                    instance_type_count = Utils.get_value_as_int(
+                        node.instance_type, instance_type_counts, 0
+                    )
                     instance_type_count += 1
                     instance_type_counts[node.instance_type] = instance_type_count
 
                     # instance type vcpus
-                    instance_type_vcpu_count = Utils.get_value_as_int(node.instance_type, instance_type_vcpus, 0)
-                    ec2_instance_type = self._context.aws_util().get_ec2_instance_type(node.instance_type)
-                    instance_type_vcpu_count += ec2_instance_type.vcpu_info_default_vcpus
+                    instance_type_vcpu_count = Utils.get_value_as_int(
+                        node.instance_type, instance_type_vcpus, 0
+                    )
+                    ec2_instance_type = self._context.aws_util().get_ec2_instance_type(
+                        node.instance_type
+                    )
+                    instance_type_vcpu_count += (
+                        ec2_instance_type.vcpu_info_default_vcpus
+                    )
                     instance_type_vcpus[node.instance_type] = instance_type_vcpu_count
 
                     # instance type, ht_support cpu count
                     instance_type_ht_support_cpu_count_key = f'{node.instance_type}:{Utils.get_as_bool(node.enable_ht_support, default=False)}'
-                    instance_type_ht_support_cpu_count = Utils.get_value_as_int(instance_type_ht_support_cpu_count_key, instance_type_ht_support_cpus, 0)
+                    instance_type_ht_support_cpu_count = Utils.get_value_as_int(
+                        instance_type_ht_support_cpu_count_key,
+                        instance_type_ht_support_cpus,
+                        0,
+                    )
                     instance_type_ht_support_cpu_count += cpus
-                    instance_type_ht_support_cpus[instance_type_ht_support_cpu_count_key] = instance_type_ht_support_cpu_count
+                    instance_type_ht_support_cpus[
+                        instance_type_ht_support_cpu_count_key
+                    ] = instance_type_ht_support_cpu_count
 
-            BaseMetrics(
-                context=self._context,
-                split_dimensions=False
-            ).count(Value=total_cpus, MetricName='cpus_total')
+            BaseMetrics(context=self._context, split_dimensions=False).count(
+                Value=total_cpus, MetricName='cpus_total'
+            )
 
             for instance_type, count in instance_type_counts.items():
                 BaseMetrics(
-                    context=self._context,
-                    split_dimensions=False
-                ).with_dimension(
-                    'instance_type', instance_type
-                ).count(Value=count, MetricName='total')
+                    context=self._context, split_dimensions=False
+                ).with_dimension('instance_type', instance_type).count(
+                    Value=count, MetricName='total'
+                )
 
             for instance_type, vcpus in instance_type_vcpus.items():
                 BaseMetrics(
-                    context=self._context,
-                    split_dimensions=False
-                ).with_dimension(
-                    'instance_type', instance_type
-                ).count(Value=vcpus, MetricName='vcpus_total')
+                    context=self._context, split_dimensions=False
+                ).with_dimension('instance_type', instance_type).count(
+                    Value=vcpus, MetricName='vcpus_total'
+                )
 
-            for instance_type_ht_support_count_key, cpus in instance_type_ht_support_cpus.items():
+            for (
+                instance_type_ht_support_count_key,
+                cpus,
+            ) in instance_type_ht_support_cpus.items():
                 tokens = instance_type_ht_support_count_key.split(':')
                 BaseMetrics(
-                    context=self._context,
-                    split_dimensions=False
+                    context=self._context, split_dimensions=False
                 ).with_dimension(
-                    'instance_type', tokens[0],
+                    'instance_type',
+                    tokens[0],
                 ).with_dimension(
-                    'ht_support', tokens[1].lower(),
+                    'ht_support',
+                    tokens[1].lower(),
                 ).count(Value=cpus, MetricName='cpus_total')
 
         except Exception as e:
@@ -839,7 +1087,6 @@ class NodeHouseKeepingSession:
         success = False
         start_time_ms = Utils.current_time_ms()
         try:
-
             self._logger.debug('node housekeeping session started ...')
 
             # identify potential candidates for deletion
@@ -871,7 +1118,6 @@ class NodeHouseKeepingSession:
         except Exception as e:
             self._logger.exception(f'node housekeeping session failed: {e}')
         finally:
-
             if success:
                 self._logger.debug('node housekeeping session completed.')
             else:
@@ -885,7 +1131,6 @@ class NodeHouseKeepingSession:
 
 
 class NodeHouseKeeper:
-
     def __init__(self, context: ideascheduler.AppContext):
         self._context = context
         self._logger = self._context.logger(name='node_housekeeper')
@@ -897,7 +1142,6 @@ class NodeHouseKeeper:
         session.begin()
 
     def invoke(self):
-
         # this is a fail safe in the event when instance cache or job cache is stale, or has not yet initialized.
         if not self._context.is_ready():
             self._logger.warning('job provisioning not ready. skip.')
@@ -911,8 +1155,7 @@ class NodeHouseKeeper:
             self._is_running.set()
 
             self._house_keeping_thread = Thread(
-                name='node-housekeeper',
-                target=self.do_job
+                name='node-housekeeper', target=self.do_job
             )
             self._house_keeping_thread.start()
 

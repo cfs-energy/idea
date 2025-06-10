@@ -27,7 +27,6 @@ from ideasdk.shell import ShellInvoker
 
 
 class UserHomeDirectory:
-
     def __init__(self, context: SocaContext, user: User):
         self._context = context
         self._logger = context.logger('user-home-init')
@@ -43,7 +42,11 @@ class UserHomeDirectory:
         return os.path.join(self.user.home_dir, '.ssh')
 
     def own_path(self, path: str):
-        shutil.chown(path, user=self.user.username, group=Utils.get_as_int(pwd.getpwnam(self.user.username).pw_gid, default=0))
+        shutil.chown(
+            path,
+            user=self.user.username,
+            group=Utils.get_as_int(pwd.getpwnam(self.user.username).pw_gid, default=0),
+        )
 
     def initialize_ssh_dir(self):
         os.makedirs(self.ssh_dir, exist_ok=True)
@@ -57,17 +60,16 @@ class UserHomeDirectory:
             return
 
         key = rsa.generate_private_key(
-            backend=crypto_default_backend(),
-            public_exponent=65537,
-            key_size=2048
+            backend=crypto_default_backend(), public_exponent=65537, key_size=2048
         )
         private_key = key.private_bytes(
             crypto_serialization.Encoding.PEM,
             crypto_serialization.PrivateFormat.TraditionalOpenSSL,
-            crypto_serialization.NoEncryption())
+            crypto_serialization.NoEncryption(),
+        )
         public_key = key.public_key().public_bytes(
             crypto_serialization.Encoding.OpenSSH,
-            crypto_serialization.PublicFormat.OpenSSH
+            crypto_serialization.PublicFormat.OpenSSH,
         )
 
         with open(id_rsa_file, 'w') as f:
@@ -94,7 +96,7 @@ class UserHomeDirectory:
         skeleton_files = [
             '/etc/skel/.bashrc',
             '/etc/skel/.bash_profile',
-            '/etc/skel/.bash_logout'
+            '/etc/skel/.bash_logout',
         ]
 
         for src_file in skeleton_files:
@@ -116,7 +118,9 @@ class UserHomeDirectory:
                 pwd.getpwnam(self.user.username)
                 break
             except KeyError:
-                self._logger.info(f'{self.user.username} not available yet. waiting for user to be synced ...')
+                self._logger.info(
+                    f'{self.user.username} not available yet. waiting for user to be synced ...'
+                )
                 time.sleep(5)
 
         self.initialize_home_dir()
@@ -126,7 +130,10 @@ class UserHomeDirectory:
         if not Utils.is_dir(self.home_dir):
             return
 
-        archive_dir = os.path.join(USER_HOME_DIR_BASE, f'{self.user.username}_{Utils.file_system_friendly_timestamp()}')
+        archive_dir = os.path.join(
+            USER_HOME_DIR_BASE,
+            f'{self.user.username}_{Utils.file_system_friendly_timestamp()}',
+        )
         shutil.move(self.home_dir, archive_dir)
         os.chown(archive_dir, 0, 0)
         os.chmod(archive_dir, 0o700)
@@ -160,7 +167,9 @@ class UserHomeDirectory:
 
         id_rsa_file = os.path.join(self.ssh_dir, 'id_rsa')
         if not Utils.is_empty(id_rsa_file):
-            exceptions.general_exception(f'private key not found in home directory for user: {self.user.username}')
+            exceptions.general_exception(
+                f'private key not found in home directory for user: {self.user.username}'
+            )
 
         key_format = self.validate_and_sanitize_key_format(key_format)
 
@@ -171,7 +180,7 @@ class UserHomeDirectory:
             lines = private_key_content.splitlines()
             if platform in ('linux', 'osx'):
                 return '\n'.join(lines)
-            elif platform == 'windows':
+            elif 'windows' in platform.lower():
                 return '\r\n'.join(lines)
 
             # default
@@ -190,13 +199,17 @@ class UserHomeDirectory:
 
             id_rsa_ppk_file = os.path.join(self.ssh_dir, 'id_rsa.ppk')
             if not Utils.is_file(id_rsa_ppk_file):
-                result = self._shell.invoke([
-                    'su',
-                    self.user.username,
-                    '-c',
-                    f'{putty_gen_bin} {id_rsa_file} -o {id_rsa_ppk_file}'
-                ])
+                result = self._shell.invoke(
+                    [
+                        'su',
+                        self.user.username,
+                        '-c',
+                        f'{putty_gen_bin} {id_rsa_file} -o {id_rsa_ppk_file}',
+                    ]
+                )
                 if result.returncode != 0:
-                    raise exceptions.general_exception(f'failed to generate .ppk file: {result}')
+                    raise exceptions.general_exception(
+                        f'failed to generate .ppk file: {result}'
+                    )
 
             return read_private_key_content(id_rsa_ppk_file)

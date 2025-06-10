@@ -27,7 +27,7 @@ __all__ = (
     'SocaUserInputSectionMetadata',
     'SocaUserInputModuleMetadata',
     'SocaUserInputTag',
-    'SocaInputParamSpec'
+    'SocaInputParamSpec',
 )
 
 from ideadatamodel import SocaBaseModel
@@ -135,7 +135,9 @@ class SocaUserInputHandlers(SocaBaseModel):
 
 class SocaUserInputParamCondition(SocaUserInputCondition):
     param: Optional[str] = Field(default=None)
-    and_: Optional[List['SocaUserInputParamCondition']] = Field(alias='and', default=None)
+    and_: Optional[List['SocaUserInputParamCondition']] = Field(
+        alias='and', default=None
+    )
     or_: Optional[List['SocaUserInputParamCondition']] = Field(alias='or', default=None)
 
 
@@ -281,7 +283,6 @@ class SocaUserInputParamMetadata(SocaBaseModel):
         return self.get_choice_value(choices[0])
 
     def get_default(self) -> Optional[Any]:
-
         multiple = ModelUtils.get_as_bool(self.multiple, False)
         if self.data_type == 'bool':
             if multiple:

@@ -25,7 +25,9 @@ class SocaPubSub(SocaPubSubProtocol):
 
     def subscribe(self, listener: SubscriptionListener, sender: Optional[str] = None):
         if self._logger:
-            self._logger.debug(f'subscribe - topic: {self._signal.name}, listener: {listener}')
+            self._logger.debug(
+                f'subscribe - topic: {self._signal.name}, listener: {listener}'
+            )
 
         if sender is None:
             self._signal.connect(listener)
@@ -34,7 +36,9 @@ class SocaPubSub(SocaPubSubProtocol):
 
     def unsubscribe(self, listener: SubscriptionListener, sender: Optional[str] = None):
         if self._logger:
-            self._logger.debug(f'unsubscribe - topic: {self._signal.name}, listener: {listener}')
+            self._logger.debug(
+                f'unsubscribe - topic: {self._signal.name}, listener: {listener}'
+            )
 
         if sender is None:
             self._signal.disconnect(listener)

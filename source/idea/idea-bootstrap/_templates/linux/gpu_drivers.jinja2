@@ -1,6 +1,19 @@
 # Begin: Install GPU Drivers - Is GPU Instance Type: {{ context.is_gpu_instance_type() }}
-{%- if context.is_gpu_instance_type() %}
-{%- if context.is_nvidia_gpu() %}
+{% if context.is_gpu_instance_type() %}
+{% if context.is_nvidia_gpu() %}
+
+{% if context.base_os in ('amazonlinux2023') %}
+  dnf check-release-update
+  dnf update -y
+  dnf install -y dkms
+  systemctl enable --now dkms
+  if (uname -r | grep -q ^6.12.); then
+    dnf install -y kernel-devel-$(uname -r)  kernel6.12-modules-extra
+  else
+    dnf install -y kernel-devel-$(uname -r)  kernel-modules-extra
+  fi
+{% endif %}
+
 function install_nvidia_grid_drivers () {
   which nvidia-smi > /dev/null 2>&1
   if [[ "$?" == "0" ]]; then
@@ -13,8 +26,26 @@ function install_nvidia_grid_drivers () {
   pushd /root/bootstrap/gpu_drivers
 
   local AWS=$(command -v aws)
-  local DRIVER_BUCKET_REGION=$(curl -s --head {{ context.config.get_string('global-settings.gpu_settings.nvidia.s3_bucket_url', required=True) }} | grep bucket-region | awk '{print $2}' | tr -d '\r\n')
-  $AWS --region ${DRIVER_BUCKET_REGION} s3 cp --quiet --recursive {{ context.config.get_string('global-settings.gpu_settings.nvidia.s3_bucket_path', required=True) }} .
+
+  # Check if we're in a GovCloud region
+  if [[ -f /etc/environment ]] && grep -q "AWS_REGION=.*gov" /etc/environment; then
+    local DRIVER_BUCKET_REGION=$(grep "AWS_REGION=" /etc/environment | cut -d= -f2 | tr -d '"')
+    log_info "Detected GovCloud region: ${DRIVER_BUCKET_REGION}"
+  else
+    # Special handling for Amazon Linux 2 with kernel 4.14
+    if [[ $(uname -a) =~ "amzn2" ]] && [[ $(uname -r) =~ ^4.14 ]]; then
+      log_info "Detected Amazon Linux 2 with kernel 4.14, using specific GRID driver path"
+      local DRIVER_BUCKET_REGION=$(curl -s --head {{ context.config.get_string('global-settings.gpu_settings.nvidia.linux.s3_bucket_url', required=True) }} | grep bucket-region | awk '{print $2}' | tr -d '\r\n')
+      $AWS --region ${DRIVER_BUCKET_REGION} s3 cp --quiet --recursive s3://ec2-linux-nvidia-drivers/grid-17.1/ .
+      popd
+      return 0
+    else
+      local DRIVER_BUCKET_REGION=$(curl -s --head {{ context.config.get_string('global-settings.gpu_settings.nvidia.linux.s3_bucket_url', required=True) }} | grep bucket-region | awk '{print $2}' | tr -d '\r\n')
+    fi
+  fi
+
+  $AWS --region ${DRIVER_BUCKET_REGION} s3 cp --quiet --recursive {{ context.config.get_string('global-settings.gpu_settings.nvidia.linux.s3_bucket_path', required=True) }} .
+
   local x_server_pid=$(cat /tmp/.X0-lock)
   if [[ ! -z "${x_server_pid}" ]]; then
     kill $x_server_pid
@@ -22,9 +53,9 @@ function install_nvidia_grid_drivers () {
 
   if [[ $(uname -a) =~ "amzn2" ]] && [[ $(uname -r) =~ ^5.10 ]]
   then
-      CC=/usr/bin/gcc10-cc /bin/sh NVIDIA-Linux-x86_64*.run --no-precompiled-interface --run-nvidia-xconfig --no-questions --accept-license --silent
+      CC=/usr/bin/gcc10-cc /bin/sh NVIDIA-Linux-x86_64*.run --no-precompiled-interface --run-nvidia-xconfig --no-questions --accept-license --dkms --silent
   else
-      /bin/sh NVIDIA-Linux-x86_64*.run --no-precompiled-interface --run-nvidia-xconfig --no-questions --accept-license --silent
+      /bin/sh NVIDIA-Linux-x86_64*.run --no-precompiled-interface --run-nvidia-xconfig --no-questions --accept-license --dkms --silent
   fi
 
   log_info "X server configuration for GPU start..."
@@ -44,16 +75,16 @@ function install_nvidia_public_drivers() {
     return 0
   fi
 
-  # Instance	Product Type	Product Series	Product
-  # G2	      GRID	        GRID Series	    GRID K520
-  # G3/G3s    Tesla	        M-Class	        M60
-  # G4dn      Tesla	        T-Series	      T4
-  # G5        Tesla	        A-Series	      A10 - G5  (instances require driver version 470.00 or later)
-  # G5g       Tesla	        T-Series	      NVIDIA T4G  (G5g instances require driver version 470.82.01 or later. The operating systems is Linux aarch64)
-  # P2        Tesla	        K-Series	      K80
-  # P3        Tesla	        V-Series	      V100
-  # P4d       Tesla	        A-Series	      A100 (320 GB HBM2 GPU memory)
-  # P4de      Tesla	        A-Series	      A100 (640 GB HBM2e GPU memory)
+  # Instance    Product Type    Product Series  Product
+  # G2        GRID          GRID Series     GRID K520
+  # G3/G3s    Tesla         M-Class         M60
+  # G4dn      Tesla         T-Series          T4
+  # G5        Tesla         A-Series          A10 - G5  (instances require driver version 470.00 or later)
+  # G5g       Tesla         T-Series          NVIDIA T4G  (G5g instances require driver version 470.82.01 or later. The operating systems is Linux aarch64)
+  # P2        Tesla         K-Series          K80
+  # P3        Tesla         V-Series          V100
+  # P4d       Tesla         A-Series          A100 (320 GB HBM2 GPU memory)
+  # P4de      Tesla         A-Series          A100 (640 GB HBM2e GPU memory)
   # P5        Tesla         H-Series        H100 (640 GB HBM3 GPU memory)
 
   local DRIVER_VERSION="{{ context.get_nvidia_gpu_driver_version() }}"
@@ -71,9 +102,9 @@ function install_nvidia_public_drivers() {
 
   if [[ $(uname -a) =~ "amzn2" ]] && [[ $(uname -r) =~ ^5.10 ]]
   then
-      CC=/usr/bin/gcc10-cc /bin/sh NVIDIA-Linux-${MACHINE}-${DRIVER_VERSION}.run -q -a -n -s
+      CC=/usr/bin/gcc10-cc /bin/sh NVIDIA-Linux-${MACHINE}-${DRIVER_VERSION}.run -q -a -n -s --dkms
   else
-      /bin/sh NVIDIA-Linux-${MACHINE}-${DRIVER_VERSION}.run -q -a -n -s
+      /bin/sh NVIDIA-Linux-${MACHINE}-${DRIVER_VERSION}.run -q -a -n -s --dkms
   fi
   log_info "X server configuration for GPU start..."
   local NVIDIAXCONFIG=$(which nvidia-xconfig)
@@ -83,9 +114,9 @@ function install_nvidia_public_drivers() {
 
   popd
 }
-{%- elif context.is_amd_gpu()  %}
+{% elif context.is_amd_gpu()  %}
 function install_amd_gpu_drivers() {
-  which -s /opt/amdgpu-pro/bin/clinfo
+  which /opt/amdgpu-pro/bin/clinfo > /dev/null 2>&1
   if [[ "$?" == "0" ]]; then
     log_info "GPU driver already installed. Skip."
     return 0
@@ -97,34 +128,100 @@ function install_amd_gpu_drivers() {
   #
   mkdir -p /root/bootstrap/gpu_drivers
   pushd /root/bootstrap/gpu_drivers
-  {% if context.base_os in ('ubuntu2204', 'ubuntu2404') -%}
-    wget https://repo.radeon.com/amdgpu-install/6.0.2/ubuntu/jammy/amdgpu-install_6.0.60002-1_all.deb
-    DEBIAN_FRONTEND=noninteractive apt install -y ./amdgpu-install_6.0.60002-1_all.deb
+
+  # Enforce pbs stop to avoid pbs restart during amdgpupro install
+  systemctl stop pbs
+
+  {% if context.base_os == 'amazonlinux2' %}
+    # Install mesa packages for Amazon Linux 2
+    yum install -y --skip-broken mesa* mesa-libEGL mesa-dri-drivers vulkan vulkan-amdgpu vulkan-devel vulkan-filesystem
+  {% endif %}
+
+  {% if context.base_os in ('amazonlinux2') %}
+    local AWS=$(command -v aws)
+
+    # Check if we're in a GovCloud region
+    if [[ -f /etc/environment ]] && grep -q "AWS_REGION=.*gov" /etc/environment; then
+      local DRIVER_BUCKET_REGION=$(grep "AWS_REGION=" /etc/environment | cut -d= -f2 | tr -d '"')
+      log_info "Detected GovCloud region: ${DRIVER_BUCKET_REGION}"
+    else
+      local DRIVER_BUCKET_REGION=$(curl -s --head {{ context.config.get_string('global-settings.gpu_settings.amd.linux.s3_bucket_url', required=True) }} | grep bucket-region | awk '{print $2}' | tr -d '\r\n')
+    fi
+
+    $AWS --region ${DRIVER_BUCKET_REGION} s3 cp --quiet --recursive {{ context.config.get_string('global-settings.gpu_settings.amd.linux.s3_bucket_path', required=True) }} .
+    tar -xf amdgpu-pro-*rhel*.tar.xz
+    cd $(find . -maxdepth 1 -mindepth 1 -type d -name "amdgpu-pro*rhel*")
+    rpm --import RPM-GPG-KEY-amdgpu
+    /bin/bash ./amdgpu-pro-install -y --opencl=pal,legacy
+
+  {% elif context.base_os in ('rhel8', 'rocky8', 'rhel9', 'rocky9') %}
+    local AMD_RADEON_REPO_BASE_URL="https://repo.radeon.com/amdgpu"
+    local AMD_GPU_VERSION="6.4.1"
+    local OS_VERSION=$(awk -F= '/^VERSION_ID/ {gsub(/"/, "", $2); print $2}' /etc/os-release)
+    log_info "Detected OS Version ${OS_VERSION}, using AMD GPU version ${AMD_GPU_VERSION}"
+
+    local RHEL_ROCKY_INSTALLER_URL="${AMD_RADEON_REPO_BASE_URL}/${AMD_GPU_VERSION}/el/${OS_VERSION}/main/x86_64/"
+
+    # Install wget if not available
+    if ! command -v wget &> /dev/null; then
+      log_info "Installing wget"
+      {% if context.base_os in ('rhel8', 'rocky8', 'rhel9', 'rocky9') %}
+      yum install -y wget
+      {% endif %}
+    fi
+
+    log_info "Downloading amdgpu-install RPM from ${RHEL_ROCKY_INSTALLER_URL}"
+    wget -r -l1 --no-parent -A "amdgpu-install-*.noarch.rpm" ${RHEL_ROCKY_INSTALLER_URL}
+
+    # Find RPM and install it
+    local AMD_GPU_RPM=$(echo "${RHEL_ROCKY_INSTALLER_URL#https://}amdgpu-install-*.noarch.rpm")
+    log_info "Installing RPM ${AMD_GPU_RPM}"
+    yum localinstall -y $(ls ${AMD_GPU_RPM})
+
+    # Install vulkan packages
+    yum install -y --skip-broken vulkan vulkan-amdgpu vulkan-headers vulkan-loader-devel vulkan-tools vulkan-validation-layers
+
+    # Install additional AMD GPU RPMs
+    log_info "Downloading additional AMD GPU RPMs"
+    wget -r -l1 --no-parent -A "libdrm-amdgpu-common-*.rpm" ${RHEL_ROCKY_INSTALLER_URL}
+    wget -r -l1 --no-parent -A "libdrm-amdgpu-*.rpm" ${RHEL_ROCKY_INSTALLER_URL}
+    wget -r -l1 --no-parent -A "xorg-x11-amdgpu-drv-amdgpu-*.rpm" ${RHEL_ROCKY_INSTALLER_URL}
+
+    # Find and install additional AMD GPU RPMs
+    local LIBDRM_AMDGPU_COMMON_RPM=$(echo "${RHEL_ROCKY_INSTALLER_URL#https://}libdrm-amdgpu-common-*.rpm")
+    local LIBDRM_AMDGPU_RPM=$(echo "${RHEL_ROCKY_INSTALLER_URL#https://}libdrm-amdgpu-*.rpm")
+    local XORG_AMDGPU_RPM=$(echo "${RHEL_ROCKY_INSTALLER_URL#https://}xorg-x11-amdgpu-drv-amdgpu-*.rpm")
+
+    log_info "Installing additional AMD GPU RPMs"
+    yum localinstall -y $(ls ${LIBDRM_AMDGPU_COMMON_RPM})
+    yum localinstall -y $(ls ${LIBDRM_AMDGPU_RPM})
+    yum localinstall -y $(ls ${XORG_AMDGPU_RPM})
+
+    log_info "Running amdgpu-install"
+    /bin/amdgpu-install --usecase=workstation --accept-eula -y
+
+  {% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+    local AMD_VERSION="6.4.1"
+    local AMD_PACKAGE_VERSION="6.4.60401-1"
+    {% if context.base_os == 'ubuntu2204' %}
+    local UBUNTU_CODENAME="jammy"
+    {% elif context.base_os == 'ubuntu2404' %}
+    local UBUNTU_CODENAME="noble"
+    {% endif %}
+
+    wget https://repo.radeon.com/amdgpu-install/${AMD_VERSION}/ubuntu/${UBUNTU_CODENAME}/amdgpu-install_${AMD_PACKAGE_VERSION}_all.deb
+    DEBIAN_FRONTEND=noninteractive apt install -y ./amdgpu-install_${AMD_PACKAGE_VERSION}_all.deb
 
     amdgpu-install --usecase=workstation --vulkan=pro --opencl=rocr --no-32 -y --accept-eula
-  {%- endif %}
-  {%- if context.base_os in ('amazonlinux2') %}
-  local AWS=$(command -v aws)
-  local DRIVER_BUCKET_REGION=$(curl -s --head {{ context.config.get_string('global-settings.gpu_settings.amd.s3_bucket_url', required=True) }} | grep bucket-region | awk '{print $2}' | tr -d '\r\n')
-  $AWS --region ${DRIVER_BUCKET_REGION} s3 cp --quiet --recursive {{ context.config.get_string('global-settings.gpu_settings.amd.s3_bucket_path', required=True) }} .
-  tar -xf amdgpu-pro-*rhel*.tar.xz
-  cd $(find . -maxdepth 1 -mindepth 1 -type d -name "amdgpu-pro*rhel*")
-  rpm --import RPM-GPG-KEY-amdgpu
-  /bin/sh ./amdgpu-pro-install -y --opencl=pal,legacy
-  {%- elif context.base_os in ('rhel8', 'rocky8') %}
-  local RHEL_ROCKY8_INSTALLER_URL={{ context.config.get_string('global-settings.gpu_settings.amd.rhel_rocky8_installer_url', required=True)}}
-  yum localinstall -y ${RHEL_ROCKY8_INSTALLER_URL}
-  /bin/amdgpu-install --usecase=workstation --vulkan=pro --opencl=rocr,legacy --accept-eula -y
-  {%- elif context.base_os in ('rhel9', 'rocky9') %}
-  local RHEL_ROCKY9_INSTALLER_URL={{ context.config.get_string('global-settings.gpu_settings.amd.rhel_rocky9_installer_url', required=True)}}
-  yum localinstall -y ${RHEL_ROCKY9_INSTALLER_URL}
-  /bin/amdgpu-install --usecase=workstation --vulkan=pro --opencl=rocr,legacy --accept-eula -y
-  {%- endif %}
+
+  {% endif %}
 
   set_reboot_required "Installed AMD GPU Driver"
 
-  mkdir -p /etc/X11/
-echo """Section \"ServerLayout\"
+  # Configure X11 for DCV nodes
+  {% if node_type == "dcv" %}
+    mkdir -p /etc/X11/
+    echo """Section \"ServerLayout\"
     Identifier     \"Layout0\"
     Screen          0 \"Screen0\"
     InputDevice     \"Keyboard0\" \"CoreKeyboard\"
@@ -181,9 +278,10 @@ Section \"Screen\"
     EndSubSection
 EndSection
 """> /etc/X11/xorg.conf
+  {% endif %}
   popd
 }
-{%- endif %}
+{% endif %}
 
 function install_gpu_drivers () {
 
@@ -297,10 +395,10 @@ function install_gpu_drivers () {
 }
 
 install_gpu_drivers
-{%- if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
 sed -i '/^Section\ "Device"/a \ \ \ \ \option \ \ \ \ \ \ \ \ "HardDPMS" "false"' /etc/X11/xorg.conf
-{%- endif %}
-{%- else %}
+{% endif %}
+{% else %}
 log_info "GPU InstanceType not detected. Skip."
-{%- endif %}
+{% endif %}
 # End: Install GPU Drivers

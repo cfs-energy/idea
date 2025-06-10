@@ -16,6 +16,7 @@
 # This is particularly useful is you are planning to do data mining with services such as Glue / Athena
 # To prevent disk to fill up, we also remove files after 10 days (default). This value can be changed using DATA_RETENTION variable
 
+# shellcheck disable=SC1091
 source /etc/environment
 
 DATA_RETENTION=10 # number of days logs stay in the server
@@ -30,10 +31,9 @@ COMPUTE_NODE_LOGS="${IDEA_CLUSTER_HOME}/${IDEA_MODULE_ID}/compute_node/logs"
 /usr/bin/aws s3 sync ${SCHEDULER_ACCOUNTING} "${S3_BUCKET_SCHEDULER_LOGS}accounting/"
 /usr/bin/aws s3 sync ${SCHEDULER_SERVER_LOGS} "${S3_BUCKET_SCHEDULER_LOGS}server_logs/"
 /usr/bin/aws s3 sync ${SCHEDULER_SCHED_LOGS} "${S3_BUCKET_SCHEDULER_LOGS}sched_logs/"
-/usr/bin/aws s3 sync ${COMPUTE_HOST_LOG} "${S3_BUCKET_SCHEDULER_LOGS}compute_nodes/"
+/usr/bin/aws s3 sync "${COMPUTE_HOST_LOG}" "${S3_BUCKET_SCHEDULER_LOGS}compute_nodes/"
 
-find ${COMPUTE_NODE_LOGS}/* -type d -mtime +${DATA_RETENTION} -print | xargs -I {} rm -rf "{}"
-find ${SCHEDULER_SERVER_LOGS} -type f -mtime +${DATA_RETENTION} -print | xargs -I {} rm "{}"
-find ${SCHEDULER_SCHED_LOGS} -type f -mtime +${DATA_RETENTION} -print | xargs -I {} rm "{}"
-find ${SCHEDULER_ACCOUNTING} -type f -mtime +${DATA_RETENTION} -print | xargs -I {} rm "{}"
-
+find "${COMPUTE_NODE_LOGS}"/* -type d -mtime +${DATA_RETENTION} -exec rm -rf {} +
+find ${SCHEDULER_SERVER_LOGS} -type f -mtime +${DATA_RETENTION} -delete
+find ${SCHEDULER_SCHED_LOGS} -type f -mtime +${DATA_RETENTION} -delete
+find ${SCHEDULER_ACCOUNTING} -type f -mtime +${DATA_RETENTION} -delete

@@ -24,7 +24,7 @@ __all__ = (
     'SocaSSHKeyPair',
     'SocaACMCertificate',
     'SocaAWSProfile',
-    'SocaEC2PrefixList'
+    'SocaEC2PrefixList',
 )
 
 from ideadatamodel import SocaBaseModel, constants, exceptions
@@ -32,6 +32,7 @@ from ideadatamodel.model_utils import ModelUtils
 
 from typing import Optional, List, Dict, Any, Set
 from pydantic import Field
+
 
 class SocaClusterResource(SocaBaseModel):
     type: Optional[str] = Field(default=None)
@@ -68,7 +69,6 @@ class SocaClusterResource(SocaBaseModel):
 
 
 class SocaVPC(SocaClusterResource):
-
     @property
     def vpc_id(self) -> str:
         return ModelUtils.get_value_as_string('VpcId', self.ref)
@@ -86,7 +86,6 @@ class SocaVPC(SocaClusterResource):
 
 
 class SocaCloudFormationStack(SocaClusterResource):
-
     @property
     def status(self) -> str:
         return ModelUtils.get_value_as_string('StackStatus', self.ref)
@@ -112,7 +111,6 @@ class SocaCloudFormationStack(SocaClusterResource):
 
 
 class SocaOpenSearchDomain(SocaClusterResource):
-
     @property
     def _domain_status(self) -> Optional[Dict]:
         return ModelUtils.get_value_as_dict('DomainStatus', self.ref)
@@ -136,7 +134,6 @@ class SocaOpenSearchDomain(SocaClusterResource):
 
 
 class SocaDirectory(SocaClusterResource):
-
     @property
     def directory_id(self) -> str:
         return ModelUtils.get_value_as_string('DirectoryId', self.ref)
@@ -156,7 +153,6 @@ class SocaDirectory(SocaClusterResource):
 
 
 class SocaSubnet(SocaClusterResource):
-
     @property
     def vpc_id(self) -> str:
         return ModelUtils.get_value_as_string('VpcId', self.ref)
@@ -207,7 +203,7 @@ class SocaFileSystem(SocaClusterResource):
     def get_volumes(self) -> Optional[List[Dict]]:
         if self.provider not in (
             constants.STORAGE_PROVIDER_FSX_NETAPP_ONTAP,
-            constants.STORAGE_PROVIDER_FSX_OPENZFS
+            constants.STORAGE_PROVIDER_FSX_OPENZFS,
         ):
             return None
 
@@ -258,13 +254,19 @@ class SocaFileSystem(SocaClusterResource):
 
     def get_volume_path(self, volume_entry: Dict) -> str:
         if self.provider == constants.STORAGE_PROVIDER_FSX_NETAPP_ONTAP:
-            ontap_config = ModelUtils.get_value_as_dict('OntapConfiguration', volume_entry)
+            ontap_config = ModelUtils.get_value_as_dict(
+                'OntapConfiguration', volume_entry
+            )
             return ModelUtils.get_value_as_string('JunctionPath', ontap_config)
         elif self.provider == constants.STORAGE_PROVIDER_FSX_OPENZFS:
-            openzfs_config = ModelUtils.get_value_as_dict('OpenZFSConfiguration', volume_entry)
+            openzfs_config = ModelUtils.get_value_as_dict(
+                'OpenZFSConfiguration', volume_entry
+            )
             return ModelUtils.get_value_as_string('VolumePath', openzfs_config)
         else:
-            raise exceptions.invalid_params(f'volume path not supported for provider: {self.provider}')
+            raise exceptions.invalid_params(
+                f'volume path not supported for provider: {self.provider}'
+            )
 
 
 class SocaSecurityGroupPermission(SocaBaseModel):
@@ -277,7 +279,6 @@ class SocaSecurityGroupPermission(SocaBaseModel):
 
 
 class SocaSecurityGroup(SocaClusterResource):
-
     @property
     def group_id(self) -> str:
         return ModelUtils.get_value_as_string('GroupId', self.ref)
@@ -310,7 +311,9 @@ class SocaSecurityGroup(SocaClusterResource):
 
             approved_groups_ids = set()
             approved_user_ids = set()
-            user_id_group_pairs = ModelUtils.get_value_as_list('UserIdGroupPairs', permission, [])
+            user_id_group_pairs = ModelUtils.get_value_as_list(
+                'UserIdGroupPairs', permission, []
+            )
             if len(user_id_group_pairs) > 0:
                 for pair in user_id_group_pairs:
                     group_id = ModelUtils.get_value_as_string('GroupId', pair)
@@ -320,13 +323,15 @@ class SocaSecurityGroup(SocaClusterResource):
                     if user_id:
                         approved_user_ids.add(user_id)
 
-            result.append(SocaSecurityGroupPermission(
-                from_port=from_port,
-                to_port=to_port,
-                approved_ips=approved_ips,
-                approved_groups_ids=approved_groups_ids,
-                approved_user_ids=approved_user_ids
-            ))
+            result.append(
+                SocaSecurityGroupPermission(
+                    from_port=from_port,
+                    to_port=to_port,
+                    approved_ips=approved_ips,
+                    approved_groups_ids=approved_groups_ids,
+                    approved_user_ids=approved_user_ids,
+                )
+            )
 
         return result
 
@@ -340,7 +345,6 @@ class SocaSecurityGroup(SocaClusterResource):
 
 
 class SocaIAMRole(SocaClusterResource):
-
     @property
     def role_name(self) -> str:
         return ModelUtils.get_value_as_string('RoleName', self.ref)
@@ -363,7 +367,6 @@ class SocaS3Bucket(SocaClusterResource):
 
 
 class SocaSSHKeyPair(SocaClusterResource):
-
     @property
     def key_name(self) -> str:
         return ModelUtils.get_value_as_string('KeyName', self.ref)
@@ -374,7 +377,6 @@ class SocaSSHKeyPair(SocaClusterResource):
 
 
 class SocaACMCertificate(SocaClusterResource):
-
     @property
     def certificate_arn(self) -> str:
         return ModelUtils.get_value_as_string('CertificateArn', self.ref)
@@ -385,14 +387,12 @@ class SocaACMCertificate(SocaClusterResource):
 
 
 class SocaAWSProfile(SocaClusterResource):
-
     @property
     def name(self) -> str:
         return str(self.ref)
 
 
 class SocaEC2PrefixList(SocaClusterResource):
-
     @property
     def prefix_list_name(self) -> str:
         return ModelUtils.get_value_as_string('PrefixListName', self.ref)

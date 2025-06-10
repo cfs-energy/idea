@@ -14,11 +14,8 @@ from typing import Dict
 
 
 class BaseTask:
+    @abstractmethod
+    def get_name(self) -> str: ...
 
     @abstractmethod
-    def get_name(self) -> str:
-        ...
-
-    @abstractmethod
-    def invoke(self, payload: Dict):
-        ...
+    def invoke(self, payload: Dict): ...

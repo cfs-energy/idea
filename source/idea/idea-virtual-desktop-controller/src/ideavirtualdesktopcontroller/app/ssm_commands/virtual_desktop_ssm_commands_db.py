@@ -15,12 +15,16 @@ from pydantic import Field
 import ideavirtualdesktopcontroller
 from ideadatamodel import exceptions
 from ideasdk.utils import Utils
-from ideavirtualdesktopcontroller.app.ssm_commands import constants as ssm_commands_constants
+from ideavirtualdesktopcontroller.app.ssm_commands import (
+    constants as ssm_commands_constants,
+)
 
 
 class VirtualDesktopSSMCommandType(str, Enum):
     RESUME_SESSION = 'RESUME_SESSION'
-    CPU_UTILIZATION_CHECK_STOP_SCHEDULED_SESSION = 'CPU_UTILIZATION_CHECK_STOP_SCHEDULED_SESSION'
+    CPU_UTILIZATION_CHECK_STOP_SCHEDULED_SESSION = (
+        'CPU_UTILIZATION_CHECK_STOP_SCHEDULED_SESSION'
+    )
     WINDOWS_ENABLE_USERDATA_EXECUTION = 'WINDOWS_ENABLE_USERDATA_EXECUTION'
     WINDOWS_DISABLE_USERDATA_EXECUTION = 'WINDOWS_DISABLE_USERDATA_EXECUTION'
 
@@ -30,7 +34,12 @@ class VirtualDesktopSSMCommand:
     command_type: Optional[VirtualDesktopSSMCommandType] = Field(default=None)
     additional_payload: Optional[Dict] = Field(default=None)
 
-    def __init__(self, command_id: Optional[str], command_type: Optional[VirtualDesktopSSMCommandType], additional_payload: Optional[Dict]):
+    def __init__(
+        self,
+        command_id: Optional[str],
+        command_type: Optional[VirtualDesktopSSMCommandType],
+        additional_payload: Optional[Dict],
+    ):
         self.command_id = command_id
         self.command_type = command_type
         self.additional_payload = additional_payload
@@ -44,7 +53,9 @@ class VirtualDesktopSSMCommandsDB:
         self._ddb_client = self.context.aws().dynamodb_table()
 
     def initialize(self):
-        exists = self.context.aws_util().dynamodb_check_table_exists(self.table_name, True)
+        exists = self.context.aws_util().dynamodb_check_table_exists(
+            self.table_name, True
+        )
         if not exists:
             self.context.aws_util().dynamodb_create_table(
                 create_table_request={
@@ -52,18 +63,18 @@ class VirtualDesktopSSMCommandsDB:
                     'AttributeDefinitions': [
                         {
                             'AttributeName': ssm_commands_constants.SSM_COMMANDS_DB_HASH_KEY,
-                            'AttributeType': 'S'
+                            'AttributeType': 'S',
                         }
                     ],
                     'KeySchema': [
                         {
                             'AttributeName': ssm_commands_constants.SSM_COMMANDS_DB_HASH_KEY,
-                            'KeyType': 'HASH'
+                            'KeyType': 'HASH',
                         }
                     ],
-                    'BillingMode': 'PAY_PER_REQUEST'
+                    'BillingMode': 'PAY_PER_REQUEST',
                 },
-                wait=True
+                wait=True,
             )
 
     @property
@@ -81,25 +92,37 @@ class VirtualDesktopSSMCommandsDB:
         return {
             ssm_commands_constants.SSM_COMMANDS_DB_HASH_KEY: db_model.command_id,
             ssm_commands_constants.SSM_COMMANDS_DB_COMMAND_TYPE_KEY: db_model.command_type,
-            ssm_commands_constants.SSM_COMMANDS_DB_COMMAND_ADDITIONAL_PAYLOAD_KEY: db_model.additional_payload
+            ssm_commands_constants.SSM_COMMANDS_DB_COMMAND_ADDITIONAL_PAYLOAD_KEY: db_model.additional_payload,
         }
 
     @staticmethod
-    def _convert_db_dict_to_db_model(db_entry: dict) -> Optional[VirtualDesktopSSMCommand]:
+    def _convert_db_dict_to_db_model(
+        db_entry: dict,
+    ) -> Optional[VirtualDesktopSSMCommand]:
         if Utils.is_empty(db_entry):
             return None
 
         return VirtualDesktopSSMCommand(
-            command_id=Utils.get_value_as_int(ssm_commands_constants.SSM_COMMANDS_DB_HASH_KEY, db_entry, 0),
-            command_type=VirtualDesktopSSMCommandType(Utils.get_value_as_string(ssm_commands_constants.SSM_COMMANDS_DB_COMMAND_TYPE_KEY, db_entry, None)),
-            additional_payload=Utils.get_value_as_dict(ssm_commands_constants.SSM_COMMANDS_DB_COMMAND_ADDITIONAL_PAYLOAD_KEY, db_entry, {}),
+            command_id=Utils.get_value_as_int(
+                ssm_commands_constants.SSM_COMMANDS_DB_HASH_KEY, db_entry, 0
+            ),
+            command_type=VirtualDesktopSSMCommandType(
+                Utils.get_value_as_string(
+                    ssm_commands_constants.SSM_COMMANDS_DB_COMMAND_TYPE_KEY,
+                    db_entry,
+                    None,
+                )
+            ),
+            additional_payload=Utils.get_value_as_dict(
+                ssm_commands_constants.SSM_COMMANDS_DB_COMMAND_ADDITIONAL_PAYLOAD_KEY,
+                db_entry,
+                {},
+            ),
         )
 
     def create(self, db_model: VirtualDesktopSSMCommand) -> VirtualDesktopSSMCommand:
         db_entry = self._convert_db_model_to_db_dict(db_model)
-        self._table.put_item(
-            Item=db_entry
-        )
+        self._table.put_item(Item=db_entry)
         return self._convert_db_dict_to_db_model(db_entry)
 
     def get(self, command_id: str) -> Union[VirtualDesktopSSMCommand, None]:
@@ -108,9 +131,7 @@ class VirtualDesktopSSMCommandsDB:
 
         try:
             result = self._table.get_item(
-                Key={
-                    ssm_commands_constants.SSM_COMMANDS_DB_HASH_KEY: command_id
-                }
+                Key={ssm_commands_constants.SSM_COMMANDS_DB_HASH_KEY: command_id}
             )
             db_entry = Utils.get_value_as_dict('Item', result)
         except self._ddb_client.exceptions.ResourceNotFoundException as _:

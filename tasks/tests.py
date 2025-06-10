@@ -16,15 +16,17 @@ import os
 from typing import List
 
 
-def _run_unit_tests(c: Context,
-                    component_name: str,
-                    component_src: str,
-                    component_tests_src: str,
-                    package_name: str,
-                    params: List[str],
-                    capture_output: bool = False,
-                    keywords=None,
-                    cov_report=None) -> int:
+def _run_unit_tests(
+    c: Context,
+    component_name: str,
+    component_src: str,
+    component_tests_src: str,
+    package_name: str,
+    params: List[str],
+    capture_output: bool = False,
+    keywords=None,
+    cov_report=None,
+) -> int:
     test_params = []
     if params is not None:
         for param in params:
@@ -42,7 +44,7 @@ def _run_unit_tests(c: Context,
         idea.props.project_root_dir,
         idea.props.data_model_src,
         idea.props.sdk_src,
-        idea.props.test_utils_src
+        idea.props.test_utils_src,
     ]
     if component_src not in python_path:
         python_path.append(component_src)
@@ -55,14 +57,19 @@ def _run_unit_tests(c: Context,
             cmd = f'{cmd} --capture=tee-sys'
         if keywords is not None:
             cmd = f'{cmd} -k "{keywords}"'
-        if cov_report is not None and cov_report in ('term', 'term-missing', 'annotate', 'html', 'xml', 'lcov'):
+        if cov_report is not None and cov_report in (
+            'term',
+            'term-missing',
+            'annotate',
+            'html',
+            'xml',
+            'lcov',
+        ):
             cmd = f'{cmd} --cov {package_name} --cov-report {cov_report}'
         idea.console.info(f'> {cmd}')
 
         try:
-            result = c.run(cmd, env={
-                'PYTHONPATH': os.pathsep.join(python_path)
-            })
+            result = c.run(cmd, env={'PYTHONPATH': os.pathsep.join(python_path)})
             return result.exited
         except SystemExit as e:
             return e.code
@@ -88,13 +95,15 @@ def sdk(c, keywords=None, params=None, capture_output=False, cov_report=None):
         params=params,
         capture_output=capture_output,
         keywords=keywords,
-        cov_report=cov_report
+        cov_report=cov_report,
     )
     raise SystemExit(exit_code)
 
 
 @task(iterable=['params'])
-def cluster_manager(c, keywords=None, params=None, capture_output=False, cov_report=None):
+def cluster_manager(
+    c, keywords=None, params=None, capture_output=False, cov_report=None
+):
     # type: (Context, str, List[str], bool, str) -> None
     """
     run cluster-manager unit tests
@@ -108,7 +117,7 @@ def cluster_manager(c, keywords=None, params=None, capture_output=False, cov_rep
         params=params,
         capture_output=capture_output,
         keywords=keywords,
-        cov_report=cov_report
+        cov_report=cov_report,
     )
     raise SystemExit(exit_code)
 
@@ -128,13 +137,15 @@ def scheduler(c, keywords=None, params=None, capture_output=False, cov_report=No
         params=params,
         capture_output=capture_output,
         keywords=keywords,
-        cov_report=cov_report
+        cov_report=cov_report,
     )
     raise SystemExit(exit_code)
 
 
 @task(iterable=['params'])
-def virtual_desktop_controller(c, keywords=None, params=None, capture_output=False, cov_report=None):
+def virtual_desktop_controller(
+    c, keywords=None, params=None, capture_output=False, cov_report=None
+):
     # type: (Context, str, List[str], bool, str) -> None
     """
     run virtual desktop controller unit tests
@@ -148,7 +159,7 @@ def virtual_desktop_controller(c, keywords=None, params=None, capture_output=Fal
         params=params,
         capture_output=capture_output,
         keywords=keywords,
-        cov_report=cov_report
+        cov_report=cov_report,
     )
     raise SystemExit(exit_code)
 
@@ -168,7 +179,7 @@ def administrator(c, keywords=None, params=None, capture_output=False, cov_repor
         params=params,
         capture_output=capture_output,
         keywords=keywords,
-        cov_report=cov_report
+        cov_report=cov_report,
     )
     raise SystemExit(exit_code)
 
@@ -185,7 +196,7 @@ def run_all(c, keywords=None, params=None, capture_output=False, cov_report=None
         administrator,
         cluster_manager,
         scheduler,
-        virtual_desktop_controller
+        virtual_desktop_controller,
     ]
 
     exit_code = 0

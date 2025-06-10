@@ -17,7 +17,10 @@ from ideavirtualdesktopcontroller.cli import build_cli_context
 import click
 
 
-@click.command(context_settings=constants.CLICK_SETTINGS, short_help='Execute commands to clean up before deleting module')
+@click.command(
+    context_settings=constants.CLICK_SETTINGS,
+    short_help='Execute commands to clean up before deleting module',
+)
 @click.option('--delete-databases', is_flag=True)
 def app_module_clean_up(delete_databases: bool):
     """
@@ -28,16 +31,28 @@ def app_module_clean_up(delete_databases: bool):
 
     context = build_cli_context()
     os_client = AwsOpenSearchClient(context)
-    os_client.delete_template(f'{context.cluster_name()}-{context.module_id()}_session_permission_template')
+    os_client.delete_template(
+        f'{context.cluster_name()}-{context.module_id()}_session_permission_template'
+    )
     os_client.delete_alias_and_index(
-        name=context.config().get_string('virtual-desktop-controller.opensearch.session_permission.alias')
+        name=context.config().get_string(
+            'virtual-desktop-controller.opensearch.session_permission.alias'
+        )
     )
 
-    os_client.delete_template(f'{context.cluster_name()}-{context.module_id()}_user_sessions_template')
-    os_client.delete_alias_and_index(
-        name=context.config().get_string('virtual-desktop-controller.opensearch.dcv_session.alias')
+    os_client.delete_template(
+        f'{context.cluster_name()}-{context.module_id()}_user_sessions_template'
     )
-    os_client.delete_template(f'{context.cluster_name()}-{context.module_id()}_software_stack_template')
     os_client.delete_alias_and_index(
-        name=context.config().get_string('virtual-desktop-controller.opensearch.software_stack.alias')
+        name=context.config().get_string(
+            'virtual-desktop-controller.opensearch.dcv_session.alias'
+        )
+    )
+    os_client.delete_template(
+        f'{context.cluster_name()}-{context.module_id()}_software_stack_template'
+    )
+    os_client.delete_alias_and_index(
+        name=context.config().get_string(
+            'virtual-desktop-controller.opensearch.software_stack.alias'
+        )
     )

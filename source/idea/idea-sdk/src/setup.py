@@ -19,9 +19,7 @@ setup(
     url='https://awslabs.github.io/scale-out-computing-on-aws/',
     author='Amazon',
     license='Apache License, Version 2.0',
-    package_dir={
-        'ideasdk': 'ideasdk'
-    },
+    package_dir={'ideasdk': 'ideasdk'},
     packages=find_packages(),
-    include_package_data=True
+    include_package_data=True,
 )

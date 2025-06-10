@@ -1,5 +1,5 @@
 # Begin: motd update
-{%- if context.base_os in ('amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9', 'ubuntu2204', 'ubuntu2404') %}
+{% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9', 'ubuntu2204', 'ubuntu2404') %}
 echo -e "
      ________  _________
     /  _/ __ \/ ____/   |
@@ -11,5 +11,5 @@ echo -e "
 {% endfor %}
 > source /etc/environment to load IDEA paths
 " > /etc/motd
-{%- endif %}
+{% endif %}
 # End: motd update

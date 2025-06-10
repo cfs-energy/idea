@@ -36,20 +36,57 @@ def context(monkeypatch):
     mock_boto_session.region_name = 'us-east-1'
     mock_boto_session.client = lambda **_: {}
 
+    # Create a mock paginator for EC2 describe_instance_types
+    mock_paginator = SocaAnyPayload()
+    mock_paginator.paginate = lambda **_: []
+
     mock_ec2_client = SocaAnyPayload()
     mock_ec2_client.describe_security_groups = lambda **_: {}
+    mock_ec2_client.get_paginator = lambda operation_name: mock_paginator
 
     mock_s3_client = SocaAnyPayload()
     mock_s3_client.upload_file = lambda **_: {}
     mock_s3_client.get_bucket_acl = lambda **_: {}
 
-    monkeypatch.setattr(EC2InstanceTypesDB, '_instance_type_names_from_botocore', MockInstanceTypes.get_instance_type_names)
+    # Mock the EC2InstanceTypesDB initialization to prevent AWS calls
+    def mock_ec2_instance_types_db_init(self, context):
+        self._context = context
+        self._logger = context.logger()
+        self._cache_refresh_interval = 43200  # 12 hours
+        self._cache_last_refresh = Utils.current_time()
+        # Create a simple cache-like object that returns the mock instance types
+        from cacheout import Cache
+
+        self._cache = Cache(maxsize=512, ttl=1296000)  # 15 days TTL
+        from threading import RLock
+
+        self._instance_types_lock = RLock()
+
+        # Pre-populate cache with mock instance types
+        from ideatestutils.aws.mock_instance_types import MOCK_INSTANCE_TYPES
+
+        for instance_type_name in MOCK_INSTANCE_TYPES:
+            ec2_instance_type = MockInstanceTypes().get_instance_type(
+                instance_type_name
+            )
+            self._cache.set(key=instance_type_name, value=ec2_instance_type)
+
+    monkeypatch.setattr(EC2InstanceTypesDB, '__init__', mock_ec2_instance_types_db_init)
+    monkeypatch.setattr(
+        EC2InstanceTypesDB,
+        '_instance_type_names_from_botocore',
+        MockInstanceTypes().get_instance_type_names,
+    )
     monkeypatch.setattr(Utils, 'create_boto_session', lambda **_: mock_boto_session)
-    monkeypatch.setattr(AWSUtil, 'get_ec2_instance_type', MockInstanceTypes.get_instance_type)
+    monkeypatch.setattr(
+        AWSUtil, 'get_ec2_instance_type', MockInstanceTypes().get_instance_type
+    )
     monkeypatch.setattr(AwsClientProvider, 's3', lambda *_: mock_s3_client)
     monkeypatch.setattr(AwsClientProvider, 'ec2', lambda *_: mock_ec2_client)
     monkeypatch.setattr(ProjectsClient, 'get_project', MockProjects.get_project)
-    monkeypatch.setattr(ProjectsClient, 'get_user_projects', MockProjects.get_user_projects)
+    monkeypatch.setattr(
+        ProjectsClient, 'get_user_projects', MockProjects.get_user_projects
+    )
 
     mock_config = MockConfig()
 
@@ -68,27 +105,29 @@ def context(monkeypatch):
             module_set='default',
             enable_aws_client_provider=True,
             enable_aws_util=True,
-            config=mock_config.get_config()
+            config=mock_config.get_config(),
         )
     )
 
     context.token_service = TokenService(
         context=context,
         options=TokenServiceOptions(
-            cognito_user_pool_provider_url=context.config().get_string('identity-provider.cognito.provider_url', required=True),
-            cognito_user_pool_domain_url=context.config().get_string('identity-provider.cognito.domain_url', required=True),
+            cognito_user_pool_provider_url=context.config().get_string(
+                'identity-provider.cognito.provider_url', required=True
+            ),
+            cognito_user_pool_domain_url=context.config().get_string(
+                'identity-provider.cognito.domain_url', required=True
+            ),
             client_id='mock-client-id',
             client_secret='mock-client-secret',
-            client_credentials_scope=[]
-        )
+            client_credentials_scope=[],
+        ),
     )
 
     context.projects_client = ProjectsClient(
         context=context,
-        options=SocaClientOptions(
-            endpoint='http://localhost'
-        ),
-        token_service=context.token_service
+        options=SocaClientOptions(endpoint='http://localhost'),
+        token_service=context.token_service,
     )
 
     return context

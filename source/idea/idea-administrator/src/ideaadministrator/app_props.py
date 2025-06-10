@@ -21,7 +21,6 @@ import os
 
 
 class AdministratorProps:
-
     @staticmethod
     def is_dev_mode() -> bool:
         return Utils.get_as_bool(EnvironmentUtils.idea_dev_mode(), False)
@@ -58,24 +57,34 @@ class AdministratorProps:
 
     @property
     def dev_mode_sdk_source_root(self) -> str:
-        return os.path.join(self.dev_mode_project_root_dir, 'source', 'idea', 'idea-sdk', 'src')
+        return os.path.join(
+            self.dev_mode_project_root_dir, 'source', 'idea', 'idea-sdk', 'src'
+        )
 
     @property
     def dev_mode_bootstrap_source_dir(self) -> str:
-        return os.path.join(self.dev_mode_project_root_dir, 'source', 'idea', 'idea-bootstrap')
+        return os.path.join(
+            self.dev_mode_project_root_dir, 'source', 'idea', 'idea-bootstrap'
+        )
 
     @property
     def dev_mode_data_model_src(self) -> str:
-        return os.path.join(self.dev_mode_project_root_dir, 'source', 'idea', 'idea-data-model', 'src')
+        return os.path.join(
+            self.dev_mode_project_root_dir, 'source', 'idea', 'idea-data-model', 'src'
+        )
 
     @property
     def dev_mode_site_packages(self) -> str:
-        virtual_env = EnvironmentUtils.get_environment_variable('VIRTUAL_ENV', required=True)
+        virtual_env = EnvironmentUtils.get_environment_variable(
+            'VIRTUAL_ENV', required=True
+        )
         return os.path.join(virtual_env, 'lib', 'python3.7', 'site-packages')
 
     @property
     def dev_mode_venv_bin_dir(self) -> str:
-        virtual_env = EnvironmentUtils.get_environment_variable('VIRTUAL_ENV', required=True)
+        virtual_env = EnvironmentUtils.get_environment_variable(
+            'VIRTUAL_ENV', required=True
+        )
         return os.path.join(virtual_env, 'bin')
 
     @property
@@ -91,7 +100,9 @@ class AdministratorProps:
 
     @property
     def lambda_function_commons_dir(self) -> str:
-        return os.path.join(self.lambda_functions_dir, self.lambda_function_commons_package_name)
+        return os.path.join(
+            self.lambda_functions_dir, self.lambda_function_commons_package_name
+        )
 
     @property
     def lambda_functions_dir(self) -> str:
@@ -107,7 +118,9 @@ class AdministratorProps:
 
     @property
     def installer_config_defaults_file(self) -> str:
-        return os.path.join(self.resources_dir, app_constants.INSTALLER_CONFIG_DEFAULTS_FILE)
+        return os.path.join(
+            self.resources_dir, app_constants.INSTALLER_CONFIG_DEFAULTS_FILE
+        )
 
     @property
     def default_values_file(self) -> str:
@@ -119,7 +132,9 @@ class AdministratorProps:
 
     @property
     def shared_storage_params_file(self) -> str:
-        return os.path.join(self.resources_dir, 'input_params', 'shared_storage_params.yml')
+        return os.path.join(
+            self.resources_dir, 'input_params', 'shared_storage_params.yml'
+        )
 
     @property
     def aws_endpoints_file(self) -> str:
@@ -242,12 +257,24 @@ class AdministratorProps:
     def cdk_bin(self) -> str:
         if os.name == 'nt':
             # for windows, cdk.cmd needs to be invoked, which is located at a different place.
-            cdk_bin = os.path.join(self.idea_user_home, 'lib', 'idea-cdk', 'node_modules', '.bin', 'cdk')
+            cdk_bin = os.path.join(
+                self.idea_user_home, 'lib', 'idea-cdk', 'node_modules', '.bin', 'cdk'
+            )
         else:
-            cdk_bin = os.path.join(self.idea_user_home, 'lib', 'idea-cdk', 'node_modules', 'aws-cdk', 'bin', 'cdk')
+            cdk_bin = os.path.join(
+                self.idea_user_home,
+                'lib',
+                'idea-cdk',
+                'node_modules',
+                'aws-cdk',
+                'bin',
+                'cdk',
+            )
         if not os.path.isfile(cdk_bin):
-            raise exceptions.general_exception(f'Unable to find cdk binary at: {cdk_bin}.'
-                                               f' Please ensure {self.app_name} is installed correctly or re-run installation.')
+            raise exceptions.general_exception(
+                f'Unable to find cdk binary at: {cdk_bin}.'
+                f' Please ensure {self.app_name} is installed correctly or re-run installation.'
+            )
         return cdk_bin
 
     def get_env(self) -> Dict[str, str]:
@@ -264,7 +291,7 @@ class AdministratorProps:
             self.dev_mode_data_model_src,
             self.dev_mode_sdk_source_root,
             self.dev_mode_admin_app_source_dir,
-            self.dev_mode_project_root_dir
+            self.dev_mode_project_root_dir,
         ]
 
         for admin_path in admin_app_sources:
@@ -280,13 +307,21 @@ class AdministratorProps:
         :return:
         """
         if self.is_dev_mode():
-            return f'invoke ' \
-                   f'--search-root "{self.dev_mode_project_root_dir}" ' \
-                   f'cli.admin --args "cdk cdk-app --config-file {config_file}"'
+            return (
+                f'invoke '
+                f'--search-root "{self.dev_mode_project_root_dir}" '
+                f'cli.admin --args "cdk cdk-app --config-file {config_file}"'
+            )
         else:
             return f'idea-admin cdk cdk-app --config-file "{config_file}"'
 
-    def get_cdk_command(self, name: str, stacks: str = None, params: Optional[List[str]] = None, rollback=True) -> str:
+    def get_cdk_command(
+        self,
+        name: str,
+        stacks: str = None,
+        params: Optional[List[str]] = None,
+        rollback=True,
+    ) -> str:
         """
         build the cdk command. eg:
         $ cdk deploy --app "idea-admin cdk-app -c user-config.json [--additional_cdk_params]
@@ -305,7 +340,9 @@ class AdministratorProps:
         """
         read an IDEA specific environment variable, indicating if administrator app is running within an ec2 instance.
         """
-        aws_credential_provider = EnvironmentUtils.get_environment_variable('IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER', default=None)
+        aws_credential_provider = EnvironmentUtils.get_environment_variable(
+            'IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER', default=None
+        )
         if Utils.is_empty(aws_credential_provider):
             return False
         return aws_credential_provider == 'Ec2InstanceMetadata'

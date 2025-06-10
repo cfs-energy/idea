@@ -20,7 +20,6 @@ from typing import Optional
 
 
 class CleanTool:
-
     def __init__(self, c: Context, app_name: str):
         self.c = c
         if app_name is None:
@@ -43,13 +42,15 @@ class CleanTool:
 
     @staticmethod
     def clean_non_project_items():
-        idea.console.print_header_block(f'clean non-project items')
+        idea.console.print_header_block('clean non-project items')
 
         # lambda assets clean-up (all directories that start with 'idea_')
         if os.path.isdir(idea.props.project_build_dir):
             for file in os.listdir(idea.props.project_build_dir):
                 if file.startswith('idea_'):
-                    function_build_dir = os.path.join(idea.props.project_build_dir, file)
+                    function_build_dir = os.path.join(
+                        idea.props.project_build_dir, file
+                    )
                     if os.path.isdir(function_build_dir):
                         idea.console.print(f'deleting {function_build_dir} ...')
                         shutil.rmtree(function_build_dir)
@@ -59,13 +60,17 @@ class CleanTool:
         if os.path.isdir(opensource_build_dir):
             idea.console.print(f'deleting {opensource_build_dir} ...')
             shutil.rmtree(opensource_build_dir)
-        opensource_dist_dir = os.path.join(idea.props.project_deployment_dir, 'open-source')
+        opensource_dist_dir = os.path.join(
+            idea.props.project_deployment_dir, 'open-source'
+        )
         if os.path.isdir(opensource_dist_dir):
             idea.console.print(f'deleting {opensource_dist_dir} ...')
             shutil.rmtree(opensource_dist_dir)
 
         # global s3 assets
-        global_s3_assets_dir = os.path.join(idea.props.project_deployment_dir, 'global-s3-assets')
+        global_s3_assets_dir = os.path.join(
+            idea.props.project_deployment_dir, 'global-s3-assets'
+        )
         if os.path.isdir(global_s3_assets_dir):
             idea.console.print(f'deleting {global_s3_assets_dir} ...')
             shutil.rmtree(global_s3_assets_dir)

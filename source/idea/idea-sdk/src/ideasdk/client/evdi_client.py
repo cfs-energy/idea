@@ -24,7 +24,9 @@ class EvdiClient:
         self._logger = context.logger('evdi-client')
 
     def publish_user_disabled_event(self, username: str):
-        controller_sqs_queue_url = self.context.config().get_string('virtual-desktop-controller.controller_sqs_queue_url', default=None)
+        controller_sqs_queue_url = self.context.config().get_string(
+            'virtual-desktop-controller.controller_sqs_queue_url', default=None
+        )
         if Utils.is_empty(controller_sqs_queue_url):
             # if the queue is empty then either vdc is not yet deployed or it is not enabled
             # either ways this event can be ignored
@@ -32,14 +34,10 @@ class EvdiClient:
 
         message = SocaEnvelope(
             header=SocaHeader(
-                namespace='Accounts.UserDisabledEvent',
-                request_id=Utils.uuid()
+                namespace='Accounts.UserDisabledEvent', request_id=Utils.uuid()
             ),
-            payload={
-                'username': username
-            }
+            payload={'username': username},
         )
         self.context.aws().sqs().send_message(
-            QueueUrl=controller_sqs_queue_url,
-            MessageBody=Utils.to_json(message)
+            QueueUrl=controller_sqs_queue_url, MessageBody=Utils.to_json(message)
         )

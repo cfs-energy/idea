@@ -14,7 +14,6 @@ import os
 
 
 class ClusterManagerUtils:
-
     @staticmethod
     def get_app_deploy_dir() -> str:
         app_deploy_dir = EnvironmentUtils.idea_app_deploy_dir(required=True)
@@ -22,4 +21,9 @@ class ClusterManagerUtils:
 
     @staticmethod
     def get_email_template_defaults_file() -> str:
-        return os.path.join(ClusterManagerUtils.get_app_deploy_dir(), 'resources', 'defaults', 'email_templates.yml')
+        return os.path.join(
+            ClusterManagerUtils.get_app_deploy_dir(),
+            'resources',
+            'defaults',
+            'email_templates.yml',
+        )

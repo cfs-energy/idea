@@ -25,14 +25,16 @@ class ClusterConfig(SocaConfig, DynamoDBStreamSubscriber):
     extends SocaConfig to provide functionality on top of configuration entries saved in cluster config ddb tables
     """
 
-    def __init__(self, cluster_name: str,
-                 aws_region: str,
-                 module_id: Optional[str] = None,
-                 module_set: Optional[str] = None,
-                 aws_profile: Optional[str] = None,
-                 create_subscription: bool = False,
-                 logger=None):
-
+    def __init__(
+        self,
+        cluster_name: str,
+        aws_region: str,
+        module_id: Optional[str] = None,
+        module_set: Optional[str] = None,
+        aws_profile: Optional[str] = None,
+        create_subscription: bool = False,
+        logger=None,
+    ):
         if Utils.is_empty(cluster_name):
             raise exceptions.invalid_params('cluster_name is required')
         if Utils.is_empty(aws_region):
@@ -52,7 +54,7 @@ class ClusterConfig(SocaConfig, DynamoDBStreamSubscriber):
             aws_profile=aws_profile,
             create_subscription=create_subscription,
             cluster_config_subscriber=self,
-            logger=logger
+            logger=logger,
         )
 
         self.module_set = module_set
@@ -70,17 +72,24 @@ class ClusterConfig(SocaConfig, DynamoDBStreamSubscriber):
         self.db.set_logger(logger)
 
     def get_module_id(self, module_name: str) -> str:
-        return super().get_string(f'global-settings.module_sets.{self.module_set}.{module_name}.module_id', required=True)
+        return super().get_string(
+            f'global-settings.module_sets.{self.module_set}.{module_name}.module_id',
+            required=True,
+        )
 
     def set_module_id(self, module_id: str):
         module_info = self.db.get_module_info(module_id)
         if module_info is None:
-            raise exceptions.general_exception(f'module not found for module_id: {module_id}')
+            raise exceptions.general_exception(
+                f'module not found for module_id: {module_id}'
+            )
         self.module_id = module_id
         self.module_info = module_info
 
     def is_module_enabled(self, module_name: str) -> bool:
-        module_id = super().get_string(f'global-settings.module_sets.{self.module_set}.{module_name}.module_id')
+        module_id = super().get_string(
+            f'global-settings.module_sets.{self.module_set}.{module_name}.module_id'
+        )
         return Utils.is_not_empty(module_id)
 
     def get_real_key(self, key: str, module_id: str = None) -> str:
@@ -97,7 +106,9 @@ class ClusterConfig(SocaConfig, DynamoDBStreamSubscriber):
             else:
                 # this condition is to retrieve the module mapping for a module that isn't the current module
                 # example. VDC needs access to scheduler configs. It will go via this condition.
-                module_id = super().get_string(f'global-settings.module_sets.{self.module_set}.{module_name}.module_id')
+                module_id = super().get_string(
+                    f'global-settings.module_sets.{self.module_set}.{module_name}.module_id'
+                )
 
         if Utils.is_empty(module_id):
             # this condition is for CUSTOM SETTINGS that the customer might add
@@ -105,34 +116,48 @@ class ClusterConfig(SocaConfig, DynamoDBStreamSubscriber):
 
         return f'{module_id}.{".".join(key.split(".")[1:])}'
 
-    def get(self, key: str, default=None, required=False, module_id=None) -> Optional[Any]:
+    def get(
+        self, key: str, default=None, required=False, module_id=None
+    ) -> Optional[Any]:
         return super().get(self.get_real_key(key, module_id), default, required)
 
-    def get_string(self, key, default=None, required=False, module_id=None) -> Optional[str]:
+    def get_string(
+        self, key, default=None, required=False, module_id=None
+    ) -> Optional[str]:
         return super().get_string(self.get_real_key(key, module_id), default, required)
 
-    def get_int(self, key, default=None, required=False, module_id=None) -> Optional[int]:
+    def get_int(
+        self, key, default=None, required=False, module_id=None
+    ) -> Optional[int]:
         return super().get_int(self.get_real_key(key, module_id), default, required)
 
-    def get_float(self, key, default=None, required=False, module_id=None) -> Optional[float]:
+    def get_float(
+        self, key, default=None, required=False, module_id=None
+    ) -> Optional[float]:
         return super().get_float(self.get_real_key(key, module_id), default, required)
 
-    def get_bool(self, key, default=None, required=False, module_id=None) -> Optional[bool]:
+    def get_bool(
+        self, key, default=None, required=False, module_id=None
+    ) -> Optional[bool]:
         return super().get_bool(self.get_real_key(key, module_id), default, required)
 
-    def get_list(self, key, default=None, required=False, module_id=None) -> Optional[List]:
+    def get_list(
+        self, key, default=None, required=False, module_id=None
+    ) -> Optional[List]:
         return super().get_list(self.get_real_key(key, module_id), default, required)
 
-    def get_config(self, key, default=None, required=False, module_id=None) -> Optional[ConfigTree]:
+    def get_config(
+        self, key, default=None, required=False, module_id=None
+    ) -> Optional[ConfigTree]:
         return super().get_config(self.get_real_key(key, module_id), default, required)
 
-    def get_secret(self, key, default=None, required=False, module_id=None) -> Optional[str]:
+    def get_secret(
+        self, key, default=None, required=False, module_id=None
+    ) -> Optional[str]:
         secret_arn = self.get_string(key, default, required, module_id)
         if Utils.is_empty(secret_arn):
             return None
-        response = self.db.aws.secretsmanager().get_secret_value(
-            SecretId=secret_arn
-        )
+        response = self.db.aws.secretsmanager().get_secret_value(SecretId=secret_arn)
         return Utils.get_value_as_string('SecretString', response)
 
     def on_create(self, entry: Dict):
@@ -146,7 +171,9 @@ class ClusterConfig(SocaConfig, DynamoDBStreamSubscriber):
         super().put(key, value)
 
     def on_update(self, old_entry: Dict, new_entry: Dict):
-        log_message = f'config updated: old - {Utils.to_json(old_entry)}, new - {new_entry}'
+        log_message = (
+            f'config updated: old - {Utils.to_json(old_entry)}, new - {new_entry}'
+        )
         if self.logger is not None:
             self.logger.info(log_message)
         else:
@@ -166,9 +193,15 @@ class ClusterConfig(SocaConfig, DynamoDBStreamSubscriber):
 
     def get_cluster_external_endpoint(self) -> str:
         cluster_module_id = self.get_module_id(constants.MODULE_CLUSTER)
-        external_alb_dns = self.get_string(f'{cluster_module_id}.load_balancers.external_alb.certificates.custom_dns_name', default=None)
+        external_alb_dns = self.get_string(
+            f'{cluster_module_id}.load_balancers.external_alb.certificates.custom_dns_name',
+            default=None,
+        )
         if Utils.is_empty(external_alb_dns):
-            external_alb_dns = self.get_string(f'{cluster_module_id}.load_balancers.external_alb.load_balancer_dns_name', default=None)
+            external_alb_dns = self.get_string(
+                f'{cluster_module_id}.load_balancers.external_alb.load_balancer_dns_name',
+                default=None,
+            )
         if Utils.is_empty(external_alb_dns):
             raise exceptions.cluster_config_error('cluster external endpoint not found')
         return f'https://{external_alb_dns}'
@@ -176,13 +209,22 @@ class ClusterConfig(SocaConfig, DynamoDBStreamSubscriber):
     def get_cluster_internal_endpoint(self) -> str:
         cluster_module_id = self.get_module_id(constants.MODULE_CLUSTER)
 
-        internal_alb_dns = self.get_string(f'{cluster_module_id}.load_balancers.internal_alb.certificates.custom_dns_name', default=None)
+        internal_alb_dns = self.get_string(
+            f'{cluster_module_id}.load_balancers.internal_alb.certificates.custom_dns_name',
+            default=None,
+        )
         if Utils.is_empty(internal_alb_dns):
             # backward compat. custom_dns_name moved under certificates starting with 3.0.0-rc.2
-            internal_alb_dns = self.get_string(f'{cluster_module_id}.load_balancers.internal_alb.custom_dns_name', default=None)
+            internal_alb_dns = self.get_string(
+                f'{cluster_module_id}.load_balancers.internal_alb.custom_dns_name',
+                default=None,
+            )
 
         if Utils.is_empty(internal_alb_dns):
-            internal_alb_dns = self.get_string(f'{cluster_module_id}.load_balancers.internal_alb.load_balancer_dns_name', default=None)
+            internal_alb_dns = self.get_string(
+                f'{cluster_module_id}.load_balancers.internal_alb.load_balancer_dns_name',
+                default=None,
+            )
         if Utils.is_empty(internal_alb_dns):
             raise exceptions.cluster_config_error('cluster internal endpoint not found')
         return f'https://{internal_alb_dns}'

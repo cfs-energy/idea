@@ -68,7 +68,7 @@ FlexLM may requires 32 bits lib depending your system. If launching `lmutil` ret
 IDEA includes a script (`/apps/<IDEA-CLUSTER>/scheduler/scripts/license_check.py`) which output the number of FlexLM available for a given feature. This script takes the following arguments:
 
 * \-s: The license server hostname
-* \-p: The port used by your flexlm deamon
+* \-p: The port used by your flexlm daemon
 * \-f: The feature name (case sensitive)
 
 {% hint style="info" %}
@@ -100,7 +100,7 @@ In our example, the availability check script command is:
 
 ```
 python /apps/utils/license_check.py --server lic1.idea-licenses.internal \
-  --port 1999 \ 
+  --port 1999 \
   --feature ccmppower
 ```
 
@@ -148,6 +148,6 @@ You can combine multiple license restrictions if needed
 ```
 #PBS -N <jobname>
 #PBS -q <queue>
-#PBS -l starccm_lic_ccmppower=5 
+#PBS -l starccm_lic_ccmppower=5
 /bin/sleep 600
 ```

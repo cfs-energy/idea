@@ -2,43 +2,43 @@
 
 {% include '_templates/linux/stunnel.jinja2' %}
 
-{%- if context.base_os in ('amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+{% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
 
 function install_efs_mount_helper () {
     which amazon-efs-mount-watchdog > /dev/null 2>&1
     if [[ "$?" != "0" ]]; then
       log_info "Installing Amazon EFS Mount Helper for {{ context.base_os }}"
-      {%- if context.base_os in ('amazonlinux2') %}
+      {% if context.base_os in ('amazonlinux2', 'amazonlinux2023') %}
         yum install -y amazon-efs-utils
-      {%- elif context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+      {% elif context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
         log_info "Installing Amazon EFS Mount Helper from Github"
-        {%- if context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
-        yum -y install git make rpm-build
-        {%- endif %}
+        {% if context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+        yum -y install git make rpm-build cargo openssl-devel
+        {% endif %}
         git clone https://github.com/aws/efs-utils
         cd efs-utils
         make rpm
         yum -y install build/amazon-efs-utils*rpm
-      {%- endif %}
+      {% endif %}
   else
     log_info "Found existing Amazon EFS Mount Helper on system"
   fi
 }
 install_efs_mount_helper
-{%- endif %}
+{% endif %}
 
-{%- if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
 
 if [[ -z "$(dpkg -l amazon-efs-utils | grep ^ii)" ]]; then
   apt install -y build-essential pkg-config cargo libssl-dev
   git clone https://github.com/aws/efs-utils
-  cd efs-utils
+  cd efs-utils || exit
   ./build-deb.sh
-  apt -y install ./build/amazon-efs-utils*.deb 
+  apt -y install ./build/amazon-efs-utils*.deb
 else
   log_info "Found existing Amazon EFS Mount Helper on system"
 fi
 
-{%- endif %}
+{% endif %}
 
 # End: AWS EFS Mount Helper

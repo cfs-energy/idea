@@ -1,66 +1,91 @@
-{%- if context.config.get_string('directoryservice.provider', required=True) in ['aws_managed_activedirectory', 'activedirectory'] %}
+#  Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+#
+#  Licensed under the Apache License, Version 2.0 (the "License"). You may not use this file except in compliance
+#  with the License. A copy of the License is located at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+#  or in the 'license' file accompanying this file. This file is distributed on an 'AS IS' BASIS, WITHOUT WARRANTIES
+#  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
+#  and limitations under the License.
+
+{% if context.config.get_string('directoryservice.provider', required=True) in ['aws_managed_activedirectory', 'activedirectory'] %}
 {% include '_templates/windows/join_activedirectory.jinja2' %}
-{%- endif %}
-
-{% include '_templates/windows/mount_shared_storage.jinja2' %}
-
-function Write-ToLog {
-    # LOG: IDEA Bootstrap Log: Get-Content C:\ProgramData\Amazon\EC2-Windows\Launch\Log\UserdataExecutionIDEA.log
-    # LOG: Default User Data: Get-Content C:\ProgramData\Amazon\EC2-Windows\Launch\Log\UserdataExecution.log
-
-    Param (
-        [ValidateNotNullOrEmpty()]
-        [Parameter(Mandatory=$true)]
-        [String] $Message,
-        [String] $LogFile = ('{0}\ProgramData\Amazon\EC2-Windows\Launch\Log\UserdataExecutionIDEA.log' -f $env:SystemDrive),
-        [ValidateSet('Error','Warn','Info')]
-        [string] $Level = 'Info'
-    )
-
-    if (-not(Test-Path -Path $LogFile)) {
-        $null = New-Item -Path $LogFile -ItemType File -Force
-    }
-
-
-    $FormattedDate = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-    switch ($Level) {
-        'Error' {
-            $LevelText = 'ERROR:'
-        }
-        'Warn' {
-            $LevelText = 'WARNING:'
-        }
-        'Info' {
-            $LevelText = 'INFO:'
-        }
-    }
-    # If Level == Error send ses message ?
-    "$FormattedDate $LevelText $Message" | Out-File -FilePath $LogFile -Append
-}
+{% endif %}
 
 {% include '_templates/windows/tag_ebs_volumes.jinja2' %}
-Write-ToLog -Message "Tagging EBS"
-Tag-EbsVolumes
-
 {% include '_templates/windows/tag_network_interface.jinja2' %}
-Write-ToLog -Message "Tagging Network Interface"
-Tag-NetworkInterface
+{% include '_templates/windows/mount_shared_storage.jinja2' %}
+{% include '_templates/windows/dcv/dcv_permissions.jinja2' %}
+{% include '_templates/windows/cloudwatch_agent.jinja2' %}
 
-function Setup-WindowsEC2Instance {
-  Param()
+# Get AWS region and account info for hostname generation
+$AWS_REGION = "{{ context.config.get_string('cluster.aws.region', required=True) }}"
+$AWS_ACCOUNT = "{{ context.config.get_string('cluster.aws.account_id', required=True) }}"
+$CLUSTER_NAME = "{{ context.config.get_string('cluster.cluster_name', required=True) }}"
+$HOSTNAME_PREFIX = "{{ context.config.get_string('directoryservice.ad_automation.hostname_prefix', default='IDEA-') }}"
+
+# Generate hostname using the IDEA algorithm
+function Get-IdeaHostname {
+    # Check if prefix is too long (leaves less than 4 chars for the random part)
+    $avail_chars = 15 - $HOSTNAME_PREFIX.Length
+    if ($avail_chars -lt 4) {
+        Write-ToLog -Message "Hostname prefix $HOSTNAME_PREFIX is too long. It must leave at least 4 characters for random data."
+        throw "Hostname prefix is too long"
+    }
+
+    # Create the input string
+    $hostname_data = "$AWS_REGION|$AWS_ACCOUNT|$CLUSTER_NAME|$InstanceId"
+    Write-ToLog -Message "Using hostname data: $hostname_data with prefix: $HOSTNAME_PREFIX (available chars: $avail_chars)"
+
+    # Create SHA256 hash
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($hostname_data)
+    $hash_bytes = $sha.ComputeHash($bytes)
+    $hash = [BitConverter]::ToString($hash_bytes).Replace("-", "").ToLower()
+
+    # Take the last n characters
+    $shake_value = $hash.Substring($hash.Length - $avail_chars)
+    $idea_hostname = "$HOSTNAME_PREFIX$shake_value".ToUpper()
+
+    Write-ToLog -Message "Generated IDEA hostname: $idea_hostname"
+    return $idea_hostname
+}
+
+
+function Configure-WindowsEC2Instance {
+
+  $timestamp = Get-Date -Format 'yyyyMMddTHHmmssffffZ'
+  $ConfigureEVDI = "$env:SystemDrive\Users\Administrator\IDEA\bootstrap\log\ConfigureEVDI.log.$timestamp"
+
+  Start-Transcript -Path $ConfigureEVDI -NoClobber -IncludeInvocationHeader
+
   # Creating unique hostname to avoid NETBIOS name conflict when using an existing AMI
   [string]$IMDS_Token = Invoke-RestMethod -Headers @{"X-aws-ec2-metadata-token-ttl-seconds" = "600"} -Method PUT -Uri http://169.254.169.254/latest/api/token
   $InstanceId = Invoke-RestMethod -Headers @{"X-aws-ec2-metadata-token" = $IMDS_Token} -Method GET -Uri http://169.254.169.254/latest/meta-data/instance-id
   # flip below lines if you want to enable/disable computer renaming
-  $DesktopHostname = $env:COMPUTERNAME
+  $DesktopHostname = Get-IdeaHostname
   # $DesktopHostname = $InstanceId.substring($InstanceId.length - 15, 15).ToUpper()
   if ($env:COMPUTERNAME -ne $DesktopHostname) {
-    Write-ToLog -Message ("Hostname detected $env:COMPUTERNAME . Renaming Computer to $DesktopHostname ...")
+    Write-ToLog -Message "Hostname detected $env:COMPUTERNAME . Renaming Computer to $DesktopHostname ..."
     Rename-Computer -NewName $DesktopHostname -Force
-    Write-ToLog -Message ("Name has been changed, re-enabling user data as we are about to restart the system ...")
-    & C:\ProgramData\Amazon\EC2-Windows\Launch\Scripts\InitializeInstance.ps1 -Schedule
+    Write-ToLog -Message "Name has been changed, re-enabling user data as we are about to restart the system ..."
+
+    # Check Windows version and use appropriate method for re-enabling user data
+    $OSVersion = [System.Environment]::OSVersion.Version
+    if ($OSVersion.Major -eq 10 -and $OSVersion.Build -ge 20348) {
+        # Windows Server 2022+ (build number 20348 or higher) - uses EC2Launch v2
+        Write-ToLog -Message "Windows Server 2022+ detected, using EC2Launch v2"
+        & "C:\Program Files\Amazon\EC2Launch\EC2Launch.exe" reset
+    } else {
+        # Older Windows versions - uses EC2Launch v1
+        Write-ToLog -Message "Windows Server pre-2022 detected, using EC2Launch v1"
+        & C:\ProgramData\Amazon\EC2-Windows\Launch\Scripts\InitializeInstance.ps1 -Schedule
+    }
+
     Write-ToLog -Message "Restarting Computer ..."
     Restart-Computer -Force
+    exit
   }
 
   $IDEASessionID = "{{ context.vars.idea_session_id }}"
@@ -68,7 +93,7 @@ function Setup-WindowsEC2Instance {
   $VdcRequestQueueURL = "{{ context.config.get_string('virtual-desktop-controller.events_sqs_queue_url', required=True) }}"
   $IdeaWebPortalURL = "{{ context.config.get_cluster_external_endpoint() }}"
 
-  {%- if context.config.get_string('directoryservice.provider', required=True) in ['aws_managed_activedirectory', 'activedirectory'] %}
+  {% if context.config.get_string('directoryservice.provider', required=True) in ['aws_managed_activedirectory', 'activedirectory'] %}
   $ServerInAD = (Get-WmiObject -Class Win32_ComputerSystem).PartOfDomain
   $DomainUserName = "{{ context.config.get_string('directoryservice.ad_short_name', required=True) }}\$LocalUser"
   if ($ServerInAD -eq $false)
@@ -79,7 +104,7 @@ function Setup-WindowsEC2Instance {
     New-ItemProperty -Path "HKLM:\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name "AutoAdminLogon" -PropertyType "DWord" -Value 1 -Force
     New-ItemProperty -Path "HKLM:\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name "DefaultUserName" -PropertyType "String" -Value $DomainUserName -Force
   }
-  {%- else %}
+  {% else %}
   # Avoid to hit race condition after the Restart-Computer
   Start-Sleep -Seconds 5
   Write-ToLog -Message "Creating new local IDEA user: $LocalUser"
@@ -111,7 +136,7 @@ function Setup-WindowsEC2Instance {
   $AdminPassword = ConvertTo-SecureString -String $AdminPasswordInput -AsPlainText -Force
   Get-LocalUser -Name "Administrator" | Set-LocalUser -Password $AdminPassword
 
-  Write-ToLog -Message "Write LOCAL users password and make it readable only by the user. This file will be overriden if an AMI is created."
+  Write-ToLog -Message "Write LOCAL users password and make it readable only by the user. This file will be overridden if an AMI is created."
   $LocalPasswordFile="C:\LOCAL_ADMINS_PASSWORD.txt"
 
   if (Test-Path $LocalPasswordFile ) {
@@ -140,7 +165,7 @@ function Setup-WindowsEC2Instance {
   $GrantAccessToLocalUser = New-Object -TypeName System.Security.AccessControl.FileSystemAccessRule("$env:COMPUTERNAME\$LocalUser", "FullControl", "Allow")
   $NewAcl.SetAccessRule($GrantAccessToLocalUser)
   Set-Acl -AclObject $NewAcl $LocalPasswordFile
-  {%- endif %}
+  {% endif %}
 
   # Disable User Access Control (UAC)"
   Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "ConsentPromptBehaviorAdmin" -Value 00000000 -Force
@@ -153,16 +178,45 @@ function Setup-WindowsEC2Instance {
 
   Write-ToLog -Message "Create Shortcut to IDEA web interface"
   $WshShell = New-Object -comObject WScript.Shell
-  $IdeaShortcutAdmin = $WshShell.CreateShortcut("C:\Users\Default\Desktop\IDEA_Interface.url")
+  $DefaultDesktopDir = "C:\Users\Default\Desktop"
+  New-Item -ItemType Directory -Path $DefaultDesktopDir -Force
+  $IdeaShortcutAdmin = $WshShell.CreateShortcut("$DefaultDesktopDir\IDEA_Interface.url")
   $IdeaShortcutAdmin.TargetPath = "$IdeaWebPortalURL"
   $IdeaShortcutAdmin.Save()
+
+  $instanceInfo = aws ec2 describe-instance-types --instance-types $InstanceType --output json | ConvertFrom-Json
+  if ($instanceInfo.InstanceTypes.GpuInfo) {
+    $gpu = $instanceInfo.InstanceTypes.GpuInfo.Gpus | ForEach-Object { $_.Manufacturer }
+    if ($gpu -eq "NVIDIA") {
+        Write-ToLog -Message "Detected NVIDIA GPU"
+        {% include  "_templates/windows/gpu/nvidia_drivers.jinja2" %}
+    } elseif ($gpu -eq "AMD")
+    {
+        Write-ToLog -Message "Detected AMD GPU"
+        {% include  "_templates/windows/gpu/amd_drivers.jinja2" %}
+    }
+    else
+    {
+        Write-ToLog -Message "GPU detected but manufacturer is not NVIDIA or AMD, detected ${gpu}, skipping .."
+    }
+  } else {
+      Write-ToLog -Message "No GPU detected on this machine"
+  }
+
+  Write-ToLog -Message "Tagging EBS Volumes"
+  Tag-EbsVolumes
+
+  Write-ToLog -Message "Tagging Network Interface"
+  Tag-NetworkInterface
 
   Write-ToLog -Message "mount any applicable shared storage file systems"
   Mount-SharedStorage -DomainUserName $DomainUserName
 
-  Write-ToLog -Message "Install and Configure Amazon DCV"
+  Write-ToLog -Message "Install and Configure NICE DCV"
   Import-Module .\ConfigureDCVHost.ps1
   Bootstrap-DCV-WindowsHost
+
+  Configure-DCVPermissions
 
   $RebootNotificationContent = "
 `$CurrentTimeStamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
@@ -172,11 +226,13 @@ Send-SQSMessage -QueueUrl $VdcRequestQueueURL -MessageBody `$RebootMessage -Mess
 "
   $IdeaScriptsDirectory = "C:\IDEA\LocalScripts"
   New-Item -Path $IdeaScriptsDirectory -Name "IdeaRebootNotification.ps1" -ItemType File -Force -Value "$RebootNotificationContent"
-  schtasks /create /sc onstart /tn IdeaRebootNotification /tr "powershell -File $IdeaScriptsDirectory\IdeaRebootNotification.ps1" /ru system /f
-
+  schtasks /create /sc onstart /tn IdeaRebootNotification /tr "powershell -ExecutionPolicy Bypass -File $IdeaScriptsDirectory\IdeaRebootNotification.ps1" /ru system /f
+  schtasks /create /sc onevent /ec system /mo "*[System[Provider[@Name='Microsoft-Windows-Power-Troubleshooter'] and (Level=4 or Level=0) and (EventID=1)]]"  /tn IDEAWakeupNotification /tr "powershell -ExecutionPolicy Bypass -File $IdeaScriptsDirectory\IdeaRebootNotification.ps1" /ru system /f
   $Message = "{{ context.vars.dcv_host_ready_message }}"
   # todo - support vpc endpoint
   Send-SQSMessage -QueueUrl $VdcRequestQueueURL -MessageBody $Message -MessageGroupId $IDEASessionID
 
+  Stop-Transcript
   Restart-Computer -Force
+  exit
 }

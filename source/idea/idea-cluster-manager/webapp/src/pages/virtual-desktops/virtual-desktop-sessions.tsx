@@ -63,34 +63,70 @@ const VIRTUAL_DESKTOP_SESSIONS_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefini
     {
         id: 'os',
         header: 'Base OS',
-        cell: e => Utils.getOsTitle(e.software_stack?.base_os)
+        cell: e => Utils.getOsTitle(e.software_stack?.base_os),
+        sortingComparator: (a, b) => {
+            const valueA = a.software_stack?.base_os || '';
+            const valueB = b.software_stack?.base_os || '';
+            return valueA.localeCompare(valueB);
+        }
     },
     {
         id: 'tenancy',
         header: 'Tenancy',
-        cell: e => Utils.getFormattedTenancy(e.software_stack?.launch_tenancy)
+        cell: e => Utils.getFormattedTenancy(e.software_stack?.launch_tenancy),
+        sortingComparator: (a, b) => {
+            const valueA = a.software_stack?.launch_tenancy || '';
+            const valueB = b.software_stack?.launch_tenancy || '';
+            return valueA.localeCompare(valueB);
+        }
     },
     {
         id: 'instance_type',
         header: 'Instance Type',
-        cell: e => e.server?.instance_type
+        cell: e => e.server?.instance_type,
+        sortingComparator: (a, b) => {
+            const valueA = a.server?.instance_type || '';
+            const valueB = b.server?.instance_type || '';
+            return valueA.localeCompare(valueB);
+        }
     },
     {
         id: 'state',
         header: 'State',
         cell: e => {
             return <VirtualDesktopSessionStatusIndicator state={e.state!} hibernation_enabled={e.hibernation_enabled!}/>
-        }
+        },
+        sortingField: "state"
     },
     {
         id: 'project_title',
         header: 'Project',
-        cell: e => e.project?.title
+        cell: e => e.project?.title,
+        sortingComparator: (a, b) => {
+            const valueA = a.project?.title || '';
+            const valueB = b.project?.title || '';
+            return valueA.localeCompare(valueB);
+        }
     },
     {
         id: 'created_on',
         header: 'Created On',
-        cell: e => new Date(e.created_on!).toLocaleString()
+        cell: e => new Date(e.created_on!).toLocaleString(),
+        sortingComparator: (a, b) => {
+            const dateA = a.created_on ? new Date(a.created_on).getTime() : 0;
+            const dateB = b.created_on ? new Date(b.created_on).getTime() : 0;
+            return dateA - dateB;
+        }
+    },
+    {
+        id: 'updated_on',
+        header: 'Updated On',
+        cell: e => e.updated_on ? new Date(e.updated_on).toLocaleString() : '-',
+        sortingComparator: (a, b) => {
+            const dateA = a.updated_on ? new Date(a.updated_on).getTime() : 0;
+            const dateB = b.updated_on ? new Date(b.updated_on).getTime() : 0;
+            return dateA - dateB;
+        }
     },
     {
         id: 'connect-session',
@@ -98,7 +134,7 @@ const VIRTUAL_DESKTOP_SESSIONS_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefini
         cell: e => {
             if (e.state === 'READY') {
                 let username: string | undefined = undefined
-                if (e.software_stack?.base_os === 'windows') {
+                if (e.software_stack?.base_os?.includes('windows')) {
                     username = 'administrator'
                 }
 
@@ -147,9 +183,9 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
     }
 
     componentDidMount() {
-        this.getProjectsClient().getUserProjects({}).then(result => {
+        this.getProjectsClient().listProjects({}).then(result => {
             let projectChoices: SocaUserInputChoice[] = []
-            result.projects?.forEach(project => {
+            result.listing?.forEach(project => {
                 projectChoices.push({
                     title: project.title,
                     value: project.project_id,
@@ -526,7 +562,12 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                 ref={this.createSessionForm}
                 maxRootVolumeMemory={this.virtualDesktopSettings?.dcv_session.max_root_volume_memory}
                 isAdminView={true}
-                onSubmit={(session_name, username, project_id, base_os, software_stack_id, session_type, instance_type, storage_size, hibernation_enabled, vpc_subnet_id) => {
+                projects={this.state.projectChoices.map(choice => ({
+                    project_id: choice.value as string,
+                    title: choice.title,
+                    description: choice.description
+                }))}
+                onSubmit={(session_name, username, project_id, base_os, software_stack_id, session_type, instance_type, storage_size, hibernation_enabled, vpc_subnet_id, admin_custom_instance_type) => {
                     return this.getVirtualDesktopAdminClient().createSession({
                         session: {
                             name: session_name,
@@ -548,7 +589,8 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                                 project_id: project_id
                             },
                             type: session_type
-                        }
+                        },
+                        admin_custom_instance_type: admin_custom_instance_type
                     }).then(_ => {
                         this.getCreateSessionForm().hideForm()
                         this.getListing().fetchRecords()
@@ -575,6 +617,52 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                 preferencesKey={'user-sessions'}
                 description="Virtual Desktop sessions for all users. End-users see these sessions as Virtual Desktops."
                 selectionType="multi"
+                enableExportToCsv={true}
+                csvFilename={`idea_virtual_desktop_sessions_export_${new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').split('Z')[0]}.csv`}
+                onExportAllRecords={async () => {
+                    try {
+                        // Show loading message
+                        this.setFlashMessage('Preparing CSV export... This may take a moment for large datasets.', 'info');
+
+                        console.log('Starting CSV export for sessions...');
+
+                        // Get current filters and date range, with fallbacks
+                        const filters = this.getListing()?.getFilters() || [];
+                        const dateRange = this.getListing()?.getDateRange();
+
+                        console.log('Filters:', filters);
+                        console.log('Date range:', dateRange);
+
+                        // Fetch all records with current filters but limited by backend constraints
+                        const result = await this.getVirtualDesktopAdminClient().listSessions({
+                            filters: filters,
+                            paginator: {
+                                start: 0,
+                                page_size: 10000 // Maximum allowed by Elasticsearch/OpenSearch
+                            },
+                            date_range: dateRange
+                        });
+
+                        console.log('Export result:', result);
+
+                        const records = result.listing || [];
+
+                        // Add a small delay to ensure the success message shows after the CSV download
+                        setTimeout(() => {
+                            const message = records.length === 10000
+                                ? `Successfully exported ${records.length} records to CSV (maximum allowed per export).`
+                                : `Successfully exported ${records.length} records to CSV.`;
+                            this.setFlashMessage(message, 'success');
+                        }, 500);
+
+                        return records;
+                    } catch (error) {
+                        console.error('CSV Export error:', error);
+                        const errorMessage = error instanceof Error ? error.message : String(error);
+                        this.setFlashMessage(`Failed to export CSV: ${errorMessage}`, 'error');
+                        throw error;
+                    }
+                }}
                 primaryAction={{
                     id: 'create-session',
                     text: 'Create Session',
@@ -765,12 +853,24 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                                 value: ''
                             },
                             {
+                                title: 'Amazon Linux 2023',
+                                value: 'amazonlinux2023'
+                            },
+                            {
                                 title: 'Amazon Linux 2',
                                 value: 'amazonlinux2'
                             },
                             {
-                                title: 'Windows',
-                                value: 'windows'
+                                title: 'Windows 2019',
+                                value: 'windows2019'
+                            },
+                            {
+                                title: 'Windows 2022',
+                                value: 'windows2022'
+                            },
+                            {
+                                title: 'Windows 2025',
+                                value: 'windows2025'
                             },
                             {
                                 title: 'Red Hat Enterprise Linux 8',
@@ -799,6 +899,8 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                         ]
                     }
                 ]}
+                defaultSortingColumn="created_on"
+                defaultSortingDescending={true}
                 onFilter={(filters) => {
                     return filters
                 }}

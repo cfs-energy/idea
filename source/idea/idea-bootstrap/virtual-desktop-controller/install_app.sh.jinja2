@@ -37,7 +37,7 @@ PACKAGE_DIR="${BOOTSTRAP_DIR}/${PACKAGE_NAME}"
 mkdir -p ${PACKAGE_DIR}
 tar -xvf ${BOOTSTRAP_DIR}/${PACKAGE_ARCHIVE} -C ${PACKAGE_DIR}
 idea_pip install -r ${PACKAGE_DIR}/requirements.txt
-idea_pip install $(ls ${PACKAGE_DIR}/*-lib.tar.gz)
+idea_pip install ${PACKAGE_DIR}/*-lib.tar.gz
 mkdir -p ${IDEA_APP_DEPLOY_DIR}/${APP_NAME}
 mkdir -p ${IDEA_APP_DEPLOY_DIR}/logs
 if [[ -d "${IDEA_APP_DEPLOY_DIR}/${APP_NAME}/resources" ]]; then

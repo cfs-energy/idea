@@ -17,7 +17,6 @@ import ldap  # noqa
 
 
 class MockLdapClient(OpenLDAPClient):
-
     def __init__(self, context: AppContext):
         super().__init__(
             context=context,
@@ -25,12 +24,14 @@ class MockLdapClient(OpenLDAPClient):
                 domain_name='idea.local',
                 uri='ldap://localhost',
                 root_username='mock',
-                root_password='mock'
-            )
+                root_password='mock',
+            ),
         )
 
     def add_s(self, dn, modlist):
-        trace_message = f'ldapadd -x -D "{self.ldap_root_bind}" -H {self.ldap_uri} "{dn}"'
+        trace_message = (
+            f'ldapadd -x -D "{self.ldap_root_bind}" -H {self.ldap_uri} "{dn}"'
+        )
         attributes = []
         for mod in modlist:
             key = mod[0]
@@ -41,7 +42,9 @@ class MockLdapClient(OpenLDAPClient):
         self.logger.info(f'> {trace_message}, attributes: ({" ".join(attributes)})')
 
     def modify_s(self, dn, modlist):
-        trace_message = f'ldapmodify -x -D "{self.ldap_root_bind}" -H {self.ldap_uri} "{dn}"'
+        trace_message = (
+            f'ldapmodify -x -D "{self.ldap_root_bind}" -H {self.ldap_uri} "{dn}"'
+        )
         attributes = []
         for mod in modlist:
             key = mod[1]
@@ -52,10 +55,20 @@ class MockLdapClient(OpenLDAPClient):
         self.logger.info(f'> {trace_message}, attributes: ({" ".join(attributes)})')
 
     def delete_s(self, dn):
-        trace_message = f'ldapdelete -x -D "{self.ldap_root_bind}" -H {self.ldap_uri} "{dn}"'
+        trace_message = (
+            f'ldapdelete -x -D "{self.ldap_root_bind}" -H {self.ldap_uri} "{dn}"'
+        )
         self.logger.info(f'> {trace_message}')
 
-    def search_s(self, base, scope=ldap.SCOPE_SUBTREE, filterstr=None, attrlist=None, attrsonly=0, trace=True):
+    def search_s(
+        self,
+        base,
+        scope=ldap.SCOPE_SUBTREE,
+        filterstr=None,
+        attrlist=None,
+        attrsonly=0,
+        trace=True,
+    ):
         trace_message = f'ldapsearch -x -b "{base}" -D "{self.ldap_root_bind}" -H {self.ldap_uri} "{filterstr}"'
         if attrlist is not None:
             trace_message = f'{trace_message} {" ".join(attrlist)}'

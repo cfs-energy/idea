@@ -19,14 +19,16 @@ from ideadatamodel.projects import (
     ListProjectsRequest,
     EnableProjectRequest,
     DisableProjectRequest,
-    GetUserProjectsRequest
+    GetUserProjectsRequest,
 )
 from ideadatamodel import exceptions
 from ideasdk.utils import Utils
+from ideadatamodel.aws.model import AwsProjectBudget
+from ideadatamodel.common.common_model import SocaAmount
+from ideadatamodel import errorcodes
 
 
 class ProjectsAPI(BaseAPI):
-
     def __init__(self, context: ideaclustermanager.AppContext):
         self.context = context
 
@@ -36,32 +38,32 @@ class ProjectsAPI(BaseAPI):
         self.acl = {
             'Projects.CreateProject': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.create_project
+                'method': self.create_project,
             },
             'Projects.GetProject': {
                 'scope': self.SCOPE_READ,
-                'method': self.get_project
+                'method': self.get_project,
             },
             'Projects.UpdateProject': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.update_project
+                'method': self.update_project,
             },
             'Projects.ListProjects': {
                 'scope': self.SCOPE_READ,
-                'method': self.list_projects
+                'method': self.list_projects,
             },
             'Projects.GetUserProjects': {
                 'scope': self.SCOPE_READ,
-                'method': self.admin_get_user_projects
+                'method': self.admin_get_user_projects,
             },
             'Projects.EnableProject': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.enable_project
+                'method': self.enable_project,
             },
             'Projects.DisableProject': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.disable_project
-            }
+                'method': self.disable_project,
+            },
         }
 
     def create_project(self, context: ApiInvocationContext):
@@ -74,8 +76,30 @@ class ProjectsAPI(BaseAPI):
         result = self.context.projects.get_project(request)
         project = result.project
         if project.is_budgets_enabled():
-            budget = self.context.aws_util().budgets_get_budget(budget_name=project.budget.budget_name)
-            project.budget = budget
+            try:
+                budget = self.context.aws_util().budgets_get_budget(
+                    budget_name=project.budget.budget_name
+                )
+                project.budget = budget
+            except exceptions.SocaException as e:
+                if e.error_code == errorcodes.BUDGET_NOT_FOUND:
+                    # Budget not found - treat as budget exhausted
+                    project.budget = AwsProjectBudget(
+                        budget_name=project.budget.budget_name,
+                        budget_limit=SocaAmount(
+                            amount=100.0
+                        ),  # Set a default budget limit
+                        actual_spend=SocaAmount(
+                            amount=200.0
+                        ),  # Set actual spend higher than limit to show as exhausted
+                        forecasted_spend=SocaAmount(
+                            amount=200.0
+                        ),  # Set forecasted spend higher than limit
+                        is_missing=True,  # Flag to indicate budget is missing
+                    )
+                else:
+                    # For other exceptions, re-raise
+                    raise e
         context.success(result)
 
     def update_project(self, context: ApiInvocationContext):
@@ -90,8 +114,30 @@ class ProjectsAPI(BaseAPI):
             if project.is_budgets_enabled():
                 # this call could possibly make some performance degradations, if the configured budget is not available.
                 # need to optimize this further.
-                budget = self.context.aws_util().budgets_get_budget(budget_name=project.budget.budget_name)
-                project.budget = budget
+                try:
+                    budget = self.context.aws_util().budgets_get_budget(
+                        budget_name=project.budget.budget_name
+                    )
+                    project.budget = budget
+                except exceptions.SocaException as e:
+                    if e.error_code == errorcodes.BUDGET_NOT_FOUND:
+                        # Budget not found - treat as budget exhausted
+                        project.budget = AwsProjectBudget(
+                            budget_name=project.budget.budget_name,
+                            budget_limit=SocaAmount(
+                                amount=100.0
+                            ),  # Set a default budget limit
+                            actual_spend=SocaAmount(
+                                amount=200.0
+                            ),  # Set actual spend higher than limit to show as exhausted
+                            forecasted_spend=SocaAmount(
+                                amount=200.0
+                            ),  # Set forecasted spend higher than limit
+                            is_missing=True,  # Flag to indicate budget is missing
+                        )
+                    else:
+                        # For other exceptions, re-raise
+                        raise e
         context.success(result)
 
     def get_user_projects(self, context: ApiInvocationContext):
@@ -125,14 +171,19 @@ class ProjectsAPI(BaseAPI):
             raise exceptions.unauthorized_access()
 
         acl_entry_scope = Utils.get_value_as_string('scope', acl_entry)
-        is_authorized = context.is_authorized(elevated_access=True, scopes=[acl_entry_scope])
+        is_authorized = context.is_authorized(
+            elevated_access=True, scopes=[acl_entry_scope]
+        )
         is_authenticated_user = context.is_authenticated_user()
 
         if is_authorized:
             acl_entry['method'](context)
             return
 
-        if is_authenticated_user and namespace in ('Projects.GetUserProjects', 'Projects.GetProject'):
+        if is_authenticated_user and namespace in (
+            'Projects.GetUserProjects',
+            'Projects.GetProject',
+        ):
             acl_entry['method'](context)
             return
 

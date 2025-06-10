@@ -78,12 +78,12 @@ Statement:
       StringLike:
         cloudwatch:namespace: IDEA/*
 
-    {%- if context.config.get_string('directoryservice.provider') == 'aws_managed_activedirectory' %}
+    {% if context.config.get_string('directoryservice.provider') == 'aws_managed_activedirectory' %}
   - Action:
       - ds:ResetUserPassword
     Resource: '{{ context.arns.get_directory_service_arn() }}'
     Effect: Allow
-    {%- endif %}
+    {% endif %}
 
 
   # PutSecret value is required so that cluster-manager can refresh directory service credentials when nearing expiration

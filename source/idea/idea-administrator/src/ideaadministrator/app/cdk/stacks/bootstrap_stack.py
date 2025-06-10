@@ -21,5 +21,7 @@ class SocaBootstrapStack(cdk.Stack):
     CloudFormation Stack will not be created.
     """
 
-    def __init__(self, scope: constructs.Construct, env: cdk.Environment, stack_name: str):
+    def __init__(
+        self, scope: constructs.Construct, env: cdk.Environment, stack_name: str
+    ):
         super().__init__(scope, env=env, stack_name=stack_name)

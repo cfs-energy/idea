@@ -22,13 +22,13 @@ Deleting Analytics stack (if using OpenSearch) will take at least 20 minutes
 
 ```bash
 # add --delete-backups if you also want to delete backups
-./idea-admin.sh delete-cluster \ 
+./idea-admin.sh delete-cluster \
   --delete-databases \
   --delete-bootstrap \
   --force \
   --aws-region us-east-2 \
   --cluster-name idea-beta
-  
+
 +------------------------------------+---------------------+--------------+---------------+---------+
 | Name                               | Instance Id         | Private IP   | Instance Type | Status  |
 +------------------------------------+---------------------+--------------+---------------+---------+

@@ -1,216 +1,223 @@
 testcases:
+  - name: amazonlinux2023-x86_64
+    base_os: amazonlinux2023
+    software_stack_id: ss-base-amazonlinux2023-x86-64-base
+    hibernation_enabled: False
+    instance_type: t3.xlarge
+    storage_size: 50
+  - name: amazonlinux2023-arm
+    base_os: amazonlinux2023
+    software_stack_id: ss-base-amazonlinux2023-arm64-base
+    hibernation_enabled: False
+    instance_type: m6g.2xlarge
+    storage_size: 50
+  - name: amazonlinux2023-gpu-nvidia
+    base_os: amazonlinux2023
+    software_stack_id: ss-base-amazonlinux2023-x86-64-base
+    hibernation_enabled: False
+    instance_type: g4dn.xlarge
+    storage_size: 50
   - name: amazonlinux2-arm
     base_os: amazonlinux2
     software_stack_id: ss-base-amazonlinux2-arm64-base
     hibernation_enabled: False
     instance_type: m6g.2xlarge
     storage_size: 50
-
   - name: amazonlinux2-x86_64
     base_os: amazonlinux2
     software_stack_id: ss-base-amazonlinux2-x86-64-base
     hibernation_enabled: False
     instance_type: t3.xlarge
     storage_size: 50
-
   - name: amazonlinux2-gpu-nvidia
     base_os: amazonlinux2
     software_stack_id: ss-base-amazonlinux2-x86-64-base
     hibernation_enabled: False
     instance_type: g4dn.xlarge
     storage_size: 50
-
-  - name: windows-x86_64
-    base_os: windows
-    software_stack_id: ss-base-windows-x86-64-base
+  - name: windows2019-x86_64
+    base_os: windows2019
+    software_stack_id: ss-base-windows2019-x86-64-base
     hibernation_enabled: false
     instance_type: t3.xlarge
     storage_size: 50
-
-  - name: windows-gpu-nvidia
-    base_os: windows
-    software_stack_id: ss-base-windows-x86-64-base-nvidia
+  - name: windows2019-gpu-nvidia
+    base_os: windows2019
+    software_stack_id: ss-base-windows2019-x86-64-base
     hibernation_enabled: false
     instance_type: g4dn.xlarge
     storage_size: 50
-
-  - name: windows-gpu-amd
-    base_os: windows
-    software_stack_id: ss-base-windows-x86-64-base-amd
+  - name: windows2019-gpu-amd
+    base_os: windows2019
+    software_stack_id: ss-base-windows2019-x86-64-base
     hibernation_enabled: false
     instance_type: g4ad.xlarge
     storage_size: 50
-
-# Comment out rhel7 tests as they're tested in the non-admin flow
-#  - name: rhel7-x86_64
-#    base_os: rhel7
-#    software_stack_id: ss-base-rhel7-x86-64-base
-#    hibernation_enabled: false
-#    instance_type: t3.xlarge
-#    storage_size: 50
-#
-#  - name: rhel7-gpu-nvidia
-#    base_os: rhel7
-#    software_stack_id: ss-base-rhel7-x86-64-base
-#    hibernation_enabled: false
-#    instance_type: g4dn.xlarge
-#    storage_size: 50
-
-  - name: centos7-x86_64
-    base_os: centos7
-    software_stack_id: ss-base-centos7-x86-64-base
-    hibernation_enabled: False
+  - name: windows2022-x86_64
+    base_os: windows2022
+    software_stack_id: ss-base-windows2022-x86-64-base
+    hibernation_enabled: false
     instance_type: t3.xlarge
     storage_size: 50
-
-  - name: centos7-arm
-    base_os: centos7
-    software_stack_id: ss-base-centos7-arm64-base
-    hibernation_enabled: False
-    instance_type: m6g.2xlarge
-    storage_size: 50
-
-  - name: centos7-gpu-nvidia
-    base_os: centos7
-    software_stack_id: ss-base-centos7-x86-64-base
-    hibernation_enabled: False
+  - name: windows2022-gpu-nvidia
+    base_os: windows2022
+    software_stack_id: ss-base-windows2022-x86-64-base
+    hibernation_enabled: false
     instance_type: g4dn.xlarge
     storage_size: 50
-
+  - name: windows2022-gpu-amd
+    base_os: windows2022
+    software_stack_id: ss-base-windows2022-x86-64-base
+    hibernation_enabled: false
+    instance_type: g4ad.xlarge
+    storage_size: 50
+  - name: windows2025-x86_64
+    base_os: windows2025
+    software_stack_id: ss-base-windows2025-x86-64-base
+    hibernation_enabled: false
+    instance_type: t3.xlarge
+    storage_size: 50
+  - name: windows2025-gpu-nvidia
+    base_os: windows2025
+    software_stack_id: ss-base-windows2025-x86-64-base
+    hibernation_enabled: false
+    instance_type: g4dn.xlarge
+    storage_size: 50
   - name: rhel8-x86_64
     base_os: rhel8
     software_stack_id: ss-base-rhel8-x86-64-base
     hibernation_enabled: False
     instance_type: t3.xlarge
     storage_size: 50
-
   - name: rhel8-arm
     base_os: rhel8
     software_stack_id: ss-base-rhel8-arm64-base
     hibernation_enabled: False
     instance_type: m6g.2xlarge
     storage_size: 50
-
   - name: rhel8-gpu-nvidia
     base_os: rhel8
     software_stack_id: ss-base-rhel8-x86-64-base
     hibernation_enabled: False
     instance_type: g4dn.xlarge
     storage_size: 50
-
   - name: rhel9-x86_64
     base_os: rhel9
     software_stack_id: ss-base-rhel9-x86-64-base
     hibernation_enabled: False
     instance_type: t3.xlarge
     storage_size: 50
-
   - name: rhel9-arm
     base_os: rhel9
     software_stack_id: ss-base-rhel9-arm64-base
     hibernation_enabled: False
     instance_type: m6g.2xlarge
     storage_size: 50
-
   - name: rhel9-gpu-nvidia
     base_os: rhel9
     software_stack_id: ss-base-rhel9-x86-64-base
     hibernation_enabled: False
     instance_type: g4dn.xlarge
     storage_size: 50
-
-# Comment out rocky8/9 tests to reduce the time for vdi batch tests
-#  - name: rocky8-x86_64
-#    base_os: rocky8
-#    software_stack_id: ss-base-rocky8-x86-64-base
-#    hibernation_enabled: False
-#    instance_type: t3.xlarge
-#    storage_size: 50
-#
-#  - name: rocky8-arm
-#    base_os: rocky8
-#    software_stack_id: ss-base-rocky8-arm64-base
-#    hibernation_enabled: False
-#    instance_type: m6g.2xlarge
-#    storage_size: 50
-#
-#  - name: rocky8-gpu-nvidia
-#    base_os: rocky8
-#    software_stack_id: ss-base-rocky8-x86-64-base
-#    hibernation_enabled: False
-#    instance_type: g4dn.xlarge
-#    storage_size: 50
-
-#  - name: rocky9-x86_64
-#    base_os: rocky9
-#    software_stack_id: ss-base-rocky9-x86-64-base
-#    hibernation_enabled: False
-#    instance_type: t3.xlarge
-#    storage_size: 50
-#
-#  - name: rocky9-arm
-#    base_os: rocky9
-#    software_stack_id: ss-base-rocky9-arm64-base
-#    hibernation_enabled: False
-#    instance_type: m6g.2xlarge
-#    storage_size: 50
-#
-#  - name: rocky9-gpu-nvidia
-#    base_os: rocky9
-#    software_stack_id: ss-base-rocky9-x86-64-base
-#    hibernation_enabled: False
-#    instance_type: g4dn.xlarge
-#    storage_size: 50
-
-  - name: amazonlinux2-gpu-amd
-    base_os: amazonlinux2
-    software_stack_id: ss-base-amazonlinux2-x86-64-base
+  - name: rocky8-x86_64
+    base_os: rocky8
+    software_stack_id: ss-base-rocky8-x86-64-base
+    hibernation_enabled: False
+    instance_type: t3.xlarge
+    storage_size: 50
+  - name: rocky8-arm
+    base_os: rocky8
+    software_stack_id: ss-base-rocky8-arm64-base
+    hibernation_enabled: False
+    instance_type: m6g.2xlarge
+    storage_size: 50
+  - name: rocky8-gpu-nvidia
+    base_os: rocky8
+    software_stack_id: ss-base-rocky8-x86-64-base
+    hibernation_enabled: False
+    instance_type: g4dn.xlarge
+    storage_size: 50
+  - name: rocky8-gpu-amd
+    base_os: rocky8
+    software_stack_id: ss-base-rocky8-x86-64-base
     hibernation_enabled: False
     instance_type: g4ad.xlarge
     storage_size: 50
-
-  - name: rhel7-gpu-amd
-    base_os: rhel7
-    software_stack_id: ss-base-rhel7-x86-64-base
-    hibernation_enabled: false
-    instance_type: g4ad.xlarge
+  - name: rocky9-x86_64
+    base_os: rocky9
+    software_stack_id: ss-base-rocky9-x86-64-base
+    hibernation_enabled: False
+    instance_type: t3.xlarge
     storage_size: 50
-
-  - name: centos7-gpu-amd
-    base_os: centos7
-    software_stack_id: ss-base-centos7-x86-64-base
+  - name: rocky9-arm
+    base_os: rocky9
+    software_stack_id: ss-base-rocky9-arm64-base
+    hibernation_enabled: False
+    instance_type: m6g.2xlarge
+    storage_size: 50
+  - name: rocky9-gpu-nvidia
+    base_os: rocky9
+    software_stack_id: ss-base-rocky9-x86-64-base
+    hibernation_enabled: False
+    instance_type: g4dn.xlarge
+    storage_size: 50
+  - name: rocky9-gpu-amd
+    base_os: rocky9
+    software_stack_id: ss-base-rocky9-x86-64-base
     hibernation_enabled: False
     instance_type: g4ad.xlarge
     storage_size: 50
-
-# Comment out RHEL8 for AMD GPU due to know issues with AMD GPU driver and kernel dependencies
-# - name: rhel8-gpu-amd
-#   base_os: rhel8
-#   software_stack_id: ss-base-rhel8-x86-64-base
-#   hibernation_enabled: false
-#   instance_type: g4ad.xlarge
-#   storage_size: 50
-
-# Comment out RHEL9 for AMD GPU due to know issues with AMD GPU driver and kernel dependencies
-#  - name: rhel9-gpu-amd
-#    base_os: rhel9
-#    software_stack_id: ss-base-rhel9-x86-64-base
-#    hibernation_enabled: false
-#    instance_type: g4ad.xlarge
-#    storage_size: 50
-
-# Comment out Rocky8 for AMD GPU due to know issues with AMD GPU driver and kernel dependencies
-#  - name: rocky8-gpu-amd
-#    base_os: rocky8
-#    software_stack_id: ss-base-rocky8-x86-64-base
-#    hibernation_enabled: false
-#    instance_type: g4ad.xlarge
-#    storage_size: 50
-
-# Comment out Rocky9 for AMD GPU due to know issues with AMD GPU driver and kernel dependencies
-#  - name: rocky9-gpu-amd
-#    base_os: rocky9
-#    software_stack_id: ss-base-rocky9-x86-64-base
-#    hibernation_enabled: false
-#    instance_type: g4ad.xlarge
-#    storage_size: 50
+  # - name: amazonlinux2-gpu-amd
+  #   base_os: amazonlinux2
+  #   software_stack_id: ss-base-amazonlinux2-x86-64-base
+  #   hibernation_enabled: False
+  #   instance_type: g4ad.xlarge
+  #   storage_size: 50
+  # - name: ubuntu2204-gpu-amd
+  #   base_os: ubuntu2204
+  #   software_stack_id: ss-base-ubuntu2204-x86-64-base
+  #   hibernation_enabled: False
+  #   instance_type: g4ad.xlarge
+  #   storage_size: 50
+  # - name: ubuntu2404-gpu-amd
+  #   base_os: ubuntu2404
+  #   software_stack_id: ss-base-ubuntu2404-x86-64-base
+  #   hibernation_enabled: False
+  #   instance_type: g4ad.xlarge
+  #   storage_size: 50
+  - name: ubuntu2204-x86_64
+    base_os: ubuntu2204
+    software_stack_id: ss-base-ubuntu2204-x86-64-base
+    hibernation_enabled: False
+    instance_type: t3.xlarge
+    storage_size: 50
+  - name: ubuntu2204-arm
+    base_os: ubuntu2204
+    software_stack_id: ss-base-ubuntu2204-arm64-base
+    hibernation_enabled: False
+    instance_type: m6g.2xlarge
+    storage_size: 50
+  - name: ubuntu2204-gpu-nvidia
+    base_os: ubuntu2204
+    software_stack_id: ss-base-ubuntu2204-x86-64-base
+    hibernation_enabled: False
+    instance_type: g4dn.xlarge
+    storage_size: 50
+  - name: ubuntu2404-x86_64
+    base_os: ubuntu2404
+    software_stack_id: ss-base-ubuntu2404-x86-64-base
+    hibernation_enabled: False
+    instance_type: t3.xlarge
+    storage_size: 50
+  - name: ubuntu2404-arm
+    base_os: ubuntu2404
+    software_stack_id: ss-base-ubuntu2404-arm64-base
+    hibernation_enabled: False
+    instance_type: m6g.2xlarge
+    storage_size: 50
+  - name: ubuntu2404-gpu-nvidia
+    base_os: ubuntu2404
+    software_stack_id: ss-base-ubuntu2404-x86-64-base
+    hibernation_enabled: False
+    instance_type: g4dn.xlarge
+    storage_size: 50

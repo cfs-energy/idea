@@ -35,34 +35,28 @@ def post_metrics(event):
         uuid = event['RequestId']
         data = {
             'RequestType': event['RequestType'],
-            'RequestTimeStamp': request_timestamp
+            'RequestTimeStamp': request_timestamp,
         }
 
         # Data is being sent by source/idea/idea-scheduler/src/ideascheduler/app/provisioning/job_provisioner/cloudformation_stack_builder.py
         for k, v in event['ResourceProperties'].items():
-            if (
-                k not in data.keys() and
-                k not in METRIC_DENYLIST_KEYS
-            ):
+            if k not in data.keys() and k not in METRIC_DENYLIST_KEYS:
                 data[k] = v
         # Metrics Account (Production)
-        metrics_url = os.environ.get('AWS_METRICS_URL', 'https://metrics.awssolutionsbuilder.com/generic')
+        metrics_url = os.environ.get(
+            'AWS_METRICS_URL', 'https://metrics.awssolutionsbuilder.com/generic'
+        )
 
         time_stamp = {'TimeStamp': request_timestamp}
-        params = {
-            'Solution': solution_id,
-            'UUID': uuid,
-            'Data': data
-        }
+        params = {'Solution': solution_id, 'UUID': uuid, 'Data': data}
 
         metrics = dict(time_stamp, **params)
         json_data = json.dumps(metrics, indent=4)
         logger.info(params)
         headers = {'content-type': 'application/json'}
-        req = http_client.http_post('POST',
-                                    metrics_url,
-                                    body=json_data.encode('utf-8'),
-                                    headers=headers)
+        req = http_client.http_post(
+            'POST', metrics_url, body=json_data.encode('utf-8'), headers=headers
+        )
         rsp_code = req.status
         logger.info(f'ResponseCode: {rsp_code}')
     except Exception as e:
@@ -84,10 +78,12 @@ def handler(event, context):
     except Exception as e:
         logger.exception(f'failed to post metrics: {e}')
     finally:
-        http_client.send_cfn_response(CfnResponse(
-            context=context,
-            event=event,
-            status=CfnResponseStatus.SUCCESS,
-            data={},
-            physical_resource_id=PHYSICAL_RESOURCE_ID
-        ))
+        http_client.send_cfn_response(
+            CfnResponse(
+                context=context,
+                event=event,
+                status=CfnResponseStatus.SUCCESS,
+                data={},
+                physical_resource_id=PHYSICAL_RESOURCE_ID,
+            )
+        )

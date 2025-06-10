@@ -15,5 +15,7 @@ from ideadatamodel.aws.model import AutoScalingGroupInstance
 from ideadatamodel.aws.autoscaling_group import AutoScalingGroup
 from ideadatamodel.aws.ec2_spot_fleet_request_config import EC2SpotFleetRequestConfig
 from ideadatamodel.aws.cloudformation_stack import CloudFormationStack
-from ideadatamodel.aws.cloudformation_stack_resources import CloudFormationStackResources
+from ideadatamodel.aws.cloudformation_stack_resources import (
+    CloudFormationStackResources,
+)
 from ideadatamodel.aws.model import *

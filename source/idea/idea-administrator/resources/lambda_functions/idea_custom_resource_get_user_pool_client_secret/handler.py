@@ -28,13 +28,15 @@ def handler(event, context):
         request_type = event.get('RequestType')
 
         if request_type == 'Delete':
-            http_client.send_cfn_response(CfnResponse(
-                context=context,
-                event=event,
-                status=CfnResponseStatus.SUCCESS,
-                data={},
-                physical_resource_id=PHYSICAL_RESOURCE_ID
-            ))
+            http_client.send_cfn_response(
+                CfnResponse(
+                    context=context,
+                    event=event,
+                    status=CfnResponseStatus.SUCCESS,
+                    data={},
+                    physical_resource_id=PHYSICAL_RESOURCE_ID,
+                )
+            )
             return
 
         resource_properties = event.get('ResourceProperties', {})
@@ -44,8 +46,7 @@ def handler(event, context):
 
         cognito_idp_client = boto3.client('cognito-idp')
         response = cognito_idp_client.describe_user_pool_client(
-            UserPoolId=user_pool_id,
-            ClientId=client_id
+            UserPoolId=user_pool_id, ClientId=client_id
         )
 
         client = response.get('UserPoolClient', {})
@@ -54,38 +55,39 @@ def handler(event, context):
         if client_secret is None:
             msg = f'Could not find ClientSecret for ClientId: {client_id}'
             logger.error(msg)
-            http_client.send_cfn_response(CfnResponse(
-                context=context,
-                event=event,
-                status=CfnResponseStatus.FAILED,
-                data={
-                    'error': msg
-                },
-                physical_resource_id=f'{PHYSICAL_RESOURCE_ID}-{client_id}'
-            ))
+            http_client.send_cfn_response(
+                CfnResponse(
+                    context=context,
+                    event=event,
+                    status=CfnResponseStatus.FAILED,
+                    data={'error': msg},
+                    physical_resource_id=f'{PHYSICAL_RESOURCE_ID}-{client_id}',
+                )
+            )
         else:
-            http_client.send_cfn_response(CfnResponse(
-                context=context,
-                event=event,
-                status=CfnResponseStatus.SUCCESS,
-                data={
-                    'ClientSecret': client_secret
-                },
-                physical_resource_id=f'{PHYSICAL_RESOURCE_ID}-{client_id}'
-            ), log_response=False)  # disable response logging to prevent exposing client secret in logs
+            http_client.send_cfn_response(
+                CfnResponse(
+                    context=context,
+                    event=event,
+                    status=CfnResponseStatus.SUCCESS,
+                    data={'ClientSecret': client_secret},
+                    physical_resource_id=f'{PHYSICAL_RESOURCE_ID}-{client_id}',
+                ),
+                log_response=False,
+            )  # disable response logging to prevent exposing client secret in logs
     except Exception as e:
         error_message = f'Failed to get ClientSecret for UserPool Client. - {e}'
         logger.exception(error_message)
         if client_id is None:
             client_id = 'failed'
-        http_client.send_cfn_response(CfnResponse(
-            context=context,
-            event=event,
-            status=CfnResponseStatus.FAILED,
-            data={
-                'error': error_message
-            },
-            physical_resource_id=f'{PHYSICAL_RESOURCE_ID}-{client_id}'
-        ))
+        http_client.send_cfn_response(
+            CfnResponse(
+                context=context,
+                event=event,
+                status=CfnResponseStatus.FAILED,
+                data={'error': error_message},
+                physical_resource_id=f'{PHYSICAL_RESOURCE_ID}-{client_id}',
+            )
+        )
     finally:
         http_client.destroy()

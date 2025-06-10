@@ -19,15 +19,14 @@ from ideasdk.context import SocaContext, SocaContextOptions
 from ideasdk.service import SocaService
 from ideasdk.utils import Utils, EnvironmentUtils
 from ideavirtualdesktopcontroller.app.app_protocols import DCVClientProtocol
-from ideavirtualdesktopcontroller.app.clients.events_client.events_client import EventsClient
+from ideavirtualdesktopcontroller.app.clients.events_client.events_client import (
+    EventsClient,
+)
 
 
 class VirtualDesktopControllerAppContext(SocaContext):
-
     def __init__(self, options: SocaContextOptions):
-        super().__init__(
-            options=options
-        )
+        super().__init__(options=options)
 
         self.token_service: Optional[TokenService] = None
         self.dcv_broker_client: Optional[DCVClientProtocol] = None
@@ -53,7 +52,11 @@ class VirtualDesktopControllerAppContext(SocaContext):
             vdc_project_dir = script_dir.parent.parent.parent.parent
             return os.path.join(vdc_project_dir, 'resources')
         else:
-            return os.path.join(self.env_app_deploy_dir(), constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER, 'resources')
+            return os.path.join(
+                self.env_app_deploy_dir(),
+                constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER,
+                'resources',
+            )
 
     def get_bootstrap_dir(self) -> str:
         if Utils.is_true(EnvironmentUtils.idea_dev_mode(), False):

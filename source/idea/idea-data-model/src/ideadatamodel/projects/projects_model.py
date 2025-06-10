@@ -9,11 +9,7 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
-from ideadatamodel import (
-    SocaBaseModel,
-    SocaKeyValue,
-    AwsProjectBudget
-)
+from ideadatamodel import SocaBaseModel, SocaKeyValue, AwsProjectBudget
 from ideadatamodel.model_utils import ModelUtils
 
 from typing import Optional, List

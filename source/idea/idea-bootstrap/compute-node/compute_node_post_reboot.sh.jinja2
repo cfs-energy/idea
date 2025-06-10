@@ -28,13 +28,13 @@ for dir in $MOUNT_DIRS; do
     chmod 777 "$dir"
 done
 
-{%- if context.vars.job.params.enable_efa_support %}
+{% if context.vars.job.params.enable_efa_support %}
   {% include 'compute-node/_templates/efa.jinja2' %}
-{%- endif %}
+{% endif %}
 
-{%- with node_type = 'compute' %}
+{% with node_type = 'compute' %}
   {% include '_templates/linux/gpu_drivers.jinja2' %}
-{%- endwith %}
+{% endwith %}
 
 # a reboot may be required if GPU Drivers or FSx for Lustre client are installed.
 REBOOT_REQUIRED=$(cat /root/bootstrap/reboot_required.txt)

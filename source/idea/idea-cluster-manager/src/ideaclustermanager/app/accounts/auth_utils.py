@@ -16,7 +16,6 @@ import validators
 
 
 class AuthUtils:
-
     @staticmethod
     def sanitize_username(username: str) -> str:
         if Utils.is_empty(username):
@@ -50,17 +49,20 @@ class AuthUtils:
     @staticmethod
     def invalid_operation(message: str) -> exceptions.SocaException:
         return exceptions.SocaException(
-            error_code=errorcodes.AUTH_INVALID_OPERATION,
-            message=message
+            error_code=errorcodes.AUTH_INVALID_OPERATION, message=message
         )
 
     @staticmethod
     def check_allowed_username(username: str):
-        if username.strip().lower() in ('root',
-                                        'admin',
-                                        'administrator',
-                                        constants.IDEA_SERVICE_ACCOUNT,
-                                        'ec2-user',
-                                        'centos',
-                                        'ssm-user'):
-            raise exceptions.invalid_params(f'invalid username: {username}. Change username to prevent conflicts with local or directory system users.')
+        if username.strip().lower() in (
+            'root',
+            'admin',
+            'administrator',
+            constants.IDEA_SERVICE_ACCOUNT,
+            'ec2-user',
+            'centos',
+            'ssm-user',
+        ):
+            raise exceptions.invalid_params(
+                f'invalid username: {username}. Change username to prevent conflicts with local or directory system users.'
+            )

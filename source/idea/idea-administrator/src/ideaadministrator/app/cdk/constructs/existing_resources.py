@@ -9,26 +9,18 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
-__all__ = (
-    'ExistingVpc',
-    'ExistingSocaCluster'
-)
+__all__ = ('ExistingVpc', 'ExistingSocaCluster')
 
 from ideasdk.utils import Utils
 
 from ideaadministrator.app_context import AdministratorContext
 
-from ideaadministrator.app.cdk.constructs import (
-    SocaBaseConstruct
-)
+from ideaadministrator.app.cdk.constructs import SocaBaseConstruct
 
 from typing import List, Optional, Dict
 
 import constructs
-from aws_cdk import (
-    aws_ec2 as ec2,
-    aws_iam as iam
-)
+from aws_cdk import aws_ec2 as ec2, aws_iam as iam
 
 
 class ExistingVpc(SocaBaseConstruct):
@@ -38,10 +30,14 @@ class ExistingVpc(SocaBaseConstruct):
     Downstream stacks should use ExistingVpc instead of ec2.Vpc to retrieve subnet information.
     """
 
-    def __init__(self, context: AdministratorContext, name: str, scope: constructs.Construct):
+    def __init__(
+        self, context: AdministratorContext, name: str, scope: constructs.Construct
+    ):
         super().__init__(context, name)
         self.scope = scope
-        self.vpc_id = self.context.config().get_string('cluster.network.vpc_id', required=True)
+        self.vpc_id = self.context.config().get_string(
+            'cluster.network.vpc_id', required=True
+        )
         self.vpc = ec2.Vpc.from_lookup(self.scope, 'vpc', vpc_id=self.vpc_id)
         self._private_subnets: Optional[List[ec2.ISubnet]] = None
         self._public_subnets: Optional[List[ec2.ISubnet]] = None
@@ -121,16 +117,13 @@ class ExistingVpc(SocaBaseConstruct):
 
 
 class ExistingSocaCluster(SocaBaseConstruct):
-
     def __init__(self, context: AdministratorContext, scope: constructs.Construct):
         super().__init__(context, 'existing-cluster')
 
         self.scope = scope
 
         self.existing_vpc = ExistingVpc(
-            context=self.context,
-            name='existing-vpc',
-            scope=self.scope
+            context=self.context, name='existing-vpc', scope=self.scope
         )
         self.security_groups: Dict[str, ec2.ISecurityGroup] = {}
         self.roles: Dict[str, iam.IRole] = {}
@@ -157,9 +150,7 @@ class ExistingSocaCluster(SocaBaseConstruct):
         roles = self.context.config().get_config('cluster.iam.roles', required=True)
         for name in roles:
             self.roles[name] = iam.Role.from_role_arn(
-                self.scope,
-                f'{name}-role',
-                role_arn=roles[name]
+                self.scope, f'{name}-role', role_arn=roles[name]
             )
 
     def get_role(self, name: str) -> iam.IRole:
@@ -168,12 +159,14 @@ class ExistingSocaCluster(SocaBaseConstruct):
         return Utils.get_any_value(name, self.roles)
 
     def lookup_security_groups(self):
-        security_groups = self.context.config().get_config('cluster.network.security_groups', required=True)
+        security_groups = self.context.config().get_config(
+            'cluster.network.security_groups', required=True
+        )
         for name in security_groups:
             self.security_groups[name] = ec2.SecurityGroup.from_security_group_id(
                 self.scope,
                 f'{name}-security-group',
-                security_group_id=security_groups[name]
+                security_group_id=security_groups[name],
             )
 
     def get_security_group(self, name: str) -> Optional[ec2.ISecurityGroup]:

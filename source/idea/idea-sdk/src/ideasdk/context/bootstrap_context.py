@@ -23,13 +23,15 @@ class BootstrapContext:
     BootstrapContext
     """
 
-    def __init__(self, config: SocaConfigType,
-                 module_name: str,
-                 module_id: str,
-                 base_os: str,
-                 instance_type: str,
-                 module_set: str):
-
+    def __init__(
+        self,
+        config: SocaConfigType,
+        module_name: str,
+        module_id: str,
+        base_os: str,
+        instance_type: str,
+        module_set: str,
+    ):
         if Utils.is_empty(config):
             raise exceptions.invalid_params('config is required')
         if Utils.is_empty(module_name):
@@ -78,7 +80,9 @@ class BootstrapContext:
 
     @property
     def https_proxy(self) -> str:
-        https_proxy = self.config.get_string('cluster.network.https_proxy', required=False, default='')
+        https_proxy = self.config.get_string(
+            'cluster.network.https_proxy', required=False, default=''
+        )
         if Utils.is_not_empty(https_proxy):
             return https_proxy
         else:
@@ -86,19 +90,32 @@ class BootstrapContext:
 
     @property
     def no_proxy(self) -> str:
-        https_proxy = self.config.get_string('cluster.network.https_proxy', required=False, default='')
+        https_proxy = self.config.get_string(
+            'cluster.network.https_proxy', required=False, default=''
+        )
         if Utils.is_not_empty(https_proxy):
-            return self.config.get_string('cluster.network.no_proxy', required=False, default='')
+            return self.config.get_string(
+                'cluster.network.no_proxy', required=False, default=''
+            )
         else:
             return ''
 
     @property
     def default_system_user(self) -> str:
-        if self.base_os in ('amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9'):
+        if self.base_os in (
+            'amazonlinux2',
+            'amazonlinux2023',
+            'rhel8',
+            'rhel9',
+            'rocky8',
+            'rocky9',
+        ):
             return 'ec2-user'
         if self.base_os in ('ubuntu2204', 'ubuntu2404'):
             return 'ubuntu'
-        raise exceptions.general_exception(f'unknown system user name for base_os: {self.base_os}')
+        raise exceptions.general_exception(
+            f'unknown system user name for base_os: {self.base_os}'
+        )
 
     def has_storage_provider(self, provider: str) -> bool:
         storage_config = self.config.get_config('shared-storage')
@@ -162,7 +179,9 @@ class BootstrapContext:
         def eval_scheduler_queue_profile() -> bool:
             if 'queue_profile' not in context_vars:
                 return False
-            queue_profiles = Utils.get_value_as_list('queue_profiles', shared_storage, [])
+            queue_profiles = Utils.get_value_as_list(
+                'queue_profiles', shared_storage, []
+            )
             # empty list = allow all
             if Utils.is_empty(queue_profiles):
                 return True
@@ -187,12 +206,16 @@ class BootstrapContext:
 
     def is_gpu_instance_type(self) -> bool:
         instance_family = self.instance_type.split('.')[0]
-        gpu_instance_families = self.config.get_list('global-settings.gpu_settings.instance_families', [])
+        gpu_instance_families = self.config.get_list(
+            'global-settings.gpu_settings.instance_families', []
+        )
         return instance_family in gpu_instance_families
 
     def is_nvidia_gpu(self) -> bool:
         instance_family = self.instance_type.split('.')[0]
-        nvidia_public_driver_versions = self.config.get_config('global-settings.gpu_settings.nvidia_public_driver_versions')
+        nvidia_public_driver_versions = self.config.get_config(
+            'global-settings.gpu_settings.nvidia_public_driver_versions'
+        )
         return instance_family in nvidia_public_driver_versions
 
     def is_amd_gpu(self) -> bool:
@@ -200,20 +223,22 @@ class BootstrapContext:
 
     def get_nvidia_gpu_driver_version(self) -> str:
         instance_family = self.instance_type.split('.')[0]
-        return self.config.get_string(f'global-settings.gpu_settings.nvidia_public_driver_versions.{instance_family}', required=True)
+        return self.config.get_string(
+            f'global-settings.gpu_settings.nvidia_public_driver_versions.{instance_family}',
+            required=True,
+        )
 
     def get_custom_aws_tags(self) -> List[Dict]:
         custom_tags = self.config.get_list('global-settings.custom_tags', [])
         custom_tags_dict = Utils.convert_custom_tags_to_key_value_pairs(custom_tags)
         result = []
         for key, value in custom_tags_dict.items():
-            result.append({
-                'Key': key,
-                'Value': value
-            })
+            result.append({'Key': key, 'Value': value})
         return result
 
-    def get_cloudwatch_agent_config(self, additional_log_files: Optional[List[Dict]] = None) -> Optional[Dict]:
+    def get_cloudwatch_agent_config(
+        self, additional_log_files: Optional[List[Dict]] = None
+    ) -> Optional[Dict]:
         context_vars = vars(self.vars)
         if 'cloudwatch_agent_config' not in context_vars:
             return None
@@ -244,10 +269,14 @@ class BootstrapContext:
         provider = self.config.get_string('metrics.provider')
         if Utils.is_empty(provider):
             return False
-        return provider in (constants.METRICS_PROVIDER_PROMETHEUS,
-                            constants.METRICS_PROVIDER_AMAZON_MANAGED_PROMETHEUS)
+        return provider in (
+            constants.METRICS_PROVIDER_PROMETHEUS,
+            constants.METRICS_PROVIDER_AMAZON_MANAGED_PROMETHEUS,
+        )
 
-    def get_prometheus_config(self, additional_scrape_configs: Optional[List[Dict]] = None) -> Optional[Dict]:
+    def get_prometheus_config(
+        self, additional_scrape_configs: Optional[List[Dict]] = None
+    ) -> Optional[Dict]:
         context_vars = vars(self.vars)
         if 'prometheus_config' not in context_vars:
             return None
@@ -257,7 +286,9 @@ class BootstrapContext:
         if Utils.is_empty(additional_scrape_configs):
             return prometheus_config
 
-        scrape_configs = Utils.get_value_as_list('scrape_configs', prometheus_config, [])
+        scrape_configs = Utils.get_value_as_list(
+            'scrape_configs', prometheus_config, []
+        )
         prometheus_config['scrape_configs'] = scrape_configs + additional_scrape_configs
 
         return prometheus_config

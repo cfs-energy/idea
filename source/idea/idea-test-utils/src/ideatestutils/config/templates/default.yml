@@ -48,7 +48,7 @@ identity-provider:
 
 directoryservice:
   automation_dir: {{ context.cluster_home_dir }}/directoryservice/automation
-  base_os: amazonlinux2
+  base_os: amazonlinux2023
   cloudwatch_logs:
     enabled: true
   deployment_id: ff77f60a-2588-4432-928a-a9e30a0bec09
@@ -81,7 +81,7 @@ directoryservice:
 
 scheduler:
   provider: openpbs
-  compute_node_os: amazonlinux2
+  compute_node_os: amazonlinux2023
   compute_node_ami: ami-mockclustersettings
   compute_node_instance_profile_arn: arn:aws:iam::123456789012:instance-profile/idea-test-compute-node-instance-profile
   spot_fleet_request_iam_role_arn: arn:aws:iam::123456789012:role/{{ context.cluster_name }}-scheduler-spot-fleet-request-role-us-east-1
@@ -237,6 +237,53 @@ global-settings:
         - hwloc-devel
         - stress
 
+      application_deb:
+        # Extra package to install on Scheduler host, including OpenPBS dependencies for Debian/Ubuntu
+        - htop
+        - hwloc
+        - gcc
+        - make
+        - libtool
+        - libhwloc-dev
+        - libx11-dev
+        - libxt-dev
+        - libedit-dev
+        - libical-dev
+        - libcjson-dev
+        - ncurses-dev
+        - perl
+        - postgresql-server-dev-all
+        - postgresql-contrib
+        - unzip
+        - python3-dev
+        - tcl-dev
+        - tk-dev
+        - swig
+        - libexpat-dev
+        - libssl-dev
+        - libxext-dev
+        - libxft-dev
+        - autoconf
+        - automake
+        - g++
+        - expat
+        - libedit2
+        - postgresql
+        - python3
+        - sendmail-bin
+        - sudo
+        - tcl
+        - tk
+        - libical3
+
+      application_7:
+        # Additional packages required for ALI2, rhel7, and rocky7
+        - dejavu-fonts-common
+
+      application_8:
+        # Additional packages required for rhel8, and rocky8
+        - dejavu-fonts-common
+
       dcv_amazonlinux:
         # List of packages to install when using Mate Desktop
         - gdm
@@ -258,6 +305,10 @@ global-settings:
 
       openldap_client:
         - openldap-clients
+
+      openldap_client_deb:
+        - ldap-utils
+        - sssd-ldap
 
       openldap_server:
         # OpenLDAP Server and dependencies
@@ -314,6 +365,21 @@ global-settings:
         - sssd-krb5-common
         - sssd-ldap
         - sssd-proxy
+
+      sssd_deb:
+        # SSSD and dependencies for Debian/Ubuntu
+        - adcli
+        - sssd-ad
+        - sssd-tools
+        - realmd
+        - libsss-sudo
+        - krb5-user
+        - sssd-krb5
+
+      sssd_7:
+        # Additional packages required for rhel7, and amazonlinux2
+        - python-sssdconfig
+
       system:
         # Default packages installed on all Linux systems
         - chrony
@@ -412,10 +478,8 @@ global-settings:
         - perl-threads-shared
         - quota
         - quota-nls
-        - redhat-lsb
         - rpcbind
         - sqlite-devel
-        - system-lsb
         - nss-pam-ldapd
         - tcp_wrappers
         - vim
@@ -423,9 +487,40 @@ global-settings:
         - zlib
         - zlib-devel
 
-      # used by cluster-manager to convert .pem files to .ppk files
-      putty:
-        - putty
+      system_deb:
+        # Default packages installed on all Debian/Ubuntu systems
+        - chrony
+        - build-essential
+        - gcc
+        - g++
+        - gfortran
+        - libc6-dev
+        - linux-headers-generic
+        - htop
+        - curl
+        - wget
+        - git
+        - jq
+        - openssl
+        - libssl-dev
+        - perl
+        - quota
+        - nfs-common
+        - vim
+        - zlib1g
+        - zlib1g-dev
+
+      system_7:
+        # Additional packages required for amazonlinux2, rhel7, and rocky7
+        - dejavu-fonts-common
+
+      system_8:
+        # Additional packages required for rhel8, and rocky8
+        - dejavu-fonts-common
+
+      system_9:
+        # Additional packages required for rhel9, and rocky9
+        - dejavu-fonts-common
 
     nodejs:
       version: "18.20.2"
@@ -438,9 +533,9 @@ global-settings:
       checksum: "68788d04c44fe39749e65e6c375fb5886d5c6c64c63711e88559c7f701bd61f6c9c32a4a8d7af0b20ca3487a3dcf626c"
       checksum_method: sha384
     python:
-      version: "3.9.19"
-      url: "https://www.python.org/ftp/python/3.9.19/Python-3.9.19.tgz"
-      checksum: "9ba5d1ba9c325313dcc1cb9a29175373a77820cfbef08a755b61c811b78c8ef0eb14ad6d52597a1ac85c1d8aa7d7157b"
+      version: "3.13.3"
+      url: "https://www.python.org/ftp/python/3.13.3/Python-3.13.3.tgz"
+      checksum: "c6d435d904daf04a8d4634a64878738ceed6970141ec1b62bc6e1aa15d8ee69dbf207970ec8e72c373b16412d1ed8cfb"
       checksum_method: sha384
     efa:
       version: "1.31.0"
@@ -452,6 +547,8 @@ global-settings:
       url: "https://github.com/openpbs/openpbs/archive/v23.06.06.tar.gz"
       checksum: "8a4d7f9c326fd1de5c103e700422bc4d49edc9d50f142c033e9e7de8d10d52f5c4f92e902e107b8e89d3e12c147ebef4"
       checksum_method: sha384
+      repo_url: "https://github.com/openpbs/openpbs.git"
+      commit: "3f2aa2f98184f73164f148d4cf9468c9469a13fe"
       # can be release or dev. if dev, sources will be cloned from github and installed for the configured release version.
       # additional customizations can be implemented in idea-bootstrap/_templates/linux/openpbs.jinja2
       type: release
@@ -558,12 +655,17 @@ global-settings:
 
   gpu_settings:
     nvidia:
-      s3_bucket_url: "ec2-linux-nvidia-drivers.s3.amazonaws.com"
-      s3_bucket_path: "s3://ec2-linux-nvidia-drivers/latest/"
+      linux:
+        s3_bucket_url: "https://ec2-linux-nvidia-drivers.s3.amazonaws.com"
+        s3_bucket_path: "s3://ec2-linux-nvidia-drivers/latest/"
+      windows:
+        s3_bucket_url: "https://ec2-windows-nvidia-drivers.s3.amazonaws.com"
+        s3_bucket_path: "s3://ec2-windows-nvidia-drivers/latest/"
     amd:
-      s3_bucket_url: "ec2-amd-linux-drivers.s3.amazonaws.com"
+      s3_bucket_url: "https://ec2-amd-linux-drivers.s3.amazonaws.com"
       s3_bucket_path: "s3://ec2-amd-linux-drivers/latest/"
-
+      rhel_rocky8_installer_url: "https://repo.radeon.com/amdgpu-install/6.4/rhel/8.9/amdgpu-install-6.4.60400-1.el8.noarch.rpm"
+      rhel_rocky9_installer_url: "https://repo.radeon.com/amdgpu-install/6.4/rhel/9.6/amdgpu-install-6.4.60400-1.el9.noarch.rpm"
     instance_families:
       - p2
       - p3
@@ -597,3 +699,20 @@ global-settings:
   #   - Key=AnotherExampleName,Value=Another Example Value
   custom_tags:
     - Key=custom:MyTagName,Value=MyTagValue
+
+vdc:
+  opensearch:
+    dcv_session:
+      alias: {{ context.cluster_name }}_vdc_user_sessions
+    software_stack:
+      alias: {{ context.cluster_name }}_vdc_software_stacks
+    session_permission:
+      alias: {{ context.cluster_name }}_vdc_session_permission
+
+analytics:
+  opensearch:
+    domain_endpoint: https://mock-opensearch-domain.us-east-1.es.amazonaws.com
+    default_number_of_shards: 2
+    default_number_of_replicas: 1
+  kinesis:
+    stream_name: {{ context.cluster_name }}-analytics-stream

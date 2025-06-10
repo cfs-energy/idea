@@ -11,11 +11,11 @@
 
 import ideascheduler
 
-from ideadatamodel import (
-    exceptions, errorcodes, constants
-)
+from ideadatamodel import exceptions, errorcodes, constants
 from ideascheduler.app.scheduler.openpbs.openpbs_api import OpenPBSHookResult
-from ideascheduler.app.scheduler.openpbs.openpbs_api_invocation_context import OpenPBSAPIInvocationContext
+from ideascheduler.app.scheduler.openpbs.openpbs_api_invocation_context import (
+    OpenPBSAPIInvocationContext,
+)
 from ideasdk.utils import Utils
 from ideasdk.api import BaseAPI, ApiInvocationContext
 
@@ -33,30 +33,32 @@ class OpenPBSAPI(BaseAPI):
         self.check_openpbs()
 
     def check_openpbs(self):
-        current_scheduler = self.context.config().get_string('scheduler.provider', required=True)
+        current_scheduler = self.context.config().get_string(
+            'scheduler.provider', required=True
+        )
         if constants.SCHEDULER_OPENPBS != current_scheduler:
             raise exceptions.SocaException(
                 error_code=errorcodes.INVALID_PARAMS,
-                message=f'openpbs is not supported. Current scheduler is: ({current_scheduler})'
+                message=f'openpbs is not supported. Current scheduler is: ({current_scheduler})',
             )
 
     def hook_validate_job(self, pbs_context: OpenPBSAPIInvocationContext):
         try:
-
             if not self.context.is_ready():
                 raise exceptions.soca_exception(
                     error_code=errorcodes.JOB_PROVISIONING_NOT_READY,
-                    message='IDEA job provisioning is not yet ready. Please try again later.'
+                    message='IDEA job provisioning is not yet ready. Please try again later.',
                 )
 
             pbs_context.build_and_validate_job()
 
             if pbs_context.is_valid():
                 pbs_context.check_incidentals()
-                pbs_context.job_submission_result.incidentals = pbs_context.incidentals_validation_result
+                pbs_context.job_submission_result.incidentals = (
+                    pbs_context.incidentals_validation_result
+                )
 
             if not pbs_context.is_valid():
-
                 formatted_user_message = f'Job submission failed and cannot be queued: {os.linesep}{os.linesep}'
 
                 if not pbs_context.job_validation_result:
@@ -65,23 +67,31 @@ class OpenPBSAPI(BaseAPI):
                     formatted_user_message += f'{os.linesep}'
 
                 if not pbs_context.incidentals_validation_result:
-                    formatted_user_message += f'* Job will not be provisioned due to below errors: {os.linesep}' \
-                                              f'{os.linesep}'
-                    formatted_user_message += f'{pbs_context.incidentals_validation_result}'
+                    formatted_user_message += (
+                        f'* Job will not be provisioned due to below errors: {os.linesep}'
+                        f'{os.linesep}'
+                    )
+                    formatted_user_message += (
+                        f'{pbs_context.incidentals_validation_result}'
+                    )
 
                 pbs_context.job_submission_result.accepted = False
-                pbs_context.api_context.success(OpenPBSHookResult(
-                    accept=False,
-                    formatted_user_message=formatted_user_message
-                ))
-                self.context.job_submission_tracker.ok(pbs_context.job_submission_result)
+                pbs_context.api_context.success(
+                    OpenPBSHookResult(
+                        accept=False, formatted_user_message=formatted_user_message
+                    )
+                )
+                self.context.job_submission_tracker.ok(
+                    pbs_context.job_submission_result
+                )
                 return
 
             job = pbs_context.job
 
             if Utils.is_true(job.provisioning_options.keep_forever):
-
-                select = Utils.get_value_as_string('select', job.params.custom_params, '')
+                select = Utils.get_value_as_string(
+                    'select', job.params.custom_params, ''
+                )
                 select = select.split(':compute_node')[0]
                 if Utils.is_not_empty(select):
                     select += f':compute_node={job.get_compute_stack()}'
@@ -90,34 +100,37 @@ class OpenPBSAPI(BaseAPI):
 
                 self.context.job_monitor.job_queued(job=job)
 
-                pbs_context.api_context.success(OpenPBSHookResult(
-                    accept=True,
-                    queue=job.queue,
-                    project=job.project,
-                    formatted_user_message=None,
-                    resources_updated={
-                        'select': select,
-                        'job_uid': job.job_uid,
-                        'job_group': job.get_job_group(),
-                        'cluster_name': job.cluster_name,
-                        'nodes': None
-                    }
-                ))
+                pbs_context.api_context.success(
+                    OpenPBSHookResult(
+                        accept=True,
+                        queue=job.queue,
+                        project=job.project,
+                        formatted_user_message=None,
+                        resources_updated={
+                            'select': select,
+                            'job_uid': job.job_uid,
+                            'job_group': job.get_job_group(),
+                            'cluster_name': job.cluster_name,
+                            'nodes': None,
+                        },
+                    )
+                )
 
             else:
-
                 if pbs_context.is_dry_run():
-
                     pbs_context.job_submission_result.accepted = False
-                    pbs_context.api_context.success(pbs_context.dry_run_post_processing())
+                    pbs_context.api_context.success(
+                        pbs_context.dry_run_post_processing()
+                    )
 
                 else:
-
                     job = pbs_context.job
 
                     self.context.job_monitor.job_queued(job=job)
 
-                    select = Utils.get_value_as_string('select', job.params.custom_params, '')
+                    select = Utils.get_value_as_string(
+                        'select', job.params.custom_params, ''
+                    )
                     select = select.split(':compute_node')[0]
                     if Utils.is_not_empty(select):
                         select += ':compute_node=tbd'
@@ -127,20 +140,22 @@ class OpenPBSAPI(BaseAPI):
                     pbs_context.get_bom_cost()
                     pbs_context.get_budget_usage()
 
-                    pbs_context.api_context.success(OpenPBSHookResult(
-                        accept=True,
-                        queue=job.queue,
-                        project=job.project,
-                        formatted_user_message=None,
-                        resources_updated={
-                            'select': select,
-                            'stack_id': 'tbd',
-                            'job_uid': job.job_uid,
-                            'job_group': job.get_job_group(),
-                            'cluster_name': job.cluster_name,
-                            'nodes': None
-                        }
-                    ))
+                    pbs_context.api_context.success(
+                        OpenPBSHookResult(
+                            accept=True,
+                            queue=job.queue,
+                            project=job.project,
+                            formatted_user_message=None,
+                            resources_updated={
+                                'select': select,
+                                'stack_id': 'tbd',
+                                'job_uid': job.job_uid,
+                                'job_group': job.get_job_group(),
+                                'cluster_name': job.cluster_name,
+                                'nodes': None,
+                            },
+                        )
+                    )
 
             self.context.job_submission_tracker.ok(pbs_context.job_submission_result)
 
@@ -149,25 +164,24 @@ class OpenPBSAPI(BaseAPI):
                 message = e.message
             else:
                 self.logger.exception(f'job validation failed: {e}')
-                message = str(f'Something went wrong while validating the job. Please contact '
-                              f'administrator to investigate the problem. {os.linesep}'
-                              f'Error: {e}')
-            pbs_context.api_context.success(OpenPBSHookResult(
-                accept=False,
-                formatted_user_message=message
-            ))
+                message = str(
+                    f'Something went wrong while validating the job. Please contact '
+                    f'administrator to investigate the problem. {os.linesep}'
+                    f'Error: {e}'
+                )
+            pbs_context.api_context.success(
+                OpenPBSHookResult(accept=False, formatted_user_message=message)
+            )
             self.context.job_submission_tracker.fail(pbs_context.job_uid, e)
 
     def hook_job_status(self, pbs_context: OpenPBSAPIInvocationContext):
         try:
-
             queue = pbs_context.event.job.queue
             queue_profile = self.context.queue_profiles.get_queue_profile(
                 queue_name=queue
             )
             job = pbs_context.event.as_soca_job(
-                context=self.context,
-                queue_profile=queue_profile
+                context=self.context, queue_profile=queue_profile
             )
 
             if pbs_context.event.type == 'runjob':
@@ -179,10 +193,9 @@ class OpenPBSAPI(BaseAPI):
             self.logger.exception(f'failed to process job status hook: {e}')
         finally:
             # always return success to OpenPBS irrespective of the error.
-            pbs_context.api_context.success(OpenPBSHookResult(
-                accept=True,
-                formatted_user_message=None
-            ))
+            pbs_context.api_context.success(
+                OpenPBSHookResult(accept=True, formatted_user_message=None)
+            )
 
     def invoke(self, context: ApiInvocationContext):
         # this API can be invoked only via root users or administrators.
@@ -193,9 +206,7 @@ class OpenPBSAPI(BaseAPI):
         if not context.is_administrator():
             raise exceptions.unauthorized_access()
 
-        pbs_context = OpenPBSAPIInvocationContext(
-            context=context
-        )
+        pbs_context = OpenPBSAPIInvocationContext(context=context)
         if pbs_context.event.hook_name == 'validate_job':
             return self.hook_validate_job(pbs_context)
         elif pbs_context.event.hook_name == 'job_status':

@@ -31,6 +31,7 @@ GetSecretValue does not support IAM condition keys based on Name of the secret. 
 scheduled for deletion at a later date, add additional idea:SecretName tag is added to individual secrets. This allows for searching
 for applicable secrets using the idea:SecretName tag and also, individual permissions can be granted based on this tag.
 """
+
 import datetime
 
 from idea_lambda_commons import HttpClient, CfnResponse, CfnResponseStatus
@@ -58,21 +59,17 @@ def handle_delete(event: dict, context):
 
     client = HttpClient()
     try:
-
         certificate_secret_name = f'{certificate_name}-certificate'
         private_key_secret_name = f'{certificate_name}-private-key'
 
         secretsmanager_client = boto3.client('secretsmanager')
         list_secrets_result = secretsmanager_client.list_secrets(
             Filters=[
-                {
-                    'Key': 'tag-key',
-                    'Values': ['idea:SecretName']
-                },
+                {'Key': 'tag-key', 'Values': ['idea:SecretName']},
                 {
                     'Key': 'tag-value',
-                    'Values': [certificate_secret_name, private_key_secret_name]
-                }
+                    'Values': [certificate_secret_name, private_key_secret_name],
+                },
             ]
         )
         secret_list = list_secrets_result.get('SecretList', [])
@@ -80,8 +77,7 @@ def handle_delete(event: dict, context):
             secret_arn = secret.get('ARN')
             logger.info(f'deleting secret: {secret_arn} ...')
             secretsmanager_client.delete_secret(
-                SecretId=secret_arn,
-                ForceDeleteWithoutRecovery=True
+                SecretId=secret_arn, ForceDeleteWithoutRecovery=True
             )
 
         acm_client = boto3.client('acm')
@@ -106,29 +102,35 @@ def handle_delete(event: dict, context):
                         break
                     except botocore.exceptions.ClientError as e:
                         if e.response['Error']['Code'] == 'ResourceInUseException':
-                            logger.warning(f'cannot delete certificate - {e}. wait till the applicable resource releases the certificate.')
+                            logger.warning(
+                                f'cannot delete certificate - {e}. wait till the applicable resource releases the certificate.'
+                            )
                             time.sleep(sleep_interval)
                         else:
                             raise e
 
-        client.send_cfn_response(CfnResponse(
-            context=context,
-            event=event,
-            status=CfnResponseStatus.SUCCESS,
-            data={},
-            physical_resource_id=certificate_name
-        ))
+        client.send_cfn_response(
+            CfnResponse(
+                context=context,
+                event=event,
+                status=CfnResponseStatus.SUCCESS,
+                data={},
+                physical_resource_id=certificate_name,
+            )
+        )
     except Exception as e:
         error_message = f'failed to delete certificate: {certificate_name} - {e}'
         logger.exception(error_message)
-        client.send_cfn_response(CfnResponse(
-            context=context,
-            event=event,
-            status=CfnResponseStatus.FAILED,
-            data={},
-            physical_resource_id=certificate_name,
-            reason=error_message
-        ))
+        client.send_cfn_response(
+            CfnResponse(
+                context=context,
+                event=event,
+                status=CfnResponseStatus.FAILED,
+                data={},
+                physical_resource_id=certificate_name,
+                reason=error_message,
+            )
+        )
     finally:
         client.destroy()
 
@@ -144,13 +146,9 @@ def handle_create_or_update(event: dict, context):
     client = HttpClient()
 
     try:
-
         common_tags = []
         for key, value in tags.items():
-            common_tags.append({
-                'Key': key,
-                'Value': value
-            })
+            common_tags.append({'Key': key, 'Value': value})
 
         certificate_secret_name = f'{certificate_name}-certificate'
         private_key_secret_name = f'{certificate_name}-private-key'
@@ -162,23 +160,18 @@ def handle_create_or_update(event: dict, context):
         secretsmanager_client = boto3.client('secretsmanager')
         list_secrets_result = secretsmanager_client.list_secrets(
             Filters=[
-                {
-                    'Key': 'tag-key',
-                    'Values': ['idea:SecretName']
-                },
+                {'Key': 'tag-key', 'Values': ['idea:SecretName']},
                 {
                     'Key': 'tag-value',
-                    'Values': [certificate_secret_name, private_key_secret_name]
-                }
+                    'Values': [certificate_secret_name, private_key_secret_name],
+                },
             ]
         )
         secret_list = list_secrets_result.get('SecretList', [])
         for secret in secret_list:
             name = secret.get('Name')
             arn = secret.get('ARN')
-            get_secret_result = secretsmanager_client.get_secret_value(
-                SecretId=arn
-            )
+            get_secret_result = secretsmanager_client.get_secret_value(SecretId=arn)
             secret_string = get_secret_result.get('SecretString')
             if name == certificate_secret_name:
                 certificate_content = secret_string
@@ -192,71 +185,84 @@ def handle_create_or_update(event: dict, context):
         if certificate_content is None and private_key_content is None:
             one_day = datetime.timedelta(1, 0, 0)
             private_key = rsa.generate_private_key(
-                public_exponent=65537,
-                key_size=2048,
-                backend=default_backend())
+                public_exponent=65537, key_size=2048, backend=default_backend()
+            )
             public_key = private_key.public_key()
-            subject = x509.Name([
-                x509.NameAttribute(NameOID.COUNTRY_NAME, 'US'),
-                x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, 'California'),
-                x509.NameAttribute(NameOID.LOCALITY_NAME, 'Sunnyvale'),
-                x509.NameAttribute(NameOID.ORGANIZATION_NAME, certificate_name),
-                x509.NameAttribute(NameOID.COMMON_NAME, domain_name)
-            ])
+            subject = x509.Name(
+                [
+                    x509.NameAttribute(NameOID.COUNTRY_NAME, 'US'),
+                    x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, 'California'),
+                    x509.NameAttribute(NameOID.LOCALITY_NAME, 'Sunnyvale'),
+                    x509.NameAttribute(NameOID.ORGANIZATION_NAME, certificate_name),
+                    x509.NameAttribute(NameOID.COMMON_NAME, domain_name),
+                ]
+            )
 
-            certificate = x509.CertificateBuilder() \
-                .subject_name(subject) \
-                .issuer_name(subject) \
-                .not_valid_before(datetime.datetime.today() - one_day) \
-                .not_valid_after(datetime.datetime.today() + (one_day * 3650)) \
-                .serial_number(x509.random_serial_number()) \
-                .public_key(public_key) \
+            certificate = (
+                x509.CertificateBuilder()
+                .subject_name(subject)
+                .issuer_name(subject)
+                .not_valid_before(datetime.datetime.today() - one_day)
+                .not_valid_after(datetime.datetime.today() + (one_day * 3650))
+                .serial_number(x509.random_serial_number())
+                .public_key(public_key)
                 .add_extension(
-                    x509.SubjectAlternativeName([
-                        x509.DNSName(domain_name)
-                    ]), critical=False) \
-                .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)\
-                .sign(private_key=private_key, algorithm=hashes.SHA256(), backend=default_backend())
+                    x509.SubjectAlternativeName([x509.DNSName(domain_name)]),
+                    critical=False,
+                )
+                .add_extension(
+                    x509.BasicConstraints(ca=False, path_length=None), critical=True
+                )
+                .sign(
+                    private_key=private_key,
+                    algorithm=hashes.SHA256(),
+                    backend=default_backend(),
+                )
+            )
 
-            certificate_content = certificate.public_bytes(serialization.Encoding.PEM).decode("utf-8")
+            certificate_content = certificate.public_bytes(
+                serialization.Encoding.PEM
+            ).decode('utf-8')
             private_key_content = private_key.private_bytes(
                 serialization.Encoding.PEM,
                 serialization.PrivateFormat.TraditionalOpenSSL,
-                serialization.NoEncryption()
-            ).decode("utf-8")
+                serialization.NoEncryption(),
+            ).decode('utf-8')
 
             # create certificate secret
             certificate_secret_tags = list(common_tags)
-            certificate_secret_tags.append({
-                'Key': 'idea:SecretName',
-                'Value': certificate_secret_name
-            })
+            certificate_secret_tags.append(
+                {'Key': 'idea:SecretName', 'Value': certificate_secret_name}
+            )
             create_secret_request = {
                 'Name': f'{certificate_secret_name}',
                 'Description': f'Self-Signed certificate for domain name: {domain_name}',
                 'SecretString': certificate_content,
-                'Tags': certificate_secret_tags
+                'Tags': certificate_secret_tags,
             }
             if kms_key_id is not None:
                 create_secret_request['KmsKeyId'] = kms_key_id
-            create_certificate_secret_result = secretsmanager_client.create_secret(**create_secret_request)
+            create_certificate_secret_result = secretsmanager_client.create_secret(
+                **create_secret_request
+            )
             certificate_secret_arn = create_certificate_secret_result.get('ARN')
 
             # create private key secret
             private_key_secret_tags = list(common_tags)
-            private_key_secret_tags.append({
-                'Key': 'idea:SecretName',
-                'Value': private_key_secret_name
-            })
+            private_key_secret_tags.append(
+                {'Key': 'idea:SecretName', 'Value': private_key_secret_name}
+            )
             create_secret_request = {
                 'Name': f'{private_key_secret_name}',
                 'Description': f'Self-Signed certificate private key for domain name: {domain_name}',
                 'SecretString': private_key_content,
-                'Tags': private_key_secret_tags
+                'Tags': private_key_secret_tags,
             }
             if kms_key_id is not None:
                 create_secret_request['KmsKeyId'] = kms_key_id
-            create_private_key_secret_result = secretsmanager_client.create_secret(**create_secret_request)
+            create_private_key_secret_result = secretsmanager_client.create_secret(
+                **create_secret_request
+            )
             private_key_secret_arn = create_private_key_secret_result.get('ARN')
 
         acm_certificate_arn = None
@@ -274,33 +280,37 @@ def handle_create_or_update(event: dict, context):
                 response = acm_client.import_certificate(
                     Certificate=certificate_content,
                     PrivateKey=private_key_content,
-                    Tags=common_tags
+                    Tags=common_tags,
                 )
                 acm_certificate_arn = response.get('CertificateArn')
 
-        client.send_cfn_response(CfnResponse(
-            context=context,
-            event=event,
-            status=CfnResponseStatus.SUCCESS,
-            data={
-                'certificate_secret_arn': certificate_secret_arn,
-                'private_key_secret_arn': private_key_secret_arn,
-                'acm_certificate_arn': acm_certificate_arn
-            },
-            physical_resource_id=certificate_name
-        ))
+        client.send_cfn_response(
+            CfnResponse(
+                context=context,
+                event=event,
+                status=CfnResponseStatus.SUCCESS,
+                data={
+                    'certificate_secret_arn': certificate_secret_arn,
+                    'private_key_secret_arn': private_key_secret_arn,
+                    'acm_certificate_arn': acm_certificate_arn,
+                },
+                physical_resource_id=certificate_name,
+            )
+        )
 
     except Exception as e:
         error_message = f'failed to create certificate: {certificate_name} - {e}'
         logger.exception(error_message)
-        client.send_cfn_response(CfnResponse(
-            context=context,
-            event=event,
-            status=CfnResponseStatus.FAILED,
-            data={},
-            physical_resource_id=certificate_name,
-            reason=error_message
-        ))
+        client.send_cfn_response(
+            CfnResponse(
+                context=context,
+                event=event,
+                status=CfnResponseStatus.FAILED,
+                data={},
+                physical_resource_id=certificate_name,
+                reason=error_message,
+            )
+        )
     finally:
         client.destroy()
 

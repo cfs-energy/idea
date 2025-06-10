@@ -28,7 +28,13 @@ class BaseMetrics:
     The implementation of this class is "inspired" from https://github.com/awslabs/cloudwatch-fluent-metrics
     """
 
-    def __init__(self, context: SocaContextProtocol, namespace: str = None, use_stream_id: bool = False, split_dimensions: bool = True):
+    def __init__(
+        self,
+        context: SocaContextProtocol,
+        namespace: str = None,
+        use_stream_id: bool = False,
+        split_dimensions: bool = True,
+    ):
         self._context = context
         self._logger = context.logger()
         self.required_dimensions = []
@@ -83,7 +89,9 @@ class BaseMetrics:
     def without_required_dimension(self, name):
         if not self.does_required_dimension_exist(name):
             return
-        self.required_dimensions = [item for item in self.required_dimensions if not item['Name'] == name]
+        self.required_dimensions = [
+            item for item in self.required_dimensions if not item['Name'] == name
+        ]
         return self
 
     def does_dimension_exist(self, name):
@@ -149,8 +157,7 @@ class BaseMetrics:
             return self
 
         self.milliseconds(
-            MetricName=metric_name,
-            Value=self.timers[timer_name].elapsed_in_ms()
+            MetricName=metric_name, Value=self.timers[timer_name].elapsed_in_ms()
         )
         return self
 
@@ -196,11 +203,12 @@ class BaseMetrics:
             self._log(**kwargs, MetricType='Summary', Unit='Milliseconds')
 
     def _log(self, **kwargs):
-
         if not self.is_metrics_collection_enabled():
             return self
 
-        timestamp = kwargs.get('Timestamp', arrow.utcnow().format('YYYY-MM-DD HH:mm:ss ZZ'))
+        timestamp = kwargs.get(
+            'Timestamp', arrow.utcnow().format('YYYY-MM-DD HH:mm:ss ZZ')
+        )
         value = float(kwargs.get('Value', 1))
         unit = kwargs.get('Unit')
         namespace = self.namespace
@@ -214,7 +222,7 @@ class BaseMetrics:
                 'Dimensions': dimensions,
                 'Timestamp': timestamp,
                 'Value': value,
-                'Unit': unit
+                'Unit': unit,
             }
             if namespace is not None:
                 metric['Namespace'] = self.namespace
@@ -224,11 +232,15 @@ class BaseMetrics:
 
         if self.split_dimensions:
             for dimension in self.dimensions:
-                md.append(build_metric(dimensions=self.required_dimensions + [dimension]))
+                md.append(
+                    build_metric(dimensions=self.required_dimensions + [dimension])
+                )
 
         md.append(build_metric(dimensions=self.required_dimensions + self.dimensions))
 
-        metrics_service: Optional[MetricsServiceProtocol] = self._context.service_registry().get_service('metrics-service')
+        metrics_service: Optional[MetricsServiceProtocol] = (
+            self._context.service_registry().get_service('metrics-service')
+        )
         if metrics_service is not None:
             metrics_service.publish(md)
 

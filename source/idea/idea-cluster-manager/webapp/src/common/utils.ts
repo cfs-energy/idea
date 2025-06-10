@@ -507,6 +507,8 @@ class Utils {
 
         let bareMetalChoice: SocaUserInputChoice[] = []
         let regularChoice: SocaUserInputChoice[] = []
+        let nvidiaGpuChoice: SocaUserInputChoice[] = []
+        let amdGpuChoice: SocaUserInputChoice[] = []
         instanceTypes.sort(this.compare_instance_types)
 
         instanceTypes.forEach((instanceType) => {
@@ -524,8 +526,16 @@ class Utils {
             architectures = architectures.slice(0, -3)
 
             let gpus = ''
+            let hasNvidiaGpu = false
+            let hasAmdGpu = false
+
             instanceType?.GpuInfo?.Gpus?.forEach((gpuInfo: any) => {
                 gpus += gpuInfo.Manufacturer + ' | '
+                if (gpuInfo.Manufacturer === 'NVIDIA') {
+                    hasNvidiaGpu = true
+                } else if (gpuInfo.Manufacturer === 'AMD') {
+                    hasAmdGpu = true
+                }
             })
 
             if (gpus.length > 0) {
@@ -544,6 +554,10 @@ class Utils {
 
             if (instanceType.BareMetal) {
                 bareMetalChoice.push(instance_choice)
+            } else if (hasNvidiaGpu) {
+                nvidiaGpuChoice.push(instance_choice)
+            } else if (hasAmdGpu) {
+                amdGpuChoice.push(instance_choice)
             } else {
                 regularChoice.push(instance_choice)
             }
@@ -554,6 +568,20 @@ class Utils {
             instanceTypeChoices.push({
                 'title': 'Regular',
                 'options': regularChoice
+            })
+        }
+
+        if (nvidiaGpuChoice.length > 0) {
+            instanceTypeChoices.push({
+                'title': 'GPU - NVIDIA',
+                'options': nvidiaGpuChoice
+            })
+        }
+
+        if (amdGpuChoice.length > 0) {
+            instanceTypeChoices.push({
+                'title': 'GPU - AMD',
+                'options': amdGpuChoice
             })
         }
 
@@ -631,6 +659,8 @@ class Utils {
 
     static getOsTitle(name?: string): string {
         switch (name) {
+            case 'amazonlinux2023':
+                return 'Amazon Linux 2023'
             case 'amazonlinux2':
                 return 'Amazon Linux 2'
             case 'rhel8':
@@ -647,6 +677,12 @@ class Utils {
                 return "Ubuntu 24.04";
             case 'windows':
                 return 'Windows'
+            case 'windows2019':
+                return 'Windows 2019'
+            case 'windows2022':
+                return 'Windows 2022'
+            case 'windows2025':
+                return 'Windows 2025'
         }
         return 'Unknown'
     }
@@ -679,7 +715,8 @@ class Utils {
     }
 
     static getAwsConsoleUrl(awsRegion: string): string {
-        let [consolePrefix, consoleSuffix, s3Prefix] = Utils.getAwsConsoleParts(awsRegion)
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        let [consolePrefix, consoleSuffix, _s3Prefix] = Utils.getAwsConsoleParts(awsRegion)
         // consolePrefix is what proceeds the plainword 'console', including the trailing dot
         // consoleSuffix is what follows the plainword 'console', including the leading dot
         return `https://${consolePrefix}console${consoleSuffix}`
@@ -712,7 +749,8 @@ class Utils {
 
     static getS3BucketUrl(awsRegion: string, bucketName: string): string {
         // getS3BucketUrl cannot use getAwsConsoleUrl() as it needs the s3Prefix
-        let [consolePrefix, consoleSuffix, s3Prefix] = Utils.getAwsConsoleParts(awsRegion)
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        let [_consolePrefix, consoleSuffix, s3Prefix] = Utils.getAwsConsoleParts(awsRegion)
         return `https://${s3Prefix}console${consoleSuffix}/s3/buckets/${bucketName}?region=${awsRegion}`
     }
 
@@ -1004,7 +1042,8 @@ class Utils {
     }
 
     static listAllTimezoneIds(): string[] {
-        const options = Intl.DateTimeFormat().resolvedOptions()
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const _options = Intl.DateTimeFormat().resolvedOptions()
         return []
     }
 }

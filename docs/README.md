@@ -59,8 +59,8 @@ IDEA [supports a list of parameters designed to simplify your job submission on 
 # Advanced Configuration
 user@host$ qsub -l instance_type=c5n.18xlarge \
     -l instance_ami=ami-123abcde
-    -l nodes=2 
-    -l scratch_size=300 
+    -l nodes=2
+    -l scratch_size=300
     -l efa_support=true
     -l spot_price=1.55 myscript.sh
 
@@ -70,22 +70,22 @@ user@host$ qsub myscript.sh
 
 ### Web-Based Jobs Workflow <a href="#os-agnostic-and-support-for-custom-ami" id="os-agnostic-and-support-for-custom-ami"></a>
 
-Submit your Scale-Out Workloads simulation easily via a simple [NoCode web-based wizard interface.](modules/hpc-workloads/admin-documentation/create-web-based-job-submission-worfklows.md)
+Submit your Scale-Out Workloads simulation easily via a simple [NoCode web-based wizard interface.](modules/hpc-workloads/admin-documentation/create-web-based-job-submission-workflows.md)
 
 ### OS agnostic and support for custom AMI <a href="#os-agnostic-and-support-for-custom-ami" id="os-agnostic-and-support-for-custom-ami"></a>
 
-Customers can integrate their Centos7/Rhel7/AmazonLinux2 AMI automatically by simply using `-l instance_ami=<ami_id>` at job submission. There is no limitation in term of AMI numbers (you can have 10 jobs running simultaneously using 10 different AMIs). IDEA supports heterogeneous environment, so you can have concurrent jobs running different operating system on the same cluster.
+Customers can integrate their Amazon Linux 2, Amazon Linux 2023, RHEL, Rocky Linux, or Ubuntu AMIs automatically by simply using `-l instance_ami=<ami_id>` at job submission. There is no limitation in term of AMI numbers (you can have 10 jobs running simultaneously using 10 different AMIs). IDEA supports heterogeneous environment, so you can have concurrent jobs running different operating system on the same cluster.
 
 {% hint style="warning" %}
 **AMI using OS different than the scheduler**
 
 In case your AMI is different than your scheduler host, you can specify the OS manually to ensure packages will be installed based on the node distribution.
 
-In this example, we assume your IDEA deployment was done using AmazonLinux2, but you want to submit a job on your personal RHEL7 AMI
+In this example, we assume your IDEA deployment was done using Amazon Linux 2023, but you want to submit a job on your personal Ubuntu 24.04 AMI
 
 ```bash
 user@host$ qsub -l instance_ami=<ami_id> \
-                -l base_os=rhel7 myscript.sh
+                -l base_os=ubuntu2404 myscript.sh
 ```
 {% endhint %}
 

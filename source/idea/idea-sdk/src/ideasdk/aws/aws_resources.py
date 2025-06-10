@@ -24,7 +24,7 @@ from ideadatamodel.cluster_resources import (
     SocaSSHKeyPair,
     SocaACMCertificate,
     SocaAWSProfile,
-    SocaEC2PrefixList
+    SocaEC2PrefixList,
 )
 
 from ideasdk.utils import Utils
@@ -38,7 +38,6 @@ import time
 
 
 class AwsResourcesInMemoryDB:
-
     def __init__(self, context: SocaContextProtocol):
         self._context = context
         self._db = Cache(maxsize=10000, ttl=0)
@@ -106,7 +105,9 @@ class AwsResourcesInMemoryDB:
     def get_cloudformation_stacks(self) -> Optional[List[SocaCloudFormationStack]]:
         return self._db.get('aws.cloudformation.stacks')
 
-    def set_cloudformation_stacks(self, cloudformation_stacks: List[SocaCloudFormationStack]):
+    def set_cloudformation_stacks(
+        self, cloudformation_stacks: List[SocaCloudFormationStack]
+    ):
         return self._db.set('aws.cloudformation.stacks', cloudformation_stacks)
 
     def get_acm_certificates(self) -> Optional[List[SocaACMCertificate]]:
@@ -129,7 +130,12 @@ class AwsResourcesInMemoryDB:
 
 
 class AwsResources:
-    def __init__(self, context: SocaContextProtocol, aws: AwsClientProvider = None, aws_util: AWSUtil = None):
+    def __init__(
+        self,
+        context: SocaContextProtocol,
+        aws: AwsClientProvider = None,
+        aws_util: AWSUtil = None,
+    ):
         self._context = context
         self._shell = ShellInvoker()
         self._db = AwsResourcesInMemoryDB(self._context)
@@ -201,23 +207,20 @@ class AwsResources:
                         name = self._get_tag_value('Name', tags)
                         if Utils.is_not_empty(name):
                             title = f'{title} [{name}]'
-                    results.append(SocaVPC(
-                        type='aws.ec2.vpc',
-                        title=title,
-                        ref=entry
-                    ))
+                    results.append(SocaVPC(type='aws.ec2.vpc', title=title, ref=entry))
                 return results
 
             vpcs = self.aws_util.invoke_aws_listing(
-                fn=self.aws.ec2().describe_vpcs,
-                result_cb=result_cb
+                fn=self.aws.ec2().describe_vpcs, result_cb=result_cb
             )
             self._db.set_vpcs(vpcs)
             return vpcs
         except Exception as e:
             self.aws_util.handle_aws_exception(e)
 
-    def get_opensearch_clusters(self, vpc_id: str, refresh: bool = False) -> List[SocaOpenSearchDomain]:
+    def get_opensearch_clusters(
+        self, vpc_id: str, refresh: bool = False
+    ) -> List[SocaOpenSearchDomain]:
         try:
             if not refresh:
                 domains = self._db.get_opensearch_domains()
@@ -226,39 +229,62 @@ class AwsResources:
 
             domains = []
             list_domain_names_result = self.aws.es().list_domain_names()
-            domain_names = Utils.get_value_as_list('DomainNames', list_domain_names_result, default=[])
+            domain_names = Utils.get_value_as_list(
+                'DomainNames', list_domain_names_result, default=[]
+            )
             for entry in domain_names:
-                domain_name = Utils.get_value_as_string('DomainName', entry, default='unknown-domain')
-                describe_domain_result = self.aws.es().describe_elasticsearch_domain(DomainName=domain_name)
+                domain_name = Utils.get_value_as_string(
+                    'DomainName', entry, default='unknown-domain'
+                )
+                describe_domain_result = self.aws.es().describe_elasticsearch_domain(
+                    DomainName=domain_name
+                )
                 domain_status = describe_domain_result['DomainStatus']
 
-                domain_created_status = Utils.get_value_as_bool('Created', domain_status, default=False)
-                domain_delete_status = Utils.get_value_as_bool('Deleted', domain_status, default=True)
-                domain_upgrade_status = Utils.get_value_as_bool('UpgradeProcessing', domain_status, default=True)
-                if (not domain_created_status) \
-                    or (domain_delete_status or domain_upgrade_status):
+                domain_created_status = Utils.get_value_as_bool(
+                    'Created', domain_status, default=False
+                )
+                domain_delete_status = Utils.get_value_as_bool(
+                    'Deleted', domain_status, default=True
+                )
+                domain_upgrade_status = Utils.get_value_as_bool(
+                    'UpgradeProcessing', domain_status, default=True
+                )
+                if (not domain_created_status) or (
+                    domain_delete_status or domain_upgrade_status
+                ):
                     continue
 
-                vpc_options = Utils.get_value_as_dict('VPCOptions', domain_status, default=None)
+                vpc_options = Utils.get_value_as_dict(
+                    'VPCOptions', domain_status, default=None
+                )
                 if vpc_options is None:
                     continue
-                domain_vpc_id = Utils.get_value_as_string('VPCId', vpc_options, default=None)
+                domain_vpc_id = Utils.get_value_as_string(
+                    'VPCId', vpc_options, default=None
+                )
                 if domain_vpc_id != vpc_id:
                     continue
-                elasticsearch_version = Utils.get_value_as_string('ElasticsearchVersion', domain_status, default='unknown version')
+                elasticsearch_version = Utils.get_value_as_string(
+                    'ElasticsearchVersion', domain_status, default='unknown version'
+                )
                 title = f'{domain_name} ({elasticsearch_version})'
-                domains.append(SocaOpenSearchDomain(
-                    type='aws.opensearch.domain',
-                    title=title,
-                    ref=describe_domain_result
-                ))
+                domains.append(
+                    SocaOpenSearchDomain(
+                        type='aws.opensearch.domain',
+                        title=title,
+                        ref=describe_domain_result,
+                    )
+                )
 
             self._db.set_opensearch_domains(domains)
             return domains
         except Exception as e:
             self.aws_util.handle_aws_exception(e)
 
-    def get_directories(self, vpc_id: str, refresh: bool = False) -> List[SocaDirectory]:
+    def get_directories(
+        self, vpc_id: str, refresh: bool = False
+    ) -> List[SocaDirectory]:
         try:
             if not refresh:
                 directories = self._db.get_directories()
@@ -280,16 +306,13 @@ class AwsResources:
                     ds_subnets = Utils.get_value_as_list('SubnetIds', vpc_settings, [])
                     ds_name = Utils.get_value_as_string('Name', entry)
                     title = f'{ds_name} (DirectoryId: {directory_id}, SubnetIds: {", ".join(ds_subnets)})'
-                    results.append(SocaDirectory(
-                        type='aws.directory',
-                        title=title,
-                        ref=entry
-                    ))
+                    results.append(
+                        SocaDirectory(type='aws.directory', title=title, ref=entry)
+                    )
                 return results
 
             directories = self.aws_util.invoke_aws_listing(
-                fn=self.aws.ds().describe_directories,
-                result_cb=result_cb
+                fn=self.aws.ds().describe_directories, result_cb=result_cb
             )
             self._db.set_directories(directories)
             return directories
@@ -317,37 +340,29 @@ class AwsResources:
                     outpost_info = entry.get('OutpostArn', None)
                     if outpost_info:
                         outpost_info = outpost_info.split('outpost/')[-1]
-                        outpost_text = f" Outpost: {outpost_info}"
+                        outpost_text = f' Outpost: {outpost_info}'
                     else:
-                        outpost_text = ""
+                        outpost_text = ''
 
                     suffix = f'(SubnetId: {subnet_id}, CIDR Block: {cidr_block}, AZ/AZID: {availability_zone}/{availability_zone_id}{outpost_text})'
                     if Utils.is_not_empty(title):
                         title = f'{title} {suffix}'
                     else:
                         title = suffix
-                    results.append(SocaSubnet(
-                        type='aws.ec2.subnet',
-                        title=title,
-                        ref=entry
-                    ))
+                    results.append(
+                        SocaSubnet(type='aws.ec2.subnet', title=title, ref=entry)
+                    )
                 return results
 
             subnets = self.aws_util.invoke_aws_listing(
                 fn=self.aws.ec2().describe_subnets,
                 fn_kwargs={
                     'Filters': [
-                        {
-                            'Name': 'vpc-id',
-                            'Values': [vpc_id]
-                        },
-                        {
-                            'Name': 'ipv6-native',
-                            'Values': ['false']
-                        }
+                        {'Name': 'vpc-id', 'Values': [vpc_id]},
+                        {'Name': 'ipv6-native', 'Values': ['false']},
                     ]
                 },
-                result_cb=result_cb
+                result_cb=result_cb,
             )
             subnets.sort(key=lambda s: s.sort_order)
             self._db.set_subnets(subnets)
@@ -355,7 +370,9 @@ class AwsResources:
         except Exception as e:
             self.aws_util.handle_aws_exception(e)
 
-    def get_file_systems(self, vpc_id: str, refresh: bool = False) -> List[SocaFileSystem]:
+    def get_file_systems(
+        self, vpc_id: str, refresh: bool = False
+    ) -> List[SocaFileSystem]:
         try:
             if not refresh:
                 file_systems = self._db.get_file_systems()
@@ -384,7 +401,12 @@ class AwsResources:
                 for entry in listing:
                     # We only work on filesystems that are in a healthy state
                     # normalized to .lower() for case insensitive comparison
-                    if Utils.get_value_as_string(lifecycle_key, entry, default='error').lower() not in allowed_lifecycle_values:
+                    if (
+                        Utils.get_value_as_string(
+                            lifecycle_key, entry, default='error'
+                        ).lower()
+                        not in allowed_lifecycle_values
+                    ):
                         continue
                     file_system_id = Utils.get_value_as_string(fsid_key, entry)
                     storage_virtual_machines = None
@@ -395,36 +417,54 @@ class AwsResources:
                     elif fs_type == 'fsx_cache':
                         file_system_provider = constants.STORAGE_PROVIDER_FSX_CACHE
                         # Perform some checks - only supporting Lustre-based file caches for now
-                        file_cache_type = Utils.get_value_as_string('FileCacheType', entry, default='unknown')
+                        file_cache_type = Utils.get_value_as_string(
+                            'FileCacheType', entry, default='unknown'
+                        )
                         if file_cache_type != 'LUSTRE':
                             continue
 
-                        lustre_configuration = Utils.get_value_as_dict('LustreConfiguration', entry, {})
+                        lustre_configuration = Utils.get_value_as_dict(
+                            'LustreConfiguration', entry, {}
+                        )
                         if Utils.is_empty(lustre_configuration):
                             continue
 
-                        file_cache_deployment_type = Utils.get_value_as_string('DeploymentType', lustre_configuration, default='unknown')
+                        file_cache_deployment_type = Utils.get_value_as_string(
+                            'DeploymentType', lustre_configuration, default='unknown'
+                        )
                         if file_cache_deployment_type != 'CACHE_1':
                             continue
 
                     else:
-                        file_system_type = Utils.get_value_as_string('FileSystemType', entry)
+                        file_system_type = Utils.get_value_as_string(
+                            'FileSystemType', entry
+                        )
                         if file_system_type == 'ONTAP':
-                            file_system_provider = constants.STORAGE_PROVIDER_FSX_NETAPP_ONTAP
+                            file_system_provider = (
+                                constants.STORAGE_PROVIDER_FSX_NETAPP_ONTAP
+                            )
                         elif file_system_type == 'OPENZFS':
-                            file_system_provider = constants.STORAGE_PROVIDER_FSX_OPENZFS
+                            file_system_provider = (
+                                constants.STORAGE_PROVIDER_FSX_OPENZFS
+                            )
                         elif file_system_type == 'LUSTRE':
                             file_system_provider = constants.STORAGE_PROVIDER_FSX_LUSTRE
                         elif file_system_type == 'WINDOWS':
-                            file_system_provider = constants.STORAGE_PROVIDER_FSX_WINDOWS_FILE_SERVER
+                            file_system_provider = (
+                                constants.STORAGE_PROVIDER_FSX_WINDOWS_FILE_SERVER
+                            )
                         else:
                             continue
 
                     # File Cache doesn't return Tags in the describe_file_caches
                     if fs_type == 'fsx_cache':
                         try:
-                            resource_arn = Utils.get_value_as_string('ResourceARN', entry)
-                            tags = self.aws.fsx().list_tags_for_resource(ResourceARN=resource_arn)['Tags']
+                            resource_arn = Utils.get_value_as_string(
+                                'ResourceARN', entry
+                            )
+                            tags = self.aws.fsx().list_tags_for_resource(
+                                ResourceARN=resource_arn
+                            )['Tags']
                         except Exception as e:
                             raise e
                     else:
@@ -437,10 +477,14 @@ class AwsResources:
                         title = f'{fsid_key}: {file_system_id}, Provider: {file_system_provider}'
 
                     if fs_type == 'efs':
-                        mount_targets_result = self.aws.efs().describe_mount_targets(FileSystemId=file_system_id)
+                        mount_targets_result = self.aws.efs().describe_mount_targets(
+                            FileSystemId=file_system_id
+                        )
                         # Rapid invocation of describe_mount_targets can cause RateExceeded on the account
-                        time.sleep(.100)
-                        mount_targets = Utils.get_value_as_list('MountTargets', mount_targets_result, [])
+                        time.sleep(0.100)
+                        mount_targets = Utils.get_value_as_list(
+                            'MountTargets', mount_targets_result, []
+                        )
 
                         vpc_found = False
                         for mount_target in mount_targets:
@@ -458,7 +502,6 @@ class AwsResources:
                             continue
 
                     elif fs_type == 'fsx':
-
                         if 'VpcId' not in entry:
                             continue
                         if entry['VpcId'] != vpc_id:
@@ -466,42 +509,53 @@ class AwsResources:
 
                         if file_system_provider in (
                             constants.STORAGE_PROVIDER_FSX_NETAPP_ONTAP,
-                            constants.STORAGE_PROVIDER_FSX_OPENZFS
+                            constants.STORAGE_PROVIDER_FSX_OPENZFS,
                         ):
                             describe_volumes_result = self.aws.fsx().describe_volumes(
                                 Filters=[
                                     {
                                         'Name': 'file-system-id',
-                                        'Values': [file_system_id]
+                                        'Values': [file_system_id],
                                     }
                                 ]
                             )
-                            volumes = Utils.get_value_as_list('Volumes', describe_volumes_result, [])
+                            volumes = Utils.get_value_as_list(
+                                'Volumes', describe_volumes_result, []
+                            )
 
-                        if file_system_provider == constants.STORAGE_PROVIDER_FSX_NETAPP_ONTAP:
-                            describe_svm_result = self.aws.fsx().describe_storage_virtual_machines(
-                                Filters=[
-                                    {
-                                        'Name': 'file-system-id',
-                                        'Values': [file_system_id]
-                                    }
-                                ]
+                        if (
+                            file_system_provider
+                            == constants.STORAGE_PROVIDER_FSX_NETAPP_ONTAP
+                        ):
+                            describe_svm_result = (
+                                self.aws.fsx().describe_storage_virtual_machines(
+                                    Filters=[
+                                        {
+                                            'Name': 'file-system-id',
+                                            'Values': [file_system_id],
+                                        }
+                                    ]
+                                )
                             )
-                            storage_virtual_machines = Utils.get_value_as_list('StorageVirtualMachines', describe_svm_result, [])
+                            storage_virtual_machines = Utils.get_value_as_list(
+                                'StorageVirtualMachines', describe_svm_result, []
+                            )
 
                     else:
                         continue
 
-                    results.append(SocaFileSystem(
-                        type=f'aws.file-system.{fs_type}',
-                        title=title,
-                        provider=file_system_provider,
-                        ref={
-                            'file_system': entry,
-                            'storage_virtual_machines': storage_virtual_machines,
-                            'volumes': volumes
-                        }
-                    ))
+                    results.append(
+                        SocaFileSystem(
+                            type=f'aws.file-system.{fs_type}',
+                            title=title,
+                            provider=file_system_provider,
+                            ref={
+                                'file_system': entry,
+                                'storage_virtual_machines': storage_virtual_machines,
+                                'volumes': volumes,
+                            },
+                        )
+                    )
                 return results
 
             file_systems = []
@@ -510,7 +564,7 @@ class AwsResources:
                 fn=self.aws.efs().describe_file_systems,
                 result_cb=result_cb,
                 marker_based_paging=True,
-                fs_type='efs'
+                fs_type='efs',
             )
             file_systems += efs
 
@@ -521,7 +575,7 @@ class AwsResources:
                 caches = self.aws_util.invoke_aws_listing(
                     fn=self.aws.fsx().describe_file_caches,
                     result_cb=result_cb,
-                    fs_type='fsx_cache'
+                    fs_type='fsx_cache',
                 )
                 file_systems += caches
             except botocore.exceptions.ClientError as error:
@@ -533,7 +587,7 @@ class AwsResources:
             fsx = self.aws_util.invoke_aws_listing(
                 fn=self.aws.fsx().describe_file_systems,
                 result_cb=result_cb,
-                fs_type='fsx'
+                fs_type='fsx',
             )
             file_systems += fsx
 
@@ -545,7 +599,6 @@ class AwsResources:
 
     def get_security_groups(self, refresh: bool = False) -> List[SocaSecurityGroup]:
         try:
-
             if not refresh:
                 security_groups = self._db.get_security_groups()
                 if security_groups is not None:
@@ -563,16 +616,15 @@ class AwsResources:
                     else:
                         title = group_id
 
-                    results.append(SocaSecurityGroup(
-                        type='aws.ec2.security-group',
-                        title=title,
-                        ref=entry
-                    ))
+                    results.append(
+                        SocaSecurityGroup(
+                            type='aws.ec2.security-group', title=title, ref=entry
+                        )
+                    )
                 return results
 
             security_groups = self.aws_util.invoke_aws_listing(
-                fn=self.aws.ec2().describe_security_groups,
-                result_cb=result_cb
+                fn=self.aws.ec2().describe_security_groups, result_cb=result_cb
             )
             self._db.set_security_groups(security_groups)
             return security_groups
@@ -591,17 +643,15 @@ class AwsResources:
                 listing = Utils.get_value_as_list('Roles', result, [])
                 for entry in listing:
                     role_name = Utils.get_value_as_string('RoleName', entry)
-                    results.append(SocaIAMRole(
-                        type='aws.iam-role',
-                        title=role_name,
-                        ref=entry
-                    ))
+                    results.append(
+                        SocaIAMRole(type='aws.iam-role', title=role_name, ref=entry)
+                    )
                 return results
 
             iam_roles = self.aws_util.invoke_aws_listing(
                 fn=self.aws.ec2().list_roles,
                 result_cb=result_cb,
-                marker_based_paging=True
+                marker_based_paging=True,
             )
             self._db.set_iam_roles(iam_roles)
             return iam_roles
@@ -610,7 +660,6 @@ class AwsResources:
 
     def get_s3_buckets(self, refresh: bool = False) -> List[SocaS3Bucket]:
         try:
-
             if not refresh:
                 s3_buckets = self._db.get_s3_buckets()
                 if s3_buckets is not None:
@@ -622,11 +671,9 @@ class AwsResources:
             s3_buckets = []
             for bucket in buckets:
                 name = Utils.get_value_as_string('Name', bucket)
-                s3_buckets.append(SocaS3Bucket(
-                    type='s3.bucket',
-                    title=f'{name}',
-                    ref=bucket
-                ))
+                s3_buckets.append(
+                    SocaS3Bucket(type='s3.bucket', title=f'{name}', ref=bucket)
+                )
 
             self._db.set_s3_buckets(s3_buckets)
             return s3_buckets
@@ -635,25 +682,26 @@ class AwsResources:
 
     def get_ec2_key_pairs(self, refresh: bool = False) -> List[SocaSSHKeyPair]:
         try:
-
             if not refresh:
                 ssh_key_pairs = self._db.get_ssh_key_pairs()
                 if ssh_key_pairs is not None:
                     return ssh_key_pairs
 
             key_pairs_result = self.aws.ec2().describe_key_pairs()
-            key_pairs = Utils.get_value_as_list('KeyPairs', key_pairs_result, default=[])
+            key_pairs = Utils.get_value_as_list(
+                'KeyPairs', key_pairs_result, default=[]
+            )
 
             key_pairs.sort(key=lambda x: x.get('KeyName', ''), reverse=False)
 
             ssh_key_pairs = []
             for key_pair in key_pairs:
                 key_name = Utils.get_value_as_string('KeyName', key_pair)
-                ssh_key_pairs.append(SocaSSHKeyPair(
-                    type='aws.ec2.key_pair',
-                    title=key_name,
-                    ref=key_pair
-                ))
+                ssh_key_pairs.append(
+                    SocaSSHKeyPair(
+                        type='aws.ec2.key_pair', title=key_name, ref=key_pair
+                    )
+                )
 
             self._db.set_ssh_key_pairs(ssh_key_pairs)
             return ssh_key_pairs
@@ -661,9 +709,10 @@ class AwsResources:
         except Exception as e:
             self.aws_util.handle_aws_exception(e)
 
-    def get_cloudformation_stacks(self, refresh: bool = False) -> List[SocaCloudFormationStack]:
+    def get_cloudformation_stacks(
+        self, refresh: bool = False
+    ) -> List[SocaCloudFormationStack]:
         try:
-
             if not refresh:
                 cloudformation_stacks = self._db.get_cloudformation_stacks()
                 if cloudformation_stacks is not None:
@@ -674,17 +723,17 @@ class AwsResources:
                 listing = Utils.get_value_as_list('Stacks', result, [])
                 for entry in listing:
                     stack_name = Utils.get_value_as_string('StackName', entry)
-                    results.append(SocaCloudFormationStack(
-                        type='aws.cloudformation-stack',
-                        title=stack_name,
-                        ref=entry
-                    ))
+                    results.append(
+                        SocaCloudFormationStack(
+                            type='aws.cloudformation-stack', title=stack_name, ref=entry
+                        )
+                    )
                 return results
 
             cloudformation_stacks = self.aws_util.invoke_aws_listing(
                 fn=self.aws.cloudformation().describe_stacks,
                 result_cb=result_cb,
-                marker_based_paging=False
+                marker_based_paging=False,
             )
             self._db.set_cloudformation_stacks(cloudformation_stacks)
             return cloudformation_stacks
@@ -693,7 +742,6 @@ class AwsResources:
 
     def get_acm_certificates(self, refresh: bool = False) -> List[SocaACMCertificate]:
         try:
-
             if not refresh:
                 acm_certificates = self._db.get_acm_certificates()
                 if acm_certificates is not None:
@@ -704,17 +752,17 @@ class AwsResources:
                 listing = Utils.get_value_as_list('CertificateSummaryList', result, [])
                 for entry in listing:
                     domain_name = Utils.get_value_as_string('DomainName', entry)
-                    results.append(SocaACMCertificate(
-                        type='aws.acm.certificate',
-                        title=domain_name,
-                        ref=entry
-                    ))
+                    results.append(
+                        SocaACMCertificate(
+                            type='aws.acm.certificate', title=domain_name, ref=entry
+                        )
+                    )
                 return results
 
             acm_certificates = self.aws_util.invoke_aws_listing(
                 fn=self.aws.acm().list_certificates,
                 result_cb=result_cb,
-                marker_based_paging=False
+                marker_based_paging=False,
             )
             self._db.set_acm_certificates(acm_certificates)
             return acm_certificates
@@ -722,38 +770,38 @@ class AwsResources:
             self.aws_util.handle_aws_exception(e)
 
     def get_aws_profiles(self, refresh: bool = False) -> List[SocaAWSProfile]:
-
         if not refresh:
             aws_profiles = self._db.get_aws_profiles()
             if aws_profiles is not None:
                 return aws_profiles
 
-        result = self._shell.invoke(cmd='aws configure list-profiles', shell=True, skip_error_logging=True)
+        result = self._shell.invoke(
+            cmd='aws configure list-profiles', shell=True, skip_error_logging=True
+        )
         if result.returncode != 0:
             error = result.stderr
             if Utils.is_empty(error):
                 error = result.stdout
-            raise exceptions.soca_exception(error_code=errorcodes.GENERAL_ERROR,
-                                            message=error)
+            raise exceptions.soca_exception(
+                error_code=errorcodes.GENERAL_ERROR, message=error
+            )
 
         profiles = str(result.stdout).splitlines(keepends=False)
         if len(profiles) == 0:
-            raise exceptions.soca_exception(error_code=errorcodes.AWS_CLI_NOT_INSTALLED,
-                                            message='AWS CLI is not installed or AWS config not found.')
+            raise exceptions.soca_exception(
+                error_code=errorcodes.AWS_CLI_NOT_INSTALLED,
+                message='AWS CLI is not installed or AWS config not found.',
+            )
 
         aws_profiles = []
         for profile in profiles:
-            aws_profiles.append(SocaAWSProfile(
-                title=profile,
-                ref=profile
-            ))
+            aws_profiles.append(SocaAWSProfile(title=profile, ref=profile))
 
         self._db.set_aws_profiles(aws_profiles)
         return aws_profiles
 
     def get_ec2_prefix_lists(self, refresh: bool = False) -> List[SocaEC2PrefixList]:
         try:
-
             if not refresh:
                 prefix_lists = self._db.get_ec2_prefix_lists()
                 if prefix_lists is not None:
@@ -763,21 +811,27 @@ class AwsResources:
                 results = []
                 listing = Utils.get_value_as_list('PrefixLists', result, [])
                 for entry in listing:
-                    prefix_list_name = Utils.get_value_as_string('PrefixListName', entry)
-                    if Utils.is_not_empty(prefix_list_name) and prefix_list_name.startswith('com.amazonaws'):
+                    prefix_list_name = Utils.get_value_as_string(
+                        'PrefixListName', entry
+                    )
+                    if Utils.is_not_empty(
+                        prefix_list_name
+                    ) and prefix_list_name.startswith('com.amazonaws'):
                         continue
                     prefix_list_id = Utils.get_value_as_string('PrefixListId', entry)
-                    results.append(SocaEC2PrefixList(
-                        type='aws.ec2.prefix_list',
-                        title=f'{prefix_list_name} [{prefix_list_id}]',
-                        ref=entry
-                    ))
+                    results.append(
+                        SocaEC2PrefixList(
+                            type='aws.ec2.prefix_list',
+                            title=f'{prefix_list_name} [{prefix_list_id}]',
+                            ref=entry,
+                        )
+                    )
                 return results
 
             prefix_lists = self.aws_util.invoke_aws_listing(
                 fn=self.aws.ec2().describe_managed_prefix_lists,
                 result_cb=result_cb,
-                marker_based_paging=False
+                marker_based_paging=False,
             )
             self._db.set_ec2_prefix_lists(prefix_lists)
             return prefix_lists

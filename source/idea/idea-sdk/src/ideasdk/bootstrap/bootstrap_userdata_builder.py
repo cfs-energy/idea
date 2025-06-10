@@ -22,9 +22,16 @@ class BootstrapUserDataBuilder:
     todo: refactor implementation to use jinja2 based templates via SDK resources
     """
 
-    def __init__(self, base_os: str, aws_region: str, bootstrap_package_uri: str, install_commands: List[str],
-                 infra_config: Optional[Dict] = None, proxy_config: Optional[Dict] = None,
-                 substitution_support: bool = True):
+    def __init__(
+        self,
+        base_os: str,
+        aws_region: str,
+        bootstrap_package_uri: str,
+        install_commands: List[str],
+        infra_config: Optional[Dict] = None,
+        proxy_config: Optional[Dict] = None,
+        substitution_support: bool = True,
+    ):
         self.base_os = base_os
         self.aws_region = aws_region
         self.bootstrap_package_uri = bootstrap_package_uri
@@ -34,9 +41,11 @@ class BootstrapUserDataBuilder:
         self.substitution_support = substitution_support
 
     def build(self):
-        if self.base_os.lower() == 'windows':
+        if 'windows' in self.base_os.lower():
             if Utils.is_not_empty(self.infra_config):
-                raise exceptions.general_exception('infra config is not supported for windows')
+                raise exceptions.general_exception(
+                    'infra config is not supported for windows'
+                )
             return self._build_windows_userdata()
 
         if self.substitution_support:
@@ -44,9 +53,9 @@ class BootstrapUserDataBuilder:
         return self._build_linux_userdata_non_substitution()
 
     def _build_windows_userdata(self) -> str:
-        userdata = f'''
+        userdata = f"""
 <powershell>
- $BootstrapDir = "C`:\\Users\\Administrator\\IDEA\\bootstrap"
+ $BootstrapDir = "C:\\Users\\Administrator\\IDEA\\bootstrap"
  function Download-Idea-Package {{
      Param(
      [ValidateNotNullOrEmpty()]
@@ -71,7 +80,7 @@ class BootstrapUserDataBuilder:
      Tar -xf "$BootstrapDir\\$PackageArchive"
  }}
  Download-Idea-Package {self.bootstrap_package_uri}
-'''
+"""
         for install_command in self.install_commands:
             userdata += f'{install_command}{os.linesep}'
         userdata += '</powershell>'
@@ -94,11 +103,11 @@ AWSCLI_AARCH64_URL="https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip"
             for key, value in self.infra_config.items():
                 infra_config_properties += f'{key}={value}{os.linesep}'
 
-        userdata += f'''
+        userdata += f"""
 echo "
 {infra_config_properties}
 " > /root/bootstrap/infra.cfg
-        '''
+        """
 
         proxy_config_entries = ''
         if self.proxy_config is not None:
@@ -111,7 +120,7 @@ echo "{proxy_config_entries}
 source /root/bootstrap/proxy.cfg
         '''
 
-        userdata += '''
+        userdata += """
 
 timestamp=$(date +%s)
 mkdir -p /root/bootstrap/logs
@@ -123,7 +132,7 @@ exec > /root/bootstrap/logs/userdata.log 2>&1
 export PATH="${!PATH}:/usr/local/bin"
 
 function install_aws_cli () {
-  if [[ "${!BASE_OS}" == "amazonlinux2" ]]; then
+  if [[ "${!BASE_OS}" == "amazonlinux2" || "${!BASE_OS}" == "amazonlinux2023" ]]; then
     yum remove -y awscli
   fi
   cd /root/bootstrap
@@ -155,10 +164,10 @@ if [[ \\${!PACKAGE_DOWNLOAD_URI} == s3://* ]]; then
   AWS=\\$(command -v aws)
   S3_BUCKET=\\$(echo \\${!PACKAGE_DOWNLOAD_URI} | cut -f3 -d/)
   if [[ \\${!INSTANCE_REGION} =~ ^us-gov-[a-z]+-[0-9]+$ ]]; then
-    S3_BUCKET_REGION=\\$(curl -s --head https://\${!S3_BUCKET}.s3.us-gov-west-1.amazonaws.com | grep bucket-region | awk '{print \$2}' | tr -d '\\r\\n')
+    S3_BUCKET_REGION=\\$(curl -s --head https://\\${!S3_BUCKET}.s3.us-gov-west-1.amazonaws.com | grep bucket-region | awk '{print \\$2}' | tr -d '\\r\\n')
     \\$AWS --region \\${!S3_BUCKET_REGION} s3 cp \\${!PACKAGE_DOWNLOAD_URI} /root/bootstrap/
   else
-    #S3_BUCKET_REGION=\\$(curl -s --head https://\${!S3_BUCKET}.s3.us-east-1.amazonaws.com | grep bucket-region | awk '{print \$2}' | tr -d '\\r\\n')
+    #S3_BUCKET_REGION=\\$(curl -s --head https://\\${!S3_BUCKET}.s3.us-east-1.amazonaws.com | grep bucket-region | awk '{print \\$2}' | tr -d '\\r\\n')
     \\$AWS --region \\${!INSTANCE_REGION} s3 cp \\${!PACKAGE_DOWNLOAD_URI} /root/bootstrap/
   fi
 else
@@ -175,7 +184,7 @@ ln -sf \\${!PACKAGE_DIR} /root/bootstrap/latest
 " > /root/bootstrap/download_bootstrap.sh
 
 chmod +x /root/bootstrap/download_bootstrap.sh
-        '''
+        """
 
         userdata += f'''
 install_aws_cli
@@ -210,7 +219,7 @@ echo "{proxy_config_entries}
 source /root/bootstrap/proxy.cfg
         '''
 
-        userdata += '''
+        userdata += """
 
 timestamp=$(date +%s)
 mkdir -p /root/bootstrap/logs
@@ -222,7 +231,7 @@ exec > /root/bootstrap/logs/userdata.log 2>&1
 export PATH="${PATH}:/usr/local/bin"
 
 function install_aws_cli () {
-  if [[ "${BASE_OS}" == "amazonlinux2" ]]; then
+  if [[ "${BASE_OS}" == "amazonlinux2" || "${BASE_OS}" == "amazonlinux2023" ]]; then
     yum remove -y awscli
   fi
   cd /root/bootstrap
@@ -254,10 +263,10 @@ if [[ \\${PACKAGE_DOWNLOAD_URI} == s3://* ]]; then
   AWS=\\$(command -v aws)
   S3_BUCKET=\\$(echo \\${PACKAGE_DOWNLOAD_URI} | cut -f3 -d/)
   if [[ \\${INSTANCE_REGION} =~ ^us-gov-[a-z]+-[0-9]+$ ]]; then
-    S3_BUCKET_REGION=\\$(curl -s --head https://\\${S3_BUCKET}.s3.us-gov-west-1.amazonaws.com | grep bucket-region | awk '{print \$2}' | tr -d '\\r\\n')
+    S3_BUCKET_REGION=\\$(curl -s --head https://\\${S3_BUCKET}.s3.us-gov-west-1.amazonaws.com | grep bucket-region | awk '{print \\$2}' | tr -d '\\r\\n')
     \\$AWS --region \\${S3_BUCKET_REGION} s3 cp \\${PACKAGE_DOWNLOAD_URI} /root/bootstrap/
   else
-    #S3_BUCKET_REGION=\\$(curl -s --head https://\\${S3_BUCKET}.s3.us-east-1.amazonaws.com | grep bucket-region | awk '{print \$2}' | tr -d '\\r\\n')
+    #S3_BUCKET_REGION=\\$(curl -s --head https://\\${S3_BUCKET}.s3.us-east-1.amazonaws.com | grep bucket-region | awk '{print \\$2}' | tr -d '\\r\\n')
     \\$AWS --region \\${INSTANCE_REGION} s3 cp \\${PACKAGE_DOWNLOAD_URI} /root/bootstrap/
   fi
 else
@@ -274,7 +283,7 @@ ln -sf \\${PACKAGE_DIR} /root/bootstrap/latest
 " > /root/bootstrap/download_bootstrap.sh
 
 chmod +x /root/bootstrap/download_bootstrap.sh
-        '''
+        """
 
         userdata += f'''
 install_aws_cli

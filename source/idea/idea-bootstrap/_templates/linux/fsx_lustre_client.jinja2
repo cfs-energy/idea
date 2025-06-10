@@ -1,113 +1,226 @@
 # Begin: FSx Lustre Client
-{%- if context.base_os == 'amazonlinux2' %}
-if [[ -z "$(rpm -qa lustre-client)" ]]; then
-  amazon-linux-extras install -y lustre
-fi
-{%- endif %}
-{%- if context.base_os in ('rhel8', 'rocky8') %}
-if [[ -z "$(rpm -qa lustre-client)" ]]; then
-  kernel=$(uname -r)
-  machine=$(uname -m)
-  log_info "Found kernel version: $kernel running on: $machine"
-  if [[ $kernel == *"4.18.0-477"*$machine ]]; then
-    wget https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -O /tmp/fsx-rpm-public-key.asc
-    rpm --import /tmp/fsx-rpm-public-key.asc
-    wget https://fsx-lustre-client-repo.s3.amazonaws.com/el/8/fsx-lustre-client.repo -O /etc/yum.repos.d/aws-fsx.repo
-    yum install -y kmod-lustre-client lustre-client
-    set_reboot_required "FSx for Lustre client installed"
-  elif [[ $kernel == *"4.18.0-425"*$machine ]]; then
-    wget https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -O /tmp/fsx-rpm-public-key.asc
-    rpm --import /tmp/fsx-rpm-public-key.asc
-    wget https://fsx-lustre-client-repo.s3.amazonaws.com/el/8/fsx-lustre-client.repo -O /etc/yum.repos.d/aws-fsx.repo
-    sed -i 's#8#8.7#' /etc/yum.repos.d/aws-fsx.repo
-    yum install -y kmod-lustre-client lustre-client
-    set_reboot_required "FSx for Lustre client installed"
-  elif [[ $kernel == *"4.18.0-372"*$machine ]]; then
-    wget https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -O /tmp/fsx-rpm-public-key.asc
-    rpm --import /tmp/fsx-rpm-public-key.asc
-    wget https://fsx-lustre-client-repo.s3.amazonaws.com/el/8/fsx-lustre-client.repo -O /etc/yum.repos.d/aws-fsx.repo
-    sed -i 's#8#8.6#' /etc/yum.repos.d/aws-fsx.repo
-    yum install -y kmod-lustre-client lustre-client
-    set_reboot_required "FSx for Lustre client installed"
-  elif [[ $kernel == *"4.18.0-348"*$machine ]]; then
-    wget https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -O /tmp/fsx-rpm-public-key.asc
-    rpm --import /tmp/fsx-rpm-public-key.asc
-    wget https://fsx-lustre-client-repo.s3.amazonaws.com/el/8/fsx-lustre-client.repo -O /etc/yum.repos.d/aws-fsx.repo
-    sed -i 's#8#8.5#' /etc/yum.repos.d/aws-fsx.repo
-    yum install -y kmod-lustre-client lustre-client
-    set_reboot_required "FSx for Lustre client installed"
-  elif [[ $kernel == *"4.18.0-305"*$machine ]]; then
-    wget https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -O /tmp/fsx-rpm-public-key.asc
-    rpm --import /tmp/fsx-rpm-public-key.asc
-    wget https://fsx-lustre-client-repo.s3.amazonaws.com/el/8/fsx-lustre-client.repo -O /etc/yum.repos.d/aws-fsx.repo
-    sed -i 's#8#8.4#' /etc/yum.repos.d/aws-fsx.repo
-    yum install -y kmod-lustre-client lustre-client
-    set_reboot_required "FSx for Lustre client installed"
-  elif [[ $kernel == *"4.18.0-240"*$machine ]]; then
-    wget https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -O /tmp/fsx-rpm-public-key.asc
-    rpm --import /tmp/fsx-rpm-public-key.asc
-    wget https://fsx-lustre-client-repo.s3.amazonaws.com/el/8/fsx-lustre-client.repo -O /etc/yum.repos.d/aws-fsx.repo
-    sed -i 's#8#8.3#' /etc/yum.repos.d/aws-fsx.repo
-    yum install -y kmod-lustre-client lustre-client
-    set_reboot_required "FSx for Lustre client installed"
-  elif [[ $kernel == *"4.18.0-193"*$machine ]]; then
-    wget https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -O /tmp/fsx-rpm-public-key.asc
-    rpm --import /tmp/fsx-rpm-public-key.asc
-    wget https://fsx-lustre-client-repo.s3.amazonaws.com/el/8/fsx-lustre-client.repo -O /etc/yum.repos.d/aws-fsx.repo
-    sed -i 's#8#8.2#' /etc/yum.repos.d/aws-fsx.repo
-    yum install -y kmod-lustre-client lustre-client
-    set_reboot_required "FSx for Lustre client installed"
-  else
-    log_error "Can't install FSx for Lustre client as kernel version $kernel isn't matching expected versions: (x86_64: 4.18.0-193, -240, -305, -348, -372, -425)!"
-  fi
-fi
-{%- endif %}
-{%- if context.base_os in ('rhel9') %}
-if [[ -z "$(rpm -qa lustre-client)" ]]; then
-  kernel=$(uname -r)
-  machine=$(uname -m)
-  log_info "Found kernel version: $kernel running on: $machine"
-  if [[ $kernel == *"5.14.0-427"*$machine ]]; then
-    curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
-    sudo rpm --import /tmp/fsx-rpm-public-key.asc
-    sudo curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/9/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
-    sudo sed -i 's#9#9.4#' /etc/yum.repos.d/aws-fsx.repo
-    sudo yum clean all
-    sudo yum install -y kmod-lustre-client lustre-client
-    set_reboot_required "FSx for Lustre client installed"
-  elif [[ $kernel == *"5.14.0-362"*$machine ]]; then
-    curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
-    sudo rpm --import /tmp/fsx-rpm-public-key.asc
-    sudo curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/9/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
-    sudo sed -i 's#9#9.3#' /etc/yum.repos.d/aws-fsx.repo
-    sudo yum clean all
-    sudo yum install -y kmod-lustre-client lustre-client
-    set_reboot_required "FSx for Lustre client installed"
-  elif [[ $kernel == *"5.14.0-70"*$machine ]]; then
-    curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
-    sudo rpm --import /tmp/fsx-rpm-public-key.asc
-    sudo curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/8/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
-    sudo sed -i 's#9#9.0#' /etc/yum.repos.d/aws-fsx.repo
-    sudo yum clean all
-    sudo yum install -y kmod-lustre-client lustre-client
-    set_reboot_required "FSx for Lustre client installed"
-  else
-    log_error "Can't install FSx for Lustre client as kernel version $kernel isn't matching expected versions: (x86_64: 5.14.0-362, -70)!"
-  fi
-fi
-{%- endif %}
-{%- if context.base_os in ('ubuntu2204') %}
-  if [[ -z "$(dpkg -l lustre-client-utils | grep ^ii)" ]]; then
-    wget -O - https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-ubuntu-public-key.asc | gpg --dearmor | sudo tee /usr/share/keyrings/fsx-ubuntu-public-key.gpg >/dev/null
-    bash -c 'echo "deb [signed-by=/usr/share/keyrings/fsx-ubuntu-public-key.gpg] https://fsx-lustre-client-repo.s3.amazonaws.com/ubuntu jammy main" > /etc/apt/sources.list.d/fsxlustreclientrepo.list && apt update'
 
+# Function to check if kernel update is pending
+check_kernel_update() {
+  local running_kernel=$(uname -r)
+  local newest_kernel
+  local kernel_update_pending=false
+
+  if command -v rpm &> /dev/null; then
+    # For RPM-based systems (RHEL, Rocky, Amazon Linux)
+    # Get all installed kernels and find the highest version
+    newest_kernel=$(rpm -q kernel | sort -V | tail -n 1 | sed 's/kernel-//')
+    if [[ "$running_kernel" != "$newest_kernel" ]]; then
+      kernel_update_pending=true
+    fi
+  elif command -v dpkg &> /dev/null; then
+    # For Debian-based systems (Ubuntu)
+    newest_kernel=$(dpkg -l linux-image-* | grep ^ii | sort -V | tail -n 1 | awk '{print $2}' | sed 's/linux-image-//')
+    if [[ "$running_kernel" != *"$newest_kernel"* ]]; then
+      kernel_update_pending=true
+    fi
+  fi
+
+  if [[ "$kernel_update_pending" = true ]]; then
+    log_info "Kernel update pending: running $running_kernel, newest installed $newest_kernel"
+    set_reboot_required "Kernel update pending, reboot required before installing Lustre client"
+    REBOOT_REQUIRED=$(cat /root/bootstrap/reboot_required.txt)
+    if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
+      (crontab -l; echo "@reboot /bin/bash ${SCRIPT_DIR}/setup.sh crontab >> ${BOOTSTRAP_DIR}/logs/userdata_post_reboot.log 2>&1") | crontab -
+      reboot
+      exit 0
+    fi
+    return 0
+  fi
+  return 1
+}
+
+# Function to check if kernel is supported for FSx Lustre on Amazon Linux 2023
+is_al2023_kernel_supported() {
+  local kernel=$(uname -r)
+  # FSx Lustre on AL2023 supports kernels in the 6.1.x range, kernel 6.12+ is not supported
+  local major_minor=$(echo $kernel | cut -d. -f1-2)
+  if [[ $(echo "$major_minor >= 6.12" | bc -l) -eq 1 ]]; then
+    log_info "Kernel $kernel is not supported for FSx Lustre on Amazon Linux 2023. Skipping Lustre client installation."
+    return 1
+  fi
+  return 0
+}
+
+{% if context.base_os == 'amazonlinux2' %}
+if [[ -z "$(rpm -qa lustre-client)" ]]; then
+  # Check if kernel update is pending
+  check_kernel_update || amazon-linux-extras install -y lustre
+fi
+{% endif %}
+{% if context.base_os == 'amazonlinux2023' %}
+if [[ -z "$(rpm -qa lustre-client)" ]]; then
+  # Check if current kernel is supported for FSx Lustre
+  if ! is_al2023_kernel_supported; then
+    log_info "Skipping FSx Lustre client installation due to unsupported kernel version"
+  else
+    # Check if kernel update is pending
+    check_kernel_update || dnf install -y lustre-client
+  fi
+fi
+{% endif %}
+{% if context.base_os in ('rhel8', 'rocky8') %}
+if [[ -z "$(rpm -qa lustre-client)" ]]; then
+  # Check current kernel version first
+  kernel=$(uname -r)
+  machine=$(uname -m)
+  log_info "Found kernel version: $kernel running on: $machine"
+
+  # Only update kernel if not already on a supported version
+  if [[ ! ($kernel == *"4.18.0-477"*$machine || $kernel == *"4.18.0-425"*$machine || $kernel == *"4.18.0-372"*$machine || $kernel == *"4.18.0-348"*$machine || $kernel == *"4.18.0-305"*$machine || $kernel == *"4.18.0-240"*$machine || $kernel == *"4.18.0-193"*$machine || $kernel == *"4.18.0-553"*$machine) ]]; then
+    log_info "Current kernel is not a supported version for FSx Lustre. Updating kernel..."
+    yum install -y kernel kernel-devel
+  else
+    log_info "Current kernel version $kernel is supported for FSx Lustre. Skipping kernel update."
+  fi
+
+  # Check if kernel update is pending
+  if check_kernel_update; then
+    log_info "Skipping Lustre client installation until after reboot for kernel update"
+  else
     kernel=$(uname -r)
-    DEBIAN_FRONTEND=noninteractive apt install -y lustre-client-modules-$kernel
-    set_reboot_required "FSx for Lustre client installed"
+    machine=$(uname -m)
+    log_info "Found kernel version: $kernel running on: $machine"
+    if [[ $kernel == *"4.18.0-477"*$machine ]]; then
+      curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
+      rpm --import /tmp/fsx-rpm-public-key.asc
+      curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/8/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
+      yum install -y kmod-lustre-client lustre-client
+      set_reboot_required "FSx for Lustre client installed"
+    elif [[ $kernel == *"4.18.0-425"*$machine ]]; then
+      curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
+      rpm --import /tmp/fsx-rpm-public-key.asc
+      curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/8/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
+      sed -i 's#8#8.7#' /etc/yum.repos.d/aws-fsx.repo
+      yum install -y kmod-lustre-client lustre-client
+      set_reboot_required "FSx for Lustre client installed"
+    elif [[ $kernel == *"4.18.0-372"*$machine ]]; then
+      curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
+      rpm --import /tmp/fsx-rpm-public-key.asc
+      curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/8/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
+      sed -i 's#8#8.6#' /etc/yum.repos.d/aws-fsx.repo
+      yum install -y kmod-lustre-client lustre-client
+      set_reboot_required "FSx for Lustre client installed"
+    elif [[ $kernel == *"4.18.0-348"*$machine ]]; then
+      curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
+      rpm --import /tmp/fsx-rpm-public-key.asc
+      curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/8/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
+      sed -i 's#8#8.5#' /etc/yum.repos.d/aws-fsx.repo
+      yum install -y kmod-lustre-client lustre-client
+      set_reboot_required "FSx for Lustre client installed"
+    elif [[ $kernel == *"4.18.0-305"*$machine ]]; then
+      curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
+      rpm --import /tmp/fsx-rpm-public-key.asc
+      curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/8/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
+      sed -i 's#8#8.4#' /etc/yum.repos.d/aws-fsx.repo
+      yum install -y kmod-lustre-client lustre-client
+      set_reboot_required "FSx for Lustre client installed"
+    elif [[ $kernel == *"4.18.0-240"*$machine ]]; then
+      curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
+      rpm --import /tmp/fsx-rpm-public-key.asc
+      curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/8/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
+      sed -i 's#8#8.3#' /etc/yum.repos.d/aws-fsx.repo
+      yum install -y kmod-lustre-client lustre-client
+      set_reboot_required "FSx for Lustre client installed"
+    elif [[ $kernel == *"4.18.0-193"*$machine ]]; then
+      curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
+      rpm --import /tmp/fsx-rpm-public-key.asc
+      curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/8/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
+      sed -i 's#8#8.2#' /etc/yum.repos.d/aws-fsx.repo
+      yum install -y kmod-lustre-client lustre-client
+      set_reboot_required "FSx for Lustre client installed"
+    elif [[ $kernel == *"4.18.0-553"*$machine ]]; then
+      curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
+      rpm --import /tmp/fsx-rpm-public-key.asc
+      curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/8/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
+      yum install -y kmod-lustre-client lustre-client
+      set_reboot_required "FSx for Lustre client installed"
+    else
+      log_error "Can't install FSx for Lustre client as kernel version $kernel isn't matching expected versions: (x86_64: 4.18.0-193, -240, -305, -348, -372, -425)!"
+    fi
+  fi
+fi
+{% endif %}
+{% if context.base_os in ('rhel9', 'rocky9') %}
+if [[ -z "$(rpm -qa lustre-client)" ]]; then
+  # Check current kernel version first
+  kernel=$(uname -r)
+  machine=$(uname -m)
+  log_info "Found kernel version: $kernel running on: $machine"
+
+  # Only update kernel if not already on a supported version
+  if [[ ! ($kernel == *"5.14.0-427"*$machine || $kernel == *"5.14.0-362"*$machine || $kernel == *"5.14.0-70"*$machine || $kernel == *"5.14.0-503"*$machine) ]]; then
+    log_info "Current kernel is not a supported version for FSx Lustre. Updating kernel..."
+    yum install -y kernel kernel-devel
+  else
+    log_info "Current kernel version $kernel is supported for FSx Lustre. Skipping kernel update."
+  fi
+
+  # Check if kernel update is pending
+  if check_kernel_update; then
+    log_info "Skipping Lustre client installation until after reboot for kernel update"
+  else
+    kernel=$(uname -r)
+    machine=$(uname -m)
+    log_info "Found kernel version: $kernel running on: $machine"
+    if [[ $kernel == *"5.14.0-427"*$machine ]]; then
+      curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
+      sudo rpm --import /tmp/fsx-rpm-public-key.asc
+      sudo curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/9/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
+      sudo sed -i 's#9#9.4#' /etc/yum.repos.d/aws-fsx.repo
+      sudo yum clean all
+      sudo yum install -y kmod-lustre-client lustre-client
+      set_reboot_required "FSx for Lustre client installed"
+    elif [[ $kernel == *"5.14.0-362"*$machine ]]; then
+      curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
+      sudo rpm --import /tmp/fsx-rpm-public-key.asc
+      sudo curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/9/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
+      sudo sed -i 's#9#9.3#' /etc/yum.repos.d/aws-fsx.repo
+      sudo yum clean all
+      sudo yum install -y kmod-lustre-client lustre-client
+      set_reboot_required "FSx for Lustre client installed"
+    elif [[ $kernel == *"5.14.0-70"*$machine ]]; then
+      curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
+      sudo rpm --import /tmp/fsx-rpm-public-key.asc
+      sudo curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/8/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
+      sudo sed -i 's#9#9.0#' /etc/yum.repos.d/aws-fsx.repo
+      sudo yum clean all
+      sudo yum install -y kmod-lustre-client lustre-client
+      set_reboot_required "FSx for Lustre client installed"
+    elif [[ $kernel == *"5.14.0-503"*$machine ]]; then
+      curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
+      sudo rpm --import /tmp/fsx-rpm-public-key.asc
+      sudo curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/9/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
+      sudo yum clean all
+      sudo yum install -y kmod-lustre-client lustre-client
+      set_reboot_required "FSx for Lustre client installed"
+    else
+      log_error "Can't install FSx for Lustre client as kernel version $kernel isn't matching expected versions: (x86_64: 5.14.0-362, -70)!"
+    fi
+  fi
+fi
+{% endif %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+  if [[ -z "$(dpkg -l lustre-client-utils | grep ^ii)" ]]; then
+    # Check if kernel update is pending
+    if check_kernel_update; then
+      log_info "Skipping Lustre client installation until after reboot for kernel update"
+    else
+      wget -O - https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-ubuntu-public-key.asc | gpg --dearmor | sudo tee /usr/share/keyrings/fsx-ubuntu-public-key.gpg >/dev/null
+      bash -c 'echo "deb [signed-by=/usr/share/keyrings/fsx-ubuntu-public-key.gpg] https://fsx-lustre-client-repo.s3.amazonaws.com/ubuntu jammy main" > /etc/apt/sources.list.d/fsxlustreclientrepo.list && apt update'
+
+      DEBIAN_FRONTEND=noninteractive apt install -y linux-aws lustre-client-modules-aws
+      set_reboot_required "FSx for Lustre client installed"
+    fi
   else
     log_info "Lustre Client Already Installed"
   fi
-{%- endif %}
+{% endif %}
 # Performance tuning
 if [[ -z "$(grep ksocklnd /etc/modprobe.d/modprobe.conf)" ]]; then
 {% include '_templates/linux/fsx_lustre_client_tuning_prereboot.jinja2' %}

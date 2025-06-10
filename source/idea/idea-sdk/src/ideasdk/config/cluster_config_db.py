@@ -9,9 +9,7 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
-from ideadatamodel import (
-    exceptions, constants, errorcodes
-)
+from ideadatamodel import exceptions, constants, errorcodes
 from ideasdk.utils import Utils, ModuleMetadataHelper
 from ideasdk.config.soca_config import SocaConfig
 from ideasdk.dynamodb.dynamodb_stream_subscriber import DynamoDBStreamSubscriber
@@ -40,14 +38,25 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
         * implementation from AwsUtil.dynamodb_create_table() cannot be used in this class and tables must be created manually
     """
 
-    def __init__(self, cluster_name: str, aws_region: str, aws_profile: Optional[str], dynamodb_kms_key_id: Optional[str] = None, create_database: bool = False, create_subscription: bool = False, cluster_config_subscriber: Optional[DynamoDBStreamSubscriber] = None, logger=None):
-
+    def __init__(
+        self,
+        cluster_name: str,
+        aws_region: str,
+        aws_profile: Optional[str],
+        dynamodb_kms_key_id: Optional[str] = None,
+        create_database: bool = False,
+        create_subscription: bool = False,
+        cluster_config_subscriber: Optional[DynamoDBStreamSubscriber] = None,
+        logger=None,
+    ):
         self.logger = logger
 
         if Utils.is_empty(cluster_name):
             raise exceptions.cluster_config_error('cluster_name is required')
         if len(cluster_name) > 11:
-            raise exceptions.cluster_config_error(f'cluster_name: {cluster_name} cannot be more than 11 characters. current: {len(cluster_name)}')
+            raise exceptions.cluster_config_error(
+                f'cluster_name: {cluster_name} cannot be more than 11 characters. current: {len(cluster_name)}'
+            )
 
         if Utils.is_empty(aws_region):
             raise exceptions.cluster_config_error('aws_region is required')
@@ -63,8 +72,7 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
 
         self.aws = AwsClientProvider(
             options=AWSClientProviderOptions(
-                region=self.aws_region,
-                profile=self.aws_profile
+                region=self.aws_region, profile=self.aws_profile
             )
         )
 
@@ -80,7 +88,7 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
                 stream_subscriber=self,
                 table_name=self.get_cluster_settings_table_name(),
                 aws_region=aws_region,
-                aws_profile=aws_profile
+                aws_profile=aws_profile,
             )
 
     def set_logger(self, logger):
@@ -122,18 +130,19 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
             if e.response['Error']['Code'] == 'ResourceNotFoundException':
                 raise exceptions.SocaException(
                     error_code=errorcodes.CLUSTER_CONFIG_NOT_INITIALIZED,
-                    message=f'Configuration tables not found for cluster: {self.cluster_name}, region: {self.aws_region}'
+                    message=f'Configuration tables not found for cluster: {self.cluster_name}, region: {self.aws_region}',
                 )
             else:
                 raise e
 
     def get_or_create_modules_table(self):
-
         table_name = self.get_modules_table_name()
         try:
             created = False
             while not created:
-                describe_table_result = self.aws.dynamodb().describe_table(TableName=table_name)
+                describe_table_result = self.aws.dynamodb().describe_table(
+                    TableName=table_name
+                )
                 table = describe_table_result['Table']
                 created = table['TableStatus'] == 'ACTIVE'
                 if not created:
@@ -145,40 +154,36 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
             if e.response['Error']['Code'] == 'ResourceNotFoundException':
                 sse_specification = {}
                 if self.dynamodb_kms_key_id is not None:
-                    self.log_info(f'detected cluster.dynamodb.kms_key_id is set to: {self.dynamodb_kms_key_id}')
+                    self.log_info(
+                        f'detected cluster.dynamodb.kms_key_id is set to: {self.dynamodb_kms_key_id}'
+                    )
                     sse_specification = {
-                            'Enabled': True,
-                            'SSEType': 'KMS',
-                            'KMSMasterKeyId': self.dynamodb_kms_key_id
-                        }
+                        'Enabled': True,
+                        'SSEType': 'KMS',
+                        'KMSMasterKeyId': self.dynamodb_kms_key_id,
+                    }
                 if self.create_database:
-                    self.log_info(f'creating cluster config dynamodb table: {table_name}, region: {self.aws_region}')
+                    self.log_info(
+                        f'creating cluster config dynamodb table: {table_name}, region: {self.aws_region}'
+                    )
                     self.aws.dynamodb().create_table(
                         TableName=table_name,
                         AttributeDefinitions=[
-                            {
-                                'AttributeName': 'module_id',
-                                'AttributeType': 'S'
-                            }
+                            {'AttributeName': 'module_id', 'AttributeType': 'S'}
                         ],
-                        KeySchema=[
-                            {
-                                'AttributeName': 'module_id',
-                                'KeyType': 'HASH'
-                            }
-                        ],
+                        KeySchema=[{'AttributeName': 'module_id', 'KeyType': 'HASH'}],
                         BillingMode='PAY_PER_REQUEST',
                         SSESpecification=sse_specification,
                         Tags=[
                             {
                                 'Key': constants.IDEA_TAG_CLUSTER_NAME,
-                                'Value': self.cluster_name
+                                'Value': self.cluster_name,
                             },
                             {
                                 'Key': constants.IDEA_TAG_BACKUP_PLAN,
-                                'Value': f'{self.cluster_name}-{constants.MODULE_CLUSTER}'
-                            }
-                        ]
+                                'Value': f'{self.cluster_name}-{constants.MODULE_CLUSTER}',
+                            },
+                        ],
                     )
                     return self.get_or_create_modules_table()
                 else:
@@ -187,14 +192,14 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
                 raise e
 
     def get_or_create_cluster_settings_table(self):
-
         table_name = self.get_cluster_settings_table_name()
 
         try:
-
             created = False
             while not created:
-                describe_table_result = self.aws.dynamodb().describe_table(TableName=table_name)
+                describe_table_result = self.aws.dynamodb().describe_table(
+                    TableName=table_name
+                )
                 table = describe_table_result['Table']
                 created = table['TableStatus'] == 'ACTIVE'
                 if not created:
@@ -207,38 +212,32 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
                 sse_specification = {}
                 if self.dynamodb_kms_key_id is not None:
                     sse_specification = {
-                            'Enabled': True,
-                            'SSEType': 'KMS',
-                            'KMSMasterKeyId': self.dynamodb_kms_key_id
-                        }
+                        'Enabled': True,
+                        'SSEType': 'KMS',
+                        'KMSMasterKeyId': self.dynamodb_kms_key_id,
+                    }
                 if self.create_database:
-                    self.log_info(f'creating cluster config dynamodb table: {table_name}, region: {self.aws_region}')
+                    self.log_info(
+                        f'creating cluster config dynamodb table: {table_name}, region: {self.aws_region}'
+                    )
                     self.aws.dynamodb().create_table(
                         TableName=table_name,
                         AttributeDefinitions=[
-                            {
-                                'AttributeName': 'key',
-                                'AttributeType': 'S'
-                            }
+                            {'AttributeName': 'key', 'AttributeType': 'S'}
                         ],
-                        KeySchema=[
-                            {
-                                'AttributeName': 'key',
-                                'KeyType': 'HASH'
-                            }
-                        ],
+                        KeySchema=[{'AttributeName': 'key', 'KeyType': 'HASH'}],
                         BillingMode='PAY_PER_REQUEST',
                         StreamSpecification={
                             'StreamEnabled': True,
-                            'StreamViewType': 'NEW_AND_OLD_IMAGES'
+                            'StreamViewType': 'NEW_AND_OLD_IMAGES',
                         },
                         SSESpecification=sse_specification,
                         Tags=[
                             {
                                 'Key': constants.IDEA_TAG_CLUSTER_NAME,
-                                'Value': self.cluster_name
+                                'Value': self.cluster_name,
                             }
-                        ]
+                        ],
                     )
                     return self.get_or_create_cluster_settings_table()
                 else:
@@ -246,17 +245,15 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
             else:
                 raise e
 
-    def sync_cluster_settings_in_db(self, config_entries: List[Dict], overwrite: bool = False):
+    def sync_cluster_settings_in_db(
+        self, config_entries: List[Dict], overwrite: bool = False
+    ):
         self.log_info(f'sync config entries to db. overwrite: {overwrite}')
 
         for entry in config_entries:
             key = entry['key']
             value = entry['value']
-            db_result = self.cluster_settings_table.get_item(
-                Key={
-                    'key': key
-                }
-            )
+            db_result = self.cluster_settings_table.get_item(Key={'key': key})
             db_item = Utils.get_value_as_dict('Item', db_result)
 
             if not overwrite:
@@ -279,19 +276,19 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
             module_id = module['id']
             module_name = module['name']
             module_type = module['type']
-            db_result = self.modules_table.get_item(
-                Key={
-                    'module_id': module_id
-                }
-            )
+            db_result = self.modules_table.get_item(Key={'module_id': module_id})
             db_item = Utils.get_value_as_dict('Item', db_result)
             if db_item is not None:
-                self.log_info(f'module: {module_id}, name: {module_name} already exists. skip.')
+                self.log_info(
+                    f'module: {module_id}, name: {module_name} already exists. skip.'
+                )
                 continue
 
             if module_type not in SUPPORTED_MODULE_TYPES:
-                raise exceptions.invalid_params(f'invalid type: {module_type} for module_id: {module_id}. '
-                                                f'supported module types: {SUPPORTED_MODULE_TYPES}')
+                raise exceptions.invalid_params(
+                    f'invalid type: {module_type} for module_id: {module_id}. '
+                    f'supported module types: {SUPPORTED_MODULE_TYPES}'
+                )
             modules_to_create.append(module)
 
         for module in modules_to_create:
@@ -304,26 +301,26 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
             else:
                 status = 'not-deployed'
 
-            self.log_info(f'creating module entry for module: {module_name}, module_id: {module_id}')
+            self.log_info(
+                f'creating module entry for module: {module_name}, module_id: {module_id}'
+            )
             self.modules_table.update_item(
-                Key={
-                    'module_id': module_id
-                },
+                Key={'module_id': module_id},
                 UpdateExpression='SET #name=:name, #status=:status, #stack_name=:stack_name, #version=:version, #type=:type',
                 ExpressionAttributeNames={
                     '#name': 'name',
                     '#status': 'status',
                     '#stack_name': 'stack_name',
                     '#version': 'version',
-                    '#type': 'type'
+                    '#type': 'type',
                 },
                 ExpressionAttributeValues={
                     ':name': module_name,
                     ':type': module_type,
                     ':status': status,
                     ':stack_name': None,
-                    ':version': None
-                }
+                    ':version': None,
+                },
             )
 
     def build_config_from_db(self, query: str = None) -> SocaConfig:
@@ -345,11 +342,7 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
         return config
 
     def get_config_entry(self, key: str) -> Optional[Dict]:
-        result = self.cluster_settings_table.get_item(
-            Key={
-                'key': key
-            }
-        )
+        result = self.cluster_settings_table.get_item(Key={'key': key})
         return Utils.get_value_as_dict('Item', result)
 
     def get_config_entries(self, query: str = None) -> List[Dict]:
@@ -366,7 +359,9 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
             except Exception as e:
                 raise exceptions.invalid_params(f'invalid search regex: {query} - {e}')
 
-        self.log_debug(f'loading config entries from db for cluster: {self.cluster_name}, region: {self.aws_region}')
+        self.log_debug(
+            f'loading config entries from db for cluster: {self.cluster_name}, region: {self.aws_region}'
+        )
 
         config_entries = []
 
@@ -374,11 +369,9 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
         read_capacity_units = 0
         last_evaluated_key = None
         while True:
-
             if last_evaluated_key is not None:
                 result = self.cluster_settings_table.scan(
-                    LastEvaluatedKey=last_evaluated_key,
-                    ReturnConsumedCapacity='TOTAL'
+                    LastEvaluatedKey=last_evaluated_key, ReturnConsumedCapacity='TOTAL'
                 )
             else:
                 result = self.cluster_settings_table.scan(
@@ -386,7 +379,9 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
                 )
 
             consumed_capacity = Utils.get_value_as_dict('ConsumedCapacity', result)
-            read_capacity_units += Utils.get_value_as_int('CapacityUnits', consumed_capacity, 0)
+            read_capacity_units += Utils.get_value_as_int(
+                'CapacityUnits', consumed_capacity, 0
+            )
 
             items = Utils.get_value_as_list('Items', result)
             if items is not None:
@@ -407,17 +402,15 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
             if last_evaluated_key is None:
                 break
 
-        self.log_debug(f'loaded {total} entries, consumed read capacity units: {read_capacity_units}')
+        self.log_debug(
+            f'loaded {total} entries, consumed read capacity units: {read_capacity_units}'
+        )
 
         config_entries.sort(key=lambda entry: entry['key'])
         return config_entries
 
     def get_module_info(self, module_id: str) -> Optional[Dict]:
-        result = self.modules_table.get_item(
-            Key={
-                'module_id': module_id
-            }
-        )
+        result = self.modules_table.get_item(Key={'module_id': module_id})
         return Utils.get_value_as_dict('Item', result)
 
     def get_cluster_modules(self) -> List[Dict]:
@@ -427,17 +420,18 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
         if items is not None:
             for item in items:
                 module_name = item['name']
-                module_metadata = self.module_metadata_helper.get_module_metadata(module_name=module_name)
+                module_metadata = self.module_metadata_helper.get_module_metadata(
+                    module_name=module_name
+                )
                 item = {
                     **item,
                     'title': module_metadata.title,
-                    'deployment_priority': module_metadata.deployment_priority
+                    'deployment_priority': module_metadata.deployment_priority,
                 }
                 modules.append(item)
         return modules
 
     def delete_config_entries(self, config_key_prefix: str):
-
         if Utils.is_empty(config_key_prefix):
             raise exceptions.invalid_params('config_key_prefix is required')
 
@@ -448,7 +442,9 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
         last_evaluated_key = None
         while True:
             if last_evaluated_key is not None:
-                result = self.cluster_settings_table.scan(LastEvaluatedKey=last_evaluated_key)
+                result = self.cluster_settings_table.scan(
+                    LastEvaluatedKey=last_evaluated_key
+                )
             else:
                 result = self.cluster_settings_table.scan()
 
@@ -470,17 +466,14 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
                 key = config_entry['key']
                 value = Utils.get_any_value('value', config_entry)
                 self.log_info(f'deleting config entry - {key} = {value}')
-                self.cluster_settings_table.delete_item(
-                    Key={
-                        'key': key
-                    }
-                )
+                self.cluster_settings_table.delete_item(Key={'key': key})
             self.log_info(f'deleted {total} config entries')
         else:
-            self.log_info(f'no config entries found matching config prefix: {config_key_prefix}')
+            self.log_info(
+                f'no config entries found matching config prefix: {config_key_prefix}'
+            )
 
     def set_config_entry(self, key: str, value: Any):
-
         self.log_info(f'updating config: {key} = {value}')
 
         # ddb does not support float. convert Decimal before updating ...
@@ -492,18 +485,10 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
                     value = [Decimal(str(x)) for x in value]
 
         self.cluster_settings_table.update_item(
-            Key={
-                'key': key
-            },
+            Key={'key': key},
             UpdateExpression='SET #value=:value ADD #version :version',
-            ExpressionAttributeNames={
-                '#value': 'value',
-                '#version': 'version'
-            },
-            ExpressionAttributeValues={
-                ':value': value,
-                ':version': 1
-            }
+            ExpressionAttributeNames={'#value': 'value', '#version': 'version'},
+            ExpressionAttributeValues={':value': value, ':version': 1},
         )
 
     def get_cluster_s3_bucket(self) -> str:
@@ -515,7 +500,9 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
                 entry = self.get_config_entry(config_key)
                 cluster_s3_bucket = Utils.get_value_as_string('value', entry)
                 if Utils.is_empty(cluster_s3_bucket):
-                    raise exceptions.cluster_config_error(f'cluster s3 bucket not found for key: {config_key}')
+                    raise exceptions.cluster_config_error(
+                        f'cluster s3 bucket not found for key: {config_key}'
+                    )
                 return cluster_s3_bucket
         raise exceptions.cluster_config_error('cluster s3 bucket not configured')
 

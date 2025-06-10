@@ -35,6 +35,8 @@ interface VirtualDesktopSessionDetailState {
         start: string,
         end: string,
     }
+    sessionHealth: Record<string, any> | null
+    showDecodedServerId: boolean
 }
 
 const DEFAULT_ACTIVE_TAB_ID = 'details'
@@ -50,7 +52,9 @@ class VirtualDesktopSessionDetail extends Component<VirtualDesktopSessionDetailP
             workingHours: {
                 start: '',
                 end: ''
-            }
+            },
+            sessionHealth: null,
+            showDecodedServerId: false
         }
     }
 
@@ -87,6 +91,11 @@ class VirtualDesktopSessionDetail extends Component<VirtualDesktopSessionDetailP
             this.setState({
                 session: result.session!
             })
+
+            // If the session is in READY state, fetch the session health information
+            if (result.session?.state === 'READY' && result.session?.dcv_session_id) {
+                this.fetchSessionHealth(result.session);
+            }
         })
 
         AppContext.get().client().virtualDesktopAdmin().listSessionPermissions({
@@ -96,6 +105,46 @@ class VirtualDesktopSessionDetail extends Component<VirtualDesktopSessionDetailP
                 sessionPermissions: response.listing!
             })
         })
+    }
+
+    fetchSessionHealth(session: VirtualDesktopSession) {
+        // Use VirtualDesktopDCVClient to fetch session health data
+        AppContext.get().client().virtualDesktopDCV().describeSessions({
+            sessions: [{
+                idea_session_id: session.idea_session_id,
+                dcv_session_id: session.dcv_session_id
+            }]
+        }).then(response => {
+            const health = response.response;
+            if (health?.sessions && session.dcv_session_id) {
+                const sessionsData = health.sessions as Record<string, any>;
+                const sessionHealthData = sessionsData[session.dcv_session_id];
+                console.log('Session health data:', sessionHealthData);
+                this.setState({
+                    sessionHealth: sessionHealthData
+                });
+            }
+        }).catch(error => {
+            console.error('Error fetching session health:', error);
+        });
+    }
+
+    // Helper function to base64 decode the server ID
+    decodeServerID(serverID: string): string {
+        try {
+            // For browsers
+            return atob(serverID);
+        } catch (e) {
+            console.error('Error decoding server ID:', e);
+            return 'Failed to decode server ID';
+        }
+    }
+
+    // Toggle between encoded and decoded server ID
+    toggleServerIdDisplay = () => {
+        this.setState(prevState => ({
+            showDecodedServerId: !prevState.showDecodedServerId
+        }));
     }
 
     buildPermissionTab() {
@@ -281,10 +330,115 @@ class VirtualDesktopSessionDetail extends Component<VirtualDesktopSessionDetailP
                                     id: 'session-health',
                                     disabled: this.state.session.state !== 'READY',
                                     content: (
-                                        <Container header={<Header variant={"h2"}>Session Health (Coming Soon)</Header>}>
-                                            <li>
-                                                Additional eVDI Session information from Amazon DCV Broker will be displayed.
-                                            </li>
+                                        <Container header={<Header variant={"h2"}>DCV Session Health</Header>}>
+                                            {this.state.sessionHealth ? (
+                                                <SpaceBetween size="l">
+                                                    <Container header={<Header variant="h3">Session Information</Header>}>
+                                                        <ColumnLayout columns={3} variant={"text-grid"}>
+                                                            <KeyValue title="Session ID" value={this.state.sessionHealth.id} clipboard={true}/>
+                                                            <KeyValue title="Name" value={this.state.sessionHealth.name}/>
+                                                            <KeyValue title="Owner" value={this.state.sessionHealth.owner}/>
+                                                            <KeyValue title="Type" value={this.state.sessionHealth.type}/>
+                                                            <KeyValue title="State" value={this.state.sessionHealth.state}/>
+                                                            <KeyValue title="Creation Time" value={this.state.sessionHealth.creation_time} type="date"/>
+                                                            <KeyValue title="Num. of Connections" value={this.state.sessionHealth.num_of_connections}/>
+                                                            <KeyValue title="Storage Root" value={this.state.sessionHealth.storage_root} clipboard={true}/>
+                                                            {this.state.sessionHealth.last_disconnection_time && (
+                                                                <KeyValue title="Last Disconnection" value={this.state.sessionHealth.last_disconnection_time} type="date"/>
+                                                            )}
+                                                        </ColumnLayout>
+                                                    </Container>
+
+                                                    {this.state.sessionHealth.server && (
+                                                        <Container header={<Header variant="h3">Server Information</Header>}>
+                                                            <ColumnLayout columns={3} variant={"text-grid"}>
+                                                                <div>
+                                                                    <KeyValue
+                                                                        title="Server ID"
+                                                                        value={
+                                                                            <div>
+                                                                                {this.state.showDecodedServerId ?
+                                                                                    this.decodeServerID(this.state.sessionHealth.server.id) :
+                                                                                    this.state.sessionHealth.server.id
+                                                                                }
+                                                                                <button
+                                                                                    onClick={this.toggleServerIdDisplay}
+                                                                                    style={{
+                                                                                        marginLeft: '8px',
+                                                                                        fontSize: '0.8em',
+                                                                                        background: 'none',
+                                                                                        border: 'none',
+                                                                                        padding: 0,
+                                                                                        color: '#0073bb',
+                                                                                        textDecoration: 'underline',
+                                                                                        cursor: 'pointer'
+                                                                                    }}
+                                                                                >
+                                                                                    {this.state.showDecodedServerId ? 'Show Encoded' : 'Decode'}
+                                                                                </button>
+                                                                            </div>
+                                                                        }
+
+                                                                        type="react-node"
+                                                                    />
+                                                                </div>
+                                                                <KeyValue title="IP Address" value={this.state.sessionHealth.server.ip} clipboard={true}/>
+                                                                <KeyValue title="Hostname" value={this.state.sessionHealth.server.hostname} clipboard={true}/>
+                                                                <KeyValue title="DCV Version" value={this.state.sessionHealth.server.version}/>
+                                                                <KeyValue title="Session Manager Version" value={this.state.sessionHealth.server.session_manager_agent_version}/>
+                                                                <KeyValue title="Server Availability" value={this.state.sessionHealth.server.availability}/>
+                                                                <KeyValue title="Console Sessions" value={this.state.sessionHealth.server.console_session_count}/>
+                                                                <KeyValue title="Virtual Sessions" value={this.state.sessionHealth.server.virtual_session_count}/>
+                                                                <KeyValue title="Web URL Path" value={this.state.sessionHealth.server.web_url_path}/>
+                                                            </ColumnLayout>
+                                                        </Container>
+                                                    )}
+
+                                                    {this.state.sessionHealth.server?.endpoints && this.state.sessionHealth.server.endpoints.length > 0 && (
+                                                        <Container header={<Header variant="h3">Server Endpoints</Header>}>
+                                                            <ColumnLayout columns={3} variant={"text-grid"}>
+                                                                {(() => {
+                                                                    // Deduplicate endpoints
+                                                                    const uniqueEndpoints: any[] = [];
+                                                                    const seen = new Set();
+
+                                                                    this.state.sessionHealth.server.endpoints.forEach((endpoint: any) => {
+                                                                        const key = `${endpoint.protocol}:${endpoint.port}:${endpoint.web_url_path || ''}`;
+                                                                        if (!seen.has(key)) {
+                                                                            seen.add(key);
+                                                                            uniqueEndpoints.push(endpoint);
+                                                                        }
+                                                                    });
+
+                                                                    return uniqueEndpoints.map((endpoint: any, index: number) => (
+                                                                        <React.Fragment key={index}>
+                                                                            <KeyValue title={`Endpoint ${index+1} Protocol`} value={endpoint.protocol}/>
+                                                                            <KeyValue title={`Endpoint ${index+1} Port`} value={endpoint.port}/>
+                                                                            <KeyValue title={`Endpoint ${index+1} Path`} value={endpoint.web_url_path || '(none)'}/>
+                                                                        </React.Fragment>
+                                                                    ));
+                                                                })()}
+                                                            </ColumnLayout>
+                                                        </Container>
+                                                    )}
+
+                                                    {this.state.sessionHealth.server?.tags && this.state.sessionHealth.server.tags.length > 0 && (
+                                                        <Container header={<Header variant="h3">Server Tags</Header>}>
+                                                            <ColumnLayout columns={2} variant={"text-grid"}>
+                                                                {this.state.sessionHealth.server.tags.map((tag: any, index: number) => (
+                                                                    <React.Fragment key={index}>
+                                                                        <KeyValue title={tag.key} value={tag.value} clipboard={true}/>
+                                                                    </React.Fragment>
+                                                                ))}
+                                                            </ColumnLayout>
+                                                        </Container>
+                                                    )}
+                                                </SpaceBetween>
+                                            ) : (
+                                                <SpaceBetween size="l">
+                                                    <p>Loading session health information...</p>
+                                                </SpaceBetween>
+                                            )}
                                         </Container>
                                     )
                                 },
@@ -308,4 +462,3 @@ class VirtualDesktopSessionDetail extends Component<VirtualDesktopSessionDetailP
 }
 
 export default withRouter(VirtualDesktopSessionDetail)
-

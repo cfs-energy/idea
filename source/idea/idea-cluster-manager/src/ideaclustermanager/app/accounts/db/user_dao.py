@@ -22,7 +22,6 @@ from boto3.dynamodb.conditions import Attr
 
 
 class UserDAO:
-
     def __init__(self, context: SocaContext, user_pool: CognitoUserPool, logger=None):
         self.context = context
         if logger is not None:
@@ -40,20 +39,12 @@ class UserDAO:
             create_table_request={
                 'TableName': self.get_table_name(),
                 'AttributeDefinitions': [
-                    {
-                        'AttributeName': 'username',
-                        'AttributeType': 'S'
-                    }
+                    {'AttributeName': 'username', 'AttributeType': 'S'}
                 ],
-                'KeySchema': [
-                    {
-                        'AttributeName': 'username',
-                        'KeyType': 'HASH'
-                    }
-                ],
-                'BillingMode': 'PAY_PER_REQUEST'
+                'KeySchema': [{'AttributeName': 'username', 'KeyType': 'HASH'}],
+                'BillingMode': 'PAY_PER_REQUEST',
             },
-            wait=True
+            wait=True,
         )
         self.table = self.context.aws().dynamodb_table().Table(self.get_table_name())
 
@@ -73,7 +64,7 @@ class UserDAO:
                 'password_max_age': Utils.get_value_as_int('password_max_age', user),
                 'additional_groups': Utils.get_value_as_list('additional_groups', user),
                 'created_on': Utils.get_value_as_int('created_on', user),
-                'updated_on': Utils.get_value_as_int('updated_on', user)
+                'updated_on': Utils.get_value_as_int('updated_on', user),
             }
         )
 
@@ -85,9 +76,7 @@ class UserDAO:
 
     @staticmethod
     def convert_to_db(user: User) -> Dict:
-        db_user = {
-            'username': user.username
-        }
+        db_user = {'username': user.username}
         if user.email is not None:
             db_user['email'] = user.email
         if user.uid is not None:
@@ -105,7 +94,9 @@ class UserDAO:
         if user.enabled is not None:
             db_user['enabled'] = user.enabled
         if user.password_last_set is not None:
-            db_user['password_last_set'] = int(user.password_last_set.timestamp() * 1000)
+            db_user['password_last_set'] = int(
+                user.password_last_set.timestamp() * 1000
+            )
         if user.password_max_age is not None:
             db_user['password_max_age'] = int(user.password_max_age)
         if user.additional_groups is not None:
@@ -114,7 +105,6 @@ class UserDAO:
         return db_user
 
     def create_user(self, user: Dict) -> Dict:
-
         username = Utils.get_value_as_string('username', user)
         username = AuthUtils.sanitize_username(username)
 
@@ -122,26 +112,23 @@ class UserDAO:
             **user,
             'username': username,
             'created_on': Utils.current_time_ms(),
-            'updated_on': Utils.current_time_ms()
+            'updated_on': Utils.current_time_ms(),
         }
 
         self.table.put_item(
-            Item=created_user,
-            ConditionExpression=Attr('username').not_exists()
+            Item=created_user, ConditionExpression=Attr('username').not_exists()
         )
         return created_user
 
     def get_user(self, username: str) -> Optional[Dict]:
         username = AuthUtils.sanitize_username(username)
         _lu_start = Utils.current_time_ms()
-        result = self.table.get_item(
-            Key={
-                'username': username
-            }
-        )
+        result = self.table.get_item(Key={'username': username})
         _lu_stop = Utils.current_time_ms()
         if self.logger.isEnabledFor(logging.DEBUG):
-            self.logger.debug(f"user_lookup: Took {_lu_stop - _lu_start}ms : {Utils.get_value_as_dict('Item', result)}")
+            self.logger.debug(
+                f'user_lookup: Took {_lu_stop - _lu_start}ms : {Utils.get_value_as_dict("Item", result)}'
+            )
         return Utils.get_value_as_dict('Item', result)
 
     def update_user(self, user: Dict) -> Dict:
@@ -161,14 +148,12 @@ class UserDAO:
             expression_attr_values[f':{key}'] = value
 
         result = self.table.update_item(
-            Key={
-                'username': username
-            },
+            Key={'username': username},
             ConditionExpression=Attr('username').eq(username),
             UpdateExpression='SET ' + ', '.join(update_expression_tokens),
             ExpressionAttributeNames=expression_attr_names,
             ExpressionAttributeValues=expression_attr_values,
-            ReturnValues='ALL_NEW'
+            ReturnValues='ALL_NEW',
         )
 
         updated_user = result['Attributes']
@@ -176,16 +161,10 @@ class UserDAO:
         return updated_user
 
     def delete_user(self, username: str):
-
         username = AuthUtils.sanitize_username(username)
-        self.table.delete_item(
-            Key={
-                'username': username
-            }
-        )
+        self.table.delete_item(Key={'username': username})
 
     def list_users(self, request: ListUsersRequest) -> ListUsersResult:
-
         scan_request = {}
 
         cursor = request.cursor
@@ -202,12 +181,12 @@ class UserDAO:
                 if filter_.eq is not None:
                     scan_filter[filter_.key] = {
                         'AttributeValueList': [filter_.eq],
-                        'ComparisonOperator': 'EQ'
+                        'ComparisonOperator': 'EQ',
                     }
                 if filter_.like is not None:
                     scan_filter[filter_.key] = {
                         'AttributeValueList': [filter_.like],
-                        'ComparisonOperator': 'CONTAINS'
+                        'ComparisonOperator': 'CONTAINS',
                     }
         if scan_filter is not None:
             scan_request['ScanFilter'] = scan_filter
@@ -219,7 +198,9 @@ class UserDAO:
         db_users = Utils.get_value_as_list('Items', scan_result, [])
 
         if self.logger.isEnabledFor(logging.DEBUG):
-            self.logger.debug(f"DDB Table scan took {_scan_end - _scan_start}ms for {len(db_users)} users")
+            self.logger.debug(
+                f'DDB Table scan took {_scan_end - _scan_start}ms for {len(db_users)} users'
+            )
 
         users = []
 
@@ -230,7 +211,9 @@ class UserDAO:
         _idp_end = Utils.current_time_ms()
 
         if self.logger.isEnabledFor(logging.DEBUG):
-            self.logger.debug(f"User status took {_idp_end - _idp_start}ms for {len(users)} users")
+            self.logger.debug(
+                f'User status took {_idp_end - _idp_start}ms for {len(users)} users'
+            )
 
         response_cursor = None
         last_evaluated_key = Utils.get_any_value('LastEvaluatedKey', scan_result)
@@ -238,8 +221,5 @@ class UserDAO:
             response_cursor = Utils.base64_encode(Utils.to_json(last_evaluated_key))
 
         return ListUsersResult(
-            listing=users,
-            paginator=SocaPaginator(
-                cursor=response_cursor
-            )
+            listing=users, paginator=SocaPaginator(cursor=response_cursor)
         )

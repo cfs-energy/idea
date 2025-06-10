@@ -32,8 +32,14 @@ class DynamoDBStreamSubscription:
     Create subscription for a DynamoDB Stream and Publish updates via DynamoDBStreamSubscriber protocol
     """
 
-    def __init__(self, stream_subscriber: DynamoDBStreamSubscriber, table_name: str, aws_region: str, aws_profile: Optional[str] = None, logger=None):
-
+    def __init__(
+        self,
+        stream_subscriber: DynamoDBStreamSubscriber,
+        table_name: str,
+        aws_region: str,
+        aws_profile: Optional[str] = None,
+        logger=None,
+    ):
         self.stream_subscriber = stream_subscriber
         self.table_name = table_name
         self.aws_region = aws_region
@@ -47,8 +53,12 @@ class DynamoDBStreamSubscription:
         if not Utils.is_empty(https_proxy):
             proxy_definitions = {'https': https_proxy}
             config = Config(proxies=proxy_definitions)
-        self.dynamodb_client = self.boto_session.client(service_name='dynamodb', region_name=self.aws_region)
-        self.dynamodb_streams_client = self.boto_session.client(service_name='dynamodbstreams', region_name=self.aws_region, config=config)
+        self.dynamodb_client = self.boto_session.client(
+            service_name='dynamodb', region_name=self.aws_region
+        )
+        self.dynamodb_streams_client = self.boto_session.client(
+            service_name='dynamodbstreams', region_name=self.aws_region, config=config
+        )
 
         self.stream_arn: Optional[str] = None
 
@@ -57,9 +67,14 @@ class DynamoDBStreamSubscription:
         self._shard_iterator_lock = threading.RLock()
         self._exit = threading.Event()
         self.shard_iterators_map: Dict[str, str] = {}
-        self.shard_initializer_thread = threading.Thread(name=f'{self.table_name}.shard-iterator-initializer', target=self.shard_iterator_initializer)
+        self.shard_initializer_thread = threading.Thread(
+            name=f'{self.table_name}.shard-iterator-initializer',
+            target=self.shard_iterator_initializer,
+        )
         self.shard_initializer_thread.start()
-        self.shard_processor_thread = threading.Thread(name=f'{self.table_name}.shard-processor', target=self.shard_processor)
+        self.shard_processor_thread = threading.Thread(
+            name=f'{self.table_name}.shard-processor', target=self.shard_processor
+        )
         self.shard_processor_thread.start()
 
     def set_logger(self, logger):
@@ -92,21 +107,29 @@ class DynamoDBStreamSubscription:
         while not self._exit.is_set():
             try:
                 with self._shard_iterator_lock:
-
                     # lazy initialize stream arn - once
                     if Utils.is_empty(self.stream_arn):
                         try:
-                            describe_table_result = self.dynamodb_client.describe_table(TableName=self.table_name)
+                            describe_table_result = self.dynamodb_client.describe_table(
+                                TableName=self.table_name
+                            )
                             table = describe_table_result['Table']
                             self.stream_arn = table['LatestStreamArn']
                         except botocore.exceptions.ClientError as e:
-                            if e.response['Error']['Code'] == 'ResourceNotFoundException':
+                            if (
+                                e.response['Error']['Code']
+                                == 'ResourceNotFoundException'
+                            ):
                                 # table may not be created yet due to race condition in module deployments
                                 continue
                             else:
                                 raise e
 
-                    describe_stream_result = self.dynamodb_streams_client.describe_stream(StreamArn=self.stream_arn)
+                    describe_stream_result = (
+                        self.dynamodb_streams_client.describe_stream(
+                            StreamArn=self.stream_arn
+                        )
+                    )
                     shards = describe_stream_result['StreamDescription']['Shards']
                     for shard in shards:
                         shard_id = shard['ShardId']
@@ -115,15 +138,22 @@ class DynamoDBStreamSubscription:
                             success = False
                             while not success:
                                 try:
-                                    get_shard_iterator_result = self.dynamodb_streams_client.get_shard_iterator(
-                                        StreamArn=self.stream_arn,
-                                        ShardId=shard_id,
-                                        ShardIteratorType='LATEST'
+                                    get_shard_iterator_result = (
+                                        self.dynamodb_streams_client.get_shard_iterator(
+                                            StreamArn=self.stream_arn,
+                                            ShardId=shard_id,
+                                            ShardIteratorType='LATEST',
+                                        )
                                     )
-                                    self.shard_iterators_map[shard_id] = get_shard_iterator_result['ShardIterator']
+                                    self.shard_iterators_map[shard_id] = (
+                                        get_shard_iterator_result['ShardIterator']
+                                    )
                                     success = True
                                 except botocore.exceptions.ClientError as e:
-                                    if e.response['Error']['Code'] == 'ProvisionedThroughputExceededException':
+                                    if (
+                                        e.response['Error']['Code']
+                                        == 'ProvisionedThroughputExceededException'
+                                    ):
                                         time.sleep(1)
                                         continue
                                     else:
@@ -139,7 +169,10 @@ class DynamoDBStreamSubscription:
                         del self.shard_iterators_map[shard_id]
 
             except Exception as e:
-                self.log_exception(f'failed to initialize {self.table_name} shard iterator: {e}', logger=self.logger)
+                self.log_exception(
+                    f'failed to initialize {self.table_name} shard iterator: {e}',
+                    logger=self.logger,
+                )
             finally:
                 self._exit.wait(random.randint(*SHARD_ITERATOR_INITIALIZER_INTERVAL))
 
@@ -154,13 +187,11 @@ class DynamoDBStreamSubscription:
         while not self._exit.is_set():
             try:
                 with self._shard_iterator_lock:
-
                     # randomize polling for shards so to avoid polling limit conflicts across servers
                     shard_ids = list(self.shard_iterators_map.keys())
                     random.shuffle(shard_ids)
 
                     for shard_id in shard_ids:
-
                         shard_iterator = self.shard_iterators_map[shard_id]
 
                         # shard is closed. skip
@@ -170,44 +201,83 @@ class DynamoDBStreamSubscription:
                         next_shard_iterator = shard_iterator
                         while True:
                             try:
-                                get_records_result = self.dynamodb_streams_client.get_records(ShardIterator=next_shard_iterator, Limit=1000)
+                                get_records_result = (
+                                    self.dynamodb_streams_client.get_records(
+                                        ShardIterator=next_shard_iterator, Limit=1000
+                                    )
+                                )
                             except botocore.exceptions.ClientError as e:
-                                if e.response['Error']['Code'] == 'ProvisionedThroughputExceededException':
+                                if (
+                                    e.response['Error']['Code']
+                                    == 'ProvisionedThroughputExceededException'
+                                ):
                                     time.sleep(1)
                                     continue
-                                elif e.response['Error']['Code'] in ('ExpiredIteratorException', 'TrimmedDataAccessException'):
+                                elif e.response['Error']['Code'] in (
+                                    'ExpiredIteratorException',
+                                    'TrimmedDataAccessException',
+                                ):
                                     next_shard_iterator = None
                                     break
                                 else:
                                     raise e
 
                             # when the shard is closed, next shard iterator will be None
-                            next_shard_iterator = get_records_result.get('NextShardIterator')
+                            next_shard_iterator = get_records_result.get(
+                                'NextShardIterator'
+                            )
                             # records can be an empty set, even when NextShardIterator is not None as the shard is not closed yet.
                             records = get_records_result.get('Records', [])
 
                             if len(records) > 0:
-                                self.log_info(f'{shard_id} - got {len(records)} records', logger=self.logger)
+                                self.log_info(
+                                    f'{shard_id} - got {len(records)} records',
+                                    logger=self.logger,
+                                )
 
                             for record in records:
                                 try:
                                     event_name = record['eventName']
                                     if event_name == 'INSERT':
-                                        config_entry_raw = record['dynamodb']['NewImage']
-                                        config_entry = {k: self.ddb_type_deserializer.deserialize(v) for k, v in config_entry_raw.items()}
+                                        config_entry_raw = record['dynamodb'][
+                                            'NewImage'
+                                        ]
+                                        config_entry = {
+                                            k: self.ddb_type_deserializer.deserialize(v)
+                                            for k, v in config_entry_raw.items()
+                                        }
                                         self.stream_subscriber.on_create(config_entry)
                                     elif event_name == 'MODIFY':
-                                        old_config_entry_raw = record['dynamodb']['OldImage']
-                                        old_config_entry = {k: self.ddb_type_deserializer.deserialize(v) for k, v in old_config_entry_raw.items()}
-                                        new_config_entry_raw = record['dynamodb']['NewImage']
-                                        new_config_entry = {k: self.ddb_type_deserializer.deserialize(v) for k, v in new_config_entry_raw.items()}
-                                        self.stream_subscriber.on_update(old_config_entry, new_config_entry)
+                                        old_config_entry_raw = record['dynamodb'][
+                                            'OldImage'
+                                        ]
+                                        old_config_entry = {
+                                            k: self.ddb_type_deserializer.deserialize(v)
+                                            for k, v in old_config_entry_raw.items()
+                                        }
+                                        new_config_entry_raw = record['dynamodb'][
+                                            'NewImage'
+                                        ]
+                                        new_config_entry = {
+                                            k: self.ddb_type_deserializer.deserialize(v)
+                                            for k, v in new_config_entry_raw.items()
+                                        }
+                                        self.stream_subscriber.on_update(
+                                            old_config_entry, new_config_entry
+                                        )
                                     elif event_name == 'REMOVE':
-                                        config_entry_raw = record['dynamodb']['OldImage']
-                                        config_entry = {k: self.ddb_type_deserializer.deserialize(v) for k, v in config_entry_raw.items()}
+                                        config_entry_raw = record['dynamodb'][
+                                            'OldImage'
+                                        ]
+                                        config_entry = {
+                                            k: self.ddb_type_deserializer.deserialize(v)
+                                            for k, v in config_entry_raw.items()
+                                        }
                                         self.stream_subscriber.on_delete(config_entry)
                                 except Exception as e:
-                                    self.log_exception(f'failed to process {self.table_name} stream update: {e}, record: {record}')
+                                    self.log_exception(
+                                        f'failed to process {self.table_name} stream update: {e}, record: {record}'
+                                    )
 
                             if len(records) == 0:
                                 break

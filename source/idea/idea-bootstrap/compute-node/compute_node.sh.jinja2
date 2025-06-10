@@ -17,16 +17,17 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
   {'Key':'Name', 'Value': 'JobId: ' + context.vars.job.job_id + ', Cluster: ' + context.cluster_name },
   {'Key':'idea:JobOwner', 'Value': context.vars.job.owner },
   {'Key':'idea:Project', 'Value': context.vars.job.project },
-  {'Key':'idea:JobQueue', 'Value': context.vars.job.queue }
+  {'Key':'idea:JobQueue', 'Value': context.vars.job.queue },
+  {'Key':'idea:JobOwnerEmail', 'Value': context.vars.job.owner_email}
 ] %}
 
-{%- with  ebs_volume_tags = TAGS %}
+{% with  ebs_volume_tags = TAGS %}
   {% include '_templates/linux/tag_ebs_volumes.jinja2' %}
-{%- endwith %}
+{% endwith %}
 
-{%- with  network_interface_tags = TAGS %}
+{% with  network_interface_tags = TAGS %}
   {% include '_templates/linux/tag_network_interface.jinja2' %}
-{%- endwith %}
+{% endwith %}
 
 if [[ ! -f ${BOOTSTRAP_DIR}/idea_preinstalled_packages.log ]]; then
 
@@ -34,16 +35,18 @@ if [[ ! -f ${BOOTSTRAP_DIR}/idea_preinstalled_packages.log ]]; then
 
   {% include '_templates/linux/system_packages.jinja2' %}
 
-  {% include '_templates/linux/cloudwatch_agent.jinja2' %}
-
-  {%- if context.is_metrics_provider_prometheus() %}
-    {%- include '_templates/linux/prometheus.jinja2' %}
-    {%- include '_templates/linux/prometheus_node_exporter.jinja2' %}
-  {%- endif %}
+  echo "Package installation completed at $(date)" >> ${BOOTSTRAP_DIR}/idea_preinstalled_packages.log
 
 else
    log_info "Found ${BOOTSTRAP_DIR}/idea_preinstalled_packages.log... skipping package installation..."
 fi
+
+{% include '_templates/linux/cloudwatch_agent.jinja2' %}
+
+{% if context.is_metrics_provider_prometheus() %}
+  {% include '_templates/linux/prometheus.jinja2' %}
+  {% include '_templates/linux/prometheus_node_exporter.jinja2' %}
+{% endif %}
 
 {% include '_templates/linux/chronyd.jinja2' %}
 
@@ -53,22 +56,22 @@ fi
 
 {% include '_templates/linux/disable_motd_update.jinja2' %}
 
-{%- if context.vars.job.is_persistent_capacity() %}
+{% if context.vars.job.is_persistent_capacity() %}
   {% set motd_messages = [
     'Compute Node, Queue: ' + context.vars.job.queue + ', Keep Forever - Stack UUID: ' + context.vars.job.provisioning_options.stack_uuid + ', Cluster: ' + context.cluster_name
   ] %}
-{%- elif context.vars.job.is_shared_capacity() %}
+{% elif context.vars.job.is_shared_capacity() %}
   {% set motd_messages = [
     'Compute Node, Queue: ' + context.vars.job.queue + ', JobGroup: ' + context.vars.job.job_group + ', Cluster: ' + context.cluster_name
   ] %}
-{%- else %}
+{% else %}
   {% set motd_messages = [
     'Compute Node, Queue: ' + context.vars.job.queue + ', JobId: ' + context.vars.job.job_id + ', Cluster: ' + context.cluster_name
   ] %}
-{%- endif %}
-{%- with messages = motd_messages %}
+{% endif %}
+{% with messages = motd_messages %}
   {% include '_templates/linux/motd.jinja2' %}
-{%- endwith %}
+{% endwith %}
 
 {% include '_templates/linux/join_directoryservice.jinja2' %}
 

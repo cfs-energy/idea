@@ -14,7 +14,12 @@ from ideasdk.context import SocaContextOptions, SocaCliContext
 from ideasdk.utils import EnvironmentUtils
 
 
-def build_cli_context(cluster_config: bool = True, enable_aws_client_provider: bool = True, enable_aws_util: bool = True, unix_socket_timeout: int = 10):
+def build_cli_context(
+    cluster_config: bool = True,
+    enable_aws_client_provider: bool = True,
+    enable_aws_util: bool = True,
+    unix_socket_timeout: int = 10,
+):
     cluster_name = EnvironmentUtils.idea_cluster_name(required=True)
     module_id = EnvironmentUtils.idea_module_id(required=True)
     module_set = EnvironmentUtils.idea_module_set(required=True)
@@ -30,6 +35,6 @@ def build_cli_context(cluster_config: bool = True, enable_aws_client_provider: b
             aws_region=aws_region,
             enable_aws_client_provider=enable_aws_client_provider,
             enable_aws_util=enable_aws_util,
-            default_logging_profile='console'
-        )
+            default_logging_profile='console',
+        ),
     )

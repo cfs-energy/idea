@@ -35,23 +35,17 @@ INVALID_PARAMS = 'INVALID_PARAMS'
 BUILD_FAILED = 'BUILD_FAILED'
 GENERAL_EXCEPTION = 'GENERAL_EXCEPTION'
 
-DEVELOPER_ONBOARDING_NOTE = f'Please go through the Developer On-boarding docs before contributing to IDEA source code.'
+DEVELOPER_ONBOARDING_NOTE = 'Please go through the Developer On-boarding docs before contributing to IDEA source code.'
 
 
 class SocaDevelopmentProps:
-
     def __init__(self):
         self.software_versions: Optional[Dict] = None
         self.load_software_versions()
 
     @staticmethod
     def _run_cmd(cmd, shell=True) -> str:
-        result = subprocess.run(
-            args=cmd,
-            shell=shell,
-            capture_output=True,
-            text=True
-        )
+        result = subprocess.run(args=cmd, shell=shell, capture_output=True, text=True)
         if result.returncode == 0:
             return str(result.stdout)
         else:
@@ -123,7 +117,7 @@ class SocaDevelopmentProps:
         if virtual_env is None:
             python_bin = Path(self.which_python)
             virtual_env = python_bin.parent.parent
-        return os.path.join(virtual_env, 'lib', 'python3.9', 'site-packages')
+        return os.path.join(virtual_env, 'lib', 'python3.13', 'site-packages')
 
     @property
     def requirements_dir(self) -> str:
@@ -241,7 +235,9 @@ class SocaDevelopmentProps:
 
     @property
     def idea_user_home(self) -> str:
-        idea_user_home = os.environ.get('IDEA_USER_HOME', os.path.expanduser(os.path.join('~', '.idea')))
+        idea_user_home = os.environ.get(
+            'IDEA_USER_HOME', os.path.expanduser(os.path.join('~', '.idea'))
+        )
         os.makedirs(idea_user_home, exist_ok=True)
         return idea_user_home
 
@@ -258,7 +254,6 @@ class SocaDevelopmentProps:
 
 
 class SocaDevelopmentConsole:
-
     def __init__(self):
         self.console = Console()
 
@@ -286,14 +281,18 @@ class SocaDevelopmentConsole:
     @staticmethod
     def confirm(message: str, default=False, auto_enter=True, icon='?') -> bool:
         try:
-            result = unsafe_prompt(questions=[{
-                'type': 'confirm',
-                'name': 'result',
-                'message': message,
-                'default': default,
-                'auto_enter': auto_enter,
-                'qmark': icon
-            }])
+            result = unsafe_prompt(
+                questions=[
+                    {
+                        'type': 'confirm',
+                        'name': 'result',
+                        'message': message,
+                        'default': default,
+                        'auto_enter': auto_enter,
+                        'qmark': icon,
+                    }
+                ]
+            )
             if 'result' in result:
                 return result['result']
             return False
@@ -307,7 +306,9 @@ class SocaDevelopmentConsole:
         except KeyboardInterrupt:
             return {}
 
-    def print_header_block(self, content: str, width: int = 120, break_long_words: bool = False, style=None):
+    def print_header_block(
+        self, content: str, width: int = 120, break_long_words: bool = False, style=None
+    ):
         if style == 'main':
             header_char = '-'
             style = RichStyle(bold=True, color='bright_white')
@@ -322,14 +323,22 @@ class SocaDevelopmentConsole:
             style = None
 
         self.console.print(header_char * width, style=style)
-        lines = textwrap.wrap(f'* {content}', width, break_on_hyphens=False, break_long_words=break_long_words, subsequent_indent='  ')
+        lines = textwrap.wrap(
+            f'* {content}',
+            width,
+            break_on_hyphens=False,
+            break_long_words=break_long_words,
+            subsequent_indent='  ',
+        )
         for line in lines:
             self.console.print(line, style=style)
         self.console.print(header_char * width, style=style)
 
 
 class SocaDevelopmentException(Exception):
-    def __init__(self, message: str, error_code: str = 'IDEA_DEVELOPMENT_ERROR', ref=None):
+    def __init__(
+        self, message: str, error_code: str = 'IDEA_DEVELOPMENT_ERROR', ref=None
+    ):
         self.error_code = error_code
         self.message = message
         self.ref = ref
@@ -342,13 +351,12 @@ class SocaDevelopmentException(Exception):
 
 
 class SocaDevelopmentExceptions:
-
     @staticmethod
     def virtual_env_not_setup():
         return SocaDevelopmentException(
             error_code=IDEA_DEVELOPMENT_ERROR,
             message=f'VirtualEnv is not setup. Please setup a python virtual environment before proceeding. {os.linesep}'
-                    f'{DEVELOPER_ONBOARDING_NOTE}'
+            f'{DEVELOPER_ONBOARDING_NOTE}',
         )
 
     @staticmethod
@@ -356,30 +364,21 @@ class SocaDevelopmentExceptions:
         return SocaDevelopmentException(
             error_code=INVALID_PYTHON_VERSION,
             message=f'You are not running a valid Python version required by IDEA. {os.linesep}'
-                    f'You must have Python {props.idea_python_version} installed for IDEA development.{os.linesep}'
-                    f'{DEVELOPER_ONBOARDING_NOTE}'
+            f'You must have Python {props.idea_python_version} installed for IDEA development.{os.linesep}'
+            f'{DEVELOPER_ONBOARDING_NOTE}',
         )
 
     @staticmethod
     def invalid_params(message: str):
-        return SocaDevelopmentException(
-            error_code=INVALID_PARAMS,
-            message=message
-        )
+        return SocaDevelopmentException(error_code=INVALID_PARAMS, message=message)
 
     @staticmethod
     def build_failed(message: str):
-        return SocaDevelopmentException(
-            error_code=BUILD_FAILED,
-            message=message
-        )
+        return SocaDevelopmentException(error_code=BUILD_FAILED, message=message)
 
     @staticmethod
     def general_exception(message: str):
-        return SocaDevelopmentException(
-            error_code=GENERAL_EXCEPTION,
-            message=message
-        )
+        return SocaDevelopmentException(error_code=GENERAL_EXCEPTION, message=message)
 
     @staticmethod
     def exception(error_code: str, message: str):
@@ -390,14 +389,17 @@ props = SocaDevelopmentProps()
 
 
 class SocaDevelopmentUtils:
-
     @staticmethod
     def get_base_prefix_compat() -> str:
         """
         Get base/real prefix, or sys.prefix if there is none.
         Sourced From: https://stackoverflow.com/questions/1871549/determine-if-python-is-running-inside-virtualenv
         """
-        return getattr(sys, "base_prefix", None) or getattr(sys, "real_prefix", None) or sys.prefix
+        return (
+            getattr(sys, 'base_prefix', None)
+            or getattr(sys, 'real_prefix', None)
+            or sys.prefix
+        )
 
     def in_virtualenv(self) -> bool:
         return self.get_base_prefix_compat() != sys.prefix
@@ -431,11 +433,7 @@ class SocaDevelopmentUtils:
 
     @staticmethod
     def get_supported_modules() -> Optional[Set[str]]:
-        return {
-            'scheduler',
-            'cluster-manager',
-            'virtual-desktop-controller'
-        }
+        return {'scheduler', 'cluster-manager', 'virtual-desktop-controller'}
 
     @staticmethod
     def get_module_name(token: str) -> Optional[str]:

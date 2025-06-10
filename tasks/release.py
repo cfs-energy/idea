@@ -10,7 +10,7 @@
 #  and limitations under the License.
 
 import tasks.idea as idea
-from invoke import task, Context
+from invoke import task
 
 from ideasdk.utils import Utils
 
@@ -22,14 +22,16 @@ from pathlib import Path
 
 @task()
 def update_version(c, version):
-    # type: (Context, str) -> None
+    # type: (Context, str) -> None # type: ignore
     """
     update idea release version in all applicable places
     """
     old_version = idea.props.idea_release_version
     if version is not None and len(version.strip()) > 0:
         print(f'updating IDEA_VERSION.txt with version: {version}')
-        with open(os.path.join(idea.props.project_root_dir, 'IDEA_VERSION.txt'), 'w') as f:
+        with open(
+            os.path.join(idea.props.project_root_dir, 'IDEA_VERSION.txt'), 'w'
+        ) as f:
             f.write(version)
 
         print(f'updating idea-admin.sh with version: {version}')
@@ -43,7 +45,9 @@ def update_version(c, version):
             f.write(content)
 
         print(f'updating idea-admin-windows.ps1 with version: {version}')
-        idea_admin_ps1 = os.path.join(idea.props.project_root_dir, 'idea-admin-windows.ps1')
+        idea_admin_ps1 = os.path.join(
+            idea.props.project_root_dir, 'idea-admin-windows.ps1'
+        )
         with open(idea_admin_ps1, 'r') as f:
             content = f.read()
             replace_old = f'$IDEARevision = if ($Env:IDEA_REVISION) {{$Env:IDEA_REVISION}} else {{"v{old_version}"}}'
@@ -65,7 +69,7 @@ def update_version(c, version):
 
 @task()
 def build_opensource_dist(c):
-    # type: (Context) -> None
+    # type: (Context) -> None # type: ignore
     """
     build open source package for Github
     """
@@ -86,7 +90,11 @@ def build_opensource_dist(c):
                 ignored_names.append(name)
             if src_base_name == 'idea-administrator' and name.endswith('tar.gz'):
                 ignored_names.append(name)
-            if src_base_name == 'deployment' and name in ('idea', 'open-source', 'global-s3-assets'):
+            if src_base_name == 'deployment' and name in (
+                'idea',
+                'open-source',
+                'global-s3-assets',
+            ):
                 ignored_names.append(name)
             if name in (
                 'dist',
@@ -94,7 +102,7 @@ def build_opensource_dist(c):
                 '__pycache__',
                 '.DS_Store',
                 'yarn-error.log',
-                'local_dev.py'
+                'local_dev.py',
             ):
                 ignored_names.append(name)
 
@@ -129,26 +137,33 @@ def build_opensource_dist(c):
         'IDEA_VERSION.txt',
         'software_versions.yml',
         'idea-admin.sh',
-        'idea-admin-windows.ps1'
+        'idea-admin-windows.ps1',
     ]
     for target in targets:
         if os.path.isdir(os.path.join(idea.props.project_root_dir, target)):
             shutil.copytree(
                 src=os.path.join(idea.props.project_root_dir, target),
                 dst=os.path.join(opensource_build_sources_dir, target),
-                ignore=ignore_callback
+                ignore=ignore_callback,
             )
         else:
-            shutil.copy(os.path.join(idea.props.project_root_dir, target), os.path.join(opensource_build_sources_dir, target))
+            shutil.copy(
+                os.path.join(idea.props.project_root_dir, target),
+                os.path.join(opensource_build_sources_dir, target),
+            )
 
     for line in Utils.print_directory_tree(Path(opensource_build_sources_dir)):
         print(line)
 
-    shutil.make_archive(opensource_build_sources_dir, 'zip', opensource_build_sources_dir)
+    shutil.make_archive(
+        opensource_build_sources_dir, 'zip', opensource_build_sources_dir
+    )
     zip_file = f'{opensource_build_sources_dir}.zip'
 
     # delete open-source target directory if exists
-    opensource_target_dir = os.path.join(idea.props.project_deployment_dir, 'open-source')
+    opensource_target_dir = os.path.join(
+        idea.props.project_deployment_dir, 'open-source'
+    )
     if os.path.isdir(opensource_target_dir):
         shutil.rmtree(opensource_target_dir)
     os.makedirs(opensource_target_dir)
@@ -157,27 +172,35 @@ def build_opensource_dist(c):
     target_zip_file = os.path.join(opensource_target_dir, 'idea.zip')
     shutil.copy(zip_file, target_zip_file)
 
-    idea.console.print_header_block(f'OpenSource zip file for Github: {target_zip_file}')
+    idea.console.print_header_block(
+        f'OpenSource zip file for Github: {target_zip_file}'
+    )
 
 
 @task()
 def build_s3_dist(c):
-    # type: (Context) -> None
+    # type: (Context) -> None # type: ignore
     """
     build s3 distribution package for global assets
     """
-    idea.console.print_header_block('Building S3 distribution package for solution\'s global assets ...')
+    idea.console.print_header_block(
+        "Building S3 distribution package for solution's global assets ..."
+    )
 
     # initialize deployment/global-s3-assets directory (delete if exists)
     # global-s3-assets os added to .gitignore
-    global_s3_assets_dir = os.path.join(idea.props.project_deployment_dir, 'global-s3-assets')
+    global_s3_assets_dir = os.path.join(
+        idea.props.project_deployment_dir, 'global-s3-assets'
+    )
     if os.path.isdir(global_s3_assets_dir):
         shutil.rmtree(global_s3_assets_dir)
     os.makedirs(global_s3_assets_dir)
 
     # initialize deployment/regional-s3-assets directory (delete if exists)
     # regional-s3-assets os added to .gitignore
-    regional_s3_assets_dir = os.path.join(idea.props.project_deployment_dir, 'regional-s3-assets')
+    regional_s3_assets_dir = os.path.join(
+        idea.props.project_deployment_dir, 'regional-s3-assets'
+    )
     if os.path.isdir(regional_s3_assets_dir):
         shutil.rmtree(regional_s3_assets_dir)
     os.makedirs(regional_s3_assets_dir)
@@ -190,18 +213,17 @@ def build_s3_dist(c):
 
     # convert policy yaml files to json for each partition and copy to:
     # deployment/global-s3-assets/installer_policies/<partition>/<policy-name>.json
-    supported_aws_partitions = [
-        'aws'
-    ]
+    supported_aws_partitions = ['aws']
 
-    policy_source_dir = os.path.join(idea.props.administrator_project_dir, 'resources', 'installer_policies')
+    policy_source_dir = os.path.join(
+        idea.props.administrator_project_dir, 'resources', 'installer_policies'
+    )
     policy_target_dir = os.path.join(global_s3_assets_dir, 'installer_policies')
     os.makedirs(policy_target_dir)
 
     policy_files = os.listdir(policy_source_dir)
 
     for aws_partition in supported_aws_partitions:
-
         partition_target_dir = os.path.join(policy_target_dir, aws_partition)
         os.makedirs(partition_target_dir)
 
@@ -213,11 +235,15 @@ def build_s3_dist(c):
                 content.replace('arn:aws:', f'arn:{aws_partition}:')
                 policy_dict = Utils.from_yaml(content)
 
-            json_file = os.path.join(partition_target_dir, policy_file_name.replace('.yml', '.json'))
+            json_file = os.path.join(
+                partition_target_dir, policy_file_name.replace('.yml', '.json')
+            )
             with open(json_file, 'w') as f:
                 f.write(Utils.to_json(policy_dict, indent=True))
 
     for line in Utils.print_directory_tree(Path(global_s3_assets_dir)):
         print(line)
 
-    idea.console.print_header_block(f'S3 distribution created successfully: {global_s3_assets_dir}')
+    idea.console.print_header_block(
+        f'S3 distribution created successfully: {global_s3_assets_dir}'
+    )

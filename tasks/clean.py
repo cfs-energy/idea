@@ -12,7 +12,7 @@
 import tasks.idea as idea
 from tasks.tools.clean_tool import CleanTool
 
-from invoke import task, Context
+from invoke import task
 
 
 @task
@@ -25,7 +25,7 @@ def data_model(c):
 
 @task
 def sdk(c):
-    # type: (Context) -> None
+    # type: (Context) -> None # type: ignore
     """
     clean sdk
     """
@@ -34,7 +34,7 @@ def sdk(c):
 
 @task
 def scheduler(c):
-    # type: (Context) -> None
+    # type: (Context) -> None # type: ignore
     """
     clean scheduler
     """
@@ -43,7 +43,7 @@ def scheduler(c):
 
 @task
 def administrator(c):
-    # type: (Context) -> None
+    # type: (Context) -> None # type: ignore
     """
     clean administrator
     """
@@ -52,7 +52,7 @@ def administrator(c):
 
 @task
 def cluster_manager(c):
-    # type: (Context) -> None
+    # type: (Context) -> None # type: ignore
     """
     clean cluster manager
     """
@@ -61,7 +61,7 @@ def cluster_manager(c):
 
 @task
 def virtual_desktop_controller(c):
-    # type: (Context) -> None
+    # type: (Context) -> None # type: ignore
     """
     clean virtual desktop controller
     """
@@ -71,7 +71,7 @@ def virtual_desktop_controller(c):
 
 @task(name='all', default=True)
 def clean_all(c):
-    # type: (Context) -> None
+    # type: (Context) -> None # type: ignore
     """
     clean all components
     """

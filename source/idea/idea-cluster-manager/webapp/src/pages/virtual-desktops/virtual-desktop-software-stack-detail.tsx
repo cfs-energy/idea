@@ -24,8 +24,6 @@ import Utils from "../../common/utils";
 import VirtualDesktopSoftwareStackEditForm from "./forms/virtual-desktop-software-stack-edit-form";
 import {VirtualDesktopAdminClient} from "../../client";
 import {withRouter} from "../../navigation/navigation-utils";
-import {EnabledDisabledStatusIndicator} from "../../components/common";
-import dot from "dot-object";
 
 export interface VirtualDesktopSoftwareStackDetailProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
 }
@@ -46,6 +44,9 @@ class VirtualDesktopSoftwareStackDetail extends Component<VirtualDesktopSoftware
             softwareStack: {},
             showEditSoftwareStackForm: false
         }
+
+        // Bind methods
+        this.handleEditClick = this.handleEditClick.bind(this);
     }
 
     getSoftwareStackId(): string {
@@ -71,16 +72,38 @@ class VirtualDesktopSoftwareStackDetail extends Component<VirtualDesktopSoftware
             <ul>
                 {
                     this.state.softwareStack.projects?.map(project => {
-                        return <li>{project.title} | {project.name}</li>
+                        return <li key={project.name}>{project.title} | {project.name}</li>
                     })
                 }
             </ul>
         )
     }
 
+    // Handler for edit button click
+    handleEditClick() {
+        console.log("Edit button clicked directly through bound handler");
+
+        // First ensure form is visible
+        this.setState({
+            showEditSoftwareStackForm: true
+        }, () => {
+            console.log("State updated, showEditSoftwareStackForm:", this.state.showEditSoftwareStackForm);
+
+            // Then wait a tick for the form to render and get its ref
+            setTimeout(() => {
+                if (this.editStackForm.current) {
+                    console.log("Calling showModal on the form ref");
+                    this.editStackForm.current.showModal();
+                } else {
+                    console.error("Form ref is not available after state update and timeout");
+                }
+            }, 0);
+        });
+    }
+
     buildHeaderActions() {
         return (
-            <Button variant={"primary"} onClick={() => this.showEditSoftwareStackForm()}> Edit </Button>
+            <Button variant={"primary"} onClick={this.handleEditClick}> Edit </Button>
         )
     }
 
@@ -103,16 +126,17 @@ class VirtualDesktopSoftwareStackDetail extends Component<VirtualDesktopSoftware
                     id: 'details',
                     content: (
                         <Container header={<Header variant={"h2"}>Stack Details</Header>}>
-                            <Grid gridDefinition={[{colspan: 8}, {colspan: 4}]}>
-                                <ColumnLayout columns={3} variant={"text-grid"}>
+                            <Grid gridDefinition={[{colspan: 12}]}>
+                                <ColumnLayout columns={4} variant={"text-grid"}>
                                     <KeyValue title="Software Stack Id" value={this.state.softwareStack.stack_id} clipboard={true}/>
                                     <KeyValue title="Minimum Storage Size" value={this.state.softwareStack.min_storage} type="memory"/>
                                     <KeyValue title="Minimum RAM Size" value={this.state.softwareStack.min_ram} type="memory"/>
                                     <KeyValue title="Architecture" value={this.state.softwareStack.architecture}/>
                                     <KeyValue title="GPU" value={this.state.softwareStack.gpu?.replaceAll('_', ' ')}/>
                                     <KeyValue title="Instance Tenancy" value={this.state.softwareStack.launch_tenancy}/>
+                                    <KeyValue title={"Projects"} value={this.buildProjectsDetails()} type={"react-node"}/>
+                                    <KeyValue title={"Allowed Instance Types"} value={this.formatAllowedInstanceTypes()} type={"react-node"}/>
                                 </ColumnLayout>
-                                <KeyValue title={"Projects"} value={this.buildProjectsDetails()} type={"react-node"}/>
                             </Grid>
                         </Container>
                     )
@@ -135,57 +159,20 @@ class VirtualDesktopSoftwareStackDetail extends Component<VirtualDesktopSoftware
         </SpaceBetween>)
     }
 
-    hideEditSoftwareStackForm() {
-        this.setState({
-            showEditSoftwareStackForm: false
-        })
-    }
+    formatAllowedInstanceTypes() {
+        const { allowed_instance_types } = this.state.softwareStack;
 
-    showEditSoftwareStackForm() {
-        this.setState({
-            showEditSoftwareStackForm: true
-        }, () => {
-            this.getEditSoftwareStackForm().showModal()
-        })
-    }
+        if (!allowed_instance_types || allowed_instance_types.length === 0) {
+            return <span>Using cluster global instance type settings</span>;
+        }
 
-    getEditSoftwareStackForm(): VirtualDesktopSoftwareStackEditForm {
-        return this.editStackForm.current!
-    }
-
-    buildEditForm() {
         return (
-            <VirtualDesktopSoftwareStackEditForm
-                ref={this.editStackForm}
-                softwareStack={this.state.softwareStack}
-                onSubmit={(stack_id: string, base_os: VirtualDesktopBaseOS, name: string, description: string, projects: Project[], pool_enabled: boolean, pool_asg_name: string, launch_tenancy: VirtualDesktopTenancy) => {
-                    return this.getVirtualDesktopAdminClient().updateSoftwareStack({
-                            software_stack: {
-                                stack_id: stack_id,
-                                base_os: base_os,
-                                name: name,
-                                description: description,
-                                projects: projects,
-                                pool_enabled: pool_enabled,
-                                pool_asg_name: pool_asg_name,
-                                launch_tenancy: launch_tenancy
-                            }
-                        }
-                    ).then(response => {
-                        this.setState({
-                            softwareStack: response.software_stack!
-                        })
-                        return Promise.resolve(true)
-                    }).catch(error => {
-                        this.getEditSoftwareStackForm().setError(error.errorCode, error.message)
-                        return Promise.resolve(false)
-                    })
-                }}
-                onDismiss={() => {
-                    this.hideEditSoftwareStackForm()
-                }}
-            />
-        )
+            <ul style={{ marginTop: 0 }}>
+                {allowed_instance_types.map((instanceType, index) => (
+                    <li key={index}>{instanceType}</li>
+                ))}
+            </ul>
+        );
     }
 
     render() {
@@ -232,7 +219,51 @@ class VirtualDesktopSoftwareStackDetail extends Component<VirtualDesktopSoftware
                 content={
                     <div>
                         {this.buildDetails()}
-                        {this.state.showEditSoftwareStackForm && this.buildEditForm()}
+                        {this.state.showEditSoftwareStackForm &&
+                            <VirtualDesktopSoftwareStackEditForm
+                                ref={this.editStackForm}
+                                softwareStack={this.state.softwareStack}
+                                onSubmit={(stack_id: string, base_os: VirtualDesktopBaseOS, name: string, description: string, projects: Project[], pool_enabled: boolean, pool_asg_name: string, launch_tenancy: VirtualDesktopTenancy, allowed_instance_types?: string[], ami_id?: string, min_ram?: number, min_storage?: number) => {
+                                    return this.getVirtualDesktopAdminClient().updateSoftwareStack({
+                                            software_stack: {
+                                                stack_id: stack_id,
+                                                base_os: base_os,
+                                                name: name,
+                                                description: description,
+                                                projects: projects,
+                                                pool_enabled: pool_enabled,
+                                                pool_asg_name: pool_asg_name,
+                                                launch_tenancy: launch_tenancy,
+                                                allowed_instance_types: allowed_instance_types,
+                                                ami_id: ami_id,
+                                                min_ram: min_ram ? {
+                                                    value: min_ram,
+                                                    unit: 'gb'
+                                                } : this.state.softwareStack.min_ram,
+                                                min_storage: min_storage ? {
+                                                    value: min_storage,
+                                                    unit: 'gb'
+                                                } : this.state.softwareStack.min_storage
+                                            }
+                                        }
+                                    ).then(response => {
+                                        this.setState({
+                                            softwareStack: response.software_stack!,
+                                            showEditSoftwareStackForm: false
+                                        })
+                                        return Promise.resolve(true)
+                                    }).catch(error => {
+                                        if (this.editStackForm.current) {
+                                            this.editStackForm.current.setError(error.errorCode, error.message)
+                                        }
+                                        return Promise.resolve(false)
+                                    })
+                                }}
+                                onDismiss={() => {
+                                    this.setState({ showEditSoftwareStackForm: false })
+                                }}
+                            />
+                        }
                     </div>
                 }
             />
@@ -241,4 +272,3 @@ class VirtualDesktopSoftwareStackDetail extends Component<VirtualDesktopSoftware
 }
 
 export default withRouter(VirtualDesktopSoftwareStackDetail)
-

@@ -10,7 +10,11 @@
 #  and limitations under the License.
 from ideadatamodel.constants import SERVICE_ID_METRICS
 from ideasdk.service import SocaService
-from ideasdk.protocols import MetricsServiceProtocol, MetricsAccumulatorProtocol, SocaContextProtocol
+from ideasdk.protocols import (
+    MetricsServiceProtocol,
+    MetricsAccumulatorProtocol,
+    SocaContextProtocol,
+)
 from ideasdk.metrics.metrics_provider_factory import MetricsProviderFactory
 from ideasdk.utils import Utils
 
@@ -27,8 +31,9 @@ ACCUMULATED_METRICS_INTERVAL_SECS = 60  # do not change!
 
 
 class MetricsService(SocaService, MetricsServiceProtocol):
-
-    def __init__(self, context: SocaContextProtocol, default_namespace: Optional[str] = None):
+    def __init__(
+        self, context: SocaContextProtocol, default_namespace: Optional[str] = None
+    ):
         super().__init__(context=context)
         self._context = context
         self._logger = context.logger('metrics-service')
@@ -39,17 +44,17 @@ class MetricsService(SocaService, MetricsServiceProtocol):
 
         self._exit = Event()
 
-        self._accumulators: Optional[OrderedDict[str, MetricsAccumulatorProtocol]] = OrderedDict()
+        self._accumulators: Optional[OrderedDict[str, MetricsAccumulatorProtocol]] = (
+            OrderedDict()
+        )
         self._factory = MetricsProviderFactory(context=self._context)
         self._metrics_backlog_queue = queue.Queue(maxsize=BACKLOG_MAX_SIZE)
 
         self._backlog_processor_thread = Thread(
-            name='metrics-backlog',
-            target=self._poll_backlog
+            name='metrics-backlog', target=self._poll_backlog
         )
         self._system_metrics_thread = Thread(
-            name='accumulated-metrics',
-            target=self._accumulated_metrics_loop
+            name='accumulated-metrics', target=self._accumulated_metrics_loop
         )
 
         self._backlog_processor_thread.start()
@@ -62,7 +67,9 @@ class MetricsService(SocaService, MetricsServiceProtocol):
         current = 0
         while not self._exit.is_set():
             try:
-                metric_data = self._metrics_backlog_queue.get(block=True, timeout=BACKLOG_WAIT_TIMEOUT_SECS)
+                metric_data = self._metrics_backlog_queue.get(
+                    block=True, timeout=BACKLOG_WAIT_TIMEOUT_SECS
+                )
                 if metric_data is None or len(metric_data) == 0:
                     continue
 
@@ -92,7 +99,9 @@ class MetricsService(SocaService, MetricsServiceProtocol):
                     self._factory.flush()
                     current = 0
             except Exception as e:
-                self._logger.exception(f'exception while processing metrics backlog: {e}')
+                self._logger.exception(
+                    f'exception while processing metrics backlog: {e}'
+                )
 
         try:
             self._factory.flush()
@@ -102,21 +111,28 @@ class MetricsService(SocaService, MetricsServiceProtocol):
     def _accumulated_metrics_loop(self):
         while not self._exit.is_set():
             try:
-
                 # publish accumulated metrics only from the leader node
                 if not self._context.is_leader():
-                    self._logger.debug('not a leader node. skip publishing accumulated metrics.')
+                    self._logger.debug(
+                        'not a leader node. skip publishing accumulated metrics.'
+                    )
                     continue
 
                 for accumulator_id, accumulator in self._accumulators.items():
                     try:
-                        self._logger.debug(f'publishing accumulated metrics: {accumulator_id}')
+                        self._logger.debug(
+                            f'publishing accumulated metrics: {accumulator_id}'
+                        )
                         accumulator.publish_metrics()
                     except Exception as e:
-                        self._logger.exception(f'failed to collect metrics from: {accumulator_id}, error: {e}')
+                        self._logger.exception(
+                            f'failed to collect metrics from: {accumulator_id}, error: {e}'
+                        )
 
             except Exception as e:
-                self._logger.exception(f'exception while collecting system metrics: {e}')
+                self._logger.exception(
+                    f'exception while collecting system metrics: {e}'
+                )
             finally:
                 self._exit.wait(ACCUMULATED_METRICS_INTERVAL_SECS)
 
@@ -126,7 +142,9 @@ class MetricsService(SocaService, MetricsServiceProtocol):
         self._metrics_backlog_queue.put(metric_data)
 
     def register_accumulator(self, accumulator: MetricsAccumulatorProtocol):
-        self._logger.info(f'registering metrics accumulator: {accumulator.accumulator_id}')
+        self._logger.info(
+            f'registering metrics accumulator: {accumulator.accumulator_id}'
+        )
         self._accumulators[accumulator.accumulator_id] = accumulator
 
     def start(self):

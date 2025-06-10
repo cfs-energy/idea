@@ -1,0 +1,306 @@
+# CloudWatch Agent Configuration File Template for Windows
+# refer to: https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Agent-Configuration-File-Details.html for documentation
+
+agent:
+  # If you set this value below 60 seconds, each metric is collected as a high-resolution metric. For more information about high-resolution metrics, see High-resolution metrics.
+  {% if metrics_collection_interval %}
+  metrics_collection_interval: {{metrics_collection_interval if enable_metrics else '~'}}
+  {% endif %}
+  region: '{{aws_region}}'
+  logfile: "C:\\ProgramData\\Amazon\\AmazonCloudWatchAgent\\Logs\\amazon-cloudwatch-agent.log"
+  debug: false
+  run_as_user: "CWAgent"
+
+{% if enable_logs %}
+logs:
+
+  # VPC Endpoint or FIPS Support
+  {% if logs_endpoint_override %}
+  endpoint_override: '{{logs_endpoint_override}}'
+  {% endif %}
+
+  log_stream_name: '{{default_log_stream_name}}'
+  force_flush_interval: {{logs_force_flush_interval if logs_force_flush_interval else 5}}
+
+  logs_collected:
+    {% if utils.is_not_empty(collected_log_files) %}
+    files:
+      collect_list:
+        {{ utils.to_yaml(collected_log_files) | indent(8) }}
+    {% endif %}
+
+    windows_events:
+      collect_list:
+        - event_name: "System"
+          event_levels:
+            - "INFORMATION"
+            - "WARNING"
+            - "ERROR"
+            - "CRITICAL"
+          log_group_name: "/{{cluster_name}}/{{module_id}}/dcv-host"
+          log_stream_name: "system-events_{ip_address}"
+          event_format: "xml"
+        - event_name: "Application"
+          event_levels:
+            - "INFORMATION"
+            - "WARNING"
+            - "ERROR"
+            - "CRITICAL"
+          log_group_name: "/{{cluster_name}}/{{module_id}}/dcv-host"
+          log_stream_name: "application-events_{ip_address}"
+          event_format: "xml"
+
+
+{% endif %}
+
+{% if enable_metrics %}
+metrics:
+  namespace: '{{metrics_namespace}}'
+
+  # VPC Endpoint or FIPS Support
+  {% if metrics_endpoint_override %}
+  endpoint_override: '{{metrics_endpoint_override}}'
+  {% endif %}
+
+  # Specifies in seconds the maximum amount of time that metrics remain in the memory buffer before being sent to the server.
+  # No matter the setting for this, if the size of the metrics in the buffer reaches 40 KB or 20 different metrics, the metrics are immediately sent to the server.
+  force_flush_interval: {{metrics_force_flush_interval if metrics_force_flush_interval else 60}}
+
+  # Specifies the dimensions that collected metrics are to be aggregated on.
+  # For example, if you roll up metrics on the AutoScalingGroupName dimension, the metrics from all instances in each Auto Scaling group are aggregated and can be viewed as a whole.
+  {% if utils.is_not_empty(aggregation_dimensions) %}
+  aggregation_dimensions:
+    {{ utils.to_yaml(aggregation_dimensions) | indent(4) }}
+  {% endif %}
+
+  metrics_collected:
+    {% if metrics_collected.cpu and metrics_collected.cpu.enabled %}
+    Processor:
+      {% if not metrics_collected.cpu.config %}
+      metrics_collection_interval: {{metrics_collection_interval if metrics_collection_interval else 60}}
+      {% if append_dimensions %}
+      append_dimensions:
+        {{ utils.to_yaml(append_dimensions) | indent(8) }}
+      {% endif %}
+      resources:
+        - "*"
+      measurement:
+        - {"name": "% Idle Time", "rename": "CPU_IDLE", "unit": "Percent"}
+        - "% Interrupt Time"
+        - "% User Time"
+        - "% Processor Time"
+      {% else %}
+      {{ utils.to_yaml(metrics_collected.cpu.config) | indent(6) }}
+      {% endif %}
+    {% endif %}
+
+    {% if metrics_collected.disk and metrics_collected.disk.enabled %}
+    LogicalDisk:
+      {% if not metrics_collected.disk.config %}
+      metrics_collection_interval: {{metrics_collection_interval if metrics_collection_interval else 60}}
+      {% if append_dimensions %}
+      append_dimensions:
+        {{ utils.to_yaml(append_dimensions) | indent(8) }}
+      {% endif %}
+      resources:
+        - "*"
+      measurement:
+        - {"name": "% Idle Time", "unit": "Percent"}
+        - {"name": "% Disk Read Time", "rename": "DISK_READ"}
+        - "% Disk Write Time"
+      {% else %}
+      {{ utils.to_yaml(metrics_collected.disk.config) | indent(6) }}
+      {% endif %}
+    {% endif %}
+
+    {% if metrics_collected.diskio and metrics_collected.diskio.enabled %}
+    PhysicalDisk:
+      {% if not metrics_collected.diskio.config %}
+      metrics_collection_interval: {{metrics_collection_interval if metrics_collection_interval else 60}}
+      {% if append_dimensions %}
+      append_dimensions:
+        {{ utils.to_yaml(append_dimensions) | indent(8) }}
+      {% endif %}
+      resources:
+        - "*"
+      measurement:
+        - "% Disk Time"
+        - "Disk Write Bytes/sec"
+        - "Disk Read Bytes/sec"
+        - "Disk Writes/sec"
+        - "Disk Reads/sec"
+      {% else %}
+      {{ utils.to_yaml(metrics_collected.diskio.config) | indent(6) }}
+      {% endif %}
+    {% endif %}
+
+    {% if metrics_collected.mem and metrics_collected.mem.enabled %}
+    Memory:
+      {% if not metrics_collected.mem.config %}
+      metrics_collection_interval: {{metrics_collection_interval if metrics_collection_interval else 60}}
+      {% if append_dimensions %}
+      append_dimensions:
+        {{ utils.to_yaml(append_dimensions) | indent(8) }}
+      {% endif %}
+      measurement:
+        - "Available Bytes"
+        - "Cache Faults/sec"
+        - "Page Faults/sec"
+        - "Pages/sec"
+      {% else %}
+      {{ utils.to_yaml(metrics_collected.mem.config) | indent(6) }}
+      {% endif %}
+    {% endif %}
+
+    {% if metrics_collected.paging_file and metrics_collected.paging_file.enabled %}
+    "Paging File":
+      {% if not metrics_collected.paging_file.config %}
+      metrics_collection_interval: {{metrics_collection_interval if metrics_collection_interval else 60}}
+      {% if append_dimensions %}
+      append_dimensions:
+        {{ utils.to_yaml(append_dimensions) | indent(8) }}
+      {% endif %}
+      resources:
+        - "*"
+      measurement:
+        - "% Usage"
+      {% else %}
+      {{ utils.to_yaml(metrics_collected.paging_file.config) | indent(6) }}
+      {% endif %}
+    {% endif %}
+
+    {% if metrics_collected.net and metrics_collected.net.enabled %}
+    "Network Interface":
+      {% if not metrics_collected.net.config %}
+      metrics_collection_interval: {{metrics_collection_interval if metrics_collection_interval else 60}}
+      {% if append_dimensions %}
+      append_dimensions:
+        {{ utils.to_yaml(append_dimensions) | indent(8) }}
+      {% endif %}
+      instances:
+        - "*"
+      measurement:
+        - "Bytes Received/sec"
+        - "Bytes Sent/sec"
+        - "Packets Received/sec"
+        - "Packets Sent/sec"
+      {% else %}
+      {{ utils.to_yaml(metrics_collected.net.config) | indent(6) }}
+      {% endif %}
+    {% endif %}
+
+    {% if metrics_collected.netstat and metrics_collected.netstat.enabled %}
+    TCPv4:
+      {% if not metrics_collected.netstat.config %}
+      metrics_collection_interval: {{metrics_collection_interval if metrics_collection_interval else 60}}
+      {% if append_dimensions %}
+      append_dimensions:
+        {{ utils.to_yaml(append_dimensions) | indent(8) }}
+      {% endif %}
+      measurement:
+        - "Connections Established"
+      {% else %}
+      {{ utils.to_yaml(metrics_collected.netstat.config) | indent(6) }}
+      {% endif %}
+
+    TCPv6:
+      {% if not metrics_collected.netstat.config %}
+      metrics_collection_interval: {{metrics_collection_interval if metrics_collection_interval else 60}}
+      {% if append_dimensions %}
+      append_dimensions:
+        {{ utils.to_yaml(append_dimensions) | indent(8) }}
+      {% endif %}
+      measurement:
+        - "Connections Established"
+      {% else %}
+      {{ utils.to_yaml(metrics_collected.netstat.config) | indent(6) }}
+      {% endif %}
+    {% endif %}
+
+    {% if metrics_collected.processes and metrics_collected.processes.enabled %}
+    Process:
+      {% if not metrics_collected.processes.config %}
+      metrics_collection_interval: {{metrics_collection_interval if metrics_collection_interval else 60}}
+      {% if append_dimensions %}
+      append_dimensions:
+        {{ utils.to_yaml(append_dimensions) | indent(8) }}
+      {% endif %}
+      instances:
+        - "*"
+      measurement:
+        - "% Processor Time"
+        - "Working Set"
+      {% else %}
+      {{ utils.to_yaml(metrics_collected.processes.config) | indent(6) }}
+      {% endif %}
+    {% endif %}
+
+    {% if metrics_collected.nvidia_gpu and metrics_collected.nvidia_gpu.enabled %}
+    nvidia_gpu:
+      {% if not metrics_collected.nvidia_gpu.config %}
+      metrics_collection_interval: {{metrics_collection_interval if metrics_collection_interval else 60}}
+      {% if append_dimensions %}
+      append_dimensions:
+        {{ utils.to_yaml(append_dimensions) | indent(8) }}
+      {% endif %}
+      # refer to: https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Agent-NVIDIA-GPU.html
+      measurement:
+        - utilization_gpu
+        - temperature_gpu
+        - power_draw
+        - utilization_memory
+        - memory_total
+        - memory_used
+        - memory_free
+        - pcie_link_gen_current
+        - pcie_link_width_current
+        - encoder_stats_session_count
+        - encoder_stats_average_fps
+        - encoder_stats_average_latency
+        - clocks_current_graphics
+        - clocks_current_sm
+        - clocks_current_memory
+        - clocks_current_video
+      {% else %}
+      {{ utils.to_yaml(metrics_collected.nvidia_gpu.config) | indent(6) }}
+      {% endif %}
+    {% endif %}
+
+    System:
+      measurement:
+        - "Context Switches/sec"
+        - "System Calls/sec"
+        - "Processor Queue Length"
+
+    {% if metrics_collected.statsd and metrics_collected.statsd.enabled %}
+    # Retrieve custom metrics with StatsD
+    # refer to: https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Agent-custom-metrics-statsd.html
+    statsd:
+      {% if not metrics_collected.statsd.config %}
+      metrics_aggregation_interval: {{metrics_collected.statsd.metrics_aggregation_interval if metrics_collected.statsd.metrics_aggregation_interval else 60}}
+      metrics_collection_interval: {{metrics_collected.statsd.metrics_collection_interval if metrics_collected.statsd.metrics_collection_interval else 10}}
+      service_address: "{{metrics_collected.statsd.service_address if metrics_collected.statsd.service_address else ':8125'}}"
+      {% else %}
+      {{ utils.to_yaml(metrics_collected.statsd.config) | indent(6) }}
+      {% endif %}
+    {% endif %}
+
+  # Adds Amazon EC2 metric dimensions to all metrics collected by the agent. This also causes the agent to not publish the hostname as a dimension.
+  # The only supported key-value pairs for append_dimensions are shown in the following list. Any other key-value pairs are ignored.
+  # Note: To disambiguate append_dimensions per individual metric vs ec2 metrics append_dimensions, the property is named as include_dimensions
+  {% if include_dimensions %}
+  append_dimensions:
+    {% if "ImageId" in include_dimensions %}
+    ImageId: '${aws:ImageId}'
+    {% endif %}
+    {% if "InstanceId" in include_dimensions %}
+    InstanceId: '${aws:InstanceId}'
+    {% endif %}
+    {% if "InstanceType" in include_dimensions %}
+    InstanceType: '${aws:InstanceType}'
+    {% endif %}
+    {% if "AutoScalingGroupName" in include_dimensions %}
+    AutoScalingGroupName: '${aws:AutoScalingGroupName}'
+    {% endif %}
+  {% endif %}
+{% endif %}

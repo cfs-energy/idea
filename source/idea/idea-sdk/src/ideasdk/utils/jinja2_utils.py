@@ -13,30 +13,24 @@ from jinja2 import Environment, FileSystemLoader, PackageLoader, BaseLoader
 
 
 class Jinja2Utils:
-
     @staticmethod
-    def env_using_file_system_loader(search_path: str, auto_escape: bool = False) -> Environment:
+    def env_using_file_system_loader(
+        search_path: str, auto_escape: bool = False
+    ) -> Environment:
         return Environment(
-            loader=FileSystemLoader(
-                searchpath=search_path,
-                followlinks=False
-            ),
-            autoescape=auto_escape
+            loader=FileSystemLoader(searchpath=search_path, followlinks=False),
+            autoescape=auto_escape,
         )
 
     @staticmethod
-    def env_using_package_loader(package_name: str, package_path: str, auto_escape: bool = False) -> Environment:
+    def env_using_package_loader(
+        package_name: str, package_path: str, auto_escape: bool = False
+    ) -> Environment:
         return Environment(
-            loader=PackageLoader(
-                package_name=package_name,
-                package_path=package_path
-            ),
-            autoescape=auto_escape
+            loader=PackageLoader(package_name=package_name, package_path=package_path),
+            autoescape=auto_escape,
         )
 
     @staticmethod
     def env_using_base_loader(auto_escape: bool = False) -> Environment:
-        return Environment(
-            loader=BaseLoader(),
-            autoescape=auto_escape
-        )
+        return Environment(loader=BaseLoader(), autoescape=auto_escape)

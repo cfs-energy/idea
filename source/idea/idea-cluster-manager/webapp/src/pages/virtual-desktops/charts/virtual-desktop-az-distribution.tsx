@@ -134,4 +134,3 @@ class VirtualDesktopAZDistributionChart extends VirtualDesktopBaseChart<VirtualD
 }
 
 export default VirtualDesktopAZDistributionChart
-

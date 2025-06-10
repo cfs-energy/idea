@@ -12,20 +12,14 @@
 import ideasdk.aws
 from ideadatamodel import exceptions, errorcodes, AWSPartition, AWSRegion
 from ideasdk.utils import Utils
+import importlib.resources as pkg_resources
 
 from typing import Optional, Dict, List
-
-try:
-    import importlib.resources as pkg_resources
-except ImportError:
-    # Try back ported to PY<37 `importlib_resources`.
-    import importlib_resources as pkg_resources  # noqa
 
 AWS_ENDPOINTS_FILE = 'aws_endpoints.json'
 
 
 class AwsEndpoints:
-
     def __init__(self):
         self._data: Optional[Dict] = None
 
@@ -34,7 +28,7 @@ class AwsEndpoints:
     @property
     def data(self) -> Dict:
         if self._data is None:
-            content = pkg_resources.read_text(package=ideasdk.aws, resource=AWS_ENDPOINTS_FILE)
+            content = pkg_resources.read_text(ideasdk.aws, AWS_ENDPOINTS_FILE)
             self._data = Utils.from_json(content)
         return self._data
 
@@ -51,20 +45,18 @@ class AwsEndpoints:
             aws_regions = Utils.get_value_as_dict('regions', partition)
             for region, content in aws_regions.items():
                 region_name = Utils.get_value_as_string('description', content)
-                regions.append(AWSRegion(
-                    name=region_name,
-                    region=region
-                ))
-            result.append(AWSPartition(
-                name=name,
-                partition=partition_,
-                regions=regions,
-                dns_suffix=dns_suffix
-            ))
+                regions.append(AWSRegion(name=region_name, region=region))
+            result.append(
+                AWSPartition(
+                    name=name,
+                    partition=partition_,
+                    regions=regions,
+                    dns_suffix=dns_suffix,
+                )
+            )
         return result
 
     def get_partition(self, partition: str) -> AWSPartition:
-
         partitions = self.list_partitions()
         for partition_ in partitions:
             if partition_.partition == partition:
@@ -72,5 +64,5 @@ class AwsEndpoints:
 
         raise exceptions.soca_exception(
             error_code=errorcodes.AWS_ENDPOINTS_PARTITION_NOT_FOUND,
-            message=f'Partition: {partition} not found in {AWS_ENDPOINTS_FILE}.'
+            message=f'Partition: {partition} not found in {AWS_ENDPOINTS_FILE}.',
         )

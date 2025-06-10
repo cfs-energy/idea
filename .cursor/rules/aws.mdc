@@ -1,0 +1,96 @@
+---
+description:  anything related to AWS infrastructure, such as but not limited to EC2, CloudFormation, CDK, DynamoDB, EFS/FSX, Cognito, AWS Secrets Manager, and OpenSearch
+globs:
+alwaysApply: false
+---
+# AWS Development Guidelines for IDEA
+
+## Key AWS Services
+IDEA integrates with these AWS services:
+- **EC2**: For compute resources (virtual desktops, HPC nodes)
+- **CloudFormation/CDK**: For infrastructure deployment
+- **DynamoDB**: For persistent data storage
+- **EFS/FSx**: For shared file systems
+- **Cognito**: For identity management
+- **Secrets Manager**: For secure storage of credentials
+- **OpenSearch**: For analytics and logging
+
+## AWS SDK Usage
+```python
+# Get AWS client through context
+s3 = self.context.aws().s3()
+try:
+    response = s3.get_object(
+        Bucket=bucket_name,
+        Key=object_key
+    )
+    content = response['Body'].read().decode('utf-8')
+    return content
+except ClientError as e:
+    error_code = e.response['Error']['Code']
+    self.logger.error(f"Error getting object: {str(e)}")
+    raise exceptions.SocaException(
+        error_code=errorcodes.AWS_S3_OPERATION_FAILED,
+        message=f"Failed to retrieve object from S3: {str(e)}"
+    )
+```
+
+## CDK Implementation
+```python
+class MyResources(Construct):
+    def __init__(self, scope: Construct, id: str, cluster_name: str, **kwargs):
+        super().__init__(scope, id, **kwargs)
+
+        # Create bucket with appropriate settings
+        self.bucket = s3.Bucket(
+            self, "MyBucket",
+            bucket_name=f"{cluster_name}-my-bucket-{Utils.get_aws_account_id()}",
+            removal_policy=RemovalPolicy.DESTROY,
+            auto_delete_objects=True,
+            encryption=s3.BucketEncryption.S3_MANAGED
+        )
+
+        # Apply standard tags
+        Tags.of(self.bucket).add("idea:cluster-name", cluster_name)
+        Tags.of(self.bucket).add("idea:module", "my-module")
+```
+
+## Resource Tagging
+Standard tags for IDEA resources:
+- `idea:cluster-name`: Name of the IDEA cluster
+- `idea:module`: Module the resource belongs to (e.g., scheduler, vdc)
+- `idea:module-id`: Unique ID of the module installation
+
+## IAM Permissions
+- Follow the principle of least privilege
+- Use roles with appropriate permissions
+- Scope permissions to specific resources when possible
+- Use condition keys to further restrict access
+
+```python
+role.add_to_policy(
+    iam.PolicyStatement(
+        effect=iam.Effect.ALLOW,
+        actions=[
+            "s3:GetObject",
+            "s3:PutObject"
+        ],
+        resources=[
+            f"{bucket.bucket_arn}/*"
+        ],
+        conditions={
+            "StringEquals": {
+                "aws:ResourceTag/idea:cluster-name": cluster_name
+            }
+        }
+    )
+)
+```
+
+## Best Practices
+- Use infrastructure as code for all resources
+- Implement proper error handling for AWS API calls
+- Use proper resource naming conventions
+- Implement secure access controls
+- Leverage AWS service-specific best practices
+- Consider cost optimization in resource selection

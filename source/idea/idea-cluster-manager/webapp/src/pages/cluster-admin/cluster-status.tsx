@@ -34,6 +34,14 @@ export interface ClusterStatusState {
 
     modules: any
     modules_loading: boolean
+
+    // Sorting state for modules table
+    modulesSortingColumn: string
+    modulesSortingDescending: boolean
+
+    // Sorting state for instances table
+    instancesSortingColumn: string
+    instancesSortingDescending: boolean
 }
 
 function getModuleInfo(module: string): Promise<GetModuleInfoResult> {
@@ -212,7 +220,11 @@ class ClusterStatus extends Component<ClusterStatusProps, ClusterStatusState> {
             instances: [],
             instances_loading: true,
             modules: [],
-            modules_loading: true
+            modules_loading: true,
+            modulesSortingColumn: 'type',
+            modulesSortingDescending: false,
+            instancesSortingColumn: 'instance_name',
+            instancesSortingDescending: false
         }
     }
 
@@ -235,6 +247,13 @@ class ClusterStatus extends Component<ClusterStatusProps, ClusterStatusState> {
                     modules.push(module)
                 })
                 modules.sort((m1: any, m2: any) => m1.deployment_priority - m2.deployment_priority)
+
+                // Apply initial sorting
+                modules = this.sortModules(
+                    modules,
+                    this.state.modulesSortingColumn,
+                    this.state.modulesSortingDescending
+                );
             }).finally(() => {
                 this.setState({
                     modules: modules,
@@ -293,11 +312,23 @@ class ClusterStatus extends Component<ClusterStatusProps, ClusterStatusState> {
 
                     instances.push(instance)
                 })
-            }).finally(() => {
+
+                // Apply initial sorting
+                const sortedInstances = this.sortInstances(
+                    instances,
+                    this.state.instancesSortingColumn,
+                    this.state.instancesSortingDescending
+                );
+
                 this.setState({
-                    instances: instances,
+                    instances: sortedInstances,
                     instances_loading: false
                 })
+            }).catch(error => {
+                this.setState({
+                    instances_loading: false
+                });
+                console.error("Error loading cluster hosts:", error);
             })
         })
     }
@@ -331,24 +362,28 @@ class ClusterStatus extends Component<ClusterStatusProps, ClusterStatusState> {
                         {
                             id: 'module-title',
                             header: 'Module',
-                            cell: (item: any) => item.title
+                            cell: (item: any) => item.title,
+                            sortingField: 'title'
                         },
                         {
                             id: 'module-id',
                             header: 'Module ID',
-                            cell: (item: any) => item.module_id
+                            cell: (item: any) => item.module_id,
+                            sortingField: 'module_id'
                         },
                         {
                             id: 'module-version',
                             header: 'Version',
                             cell: (item: any) => {
                                 return Utils.asString(item.version, '-')
-                            }
+                            },
+                            sortingField: 'version'
                         },
                         {
                             id: 'module-type',
                             header: 'Type',
-                            cell: (item: any) => <ModuleType module={item}/>
+                            cell: (item: any) => <ModuleType module={item}/>,
+                            sortingField: 'type'
                         },
                         {
                             id: 'status',
@@ -359,7 +394,8 @@ class ClusterStatus extends Component<ClusterStatusProps, ClusterStatusState> {
                                 } else if (item.status === 'not-deployed') {
                                     return <StatusIndicator type="stopped">Not Deployed</StatusIndicator>
                                 }
-                            }
+                            },
+                            sortingField: 'status'
                         },
                         {
                             id: 'health_check',
@@ -396,7 +432,29 @@ class ClusterStatus extends Component<ClusterStatusProps, ClusterStatusState> {
                                 }
                             }
                         },
-                    ]}/>
+                    ]}
+                    sortingColumn={{
+                        sortingField: this.state.modulesSortingColumn
+                    }}
+                    sortingDescending={this.state.modulesSortingDescending}
+                    onSortingChange={({detail}) => {
+                        const newSortingColumn = detail.sortingColumn.sortingField as string;
+                        const newSortingDescending = detail.isDescending ?? false;
+
+                        // Sort the modules with the new sorting state
+                        const sortedModules = this.sortModules(
+                            this.state.modules,
+                            newSortingColumn,
+                            newSortingDescending
+                        );
+
+                        this.setState({
+                            modules: sortedModules,
+                            modulesSortingColumn: newSortingColumn,
+                            modulesSortingDescending: newSortingDescending
+                        });
+                    }}
+                />
             </ColumnLayout>
         )
     }
@@ -425,17 +483,20 @@ class ClusterStatus extends Component<ClusterStatusProps, ClusterStatusState> {
                         {
                             id: 'instance-name',
                             header: 'Instance Name',
-                            cell: (item: any) => item.instance_name
+                            cell: (item: any) => item.instance_name,
+                            sortingField: 'instance_name'
                         },
                         {
                             id: 'module-id',
                             header: 'Module ID',
-                            cell: (item: any) => item.module_id
+                            cell: (item: any) => item.module_id,
+                            sortingField: 'module_id'
                         },
                         {
                             id: 'node-type',
                             header: 'Node Type',
-                            cell: (item: any) => <NodeType node={item}/>
+                            cell: (item: any) => <NodeType node={item}/>,
+                            sortingField: 'node_type'
                         },
                         {
                             id: 'module-version',
@@ -446,17 +507,20 @@ class ClusterStatus extends Component<ClusterStatusProps, ClusterStatusState> {
                                 } else {
                                     return <ModuleVersion module={item.module_name}/>
                                 }
-                            }
+                            },
+                            sortingField: 'module_version'
                         },
                         {
                             id: 'instance-type',
                             header: 'Instance Type',
-                            cell: (item: any) => item.instance_type
+                            cell: (item: any) => item.instance_type,
+                            sortingField: 'instance_type'
                         },
                         {
                             id: 'availability-zone',
                             header: 'Availability Zone',
-                            cell: (item: any) => item.availability_zone
+                            cell: (item: any) => item.availability_zone,
+                            sortingField: 'availability_zone'
                         },
                         {
                             id: 'instance-state',
@@ -471,17 +535,20 @@ class ClusterStatus extends Component<ClusterStatusProps, ClusterStatusState> {
                                 } else {
                                     return <StatusIndicator type="in-progress" colorOverride="grey">{item.instance_state}</StatusIndicator>
                                 }
-                            }
+                            },
+                            sortingField: 'instance_state'
                         },
                         {
                             id: 'private-ip',
                             header: 'Private IP',
-                            cell: (item: any) => (Utils.isEmpty(item.private_ip) ? '-' : item.private_ip)
+                            cell: (item: any) => (Utils.isEmpty(item.private_ip) ? '-' : item.private_ip),
+                            sortingField: 'private_ip'
                         },
                         {
                             id: 'public-ip',
                             header: 'Public IP',
-                            cell: (item: any) => (Utils.isEmpty(item.public_ip) ? '-' : item.public_ip)
+                            cell: (item: any) => (Utils.isEmpty(item.public_ip) ? '-' : item.public_ip),
+                            sortingField: 'public_ip'
                         },
                         {
                             id: 'connect',
@@ -494,9 +561,131 @@ class ClusterStatus extends Component<ClusterStatusProps, ClusterStatusState> {
                                 }
                             }
                         }
-                    ]}/>
+                    ]}
+                    sortingColumn={{
+                        sortingField: this.state.instancesSortingColumn
+                    }}
+                    sortingDescending={this.state.instancesSortingDescending}
+                    onSortingChange={({detail}) => {
+                        const newSortingColumn = detail.sortingColumn.sortingField as string;
+                        const newSortingDescending = detail.isDescending ?? false;
+
+                        // Sort the instances with the new sorting state
+                        const sortedInstances = this.sortInstances(
+                            this.state.instances,
+                            newSortingColumn,
+                            newSortingDescending
+                        );
+
+                        this.setState({
+                            instances: sortedInstances,
+                            instancesSortingColumn: newSortingColumn,
+                            instancesSortingDescending: newSortingDescending
+                        });
+                    }}
+                />
             </ColumnLayout>
         )
+    }
+
+    // Sort modules based on current sorting state
+    sortModules(modules: any[], sortingColumn: string, isDescending: boolean): any[] {
+        if (!modules || modules.length === 0) return [];
+
+        // Create a copy to avoid mutating the original array
+        const sortedModules = [...modules];
+
+        sortedModules.sort((a, b) => {
+            let valueA, valueB;
+
+            // Get values based on sorting column
+            switch (sortingColumn) {
+                case 'title':
+                case 'module_id':
+                case 'version':
+                    valueA = (a[sortingColumn] || '').toString().toLowerCase();
+                    valueB = (b[sortingColumn] || '').toString().toLowerCase();
+                    return isDescending
+                        ? valueB.localeCompare(valueA)
+                        : valueA.localeCompare(valueB);
+
+                case 'type':
+                    valueA = (a.type || '').toString().toLowerCase();
+                    valueB = (b.type || '').toString().toLowerCase();
+                    return isDescending
+                        ? valueB.localeCompare(valueA)
+                        : valueA.localeCompare(valueB);
+
+                case 'status':
+                    // Sort "deployed" before "not-deployed"
+                    const statusOrder: Record<string, number> = {
+                        'deployed': 1,
+                        'not-deployed': 0
+                    };
+                    const statusA = a.status as string || '';
+                    const statusB = b.status as string || '';
+                    const result = (statusOrder[statusA] || 0) - (statusOrder[statusB] || 0);
+                    return isDescending ? -result : result;
+
+                default:
+                    return 0;
+            }
+        });
+
+        return sortedModules;
+    }
+
+    // Sort instances based on current sorting state
+    sortInstances(instances: any[], sortingColumn: string, isDescending: boolean): any[] {
+        if (!instances || instances.length === 0) return [];
+
+        // Create a copy to avoid mutating the original array
+        const sortedInstances = [...instances];
+
+        sortedInstances.sort((a, b) => {
+            let valueA, valueB;
+
+            // Get values based on sorting column
+            switch (sortingColumn) {
+                case 'instance_name':
+                case 'module_id':
+                case 'module_version':
+                case 'instance_type':
+                case 'availability_zone':
+                case 'private_ip':
+                case 'public_ip':
+                    valueA = (a[sortingColumn] || '').toString().toLowerCase();
+                    valueB = (b[sortingColumn] || '').toString().toLowerCase();
+                    return isDescending
+                        ? valueB.localeCompare(valueA)
+                        : valueA.localeCompare(valueB);
+
+                case 'node_type':
+                    valueA = (a.node_type || '').toString().toLowerCase();
+                    valueB = (b.node_type || '').toString().toLowerCase();
+                    return isDescending
+                        ? valueB.localeCompare(valueA)
+                        : valueA.localeCompare(valueB);
+
+                case 'instance_state':
+                    // Order: running > others > stopped > terminated
+                    const stateOrder: Record<string, number> = {
+                        'running': 3,
+                        'stopped': 1,
+                        'terminated': 0
+                    };
+                    const stateA = a.instance_state as string || '';
+                    const stateB = b.instance_state as string || '';
+                    // Default to 2 for other states to position them between running and stopped
+                    const result = (stateOrder[stateA] ?? 2) - (stateOrder[stateB] ?? 2);
+                    return isDescending ? -result : result;
+
+                default:
+                    return 0;
+            }
+        });
+
+        return sortedInstances;
     }
 
     render() {

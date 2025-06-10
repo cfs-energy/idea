@@ -11,23 +11,31 @@
 
 import ideavirtualdesktopcontroller
 from ideasdk.utils import Utils
-from ideavirtualdesktopcontroller.app.clients.events_client.events_client import VirtualDesktopEvent
-from ideavirtualdesktopcontroller.app.events.handlers.base_event_handler import BaseVirtualDesktopControllerEventHandler
+from ideavirtualdesktopcontroller.app.clients.events_client.events_client import (
+    VirtualDesktopEvent,
+)
+from ideavirtualdesktopcontroller.app.events.handlers.base_event_handler import (
+    BaseVirtualDesktopControllerEventHandler,
+)
 
 
 class UserCreatedEventHandler(BaseVirtualDesktopControllerEventHandler):
-
     def __init__(self, context: ideavirtualdesktopcontroller.AppContext):
         super().__init__(context, 'user-state-handler')
 
     def handle_event(self, message_id: str, sender_id: str, event: VirtualDesktopEvent):
         if not self.is_sender_controller_role(sender_id):
-            raise self.message_source_validation_failed(f'Corrupted sender_id: {sender_id}. Ignoring message')
+            raise self.message_source_validation_failed(
+                f'Corrupted sender_id: {sender_id}. Ignoring message'
+            )
 
         username = Utils.get_value_as_string('username', event.detail, None)
 
         if Utils.is_empty(username):
-            self.log_warning(message_id=message_id, message=f'Invalid username {username}. NO=OP. Returning.')
+            self.log_warning(
+                message_id=message_id,
+                message=f'Invalid username {username}. NO=OP. Returning.',
+            )
             return
 
         self.log_debug(message_id=message_id, message='Currently NO=OP. Returning')

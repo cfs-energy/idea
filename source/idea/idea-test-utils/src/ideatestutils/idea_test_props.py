@@ -13,9 +13,10 @@ import os
 
 
 class IdeaTestProps:
-
     def get_idea_user_home_dir(self) -> str:
-        idea_user_home = os.environ.get('IDEA_USER_HOME', os.path.expanduser(os.path.join('~', '.idea')))
+        idea_user_home = os.environ.get(
+            'IDEA_USER_HOME', os.path.expanduser(os.path.join('~', '.idea'))
+        )
         os.makedirs(idea_user_home, exist_ok=True)
         return idea_user_home
 

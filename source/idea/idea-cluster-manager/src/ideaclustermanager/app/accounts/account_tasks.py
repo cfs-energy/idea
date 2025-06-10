@@ -14,7 +14,7 @@ __all__ = (
     'CreateUserHomeDirectoryTask',
     'SyncGroupInDirectoryServiceTask',
     'SyncPasswordInDirectoryServiceTask',
-    'GroupMembershipUpdatedTask'
+    'GroupMembershipUpdatedTask',
 )
 
 from ideasdk.utils import Utils
@@ -31,7 +31,6 @@ import shutil
 
 
 class SyncGroupInDirectoryServiceTask(BaseTask):
-
     def __init__(self, context: ideaclustermanager.AppContext):
         self.context = context
         self.logger = context.logger(self.get_name())
@@ -44,7 +43,9 @@ class SyncGroupInDirectoryServiceTask(BaseTask):
         group = self.context.accounts.group_dao.get_group(group_name)
 
         if self.context.ldap_client.is_readonly():
-            self.logger.info(f'Read-only Directory service - NOOP for {self.get_name()}')
+            self.logger.info(
+                f'Read-only Directory service - NOOP for {self.get_name()}'
+            )
             return
 
         delete_group = False
@@ -52,8 +53,7 @@ class SyncGroupInDirectoryServiceTask(BaseTask):
             if group['enabled']:
                 self.logger.info(f'sync group: {group_name} directory service ...')
                 self.context.ldap_client.sync_group(
-                    group_name=group['group_name'],
-                    gid=group['gid']
+                    group_name=group['group_name'], gid=group['gid']
                 )
             else:
                 delete_group = True
@@ -67,7 +67,6 @@ class SyncGroupInDirectoryServiceTask(BaseTask):
 
 
 class GroupMembershipUpdatedTask(BaseTask):
-
     def __init__(self, context: ideaclustermanager.AppContext):
         self.context = context
         self.logger = context.logger(self.get_name())
@@ -85,41 +84,48 @@ class GroupMembershipUpdatedTask(BaseTask):
         if group is None:
             raise exceptions.soca_exception(
                 error_code=errorcodes.AUTH_GROUP_NOT_FOUND,
-                message=f'group not found: {group_name}'
+                message=f'group not found: {group_name}',
             )
         if group['enabled']:
             if operation == 'add':
-
                 if ds_readonly:
-                    self.logger.info(f'add member: {username} to group: {group_name} in READ-ONLY directory service ...')
+                    self.logger.info(
+                        f'add member: {username} to group: {group_name} in READ-ONLY directory service ...'
+                    )
                 else:
-                    self.logger.info(f'add member: {username} to group: {group_name} in directory service ...')
+                    self.logger.info(
+                        f'add member: {username} to group: {group_name} in directory service ...'
+                    )
                     self.context.ldap_client.add_user_to_group([username], group_name)
 
                 # update membership in user projects (DynamoDB)
-                self.logger.info(f'add member: {username} to group: {group_name} - DAO ...')
+                self.logger.info(
+                    f'add member: {username} to group: {group_name} - DAO ...'
+                )
                 self.context.projects.user_projects_dao.group_member_added(
-                    group_name=group_name,
-                    username=username
+                    group_name=group_name, username=username
                 )
 
             else:
-
                 if ds_readonly:
-                    self.logger.info(f'NOOP - remove member: {username} from group: {group_name} in readonly directory service ...')
+                    self.logger.info(
+                        f'NOOP - remove member: {username} from group: {group_name} in readonly directory service ...'
+                    )
                 else:
-                    self.logger.info(f'remove member: {username} from group: {group_name} in directory service ...')
-                    self.context.ldap_client.remove_user_from_group([username], group_name)
+                    self.logger.info(
+                        f'remove member: {username} from group: {group_name} in directory service ...'
+                    )
+                    self.context.ldap_client.remove_user_from_group(
+                        [username], group_name
+                    )
 
                 # update membership in user projects
                 self.context.projects.user_projects_dao.group_member_removed(
-                    group_name=group_name,
-                    username=username
+                    group_name=group_name, username=username
                 )
 
 
 class SyncUserInDirectoryServiceTask(BaseTask):
-
     def __init__(self, context: ideaclustermanager.AppContext):
         self.context = context
         self.logger = context.logger(self.get_name())
@@ -136,14 +142,15 @@ class SyncUserInDirectoryServiceTask(BaseTask):
         readonly = self.context.ldap_client.is_readonly()
 
         if readonly:
-            self.logger.info(f'sync user: Read-only Directory service - sync {username} NOOP ... returning')
+            self.logger.info(
+                f'sync user: Read-only Directory service - sync {username} NOOP ... returning'
+            )
             return
 
         if enabled:
             self.logger.info(f'sync user: {username} TO directory service ...')
             self.context.ldap_client.sync_group(
-                group_name=user['group_name'],
-                gid=user['gid']
+                group_name=user['group_name'], gid=user['gid']
             )
             self.context.ldap_client.sync_user(
                 uid=user['uid'],
@@ -151,7 +158,7 @@ class SyncUserInDirectoryServiceTask(BaseTask):
                 username=user['username'],
                 email=user['email'],
                 login_shell=user['login_shell'],
-                home_dir=user['home_dir']
+                home_dir=user['home_dir'],
             )
 
             if sudo:
@@ -172,7 +179,6 @@ class SyncUserInDirectoryServiceTask(BaseTask):
 
 
 class SyncPasswordInDirectoryServiceTask(BaseTask):
-
     def __init__(self, context: ideaclustermanager.AppContext):
         self.context = context
         self.logger = context.logger(self.get_name())
@@ -193,7 +199,9 @@ class SyncPasswordInDirectoryServiceTask(BaseTask):
 
         # clean up password file
         password_file_path = pathlib.Path(password_file)
-        ds_automation_dir = self.context.config().get_string('directoryservice.automation_dir', required=True)
+        ds_automation_dir = self.context.config().get_string(
+            'directoryservice.automation_dir', required=True
+        )
         if str(password_file_path.parent.parent) == ds_automation_dir:
             shutil.rmtree(password_file_path.parent)
         else:
@@ -201,7 +209,6 @@ class SyncPasswordInDirectoryServiceTask(BaseTask):
 
 
 class CreateUserHomeDirectoryTask(BaseTask):
-
     def __init__(self, context: ideaclustermanager.AppContext):
         self.context = context
         self.logger = context.logger(self.get_name())
@@ -212,7 +219,4 @@ class CreateUserHomeDirectoryTask(BaseTask):
     def invoke(self, payload: Dict):
         username = payload['username']
         user = self.context.accounts.get_user(username)
-        UserHomeDirectory(
-            context=self.context,
-            user=user
-        ).initialize()
+        UserHomeDirectory(context=self.context, user=user).initialize()
