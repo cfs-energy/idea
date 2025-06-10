@@ -4,12 +4,15 @@ runs:
   using: 'composite'
   steps:
     - name: Store data-model.ts hash
+      shell: bash
       run: |
         echo "DATA_MODEL_HASH_BEFORE=$(md5sum source/idea/idea-cluster-manager/webapp/src/client/data-model.ts | cut -d' ' -f1)" >> $GITHUB_ENV
     - name: Generate TS Data Model
+      shell: bash
       run: |
         invoke web-portal.typings
     - name: Check if generated data-model.ts matches committed version
+      shell: bash
       run: |
         DATA_MODEL_HASH_AFTER=$(md5sum source/idea/idea-cluster-manager/webapp/src/client/data-model.ts | cut -d' ' -f1)
         if [ "$DATA_MODEL_HASH_BEFORE" = "$DATA_MODEL_HASH_AFTER" ]; then
@@ -21,5 +24,6 @@ runs:
           exit 1
         fi
     - name: Build Modules
+      shell: bash
       run: |
         invoke clean build package
