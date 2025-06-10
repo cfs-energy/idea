@@ -35,8 +35,8 @@ runs:
       shell: bash
       run: |
         curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-        unzip awscliv2.zip
-        sudo ./aws/install
+        unzip -q awscliv2.zip
+        sudo ./aws/install --update
     - name: Install system dependencies
       shell: bash
       run: |
