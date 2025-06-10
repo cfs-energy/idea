@@ -9,13 +9,7 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
-__all__ = (
-    'TermFilter',
-    'RangeFilter',
-    'FreeTextFilter',
-    'SortFilter',
-    'SortOrder'
-)
+__all__ = ('TermFilter', 'RangeFilter', 'FreeTextFilter', 'SortFilter', 'SortOrder')
 
 from enum import Enum
 from typing import List, Union, Dict
@@ -33,11 +27,7 @@ class TermFilter:
             self.value = value
 
     def get_term_filter(self) -> Dict:
-        return {
-            'terms': {
-                self.key: self.value
-            }
-        }
+        return {'terms': {self.key: self.value}}
 
 
 class RangeFilter:
@@ -51,14 +41,7 @@ class RangeFilter:
         self.end = end
 
     def get_range_filter(self) -> Dict:
-        return {
-            'range': {
-                self.key: {
-                    'gte': self.start,
-                    'lt': self.end
-                }
-            }
-        }
+        return {'range': {self.key: {'gte': self.start, 'lt': self.end}}}
 
 
 class FreeTextFilter:
@@ -68,12 +51,7 @@ class FreeTextFilter:
         self.text = text
 
     def get_free_text_filter(self) -> Dict:
-        return {
-            'query_string': {
-                "fields": [],
-                "query": self.text
-            }
-        }
+        return {'query_string': {'fields': [], 'query': self.text}}
 
 
 class SortOrder(str, Enum):

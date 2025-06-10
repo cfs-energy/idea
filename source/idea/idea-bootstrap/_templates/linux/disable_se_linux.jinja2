@@ -1,4 +1,4 @@
-{%- if context.base_os in ('amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+{% if context.base_os in ('amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
 # Begin: Disable SE Linux
 sestatus | grep -q "disabled"
 if [[ "$?" != "0" ]]; then
@@ -9,4 +9,4 @@ if [[ "$?" != "0" ]]; then
   set_reboot_required "Disable SE Linux"
 fi
 # End: Disable SE Linux
-{%- endif %}
+{% endif %}

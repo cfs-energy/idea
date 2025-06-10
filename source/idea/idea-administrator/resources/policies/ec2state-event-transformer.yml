@@ -19,11 +19,11 @@ Statement:
     Action: sns:Publish
     Resource: "{{ context.arns.get_sns_arn('*ec2-state-change*') }}"
 
-  {%- if context.config.get_string('cluster.sns.kms_key_id') %}
+  {% if context.config.get_string('cluster.sns.kms_key_id') %}
   - Action:
       - kms:GenerateDataKey
       - kms:Decrypt
     Resource:
       - '{{ context.arns.kms_sns_key_arn }}'
     Effect: Allow
-  {%- endif %}
+  {% endif %}

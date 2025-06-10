@@ -23,7 +23,7 @@ import {
     SpaceBetween
 } from "@cloudscape-design/components";
 import {ButtonDropdownProps} from "@cloudscape-design/components/button-dropdown/interfaces";
-import IdeaTable from "../table";
+import IdeaTable, {IdeaTableRef} from "../table";
 import {TableProps} from "@cloudscape-design/components/table/interfaces";
 import {NonCancelableEventHandler} from "@cloudscape-design/components/internal/events";
 import {SocaDateRange, SocaFilter, SocaListingPayload, SocaPaginator, SocaUserInputParamMetadata} from "../../client/data-model";
@@ -77,6 +77,11 @@ export interface IdeaListViewProps<T = any> {
     onPage?: (page: number, type: 'next' | 'prev' | 'page') => SocaPaginator;
     variant?: TableProps.Variant
     stickyHeader?: boolean
+    defaultSortingColumn?: string;
+    defaultSortingDescending?: boolean;
+    enableExportToCsv?: boolean;
+    csvFilename?: string | (() => string);
+    onExportAllRecords?: () => Promise<any[]>;
 }
 
 export interface IdeaListViewState<T = any> {
@@ -101,7 +106,7 @@ export interface IdeaListingRequestType {
 
 class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
 
-    table: React.RefObject<IdeaTable>
+    table: React.RefObject<IdeaTableRef>
 
     constructor(props: IdeaListViewProps) {
         super(props);
@@ -133,7 +138,7 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
         }
         return {
             start: 0,
-            page_size: 20
+            page_size: 30
         }
     }
 
@@ -396,6 +401,8 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
             })
         }
 
+        // Remove export to CSV from secondaryActions as it will have its own button
+
         return (
             <SpaceBetween direction="horizontal"
                           size="xs">
@@ -405,6 +412,15 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
                     }
                 }}/>}
                 {this.showDateRange() && this.buildDateRange()}
+                {this.props.enableExportToCsv &&
+                    <Button
+                        variant="normal"
+                        iconName="download"
+                        disabled={(!this.props.onFetchRecords && !this.props.onExportAllRecords) || this.state.loading}
+                        onClick={() => this.exportToCsv()}>
+                        CSV Export
+                    </Button>
+                }
                 {secondaryActions.length > 0 &&
                     <ButtonDropdown disabled={this.props.secondaryActionsDisabled} items={secondaryActions} onItemClick={(event) => {
                         this.props.secondaryActions?.forEach((value => {
@@ -433,7 +449,6 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
     }
 
     buildTable() {
-
         return <IdeaTable
             ref={this.table}
             header={
@@ -455,6 +470,8 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
             selectFilters={this.props.selectFilters}
             filteringProperties={this.props.filteringProperties}
             filteringOptions={this.props.filteringOptions}
+            defaultSortingColumn={this.props.defaultSortingColumn}
+            defaultSortingDescending={this.props.defaultSortingDescending}
             onFilter={(filters) => {
                 let applicableFilters
                 if (this.props.onFilter) {
@@ -591,6 +608,157 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
 
     setFlashMessages(items: FlashbarProps.MessageDefinition[]) {
 
+    }
+
+    /**
+     * Export all records to CSV (fetches all data regardless of current pagination)
+     */
+    private async exportToCsv() {
+        if (!this.props.columnDefinitions) {
+            return;
+        }
+
+        const columnDefinitions = this.props.columnDefinitions;
+
+        try {
+            let allRecords = this.state.listing;
+
+            // If there's a custom export function, use it
+            if (this.props.onExportAllRecords) {
+                allRecords = await this.props.onExportAllRecords();
+            } else if (this.props.onFetchRecords) {
+                // Fallback to the original logic for backward compatibility
+                const currentTotal = this.state.listingRequest?.paginator?.total || this.state.listing.length;
+
+                // If we have more records than currently loaded, fetch all records
+                if (currentTotal > this.state.listing.length) {
+                    // Create a request with a very large page size to get all records
+                    const exportRequest = {
+                        ...this.state.listingRequest,
+                        paginator: {
+                            ...this.state.listingRequest.paginator,
+                            start: 0,
+                            page_size: Math.max(currentTotal, 10000) // Use total count or 10k as fallback
+                        }
+                    };
+
+                    // Temporarily store current request state
+                    const originalRequest = { ...this.state.listingRequest };
+
+                    // Update state to use export pagination and wait for it to complete
+                    await new Promise<void>((resolve) => {
+                        this.setState({
+                            listingRequest: exportRequest
+                        }, resolve);
+                    });
+
+                    // Fetch all records (now that state is updated)
+                    const result = await this.props.onFetchRecords();
+                    allRecords = result.listing || [];
+
+                    // Restore original pagination state
+                    await new Promise<void>((resolve) => {
+                        this.setState({
+                            listingRequest: originalRequest
+                        }, resolve);
+                    });
+                }
+            }
+
+            // Filter out columns that shouldn't be exported (like interactive UI elements)
+            const exportableColumns = columnDefinitions.filter(col =>
+                col.id !== 'connect-session' // Exclude join session column
+            );
+
+            // Create CSV header row
+            const headers = exportableColumns
+                .map(col => col.header)
+                .join(',');
+
+            // Create CSV data rows
+            const rows = allRecords.map(item => {
+                return exportableColumns.map(col => {
+                    // Get raw cell value
+                    let cellValue = '';
+
+                    // First, check if there's a sortingField - this represents the raw data value
+                    if ((col as any).sortingField && (item as any)[(col as any).sortingField] !== undefined) {
+                        cellValue = String((item as any)[(col as any).sortingField] || '');
+                    } else if (typeof col.cell === 'function') {
+                        // If cell is a React component, try to extract text
+                        const cellContent = col.cell(item);
+                        if (React.isValidElement(cellContent)) {
+                            // For React elements, use a simplified text extraction
+                            cellValue = this.extractTextFromReactElement(cellContent);
+                        } else {
+                            cellValue = String(cellContent || '');
+                        }
+                    } else if (col.id && (item as any)[col.id] !== undefined) {
+                        cellValue = String((item as any)[col.id] || '');
+                    }
+
+                    // Escape CSV value: wrap in quotes and escape existing quotes
+                    return '"' + cellValue.replace(/"/g, '""') + '"';
+                }).join(',');
+            }).join('\n');
+
+            // Combine headers and rows
+            const csvContent = headers + '\n' + rows;
+
+            // Create download link
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.setAttribute('href', url);
+
+            // Handle both string and function types for csvFilename
+            const filename = typeof this.props.csvFilename === 'function'
+                ? this.props.csvFilename()
+                : (this.props.csvFilename || `${this.props.title || 'export'}.csv`);
+
+            link.setAttribute('download', filename);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+
+        } catch (error) {
+            console.error('CSV Export failed:', error);
+            // Don't show flash messages here as they can interfere with parent component's flash system
+        }
+    }
+
+    /**
+     * Attempt to extract text from a React element for CSV export
+     */
+    private extractTextFromReactElement(element: React.ReactElement): string {
+        // Simple implementation to extract text from React elements
+        if (!element) return '';
+
+        // Extract props.children and convert to string
+        if (element.props && element.props.children) {
+            if (typeof element.props.children === 'string') {
+                return element.props.children;
+            } else if (Array.isArray(element.props.children)) {
+                return element.props.children
+                    .map((child: React.ReactNode) => {
+                        if (typeof child === 'string') return child;
+                        if (React.isValidElement(child)) return this.extractTextFromReactElement(child);
+                        return '';
+                    })
+                    .join(' ');
+            } else if (React.isValidElement(element.props.children)) {
+                return this.extractTextFromReactElement(element.props.children);
+            }
+        }
+
+        // For components that might have a 'value' or 'text' prop
+        if (element.props && (element.props.value || element.props.text)) {
+            return String(element.props.value || element.props.text || '');
+        }
+
+        // If we can't extract anything useful, return empty string
+        return '';
     }
 
     render() {

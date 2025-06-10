@@ -10,7 +10,13 @@
 #  and limitations under the License.
 
 import ideascheduler
-from ideadatamodel.scheduler import SocaJob, SocaComputeNode, SocaComputeNodeState, SocaQueue, SocaJobState
+from ideadatamodel.scheduler import (
+    SocaJob,
+    SocaComputeNode,
+    SocaComputeNodeState,
+    SocaQueue,
+    SocaJobState,
+)
 
 from ideascheduler.app.scheduler.openpbs import OpenPBSScheduler
 from ideascheduler.app.app_protocols import SocaSchedulerProtocol
@@ -65,7 +71,9 @@ class SocaScheduler(SocaSchedulerProtocol):
         self._scheduler.create_queue(queue_name=queue_name)
 
     def set_queue_attributes(self, queue_name: str, attributes: Dict[str, Any]):
-        self._scheduler.set_queue_attributes(queue_name=queue_name, attributes=attributes)
+        self._scheduler.set_queue_attributes(
+            queue_name=queue_name, attributes=attributes
+        )
 
     def list_queues(self) -> List[SocaQueue]:
         return self._scheduler.list_queues()
@@ -79,31 +87,45 @@ class SocaScheduler(SocaSchedulerProtocol):
     def is_queue_enabled(self, queue: str):
         return self._scheduler.is_queue_enabled(queue=queue)
 
-    def list_jobs(self, queue: Optional[str] = None, job_ids: Optional[List[str]] = None,
-                  owners: Optional[List[str]] = None, job_state: Optional[SocaJobState] = None,
-                  queued_after: Optional[arrow.Arrow] = None,
-                  max_jobs: int = -1,
-                  stack_id: str = None) -> List[SocaJob]:
-        return self._scheduler.list_jobs(queue=queue,
-                                         job_ids=job_ids,
-                                         owners=owners,
-                                         job_state=job_state,
-                                         queued_after=queued_after,
-                                         max_jobs=max_jobs,
-                                         stack_id=stack_id)
+    def list_jobs(
+        self,
+        queue: Optional[str] = None,
+        job_ids: Optional[List[str]] = None,
+        owners: Optional[List[str]] = None,
+        job_state: Optional[SocaJobState] = None,
+        queued_after: Optional[arrow.Arrow] = None,
+        max_jobs: int = -1,
+        stack_id: str = None,
+    ) -> List[SocaJob]:
+        return self._scheduler.list_jobs(
+            queue=queue,
+            job_ids=job_ids,
+            owners=owners,
+            job_state=job_state,
+            queued_after=queued_after,
+            max_jobs=max_jobs,
+            stack_id=stack_id,
+        )
 
-    def job_iterator(self, queue: Optional[str] = None, job_ids: Optional[List[str]] = None,
-                     owners: Optional[List[str]] = None, job_state: Optional[SocaJobState] = None,
-                     queued_after: Optional[arrow.Arrow] = None,
-                     max_jobs: int = -1,
-                     stack_id: str = None) -> Generator[SocaJob, None, None]:
-        return self._scheduler.job_iterator(queue=queue,
-                                            job_ids=job_ids,
-                                            owners=owners,
-                                            job_state=job_state,
-                                            queued_after=queued_after,
-                                            max_jobs=max_jobs,
-                                            stack_id=stack_id)
+    def job_iterator(
+        self,
+        queue: Optional[str] = None,
+        job_ids: Optional[List[str]] = None,
+        owners: Optional[List[str]] = None,
+        job_state: Optional[SocaJobState] = None,
+        queued_after: Optional[arrow.Arrow] = None,
+        max_jobs: int = -1,
+        stack_id: str = None,
+    ) -> Generator[SocaJob, None, None]:
+        return self._scheduler.job_iterator(
+            queue=queue,
+            job_ids=job_ids,
+            owners=owners,
+            job_state=job_state,
+            queued_after=queued_after,
+            max_jobs=max_jobs,
+            stack_id=stack_id,
+        )
 
     def get_job(self, job_id: str) -> Optional[SocaJob]:
         return self._scheduler.get_job(job_id=job_id)
@@ -123,12 +145,8 @@ class SocaScheduler(SocaSchedulerProtocol):
     def set_job_attributes(self, job_id: str, attributes: Dict[str, Any]) -> bool:
         return self._scheduler.set_job_attributes(job_id=job_id, attributes=attributes)
 
-    def provision_job(self, job: SocaJob,
-                      stack_id: str) -> int:
-        return self._scheduler.provision_job(
-            job=job,
-            stack_id=stack_id
-        )
+    def provision_job(self, job: SocaJob, stack_id: str) -> int:
+        return self._scheduler.provision_job(job=job, stack_id=stack_id)
 
     def reset_job(self, job_id: str) -> bool:
         return self._scheduler.reset_job(job_id=job_id)

@@ -31,7 +31,6 @@ def main(**kwargs):
     """
 
     try:
-
         cluster_name = EnvironmentUtils.idea_cluster_name(required=True)
         module_id = EnvironmentUtils.idea_module_id(required=True)
         module_set = EnvironmentUtils.idea_module_set(required=True)
@@ -52,10 +51,10 @@ def main(**kwargs):
                     enable_aws_client_provider=True,
                     use_vpc_endpoints=True,
                     enable_metrics=True,
-                    enable_analytics=True
+                    enable_analytics=True,
                 )
             ),
-            **kwargs
+            **kwargs,
         ).launch()
 
     except Exception as e:

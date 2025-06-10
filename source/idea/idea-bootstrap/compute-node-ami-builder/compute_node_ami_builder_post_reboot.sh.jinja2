@@ -15,9 +15,9 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
 {% include 'compute-node/_templates/scheduler_stop.jinja2' %}
 
-{%- with node_type = 'compute' %}
-  {%- include '_templates/linux/gpu_drivers.jinja2' %}
-{%- endwith %}
+{% with node_type = 'compute' %}
+  {% include '_templates/linux/gpu_drivers.jinja2' %}
+{% endwith %}
 
 # a reboot may be required if GPU Drivers are installed.
 REBOOT_REQUIRED=$(cat /root/bootstrap/reboot_required.txt)
@@ -32,20 +32,20 @@ else
 
   # clean-up: shared storage mounts
   {% for name, storage in context.config.get_config('shared-storage').items() %}
-  {%- if context.eval_shared_storage_scope(shared_storage=storage) %}
-  {%- if storage.provider == 'efs' %}
+  {% if context.eval_shared_storage_scope(shared_storage=storage) %}
+  {% if storage.provider == 'efs' %}
   remove_efs_from_fstab "{{ storage.mount_dir }}"
-  {%- endif %}
-  {%- if storage.provider == 'fsx_lustre' %}
+  {% endif %}
+  {% if storage.provider == 'fsx_lustre' %}
   remove_fsx_lustre_from_fstab "{{ storage.mount_dir }}"
-  {%- endif %}
-  {%- if storage.provider == 'fsx_netapp_ontap' %}
+  {% endif %}
+  {% if storage.provider == 'fsx_netapp_ontap' %}
   remove_fsx_netapp_ontap_from_fstab "{{ storage.mount_dir }}"
-  {%- endif %}
-  {%- if storage.provider == 'fsx_openzfs' %}
+  {% endif %}
+  {% if storage.provider == 'fsx_openzfs' %}
   remove_fsx_openzfs_from_fstab "{{ storage.mount_dir }}"
-  {%- endif %}
-  {%- endif %}
+  {% endif %}
+  {% endif %}
   {% endfor %}
 
   # clean-up
@@ -63,7 +63,7 @@ else
   crontab -l | grep -v 'compute_node_ami_builder_post_reboot.sh' | crontab -
 
   # create idea_preinstalled_packages.log file indicating packages have been preinstalled on this ami.
-  echo "$(date)" >> /root/bootstrap/idea_preinstalled_packages.log
+  # echo "$(date)" >> /root/bootstrap/idea_preinstalled_packages.log
 
   # flush filesystem buffers before signaling ami creation
   /bin/sync

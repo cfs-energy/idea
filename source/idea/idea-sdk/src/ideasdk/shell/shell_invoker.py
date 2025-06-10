@@ -22,7 +22,14 @@ StreamOutputCallback = Callable[[AnyStr], None]
 
 
 class ShellInvocationResult:
-    def __init__(self, command, result: CompletedProcess, total_time_ms: int, text=True, pipe=False):
+    def __init__(
+        self,
+        command,
+        result: CompletedProcess,
+        total_time_ms: int,
+        text=True,
+        pipe=False,
+    ):
         self.command = command
         self.args = result.args
         self.returncode = result.returncode
@@ -45,8 +52,10 @@ class ShellInvocationResult:
                 output = self.stderr
             else:
                 output = self.stdout
-            return f'shell> {shell_command} >> returncode: {self.returncode} ' \
-                   f'>> stderr: {output} >> {self.total_time_ms} ms'
+            return (
+                f'shell> {shell_command} >> returncode: {self.returncode} '
+                f'>> stderr: {output} >> {self.total_time_ms} ms'
+            )
 
     @property
     def shell_command(self):
@@ -56,24 +65,26 @@ class ShellInvocationResult:
                 commands = command
                 shelled = []
                 for cmd in commands:
-                    shelled.append(" ".join(cmd))
-                command = " | ".join(shelled)
+                    shelled.append(' '.join(cmd))
+                command = ' | '.join(shelled)
             else:
-                command = " ".join(command)
+                command = ' '.join(command)
         return command
 
 
 class StreamInvocationProcess:
-
-    def __init__(self, cmd: Union[List[str], str],
-                 callback: StreamOutputCallback,
-                 cwd: Optional[str] = None,
-                 shell=False,
-                 text=True,
-                 env: Optional[Dict] = None,
-                 start_new_session=False,
-                 stop_signal=signal.SIGINT,
-                 ignore_keyboard_interrupt=False):
+    def __init__(
+        self,
+        cmd: Union[List[str], str],
+        callback: StreamOutputCallback,
+        cwd: Optional[str] = None,
+        shell=False,
+        text=True,
+        env: Optional[Dict] = None,
+        start_new_session=False,
+        stop_signal=signal.SIGINT,
+        ignore_keyboard_interrupt=False,
+    ):
         self._cmd = cmd
         self._callback = callback
         self._cwd = cwd
@@ -90,9 +101,7 @@ class StreamInvocationProcess:
 
     @property
     def process(self) -> subprocess.Popen:
-        assert (
-            self._process is not None
-        )
+        assert self._process is not None
         return self._process
 
     @property
@@ -100,15 +109,11 @@ class StreamInvocationProcess:
         return self._stop_signal
 
     def send_signal(self, sig: int):
-        assert (
-            self._process is not None
-        )
+        assert self._process is not None
         self._process.send_signal(sig)
 
     def send_stop_signal(self):
-        assert (
-            self._process is not None
-        )
+        assert self._process is not None
         with self._lock:
             if self.is_stop_signaled:
                 return
@@ -132,7 +137,7 @@ class StreamInvocationProcess:
             cwd=self._cwd,
             env=self._env,
             start_new_session=self._start_new_session,
-            encoding='utf-8'
+            encoding='utf-8',
         )
         for line in iter(self.process.stdout.readline, ''):
             try:
@@ -146,14 +151,11 @@ class StreamInvocationProcess:
         return self.process.poll()
 
     def wait(self, timeout=None) -> int:
-        assert (
-            self._process is not None
-        )
+        assert self._process is not None
         return self._process.wait(timeout)
 
 
 class ShellInvoker:
-
     def __init__(self, logger=None, cwd: str = None):
         self._logger = logger
         self._cwd = cwd
@@ -166,8 +168,15 @@ class ShellInvoker:
     def cwd(self, path: Optional[str]):
         self._cwd = path
 
-    def invoke(self, cmd=None, shell=False, text=True, skip_error_logging=False, env: Optional[Dict] = None, cmd_input=None) -> ShellInvocationResult:
-
+    def invoke(
+        self,
+        cmd=None,
+        shell=False,
+        text=True,
+        skip_error_logging=False,
+        env: Optional[Dict] = None,
+        cmd_input=None,
+    ) -> ShellInvocationResult:
         start_time = Utils.current_time_ms()
 
         result = subprocess.run(
@@ -183,10 +192,7 @@ class ShellInvoker:
         total_time = Utils.current_time_ms() - start_time
 
         response = ShellInvocationResult(
-            command=cmd,
-            result=result,
-            total_time_ms=total_time,
-            text=text
+            command=cmd, result=result, total_time_ms=total_time, text=text
         )
 
         if self._logger is None:
@@ -200,15 +206,17 @@ class ShellInvoker:
 
         return response
 
-    def invoke_stream(self, cmd: Union[List[str], str],
-                      callback: StreamOutputCallback,
-                      shell=False,
-                      text=True,
-                      env: Optional[Dict] = None,
-                      start_new_session=False,
-                      stop_signal=signal.SIGINT,
-                      ignore_keyboard_interrupt=False):
-
+    def invoke_stream(
+        self,
+        cmd: Union[List[str], str],
+        callback: StreamOutputCallback,
+        shell=False,
+        text=True,
+        env: Optional[Dict] = None,
+        start_new_session=False,
+        stop_signal=signal.SIGINT,
+        ignore_keyboard_interrupt=False,
+    ):
         return StreamInvocationProcess(
             cmd=cmd,
             cwd=self.cwd,
@@ -218,11 +226,12 @@ class ShellInvoker:
             env=env,
             start_new_session=start_new_session,
             stop_signal=stop_signal,
-            ignore_keyboard_interrupt=ignore_keyboard_interrupt
+            ignore_keyboard_interrupt=ignore_keyboard_interrupt,
         )
 
-    def invoke_pipe(self, cmds: List[List] = None, env: Optional[Dict] = None) -> ShellInvocationResult:
-
+    def invoke_pipe(
+        self, cmds: List[List] = None, env: Optional[Dict] = None
+    ) -> ShellInvocationResult:
         start_time = Utils.current_time_ms()
 
         result = None
@@ -235,23 +244,16 @@ class ShellInvoker:
                     capture_output=True,
                     input=prev_result.stdout,
                     cwd=self.cwd,
-                    env=env
+                    env=env,
                 )
             else:
                 result = subprocess.run(
-                    args=cmd,
-                    shell=False,
-                    capture_output=True,
-                    cwd=self.cwd,
-                    env=env
+                    args=cmd, shell=False, capture_output=True, cwd=self.cwd, env=env
                 )
             prev_result = result
 
         total_time = Utils.current_time_ms() - start_time
 
         return ShellInvocationResult(
-            command=cmds,
-            result=result,
-            total_time_ms=total_time,
-            pipe=True
+            command=cmds, result=result, total_time_ms=total_time, pipe=True
         )

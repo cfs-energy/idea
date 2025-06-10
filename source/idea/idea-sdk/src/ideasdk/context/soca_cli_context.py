@@ -15,22 +15,28 @@ from ideasdk.shell import ShellInvoker
 from ideasdk.utils import Utils
 from ideasdk.client import SocaClient, SocaClientOptions
 from ideadatamodel import (
-    exceptions, errorcodes,
+    exceptions,
+    errorcodes,
     SocaKeyValue,
     SocaUserInputChoice,
     SocaUserInputParamMetadata,
     SocaUserInputSectionMetadata,
     SocaUserInputModuleMetadata,
-    SocaInputParamSpec
+    SocaInputParamSpec,
 )
-from ideasdk.aws import AwsClientProvider, AWSUtil, AWSClientProviderOptions, AwsResources
+from ideasdk.aws import (
+    AwsClientProvider,
+    AWSUtil,
+    AWSClientProviderOptions,
+    AwsResources,
+)
 from ideasdk.user_input.framework import (
     SocaUserInputArgs,
     SocaUserInputParamRegistry,
     SocaUserInputModule,
     SocaUserInputSection,
     SocaPromptRegistry,
-    SocaPrompt
+    SocaPrompt,
 )
 
 from typing import Any, Union, Optional, Dict, List
@@ -54,18 +60,20 @@ else:
 
 
 class SocaCliContext(SocaContext):
-    def __init__(self,
-                 options: Optional[SocaContextOptions] = None,
-                 api_context_path: Optional[str] = None,
-                 unix_socket_timeout: Optional[int] = None):
-        super().__init__(
-            options=options
-        )
+    def __init__(
+        self,
+        options: Optional[SocaContextOptions] = None,
+        api_context_path: Optional[str] = None,
+        unix_socket_timeout: Optional[int] = None,
+    ):
+        super().__init__(options=options)
         self._shell = ShellInvoker()
         self._console = Console()
         self._api_context_path = api_context_path
         self._unix_socket_client: Optional[SocaClient] = None
-        self._aws_resources = AwsResources(context=self, aws=self._aws, aws_util=self._aws_util)
+        self._aws_resources = AwsResources(
+            context=self, aws=self._aws, aws_util=self._aws_util
+        )
         self._unix_socket_timeout: Optional[int] = unix_socket_timeout
 
     @property
@@ -96,7 +104,7 @@ class SocaCliContext(SocaContext):
         if not self.is_root():
             raise exceptions.soca_exception(
                 error_code=errorcodes.NOT_AUTHORIZED,
-                message='Access Denied: root access is required to use ideactl.'
+                message='Access Denied: root access is required to use ideactl.',
             )
 
     # BEGIN: STDOUT FUNCTIONS
@@ -118,26 +126,48 @@ class SocaCliContext(SocaContext):
     def spinner(self, message: Any):
         return self.console.status(status=message)
 
-    def print(self, message: Any, style=None, end=f'{os.linesep}', new_line=False, highlight=True, **kwargs):
+    def print(
+        self,
+        message: Any,
+        style=None,
+        end=f'{os.linesep}',
+        new_line=False,
+        highlight=True,
+        **kwargs,
+    ):
         if Utils.is_not_empty(message):
             try:
-                self.console.print(message, end=end, style=style, highlight=highlight, **kwargs)
+                self.console.print(
+                    message, end=end, style=style, highlight=highlight, **kwargs
+                )
             except BlockingIOError:
                 print(message, end='\r\n')
         if new_line:
             self.new_line()
 
     def print_title(self, message: str, new_line=False):
-        self.print(Text(text=message, style=Style(bold=True, italic=True, color='bright_white')), new_line=new_line)
+        self.print(
+            Text(
+                text=message, style=Style(bold=True, italic=True, color='bright_white')
+            ),
+            new_line=new_line,
+        )
 
     def new_line(self, count: int = 1):
         self.console.line(count)
 
-    def print_rule(self, title: Optional[str] = None, align: Literal["left", "center", "right"] = 'left', style=None):
+    def print_rule(
+        self,
+        title: Optional[str] = None,
+        align: Literal['left', 'center', 'right'] = 'left',
+        style=None,
+    ):
         if Utils.is_empty(title):
             text = ''
         else:
-            text = Text(text=title, style=Style(bold=True, italic=True, color='bright_white'))
+            text = Text(
+                text=title, style=Style(bold=True, italic=True, color='bright_white')
+            )
         if style is None:
             style = 'rule.line'
         self.print(Rule(text, align=align, style=style))
@@ -175,19 +205,21 @@ class SocaCliContext(SocaContext):
     def error(self, message=Any):
         self.console.print(escape(message), style='bold red')
 
-    def exception(self, message=None, markdown=False, error_code=errorcodes.CLI_ERROR, ref=None):
+    def exception(
+        self, message=None, markdown=False, error_code=errorcodes.CLI_ERROR, ref=None
+    ):
         if markdown:
             md_message = Markdown(message)
             self.console.print(md_message)
             raise SystemExit
         else:
             return exceptions.SocaException(
-                error_code=error_code,
-                message=message,
-                ref=ref
+                error_code=error_code, message=message, ref=ref
             )
 
-    def get_log_message(self, tag: str = None, message: Optional[Union[str, Dict]] = None) -> str:
+    def get_log_message(
+        self, tag: str = None, message: Optional[Union[str, Dict]] = None
+    ) -> str:
         if Utils.is_not_empty(tag):
             log = f'[{arrow.now()}] ({tag}) '
         else:
@@ -206,28 +238,35 @@ class SocaCliContext(SocaContext):
         self.console.out(log_message.rstrip())
 
     @staticmethod
-    def prompt(message: str, default: Union[bool, str, SocaUserInputChoice] = None, auto_enter=True, icon='?', choices: List[Union[str, SocaUserInputChoice]] = None) -> Union[bool, str]:
+    def prompt(
+        message: str,
+        default: Union[bool, str, SocaUserInputChoice] = None,
+        auto_enter=True,
+        icon='?',
+        choices: List[Union[str, SocaUserInputChoice]] = None,
+    ) -> Union[bool, str]:
         if Utils.is_empty(choices):
             if default is None:
                 default = False
-            result = unsafe_prompt(questions=[{
-                'type': 'confirm',
-                'name': 'result',
-                'message': message,
-                'default': default,
-                'auto_enter': auto_enter,
-                'qmark': icon
-            }])
+            result = unsafe_prompt(
+                questions=[
+                    {
+                        'type': 'confirm',
+                        'name': 'result',
+                        'message': message,
+                        'default': default,
+                        'auto_enter': auto_enter,
+                        'qmark': icon,
+                    }
+                ]
+            )
             return Utils.get_value_as_bool('result', result, default)
         else:
             choices_ = []
             default_choice_ = None
             for choice in choices:
                 if isinstance(choice, str):
-                    choice_ = Choice(
-                        title=choice,
-                        value=choice
-                    )
+                    choice_ = Choice(title=choice, value=choice)
                     choices_.append(choice_)
                     if default is not None:
                         if default == choice:
@@ -237,7 +276,7 @@ class SocaCliContext(SocaContext):
                         title=choice.title,
                         value=choice.value,
                         disabled=choice.disabled,
-                        checked=choice.checked
+                        checked=choice.checked,
                     )
                     choices_.append(choice_)
                     if default is not None:
@@ -247,14 +286,18 @@ class SocaCliContext(SocaContext):
             if default_choice_ is None:
                 default_choice_ = choices_[0]
 
-            result = unsafe_prompt(questions=[{
-                'type': 'select',
-                'name': 'result',
-                'message': message,
-                'choices': choices_,
-                'default': default_choice_,
-                'qmark': icon
-            }])
+            result = unsafe_prompt(
+                questions=[
+                    {
+                        'type': 'select',
+                        'name': 'result',
+                        'message': message,
+                        'choices': choices_,
+                        'default': default_choice_,
+                        'qmark': icon,
+                    }
+                ]
+            )
             return Utils.get_value_as_string('result', result)
 
     @property
@@ -268,23 +311,21 @@ class SocaCliContext(SocaContext):
                     enable_logging=False,
                     endpoint=f'http://localhost{self._api_context_path}',
                     unix_socket='/run/idea.sock',
-                    timeout=self._unix_socket_timeout
-                )
+                    timeout=self._unix_socket_timeout,
+                ),
             )
         return self._unix_socket_client
 
-    def aws_init(self, aws_profile: Optional[str] = None, aws_region: Optional[str] = None):
+    def aws_init(
+        self, aws_profile: Optional[str] = None, aws_region: Optional[str] = None
+    ):
         try:
             self._aws = AwsClientProvider(
-                options=AWSClientProviderOptions(
-                    profile=aws_profile,
-                    region=aws_region
-                ))
+                options=AWSClientProviderOptions(profile=aws_profile, region=aws_region)
+            )
             self._aws_util = AWSUtil(context=self, aws=self._aws)
             self._aws_resources = AwsResources(
-                context=self,
-                aws=self._aws,
-                aws_util=self._aws_util
+                context=self, aws=self._aws, aws_util=self._aws_util
             )
 
         except Exception as e:
@@ -303,7 +344,13 @@ class SocaCliContext(SocaContext):
             self.aws_init(self._options.aws_profile, self._options.aws_region)
         return self._aws
 
-    def ask(self, questions: List[SocaUserInputParamMetadata], title: str = None, description: str = None, module_name: str = None) -> Dict:
+    def ask(
+        self,
+        questions: List[SocaUserInputParamMetadata],
+        title: str = None,
+        description: str = None,
+        module_name: str = None,
+    ) -> Dict:
         if Utils.is_empty(module_name):
             module_name = 'default'
 
@@ -315,13 +362,10 @@ class SocaCliContext(SocaContext):
                     title=title,
                     description=description,
                     sections=[
-                        SocaUserInputSectionMetadata(
-                            name='default',
-                            params=questions
-                        )
-                    ]
+                        SocaUserInputSectionMetadata(name='default', params=questions)
+                    ],
                 )
-            ]
+            ],
         )
 
         param_registry = SocaUserInputParamRegistry(context=self, spec=spec)
@@ -333,26 +377,25 @@ class SocaCliContext(SocaContext):
         section_prompts = []
         params = param_registry.get_params(module=module_name)
         for param_meta in params:
-            section_prompts.append(SocaPrompt(
-                context=self,
-                args=args,
-                param=param_meta,
-                registry=prompt_registry
-            ))
+            section_prompts.append(
+                SocaPrompt(
+                    context=self, args=args, param=param_meta, registry=prompt_registry
+                )
+            )
 
         sections = []
         for section_meta in module_meta.sections:
-            sections.append(SocaUserInputSection(
-                context=self,
-                section=section_meta,
-                prompts=section_prompts
-            ))
+            sections.append(
+                SocaUserInputSection(
+                    context=self, section=section_meta, prompts=section_prompts
+                )
+            )
 
         user_input_module = SocaUserInputModule(
             context=self,
             module=module_meta,
             sections=sections,
-            restart_errorcodes=[errorcodes.INSTALLER_MISSING_PERMISSIONS]
+            restart_errorcodes=[errorcodes.INSTALLER_MISSING_PERMISSIONS],
         )
 
         user_input_module.safe_ask()

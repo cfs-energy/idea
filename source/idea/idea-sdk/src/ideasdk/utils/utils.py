@@ -44,7 +44,7 @@ T = TypeVar('T')
 TRUE_VALUES = ('true', 'yes', 'y', '1')
 FALSE_VALUES = ('false', 'no', 'n', '0')
 
-FILENAME_ASCII_STRIP_RE = re.compile(r"[^A-Za-z0-9_.-]")
+FILENAME_ASCII_STRIP_RE = re.compile(r'[^A-Za-z0-9_.-]')
 
 # directory tree constants
 DIRECTORY_TREE_SPACE = '    '
@@ -55,7 +55,6 @@ DIRECTORY_TREE_LAST = '└── '
 
 # noinspection InsecureHash
 class Utils:
-
     @staticmethod
     def is_empty(value: Optional[Union[Any]]) -> bool:
         return ModelUtils.is_empty(value)
@@ -85,19 +84,27 @@ class Utils:
         return ModelUtils.get_as_string(value, default)
 
     @staticmethod
-    def get_as_int(value: Optional[Union[float, int, str]], default: int = None) -> Optional[int]:
+    def get_as_int(
+        value: Optional[Union[float, int, str]], default: int = None
+    ) -> Optional[int]:
         return ModelUtils.get_as_int(value, default)
 
     @staticmethod
-    def get_as_float(value: Optional[Union[float, str]], default: float = None) -> Optional[float]:
+    def get_as_float(
+        value: Optional[Union[float, str]], default: float = None
+    ) -> Optional[float]:
         return ModelUtils.get_as_float(value, default)
 
     @staticmethod
-    def get_as_decimal(value: Optional[Union[float, str]], default: float = None) -> Optional[Decimal]:
+    def get_as_decimal(
+        value: Optional[Union[float, str]], default: float = None
+    ) -> Optional[Decimal]:
         return ModelUtils.get_as_decimal(value, default)
 
     @staticmethod
-    def get_as_bool(value: Optional[Union[bool, str, int]], default=None) -> Optional[bool]:
+    def get_as_bool(
+        value: Optional[Union[bool, str, int]], default=None
+    ) -> Optional[bool]:
         return ModelUtils.get_as_bool(value, default)
 
     @staticmethod
@@ -141,35 +148,51 @@ class Utils:
         return ModelUtils.value_exists(key, obj)
 
     @staticmethod
-    def get_value_as_int(key: str, obj: Mapping = None, default: int = None) -> Optional[int]:
+    def get_value_as_int(
+        key: str, obj: Mapping = None, default: int = None
+    ) -> Optional[int]:
         return ModelUtils.get_value_as_int(key, obj, default)
 
     @staticmethod
-    def get_value_as_float(key: str, obj: Mapping = None, default: float = None) -> Optional[float]:
+    def get_value_as_float(
+        key: str, obj: Mapping = None, default: float = None
+    ) -> Optional[float]:
         return ModelUtils.get_value_as_float(key, obj, default)
 
     @staticmethod
-    def get_value_as_decimal(key: str, obj: Mapping = None, default: float = None) -> Optional[Decimal]:
+    def get_value_as_decimal(
+        key: str, obj: Mapping = None, default: float = None
+    ) -> Optional[Decimal]:
         return ModelUtils.get_value_as_decimal(key, obj, default)
 
     @staticmethod
-    def get_value_as_bool(key: str, obj: Mapping = None, default: bool = None) -> Optional[bool]:
+    def get_value_as_bool(
+        key: str, obj: Mapping = None, default: bool = None
+    ) -> Optional[bool]:
         return ModelUtils.get_value_as_bool(key, obj, default)
 
     @staticmethod
-    def get_value_as_string(key: str, obj: Mapping = None, default: str = None) -> Optional[str]:
+    def get_value_as_string(
+        key: str, obj: Mapping = None, default: str = None
+    ) -> Optional[str]:
         return ModelUtils.get_value_as_string(key, obj, default)
 
     @staticmethod
-    def get_value_as_dict(key: str, obj: Mapping = None, default: dict = None) -> Optional[dict]:
+    def get_value_as_dict(
+        key: str, obj: Mapping = None, default: dict = None
+    ) -> Optional[dict]:
         return ModelUtils.get_value_as_dict(key, obj, default)
 
     @staticmethod
-    def get_value_as_list(key: str, obj: Mapping = None, default: list = None) -> Optional[list]:
+    def get_value_as_list(
+        key: str, obj: Mapping = None, default: list = None
+    ) -> Optional[list]:
         return ModelUtils.get_value_as_list(key, obj, default)
 
     @staticmethod
-    def get_any_value(key: str, obj: Mapping = None, default: Any = None) -> Optional[Any]:
+    def get_any_value(
+        key: str, obj: Mapping = None, default: Any = None
+    ) -> Optional[Any]:
         return ModelUtils.get_any_value(key, obj, default)
 
     @staticmethod
@@ -229,7 +252,9 @@ class Utils:
     # end model util wrappers
 
     @staticmethod
-    def is_interval_expired(last_run_ms: Optional[int], now_ms: int, interval_secs: int) -> bool:
+    def is_interval_expired(
+        last_run_ms: Optional[int], now_ms: int, interval_secs: int
+    ) -> bool:
         if last_run_ms is None:
             return True
         return (now_ms - last_run_ms) > (interval_secs * 1000)
@@ -256,12 +281,12 @@ class Utils:
         return currency + '{:,.2f}'.format(amount)
 
     @staticmethod
-    def get_retry_backoff_interval(current_retry=0,
-                                   max_retries: Optional[int] = None,
-                                   backoff_in_seconds=1) -> float:
+    def get_retry_backoff_interval(
+        current_retry=0, max_retries: Optional[int] = None, backoff_in_seconds=1
+    ) -> float:
         if max_retries is not None:
             current_retry = current_retry % max_retries
-        return backoff_in_seconds * 2 ** current_retry + random.uniform(0, 1)
+        return backoff_in_seconds * 2**current_retry + random.uniform(0, 1)
 
     @staticmethod
     def retry_with_backoff(fn: Callable[[], T], retries=5, backoff_in_seconds=1) -> T:
@@ -293,7 +318,7 @@ class Utils:
                     sleep = Utils.get_retry_backoff_interval(
                         current_retry=x,
                         max_retries=retries,
-                        backoff_in_seconds=backoff_in_seconds
+                        backoff_in_seconds=backoff_in_seconds,
                     )
                     time.sleep(sleep)
                     x += 1
@@ -333,9 +358,13 @@ class Utils:
             return arrow.utcnow().shift(seconds=seconds).humanize(only_distance=True)
         else:
             if future:
-                return arrow.utcnow().shift(seconds=seconds).humanize(only_distance=False)
+                return (
+                    arrow.utcnow().shift(seconds=seconds).humanize(only_distance=False)
+                )
             else:
-                return arrow.utcnow().shift(seconds=-seconds).humanize(only_distance=False)
+                return (
+                    arrow.utcnow().shift(seconds=-seconds).humanize(only_distance=False)
+                )
 
     @staticmethod
     def uuid() -> str:
@@ -346,7 +375,13 @@ class Utils:
         return shortuuid.uuid()
 
     @staticmethod
-    def generate_password(length=8, min_uppercase_chars=1, min_lowercase_chars=1, min_numbers=1, min_special_chars=1) -> str:
+    def generate_password(
+        length=8,
+        min_uppercase_chars=1,
+        min_lowercase_chars=1,
+        min_numbers=1,
+        min_special_chars=1,
+    ) -> str:
         generator = PasswordGenerator()
         generator.maxlen = length
         generator.minlen = length
@@ -354,7 +389,7 @@ class Utils:
         generator.minlchars = min_lowercase_chars
         generator.minnumbers = min_numbers
         generator.minschars = min_special_chars
-        generator.excludeschars = "$"
+        generator.excludeschars = '$'
         return generator.generate()
 
     @staticmethod
@@ -396,8 +431,8 @@ class Utils:
     @staticmethod
     def compute_checksum_for_file(file_path: str) -> str:
         hash_sha256 = hashlib.sha256()
-        with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(4096), b""):
+        with open(file_path, 'rb') as f:
+            for chunk in iter(lambda: f.read(4096), b''):
                 hash_sha256.update(chunk)
         return hash_sha256.hexdigest()
 
@@ -451,7 +486,7 @@ class Utils:
             raise exceptions.soca_exception(
                 error_code=errorcodes.INVALID_SEMVER,
                 message=f'Could not extract semantic version from: {filename_or_uri}. '
-                        f'Please ensure you have included a semantic version in the package name.'
+                f'Please ensure you have included a semantic version in the package name.',
             )
 
     @staticmethod
@@ -534,7 +569,9 @@ class Utils:
         :return: True if file has binary content, False otherwise.
         :raises FILE_NOT_FOUND: A non-file has been passed.
         """
-        text_chars = bytearray({7, 8, 9, 10, 12, 13, 27} | set(range(0x20, 0x100)) - {0x7f})
+        text_chars = bytearray(
+            {7, 8, 9, 10, 12, 13, 27} | set(range(0x20, 0x100)) - {0x7F}
+        )
         if not Utils.is_file(file):
             raise exceptions.file_not_found(file)
         with open(file, 'rb') as f:
@@ -562,7 +599,9 @@ class Utils:
         for sep in os.path.sep, os.path.altsep:
             if sep:
                 filename = filename.replace(sep, ' ')
-                filename = str(FILENAME_ASCII_STRIP_RE.sub('', '_'.join(filename.split()))).strip('._')
+                filename = str(
+                    FILENAME_ASCII_STRIP_RE.sub('', '_'.join(filename.split()))
+                ).strip('._')
 
         if Utils.is_empty(filename):
             return None
@@ -585,7 +624,9 @@ class Utils:
         return f'ip-{transformed_ip}'
 
     @staticmethod
-    def build_package_download_url(cluster_s3_bucket: str, module_name: str, module_version: str):
+    def build_package_download_url(
+        cluster_s3_bucket: str, module_name: str, module_version: str
+    ):
         return f's3://{cluster_s3_bucket}/idea/releases/idea-{module_name}-{module_version}.tar.gz'
 
     @staticmethod
@@ -674,10 +715,7 @@ class Utils:
                 continue
             if Utils.is_empty(value):
                 continue
-            result.append({
-                'Key': key,
-                'Value': Utils.get_as_string(value)
-            })
+            result.append({'Key': key, 'Value': Utils.get_as_string(value)})
         return result
 
     @staticmethod
@@ -692,7 +730,9 @@ class Utils:
         :return: boto3.Session
         """
         botocore_session = botocore.session.Session(profile=aws_profile)
-        botocore_session.user_agent_extra = f'AwsSolution/{constants.AWS_SOLUTION_ID}/{ideasdk.__version__}'
+        botocore_session.user_agent_extra = (
+            f'AwsSolution/{constants.AWS_SOLUTION_ID}/{ideasdk.__version__}'
+        )
         return boto3.Session(botocore_session=botocore_session, region_name=aws_region)
 
     @staticmethod
@@ -701,18 +741,21 @@ class Utils:
         returns the name of the platform given a supported base os
         raises INVALID_PARAMS for an unsupported OS
         """
-        if base_os in constants.SUPPORTED_LINUX_OS:
-            return constants.PLATFORM_LINUX
-        elif base_os == constants.OS_WINDOWS:
+        # Simplified Windows detection to match all Windows variations
+        if 'windows' in str(base_os).lower():
             return constants.PLATFORM_WINDOWS
-        raise exceptions.invalid_params(f'unable to determine platform for base_os: {base_os}')
+        elif base_os in constants.SUPPORTED_LINUX_OS:
+            return constants.PLATFORM_LINUX
+        raise exceptions.invalid_params(
+            f'unable to determine platform for base_os: {base_os}'
+        )
 
     @staticmethod
     def get_ec2_block_device_name(base_os: str) -> str:
         """
         returns the ec2 block device name given a supported base os
         """
-        if base_os == constants.OS_AMAZONLINUX2:
+        if base_os in (constants.OS_AMAZONLINUX2, constants.OS_AMAZONLINUX2023):
             return '/dev/xvda'
         else:
             return '/dev/sda1'
@@ -731,6 +774,10 @@ class Utils:
         for pointer, path in zip(pointers, contents):
             yield prefix + pointer + path.name
             if path.is_dir():  # extend the prefix and recurse:
-                extension = DIRECTORY_TREE_BRANCH if pointer == DIRECTORY_TREE_TEE else DIRECTORY_TREE_SPACE
+                extension = (
+                    DIRECTORY_TREE_BRANCH
+                    if pointer == DIRECTORY_TREE_TEE
+                    else DIRECTORY_TREE_SPACE
+                )
                 # i.e. space because last, └── , above so no more |
                 yield from Utils.print_directory_tree(path, prefix=prefix + extension)

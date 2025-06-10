@@ -24,6 +24,6 @@ echo -e "
 echo -e "PATH=/bin:/usr/bin
 IDEA_CLUSTER_NAME=${IDEA_CLUSTER_NAME}
 AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
-IDEA_JOB_STATUS_SQS_QUEUE_URL={{context.config.get_string('scheduler.job_status_sqs_queue_url')}}
+IDEA_JOB_STATUS_SQS_QUEUE_URL={{ context.config.get_string('scheduler.job_status_sqs_queue_url') }}
 " > /var/spool/pbs/pbs_environment
 # End: Configure OpenPBS Compute Node

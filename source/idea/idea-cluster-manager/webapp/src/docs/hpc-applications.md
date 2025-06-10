@@ -13,7 +13,3 @@ To update an application, select the application on the list and click "Action" 
 ## Delete an application
 
 To delete an application, select the application on the list and click "Action" then click "Delete Application" button.
-
-
-
-

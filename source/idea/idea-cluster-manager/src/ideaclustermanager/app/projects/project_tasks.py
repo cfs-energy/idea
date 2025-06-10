@@ -9,11 +9,7 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
-__all__ = (
-    'ProjectEnabledTask',
-    'ProjectDisabledTask',
-    'ProjectGroupsUpdatedTask'
-)
+__all__ = ('ProjectEnabledTask', 'ProjectDisabledTask', 'ProjectGroupsUpdatedTask')
 
 from ideasdk.utils import Utils
 
@@ -24,7 +20,6 @@ from typing import Dict
 
 
 class ProjectEnabledTask(BaseTask):
-
     def __init__(self, context: ideaclustermanager.AppContext):
         self.context = context
         self.logger = context.logger(self.get_name())
@@ -34,13 +29,10 @@ class ProjectEnabledTask(BaseTask):
 
     def invoke(self, payload: Dict):
         project_id = payload['project_id']
-        self.context.projects.user_projects_dao.project_enabled(
-            project_id=project_id
-        )
+        self.context.projects.user_projects_dao.project_enabled(project_id=project_id)
 
 
 class ProjectDisabledTask(BaseTask):
-
     def __init__(self, context: ideaclustermanager.AppContext):
         self.context = context
         self.logger = context.logger(self.get_name())
@@ -50,13 +42,10 @@ class ProjectDisabledTask(BaseTask):
 
     def invoke(self, payload: Dict):
         project_id = payload['project_id']
-        self.context.projects.user_projects_dao.project_disabled(
-            project_id=project_id
-        )
+        self.context.projects.user_projects_dao.project_disabled(project_id=project_id)
 
 
 class ProjectGroupsUpdatedTask(BaseTask):
-
     def __init__(self, context: ideaclustermanager.AppContext):
         self.context = context
         self.logger = context.logger(self.get_name())
@@ -73,8 +62,7 @@ class ProjectGroupsUpdatedTask(BaseTask):
 
             for ldap_group_name in groups_removed:
                 self.context.projects.user_projects_dao.ldap_group_added(
-                    project_id=project_id,
-                    group_name=ldap_group_name
+                    project_id=project_id, group_name=ldap_group_name
                 )
                 # perform full refresh to ensure if users existed in multiple groups, and one of the group
                 # was deleted, those users get added back again
@@ -84,6 +72,5 @@ class ProjectGroupsUpdatedTask(BaseTask):
 
             for ldap_group_name in groups_added:
                 self.context.projects.user_projects_dao.ldap_group_added(
-                    project_id=project_id,
-                    group_name=ldap_group_name
+                    project_id=project_id, group_name=ldap_group_name
                 )

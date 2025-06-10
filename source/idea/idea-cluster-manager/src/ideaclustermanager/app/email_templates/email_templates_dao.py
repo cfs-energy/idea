@@ -10,7 +10,13 @@
 #  and limitations under the License.
 
 from ideasdk.utils import Utils
-from ideadatamodel import (exceptions, EmailTemplate, ListEmailTemplatesRequest, ListEmailTemplatesResult, SocaPaginator)
+from ideadatamodel import (
+    exceptions,
+    EmailTemplate,
+    ListEmailTemplatesRequest,
+    ListEmailTemplatesResult,
+    SocaPaginator,
+)
 from ideasdk.context import SocaContext
 
 from typing import Dict, Optional
@@ -19,7 +25,6 @@ import arrow
 
 
 class EmailTemplatesDAO:
-
     def __init__(self, context: SocaContext, logger=None):
         self.context = context
         if logger is not None:
@@ -36,20 +41,12 @@ class EmailTemplatesDAO:
             create_table_request={
                 'TableName': self.get_table_name(),
                 'AttributeDefinitions': [
-                    {
-                        'AttributeName': 'name',
-                        'AttributeType': 'S'
-                    }
+                    {'AttributeName': 'name', 'AttributeType': 'S'}
                 ],
-                'KeySchema': [
-                    {
-                        'AttributeName': 'name',
-                        'KeyType': 'HASH'
-                    }
-                ],
-                'BillingMode': 'PAY_PER_REQUEST'
+                'KeySchema': [{'AttributeName': 'name', 'KeyType': 'HASH'}],
+                'BillingMode': 'PAY_PER_REQUEST',
             },
-            wait=True
+            wait=True,
         )
         self.table = self.context.aws().dynamodb_table().Table(self.get_table_name())
 
@@ -69,14 +66,12 @@ class EmailTemplatesDAO:
             subject=subject,
             body=body,
             created_on=arrow.get(created_on).datetime,
-            updated_on=arrow.get(updated_on).datetime
+            updated_on=arrow.get(updated_on).datetime,
         )
 
     @staticmethod
     def convert_to_db(email_template: EmailTemplate) -> Dict:
-        db_email_template = {
-            'name': email_template.name
-        }
+        db_email_template = {'name': email_template.name}
 
         if email_template.title is not None:
             db_email_template['title'] = email_template.title
@@ -93,7 +88,6 @@ class EmailTemplatesDAO:
         return db_email_template
 
     def create_email_template(self, email_template: Dict) -> Dict:
-
         name = Utils.get_value_as_string('name', email_template)
         if Utils.is_empty(name):
             raise exceptions.invalid_params('name is required')
@@ -101,28 +95,20 @@ class EmailTemplatesDAO:
         created_email_template = {
             **email_template,
             'created_on': Utils.current_time_ms(),
-            'updated_on': Utils.current_time_ms()
+            'updated_on': Utils.current_time_ms(),
         }
-        self.table.put_item(
-            Item=created_email_template
-        )
+        self.table.put_item(Item=created_email_template)
 
         return created_email_template
 
     def get_email_template(self, name: str) -> Optional[Dict]:
-
         if Utils.is_empty(name):
             raise exceptions.invalid_params('name is required')
 
-        result = self.table.get_item(
-            Key={
-                'name': name
-            }
-        )
+        result = self.table.get_item(Key={'name': name})
         return Utils.get_value_as_dict('Item', result)
 
     def update_email_template(self, email_template: Dict):
-
         name = Utils.get_value_as_string('name', email_template)
         if Utils.is_empty(name):
             raise exceptions.invalid_params('name is required')
@@ -141,14 +127,12 @@ class EmailTemplatesDAO:
             expression_attr_values[f':{key}'] = value
 
         result = self.table.update_item(
-            Key={
-                'name': name
-            },
+            Key={'name': name},
             ConditionExpression=Attr('name').eq(name),
             UpdateExpression='SET ' + ', '.join(update_expression_tokens),
             ExpressionAttributeNames=expression_attr_names,
             ExpressionAttributeValues=expression_attr_values,
-            ReturnValues='ALL_NEW'
+            ReturnValues='ALL_NEW',
         )
 
         updated_email_template = result['Attributes']
@@ -157,17 +141,14 @@ class EmailTemplatesDAO:
         return updated_email_template
 
     def delete_email_template(self, name: str):
-
         if Utils.is_empty(name):
             raise exceptions.invalid_params('name is required')
 
-        self.table.delete_item(
-            Key={
-                'name': name
-            }
-        )
+        self.table.delete_item(Key={'name': name})
 
-    def list_email_templates(self, request: ListEmailTemplatesRequest) -> ListEmailTemplatesResult:
+    def list_email_templates(
+        self, request: ListEmailTemplatesRequest
+    ) -> ListEmailTemplatesResult:
         scan_request = {}
 
         cursor = request.cursor
@@ -184,12 +165,12 @@ class EmailTemplatesDAO:
                 if filter_.eq is not None:
                     scan_filter[filter_.key] = {
                         'AttributeValueList': [filter_.eq],
-                        'ComparisonOperator': 'EQ'
+                        'ComparisonOperator': 'EQ',
                     }
                 if filter_.like is not None:
                     scan_filter[filter_.key] = {
                         'AttributeValueList': [filter_.like],
-                        'ComparisonOperator': 'CONTAINS'
+                        'ComparisonOperator': 'CONTAINS',
                     }
         if scan_filter is not None:
             scan_request['ScanFilter'] = scan_filter
@@ -208,8 +189,5 @@ class EmailTemplatesDAO:
             response_cursor = Utils.base64_encode(Utils.to_json(last_evaluated_key))
 
         return ListEmailTemplatesResult(
-            listing=email_templates,
-            paginator=SocaPaginator(
-                cursor=response_cursor
-            )
+            listing=email_templates, paginator=SocaPaginator(cursor=response_cursor)
         )

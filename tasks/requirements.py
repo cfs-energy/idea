@@ -13,12 +13,13 @@ import tasks.idea as idea
 
 from invoke import task, Context
 
-from typing import Optional
 import os
 import sys
 
 
-def _update_requirement(c: Context, name: str, upgrade: bool = False, package_name: str = None):
+def _update_requirement(
+    c: Context, name: str, upgrade: bool = False, package_name: str = None
+):
     project_root = idea.props.project_root_dir
 
     name = name.strip().lower()
@@ -26,7 +27,7 @@ def _update_requirement(c: Context, name: str, upgrade: bool = False, package_na
     if name.endswith('.txt'):
         name = name.replace('.txt', '')
     if '.' in name:
-        name = name[:name.rfind('.')]
+        name = name[: name.rfind('.')]
 
     in_file = f'{name}.in'
     in_file_abs_path = os.path.join(project_root, 'requirements', in_file)
@@ -35,7 +36,7 @@ def _update_requirement(c: Context, name: str, upgrade: bool = False, package_na
         idea.console.error(f'Requirements .in file not found: {in_file_abs_path}')
         sys.exit(1)
 
-    cmd = 'pip-compile --no-header --no-annotate '
+    cmd = 'pip-compile --no-header --no-annotate --no-strip-extras '
     if upgrade:
         cmd += '--upgrade '
     if package_name:
@@ -50,7 +51,7 @@ def _update_requirement(c: Context, name: str, upgrade: bool = False, package_na
 
 @task(optional=['name'])
 def update(c, name=None, upgrade=False, package_name=None):
-    # type: (Context, Optional[str], bool, str) -> None
+    # type: (Context, Optional[str], bool, str) -> None # type: ignore
     """
     Update python requirements using pip-compile.
     """
@@ -58,20 +59,22 @@ def update(c, name=None, upgrade=False, package_name=None):
         _update_requirement(c, name, upgrade, package_name)
         return
 
-    for name in ('dev',
-                 'doc',
-                 'tests',
-                 'idea-dev-lambda',
-                 'idea-administrator',
-                 'idea-scheduler',
-                 'idea-cluster-manager',
-                 'idea-virtual-desktop-controller'):
+    for name in (
+        'dev',
+        'doc',
+        'tests',
+        'idea-dev-lambda',
+        'idea-administrator',
+        'idea-scheduler',
+        'idea-cluster-manager',
+        'idea-virtual-desktop-controller',
+    ):
         _update_requirement(c, name, upgrade, package_name)
 
 
 @task(optional=['name'])
 def install(c, name=None):
-    # type: (Context, Optional[str]) -> None
+    # type: (Context, Optional[str]) -> None # type: ignore
     """
     Install python requirements
     """

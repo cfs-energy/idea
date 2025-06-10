@@ -12,18 +12,20 @@
 import tasks.idea as idea
 
 import os
-from invoke import task, Context
+from invoke import task
 import shutil
 
 
 @task
 def prepare_artifacts(c):
-    # type: (Context) -> None
+    # type: (Context) -> None # type: ignore
     """
     copy docker artifacts to deployment directory
     """
     release_version = idea.props.idea_release_version
-    all_package_archive = os.path.join(idea.props.project_dist_dir, f'all-{release_version}.tar.gz')
+    all_package_archive = os.path.join(
+        idea.props.project_dist_dir, f'all-{release_version}.tar.gz'
+    )
     if not os.path.isfile(all_package_archive):
         raise Exception(f'${all_package_archive} not found')
     shutil.copy(all_package_archive, idea.props.deployment_administrator_dir)
@@ -31,7 +33,7 @@ def prepare_artifacts(c):
 
 @task
 def build(c, no_cache=False):
-    # type: (Context, bool) -> None
+    # type: (Context, bool) -> None # type: ignore
     """
     build administrator docker image
     """
@@ -39,17 +41,20 @@ def build(c, no_cache=False):
     prepare_artifacts(c)
 
     release_version = idea.props.idea_release_version
-    build_cmd = str(f'docker build '
-                    f'--build-arg PUBLIC_ECR_TAG=v{release_version} '
-                    f'-t idea-administrator:v{release_version} '
-                    f'"{idea.props.deployment_administrator_dir}"')
+    build_cmd = str(
+        f'docker build '
+        f'--build-arg PUBLIC_ECR_TAG=v{release_version} '
+        f'-t idea-administrator:v{release_version} '
+        f'"{idea.props.deployment_administrator_dir}"'
+    )
     if no_cache:
         build_cmd = f'{build_cmd} --no-cache'
     c.run(build_cmd)
 
+
 @task
 def build_push_multi(c, ecr_registry, ecr_tag, no_cache=False):
-    # type: (Context, str, str, bool) -> None
+    # type: (Context, str, str, bool) -> None # type: ignore
     """
     Build and publish docker image to an ECR repository using buildx and IAM instance profile
     """
@@ -57,17 +62,19 @@ def build_push_multi(c, ecr_registry, ecr_tag, no_cache=False):
     prepare_artifacts(c)
 
     release_version = idea.props.idea_release_version
-    build_cmd = (f'aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin {ecr_registry} && '
-                f'docker buildx ls | grep multi-platform-builder && docker buildx rm multi-platform-builder || echo "No builder to remove" && '
-                f'docker builder prune -f && '
-                f'docker buildx create --use --platform=linux/arm64,linux/amd64 --name multi-platform-builder && '
-                f'docker buildx inspect --bootstrap && '
-                f'docker buildx build --push --platform linux/amd64,linux/arm64 '
-                f'--build-arg PUBLIC_ECR_TAG=v{release_version} '
-                f'-t {ecr_registry}/idea-administrator:v{release_version} '
-                f'-t {ecr_registry}/idea-administrator:{ecr_tag} '
-                f'-t {ecr_registry}/idea-administrator:latest '
-                f'"{idea.props.deployment_administrator_dir}" ')
+    build_cmd = (
+        f'aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin {ecr_registry} && '
+        f'docker buildx ls | grep multi-platform-builder && docker buildx rm multi-platform-builder || echo "No builder to remove" && '
+        f'docker builder prune -f && '
+        f'docker buildx create --use --platform=linux/arm64,linux/amd64 --name multi-platform-builder && '
+        f'docker buildx inspect --bootstrap && '
+        f'docker buildx build --push --platform linux/amd64,linux/arm64 '
+        f'--build-arg PUBLIC_ECR_TAG=v{release_version} '
+        f'-t {ecr_registry}/idea-administrator:v{release_version} '
+        f'-t {ecr_registry}/idea-administrator:{ecr_tag} '
+        f'-t {ecr_registry}/idea-administrator:latest '
+        f'"{idea.props.deployment_administrator_dir}" '
+    )
 
     if no_cache:
         build_cmd = f'{build_cmd} --no-cache'
@@ -76,16 +83,16 @@ def build_push_multi(c, ecr_registry, ecr_tag, no_cache=False):
 
 @task
 def publish(c, ecr_registry, ecr_tag):
-    # type: (Context, str, str) -> None
+    # type: (Context, str, str) -> None # type: ignore
     """
     publish docker image to an ECR repository
     """
     local_image = f'idea-administrator:{ecr_tag}'
-    latest_image = f'idea-administrator:latest'
-    
+    latest_image = 'idea-administrator:latest'
+
     # Tag the image with given tag
     c.run(f'docker tag {local_image} {ecr_registry}/{local_image}')
-    
+
     # Tag the image with 'latest' tag
     c.run(f'docker tag {local_image} {ecr_registry}/{latest_image}')
 
@@ -94,11 +101,9 @@ def publish(c, ecr_registry, ecr_tag):
     c.run(f'docker push {ecr_registry}/{latest_image}')
 
 
-
-
 @task
 def print_commands(c):
-    # type: (Context) -> None
+    # type: (Context) -> None # type: ignore
     """
     print docker push commands for ECR
     """

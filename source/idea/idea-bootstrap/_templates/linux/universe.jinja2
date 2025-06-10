@@ -1,0 +1,43 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Begin: Enable extra repo for Ubuntu https://help.ubuntu.com/community/Repositories/Ubuntu
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+  log_info "Ubuntu detected, enabling universe and multiverse repository"
+
+  # Function to check if a component is enabled in any repository
+  check_component_enabled() {
+    local component=$1
+
+    # Check old format (sources.list style): lines starting with "deb"
+    if grep -r "^[[:space:]]*deb" /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null | grep -q "[[:space:]]${component}[[:space:]]*\$\|[[:space:]]${component}[[:space:]]"; then
+      return 0  # Component found in old format
+    fi
+
+    # Check new DEB822 format: look for "Types: deb" sections with "Components:" containing our component
+    if grep -r -A 10 "^Types:[[:space:]]*deb" /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null | grep "^Components:" | grep -q "[[:space:]]${component}[[:space:]]*\$\|[[:space:]]${component}[[:space:]]"; then
+      return 0  # Component found in new format
+    fi
+    return 1  # Component not found
+  }
+
+  # Check if 'universe' is already enabled
+  if ! check_component_enabled "universe"; then
+      log_info "Adding universe repository..."
+      add-apt-repository universe -y
+  else
+      log_info "Universe repository is already enabled."
+  fi
+
+  # Check if 'multiverse' is already enabled
+  if ! check_component_enabled "multiverse"; then
+      log_info "Adding multiverse repository..."
+      add-apt-repository multiverse -y
+  else
+      log_info "Multiverse repository is already enabled."
+  fi
+
+  # Update package lists
+  apt update
+{% endif %}
+# End: Enable extra repo for Ubuntu

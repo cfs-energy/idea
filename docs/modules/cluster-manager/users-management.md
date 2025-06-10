@@ -70,7 +70,7 @@ You cannot reset the password of a user if his/her confirmation status is not "C
 
 ### Add a batch of users
 
-Login to the cluster manager and run `ideactl accounts batch-create-users` to create multiple users in a single command. Users informations (username/email ...) must be specified via a .csv file
+Login to the cluster manager and run `ideactl accounts batch-create-users` to create multiple users in a single command. Users information (username/email ...) must be specified via a .csv file
 
 ### ideactl accounts
 

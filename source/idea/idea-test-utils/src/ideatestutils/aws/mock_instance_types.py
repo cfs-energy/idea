@@ -16,12 +16,7 @@ from ideadatamodel import exceptions, errorcodes
 
 from typing import List
 
-MOCK_INSTANCE_TYPES = [
-    't3.micro',
-    'c5.large',
-    'c5.xlarge',
-    'c5n.18xlarge'
-]
+MOCK_INSTANCE_TYPES = ['t3.micro', 'c5.large', 'c5.xlarge', 'c5n.18xlarge']
 
 
 class MockInstanceTypes:
@@ -41,19 +36,18 @@ class MockInstanceTypes:
         if instance_type not in MOCK_INSTANCE_TYPES:
             raise exceptions.SocaException(
                 error_code=errorcodes.INVALID_EC2_INSTANCE_TYPE,
-                message=f'ec2 instance_type is invalid: {instance_type}'
+                message=f'ec2 instance_type is invalid: {instance_type}',
             )
 
         try:
             env = Jinja2Utils.env_using_package_loader(
-                package_name='ideatestutils.aws',
-                package_path='templates'
+                package_name='ideatestutils.aws', package_path='templates'
             )
             template = env.get_template(f'{instance_type}.json')
         except jinja2.exceptions.TemplateNotFound:
             raise exceptions.SocaException(
                 error_code=errorcodes.INVALID_EC2_INSTANCE_TYPE,
-                message=f'ec2 instance_type is invalid: {instance_type}'
+                message=f'ec2 instance_type is invalid: {instance_type}',
             )
         content = template.render()
         instance_type_dict = Utils.from_json(content)

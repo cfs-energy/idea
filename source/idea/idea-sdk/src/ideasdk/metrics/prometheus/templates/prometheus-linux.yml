@@ -5,14 +5,13 @@ global:
   scrape_interval: {{ scrape_interval if scrape_interval else '60s' }}
   scrape_timeout: {{ scrape_timeout if scrape_timeout else '10s' }}
 
-  {%- if external_labels %}
+  {% if external_labels %}
   external_labels:
     {{ utils.to_yaml(external_labels) | indent(4) }}
-  {%- endif %}
+  {% endif %}
 
 remote_write:
   - {{ utils.to_yaml(remote_write) | indent(4) }}
 
 scrape_configs:
   {{ utils.to_yaml(scrape_configs) | indent(2) }}
-

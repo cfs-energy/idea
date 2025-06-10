@@ -18,7 +18,7 @@ __all__ = (
     'ListClusterHostsResult',
     'DescribeInstanceTypesRequest',
     'DescribeInstanceTypesResult',
-    'OPEN_API_SPEC_ENTRIES_CLUSTER_SETTINGS'
+    'OPEN_API_SPEC_ENTRIES_CLUSTER_SETTINGS',
 )
 
 from ideadatamodel import SocaPayload, SocaListingPayload, IdeaOpenAPISpecEntry
@@ -38,6 +38,7 @@ class ListClusterModulesResult(SocaListingPayload):
 
 
 # ClusterSettings.GetClusterModule
+
 
 class GetModuleSettingsRequest(SocaPayload):
     module_id: Optional[str] = Field(default=None)
@@ -71,27 +72,27 @@ OPEN_API_SPEC_ENTRIES_CLUSTER_SETTINGS = [
         request=ListClusterModulesRequest,
         result=ListClusterModulesResult,
         is_listing=True,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='ClusterSettings.GetModuleSettings',
         request=GetModuleSettingsRequest,
         result=GetModuleSettingsResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='ClusterSettings.ListClusterHosts',
         request=ListClusterHostsRequest,
         result=ListClusterHostsResult,
         is_listing=True,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='ClusterSettings.DescribeInstanceTypes',
         request=DescribeInstanceTypesRequest,
         result=DescribeInstanceTypesResult,
         is_listing=False,
-        is_public=False
-    )
+        is_public=False,
+    ),
 ]

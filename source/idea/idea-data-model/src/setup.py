@@ -9,7 +9,5 @@ setup(
     author='Amazon',
     license='Apache License, Version 2.0',
     packages=find_packages(exclude='tests'),
-    package_dir={
-        'ideadatamodel': 'ideadatamodel'
-    }
+    package_dir={'ideadatamodel': 'ideadatamodel'},
 )

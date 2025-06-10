@@ -21,17 +21,13 @@ from sanic import Sanic, response
 from sanic.router import Route
 
 
-def _compile_routes_needing_options(
-    routes: Dict[str, Route]
-) -> Dict[str, FrozenSet]:
+def _compile_routes_needing_options(routes: Dict[str, Route]) -> Dict[str, FrozenSet]:
     needs_options = defaultdict(list)
     # This is 21.3 and later. You will need to change this for older versions.
     for route in routes.values():
-        if "OPTIONS" not in route.methods:
+        if 'OPTIONS' not in route.methods:
             needs_options[route.uri].extend(route.methods)
-    return {
-        uri: frozenset(methods) for uri, methods in dict(needs_options).items()
-    }
+    return {uri: frozenset(methods) for uri, methods in dict(needs_options).items()}
 
 
 def _options_wrapper(handler, methods):
@@ -53,8 +49,6 @@ def setup_options(app: Sanic, _):
     needs_options = _compile_routes_needing_options(app.router.routes_all)
     for uri, methods in needs_options.items():
         app.add_route(
-            _options_wrapper(options_handler, methods),
-            uri,
-            methods=["OPTIONS"]
+            _options_wrapper(options_handler, methods), uri, methods=['OPTIONS']
         )
     app.router.finalize()

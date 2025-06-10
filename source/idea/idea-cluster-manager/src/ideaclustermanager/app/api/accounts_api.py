@@ -48,7 +48,7 @@ from ideadatamodel.auth import (
     AddSudoUserResult,
     RemoveSudoUserRequest,
     GlobalSignOutRequest,
-    GlobalSignOutResult
+    GlobalSignOutResult,
 )
 from ideadatamodel import exceptions
 from ideasdk.utils import Utils
@@ -57,7 +57,6 @@ import ideaclustermanager
 
 
 class AccountsAPI(BaseAPI):
-
     def __init__(self, context: ideaclustermanager.AppContext):
         self.context = context
 
@@ -67,88 +66,79 @@ class AccountsAPI(BaseAPI):
         self.acl = {
             'Accounts.CreateUser': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.create_user
+                'method': self.create_user,
             },
-            'Accounts.GetUser': {
-                'scope': self.SCOPE_READ,
-                'method': self.get_user
-            },
+            'Accounts.GetUser': {'scope': self.SCOPE_READ, 'method': self.get_user},
             'Accounts.ModifyUser': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.modify_user
+                'method': self.modify_user,
             },
-            'Accounts.ListUsers': {
-                'scope': self.SCOPE_READ,
-                'method': self.list_users
-            },
+            'Accounts.ListUsers': {'scope': self.SCOPE_READ, 'method': self.list_users},
             'Accounts.EnableUser': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.enable_user
+                'method': self.enable_user,
             },
             'Accounts.DisableUser': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.disable_user
+                'method': self.disable_user,
             },
             'Accounts.DeleteUser': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.delete_user
+                'method': self.delete_user,
             },
             'Accounts.CreateGroup': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.create_group
+                'method': self.create_group,
             },
-            'Accounts.GetGroup': {
-                'scope': self.SCOPE_READ,
-                'method': self.get_group
-            },
+            'Accounts.GetGroup': {'scope': self.SCOPE_READ, 'method': self.get_group},
             'Accounts.ModifyGroup': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.modify_group
+                'method': self.modify_group,
             },
             'Accounts.EnableGroup': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.enable_group
+                'method': self.enable_group,
             },
             'Accounts.DisableGroup': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.disable_group
+                'method': self.disable_group,
             },
             'Accounts.DeleteGroup': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.delete_group
+                'method': self.delete_group,
             },
             'Accounts.AddUserToGroup': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.add_user_to_group
+                'method': self.add_user_to_group,
             },
             'Accounts.RemoveUserFromGroup': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.remove_user_from_group
+                'method': self.remove_user_from_group,
             },
             'Accounts.ListGroups': {
                 'scope': self.SCOPE_READ,
-                'method': self.list_groups
+                'method': self.list_groups,
             },
             'Accounts.ListUsersInGroup': {
                 'scope': self.SCOPE_READ,
-                'method': self.list_users_in_group
+                'method': self.list_users_in_group,
             },
             'Accounts.AddSudoUser': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.add_sudo_user
+                'method': self.add_sudo_user,
             },
             'Accounts.RemoveSudoUser': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.remove_sudo_user
+                'method': self.remove_sudo_user,
             },
             'Accounts.GlobalSignOut': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.global_sign_out
+                'method': self.global_sign_out,
             },
             'Accounts.ResetPassword': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.reset_password
-            }
+                'method': self.reset_password,
+            },
         }
 
     @property
@@ -160,7 +150,10 @@ class AccountsAPI(BaseAPI):
         decoded_token = self.token_service.decode_token(access_token)
 
         groups = Utils.get_value_as_list('cognito:groups', decoded_token)
-        if Utils.is_not_empty(groups) and self.context.user_pool.admin_group_name in groups:
+        if (
+            Utils.is_not_empty(groups)
+            and self.context.user_pool.admin_group_name in groups
+        ):
             return True
 
         token_scope = Utils.get_value_as_string('scope', decoded_token)
@@ -176,9 +169,7 @@ class AccountsAPI(BaseAPI):
         email_verified = Utils.get_as_bool(request.email_verified, False)
 
         created_user = self.context.accounts.create_user(request.user, email_verified)
-        context.success(CreateUserResult(
-            user=created_user
-        ))
+        context.success(CreateUserResult(user=created_user))
 
     def get_user(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(GetUserRequest)
@@ -189,9 +180,7 @@ class AccountsAPI(BaseAPI):
         request = context.get_request_payload_as(ModifyUserRequest)
         email_verified = Utils.get_as_bool(request.email_verified, False)
         user = self.context.accounts.modify_user(request.user, email_verified)
-        context.success(ModifyUserResult(
-            user=user
-        ))
+        context.success(ModifyUserResult(user=user))
 
     def enable_user(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(EnableUserRequest)
@@ -228,16 +217,12 @@ class AccountsAPI(BaseAPI):
     def create_group(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(CreateGroupRequest)
         created_group = self.context.accounts.create_group(request.group)
-        context.success(CreateGroupResult(
-            group=created_group
-        ))
+        context.success(CreateGroupResult(group=created_group))
 
     def modify_group(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(ModifyGroupRequest)
         modified_group = self.context.accounts.modify_group(request.group)
-        context.success(ModifyGroupResult(
-            group=modified_group
-        ))
+        context.success(ModifyGroupResult(group=modified_group))
 
     def enable_group(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(EnableGroupRequest)
@@ -257,9 +242,7 @@ class AccountsAPI(BaseAPI):
     def get_group(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(GetGroupRequest)
         group = self.context.accounts.get_group(request.group_name)
-        context.success(GetGroupResult(
-            group=group
-        ))
+        context.success(GetGroupResult(group=group))
 
     def list_groups(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(ListGroupsRequest)
@@ -273,7 +256,9 @@ class AccountsAPI(BaseAPI):
 
     def remove_user_from_group(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(RemoveUserFromGroupRequest)
-        self.context.accounts.remove_users_from_group(request.usernames, request.group_name)
+        self.context.accounts.remove_users_from_group(
+            request.usernames, request.group_name
+        )
         context.success(RemoveUserFromGroupResult())
 
     def list_users_in_group(self, context: ApiInvocationContext):
@@ -285,17 +270,13 @@ class AccountsAPI(BaseAPI):
         request = context.get_request_payload_as(AddSudoUserRequest)
         self.context.accounts.add_sudo_user(request.username)
         user = self.context.accounts.get_user(request.username)
-        context.success(AddSudoUserResult(
-            user=user
-        ))
+        context.success(AddSudoUserResult(user=user))
 
     def remove_sudo_user(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(RemoveSudoUserRequest)
         self.context.accounts.remove_sudo_user(request.username)
         user = self.context.accounts.get_user(request.username)
-        context.success(AddSudoUserResult(
-            user=user
-        ))
+        context.success(AddSudoUserResult(user=user))
 
     @staticmethod
     def check_sudo_authorization_services(context: ApiInvocationContext):
@@ -309,12 +290,14 @@ class AccountsAPI(BaseAPI):
         namespace = context.namespace
         if namespace == 'Accounts.CreateUser':
             payload = context.get_request_payload_as(CreateUserRequest)
-            is_sudo_authorization_required = payload.user is not None and Utils.is_true(payload.user.sudo)
+            is_sudo_authorization_required = payload.user is not None and Utils.is_true(
+                payload.user.sudo
+            )
         else:
             is_sudo_authorization_required = namespace in (
                 'Accounts.AddSudoUser',
                 'Accounts.RemoveSudoUser',
-                'Accounts.ModifyUser'
+                'Accounts.ModifyUser',
             )
 
         if not is_sudo_authorization_required:
@@ -336,7 +319,9 @@ class AccountsAPI(BaseAPI):
         self.check_sudo_authorization_services(context)
 
         acl_entry_scope = Utils.get_value_as_string('scope', acl_entry)
-        is_authorized = context.is_authorized(elevated_access=True, scopes=[acl_entry_scope])
+        is_authorized = context.is_authorized(
+            elevated_access=True, scopes=[acl_entry_scope]
+        )
 
         if is_authorized:
             acl_entry['method'](context)

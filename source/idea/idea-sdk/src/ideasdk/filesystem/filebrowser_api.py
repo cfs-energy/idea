@@ -21,13 +21,12 @@ from ideadatamodel.filesystem import (
     DownloadFilesResult,
     CreateFileRequest,
     DeleteFilesRequest,
-    TailFileRequest
+    TailFileRequest,
 )
 from ideasdk.filesystem.filesystem_helper import FileSystemHelper
 
 
 class FileBrowserAPI(BaseAPI):
-
     def __init__(self, context: SocaContextProtocol):
         self.context = context
 
@@ -59,9 +58,7 @@ class FileBrowserAPI(BaseAPI):
         helper = FileSystemHelper(self.context, context.get_username())
         request = context.get_request_payload_as(DownloadFilesRequest)
         download_file = helper.download_files(request)
-        context.success(DownloadFilesResult(
-            download_url=download_file
-        ))
+        context.success(DownloadFilesResult(download_url=download_file))
 
     def create_file(self, context: ApiInvocationContext):
         helper = FileSystemHelper(self.context, context.get_username())
@@ -76,7 +73,6 @@ class FileBrowserAPI(BaseAPI):
         context.success(response)
 
     def invoke(self, context: ApiInvocationContext):
-
         # authorized user access - do not allow app based authorizations to read user files
         if not context.is_authorized_user():
             raise exceptions.unauthorized_access()

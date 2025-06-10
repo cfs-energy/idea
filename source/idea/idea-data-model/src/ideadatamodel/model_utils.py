@@ -33,7 +33,6 @@ def json_serializer(obj):
 
 
 class ModelUtils:
-
     @staticmethod
     def is_empty(value: Optional[Any]) -> bool:
         if value is None:
@@ -130,7 +129,9 @@ class ModelUtils:
         return str(value)
 
     @staticmethod
-    def get_as_int(value: Optional[Union[float, int, str]], default: int = None) -> Optional[int]:
+    def get_as_int(
+        value: Optional[Union[float, int, str]], default: int = None
+    ) -> Optional[int]:
         if value is None:
             return default
         if isinstance(value, int):
@@ -147,7 +148,9 @@ class ModelUtils:
         return default
 
     @staticmethod
-    def get_as_float(value: Optional[Union[float, str]], default: float = None) -> Optional[float]:
+    def get_as_float(
+        value: Optional[Union[float, str]], default: float = None
+    ) -> Optional[float]:
         if value is None:
             return None if default is None else float(default)
         if isinstance(value, float):
@@ -164,7 +167,9 @@ class ModelUtils:
         return None if default is None else float(default)
 
     @staticmethod
-    def get_as_decimal(value: Optional[Union[float, str]], default: Decimal = None) -> Optional[Decimal]:
+    def get_as_decimal(
+        value: Optional[Union[float, str]], default: Decimal = None
+    ) -> Optional[Decimal]:
         if value is None:
             return None if default is None else float(default)
         if isinstance(value, float):
@@ -181,7 +186,9 @@ class ModelUtils:
         return None if default is None else default
 
     @staticmethod
-    def get_as_bool(value: Optional[Union[bool, str, int]], default=None) -> Optional[bool]:
+    def get_as_bool(
+        value: Optional[Union[bool, str, int]], default=None
+    ) -> Optional[bool]:
         if ModelUtils.is_empty(value) is None:
             return default
         if isinstance(value, bool):
@@ -316,50 +323,66 @@ class ModelUtils:
         return True
 
     @staticmethod
-    def get_value_as_int(key: str, obj: Mapping = None, default: int = None) -> Optional[int]:
+    def get_value_as_int(
+        key: str, obj: Mapping = None, default: int = None
+    ) -> Optional[int]:
         if not ModelUtils.value_exists(key=key, obj=obj):
             return default
         return ModelUtils.get_as_int(value=obj[key], default=default)
 
     @staticmethod
-    def get_value_as_float(key: str, obj: Mapping = None, default: float = None) -> Optional[float]:
+    def get_value_as_float(
+        key: str, obj: Mapping = None, default: float = None
+    ) -> Optional[float]:
         if not ModelUtils.value_exists(key=key, obj=obj):
             return default
         return ModelUtils.get_as_float(value=obj[key], default=default)
 
     @staticmethod
-    def get_value_as_decimal(key: str, obj: Mapping = None, default: float = None) -> Optional[Decimal]:
+    def get_value_as_decimal(
+        key: str, obj: Mapping = None, default: float = None
+    ) -> Optional[Decimal]:
         if not ModelUtils.value_exists(key=key, obj=obj):
             return default
         return ModelUtils.get_as_decimal(value=obj[key], default=default)
 
     @staticmethod
-    def get_value_as_bool(key: str, obj: Mapping = None, default: bool = None) -> Optional[bool]:
+    def get_value_as_bool(
+        key: str, obj: Mapping = None, default: bool = None
+    ) -> Optional[bool]:
         if not ModelUtils.value_exists(key=key, obj=obj):
             return default
         return ModelUtils.get_as_bool(value=obj[key], default=default)
 
     @staticmethod
-    def get_value_as_string(key: str, obj: Mapping = None, default: str = None) -> Optional[str]:
+    def get_value_as_string(
+        key: str, obj: Mapping = None, default: str = None
+    ) -> Optional[str]:
         if not ModelUtils.value_exists(key=key, obj=obj):
             return default
 
         return ModelUtils.get_as_string(value=obj[key], default=default)
 
     @staticmethod
-    def get_value_as_dict(key: str, obj: Mapping = None, default: dict = None) -> Optional[dict]:
+    def get_value_as_dict(
+        key: str, obj: Mapping = None, default: dict = None
+    ) -> Optional[dict]:
         if not ModelUtils.value_exists(key=key, obj=obj):
             return default
         return ModelUtils.get_as_dict(value=obj[key], default=default)
 
     @staticmethod
-    def get_value_as_list(key: str, obj: Mapping = None, default: list = None) -> Optional[list]:
+    def get_value_as_list(
+        key: str, obj: Mapping = None, default: list = None
+    ) -> Optional[list]:
         if not ModelUtils.value_exists(key=key, obj=obj):
             return default
         return ModelUtils.get_as_list(value=obj[key], default=default)
 
     @staticmethod
-    def get_any_value(key: str, obj: Mapping = None, default: Any = None) -> Optional[Any]:
+    def get_any_value(
+        key: str, obj: Mapping = None, default: Any = None
+    ) -> Optional[Any]:
         if not ModelUtils.value_exists(key=key, obj=obj):
             return default
         return obj[key]
@@ -408,7 +431,7 @@ class ModelUtils:
         if ModelUtils.is_empty(value):
             raise exceptions.SocaException(
                 error_code=errorcodes.INVALID_PARAMS,
-                message=f'Invalid arguments. {label} is required.'
+                message=f'Invalid arguments. {label} is required.',
             )
 
     @staticmethod
@@ -426,14 +449,22 @@ class ModelUtils:
     def to_json(payload: Union[BaseModel, Any], indent=False) -> str:
         if isinstance(payload, BaseModel):
             if indent:
-                return payload.model_dump_json(exclude_none=True, by_alias=True, indent=2)
+                return payload.model_dump_json(
+                    exclude_none=True, by_alias=True, indent=2
+                )
             else:
                 return payload.model_dump_json(exclude_none=True, by_alias=True)
         else:
             if indent:
-                return ModelUtils.from_bytes(orjson.dumps(payload, option=orjson.OPT_INDENT_2, default=json_serializer))
+                return ModelUtils.from_bytes(
+                    orjson.dumps(
+                        payload, option=orjson.OPT_INDENT_2, default=json_serializer
+                    )
+                )
             else:
-                return ModelUtils.from_bytes(orjson.dumps(payload, default=json_serializer))
+                return ModelUtils.from_bytes(
+                    orjson.dumps(payload, default=json_serializer)
+                )
 
     @staticmethod
     def from_json(data: str) -> Union[Dict, List]:

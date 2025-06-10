@@ -55,7 +55,7 @@ def find_schedule_keys(input_dict, path=''):
             for result in find_schedule_keys(value, new_path):
                 yield result
         elif value == 'STOP_ALL_DAY':
-            yield new_path.rsplit('.', 1)[0] 
+            yield new_path.rsplit('.', 1)[0]
 
 output = yaml.safe_load('''$OUTPUT''')
 

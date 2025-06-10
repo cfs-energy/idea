@@ -20,7 +20,7 @@ __all__ = (
     'DeleteEmailTemplateResult',
     'ListEmailTemplatesRequest',
     'ListEmailTemplatesResult',
-    'OPEN_API_SPEC_ENTRIES_EMAIL_TEMPLATES'
+    'OPEN_API_SPEC_ENTRIES_EMAIL_TEMPLATES',
 )
 
 from ideadatamodel import SocaPayload, SocaListingPayload, IdeaOpenAPISpecEntry
@@ -80,34 +80,34 @@ OPEN_API_SPEC_ENTRIES_EMAIL_TEMPLATES = [
         request=CreateEmailTemplateRequest,
         result=CreateEmailTemplateResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='EmailTemplates.GetEmailTemplate',
         request=GetEmailTemplateRequest,
         result=GetEmailTemplateResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='EmailTemplates.UpdateEmailTemplate',
         request=UpdateEmailTemplateRequest,
         result=UpdateEmailTemplateResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='EmailTemplates.ListEmailTemplates',
         request=ListEmailTemplatesRequest,
         result=ListEmailTemplatesResult,
         is_listing=True,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='EmailTemplates.DeleteEmailTemplate',
         request=DeleteEmailTemplateRequest,
         result=DeleteEmailTemplateResult,
         is_listing=False,
-        is_public=False
-    )
+        is_public=False,
+    ),
 ]

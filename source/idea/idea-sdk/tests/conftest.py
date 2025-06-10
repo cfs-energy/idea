@@ -24,6 +24,6 @@ def context(monkeypatch):
             module_name='mock',
             module_id='mock',
             module_set='default',
-            config=mock_config.get_config()
+            config=mock_config.get_config(),
         )
     )

@@ -94,4 +94,3 @@ class AuthLayout extends Component<AuthLayoutProps, AuthLayoutState> {
 }
 
 export default AuthLayout;
-

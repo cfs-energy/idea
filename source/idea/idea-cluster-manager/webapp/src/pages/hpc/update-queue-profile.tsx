@@ -401,7 +401,7 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                                 {
                                     title: 'Default Compute Stack Parameters',
                                     name: 'default-compute-stack',
-                                    description: 'Configure the default compute stack parameters for the jobs submitted to queues in this queue profile. Default parameters can be overriden during job submission.',
+                                    description: 'Configure the default compute stack parameters for the jobs submitted to queues in this queue profile. Default parameters can be overridden during job submission.',
                                     required: true,
                                     groups: [
                                         {
@@ -414,11 +414,15 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                                                     description: 'Select the default operating system for the compute nodes',
                                                     param_type: 'select',
                                                     data_type: 'str',
-                                                    default: 'amazonlinux2',
+                                                    default: 'amazonlinux2023',
                                                     validate: {
                                                         required: true
                                                     },
                                                     choices: [
+                                                        {
+                                                            title: 'Amazon Linux 2023',
+                                                            value: 'amazonlinux2023'
+                                                        },
                                                         {
                                                             title: 'Amazon Linux 2',
                                                             value: 'amazonlinux2'
@@ -438,6 +442,14 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                                                         {
                                                             title: 'Rocky Linux 9',
                                                             value: 'rocky9'
+                                                        },
+                                                        {
+                                                            title: 'Ubuntu 22.04',
+                                                            value: 'ubuntu2204'
+                                                        },
+                                                        {
+                                                            title: 'Ubuntu 24.04',
+                                                            value: 'ubuntu2404'
                                                         }
                                                     ]
                                                 },

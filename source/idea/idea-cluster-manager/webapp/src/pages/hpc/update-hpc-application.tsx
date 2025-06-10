@@ -29,6 +29,10 @@ import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import IdeaAppLayout, {IdeaAppLayoutProps} from "../../components/app-layout";
 import {withRouter} from "../../navigation/navigation-utils";
 
+// Import Ace editor themes
+import 'ace-builds/css/theme/github_dark.css';
+import 'ace-builds/css/theme/github_light_default.css';
+
 const SampleJobScriptSimple = require('./sample-job-script-simple.txt')
 const SampleJobScriptJinja2 = require('./sample-job-script-jinja2.txt')
 const SampleJobParams = require('./sample-job-params.json')
@@ -129,7 +133,7 @@ class UpdateHpcApplication extends Component<UpdateHpcApplicationProps, UpdateHp
             ace: undefined,
             preferences: undefined,
             jobScriptTemplate: 'jinja2',
-            language: 'batchfile',
+            language: 'sh',
             scriptInterpreter: 'pbs',
             activeStep: 0,
             toolsOpen: false,
@@ -171,8 +175,21 @@ class UpdateHpcApplication extends Component<UpdateHpcApplicationProps, UpdateHp
             import('ace-builds/webpack-resolver').then(() => {
                 ace.config.set('useStrictCSP', true)
                 ace.config.set('loadWorkerFromBlob', false)
+
+                // Detect current mode and set appropriate theme
+                const isDarkMode = AppContext.get().isDarkMode();
+                const editorTheme = isDarkMode ? 'github_dark' : 'github_light_default';
+
                 this.setState({
-                    ace: ace
+                    ace: ace,
+                    preferences: {
+                        wrapLines: true,
+                        theme: editorTheme,
+                        showGutter: true,
+                        showLineNumbers: true,
+                        showInvisibles: false,
+                        showPrintMargin: false
+                    }
                 })
             })
         })
@@ -657,6 +674,14 @@ class UpdateHpcApplication extends Component<UpdateHpcApplicationProps, UpdateHp
                                                             })
                                                         }}
                                                         loading={false}
+                                                        themes={{
+                                                            light: [
+                                                                'github_light_default'
+                                                            ],
+                                                            dark: [
+                                                                'github_dark'
+                                                            ]
+                                                        }}
                                                         i18nStrings={{
                                                             loadingState: "Loading code editor",
                                                             errorState:

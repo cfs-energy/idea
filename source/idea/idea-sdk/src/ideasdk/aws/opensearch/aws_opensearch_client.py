@@ -14,7 +14,7 @@ from ideasdk.aws.opensearch.opensearch_filters import (
     TermFilter,
     RangeFilter,
     FreeTextFilter,
-    SortFilter
+    SortFilter,
 )
 from ideasdk.protocols import SocaContextProtocol
 
@@ -29,7 +29,9 @@ class AwsOpenSearchClient:
         self.context = context
         self._logger = context.logger('opensearch-client')
 
-        domain_endpoint = self.context.config().get_string('analytics.opensearch.domain_endpoint', required=True)
+        domain_endpoint = self.context.config().get_string(
+            'analytics.opensearch.domain_endpoint', required=True
+        )
         if not domain_endpoint.startswith('https://'):
             domain_endpoint = f'https://{domain_endpoint}'
 
@@ -37,55 +39,98 @@ class AwsOpenSearchClient:
             hosts=[domain_endpoint],
             port=443,
             use_ssl=True,
-            verify_certs=True
+            verify_certs=True,
+            pool_maxsize=10,
         )
 
     def add_index_entry(self, index_name: str, doc_id: str, body: str, **kwargs):
         timeout = kwargs.get('timeout', '10s')
         response = self.os_client.index(
-            index=index_name,
-            id=doc_id,
-            body=body,
-            timeout=timeout
+            index=index_name, id=doc_id, body=body, timeout=timeout
         )
         return response['result'] == 'created'
 
     def bulk_index(self, index_name: str, docs: Dict[str, Dict], **kwargs):
+        try:
+            self._logger.info(
+                f'Starting bulk index operation for index: {index_name} with {len(docs)} documents'
+            )
+            items = []
 
-        items = []
+            for doc_id, doc in docs.items():
+                items.append({'_index': index_name, '_id': doc_id, '_source': doc})
 
-        for doc_id, doc in docs.items():
-            items.append({
-                '_index': index_name,
-                '_id': doc_id,
-                '_source': doc
-            })
+            if len(items) == 0:
+                self._logger.warning(f'No items to index for index: {index_name}')
+                return True
 
-        helpers.bulk(
-            client=self.os_client,
-            actions=items
-        )
+            # Log first document ID for tracing
+            if len(items) > 0:
+                self._logger.debug(f'First document ID to index: {items[0]["_id"]}')
 
-        return True
+            # Use bulk helper with error handling
+            success, failed = helpers.bulk(
+                client=self.os_client,
+                actions=items,
+                stats_only=False,
+                raise_on_error=False,  # Don't raise exception, return errors instead
+            )
 
-    def search(self, index: str, term_filters: Optional[List[TermFilter]] = None, range_filter: Optional[RangeFilter] = None, free_text_filter: Optional[FreeTextFilter] = None, sort_filter: Optional[SortFilter] = None, size: Optional[int] = None, start_from: Optional[int] = None, source: bool = True) -> dict:
-        query = {"bool": {}}
+            if failed:
+                self._logger.error(
+                    f'Bulk indexing completed with errors: {success} success, {len(failed)} failed'
+                )
+                for error in failed[:5]:  # Log up to 5 errors
+                    self._logger.error(f'Indexing error: {error}')
+                return False
+            else:
+                self._logger.info(
+                    f'Bulk indexing completed successfully: {success} documents indexed'
+                )
+                return True
+        except Exception as e:
+            self._logger.exception(
+                f'Failed to perform bulk indexing operation: {str(e)}'
+            )
+            return False
+
+    def search(
+        self,
+        index: str,
+        term_filters: Optional[List[TermFilter]] = None,
+        range_filter: Optional[RangeFilter] = None,
+        free_text_filter: Optional[FreeTextFilter] = None,
+        sort_filter: Optional[SortFilter] = None,
+        size: Optional[int] = None,
+        start_from: Optional[int] = None,
+        source: bool = True,
+    ) -> dict:
+        query = {'bool': {}}
         if Utils.is_not_empty(term_filters):
-            query["bool"]["must"] = Utils.get_value_as_list("must", query["bool"], default=[])
+            query['bool']['must'] = Utils.get_value_as_list(
+                'must', query['bool'], default=[]
+            )
             for term_filter in term_filters:
-                query["bool"]["must"].append(term_filter.get_term_filter())
+                query['bool']['must'].append(term_filter.get_term_filter())
 
         if Utils.is_not_empty(free_text_filter):
-            query["bool"]["must"] = Utils.get_value_as_list("must", query["bool"], default=[])
-            query["bool"]["must"].append(free_text_filter.get_free_text_filter())
+            query['bool']['must'] = Utils.get_value_as_list(
+                'must', query['bool'], default=[]
+            )
+            query['bool']['must'].append(free_text_filter.get_free_text_filter())
 
         if Utils.is_not_empty(range_filter):
-            query["bool"]["filter"] = Utils.get_value_as_list("filter", query["bool"], default=[])
-            query["bool"]["filter"].append(range_filter.get_range_filter())
+            query['bool']['filter'] = Utils.get_value_as_list(
+                'filter', query['bool'], default=[]
+            )
+            query['bool']['filter'].append(range_filter.get_range_filter())
+            self._logger.debug(f'Added range filter: {range_filter.get_range_filter()}')
 
         sort_by = None
         if Utils.is_not_empty(sort_filter):
             sort_by = sort_filter.get_sort_filter()
+
+        self._logger.debug(f'OpenSearch query: {Utils.to_json(query)}')
 
         return self._search(
             index=index,
@@ -93,10 +138,18 @@ class AwsOpenSearchClient:
             sort_by=sort_by,
             size=size,
             start_from=start_from,
-            source=source
+            source=source,
         )
 
-    def _search(self, index: str, body: dict, sort_by: Optional[str] = None, size: Optional[int] = None, start_from: Optional[int] = None, source: bool = True) -> dict:
+    def _search(
+        self,
+        index: str,
+        body: dict,
+        sort_by: Optional[str] = None,
+        size: Optional[int] = None,
+        start_from: Optional[int] = None,
+        source: bool = True,
+    ) -> dict:
         try:
             result = self.os_client.search(
                 index=index,
@@ -104,7 +157,7 @@ class AwsOpenSearchClient:
                 sort=sort_by,
                 size=size,
                 from_=start_from,
-                _source=source
+                _source=source,
             )
         except opensearchpy.exceptions.NotFoundError:
             # if index does not exist, return False
@@ -114,7 +167,16 @@ class AwsOpenSearchClient:
 
     def exists(self, index: str, body: dict):
         result = self._search(index, body, source=False)
-        return Utils.get_value_as_int('value', Utils.get_value_as_dict('total', Utils.get_value_as_dict('hits', result, {}), {}), 0) > 0
+        return (
+            Utils.get_value_as_int(
+                'value',
+                Utils.get_value_as_dict(
+                    'total', Utils.get_value_as_dict('hits', result, {}), {}
+                ),
+                0,
+            )
+            > 0
+        )
 
     def get_template(self, name: str) -> Optional[Dict]:
         try:
@@ -133,10 +195,7 @@ class AwsOpenSearchClient:
 
         for index_name in response:
             try:
-                self.os_client.indices.delete_alias(
-                    index=index_name,
-                    name=name
-                )
+                self.os_client.indices.delete_alias(index=index_name, name=name)
             except opensearchpy.exceptions.NotFoundError as _:
                 pass
             self._logger.warning(f'Alias: {name} deleted ...')
@@ -144,9 +203,7 @@ class AwsOpenSearchClient:
 
     def delete_index(self, name: str):
         try:
-            self.os_client.indices.delete(
-                index=name
-            )
+            self.os_client.indices.delete(index=name)
         except opensearchpy.exceptions.NotFoundError as _:
             pass
         self._logger.warning(f'Index: {name} deleted ...')

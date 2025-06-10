@@ -9,14 +9,13 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
-from ideadatamodel import constants, SocaJob
+from ideadatamodel import SocaJob
 from ideasdk.context import SocaContext, SocaContextOptions
 from ideasdk.auth import TokenService
 from ideasdk.client import AccountsClient, ProjectsClient, NotificationsAsyncClient
 from ideasdk.utils import EnvironmentUtils, Utils
 from ideasdk.shell import ShellInvoker
 
-import ideascheduler
 
 from ideascheduler.app.app_protocols import (
     InstanceCacheProtocol,
@@ -29,29 +28,18 @@ from ideascheduler.app.app_protocols import (
     HpcQueueProfilesServiceProtocol,
     HpcApplicationsProtocol,
     LicenseServiceProtocol,
-    JobNotificationsProtocol
+    JobNotificationsProtocol,
 )
 from ideascheduler.app.metrics import JobProvisioningMetrics
 
 import os
-import base64
-import uuid
-import boto3
-from botocore import config as botocore_config
-import json
-import yaml
-import time
-from typing import Optional, Union
-import click
+from typing import Optional
 from pathlib import Path
 
 
 class SchedulerAppContext(SocaContext):
-
     def __init__(self, options: SocaContextOptions = None):
-        super().__init__(
-            options=options
-        )
+        super().__init__(options=options)
 
         # sdk services
         self.token_service: Optional[TokenService] = None

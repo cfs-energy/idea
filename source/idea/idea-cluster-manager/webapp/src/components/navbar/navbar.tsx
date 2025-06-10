@@ -315,4 +315,3 @@ class IdeaNavbar extends Component<IdeaNavbarProps, IdeaNavbarState> {
 }
 
 export default IdeaNavbar
-

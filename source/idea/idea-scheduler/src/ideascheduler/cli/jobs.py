@@ -10,10 +10,15 @@
 #  and limitations under the License.
 
 from ideadatamodel import (
-    exceptions, constants,
-    SocaPaginator, SocaSortBy, SocaDateRange,
-    ListJobsRequest, ListJobsResult,
-    SocaJobState, SocaJob
+    exceptions,
+    constants,
+    SocaPaginator,
+    SocaSortBy,
+    SocaDateRange,
+    ListJobsRequest,
+    ListJobsResult,
+    SocaJobState,
+    SocaJob,
 )
 from ideasdk.utils import Utils
 from ideasdk.context import SocaCliContext
@@ -104,19 +109,35 @@ class JobQuery:
         if period == 'today':
             return key, date().floor('day'), date().ceil('day')
         elif period == 'yesterday':
-            return key, date().shift(days=-1).floor('day'), date().shift(days=-1).ceil('day')
+            return (
+                key,
+                date().shift(days=-1).floor('day'),
+                date().shift(days=-1).ceil('day'),
+            )
         elif period == 'this-week':
             return key, date().floor('week'), date().ceil('week')
         elif period == 'last-week':
-            return key, date().shift(weeks=-1).floor('week'), date().shift(weeks=-1).ceil('week')
+            return (
+                key,
+                date().shift(weeks=-1).floor('week'),
+                date().shift(weeks=-1).ceil('week'),
+            )
         elif period == 'this-month':
             return key, date().floor('month'), date().ceil('month')
         elif period == 'last-month':
-            return key, date().shift(months=-1).floor('month'), date().shift(months=-1).ceil('month')
+            return (
+                key,
+                date().shift(months=-1).floor('month'),
+                date().shift(months=-1).ceil('month'),
+            )
         elif period == 'this-year':
             return key, date().floor('year'), date().ceil('year')
         elif period == 'last-year':
-            return key, date().shift(years=-1).floor('year'), date().shift(years=-1).ceil('year')
+            return (
+                key,
+                date().shift(years=-1).floor('year'),
+                date().shift(years=-1).ceil('year'),
+            )
         elif period.endswith(('d', 'w', 'm', 'y')):
             token = period.strip().lower()
             if token.endswith('y'):
@@ -185,19 +206,11 @@ class JobQuery:
         period_key, period_start, period_end = self.period
         return ListJobsRequest(
             queue_type=self.queue_type,
-            paginator=SocaPaginator(
-                page_size=self.page_size,
-                start=self.start
-            ),
-            sort_by=SocaSortBy(
-                key=sort_by_key,
-                order=sort_by_order
-            ),
+            paginator=SocaPaginator(page_size=self.page_size, start=self.start),
+            sort_by=SocaSortBy(key=sort_by_key, order=sort_by_order),
             date_range=SocaDateRange(
-                key=period_key,
-                start=period_start.datetime,
-                end=period_end.datetime
-            )
+                key=period_key, start=period_start.datetime, end=period_end.datetime
+            ),
         )
 
     def __str__(self):
@@ -211,8 +224,10 @@ class JobQuery:
 
         period_key, period_start, period_end = self.period
         if period_start and period_end:
-            params.append(f'Period: {period_key} [{period_start.format(DISPLAY_DATE_FORMAT)} - '
-                          f'{period_end.format(DISPLAY_DATE_FORMAT)}]')
+            params.append(
+                f'Period: {period_key} [{period_start.format(DISPLAY_DATE_FORMAT)} - '
+                f'{period_end.format(DISPLAY_DATE_FORMAT)}]'
+            )
 
         sort_by = self.sort_by
         if sort_by:
@@ -222,7 +237,9 @@ class JobQuery:
 
 
 class JobRow:
-    def __init__(self, context: SocaCliContext, query: JobQuery, job: Optional[SocaJob] = None):
+    def __init__(
+        self, context: SocaCliContext, query: JobQuery, job: Optional[SocaJob] = None
+    ):
         self.context = context
         self.query = query
         self.job = job
@@ -230,7 +247,11 @@ class JobRow:
     def _format(self, value: Optional[datetime]) -> Optional[str]:
         if value is None:
             return None
-        return arrow.get(value).to(self.context.cluster_timezone()).format(DISPLAY_DATE_FORMAT)
+        return (
+            arrow.get(value)
+            .to(self.context.cluster_timezone())
+            .format(DISPLAY_DATE_FORMAT)
+        )
 
     @property
     def job_info(self) -> str:
@@ -295,21 +316,27 @@ class JobRow:
             datetime_info += f'- Pending: {duration(pending)}{os.linesep}'
         elif self.job.queue_time:
             pending = (arrow.utcnow() - self.job.queue_time).seconds
-            datetime_info += f'- Queued: {duration(pending, absolute=False)}{os.linesep}'
+            datetime_info += (
+                f'- Queued: {duration(pending, absolute=False)}{os.linesep}'
+            )
 
         if self.job.start_time and self.job.provisioning_time:
             pending = (self.job.start_time - self.job.provisioning_time).seconds
             datetime_info += f'- Provision: {duration(pending)}{os.linesep}'
         elif self.job.provisioning_time:
             provisioning = (arrow.utcnow() - self.job.provisioning_time).seconds
-            datetime_info += f'- ProvStarted: {duration(provisioning, absolute=False)}{os.linesep}'
+            datetime_info += (
+                f'- ProvStarted: {duration(provisioning, absolute=False)}{os.linesep}'
+            )
 
         if self.job.end_time and self.job.start_time:
             execution = (self.job.end_time - self.job.start_time).seconds
             datetime_info += f'- Execution: {duration(execution)}{os.linesep}'
         elif self.job.start_time:
             execution = (arrow.utcnow() - self.job.start_time).seconds
-            datetime_info += f'- ExecStarted: {duration(execution, absolute=False)}{os.linesep}'
+            datetime_info += (
+                f'- ExecStarted: {duration(execution, absolute=False)}{os.linesep}'
+            )
 
         if self.job.queue_time and self.job.end_time:
             total_time = self.job.end_time - self.job.queue_time
@@ -327,7 +354,9 @@ class JobRow:
             if self.job.params.spot_price is None:
                 capacity += f'SpotPrice: auto{os.linesep}'
             else:
-                capacity += f'SpotPrice: {self.job.params.spot_price.formatted()}{os.linesep}'
+                capacity += (
+                    f'SpotPrice: {self.job.params.spot_price.formatted()}{os.linesep}'
+                )
         return capacity
 
     @property
@@ -336,11 +365,15 @@ class JobRow:
         compute_stack += f'{self.capacity_info}'
         compute_stack += f'InstanceTypes:{os.linesep}'
         for index, option in enumerate(self.job.provisioning_options.instance_types):
-            compute_stack += f'- {option.name}, weight={option.weighted_capacity}{os.linesep}'
+            compute_stack += (
+                f'- {option.name}, weight={option.weighted_capacity}{os.linesep}'
+            )
         compute_stack += f'BaseOS: {self.job.params.base_os}{os.linesep}'
         if self.job.params.instance_ami:
             compute_stack += f'AMI: {self.job.params.instance_ami}{os.linesep}'
-        compute_stack += f'Hyper-threading: {self.job.params.enable_ht_support}{os.linesep}'
+        compute_stack += (
+            f'Hyper-threading: {self.job.params.enable_ht_support}{os.linesep}'
+        )
         compute_stack += f'EFA: {self.job.params.enable_efa_support}{os.linesep}'
         compute_stack += f'PlacementGroup: {self.job.params.enable_placement_group}'
         return compute_stack
@@ -360,11 +393,19 @@ class JobRow:
                 scratch_storage += f'- Existing: {fsx_lustre.existing_fsx}{os.linesep}'
             else:
                 scratch_storage += f'- Size: {fsx_lustre.size}{os.linesep}'
-                scratch_storage += f'- PerUnitThru: {fsx_lustre.per_unit_throughput}{os.linesep}'
-                scratch_storage += f'- DeployType: {fsx_lustre.deployment_type}{os.linesep}'
+                scratch_storage += (
+                    f'- PerUnitThru: {fsx_lustre.per_unit_throughput}{os.linesep}'
+                )
+                scratch_storage += (
+                    f'- DeployType: {fsx_lustre.deployment_type}{os.linesep}'
+                )
         else:
-            scratch_storage = f'- Size: {self.job.params.scratch_storage_size}{os.linesep}'
-            scratch_storage += f'- KeepEBS: {self.job.params.keep_ebs_volumes}{os.linesep}'
+            scratch_storage = (
+                f'- Size: {self.job.params.scratch_storage_size}{os.linesep}'
+            )
+            scratch_storage += (
+                f'- KeepEBS: {self.job.params.keep_ebs_volumes}{os.linesep}'
+            )
             if self.job.params.scratch_storage_iops > 0:
                 scratch_storage += f'{os.linesep}- IOPS: {self.job.params.scratch_storage_size}{os.linesep}'
         return scratch_storage
@@ -385,9 +426,11 @@ class JobRow:
         flags += f'- Anonymous: {self.job.params.enable_anonymous_metrics}'
         if self.job.notifications:
             flags += f'{os.linesep}{os.linesep}'
-            flags += f'Notifications:{os.linesep}' \
-                     f'- Started: {self.job.notifications.started}{os.linesep}' \
-                     f'- Completed: {self.job.notifications.completed}'
+            flags += (
+                f'Notifications:{os.linesep}'
+                f'- Started: {self.job.notifications.started}{os.linesep}'
+                f'- Completed: {self.job.notifications.completed}'
+            )
         return flags
 
     @property
@@ -397,7 +440,9 @@ class JobRow:
             show_max = 4
             for index, host in enumerate(self.job.execution_hosts):
                 if index == show_max:
-                    execution_hosts += f'({len(self.job.execution_hosts) - show_max} more.'
+                    execution_hosts += (
+                        f'({len(self.job.execution_hosts) - show_max} more.'
+                    )
                     break
                 execution_hosts += f'Host: {host.host}{os.linesep}'
                 execution_hosts += f'- {host.instance_id}{os.linesep}'
@@ -427,26 +472,36 @@ class JobRow:
         potential_savings = self.job.estimated_bom_cost.savings_total
         estimated_costs += f'EstimatedCost: {total.formatted()}{os.linesep}'
         if self.job.estimated_bom_cost.savings_total:
-            estimated_costs += f'PotentialSavings: '
+            estimated_costs += 'PotentialSavings: '
             savings_pct = self.job.estimated_bom_cost.savings_percent()
-            estimated_costs += f'{potential_savings.formatted()} ({savings_pct}%){os.linesep}'
+            estimated_costs += (
+                f'{potential_savings.formatted()} ({savings_pct}%){os.linesep}'
+            )
         if self.job.estimated_budget_usage:
             estimated_costs += f'{os.linesep}'
             budget_usage = self.job.estimated_budget_usage
-            estimated_costs += f'BudgetUsage: {budget_usage.job_usage_percent}%{os.linesep}'
+            estimated_costs += (
+                f'BudgetUsage: {budget_usage.job_usage_percent}%{os.linesep}'
+            )
             estimated_costs += f'- AllocatedBudget: {budget_usage.budget_limit.formatted()}{os.linesep}'
-            estimated_costs += f'- ActualSpend: {budget_usage.actual_spend.formatted()}{os.linesep}'
-            estimated_costs += f'- ForecastedSpend: {budget_usage.forecasted_spend.formatted()}'
+            estimated_costs += (
+                f'- ActualSpend: {budget_usage.actual_spend.formatted()}{os.linesep}'
+            )
+            estimated_costs += (
+                f'- ForecastedSpend: {budget_usage.forecasted_spend.formatted()}'
+            )
 
         return estimated_costs
 
     def columns(self) -> List[Tuple[List, Optional[Dict]]]:
-        cols = [(['Job'], None),
-                (['State'], None),
-                (['Timing'], None),
-                (['ComputeStack'], None),
-                (['Storage'], None),
-                (['Flags'], None)]
+        cols = [
+            (['Job'], None),
+            (['State'], None),
+            (['Timing'], None),
+            (['ComputeStack'], None),
+            (['Storage'], None),
+            (['Flags'], None),
+        ]
         if self.query.show_exec_hosts:
             cols.append((['Execution Hosts'], None))
         if self.query.show_licenses:
@@ -458,12 +513,14 @@ class JobRow:
         return cols
 
     def build(self) -> List[Any]:
-        row = [self.job_info,
-               self.job_state,
-               self.timings,
-               self.compute_stack,
-               self.storage,
-               self.flags]
+        row = [
+            self.job_info,
+            self.job_state,
+            self.timings,
+            self.compute_stack,
+            self.storage,
+            self.flags,
+        ]
         if self.query.show_exec_hosts:
             row.append(self.execution_hosts)
         if self.query.show_licenses:
@@ -488,9 +545,7 @@ class JobListing:
             namespace = 'SchedulerAdmin.ListActiveJobs'
 
         return self.context.unix_socket_client.invoke_alt(
-            namespace=namespace,
-            payload=self.query.build(),
-            result_as=ListJobsResult
+            namespace=namespace, payload=self.query.build(), result_as=ListJobsResult
         )
 
 
@@ -504,26 +559,71 @@ def jobs():
 @jobs.command('list', context_settings=constants.CLICK_SETTINGS)
 @click.option('--queue-type', '-q', help='Get jobs for a SOCA QueueType.')
 @click.option('--queue', '-Q', help='Get jobs for a scheduler queue name.')
-@click.option('--owner', '-o', default='all', help='List jobs for a specific user. Default: all')
-@click.option('--jobs', '-j', help='Show listing for a JobId or multiple JobIds (separated by comma)')
-@click.option('--job-groups', '-g', help='Show listing for a JobGroup or multiple JobGroups (separated by comma)')
-@click.option('--projects', '-p', help='Show listing for a JobProject or multiple JobProjects (separated by comma)')
-@click.option('--state', '-s', help='Filter active jobs listing for a specific job state. '
-                                    'Must be one of: [queued, provisioning, running]. '
-                                    'Applicable only when listing active jobs.')
-@click.option('--licenses', '-l', is_flag=True, help='Show licenses requested by the Job.')
+@click.option(
+    '--owner', '-o', default='all', help='List jobs for a specific user. Default: all'
+)
+@click.option(
+    '--jobs',
+    '-j',
+    help='Show listing for a JobId or multiple JobIds (separated by comma)',
+)
+@click.option(
+    '--job-groups',
+    '-g',
+    help='Show listing for a JobGroup or multiple JobGroups (separated by comma)',
+)
+@click.option(
+    '--projects',
+    '-p',
+    help='Show listing for a JobProject or multiple JobProjects (separated by comma)',
+)
+@click.option(
+    '--state',
+    '-s',
+    help='Filter active jobs listing for a specific job state. '
+    'Must be one of: [queued, provisioning, running]. '
+    'Applicable only when listing active jobs.',
+)
+@click.option(
+    '--licenses', '-l', is_flag=True, help='Show licenses requested by the Job.'
+)
 @click.option('--comment', '-c', is_flag=True, help='Show Job comments.')
-@click.option('--execution-hosts', '-e', is_flag=True, help='Show execution hosts. Limits to 4.')
-@click.option('--history', '-H', is_flag=True, help='List finished jobs from OpenSearch.')
-@click.option('--bom', '-b', is_flag=True, help='(History Only) Show Estimated BOM Costs and Budget Usage.')
-@click.option('--period', '-P', help='(History Only) Show listing for a specific time period. Default: end:1w.')
-@click.option('--sort-by', '-S', help='(History Only) Show listing sorted by specified time property. '
-                                      'One of: [q: queue, p: provisioning, s: start, e: end]. '
-                                      'See examples for more options.')
-@click.option('--page-size', '-n', help='Limit the no. of results displayed. Default: 20')
-@click.option('--start', '-ps', help='Used for paging next batch of results. Default: 0')
-@click.option('--file-export', '-x', help='Export listing results to a file. Export format is the '
-                                          'listing format provided with -f option.')
+@click.option(
+    '--execution-hosts', '-e', is_flag=True, help='Show execution hosts. Limits to 4.'
+)
+@click.option(
+    '--history', '-H', is_flag=True, help='List finished jobs from OpenSearch.'
+)
+@click.option(
+    '--bom',
+    '-b',
+    is_flag=True,
+    help='(History Only) Show Estimated BOM Costs and Budget Usage.',
+)
+@click.option(
+    '--period',
+    '-P',
+    help='(History Only) Show listing for a specific time period. Default: end:1w.',
+)
+@click.option(
+    '--sort-by',
+    '-S',
+    help='(History Only) Show listing sorted by specified time property. '
+    'One of: [q: queue, p: provisioning, s: start, e: end]. '
+    'See examples for more options.',
+)
+@click.option(
+    '--page-size', '-n', help='Limit the no. of results displayed. Default: 20'
+)
+@click.option(
+    '--start', '-ps', help='Used for paging next batch of results. Default: 0'
+)
+@click.option(
+    '--file-export',
+    '-x',
+    help='Export listing results to a file. Export format is the '
+    'listing format provided with -f option.',
+)
 def list_jobs(**kwargs):
     """
     list active jobs or finished jobs.
@@ -574,16 +674,18 @@ def list_jobs(**kwargs):
         return
 
     if query.is_history:
-        title = f'Finished Jobs'
+        title = 'Finished Jobs'
     else:
-        title = f'Active Jobs'
+        title = 'Active Jobs'
 
     title += ' ('
     title += f'Total: {result.paginator.total}'
     query_string = str(query)
     if not Utils.is_empty(query_string):
         title += f', {query_string}'
-    title += f', PageSize: {result.paginator.page_size}, Start: {result.paginator.start}'
+    title += (
+        f', PageSize: {result.paginator.page_size}, Start: {result.paginator.start}'
+    )
     title += ')'
 
     table = Table(title=title, box=box.HEAVY_HEAD, show_lines=True)
@@ -596,7 +698,5 @@ def list_jobs(**kwargs):
 
     for job in listing:
         row = JobRow(context=context, query=query, job=job).build()
-        table.add_row(
-            *row
-        )
+        table.add_row(*row)
     context.print(table)

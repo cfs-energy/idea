@@ -16,7 +16,6 @@ import abc
 
 
 class SocaService(SocaServiceProtocol):
-
     def __init__(self, context: SocaContextProtocol):
         context.service_registry().register(service=self)
 
@@ -32,8 +31,7 @@ class SocaService(SocaServiceProtocol):
         pass
 
     @abc.abstractmethod
-    def start(self):
-        ...
+    def start(self): ...
 
     @abc.abstractmethod
     def stop(self):

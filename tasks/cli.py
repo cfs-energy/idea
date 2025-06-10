@@ -33,6 +33,7 @@ def scheduler(c, args):
     invoke scheduler cli
     """
     from ideasdk.utils import Utils
+
     tokens = Utils.from_json(Utils.base64_decode(args))
     invoke_cli(c, 'ideactl', 'ideascheduler.cli.cli_main', tokens)
 
@@ -44,17 +45,19 @@ def cluster_manager(c, args):
     invoke cluster-manager cli
     """
     from ideasdk.utils import Utils
+
     tokens = Utils.from_json(Utils.base64_decode(args))
     invoke_cli(c, 'ideactl', 'ideaclustermanager.cli.cli_main', tokens)
 
 
 @task
-def scheduler(c, args):
+def virtual_desktop_controller(c, args):
     # type: (Context, str) -> None
     """
     invoke virtual desktop controller cli
     """
     from ideasdk.utils import Utils
+
     tokens = Utils.from_json(Utils.base64_decode(args))
     invoke_cli(c, 'ideactl', 'ideavirtualdesktopcontroller.cli.cli_main', tokens)
 
@@ -66,5 +69,6 @@ def admin(c, args):
     invoke administrator app cli
     """
     from ideasdk.utils import Utils
+
     tokens = Utils.from_json(Utils.base64_decode(args))
     invoke_cli(c, 'idea-admin', 'ideaadministrator.app_main', tokens)

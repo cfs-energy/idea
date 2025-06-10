@@ -30,8 +30,7 @@ class InMemoryInstanceDB:
         self._logger = context.logger()
 
         self._instances = Cache(
-            maxsize=INSTANCE_CACHE_MAX_SIZE,
-            ttl=INSTANCE_CACHE_TTL_SECS
+            maxsize=INSTANCE_CACHE_MAX_SIZE, ttl=INSTANCE_CACHE_TTL_SECS
         )
 
     def get(self, instance_id: str) -> Optional[EC2Instance]:
@@ -58,7 +57,6 @@ class InMemoryInstanceDB:
 
     @staticmethod
     def _apply_filters(instances: List[EC2Instance], **kwargs) -> List[EC2Instance]:
-
         cluster_name = kwargs.get('cluster_name', None)
 
         node_type = kwargs.get('node_type', None)
@@ -98,7 +96,6 @@ class InMemoryInstanceDB:
 
         result = []
         for instance in instances:
-
             if cluster_name is not None:
                 if instance.soca_cluster_name is None:
                     continue
@@ -179,8 +176,13 @@ class InMemoryInstanceDB:
 
 
 class InstanceSyncSession:
-    def __init__(self, context: ideascheduler.AppContext, logger: logging.Logger,
-                 db: InMemoryInstanceDB, session_key: str):
+    def __init__(
+        self,
+        context: ideascheduler.AppContext,
+        logger: logging.Logger,
+        db: InMemoryInstanceDB,
+        session_key: str,
+    ):
         self._context = context
         self._logger = logger
         self.session_key = session_key
@@ -217,8 +219,9 @@ class InstanceCache(InstanceCacheProtocol):
     def list_instances(self, **kwargs) -> List[EC2Instance]:
         return self._db.query(**kwargs)
 
-    def list_compute_instances(self, cluster_name: Optional[str] = None, **kwargs) -> List[EC2Instance]:
-
+    def list_compute_instances(
+        self, cluster_name: Optional[str] = None, **kwargs
+    ) -> List[EC2Instance]:
         if Utils.is_empty(cluster_name):
             cluster_name = self._context.cluster_name()
 
@@ -240,7 +243,7 @@ class InstanceCache(InstanceCacheProtocol):
             context=self._context,
             logger=self._logger,
             db=self._db,
-            session_key=session_key
+            session_key=session_key,
         )
 
     def get_job_instance_count(self, job_id: str) -> int:
@@ -271,11 +274,15 @@ class InstanceCache(InstanceCacheProtocol):
             job_metrics[job_id] = job_instance_count
 
             job_group = instance.soca_job_group
-            group_instance_count = Utils.get_value_as_int('count', job_group_metrics, 0) + 1
+            group_instance_count = (
+                Utils.get_value_as_int('count', job_group_metrics, 0) + 1
+            )
             job_group_metrics[job_group] = group_instance_count
 
             queue_profile = instance.soca_queue_type
-            queue_profile_instance_count = Utils.get_value_as_int('count', queue_profile_metrics, 0) + 1
+            queue_profile_instance_count = (
+                Utils.get_value_as_int('count', queue_profile_metrics, 0) + 1
+            )
             queue_profile_metrics[queue_profile] = queue_profile_instance_count
 
         self._job_metrics = job_metrics

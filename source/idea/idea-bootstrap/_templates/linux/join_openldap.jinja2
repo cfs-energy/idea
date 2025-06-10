@@ -1,9 +1,9 @@
 # Begin: Join OpenLDAP
 
-IDEA_DS_TLS_CERTIFICATE_SECRET_ARN="{{context.config.get_string('directoryservice.tls_certificate_secret_arn', required=True)}}"
-IDEA_CLUSTER_DATA_DIR="{{context.config.get_string('shared-storage.data.mount_dir', required=True)}}"
-IDEA_DS_LDAP_BASE="{{context.config.get_string('directoryservice.ldap_base', required=True)}}"
-IDEA_DS_LDAP_HOST="{{context.config.get_string('directoryservice.hostname', required=True)}}"
+IDEA_DS_TLS_CERTIFICATE_SECRET_ARN="{{ context.config.get_string('directoryservice.tls_certificate_secret_arn', required=True) }}"
+IDEA_CLUSTER_DATA_DIR="{{ context.config.get_string('shared-storage.data.mount_dir', required=True) }}"
+IDEA_DS_LDAP_BASE="{{ context.config.get_string('directoryservice.ldap_base', required=True) }}"
+IDEA_DS_LDAP_HOST="{{ context.config.get_string('directoryservice.hostname', required=True) }}"
 
 if [[ -f "/etc/openldap/ldap.conf" ]]; then
   cp /etc/openldap/ldap.conf /etc/openldap/ldap.conf.orig
@@ -12,7 +12,7 @@ echo -e "
 TLS_CACERTDIR /etc/openldap/cacerts/
 
 # Turning this off breaks GSSAPI used with krb5 when rdns = false
-SASL_NOCANON	on
+SASL_NOCANON    on
 
 URI ldap://${IDEA_DS_LDAP_HOST}
 
@@ -68,7 +68,7 @@ mkdir -p /etc/openldap/cacerts/
 DS_TLS_CERTIFICATE=$(get_secret "${IDEA_DS_TLS_CERTIFICATE_SECRET_ARN}")
 echo -n "${DS_TLS_CERTIFICATE}" > /etc/openldap/cacerts/openldap-server.pem
 
-{%- if context.base_os in ('amazonlinux2') %}
+{% if context.base_os in ('amazonlinux2', 'amazonlinux2023') %}
 authconfig --disablesssd \
            --disablesssdauth \
            --disableldap \
@@ -96,8 +96,8 @@ authconfig --enablesssd \
            --enablemkhomedir \
            --enablecachecreds \
            --updateall
-{%- endif %}
-{%- if context.base_os in ('rhel8','rhel9', 'rocky8', 'rocky9') %}
+{% endif %}
+{% if context.base_os in ('rhel8','rhel9', 'rocky8', 'rocky9') %}
 openssl rehash /etc/openldap/cacerts
 
 systemctl stop sssd
@@ -107,10 +107,10 @@ authselect select sssd with-mkhomedir --force
 
 systemctl enable oddjobd
 systemctl restart oddjobd
-{%- endif %}
-{%- if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% endif %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
 pam-auth-update --enable sss
-{%- endif %}
+{% endif %}
 
 systemctl enable sssd
 systemctl restart sssd
@@ -121,4 +121,3 @@ if [[ "$?" != "0" ]]; then
 fi
 
 # End: Join OpenLDAP
-

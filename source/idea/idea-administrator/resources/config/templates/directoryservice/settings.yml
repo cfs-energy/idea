@@ -57,12 +57,12 @@ root_password_secret_arn: {{ directory_service_root_password_secret_arn or '~' }
 
 {% if directory_service_provider == 'openldap' %}
 {% include 'directoryservice/_templates/openldap.yml' %}
-{%- endif %}
+{% endif %}
 
-{%- if directory_service_provider == 'aws_managed_activedirectory' %}
+{% if directory_service_provider == 'aws_managed_activedirectory' %}
 {% include 'directoryservice/_templates/aws_managed_activedirectory.yml' %}
-{%- endif %}
+{% endif %}
 
-{%- if directory_service_provider == 'activedirectory' %}
+{% if directory_service_provider == 'activedirectory' %}
 {% include 'directoryservice/_templates/activedirectory.yml' %}
-{%- endif %}
+{% endif %}

@@ -13,4 +13,3 @@ Select your group and click **Actions** > **Delete Group** to permanently delete
 ### Remove user from group
 
 Select your group and click the bottom tab to expend the group membership. Select user(s) you want to remove and click **Remove from Group**.
-

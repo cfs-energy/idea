@@ -52,7 +52,8 @@ const APPLICATIONS_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<HpcAppl
     {
         id: 'title',
         header: 'Title',
-        cell: application => application.title
+        cell: application => application.title,
+        sortingField: 'title'
     },
     {
         id: 'projects',
@@ -70,12 +71,22 @@ const APPLICATIONS_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<HpcAppl
                     }
                 </div>
             )
+        },
+        sortingComparator: (a, b) => {
+            const projectsA = a.projects || [];
+            const projectsB = b.projects || [];
+            return projectsA.length - projectsB.length;
         }
     },
     {
         id: 'updated_on',
         header: 'Updated On',
-        cell: application => new Date(application.updated_on!).toLocaleString()
+        cell: application => new Date(application.updated_on!).toLocaleString(),
+        sortingComparator: (a, b) => {
+            const dateA = a.updated_on ? new Date(a.updated_on).getTime() : 0;
+            const dateB = b.updated_on ? new Date(b.updated_on).getTime() : 0;
+            return dateA - dateB;
+        }
     }
 ]
 
@@ -207,6 +218,8 @@ class HpcApplications extends Component<HpcApplicationsProps, HpcApplicationsSta
                     })
                 }}
                 columnDefinitions={APPLICATIONS_TABLE_COLUMN_DEFINITIONS}
+                defaultSortingColumn="title"
+                defaultSortingDescending={false}
             />
         )
     }

@@ -14,15 +14,28 @@ from ideadatamodel import exceptions, errorcodes, constants
 from ideasdk.context import SocaContext
 
 from ideadatamodel.user_input import (
-    SocaInputParamSpec, SocaUserInputParamMetadata, SocaUserInputParamType, SocaUserInputChoice,
-    SocaUserInputTag, SocaUserInputSectionMetadata, SocaUserInputModuleMetadata,
+    SocaInputParamSpec,
+    SocaUserInputParamMetadata,
+    SocaUserInputParamType,
+    SocaUserInputChoice,
+    SocaUserInputTag,
+    SocaUserInputSectionMetadata,
+    SocaUserInputModuleMetadata,
     SocaInputParamValidationResult,
-    SocaInputParamValidationEntry, SocaUserInputParamCondition
+    SocaInputParamValidationEntry,
+    SocaUserInputParamCondition,
 )
 
 from abc import ABC
 from typing import Optional, Dict, List, Union, Type, Callable, Any, Generic, TypeVar
-from questionary import unsafe_prompt, Style, Validator, Choice, Separator, ValidationError
+from questionary import (
+    unsafe_prompt,
+    Style,
+    Validator,
+    Choice,
+    Separator,
+    ValidationError,
+)
 from rich.console import Console
 from rich.style import Style as RichStyle
 import queue
@@ -35,7 +48,7 @@ import re
 
 T = TypeVar('T')
 
-DEFAULT_SELECT_STYLE = Style([("text", "fg:#8a850b")])
+DEFAULT_SELECT_STYLE = Style([('text', 'fg:#8a850b')])
 DEFAULT_COMPLETE_STYLE = 'MULTI_COLUMN'
 DEFAULT_PATH_COMPLETE_STYLE = DEFAULT_COMPLETE_STYLE
 DEFAULT_UNICODE = '?'
@@ -48,20 +61,24 @@ INTERRUPT_OPTION_CANCEL = 'cancel'
 
 SocaPromptDefaultFactory = Optional[Callable[[bool], T]]
 SocaUserInputDefaultType = Union[Optional[T], SocaPromptDefaultFactory]
-SocaUserInputChoicesType = Union[Optional[List[SocaUserInputChoice]], Callable[..., List[SocaUserInputChoice]]]
+SocaUserInputChoicesType = Union[
+    Optional[List[SocaUserInputChoice]], Callable[..., List[SocaUserInputChoice]]
+]
 
 console = Console()
 
 
 class SocaUserInputArgs:
-    def __init__(self, context: SocaContext,
-                 initial_config: Optional[Dict] = None,
-                 cli_args: Optional[Dict] = None,
-                 file: str = None,
-                 file_format: str = 'yaml',
-                 param_registry: 'SocaUserInputParamRegistry' = None,
-                 debug: bool = False):
-
+    def __init__(
+        self,
+        context: SocaContext,
+        initial_config: Optional[Dict] = None,
+        cli_args: Optional[Dict] = None,
+        file: str = None,
+        file_format: str = 'yaml',
+        param_registry: 'SocaUserInputParamRegistry' = None,
+        debug: bool = False,
+    ):
         self.context = context
 
         self._cli_args = Utils.get_as_dict(cli_args, {})
@@ -178,7 +195,9 @@ class SocaUserInputArgs:
             param_meta = self.get_meta(param_name)
 
             # auto-prefix
-            if Utils.is_not_empty(param_meta.validate_) and Utils.is_not_empty(param_meta.validate_.auto_prefix):
+            if Utils.is_not_empty(param_meta.validate_) and Utils.is_not_empty(
+                param_meta.validate_.auto_prefix
+            ):
                 value = Utils.get_as_string(value)
                 prefix = param_meta.validate_.auto_prefix
                 if Utils.is_not_empty(value) and not value.startswith(prefix):
@@ -194,9 +213,12 @@ class SocaUserInputArgs:
         """
         pass
 
-    def add_validation_entry(self, message: str,
-                             param_name: Optional[str] = None,
-                             section: Optional[str] = None):
+    def add_validation_entry(
+        self,
+        message: str,
+        param_name: Optional[str] = None,
+        section: Optional[str] = None,
+    ):
         # if same message is already added, return.
         for entry in self._validation_result.entries:
             if message == entry.message:
@@ -209,21 +231,22 @@ class SocaUserInputArgs:
             meta = self.param_registry.get_param(param_name)
             name = param_name
 
-        self._validation_result.entries.append(SocaInputParamValidationEntry(
-            name=name,
-            section=section,
-            message=message,
-            meta=meta
-        ))
+        self._validation_result.entries.append(
+            SocaInputParamValidationEntry(
+                name=name, section=section, message=message, meta=meta
+            )
+        )
 
     def validation_fail(self, message: str = None) -> exceptions.SocaException:
         return exceptions.soca_exception(
             error_code=errorcodes.INSTALLER_PARAM_VALIDATION_FAILED,
             message=message,
-            ref=self._validation_result
+            ref=self._validation_result,
         )
 
-    def get_meta(self, param_name: str, raise_exc: bool = True) -> SocaUserInputParamMetadata:
+    def get_meta(
+        self, param_name: str, raise_exc: bool = True
+    ) -> SocaUserInputParamMetadata:
         return self.param_registry.get_param(name=param_name, raise_exc=raise_exc)
 
     def get(self, param_name: str) -> Optional[Any]:
@@ -265,7 +288,12 @@ class SocaUserInputArgs:
 
 
 class SocaUserInputParamRegistry:
-    def __init__(self, context: SocaContext, file: str = None, spec: Optional[SocaInputParamSpec] = None):
+    def __init__(
+        self,
+        context: SocaContext,
+        file: str = None,
+        spec: Optional[SocaInputParamSpec] = None,
+    ):
         self._context = context
 
         if file is None and spec is None:
@@ -276,7 +304,9 @@ class SocaUserInputParamRegistry:
 
         self._is_initialized = False
         self._params: OrderedDict[str, SocaUserInputParamMetadata] = OrderedDict()
-        self._cli_args_inverse_index: Optional[Dict[str, SocaUserInputParamMetadata]] = {}
+        self._cli_args_inverse_index: Optional[
+            Dict[str, SocaUserInputParamMetadata]
+        ] = {}
         self._tags: Optional[Dict[str, SocaUserInputTag]] = {}
 
     # Begin: Private Methods
@@ -299,7 +329,9 @@ class SocaUserInputParamRegistry:
         for param in self._spec.params:
             self._register_param(param)
 
-    def _get_template_param(self, name: str, template_param: str) -> Optional[SocaUserInputParamMetadata]:
+    def _get_template_param(
+        self, name: str, template_param: str
+    ) -> Optional[SocaUserInputParamMetadata]:
         if template_param not in self._params:
             return None
         template = self._params[template_param]
@@ -322,7 +354,9 @@ class SocaUserInputParamRegistry:
                     for section_param in section.params:
                         if Utils.is_empty(section_param.template):
                             continue
-                        template_param = self._get_template_param(section_param.name, section_param.template)
+                        template_param = self._get_template_param(
+                            section_param.name, section_param.template
+                        )
                         self._register_param(template_param)
 
                 if Utils.is_empty(section.groups):
@@ -336,7 +370,9 @@ class SocaUserInputParamRegistry:
                         for group_param in group.params:
                             if Utils.is_empty(group_param.template):
                                 continue
-                            template_param = self._get_template_param(group_param.name, group_param.template)
+                            template_param = self._get_template_param(
+                                group_param.name, group_param.template
+                            )
                             self._register_param(template_param)
 
     def load_input_param_spec(self):
@@ -344,7 +380,7 @@ class SocaUserInputParamRegistry:
             if not os.path.isfile(self._file):
                 raise exceptions.soca_exception(
                     error_code=errorcodes.INPUT_PARAM_SPEC_NOT_FOUND,
-                    message=f'InputParams .yml spec file not found: {self._file}'
+                    message=f'InputParams .yml spec file not found: {self._file}',
                 )
             with open(self._file, 'r') as f:
                 content = f.read()
@@ -387,7 +423,9 @@ class SocaUserInputParamRegistry:
             return DEFAULT_ASCII
         return tag.ascii
 
-    def get_param(self, name: str, raise_exc=True) -> Optional[SocaUserInputParamMetadata]:
+    def get_param(
+        self, name: str, raise_exc=True
+    ) -> Optional[SocaUserInputParamMetadata]:
         self._check_initialized()
 
         param = self._params.get(name, None)
@@ -395,7 +433,7 @@ class SocaUserInputParamRegistry:
             if raise_exc:
                 raise exceptions.soca_exception(
                     error_code=errorcodes.INPUT_PARAM_NOT_DEFINED,
-                    message=f'InstallParam: {name} not found in InstallParamRegistry'
+                    message=f'InstallParam: {name} not found in InstallParamRegistry',
                 )
             return None
 
@@ -407,11 +445,13 @@ class SocaUserInputParamRegistry:
         if param is None:
             raise exceptions.soca_exception(
                 error_code=errorcodes.INPUT_PARAM_NOT_DEFINED,
-                message=f'InstallArg: {arg_name} not found in InstallParamRegistry'
+                message=f'InstallArg: {arg_name} not found in InstallParamRegistry',
             )
         return param.model_copy(deep=True)
 
-    def get_params(self, module: str = None, section: str = None, group: str = None, all_=True) -> List[SocaUserInputParamMetadata]:
+    def get_params(
+        self, module: str = None, section: str = None, group: str = None, all_=True
+    ) -> List[SocaUserInputParamMetadata]:
         self._check_initialized()
 
         result = []
@@ -427,8 +467,15 @@ class SocaUserInputParamRegistry:
         if Utils.is_empty(module_info.sections):
             return result
 
-        def merge(to: SocaUserInputParamMetadata, from_: SocaUserInputParamMetadata) -> SocaUserInputParamMetadata:
-            to_dict = to.model_copy(deep=True).model_dump(exclude_unset=True, exclude_none=True, exclude_defaults=True, by_alias=True)
+        def merge(
+            to: SocaUserInputParamMetadata, from_: SocaUserInputParamMetadata
+        ) -> SocaUserInputParamMetadata:
+            to_dict = to.model_copy(deep=True).model_dump(
+                exclude_unset=True,
+                exclude_none=True,
+                exclude_defaults=True,
+                by_alias=True,
+            )
             from_dict = from_.model_dump(by_alias=True)
             for key in from_dict:
                 value = from_dict[key]
@@ -437,7 +484,6 @@ class SocaUserInputParamRegistry:
             return SocaUserInputParamMetadata(**to_dict)
 
         for section_info in module_info.sections:
-
             if Utils.is_not_empty(section) and section != section_info.name:
                 continue
 
@@ -450,7 +496,6 @@ class SocaUserInputParamRegistry:
             if all_ or Utils.is_not_empty(group):
                 if Utils.is_not_empty(section_info.groups):
                     for group_info in section_info.groups:
-
                         if Utils.is_not_empty(group) and group != group_info.name:
                             continue
 
@@ -462,13 +507,12 @@ class SocaUserInputParamRegistry:
         return result
 
     def get_section(self, module: str, section: str) -> SocaUserInputSectionMetadata:
-
         module_ = self.get_module(module)
 
         if Utils.is_empty(module_.sections):
             raise exceptions.soca_exception(
                 error_code=errorcodes.GENERAL_ERROR,
-                message=f'sections not found for module: {module_.name} in {self._file}'
+                message=f'sections not found for module: {module_.name} in {self._file}',
             )
 
         for section_ in module_.sections:
@@ -478,16 +522,18 @@ class SocaUserInputParamRegistry:
 
         raise exceptions.soca_exception(
             error_code=errorcodes.GENERAL_ERROR,
-            message=f'section: {section} not found for module: {module} in {self._file}'
+            message=f'section: {section} not found for module: {module} in {self._file}',
         )
 
-    def get_module(self, module: str, deep_copy: bool = True) -> SocaUserInputModuleMetadata:
+    def get_module(
+        self, module: str, deep_copy: bool = True
+    ) -> SocaUserInputModuleMetadata:
         self._check_initialized()
 
         if Utils.is_empty(self._spec.modules):
             raise exceptions.soca_exception(
                 error_code=errorcodes.GENERAL_ERROR,
-                message=f'modules not found in {self._file}'
+                message=f'modules not found in {self._file}',
             )
 
         for module_ in self._spec.modules:
@@ -497,7 +543,7 @@ class SocaUserInputParamRegistry:
 
         raise exceptions.soca_exception(
             error_code=errorcodes.GENERAL_ERROR,
-            message=f'module: {module} not found in {self._file}'
+            message=f'module: {module} not found in {self._file}',
         )
 
 
@@ -515,7 +561,7 @@ class SocaPromptRegistry:
         if prompt is None:
             raise exceptions.soca_exception(
                 error_code=errorcodes.INPUT_PROMPT_NOT_FOUND,
-                message=f'Prompt not found for param name: {param_name}'
+                message=f'Prompt not found for param name: {param_name}',
             )
         return prompt
 
@@ -525,12 +571,15 @@ class SocaPromptBaseClass(ABC):
 
 
 class SocaPrompt(SocaPromptBaseClass, Generic[T]):
-    def __init__(self, context: SocaContext,
-                 args: SocaUserInputArgs,
-                 param: SocaUserInputParamMetadata,
-                 default: SocaUserInputDefaultType = None,
-                 choices: SocaUserInputChoicesType = None,
-                 registry: SocaPromptRegistry = None):
+    def __init__(
+        self,
+        context: SocaContext,
+        args: SocaUserInputArgs,
+        param: SocaUserInputParamMetadata,
+        default: SocaUserInputDefaultType = None,
+        choices: SocaUserInputChoicesType = None,
+        registry: SocaPromptRegistry = None,
+    ):
         self.context = context
         self.param = param
 
@@ -655,12 +704,8 @@ class SocaPrompt(SocaPromptBaseClass, Generic[T]):
         choices = []
         available_choices = Utils.get_as_list(self.param.choices, [])
         for choice in available_choices:
-
             if isinstance(choice, str):
-                choice_ = SocaUserInputChoice(
-                    title=f'{choice}',
-                    value=f'{choice}'
-                )
+                choice_ = SocaUserInputChoice(title=f'{choice}', value=f'{choice}')
             else:
                 choice_: SocaUserInputChoice = choice
 
@@ -691,7 +736,6 @@ class SocaPrompt(SocaPromptBaseClass, Generic[T]):
             return True
 
         if Utils.is_not_empty(when.param):
-
             param_value = self.args.get(when.param)
 
             # todo - between, min, max
@@ -714,9 +758,17 @@ class SocaPrompt(SocaPromptBaseClass, Generic[T]):
                 return True
             elif Utils.is_not_empty(when.in_) and param_value in when.in_:
                 return True
-            elif Utils.is_not_empty(when.contains) and param_value is not None and when.contains in param_value:
+            elif (
+                Utils.is_not_empty(when.contains)
+                and param_value is not None
+                and when.contains in param_value
+            ):
                 return True
-            elif Utils.is_not_empty(when.not_contains) and param_value is not None and when.not_contains not in param_value:
+            elif (
+                Utils.is_not_empty(when.not_contains)
+                and param_value is not None
+                and when.not_contains not in param_value
+            ):
                 return True
             elif Utils.is_not_empty(when.not_in) and param_value not in when.not_in:
                 return True
@@ -738,15 +790,12 @@ class SocaPrompt(SocaPromptBaseClass, Generic[T]):
         return True
 
     def can_skip(self, review_mode: bool = False) -> bool:
-
         when = self.when
 
         if review_mode:
-
             return True
 
         else:
-
             # we can not skip, if prompt should be shown
             if self.should_show_prompt(when):
                 return False
@@ -771,7 +820,6 @@ class SocaPrompt(SocaPromptBaseClass, Generic[T]):
         return f'[{self.title}] {message}'
 
     def build(self, review_mode: bool = False) -> Optional[Union[List[Dict], Dict]]:
-
         if self.can_skip(review_mode):
             return None
 
@@ -793,15 +841,17 @@ class SocaPrompt(SocaPromptBaseClass, Generic[T]):
                 'message': self.get_prompt(self.description),
                 'filter': self.get_filter(),
                 'qmark': self.unicode_icon,
-                'instruction': help_text
+                'instruction': help_text,
             }
 
         def eval_select_or_text(result) -> bool:
             return result.get(self.name) == constants.SELECT_CHOICE_OTHER
 
-        if param_type in (SocaUserInputParamType.SELECT,
-                          SocaUserInputParamType.RAW_SELECT,
-                          SocaUserInputParamType.SELECT_OR_TEXT):
+        if param_type in (
+            SocaUserInputParamType.SELECT,
+            SocaUserInputParamType.RAW_SELECT,
+            SocaUserInputParamType.SELECT_OR_TEXT,
+        ):
             choices = self.get_choices()
             choices_ = []
             default_choice = None
@@ -810,7 +860,7 @@ class SocaPrompt(SocaPromptBaseClass, Generic[T]):
                     title=choice.title,
                     value=choice.value,
                     disabled=choice.disabled,
-                    checked=choice.checked
+                    checked=choice.checked,
                 )
                 if choice.value == default:
                     default_choice = choice_
@@ -823,26 +873,32 @@ class SocaPrompt(SocaPromptBaseClass, Generic[T]):
                 if num_choices > 0:
                     param_type_ = SocaUserInputParamType.SELECT
                     choices_.append(Separator())
-                    choices_.append(Choice(
-                        title=constants.SELECT_CHOICE_OTHER,
-                        value=constants.SELECT_CHOICE_OTHER
-                    ))
+                    choices_.append(
+                        Choice(
+                            title=constants.SELECT_CHOICE_OTHER,
+                            value=constants.SELECT_CHOICE_OTHER,
+                        )
+                    )
 
             if num_choices > 0:
-                questions.append({**common(), **{
-                    'type': str(param_type_),
-                    'choices': choices_,
-                    'default': default_choice
-                }})
+                questions.append(
+                    {
+                        **common(),
+                        **{
+                            'type': str(param_type_),
+                            'choices': choices_,
+                            'default': default_choice,
+                        },
+                    }
+                )
             else:
                 param_type = SocaUserInputParamType.TEXT
 
-        if param_type in (SocaUserInputParamType.TEXT,
-                          SocaUserInputParamType.SELECT_OR_TEXT):
-            override = {
-                'validate': self.get_validator(),
-                'multiline': self.multiline
-            }
+        if param_type in (
+            SocaUserInputParamType.TEXT,
+            SocaUserInputParamType.SELECT_OR_TEXT,
+        ):
+            override = {'validate': self.get_validator(), 'multiline': self.multiline}
 
             if param_type == SocaUserInputParamType.SELECT_OR_TEXT:
                 if self.description2:
@@ -861,18 +917,11 @@ class SocaPrompt(SocaPromptBaseClass, Generic[T]):
         override = None
         # noinspection TimingAttack
         if param_type == SocaUserInputParamType.PASSWORD:
-            override = {
-                'validate': self.get_validator()
-            }
+            override = {'validate': self.get_validator()}
         elif param_type == SocaUserInputParamType.PATH:
-            override = {
-                'validate': self.get_validator()
-            }
+            override = {'validate': self.get_validator()}
         elif param_type == SocaUserInputParamType.CONFIRM:
-            override = {
-                'type': 'confirm',
-                'auto_enter': self.auto_enter
-            }
+            override = {'type': 'confirm', 'auto_enter': self.auto_enter}
         elif param_type == SocaUserInputParamType.CHECKBOX:
             choices = self.get_choices()
 
@@ -884,13 +933,10 @@ class SocaPrompt(SocaPromptBaseClass, Generic[T]):
                     title=choice.title,
                     value=choice.value,
                     disabled=choice.disabled,
-                    checked=choice.value in defaults
+                    checked=choice.value in defaults,
                 )
                 choices_.append(choice_)
-            override = {
-                'choices': choices_,
-                'validate': self.get_validator()
-            }
+            override = {'choices': choices_, 'validate': self.get_validator()}
         elif param_type == SocaUserInputParamType.AUTOCOMPLETE:
             choices = self.get_choices()
             choices_ = []
@@ -905,7 +951,7 @@ class SocaPrompt(SocaPromptBaseClass, Generic[T]):
             override = {
                 'choices': choices_,
                 'default': default,
-                'validate': self.get_validator()
+                'validate': self.get_validator(),
             }
 
         if len(questions) > 0:
@@ -959,7 +1005,9 @@ class SocaPrompt(SocaPromptBaseClass, Generic[T]):
                             question['message'] = message
                         del question['instruction']
 
-                if question_type == 'text' and Utils.get_value_as_bool('multiline', question, False):
+                if question_type == 'text' and Utils.get_value_as_bool(
+                    'multiline', question, False
+                ):
                     instruction = Utils.get_value_as_string('instruction', question)
                     exit_note = 'Alt+Enter to exit'
                     if Utils.is_empty(instruction):
@@ -975,7 +1023,10 @@ class SocaPrompt(SocaPromptBaseClass, Generic[T]):
                 if question_type == 'path' and 'complete_style' not in question:
                     question['complete_style'] = DEFAULT_PATH_COMPLETE_STYLE
 
-                if question_type in ('text', 'password', 'path') and 'default' in question:
+                if (
+                    question_type in ('text', 'password', 'path')
+                    and 'default' in question
+                ):
                     default_val = question.get('default')
                     if default_val is None:
                         question['default'] = ''
@@ -994,9 +1045,7 @@ class SocaPrompt(SocaPromptBaseClass, Generic[T]):
 
         except KeyboardInterrupt:
             raise exceptions.soca_exception(
-                error_code=errorcodes.USER_INPUT_FLOW_INTERRUPT,
-                message='',
-                ref=self
+                error_code=errorcodes.USER_INPUT_FLOW_INTERRUPT, message='', ref=self
             )
         except Exception as e:
             if isinstance(e, exceptions.SocaException):
@@ -1012,12 +1061,12 @@ class SocaPrompt(SocaPromptBaseClass, Generic[T]):
                 raise exceptions.soca_exception(
                     error_code=errorcodes.GENERAL_ERROR,
                     message=f'Unhandled exception occurred while processing the question: {question_debug_str}',
-                    ref=e
+                    ref=e,
                 )
 
     def get_validator(self) -> Optional[Union[Type[Validator], Callable]]:
-
         if self.param_type == SocaUserInputParamType.CHECKBOX:
+
             def validate(values):
                 try:
                     self.validate(value=values)
@@ -1046,16 +1095,12 @@ class SocaPrompt(SocaPromptBaseClass, Generic[T]):
 
     def validation_error(self, message: str) -> exceptions.SocaException:
         return exceptions.soca_exception(
-            error_code=errorcodes.VALIDATION_FAILED,
-            message=message,
-            ref=self.param
+            error_code=errorcodes.VALIDATION_FAILED, message=message, ref=self.param
         )
 
     def flow_error(self, message: str) -> exceptions.SocaException:
         return exceptions.soca_exception(
-            error_code=errorcodes.USER_INPUT_FLOW_ERROR,
-            message=message,
-            ref=self
+            error_code=errorcodes.USER_INPUT_FLOW_ERROR, message=message, ref=self
         )
 
     def get_filter(self) -> Callable:
@@ -1070,7 +1115,9 @@ class SocaPrompt(SocaPromptBaseClass, Generic[T]):
         if Utils.is_not_empty(validate.regex):
             pattern = re.compile(validate.regex)
             if not pattern.match(value):
-                raise self.validation_error(message=f'{self.title} must match regex: {validate.regex}')
+                raise self.validation_error(
+                    message=f'{self.title} must match regex: {validate.regex}'
+                )
 
     def filter(self, value: Any) -> Optional[T]:
         self.args.set(self.param.name, value)
@@ -1078,10 +1125,15 @@ class SocaPrompt(SocaPromptBaseClass, Generic[T]):
 
 
 class SocaUserInputSection:
-    def __init__(self, context: SocaContext,
-                 section: SocaUserInputSectionMetadata,
-                 prompts: List[SocaPrompt],
-                 skip_section_callback: Optional[Callable[['SocaUserInputSection'], bool]] = None):
+    def __init__(
+        self,
+        context: SocaContext,
+        section: SocaUserInputSectionMetadata,
+        prompts: List[SocaPrompt],
+        skip_section_callback: Optional[
+            Callable[['SocaUserInputSection'], bool]
+        ] = None,
+    ):
         self.context = context
         self.section = section
         self.prompts = prompts
@@ -1110,30 +1162,34 @@ class SocaUserInputSection:
             return
         if not Utils.is_empty(prefix):
             title = f'({prefix}) {title}'
-        console.print(title,
-                      style=RichStyle(bold=True, underline=True, italic=True),
-                      highlight=False)
+        console.print(
+            title,
+            style=RichStyle(bold=True, underline=True, italic=True),
+            highlight=False,
+        )
         console.line(1)
 
     def ask_review_prompt(self, message: str = None, auto_enter: bool = True) -> bool:
         try:
-
             if Utils.is_empty(message):
                 message = f'Are the {self.section.title} OK?'
 
             result = 'result'
-            response = unsafe_prompt(questions=[{
-                'type': 'confirm',
-                'name': result,
-                'message': message,
-                'default': False,
-                'auto_enter': auto_enter,
-                'qmark': '?'
-            }])
+            response = unsafe_prompt(
+                questions=[
+                    {
+                        'type': 'confirm',
+                        'name': result,
+                        'message': message,
+                        'default': False,
+                        'auto_enter': auto_enter,
+                        'qmark': '?',
+                    }
+                ]
+            )
             return Utils.get_value_as_bool(result, response)
 
         except KeyboardInterrupt:
-
             title = self.title
             if title is None:
                 title = self.section.name
@@ -1141,7 +1197,7 @@ class SocaUserInputSection:
             raise exceptions.soca_exception(
                 error_code=errorcodes.USER_INPUT_FLOW_INTERRUPT,
                 message=f'"{title}" review canceled by user',
-                ref=self
+                ref=self,
             )
 
     def _reset(self):
@@ -1149,7 +1205,6 @@ class SocaUserInputSection:
 
     def ask(self, restart: bool = False, review_mode: bool = False) -> Optional[Dict]:
         try:
-
             if restart:
                 self._reset()
 
@@ -1170,7 +1225,7 @@ class SocaUserInputSection:
                 raise exceptions.soca_exception(
                     error_code=errorcodes.USER_INPUT_FLOW_INTERRUPT,
                     message=e.message,
-                    ref=self
+                    ref=self,
                 )
             else:
                 raise e
@@ -1181,7 +1236,9 @@ SectionCallback = Callable[[SocaContextType, SocaUserInputSection, Any], bool]
 
 
 class QueuedSection:
-    def __init__(self, index: int, section: SocaUserInputSection, review_mode: bool = False):
+    def __init__(
+        self, index: int, section: SocaUserInputSection, review_mode: bool = False
+    ):
         self.priority = index
         self.section = section
         self.review_mode = review_mode
@@ -1197,17 +1254,20 @@ class QueuedSection:
 
 
 class SocaUserInputModule:
-    def __init__(self, context: SocaContext,
-                 module: SocaUserInputModuleMetadata,
-                 sections: List[SocaUserInputSection],
-                 section_callback: Optional[SectionCallback] = None,
-                 section_callback_kwargs: Optional[Dict] = None,
-                 restart_errorcodes: Optional[List[str]] = None,
-                 persistent: bool = True,
-                 start_section: Optional[int] = None,
-                 start_section_name: Optional[str] = None,
-                 display_info: bool = True,
-                 display_steps: bool = True):
+    def __init__(
+        self,
+        context: SocaContext,
+        module: SocaUserInputModuleMetadata,
+        sections: List[SocaUserInputSection],
+        section_callback: Optional[SectionCallback] = None,
+        section_callback_kwargs: Optional[Dict] = None,
+        restart_errorcodes: Optional[List[str]] = None,
+        persistent: bool = True,
+        start_section: Optional[int] = None,
+        start_section_name: Optional[str] = None,
+        display_info: bool = True,
+        display_steps: bool = True,
+    ):
         self.context = context
         self.module = module
         self.sections = sections
@@ -1227,7 +1287,9 @@ class SocaUserInputModule:
                     start_section_index = index
         self._start_section_index = start_section_index
 
-        self._queue: Optional[queue.PriorityQueue[QueuedSection]] = queue.PriorityQueue()
+        self._queue: Optional[queue.PriorityQueue[QueuedSection]] = (
+            queue.PriorityQueue()
+        )
         self._current_section = 0
         self._total_sections = 0
 
@@ -1316,9 +1378,9 @@ class SocaUserInputModule:
         console.print(description)
         console.line(1)
 
-    def ask(self, restart: bool = False,
-            restart_section: bool = True) -> Optional[Dict]:
-
+    def ask(
+        self, restart: bool = False, restart_section: bool = True
+    ) -> Optional[Dict]:
         if len(self.sections) == 0:
             return None
 
@@ -1338,17 +1400,25 @@ class SocaUserInputModule:
                 if restart_section:
                     section_prefix = None
                     if self._display_steps:
-                        section_prefix = f'Step {self.current_section_step} of {self.total_sections}'
+                        section_prefix = (
+                            f'Step {self.current_section_step} of {self.total_sections}'
+                        )
                     section.print_title(prefix=section_prefix)
 
-                answers = section.ask(restart=restart_section, review_mode=queued_section.review_mode)
+                answers = section.ask(
+                    restart=restart_section, review_mode=queued_section.review_mode
+                )
                 result = {**result, **answers}
 
                 queued_section.review_mode = False
                 callback_result = True
                 if self._section_callback:
-                    callback_kwargs = Utils.get_as_dict(self._section_callback_kwargs, {})
-                    callback_result = self._section_callback(self.context, section, **callback_kwargs)
+                    callback_kwargs = Utils.get_as_dict(
+                        self._section_callback_kwargs, {}
+                    )
+                    callback_result = self._section_callback(
+                        self.context, section, **callback_kwargs
+                    )
                     if not callback_result:
                         queued_section.review_mode = False
                         self._queue.put(queued_section)
@@ -1363,7 +1433,7 @@ class SocaUserInputModule:
                     raise exceptions.soca_exception(
                         error_code=errorcodes.USER_INPUT_FLOW_INTERRUPT,
                         message=e.message,
-                        ref=queued_section
+                        ref=queued_section,
                     )
                 else:
                     raise e
@@ -1380,9 +1450,7 @@ class SocaUserInputModule:
         return self._persistent
 
     def flow_interrupt_prompt(self) -> Optional[str]:
-        choices = [
-            Choice(title='Cancel', value='cancel')
-        ]
+        choices = [Choice(title='Cancel', value='cancel')]
         default_choice = choices[0]
 
         restart_module_choice = 'Restart'
@@ -1395,10 +1463,14 @@ class SocaUserInputModule:
 
         if self.current_section > 0:
             current_section_title = self.get_section_title(index=self.current_section)
-            restart_section_choice = f'Restart current, Step {self.current_section_step}'
+            restart_section_choice = (
+                f'Restart current, Step {self.current_section_step}'
+            )
             if current_section_title is not None:
                 restart_section_choice += f': {current_section_title}'
-            choices.append(Choice(title=restart_section_choice, value='restart-section'))
+            choices.append(
+                Choice(title=restart_section_choice, value='restart-section')
+            )
 
         choices.append(Choice(title='Yes, Exit.', value='exit'))
 
@@ -1423,16 +1495,16 @@ class SocaUserInputModule:
             'message': 'Do you want to exit?',
             'instruction': instruction,
             'choices': choices,
-            'default': default_choice
+            'default': default_choice,
         }
         result = unsafe_prompt(questions=[prompt])
         return Utils.get_value_as_string(option, result)
 
-    def safe_ask(self, restart: bool = True, restart_section: bool = True) -> Optional[Dict]:
+    def safe_ask(
+        self, restart: bool = True, restart_section: bool = True
+    ) -> Optional[Dict]:
         try:
-
-            return self.ask(restart=restart,
-                            restart_section=restart_section)
+            return self.ask(restart=restart, restart_section=restart_section)
 
         except exceptions.SocaException as e:
             if e.error_code == errorcodes.USER_INPUT_FLOW_INTERRUPT:

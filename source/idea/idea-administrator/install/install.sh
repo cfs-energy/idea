@@ -14,7 +14,7 @@
 # IDEA Administrator Installation Script
 
 IDEA_APP_DEPLOY_DIR="/root/.idea"
-IDEA_CDK_VERSION="2.164.1"
+IDEA_CDK_VERSION="2.1016.1"
 
 SCRIPT_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 
@@ -41,20 +41,20 @@ setup_deploy_dir () {
 check_and_install_cdk () {
   echo "installing aws-cdk for idea ..."
   mkdir -p "${IDEA_CDK_DIR}"
-  pushd "${IDEA_CDK_DIR}"
+  pushd "${IDEA_CDK_DIR}" || exit
   npm init --force --yes
   npm install "aws-cdk@${IDEA_CDK_VERSION}" --save
-  popd
+  popd || exit
 }
 
 function install () {
   setup_deploy_dir
   check_and_install_cdk
-  pip install --default-timeout=100 -r ${SCRIPT_DIR}/requirements.txt
-  pip install $(ls ${SCRIPT_DIR}/*-lib.tar.gz)
+  pip install --default-timeout=100 -r "${SCRIPT_DIR}"/requirements.txt
+  pip install "${SCRIPT_DIR}"/*-lib.tar.gz
   local APP_DIR="${IDEA_APP_DEPLOY_DIR}/idea-administrator"
   mkdir -p "${APP_DIR}"
-  mv ${SCRIPT_DIR}/resources ${APP_DIR}
+  mv "${SCRIPT_DIR}"/resources ${APP_DIR}
 }
 
 install

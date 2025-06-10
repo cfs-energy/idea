@@ -1,9 +1,6 @@
 spec:
-
   title: 'IDEA / Cluster Manager API'
-
   description: 'All APIs served by Cluster Manager'
-
   tags:
     - name: Accounts
       description: Account Management APIs **(Elevated Access)**
@@ -17,7 +14,6 @@ spec:
       description: Cluster Settings APIs **(Authenticated + Elevated Access)**
     - name: FileBrowser
       description: File Browser APIs **(Authenticated Access)**
-
   entries:
     - namespace: Auth.InitiateAuth
       request:
@@ -89,7 +85,6 @@ spec:
                   }
                 }
               }
-
     - namespace: Accounts.CreateUser
       request:
         examples:
@@ -119,7 +114,7 @@ spec:
                 "payload": {
                   "user": {
                     "username": "demouser",
-                    "email": "demouser@amazon.com",
+                    "email": "demouser@cfs.energy",
                     "uid": 5010,
                     "gid": 5011,
                     "group_name": "demouserusergroup",
@@ -137,6 +132,3 @@ spec:
                   }
                 }
               }
-
-
-

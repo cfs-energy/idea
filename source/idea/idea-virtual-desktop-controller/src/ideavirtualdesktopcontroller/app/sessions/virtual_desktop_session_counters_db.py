@@ -18,7 +18,9 @@ from ideavirtualdesktopcontroller.app.sessions import constants as sessions_cons
 
 
 class VirtualDesktopSessionCounterType(str, Enum):
-    DCV_SESSION_CREATION_REQUEST_ACCPETED_COUNTER = 'DCV_SESSION_CREATION_REQUEST_ACCPETED_COUNTER'
+    DCV_SESSION_CREATION_REQUEST_ACCEPTED_COUNTER = (
+        'DCV_SESSION_CREATION_REQUEST_ACCEPTED_COUNTER'
+    )
     DCV_SESSION_RESUMED_COUNTER = 'DCV_SESSION_RESUMED_COUNTER'
     VALIDATE_DCV_SESSION_CREATED_COUNTER = 'VALIDATE_DCV_SESSION_CREATED_COUNTER'
 
@@ -28,7 +30,12 @@ class VirtualDesktopSessionCounterDBModel:
     counter_type: Optional[VirtualDesktopSessionCounterType] = Field(default=None)
     counter: Optional[int] = Field(default=None)
 
-    def __init__(self, idea_session_id: Optional[str], counter_type: Optional[str], counter: Optional[int] = None):
+    def __init__(
+        self,
+        idea_session_id: Optional[str],
+        counter_type: Optional[str],
+        counter: Optional[int] = None,
+    ):
         self.idea_session_id = idea_session_id
         self.counter_type = counter_type
         self.counter = counter
@@ -52,7 +59,9 @@ class VirtualDesktopSessionCounterDB:
         return f'{self.context.cluster_name()}.{self.context.module_id()}.controller.user-sessions-counter'
 
     def initialize(self):
-        exists = self.context.aws_util().dynamodb_check_table_exists(self.table_name, True)
+        exists = self.context.aws_util().dynamodb_check_table_exists(
+            self.table_name, True
+        )
         if not exists:
             self.context.aws_util().dynamodb_create_table(
                 create_table_request={
@@ -60,60 +69,76 @@ class VirtualDesktopSessionCounterDB:
                     'AttributeDefinitions': [
                         {
                             'AttributeName': sessions_constants.USER_SESSION_COUNTER_DB_HASH_KEY,
-                            'AttributeType': 'S'
+                            'AttributeType': 'S',
                         },
                         {
                             'AttributeName': sessions_constants.USER_SESSION_COUNTER_DB_RANGE_KEY,
-                            'AttributeType': 'S'
+                            'AttributeType': 'S',
                         },
                     ],
                     'KeySchema': [
                         {
                             'AttributeName': sessions_constants.USER_SESSION_COUNTER_DB_HASH_KEY,
-                            'KeyType': 'HASH'
+                            'KeyType': 'HASH',
                         },
                         {
                             'AttributeName': sessions_constants.USER_SESSION_COUNTER_DB_RANGE_KEY,
-                            'KeyType': 'RANGE'
-                        }
+                            'KeyType': 'RANGE',
+                        },
                     ],
-                    'BillingMode': 'PAY_PER_REQUEST'
+                    'BillingMode': 'PAY_PER_REQUEST',
                 },
-                wait=True
+                wait=True,
             )
 
     @staticmethod
-    def _convert_session_counter_db_model_to_dict(db_model: VirtualDesktopSessionCounterDBModel) -> Dict:
+    def _convert_session_counter_db_model_to_dict(
+        db_model: VirtualDesktopSessionCounterDBModel,
+    ) -> Dict:
         return {
             sessions_constants.USER_SESSION_COUNTER_DB_HASH_KEY: db_model.idea_session_id,
             sessions_constants.USER_SESSION_COUNTER_DB_RANGE_KEY: db_model.counter_type.name,
-            sessions_constants.USER_SESSION_COUNTER_DB_COUNTER_KEY: db_model.counter
+            sessions_constants.USER_SESSION_COUNTER_DB_COUNTER_KEY: db_model.counter,
         }
 
     @staticmethod
-    def _convert_session_counter_dict_to_db_model(db_entry: Dict) -> VirtualDesktopSessionCounterDBModel:
+    def _convert_session_counter_dict_to_db_model(
+        db_entry: Dict,
+    ) -> VirtualDesktopSessionCounterDBModel:
         return VirtualDesktopSessionCounterDBModel(
-            idea_session_id=Utils.get_value_as_string(sessions_constants.USER_SESSION_COUNTER_DB_HASH_KEY, db_entry, ''),
-            counter_type=VirtualDesktopSessionCounterType(Utils.get_value_as_string(sessions_constants.USER_SESSION_COUNTER_DB_RANGE_KEY, db_entry, '')),
-            counter=Utils.get_value_as_int(sessions_constants.USER_SESSION_COUNTER_DB_COUNTER_KEY, db_entry, 0)
+            idea_session_id=Utils.get_value_as_string(
+                sessions_constants.USER_SESSION_COUNTER_DB_HASH_KEY, db_entry, ''
+            ),
+            counter_type=VirtualDesktopSessionCounterType(
+                Utils.get_value_as_string(
+                    sessions_constants.USER_SESSION_COUNTER_DB_RANGE_KEY, db_entry, ''
+                )
+            ),
+            counter=Utils.get_value_as_int(
+                sessions_constants.USER_SESSION_COUNTER_DB_COUNTER_KEY, db_entry, 0
+            ),
         )
 
-    def create(self, db_model: VirtualDesktopSessionCounterDBModel) -> VirtualDesktopSessionCounterDBModel:
+    def create(
+        self, db_model: VirtualDesktopSessionCounterDBModel
+    ) -> VirtualDesktopSessionCounterDBModel:
         db_entry = self._convert_session_counter_db_model_to_dict(db_model)
-        self._table.put_item(
-            Item=db_entry
-        )
+        self._table.put_item(Item=db_entry)
         return self._convert_session_counter_dict_to_db_model(db_entry)
 
-    def get(self, idea_session_id: str, counter_type: VirtualDesktopSessionCounterType) -> Union[VirtualDesktopSessionCounterDBModel, None]:
+    def get(
+        self, idea_session_id: str, counter_type: VirtualDesktopSessionCounterType
+    ) -> Union[VirtualDesktopSessionCounterDBModel, None]:
         if Utils.is_empty(idea_session_id) or Utils.is_empty(counter_type):
-            raise exceptions.invalid_params('idea_session_id and counter_type are required')
+            raise exceptions.invalid_params(
+                'idea_session_id and counter_type are required'
+            )
 
         try:
             result = self._table.get_item(
                 Key={
                     sessions_constants.USER_SESSION_COUNTER_DB_HASH_KEY: idea_session_id,
-                    sessions_constants.USER_SESSION_COUNTER_DB_RANGE_KEY: counter_type
+                    sessions_constants.USER_SESSION_COUNTER_DB_RANGE_KEY: counter_type,
                 }
             )
             db_entry = Utils.get_value_as_dict('Item', result)
@@ -127,19 +152,24 @@ class VirtualDesktopSessionCounterDB:
         if Utils.is_empty(db_entry):
             db_entry = {
                 sessions_constants.USER_SESSION_COUNTER_DB_HASH_KEY: idea_session_id,
-                sessions_constants.USER_SESSION_COUNTER_DB_RANGE_KEY: counter_type.value
+                sessions_constants.USER_SESSION_COUNTER_DB_RANGE_KEY: counter_type.value,
             }
 
         return self._convert_session_counter_dict_to_db_model(db_entry)
 
-    def create_or_update(self, db_model: VirtualDesktopSessionCounterDBModel) -> VirtualDesktopSessionCounterDBModel:
+    def create_or_update(
+        self, db_model: VirtualDesktopSessionCounterDBModel
+    ) -> VirtualDesktopSessionCounterDBModel:
         db_entry = self._convert_session_counter_db_model_to_dict(db_model)
         update_expression_tokens = []
         expression_attr_names = {}
         expression_attr_values = {}
 
         for key, value in db_entry.items():
-            if key in {sessions_constants.USER_SESSION_COUNTER_DB_HASH_KEY, sessions_constants.USER_SESSION_COUNTER_DB_RANGE_KEY}:
+            if key in {
+                sessions_constants.USER_SESSION_COUNTER_DB_HASH_KEY,
+                sessions_constants.USER_SESSION_COUNTER_DB_RANGE_KEY,
+            }:
                 continue
             update_expression_tokens.append(f'#{key} = :{key}')
             expression_attr_names[f'#{key}'] = key
@@ -147,13 +177,17 @@ class VirtualDesktopSessionCounterDB:
 
         result = self._table.update_item(
             Key={
-                sessions_constants.USER_SESSION_COUNTER_DB_HASH_KEY: db_entry[sessions_constants.USER_SESSION_COUNTER_DB_HASH_KEY],
-                sessions_constants.USER_SESSION_COUNTER_DB_RANGE_KEY: db_entry[sessions_constants.USER_SESSION_COUNTER_DB_RANGE_KEY],
+                sessions_constants.USER_SESSION_COUNTER_DB_HASH_KEY: db_entry[
+                    sessions_constants.USER_SESSION_COUNTER_DB_HASH_KEY
+                ],
+                sessions_constants.USER_SESSION_COUNTER_DB_RANGE_KEY: db_entry[
+                    sessions_constants.USER_SESSION_COUNTER_DB_RANGE_KEY
+                ],
             },
             UpdateExpression='SET ' + ', '.join(update_expression_tokens),
             ExpressionAttributeNames=expression_attr_names,
             ExpressionAttributeValues=expression_attr_values,
-            ReturnValues='ALL_NEW'
+            ReturnValues='ALL_NEW',
         )
         return self._convert_session_counter_dict_to_db_model(result['Attributes'])
 

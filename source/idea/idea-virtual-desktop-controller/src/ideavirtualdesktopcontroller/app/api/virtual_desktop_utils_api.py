@@ -25,7 +25,7 @@ from ideadatamodel.virtual_desktop import (
     VirtualDesktopSession,
     VirtualDesktopBaseOS,
     VirtualDesktopGPU,
-    VirtualDesktopScheduleType
+    VirtualDesktopScheduleType,
 )
 from ideasdk.api import ApiInvocationContext
 from ideasdk.utils import Utils
@@ -46,40 +46,44 @@ class VirtualDesktopUtilsAPI(VirtualDesktopAPI):
             'VirtualDesktopUtils.ListAllowedInstanceTypesForSession': self.list_allowed_instance_types_for_session,
             'VirtualDesktopUtils.GetBasePermissions': self.get_base_permissions,
             'VirtualDesktopUtils.ListPermissionProfiles': self.list_permission_profiles,
-            'VirtualDesktopUtils.GetPermissionProfile': self.get_permission_profile
+            'VirtualDesktopUtils.GetPermissionProfile': self.get_permission_profile,
         }
 
     def get_base_permissions(self, context: ApiInvocationContext):
-        context.success(GetBasePermissionsResponse(
-            permissions=self.permission_profile_db.permission_types
-        ))
+        context.success(
+            GetBasePermissionsResponse(
+                permissions=self.permission_profile_db.permission_types
+            )
+        )
 
     def get_permission_profile(self, context: ApiInvocationContext):
-        profile_id = context.get_request_payload_as(GetPermissionProfileRequest).profile_id
+        profile_id = context.get_request_payload_as(
+            GetPermissionProfileRequest
+        ).profile_id
         if Utils.is_empty(profile_id):
             context.fail(
                 message=f'Invalid profile_id: {profile_id}',
-                error_code=errorcodes.INVALID_PARAMS
+                error_code=errorcodes.INVALID_PARAMS,
             )
             return
         profile = self.permission_profile_db.get(profile_id=profile_id)
         if Utils.is_empty(profile):
             context.fail(
                 message=f'Invalid profile_id: {profile_id}',
-                error_code=errorcodes.INVALID_PARAMS
+                error_code=errorcodes.INVALID_PARAMS,
             )
             return
 
-        context.success(GetPermissionProfileResponse(
-            profile=profile
-        ))
+        context.success(GetPermissionProfileResponse(profile=profile))
 
     def list_permission_profiles(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(ListPermissionProfilesRequest)
         result = self.permission_profile_db.list(request)
         context.success(result)
 
-    def _validate_list_allowed_instance_types_for_session(self, session: VirtualDesktopSession) -> (VirtualDesktopSession, bool):
+    def _validate_list_allowed_instance_types_for_session(
+        self, session: VirtualDesktopSession
+    ) -> tuple[VirtualDesktopSession, bool]:
         if Utils.is_empty(session):
             session.failure_reason = 'Invalid session object'
             self._logger.error(session.failure_reason)
@@ -113,60 +117,69 @@ class VirtualDesktopUtilsAPI(VirtualDesktopAPI):
         return session, True
 
     def list_allowed_instance_types_for_session(self, context: ApiInvocationContext):
-        session = context.get_request_payload_as(ListAllowedInstanceTypesForSessionRequest).session
-        session, is_valid = self._validate_list_allowed_instance_types_for_session(session)
+        session = context.get_request_payload_as(
+            ListAllowedInstanceTypesForSessionRequest
+        ).session
+        session, is_valid = self._validate_list_allowed_instance_types_for_session(
+            session
+        )
 
         if not is_valid:
             context.fail(
                 message=session.failure_reason,
                 payload=ListAllowedInstanceTypesForSessionResponse(listing=[]),
-                error_code=errorcodes.GENERAL_ERROR
+                error_code=errorcodes.GENERAL_ERROR,
             )
             return
 
-        allowed_instance_types = self.controller_utils.get_valid_instance_types(session.hibernation_enabled, session.software_stack, self.controller_utils.get_gpu_manufacturer(session.server.instance_type))
-        context.success(ListAllowedInstanceTypesResponse(
-            listing=allowed_instance_types
-        ))
+        allowed_instance_types = self.controller_utils.get_valid_instance_types(
+            session.hibernation_enabled,
+            session.software_stack,
+            self.controller_utils.get_gpu_manufacturer(session.server.instance_type),
+        )
+        context.success(
+            ListAllowedInstanceTypesResponse(listing=allowed_instance_types)
+        )
 
     def list_allowed_instance_types(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(ListAllowedInstanceTypesRequest)
 
-        hibernation_enabled = False if Utils.is_empty(request.hibernation_support) else request.hibernation_support
-        allowed_instance_types = self.controller_utils.get_valid_instance_types(hibernation_enabled, request.software_stack)
-        context.success(ListAllowedInstanceTypesResponse(
-            listing=allowed_instance_types
-        ))
+        hibernation_enabled = (
+            False
+            if Utils.is_empty(request.hibernation_support)
+            else request.hibernation_support
+        )
+        allowed_instance_types = self.controller_utils.get_valid_instance_types(
+            hibernation_enabled,
+            request.software_stack,
+            None,
+        )
+        context.success(
+            ListAllowedInstanceTypesResponse(listing=allowed_instance_types)
+        )
 
     @staticmethod
     def list_schedule_types(context: ApiInvocationContext):
         schedule_types = []
         for schedule_type in VirtualDesktopScheduleType:
             schedule_types.append(schedule_type)
-        context.success(ListScheduleTypesResponse(
-            listing=schedule_types
-        ))
+        context.success(ListScheduleTypesResponse(listing=schedule_types))
 
     @staticmethod
     def list_supported_gpu(context: ApiInvocationContext):
         supported_gpu = []
         for gpu in VirtualDesktopGPU:
             supported_gpu.append(gpu)
-        context.success(ListSupportedGPUResponse(
-            listing=supported_gpu
-        ))
+        context.success(ListSupportedGPUResponse(listing=supported_gpu))
 
     @staticmethod
     def list_supported_os(context: ApiInvocationContext):
         supported_os = []
         for os in VirtualDesktopBaseOS:
             supported_os.append(os)
-        context.success(ListSupportedOSResponse(
-            listing=supported_os
-        ))
+        context.success(ListSupportedOSResponse(listing=supported_os))
 
     def invoke(self, context: ApiInvocationContext):
-
         if not context.is_authorized_user():
             raise exceptions.unauthorized_access()
 

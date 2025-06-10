@@ -19,8 +19,9 @@ from typing import Callable, Optional
 
 
 class PackageTool:
-
-    def __init__(self, c: Context, app_name: str, requirements_handler: Optional[Callable] = None):
+    def __init__(
+        self, c: Context, app_name: str, requirements_handler: Optional[Callable] = None
+    ):
         self.c = c
         self.requirements_handler = requirements_handler
 
@@ -58,9 +59,13 @@ class PackageTool:
         return os.path.join(idea.props.project_dist_dir, self.output_archive_name)
 
     def find_requirements_file(self) -> str:
-        requirements_file = os.path.join(idea.props.requirements_dir, f'{self.app_name}.txt')
+        requirements_file = os.path.join(
+            idea.props.requirements_dir, f'{self.app_name}.txt'
+        )
         if not os.path.isfile(requirements_file):
-            raise idea.exceptions.build_failed(f'project requirements file not found: {requirements_file}')
+            raise idea.exceptions.build_failed(
+                f'project requirements file not found: {requirements_file}'
+            )
         return requirements_file
 
     def clean(self):
@@ -72,7 +77,6 @@ class PackageTool:
             os.remove(self.output_archive_file)
 
     def package(self, delete_output_dir=False):
-
         idea.console.print_header_block(f'package {self.app_name}')
 
         # create output dir
@@ -82,16 +86,19 @@ class PackageTool:
 
         if self.project_build_tool.has_src():
             # copy requirements
-            idea.console.print(f'copying requirements.txt ...')
+            idea.console.print('copying requirements.txt ...')
             if self.requirements_handler is not None:
                 self.requirements_handler(self)
             else:
-                shutil.copyfile(self.find_requirements_file(), os.path.join(output_dir, 'requirements.txt'))
+                shutil.copyfile(
+                    self.find_requirements_file(),
+                    os.path.join(output_dir, 'requirements.txt'),
+                )
 
         # copy sdk
         if self.sdk_build_tool is not None:
             self.sdk_build_tool.build()
-            idea.console.print(f'copying sdk artifacts ...')
+            idea.console.print('copying sdk artifacts ...')
             for file in os.listdir(self.sdk_build_tool.output_dir):
                 file_path = os.path.join(self.sdk_build_tool.output_dir, file)
                 if os.path.isdir(file_path):
@@ -102,7 +109,7 @@ class PackageTool:
         # copy data-model
         if self.data_model_build_tool is not None:
             self.data_model_build_tool.build()
-            idea.console.print(f'copying data-model artifacts ...')
+            idea.console.print('copying data-model artifacts ...')
             for file in os.listdir(self.data_model_build_tool.output_dir):
                 file_path = os.path.join(self.data_model_build_tool.output_dir, file)
                 if os.path.isdir(file_path):
@@ -127,7 +134,7 @@ class PackageTool:
             for file in files:
                 shutil.copy2(os.path.join(install_dir, file), output_dir)
 
-        idea.console.print(f'creating archive ...')
+        idea.console.print('creating archive ...')
         shutil.make_archive(output_dir, 'gztar', output_dir)
 
         if delete_output_dir:

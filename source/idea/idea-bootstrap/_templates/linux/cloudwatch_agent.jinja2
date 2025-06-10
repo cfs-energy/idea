@@ -1,7 +1,9 @@
 # Begin: Install CloudWatch Agent
 
 CLOUDWATCH_AGENT_BOOTSTRAP_DIR="/root/bootstrap/amazon-cloudwatch-agent"
+rm -rf ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}
 mkdir -p ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}
+
 function get_cloudwatch_agent_download_link() {
   local DOWNLOAD_LINK="{{ context.config.get_string('global-settings.package_config.amazon_cloudwatch_agent.download_link', default='') }}"
   if [[ ! -z "${DOWNLOAD_LINK}" ]]; then
@@ -14,7 +16,7 @@ function get_cloudwatch_agent_download_link() {
   sed -i "s/%region%/${AWS_REGION}/g" ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}/cloudwatch_download_link.txt
   local BASE_OS="{{ context.base_os }}"
   case $BASE_OS in
-    amazonlinux2)
+    amazonlinux2 | amazonlinux2023)
       sed -i 's/%os%/amazon_linux/g' ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}/cloudwatch_download_link.txt
       sed -i 's/%ext%/rpm/g' ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}/cloudwatch_download_link.txt
       ;;
@@ -22,11 +24,7 @@ function get_cloudwatch_agent_download_link() {
       sed -i 's/%os%/redhat/g' ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}/cloudwatch_download_link.txt
       sed -i 's/%ext%/rpm/g' ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}/cloudwatch_download_link.txt
       ;;
-    ubuntu2204)
-      sed -i 's/%os%/ubuntu/g' ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}/cloudwatch_download_link.txt
-      sed -i 's/%ext%/deb/g' ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}/cloudwatch_download_link.txt
-      ;;
-    ubuntu2404)
+    ubuntu2204 | ubuntu2404)
       sed -i 's/%os%/ubuntu/g' ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}/cloudwatch_download_link.txt
       sed -i 's/%ext%/deb/g' ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}/cloudwatch_download_link.txt
       ;;
@@ -42,26 +40,31 @@ function get_cloudwatch_agent_download_link() {
   esac
   cat ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}/cloudwatch_download_link.txt
 }
-CLOUDWATCH_AGENT_DOWNLOAD_LINK="$(get_cloudwatch_agent_download_link)"
-CLOUDWATCH_AGENT_PACKAGE_NAME="$(basename ${CLOUDWATCH_AGENT_DOWNLOAD_LINK})"
-pushd ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}
-wget "${CLOUDWATCH_AGENT_DOWNLOAD_LINK}"
 
-{%- if context.base_os in ('amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
-rpm -U ./${CLOUDWATCH_AGENT_PACKAGE_NAME}
-{%- elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
-dpkg -i ./${CLOUDWATCH_AGENT_PACKAGE_NAME}
-{%- endif %}
+# Check if CloudWatch Agent is already installed
+if [ -d "/opt/aws/amazon-cloudwatch-agent" ] && [ -f "/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl" ]; then
+  echo "CloudWatch Agent is already installed. Skipping download and installation."
+else
+  echo "CloudWatch Agent not found. Proceeding with download and installation."
+  CLOUDWATCH_AGENT_DOWNLOAD_LINK="$(get_cloudwatch_agent_download_link)"
+  CLOUDWATCH_AGENT_PACKAGE_NAME="$(basename ${CLOUDWATCH_AGENT_DOWNLOAD_LINK})"
+  pushd ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR} || exit
+  wget "${CLOUDWATCH_AGENT_DOWNLOAD_LINK}"
 
-popd
+{% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+  rpm -U ./${CLOUDWATCH_AGENT_PACKAGE_NAME}
+{% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+  dpkg -i ./${CLOUDWATCH_AGENT_PACKAGE_NAME}
+{% endif %}
 
-{%- set cloudwatch_agent_config = context.get_cloudwatch_agent_config(additional_log_files=additional_log_files) %}
-{%- if cloudwatch_agent_config %}
+  popd || exit
+fi
+
+{% set cloudwatch_agent_config = context.get_cloudwatch_agent_config(additional_log_files=additional_log_files) %}
+{% if cloudwatch_agent_config %}
 echo '{{ context.utils.to_json(cloudwatch_agent_config, indent=True) }}' > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
-{%- else %}
+{% else %}
 log_warning "Install CloudWatch Agent: cloudwatch_agent_config not provided."
-{%- endif %}
+{% endif %}
 # End: Install CloudWatch Agent
-
-

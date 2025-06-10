@@ -27,7 +27,7 @@ from ideadatamodel import (
     ModifyUserRequest,
     ModifyUserResult,
     DeleteUserRequest,
-    DeleteUserResult
+    DeleteUserResult,
 )
 from ideaclustermanager.cli import build_cli_context
 from ideasdk.utils import Utils
@@ -56,10 +56,8 @@ def get_user(username: str):
     try:
         result = context.unix_socket_client.invoke_alt(
             namespace='Accounts.GetUser',
-            payload=GetUserRequest(
-                username=username
-            ),
-            result_as=GetUserResult
+            payload=GetUserRequest(username=username),
+            result_as=GetUserResult,
         )
     except exceptions.SocaException as e:
         context.error(e.message)
@@ -77,10 +75,8 @@ def enable_user(username: str):
     try:
         context.unix_socket_client.invoke_alt(
             namespace='Accounts.EnableUser',
-            payload=EnableUserRequest(
-                username=username
-            ),
-            result_as=EnableUserResult
+            payload=EnableUserRequest(username=username),
+            result_as=EnableUserResult,
         )
     except exceptions.SocaException as e:
         context.error(e.message)
@@ -96,10 +92,8 @@ def disable_user(username: str):
     try:
         context.unix_socket_client.invoke_alt(
             namespace='Accounts.DisableUser',
-            payload=DisableUserRequest(
-                username=username
-            ),
-            result_as=DisableUserResult
+            payload=DisableUserRequest(username=username),
+            result_as=DisableUserResult,
         )
     except exceptions.SocaException as e:
         context.error(e.message)
@@ -115,10 +109,8 @@ def delete_user(username: str):
     try:
         context.unix_socket_client.invoke_alt(
             namespace='Accounts.DeleteUser',
-            payload=DeleteUserRequest(
-                username=username
-            ),
-            result_as=DeleteUserResult
+            payload=DeleteUserRequest(username=username),
+            result_as=DeleteUserResult,
         )
     except exceptions.SocaException as e:
         context.error(e.message)
@@ -134,21 +126,28 @@ def list_users():
     result = context.unix_socket_client.invoke_alt(
         namespace='Accounts.ListUsers',
         payload=ListUsersRequest(),
-        result_as=ListUsersResult
+        result_as=ListUsersResult,
     )
     user_table = Table()
-    user_table.add_column("Username", justify="left", no_wrap=False)
-    user_table.add_column("UID", justify="left", no_wrap=False)
-    user_table.add_column("GID", justify="left", no_wrap=False)
-    user_table.add_column("Email", justify="left", no_wrap=False)
-    user_table.add_column("Is Admin?", justify="left", no_wrap=False)
-    user_table.add_column("Status", justify="left", no_wrap=False)
-    user_table.add_column("Group", justify="left", style="green", no_wrap=False)
-    user_table.add_column("Created On", justify="left", style="red", no_wrap=False)
+    user_table.add_column('Username', justify='left', no_wrap=False)
+    user_table.add_column('UID', justify='left', no_wrap=False)
+    user_table.add_column('GID', justify='left', no_wrap=False)
+    user_table.add_column('Email', justify='left', no_wrap=False)
+    user_table.add_column('Is Admin?', justify='left', no_wrap=False)
+    user_table.add_column('Status', justify='left', no_wrap=False)
+    user_table.add_column('Group', justify='left', style='green', no_wrap=False)
+    user_table.add_column('Created On', justify='left', style='red', no_wrap=False)
     for listing in result.listing:
-        user_table.add_row(listing.username, Utils.get_as_string(listing.uid), Utils.get_as_string(listing.gid),
-                           listing.email, Utils.get_as_string(listing.sudo), Utils.get_as_string(listing.status),
-                           listing.group_name, listing.created_on.strftime("%m/%d/%Y, %H:%M:%S"))
+        user_table.add_row(
+            listing.username,
+            Utils.get_as_string(listing.uid),
+            Utils.get_as_string(listing.gid),
+            listing.email,
+            Utils.get_as_string(listing.sudo),
+            Utils.get_as_string(listing.status),
+            listing.group_name,
+            listing.created_on.strftime('%m/%d/%Y, %H:%M:%S'),
+        )
     context.print(user_table)
 
 
@@ -158,8 +157,14 @@ def list_users():
 @click.option('--password', help='Password (Required when setting email-verified)')
 @click.option('--uid', help='UID')
 @click.option('--gid', help='GID')
-@click.option('--email-verified', is_flag=True, help='Indicate if the email address is verified. Invitation email will not be sent.')
-@click.option('--sudo', is_flag=True, help='Indicate if user is an admin user with sudo access')
+@click.option(
+    '--email-verified',
+    is_flag=True,
+    help='Indicate if the email address is verified. Invitation email will not be sent.',
+)
+@click.option(
+    '--sudo', is_flag=True, help='Indicate if user is an admin user with sudo access'
+)
 def create_user(**kwargs):
     """
     create new user account
@@ -171,16 +176,16 @@ def create_user(**kwargs):
             'sudo': Utils.get_value_as_bool('sudo', kwargs, False),
             'password': Utils.get_value_as_string('password', kwargs),
             'uid': Utils.get_value_as_int('uid', kwargs),
-            'gid': Utils.get_value_as_int('gid', kwargs)
+            'gid': Utils.get_value_as_int('gid', kwargs),
         },
-        'email_verified': Utils.get_value_as_bool('email_verified', kwargs, False)
+        'email_verified': Utils.get_value_as_bool('email_verified', kwargs, False),
     }
 
     context = build_cli_context()
     result = context.unix_socket_client.invoke_alt(
         namespace='Accounts.CreateUser',
         payload=CreateUserRequest(**request),
-        result_as=CreateUserResult
+        result_as=CreateUserResult,
     )
     context.print_json(Utils.to_json(result.user))
 
@@ -190,7 +195,9 @@ def create_user(**kwargs):
 @click.option('--email', help='Email Address')
 @click.option('--uid', help='UID')
 @click.option('--gid', help='GID')
-@click.option('--sudo', help='Add or remove sudo access. Allowed values [yes/no/true/false/0/1]')
+@click.option(
+    '--sudo', help='Add or remove sudo access. Allowed values [yes/no/true/false/0/1]'
+)
 @click.option('--login-shell', help='Login shell for the user')
 def modify_user(**kwargs):
     """
@@ -210,7 +217,7 @@ def modify_user(**kwargs):
             'sudo': Utils.get_value_as_bool('sudo', kwargs),
             'uid': Utils.get_value_as_int('uid', kwargs),
             'gid': Utils.get_value_as_int('gid', kwargs),
-            'login_shell': Utils.get_value_as_string('login_shell', kwargs)
+            'login_shell': Utils.get_value_as_string('login_shell', kwargs),
         }
     }
 
@@ -218,7 +225,7 @@ def modify_user(**kwargs):
     result = context.unix_socket_client.invoke_alt(
         namespace='Accounts.ModifyUser',
         payload=ModifyUserRequest(**request),
-        result_as=ModifyUserResult
+        result_as=ModifyUserResult,
     )
     context.print_json(Utils.to_json(result.user))
 
@@ -226,9 +233,15 @@ def modify_user(**kwargs):
 @accounts.command(context_settings=constants.CLICK_SETTINGS)
 @click.option('--path-to-csv', help='path to the csv file')
 @click.option('--force', is_flag=True, help='skips confirmation prompts')
-@click.option('--generate-template', is_flag=True, help='generates a csv template compatible with this command')
+@click.option(
+    '--generate-template',
+    is_flag=True,
+    help='generates a csv template compatible with this command',
+)
 @click.option('--template-path', help='location to generate template.csv file')
-def batch_create_users(path_to_csv: str, force: bool, generate_template: bool, template_path: str):
+def batch_create_users(
+    path_to_csv: str, force: bool, generate_template: bool, template_path: str
+):
     """
     creates users from csv file
     """
@@ -241,7 +254,9 @@ def batch_create_users(path_to_csv: str, force: bool, generate_template: bool, t
             csv_file = ClusterManagerUtils.generate_template(template_path)
             context.info(f'The generated template file is located at {csv_file}')
         else:
-            context.error('Path missing or incorrect; please provide a path to where to generate the "users_file_template.csv"')
+            context.error(
+                'Path missing or incorrect; please provide a path to where to generate the "users_file_template.csv"'
+            )
         return
 
     ClusterManagerUtils.check_if_csv_file(path_to_csv, context)
@@ -254,7 +269,7 @@ def batch_create_users(path_to_csv: str, force: bool, generate_template: bool, t
     csv_validations = []
     csv_contains_error = False
     csv_contains_duplicate = False
-    with open(path_to_csv, 'r', encoding="utf-8") as csv_file:
+    with open(path_to_csv, 'r', encoding='utf-8') as csv_file:
         csv_reader = csv.DictReader(csv_file)
         fieldnames = csv_reader.fieldnames
 
@@ -262,7 +277,9 @@ def batch_create_users(path_to_csv: str, force: bool, generate_template: bool, t
         ClusterManagerUtils.check_has_valid_csv_headers(fieldnames, context)
 
         for row in csv_reader:
-            new_username = AuthUtils.sanitize_username(Utils.get_value_as_string('Username', row))
+            new_username = AuthUtils.sanitize_username(
+                Utils.get_value_as_string('Username', row)
+            )
             valid_username_response = ''
             try:
                 ClusterManagerUtils.check_valid_username(new_username)
@@ -288,19 +305,35 @@ def batch_create_users(path_to_csv: str, force: bool, generate_template: bool, t
             new_is_admin = Utils.get_value_as_bool('Is Admin?', row, default=False)
 
             new_usernames.append(new_username)
-            csv_validations.append((new_username, new_email, Utils.get_as_string(new_is_admin, default='False'), valid_username_response, valid_email_response))
+            csv_validations.append(
+                (
+                    new_username,
+                    new_email,
+                    Utils.get_as_string(new_is_admin, default='False'),
+                    valid_username_response,
+                    valid_email_response,
+                )
+            )
 
-            user_table.add_row(new_username, new_email, Utils.get_as_string(new_is_admin))
-            new_users.append(User(username=new_username, email=new_email, sudo=new_is_admin))
+            user_table.add_row(
+                new_username, new_email, Utils.get_as_string(new_is_admin)
+            )
+            new_users.append(
+                User(username=new_username, email=new_email, sudo=new_is_admin)
+            )
 
-    duplicate_users_in_csv = ClusterManagerUtils.check_duplicate_users_in_csv(new_usernames)
+    duplicate_users_in_csv = ClusterManagerUtils.check_duplicate_users_in_csv(
+        new_usernames
+    )
     if len(duplicate_users_in_csv) > 0:
         table = Table()
         table.add_column('Username', justify='left', no_wrap=False)
         for user in duplicate_users_in_csv:
             table.add_row(user)
         context.print(table)
-        context.error('These users are repeated in the csv file; please ensure all usernames are unique in the csv file and try again.')
+        context.error(
+            'These users are repeated in the csv file; please ensure all usernames are unique in the csv file and try again.'
+        )
         return
 
     duplicate_users = ClusterManagerUtils.check_duplicate_users(new_usernames, context)
@@ -312,26 +345,66 @@ def batch_create_users(path_to_csv: str, force: bool, generate_template: bool, t
             is_duplicate = item[0] in duplicate_users
 
             if not Utils.is_empty(item[3]) and not Utils.is_empty(item[4]):
-                status_table.add_row(item[0], item[1], item[2], "FAILED", f'{item[3]} AND {item[4]}', style='red')
+                status_table.add_row(
+                    item[0],
+                    item[1],
+                    item[2],
+                    'FAILED',
+                    f'{item[3]} AND {item[4]}',
+                    style='red',
+                )
             elif not Utils.is_empty(item[3]):
-                status_table.add_row(item[0], item[1], item[2], "FAILED", f'{item[3]}', style='red')
+                status_table.add_row(
+                    item[0], item[1], item[2], 'FAILED', f'{item[3]}', style='red'
+                )
             elif not Utils.is_empty(item[4]) and is_duplicate:
-                status_table.add_row(item[0], item[1], item[2], "FAILED", f'user already exists; please remove them from the csv and try again AND {item[4]}', style='red')
+                status_table.add_row(
+                    item[0],
+                    item[1],
+                    item[2],
+                    'FAILED',
+                    f'user already exists; please remove them from the csv and try again AND {item[4]}',
+                    style='red',
+                )
             elif not Utils.is_empty(item[4]):
-                status_table.add_row(item[0], item[1], item[2], "FAILED", f'{item[4]}', style='red')
+                status_table.add_row(
+                    item[0], item[1], item[2], 'FAILED', f'{item[4]}', style='red'
+                )
             elif is_duplicate:
-                status_table.add_row(item[0], item[1], item[2], "FAILED", 'user already exists; please remove them from the csv and try again', style='red')
+                status_table.add_row(
+                    item[0],
+                    item[1],
+                    item[2],
+                    'FAILED',
+                    'user already exists; please remove them from the csv and try again',
+                    style='red',
+                )
             else:
-                status_table.add_row(item[0], item[1], item[2], "ABORTED", 'csv file contains errors', style='bright_black')
+                status_table.add_row(
+                    item[0],
+                    item[1],
+                    item[2],
+                    'ABORTED',
+                    'csv file contains errors',
+                    style='bright_black',
+                )
         context.print(status_table)
         raise SystemExit(1)
 
     if not force:
         context.print(user_table)
-        continue_deployment = context.prompt(f'Are you sure you want to add these users?')
+        continue_deployment = context.prompt(
+            'Are you sure you want to add these users?'
+        )
         if not continue_deployment:
             for new_user in new_users:
-                status_table.add_row(new_user.username, new_user.email, Utils.get_as_string(new_user.sudo, default='False'), 'ABORTED', 'Adding user Aborted!')
+                status_table.add_row(
+                    new_user.username,
+                    new_user.email,
+                    Utils.get_as_string(new_user.sudo, default='False'),
+                    'ABORTED',
+                    'Adding user Aborted!',
+                )
             context.print(status_table)
             raise SystemExit(1)
 

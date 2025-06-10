@@ -14,6 +14,7 @@ This function is triggered every time a state change event is triggered by an EC
 with IDEA_CLUSTER. It repackages the event, appends tag information and then publishes an 'Ec2.StateChangeEvent'
 intended for the different modules that have subscribed to this event within the cluster
 """
+
 import boto3
 import os
 import json
@@ -46,26 +47,27 @@ def handler(event, _):
 
         message_attributes = {}
         for tags in ec2instance.tags:
-            if tags["Key"].startswith(idea_tag_prefix):
-                event['detail']['tags'][tags["Key"]] = tags["Value"]
-                message_attributes[re.sub(r"[^a-zA-Z0-9_\-\.]+", "_", tags["Key"]).strip()] = {
-                        'DataType': 'String',
-                        'StringValue': tags["Value"]
-                        }
+            if tags['Key'].startswith(idea_tag_prefix):
+                event['detail']['tags'][tags['Key']] = tags['Value']
+                message_attributes[
+                    re.sub(r'[^a-zA-Z0-9_\-\.]+', '_', tags['Key']).strip()
+                ] = {'DataType': 'String', 'StringValue': tags['Value']}
 
-            if tags["Key"] == cluster_name_tag_key and tags["Value"] == cluster_name_tag_value:
+            if (
+                tags['Key'] == cluster_name_tag_key
+                and tags['Value'] == cluster_name_tag_value
+            ):
                 cluster_match = True
 
         if not cluster_match:
-            logger.info(f'tag_key(s): {cluster_name_tag_key} and tag_value(s): {cluster_name_tag_value} on instance-id: {instance_id} not found. NO=OP.')
+            logger.info(
+                f'tag_key(s): {cluster_name_tag_key} and tag_value(s): {cluster_name_tag_value} on instance-id: {instance_id} not found. NO=OP.'
+            )
             return
 
         forwarding_event = {
-            'header': {
-                'namespace': 'Ec2.StateChangeEvent',
-                'request_id': instance_id
-            },
-            'payload': event['detail']
+            'header': {'namespace': 'Ec2.StateChangeEvent', 'request_id': instance_id},
+            'payload': event['detail'],
         }
 
         logger.info(f'forwarding ec2-state-event for {instance_id} for state {state}')
@@ -74,11 +76,16 @@ def handler(event, _):
             TopicArn=forwarding_topic_arn,
             MessageStructure='json',
             MessageAttributes=message_attributes,
-            Message=json.dumps({
-                'default': json.dumps(forwarding_event),
-                'sqs': forwarding_event,
-            }))
+            Message=json.dumps(
+                {
+                    'default': json.dumps(forwarding_event),
+                    'sqs': forwarding_event,
+                }
+            ),
+        )
 
         logger.info(response)
     except Exception as e:
-        logger.exception(f'Error in Handling ec2 state change event: {event}, error: {e}')
+        logger.exception(
+            f'Error in Handling ec2 state change event: {event}, error: {e}'
+        )

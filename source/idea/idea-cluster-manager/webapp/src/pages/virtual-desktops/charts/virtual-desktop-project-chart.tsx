@@ -133,4 +133,3 @@ class VirtualDesktopProjectChart extends VirtualDesktopBaseChart<VirtualDesktopP
 }
 
 export default VirtualDesktopProjectChart
-

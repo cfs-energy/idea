@@ -13,7 +13,12 @@ import ideasdk.app
 from ideasdk.auth import TokenService, TokenServiceOptions
 from ideadatamodel import constants
 from ideasdk.server import SocaServerOptions
-from ideasdk.client import ProjectsClient, AccountsClient, NotificationsAsyncClient, SocaClientOptions
+from ideasdk.client import (
+    ProjectsClient,
+    AccountsClient,
+    NotificationsAsyncClient,
+    SocaClientOptions,
+)
 from ideasdk.shell import ShellInvoker
 from ideasdk.utils import GroupNameHelper
 
@@ -22,13 +27,19 @@ from ideascheduler.app.api import SchedulerApiInvoker
 from ideascheduler.app.aws import InstanceCache, InstanceMonitor
 from ideascheduler.app.metrics import JobProvisioningMetrics
 from ideascheduler.app.provisioning import (
-    JobCache, JobMonitor, NodeMonitor, JobSubmissionTracker,
-    JobProvisioner, HpcQueueProfilesService
+    JobCache,
+    JobMonitor,
+    NodeMonitor,
+    JobSubmissionTracker,
+    JobProvisioner,
+    HpcQueueProfilesService,
 )
 from ideascheduler.app.scheduler import SocaScheduler
 from ideascheduler.app.documents import DocumentStore
 from ideascheduler.app.scheduler_default_settings import SchedulerDefaultSettings
-from ideascheduler.app.applications.hpc_applications_service import HpcApplicationsService
+from ideascheduler.app.applications.hpc_applications_service import (
+    HpcApplicationsService,
+)
 from ideascheduler.app.licenses.license_service import LicenseService
 from ideascheduler.app.notifications.job_notifications import JobNotifications
 
@@ -41,14 +52,18 @@ class SchedulerApp(ideasdk.app.SocaApp):
     scheduler app
     """
 
-    def __init__(self, context: ideascheduler.AppContext,
-                 config_file: str,
-                 env_file: str = None,
-                 config_overrides_file: str = None,
-                 validation_level: int = constants.CONFIG_LEVEL_CRITICAL,
-                 **kwargs):
-
-        api_path_prefix = context.config().get_string('scheduler.server.api_context_path', f'/{context.module_id()}')
+    def __init__(
+        self,
+        context: ideascheduler.AppContext,
+        config_file: str,
+        env_file: str = None,
+        config_overrides_file: str = None,
+        validation_level: int = constants.CONFIG_LEVEL_CRITICAL,
+        **kwargs,
+    ):
+        api_path_prefix = context.config().get_string(
+            'scheduler.server.api_context_path', f'/{context.module_id()}'
+        )
         super().__init__(
             context=context,
             config_file=config_file,
@@ -57,10 +72,9 @@ class SchedulerApp(ideasdk.app.SocaApp):
             config_overrides_file=config_overrides_file,
             validation_level=validation_level,
             server_options=SocaServerOptions(
-                api_path_prefixes=[api_path_prefix],
-                enable_metrics=True
+                api_path_prefixes=[api_path_prefix], enable_metrics=True
             ),
-            **kwargs
+            **kwargs,
         )
         self.context = context
 
@@ -69,15 +83,24 @@ class SchedulerApp(ideasdk.app.SocaApp):
         self.instance_monitor: Optional[InstanceMonitor] = None
 
     def app_initialize(self):
-
         group_name_helper = GroupNameHelper(self.context)
-        provider_url = self.context.config().get_string('identity-provider.cognito.provider_url', required=True)
-        domain_url = self.context.config().get_string('identity-provider.cognito.domain_url', required=True)
+        provider_url = self.context.config().get_string(
+            'identity-provider.cognito.provider_url', required=True
+        )
+        domain_url = self.context.config().get_string(
+            'identity-provider.cognito.domain_url', required=True
+        )
         administrators_group_name = group_name_helper.get_cluster_administrators_group()
         managers_group_name = group_name_helper.get_cluster_managers_group()
-        cluster_manager_module_id = self.context.config().get_module_id(constants.MODULE_CLUSTER_MANAGER)
-        client_id = self.context.config().get_secret('scheduler.client_id', required=True)
-        client_secret = self.context.config().get_secret('scheduler.client_secret', required=True)
+        cluster_manager_module_id = self.context.config().get_module_id(
+            constants.MODULE_CLUSTER_MANAGER
+        )
+        client_id = self.context.config().get_secret(
+            'scheduler.client_id', required=True
+        )
+        client_secret = self.context.config().get_secret(
+            'scheduler.client_secret', required=True
+        )
 
         self.context.token_service = TokenService(
             context=self.context,
@@ -86,12 +109,10 @@ class SchedulerApp(ideasdk.app.SocaApp):
                 cognito_user_pool_domain_url=domain_url,
                 client_id=client_id,
                 client_secret=client_secret,
-                client_credentials_scope=[
-                    f'{cluster_manager_module_id}/read'
-                ],
+                client_credentials_scope=[f'{cluster_manager_module_id}/read'],
                 administrators_group_name=administrators_group_name,
-                managers_group_name=managers_group_name
-            )
+                managers_group_name=managers_group_name,
+            ),
         )
 
         # clients
@@ -103,9 +124,9 @@ class SchedulerApp(ideasdk.app.SocaApp):
             options=SocaClientOptions(
                 endpoint=f'{internal_endpoint}/{cluster_manager_module_id}/api/v1',
                 enable_logging=False,
-                verify_ssl=False
+                verify_ssl=False,
             ),
-            token_service=self.context.token_service
+            token_service=self.context.token_service,
         )
 
         # projects client
@@ -114,9 +135,9 @@ class SchedulerApp(ideasdk.app.SocaApp):
             options=SocaClientOptions(
                 endpoint=f'{internal_endpoint}/{cluster_manager_module_id}/api/v1',
                 enable_logging=False,
-                verify_ssl=False
+                verify_ssl=False,
             ),
-            token_service=self.context.token_service
+            token_service=self.context.token_service,
         )
 
         # if opensearch is enabled in the cluster, but the domain is still being created,
@@ -128,8 +149,7 @@ class SchedulerApp(ideasdk.app.SocaApp):
 
         self.context.instance_cache = InstanceCache(context=self.context)
         self.instance_monitor = InstanceMonitor(
-            context=self.context,
-            instance_cache=self.context.instance_cache
+            context=self.context, instance_cache=self.context.instance_cache
         )
         self.context.scheduler = SocaScheduler(context=self.context)
 
@@ -153,10 +173,11 @@ class SchedulerApp(ideasdk.app.SocaApp):
         self.context.applications = HpcApplicationsService(context=self.context)
         self.context.shell = ShellInvoker()
         self.context.license_service = LicenseService(context=self.context)
-        self.context.notifications_client = NotificationsAsyncClient(context=self.context)
+        self.context.notifications_client = NotificationsAsyncClient(
+            context=self.context
+        )
         self.context.job_notifications = JobNotifications(
-            context=self.context,
-            notifications_client=self.context.notifications_client
+            context=self.context, notifications_client=self.context.notifications_client
         )
 
     def app_start(self):

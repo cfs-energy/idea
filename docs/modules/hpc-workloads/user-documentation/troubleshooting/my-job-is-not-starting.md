@@ -23,7 +23,7 @@ If the capacity is being provisioned, the next thing to check is if there is no 
 
 To verify that, review logs located under `/apps/<CLUSTER>/scheduler/jobs/<JOB_ID>/`
 
-You will find the boostrap & compute\_node logs for all EC2 instances being provisioned for your job:
+You will find the bootstrap & compute\_node logs for all EC2 instances being provisioned for your job:
 
 <pre><code><strong>Bootstrap:
 </strong><strong>/apps/&#x3C;CLUSTER>/scheduler/jobs/&#x3C;JOB_ID>/bootstrap/&#x3C;COMPUTE_NODE_JOB_ID>

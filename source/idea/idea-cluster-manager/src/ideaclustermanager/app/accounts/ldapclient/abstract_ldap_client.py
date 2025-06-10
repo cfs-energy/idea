@@ -11,10 +11,12 @@
 from pydantic import Field
 
 from ideadatamodel import (
-    exceptions, errorcodes, constants,
+    exceptions,
+    errorcodes,
+    constants,
     SocaBaseModel,
     SocaFilter,
-    SocaPaginator
+    SocaPaginator,
 )
 from ideasdk.context import SocaContext
 from ideasdk.utils import Utils
@@ -66,7 +68,6 @@ GID_MAX = 65533
 
 
 class AbstractLDAPClient:
-
     def __init__(self, context: SocaContext, options: LdapClientOptions, logger=None):
         self.context = context
 
@@ -87,39 +88,67 @@ class AbstractLDAPClient:
 
         # initialize pooled connection manager for LDAP to conserve resources
         # Set any LDAP options that may be needed
-        self.logger.debug(f"Setting LDAP options..")
+        self.logger.debug('Setting LDAP options..')
         default_ldap_options = [
             {'name': 'Referrals', 'code': ldap.OPT_REFERRALS, 'value': ldap.OPT_OFF},
-            {'name': 'Protocol Version', 'code': ldap.OPT_PROTOCOL_VERSION, 'value': ldap.VERSION3}
+            {
+                'name': 'Protocol Version',
+                'code': ldap.OPT_PROTOCOL_VERSION,
+                'value': ldap.VERSION3,
+            },
         ]
         for option in default_ldap_options:
-            self.logger.debug(f"Setting default option: {option.get('name')}({option.get('code')}) -> {option.get('value')}")
+            self.logger.debug(
+                f'Setting default option: {option.get("name")}({option.get("code")}) -> {option.get("value")}'
+            )
             ldap.set_option(option.get('code'), option.get('value'))
-            self.logger.debug(f"Confirming default option: {option.get('name')}({option.get('code')}) -> {ldap.get_option(option.get('code'))}")
+            self.logger.debug(
+                f'Confirming default option: {option.get("name")}({option.get("code")}) -> {ldap.get_option(option.get("code"))}'
+            )
 
-        configured_ldap_options = self.context.config().get_list('directoryservice.ldap_options', default=[])
+        configured_ldap_options = self.context.config().get_list(
+            'directoryservice.ldap_options', default=[]
+        )
         if configured_ldap_options:
-            self.logger.debug(f"Obtained LDAP options from directoryservice.ldap_options: {configured_ldap_options}")
+            self.logger.debug(
+                f'Obtained LDAP options from directoryservice.ldap_options: {configured_ldap_options}'
+            )
             for option in configured_ldap_options:
                 opt_d = dict(eval(option))
                 if isinstance(opt_d, dict):
-                    self.logger.debug(f"Setting configured option: {opt_d.get('name')}({opt_d.get('code')}) -> {opt_d.get('value')}")
+                    self.logger.debug(
+                        f'Setting configured option: {opt_d.get("name")}({opt_d.get("code")}) -> {opt_d.get("value")}'
+                    )
                     ldap.set_option(opt_d.get('code'), opt_d.get('value'))
-                    self.logger.debug(f"Confirming configured option: {opt_d.get('name')}({opt_d.get('code')}) -> {ldap.get_option(opt_d.get('code'))}")
+                    self.logger.debug(
+                        f'Confirming configured option: {opt_d.get("name")}({opt_d.get("code")}) -> {ldap.get_option(opt_d.get("code"))}'
+                    )
 
-        self.logger.debug(f"Starting LDAP connection pool to {self.ldap_uri}")
+        self.logger.debug(f'Starting LDAP connection pool to {self.ldap_uri}')
         self.connection_manager = ConnectionManager(
             uri=self.ldap_uri,
-            size=Utils.get_as_int(options.connection_pool_size, DEFAULT_LDAP_CONNECTION_POOL_SIZE),
-            retry_max=Utils.get_as_int(options.connection_retry_max, DEFAULT_LDAP_CONNECTION_RETRY_MAX),
-            retry_delay=Utils.get_as_float(options.connection_retry_delay, DEFAULT_LDAP_CONNECTION_RETRY_DELAY),
-            timeout=Utils.get_as_float(options.connection_timeout, DEFAULT_LDAP_CONNECTION_TIMEOUT),
-            use_pool=Utils.get_as_bool(options.connection_pool_enabled, DEFAULT_LDAP_ENABLE_CONNECTION_POOL)
+            size=Utils.get_as_int(
+                options.connection_pool_size, DEFAULT_LDAP_CONNECTION_POOL_SIZE
+            ),
+            retry_max=Utils.get_as_int(
+                options.connection_retry_max, DEFAULT_LDAP_CONNECTION_RETRY_MAX
+            ),
+            retry_delay=Utils.get_as_float(
+                options.connection_retry_delay, DEFAULT_LDAP_CONNECTION_RETRY_DELAY
+            ),
+            timeout=Utils.get_as_float(
+                options.connection_timeout, DEFAULT_LDAP_CONNECTION_TIMEOUT
+            ),
+            use_pool=Utils.get_as_bool(
+                options.connection_pool_enabled, DEFAULT_LDAP_ENABLE_CONNECTION_POOL
+            ),
         )
 
     # ldap wrapper methods
     def add_s(self, dn, modlist):
-        trace_message = f'ldapadd -x -D "{self.ldap_root_bind}" -H {self.ldap_uri} "{dn}"'
+        trace_message = (
+            f'ldapadd -x -D "{self.ldap_root_bind}" -H {self.ldap_uri} "{dn}"'
+        )
         attributes = []
         for mod in modlist:
             key = mod[0]
@@ -132,7 +161,9 @@ class AbstractLDAPClient:
             conn.add_s(dn, modlist)
 
     def modify_s(self, dn, modlist):
-        trace_message = f'ldapmodify -x -D "{self.ldap_root_bind}" -H {self.ldap_uri} "{dn}"'
+        trace_message = (
+            f'ldapmodify -x -D "{self.ldap_root_bind}" -H {self.ldap_uri} "{dn}"'
+        )
         attributes = []
         for mod in modlist:
             key = mod[1]
@@ -145,12 +176,22 @@ class AbstractLDAPClient:
             conn.modify_s(dn, modlist)
 
     def delete_s(self, dn):
-        trace_message = f'ldapdelete -x -D "{self.ldap_root_bind}" -H {self.ldap_uri} "{dn}"'
+        trace_message = (
+            f'ldapdelete -x -D "{self.ldap_root_bind}" -H {self.ldap_uri} "{dn}"'
+        )
         self.logger.info(f'> {trace_message}')
         with self.get_ldap_root_connection() as conn:
             conn.delete_s(dn)
 
-    def search_s(self, base, scope=ldap.SCOPE_SUBTREE, filterstr=None, attrlist=None, attrsonly=0, trace=True):
+    def search_s(
+        self,
+        base,
+        scope=ldap.SCOPE_SUBTREE,
+        filterstr=None,
+        attrlist=None,
+        attrsonly=0,
+        trace=True,
+    ):
         if trace:
             trace_message = f'ldapsearch -x -b "{base}" -D "{self.ldap_root_bind}" -H {self.ldap_uri} "{filterstr}"'
             if attrlist is not None:
@@ -159,13 +200,17 @@ class AbstractLDAPClient:
         with self.get_ldap_root_connection() as conn:
             return conn.search_s(base, scope, filterstr, attrlist, attrsonly)
 
-    def simple_paginated_search(self, base, scope=ldap.SCOPE_SUBTREE,
-                                filterstr=None,
-                                attrlist=None,
-                                attrsonly=0,
-                                timeout=-1,
-                                page_size: int = None,
-                                cookie: str = None) -> Dict:
+    def simple_paginated_search(
+        self,
+        base,
+        scope=ldap.SCOPE_SUBTREE,
+        filterstr=None,
+        attrlist=None,
+        attrsonly=0,
+        timeout=-1,
+        page_size: int = None,
+        cookie: str = None,
+    ) -> Dict:
         trace_message = f'ldapsearch -x -b "{base}" -D "{self.ldap_root_bind}" -H {self.ldap_uri} "{filterstr}"'
         if attrlist is not None:
             trace_message = f'{trace_message} {" ".join(attrlist)}'
@@ -177,36 +222,42 @@ class AbstractLDAPClient:
                 cookie_b = DEFAULT_LDAP_COOKIE
             else:
                 cookie_b = base64.b64decode(cookie)
-            serverctrls = [SimplePagedResultsControl(True, size=page_size, cookie=cookie_b)]
+            serverctrls = [
+                SimplePagedResultsControl(True, size=page_size, cookie=cookie_b)
+            ]
 
-            message_id = conn.search_ext(base, scope, filterstr, attrlist, attrsonly, serverctrls, None, timeout)
+            message_id = conn.search_ext(
+                base, scope, filterstr, attrlist, attrsonly, serverctrls, None, timeout
+            )
             rtype, rdata, rmsgid, res_serverctrls = conn.result3(message_id)
 
             result.extend(rdata)
-            controls = [control for control in res_serverctrls if control.controlType == SimplePagedResultsControl.controlType]
+            controls = [
+                control
+                for control in res_serverctrls
+                if control.controlType == SimplePagedResultsControl.controlType
+            ]
             if controls and len(controls) > 0:
                 return {
                     'result': result,
                     'total': None,
-                    'cookie': Utils.from_bytes(base64.b64encode(controls[0].cookie))
+                    'cookie': Utils.from_bytes(base64.b64encode(controls[0].cookie)),
                 }
             else:
-                return {
-                    'result': result,
-                    'total': None,
-                    'cookie': None
-                }
+                return {'result': result, 'total': None, 'cookie': None}
 
-    def sssvlv_paginated_search(self,
-                                base,
-                                sort_by: str,
-                                scope=ldap.SCOPE_SUBTREE,
-                                filterstr=None,
-                                attrlist=None,
-                                attrsonly=0,
-                                timeout=-1,
-                                start=0,
-                                page_size: int = None) -> Dict:
+    def sssvlv_paginated_search(
+        self,
+        base,
+        sort_by: str,
+        scope=ldap.SCOPE_SUBTREE,
+        filterstr=None,
+        attrlist=None,
+        attrsonly=0,
+        timeout=-1,
+        start=0,
+        page_size: int = None,
+    ) -> Dict:
         """
         Server Side Sorting and Virtual List View (SSSVLV) based search and paging for LDAP
         Refer to https://ldapwiki.com/wiki/Virtual%20List%20View%20Control for more details
@@ -246,7 +297,11 @@ class AbstractLDAPClient:
         conn = None
         try:
             conn = ldap.initialize(self.ldap_uri)
-            conn.bind_s(who=self.ldap_root_bind, cred=self.ldap_root_password, method=ldap.AUTH_SIMPLE)
+            conn.bind_s(
+                who=self.ldap_root_bind,
+                cred=self.ldap_root_password,
+                method=ldap.AUTH_SIMPLE,
+            )
 
             page_size = Utils.get_as_int(page_size, DEFAULT_LDAP_PAGE_SIZE)
             page_start = Utils.get_as_int(start, DEFAULT_LDAP_PAGE_START)
@@ -257,15 +312,14 @@ class AbstractLDAPClient:
                     before_count=0,
                     after_count=page_size - 1,
                     offset=page_start + 1,
-                    content_count=0
+                    content_count=0,
                 ),
-                SSSRequestControl(
-                    criticality=True,
-                    ordering_rules=[sort_by]
-                )
+                SSSRequestControl(criticality=True, ordering_rules=[sort_by]),
             ]
 
-            message_id = conn.search_ext(base, scope, filterstr, attrlist, attrsonly, serverctrls, None, timeout)
+            message_id = conn.search_ext(
+                base, scope, filterstr, attrlist, attrsonly, serverctrls, None, timeout
+            )
             rtype, rdata, rmsgid, res_serverctrls = conn.result3(message_id)
 
             total = 0
@@ -274,16 +328,10 @@ class AbstractLDAPClient:
                     total = res_control.content_count
 
             result.extend(rdata)
-            return {
-                'result': result,
-                'total': total
-            }
+            return {'result': result, 'total': total}
 
         except ldap.VLV_ERROR:
-            return {
-                'result': result,
-                'total': 0
-            }
+            return {'result': result, 'total': 0}
         finally:
             try:
                 if conn:
@@ -293,7 +341,9 @@ class AbstractLDAPClient:
 
     @property
     def ds_provider(self) -> str:
-        return self.context.config().get_string('directoryservice.provider', required=True)
+        return self.context.config().get_string(
+            'directoryservice.provider', required=True
+        )
 
     def is_openldap(self) -> bool:
         return self.ds_provider == constants.DIRECTORYSERVICE_OPENLDAP
@@ -301,13 +351,11 @@ class AbstractLDAPClient:
     def is_activedirectory(self) -> bool:
         return self.ds_provider in (
             constants.DIRECTORYSERVICE_AWS_MANAGED_ACTIVE_DIRECTORY,
-            constants.DIRECTORYSERVICE_ACTIVE_DIRECTORY
+            constants.DIRECTORYSERVICE_ACTIVE_DIRECTORY,
         )
 
     def is_readonly(self) -> bool:
-        return self.ds_provider in (
-            constants.DIRECTORYSERVICE_ACTIVE_DIRECTORY
-        )
+        return self.ds_provider in (constants.DIRECTORYSERVICE_ACTIVE_DIRECTORY)
 
     @property
     def domain_name(self) -> str:
@@ -343,14 +391,16 @@ class AbstractLDAPClient:
 
         secret_arn = self.options.root_username_secret_arn
         if Utils.is_not_empty(secret_arn):
-            result = self.context.aws().secretsmanager().get_secret_value(
-                SecretId=secret_arn
+            result = (
+                self.context.aws()
+                .secretsmanager()
+                .get_secret_value(SecretId=secret_arn)
             )
             return Utils.get_value_as_string('SecretString', result)
 
         raise exceptions.soca_exception(
             error_code=errorcodes.GENERAL_ERROR,
-            message='DS root username/password not configured'
+            message='DS root username/password not configured',
         )
 
     def fetch_root_password(self) -> str:
@@ -364,14 +414,16 @@ class AbstractLDAPClient:
 
         secret_arn = self.options.root_password_secret_arn
         if Utils.is_not_empty(secret_arn):
-            result = self.context.aws().secretsmanager().get_secret_value(
-                SecretId=secret_arn
+            result = (
+                self.context.aws()
+                .secretsmanager()
+                .get_secret_value(SecretId=secret_arn)
             )
             return Utils.get_value_as_string('SecretString', result)
 
         raise exceptions.soca_exception(
             error_code=errorcodes.GENERAL_ERROR,
-            message='DS root username/password not configured'
+            message='DS root username/password not configured',
         )
 
     def update_root_password(self, password: str):
@@ -386,8 +438,7 @@ class AbstractLDAPClient:
         secret_arn = self.options.root_password_secret_arn
         if Utils.is_not_empty(secret_arn):
             self.context.aws().secretsmanager().put_secret_value(
-                SecretId=secret_arn,
-                SecretString=password
+                SecretId=secret_arn, SecretString=password
             )
 
         self._root_password = password
@@ -409,8 +460,7 @@ class AbstractLDAPClient:
         returns an LDAP connection object bound to ROOT user from the connection pool
         """
         res = self.connection_manager.connection(
-            bind=self.ldap_root_bind,
-            passwd=self.ldap_root_password
+            bind=self.ldap_root_bind, passwd=self.ldap_root_password
         )
         # if self.logger.isEnabledFor(logging.DEBUG):
         #    self.logger.debug(f"LDAP CM returning conn ({res})")
@@ -425,11 +475,7 @@ class AbstractLDAPClient:
         gid = LdapUtils.get_int_value('gidNumber', ldap_group)
         users = LdapUtils.get_string_list('memberUid', ldap_group)
 
-        return {
-            'name': name,
-            'gid': gid,
-            'users': users
-        }
+        return {'name': name, 'gid': gid, 'users': users}
 
     def is_existing_group(self, group_name: str) -> bool:
         if Utils.is_empty(group_name):
@@ -438,20 +484,19 @@ class AbstractLDAPClient:
         result = self.search_s(
             base=self.ldap_group_base,
             filterstr=self.build_group_filterstr(group_name),
-            attrlist=['cn']
+            attrlist=['cn'],
         )
 
         return len(result) > 0
 
     def is_existing_user(self, username: str) -> bool:
-
         if Utils.is_empty(username):
             raise exceptions.invalid_params('username is required')
 
         results = self.search_s(
             base=self.ldap_user_base,
             filterstr=self.build_user_filterstr(username),
-            attrlist=['cn']
+            attrlist=['cn'],
         )
 
         return len(results) > 0
@@ -460,25 +505,22 @@ class AbstractLDAPClient:
         results = self.search_s(
             base=self.ldap_sudoers_base,
             filterstr=self.build_sudoer_filterstr(username),
-            attrlist=['cn']
+            attrlist=['cn'],
         )
 
         return len(results) > 0
 
     @property
     @abstractmethod
-    def ldap_computers_base(self) -> str:
-        ...
+    def ldap_computers_base(self) -> str: ...
 
     @property
     @abstractmethod
-    def ldap_user_base(self) -> str:
-        ...
+    def ldap_user_base(self) -> str: ...
 
     @property
     @abstractmethod
-    def ldap_user_filterstr(self) -> str:
-        ...
+    def ldap_user_filterstr(self) -> str: ...
 
     def build_computer_dn(self, computer: str) -> str:
         return f'cn={computer},{self.ldap_computers_base}'
@@ -491,18 +533,18 @@ class AbstractLDAPClient:
 
     @property
     @abstractmethod
-    def ldap_group_base(self) -> str:
-        ...
+    def ldap_group_base(self) -> str: ...
 
     @property
     @abstractmethod
-    def ldap_group_filterstr(self) -> str:
-        ...
+    def ldap_group_filterstr(self) -> str: ...
 
     def build_group_dn(self, group_name: str) -> str:
         return f'cn={group_name},{self.ldap_group_base}'
 
-    def build_group_filterstr(self, group_name: str = None, username: str = None) -> str:
+    def build_group_filterstr(
+        self, group_name: str = None, username: str = None
+    ) -> str:
         filterstr = self.ldap_group_filterstr
         if group_name is not None:
             # Check if we have a fully qualified
@@ -516,25 +558,21 @@ class AbstractLDAPClient:
 
     @property
     @abstractmethod
-    def ldap_sudoers_base(self) -> str:
-        ...
+    def ldap_sudoers_base(self) -> str: ...
 
     @property
     @abstractmethod
-    def ldap_sudoer_filterstr(self) -> str:
-        ...
+    def ldap_sudoer_filterstr(self) -> str: ...
 
     def build_sudoer_filterstr(self, username: str) -> str:
         return f'(&{self.ldap_sudoer_filterstr}(cn={username}))'
 
     @property
     @abstractmethod
-    def ldap_root_bind(self) -> str:
-        ...
+    def ldap_root_bind(self) -> str: ...
 
     @abstractmethod
-    def change_password(self, username: str, password: str):
-        ...
+    def change_password(self, username: str, password: str): ...
 
     def convert_ldap_user(self, ldap_user: Dict) -> Optional[Dict]:
         if Utils.is_empty(ldap_user):
@@ -552,7 +590,9 @@ class AbstractLDAPClient:
 
         # UserAccountControl from ActiveDirectory
         if self.is_activedirectory():
-            user_account_control = LdapUtils.get_int_value('userAccountControl', ldap_user)
+            user_account_control = LdapUtils.get_int_value(
+                'userAccountControl', ldap_user
+            )
         else:
             user_account_control = None
 
@@ -569,7 +609,7 @@ class AbstractLDAPClient:
             'gid': gid,
             'login_shell': login_shell,
             'home_dir': home_dir,
-            'user_account_control': user_account_control
+            'user_account_control': user_account_control,
         }
 
         if password_last_set:
@@ -579,10 +619,11 @@ class AbstractLDAPClient:
         return result
 
     def get_group(self, group_name: str) -> Optional[Dict]:
-        self.logger.debug(f"abstract_ldap-get_group(): Attempting to lookup {group_name} . Base: {self.ldap_group_base}")
+        self.logger.debug(
+            f'abstract_ldap-get_group(): Attempting to lookup {group_name} . Base: {self.ldap_group_base}'
+        )
         result = self.search_s(
-            base=self.ldap_group_base,
-            filterstr=self.build_group_filterstr(group_name)
+            base=self.ldap_group_base, filterstr=self.build_group_filterstr(group_name)
         )
 
         if len(result) == 0:
@@ -591,14 +632,13 @@ class AbstractLDAPClient:
         return self.convert_ldap_group(result[0][1])
 
     @abstractmethod
-    def sync_group(self, group_name: str, gid: int) -> Dict:
-        ...
+    def sync_group(self, group_name: str, gid: int) -> Dict: ...
 
     def get_all_groups_with_user(self, username: str) -> List[str]:
         ldap_result = self.search_s(
             base=self.ldap_group_base,
             filterstr=self.build_group_filterstr(username=username),
-            attrlist=['cn']
+            attrlist=['cn'],
         )
 
         result = []
@@ -608,10 +648,13 @@ class AbstractLDAPClient:
 
         return result
 
-    def search_groups(self, group_name_filter: SocaFilter = None,
-                      username_filter: SocaFilter = None,
-                      page_size: int = None,
-                      start: int = 0) -> Tuple[List[Dict], SocaPaginator]:
+    def search_groups(
+        self,
+        group_name_filter: SocaFilter = None,
+        username_filter: SocaFilter = None,
+        page_size: int = None,
+        start: int = 0,
+    ) -> Tuple[List[Dict], SocaPaginator]:
         result = []
 
         group_name_token = None
@@ -639,33 +682,34 @@ class AbstractLDAPClient:
         if Utils.are_empty(group_name_token, username_token):
             filterstr = self.ldap_group_filterstr
         else:
-            filterstr = self.build_group_filterstr(group_name=group_name_token, username=username_token)
+            filterstr = self.build_group_filterstr(
+                group_name=group_name_token, username=username_token
+            )
 
         if self.is_activedirectory():
-
             search_result = self.simple_paginated_search(
-                base=self.ldap_group_base,
-                filterstr=filterstr
+                base=self.ldap_group_base, filterstr=filterstr
             )
 
             ldap_result = Utils.get_value_as_list('result', search_result, default=[])
             total = len(ldap_result)
 
         else:
-
             search_result = self.sssvlv_paginated_search(
                 base=self.ldap_group_base,
                 sort_by='gidNumber:integerOrderingMatch',
                 filterstr=filterstr,
                 page_size=page_size,
-                start=start
+                start=start,
             )
 
             ldap_result = Utils.get_value_as_list('result', search_result)
             total = Utils.get_value_as_int('total', search_result)
 
         if ldap_result:
-            self.logger.debug(f"search_groups Start: {start} - LDAP result count: {len(ldap_result)} - Results Total: {total}")
+            self.logger.debug(
+                f'search_groups Start: {start} - LDAP result count: {len(ldap_result)} - Results Total: {total}'
+            )
             for ldap_group in ldap_result:
                 user_group = self.convert_ldap_group(ldap_group[1])
                 if Utils.is_empty(user_group):
@@ -679,7 +723,9 @@ class AbstractLDAPClient:
             group_dn = self.build_group_dn(group_name)
             group_attrs = []
             for username in usernames:
-                group_attrs.append((ldap.MOD_ADD, 'memberUid', [Utils.to_bytes(username)]))
+                group_attrs.append(
+                    (ldap.MOD_ADD, 'memberUid', [Utils.to_bytes(username)])
+                )
             self.modify_s(group_dn, group_attrs)
         except ldap.TYPE_OR_VALUE_EXISTS:
             pass
@@ -699,12 +745,10 @@ class AbstractLDAPClient:
         self.delete_s(group_dn)
 
     @abstractmethod
-    def add_sudo_user(self, username: str):
-        ...
+    def add_sudo_user(self, username: str): ...
 
     @abstractmethod
-    def remove_sudo_user(self, username: str):
-        ...
+    def remove_sudo_user(self, username: str): ...
 
     def list_sudo_users(self) -> List[str]:
         result = []
@@ -712,7 +756,7 @@ class AbstractLDAPClient:
         ldap_result = self.search_s(
             base=self.ldap_sudoers_base,
             filterstr=self.ldap_sudoer_filterstr,
-            attrlist=['cn']
+            attrlist=['cn'],
         )
 
         for entry in ldap_result:
@@ -723,11 +767,10 @@ class AbstractLDAPClient:
         return result
 
     def get_user(self, username: str, trace=True) -> Optional[Dict]:
-
         results = self.search_s(
             base=self.ldap_user_base,
             filterstr=self.build_user_filterstr(username),
-            trace=trace
+            trace=trace,
         )
 
         if len(results) == 0:
@@ -736,18 +779,19 @@ class AbstractLDAPClient:
         return self.convert_ldap_user(results[0][1])
 
     @abstractmethod
-    def create_service_account(self, username: str, password: str):
-        ...
+    def create_service_account(self, username: str, password: str): ...
 
     @abstractmethod
-    def sync_user(self, *,
-                  uid: int,
-                  gid: int,
-                  username: str,
-                  email: str,
-                  login_shell: str,
-                  home_dir: str) -> Dict:
-        ...
+    def sync_user(
+        self,
+        *,
+        uid: int,
+        gid: int,
+        username: str,
+        email: str,
+        login_shell: str,
+        home_dir: str,
+    ) -> Dict: ...
 
     def update_computer_description(self, computer: str, description: str):
         computer_dn = self.build_computer_dn(computer)
@@ -758,16 +802,16 @@ class AbstractLDAPClient:
 
     def update_email(self, username: str, email: str):
         user_dn = self.build_user_dn(username)
-        user_attrs = [
-            (ldap.MOD_REPLACE, 'mail', [Utils.to_bytes(email)])
-        ]
+        user_attrs = [(ldap.MOD_REPLACE, 'mail', [Utils.to_bytes(email)])]
         self.modify_s(user_dn, user_attrs)
 
     def delete_user(self, username: str):
         user_dn = self.build_user_dn(username)
         self.delete_s(user_dn)
 
-    def search_users(self, username_filter: SocaFilter, page_size: int = None, start: int = 0) -> Tuple[List[Dict], SocaPaginator]:
+    def search_users(
+        self, username_filter: SocaFilter, page_size: int = None, start: int = 0
+    ) -> Tuple[List[Dict], SocaPaginator]:
         result = []
 
         filterstr = self.ldap_user_filterstr
@@ -775,37 +819,42 @@ class AbstractLDAPClient:
             if Utils.is_not_empty(username_filter.eq):
                 filterstr = self.build_user_filterstr(username=username_filter.eq)
             elif Utils.is_not_empty(username_filter.starts_with):
-                filterstr = self.build_user_filterstr(username=f'{username_filter.starts_with}*')
+                filterstr = self.build_user_filterstr(
+                    username=f'{username_filter.starts_with}*'
+                )
             elif Utils.is_not_empty(username_filter.ends_with):
-                filterstr = self.build_user_filterstr(username=f'*{username_filter.ends_with}')
+                filterstr = self.build_user_filterstr(
+                    username=f'*{username_filter.ends_with}'
+                )
             elif Utils.is_not_empty(username_filter.like):
-                filterstr = self.build_user_filterstr(username=f'*{username_filter.like}*')
+                filterstr = self.build_user_filterstr(
+                    username=f'*{username_filter.like}*'
+                )
 
         if self.is_activedirectory():
-
             search_result = self.simple_paginated_search(
-                base=self.ldap_user_base,
-                filterstr=filterstr
+                base=self.ldap_user_base, filterstr=filterstr
             )
 
             ldap_result = Utils.get_value_as_list('result', search_result)
             total = len(ldap_result)
 
         else:
-
             search_result = self.sssvlv_paginated_search(
                 base=self.ldap_user_base,
                 sort_by='uidNumber:integerOrderingMatch',
                 filterstr=filterstr,
                 page_size=page_size,
-                start=start
+                start=start,
             )
 
             ldap_result = Utils.get_value_as_list('result', search_result)
             total = Utils.get_value_as_int('total', search_result)
 
         if ldap_result:
-            self.logger.debug(f"search_users Start: {start} - LDAP result count: {len(ldap_result)} - Results Total: {total}")
+            self.logger.debug(
+                f'search_users Start: {start} - LDAP result count: {len(ldap_result)} - Results Total: {total}'
+            )
             for ldap_user in ldap_result:
                 user = self.convert_ldap_user(ldap_user[1])
                 if Utils.is_empty(user):

@@ -1,0 +1,86 @@
+# Begin: Install CloudWatch Agent
+
+$CLOUDWATCH_AGENT_BOOTSTRAP_DIR = "C:\temp\bootstrap\amazon-cloudwatch-agent"
+New-Item -ItemType Directory -Force -Path $CLOUDWATCH_AGENT_BOOTSTRAP_DIR | Out-Null
+
+function Get-CloudWatchAgentDownloadLink {
+    $DOWNLOAD_LINK = "{{ context.config.get_string('global-settings.package_config.amazon_cloudwatch_agent.download_link', default='') }}"
+    if (![string]::IsNullOrEmpty($DOWNLOAD_LINK)) {
+        return $DOWNLOAD_LINK
+    }
+
+    $DOWNLOAD_LINK_PATTERN = "{{ context.config.get_string('global-settings.package_config.amazon_cloudwatch_agent.download_link_pattern', required=True) }}"
+    $DOWNLOAD_LINK_PATTERN | Out-File -FilePath "$CLOUDWATCH_AGENT_BOOTSTRAP_DIR\cloudwatch_download_link.txt" -Encoding utf8
+
+    $AWS_REGION = "{{ context.aws_region }}"
+    (Get-Content "$CLOUDWATCH_AGENT_BOOTSTRAP_DIR\cloudwatch_download_link.txt") -replace '%region%', $AWS_REGION | Set-Content "$CLOUDWATCH_AGENT_BOOTSTRAP_DIR\cloudwatch_download_link.txt"
+
+    # For Windows, we use windows/amd64 and .msi extension (Windows only supports amd64)
+    (Get-Content "$CLOUDWATCH_AGENT_BOOTSTRAP_DIR\cloudwatch_download_link.txt") -replace '%os%', 'windows' | Set-Content "$CLOUDWATCH_AGENT_BOOTSTRAP_DIR\cloudwatch_download_link.txt"
+    (Get-Content "$CLOUDWATCH_AGENT_BOOTSTRAP_DIR\cloudwatch_download_link.txt") -replace '%ext%', 'msi' | Set-Content "$CLOUDWATCH_AGENT_BOOTSTRAP_DIR\cloudwatch_download_link.txt"
+    (Get-Content "$CLOUDWATCH_AGENT_BOOTSTRAP_DIR\cloudwatch_download_link.txt") -replace '%architecture%', 'amd64' | Set-Content "$CLOUDWATCH_AGENT_BOOTSTRAP_DIR\cloudwatch_download_link.txt"
+
+    return Get-Content "$CLOUDWATCH_AGENT_BOOTSTRAP_DIR\cloudwatch_download_link.txt"
+}
+
+# Check if CloudWatch Agent is already installed
+$CloudWatchAgentPath = "C:\Program Files\Amazon\AmazonCloudWatchAgent"
+$CloudWatchAgentConfig = "$CloudWatchAgentPath\amazon-cloudwatch-agent-ctl.ps1"
+
+if ((Test-Path $CloudWatchAgentPath) -and (Test-Path $CloudWatchAgentConfig)) {
+    Write-Output "CloudWatch Agent is already installed. Skipping download and installation."
+} else {
+    Write-Output "CloudWatch Agent not found. Proceeding with download and installation."
+
+    $CLOUDWATCH_AGENT_DOWNLOAD_LINK = Get-CloudWatchAgentDownloadLink
+    $CLOUDWATCH_AGENT_PACKAGE_NAME = Split-Path $CLOUDWATCH_AGENT_DOWNLOAD_LINK -Leaf
+    $LocalPackagePath = "$CLOUDWATCH_AGENT_BOOTSTRAP_DIR\$CLOUDWATCH_AGENT_PACKAGE_NAME"
+
+    try {
+        Write-Output "Downloading CloudWatch Agent from: $CLOUDWATCH_AGENT_DOWNLOAD_LINK"
+        Invoke-WebRequest -Uri $CLOUDWATCH_AGENT_DOWNLOAD_LINK -OutFile $LocalPackagePath -UseBasicParsing
+
+        Write-Output "Installing CloudWatch Agent..."
+        Start-Process -FilePath "msiexec.exe" -ArgumentList "/i", $LocalPackagePath, "/quiet", "/norestart" -Wait -NoNewWindow
+
+        if ($LASTEXITCODE -eq 0) {
+            Write-Output "CloudWatch Agent installation completed successfully."
+        } else {
+            Write-Error "CloudWatch Agent installation failed with exit code: $LASTEXITCODE"
+            exit $LASTEXITCODE
+        }
+    } catch {
+        Write-Error "Failed to download or install CloudWatch Agent: $($_.Exception.Message)"
+        exit 1
+    }
+}
+
+{% set cloudwatch_agent_config = context.get_cloudwatch_agent_config(additional_log_files=additional_log_files) %}
+{% if cloudwatch_agent_config %}
+# Configure CloudWatch Agent
+$ConfigJson = @'
+{{ context.utils.to_json(cloudwatch_agent_config, indent=True) }}
+'@
+
+$ConfigPath = "$CloudWatchAgentPath\amazon-cloudwatch-agent.json"
+# Use UTF8NoBOM to avoid BOM issues that cause JSON parsing errors
+# Fallback to ASCII if UTF8NoBOM is not available in older PowerShell versions
+try {
+    $ConfigJson | Out-File -FilePath $ConfigPath -Encoding UTF8NoBOM
+} catch {
+    Write-Warning "UTF8NoBOM encoding not available, falling back to ASCII"
+    $ConfigJson | Out-File -FilePath $ConfigPath -Encoding ASCII
+}
+
+# Start CloudWatch Agent with the configuration
+try {
+    & "$CloudWatchAgentPath\amazon-cloudwatch-agent-ctl.ps1" -a fetch-config -m ec2 -s -c "file:$ConfigPath"
+    Write-Output "CloudWatch Agent configured and started successfully."
+} catch {
+    Write-Error "Failed to configure CloudWatch Agent: $($_.Exception.Message)"
+}
+{% else %}
+Write-Warning "Install CloudWatch Agent: cloudwatch_agent_config not provided."
+{% endif %}
+
+# End: Install CloudWatch Agent

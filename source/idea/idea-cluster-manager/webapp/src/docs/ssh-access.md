@@ -10,5 +10,3 @@ AWS System Manager Session Manager (SSM) is enabled on your IDEA cluster. Users 
 - Select the EC2 instance you want to access
 - Click Connect button
 - Click Session Manager tab
-
-

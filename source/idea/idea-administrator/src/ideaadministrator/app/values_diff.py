@@ -14,7 +14,6 @@ import os
 
 
 class ValuesDiff:
-
     def __init__(self, cluster_name: str, aws_region: str):
         self.props = AdministratorProps()
         self.cluster_name = cluster_name
@@ -30,7 +29,9 @@ class ValuesDiff:
 
     def get_cluster_region_dir(self) -> str:
         cluster_home = self.props.cluster_dir(self.get_cluster_name())
-        cluster_region_dir = self.props.cluster_region_dir(cluster_home, self.get_aws_region())
+        cluster_region_dir = self.props.cluster_region_dir(
+            cluster_home, self.get_aws_region()
+        )
         os.makedirs(cluster_region_dir, exist_ok=True)
         return cluster_region_dir
 
@@ -39,4 +40,3 @@ class ValuesDiff:
 
     def get_values_file_s3_key(self) -> str:
         return self.values_file_dir + self.values_file
-

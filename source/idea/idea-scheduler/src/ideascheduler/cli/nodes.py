@@ -10,13 +10,20 @@
 #  and limitations under the License.
 
 from ideascheduler.cli import build_cli_context
-from ideadatamodel import constants, ProvisionAlwaysOnNodesRequest, ProvisionAlwaysOnNodesResult, SocaJobParams
+from ideadatamodel import (
+    constants,
+    ProvisionAlwaysOnNodesRequest,
+    ProvisionAlwaysOnNodesResult,
+    SocaJobParams,
+)
 from ideasdk.utils import Utils
 
 import click
 
 
-@click.command(context_settings=constants.CLICK_SETTINGS, short_help='provision always on nodes')
+@click.command(
+    context_settings=constants.CLICK_SETTINGS, short_help='provision always on nodes'
+)
 @click.option('--nodes', help='The no. of nodes to be provisioned.')
 @click.option('--owner', required=True, help='The owner of the provisioned capacity')
 @click.option('--queue-profile', required=True, help='The name of the queue profile')
@@ -36,13 +43,13 @@ def provision_always_on_nodes(**kwargs):
             project_name=Utils.get_value_as_string('project', kwargs),
             queue_profile_name=Utils.get_value_as_string('queue_profile', kwargs),
             owner=Utils.get_value_as_string('owner', kwargs),
-            params=SocaJobParams(
-                nodes=Utils.get_value_as_int('nodes', kwargs)
-            )
+            params=SocaJobParams(nodes=Utils.get_value_as_int('nodes', kwargs)),
         ),
-        result_as=ProvisionAlwaysOnNodesResult
+        result_as=ProvisionAlwaysOnNodesResult,
     )
 
-    context.success(f'provisioning always on nodes for queue profile: {queue_profile_name}')
+    context.success(
+        f'provisioning always on nodes for queue profile: {queue_profile_name}'
+    )
     context.info(f'+ Stack Name: {result.stack_name}')
     context.info(f'+ Stack Id: {result.stack_id}')

@@ -38,22 +38,30 @@ const EMAIL_TEMPLATES_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<Emai
     {
         id: 'title',
         header: 'Title',
-        cell: template => template.title
+        cell: template => template.title,
+        sortingField: 'title'
     },
     {
         id: 'name',
         header: 'Name',
-        cell: template => template.name
+        cell: template => template.name,
+        sortingField: 'name'
     },
     {
         id: 'type',
         header: 'Template Type',
-        cell: template => template.template_type
+        cell: template => template.template_type,
+        sortingField: 'template_type'
     },
     {
         id: 'updated_on',
         header: 'Updated On',
-        cell: template => new Date(template.updated_on!).toLocaleString()
+        cell: template => new Date(template.updated_on!).toLocaleString(),
+        sortingComparator: (a, b) => {
+            const dateA = a.updated_on ? new Date(a.updated_on).getTime() : 0;
+            const dateB = b.updated_on ? new Date(b.updated_on).getTime() : 0;
+            return dateA - dateB;
+        }
     }
 ]
 
@@ -297,6 +305,8 @@ class EmailTemplates extends Component<EmailTemplatesProps, EmailTemplatesState>
                     })
                 }}
                 columnDefinitions={EMAIL_TEMPLATES_TABLE_COLUMN_DEFINITIONS}
+                defaultSortingColumn="updated_on"
+                defaultSortingDescending={true}
             />
         )
     }

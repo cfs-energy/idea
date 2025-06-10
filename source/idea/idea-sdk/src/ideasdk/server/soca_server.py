@@ -98,7 +98,7 @@ class SocaServerOptions(SocaBaseModel):
             enable_http_file_upload=None,
             enable_openapi_spec=None,
             openapi_spec_file=None,
-            enable_audit_logs=None
+            enable_audit_logs=None,
         )
 
 
@@ -125,36 +125,50 @@ class ServerOptionsProvider:
     def enable_http(self) -> bool:
         if self.options.enable_http is not None:
             return self.options.enable_http
-        return self.context.config().get_bool(f'{self.context.module_name()}.server.enable_http', DEFAULT_ENABLE_HTTP,
-                                              module_id=self.context.module_id())
+        return self.context.config().get_bool(
+            f'{self.context.module_name()}.server.enable_http',
+            DEFAULT_ENABLE_HTTP,
+            module_id=self.context.module_id(),
+        )
 
     @property
     def enable_http_file_upload(self) -> bool:
         if self.options.enable_http_file_upload is not None:
             return self.options.enable_http_file_upload
-        return self.context.config().get_bool(f'{self.context.module_name()}.server.enable_http_file_upload', DEFAULT_ENABLE_HTTP_FILE_UPLOAD,
-                                              module_id=self.context.module_id())
+        return self.context.config().get_bool(
+            f'{self.context.module_name()}.server.enable_http_file_upload',
+            DEFAULT_ENABLE_HTTP_FILE_UPLOAD,
+            module_id=self.context.module_id(),
+        )
 
     @property
     def enable_tls(self) -> bool:
         if self.options.enable_tls is not None:
             return self.options.enable_tls
-        return self.context.config().get_bool(f'{self.context.module_name()}.server.enable_tls', DEFAULT_ENABLE_TLS,
-                                              module_id=self.context.module_id())
+        return self.context.config().get_bool(
+            f'{self.context.module_name()}.server.enable_tls',
+            DEFAULT_ENABLE_TLS,
+            module_id=self.context.module_id(),
+        )
 
     @property
     def enable_web_sockets(self) -> bool:
         if self.options.enable_web_sockets is not None:
             return self.options.enable_web_sockets
-        return self.context.config().get_bool(f'{self.context.module_name()}.server.enable_web_sockets', DEFAULT_ENABLE_WEBSOCKETS,
-                                              module_id=self.context.module_id())
+        return self.context.config().get_bool(
+            f'{self.context.module_name()}.server.enable_web_sockets',
+            DEFAULT_ENABLE_WEBSOCKETS,
+            module_id=self.context.module_id(),
+        )
 
     @property
     def enable_metrics(self) -> bool:
         if self.options.enable_metrics is not None:
             return self.options.enable_metrics
-        enable_metrics = self.context.config().get_bool(f'{self.context.module_name()}.server.enable_metrics',
-                                                        module_id=self.context.module_id())
+        enable_metrics = self.context.config().get_bool(
+            f'{self.context.module_name()}.server.enable_metrics',
+            module_id=self.context.module_id(),
+        )
         if enable_metrics is not None:
             return enable_metrics
         if self.is_running_in_ec2() and Utils.is_linux():
@@ -165,8 +179,10 @@ class ServerOptionsProvider:
     def enable_unix_socket(self) -> bool:
         if self.options.enable_unix_socket is not None:
             return self.options.enable_unix_socket
-        enable_unix_socket = self.context.config().get_bool(f'{self.context.module_name()}.server.enable_unix_socket',
-                                                            module_id=self.context.module_id())
+        enable_unix_socket = self.context.config().get_bool(
+            f'{self.context.module_name()}.server.enable_unix_socket',
+            module_id=self.context.module_id(),
+        )
         if enable_unix_socket is not None:
             return enable_unix_socket
         if self.is_running_in_ec2() and Utils.is_linux():
@@ -177,20 +193,29 @@ class ServerOptionsProvider:
     def hostname(self) -> str:
         if Utils.is_not_empty(self.options.hostname):
             return self.options.hostname
-        hostname = self.context.config().get_string(f'{self.context.module_name()}.server.hostname',
-                                                    module_id=self.context.module_id())
+        hostname = self.context.config().get_string(
+            f'{self.context.module_name()}.server.hostname',
+            module_id=self.context.module_id(),
+        )
         if Utils.is_not_empty(hostname):
             return hostname
         if self.is_running_in_ec2():
-            return self.context.aws().instance_metadata().get_instance_identity_document().privateIp
+            return (
+                self.context.aws()
+                .instance_metadata()
+                .get_instance_identity_document()
+                .privateIp
+            )
         return DEFAULT_HOSTNAME
 
     @property
     def port(self) -> int:
         if self.options.port is not None:
             return self.options.port
-        port = self.context.config().get_int(f'{self.context.module_name()}.server.port',
-                                             module_id=self.context.module_id())
+        port = self.context.config().get_int(
+            f'{self.context.module_name()}.server.port',
+            module_id=self.context.module_id(),
+        )
         if port is not None:
             return port
         if self.enable_tls:
@@ -204,11 +229,15 @@ class ServerOptionsProvider:
             return None
         if Utils.is_not_empty(self.options.tls_certificate_file):
             return self.options.tls_certificate_file
-        tls_certificate_file = self.context.config().get_string(f'{self.context.module_name()}.server.tls_certificate_file',
-                                                                module_id=self.context.module_id())
+        tls_certificate_file = self.context.config().get_string(
+            f'{self.context.module_name()}.server.tls_certificate_file',
+            module_id=self.context.module_id(),
+        )
         if Utils.is_not_empty(tls_certificate_file):
             return tls_certificate_file
-        return os.path.join(EnvironmentUtils.idea_app_deploy_dir(), 'certs', 'server.crt')
+        return os.path.join(
+            EnvironmentUtils.idea_app_deploy_dir(), 'certs', 'server.crt'
+        )
 
     @property
     def tls_key_file(self) -> Optional[str]:
@@ -216,11 +245,15 @@ class ServerOptionsProvider:
             return None
         if Utils.is_not_empty(self.options.tls_key_file):
             return self.options.tls_key_file
-        tls_key_file = self.context.config().get_string(f'{self.context.module_name()}.server.tls_key_file',
-                                                        module_id=self.context.module_id())
+        tls_key_file = self.context.config().get_string(
+            f'{self.context.module_name()}.server.tls_key_file',
+            module_id=self.context.module_id(),
+        )
         if Utils.is_not_empty(tls_key_file):
             return tls_key_file
-        return os.path.join(EnvironmentUtils.idea_app_deploy_dir(), 'certs', 'server.key')
+        return os.path.join(
+            EnvironmentUtils.idea_app_deploy_dir(), 'certs', 'server.key'
+        )
 
     @property
     def unix_socket_file(self) -> Optional[str]:
@@ -228,8 +261,10 @@ class ServerOptionsProvider:
             return None
         if Utils.is_not_empty(self.options.unix_socket_file):
             return self.options.unix_socket_file
-        unix_socket_file = self.context.config().get_string(f'{self.context.module_name()}.server.unix_socket_file',
-                                                            module_id=self.context.module_id())
+        unix_socket_file = self.context.config().get_string(
+            f'{self.context.module_name()}.server.unix_socket_file',
+            module_id=self.context.module_id(),
+        )
         if Utils.is_not_empty(unix_socket_file):
             return unix_socket_file
         return DEFAULT_UNIX_SOCKET_FILE
@@ -238,8 +273,10 @@ class ServerOptionsProvider:
     def max_workers(self) -> int:
         if self.options.max_workers is not None:
             return self.options.max_workers
-        max_workers = self.context.config().get_int(f'{self.context.module_name()}.server.max_workers',
-                                                    module_id=self.context.module_id())
+        max_workers = self.context.config().get_int(
+            f'{self.context.module_name()}.server.max_workers',
+            module_id=self.context.module_id(),
+        )
         if max_workers is not None:
             return max_workers
         return DEFAULT_MAX_WORKERS
@@ -248,8 +285,10 @@ class ServerOptionsProvider:
     def graceful_shutdown_timeout(self) -> float:
         if self.options.graceful_shutdown_timeout is not None:
             return self.options.graceful_shutdown_timeout
-        graceful_shutdown_timeout = self.context.config().get_float(f'{self.context.module_name()}.server.graceful_shutdown_timeout',
-                                                                    module_id=self.context.module_id())
+        graceful_shutdown_timeout = self.context.config().get_float(
+            f'{self.context.module_name()}.server.graceful_shutdown_timeout',
+            module_id=self.context.module_id(),
+        )
         if graceful_shutdown_timeout is not None:
             return graceful_shutdown_timeout
         return DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT
@@ -258,8 +297,10 @@ class ServerOptionsProvider:
     def api_path_prefixes(self) -> List[str]:
         if Utils.is_not_empty(self.options.api_path_prefixes):
             return self.options.api_path_prefixes
-        api_path_prefixes = self.context.config().get_list(f'{self.context.module_name()}.server.api_path_prefixes',
-                                                           module_id=self.context.module_id())
+        api_path_prefixes = self.context.config().get_list(
+            f'{self.context.module_name()}.server.api_path_prefixes',
+            module_id=self.context.module_id(),
+        )
         if Utils.is_not_empty(api_path_prefixes):
             return api_path_prefixes
         return api_path_prefixes
@@ -275,7 +316,11 @@ class ServerOptionsProvider:
     def enable_openapi_spec(self) -> bool:
         if self.options.enable_openapi_spec is not None:
             return self.options.enable_openapi_spec
-        return self.context.config().get_bool(f'{self.context.module_name()}.server.enable_openapi_spec', DEFAULT_ENABLE_OPENAPI_SPEC, module_id=self.context.module_id())
+        return self.context.config().get_bool(
+            f'{self.context.module_name()}.server.enable_openapi_spec',
+            DEFAULT_ENABLE_OPENAPI_SPEC,
+            module_id=self.context.module_id(),
+        )
 
     @property
     def openapi_spec_file(self) -> Optional[str]:
@@ -283,16 +328,29 @@ class ServerOptionsProvider:
             return None
         if Utils.is_not_empty(self.options.openapi_spec_file):
             return self.options.openapi_spec_file
-        openapi_spec_file = self.context.config().get_string(f'{self.context.module_name()}.server.openapi_spec_file', module_id=self.context.module_id())
+        openapi_spec_file = self.context.config().get_string(
+            f'{self.context.module_name()}.server.openapi_spec_file',
+            module_id=self.context.module_id(),
+        )
         if Utils.is_not_empty(openapi_spec_file):
             return openapi_spec_file
-        return os.path.join(EnvironmentUtils.idea_app_deploy_dir(required=True), self.context.module_name(), 'resources', 'api', 'openapi.yml')
+        return os.path.join(
+            EnvironmentUtils.idea_app_deploy_dir(required=True),
+            self.context.module_name(),
+            'resources',
+            'api',
+            'openapi.yml',
+        )
 
     @property
     def enable_audit_logs(self) -> bool:
         if self.options.enable_audit_logs is not None:
             return self.options.enable_audit_logs
-        return self.context.config().get_bool(f'{self.context.module_name()}.server.enable_audit_logs', DEFAULT_ENABLE_AUDIT_LOGS, module_id=self.context.module_id())
+        return self.context.config().get_bool(
+            f'{self.context.module_name()}.server.enable_audit_logs',
+            DEFAULT_ENABLE_AUDIT_LOGS,
+            module_id=self.context.module_id(),
+        )
 
     def build(self) -> SocaServerOptions:
         return SocaServerOptions(
@@ -310,11 +368,10 @@ class ServerOptionsProvider:
             enable_web_sockets=self.enable_web_sockets,
             enable_openapi_spec=self.enable_openapi_spec,
             openapi_spec_file=self.openapi_spec_file,
-            enable_audit_logs=self.enable_audit_logs
+            enable_audit_logs=self.enable_audit_logs,
         )
 
     def validate(self):
-
         if self.enable_http:
             if Utils.is_empty(self.hostname):
                 raise exceptions.invalid_params('options.hostname is required')
@@ -326,11 +383,15 @@ class ServerOptionsProvider:
                 raise exceptions.invalid_params('options.unix_socket_file is required')
 
         if not self.enable_http and not self.enable_unix_socket:
-            raise exceptions.invalid_params('either enable_http or enable_unix_socket or both must be enabled.')
+            raise exceptions.invalid_params(
+                'either enable_http or enable_unix_socket or both must be enabled.'
+            )
 
         if self.enable_tls:
             if Utils.is_empty(self.tls_certificate_file):
-                raise exceptions.invalid_params('options.tls_certificate_file is required')
+                raise exceptions.invalid_params(
+                    'options.tls_certificate_file is required'
+                )
             if not Utils.is_file(self.tls_certificate_file):
                 raise exceptions.file_not_found(self.tls_certificate_file)
             if Utils.is_empty(self.tls_key_file):
@@ -345,11 +406,13 @@ class ServerOptionsProvider:
 
 
 class ApiInvocationHandler:
-
-    def __init__(self, context: SocaContextProtocol,
-                 server: 'SocaServer',
-                 api_invoker: ApiInvokerProtocol,
-                 group_name_helper: GroupNameHelper):
+    def __init__(
+        self,
+        context: SocaContextProtocol,
+        server: 'SocaServer',
+        api_invoker: ApiInvokerProtocol,
+        group_name_helper: GroupNameHelper,
+    ):
         self.context = context
         self.logger = context.logger('api')
         self.api_invoker = api_invoker
@@ -363,7 +426,9 @@ class ApiInvocationHandler:
 
     @staticmethod
     def get_error_code(response: Dict) -> str:
-        return Utils.get_value_as_string('error_code', response, errorcodes.GENERAL_ERROR)
+        return Utils.get_value_as_string(
+            'error_code', response, errorcodes.GENERAL_ERROR
+        )
 
     def publish_metrics(self, context: ApiInvocationContext):
         if not self.server.options.enable_metrics:
@@ -376,9 +441,7 @@ class ApiInvocationHandler:
         namespace = context.namespace
         success = context.is_success()
 
-        BaseMetrics(
-            context=self.context
-        ).with_required_dimension(
+        BaseMetrics(context=self.context).with_required_dimension(
             name='api', value=namespace
         ).invocation(MetricName='api_invocations', Value=context.get_total_time_ms())
 
@@ -386,19 +449,17 @@ class ApiInvocationHandler:
             error_code = context.error_code
             if Utils.is_empty(error_code):
                 error_code = 'UNKNOWN_ERROR'
-            BaseMetrics(
-                context=self.context
-            ).with_required_dimension(
+            BaseMetrics(context=self.context).with_required_dimension(
                 name='api', value=namespace
-            ).with_required_dimension(
-                name='error_code', value=error_code
-            ).count(MetricName='count')
+            ).with_required_dimension(name='error_code', value=error_code).count(
+                MetricName='count'
+            )
 
     def check_is_running(self):
         if not self.server.is_running():
             raise exceptions.soca_exception(
                 error_code=errorcodes.SERVER_IS_SHUTTING_DOWN,
-                message='server is shutting down'
+                message='server is shutting down',
             )
 
     @staticmethod
@@ -420,10 +481,7 @@ class ApiInvocationHandler:
     def get_token(self, http_request) -> Optional[Dict]:
         token = Utils.get_value_as_list('token', http_request.args)
         if Utils.is_not_empty(token):
-            return {
-                'token_type': 'Bearer',
-                'token': Utils.get_first(token)
-            }
+            return {'token_type': 'Bearer', 'token': Utils.get_first(token)}
 
         return self.server.get_authorization_header(http_request)
 
@@ -448,15 +506,27 @@ class ApiInvocationHandler:
             return None
 
     def _invoke(self, http_request) -> Dict:
-
         request = http_request.json
         request_logged = False
 
         invocation_context: Optional[ApiInvocationContext] = None
 
         try:
+            # In newer Sanic versions (>23.6.0), socket detection changes
+            # We need a robust method to detect unix socket connections
 
+            # Method 1: If socket is None, assume it's a unix socket (Sanic 23.6.0 behavior)
             if http_request.socket is None:
+                invocation_source = constants.API_INVOCATION_SOURCE_UNIX_SOCKET
+            # Method 2: For newer Sanic versions, check if the request is to the unix socket server
+            # This check only works if the server is configured to listen on a unix socket
+            elif (
+                self.server is not None
+                and hasattr(self.server, '_unix_server')
+                and self.server._unix_server is not None
+                and self.server._unix_app is not None
+                and http_request.app == self.server._unix_app
+            ):
                 invocation_source = constants.API_INVOCATION_SOURCE_UNIX_SOCKET
             else:
                 invocation_source = constants.API_INVOCATION_SOURCE_HTTP
@@ -474,7 +544,9 @@ class ApiInvocationHandler:
             # validate request prior to logging
             invocation_context.validate_request()
 
-            tracing_request = self.api_invoker.get_request_logging_payload(invocation_context)
+            tracing_request = self.api_invoker.get_request_logging_payload(
+                invocation_context
+            )
 
             invocation_context.log_request(tracing_request)
             request_logged = True
@@ -490,28 +562,29 @@ class ApiInvocationHandler:
             if response is None:
                 raise exceptions.soca_exception(
                     error_code=errorcodes.NOT_SUPPORTED,
-                    message=f'namespace: {invocation_context.namespace} not supported'
+                    message=f'namespace: {invocation_context.namespace} not supported',
                 )
 
         except exceptions.SocaException as e:
-
             message = e.message
             if e.ref is not None and isinstance(e.ref, Exception):
                 message += f' (RootCause: {str(e.ref)})'
             invocation_context.fail(error_code=e.error_code, message=message)
 
         except Exception as e:
-
             message = f'{e}'
             self.logger.exception(message)
-            invocation_context.fail(error_code=errorcodes.GENERAL_ERROR, message=message)
+            invocation_context.fail(
+                error_code=errorcodes.GENERAL_ERROR, message=message
+            )
 
         finally:
-
             if not request_logged:
                 invocation_context.log_request()
 
-            tracing_response = self.api_invoker.get_response_logging_payload(invocation_context)
+            tracing_response = self.api_invoker.get_response_logging_payload(
+                invocation_context
+            )
             invocation_context.log_response(tracing_response)
 
         # publish metrics
@@ -526,12 +599,9 @@ class ApiInvocationHandler:
             message = f'Critical exception: {e}'
             self.logger.exception(message)
             return {
-                'header': {
-                    'namespace': 'ErrorResponse',
-                    'request_id': Utils.uuid()
-                },
+                'header': {'namespace': 'ErrorResponse', 'request_id': Utils.uuid()},
                 'success': False,
-                'message': message
+                'message': message,
             }
 
 
@@ -540,8 +610,12 @@ class SocaServer(SocaService):
     IDEA Server
     """
 
-    def __init__(self, context: SocaContextProtocol, api_invoker: ApiInvokerProtocol, options: SocaServerOptions):
-
+    def __init__(
+        self,
+        context: SocaContextProtocol,
+        api_invoker: ApiInvokerProtocol,
+        options: SocaServerOptions,
+    ):
         if Utils.is_empty(api_invoker):
             raise exceptions.invalid_params('api_invoker is required')
 
@@ -557,14 +631,14 @@ class SocaServer(SocaService):
             context=self._context,
             server=self,
             api_invoker=api_invoker,
-            group_name_helper=self._group_name_helper
+            group_name_helper=self._group_name_helper,
         )
 
         self._server_loop: Optional[asyncio.AbstractEventLoop] = None
         self._server_thread: Optional[Thread] = None
         self._executor = ThreadPoolExecutor(
             max_workers=self.options.max_workers,
-            thread_name_prefix=f'{self._context.module_id()}-server-worker'
+            thread_name_prefix=f'{self._context.module_id()}-server-worker',
         )
         self._is_running = Event()
 
@@ -613,7 +687,7 @@ class SocaServer(SocaService):
         if self._http_app is None:
             raise exceptions.soca_exception(
                 error_code=errorcodes.GENERAL_ERROR,
-                message='Server is not yet initialized.'
+                message='Server is not yet initialized.',
             )
         return self._http_app
 
@@ -622,29 +696,34 @@ class SocaServer(SocaService):
         if self._unix_app is None:
             raise exceptions.soca_exception(
                 error_code=errorcodes.GENERAL_ERROR,
-                message='Server is not yet initialized.'
+                message='Server is not yet initialized.',
             )
         return self._unix_app
 
-    def add_route(self,
-                  handler: RouteHandler,
-                  uri: str,
-                  name: Optional[str] = None,
-                  methods: Iterable[str] = frozenset({"GET"})):
+    def add_route(
+        self,
+        handler: RouteHandler,
+        uri: str,
+        name: Optional[str] = None,
+        methods: Iterable[str] = frozenset({'GET'}),
+    ):
         _method_names = ', '.join(list(methods))
         if self.options.enable_http:
             for path_prefix in self.options.api_path_prefixes:
-                _auto_name = f"http-{path_prefix}-{uri}-{_method_names}"
+                _auto_name = f'http-{path_prefix}-{uri}-{_method_names}'
                 _name = name if Utils.is_not_empty(name) else _auto_name
-                self.http_app.add_route(handler, f'{path_prefix}{uri}', methods, name=_name)
+                self.http_app.add_route(
+                    handler, f'{path_prefix}{uri}', methods, name=_name
+                )
         else:
             for path_prefix in self.options.api_path_prefixes:
-                _auto_name = f"unix-{path_prefix}-{uri}-{_method_names}"
+                _auto_name = f'unix-{path_prefix}-{uri}-{_method_names}'
                 _name = name if Utils.is_not_empty(name) else _auto_name
-                self.unix_app.add_route(handler, f'{path_prefix}{uri}', methods, name=_name)
+                self.unix_app.add_route(
+                    handler, f'{path_prefix}{uri}', methods, name=_name
+                )
 
     def initialize(self):
-
         if self.options.enable_http:
             self._http_app = sanic.Sanic(
                 name='http-server',
@@ -664,7 +743,7 @@ class SocaServer(SocaService):
                 config=SANIC_APP_CONFIG,
                 router=self.sanic_router,
                 signal_router=self.sanic_signal_router,
-                log_config=SANIC_LOGGING_CONFIG
+                log_config=SANIC_LOGGING_CONFIG,
             )
 
         if self.options.enable_metrics:
@@ -675,63 +754,104 @@ class SocaServer(SocaService):
                 self.metrics_api_token = f.read()
 
         if self.options.enable_http:
-            self.http_app.register_listener(setup_options, "before_server_start")
-            self.http_app.register_middleware(add_cors_headers, "response")
+            self.http_app.register_listener(setup_options, 'before_server_start')
+            self.http_app.register_middleware(add_cors_headers, 'response')
 
             # health check routes
-            self.http_app.add_route(self.health_check_route, '/healthcheck', methods=['GET'], name='httpapp_healthcheck')
-            self.add_route(handler=self.health_check_route, uri='/healthcheck', methods=['GET'])
+            self.http_app.add_route(
+                self.health_check_route,
+                '/healthcheck',
+                methods=['GET'],
+                name='httpapp_healthcheck',
+            )
+            self.add_route(
+                handler=self.health_check_route, uri='/healthcheck', methods=['GET']
+            )
 
             # file transfer routes
             if self.options.enable_http_file_upload:
-                self.add_route(handler=self.file_upload_route, uri='/api/v1/upload', methods=['PUT'])
-                self.add_route(handler=self.file_upload_route, uri='/api/v1/<namespace:str>', methods=['PUT'])
-                self.add_route(handler=self.file_download_route, uri='/api/v1/download', methods=['GET'])
-                self.add_route(handler=self.file_download_route, uri='/api/v1/<namespace:str>', methods=['GET'])
+                self.add_route(
+                    handler=self.file_upload_route,
+                    uri='/api/v1/upload',
+                    methods=['PUT'],
+                )
+                self.add_route(
+                    handler=self.file_upload_route,
+                    uri='/api/v1/<namespace:str>',
+                    methods=['PUT'],
+                )
+                self.add_route(
+                    handler=self.file_download_route,
+                    uri='/api/v1/download',
+                    methods=['GET'],
+                )
+                self.add_route(
+                    handler=self.file_download_route,
+                    uri='/api/v1/<namespace:str>',
+                    methods=['GET'],
+                )
 
             # metrics routes
             if self.options.enable_metrics:
-                self.add_route(handler=self.metrics_route, uri='/metrics', methods=['GET'])
+                self.add_route(
+                    handler=self.metrics_route, uri='/metrics', methods=['GET']
+                )
 
             # open api spec routes
             if self.options.enable_openapi_spec:
-                self.add_route(handler=self.openapi_spec_route, uri='/api/v1/openapi.yml', methods=['GET'])
+                self.add_route(
+                    handler=self.openapi_spec_route,
+                    uri='/api/v1/openapi.yml',
+                    methods=['GET'],
+                )
 
         self.add_route(handler=self.api_route, uri='/api/v1', methods=['POST'])
-        self.add_route(handler=self.api_route, uri='/api/v1/<namespace:str>', methods=['POST'])
+        self.add_route(
+            handler=self.api_route, uri='/api/v1/<namespace:str>', methods=['POST']
+        )
 
     async def invoke_api_task(self, http_request):
         result = self._executor.submit(
             lambda http_request_: self._api_invocation_handler.invoke(http_request_),
-            http_request
+            http_request,
         )
         return await asyncio.wrap_future(result)
 
     @staticmethod
     async def health_check_route(_):
-        return sanic.response.json({
-            'success': True
-        }, dumps=Utils.to_json)
+        return sanic.response.json({'success': True}, dumps=Utils.to_json)
 
     @staticmethod
     def unauthorized_access():
-        return sanic.response.json({
-            'success': False,
-            'error_code': errorcodes.UNAUTHORIZED_ACCESS
-        }, dumps=Utils.to_json)
+        return sanic.response.json(
+            {'success': False, 'error_code': errorcodes.UNAUTHORIZED_ACCESS},
+            dumps=Utils.to_json,
+        )
 
     async def metrics_route(self, http_request):
         authorization = self.get_authorization_header(http_request)
         if Utils.is_empty(authorization):
-            return self.unauthorized_access()
+            return sanic.response.json(
+                {'success': False, 'error_code': errorcodes.UNAUTHORIZED_ACCESS},
+                dumps=Utils.to_json,
+            )
         token_type = Utils.get_value_as_string('token_type', authorization)
         _token = Utils.get_value_as_string('token', authorization)
         if Utils.is_any_empty(token_type, _token):
-            return self.unauthorized_access()
+            return sanic.response.json(
+                {'success': False, 'error_code': errorcodes.UNAUTHORIZED_ACCESS},
+                dumps=Utils.to_json,
+            )
         if token_type != 'Bearer':
-            return self.unauthorized_access()
+            return sanic.response.json(
+                {'success': False, 'error_code': errorcodes.UNAUTHORIZED_ACCESS},
+                dumps=Utils.to_json,
+            )
         if _token != self.metrics_api_token:
-            return self.unauthorized_access()
+            return sanic.response.json(
+                {'success': False, 'error_code': errorcodes.UNAUTHORIZED_ACCESS},
+                dumps=Utils.to_json,
+            )
         # todo - enable gzip if accepted
         output = generate_latest()
         return sanic.response.text(Utils.from_bytes(output))
@@ -743,7 +863,9 @@ class SocaServer(SocaService):
     async def openapi_spec_route(self, _):
         openapi_spec_file = pathlib.Path(self.options.openapi_spec_file)
 
-        spec_template_env = Jinja2Utils.env_using_file_system_loader(search_path=str(openapi_spec_file.parent))
+        spec_template_env = Jinja2Utils.env_using_file_system_loader(
+            search_path=str(openapi_spec_file.parent)
+        )
         spec_template = spec_template_env.get_template(openapi_spec_file.name)
 
         server_url = self._context.config().get_cluster_external_endpoint()
@@ -754,7 +876,7 @@ class SocaServer(SocaService):
             'module_id': self._context.module_id(),
             'module_name': self._context.module_name(),
             'module_version': self._context.module_version(),
-            'server_url': server_url
+            'server_url': server_url,
         }
 
         spec_content = spec_template.render(**spec_template_data)
@@ -780,10 +902,7 @@ class SocaServer(SocaService):
         kv = authorization.split(' ')
         if len(kv) != 2:
             return None
-        return {
-            'token_type': kv[0],
-            'token': kv[1]
-        }
+        return {'token_type': kv[0], 'token': kv[1]}
 
     async def file_upload_route(self, http_request, **_):
         try:
@@ -798,23 +917,22 @@ class SocaServer(SocaService):
             return sanic.response.json(result, dumps=Utils.to_json)
         except Exception as e:
             if isinstance(e, exceptions.SocaException):
-                return sanic.response.json({
-                    'error_code': e.error_code,
-                    'success': False
-                }, dumps=Utils.to_json)
+                return sanic.response.json(
+                    {'error_code': e.error_code, 'success': False}, dumps=Utils.to_json
+                )
             else:
-                return sanic.response.json({
-                    'error_code': errorcodes.GENERAL_ERROR,
-                    'success': False
-                }, dumps=Utils.to_json)
+                return sanic.response.json(
+                    {'error_code': errorcodes.GENERAL_ERROR, 'success': False},
+                    dumps=Utils.to_json,
+                )
 
     async def file_download_route(self, http_request, **_):
         username = self._api_invocation_handler.get_username(http_request)
         if Utils.is_empty(username):
-            return sanic.response.json({
-                'error_code': errorcodes.UNAUTHORIZED_ACCESS,
-                'success': False
-            }, dumps=Utils.to_json)
+            return sanic.response.json(
+                {'error_code': errorcodes.UNAUTHORIZED_ACCESS, 'success': False},
+                dumps=Utils.to_json,
+            )
 
         download_file = None
         download_files = Utils.get_value_as_list('file', http_request.args)
@@ -822,22 +940,23 @@ class SocaServer(SocaService):
             download_file = download_files[0]
 
         if Utils.is_empty(download_file):
-            return sanic.response.json({
-                'error_code': errorcodes.UNAUTHORIZED_ACCESS,
-                'success': False
-            }, dumps=Utils.to_json)
+            return sanic.response.json(
+                {'error_code': errorcodes.UNAUTHORIZED_ACCESS, 'success': False},
+                dumps=Utils.to_json,
+            )
 
         helper = FileSystemHelper(self._context, username=username)
         try:
             helper.check_access(download_file, check_read=True, check_write=False)
         except exceptions.SocaException as e:
-            return sanic.response.json({
-                'error_code': e.error_code,
-                'message': e.message,
-                'success': False
-            }, dumps=Utils.to_json)
+            return sanic.response.json(
+                {'error_code': e.error_code, 'message': e.message, 'success': False},
+                dumps=Utils.to_json,
+            )
 
-        return await sanic.response.file(download_file, filename=os.path.basename(download_file))
+        return await sanic.response.file(
+            download_file, filename=os.path.basename(download_file)
+        )
 
     def _remove_unix_socket(self):
         if not self.options.enable_unix_socket:
@@ -854,9 +973,7 @@ class SocaServer(SocaService):
             await self._unix_server.before_start()
 
     def _run_server(self):
-
         try:
-
             self._server_loop = asyncio.new_event_loop()
 
             ssl_context = None
@@ -864,14 +981,16 @@ class SocaServer(SocaService):
                 ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
                 ssl_context.load_cert_chain(
                     certfile=self.options.tls_certificate_file,
-                    keyfile=self.options.tls_key_file
+                    keyfile=self.options.tls_key_file,
                 )
 
             if self.options.enable_http:
-                if self.is_another_instance_running(self.options.hostname, self.options.port):
+                if self.is_another_instance_running(
+                    self.options.hostname, self.options.port
+                ):
                     raise exceptions.SocaException(
                         error_code=errorcodes.PORT_IS_ALREADY_IN_USE,
-                        message=f'Failed to start soca-server. Port: {self.options.port} is already in use.'
+                        message=f'Failed to start soca-server. Port: {self.options.port} is already in use.',
                     )
 
                 self._http_server = create_server(
@@ -882,7 +1001,9 @@ class SocaServer(SocaService):
                     loop=self._server_loop,
                     run_async=True,
                     reuse_port=True,
-                    protocol=WebSocketProtocol if self.options.enable_web_sockets else HttpProtocol
+                    protocol=WebSocketProtocol
+                    if self.options.enable_web_sockets
+                    else HttpProtocol,
                 )
 
             if self.options.enable_unix_socket:
@@ -893,7 +1014,7 @@ class SocaServer(SocaService):
                     app=self._unix_app,
                     loop=self._server_loop,
                     run_async=True,
-                    reuse_port=True
+                    reuse_port=True,
                 )
                 os.chmod(self.options.unix_socket_file, 0o700)
 
@@ -902,10 +1023,14 @@ class SocaServer(SocaService):
             if self.options.enable_unix_socket:
                 self._server_loop.run_until_complete(self._unix_server.serve_coro)
 
-            startup_message = str(f'server started. listening on - '
-                                  f'{self.options.protocol}://{self.options.hostname}:{self.options.port} (api)')
+            startup_message = str(
+                f'server started. listening on - '
+                f'{self.options.protocol}://{self.options.hostname}:{self.options.port} (api)'
+            )
             if self.options.enable_unix_socket:
-                startup_message += f', {Utils.url_encode(self.options.unix_socket_file)} (unix socket)'
+                startup_message += (
+                    f', {Utils.url_encode(self.options.unix_socket_file)} (unix socket)'
+                )
             self._logger.info(startup_message)
 
             result = True, None
@@ -927,8 +1052,7 @@ class SocaServer(SocaService):
         self._is_running.set()
 
         self._server_thread = Thread(
-            target=self._run_server,
-            name=f'{self._context.module_id()}-run-server'
+            target=self._run_server, name=f'{self._context.module_id()}-run-server'
         )
         self._server_thread.start()
         result = self._is_started_future.result()

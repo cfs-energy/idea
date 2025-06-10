@@ -17,8 +17,16 @@ import requests
 import requests.adapters
 import requests.exceptions
 import requests_unixsocket.adapters
+import orjson
 
-from ideadatamodel import exceptions, errorcodes, SocaBaseModel, SocaEnvelope, SocaHeader, SocaAnyPayload
+from ideadatamodel import (
+    exceptions,
+    errorcodes,
+    SocaBaseModel,
+    SocaEnvelope,
+    SocaHeader,
+    SocaAnyPayload,
+)
 from ideasdk.protocols import SocaContextProtocol
 from ideasdk.utils import Utils
 from pydantic import Field
@@ -53,8 +61,9 @@ class SocaClientOptions(SocaBaseModel):
 
 
 class SocaClient:
-
-    def __init__(self, context: SocaContextProtocol, options: SocaClientOptions, logger=None):
+    def __init__(
+        self, context: SocaContextProtocol, options: SocaClientOptions, logger=None
+    ):
         self._context = context
         if logger is None:
             self._logger = context.logger('http-client')
@@ -63,7 +72,9 @@ class SocaClient:
 
         self.options = options
 
-        pool_connections = Utils.get_as_int(options.pool_connections, DEFAULT_POOL_CONNECTIONS)
+        pool_connections = Utils.get_as_int(
+            options.pool_connections, DEFAULT_POOL_CONNECTIONS
+        )
         pool_max_size = Utils.get_as_int(options.pool_max_size, DEFAULT_POOL_MAX_SIZE)
         max_retries = Utils.get_as_int(options.max_retries, DEFAULT_MAX_RETRIES)
         pool_block = Utils.get_as_bool(options.pool_block, DEFAULT_POOL_BLOCK)
@@ -76,14 +87,14 @@ class SocaClient:
                 pool_connections=pool_connections,
                 pool_maxsize=pool_max_size,
                 max_retries=max_retries,
-                pool_block=pool_block
+                pool_block=pool_block,
             )
         else:
             adapter = requests.adapters.HTTPAdapter(
                 pool_connections=pool_connections,
                 pool_maxsize=pool_max_size,
                 max_retries=max_retries,
-                pool_block=pool_block
+                pool_block=pool_block,
             )
 
         session.mount(self.get_scheme(), adapter)
@@ -128,7 +139,12 @@ class SocaClient:
     def timeout(self) -> float:
         return Utils.get_as_float(self.options.timeout, DEFAULT_TIMEOUT_SECONDS)
 
-    def invoke(self, request: SocaEnvelope, result_as: Optional[Type[T]] = SocaAnyPayload, access_token: str = None) -> T:
+    def invoke(
+        self,
+        request: SocaEnvelope,
+        result_as: Optional[Type[T]] = SocaAnyPayload,
+        access_token: str = None,
+    ) -> T:
         try:
             header = request.header
             request_id = header.request_id
@@ -140,9 +156,7 @@ class SocaClient:
             if self.is_enable_logging:
                 self._logger.info(f'(req) {request_data}')
 
-            headers = {
-                'Content-Type': 'application/json'
-            }
+            headers = {'Content-Type': 'application/json'}
             if access_token is not None:
                 headers['Authorization'] = f'Bearer {access_token}'
 
@@ -153,23 +167,42 @@ class SocaClient:
                     timeout=self.timeout,
                     headers=headers,
                     data=request_data,
-                    verify=self.options.verify_ssl
+                    verify=self.options.verify_ssl,
                 )
 
             response_data = http_response.text
             if self.is_enable_logging:
                 self._logger.info(f'(res) {response_data}')
 
-            response = Utils.from_json(response_data)
+            # Check if response is empty or whitespace only
+            if not response_data or not response_data.strip():
+                raise exceptions.soca_exception(
+                    error_code=errorcodes.GENERAL_ERROR,
+                    message=f'Empty response received from server. HTTP Status: {http_response.status_code}',
+                )
+
+            # Check HTTP status codes
+            if http_response.status_code >= 400:
+                raise exceptions.soca_exception(
+                    error_code=errorcodes.GENERAL_ERROR,
+                    message=f'HTTP error {http_response.status_code}: {response_data}',
+                )
+
+            try:
+                response = Utils.from_json(response_data)
+            except (ValueError, TypeError, orjson.JSONDecodeError) as json_error:
+                raise exceptions.soca_exception(
+                    error_code=errorcodes.GENERAL_ERROR,
+                    message=f'Invalid JSON response from server: {json_error}. Response: {response_data[:500]}...',
+                )
 
             success = Utils.get_value_as_bool('success', response, False)
             if not success:
-                error_code = Utils.get_value_as_string('error_code', response, errorcodes.GENERAL_ERROR)
-                message = Utils.get_value_as_string('message', response, 'Unknown')
-                raise exceptions.soca_exception(
-                    error_code=error_code,
-                    message=message
+                error_code = Utils.get_value_as_string(
+                    'error_code', response, errorcodes.GENERAL_ERROR
                 )
+                message = Utils.get_value_as_string('message', response, 'Unknown')
+                raise exceptions.soca_exception(error_code=error_code, message=message)
 
             payload = Utils.get_value_as_dict('payload', response)
             if payload is None:
@@ -182,30 +215,32 @@ class SocaClient:
 
         except requests.exceptions.Timeout as e:
             raise exceptions.soca_exception(
-                error_code=errorcodes.SOCKET_TIMEOUT,
-                message=f'Connection Timeout: {e}'
+                error_code=errorcodes.SOCKET_TIMEOUT, message=f'Connection Timeout: {e}'
             )
         except requests.exceptions.ConnectionError as e:
             raise exceptions.soca_exception(
-                error_code=errorcodes.CONNECTION_ERROR,
-                message=f'Connection Error: {e}'
+                error_code=errorcodes.CONNECTION_ERROR, message=f'Connection Error: {e}'
             )
 
-    def invoke_alt(self, namespace: str, payload: Optional[Any],
-                   result_as: Optional[Type[T]] = SocaAnyPayload,
-                   access_token: str = None) -> T:
+    def invoke_alt(
+        self,
+        namespace: str,
+        payload: Optional[Any],
+        result_as: Optional[Type[T]] = SocaAnyPayload,
+        access_token: str = None,
+    ) -> T:
         request = SocaEnvelope(
-            header=SocaHeader(
-                namespace=namespace,
-                request_id=Utils.uuid()
-            ),
-            payload=payload
+            header=SocaHeader(namespace=namespace, request_id=Utils.uuid()),
+            payload=payload,
         )
         return self.invoke(request, result_as, access_token)
 
-    def invoke_json(self, json_request: str,
-                    result_as: Optional[Type[T]] = SocaAnyPayload,
-                    access_token: str = None) -> T:
+    def invoke_json(
+        self,
+        json_request: str,
+        result_as: Optional[Type[T]] = SocaAnyPayload,
+        access_token: str = None,
+    ) -> T:
         request = Utils.from_json(json_request)
         soca_request = SocaEnvelope(**request)
         return self.invoke(soca_request, result_as, access_token)

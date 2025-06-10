@@ -22,4 +22,3 @@ ec2:
   # refer to source/idea-bootstrap/openldap-server/_templates/install_openldap.jinja2 to customize the OUs based on your requirements.
 
 # End: OpenLDAP Settings (openldap)
-

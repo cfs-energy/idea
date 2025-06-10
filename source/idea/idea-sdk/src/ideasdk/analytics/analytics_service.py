@@ -38,7 +38,6 @@ class AnalyticsEntry(SocaBaseModel):
 
 
 class AnalyticsService(SocaService, AnalyticsServiceProtocol):
-
     def __init__(self, context: SocaContextProtocol):
         super().__init__(context=context)
         self.MAX_BUFFER_SIZE = 20
@@ -63,15 +62,16 @@ class AnalyticsService(SocaService, AnalyticsServiceProtocol):
         self._logger.info('Starting Analytics Service ...')
         # until I get positive status from Open Search -> wait here.
         self._buffer_processing_thread = threading.Thread(
-            name='buffer-processing-thread',
-            target=self._process_buffer
+            name='buffer-processing-thread', target=self._process_buffer
         )
         self._buffer_processing_thread.start()
 
     def _process_buffer(self):
         while not self._exit.is_set():
             self._buffer_size_limit_reached_condition.acquire()
-            self._buffer_size_limit_reached_condition.wait(timeout=self.MAX_WAIT_TIME_MS / 1000)
+            self._buffer_size_limit_reached_condition.wait(
+                timeout=self.MAX_WAIT_TIME_MS / 1000
+            )
             self._buffer_size_limit_reached_condition.release()
             self._post_entries_to_kinesis()
 
@@ -82,24 +82,52 @@ class AnalyticsService(SocaService, AnalyticsServiceProtocol):
                 return
 
             for entry in self._buffer:
-                records.append({
-                    'Data': Utils.to_bytes(Utils.to_json({
-                        'index_id': entry.entry_content.index_id,
-                        'entry': entry.entry_content.entry_record,
-                        'document_id': entry.entry_id,
-                        'action': entry.entry_action,
-                        'timestamp': Utils.current_time_ms()
-                    })),
-                    'PartitionKey': entry.entry_id
-                })
+                records.append(
+                    {
+                        'Data': Utils.to_bytes(
+                            Utils.to_json(
+                                {
+                                    'index_id': entry.entry_content.index_id,
+                                    'entry': entry.entry_content.entry_record,
+                                    'document_id': entry.entry_id,
+                                    'action': entry.entry_action,
+                                    'timestamp': Utils.current_time_ms(),
+                                }
+                            )
+                        ),
+                        'PartitionKey': entry.entry_id,
+                    }
+                )
 
-            stream_name = self.context.config().get_string('analytics.kinesis.stream_name', required=True)
-            self._logger.info(f'posting {len(records)} record(s) to analytics stream...')
-            response = self.context.aws().kinesis().put_records(
-                Records=records,
-                StreamName=stream_name
+            stream_name = self.context.config().get_string(
+                'analytics.kinesis.stream_name', required=True
             )
-            # TODO: handle failure/success
+            self._logger.info(
+                f'posting {len(records)} record(s) to analytics stream...'
+            )
+            response = (
+                self.context.aws()
+                .kinesis()
+                .put_records(Records=records, StreamName=stream_name)
+            )
+            # Handle failure/success from Kinesis response
+            failed_record_count = response.get('FailedRecordCount', 0)
+            if failed_record_count > 0:
+                self._logger.warning(
+                    f'Failed to post {failed_record_count} out of {len(records)} records to Kinesis stream'
+                )
+                # Log details of failed records for debugging
+                records_list = response.get('Records', [])
+                for i, record_response in enumerate(records_list):
+                    if 'ErrorCode' in record_response:
+                        self._logger.error(
+                            f'Record {i} failed with error: {record_response.get("ErrorCode")} - {record_response.get("ErrorMessage", "Unknown error")}'
+                        )
+            else:
+                self._logger.debug(
+                    f'Successfully posted all {len(records)} records to Kinesis stream'
+                )
+
             self._buffer = []
 
     def _enforce_buffer_processing(self):
@@ -112,7 +140,9 @@ class AnalyticsService(SocaService, AnalyticsServiceProtocol):
     def post_entry(self, document: AnalyticsEntry):
         with self._buffer_lock:
             self._buffer.append(document)
-            self._logger.debug(f'Added entry to buffer ... Buffer Size: {len(self._buffer)}')
+            self._logger.debug(
+                f'Added entry to buffer ... Buffer Size: {len(self._buffer)}'
+            )
 
             if len(self._buffer) >= self.MAX_BUFFER_SIZE:
                 self._enforce_buffer_processing()
@@ -122,17 +152,25 @@ class AnalyticsService(SocaService, AnalyticsServiceProtocol):
         self._logger.info(f'new template version for {template_name} is {new_version}')
         current_template = self.os_client.get_template(template_name)
         if Utils.is_not_empty(current_template):
-            self._logger.info(f'current template is not empty')
+            self._logger.info('current template is not empty')
             self._logger.debug(current_template)
-            current_version = Utils.get_value_as_int('version', Utils.get_value_as_dict(template_name, current_template, {}), default=-1)
+            current_version = Utils.get_value_as_int(
+                'version',
+                Utils.get_value_as_dict(template_name, current_template, {}),
+                default=-1,
+            )
             self._logger.info(f'current version = {current_version}')
             if int(new_version) <= int(current_version):
-                self._logger.info('Trying to add the same or older version of the template. Ignoring request.')
+                self._logger.info(
+                    'Trying to add the same or older version of the template. Ignoring request.'
+                )
                 return new_version
 
         response = self.os_client.put_template(template_name, template_body)
         if not Utils.get_value_as_bool('acknowledged', response, default=False):
-            self._logger.info(f'There is some error. Need to check later. response: {response}')
+            self._logger.info(
+                f'There is some error. Need to check later. response: {response}'
+            )
         self._logger.error(f'new version being returned is {new_version}')
         return new_version
 
@@ -140,5 +178,8 @@ class AnalyticsService(SocaService, AnalyticsServiceProtocol):
         self._logger.error('Stopping Analytics Service ...')
         self._exit.set()
         self._enforce_buffer_processing()
-        if self._buffer_processing_thread is not None and self._buffer_processing_thread.is_alive():
+        if (
+            self._buffer_processing_thread is not None
+            and self._buffer_processing_thread.is_alive()
+        ):
             self._buffer_processing_thread.join()

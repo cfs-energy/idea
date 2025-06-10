@@ -12,10 +12,7 @@
 import ideaclustermanager
 
 from ideasdk.api import ApiInvocationContext, BaseAPI
-from ideadatamodel.analytics import (
-    OpenSearchQueryRequest,
-    OpenSearchQueryResult
-)
+from ideadatamodel.analytics import OpenSearchQueryRequest, OpenSearchQueryResult
 from ideadatamodel import exceptions
 from ideasdk.utils import Utils
 
@@ -48,9 +45,7 @@ class AnalyticsAPI(BaseAPI):
             **request.data
         )
 
-        context.success(OpenSearchQueryResult(
-            data=result
-        ))
+        context.success(OpenSearchQueryResult(data=result))
 
     def invoke(self, context: ApiInvocationContext):
         if not context.is_authenticated():

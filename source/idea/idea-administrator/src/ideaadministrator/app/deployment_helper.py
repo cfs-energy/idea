@@ -22,19 +22,21 @@ import time
 
 
 class DeploymentHelper:
-
-    def __init__(self, cluster_name: str, aws_region: str,
-                 termination_protection: bool = True,
-                 deployment_id: str = None,
-                 upgrade: bool = False,
-                 all_modules: bool = False,
-                 force_build_bootstrap: bool = False,
-                 optimize_deployment: bool = False,
-                 module_set: str = constants.DEFAULT_MODULE_SET,
-                 module_ids: List[str] = None,
-                 aws_profile: str = None,
-                 rollback: bool = True):
-
+    def __init__(
+        self,
+        cluster_name: str,
+        aws_region: str,
+        termination_protection: bool = True,
+        deployment_id: str = None,
+        upgrade: bool = False,
+        all_modules: bool = False,
+        force_build_bootstrap: bool = False,
+        optimize_deployment: bool = False,
+        module_set: str = constants.DEFAULT_MODULE_SET,
+        module_ids: List[str] = None,
+        aws_profile: str = None,
+        rollback: bool = True,
+    ):
         self.cluster_name = cluster_name
         self.aws_region = aws_region
         self.termination_protection = termination_protection
@@ -54,9 +56,7 @@ class DeploymentHelper:
         self.module_metadata_helper = ModuleMetadataHelper()
 
         self.cluster_config_db = ClusterConfigDB(
-            cluster_name=cluster_name,
-            aws_region=aws_region,
-            aws_profile=aws_profile
+            cluster_name=cluster_name, aws_region=aws_region, aws_profile=aws_profile
         )
 
         self.cluster_modules = {}
@@ -87,11 +87,10 @@ class DeploymentHelper:
             rollback=self.rollback,
             termination_protection=self.termination_protection,
             deployment_id=self.deployment_id,
-            module_set=self.module_set
+            module_set=self.module_set,
         ).invoke(force_build_bootstrap=self.force_build_bootstrap)
 
     def get_deployment_order(self) -> List[str]:
-
         module_deployment_order = []
 
         for module_id in self.module_ids:
@@ -104,17 +103,20 @@ class DeploymentHelper:
                 if not self.upgrade:
                     continue
 
-            module_deployment_order.append({
-                'module_id': module_id,
-                'priority': self.module_metadata_helper.get_module_deployment_priority(module_name=module_info['name'])
-            })
+            module_deployment_order.append(
+                {
+                    'module_id': module_id,
+                    'priority': self.module_metadata_helper.get_module_deployment_priority(
+                        module_name=module_info['name']
+                    ),
+                }
+            )
 
         module_deployment_order.sort(key=lambda m: m['priority'])
 
         return [m['module_id'] for m in module_deployment_order]
 
     def get_optimized_deployment_order(self) -> List[List[str]]:
-
         deployment_order = self.get_deployment_order()
         module_deployments = OrderedDict()
 
@@ -128,7 +130,9 @@ class DeploymentHelper:
                 if not self.upgrade:
                     continue
 
-            priority = self.module_metadata_helper.get_module_deployment_priority(module_name=module_info['name'])
+            priority = self.module_metadata_helper.get_module_deployment_priority(
+                module_name=module_info['name']
+            )
 
             if priority in module_deployments:
                 module_deployments[priority].append(module_id)
@@ -146,10 +150,14 @@ class DeploymentHelper:
             print('could not find any modules to upgrade.')
         else:
             if len(self.module_ids) == 1:
-                print(f'{self.module_ids[0]} is already deployed. use the --upgrade flag to upgrade or re-deploy the module.')
+                print(
+                    f'{self.module_ids[0]} is already deployed. use the --upgrade flag to upgrade or re-deploy the module.'
+                )
             else:
                 module_s = ', '.join(self.module_ids)
-                print(f'[{module_s}] are already deployed. use the --upgrade flag to re-deploy these modules.')
+                print(
+                    f'[{module_s}] are already deployed. use the --upgrade flag to re-deploy these modules.'
+                )
 
     def invoke(self):
         if self.optimize_deployment and len(self.module_ids) > 1:
@@ -165,7 +173,7 @@ class DeploymentHelper:
                     thread = threading.Thread(
                         name=f'Thread: {module_id}',
                         target=self.deploy_module,
-                        kwargs={'module_id': module_id}
+                        kwargs={'module_id': module_id},
                     )
                     threads.append(thread)
                     thread.start()
@@ -186,7 +194,7 @@ class DeploymentHelper:
                         self.cluster_config_db = ClusterConfigDB(
                             cluster_name=self.cluster_name,
                             aws_region=self.aws_region,
-                            aws_profile=self.aws_profile
+                            aws_profile=self.aws_profile,
                         )
                         self.initialize_cluster_modules()
                     else:
@@ -195,7 +203,9 @@ class DeploymentHelper:
                 for module_id in modules:
                     module_info = self.cluster_modules[module_id]
                     if module_info['status'] != 'deployed':
-                        raise exceptions.general_exception(f'deployment failed. could not deploy module: {module_id}')
+                        raise exceptions.general_exception(
+                            f'deployment failed. could not deploy module: {module_id}'
+                        )
 
         else:
             deployment_order = self.get_deployment_order()

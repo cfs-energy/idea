@@ -16,4 +16,3 @@ import DashboardMain from "./dashboard-main";
 export {
     DashboardMain
 }
-

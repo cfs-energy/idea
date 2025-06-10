@@ -21,11 +21,11 @@ import {Constants} from "../../../common/constants";
 import VirtualDesktopUtilsClient from "../../../client/virtual-desktop-utils-client";
 
 export interface VirtualDesktopCreateSessionFormProps {
-    userProjects?: Project[]
+    projects?: Project[]
     defaultName?: string
     maxRootVolumeMemory: number
     isAdminView?: boolean
-    onSubmit: (session_name: string, username: string, project_id: string, base_os: VirtualDesktopBaseOS, software_stack_id: string, session_type: VirtualDesktopSessionType, instance_type: string, storage_size: number, hibernation_enabled: boolean, vpc_subnet_id: string) => Promise<boolean>
+    onSubmit: (session_name: string, username: string, project_id: string, base_os: VirtualDesktopBaseOS, software_stack_id: string, session_type: VirtualDesktopSessionType, instance_type: string, storage_size: number, hibernation_enabled: boolean, vpc_subnet_id: string, admin_custom_instance_type?: boolean) => Promise<boolean>
     onDismiss: () => void
 }
 
@@ -42,12 +42,16 @@ export interface VirtualDesktopCreateSessionFormState {
     supportedOsChoices: SocaUserInputChoice[]
     dcvSessionTypeChoice: DCVSessionTypeChoice
     eVDIUsers: User[]
+    allowCustomInstanceType: boolean
+    softwareStacksByOS: { [os: string]: VirtualDesktopSoftwareStack[] }
 }
 
 class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSessionFormProps, VirtualDesktopCreateSessionFormState> {
     form: RefObject<IdeaForm>
     instanceTypesInfo: any
     defaultInstanceTypeChoices: SocaUserInputChoice[]
+    // Flag to prevent duplicate API calls when hibernation is changed programmatically
+    private hibernationChangedByStackSelection: boolean = false;
 
     constructor(props: VirtualDesktopCreateSessionFormProps) {
         super(props);
@@ -62,7 +66,9 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
                 choices: Utils.getDCVSessionTypes(),
                 defaultChoice: 'VIRTUAL',
                 disabled: false
-            }
+            },
+            allowCustomInstanceType: false,
+            softwareStacksByOS: {}
         }
         this.instanceTypesInfo = {}
         this.defaultInstanceTypeChoices = []
@@ -105,16 +111,20 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
             showModal: true
         }, () => {
             this.getForm().showModal()
+
+            // Make sure hibernation is disabled initially when form opens
+            setTimeout(() => {
+                const hibernation = this.getForm()?.getFormField('hibernate_instance');
+                if (hibernation) {
+                    hibernation.disable(true);
+                }
+            }, 100);
         })
     }
 
     componentDidMount() {
-        this.getVirtualDesktopUtilsClient().listAllowedInstanceTypes({}).then(
-            result => {
-                this.instanceTypesInfo = this.generateInstanceTypeReverseIndex(result.listing)
-                this.defaultInstanceTypeChoices = Utils.generateInstanceTypeListing(result.listing)
-            }
-        )
+        // We're not loading global instance types here anymore
+        // We'll only load them after both OS and software stack are selected
 
         this.getProjectsClient().getProject({
             project_name: 'default'
@@ -122,16 +132,7 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
             this.setState({
                 defaultProject: result.project
             })
-        })
-
-        this.getVirtualDesktopUtilsClient().listSupportedOS({}).then(result => {
-            this.setState({
-                supportedOsChoices: Utils.getSupportedOSChoices(result.listing!)
-            }, () => {
-                this.getForm()?.getFormField('base_os')?.setOptions({
-                    listing: this.state.supportedOsChoices
-                })
-            })
+            // Removed OS choices initialization - will be empty until project selected
         })
 
         let groups: string[] = [Utils.getUserGroupName(Utils.getModuleId(Constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER)), Utils.getAdministratorGroup(Utils.getModuleId(Constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER))]
@@ -149,6 +150,14 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
                 })
             })
         })
+
+        // Initially disable hibernation until software stack is selected
+        setTimeout(() => {
+            const hibernation = this.getForm()?.getFormField('hibernate_instance');
+            if (hibernation) {
+                hibernation.disable(true);
+            }
+        }, 100);
     }
 
     generateInstanceTypeReverseIndex(instanceTypeList: any[]): { [k: string]: any } {
@@ -220,12 +229,15 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
     generateSoftwareStackListing(softwareStacks: VirtualDesktopSoftwareStack[] | undefined): SocaUserInputChoice[] {
         let softwareStackChoices: SocaUserInputChoice[] = []
 
-        softwareStacks?.sort(this.compare_software_stacks)
+        // Only show explicitly enabled stacks
+        const enabledStacks = softwareStacks?.filter(stack => stack.enabled === true);
 
-        softwareStacks?.forEach((stack) => {
+        enabledStacks?.sort(this.compare_software_stacks)
+
+        enabledStacks?.forEach((stack) => {
             softwareStackChoices.push({
                 title: stack.description,
-                description: `Name: ${stack.name}, AMI ID: ${stack.ami_id}, OS: ${stack.base_os}, GPU: ${Utils.getFormattedGPUManufacturer(stack.gpu)}`,
+                description: `Name: ${stack.name}, AMI ID: ${stack.ami_id}, OS: ${stack.base_os}`,
                 value: stack.stack_id
             })
         })
@@ -343,21 +355,50 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
         if (Utils.isEmpty(project_id) || Utils.isEmpty(base_os)) {
             return
         }
+
+        // Check if we have cached software stacks for this OS
+        if (base_os && this.state.softwareStacksByOS[base_os] && this.state.softwareStacksByOS[base_os].length > 0) {
+            const cachedStacks = this.state.softwareStacksByOS[base_os];
+            // Only show explicitly enabled stacks
+            const enabledCachedStacks = cachedStacks.filter(stack => stack.enabled === true);
+
+            // Use cached data instead of making another API call
+            const softwareStack = this.getForm()?.getFormField('software_stack')
+            softwareStack?.setOptions({
+                listing: this.generateSoftwareStackListing(enabledCachedStacks)
+            })
+
+            let softwareStacks: { [k: string]: VirtualDesktopSoftwareStack } = {}
+            enabledCachedStacks.forEach((stack: VirtualDesktopSoftwareStack) => {
+                if (stack.stack_id !== undefined) {
+                    softwareStacks[stack.stack_id] = stack
+                }
+            })
+            this.setState({
+                softwareStacks: softwareStacks
+            })
+            return;
+        }
+
+        // If no cached data, make the API call
         this.getVirtualDesktopClient().listSoftwareStacks({
-            disabled_also: true,
+            disabled_also: false, // Only get enabled stacks
             project_id: project_id,
             filters: [{
                 key: 'base_os',
                 value: base_os
             }]
         }).then(result => {
+            // Only include stacks that are explicitly enabled
+            const enabledApiStacks = result.listing?.filter(stack => stack.enabled === true);
+
             const softwareStack = this.getForm()?.getFormField('software_stack')
             softwareStack?.setOptions({
-                listing: this.generateSoftwareStackListing(result.listing)
+                listing: this.generateSoftwareStackListing(enabledApiStacks)
             })
 
             let softwareStacks: { [k: string]: VirtualDesktopSoftwareStack } = {}
-            result.listing?.forEach((stack) => {
+            enabledApiStacks?.forEach((stack) => {
                 if (stack.stack_id !== undefined) {
                     softwareStacks[stack.stack_id] = stack
                 }
@@ -385,6 +426,12 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
         let dcvSessionTypeChoices: SocaUserInputChoice[] = []
         const base_os = this.getForm()?.getValue('base_os')
         let instanceTypeName = this.getForm()?.getValue('instance_type')
+
+        // Return early if the required fields are not set
+        if (!base_os || !instanceTypeName) {
+            return;
+        }
+
         let gpu = this.getInstanceGPU(instanceTypeName)
         let arch = this.getInstanceArch(instanceTypeName)
         let dcvSessionTypeDefaultChoice: 'VIRTUAL' | 'CONSOLE' = 'VIRTUAL'
@@ -402,7 +449,7 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
             dcvSessionTypeDefaultChoice = 'VIRTUAL'
             dcvSessionTypeChoices.push(virtual_choice)
             disableSessionTypeChoice = true
-        } else if (base_os === 'windows' || gpu === 'AMD') {
+        } else if ((base_os && base_os.includes('windows')) || gpu === 'AMD') {
             // https://docs.aws.amazon.com/dcv/latest/adminguide/servers.html - AMD GPU, Windows support Console sessions only
             dcvSessionTypeDefaultChoice = 'CONSOLE'
             dcvSessionTypeChoices.push(console_choice)
@@ -467,7 +514,7 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
                 required: true
             },
             default: this.state.defaultProject?.project_id,
-            choices: this.buildProjectChoices(this.props.userProjects!)
+            choices: this.buildProjectChoices(this.props.projects!)
         })
         formParams.push({
             name: 'base_os',
@@ -478,8 +525,7 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
             validate: {
                 required: true
             },
-            default: 'amazonlinux2',
-            choices: this.state.supportedOsChoices
+            choices: this.state.supportedOsChoices // Use the filtered choices from state
         })
         formParams.push({
             name: 'software_stack',
@@ -503,16 +549,22 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
                 required: true
             }
         })
+
+        // Check if both base_os and software_stack are selected
+        const softwareStackSelected = !!this.getForm()?.getValue('software_stack');
+        const baseOsSelected = !!this.getForm()?.getValue('base_os');
+        const showInstanceType = softwareStackSelected && baseOsSelected;
+
         formParams.push({
             name: 'instance_type',
             title: 'Virtual Desktop Size',
-            description: 'Select a virtual desktop instance type',
+            description: this.state.allowCustomInstanceType ? 'Enter any valid EC2 instance type' : 'Select a virtual desktop instance type',
             data_type: 'str',
-            param_type: 'select_or_text',
+            param_type: this.state.allowCustomInstanceType ? 'text' : 'select',
             validate: {
-                required: true
+                required: showInstanceType // Only required if OS and stack are selected
             },
-            choices: this.defaultInstanceTypeChoices
+            choices: (showInstanceType && !this.state.allowCustomInstanceType) ? this.defaultInstanceTypeChoices : []
         })
         formParams.push({
             name: 'root_storage_size',
@@ -536,6 +588,25 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
             },
             default: false
         })
+
+        if (this.props.isAdminView) {
+            formParams.push({
+                name: 'allow_custom_instance_type',
+                title: 'Enable Custom Instance Types',
+                description: 'Allow entering any valid EC2 instance type',
+                data_type: 'bool',
+                param_type: 'confirm',
+                default: this.state.allowCustomInstanceType,
+                validate: {
+                    required: true
+                },
+                when: {
+                    param: 'advanced_options',
+                    eq: true
+                }
+            })
+        }
+
         formParams.push({
             name: 'dcv_session_type',
             title: 'DCV Session Type',
@@ -568,6 +639,130 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
         return formParams
     }
 
+    getSoftwareStack(stack_id: string): VirtualDesktopSoftwareStack | undefined {
+        if (!stack_id || !this.state.softwareStacks || !this.state.softwareStacks[stack_id]) {
+            return undefined;
+        }
+
+        // Return a clean object with only the properties that are defined
+        const stack = this.state.softwareStacks[stack_id];
+        return {
+            stack_id: stack.stack_id,
+            base_os: stack.base_os,
+            name: stack.name,
+            description: stack.description,
+            ami_id: stack.ami_id,
+            architecture: stack.architecture,
+            gpu: stack.gpu,
+            min_storage: stack.min_storage,
+            min_ram: stack.min_ram,
+            allowed_instance_types: stack.allowed_instance_types,
+        };
+    }
+
+    // Filter instance types based on software stack allowed_instance_types
+    filterInstanceTypesByAllowedInstanceTypes(instanceTypes: any[], allowedInstanceTypes: string[] | undefined): any[] {
+        if (!allowedInstanceTypes || allowedInstanceTypes.length === 0) {
+            return instanceTypes;
+        }
+
+        return instanceTypes.filter(instance => {
+            const instanceType = instance.InstanceType;
+            const instanceFamily = instanceType.split('.')[0];
+
+            // Check if instance type or family is in the allowed list
+            return allowedInstanceTypes.some(allowedType => {
+                if (allowedType.includes('.')) {
+                    // Exact instance type match
+                    return allowedType === instanceType;
+                } else {
+                    // Instance family match
+                    return allowedType === instanceFamily;
+                }
+            });
+        });
+    }
+
+    // Filter g4ad instance types based on OS compatibility
+    filterG4adInstanceTypes(instanceTypes: any[], baseOs: string): any[] {
+        const g4adCompatibleOS = ['windows2019', 'windows2022', 'rocky8', 'rocky9'];
+
+        return instanceTypes.filter(instance => {
+            const instanceType = instance.InstanceType;
+            const instanceFamily = instanceType.split('.')[0];
+
+            // If it's a g4ad instance type, only allow it for compatible OS
+            if (instanceFamily === 'g4ad') {
+                return g4adCompatibleOS.includes(baseOs);
+            }
+
+            // For non-g4ad instance types, allow them for all OS
+            return true;
+        });
+    }
+
+    // Method to update OS choices based on project's accessible software stacks
+    updateSupportedOSChoices(project_id?: string) {
+        if (!project_id) {
+            return;
+        }
+
+        // First, get all supported OS options
+        this.getVirtualDesktopUtilsClient().listSupportedOS({}).then(osResult => {
+            // Now get all enabled software stacks for the project to determine which OS options have stacks
+            // Use a large page size to get all stacks in one request
+            this.getVirtualDesktopClient().listSoftwareStacks({
+                disabled_also: false, // Only get enabled stacks
+                project_id: project_id,
+                paginator: {
+                    page_size: 100 // Ensure we get all stacks in one request
+                }
+            }).then(stackResult => {
+                // Only include stacks that are explicitly enabled
+                const projectEnabledStacks = stackResult.listing?.filter(stack => stack.enabled === true);
+
+                // Extract unique base OS values from available software stacks
+                const osWithStacksSet = new Set<string>();
+
+                // Create a map to store software stacks by OS
+                const softwareStacksByOS: { [os: string]: VirtualDesktopSoftwareStack[] } = {};
+
+                projectEnabledStacks?.forEach(stack => {
+                    if (stack.base_os) {
+                        osWithStacksSet.add(stack.base_os);
+
+                        // Group stacks by OS
+                        if (!softwareStacksByOS[stack.base_os]) {
+                            softwareStacksByOS[stack.base_os] = [];
+                        }
+                        softwareStacksByOS[stack.base_os].push(stack);
+                    }
+                });
+
+                // Create choices array with only OS options that have stacks
+                const supportedOsChoices: SocaUserInputChoice[] = [];
+                osResult.listing?.forEach(os => {
+                    // Only add OS options that have software stacks
+                    if (osWithStacksSet.has(os)) {
+                        supportedOsChoices.push({
+                            title: Utils.getOsTitle(os),
+                            value: os
+                        });
+                    }
+                });
+
+                this.setState({
+                    supportedOsChoices,
+                    softwareStacksByOS // Cache the software stacks by OS
+                }, () => {
+                    this.getForm()?.getFormField('base_os')?.setOptions({
+                        listing: supportedOsChoices
+                    });
+                });
+            });
+        });
+    }
+
     render() {
         return (
             this.state.showModal &&
@@ -580,54 +775,196 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
                 onStateChange={(event) => {
                     if (event.param.name === 'base_os') {
                         const hibernation = this.getForm()?.getFormField('hibernate_instance')
-                        if (event.value === 'windows') {
-                            // Hibernation is conditionally supported for Windows
-                            hibernation?.disable(false)
-                        } else {
-                            if (event.value === 'amazonlinux2') {
-                                // Hibernation is supported for Amazon Linux 2 .
+
+                        // Set hibernation to disabled by default
+                        if (hibernation) {
+                            hibernation.setValue(false)
+                        }
+
+                        // Reset flag since this is a user-initiated OS change
+                        this.hibernationChangedByStackSelection = false;
+
+                        // Only consider enabling hibernation if we have both OS and software stack
+                        const softwareStackValue = this.getForm()?.getValue('software_stack');
+                        const osSelected = !!event.value;
+                        const stackSelected = !!softwareStackValue;
+
+                        if (osSelected && stackSelected) {
+                            if (event.value === 'windows2019' || event.value === 'windows2022' || event.value === 'windows2025' ||
+                                event.value === 'amazonlinux2' || event.value === 'amazonlinux2023' ||
+                                event.value === 'rhel8' || event.value === 'rhel9' ||
+                                event.value === 'rocky8' || event.value === 'rocky9' ||
+                                event.value === 'ubuntu2204') {
+                                // Hibernation is supported for these OS types
                                 hibernation?.disable(false)
-                            } else if (event.value === 'rhel8') {
-                                // Hibernation is supported for RHEL8
-                                hibernation?.disable(false)
-                            } else if (event.value === 'rhel9'){
-                                // Hibernation is supported for RHEL9
-                                hibernation?.disable(false)
-                            } else if (event.value === 'rocky8'){
-                                // Hibernation is supported for Rocky8
-                                hibernation?.disable(false)
-                            } else if (event.value === 'rocky9'){
-                                // Hibernation is supported for Rocky9
-                                hibernation?.disable(false)
-                            } else if (event.value === 'ubuntu2204'){
-                                // Hibernation is supported for Ubuntu 22.04
-                                hibernation?.disable(false)
-                            } else if (event.value === 'ubuntu2404'){
-                                // Hibernation is not supported for Ubuntu 24.04
-                                hibernation?.disable(true)
                             } else {
-                                hibernation?.setValue(false)
+                                // Hibernation is not supported for other OS types
                                 hibernation?.disable(true)
                             }
+                        } else {
+                            // If no stack is selected, keep hibernation disabled regardless of OS
+                            hibernation?.disable(true)
                         }
-                        this.updateSessionTypeChoicesIfRequired()
+
+                        // Clear any previously selected software stack when OS changes
+                        const softwareStack = this.getForm()?.getFormField('software_stack');
+                        if (softwareStack) {
+                            softwareStack.setValue('');
+                        }
+
+                        // Clear any previously selected instance type when OS changes
+                        const instanceType = this.getForm()?.getFormField('instance_type');
+                        if (instanceType) {
+                            instanceType.setValue('');
+                            instanceType.setOptions({ listing: [] });
+                        }
+
+                        // Refresh instance types if software stack is already selected
+                        // This ensures g4ad filtering is applied when OS changes
+                        if (softwareStackValue && event.value && !this.state.allowCustomInstanceType) {
+                            const selectedSoftwareStack = this.getSoftwareStack(softwareStackValue);
+                            if (selectedSoftwareStack) {
+                                this.getVirtualDesktopUtilsClient().listAllowedInstanceTypes({
+                                    hibernation_support: this.getForm()?.getValue('hibernate_instance'),
+                                    software_stack: selectedSoftwareStack
+                                }).then(result => {
+                                    // Filter by allowed_instance_types if present in software stack
+                                    const filteredResults = selectedSoftwareStack?.allowed_instance_types
+                                        ? this.filterInstanceTypesByAllowedInstanceTypes(result.listing, selectedSoftwareStack.allowed_instance_types)
+                                        : result.listing;
+
+                                    // Filter g4ad instance types based on OS compatibility
+                                    const g4adFilteredResults = this.filterG4adInstanceTypes(filteredResults, event.value);
+
+                                    // Store instance types info for future reference
+                                    this.instanceTypesInfo = this.generateInstanceTypeReverseIndex(result.listing)
+                                    this.defaultInstanceTypeChoices = Utils.generateInstanceTypeListing(g4adFilteredResults)
+
+                                    let instance_type = this.getForm()?.getFormField('instance_type')
+                                    instance_type?.setOptions({
+                                        listing: Utils.generateInstanceTypeListing(g4adFilteredResults)
+                                    })
+
+                                    // Make instance_type field required now that we have selected both OS and software stack
+                                    instance_type?.validate();
+                                });
+                            }
+                        }
+
+                        // Only update session type choices if instance type is selected
+                        const instanceTypeName = this.getForm()?.getValue('instance_type');
+                        if (instanceTypeName && event.value) {
+                            this.updateSessionTypeChoicesIfRequired();
+                        }
+
                         this.updateSoftwareStackOptions()
                     } else if (event.param.name === 'software_stack') {
-                        this.getVirtualDesktopUtilsClient().listAllowedInstanceTypes({
-                            hibernation_support: this.getForm()?.getValue('hibernate_instance'),
-                            software_stack: this.state.softwareStacks[event.value]
-                        }).then(result => {
-                            let instance_type = this.getForm()?.getFormField('instance_type')
-                            instance_type?.setOptions({
-                                listing: Utils.generateInstanceTypeListing(result.listing)
-                            })
+                        // Only fetch and update instance types if software stack and base OS are selected
+                        // Enable hibernation option when software stack is selected
+                        const hibernation = this.getForm()?.getFormField('hibernate_instance');
+                        const baseOs = this.getForm()?.getValue('base_os');
+
+                        // Only enable hibernation if we have both stack and OS selected
+                        if (hibernation && baseOs) {
+                            // Enable or disable based on OS compatibility with hibernation
+                            if (baseOs === 'windows2019' || baseOs === 'windows2022' || baseOs === 'windows2025' ||
+                                baseOs === 'amazonlinux2' || baseOs === 'amazonlinux2023' ||
+                                baseOs === 'rhel8' || baseOs === 'rhel9' ||
+                                baseOs === 'rocky8' || baseOs === 'rocky9' ||
+                                baseOs === 'ubuntu2204') {
+                                hibernation.disable(!event.value); // Enable if we have a value
+                            } else {
+                                // For other OS types that don't support hibernation
+                                hibernation.disable(true);
+                            }
+                        } else {
+                            // If OS isn't selected yet, keep hibernation disabled
+                            hibernation?.disable(true);
+                        }
+
+                        if (!this.state.allowCustomInstanceType && event.value) {
+                            const softwareStack = this.getSoftwareStack(event.value);
+                            const baseOs = this.getForm()?.getValue('base_os');
+
+                            if (baseOs) {
+                                // Set a flag to indicate this hibernation change was triggered by software stack selection
+                                // to prevent duplicate API calls
+                                this.hibernationChangedByStackSelection = true;
+
+                                this.getVirtualDesktopUtilsClient().listAllowedInstanceTypes({
+                                    hibernation_support: this.getForm()?.getValue('hibernate_instance'),
+                                    software_stack: softwareStack
+                                }).then(result => {
+                                    // Filter by allowed_instance_types if present in software stack
+                                    const filteredResults = softwareStack?.allowed_instance_types
+                                        ? this.filterInstanceTypesByAllowedInstanceTypes(result.listing, softwareStack.allowed_instance_types)
+                                        : result.listing;
+
+                                    // Filter g4ad instance types based on OS compatibility
+                                    const g4adFilteredResults = baseOs ? this.filterG4adInstanceTypes(filteredResults, baseOs) : filteredResults;
+
+                                    // Store instance types info for future reference
+                                    this.instanceTypesInfo = this.generateInstanceTypeReverseIndex(result.listing)
+                                    this.defaultInstanceTypeChoices = Utils.generateInstanceTypeListing(g4adFilteredResults)
+
+                                    let instance_type = this.getForm()?.getFormField('instance_type')
+                                    instance_type?.setOptions({
+                                        listing: Utils.generateInstanceTypeListing(g4adFilteredResults)
+                                    })
+
+                                    // Make instance_type field required now that we have selected both OS and software stack
+                                    instance_type?.validate();
+
+                                    this.updateRootVolumeSizeIfRequired()
+
+                                    // Only update session type choices if an instance type is actually selected
+                                    if (instance_type?.getValueAsString()) {
+                                        this.updateSessionTypeChoicesIfRequired();
+                                    }
+                                })
+                            }
+                        } else {
                             this.updateRootVolumeSizeIfRequired()
-                        })
+                        }
                     } else if (event.param.name === 'project_id') {
-                        this.updateSoftwareStackOptions()
+                        // Reset flag since this is a user-initiated project change
+                        this.hibernationChangedByStackSelection = false;
+
+                        // Update OS choices when project changes
+                        this.updateSupportedOSChoices(event.value);
+
+                        // Clear the base_os selection when project changes
+                        const baseOs = this.getForm()?.getFormField('base_os');
+                        if (baseOs) {
+                            baseOs.setValue('');
+                        }
+
+                        // Clear the software stack selection when project changes
+                        const softwareStack = this.getForm()?.getFormField('software_stack');
+                        if (softwareStack) {
+                            softwareStack.setValue('');
+                            softwareStack.setOptions({ listing: [] });
+                        }
+
+                        // Clear the instance type selection as well
+                        const instanceType = this.getForm()?.getFormField('instance_type');
+                        if (instanceType) {
+                            instanceType.setValue('');
+                            instanceType.setOptions({ listing: [] });
+                        }
+
+                        // Disable hibernation again since software stack was cleared
+                        const hibernation = this.getForm()?.getFormField('hibernate_instance');
+                        if (hibernation) {
+                            hibernation.disable(true);
+                        }
                     } else if (event.param.name === 'instance_type') {
                         this.updateRootVolumeSizeIfRequired()
-                        this.updateSessionTypeChoicesIfRequired()
+                        // Only update session type choices if instance type and base_os are selected
+                        const baseOs = this.getForm()?.getValue('base_os');
+                        if (baseOs && event.value) {
+                            this.updateSessionTypeChoicesIfRequired();
+                        }
                     } else if (event.param.name === 'root_storage_size') {
                         let min_storage_gb = this.getMinRootVolumeSizeInGB(this.state.softwareStacks[this.getForm()?.getValue('software_stack')], this.getForm()?.getValue('hibernate_instance'), this.getForm()?.getValue('instance_type'))
                         if (event.value < min_storage_gb.value) {
@@ -640,23 +977,66 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
                             })
                         }
                     } else if (event.param.name === 'hibernate_instance') {
-                        this.getVirtualDesktopUtilsClient().listAllowedInstanceTypes({
-                            hibernation_support: event.value,
-                            software_stack: this.state.softwareStacks[this.getForm()?.getValue('software_stack')]
-                        }).then(result => {
-                            let instance_type = this.getForm()?.getFormField('instance_type')
-                            instance_type?.setOptions({
-                                listing: Utils.generateInstanceTypeListing(result.listing)
-                            })
+                        // Skip the API call if this change was triggered by software stack selection
+                        if (this.hibernationChangedByStackSelection) {
+                            // Reset the flag and skip the duplicate API call
+                            this.hibernationChangedByStackSelection = false;
+                            return;
+                        }
+
+                        // Only fetch and update instance types if not using custom instance type
+                        if (!this.state.allowCustomInstanceType) {
+                            const softwareStack = this.getSoftwareStack(this.getForm()?.getValue('software_stack'));
+                            const baseOs = this.getForm()?.getValue('base_os');
+
+                            // Only update instance types if both software stack and base OS are selected
+                            if (softwareStack && baseOs) {
+                                this.getVirtualDesktopUtilsClient().listAllowedInstanceTypes({
+                                    hibernation_support: event.value,
+                                    software_stack: softwareStack
+                                }).then(result => {
+                                    // Filter by allowed_instance_types if present in software stack
+                                    const filteredResults = softwareStack?.allowed_instance_types
+                                        ? this.filterInstanceTypesByAllowedInstanceTypes(result.listing, softwareStack.allowed_instance_types)
+                                        : result.listing;
+
+                                    // Filter g4ad instance types based on OS compatibility
+                                    const g4adFilteredResults = baseOs ? this.filterG4adInstanceTypes(filteredResults, baseOs) : filteredResults;
+
+                                    // Update instance types info
+                                    this.instanceTypesInfo = this.generateInstanceTypeReverseIndex(result.listing)
+                                    this.defaultInstanceTypeChoices = Utils.generateInstanceTypeListing(g4adFilteredResults)
+
+                                    let instance_type = this.getForm()?.getFormField('instance_type')
+                                    instance_type?.setOptions({
+                                        listing: Utils.generateInstanceTypeListing(g4adFilteredResults)
+                                    })
+
+                                    this.updateRootVolumeSizeIfRequired()
+                                })
+                            } else {
+                                // If either software stack or base OS is not selected yet, just clear instance type
+                                const instanceType = this.getForm()?.getFormField('instance_type');
+                                if (instanceType) {
+                                    instanceType.setValue('');
+                                    instanceType.setOptions({ listing: [] });
+                                }
+                            }
+                        } else {
                             this.updateRootVolumeSizeIfRequired()
-                        })
+                        }
                     } else if (event.param.name === 'user_name') {
                         this.getProjectsClient().getUserProjects({
-                            username: AppContext.get().auth().getUsername()
+                            username: event.value || AppContext.get().auth().getUsername()
                         }).then(result => {
                             this.getForm()?.getFormField('project_id')?.setOptions({
                                 listing: this.buildProjectChoices(result.projects!)
                             })
+                        })
+                    } else if (event.param.name === 'allow_custom_instance_type') {
+                        // Just update the state - the field will be updated according to buildFormParams()
+                        this.setState({
+                            allowCustomInstanceType: event.value
                         })
                     }
                 }}
@@ -676,8 +1056,12 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
                     const session_type = values.dcv_session_type
                     const instance_type = values.instance_type
                     let username = values.user_name
+
+                    // Pass admin_custom_instance_type flag to backend when admin has enabled custom instance types
+                    const admin_custom_instance_type = this.props.isAdminView && this.state.allowCustomInstanceType
+
                     if (this.props.onSubmit) {
-                        return this.props.onSubmit(session_name, username, project_id, base_os, software_stack_id, session_type, instance_type, storage_size, hibernation_enabled, vpc_subnet_id)
+                        return this.props.onSubmit(session_name, username, project_id, base_os, software_stack_id, session_type, instance_type, storage_size, hibernation_enabled, vpc_subnet_id, admin_custom_instance_type)
                     } else {
                         return Promise.resolve(true)
                     }

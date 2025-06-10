@@ -9,12 +9,10 @@ setup(
     author='Amazon',
     license='Apache License, Version 2.0',
     packages=find_packages(),
-    package_dir={
-        'ideavirtualdesktopcontroller': 'ideavirtualdesktopcontroller'
-    },
-    entry_points='''
+    package_dir={'ideavirtualdesktopcontroller': 'ideavirtualdesktopcontroller'},
+    entry_points="""
         [console_scripts]
         ideactl=ideavirtualdesktopcontroller.cli.cli_main:main
         ideaserver=ideavirtualdesktopcontroller.app.app_main:main
-    '''
+    """,
 )

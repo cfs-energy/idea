@@ -16,6 +16,9 @@ echo -e "
 \$clienthost {{ context.config.get_string('scheduler.private_dns_name').split('.')[0] }}
 \$usecp *:/dev/null /dev/null
 \$usecp *:{{ context.config.get_string('shared-storage.data.mount_dir') }} {{ context.config.get_string('shared-storage.data.mount_dir') }}
+\$usecp *:{{ context.config.get_string('shared-storage.apps.mount_dir') }} {{ context.config.get_string('shared-storage.apps.mount_dir') }}
+# Shared scratch directories should also be added here
+\$usecp *:/fsx /fsx
 " > /var/spool/pbs/mom_priv/config
 
 systemctl start pbs

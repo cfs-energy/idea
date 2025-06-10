@@ -41,18 +41,17 @@ def init(locale_: str):
         raise exceptions.soca_exception(
             error_code=errorcodes.LOCALE_NOT_FOUND_OR_INVALID,
             message=f'locale: {locale_} is invalid or not configured in OS. Error: {e} {os.linesep}'
-                    f'To configure locale on Linux, run below commands: {os.linesep}'
-                    f'> export LC_ALL="{locale_}.UTF-8" {os.linesep}'
-                    f'> export LC_CTYPE="{locale_}.UTF-8" {os.linesep}'
-                    f'> sudo dpkg-reconfigure locales'
+            f'To configure locale on Linux, run below commands: {os.linesep}'
+            f'> export LC_ALL="{locale_}.UTF-8" {os.linesep}'
+            f'> export LC_CTYPE="{locale_}.UTF-8" {os.linesep}'
+            f'> sudo dpkg-reconfigure locales',
         )
 
 
 def _get_locale_info(key: str) -> Optional[Any]:
     if _LOCALE_INFO is None:
         raise exceptions.soca_exception(
-            error_code=errorcodes.GENERAL_ERROR,
-            message='Locale not yet initialized'
+            error_code=errorcodes.GENERAL_ERROR, message='Locale not yet initialized'
         )
     return ModelUtils.get_any_value(key, _LOCALE_INFO)
 
@@ -86,7 +85,6 @@ def currency(amount: float, symbol=True, grouping=False, international=False) ->
     :param international:
     :return: formatted currency value based on locale
     """
-    return locale.currency(amount,
-                           symbol=symbol,
-                           grouping=grouping,
-                           international=international)
+    return locale.currency(
+        amount, symbol=symbol, grouping=grouping, international=international
+    )

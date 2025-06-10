@@ -28,39 +28,38 @@ class GroupNameHelper:
         return f'{name}-{group_type}-group'
 
     def get_cluster_administrators_group(self) -> str:
-        group_name = self.context.config().get_string('identity-provider.cognito.administrators_group_name', required=True)
+        group_name = self.context.config().get_string(
+            'identity-provider.cognito.administrators_group_name', required=True
+        )
         if group_name.endswith(f'{constants.GROUP_TYPE_CLUSTER}-group'):
             return group_name
         return self._build_group_name(
-            group_type=constants.GROUP_TYPE_CLUSTER,
-            name=group_name
+            group_type=constants.GROUP_TYPE_CLUSTER, name=group_name
         )
 
     def get_cluster_managers_group(self) -> str:
-        group_name = self.context.config().get_string('identity-provider.cognito.managers_group_name', required=True)
+        group_name = self.context.config().get_string(
+            'identity-provider.cognito.managers_group_name', required=True
+        )
         if group_name.endswith(f'{constants.GROUP_TYPE_CLUSTER}-group'):
             return group_name
         return self._build_group_name(
-            group_type=constants.GROUP_TYPE_CLUSTER,
-            name=group_name
+            group_type=constants.GROUP_TYPE_CLUSTER, name=group_name
         )
 
     def get_module_administrators_group(self, module_id: str) -> str:
         return self._build_group_name(
-            group_type=constants.GROUP_TYPE_MODULE,
-            name=f'{module_id}-administrators'
+            group_type=constants.GROUP_TYPE_MODULE, name=f'{module_id}-administrators'
         )
 
     def get_module_users_group(self, module_id: str) -> str:
         return self._build_group_name(
-            group_type=constants.GROUP_TYPE_MODULE,
-            name=f'{module_id}-users'
+            group_type=constants.GROUP_TYPE_MODULE, name=f'{module_id}-users'
         )
 
     def get_project_group(self, project_code: str) -> str:
         return self._build_group_name(
-            group_type=constants.GROUP_TYPE_PROJECT,
-            name=project_code
+            group_type=constants.GROUP_TYPE_PROJECT, name=project_code
         )
 
     def get_default_project_group(self) -> str:
@@ -68,6 +67,5 @@ class GroupNameHelper:
 
     def get_user_group(self, username: str) -> str:
         return self._build_group_name(
-            group_type=constants.GROUP_TYPE_USER,
-            name=username
+            group_type=constants.GROUP_TYPE_USER, name=username
         )

@@ -9,10 +9,21 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
-from ideasdk.protocols import SocaContextProtocol, ApiInvocationContextProtocol, SocaContextProtocolType
+from ideasdk.protocols import (
+    SocaContextProtocol,
+    ApiInvocationContextProtocol,
+    SocaContextProtocolType,
+)
 from ideasdk.auth import TokenService, ApiAuthorization, ApiAuthorizationType
 from ideasdk.utils import Utils, GroupNameHelper
-from ideadatamodel import constants, get_payload_as, SocaEnvelope, SocaPayload, exceptions, errorcodes
+from ideadatamodel import (
+    constants,
+    get_payload_as,
+    SocaEnvelope,
+    SocaPayload,
+    exceptions,
+    errorcodes,
+)
 
 from typing import Optional, Dict, Type, TypeVar, Union, List
 import logging
@@ -34,13 +45,16 @@ class ApiInvocationContext(ApiInvocationContextProtocol):
     A new instance of ApiInvocationContext is created for each API invocation by `SocaServer` -> `ApiInvocationHandler`
     """
 
-    def __init__(self, context: SocaContextProtocol,
-                 request: Union[Dict, SocaEnvelope],
-                 invocation_source: str,
-                 group_name_helper: GroupNameHelper,
-                 logger: logging.Logger,
-                 token: Optional[Dict] = None,
-                 token_service: Optional[TokenService] = None):
+    def __init__(
+        self,
+        context: SocaContextProtocol,
+        request: Union[Dict, SocaEnvelope],
+        invocation_source: str,
+        group_name_helper: GroupNameHelper,
+        logger: logging.Logger,
+        token: Optional[Dict] = None,
+        token_service: Optional[TokenService] = None,
+    ):
         self._context = context
         self._request = request
         self._invocation_source = invocation_source
@@ -99,7 +113,9 @@ class ApiInvocationContext(ApiInvocationContextProtocol):
             return False
         if self._token_service is None:
             return False
-        return self._token_service.is_scope_authorized(access_token=access_token, scope=scope)
+        return self._token_service.is_scope_authorized(
+            access_token=access_token, scope=scope
+        )
 
     def is_unix_domain_socket_invocation(self) -> bool:
         """
@@ -130,7 +146,11 @@ class ApiInvocationContext(ApiInvocationContextProtocol):
             return True
 
         if authorization.type == ApiAuthorizationType.USER:
-            module_administrators_group = self._group_name_helper.get_module_administrators_group(module_id=self._context.module_id())
+            module_administrators_group = (
+                self._group_name_helper.get_module_administrators_group(
+                    module_id=self._context.module_id()
+                )
+            )
             return module_administrators_group in authorization.groups
 
         return False
@@ -144,7 +164,7 @@ class ApiInvocationContext(ApiInvocationContextProtocol):
         return authorization.type in (
             ApiAuthorizationType.USER,
             ApiAuthorizationType.ADMINISTRATOR,
-            ApiAuthorizationType.MANAGER
+            ApiAuthorizationType.MANAGER,
         )
 
     def is_authenticated_app(self) -> bool:
@@ -179,7 +199,9 @@ class ApiInvocationContext(ApiInvocationContextProtocol):
         # regular user with module access
         authorization = self.get_authorization()
         if authorization.type == ApiAuthorizationType.USER:
-            module_users_group = self._group_name_helper.get_module_users_group(module_id=self._context.module_id())
+            module_users_group = self._group_name_helper.get_module_users_group(
+                module_id=self._context.module_id()
+            )
             return module_users_group in authorization.groups
 
         return False
@@ -266,14 +288,15 @@ class ApiInvocationContext(ApiInvocationContextProtocol):
             self._response = {
                 'header': self.header,
                 'success': True,
-                'payload': payload_dict
+                'payload': payload_dict,
             }
         else:
             self._response['success'] = True
             self._response['payload'] = payload_dict
 
-    def fail(self, error_code: str, message: str, payload: Union[SocaPayload, Dict] = None):
-
+    def fail(
+        self, error_code: str, message: str, payload: Union[SocaPayload, Dict] = None
+    ):
         payload_dict = None
         if payload is not None:
             if isinstance(payload, SocaPayload):
@@ -351,21 +374,35 @@ class ApiInvocationContext(ApiInvocationContextProtocol):
         return self._decoded_token
 
     def get_authorization(self) -> ApiAuthorization:
+        """
+        decode the token and check for authorization.
+        this is the central authorization logic
+        """
         if self._authorization is not None:
             return self._authorization
 
+        # Unix domain socket invocations are always authorized as 'administrator'
+        # In this case the request is most likely coming from 'ideactl' command
+        # Users/apps need sudo access to even perform a Unix domain socket call
         if self.is_unix_domain_socket_invocation():
-            result = ApiAuthorization(
-                username=self.context.config().get_string('cluster.administrator_username', required=True),
+            self._authorization = ApiAuthorization(
                 type=ApiAuthorizationType.ADMINISTRATOR,
-                invocation_source=constants.API_INVOCATION_SOURCE_UNIX_SOCKET
+                username=self.context.config().get_string(
+                    'cluster.administrator_username', required=True
+                ),
+                invocation_source=constants.API_INVOCATION_SOURCE_UNIX_SOCKET,
             )
-        else:
-            if not self.has_access_token():
-                raise exceptions.unauthorized_access()
-            decoded_token = self.get_decoded_token()
-            result = self._token_service.get_authorization(decoded_token)
-            result.invocation_source = constants.API_INVOCATION_SOURCE_HTTP
+            return self._authorization
+
+        # For non-unix socket requests, require token authentication
+        if not self.has_access_token():
+            raise exceptions.SocaException(
+                error_code=errorcodes.UNAUTHORIZED_ACCESS, message='Unauthorized Access'
+            )
+
+        decoded_token = self.get_decoded_token()
+        result = self._token_service.get_authorization(decoded_token)
+        result.invocation_source = constants.API_INVOCATION_SOURCE_HTTP
 
         self._authorization = result
         return self._authorization
@@ -387,12 +424,16 @@ class ApiInvocationContext(ApiInvocationContextProtocol):
         if Utils.is_empty(namespace):
             raise exceptions.invalid_params('namespace is required')
         if not re.match(PATTERN_NAMESPACE, namespace):
-            raise exceptions.invalid_params(f'namespace must satisfy regex: {PATTERN_NAMESPACE}')
+            raise exceptions.invalid_params(
+                f'namespace must satisfy regex: {PATTERN_NAMESPACE}'
+            )
 
         request_id = self.request_id
         if Utils.is_not_empty(request_id):
             if not re.match(PATTERN_REQUEST_ID, request_id):
-                raise exceptions.invalid_params(f'request_id must satisfy regex: {PATTERN_REQUEST_ID}')
+                raise exceptions.invalid_params(
+                    f'request_id must satisfy regex: {PATTERN_REQUEST_ID}'
+                )
 
     def is_valid_request(self) -> bool:
         try:
@@ -407,10 +448,11 @@ class ApiInvocationContext(ApiInvocationContextProtocol):
     # begin: audit logging methods
 
     def is_payload_tracing_enabled(self) -> bool:
-        return self._context.config().get_bool('cluster.logging.audit_logs.enable_payload_tracing', default=False)
+        return self._context.config().get_bool(
+            'cluster.logging.audit_logs.enable_payload_tracing', default=False
+        )
 
     def get_log_tag(self) -> str:
-
         client_id = None
 
         try:
@@ -428,7 +470,9 @@ class ApiInvocationContext(ApiInvocationContextProtocol):
             else:
                 raise e
 
-        enabled_tags = self._context.config().get_list('cluster.logging.audit_logs.tags', default=[])
+        enabled_tags = self._context.config().get_list(
+            'cluster.logging.audit_logs.tags', default=[]
+        )
 
         tags = []
 
@@ -464,15 +508,23 @@ class ApiInvocationContext(ApiInvocationContextProtocol):
 
         if success:
             if self.is_payload_tracing_enabled():
-                self._logger.info(f'(res) [{self.get_log_tag()}] {Utils.to_json(response)} ({self.get_total_time_ms()} ms)')
+                self._logger.info(
+                    f'(res) [{self.get_log_tag()}] {Utils.to_json(response)} ({self.get_total_time_ms()} ms)'
+                )
             else:
-                self._logger.info(f'(res) [{self.get_log_tag()}] {self.namespace} ({self.get_total_time_ms()} ms) [OK]')
+                self._logger.info(
+                    f'(res) [{self.get_log_tag()}] {self.namespace} ({self.get_total_time_ms()} ms) [OK]'
+                )
         else:
             if self.is_payload_tracing_enabled():
-                self._logger.info(f'(res) [{self.get_log_tag()}] {Utils.to_json(response)} ({self.get_total_time_ms()} ms)')
+                self._logger.info(
+                    f'(res) [{self.get_log_tag()}] {Utils.to_json(response)} ({self.get_total_time_ms()} ms)'
+                )
             else:
                 error_code = Utils.get_value_as_string('error_code', response)
-                self._logger.info(f'(res) [{self.get_log_tag()}] {self.namespace} ({self.get_total_time_ms()} ms) [{error_code}]')
+                self._logger.info(
+                    f'(res) [{self.get_log_tag()}] {self.namespace} ({self.get_total_time_ms()} ms) [{error_code}]'
+                )
 
     def log_info(self, message: str):
         self._logger.info(f'[{self.get_log_tag()}] {message}')

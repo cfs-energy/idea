@@ -1,5 +1,6 @@
 -r idea-sdk.in
-supervisor
-sanic~=23.6.0
+git+https://github.com/Supervisor/supervisor.git@main
+sanic
 python-ldap
 ldappool
+passlib

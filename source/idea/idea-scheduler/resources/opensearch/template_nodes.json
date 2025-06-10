@@ -103,7 +103,7 @@
       "stack_id": {
         "type": "keyword"
       },
-      "lifecyle": {
+      "lifecycle": {
         "type": "keyword"
       },
       "tenancy": {

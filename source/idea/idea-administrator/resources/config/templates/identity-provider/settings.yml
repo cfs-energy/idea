@@ -9,12 +9,13 @@
 
 provider: "{{identity_provider}}"
 
-{%- if identity_provider == 'cognito-idp' %}
+{% if identity_provider == 'cognito-idp' %}
 cognito:
   administrators_group_name: administrators-cluster-group
   managers_group_name: managers-cluster-group
   removal_policy: "DESTROY" # RETAIN will preserve the user pool even if you delete the stack.
-  advanced_security_mode: "AUDIT"  # Allowed values: AUDIT, ENFORCED, OFF - Depending on regional ability. See https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-cognito-userpool-userpooladdons.html
+  advanced_security_mode: "OFF"  # Allowed values: AUDIT, ENFORCED, OFF - Depending on regional ability. See https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-cognito-userpool-userpooladdons.html
+                                 # NOTE: Setting this to "AUDIT" or "ENFORCED" requires Cognito Plus feature plan. See https://docs.aws.amazon.com/cognito/latest/developerguide/feature-plans-features-plus.html
   email_provider: "cognito"   # "cognito" or "ses"
   # Options that control Cognito interactions with Amazon Simple Email Service (SES)
   # NOTE: You must configure and verify email addresses prior to IDEA installation.
@@ -31,4 +32,4 @@ cognito:
   # to enable SSO, run ./idea-admin.sh sso configure. do not modify this configuration to true to enable SSO.
   sso_enabled: false
 
-{%- endif %}
+{% endif %}

@@ -43,33 +43,47 @@ export const USER_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<User>[] 
     {
         id: 'username',
         header: 'Username',
-        cell: e => e.username
+        cell: e => e.username,
+        sortingField: 'username'
     },
     {
         id: 'uid',
         header: 'UID',
-        cell: e => e.uid
+        cell: e => e.uid,
+        sortingField: 'uid'
     },
     {
         id: 'gid',
         header: 'GID',
-        cell: e => e.gid
+        cell: e => e.gid,
+        sortingField: 'gid'
     },
     {
         id: 'email',
         header: 'Email',
-        cell: e => e.email
+        cell: e => e.email,
+        sortingField: 'email'
     },
     {
         id: 'sudo',
         header: 'Is Admin?',
-        cell: e => (e.sudo) ? 'Yes' : 'No'
+        cell: e => (e.sudo) ? 'Yes' : 'No',
+        sortingComparator: (a, b) => {
+            const valueA = a.sudo ? 1 : 0;
+            const valueB = b.sudo ? 1 : 0;
+            return valueA - valueB;
+        }
     },
     {
         id: 'enabled',
         header: 'Status',
         cell: e => (e.enabled) ? <StatusIndicator type="success">Enabled</StatusIndicator> :
-            <StatusIndicator type="stopped">Disabled</StatusIndicator>
+            <StatusIndicator type="stopped">Disabled</StatusIndicator>,
+        sortingComparator: (a, b) => {
+            const valueA = a.enabled ? 1 : 0;
+            const valueB = b.enabled ? 1 : 0;
+            return valueA - valueB;
+        }
     },
     {
         id: 'groups',
@@ -88,12 +102,22 @@ export const USER_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<User>[] 
             } else {
                 return '-'
             }
+        },
+        sortingComparator: (a, b) => {
+            const aGroups = a.additional_groups || [];
+            const bGroups = b.additional_groups || [];
+            return aGroups.length - bGroups.length;
         }
     },
     {
         id: 'created_on',
         header: 'Created On',
-        cell: e => new Date(e.created_on!).toLocaleString()
+        cell: e => new Date(e.created_on!).toLocaleString(),
+        sortingComparator: (a, b) => {
+            const dateA = a.created_on ? new Date(a.created_on).getTime() : 0;
+            const dateB = b.created_on ? new Date(b.created_on).getTime() : 0;
+            return dateA - dateB;
+        }
     }
 ]
 
@@ -714,6 +738,8 @@ class Users extends Component<UsersProps, UsersState> {
                 title="Users"
                 description="Cluster user management"
                 selectionType="single"
+                enableExportToCsv={true}
+                csvFilename={`idea_users_export_${new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').split('Z')[0]}.csv`}
                 primaryAction={{
                     id: 'create-user',
                     text: 'Create User',
@@ -761,6 +787,8 @@ class Users extends Component<UsersProps, UsersState> {
                 ]}
                 showPaginator={true}
                 showFilters={true}
+                defaultSortingColumn="created_on"
+                defaultSortingDescending={true}
                 filters={[
                     {
                         key: 'username'

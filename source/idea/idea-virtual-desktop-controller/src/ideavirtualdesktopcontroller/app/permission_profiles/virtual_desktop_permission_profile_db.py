@@ -13,20 +13,34 @@ from typing import Dict, Optional, List
 import yaml
 
 import ideavirtualdesktopcontroller
-from ideadatamodel import exceptions, VirtualDesktopPermissionProfile, ListPermissionProfilesRequest, ListPermissionProfilesResponse, SocaPaginator, VirtualDesktopPermission
+from ideadatamodel import (
+    exceptions,
+    VirtualDesktopPermissionProfile,
+    ListPermissionProfilesRequest,
+    ListPermissionProfilesResponse,
+    SocaPaginator,
+    VirtualDesktopPermission,
+)
 from ideasdk.utils import Utils
-from ideavirtualdesktopcontroller.app.permission_profiles import constants as permission_profiles_constants
-from ideavirtualdesktopcontroller.app.virtual_desktop_notifiable_db import VirtualDesktopNotifiableDB
+from ideavirtualdesktopcontroller.app.permission_profiles import (
+    constants as permission_profiles_constants,
+)
+from ideavirtualdesktopcontroller.app.virtual_desktop_notifiable_db import (
+    VirtualDesktopNotifiableDB,
+)
 
 
 class VirtualDesktopPermissionProfileDB(VirtualDesktopNotifiableDB):
-
     def __init__(self, context: ideavirtualdesktopcontroller.AppContext):
         self.context = context
         self._logger = self.context.logger('virtual-desktop-permission-profile-db')
         self._table_obj = None
-        self.BASE_PERMISSIONS_CONFIG_FILE = f'{self.context.get_resources_dir()}/permission-config.yaml'
-        self.BASE_PERMISSION_PROFILE_CONFIG_FILE = f'{self.context.get_resources_dir()}/base-permission-profile-config.yaml'
+        self.BASE_PERMISSIONS_CONFIG_FILE = (
+            f'{self.context.get_resources_dir()}/permission-config.yaml'
+        )
+        self.BASE_PERMISSION_PROFILE_CONFIG_FILE = (
+            f'{self.context.get_resources_dir()}/base-permission-profile-config.yaml'
+        )
         self._permission_types: List[VirtualDesktopPermission] = []
         self._load_permission_types()
         self._ddb_client = self.context.aws().dynamodb_table()
@@ -51,20 +65,28 @@ class VirtualDesktopPermissionProfileDB(VirtualDesktopNotifiableDB):
             permissions_config = yaml.safe_load(f)
 
         if Utils.is_empty(permissions_config):
-            self._logger.error(f'{self.BASE_PERMISSIONS_CONFIG_FILE} file is empty. Returning')
+            self._logger.error(
+                f'{self.BASE_PERMISSIONS_CONFIG_FILE} file is empty. Returning'
+            )
             return
 
         for permission_key in permissions_config:
             self._logger.debug(f'Loading {permission_key} from config')
-            self._permission_types.append(VirtualDesktopPermission(
-                key=permission_key,
-                name=permissions_config.get(permission_key).get('name'),
-                description=permissions_config.get(permission_key).get('description'),
-                enabled=False
-            ))
+            self._permission_types.append(
+                VirtualDesktopPermission(
+                    key=permission_key,
+                    name=permissions_config.get(permission_key).get('name'),
+                    description=permissions_config.get(permission_key).get(
+                        'description'
+                    ),
+                    enabled=False,
+                )
+            )
 
     def initialize(self):
-        exists = self.context.aws_util().dynamodb_check_table_exists(self.table_name, True)
+        exists = self.context.aws_util().dynamodb_check_table_exists(
+            self.table_name, True
+        )
         if not exists:
             self.context.aws_util().dynamodb_create_table(
                 create_table_request={
@@ -72,18 +94,18 @@ class VirtualDesktopPermissionProfileDB(VirtualDesktopNotifiableDB):
                     'AttributeDefinitions': [
                         {
                             'AttributeName': permission_profiles_constants.PERMISSION_PROFILE_DB_HASH_KEY,
-                            'AttributeType': 'S'
+                            'AttributeType': 'S',
                         }
                     ],
                     'KeySchema': [
                         {
                             'AttributeName': permission_profiles_constants.PERMISSION_PROFILE_DB_HASH_KEY,
-                            'KeyType': 'HASH'
+                            'KeyType': 'HASH',
                         }
                     ],
-                    'BillingMode': 'PAY_PER_REQUEST'
+                    'BillingMode': 'PAY_PER_REQUEST',
                 },
-                wait=True
+                wait=True,
             )
             self._create_base_permission_profiles()
 
@@ -92,38 +114,56 @@ class VirtualDesktopPermissionProfileDB(VirtualDesktopNotifiableDB):
             base_permission_profile_config = yaml.safe_load(f)
 
         if Utils.is_empty(base_permission_profile_config):
-            self._logger.error(f'{self.BASE_PERMISSION_PROFILE_CONFIG_FILE} file is empty. Returning')
+            self._logger.error(
+                f'{self.BASE_PERMISSION_PROFILE_CONFIG_FILE} file is empty. Returning'
+            )
             return
 
         for profile_name in base_permission_profile_config:
-            profile_info = Utils.get_value_as_dict(profile_name, base_permission_profile_config, {})
+            profile_info = Utils.get_value_as_dict(
+                profile_name, base_permission_profile_config, {}
+            )
 
             profile_title = Utils.get_value_as_string('profile_title', profile_info, '')
             if Utils.is_empty(profile_title):
-                error_message = f'missing required field profile_title for {profile_name}.'
+                error_message = (
+                    f'missing required field profile_title for {profile_name}.'
+                )
                 raise exceptions.invalid_params(error_message)
 
-            profile_description = Utils.get_value_as_string('profile_description', profile_info, '')
+            profile_description = Utils.get_value_as_string(
+                'profile_description', profile_info, ''
+            )
 
             current_profile = self.get(profile_id=profile_name)
             if Utils.is_not_empty(current_profile):
-                self._logger.info(f'Permission profile {profile_name} already exists. NO=OP. Continuing without updating')
+                self._logger.info(
+                    f'Permission profile {profile_name} already exists. NO=OP. Continuing without updating'
+                )
                 continue
 
-            permission_profile = self.convert_db_dict_to_permission_profile_object(profile_info)
+            permission_profile = self.convert_db_dict_to_permission_profile_object(
+                profile_info
+            )
             permission_profile.profile_id = profile_name
             permission_profile.title = profile_title
             permission_profile.description = profile_description
 
             self.create(permission_profile)
 
-    def convert_permission_profile_object_to_db_dict(self, permission_profile: VirtualDesktopPermissionProfile) -> Dict:
+    def convert_permission_profile_object_to_db_dict(
+        self, permission_profile: VirtualDesktopPermissionProfile
+    ) -> Dict:
         db_dict = {
             permission_profiles_constants.PERMISSION_PROFILE_DB_HASH_KEY: permission_profile.profile_id,
             permission_profiles_constants.PERMISSION_PROFILE_DB_TITLE_KEY: permission_profile.title,
             permission_profiles_constants.PERMISSION_PROFILE_DB_DESCRIPTION_KEY: permission_profile.description,
-            permission_profiles_constants.PERMISSION_PROFILE_DB_CREATED_ON_KEY: Utils.to_milliseconds(permission_profile.created_on),
-            permission_profiles_constants.PERMISSION_PROFILE_DB_UPDATED_ON_KEY: Utils.to_milliseconds(permission_profile.updated_on)
+            permission_profiles_constants.PERMISSION_PROFILE_DB_CREATED_ON_KEY: Utils.to_milliseconds(
+                permission_profile.created_on
+            ),
+            permission_profiles_constants.PERMISSION_PROFILE_DB_UPDATED_ON_KEY: Utils.to_milliseconds(
+                permission_profile.updated_on
+            ),
         }
 
         for permission_type in self.permission_types:
@@ -134,48 +174,93 @@ class VirtualDesktopPermissionProfileDB(VirtualDesktopNotifiableDB):
 
         return db_dict
 
-    def convert_db_dict_to_permission_profile_object(self, db_dict: Dict) -> Optional[VirtualDesktopPermissionProfile]:
+    def convert_db_dict_to_permission_profile_object(
+        self, db_dict: Dict
+    ) -> Optional[VirtualDesktopPermissionProfile]:
         if Utils.is_empty(db_dict):
             return None
 
         permission_profile = VirtualDesktopPermissionProfile(
-            profile_id=Utils.get_value_as_string(permission_profiles_constants.PERMISSION_PROFILE_DB_HASH_KEY, db_dict, ''),
-            title=Utils.get_value_as_string(permission_profiles_constants.PERMISSION_PROFILE_DB_TITLE_KEY, db_dict, ''),
-            description=Utils.get_value_as_string(permission_profiles_constants.PERMISSION_PROFILE_DB_DESCRIPTION_KEY, db_dict, ''),
+            profile_id=Utils.get_value_as_string(
+                permission_profiles_constants.PERMISSION_PROFILE_DB_HASH_KEY,
+                db_dict,
+                '',
+            ),
+            title=Utils.get_value_as_string(
+                permission_profiles_constants.PERMISSION_PROFILE_DB_TITLE_KEY,
+                db_dict,
+                '',
+            ),
+            description=Utils.get_value_as_string(
+                permission_profiles_constants.PERMISSION_PROFILE_DB_DESCRIPTION_KEY,
+                db_dict,
+                '',
+            ),
             permissions=[],
-            created_on=Utils.to_datetime(Utils.get_value_as_int(permission_profiles_constants.PERMISSION_PROFILE_DB_CREATED_ON_KEY, db_dict, 0)),
-            updated_on=Utils.to_datetime(Utils.get_value_as_int(permission_profiles_constants.PERMISSION_PROFILE_DB_UPDATED_ON_KEY, db_dict, 0)),
+            created_on=Utils.to_datetime(
+                Utils.get_value_as_int(
+                    permission_profiles_constants.PERMISSION_PROFILE_DB_CREATED_ON_KEY,
+                    db_dict,
+                    0,
+                )
+            ),
+            updated_on=Utils.to_datetime(
+                Utils.get_value_as_int(
+                    permission_profiles_constants.PERMISSION_PROFILE_DB_UPDATED_ON_KEY,
+                    db_dict,
+                    0,
+                )
+            ),
         )
 
         for permission_type in self.permission_types:
-            permission_profile.permissions.append(VirtualDesktopPermission(
-                key=permission_type.key,
-                name=permission_type.name,
-                description=permission_type.description,
-                enabled=Utils.get_value_as_bool(permission_type.key, db_dict, False)
-            ))
+            permission_profile.permissions.append(
+                VirtualDesktopPermission(
+                    key=permission_type.key,
+                    name=permission_type.name,
+                    description=permission_type.description,
+                    enabled=Utils.get_value_as_bool(
+                        permission_type.key, db_dict, False
+                    ),
+                )
+            )
 
         return permission_profile
 
-    def create(self, permission_profile: VirtualDesktopPermissionProfile) -> VirtualDesktopPermissionProfile:
+    def create(
+        self, permission_profile: VirtualDesktopPermissionProfile
+    ) -> VirtualDesktopPermissionProfile:
         db_entry = self.convert_permission_profile_object_to_db_dict(permission_profile)
-        db_entry[permission_profiles_constants.PERMISSION_PROFILE_DB_CREATED_ON_KEY] = Utils.current_time_ms()
-        db_entry[permission_profiles_constants.PERMISSION_PROFILE_DB_UPDATED_ON_KEY] = Utils.current_time_ms()
-        self._table.put_item(
-            Item=db_entry
+        db_entry[permission_profiles_constants.PERMISSION_PROFILE_DB_CREATED_ON_KEY] = (
+            Utils.current_time_ms()
         )
-        self.trigger_create_event(db_entry[permission_profiles_constants.PERMISSION_PROFILE_DB_HASH_KEY], '', new_entry=db_entry)
+        db_entry[permission_profiles_constants.PERMISSION_PROFILE_DB_UPDATED_ON_KEY] = (
+            Utils.current_time_ms()
+        )
+        self._table.put_item(Item=db_entry)
+        self.trigger_create_event(
+            db_entry[permission_profiles_constants.PERMISSION_PROFILE_DB_HASH_KEY],
+            '',
+            new_entry=db_entry,
+        )
         return self.convert_db_dict_to_permission_profile_object(db_entry)
 
-    def update(self, permission_profile: VirtualDesktopPermissionProfile) -> VirtualDesktopPermissionProfile:
+    def update(
+        self, permission_profile: VirtualDesktopPermissionProfile
+    ) -> VirtualDesktopPermissionProfile:
         db_entry = self.convert_permission_profile_object_to_db_dict(permission_profile)
-        db_entry[permission_profiles_constants.PERMISSION_PROFILE_DB_UPDATED_ON_KEY] = Utils.current_time_ms()
+        db_entry[permission_profiles_constants.PERMISSION_PROFILE_DB_UPDATED_ON_KEY] = (
+            Utils.current_time_ms()
+        )
         update_expression_tokens = []
         expression_attr_names = {}
         expression_attr_values = {}
 
         for key, value in db_entry.items():
-            if key in {permission_profiles_constants.PERMISSION_PROFILE_DB_HASH_KEY, permission_profiles_constants.PERMISSION_PROFILE_DB_CREATED_ON_KEY}:
+            if key in {
+                permission_profiles_constants.PERMISSION_PROFILE_DB_HASH_KEY,
+                permission_profiles_constants.PERMISSION_PROFILE_DB_CREATED_ON_KEY,
+            }:
                 continue
             update_expression_tokens.append(f'#{key} = :{key}')
             expression_attr_names[f'#{key}'] = key
@@ -183,16 +268,23 @@ class VirtualDesktopPermissionProfileDB(VirtualDesktopNotifiableDB):
 
         result = self._table.update_item(
             Key={
-                permission_profiles_constants.PERMISSION_PROFILE_DB_HASH_KEY: db_entry[permission_profiles_constants.PERMISSION_PROFILE_DB_HASH_KEY],
+                permission_profiles_constants.PERMISSION_PROFILE_DB_HASH_KEY: db_entry[
+                    permission_profiles_constants.PERMISSION_PROFILE_DB_HASH_KEY
+                ],
             },
             UpdateExpression='SET ' + ', '.join(update_expression_tokens),
             ExpressionAttributeNames=expression_attr_names,
             ExpressionAttributeValues=expression_attr_values,
-            ReturnValues='ALL_OLD'
+            ReturnValues='ALL_OLD',
         )
 
         old_db_entry = Utils.get_value_as_dict('Attributes', result, {})
-        self.trigger_update_event(db_entry[permission_profiles_constants.PERMISSION_PROFILE_DB_HASH_KEY], '', old_entry=old_db_entry, new_entry=db_entry)
+        self.trigger_update_event(
+            db_entry[permission_profiles_constants.PERMISSION_PROFILE_DB_HASH_KEY],
+            '',
+            old_entry=old_db_entry,
+            new_entry=db_entry,
+        )
         return self.convert_db_dict_to_permission_profile_object(db_entry)
 
     def get(self, profile_id: str) -> Optional[VirtualDesktopPermissionProfile]:
@@ -216,7 +308,9 @@ class VirtualDesktopPermissionProfileDB(VirtualDesktopNotifiableDB):
 
         return self.convert_db_dict_to_permission_profile_object(db_entry)
 
-    def list(self, request: ListPermissionProfilesRequest) -> ListPermissionProfilesResponse:
+    def list(
+        self, request: ListPermissionProfilesRequest
+    ) -> ListPermissionProfilesResponse:
         list_request = {}
         if Utils.is_not_empty(request.cursor):
             last_evaluated_key = Utils.from_json(Utils.base64_decode(request.cursor))
@@ -235,15 +329,14 @@ class VirtualDesktopPermissionProfileDB(VirtualDesktopNotifiableDB):
             response_cursor = Utils.base64_encode(Utils.to_json(last_evaluated_key))
 
         return ListPermissionProfilesResponse(
-            listing=result,
-            paginator=SocaPaginator(
-                cursor=response_cursor
-            )
+            listing=result, paginator=SocaPaginator(cursor=response_cursor)
         )
 
     def delete(self, profile_name: str):
         if Utils.is_empty(profile_name):
-            self._logger.error(f'invalid values for profile_name: {profile_name}. Idempotent delete complete.')
+            self._logger.error(
+                f'invalid values for profile_name: {profile_name}. Idempotent delete complete.'
+            )
             return
 
         try:
@@ -251,9 +344,15 @@ class VirtualDesktopPermissionProfileDB(VirtualDesktopNotifiableDB):
                 Key={
                     permission_profiles_constants.PERMISSION_PROFILE_DB_HASH_KEY: profile_name
                 },
-                ReturnValues='ALL_OLD'
+                ReturnValues='ALL_OLD',
             )
             old_db_entry = Utils.get_value_as_dict('Attributes', result, {})
-            self.trigger_delete_event(old_db_entry[permission_profiles_constants.PERMISSION_PROFILE_DB_HASH_KEY], '', deleted_entry=old_db_entry)
+            self.trigger_delete_event(
+                old_db_entry[
+                    permission_profiles_constants.PERMISSION_PROFILE_DB_HASH_KEY
+                ],
+                '',
+                deleted_entry=old_db_entry,
+            )
         except Exception as e:
             self._logger.error(e)

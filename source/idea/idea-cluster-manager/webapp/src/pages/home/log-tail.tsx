@@ -18,8 +18,9 @@ import {withRouter} from "../../navigation/navigation-utils";
 import {AppContext} from "../../common";
 import Utils from "../../common/utils";
 import {Box, Button, Container, Grid, StatusIndicator, StatusIndicatorProps} from "@cloudscape-design/components";
-import {XTerm} from "xterm-for-react";
-import {FitAddon} from 'xterm-addon-fit'
+import { Terminal } from "@xterm/xterm";
+import { FitAddon } from '@xterm/addon-fit';
+import "@xterm/xterm/css/xterm.css";
 
 
 export interface IdeaLogTailProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
@@ -41,18 +42,22 @@ export interface IdeaLogTailState {
 
 const MAX_LINE_COUNT = 1000
 const MAX_EMPTY_RECEIVES = 10
+const DEFAULT_POLLING_INTERVAL = 10000 // 10 seconds
+const POLLING_INTERVAL = parseInt(process.env.REACT_APP_TAIL_POLLING_INTERVAL || DEFAULT_POLLING_INTERVAL.toString())
 
 class IdeaLogTail extends Component<IdeaLogTailProps, IdeaLogTailState> {
 
     logEntries: RefObject<HTMLDivElement>
     interval: any
-    xterm: RefObject<XTerm>
+    xterm: RefObject<HTMLDivElement>
+    terminal: Terminal
     xtermFitAddon: FitAddon
 
     constructor(props: IdeaLogTailProps) {
         super(props);
         this.logEntries = React.createRef()
         this.xterm = React.createRef()
+        this.terminal = new Terminal()
         this.xtermFitAddon = new FitAddon()
         this.interval = null
         this.state = {
@@ -117,8 +122,8 @@ class IdeaLogTail extends Component<IdeaLogTailProps, IdeaLogTailState> {
                     })
                 })
             })
-        }, 6000)
-        console.log('polling started')
+        }, POLLING_INTERVAL)
+        console.log(`polling started with interval: ${POLLING_INTERVAL}ms`)
     }
 
     stopPolling() {
@@ -133,7 +138,7 @@ class IdeaLogTail extends Component<IdeaLogTailProps, IdeaLogTailState> {
     }
 
     newLogEntry = (line: string) => {
-        this.xterm.current!.terminal.writeln(line.trim())
+        this.terminal.writeln(line.trim())
     }
 
     componentDidMount() {
@@ -147,17 +152,19 @@ class IdeaLogTail extends Component<IdeaLogTailProps, IdeaLogTailState> {
             'cwd': cwd
         })
 
-        const terminal = this.xterm.current?.terminal!
-        terminal.options = {
-            scrollback: 10000
-        }
-        terminal.onKey((event) => {
-            if(event.domEvent.code === 'Enter') {
-                terminal.writeln('')
+        if (this.xterm.current) {
+            this.terminal.open(this.xterm.current)
+            this.terminal.options = {
+                scrollback: 10000
             }
-        })
-        this.xtermFitAddon.activate(terminal)
-        this.xtermFitAddon.fit()
+            this.terminal.onKey((event) => {
+                if(event.domEvent.code === 'Enter') {
+                    this.terminal.writeln('')
+                }
+            })
+            this.xtermFitAddon.activate(this.terminal)
+            this.xtermFitAddon.fit()
+        }
 
         let lines: string[]
         AppContext.get().client().fileBrowser().tailFile({
@@ -243,7 +250,7 @@ class IdeaLogTail extends Component<IdeaLogTailProps, IdeaLogTailState> {
             }
         >
             <div className={"idea-log-tail"}>
-                <XTerm ref={this.xterm} className={"idea-terminal"}/>
+                <div ref={this.xterm} className={"idea-terminal"}/>
             </div>
         </Container>
     }

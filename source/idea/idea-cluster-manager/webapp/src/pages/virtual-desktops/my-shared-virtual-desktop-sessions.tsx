@@ -44,31 +44,45 @@ class MySharedVirtualDesktopSessions extends Component<MySharedVirtualDesktopPro
             id: 'name',
             header: 'Name',
             cell: e => e.idea_session_name,
+            sortingField: 'idea_session_name'
         },
         {
             id: 'owner',
             header: 'Session Owner',
             cell: e => e.idea_session_owner,
+            sortingField: 'idea_session_owner'
         },
         {
             id: 'base_os',
             header: 'Base OS',
-            cell: e => Utils.getOsTitle(e.idea_session_base_os)
+            cell: e => Utils.getOsTitle(e.idea_session_base_os),
+            sortingComparator: (a, b) => {
+                const valueA = a.idea_session_base_os || '';
+                const valueB = b.idea_session_base_os || '';
+                return valueA.localeCompare(valueB);
+            }
         },
         {
             id: 'instance_type',
             header: 'Instance Type',
-            cell: e => e.idea_session_instance_type
+            cell: e => e.idea_session_instance_type,
+            sortingField: 'idea_session_instance_type'
         },
         {
             id: 'state',
             header: 'State',
-            cell: e => <VirtualDesktopSessionStatusIndicator state={e.idea_session_state!} hibernation_enabled={e.idea_session_hibernation_enabled!}/>
+            cell: e => <VirtualDesktopSessionStatusIndicator state={e.idea_session_state!} hibernation_enabled={e.idea_session_hibernation_enabled!}/>,
+            sortingField: 'idea_session_state'
         },
         {
             id: 'expiry',
             header: 'Permission Expiry',
-            cell: e => new Date(e.expiry_date!).toLocaleString()
+            cell: e => new Date(e.expiry_date!).toLocaleString(),
+            sortingComparator: (a, b) => {
+                const dateA = a.expiry_date ? new Date(a.expiry_date).getTime() : 0;
+                const dateB = b.expiry_date ? new Date(b.expiry_date).getTime() : 0;
+                return dateA - dateB;
+            }
         },
         {
             id: 'download-dcv-file',
@@ -229,12 +243,24 @@ class MySharedVirtualDesktopSessions extends Component<MySharedVirtualDesktopPro
                                 value: ''
                             },
                             {
+                                title: 'Amazon Linux 2023',
+                                value: 'amazonlinux2023'
+                            },
+                            {
                                 title: 'Amazon Linux 2',
                                 value: 'amazonlinux2'
                             },
                             {
-                                title: 'Windows',
-                                value: 'windows'
+                                title: 'Windows 2019',
+                                value: 'windows2019'
+                            },
+                            {
+                                title: 'Windows 2022',
+                                value: 'windows2022'
+                            },
+                            {
+                                title: 'Windows 2025',
+                                value: 'windows2025'
                             },
                             {
                                 title: 'RHEL 8',
@@ -287,6 +313,8 @@ class MySharedVirtualDesktopSessions extends Component<MySharedVirtualDesktopPro
                         })
                 }}
                 columnDefinitions={this.VIRTUAL_DESKTOP_SHARED_SESSIONS_TABLE_COLUMN_DEFINITIONS}
+                defaultSortingColumn="expiry"
+                defaultSortingDescending={false}
             />
         )
     }

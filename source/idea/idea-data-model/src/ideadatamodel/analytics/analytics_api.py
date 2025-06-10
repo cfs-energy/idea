@@ -9,10 +9,7 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
-__all__ = (
-    'OpenSearchQueryRequest',
-    'OpenSearchQueryResult'
-)
+__all__ = ('OpenSearchQueryRequest', 'OpenSearchQueryResult')
 
 from ideadatamodel import SocaPayload
 

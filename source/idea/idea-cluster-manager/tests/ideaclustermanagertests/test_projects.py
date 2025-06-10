@@ -17,7 +17,7 @@ from ideaclustermanager import AppContext
 from ideaclustermanager.app.accounts.account_tasks import GroupMembershipUpdatedTask
 from ideaclustermanager.app.projects.project_tasks import (
     ProjectEnabledTask,
-    ProjectDisabledTask
+    ProjectDisabledTask,
 )
 
 from ideadatamodel import (
@@ -34,7 +34,7 @@ from ideadatamodel import (
     ListProjectsRequest,
     Group,
     User,
-    GetUserProjectsRequest
+    GetUserProjectsRequest,
 )
 
 import pytest
@@ -46,29 +46,21 @@ class ProjectsTestContext:
 
 
 def enable_project(context: AppContext, project: Project):
-    context.projects.enable_project(EnableProjectRequest(
-        project_id=project.project_id
-    ))
+    context.projects.enable_project(EnableProjectRequest(project_id=project.project_id))
     task = ProjectEnabledTask(context=context)
-    task.invoke({
-        'project_id': project.project_id
-    })
+    task.invoke({'project_id': project.project_id})
 
 
 def disable_project(context: AppContext, project: Project):
-    context.projects.enable_project(EnableProjectRequest(
-        project_id=project.project_id
-    ))
+    context.projects.enable_project(EnableProjectRequest(project_id=project.project_id))
     task = ProjectDisabledTask(context=context)
-    task.invoke({
-        'project_id': project.project_id
-    })
+    task.invoke({'project_id': project.project_id})
 
 
 def is_memberof(context: AppContext, user: User, project: Project) -> bool:
-    result = context.projects.get_user_projects(GetUserProjectsRequest(
-        username=user.username
-    ))
+    result = context.projects.get_user_projects(
+        GetUserProjectsRequest(username=user.username)
+    )
 
     if result.projects is None:
         return False
@@ -83,56 +75,46 @@ def is_memberof(context: AppContext, user: User, project: Project) -> bool:
 def add_member(context: AppContext, user: User, project: Project):
     username = user.username
     group_name = project.ldap_groups[0]
-    context.accounts.add_users_to_group(
-        usernames=[username],
-        group_name=group_name
+    context.accounts.add_users_to_group(usernames=[username], group_name=group_name)
+    task = GroupMembershipUpdatedTask(context=context)
+    task.invoke(
+        payload={'group_name': group_name, 'username': username, 'operation': 'add'}
     )
-    task = GroupMembershipUpdatedTask(
-        context=context
-    )
-    task.invoke(payload={
-        'group_name': group_name,
-        'username': username,
-        'operation': 'add'
-    })
 
 
 def remove_member(context: AppContext, user: User, project: Project):
     username = user.username
     group_name = project.ldap_groups[0]
     context.accounts.remove_users_from_group(
-        usernames=[username],
-        group_name=group_name
+        usernames=[username], group_name=group_name
     )
-    task = GroupMembershipUpdatedTask(
-        context=context
+    task = GroupMembershipUpdatedTask(context=context)
+    task.invoke(
+        payload={'group_name': group_name, 'username': username, 'operation': 'remove'}
     )
-    task.invoke(payload={
-        'group_name': group_name,
-        'username': username,
-        'operation': 'remove'
-    })
 
 
 @pytest.fixture(scope='module')
 def membership(context: AppContext):
     def create_project(project_name: str, project_title: str) -> Project:
         # create project group
-        group = context.accounts.create_group(Group(
-            title=f'{project_title} Project Group',
-            name=f'{project_name}-project-group',
-            group_type=constants.GROUP_TYPE_PROJECT
-        ))
+        group = context.accounts.create_group(
+            Group(
+                title=f'{project_title} Project Group',
+                name=f'{project_name}-project-group',
+                group_type=constants.GROUP_TYPE_PROJECT,
+            )
+        )
         assert group is not None
 
         # create project
-        result = context.projects.create_project(CreateProjectRequest(
-            project=Project(
-                name=project_name,
-                title=project_title,
-                ldap_groups=[group.name]
+        result = context.projects.create_project(
+            CreateProjectRequest(
+                project=Project(
+                    name=project_name, title=project_title, ldap_groups=[group.name]
+                )
             )
-        ))
+        )
         assert result is not None
         assert result.project is not None
 
@@ -140,9 +122,9 @@ def membership(context: AppContext):
         enable_project(context=context, project=result.project)
 
         # get enabled project
-        result = context.projects.get_project(GetProjectRequest(
-            project_id=result.project.project_id
-        ))
+        result = context.projects.get_project(
+            GetProjectRequest(project_id=result.project.project_id)
+        )
 
         assert result.project is not None
         assert result.project.enabled is True
@@ -150,11 +132,14 @@ def membership(context: AppContext):
         return result.project
 
     def create_user(username: str) -> User:
-        return context.accounts.create_user(user=User(
-            username=username,
-            password='MockPassword_123',
-            email=f'{username}@example.com'
-        ), email_verified=True)
+        return context.accounts.create_user(
+            user=User(
+                username=username,
+                password='MockPassword_123',
+                email=f'{username}@example.com',
+            ),
+            email_verified=True,
+        )
 
     project_a = create_project('project-a', 'Project A')
     project_b = create_project('project-b', 'Project B')
@@ -167,7 +152,7 @@ def membership(context: AppContext):
         project_b=project_b,
         user_1=user_1,
         user_2=user_2,
-        user_3=user_3
+        user_3=user_3,
     )
 
 
@@ -178,9 +163,7 @@ def test_projects_create_defaults(context):
 
     context.projects.create_defaults()
 
-    result = context.projects.get_project(GetProjectRequest(
-        project_name='default'
-    ))
+    result = context.projects.get_project(GetProjectRequest(project_name='default'))
     assert result is not None
     assert result.project is not None
     assert result.project.name == 'default'
@@ -190,31 +173,35 @@ def test_projects_crud_create_project(context):
     """
     create project
     """
-    result = context.projects.create_project(CreateProjectRequest(
-        project=Project(
-            name='sampleproject',
-            title='Sample Project',
-            description='Sample Project Description',
-            ldap_groups=['default-project-group'],
-            tags=[
-                SocaKeyValue(key='k1', value='v1'),
-                SocaKeyValue(key='k2', value='v2')
-            ]
+    result = context.projects.create_project(
+        CreateProjectRequest(
+            project=Project(
+                name='sampleproject',
+                title='Sample Project',
+                description='Sample Project Description',
+                ldap_groups=['default-project-group'],
+                tags=[
+                    SocaKeyValue(key='k1', value='v1'),
+                    SocaKeyValue(key='k2', value='v2'),
+                ],
+            )
         )
-    ))
+    )
     assert result is not None
     assert result.project is not None
     assert result.project.name == 'sampleproject'
     ProjectsTestContext.crud_project = result.project
 
-    result = context.projects.get_project(GetProjectRequest(
-        project_name=ProjectsTestContext.crud_project.name
-    ))
+    result = context.projects.get_project(
+        GetProjectRequest(project_name=ProjectsTestContext.crud_project.name)
+    )
     assert result is not None
     assert result.project is not None
     assert result.project.enabled is False
     assert result.project.ldap_groups is not None
-    assert result.project.ldap_groups[0] == ProjectsTestContext.crud_project.ldap_groups[0]
+    assert (
+        result.project.ldap_groups[0] == ProjectsTestContext.crud_project.ldap_groups[0]
+    )
     assert result.project.description is not None
     assert result.project.description == 'Sample Project Description'
     assert result.project.tags is not None
@@ -233,9 +220,9 @@ def test_projects_crud_get_project_by_name(context):
     """
     assert ProjectsTestContext.crud_project is not None
 
-    result = context.projects.get_project(GetProjectRequest(
-        project_name=ProjectsTestContext.crud_project.name
-    ))
+    result = context.projects.get_project(
+        GetProjectRequest(project_name=ProjectsTestContext.crud_project.name)
+    )
     assert result is not None
     assert result.project is not None
     assert result.project.name == ProjectsTestContext.crud_project.name
@@ -248,9 +235,9 @@ def test_projects_crud_get_project_by_id(context):
     """
     assert ProjectsTestContext.crud_project is not None
 
-    result = context.projects.get_project(GetProjectRequest(
-        project_id=ProjectsTestContext.crud_project.project_id
-    ))
+    result = context.projects.get_project(
+        GetProjectRequest(project_id=ProjectsTestContext.crud_project.project_id)
+    )
     assert result is not None
     assert result.project is not None
     assert result.project.name == ProjectsTestContext.crud_project.name
@@ -264,17 +251,40 @@ def test_projects_crud_get_project_invalid_should_fail(context):
 
     # by project id
     with pytest.raises(exceptions.SocaException) as exc_info:
-        context.projects.get_project(GetProjectRequest(
-            project_id='unknown-project-id'
-        ))
+        context.projects.get_project(GetProjectRequest(project_id='unknown-project-id'))
     assert exc_info.value.error_code == errorcodes.PROJECT_NOT_FOUND
 
     # by project name
     with pytest.raises(exceptions.SocaException) as exc_info:
-        context.projects.get_project(GetProjectRequest(
-            project_name='unknown-project-name'
-        ))
+        context.projects.get_project(
+            GetProjectRequest(project_name='unknown-project-name')
+        )
     assert exc_info.value.error_code == errorcodes.PROJECT_NOT_FOUND
+
+
+def test_projects_create_without_ldap_groups(context):
+    """
+    Create project without providing ldap_groups
+    """
+    result = context.projects.create_project(
+        CreateProjectRequest(
+            project=Project(
+                name='no-groups-project',
+                title='Project Without Groups',
+                description='Project without LDAP groups',
+            )
+        )
+    )
+    assert result is not None
+    assert result.project is not None
+    assert result.project.name == 'no-groups-project'
+    assert result.project.ldap_groups is not None
+    assert len(result.project.ldap_groups) == 0
+
+    # Clean up
+    context.projects.disable_project(
+        DisableProjectRequest(project_name='no-groups-project')
+    )
 
 
 def test_projects_crud_enable_project(context):
@@ -283,13 +293,13 @@ def test_projects_crud_enable_project(context):
     """
     assert ProjectsTestContext.crud_project is not None
 
-    context.projects.enable_project(EnableProjectRequest(
-        project_id=ProjectsTestContext.crud_project.project_id
-    ))
+    context.projects.enable_project(
+        EnableProjectRequest(project_id=ProjectsTestContext.crud_project.project_id)
+    )
 
-    result = context.projects.get_project(GetProjectRequest(
-        project_id=ProjectsTestContext.crud_project.project_id
-    ))
+    result = context.projects.get_project(
+        GetProjectRequest(project_id=ProjectsTestContext.crud_project.project_id)
+    )
     assert result is not None
     assert result.project is not None
     assert result.project.enabled is True
@@ -301,13 +311,13 @@ def test_projects_crud_disable_project(context):
     """
     assert ProjectsTestContext.crud_project is not None
 
-    context.projects.disable_project(DisableProjectRequest(
-        project_id=ProjectsTestContext.crud_project.project_id
-    ))
+    context.projects.disable_project(
+        DisableProjectRequest(project_id=ProjectsTestContext.crud_project.project_id)
+    )
 
-    result = context.projects.get_project(GetProjectRequest(
-        project_id=ProjectsTestContext.crud_project.project_id
-    ))
+    result = context.projects.get_project(
+        GetProjectRequest(project_id=ProjectsTestContext.crud_project.project_id)
+    )
     assert result is not None
     assert result.project is not None
     assert result.project.enabled is False
@@ -449,9 +459,9 @@ def test_projects_get_user_projects(context, membership):
     # verify
 
     def check_user_projects(username: str, project_ids: List[str]):
-        result = context.projects.get_user_projects(GetUserProjectsRequest(
-            username=username
-        ))
+        result = context.projects.get_user_projects(
+            GetUserProjectsRequest(username=username)
+        )
         assert result.projects is not None
         count = 0
         for project in result.projects:
@@ -460,17 +470,19 @@ def test_projects_get_user_projects(context, membership):
 
         assert len(project_ids) == count
 
-    check_user_projects(username=membership.user_1.username, project_ids=[
-        membership.project_a.project_id
-    ])
+    check_user_projects(
+        username=membership.user_1.username,
+        project_ids=[membership.project_a.project_id],
+    )
     assert is_memberof(context, membership.user_1, membership.project_b) is False
 
-    check_user_projects(username=membership.user_2.username, project_ids=[
-        membership.project_b.project_id
-    ])
+    check_user_projects(
+        username=membership.user_2.username,
+        project_ids=[membership.project_b.project_id],
+    )
     assert is_memberof(context, membership.user_2, membership.project_a) is False
 
-    check_user_projects(username=membership.user_3.username, project_ids=[
-        membership.project_a.project_id,
-        membership.project_b.project_id
-    ])
+    check_user_projects(
+        username=membership.user_3.username,
+        project_ids=[membership.project_a.project_id, membership.project_b.project_id],
+    )

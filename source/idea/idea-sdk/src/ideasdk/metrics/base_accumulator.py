@@ -9,23 +9,26 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
-from ideasdk.protocols import SocaContextProtocol, MetricsServiceProtocol, MetricsAccumulatorProtocol
+from ideasdk.protocols import (
+    SocaContextProtocol,
+    MetricsServiceProtocol,
+    MetricsAccumulatorProtocol,
+)
 from abc import abstractmethod
 from typing import Optional
 
 
 class BaseAccumulator(MetricsAccumulatorProtocol):
-
     def __init__(self, context: SocaContextProtocol):
-        metrics_service: Optional[MetricsServiceProtocol] = context.service_registry().get_service('metrics-service')
+        metrics_service: Optional[MetricsServiceProtocol] = (
+            context.service_registry().get_service('metrics-service')
+        )
         if metrics_service is not None:
             metrics_service.register_accumulator(self)
 
     @property
     @abstractmethod
-    def accumulator_id(self):
-        ...
+    def accumulator_id(self): ...
 
     @abstractmethod
-    def publish_metrics(self) -> None:
-        ...
+    def publish_metrics(self) -> None: ...

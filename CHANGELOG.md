@@ -2,14 +2,197 @@
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+and this project adheres to [Calendar Versioning](https://calver.org/).
+
+## [25.06.1] - 2025-06-10
+
+> **📋 TL;DR - KEY HIGHLIGHTS**
+> - 🚨 **Breaking:** Amazon Linux 2 no longer supported for Infrastructure Base OS
+> - 📅 **Versioning:** Switched to CalVer from Semantic Versioning
+> - 🛠️ **New Tool:** Unified `upgrade-cluster` command for easier upgrades
+> - 💻 **OS Support:** Added AL2023, Windows Server 2022/2025, Ubuntu 22.04/24.04
+> - ⚡ **Major Feature:** Script Workbench for PBS job creation in Web UI
+
+* This release marks the change to [CalVer](https://calver.org/) from Semantic Versioning
+
+### **⚠️ BREAKING CHANGES** - Read Carefully!
+
+**Amazon Linux 2 Support for Infrastructure Base OS Removed**
+* Amazon Linux 2 is no longer supported as an Infrastructure Base OS
+* **Action Required:** The new `upgrade-cluster` tool will assist with updating the Base OS and AMI for Infrastructure Hosts as part of the upgrade process
+* **New Default:** Amazon Linux 2023 is now the default for new installs
+
+### **🚀 Upgrade Paths**
+
+There are two recommended upgrade paths:
+
+1. **⭐ Recommended: Use the new unified upgrade-cluster command** (simplest approach)
+   ```bash
+   ./idea-admin.sh upgrade-cluster \
+     --aws-region us-east-2 \
+     --cluster-name idea-test1
+   ```
+   This command handles all the necessary steps including base OS updates, global settings backup and regeneration, and module upgrades in a single operation.
+
+   Detailed information about the `upgrade-cluster` command can be found in the [IDEA Upgrade Documentation](https://hpc.com/first-time-users/cluster-operations/update-idea-cluster/update-idea-backend-resource).
+
+2. **Alternative: Manual update process**
+
+   If you prefer more control over the upgrade process, follow the detailed instructions in the [IDEA Upgrade Documentation](https://hpc.com/first-time-users/cluster-operations/update-idea-cluster/update-idea-backend-resource).
+
+### **📋 Post Upgrade**
+
+**Merge Software Stacks (Optional)**
+
+   After completing the upgrade, you can run `ideactl merge-software-stacks` from the VDC Controller to merge new default software stacks from the release into your cluster.
+
+## **🆕 Major New Features**
+
+### **Script Workbench**
+Added [Script Workbench](https://docs.idea-hpc.com/modules/hpc-workloads/user-documentation/script-workbench) - a game-changing feature that allows users to create, validate (dry run), and submit PBS job scripts directly from the Web UI with real-time directive validation and cost estimation.
+
+### **Expanded Operating System Support**
+* **Amazon Linux 2023** support for eVDI, Infrastructure, and Compute hosts
+* **Windows Server 2022 & 2025** support for eVDI
+  * All Windows eVDI nodes now bootstrap GPU drivers and DCV packages allowing for more modern instance types and increased flexibility
+* **Ubuntu 22.04 and 24.04** HPC Job support
+* **RHEL 8/9 & Rocky 8/9** Infrastructure host support
+* **FSx Lustre client** for Ubuntu 24.04
+
+### **New Unified Upgrade Command**
+* `upgrade-cluster` command that combines multiple steps into a single operation for easier upgrades
+* Handles base OS updates, global settings backup and regeneration, and module upgrades automatically
+
+## **✨ Features**
+
+### **Administration and Tools**
+* New `idea-admin.sh` tools
+  * `backup-update-global-settings` command to update the global cluster settings in DDB
+* New `vdc-controller` cli tools in `ideactl`
+  * `merge-software-stacks` tool to merge in new software stacks after a cluster upgrade
+  * `cleanup-orphaned-schedules` tool to cleanup the schedules table in DDB if sessions were improperly deleted
+  * `terminate-sessions` tool to delete sessions by ID, username, or created date. Useful for deleting old sessions en mass
+  * `update-base-stacks` tool to automatically update base software stacks with latest AMI versions
+* Added optional `--reset` parameter to `ideactl reindex-software-stacks` and `ideactl reindex-user-sessions` on VDC Controller to first clear OpenSearch data before reindexing from DDB
+* Updated `ami_update.py` and `ami_update_stacks.py` to use more maintainable dictionary definitions
+* Admins can now force stop sessions in any state
+* Added Session Health tab for DCV Session Info to Admin eVDI Session detail page
+* Implement Github Actions for CI for build, push, and unit tests
+
+### **Software Stack Management**
+* Added the ability to clone existing software stacks
+* Software Stack AMI, RAM, and Storage are now modifiable from the Web UI
+* Added the ability for admin users to enable / disable / delete software stacks from the Cluster Manager Web UI
+  * Added DeleteSoftwareStacks Admin API
+  * Software Stack table is now multi-select and Admins can delete/disable multiple stacks at once
+* Added the ability to set allowed instance types on a per software stack basis
+* Admins can now assign projects to software stacks without needing to be a project member
+* Admins can see all available projects in both the Create Software Stack and Capture from Session modals
+
+### **User Experience and Interface**
+* Added the ability to sort most tabular objects alphanumerically
+* Added the ability for admins to launch sessions on behalf of users using instance types not defined in the allowed lists
+* Refactored the Create Session form in Cluster Manager Web UI to only show users what they have permissions to launch
+* Added Budget tab to the Submit Job Web UI page for users to review existing budget consumption if the submitting project has a budget attached
+* Enhanced session validation for eVDI instances. Sessions in an ERROR state can now be recovered by Reboot or Admin Stop/Resume if the problem causing the ERROR has been resolved. Example: Bad `.bashrc` causing DCV session creation to fail
+* Added the ability to export page tables in CSV format
+* Updated default Job Notification email to include queue name and exit code
+* Dark Mode is now default
+* Various front end cosmetic improvements
+
+### **Infrastructure and Security**
+* VDC and Compute Hosts will now be deleted from AD upon termination
+* Windows eVDI hosts now support extended metrics collection via Cloudwatch Agent
+* Linux Compute nodes enable file logging via Cloudwatch Agent
+* Added additional Cloudwatch log file consumption to Infrastructure & Application hosts
+* Add `JobOwnerEmail` tag to eVDI and Compute nodes
+  * Update your cost allocation tags to consume this new tag into CUR
+* Reworked `filesystem_helper` for better file deletion management
+* Implemented Github Actions CI for
+  * Linting & Pre-Commit Checks
+  * Unit Tests
+  * Build Tests
+  * Production Build & Push
+* Implemented `pre-commit` checks & linting
+  * Updated codebase to satisfy `ruff`, `j2lint`, `typos` and more
+
+## **🔄 Changes**
+
+### **Core Dependencies and Services**
+| Component | Previous Version | New Version | Notes |
+|-----------|------------------|-------------|-------|
+| AWS CDK | `2.164.1` | `2.1016.1` | CDK stacks updated for deprecating actions |
+| Python | `3.9.19` | `3.13.3` | Lambda runtimes now use Python 3.13 |
+| Node | `18.20.4` | `22.14.0` | - |
+| NVM | `0.40.1` | `0.40.2` | - |
+| NPM | `10.5.2` | `10.9.2` | - |
+| AWS EFA | `1.35.0` | `1.41.0` | - |
+| OpenSearch | `2.15` | `2.19` | - |
+
+### **DCV Updates**
+| Component | Previous Version | New Version |
+|-----------|------------------|-------------|
+| Amazon DCV Server | `2024.0-17979` | `2024.0-19030` |
+| Amazon DCV Agent | `2024.0.781-1` | `2024.0-817-1` |
+| Amazon DCV Connection Gateway | `2023.0.710-1` | `2024.0-777-1` |
+| Amazon DCV Broker | `2024.0.457-1` | `2024.0-504-1` |
+
+### **System Configurations**
+* Update NVIDIA Production GPU Drivers from `550.127.05` -> `570.124.06`
+* New installs use Amazon Linux 2023 by default for Infrastructure hosts
+* New installs use AWS Managed Active Directory by default
+* OpenLDAP is no longer supported for new deployments
+* Included `ec2:DescribeInstanceTypes` and S3 access to GPU Drivers on eVDI instance IAM role
+* Cognito IDP Advanced security is now a paid feature, default to OFF to avoid Plus plan requirement
+
+### **User Experience Improvements**
+* Set `pro config set apt_news=false` on Ubuntu to prevent advertising
+* Install Firefox on Ubuntu with apt instead of snap to prevent launch issues
+* Made `terminate instance` button more obvious that it is a destructive action
+* Documentation is now residing in the `main` branch
+
+## **🐛 Bug Fixes**
+
+### **User Interface**
+* Fixed Chrome background handling closing the Service Worker causing premature auto-logouts
+* Fixed projects page not loading when AWS Budget had been deleted or expired
+* When capturing a Software Stack from a session, Project selection is now respected in the resulting stack
+* Fixed GiB/GB conversion issue resulting in captured software stacks having incorrect Min RAM
+* Fixed session filtering by calendar range
+* Fixed CodeEditor theming
+
+### **Infrastructure and Services**
+* Fixed automated generation of data model. Updated to support Pydantic v2
+* Fixed an issue with JSON output from qstat with multiple jobids, added `-E` flag to ensure successful output
+* Fixed and refactored integration tests
+* Fixed multi-node non-spot jobs not being launched in placement groups
+* Fixed infrastructure deployments failing with non-default AWS profile using `idea-admin` utility
+* Fixed GPU drivers installation failing on GPU instances in AWS Gov Cloud
+* Added file size validation to open operations from Web UI File Browser
+* Fixed dependency with HPC Jobs using placement groups, CloudFormation stack no longer fails to delete
+* Fixed instance type EFA validation when queue has EFA enabled by default and submit script does not contain `efa_support` directive
+* Updated to Tail File mechanism for resilience and robustness
+* Linux and Windows eVDI nodes now provide Cloudwatch Agent metrics if Metrics & Logging is enabled
+  * Extended eVDI metrics use the `CWAgent` namespace so they appear in the AWS Console on the Monitoring Tab alongside default metrics
+
+## **⚠️ Known Issues**
+
+### **Platform Limitations**
+* Backend APIs return paginated results so table sorting is only per page
+* CSV Exports are limited to 10000 results
+* AMD GPUs (`g4ad`) only work on Windows and Rocky8/9
+  * Incompatible OS's are filtered client side in the eVDI Create Session form
+
+### **Browser-Specific Issues**
+* Logins fail with multiple sso-enabled clusters on Safari
+* Software Stacks captured from running sessions where AMI creation exceeds 8 minutes will fail to auto-enable and must be enabled manually
 
 ## [3.1.10] - 2024-10-29
 
 ### Notes
-* This upgrade does require an update to the global settings. Please review [Global Settings Upgrade](https://docs.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/update-idea-backend-resource#global-settings-backup-and-upgrade) before upgrading.
+* This upgrade does require an update to the global settings. Please review [Global Settings Upgrade](https://hpc.com/first-time-users/cluster-operations/update-idea-cluster/update-idea-backend-resource#global-settings-backup-and-upgrade) before upgrading.
 * You should update the IDEA CDK Bootstrap to fix [CDK Issue #31885](https://github.com/aws/aws-cdk/issues/31885) - This is a security fix and should be addressed on all CDK stacks regardless of IDEA
-  * To update the IDEA CDK Bootstrap for existing deployments, use idea-admin: 
+  * To update the IDEA CDK Bootstrap for existing deployments, use idea-admin:
     ```
     idea-admin.sh bootstrap --cluster-name <CLUSTER_NAME> --aws-region <CLUSTER_REGION> --aws-profile <AWS_PROFILE>
     ```
@@ -62,7 +245,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Bug Fixes
 * Fixed taskbar not appearing on Ubuntu eVDI nodes
-* Removed non-existant `cfn_template` from devtool `release.update-version`
+* Removed non-existent `cfn_template` from devtool `release.update-version`
 * Fixed snap on Ubuntu to use `/data/home` user directory
 * Update firefox.desktop `NoDisplay=false` to show in Ubuntu application launcher
 * Change input method for Ubuntu to `xim` to fix issues with `ibus` not allowing keyboard input in certain apps
@@ -75,7 +258,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [3.1.8] - 2024-07-17
 
 ### Notes
-* This upgrade does require an update to the global settings. Please review [Global Settings Upgrade](https://docs.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/update-idea-backend-resource#global-settings-backup-and-upgrade) before upgrading.
+* This upgrade does require an update to the global settings. Please review [Global Settings Upgrade](https://hpc.com/first-time-users/cluster-operations/update-idea-cluster/update-idea-backend-resource#global-settings-backup-and-upgrade) before upgrading.
 * Removed `RHEL 7` and `CentOS 7` due to EOL on 6/30/2024
   * Remove software stacks and existing eVDI deployments that are running `CentOS 7` or `RHEL 7` BEFORE upgrading to IDEA 3.1.8
 
@@ -101,19 +284,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Known Caveats
 * Internal DNS zone uses `.local` which should be reserved for mDNS per RFC6762
-* DCV USB Forwarding not available on 
+* DCV USB Forwarding not available on
   * `RHEL 9`
   * `Rocky 9`
   * `Ubuntu 22.04` with kernel newer than `6.2`
 * No Lustre client for Ubuntu with kernel newer than `6.2`
-* When accessing multiple IDEA deployments at once in Safari, SSO logins hang for environemnts that were loaded after the first. Also exists in prior releases.
+* When accessing multiple IDEA deployments at once in Safari, SSO logins hang for environments that were loaded after the first. Also exists in prior releases.
 * When using SSO and Chrome, inactive tabs time out more quickly than desired. Also exists in prior releases.
 * Docs need some updates to reflect addition of Ubuntu and removal of RHEL 7 and CentOS 7
 
 ## [3.1.7] - 2024-06-01
 
 ### Notes
-* This upgrade does require an update to the global settings. Please review [Global Settings Upgrade](https://docs.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/update-idea-backend-resource#global-settings-backup-and-upgrade) before upgrading.
+* This upgrade does require an update to the global settings. Please review [Global Settings Upgrade](https://hpc.com/first-time-users/cluster-operations/update-idea-cluster/update-idea-backend-resource#global-settings-backup-and-upgrade) before upgrading.
 * Pre-upgrade script `scripts/pre-upgrade-317.sh` will assist by outputting the cluster settings command to update Base OS AMI as well as rename occurrences in settings for schedule `STOP_ALL_DAY` to `STOP_ON_IDLE`.
 * Schedule Update script included in scripts to be able to update existing sessions to `STOP_ON_IDLE` via API
 
@@ -152,7 +335,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Update references to old Github Repo
 * Update references to old Docs URL
 * Added AMI update scripts in `scripts/dev` to update AMI versions for base and software stacks. These will be worked into devtool at a later time
-  
+
 ### Bug Fixes
 * Fixed FSx for Lustre allowed size mismatch between AWS and IDEA
   * This likely needs a re-work for different FSx Lustre types.
@@ -167,7 +350,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   * Cluster home directory `/apps/idea-<cluster name>` from `700` to `701` to allow traverse to script directory
 * Fix Home Dir permissions for New Users from `700` to `710` to allow file sharing when using `Add User to My Group` feature
 * Fix scratch storage mount permissions for HPC jobs on Linux
-* In `idea-admin.sh` sso configuration, multiple scopes can be submitted seperated by `,` this will be replaced with a space in Cognito
+* In `idea-admin.sh` sso configuration, multiple scopes can be submitted separated by `,` this will be replaced with a space in Cognito
 
 ### Known Caveats
 * Data model was updated in 3.1.6, devtool web-portal.typings needs to be re-worked to support changes in Pydantic v2 and IDEA data model
@@ -323,236 +506,3 @@ Users of older `idea-admin.sh` and `idea-admin-windows.ps1` may need to manually
 * Update requests module from `2.27.1` to `2.31.0`
 * ALB deployments will now set the option to Drop Invalid Headers
 * Default Web/API page size increased from `20` to `50`
-* Update AMI IDs for all supported operating systems
-* Update AWS EFA Installer from `1.22.1` to `1.23.1`
-* Update DCV Server from `2023.0-14852` to `2023.0-15065`, DCV Session Manager Agent from `2023.0.642` to `2023.0.675`, and DCV viewer from `2023.0.5388` to `2023.0.5483`
-* Reduce the default DCV idle disconnect from 24-hours to 4-hours
-* Update Nvidia drivers from `510.47.03` to `525.105.17`
-
-### Bug Fixes
-* `ideactl ldap search-nnn `on `cluster-manager` did not properly return all results when the results spanned multiple pages of results. This has been fixed.
-* Newly created software stacks were not set to enabled  by default.
-* Deleting a cluster with a large AWS Backup Vault could have resulted in error and the need to delete the Vault manually.
-* eVDI owner permissions that had de-selected the `builtin`  and customized permissions would render the eVDI session unusable even to the session owner. This has been corrected and custom owner permissions work as expected.
-
-### Known Caveats
-
-* `Red Hat Enterprise Linux 8.7` and `Rocky Linux 8.7` do not launch VDI sessions on `G4ad` instances due to AMD GPU driver kernel version dependencies.
-* AWS EFA installer doesn't install successfully on `Rocky Linux 8.7`
-
-
-## [3.1.2] - 2023-05-09
-
-### Features
-
-* Expand proxy support for VPCs without VPC endpoints
-* Validate that the user password conforms to Cognito user pool password policy requirements before creating the user in the user pool
-* Added `ideactl`  support for `add-user-to-group`  and `remove-user-from-group `
-* Expand support for customer-managed KMS keys to `DynamoDB`, `OpenSearch`, `Kinesis`, and `EBS`
-* Support use case of having a unique customer-managed KMS key for each of the following AWS service: `Secrets Manager`, `SNS`, `SQS`, `DynamoDB`, `EBS`, `Backup`, `OpenSearch`, `Kinesis`, `EFS`, and `FSx for Lustre`
-  * `EBS` customer-managed key needs the following service-roles to be added as key users: AWSServiceRoleForAutoScaling, AWSServiceRoleForEC2Fleet, AWSServiceRoleforEC2SpotFleet. Post IDEA cluster deployment, IDEA VDC Controller IAM role also needs to be added as a key user.
-  * `SQS` customer-managed key needs customization to grant SNS service-principal access per https://docs.aws.amazon.com/sns/latest/dg/sns-enable-encryption-for-topic-sqs-queue-subscriptions.html
-* New options to control eVDI subnet use/selection can be found under `vdc.dcv_sessions.network`:
-  * Allow for eVDI subnets to differ from HPC/compute subnets in the configuration. By default, the same subnets are configured. This can be changed on a running cluster without a restart.
-  * Allow for `ordered`  or `random`  subnet selection during eVDI launching. Default subnet selection is `ordered` .
-  * Allow for automatic retry of eVDI subnets during creating eVDI resources. Default is to `auto-retry` the next subnet. This may be disabled in situations to avoid cross-AZ charges with eVDI resources accessing resources in other AZs.
-* Allow the IDEA Administrator to define NICE DCV USB remotization devices that will apply to the eVDI fleet. USB filter strings can be added to `vdc.server.usb_remotization`  (list) for USB client-side devices to be enabled for USB remotization.
-* Added terminate when idle support to `AlwaysOn` capacity
-
-### Changes
-
-* AWS EFA Installer updated from `1.22.0`  to `1.22.1`
-* Update DCV Server from `2022.1-13300` to `2023.0-14852`, DCV Session Manager Agent from `2022.1-592` to `2023.0-642`, DCV Connection Gateway from `2022.1.377` to `2023.0.531`, DCV Session Manager Broker from `2022.1.355` to `2023.0.392`, and DCV viewer from `2022.1.4251` to `2023.0.5388`
-* Changes to WebUI / notification icon - Password expiration warning will only appear at `<10days`.  Remove the default pip on the icon indicating a waiting notification.
-* eVDI hosts will now populate `/etc/environment`  with two additional environment variables that can be used by bootstrap scripting / post-boot customization. `IDEA_SESSION_OWNER`  and `IDEA_SESSION_ID` .
-* When submitting a job from the WebUI - the job name  will now default to the filename with the `.`  character replaced with `_`  as `.`  is not allowed in job names.
-* Changed front-end WebUI API request timeout from `10-seconds` to `30-seconds` to accommodate longer lookups/lists on back-end directory services.
-* Changed user drop-down lists to search instead of select for clusters with a large number of users.
-
-### Bug Fixes
-
-* Fixed an issue that prevented user VDI sessions to successfully transition from `Stopping` to `Stopped` state
-* Set `PBS_LEAF_NAME` to the compute node hostname to address an issue if compute node AMI has more than one network interface
-* The incorrect version number for IDEA was displayed in the Web console
-* eVDI sessions were launched with EBS volume encryption tied to the Hibernation setting
-* The download link for NICE DCV Session manager agent for Windows was incorrect
-* Log files are now encoded in `UTF-8` encoding. This allows for logging of eVDI session names with UTF-8/multibyte characters. Previously this would cause a traceback.
-* A bug was preventing the cluster timezone from properly being detecting in some modules. The timezone would default to `America/Los_Angeles`  for some situations even when the `cluster.timezone`  was properly set. This would cause eVDI schedules to operate in `America/Los_Angeles`  instead of the cluster timezone.
-* Fixed a bug that prevented updates to DCV connection gateway certificate ARNs when private certificates are used
-* Fixed a bug that prevented SSH access to IDEA infrastructure instances when `CentOS7` is used
-* Addressed user-scale issue of querying Cognito API for user-status in bulk list users.
-
-
-
-## [3.1.1] - 2023-03-10
-
-### Features
-
-* Enable IDEA to deploy in `isolated subnets` (no NAT Gateway) utilizing combination of VPC Endpoints and a customer-managed proxy. The proxy is used to access public repos and AWS service endpoints that don't support VPC Endpoints (Pricing, ServiceQuotas, DynamoDB Streams, Cognito, Directory Service).
-
-
-### Bug Fixes
-
-* When adding a user that does not conform to the Cognito pool password policy a user record is still created in the User Pool without the non-conforming password. This has been updated to remove the non-conforming user account during a password policy failure.
-* Running `delete-cluster`  with a previously configured cluster may cause problems in removing the Cognito User Pools.
-
-### Changes
-
-* Remove AWS CLI v1 (for AL2) and install AWS CLI v2 to remain consistent with AWS CLI v2 as a requirement.
-* Update AWS EFA Installer from `1.21.0`  to `1.22.0 `
-* Update OpenMPI from `4.1.4`  to `4.1.5`
-* `G5  Instance Family` are now permitted in the default VDI configuration
-
-### Security
-
-* Reduced IAM permissions required for `analytics-sink-lambda` function from `ec2:*` to the required permissions
-* When configured for SSO - only allow `clusteradmin` to use Cognito-local authentication. Other users will not be permitted to use Cognito local authentication. A new logging message has been created to log the attempt.
-
-
-
-## [3.1.0] - 2023-02-20
-
-### Features
-
-* Enable IDEA installation to use an existing Active Directory for directory services. Several behavior changes take place and the dedicated document should be consulted to understand these changes.
-
-* Cognito User Pool now contains the standard AWS Tags for the IDEA cluster name.
-* Amazon OpenSearch Service - Default engine version updated to OpenSearch 2.3  for new installations.
-* Enhanced `delete-cluster` to delete CloudWatch Log Groups.
-* Added option `--delete-all` for `delete-cluster`. This will delete bootstrap, backups, dynamodb tables, and cloudwatch log groups.
-* Support for new instance families:   `c6in`, `m6in`, `m6idn`, `r6in` and `r6idn`
-* (`cluster-manager`) - Added `groups`  subcommands for group add/delete/enable/disable/listing
-
-
-### Changes
-
-* AWS CDK updated to `2.63.0` (requires development environment update)
-* boto3 / botocore updates (`1.26.61 / 1.29.61`)
-* Various Python library updates (ujson, troposphere, jsii)
-* **NOTE** - Development environment updates are required due to CDK and package changes.
-* Shell script automations now have a min/max sleep time. Previously a random sleep interval of `0`  could be encountered.
-* **Revert** max username length from 32-characters to 20-characters to maintain Active Directory compatibility.
-* Joins to Active Directory now make use of a generated IDEA Hostname  with a configured prefix (`directoryservice/settings.yml`).
-* misc typos / text cleanups
-
-
-### Security
-
-* `IMDSv2 support - Phase-2` - Added ability for IMDSv2 version enforcement for infrastructure and user VDI instances.
-* Run SSH key conversion via `puttygen`  as the requesting username vs. root to decrease potential for permissions problems.
-* AD preset/joins now take place with 120-character computer object passwords.
-* The Cognito User Pool is now created with Deletion Protection activated. This prevents an accidental deletion from the console or CloudFormation. A delete-cluster  operation from idea-admin.sh  will automatically remove this attribute when deleting a cluster.
-* The Cognito User Pool now deploys with Advanced Security Mode - Audit enabled by default (configurable via `identity-provider/settings.yml` ).  See documentation for additional details and the metrics that are published to CloudWatch: https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-pool-settings-advanced-security.html
-
-
-### Bug Fixes
-
-* CloudWatch alarms related to DynamoDB scaling are now automatically deleted when the dynamodb tables are deleted.
-* AD Joins were failing when the hostname length was being truncated between the pre-creation of the AD object by `cluster-manager`  and the actual join by the node. AD joins will now use a generated IDEA hostname to properly join AD. This hostname is limited to 15characters in length for AD compatibility reasons.
-* Under certain circumstances a non-admin user would be unable to see a listing of projects with a DirectoryService back-end of Active Directory.
-* A race condition during IAM role creation and policy application could sometimes cause a failure and rollback during installation of the cluster  stack, preventing IDEA installation from proceeding.
-* The IDEA installer only allowed specifying an IPv4 /32 during installation. This has been corrected to allow valid IPv4 CIDR notations.
-* Active Directory configuration was not creating Computer objects in the configured OU. Computer Objects were being created in the default OU/location in the domain which may not be permitted by the service user.
-* The IDEA installer would fail when selecting a new VPC and to use VPC Endpoints.
-* Bug fix for `idea-admin.sh shared-storage attach-file-system`  to properly query and configure CIFS share names for FSx for NetApp ONTAP
-* Bug fix for platform identification used during SSH key generation
-* Bug fix for creating PPK SSH key with correct user ownership
-* When performing an IDEA installation - under rare circumstances the analytics  stack may fail with an error: The role defined for the function cannot be assumed by Lambda. Retrying the deployment will generally recover the installation. This has been corrected.
-* Cluster Status displayed an unhealthy status for modules that were not deployed by the IDEA administrator. These now show as 'Not Applicable'.
-* The `DeleteSession`  eVDI API was not functioning correctly.
-* During installation of the analytics  stack - there could be a race condition that prevented installation. This has been corrected.
-* Enforce matching job_owner  to JWT during API requests.
-* Under certain conditions the `config generate`  phase could fail in regions due to Amazon File Cache not being deployed. This has been corrected.
-* The eVDI / DCV Connection Gateway process may not properly restart after an instance restart. This has been corrected.
-
-
-### Known Caveats
-
-* When using a custom DNS domain name - the Administrator must update the Cognito invite template from the AWS console or the URL sent to users will not be the custom DNS name.
-* Performing a `delete-cluster`  while AWS Backup Vault has running jobs will result in an error and the cluster delete will fail.
-  * **Workaround**: Retry the `delete-cluster`  outside of the Backup Vault window when the recovery point can be deleted properly.
-* After the removal/deletion of a cluster from an AWS account - there may still be artifacts related to the old cluster:
-  * OpenSearch statistic entries / Job history if using `--existing-resources`
-
-* Using a default configuration of NFSv4 for EFS filesystems will still attempt to validate/install the Amazon EFS Mount helper
-* Nested `shared-storage`  modules are not currently supported and may not mount in the correct order
-* Using the job-level parameter for `fsx_lustre`  is only supported for creating ephemeral/new FSx/Lustre deployments. Attaching to existing FSx/Lustre deployments at a per-job-level is not supported in this release. Attaching via the shared-storage  module for existing FSx/Lustre filesystems is supported.
-* Some WebUI elements are still visible but without functionality when using Active Directory and SSO. (e.g. Forgot Password). These elements should be avoided in Active Directory / SSO configurations and will be automatically disabled in future releases based on the configuration settings.
-* By default - the Cognito User Pool uses Cognito for sending email invitations for new users. There is a limit of 50  emails (invites) per day in this configuration.
-  * **Workaround**: Configured Amazon Simple Email Service (SES) and configure the Cognito pool to use SES and a verified sender-id.
-
-
-
-## [3.0.0] - 2022-12-30
-
-### Features
-
-* Add support for Amazon File Cache filesystems to shared-storage module.
-* Support for GovCloud region `us-gov-west-1` . GovCloud region `us-gov-east-1`  is not supported at this time.
-* Perform Lustre client performance tuning on high-performance instances (64core+, 64GiB+)
-
-### Changes
-
-* AWS EFA Installer updated to `1.21.0 `
-* IDEA Python updated to `3.9.16 `
-* Lustre client updated to `2.12`
-* Changes to integration-test infrastructure to leverage `IMDSv2`
-* Changes to integration-tests to clean up any AWS Backups that are deployed and log more environment variables during the run
-* Connect anonymous metrics for telemetry information about the AWS Solution
-* Revised eVDI `allowlist/denylist` functionality to allow fine-grained control of instances. Supports both instance family and specific instance conventions.
-* Build python in the bootstrap directory vs. `/tmp`  - this is more compatible with AMIs that have `noexec`  mount policy for `/tmp` .
-* Refactor launch configurations into Launch Templates for `cluster-manager` and eVDI ASGs
-* Reduce memory consumption of `qstat`  data collection by not including the environment variables. Also corrects PBS that emits poorly formatted JSON.
-* Disable computer renaming to prevent AD problems
-* Change idea-admin.sh  "detect my IP address" functionality to use `checkip.amazonaws.com`
-* Usernames can now be up to 32-characters and including the `_`  character
-* Instance families `m6a`  and `g4ad`  added to default VDI allowlist
-* Internal improvements to the testing framework and unit tests
-* Add `availability_zone_id` to PBS `resouredef` for jobs (unused)
-* Improve the behavior of installation in dense EFS environments
-* Prevent shared-storage from listing unhealthy filesystems
-
-
-### Security
-
-* Security: Support mounting EFS filesystems via the Amazon EFS Helper  , providing TLS protection of NFS traffic / Data in transit encryption. (non-default)
-* Security: `IMDSv2 support - Phase-1` - Ephemeral nodes now make use of IMDSv2 when connecting to Instance Metadata Service
-* Security: prevent user enumeration via timing attacks/analysis
-* Security: Prevent rendering in iframe
-* Security: reduce refresh token to 12hrs
-* Security: Prevent LFI in limited scenarios
-* Security: Invalidate refresh token on all devices during password change
-* Security: prevent log injection
-* Security: OpenLDAP now uses `SSHA/SHA512` for password storage
-* Security: Allow ELBs to have a configured SSL/TLS policy in the configuration
-* Security: Removed unused API endpoints
-* Security: `SHA384 rollout- Phase1` - Start to use `sha384`  for external objects/ downloads
-
-### Bug Fixes
-
-* SSO / SAML behaviors fixed.
-  * SSO now requires provider-type.
-  * While SSO/SAML should work for any complaint vendor - primary testing is with external providers AzureAD  and Okta
-
-* The `patch`  command would finish and exit before the patch was completed on the deployed nodes.
-* VDC API failure for users listing software packages without a defined filter
-* Corrections to VDC software stack and user stack indexing
-* Improved error handling for bad options/arguments to `qsub`  / scheduler
-* Fixed inability for Windows session sharing in VDI when using AWS MAD
-* Windows VDI sessions with AWS MAD displayed a black screen/thumbnail
-* Cleaned up delete-cluster  operations to prevent race condition on bucket objects delete
-* Properly check CPU utilization before enforcing scheduled actions on eVDI sessions
-* Fix EVDI windows sessions and being properly added to Local Admin user context
-* Correct PBS job comment when a user deletes a job from the WebUI
-* Fix for `sssd` error related to config params in wrong stanza/section
-* Misc other fixes/corrections
-
-### Known Caveats
-
-* After the removal/deletion of a cluster from an AWS account - there may still be artifacts related to the old cluster:
-  * Cloudwatch autoscaling alarms for the DynamoDB tables
-  * OpenSearch statistic entries / Job history if using `--existing-resources`
-* Using a default configuration of NFSv4 for EFS filesystems will still attempt to validate/install the Amazon EFS Mount helper
-* Nested shared-storage  modules are not currently supported and may not mount in the correct order
-* Using the job-level parameter for `fsx_lustre`  is only supported for creating ephemeral/new FSx/Lustre deployments. Attaching to existing FSx/Lustre deployments at a per-job-level is not supported in this release. Attaching via the shared-storage  module for existing FSx/Lustre filesystems is supported.
-

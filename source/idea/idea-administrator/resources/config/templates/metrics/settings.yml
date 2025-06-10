@@ -9,7 +9,7 @@
 # provider can be one of [cloudwatch, amazon_managed_prometheus, prometheus]
 provider: "{{metrics_provider}}"
 
-{%- if metrics_provider == 'cloudwatch' %}
+{% if metrics_provider == 'cloudwatch' %}
 cloudwatch:
   # `dashboard_name` can only contain alphanumerics, dash (-) and underscore (_).
   dashboard_name: "{{cluster_name}}_{{aws_region}}"
@@ -21,14 +21,14 @@ cloudwatch:
   # Specifies in seconds the maximum amount of time that metrics remain in the memory buffer before being sent to the server.
   # No matter the setting for this, if the size of the metrics in the buffer reaches 40 KB or 20 different metrics, the metrics are immediately sent to the server.
   force_flush_interval: 60
-{%- endif %}
+{% endif %}
 
-{%- if metrics_provider == 'amazon_managed_prometheus' %}
+{% if metrics_provider == 'amazon_managed_prometheus' %}
 amazon_managed_prometheus:
   workspace_name: {{cluster_name}}-workspace
-{%- endif %}
+{% endif %}
 
-{%- if metrics_provider in ['amazon_managed_prometheus', 'prometheus'] %}
+{% if metrics_provider in ['amazon_managed_prometheus', 'prometheus'] %}
 prometheus:
 
   # default scrape_interval. individual modules may override this configuration.
@@ -90,4 +90,4 @@ prometheus:
   # for custom prometheus, update this section in a similar fashion as that of remote_write configuration.
   remote_read:
     url: {{ prometheus_query_url if prometheus_query_url else '~' }}
-{%- endif %}
+{% endif %}

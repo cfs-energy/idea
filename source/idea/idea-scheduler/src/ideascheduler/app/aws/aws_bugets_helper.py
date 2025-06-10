@@ -11,10 +11,15 @@
 
 import ideascheduler
 from ideadatamodel import (
-    exceptions, errorcodes,
-    SocaJob, SocaJobEstimatedBOMCost,
+    exceptions,
+    errorcodes,
+    SocaJob,
+    SocaJobEstimatedBOMCost,
     SocaJobEstimatedBudgetUsage,
-    AwsProjectBudget, Project, GetProjectRequest
+    AwsProjectBudget,
+    Project,
+    GetProjectRequest,
+    SocaAmount,
 )
 from ideasdk.utils import Utils
 
@@ -22,7 +27,12 @@ from typing import Optional
 
 
 class AwsBudgetsHelper:
-    def __init__(self, context: ideascheduler.AppContext, job: SocaJob = None, project: Project = None):
+    def __init__(
+        self,
+        context: ideascheduler.AppContext,
+        job: SocaJob = None,
+        project: Project = None,
+    ):
         self._context = context
         self._logger = context.logger()
 
@@ -32,7 +42,9 @@ class AwsBudgetsHelper:
         if self._project is None and self._job is not None:
             if Utils.is_empty(job.project):
                 return
-            get_project_result = self._context.projects_client.get_project(GetProjectRequest(project_name=job.project))
+            get_project_result = self._context.projects_client.get_project(
+                GetProjectRequest(project_name=job.project)
+            )
             self._project = get_project_result.project
 
     @property
@@ -64,8 +76,30 @@ class AwsBudgetsHelper:
             budget_name = self.budget_name
             if Utils.is_empty(budget_name):
                 return None
-            return self._context.aws_util().budgets_get_budget(budget_name=self.budget_name)
+            return self._context.aws_util().budgets_get_budget(
+                budget_name=self.budget_name
+            )
         except exceptions.SocaException as e:
+            if e.error_code == errorcodes.BUDGET_NOT_FOUND:
+                # If the budget is not found, create a synthetic one that shows as exhausted
+                if not raise_exc:
+                    self._logger.warning(
+                        f'Budget not found: {budget_name}, creating a synthetic budget'
+                    )
+                    # Create a synthetic budget with is_missing=True flag
+                    return AwsProjectBudget(
+                        budget_name=budget_name,
+                        budget_limit=SocaAmount(
+                            amount=100.0
+                        ),  # Set a default budget limit
+                        actual_spend=SocaAmount(
+                            amount=200.0
+                        ),  # Set actual spend higher than limit to show as exhausted
+                        forecasted_spend=SocaAmount(
+                            amount=200.0
+                        ),  # Set forecasted spend higher than limit
+                        is_missing=True,  # Flag to indicate budget is missing
+                    )
             if raise_exc:
                 raise e
             else:
@@ -84,12 +118,13 @@ class AwsBudgetsHelper:
             raise exceptions.SocaException(
                 error_code=errorcodes.BUDGETS_LIMIT_EXCEEDED,
                 message=f'Project: ({self._job.project}) has exceeded the allocated budget limit. '
-                        f'Please update the limit on AWS Budgets Console or try again later.',
-                ref=budget
+                f'Please update the limit on AWS Budgets Console or try again later.',
+                ref=budget,
             )
 
-    def compute_budget_usage(self, bom_cost: Optional[SocaJobEstimatedBOMCost] = None) -> Optional[SocaJobEstimatedBudgetUsage]:
-
+    def compute_budget_usage(
+        self, bom_cost: Optional[SocaJobEstimatedBOMCost] = None
+    ) -> Optional[SocaJobEstimatedBudgetUsage]:
         budget_name = self.budget_name
         if Utils.is_empty(budget_name):
             return None
@@ -102,8 +137,12 @@ class AwsBudgetsHelper:
 
         budget = self.get_budget()
 
-        job_usage_percent = round((bom_cost.line_items_total.amount / budget.budget_limit.amount) * 100, 2)
-        job_usage_percent_with_savings = round((bom_cost.total.amount / budget.budget_limit.amount) * 100, 2)
+        job_usage_percent = round(
+            (bom_cost.line_items_total.amount / budget.budget_limit.amount) * 100, 2
+        )
+        job_usage_percent_with_savings = round(
+            (bom_cost.total.amount / budget.budget_limit.amount) * 100, 2
+        )
 
         return SocaJobEstimatedBudgetUsage(
             budget_name=budget_name,
@@ -111,5 +150,5 @@ class AwsBudgetsHelper:
             actual_spend=budget.actual_spend,
             forecasted_spend=budget.forecasted_spend,
             job_usage_percent=job_usage_percent,
-            job_usage_percent_with_savings=job_usage_percent_with_savings
+            job_usage_percent_with_savings=job_usage_percent_with_savings,
         )

@@ -57,7 +57,7 @@ __all__ = (
     'LimitCheckResult',
     'HpcApplication',
     'HpcQueueProfile',
-    'HpcLicenseResource'
+    'HpcLicenseResource',
 )
 
 from ideadatamodel import (
@@ -67,7 +67,7 @@ from ideadatamodel import (
     exceptions,
     EC2Instance,
     SocaUserInputModuleMetadata,
-    Project
+    Project,
 )
 
 from ideadatamodel.model_utils import ModelUtils
@@ -144,7 +144,9 @@ class SocaSpotAllocationStrategy(str, Enum):
         return ['capacity-optimized', 'lowest-price', 'diversified']
 
     @staticmethod
-    def resolve(value: Optional[str], default=None) -> Optional['SocaSpotAllocationStrategy']:
+    def resolve(
+        value: Optional[str], default=None
+    ) -> Optional['SocaSpotAllocationStrategy']:
         if ModelUtils.is_empty(value):
             return default
         token = value.strip().lower()
@@ -301,6 +303,7 @@ class SocaJobProvisioningOptions(SocaBaseModel):
     If any of these values can be potentially be submitted by the user during job submission,
     these values must be pulled up to JobParams.
     """
+
     keep_forever: Optional[bool] = Field(default=None)
     terminate_when_idle: Optional[int] = Field(default=None)
     ebs_optimized: Optional[bool] = Field(default=None)
@@ -344,20 +347,17 @@ class SocaJobEstimatedBOMCostLineItem(SocaBaseModel):
     def update(self, with_: 'SocaJobEstimatedBOMCostLineItem'):
         self.quantity = with_.quantity
         total_amount = self.quantity * self.unit_price.amount
-        self.total_price = SocaAmount(
-            amount=total_amount
-        )
+        self.total_price = SocaAmount(amount=total_amount)
 
 
 class SocaJobEstimatedBOMCost(SocaBaseModel):
     line_items: Optional[List[SocaJobEstimatedBOMCostLineItem]] = Field(default=None)
     line_items_total: Optional[SocaAmount] = Field(default=None)
     savings: Optional[List[SocaJobEstimatedBOMCostLineItem]] = Field(default=None)
-    savings_total: Optional[SocaAmount]  = Field(default=None)
+    savings_total: Optional[SocaAmount] = Field(default=None)
     total: Optional[SocaAmount] = Field(default=None)
 
     def _compute_total(self):
-
         # line items
         line_items_total = self.line_items_total
         if line_items_total is None:
@@ -395,8 +395,11 @@ class SocaJobEstimatedBOMCost(SocaBaseModel):
             total.amount -= savings_total.amount
 
     @staticmethod
-    def _get_line_item(line_items: Optional[List[SocaJobEstimatedBOMCostLineItem]],
-                       service: str, product: str) -> Optional[Tuple[int, Optional[SocaJobEstimatedBOMCostLineItem]]]:
+    def _get_line_item(
+        line_items: Optional[List[SocaJobEstimatedBOMCostLineItem]],
+        service: str,
+        product: str,
+    ) -> Optional[Tuple[int, Optional[SocaJobEstimatedBOMCostLineItem]]]:
         if line_items is None:
             return -1, None
         for index, line_item in enumerate(line_items):
@@ -409,7 +412,6 @@ class SocaJobEstimatedBOMCost(SocaBaseModel):
 
     @staticmethod
     def _build_line_item(**kwargs) -> SocaJobEstimatedBOMCostLineItem:
-
         title = kwargs.get('title', None)
         service = kwargs.get('service', None)
         product = kwargs.get('product', None)
@@ -445,27 +447,26 @@ class SocaJobEstimatedBOMCost(SocaBaseModel):
             quantity=quantity,
             unit=unit,
             unit_price=unit_price,
-            total_price=total_price
+            total_price=total_price,
         )
 
-    def get_line_item(self, service: str, product: str) -> Optional[SocaJobEstimatedBOMCostLineItem]:
+    def get_line_item(
+        self, service: str, product: str
+    ) -> Optional[SocaJobEstimatedBOMCostLineItem]:
         index, line_item = self._get_line_item(
-            line_items=self.line_items,
-            service=service,
-            product=product
+            line_items=self.line_items, service=service, product=product
         )
         return line_item
 
-    def get_savings_line_item(self, service: str, product: str) -> Optional[SocaJobEstimatedBOMCostLineItem]:
+    def get_savings_line_item(
+        self, service: str, product: str
+    ) -> Optional[SocaJobEstimatedBOMCostLineItem]:
         index, line_item = self._get_line_item(
-            line_items=self.savings,
-            service=service,
-            product=product
+            line_items=self.savings, service=service, product=product
         )
         return line_item
 
     def add_line_item(self, update=False, **kwargs):
-
         line_item = self._build_line_item(**kwargs)
 
         line_items = self.line_items
@@ -474,8 +475,7 @@ class SocaJobEstimatedBOMCost(SocaBaseModel):
             self.line_items = line_items
 
         existing = self.get_line_item(
-            service=line_item.service,
-            product=line_item.product
+            service=line_item.service, product=line_item.product
         )
 
         if existing:
@@ -490,9 +490,7 @@ class SocaJobEstimatedBOMCost(SocaBaseModel):
 
     def remove_line_item(self, service: str, product: str) -> bool:
         index, line_item = self._get_line_item(
-            line_items=self.line_items,
-            service=service,
-            product=product
+            line_items=self.line_items, service=service, product=product
         )
 
         if index == -1:
@@ -505,7 +503,6 @@ class SocaJobEstimatedBOMCost(SocaBaseModel):
         return True
 
     def add_savings(self, update=False, **kwargs):
-
         line_item = self._build_line_item(**kwargs)
 
         savings = self.savings
@@ -514,8 +511,7 @@ class SocaJobEstimatedBOMCost(SocaBaseModel):
             self.savings = savings
 
         existing = self.get_savings_line_item(
-            service=line_item.service,
-            product=line_item.product
+            service=line_item.service, product=line_item.product
         )
 
         if existing:
@@ -530,9 +526,7 @@ class SocaJobEstimatedBOMCost(SocaBaseModel):
 
     def remove_savings(self, service: str, product: str):
         index, line_item = self._get_line_item(
-            line_items=self.savings,
-            service=service,
-            product=product
+            line_items=self.savings, service=service, product=product
         )
 
         if index == -1:
@@ -693,6 +687,7 @@ class SocaJob(SocaBaseModel):
     queue_type: Optional[str] = Field(default=None)
     scaling_mode: Optional[SocaScalingMode] = Field(default=None)
     owner: Optional[str] = Field(default=None)
+    owner_email: Optional[str] = Field(default=None)
     state: Optional[SocaJobState] = Field(default=None)
     exit_status: Optional[int] = Field(default=None, strict=False)
     provisioned: Optional[bool] = Field(default=None)
@@ -819,11 +814,13 @@ class SocaJob(SocaBaseModel):
         return False
 
     def get_compute_stack(self) -> str:
-
         if self.params is None:
             raise exceptions.invalid_job('params not found')
 
-        if ModelUtils.is_not_empty(self.params.compute_stack) and self.params.compute_stack != 'tbd':
+        if (
+            ModelUtils.is_not_empty(self.params.compute_stack)
+            and self.params.compute_stack != 'tbd'
+        ):
             return self.params.compute_stack
 
         def sanitize(token) -> str:
@@ -896,10 +893,10 @@ class SocaJob(SocaBaseModel):
             *instance_types,
             instance_ami,
             enable_ht_support,
-            capacity_type
+            capacity_type,
         ]
 
-        digest = hashlib.shake_256(":".join(tokens).encode('utf-8')).hexdigest(4)
+        digest = hashlib.shake_256(':'.join(tokens).encode('utf-8')).hexdigest(4)
         return f'g{digest}'
 
     def capacity_type(self) -> SocaCapacityType:
@@ -908,7 +905,9 @@ class SocaJob(SocaBaseModel):
 
         spot = ModelUtils.get_as_bool(self.params.spot, False)
         if spot:
-            spot_allocation_count = ModelUtils.get_as_int(self.params.spot_allocation_count, 0)
+            spot_allocation_count = ModelUtils.get_as_int(
+                self.params.spot_allocation_count, 0
+            )
             if spot_allocation_count == 0:
                 return SocaCapacityType.SPOT
             else:
@@ -940,7 +939,9 @@ class SocaJob(SocaBaseModel):
         if self.is_spot_capacity():
             return 0
         nodes = ModelUtils.get_as_int(self.params.nodes, 0)
-        spot_allocation_count = ModelUtils.get_as_int(self.params.spot_allocation_count, 0)
+        spot_allocation_count = ModelUtils.get_as_int(
+            self.params.spot_allocation_count, 0
+        )
         return nodes - spot_allocation_count
 
     def ondemand_capacity(self) -> int:
@@ -970,7 +971,9 @@ class SocaJob(SocaBaseModel):
         if instance_type is None:
             instance_type_option = self.default_instance_type_option
         else:
-            instance_type_option = self.get_instance_type_option(instance_type=instance_type)
+            instance_type_option = self.get_instance_type_option(
+                instance_type=instance_type
+            )
         return instance_type_option.weighted_capacity
 
     def _memory_values(self) -> Optional[List[SocaMemory]]:
@@ -1023,7 +1026,9 @@ class SocaJob(SocaBaseModel):
             return False
         if ModelUtils.is_true(self.provisioning_options.keep_forever):
             return False
-        terminate_when_idle = ModelUtils.get_as_int(self.provisioning_options.terminate_when_idle, 0)
+        terminate_when_idle = ModelUtils.get_as_int(
+            self.provisioning_options.terminate_when_idle, 0
+        )
         if terminate_when_idle > 0:
             return False
         return True
@@ -1087,17 +1092,23 @@ class SocaJob(SocaBaseModel):
     def default_instance_type_option(self) -> SocaInstanceTypeOptions:
         options = self.get_provisioning_options()
         if ModelUtils.is_empty(options.instance_types):
-            raise exceptions.invalid_job('provisioning_options.instance_types not found')
+            raise exceptions.invalid_job(
+                'provisioning_options.instance_types not found'
+            )
         return options.instance_types[0]
 
     def get_instance_type_option(self, instance_type: str):
         options = self.get_provisioning_options()
         if ModelUtils.is_empty(options.instance_types):
-            raise exceptions.invalid_job('provisioning_options.instance_types not found')
+            raise exceptions.invalid_job(
+                'provisioning_options.instance_types not found'
+            )
         for option in options.instance_types:
             if option.name == instance_type:
                 return option
-        raise exceptions.invalid_job(f'{instance_type} not found in provisioning_options.instance_types[]')
+        raise exceptions.invalid_job(
+            f'{instance_type} not found in provisioning_options.instance_types[]'
+        )
 
     def get_spot_price(self) -> Optional[SocaAmount]:
         if self.params is None:
@@ -1203,7 +1214,7 @@ class SocaComputeNode(SocaBaseModel):
     terminate_when_idle: Optional[int] = Field(default=None)
     compute_stack: Optional[str] = Field(default=None)
     stack_id: Optional[str] = Field(default=None)
-    lifecyle: Optional[str] = Field(default=None)
+    lifecycle: Optional[str] = Field(default=None)
     tenancy: Optional[str] = Field(default=None)
     spot_fleet_request: Optional[str] = Field(default=None)
     auto_scaling_group: Optional[str] = Field(default=None)
@@ -1296,9 +1307,11 @@ class SocaComputeNode(SocaBaseModel):
         return True
 
     def is_ready(self) -> bool:
-        return self.has_state(SocaComputeNodeState.FREE,
-                              SocaComputeNodeState.BUSY,
-                              SocaComputeNodeState.JOB_BUSY)
+        return self.has_state(
+            SocaComputeNodeState.FREE,
+            SocaComputeNodeState.BUSY,
+            SocaComputeNodeState.JOB_BUSY,
+        )
 
     def get_spot_price(self) -> Optional[SocaAmount]:
         spot = ModelUtils.get_as_bool(self.spot, False)
@@ -1308,7 +1321,6 @@ class SocaComputeNode(SocaBaseModel):
 
     @staticmethod
     def from_ec2_instance(instance: EC2Instance) -> Optional['SocaComputeNode']:
-
         if not instance.is_valid_idea_compute_node():
             return None
 
@@ -1330,18 +1342,20 @@ class SocaComputeNode(SocaBaseModel):
             subnet_id=instance.subnet_id,
             stack_id=instance.aws_cloudformation_stack_id,
             compute_stack=instance.soca_compute_stack,
-            scaling_mode=SocaScalingMode.resolve(instance.soca_scaling_mode, default=SocaScalingMode.SINGLE_JOB),
+            scaling_mode=SocaScalingMode.resolve(
+                instance.soca_scaling_mode, default=SocaScalingMode.SINGLE_JOB
+            ),
             job_id=instance.soca_job_id,
             job_group=instance.soca_job_group,
             instance_ami=instance.image_id,
             instance_profile=instance.iam_instance_profile_id,
-            lifecyle=instance.instance_lifecycle,
+            lifecycle=instance.instance_lifecycle,
             tenancy=instance.placement_tenancy,
             spot_fleet_request=spot_fleet_request,
             auto_scaling_group=auto_scaling_group,
             keep_forever=instance.soca_keep_forever,
             terminate_when_idle=instance.soca_terminate_when_idle,
-            launch_time=instance.launch_time.datetime
+            launch_time=instance.launch_time.datetime,
         )
 
 
@@ -1357,7 +1371,10 @@ class SocaQueueManagementParams(SocaBaseModel):
     allowed_instance_profiles: Optional[List[str]] = Field(default=None)
 
     def is_allowed_security_group(self, security_group: str) -> bool:
-        if self.allowed_security_groups is None or len(self.allowed_security_groups) == 0:
+        if (
+            self.allowed_security_groups is None
+            or len(self.allowed_security_groups) == 0
+        ):
             return True
         return security_group in self.allowed_security_groups
 
@@ -1367,12 +1384,17 @@ class SocaQueueManagementParams(SocaBaseModel):
         return param_name in self.restricted_parameters
 
     def is_allowed_instance_profile(self, instance_profile: str):
-        if self.allowed_instance_profiles is None or len(self.allowed_instance_profiles) == 0:
+        if (
+            self.allowed_instance_profiles is None
+            or len(self.allowed_instance_profiles) == 0
+        ):
             return True
         return instance_profile in self.allowed_instance_profiles
 
     @staticmethod
-    def _get_instance_families(instance_types: Optional[List[str]] = None) -> Optional[List[str]]:
+    def _get_instance_families(
+        instance_types: Optional[List[str]] = None,
+    ) -> Optional[List[str]]:
         if instance_types is None:
             return None
         if len(instance_types) == 0:
@@ -1386,7 +1408,9 @@ class SocaQueueManagementParams(SocaBaseModel):
             return None
         return instance_families
 
-    def _is_allowed_or_excluded_instance_type(self, instance_type: str, instance_types: Optional[List[str]]) -> bool:
+    def _is_allowed_or_excluded_instance_type(
+        self, instance_type: str, instance_types: Optional[List[str]]
+    ) -> bool:
         check_type = instance_type in instance_types
 
         check_family = False
@@ -1401,21 +1425,19 @@ class SocaQueueManagementParams(SocaBaseModel):
         if ModelUtils.is_empty(self.allowed_instance_types):
             return True
         return self._is_allowed_or_excluded_instance_type(
-            instance_type=instance_type,
-            instance_types=self.allowed_instance_types
+            instance_type=instance_type, instance_types=self.allowed_instance_types
         )
 
     def is_excluded_instance_type(self, instance_type) -> bool:
         if ModelUtils.is_empty(self.excluded_instance_types):
             return False
         return self._is_allowed_or_excluded_instance_type(
-            instance_type=instance_type,
-            instance_types=self.excluded_instance_types
+            instance_type=instance_type, instance_types=self.excluded_instance_types
         )
 
 
 class SocaQueueMode(str, Enum):
-    FIFO = 'fifo',
+    FIFO = ('fifo',)
     FAIRSHARE = 'fairshare'
     LICENSE_OPTIMIZED = 'license-optimized'
 
@@ -1481,9 +1503,15 @@ class LimitCheckResult(SocaBaseModel):
             s = f'{self.limit_type} limit ok. '
         else:
             s = f'{self.limit_type} limit exceeded. '
-        if self.queue_threshold is not None and 0 < self.queue_threshold < self.queue_current:
+        if (
+            self.queue_threshold is not None
+            and 0 < self.queue_threshold < self.queue_current
+        ):
             s += f'QueueLimit: {self.queue_threshold}'
-        if self.group_threshold is not None and 0 < self.group_threshold < self.group_current:
+        if (
+            self.group_threshold is not None
+            and 0 < self.group_threshold < self.group_current
+        ):
             s += f'GroupLimit: {self.group_threshold}'
         return s
 
@@ -1579,7 +1607,7 @@ class JobMetrics(SocaBaseModel):
 
         return JobMetrics(
             active_jobs=other.active_jobs - self.active_jobs,
-            desired_capacity=other.desired_capacity - self.desired_capacity
+            desired_capacity=other.desired_capacity - self.desired_capacity,
         )
 
     def apply_delta(self, delta: 'JobMetrics'):
@@ -1696,7 +1724,7 @@ class ProvisioningCapacityInfo(SocaBaseModel):
         if self.target_capacity > 0:
             s += f'target_capacity: {self.target_capacity}, '
         else:
-            s += f'target_capacity: no-change, '
+            s += 'target_capacity: no-change, '
         s += f'existing_instances: {self.total_instances}'
 
         if self.max_provisioned_instances:

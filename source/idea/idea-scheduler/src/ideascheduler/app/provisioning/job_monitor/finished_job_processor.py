@@ -12,7 +12,11 @@
 import ideascheduler
 
 from ideadatamodel import (
-    constants, SocaJob, JobUpdate, CustomFileLoggerParams, SocaJobState
+    constants,
+    SocaJob,
+    JobUpdate,
+    CustomFileLoggerParams,
+    SocaJobState,
 )
 from ideascheduler.app.aws import PricingHelper, AwsBudgetsHelper
 from ideasdk.utils import Utils
@@ -29,8 +33,13 @@ class ProcessFinishedJob:
     Finished Job Post-Processing
     """
 
-    def __init__(self, context: ideascheduler.AppContext, logger: logging.Logger,
-                 job: SocaJob, job_export_logger: logging.Logger):
+    def __init__(
+        self,
+        context: ideascheduler.AppContext,
+        logger: logging.Logger,
+        job: SocaJob,
+        job_export_logger: logging.Logger,
+    ):
         self._context = context
         self._logger = logger
         self.job = job
@@ -46,8 +55,9 @@ class ProcessFinishedJob:
         3. clears the execution data from JobCache
         """
         try:
-
-            execution_hosts = self._context.job_cache.get_job_execution_hosts(job_id=self.job.job_id)
+            execution_hosts = self._context.job_cache.get_job_execution_hosts(
+                job_id=self.job.job_id
+            )
 
             self.job.execution_hosts = execution_hosts
 
@@ -58,11 +68,12 @@ class ProcessFinishedJob:
             self._context.job_cache.delete_job_execution_hosts(job_id=self.job.job_id)
 
         except Exception as e:
-            self._logger.exception(f'{self.job.log_tag} failed to apply job execution: {e}')
+            self._logger.exception(
+                f'{self.job.log_tag} failed to apply job execution: {e}'
+            )
 
     def compute_and_apply_estimated_costs(self):
         try:
-
             # todo - compute pricing from actual usage rather than resource estimates
             #   see development list in PricingHelper
 
@@ -78,19 +89,18 @@ class ProcessFinishedJob:
                 total_time_secs = constants.SECONDS_IN_MINUTE
 
             estimated_bom_cost = PricingHelper(
-                context=self._context,
-                job=self.job,
-                total_time_secs=total_time_secs
+                context=self._context, job=self.job, total_time_secs=total_time_secs
             ).compute_estimated_bom_cost()
 
             self.job.estimated_bom_cost = estimated_bom_cost
 
         except Exception as e:
-            self._logger.exception(f'{self.job.log_tag} failed to compute estimated costs: {e}')
+            self._logger.exception(
+                f'{self.job.log_tag} failed to compute estimated costs: {e}'
+            )
 
     def compute_and_apply_budget_usage(self):
         try:
-
             if self.job.estimated_bom_cost is None:
                 return
 
@@ -102,10 +112,11 @@ class ProcessFinishedJob:
             self.job.estimated_budget_usage = estimated_budget_usage
 
         except Exception as e:
-            self._logger.exception(f'{self.job.log_tag} failed to compute budget usage: {e}')
+            self._logger.exception(
+                f'{self.job.log_tag} failed to compute budget usage: {e}'
+            )
 
     def publish_job_metrics(self):
-
         try:
             self._context.metrics.jobs_finished(queue_type=self.job.queue_type)
 
@@ -113,42 +124,49 @@ class ProcessFinishedJob:
                 provisioning_duration = self.job.provisioning_time - self.job.start_time
                 self._context.metrics.jobs_provisioning_duration(
                     queue_type=self.job.queue_type,
-                    duration_secs=provisioning_duration.seconds
+                    duration_secs=provisioning_duration.seconds,
                 )
 
             if self.job.end_time and self.job.start_time:
                 running_duration = self.job.end_time - self.job.start_time
                 self._context.metrics.jobs_running_duration(
                     queue_type=self.job.queue_type,
-                    duration_secs=running_duration.seconds
+                    duration_secs=running_duration.seconds,
                 )
 
             if self.job.queue_time and self.job.end_time:
                 total_duration = self.job.end_time - self.job.queue_time
                 self._context.metrics.jobs_total_duration(
-                    queue_type=self.job.queue_type,
-                    duration_secs=total_duration.seconds
+                    queue_type=self.job.queue_type, duration_secs=total_duration.seconds
                 )
         except Exception as e:
-            self._logger.exception(f'{self.job.log_tag} failed to publish job metrics: {e}')
+            self._logger.exception(
+                f'{self.job.log_tag} failed to publish job metrics: {e}'
+            )
 
     def publish_to_job_export_log(self):
         try:
             self._job_export_logger.critical(self.get_job_as_json())
         except Exception as e:
-            self._logger.exception(f'{self.job.log_tag} failed to export job to job log: {e}')
+            self._logger.exception(
+                f'{self.job.log_tag} failed to export job to job log: {e}'
+            )
 
     def send_email_notification(self):
         try:
             self._context.job_notifications.job_completed(job=self.job)
         except Exception as e:
-            self._logger.exception(f'{self.job.log_tag} failed to send email notification: {e}')
+            self._logger.exception(
+                f'{self.job.log_tag} failed to send email notification: {e}'
+            )
 
     def publish_to_finished_jobs_db(self):
         try:
             self._context.job_cache.add_finished_job(job=self.job)
         except Exception as e:
-            self._logger.exception(f'{self.job.log_tag} failed to add finished job to db: {e}')
+            self._logger.exception(
+                f'{self.job.log_tag} failed to add finished job to db: {e}'
+            )
 
     def log_job_complete(self):
         log_msg = f'{self.job.log_tag} JobCompleted'
@@ -158,7 +176,6 @@ class ProcessFinishedJob:
 
     def invoke(self) -> SocaJob:
         try:
-
             self.apply_job_execution_context()
 
             self.compute_and_apply_estimated_costs()
@@ -178,7 +195,9 @@ class ProcessFinishedJob:
             return self.job
 
         except Exception as e:
-            self._logger.exception(f'{self.job.log_tag} finished job processing failed: {e}')
+            self._logger.exception(
+                f'{self.job.log_tag} finished job processing failed: {e}'
+            )
 
 
 class FinishedJobProcessor:
@@ -193,22 +212,23 @@ class FinishedJobProcessor:
 
         self._jobs_export_logger: logging.Logger = self._setup_job_export_logger()
         self._finished_job_thread = Thread(
-            name='finished-job-processor',
-            target=self._poll_finished_jobs
+            name='finished-job-processor', target=self._poll_finished_jobs
         )
         self._finished_job_thread.start()
 
         self._retry_updates: List[JobUpdate] = []
 
     def _setup_job_export_logger(self) -> logging.Logger:
-        return self._context.logging().get_custom_file_logger(CustomFileLoggerParams(
-            logger_name='soca_job_export',
-            log_dir_name='jobs',
-            log_file_name='soca_job_export.log',
-            when='midnight',
-            interval=1,
-            backupCount=365
-        ))
+        return self._context.logging().get_custom_file_logger(
+            CustomFileLoggerParams(
+                logger_name='soca_job_export',
+                log_dir_name='jobs',
+                log_file_name='soca_job_export.log',
+                when='midnight',
+                interval=1,
+                backupCount=365,
+            )
+        )
 
     def _process_finished_jobs(self, jobs: List[SocaJob]):
         if len(jobs) == 0:
@@ -218,7 +238,9 @@ class FinishedJobProcessor:
         for job in jobs:
             finished_job_ids.append(job.job_id)
 
-        finished_jobs = self._context.scheduler.list_jobs(job_ids=finished_job_ids, job_state=SocaJobState.FINISHED)
+        finished_jobs = self._context.scheduler.list_jobs(
+            job_ids=finished_job_ids, job_state=SocaJobState.FINISHED
+        )
 
         jobs_to_index = []
         for finished_job in finished_jobs:
@@ -227,11 +249,13 @@ class FinishedJobProcessor:
                     context=self._context,
                     logger=self._logger,
                     job=finished_job,
-                    job_export_logger=self._jobs_export_logger
+                    job_export_logger=self._jobs_export_logger,
                 ).invoke()
                 jobs_to_index.append(job_to_index)
             except Exception as e:
-                self._logger.exception(f'{finished_job.log_tag} failed to process finished job: {e}')
+                self._logger.exception(
+                    f'{finished_job.log_tag} failed to process finished job: {e}'
+                )
 
         try:
             self._context.document_store.add_jobs(jobs=jobs_to_index)
@@ -241,12 +265,9 @@ class FinishedJobProcessor:
     def _poll_finished_jobs(self):
         while not self._exit.is_set():
             try:
-
                 jobs_table = self._context.job_cache.get_jobs_table()
 
-                active_job_ids = OpenPBSQSelect(
-                    self._context
-                ).list_jobs_ids()
+                active_job_ids = OpenPBSQSelect(self._context).list_jobs_ids()
                 active_job_ids = set(active_job_ids)
 
                 jobs_deleted = 0
@@ -257,7 +278,6 @@ class FinishedJobProcessor:
 
                 result = jobs_table.all()
                 for entry in result:
-
                     if self._exit.is_set():
                         break
 
@@ -268,7 +288,9 @@ class FinishedJobProcessor:
                         if job_id in active_job_ids:
                             continue
 
-                        completed_job = self._context.job_cache.convert_db_entry_to_job(entry)
+                        completed_job = self._context.job_cache.convert_db_entry_to_job(
+                            entry
+                        )
                         if completed_job is None:
                             continue
 
@@ -292,14 +314,21 @@ class FinishedJobProcessor:
                     self._context.job_cache.delete_jobs(job_ids=jobs_ids_to_delete)
 
                 if jobs_deleted + jobs_finished > 0:
-                    self._logger.info(f'finished_jobs: {jobs_finished}, active jobs: {len(active_job_ids)}, deleted jobs: {jobs_deleted}')
+                    self._logger.info(
+                        f'finished_jobs: {jobs_finished}, active jobs: {len(active_job_ids)}, deleted jobs: {jobs_deleted}'
+                    )
 
                 if len(finished_jobs) > 0:
                     self._process_finished_jobs(finished_jobs)
 
             finally:
                 if not self._exit.is_set():
-                    self._exit.wait(self._context.config().get_int('scheduler.job_provisioning.finished_job_processing_interval_seconds', default=30))
+                    self._exit.wait(
+                        self._context.config().get_int(
+                            'scheduler.job_provisioning.finished_job_processing_interval_seconds',
+                            default=30,
+                        )
+                    )
 
     def stop(self):
         self._exit.set()

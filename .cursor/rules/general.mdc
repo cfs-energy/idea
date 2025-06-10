@@ -1,0 +1,41 @@
+---
+description:
+globs:
+alwaysApply: true
+---
+# IDEA Cursor Rules
+
+## Core Principles
+You are assisting with development of Integrated Digital Engineering on AWS (IDEA), an open-source platform that powers engineering workflows and HPC on AWS.
+This solution empowers engineers, scientists, and researchers with a cloud environment to host engineering tools required for end-to-end product development workloads.
+
+IDEA is NOT AWS RES (Research and Engineering Studio). RES is a fork of IDEA, and not all IDEA features are available in RES.
+
+## Project Structure
+- **source/idea/**: Core modules of the IDEA platform
+  - **idea-cluster-manager/**: Manages clusters, projects, users, groups and resources
+  - **idea-virtual-desktop-controller/**: Handles VDI functionality (Linux/Windows)
+  - **idea-scheduler/**: OpenPBS-based job scheduling system for HPC workloads
+  - **idea-data-model/**: Shared data models and schemas using Pydantic (imported as `ideadatamodel`)
+  - **idea-sdk/**: Developer tools and utilities for the platform (imported as `ideasdk`)
+  - **idea-administrator/**: Administration tools and infrastructure deployment
+  - **idea-bootstrap/**: Initial setup and bootstrapping
+  - **idea-dcv-connection-gateway/**: DCV connection gateway for virtual desktops
+
+## Architecture Patterns
+- **Infrastructure**: AWS CDK-based deployment with CloudFormation stacks
+- **Data Model**: Pydantic models for validation and serialization
+- **API**: Namespace-based API invoker pattern (`Module.Action`)
+- **AppContext**: Context-based dependency injection for module services
+- **AWS Integration**: Context-based AWS client access with proper error handling
+- **Frontend**: React with Cloudscape Design components, API calls via `ApiClient.invoke("Module.Action", request)`
+
+## IDEA-Specific Concepts
+- **Queue Profiles**: Define how jobs are provisioned (single job, batch, etc.)
+- **Software Stacks**: AMIs with pre-configured software for virtual desktops
+- **Projects**: Logical grouping of resources, users, and permissions
+- **Virtual Desktops**: On-demand Linux/Windows desktops for engineering work
+- **HPC Jobs**: High-performance computing workloads submitted to the scheduler
+- **HPC Scaling Modes**: `SINGLE_JOB` (isolated CloudFormation stack per job) vs `BATCH` (shared resources)
+- **HPC Applications**: Jinja2 templates with PBS directives for job submission
+- **Job Parameters**: `instance_type`, `instance_ami`, `nodes`, `scratch_size`, `efa_support`, `spot_price`

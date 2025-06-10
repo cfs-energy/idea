@@ -348,7 +348,7 @@ mappings:
             raw:
               type: keyword
         description:
-           type: text
+          type: text
         created_on:
           type: date
           format: epoch_millis
@@ -386,5 +386,3 @@ mappings:
           fields:
             raw:
               type: keyword
-
-

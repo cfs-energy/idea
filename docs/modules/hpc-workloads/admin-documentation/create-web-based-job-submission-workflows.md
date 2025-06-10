@@ -1,4 +1,4 @@
-# Create Web Based Job Submission Worfklows
+# Create Web Based Job Submission Workflows
 
 On this page, you will learn how to create an application profile and give your users the ability to submit HPC jobs via a simple web interface.
 
@@ -16,7 +16,7 @@ The first step is to identify the variables you want your users to configure. Le
 #PBS -l instance_type=t3.xlarge
 
 # CD into current working directory
-cd $PBS_O_WORKDIR 
+cd $PBS_O_WORKDIR
 
 # Prepare the job environment, edit the current PATH, License Server etc
 export PATH=/apps/softwarename/v2023/
@@ -29,7 +29,7 @@ export LICENSE_SERVER=1234@licenseserver.internal
 
 # Once job is complete, archive output to S3
 BACKUP="true"
-if [[ "$BACKUP" == "true" ]]; 
+if [[ "$BACKUP" == "true" ]];
   then
      aws s3 sync . s3://mybucketname/
 fi
@@ -37,15 +37,15 @@ fi
 
 Replace the values/parameters you want your users to configure with `{{``VARIABLE_NAME }}` such as:
 
-Job Script you will need to reuse later during [#configure-the-job-script](create-web-based-job-submission-worfklows.md#configure-the-job-script "mention"):
+Job Script you will need to reuse later during [#configure-the-job-script](create-web-based-job-submission-workflows.md#configure-the-job-script "mention"):
 
 ```
 #PBS -N {{ job_name }}
-#PBS -q {{ queue_name }} 
+#PBS -q {{ queue_name }}
 #PBS -l instance_type={{ instance_type }}
 
 # CD into current working directory
-cd $PBS_O_WORKDIR 
+cd $PBS_O_WORKDIR
 
 # Prepare the job environment, edit the current PATH, License Server etc
 export PATH=/apps/softwarename/{{ version }}/
@@ -383,7 +383,7 @@ Now let's create a new "Text" field called `bucket_to_archive`. However, we want
 
 ## Configure the job script <a href="#configure-the-job-script" id="configure-the-job-script"></a>
 
-Once your HTML form is done, simply click "**Next**" and copy/paste [#build-the-job-script](create-web-based-job-submission-worfklows.md#build-the-job-script "mention") within the "**Job Script**" section. Select "Jinja2" as template.
+Once your HTML form is done, simply click "**Next**" and copy/paste [#build-the-job-script](create-web-based-job-submission-workflows.md#build-the-job-script "mention") within the "**Job Script**" section. Select "Jinja2" as template.
 
 {% hint style="info" %}
 Job Script support Jinja2 templating. For example, **\{{ job\_name | upper \}}** will retrieve the HTML field named **job\_name** and enforce uppercase.

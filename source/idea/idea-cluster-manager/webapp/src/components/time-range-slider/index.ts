@@ -16,4 +16,3 @@ import {IdeaTimeRangeSliderProps} from "./time-range-slider";
 
 export default IdeaTimeRangeSlider
 export type {IdeaTimeRangeSliderProps}
-

@@ -1,4 +1,13 @@
-{%- if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
-echo "DNSStubListener=no" >> /etc/systemd/resolved.conf
-systemctl restart systemd-resolved
-{%- endif %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+# Begin: DNS Resolver patch
+function patch_dns_resolver () {
+  log_info "Patch DNS resolver for Ubuntu, pointing /etc/resolv to /run/systemd/resolve/resolv.conf and not ../run/systemd/resolve/stub-resolv.conf. See  https://bugs.launchpad.net/ubuntu/+source/systemd/+bug/1624320"
+  rm -f /etc/resolv.conf
+  cp /run/systemd/resolve/resolv.conf /etc/resolv.conf
+  chattr +i /etc/resolv.conf
+}
+patch_dns_resolver
+
+{% else %}
+  log_info "No DNS resolv patch needed for this OS distribution"
+{% endif %}

@@ -35,7 +35,9 @@ class PricingHelper:
     This code is work in progress and needs additional development to get close to accurate pricing estimates.
     """
 
-    def __init__(self, context: SocaContextProtocol, job: SocaJob, total_time_secs: int = None):
+    def __init__(
+        self, context: SocaContextProtocol, job: SocaJob, total_time_secs: int = None
+    ):
         self._context = context
         self.job = job
         self.total_time_secs = total_time_secs
@@ -57,7 +59,9 @@ class PricingHelper:
 
     @property
     def ec2_boot_penalty_seconds(self) -> int:
-        return self.config().get_int('scheduler.cost_estimation.ec2_boot_penalty_seconds')
+        return self.config().get_int(
+            'scheduler.cost_estimation.ec2_boot_penalty_seconds'
+        )
 
     @property
     def total_time_seconds(self) -> int:
@@ -96,7 +100,11 @@ class PricingHelper:
 
     @property
     def scratch_storage_iops_quantity(self) -> float:
-        iops = self.scratch_storage_iops * self.job.desired_nodes() * self.total_time_seconds
+        iops = (
+            self.scratch_storage_iops
+            * self.job.desired_nodes()
+            * self.total_time_seconds
+        )
         return round(iops / TOTAL_SECONDS_IN_MONTH)
 
     @property
@@ -115,7 +123,9 @@ class PricingHelper:
         if fsx_lustre.size is not None:
             return fsx_lustre.size
         else:
-            default_fsx_lustre_size = self.config().get_int('scheduler.cost_estimation.default_fsx_lustre_size')
+            default_fsx_lustre_size = self.config().get_int(
+                'scheduler.cost_estimation.default_fsx_lustre_size'
+            )
             return SocaMemory(value=default_fsx_lustre_size, unit=SocaMemoryUnit.GB)
 
     @property
@@ -172,35 +182,37 @@ class PricingHelper:
             ondemand_usage_hours = self.total_time_hours * self.job.ondemand_nodes()
             estimated_bom_cost.add_line_item(
                 title=f'Compute On-Demand: '
-                      f'({self.job.ondemand_nodes()} x {self.job.default_instance_type})',
+                f'({self.job.ondemand_nodes()} x {self.job.default_instance_type})',
                 service='aws.ec2',
                 product=f'instance_type={self.job.default_instance_type},lifecycle=default',
                 unit='per hour',
                 quantity=ondemand_usage_hours,
-                unit_price=instance_type_unit_price.ondemand
+                unit_price=instance_type_unit_price.ondemand,
             )
 
-            reserved_savings = instance_type_unit_price.ondemand - instance_type_unit_price.reserved
+            reserved_savings = (
+                instance_type_unit_price.ondemand - instance_type_unit_price.reserved
+            )
             estimated_bom_cost.add_savings(
                 title=f'Compute Reserved: [1yr No Upfront] '
-                      f'({self.job.ondemand_nodes()} x {self.job.default_instance_type})',
+                f'({self.job.ondemand_nodes()} x {self.job.default_instance_type})',
                 service='aws.ec2',
                 product=f'instance_type={self.job.default_instance_type},lifecycle=default',
                 unit='per hour',
                 quantity=ondemand_usage_hours,
-                unit_price=reserved_savings
+                unit_price=reserved_savings,
             )
 
         if self.job.spot_nodes() > 0:
             spot_usage_hours = self.total_time_hours * self.job.spot_nodes()
             estimated_bom_cost.add_line_item(
                 title=f'Compute Spot: '
-                      f'({self.job.spot_nodes()} x {self.job.default_instance_type})',
+                f'({self.job.spot_nodes()} x {self.job.default_instance_type})',
                 service='aws.ec2',
                 product=f'instance_type={self.job.default_instance_type},lifecycle=spot',
                 unit='per hour',
                 quantity=spot_usage_hours,
-                unit_price=self.ec2_spot_unit_price
+                unit_price=self.ec2_spot_unit_price,
             )
 
         root_storage_unit_price = self.root_storage_unit_price
@@ -212,7 +224,7 @@ class PricingHelper:
             product='root_storage=gp3',
             unit='GB-month',
             quantity=root_storage_quantity,
-            unit_price=root_storage_unit_price
+            unit_price=root_storage_unit_price,
         )
 
         if self.is_fsx_lustre_enabled:
@@ -224,7 +236,7 @@ class PricingHelper:
                 product='scratch_storage=lustre',
                 unit='GB-month',
                 quantity=fsx_lustre_quantity,
-                unit_price=fsx_lustre_unit_price
+                unit_price=fsx_lustre_unit_price,
             )
         elif self.scratch_storage_size > 0:
             scratch_storage_unit_price = self.scratch_storage_unit_price
@@ -237,7 +249,7 @@ class PricingHelper:
                     product='scratch_storage=io1',
                     unit='GB-month',
                     quantity=scratch_storage_quantity,
-                    unit_price=scratch_storage_unit_price
+                    unit_price=scratch_storage_unit_price,
                 )
 
                 scratch_storage_iops_unit_price = self.scratch_storage_iops_unit_price
@@ -249,7 +261,7 @@ class PricingHelper:
                     product=f'scratch_storage_iops={scratch_storage_iops_quantity}',
                     unit='IOPS-month',
                     quantity=scratch_storage_iops_quantity,
-                    unit_price=scratch_storage_iops_unit_price
+                    unit_price=scratch_storage_iops_unit_price,
                 )
             else:
                 title = f'Scratch: EBS gp3 ({self.job.desired_nodes()} x {scratch_storage_size})'
@@ -260,7 +272,7 @@ class PricingHelper:
                     product=f'scratch_storage={product}',
                     unit='GB-month',
                     quantity=scratch_storage_quantity,
-                    unit_price=scratch_storage_unit_price
+                    unit_price=scratch_storage_unit_price,
                 )
 
         return estimated_bom_cost

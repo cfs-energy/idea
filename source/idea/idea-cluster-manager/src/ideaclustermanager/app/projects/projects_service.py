@@ -26,7 +26,7 @@ from ideadatamodel.projects import (
     DisableProjectResult,
     GetUserProjectsRequest,
     GetUserProjectsResult,
-    Project
+    Project,
 )
 from ideasdk.utils import Utils, GroupNameHelper
 from ideasdk.context import SocaContext
@@ -38,8 +38,12 @@ from ideaclustermanager.app.tasks.task_manager import TaskManager
 
 
 class ProjectsService:
-
-    def __init__(self, context: SocaContext, accounts_service: AccountsService, task_manager: TaskManager):
+    def __init__(
+        self,
+        context: SocaContext,
+        accounts_service: AccountsService,
+        task_manager: TaskManager,
+    ):
         self.context = context
         self.accounts_service = accounts_service
         self.task_manager = task_manager
@@ -51,7 +55,7 @@ class ProjectsService:
         self.user_projects_dao = UserProjectsDAO(
             context=context,
             projects_dao=self.projects_dao,
-            accounts_service=self.accounts_service
+            accounts_service=self.accounts_service,
         )
         self.user_projects_dao.initialize()
 
@@ -63,7 +67,9 @@ class ProjectsService:
         :return: the created project (with project_id)
         """
 
-        ds_provider = self.context.config().get_string('directoryservice.provider', required=True)
+        ds_provider = self.context.config().get_string(
+            'directoryservice.provider', required=True
+        )
 
         if Utils.is_empty(request):
             raise exceptions.invalid_params('request is required')
@@ -77,10 +83,15 @@ class ProjectsService:
 
         existing = self.projects_dao.get_project_by_name(project.name)
         if existing is not None:
-            raise exceptions.invalid_params(f'project with name: {project.name} already exists')
+            raise exceptions.invalid_params(
+                f'project with name: {project.name} already exists'
+            )
 
-        if Utils.is_empty(project.ldap_groups):
-            raise exceptions.invalid_params('ldap_groups[] is required')
+        # Initialize empty ldap_groups list if not provided
+        if project.ldap_groups is None:
+            project.ldap_groups = []
+
+        # Validate any provided ldap_groups
         for ldap_group_name in project.ldap_groups:
             # check if group exists
             # Active Directory mode checks the back-end LDAP
@@ -93,7 +104,9 @@ class ProjectsService:
         enable_budgets = Utils.get_as_bool(project.enable_budgets, False)
         if enable_budgets:
             if project.budget is None or Utils.is_empty(project.budget.budget_name):
-                raise exceptions.invalid_params('budget.budget_name is required when budgets are enabled')
+                raise exceptions.invalid_params(
+                    'budget.budget_name is required when budgets are enabled'
+                )
             budget_name = project.budget.budget_name
             self.context.aws_util().budgets_get_budget(budget_name)
 
@@ -105,9 +118,7 @@ class ProjectsService:
 
         created_project = self.projects_dao.convert_from_db(db_created_project)
 
-        return CreateProjectResult(
-            project=created_project
-        )
+        return CreateProjectResult(project=created_project)
 
     def get_project(self, request: GetProjectRequest) -> GetProjectResult:
         """
@@ -119,7 +130,9 @@ class ProjectsService:
         if Utils.is_empty(request):
             raise exceptions.invalid_params('request is required')
         if Utils.are_empty(request.project_id, request.project_name):
-            raise exceptions.invalid_params('Either project_id or project_name is required')
+            raise exceptions.invalid_params(
+                'Either project_id or project_name is required'
+            )
 
         self.logger.debug(f'get_project(): running with request: {request}')
 
@@ -133,17 +146,15 @@ class ProjectsService:
             if Utils.is_not_empty(request.project_id):
                 raise exceptions.soca_exception(
                     error_code=errorcodes.PROJECT_NOT_FOUND,
-                    message=f'project not found for project id: {request.project_id}'
+                    message=f'project not found for project id: {request.project_id}',
                 )
             if Utils.is_not_empty(request.project_name):
                 raise exceptions.soca_exception(
                     error_code=errorcodes.PROJECT_NOT_FOUND,
-                    message=f'project not found for project name: {request.project_name}'
+                    message=f'project not found for project name: {request.project_name}',
                 )
 
-        return GetProjectResult(
-            project=self.projects_dao.convert_from_db(project)
-        )
+        return GetProjectResult(project=self.projects_dao.convert_from_db(project))
 
     def update_project(self, request: UpdateProjectRequest) -> UpdateProjectResult:
         """
@@ -165,25 +176,44 @@ class ProjectsService:
         if existing is None:
             raise exceptions.soca_exception(
                 error_code=errorcodes.PROJECT_NOT_FOUND,
-                message=f'project not found for id: {project.project_id}'
+                message=f'project not found for id: {project.project_id}',
             )
 
         if Utils.is_not_empty(project.name) and existing['name'] != project.name:
             same_name_project = self.projects_dao.get_project_by_name(project.name)
-            if same_name_project is not None and same_name_project['project_id'] != project.project_id:
-                raise exceptions.invalid_params(f'project with name: {project.name} already exists')
+            if (
+                same_name_project is not None
+                and same_name_project['project_id'] != project.project_id
+            ):
+                raise exceptions.invalid_params(
+                    f'project with name: {project.name} already exists'
+                )
 
         enable_budgets = Utils.get_as_bool(project.enable_budgets, False)
         if enable_budgets:
             if project.budget is None or Utils.is_empty(project.budget.budget_name):
-                raise exceptions.invalid_params('budget.budget_name is required when budgets are enabled')
+                raise exceptions.invalid_params(
+                    'budget.budget_name is required when budgets are enabled'
+                )
             budget_name = project.budget.budget_name
-            self.context.aws_util().budgets_get_budget(budget_name)
+            try:
+                self.context.aws_util().budgets_get_budget(budget_name)
+            except exceptions.SocaException as e:
+                if e.error_code == errorcodes.BUDGET_NOT_FOUND:
+                    # We'll allow the update but log a warning about the missing budget
+                    self.logger.warning(
+                        f'Budget {budget_name} not found but still updating project configuration.'
+                    )
+                else:
+                    # For other exceptions, re-raise
+                    raise e
 
         groups_added = None
         groups_removed = None
         if Utils.is_not_empty(project.ldap_groups):
-            existing_ldap_groups = set(Utils.get_value_as_list('ldap_groups', existing, []))
+            existing_ldap_groups = set(
+                Utils.get_value_as_list('ldap_groups', existing, [])
+            )
             updated_ldap_groups = set(project.ldap_groups)
 
             groups_added = updated_ldap_groups - existing_ldap_groups
@@ -197,7 +227,9 @@ class ProjectsService:
         # none values will be skipped by db update. ensure enabled/disabled cannot be called via update project.
         project.enabled = None
 
-        db_updated = self.projects_dao.update_project(self.projects_dao.convert_to_db(project))
+        db_updated = self.projects_dao.update_project(
+            self.projects_dao.convert_to_db(project)
+        )
         updated_project = self.projects_dao.convert_from_db(db_updated)
 
         if updated_project.enabled:
@@ -207,21 +239,20 @@ class ProjectsService:
                     payload={
                         'project_id': updated_project.project_id,
                         'groups_added': groups_added,
-                        'groups_removed': groups_removed
+                        'groups_removed': groups_removed,
                     },
-                    message_group_id=updated_project.project_id
+                    message_group_id=updated_project.project_id,
                 )
 
-        return UpdateProjectResult(
-            project=updated_project
-        )
+        return UpdateProjectResult(project=updated_project)
 
     def enable_project(self, request: EnableProjectRequest) -> EnableProjectResult:
-
         if Utils.is_empty(request):
             raise exceptions.invalid_params('request is required')
         if Utils.are_empty(request.project_id, request.project_name):
-            raise exceptions.invalid_params('Either project_id or project_name is required')
+            raise exceptions.invalid_params(
+                'Either project_id or project_name is required'
+            )
 
         project = None
         if Utils.is_not_empty(request.project_id):
@@ -231,32 +262,29 @@ class ProjectsService:
 
         if project is None:
             raise exceptions.soca_exception(
-                error_code=errorcodes.PROJECT_NOT_FOUND,
-                message='project not found'
+                error_code=errorcodes.PROJECT_NOT_FOUND, message='project not found'
             )
 
-        self.projects_dao.update_project({
-            'project_id': project['project_id'],
-            'enabled': True
-        })
+        self.projects_dao.update_project(
+            {'project_id': project['project_id'], 'enabled': True}
+        )
 
         self.task_manager.send(
             task_name='projects.project-enabled',
-            payload={
-                'project_id': project['project_id']
-            },
+            payload={'project_id': project['project_id']},
             message_group_id=project['project_id'],
-            message_dedupe_id=Utils.short_uuid()
+            message_dedupe_id=Utils.short_uuid(),
         )
 
         return EnableProjectResult()
 
     def disable_project(self, request: DisableProjectRequest) -> DisableProjectResult:
-
         if Utils.is_empty(request):
             raise exceptions.invalid_params('request is required')
         if Utils.are_empty(request.project_id, request.project_name):
-            raise exceptions.invalid_params('Either project_id or project_name is required')
+            raise exceptions.invalid_params(
+                'Either project_id or project_name is required'
+            )
 
         project = None
         if Utils.is_not_empty(request.project_id):
@@ -266,21 +294,17 @@ class ProjectsService:
 
         if project is None:
             raise exceptions.soca_exception(
-                error_code=errorcodes.PROJECT_NOT_FOUND,
-                message='project not found'
+                error_code=errorcodes.PROJECT_NOT_FOUND, message='project not found'
             )
-        self.projects_dao.update_project({
-            'project_id': project['project_id'],
-            'enabled': False
-        })
+        self.projects_dao.update_project(
+            {'project_id': project['project_id'], 'enabled': False}
+        )
 
         self.task_manager.send(
             task_name='projects.project-disabled',
-            payload={
-                'project_id': project['project_id']
-            },
+            payload={'project_id': project['project_id']},
             message_group_id=project['project_id'],
-            message_dedupe_id=Utils.short_uuid()
+            message_dedupe_id=Utils.short_uuid(),
         )
 
         return DisableProjectResult()
@@ -288,7 +312,9 @@ class ProjectsService:
     def list_projects(self, request: ListProjectsRequest) -> ListProjectsResult:
         return self.projects_dao.list_projects(request)
 
-    def get_user_projects(self, request: GetUserProjectsRequest) -> GetUserProjectsResult:
+    def get_user_projects(
+        self, request: GetUserProjectsRequest
+    ) -> GetUserProjectsResult:
         if Utils.is_empty(request):
             raise exceptions.invalid_params('request is required')
         if Utils.is_empty(request.username):
@@ -297,14 +323,24 @@ class ProjectsService:
         self.logger.debug(f'get_user_projects() - request: {request}')
 
         # Probe directory service
-        ds_provider = self.context.config().get_string('directoryservice.provider', required=True)
-        self.logger.debug(f'ProjectsService.get_user_projects() - DS Provider is {ds_provider} ...')
+        ds_provider = self.context.config().get_string(
+            'directoryservice.provider', required=True
+        )
+        self.logger.debug(
+            f'ProjectsService.get_user_projects() - DS Provider is {ds_provider} ...'
+        )
         if ds_provider in {constants.DIRECTORYSERVICE_ACTIVE_DIRECTORY}:
-            self.logger.debug(f'get_user_projects() - Running in AD mode - performing AD query for {request.username} group memberships...')
-            user_result = self.accounts_service.ldap_client.get_user(username=request.username)
+            self.logger.debug(
+                f'get_user_projects() - Running in AD mode - performing AD query for {request.username} group memberships...'
+            )
+            user_result = self.accounts_service.ldap_client.get_user(
+                username=request.username
+            )
             self.logger.debug(f'get_user_projects() - User Result: {user_result}')
 
-        user_projects = self.user_projects_dao.get_projects_by_username(request.username)
+        user_projects = self.user_projects_dao.get_projects_by_username(
+            request.username
+        )
 
         result = []
         # todo - batch get
@@ -317,36 +353,47 @@ class ProjectsService:
             result.append(self.projects_dao.convert_from_db(db_project))
         result.sort(key=lambda p: p.name)
 
-        return GetUserProjectsResult(
-            projects=result
-        )
+        return GetUserProjectsResult(projects=result)
 
     def create_defaults(self):
+        ds_provider = self.context.config().get_string(
+            'directoryservice.provider', required=True
+        )
 
-        ds_provider = self.context.config().get_string('directoryservice.provider', required=True)
+        self.logger.debug(
+            f'ProjectsService.create_defaults() - DS Provider is {ds_provider} ...'
+        )
 
-        self.logger.debug(f'ProjectsService.create_defaults() - DS Provider is {ds_provider} ...')
-
-        default_project_group_name = GroupNameHelper(self.context).get_default_project_group()
+        default_project_group_name = GroupNameHelper(
+            self.context
+        ).get_default_project_group()
 
         if ds_provider in {constants.DIRECTORYSERVICE_ACTIVE_DIRECTORY}:
-            default_project_group_name_ds = self.context.config().get_string('directoryservice.group_mapping.default-project-group', required=True)
+            default_project_group_name_ds = self.context.config().get_string(
+                'directoryservice.group_mapping.default-project-group', required=True
+            )
         else:
             default_project_group_name_ds = default_project_group_name
 
-        default_project = self.projects_dao.get_project_by_name(constants.DEFAULT_PROJECT)
-        self.logger.debug(f'Default project group name: {default_project_group_name} Project: {default_project}')
+        default_project = self.projects_dao.get_project_by_name(
+            constants.DEFAULT_PROJECT
+        )
+        self.logger.debug(
+            f'Default project group name: {default_project_group_name} Project: {default_project}'
+        )
 
         if default_project is None:
             self.logger.info('creating and enabling default project ...')
-            result = self.create_project(CreateProjectRequest(
-                project=Project(
-                    name=constants.DEFAULT_PROJECT,
-                    title='Default Project',
-                    description='Default Project',
-                    ldap_groups=[GroupNameHelper(self.context).get_default_project_group()]
+            result = self.create_project(
+                CreateProjectRequest(
+                    project=Project(
+                        name=constants.DEFAULT_PROJECT,
+                        title='Default Project',
+                        description='Default Project',
+                        ldap_groups=[default_project_group_name_ds],
+                    )
                 )
-            ))
-            self.enable_project(EnableProjectRequest(
-                project_id=result.project.project_id
-            ))
+            )
+            self.enable_project(
+                EnableProjectRequest(project_id=result.project.project_id)
+            )

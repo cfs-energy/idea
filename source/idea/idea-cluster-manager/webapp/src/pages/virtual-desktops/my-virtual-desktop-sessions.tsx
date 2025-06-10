@@ -58,7 +58,7 @@ export interface MyVirtualDesktopSessionsProps extends IdeaAppLayoutProps, IdeaS
 export interface MyVirtualDesktopConfirmModalActionProps {
     actionTitle: string
     onConfirm: () => void
-    actionText: string
+    actionText: string | React.ReactNode
     onCancel: () => void
 }
 
@@ -386,10 +386,10 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
             if (Utils.isNotEmpty(os_filter) && os_filter !== OS_FILTER_ALL_ID && session.base_os !== undefined) {
                 // there is an OS filter that is applied.
                 // Any session that doesn't match the OS filter in our local copy also needs to be hidden.
-                let os_filters: VirtualDesktopBaseOS[] = ['windows']
+                let os_filters: VirtualDesktopBaseOS[] = ['windows', 'windows2019', 'windows2022', 'windows2025']
 
                 if (os_filter === OS_FILTER_LINUX_ID) {
-                    os_filters = ['amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9', 'ubuntu2204', 'ubuntu2404']
+                    os_filters = ['amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9', 'ubuntu2204', 'ubuntu2404']
                 }
 
                 if (!(os_filters?.includes(session?.base_os))) {
@@ -422,7 +422,15 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
                 selectedSession: session,
                 confirmAction: {
                     actionTitle: "Terminate Virtual Desktop",
-                    actionText: "Are you sure you want to terminate virtual desktop: " + session.name + "?",
+                    actionText: (
+                        <div>
+                            Are you sure you want to terminate virtual desktop: {session.name}?
+                            <br /><br />
+                            This will <strong>permanently delete</strong> the instance and its local data.
+                            <br /><br />
+                            <strong>Note:</strong> Shared storage filesystems will <strong>not</strong> be affected.
+                        </div>
+                    ),
                     onConfirm: () => {
                         this.getVirtualDesktopClient().deleteSessions({
                             sessions: [
@@ -837,7 +845,7 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
                 ref={this.createSessionForm}
                 defaultName={`MyDesktop${(this.state.sessions.size) + 1}`}
                 maxRootVolumeMemory={this.virtualDesktopSettings?.dcv_session.max_root_volume_memory}
-                userProjects={this.state.userProjects}
+                projects={this.state.userProjects}
                 onSubmit={(session_name, username, project_id, base_os, software_stack_id, session_type, instance_type, storage_size, hibernation_enabled, vpc_subnet_id) => {
                     return this.getVirtualDesktopClient().createSession({
                         session: {
@@ -901,6 +909,7 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
                 title={this.state.confirmAction.actionTitle}
                 onConfirm={this.state.confirmAction.onConfirm}
                 onCancel={this.state.confirmAction.onCancel}
+                dangerConfirm={this.state.confirmAction.actionTitle === "Terminate Virtual Desktop"}
             >
                 {this.state.confirmAction.actionText}
             </IdeaConfirm>)

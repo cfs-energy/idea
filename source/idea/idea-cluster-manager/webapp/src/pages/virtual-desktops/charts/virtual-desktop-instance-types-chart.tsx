@@ -134,4 +134,3 @@ class VirtualDesktopInstanceTypesChart extends VirtualDesktopBaseChart<VirtualDe
 }
 
 export default VirtualDesktopInstanceTypesChart
-

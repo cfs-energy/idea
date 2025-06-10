@@ -1,0 +1,25 @@
+name: 'Build Modules'
+description: 'Builds the IDEA data model and modules'
+runs:
+  using: 'composite'
+  steps:
+    - name: Store data-model.ts hash
+      run: |
+        echo "DATA_MODEL_HASH_BEFORE=$(md5sum source/idea/idea-cluster-manager/webapp/src/client/data-model.ts | cut -d' ' -f1)" >> $GITHUB_ENV
+    - name: Generate TS Data Model
+      run: |
+        invoke web-portal.typings
+    - name: Check if generated data-model.ts matches committed version
+      run: |
+        DATA_MODEL_HASH_AFTER=$(md5sum source/idea/idea-cluster-manager/webapp/src/client/data-model.ts | cut -d' ' -f1)
+        if [ "$DATA_MODEL_HASH_BEFORE" = "$DATA_MODEL_HASH_AFTER" ]; then
+          echo "✅ Generated data-model.ts matches committed version"
+        else
+          echo "❌ Generated data-model.ts differs from committed version!"
+          echo "The committed data-model.ts file is out of sync with the Pydantic models."
+          echo "Please run 'invoke web-portal.typings' locally and commit the updated file."
+          exit 1
+        fi
+    - name: Build Modules
+      run: |
+        invoke clean build package

@@ -2,13 +2,13 @@
 # * apps and data shared storage are mandatory.
 # * you can optionally provide additional "existing" file systems
 
-{%- macro storage_provider_config(provider, kwargs) %}
-{%- if provider == 'efs' %}
-  {%- include 'shared-storage/_templates/efs.yml' %}
-{%- elif provider == 'fsx_lustre' %}
-  {%- include 'shared-storage/_templates/fsx_lustre.yml' %}
-{%- endif %}
-{%- endmacro %}
+{% macro storage_provider_config(provider, kwargs) %}
+{% if provider == 'efs' %}
+  {% include 'shared-storage/_templates/efs.yml' %}
+{% elif provider == 'fsx_lustre' %}
+  {% include 'shared-storage/_templates/fsx_lustre.yml' %}
+{% endif %}
+{% endmacro %}
 
 # application storage for cluster.
 # used to store common applications, scripts, files and logs across the cluster

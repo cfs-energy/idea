@@ -14,10 +14,8 @@ from abc import abstractmethod
 
 
 class AdministratorContextProtocol(SocaCliContext):
-
     def __init__(self, options: SocaContextOptions = None):
         super().__init__(options=options)
 
     @abstractmethod
-    def get_stack_name(self, module: str) -> str:
-        ...
+    def get_stack_name(self, module: str) -> str: ...

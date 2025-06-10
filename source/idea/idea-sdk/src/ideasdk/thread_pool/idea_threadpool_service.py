@@ -19,8 +19,9 @@ from ideasdk.utils import Utils
 
 
 class IdeaThreadpoolService(SocaService):
-
-    def __init__(self, context: SocaContextProtocol, enforcement_frequency_per_min: int):
+    def __init__(
+        self, context: SocaContextProtocol, enforcement_frequency_per_min: int
+    ):
         super().__init__(context)
         self.ENFORCEMENT_FREQUENCY_PER_MIN = enforcement_frequency_per_min
         self._logger = context.logger('idea-threadpool-service')
@@ -32,8 +33,7 @@ class IdeaThreadpoolService(SocaService):
 
     def _initialize(self):
         self._service_thread = Thread(
-            name='service-thread',
-            target=self._adjust_thread_counts
+            name='service-thread', target=self._adjust_thread_counts
         )
         self._service_thread.start()
 
@@ -63,11 +63,15 @@ class IdeaThreadpoolService(SocaService):
     def _enforce_thread_count(self, count: int):
         self._logger.debug(f'Enforcing Thread count: {count}')
         if len(self._all_threads) == count:
-            self._logger.debug('The count is the same, we do not need to do anything. NO=OP. Returning.')
+            self._logger.debug(
+                'The count is the same, we do not need to do anything. NO=OP. Returning.'
+            )
             return
 
         if len(self._all_threads) > count:
-            self._logger.debug(f'Current thread count: {len(self._all_threads)}. Required: {count}. Need to terminate threads')
+            self._logger.debug(
+                f'Current thread count: {len(self._all_threads)}. Required: {count}. Need to terminate threads'
+            )
             # need to mark certain threads for termination
             if len(self._active_threads) > count:
                 # there are actual threads that need to be marked for termination
@@ -77,11 +81,15 @@ class IdeaThreadpoolService(SocaService):
             else:
                 # we have already marked them for termination, they just haven't terminated yet.
                 # we can eventually add more logic here. But for now. NO-OP
-                self._logger.debug('No=OP case, where threads are already marked for termination')
+                self._logger.debug(
+                    'No=OP case, where threads are already marked for termination'
+                )
                 pass
         else:
             # need to provision new threads.
-            self._logger.debug(f'Current thread count: {len(self._all_threads)}. Required: {count}. Need to provision new threads')
+            self._logger.debug(
+                f'Current thread count: {len(self._all_threads)}. Required: {count}. Need to provision new threads'
+            )
             for i in range(len(self._all_threads), count):
                 self._logger.debug(f'creating thread with id: {i}')
                 thread = self.provision_new_thread(i)
@@ -90,12 +98,10 @@ class IdeaThreadpoolService(SocaService):
                 self._active_threads.append(thread)
 
     @abstractmethod
-    def calculate_number_of_threads_required(self) -> int:
-        ...
+    def calculate_number_of_threads_required(self) -> int: ...
 
     @abstractmethod
-    def provision_new_thread(self, thread_id: int) -> IdeaThread:
-        ...
+    def provision_new_thread(self, thread_id: int) -> IdeaThread: ...
 
     def start(self):
         if self._is_running:

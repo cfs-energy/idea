@@ -19,10 +19,8 @@ from abc import abstractmethod, ABC
 
 
 class BaseMetadataUpdater(ABC):
-
     @abstractmethod
-    def update(self):
-        ...
+    def update(self): ...
 
 
 class PythonAppMetaFileUpdater(BaseMetadataUpdater):
@@ -33,7 +31,9 @@ class PythonAppMetaFileUpdater(BaseMetadataUpdater):
 
     def __init__(self, meta_file: str):
         if not os.path.isfile(meta_file):
-            raise idea.exceptions.invalid_params(f'meta_file: {meta_file} does not exist of not found')
+            raise idea.exceptions.invalid_params(
+                f'meta_file: {meta_file} does not exist of not found'
+            )
         self.meta_file = meta_file
 
     def update(self):
@@ -65,16 +65,22 @@ class PythonAppMetaFileUpdater(BaseMetadataUpdater):
 
 
 class InstallScriptsFileUpdater(BaseMetadataUpdater):
-
     def update(self):
         pass
 
 
 class WebAppEnvFileUpdater(BaseMetadataUpdater):
-
-    def __init__(self, webapp_env_file: str, app_name: str, app_version: str, release_version: str):
+    def __init__(
+        self,
+        webapp_env_file: str,
+        app_name: str,
+        app_version: str,
+        release_version: str,
+    ):
         if not os.path.isfile(webapp_env_file):
-            raise idea.exceptions.invalid_params(f'webapp .env file: {webapp_env_file} does not exist of not found')
+            raise idea.exceptions.invalid_params(
+                f'webapp .env file: {webapp_env_file} does not exist of not found'
+            )
         self.webapp_env_file = webapp_env_file
         self.app_name = app_name
         self.app_version = app_version
@@ -114,9 +120,17 @@ class NpmPackageJsonFileUpdater(BaseMetadataUpdater):
     should be called everytime during build
     """
 
-    def __init__(self, package_json_file: str, app_name: str, app_version: str, release_version: str):
+    def __init__(
+        self,
+        package_json_file: str,
+        app_name: str,
+        app_version: str,
+        release_version: str,
+    ):
         if not os.path.isfile(package_json_file):
-            raise idea.exceptions.invalid_params(f'package.json file: {package_json_file} does not exist of not found')
+            raise idea.exceptions.invalid_params(
+                f'package.json file: {package_json_file} does not exist of not found'
+            )
         self.package_json_file = package_json_file
         self.app_name = app_name
         self.app_version = app_version
@@ -175,7 +189,9 @@ class BuildTool:
 
         app_dir = os.path.join(idea.props.project_source_dir, app_name)
         if not os.path.isdir(app_dir):
-            raise idea.exceptions.invalid_params(f'project_dir: {app_dir} not found or does not exist')
+            raise idea.exceptions.invalid_params(
+                f'project_dir: {app_dir} not found or does not exist'
+            )
 
         self.app_dir = app_dir
         self.release_version = idea.props.idea_release_version
@@ -268,7 +284,9 @@ class BuildTool:
         for file in files:
             if file.endswith('_meta'):
                 return os.path.join(src_dir, file, '__init__.py')
-        raise idea.exceptions.build_failed(f'could not find app meta file (__init__.py) in: {src_dir}')
+        raise idea.exceptions.build_failed(
+            f'could not find app meta file (__init__.py) in: {src_dir}'
+        )
 
     def clean(self):
         if self.has_src():
@@ -282,7 +300,9 @@ class BuildTool:
             src_egg = os.path.join(self.src_dir, egg_info_name)
             if os.path.isdir(src_egg):
                 idea.console.print(f'deleting {src_egg} ...')
-                shutil.rmtree(os.path.join(self.src_dir, egg_info_name), ignore_errors=True)
+                shutil.rmtree(
+                    os.path.join(self.src_dir, egg_info_name), ignore_errors=True
+                )
 
         if self.has_webapp():
             skip_web = os.environ.get('IDEA_SKIP_WEB_BUILD', '0')
@@ -307,7 +327,9 @@ class BuildTool:
                 file_path = os.path.join(idea.props.deployment_administrator_dir, file)
                 if os.path.isfile(file_path):
                     idea.console.print(f'deleting {file_path} ...')
-                    os.remove(os.path.join(idea.props.deployment_administrator_dir, file))
+                    os.remove(
+                        os.path.join(idea.props.deployment_administrator_dir, file)
+                    )
                 elif os.path.isdir(file_path):
                     idea.console.print(f'deleting {file_path} ...')
                     shutil.rmtree(file_path)
@@ -336,18 +358,17 @@ class BuildTool:
             package_json_file=os.path.join(webapp_dir, 'package.json'),
             app_name=app_name,
             app_version=app_version,
-            release_version=release_version
+            release_version=release_version,
         ).update()
 
         WebAppEnvFileUpdater(
             webapp_env_file=os.path.join(webapp_dir, '.env'),
             app_name=app_name,
             app_version=app_version,
-            release_version=release_version
+            release_version=release_version,
         ).update()
 
     def build_webapp(self):
-
         skip_web = os.environ.get('IDEA_SKIP_WEB_BUILD', '0')
         if skip_web == '1':
             return
@@ -359,7 +380,6 @@ class BuildTool:
             self.c.run('yarn install && yarn build')
 
     def copy_build_outputs(self):
-
         output_dir = self.output_dir
         shutil.rmtree(output_dir, ignore_errors=True)
         os.makedirs(output_dir, exist_ok=True)
@@ -369,8 +389,12 @@ class BuildTool:
             app_name = self.app_name
             # python does not accept server and does some funky normalization on the semver.
             # this is only applicable for pre-releases or dev branches. e.g. 3.0.0-dev.1 gets converted to 3.0.0.dev1
-            normalized_python_app_version = idea.utils.get_package_meta(self.c, self.src_dir, 'version')
-            sdist_name = f'{app_name}-{normalized_python_app_version}.tar.gz'
+            normalized_python_app_version = idea.utils.get_package_meta(
+                self.c, self.src_dir, 'version'
+            )
+            # Normalize the app name by replacing hyphens with underscores to match setuptools behavior
+            normalized_app_name = app_name.replace('-', '_')
+            sdist_name = f'{normalized_app_name}-{normalized_python_app_version}.tar.gz'
             sdist = os.path.join(self.src_dir, 'dist', sdist_name)
             shutil.copy(sdist, os.path.join(output_dir, f'{app_name}-lib.tar.gz'))
 
@@ -385,10 +409,11 @@ class BuildTool:
         # resources
         if self.has_resources():
             shutil.copytree(self.resources_dir, os.path.join(output_dir, 'resources'))
-            shutil.copytree(self.bootstrap_dir, os.path.join(output_dir, 'resources', 'bootstrap'))
+            shutil.copytree(
+                self.bootstrap_dir, os.path.join(output_dir, 'resources', 'bootstrap')
+            )
 
     def build(self):
-
         idea.console.print_header_block(f'build {self.app_name}')
 
         self.pre_build_src()

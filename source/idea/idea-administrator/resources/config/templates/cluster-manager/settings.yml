@@ -45,7 +45,7 @@ web_portal:
   #  3: INFO
   #  4: DEBUG
   #  5: TRACE
-  # log level can be overriden by user by setting the `idea.log-level` local storage key using browser console
+  # log level can be overridden by user by setting the `idea.log-level` local storage key using browser console
   # eg. localStorage.setItem('idea.log-level', '4')
   default_log_level: 3
 
@@ -112,4 +112,3 @@ task_manager:
   polling_visibility_timeout: 30 # Visibility timeout for SQS messages
   sqs_wait_time: 20 # SQS polling / Wait time (in seconds). Used to active short or long SQS polling. (Min 0, Max 20)
   debug: false      # Debug task_manager (extra information in logs, logging profile must be 'debug' to see)
-

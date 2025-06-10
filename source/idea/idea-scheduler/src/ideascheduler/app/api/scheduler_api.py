@@ -22,11 +22,14 @@ from ideadatamodel.scheduler import (
     GetJobRequest,
     GetJobResult,
     DeleteJobRequest,
-    DeleteJobResult
+    DeleteJobResult,
 )
 from ideasdk.api import BaseAPI, ApiInvocationContext
 from ideasdk.utils import Utils, GroupNameHelper
-from ideascheduler.app.scheduler.job_param_builder import JobParamsBuilderContext, InstanceTypesParamBuilder
+from ideascheduler.app.scheduler.job_param_builder import (
+    JobParamsBuilderContext,
+    InstanceTypesParamBuilder,
+)
 
 import ideascheduler
 import os
@@ -45,53 +48,55 @@ class SchedulerAPI(BaseAPI):
         self.acl = {
             'Scheduler.ListActiveJobs': {
                 'scope': self.SCOPE_READ,
-                'method': self.list_active_jobs
+                'method': self.list_active_jobs,
             },
             'Scheduler.ListCompletedJobs': {
                 'scope': self.SCOPE_READ,
-                'method': self.list_completed_jobs
+                'method': self.list_completed_jobs,
             },
             'Scheduler.GetUserApplications': {
                 'scope': self.SCOPE_READ,
-                'method': self.get_user_applications
+                'method': self.get_user_applications,
             },
             'Scheduler.SubmitJob': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.submit_job
+                'method': self.submit_job,
             },
             'Scheduler.DeleteJob': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.delete_job
+                'method': self.delete_job,
             },
             'Scheduler.GetActiveJob': {
                 'scope': self.SCOPE_READ,
-                'method': self.get_active_job
+                'method': self.get_active_job,
             },
             'Scheduler.GetCompletedJob': {
                 'scope': self.SCOPE_READ,
-                'method': self.get_completed_job
+                'method': self.get_completed_job,
             },
             'Scheduler.GetInstanceTypeOptions': {
                 'scope': self.SCOPE_READ,
-                'method': self.get_instance_type_options
-            }
+                'method': self.get_instance_type_options,
+            },
         }
 
     def list_active_jobs(self, context: ApiInvocationContext):
         payload = context.get_request_payload_as(ListJobsRequest)
         page_size = payload.page_size
         page_start = payload.page_start
-        entries = self.context.job_cache.list_jobs(owner=context.get_username(), _limit=page_size, _offset=page_start)
+        entries = self.context.job_cache.list_jobs(
+            owner=context.get_username(), _limit=page_size, _offset=page_start
+        )
         total = self.context.job_cache.get_count(owner=context.get_username())
 
-        context.success(ListJobsResult(
-            paginator=SocaPaginator(
-                total=total,
-                page_size=payload.page_size,
-                start=payload.page_start
-            ),
-            listing=entries
-        ))
+        context.success(
+            ListJobsResult(
+                paginator=SocaPaginator(
+                    total=total, page_size=payload.page_size, start=payload.page_start
+                ),
+                listing=entries,
+            )
+        )
 
     def list_completed_jobs(self, context: ApiInvocationContext):
         payload = context.get_request_payload_as(ListJobsRequest)
@@ -112,15 +117,17 @@ class SchedulerAPI(BaseAPI):
             payload = context.get_request_payload_as(ListJobsRequest)
             page_size = payload.page_size
             page_start = payload.page_start
-            entries = self.context.job_cache.list_completed_jobs(owner=context.get_username(), _limit=page_size, _offset=page_start)
-            total = self.context.job_cache.get_completed_jobs_count(owner=context.get_username())
+            entries = self.context.job_cache.list_completed_jobs(
+                owner=context.get_username(), _limit=page_size, _offset=page_start
+            )
+            total = self.context.job_cache.get_completed_jobs_count(
+                owner=context.get_username()
+            )
             result = ListJobsResult(
                 paginator=SocaPaginator(
-                    total=total,
-                    page_size=payload.page_size,
-                    start=payload.page_start
+                    total=total, page_size=payload.page_size, start=payload.page_start
                 ),
-                listing=entries
+                listing=entries,
             )
 
         context.success(result)
@@ -143,25 +150,35 @@ class SchedulerAPI(BaseAPI):
             raise exceptions.invalid_params('Empty context user')
 
         if context_user is not job_owner:
-            raise exceptions.invalid_params('Mismatched user information in job request')
+            raise exceptions.invalid_params(
+                'Mismatched user information in job request'
+            )
 
         job_script = request.job_script
         if Utils.is_empty(job_script):
-            raise exceptions.invalid_params('job_script is required in form of base64 encoded job script.')
+            raise exceptions.invalid_params(
+                'job_script is required in form of base64 encoded job script.'
+            )
 
         job_script_interpreter = request.job_script_interpreter
         if Utils.is_empty(job_script_interpreter):
             raise exceptions.invalid_params('job_script_interpreter is required.')
         if job_script_interpreter not in ('pbs', 'bash'):
-            raise exceptions.invalid_params('job_script_interpreter must be one of [pbs, bash]')
+            raise exceptions.invalid_params(
+                'job_script_interpreter must be one of [pbs, bash]'
+            )
 
         dry_run = DryRunOption.resolve(request.dry_run)
 
-        data_dir = self.context.config().get_string('shared-storage.data.mount_dir', required=True)
+        data_dir = self.context.config().get_string(
+            'shared-storage.data.mount_dir', required=True
+        )
         job_submission_dir = os.path.join(data_dir, 'home', job_owner, 'jobs')
 
         if Utils.is_symlink(job_submission_dir):
-            raise exceptions.general_exception(f'a symbolic link exists at location: {job_submission_dir}. delete the symbolic link and try again.')
+            raise exceptions.general_exception(
+                f'a symbolic link exists at location: {job_submission_dir}. delete the symbolic link and try again.'
+            )
 
         if not Utils.is_dir(job_submission_dir):
             os.makedirs(job_submission_dir)
@@ -169,10 +186,21 @@ class SchedulerAPI(BaseAPI):
             shutil.chown(job_submission_dir, user=job_owner, group=group_name)
 
         job_uid = Utils.short_uuid()
+        # Try to extract job name from PBS script if present
+        job_name = None
+        script_content = Utils.base64_decode(job_script)
+        for line in script_content.split('\n'):
+            if line.startswith('#PBS -N '):
+                job_name = line.replace('#PBS -N ', '').strip()
+                break
+
+        # Use job_name and uid without timestamp
+        filename_base = f'{job_name}_{job_uid}' if job_name else job_uid
+
         if job_script_interpreter == 'pbs':
-            job_submit_script = os.path.join(job_submission_dir, f'{job_uid}.que')
+            job_submit_script = os.path.join(job_submission_dir, f'{filename_base}.que')
         else:
-            job_submit_script = os.path.join(job_submission_dir, f'{job_uid}.sh')
+            job_submit_script = os.path.join(job_submission_dir, f'{filename_base}.sh')
 
         with open(job_submit_script, 'w') as f:
             f.write(Utils.base64_decode(job_script))
@@ -182,7 +210,6 @@ class SchedulerAPI(BaseAPI):
         shutil.chown(job_submit_script, user=job_owner, group=group_name)
 
         if job_script_interpreter == 'pbs':
-
             job_submit_command = ['cd', job_submission_dir, '&&', 'qsub']
             if dry_run is not None:
                 job_submit_command += ['-l', f'dry_run={dry_run}']
@@ -201,7 +228,9 @@ class SchedulerAPI(BaseAPI):
                 job_id = str(result.stdout).split('.')[0]
             elif result.returncode != 0 and dry_run is None:
                 self.logger.error(f'Failed to submit job: {result}')
-                raise exceptions.soca_exception(errorcodes.JOB_SUBMISSION_FAILED, f'Failed to submit job: {result}')
+                raise exceptions.soca_exception(
+                    errorcodes.JOB_SUBMISSION_FAILED, f'Failed to submit job: {result}'
+                )
 
             submission_result = self.context.job_submission_tracker.get(job_uid)
             if isinstance(submission_result, BaseException):
@@ -209,7 +238,9 @@ class SchedulerAPI(BaseAPI):
 
             if submission_result is None and result.returncode != 0:
                 self.logger.error(f'Failed to submit job: {result}')
-                raise exceptions.soca_exception(errorcodes.JOB_SUBMISSION_FAILED, f'Failed to submit job: {result}')
+                raise exceptions.soca_exception(
+                    errorcodes.JOB_SUBMISSION_FAILED, f'Failed to submit job: {result}'
+                )
 
             if job_id is not None:
                 submission_result.job.job_id = job_id
@@ -221,8 +252,13 @@ class SchedulerAPI(BaseAPI):
             context.success(submission_result)
 
         elif job_script_interpreter == 'bash':
-
-            job_submit_command = ['cd', job_submission_dir, '&&', 'bash', job_submit_script]
+            job_submit_command = [
+                'cd',
+                job_submission_dir,
+                '&&',
+                'bash',
+                job_submit_script,
+            ]
 
             job_submit_command_str = ' '.join(job_submit_command)
             command = ['su', job_owner, '-c', f'{job_submit_command_str}']
@@ -231,11 +267,11 @@ class SchedulerAPI(BaseAPI):
             result = self.context.shell.invoke(command)
 
             if result.returncode == 0:
-                context.success(SubmitJobResult(
-                    accepted=True
-                ))
+                context.success(SubmitJobResult(accepted=True))
             else:
-                raise exceptions.soca_exception(errorcodes.JOB_SUBMISSION_FAILED, f'Failed to submit job: {result}')
+                raise exceptions.soca_exception(
+                    errorcodes.JOB_SUBMISSION_FAILED, f'Failed to submit job: {result}'
+                )
 
     def get_instance_type_options(self, context: ApiInvocationContext):
         """
@@ -253,24 +289,33 @@ class SchedulerAPI(BaseAPI):
         enable_ht_support = request.enable_ht_support
 
         if Utils.are_empty(queue_name, queue_profile_name):
-            raise exceptions.invalid_params('One of [queue_name, queue_profile_name] is required.')
+            raise exceptions.invalid_params(
+                'One of [queue_name, queue_profile_name] is required.'
+            )
 
         queue_profile = self.context.queue_profiles.get_queue_profile(
-            queue_profile_name=queue_profile_name,
-            queue_name=queue_name
+            queue_profile_name=queue_profile_name, queue_name=queue_name
         )
 
         if Utils.is_empty(instance_types):
             instance_types = queue_profile.default_job_params.instance_types
         if enable_ht_support is None:
-            enable_ht_support = Utils.get_as_bool(queue_profile.default_job_params.enable_ht_support, False)
+            enable_ht_support = Utils.get_as_bool(
+                queue_profile.default_job_params.enable_ht_support, False
+            )
 
-        param_builder_context = JobParamsBuilderContext(self.context, params={}, queue_profile=queue_profile)
-        builder = InstanceTypesParamBuilder(param_builder_context, constants.JOB_PARAM_INSTANCE_TYPES)
-        instance_type_options = builder.get_instance_type_options(instance_types, enable_ht_support)
-        context.success(GetInstanceTypeOptionsResult(
-            instance_types=instance_type_options
-        ))
+        param_builder_context = JobParamsBuilderContext(
+            self.context, params={}, queue_profile=queue_profile
+        )
+        builder = InstanceTypesParamBuilder(
+            param_builder_context, constants.JOB_PARAM_INSTANCE_TYPES
+        )
+        instance_type_options = builder.get_instance_type_options(
+            instance_types, enable_ht_support
+        )
+        context.success(
+            GetInstanceTypeOptionsResult(instance_types=instance_type_options)
+        )
 
     def get_active_job(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(GetJobRequest)
@@ -281,11 +326,9 @@ class SchedulerAPI(BaseAPI):
         if job is None:
             raise exceptions.soca_exception(
                 error_code=errorcodes.JOB_NOT_FOUND,
-                message=f'Job not found for job id: {job_id}'
+                message=f'Job not found for job id: {job_id}',
             )
-        return context.success(GetJobResult(
-            job=job
-        ))
+        return context.success(GetJobResult(job=job))
 
     def get_completed_job(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(GetJobRequest)
@@ -296,14 +339,11 @@ class SchedulerAPI(BaseAPI):
         if job is None:
             raise exceptions.soca_exception(
                 error_code=errorcodes.JOB_NOT_FOUND,
-                message=f'Job not found for job id: {job_id}'
+                message=f'Job not found for job id: {job_id}',
             )
-        return context.success(GetJobResult(
-            job=job
-        ))
+        return context.success(GetJobResult(job=job))
 
     def delete_job(self, context: ApiInvocationContext):
-
         request = context.get_request_payload_as(DeleteJobRequest)
         if Utils.is_empty(request.job_id):
             raise exceptions.invalid_params('job_id is required')
@@ -312,7 +352,9 @@ class SchedulerAPI(BaseAPI):
 
         job = self.context.scheduler.get_job(job_id=request.job_id)
         if job is None:
-            raise exceptions.soca_exception(errorcodes.JOB_NOT_FOUND, f'Job not found for Job Id: {request.job_id}')
+            raise exceptions.soca_exception(
+                errorcodes.JOB_NOT_FOUND, f'Job not found for Job Id: {request.job_id}'
+            )
         if job.owner != username:
             raise exceptions.unauthorized_access()
 

@@ -14,7 +14,7 @@ from ideadatamodel import exceptions
 from ideadatamodel.virtual_desktop import (
     DescribeServersResponse,
     DescribeSessionsRequest,
-    DescribeSessionsResponse
+    DescribeSessionsResponse,
 )
 from ideasdk.api import ApiInvocationContext
 from ideavirtualdesktopcontroller.app.api.virtual_desktop_api import VirtualDesktopAPI
@@ -27,24 +27,19 @@ class VirtualDesktopDCVAPI(VirtualDesktopAPI):
         self._logger = context.logger('virtual-desktop-dcv-api')
         self.namespace_handler_map = {
             'VirtualDesktopDCV.DescribeServers': self.describe_dcv_servers,
-            'VirtualDesktopDCV.DescribeSessions': self.describe_dcv_sessions
+            'VirtualDesktopDCV.DescribeSessions': self.describe_dcv_sessions,
         }
 
     def describe_dcv_servers(self, context: ApiInvocationContext):
         response = self.context.dcv_broker_client.describe_servers()
-        context.success(DescribeServersResponse(
-            response=response
-        ))
+        context.success(DescribeServersResponse(response=response))
 
     def describe_dcv_sessions(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(DescribeSessionsRequest)
         response = self.context.dcv_broker_client.describe_sessions(request.sessions)
-        context.success(DescribeSessionsResponse(
-            response=response
-        ))
+        context.success(DescribeSessionsResponse(response=response))
 
     def invoke(self, context: ApiInvocationContext):
-
         if not context.is_authorized(elevated_access=True):
             raise exceptions.unauthorized_access()
 

@@ -19,7 +19,7 @@ from ideascheduler.app.scheduler.openpbs import OpenPBSConverter, OpenPBSJob
 from ideascheduler.app.scheduler.openpbs import openpbs_constants
 from ideascheduler.app.scheduler.openpbs.openpbs_qselect import OpenPBSQSelect
 
-from typing import Optional, List,  Generator
+from typing import Optional, List, Generator
 import logging
 import orjson
 
@@ -29,11 +29,14 @@ class OpenPBSQStat:
     Wrapper class for qstat shell invocations
     """
 
-    def __init__(self, context: ideascheduler.AppContext,
-                 logger: logging.Logger,
-                 shell: ShellInvoker,
-                 converter: OpenPBSConverter,
-                 **kwargs):
+    def __init__(
+        self,
+        context: ideascheduler.AppContext,
+        logger: logging.Logger,
+        shell: ShellInvoker,
+        converter: OpenPBSConverter,
+        **kwargs,
+    ):
         self._context = context
         self._logger = logger
         self._shell = shell
@@ -117,7 +120,9 @@ class OpenPBSQStat:
                     continue
             if job_state is not None:
                 pbs_state = tokens[9]
-                if not self._compare_job_state(pbs_job_state=pbs_state, job_state=job_state):
+                if not self._compare_job_state(
+                    pbs_job_state=pbs_state, job_state=job_state
+                ):
                     continue
             job_id = tokens[0].split('.')[0]
             job_ids.append(job_id)
@@ -165,7 +170,6 @@ class OpenPBSQStat:
                 return []
 
             for job_id, job in jobs.items():
-
                 pbs_job = OpenPBSJob(id=job_id, **job)
 
                 queue_profile = self._context.queue_profiles.get_queue_profile(
@@ -176,8 +180,7 @@ class OpenPBSQStat:
                     continue
 
                 soca_job = pbs_job.as_soca_job(
-                    context=self._context,
-                    queue_profile=queue_profile
+                    context=self._context, queue_profile=queue_profile
                 )
 
                 if soca_job is None:
@@ -186,7 +189,9 @@ class OpenPBSQStat:
 
             return response
         except orjson.JSONDecodeError as e:
-            self._logger.error(f'failed to parse json data during pbs qstat: {qstat_result}')
+            self._logger.error(
+                f'failed to parse json data during pbs qstat: {qstat_result}'
+            )
             raise e
 
     def _handle_job_finished_error(self) -> List[SocaJob]:
@@ -209,23 +214,23 @@ class OpenPBSQStat:
         """
         raise exceptions.SocaException(
             error_code=errorcodes.SCHEDULER_JOB_FINISHED,
-            message=f'{self._shell_result}'
+            message=f'{self._shell_result}',
         )
 
     def _handle_unknown_job_id_error(self) -> List[SocaJob]:
         """
-       one or more of job_ids not found
-       open pbs still returns job information for other job_ids that were found after error messages
+        one or more of job_ids not found
+        open pbs still returns job information for other job_ids that were found after error messages
 
-       e.g:
+        e.g:
 
-       $ qstat -f -F json 600 601 597
-       qstat: Unknown Job Id 600.ip-10-0-0-9
-       qstat: Unknown Job Id 601.ip-10-0-0-9
-       {
-           "timestamp":1634779109,
-             ..
-       """
+        $ qstat -f -F json 600 601 597
+        qstat: Unknown Job Id 600.ip-10-0-0-9
+        qstat: Unknown Job Id 601.ip-10-0-0-9
+        {
+            "timestamp":1634779109,
+              ..
+        """
         output = str(self._shell_result.stderr)
 
         lines = output.splitlines()
@@ -235,7 +240,7 @@ class OpenPBSQStat:
                 continue
             applicable_lines.append(line)
 
-        qstat_result = "".join(applicable_lines)
+        qstat_result = ''.join(applicable_lines)
 
         return self._handle_qstat_result(qstat_result=qstat_result)
 
@@ -253,12 +258,12 @@ class OpenPBSQStat:
             queue = self.queue
             if job_ids is not None and len(job_ids) > 0:
                 if job_state is not None and job_state == SocaJobState.FINISHED:
-                    cmd += ['-x', '-f', '-F', 'json']
+                    cmd += ['-E', '-x', '-f', '-F', 'json']
                 else:
-                    cmd += ['-f', '-F', 'json']
+                    cmd += ['-E', '-f', '-F', 'json']
                 cmd += job_ids
             elif queue is not None:
-                cmd += ['-f', '-F', 'json']
+                cmd += ['-E', '-f', '-F', 'json']
                 cmd.append(queue)
 
         result = self._shell.invoke(cmd, skip_error_logging=True)
@@ -279,8 +284,7 @@ class OpenPBSQStat:
             return []
         else:
             raise exceptions.SocaException(
-                error_code=errorcodes.SCHEDULER_ERROR,
-                message=f'{result}'
+                error_code=errorcodes.SCHEDULER_ERROR, message=f'{result}'
             )
 
     def list_jobs(self) -> List[SocaJob]:
@@ -298,9 +302,9 @@ class OpenPBSQStat:
         cmd = [self.qstat_bin]
         job_state = self.job_state
         if job_state is not None and job_state == SocaJobState.FINISHED:
-            cmd += ['-x', '-f', '-F', 'json']
+            cmd += ['-E', '-x', '-f', '-F', 'json']
         else:
-            cmd += ['-f', '-F', 'json']
+            cmd += ['-E', '-f', '-F', 'json']
 
         job_ids = self.job_ids
         if Utils.is_empty(job_ids):
@@ -308,7 +312,7 @@ class OpenPBSQStat:
                 context=self._context,
                 logger=self._logger,
                 shell=self._shell,
-                **self._kwargs
+                **self._kwargs,
             ).list_jobs_ids()
 
         if Utils.is_empty(job_ids):
@@ -319,7 +323,7 @@ class OpenPBSQStat:
         remaining = len(job_ids)
         result = None
         while remaining > 0:
-            job_ids_to_get = job_ids[start:start + page_size]
+            job_ids_to_get = job_ids[start : start + page_size]
 
             get_jobs_cmd = cmd + job_ids_to_get
             result = self._shell.invoke(get_jobs_cmd, skip_error_logging=True)
@@ -346,8 +350,7 @@ class OpenPBSQStat:
             self._logger.warning(f'{result}')
         else:
             raise exceptions.SocaException(
-                error_code=errorcodes.SCHEDULER_ERROR,
-                message=f'{result}'
+                error_code=errorcodes.SCHEDULER_ERROR, message=f'{result}'
             )
         for job in jobs:
             yield job

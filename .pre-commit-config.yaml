@@ -1,0 +1,120 @@
+default_install_hook_types:
+  - pre-commit
+repos:
+  # Basic checks (should run first and quickly)
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: package\.json$
+      - id: end-of-file-fixer
+        exclude: ^(/docs)
+      - id: check-added-large-files
+      - id: check-json
+      - id: pretty-format-json
+        args:
+          - "--autofix"
+          - "--no-sort-keys"
+        exclude: package\.json$
+      - id: check-toml
+      - id: no-commit-to-branch
+      - id: fix-byte-order-marker
+      - id: check-merge-conflict
+  - repo: https://github.com/Lucas-C/pre-commit-hooks
+    rev: v1.5.5
+    hooks:
+      - id: forbid-crlf
+      - id: remove-crlf
+      - id: forbid-tabs
+      - id: remove-tabs
+  - repo: https://github.com/sirosen/texthooks
+    rev: 0.6.8
+    hooks:
+      - id: alphabetize-codeowners
+      - id: fix-smartquotes
+      - id: fix-ligatures
+      - id: fix-spaces
+  # Security check (important to run early)
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.27.2
+    hooks:
+      - id: gitleaks
+        args: [--config, .github/.gitleaks.toml]
+  # YAML-specific checks and formatting
+  - repo: https://github.com/adrienverge/yamllint.git
+    rev: v1.37.1
+    hooks:
+      - id: yamllint
+        args: ['--format', 'parsable', '-d', '{extends: relaxed, rules: {line-length: disable}}', '-s']
+        exclude: |
+          (?x)^(
+            .*/templates/.*\.ya?ml$|
+            .*/_templates/.*\.ya?ml$|
+            source/idea/idea-test-utils/src/ideatestutils/config/templates/.*\.ya?ml$|
+            source/idea/idea-sdk/src/ideasdk/metrics/.*/templates/.*\.ya?ml$|
+            source/idea/idea-cluster-manager/resources/defaults/email_templates\.yml$|
+            source/idea/idea-administrator/resources/policies/.*\.yml$|
+            source/idea/idea-administrator/resources/cdk/.*\.yml$
+          )$
+  - repo: https://github.com/google/yamlfmt
+    rev: v0.17.0
+    hooks:
+      - id: yamlfmt
+        exclude: |
+          (?x)^(
+            .*/templates/.*\.ya?ml$|
+            .*/_templates/.*\.ya?ml$|
+            source/idea/idea-test-utils/src/ideatestutils/config/templates/.*\.ya?ml$|
+            source/idea/idea-sdk/src/ideasdk/metrics/.*/templates/.*\.ya?ml$|
+            source/idea/idea-cluster-manager/resources/defaults/email_templates\.yml$|
+            source/idea/idea-administrator/resources/policies/.*\.yml$|
+            source/idea/idea-administrator/resources/cdk/.*\.yml$
+          )$
+  # Python linting and formatting
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    # Ruff version.
+    rev: v0.11.13
+    hooks:
+      # Run the linter.
+      - id: ruff
+        args: [--fix]
+      # Run the formatter.
+      - id: ruff-format
+  - repo: https://github.com/aristanetworks/j2lint.git
+    rev: v1.2.0
+    hooks:
+      - id: j2lint
+        args: [--ignore, jinja-statements-indentation, --]
+  # Docker linting
+  - repo: https://github.com/hadolint/hadolint
+    rev: v2.13.1-beta
+    hooks:
+      - id: hadolint
+        args:
+          - --config
+          - .github/.hadolint.yaml
+  # Shell script linting
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
+    hooks:
+      - id: shellcheck
+  # GitHub Actions workflow linting
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.7
+    hooks:
+      - id: actionlint
+        name: Lint GitHub Actions workflow files
+        description: Runs actionlint to lint GitHub Actions workflow files
+        language: golang
+        types: ["yaml"]
+        files: ^\.github/workflows/
+        entry: actionlint
+        minimum_pre_commit_version: 3.0.0
+  # Typo checking (can run last as it's less critical)
+  - repo: https://github.com/adhtruong/mirrors-typos
+    rev: v1.33.1
+    hooks:
+      - id: typos
+        args:
+          - --config
+          - .github/_typos.toml

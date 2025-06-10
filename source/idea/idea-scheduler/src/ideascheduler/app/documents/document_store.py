@@ -22,7 +22,7 @@ from ideadatamodel import (
     ListJobsResult,
     SocaComputeNode,
     SocaJob,
-    SocaListingPayload
+    SocaListingPayload,
 )
 from ideasdk.utils import Utils
 from ideasdk.aws.opensearch.aws_opensearch_client import AwsOpenSearchClient
@@ -46,7 +46,9 @@ class DocumentStore(DocumentStoreProtocol):
         self.opensearch_client: Optional[AwsOpenSearchClient] = None
 
     def is_enabled(self) -> bool:
-        domain_endpoint = self.context.config().get_string('analytics.opensearch.domain_endpoint')
+        domain_endpoint = self.context.config().get_string(
+            'analytics.opensearch.domain_endpoint'
+        )
         return Utils.is_not_empty(domain_endpoint)
 
     def is_initialized(self) -> bool:
@@ -62,7 +64,9 @@ class DocumentStore(DocumentStoreProtocol):
     def _jobs_index(self) -> str:
         cluster_name = self.context.cluster_name()
         module_id = self.context.module_id()
-        index_suffix = self.context.config().get_string('scheduler.opensearch.jobs_index.suffix', '0')
+        index_suffix = self.context.config().get_string(
+            'scheduler.opensearch.jobs_index.suffix', '0'
+        )
         return f'{cluster_name}_{module_id}_jobs_{index_suffix}'
 
     @property
@@ -91,7 +95,9 @@ class DocumentStore(DocumentStoreProtocol):
     def _nodes_index(self) -> str:
         cluster_name = self.context.cluster_name()
         module_id = self.context.module_id()
-        index_suffix = self.context.config().get_string('scheduler.opensearch.jobs.index_suffix', '0')
+        index_suffix = self.context.config().get_string(
+            'scheduler.opensearch.jobs.index_suffix', '0'
+        )
         return f'{cluster_name}_{module_id}_nodes_{index_suffix}'
 
     @property
@@ -100,9 +106,15 @@ class DocumentStore(DocumentStoreProtocol):
         module_id = self.context.module_id()
         return f'{cluster_name}_{module_id}_nodes'
 
-    def _create_or_update_template(self, template_name: str, template_file: str, index_pattern: str, alias: str,
-                                   number_of_shards: int,
-                                   number_of_replicas: int):
+    def _create_or_update_template(
+        self,
+        template_name: str,
+        template_file: str,
+        index_pattern: str,
+        alias: str,
+        number_of_shards: int,
+        number_of_replicas: int,
+    ):
         """
         create or update the opensearch index template settings
 
@@ -139,9 +151,15 @@ class DocumentStore(DocumentStoreProtocol):
 
             # if domain is not ready yet and is still being deployed, this line will fail
             # and scheduler initialization should retry initialization
-            get_template_result = self.opensearch_client.get_template(name=template_name)
-            existing_template = Utils.get_value_as_dict(template_name, get_template_result)
-            existing_template_version = Utils.get_value_as_int('version', existing_template, 0)
+            get_template_result = self.opensearch_client.get_template(
+                name=template_name
+            )
+            existing_template = Utils.get_value_as_dict(
+                template_name, get_template_result
+            )
+            existing_template_version = Utils.get_value_as_int(
+                'version', existing_template, 0
+            )
 
             if template_version <= existing_template_version:
                 return
@@ -175,64 +193,89 @@ class DocumentStore(DocumentStoreProtocol):
                 raise exceptions.soca_exception(
                     error_code=errorcodes.CONFIG_ERROR,
                     message=f'opensearch template: {template_file} is invalid. '
-                            f'index_patterns not found or invalid.'
+                    f'index_patterns not found or invalid.',
                 )
             if not alias_updated:
                 raise exceptions.soca_exception(
                     error_code=errorcodes.CONFIG_ERROR,
                     message=f'opensearch template: {template_file} is invalid. '
-                            f'template.aliases not found or invalid.'
+                    f'template.aliases not found or invalid.',
                 )
 
             self.opensearch_client.put_template(name=template_name, body=template)
-            self.logger.info(f'OpenSearch index template updated. '
-                             f'TemplateName: {template_name}, '
-                             f'Version: {template_version}, '
-                             f'Pattern: {index_pattern}, '
-                             f'Alias: {alias}')
+            self.logger.info(
+                f'OpenSearch index template updated. '
+                f'TemplateName: {template_name}, '
+                f'Version: {template_version}, '
+                f'Pattern: {index_pattern}, '
+                f'Alias: {alias}'
+            )
         except Exception as e:
-            self.logger.exception(f'failed to create or update template: {template_file}. Error: {e}')
-            raise exceptions.soca_exception(error_code=errorcodes.DOCUMENT_STORE_CONFIG_ERROR, message=str(e), exc=e)
+            self.logger.exception(
+                f'failed to create or update template: {template_file}. Error: {e}'
+            )
+            raise exceptions.soca_exception(
+                error_code=errorcodes.DOCUMENT_STORE_CONFIG_ERROR, message=str(e), exc=e
+            )
 
     def initialize(self):
         """
         creates or updates the index templates in opensearch
         """
         try:
-
             self.opensearch_client = AwsOpenSearchClient(self.context)
 
-            default_number_of_shards = self.context.config().get_int('analytics.opensearch.default_number_of_shards', 2)
-            default_number_of_replicas = self.context.config().get_int('analytics.opensearch.default_number_of_replicas', 1)
+            default_number_of_shards = self.context.config().get_int(
+                'analytics.opensearch.default_number_of_shards', 2
+            )
+            default_number_of_replicas = self.context.config().get_int(
+                'analytics.opensearch.default_number_of_replicas', 1
+            )
 
-            jobs_template_name = f'{self.context.cluster_name()}_{self.context.module_id()}_jobs'
+            jobs_template_name = (
+                f'{self.context.cluster_name()}_{self.context.module_id()}_jobs'
+            )
             resources_dir = self.context.get_resources_dir()
-            jobs_template_file = os.path.join(resources_dir, 'opensearch', 'template_jobs.json')
+            jobs_template_file = os.path.join(
+                resources_dir, 'opensearch', 'template_jobs.json'
+            )
 
-            jobs_number_of_shards = self.context.config().get_int('scheduler.opensearch.jobs.number_of_shards', default_number_of_shards)
-            jobs_number_of_replicas = self.context.config().get_int('scheduler.opensearch.jobs.number_of_replicas',
-                                                                    default_number_of_replicas)
+            jobs_number_of_shards = self.context.config().get_int(
+                'scheduler.opensearch.jobs.number_of_shards', default_number_of_shards
+            )
+            jobs_number_of_replicas = self.context.config().get_int(
+                'scheduler.opensearch.jobs.number_of_replicas',
+                default_number_of_replicas,
+            )
             self._create_or_update_template(
                 template_name=jobs_template_name,
                 template_file=jobs_template_file,
                 index_pattern=self._jobs_index_pattern,
                 alias=self._jobs_alias,
                 number_of_shards=jobs_number_of_shards,
-                number_of_replicas=jobs_number_of_replicas
+                number_of_replicas=jobs_number_of_replicas,
             )
 
-            nodes_number_of_shards = self.context.config().get_int('scheduler.opensearch.nodes.number_of_shards', default_number_of_shards)
-            nodes_number_of_replicas = self.context.config().get_int('scheduler.opensearch.nodes.number_of_replicas',
-                                                                     default_number_of_replicas)
-            nodes_template_name = f'{self.context.cluster_name()}_{self.context.module_id()}_nodes'
-            nodes_template_file = os.path.join(resources_dir, 'opensearch', 'template_nodes.json')
+            nodes_number_of_shards = self.context.config().get_int(
+                'scheduler.opensearch.nodes.number_of_shards', default_number_of_shards
+            )
+            nodes_number_of_replicas = self.context.config().get_int(
+                'scheduler.opensearch.nodes.number_of_replicas',
+                default_number_of_replicas,
+            )
+            nodes_template_name = (
+                f'{self.context.cluster_name()}_{self.context.module_id()}_nodes'
+            )
+            nodes_template_file = os.path.join(
+                resources_dir, 'opensearch', 'template_nodes.json'
+            )
             self._create_or_update_template(
                 template_name=nodes_template_name,
                 template_file=nodes_template_file,
                 index_pattern=self._nodes_index_pattern,
                 alias=self._nodes_alias,
                 number_of_shards=nodes_number_of_shards,
-                number_of_replicas=nodes_number_of_replicas
+                number_of_replicas=nodes_number_of_replicas,
             )
 
             self._is_initialized = True
@@ -253,10 +296,7 @@ class DocumentStore(DocumentStoreProtocol):
         for job in jobs:
             docs[job.job_uid] = Utils.to_dict(job)
 
-        return self.opensearch_client.bulk_index(
-            index_name=self._jobs_index,
-            docs=docs
-        )
+        return self.opensearch_client.bulk_index(index_name=self._jobs_index, docs=docs)
 
     def add_nodes(self, nodes: List[SocaComputeNode], **kwargs) -> bool:
         if not self.is_enabled():
@@ -269,12 +309,12 @@ class DocumentStore(DocumentStoreProtocol):
             docs[node.instance_id] = Utils.to_dict(node)
 
         return self.opensearch_client.bulk_index(
-            index_name=self._nodes_index,
-            docs=docs
+            index_name=self._nodes_index, docs=docs
         )
 
-    def _search(self, index: str, options: SocaListingPayload, default_sort_by: str) -> Dict:
-
+    def _search(
+        self, index: str, options: SocaListingPayload, default_sort_by: str
+    ) -> Dict:
         term_filters = []
         if Utils.is_not_empty(options.filters):
             for listing_filter in options.filters:
@@ -283,22 +323,20 @@ class DocumentStore(DocumentStoreProtocol):
                 if Utils.is_empty(listing_filter.value):
                     continue
                 if listing_filter.key == '$all':
-                    term_filters.append({
-                        'query_string': {
-                            'query': Utils.get_as_string(listing_filter.value),
-                            'fields': []
+                    term_filters.append(
+                        {
+                            'query_string': {
+                                'query': Utils.get_as_string(listing_filter.value),
+                                'fields': [],
+                            }
                         }
-                    })
+                    )
                 else:
                     if isinstance(listing_filter.value, list):
                         value = listing_filter.value
                     else:
                         value = [listing_filter.value]
-                    term_filters.append({
-                        'terms': {
-                            listing_filter.key: value
-                        }
-                    })
+                    term_filters.append({'terms': {listing_filter.key: value}})
 
         filters = []
         if options.date_range:
@@ -306,7 +344,13 @@ class DocumentStore(DocumentStoreProtocol):
             date_range_key = date_range.key
             date_range_start = arrow.get(date_range.start).isoformat()
             date_range_end = arrow.get(date_range.end).isoformat()
-            filters.append({'range': {date_range_key: {'gte': date_range_start, 'lt': date_range_end}}})
+            filters.append(
+                {
+                    'range': {
+                        date_range_key: {'gte': date_range_start, 'lt': date_range_end}
+                    }
+                }
+            )
 
         query = None
         if len(filters) > 0 or len(term_filters) is not None:
@@ -332,7 +376,7 @@ class DocumentStore(DocumentStoreProtocol):
             sort=sort_by,
             size=options.page_size,
             from_=options.page_start,
-            body=body
+            body=body,
         )
 
     def search_jobs(self, options: ListJobsRequest, **kwargs) -> ListJobsResult:
@@ -340,13 +384,13 @@ class DocumentStore(DocumentStoreProtocol):
             return ListJobsResult(
                 listing=[],
                 paginator=SocaPaginator(
-                    total=0,
-                    page_size=options.page_size,
-                    start=options.page_start
-                )
+                    total=0, page_size=options.page_size, start=options.page_start
+                ),
             )
 
-        results = self._search(index=self._jobs_alias, options=options, default_sort_by='queue_time:desc')
+        results = self._search(
+            index=self._jobs_alias, options=options, default_sort_by='queue_time:desc'
+        )
 
         hits = Utils.get_value_as_dict('hits', results)
         total = Utils.get_value_as_dict('total', hits)
@@ -364,8 +408,8 @@ class DocumentStore(DocumentStoreProtocol):
             paginator=SocaPaginator(
                 total=Utils.get_value_as_int('value', total),
                 page_size=options.page_size,
-                start=options.page_start
-            )
+                start=options.page_start,
+            ),
         )
 
     def search_nodes(self, options: ListNodesRequest, **kwargs) -> ListNodesResult:
@@ -373,13 +417,13 @@ class DocumentStore(DocumentStoreProtocol):
             return ListNodesResult(
                 listing=[],
                 paginator=SocaPaginator(
-                    total=0,
-                    page_size=options.page_size,
-                    start=options.page_start
-                )
+                    total=0, page_size=options.page_size, start=options.page_start
+                ),
             )
 
-        results = self._search(index=self._nodes_alias, options=options, default_sort_by='launch_time:desc')
+        results = self._search(
+            index=self._nodes_alias, options=options, default_sort_by='launch_time:desc'
+        )
 
         hits = Utils.get_value_as_dict('hits', results)
         total = Utils.get_value_as_dict('total', hits)
@@ -397,6 +441,6 @@ class DocumentStore(DocumentStoreProtocol):
             paginator=SocaPaginator(
                 total=Utils.get_value_as_int('value', total),
                 page_size=options.page_size,
-                start=options.page_start
-            )
+                start=options.page_start,
+            ),
         )

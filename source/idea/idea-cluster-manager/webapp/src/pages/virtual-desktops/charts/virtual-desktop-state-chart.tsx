@@ -133,4 +133,3 @@ class VirtualDesktopStateChart extends VirtualDesktopBaseChart<VirtualDesktopSta
 }
 
 export default VirtualDesktopStateChart
-

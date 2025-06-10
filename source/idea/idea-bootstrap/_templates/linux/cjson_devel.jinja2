@@ -1,0 +1,59 @@
+# Begin: Install cjson-devel from source
+function install_cjson_devel () {
+  # Check if cjson is already installed
+  {% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+  if [ -f "/usr/lib/x86_64-linux-gnu/libcjson.so" ]; then
+    log_info "cjson-devel already installed."
+    return 0
+  fi
+  {% else %}
+  if [ -f "/lib64/libcjson.so" ]; then
+    log_info "cjson-devel already installed."
+    return 0
+  fi
+  {% endif %}
+
+  log_info "Building cjson-devel from source"
+
+  # Clone the repository and checkout specific version
+  git clone https://github.com/DaveGamble/cJSON.git
+  cd cJSON || exit
+  # Use v1.7.18 for stability
+  git checkout v1.7.18
+
+  # Build and install
+  mkdir build
+  cd build || exit
+  {% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+  cmake ..
+  {% else %}
+  cmake3 ..
+  {% endif %}
+  make
+  make install
+
+  # Create symlink if needed
+  {% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+  # Ubuntu uses /usr/lib/x86_64-linux-gnu/ for 64-bit libraries
+  if [ -f "/usr/local/lib/libcjson.so.1" ] && [ ! -f "/usr/lib/x86_64-linux-gnu/libcjson.so.1" ]; then
+    ln -sf /usr/local/lib/libcjson.so.1 /usr/lib/x86_64-linux-gnu/libcjson.so.1
+  fi
+  if [ -f "/usr/lib/x86_64-linux-gnu/libcjson.so.1" ]; then
+    ln -sf /usr/lib/x86_64-linux-gnu/libcjson.so.1 /usr/lib/x86_64-linux-gnu/libcjson.so
+  fi
+  {% else %}
+  # RHEL/CentOS/Amazon Linux use /lib64
+  if [ -f "/usr/local/lib64/libcjson.so.1" ] && [ ! -f "/lib64/libcjson.so.1" ]; then
+    ln -sf /usr/local/lib64/libcjson.so.1 /lib64/libcjson.so.1
+  fi
+  ln -sf /lib64/libcjson.so.1 /lib64/libcjson.so
+  {% endif %}
+
+  # Update library cache
+  ldconfig
+
+  log_info "cjson-devel successfully installed."
+}
+
+install_cjson_devel
+# End: Install cjson-devel from source

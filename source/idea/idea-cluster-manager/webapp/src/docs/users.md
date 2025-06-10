@@ -28,6 +28,3 @@ Select your user and click **Actions** > **Add User to Group** to add user to th
 ### Remove user from group
 
 Select your user and click **Actions** > **Remove User from Group** to remove group membership for this user.
-
-
-

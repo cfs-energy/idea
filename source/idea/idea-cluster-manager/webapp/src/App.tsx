@@ -58,6 +58,7 @@ import {IdeaAppNavigationProps, withRouter} from './navigation/navigation-utils'
 import {Routes, Route} from "react-router-dom";
 import IdeaLogTail from "./pages/home/log-tail";
 import Utils from './common/utils';
+import ScriptWorkbench from "./pages/hpc/script-workbench";
 
 
 export interface IdeaWebPortalAppProps extends IdeaAppNavigationProps {
@@ -896,6 +897,22 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
                     <IdeaAuthenticatedRoute isLoggedIn={this.state.isLoggedIn}>
                         <ClusterSettings
                             ideaPageId="cluster-settings"
+                            toolsOpen={this.state.toolsOpen}
+                            tools={this.state.tools}
+                            onToolsChange={this.onToolsChange}
+                            onPageChange={this.onPageChange}
+                            sideNavItems={this.state.sideNavItems}
+                            sideNavHeader={this.state.sideNavHeader}
+                            onSideNavChange={this.onSideNavChange}
+                            onFlashbarChange={this.onFlashbarChange}
+                            flashbarItems={this.state.flashbarItems}
+                        />
+                    </IdeaAuthenticatedRoute>
+                }/>
+                <Route path="/home/script-workbench" element={
+                    <IdeaAuthenticatedRoute isLoggedIn={this.state.isLoggedIn}>
+                        <ScriptWorkbench
+                            ideaPageId="script-workbench"
                             toolsOpen={this.state.toolsOpen}
                             tools={this.state.tools}
                             onToolsChange={this.onToolsChange}

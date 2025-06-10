@@ -20,4 +20,3 @@ You can create a shortcut of your favorite locations and easily access them via 
 ### Submit job
 
 Select your input file then click Submit Job to trigger a new job submission workflow.
-

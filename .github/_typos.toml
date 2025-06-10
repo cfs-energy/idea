@@ -1,0 +1,13 @@
+[default.extend-words]
+CLEA = "CLEA"
+Pn = "Pn"
+Ded = "Ded"
+onfigure = "onfigure"
+braket = "braket"
+Sur = "Sur"
+
+[default]
+extend-ignore-re = [
+  "ami-[0-9a-f]+",
+  "fs-[0-9a-f]+"
+]

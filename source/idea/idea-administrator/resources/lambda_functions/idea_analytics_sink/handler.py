@@ -12,6 +12,7 @@
 Analytics Sink Lambda:
 This function is triggered by the analytics kinesis stream when any module submits an analytics event
 """
+
 import base64
 import os
 import json
@@ -23,10 +24,7 @@ if not opensearch_endpoint.startswith('https://'):
     opensearch_endpoint = f'https://{opensearch_endpoint}'
 
 os_client = OpenSearch(
-    hosts=[opensearch_endpoint],
-    port=443,
-    use_ssl=True,
-    verify_certs=True
+    hosts=[opensearch_endpoint], port=443, use_ssl=True, verify_certs=True
 )
 
 logger = logging.getLogger()
@@ -37,39 +35,42 @@ def handler(event, _):
     try:
         bulk_request_with_timestamp = []
         for record in event['Records']:
-            analytics_entry = base64.b64decode(record["kinesis"]["data"])
+            analytics_entry = base64.b64decode(record['kinesis']['data'])
             analytics_entry = json.loads(analytics_entry.decode())
             request = {
-                "_id": analytics_entry["document_id"],
-                "_index": analytics_entry["index_id"]
+                '_id': analytics_entry['document_id'],
+                '_index': analytics_entry['index_id'],
             }
 
-            if analytics_entry["action"] == 'CREATE_ENTRY':
+            if analytics_entry['action'] == 'CREATE_ENTRY':
                 # create new
-                request["_op_type"] = "create"
-                request["_source"] = analytics_entry["entry"]
+                request['_op_type'] = 'create'
+                request['_source'] = analytics_entry['entry']
 
-            elif analytics_entry["action"] == 'UPDATE_ENTRY':
+            elif analytics_entry['action'] == 'UPDATE_ENTRY':
                 # update existing
-                request["_op_type"] = "update"
-                request["doc"] = analytics_entry["entry"]
+                request['_op_type'] = 'update'
+                request['doc'] = analytics_entry['entry']
             else:
                 # delete
-                request["_op_type"] = "delete"
+                request['_op_type'] = 'delete'
 
-            bulk_request_with_timestamp.append((analytics_entry["timestamp"], request))
+            bulk_request_with_timestamp.append((analytics_entry['timestamp'], request))
 
-        bulk_request_with_timestamp_sorted = sorted(bulk_request_with_timestamp, key=lambda x: x[0])
+        bulk_request_with_timestamp_sorted = sorted(
+            bulk_request_with_timestamp, key=lambda x: x[0]
+        )
         bulk_request = []
         for entry in bulk_request_with_timestamp_sorted:
             request = entry[1]
-            logger.info(f'Submitting request for action: {request["_op_type"]} for document_id: {request["_id"]} to index {request["_index"]}')
+            logger.info(
+                f'Submitting request for action: {request["_op_type"]} for document_id: {request["_id"]} to index {request["_index"]}'
+            )
             bulk_request.append(request)
 
-        response = helpers.bulk(
-            client=os_client,
-            actions=bulk_request
-        )
+        response = helpers.bulk(client=os_client, actions=bulk_request)
         logger.info(response)
     except Exception as e:
-        logger.exception(f'Error while processing analytics request for event: {json.dumps(event)}, error: {e}')
+        logger.exception(
+            f'Error while processing analytics request for event: {json.dumps(event)}, error: {e}'
+        )

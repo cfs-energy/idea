@@ -20,11 +20,9 @@ setup(
     author='Amazon',
     license='Apache License, Version 2.0',
     packages=find_packages(),
-    package_dir={
-        'ideaadministrator': 'ideaadministrator'
-    },
-    entry_points='''
+    package_dir={'ideaadministrator': 'ideaadministrator'},
+    entry_points="""
         [console_scripts]
         idea-admin=ideaadministrator.app_main:main_wrapper
-    '''
+    """,
 )

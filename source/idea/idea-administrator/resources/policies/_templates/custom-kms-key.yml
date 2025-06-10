@@ -1,4 +1,4 @@
-  {%- if context.config.get_string('cluster.kms.key_type') == 'customer-managed' %}
+  {% if context.config.get_string('cluster.kms.key_type') == 'customer-managed' %}
   - Action:
       - kms:Encrypt
       - kms:Decrypt
@@ -6,12 +6,12 @@
     Resource:
       {{ context.utils.to_yaml(context.arns.kms_key_arn) | indent(6) }}
     Effect: Allow
-  {%- endif %}
-  {%- if context.config.get_string('cluster.dynamodb.kms_key_id') %}
+  {% endif %}
+  {% if context.config.get_string('cluster.dynamodb.kms_key_id') %}
   - Action:
       - kms:DescribeKey
       - kms:CreateGrant
     Resource:
       - '{{ context.arns.kms_dynamodb_key_arn }}'
     Effect: Allow
-  {%- endif %}
+  {% endif %}

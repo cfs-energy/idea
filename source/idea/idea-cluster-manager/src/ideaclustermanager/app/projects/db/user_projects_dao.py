@@ -21,8 +21,13 @@ from boto3.dynamodb.conditions import Key
 
 
 class UserProjectsDAO:
-
-    def __init__(self, context: SocaContext, projects_dao: ProjectsDAO, accounts_service: AccountsService, logger=None):
+    def __init__(
+        self,
+        context: SocaContext,
+        projects_dao: ProjectsDAO,
+        accounts_service: AccountsService,
+        logger=None,
+    ):
         self.context = context
         self.projects_dao = projects_dao
         self.accounts_service = accounts_service
@@ -45,58 +50,42 @@ class UserProjectsDAO:
             create_table_request={
                 'TableName': self.get_user_projects_table_name(),
                 'AttributeDefinitions': [
-                    {
-                        'AttributeName': 'username',
-                        'AttributeType': 'S'
-                    },
-                    {
-                        'AttributeName': 'project_id',
-                        'AttributeType': 'S'
-                    }
+                    {'AttributeName': 'username', 'AttributeType': 'S'},
+                    {'AttributeName': 'project_id', 'AttributeType': 'S'},
                 ],
                 'KeySchema': [
-                    {
-                        'AttributeName': 'username',
-                        'KeyType': 'HASH'
-                    },
-                    {
-                        'AttributeName': 'project_id',
-                        'KeyType': 'RANGE'
-                    }
+                    {'AttributeName': 'username', 'KeyType': 'HASH'},
+                    {'AttributeName': 'project_id', 'KeyType': 'RANGE'},
                 ],
-                'BillingMode': 'PAY_PER_REQUEST'
+                'BillingMode': 'PAY_PER_REQUEST',
             },
-            wait=True
+            wait=True,
         )
         self.context.aws_util().dynamodb_create_table(
             create_table_request={
                 'TableName': self.get_project_groups_table_name(),
                 'AttributeDefinitions': [
-                    {
-                        'AttributeName': 'group_name',
-                        'AttributeType': 'S'
-                    },
-                    {
-                        'AttributeName': 'project_id',
-                        'AttributeType': 'S'
-                    }
+                    {'AttributeName': 'group_name', 'AttributeType': 'S'},
+                    {'AttributeName': 'project_id', 'AttributeType': 'S'},
                 ],
                 'KeySchema': [
-                    {
-                        'AttributeName': 'group_name',
-                        'KeyType': 'HASH'
-                    },
-                    {
-                        'AttributeName': 'project_id',
-                        'KeyType': 'RANGE'
-                    }
+                    {'AttributeName': 'group_name', 'KeyType': 'HASH'},
+                    {'AttributeName': 'project_id', 'KeyType': 'RANGE'},
                 ],
-                'BillingMode': 'PAY_PER_REQUEST'
+                'BillingMode': 'PAY_PER_REQUEST',
             },
-            wait=True
+            wait=True,
         )
-        self.user_projects_table = self.context.aws().dynamodb_table().Table(self.get_user_projects_table_name())
-        self.project_groups_table = self.context.aws().dynamodb_table().Table(self.get_project_groups_table_name())
+        self.user_projects_table = (
+            self.context.aws()
+            .dynamodb_table()
+            .Table(self.get_user_projects_table_name())
+        )
+        self.project_groups_table = (
+            self.context.aws()
+            .dynamodb_table()
+            .Table(self.get_project_groups_table_name())
+        )
 
     def create_user_project(self, project_id: str, username: str):
         if Utils.is_empty(project_id):
@@ -106,10 +95,7 @@ class UserProjectsDAO:
 
         self.logger.info(f'added user project: {project_id}, username: {username}')
         self.user_projects_table.put_item(
-            Item={
-                'project_id': project_id,
-                'username': username
-            }
+            Item={'project_id': project_id, 'username': username}
         )
 
     def delete_user_project(self, project_id: str, username: str):
@@ -120,10 +106,7 @@ class UserProjectsDAO:
 
         self.logger.info(f'deleted user project: {project_id}, username: {username}')
         self.user_projects_table.delete_item(
-            Key={
-                'project_id': project_id,
-                'username': username
-            }
+            Key={'project_id': project_id, 'username': username}
         )
 
     def ldap_group_added(self, project_id: str, group_name: str):
@@ -133,18 +116,14 @@ class UserProjectsDAO:
             raise exceptions.invalid_params('username is required')
 
         self.project_groups_table.put_item(
-            Item={
-                'group_name': group_name,
-                'project_id': project_id
-            }
+            Item={'group_name': group_name, 'project_id': project_id}
         )
 
-        usernames = self.accounts_service.group_members_dao.get_usernames_in_group(group_name)
+        usernames = self.accounts_service.group_members_dao.get_usernames_in_group(
+            group_name
+        )
         for username in usernames:
-            self.create_user_project(
-                project_id=project_id,
-                username=username
-            )
+            self.create_user_project(project_id=project_id, username=username)
 
     def ldap_group_removed(self, project_id: str, group_name: str):
         if Utils.is_empty(project_id):
@@ -153,18 +132,14 @@ class UserProjectsDAO:
             raise exceptions.invalid_params('username is required')
 
         self.project_groups_table.delete_item(
-            Key={
-                'group_name': group_name,
-                'project_id': project_id
-            }
+            Key={'group_name': group_name, 'project_id': project_id}
         )
 
-        usernames = self.accounts_service.group_members_dao.get_usernames_in_group(group_name)
+        usernames = self.accounts_service.group_members_dao.get_usernames_in_group(
+            group_name
+        )
         for username in usernames:
-            self.delete_user_project(
-                project_id=project_id,
-                username=username
-            )
+            self.delete_user_project(project_id=project_id, username=username)
 
     def get_projects_by_username(self, username: str) -> List[str]:
         if Utils.is_empty(username):
@@ -183,27 +158,39 @@ class UserProjectsDAO:
     def get_projects_by_group_name(self, group_name: str) -> List[str]:
         if Utils.is_empty(group_name):
             raise exceptions.invalid_params('group_name is required')
-        self.logger.debug(f'get_projects_by_group_name() - Looking for {group_name} in UserProjectsDAO/DDB')
+        self.logger.debug(
+            f'get_projects_by_group_name() - Looking for {group_name} in UserProjectsDAO/DDB'
+        )
         result = self.project_groups_table.query(
             KeyConditionExpression=Key('group_name').eq(group_name)
         )
-        self.logger.debug(f'get_projects_by_group_name() - Group: {group_name} Result: {result}')
+        self.logger.debug(
+            f'get_projects_by_group_name() - Group: {group_name} Result: {result}'
+        )
         group_projects = Utils.get_value_as_list('Items', result, default=[])
 
         if Utils.is_empty(group_projects):
-            self.logger.info(f'get_projects_by_group_name() - Group: {group_name} - No projects found (DAO)')
+            self.logger.info(
+                f'get_projects_by_group_name() - Group: {group_name} - No projects found (DAO)'
+            )
             return []
 
-        self.logger.debug(f'get_projects_by_group_name() - Group: {group_name} group_projects: {group_projects}')
+        self.logger.debug(
+            f'get_projects_by_group_name() - Group: {group_name} group_projects: {group_projects}'
+        )
         project_ids = []
         for group_project in group_projects:
             project_ids.append(group_project['project_id'])
 
         if Utils.is_empty(project_ids):
-            self.logger.info(f'get_projects_by_group_name() - Group: {group_name} - No projectIDs found (DAO)')
+            self.logger.info(
+                f'get_projects_by_group_name() - Group: {group_name} - No projectIDs found (DAO)'
+            )
             return []
 
-        self.logger.debug(f'get_projects_by_group_name() - Group: {group_name} group_projects: {group_projects} - Returning IDs: {project_ids}')
+        self.logger.debug(
+            f'get_projects_by_group_name() - Group: {group_name} group_projects: {group_projects} - Returning IDs: {project_ids}'
+        )
         return project_ids
 
     def group_member_added(self, group_name: str, username: str):
@@ -211,14 +198,13 @@ class UserProjectsDAO:
             raise exceptions.invalid_params('group_name is required')
         if Utils.is_empty(username):
             raise exceptions.invalid_params('username is required')
-        self.logger.info(f'group_member_added() - Adding {username} to {group_name} in DDB. Fetch project_id for {group_name}')
+        self.logger.info(
+            f'group_member_added() - Adding {username} to {group_name} in DDB. Fetch project_id for {group_name}'
+        )
 
         project_ids = self.get_projects_by_group_name(group_name)
         for project_id in project_ids:
-            self.create_user_project(
-                project_id=project_id,
-                username=username
-            )
+            self.create_user_project(project_id=project_id, username=username)
 
     def group_member_removed(self, group_name: str, username: str):
         if Utils.is_empty(group_name):
@@ -227,10 +213,7 @@ class UserProjectsDAO:
             raise exceptions.invalid_params('username is required')
         project_ids = self.get_projects_by_group_name(group_name)
         for project_id in project_ids:
-            self.delete_user_project(
-                project_id=project_id,
-                username=username
-            )
+            self.delete_user_project(project_id=project_id, username=username)
 
     def project_disabled(self, project_id: str):
         if Utils.are_empty(project_id):
@@ -259,9 +242,6 @@ class UserProjectsDAO:
             raise exceptions.invalid_params('project_id is required')
 
         result = self.user_projects_table.get_item(
-            Key={
-                'username': username,
-                'project_id': project_id
-            }
+            Key={'username': username, 'project_id': project_id}
         )
         return Utils.get_value_as_dict('Item', result) is not None

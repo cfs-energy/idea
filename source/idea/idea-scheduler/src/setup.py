@@ -9,12 +9,10 @@ setup(
     author='Amazon',
     license='Apache License, Version 2.0',
     packages=find_packages(),
-    package_dir={
-        'ideascheduler': 'ideascheduler'
-    },
-    entry_points='''
+    package_dir={'ideascheduler': 'ideascheduler'},
+    entry_points="""
         [console_scripts]
         ideaserver=ideascheduler.app.app_main:main
         ideactl=ideascheduler.cli.cli_main:main
-    '''
+    """,
 )

@@ -1,0 +1,21 @@
+name: Build Tests
+on:
+  push:
+  pull_request:
+    paths-ignore:
+      - 'docs/**'
+  workflow_dispatch:
+jobs:
+  lint_and_build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pre-commit Linting
+        uses: ./.github/actions/pre-commit
+      - name: Setup Development Environment
+        uses: ./.github/actions/setup_dev_environment
+      - name: Build Modules
+        uses: ./.github/actions/build_modules
+      - name: Build Docker Image
+        run: |
+          invoke docker.build

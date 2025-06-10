@@ -1,40 +1,35 @@
 # Begin: Install OpenPBS
-{%- if context.base_os in ('amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9', 'ubuntu2204', 'ubuntu2404') %}
-{%- if context.config.get_string('global-settings.package_config.openpbs.type') == 'release' and context.base_os != 'ubuntu2404' %}
-function install_openpbs () {
-  local OPENPBS_VERSION="{{ context.config.get_string('global-settings.package_config.openpbs.version', required=True) }}"
-  local OPENPBS_URL="{{ context.config.get_string('global-settings.package_config.openpbs.url', required=True) }}"
-  local OPENPBS_HASH="{{ context.config.get_string('global-settings.package_config.openpbs.checksum', required=True).lower().strip() }}"
-  local OPENPBS_HASH_METHOD="{{ context.config.get_string('global-settings.package_config.openpbs.checksum_method', required=True).lower().strip() }}"
-  local OPENPBS_TGZ="$(basename ${OPENPBS_URL})"
-  local OPENPBS_WORK_DIR="/root/bootstrap/openpbs"
-  # check if already installed and is the correct version
-  local OPENPBS_INSTALLED_VERSION=$(/opt/pbs/bin/qstat --version | awk '{print $NF}')
-  if [[ "${OPENPBS_INSTALLED_VERSION}" == "${OPENPBS_VERSION}" ]]; then
-    log_info "OpenPBS is already installed. Version: ${OPENPBS_VERSION}"
-    return 0
-  fi
+{% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9', 'ubuntu2204', 'ubuntu2404') %}
 
-  log_info "OpenPBS not detected or incorrect version, Installing OpenPBS version: ${OPENPBS_VERSION}..."
-
+function install_openpbs_dependencies() {
   OPENPBS_PKGS="{{ ' '.join(context.config.get_list('global-settings.package_config.openpbs.packages')) }}"
-  {%- if context.base_os in ('amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
-  yum install -y $(echo ${OPENPBS_PKGS[*]})
-  {%- endif %}
-  {%- if context.base_os == 'ubuntu2204' %}
+  {% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+  yum install -y --skip-broken $(echo ${OPENPBS_PKGS[*]})
+  {% endif %}
+  {% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
   apt install -y $(echo ${OPENPBS_PKGS[*]})
-  {%- endif %}
-  mkdir -p "${OPENPBS_WORK_DIR}"
-  pushd ${OPENPBS_WORK_DIR}
-  # ADD A WAITER SO THAT IF CONNECTION IS THROTTLED WE CAN CONTINUE AFTER WAITING.
-  wget ${OPENPBS_URL}
-  if [[ $(openssl ${OPENPBS_HASH_METHOD} ${OPENPBS_TGZ} | awk '{print $2}') != ${OPENPBS_HASH} ]];  then
-    echo -e "FATAL ERROR: ${OPENPBS_HASH_METHOD} Checksum for OpenPBS failed. File may be compromised." > /etc/motd
-    exit 1
+  {% endif %}
+  {% include '_templates/linux/cjson_devel.jinja2' %}
+}
+
+function check_openpbs_installed() {
+  local OPENPBS_VERSION=$1
+  # check if already installed and is the correct version
+  if [[ -f /opt/pbs/bin/qstat ]]; then
+    local OPENPBS_INSTALLED_VERSION=$(/opt/pbs/bin/qstat --version | awk '{print $NF}')
+    if [[ "${OPENPBS_INSTALLED_VERSION}" == "${OPENPBS_VERSION}" ]]; then
+      log_info "OpenPBS is already installed. Version: ${OPENPBS_VERSION}"
+      return 0
+    fi
   fi
-  tar zxvf ${OPENPBS_TGZ}
-  local OPENPBS_WORK_DIR="${OPENPBS_WORK_DIR}/openpbs-${OPENPBS_VERSION}"
-  pushd ${OPENPBS_WORK_DIR}
+  return 1
+}
+
+function compile_and_install_openpbs() {
+  local OPENPBS_VERSION=$1
+  local OPENPBS_WORK_DIR=$2
+
+  pushd ${OPENPBS_WORK_DIR} || exit
   ./autogen.sh
   ./configure PBS_VERSION=${OPENPBS_VERSION} --prefix=/opt/pbs
   local NUM_PROCS=`nproc --all`
@@ -43,46 +38,76 @@ function install_openpbs () {
   make install ${MAKE_FLAGS}
   /opt/pbs/libexec/pbs_postinstall
   chmod 4755 /opt/pbs/sbin/pbs_iff /opt/pbs/sbin/pbs_rcp
-  popd
-  popd
+  popd || exit
 }
-install_openpbs
-{%- endif %}
-{%- if context.config.get_string('global-settings.package_config.openpbs.type') == 'dev' or context.base_os == 'ubuntu2404' %}
-function install_openpbs () {
+
+function install_openpbs_release() {
   local OPENPBS_VERSION="{{ context.config.get_string('global-settings.package_config.openpbs.version', required=True) }}"
+
+  # Check if already installed with correct version
+  check_openpbs_installed "${OPENPBS_VERSION}" && return 0
+
+  log_info "Installing OpenPBS version ${OPENPBS_VERSION} from release package..."
+
+  local OPENPBS_URL="{{ context.config.get_string('global-settings.package_config.openpbs.url', required=True) }}"
+  local OPENPBS_HASH="{{ context.config.get_string('global-settings.package_config.openpbs.checksum', required=True).lower().strip() }}"
+  local OPENPBS_HASH_METHOD="{{ context.config.get_string('global-settings.package_config.openpbs.checksum_method', required=True).lower().strip() }}"
+  local OPENPBS_TGZ="$(basename ${OPENPBS_URL})"
   local OPENPBS_WORK_DIR="/root/bootstrap/openpbs"
-  # check if already installed and is the correct version
-  local OPENPBS_INSTALLED_VERSION=$(/opt/pbs/bin/qstat --version | awk '{print $NF}')
-  if [[ "${OPENPBS_INSTALLED_VERSION}" == "${OPENPBS_VERSION}" ]]; then
-    log_info "OpenPBS is already installed. Version: ${OPENPBS_VERSION}"
-    return 0
+
+  # Download and verify
+  mkdir -p "${OPENPBS_WORK_DIR}"
+  pushd ${OPENPBS_WORK_DIR} || exit
+  wget ${OPENPBS_URL}
+  if [[ $(openssl ${OPENPBS_HASH_METHOD} ${OPENPBS_TGZ} | awk '{print $2}') != ${OPENPBS_HASH} ]]; then
+    echo -e "FATAL ERROR: ${OPENPBS_HASH_METHOD} Checksum for OpenPBS failed. File may be compromised." > /etc/motd
+    popd
+    exit 1
   fi
 
-  log_info "OpenPBS Not Detected, Installing OpenPBS ..."
+  # Extract
+  tar zxvf ${OPENPBS_TGZ}
+  local EXTRACT_DIR="${OPENPBS_WORK_DIR}/openpbs-${OPENPBS_VERSION}"
+  popd || exit
 
-  OPENPBS_PKGS="{{ ' '.join(context.config.get_list('global-settings.package_config.openpbs.packages')) }}"
-  {%- if context.base_os in ('amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
-  yum install -y $(echo ${OPENPBS_PKGS[*]})
-  {%- endif %}
-  {%- if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
-  apt install -y $(echo ${OPENPBS_PKGS[*]})
-  {%- endif %}
-  mkdir -p "${OPENPBS_WORK_DIR}"
-  pushd ${OPENPBS_WORK_DIR}
-  git clone https://github.com/openpbs/openpbs.git
-  cd openpbs
-  sh ./autogen.sh
-  ./configure PBS_VERSION=${OPENPBS_VERSION} --prefix=/opt/pbs
-  local NUM_PROCS=`nproc --all`
-  local MAKE_FLAGS="-j${NUM_PROCS}"
-  make ${MAKE_FLAGS}
-  make install ${MAKE_FLAGS}
-  /opt/pbs/libexec/pbs_postinstall
-  chmod 4755 /opt/pbs/sbin/pbs_iff /opt/pbs/sbin/pbs_rcp
-  popd
+  # Compile and install
+  compile_and_install_openpbs "${OPENPBS_VERSION}" "${EXTRACT_DIR}"
 }
-install_openpbs
-{%- endif %}
-{%- endif %}
+
+function install_openpbs_git() {
+  local OPENPBS_VERSION="{{ context.config.get_string('global-settings.package_config.openpbs.version', required=True) }}"
+
+  # Check if already installed with correct version
+  check_openpbs_installed "${OPENPBS_VERSION}" && return 0
+
+  local OPENPBS_REPO_URL="{{ context.config.get_string('global-settings.package_config.openpbs.repo_url', required=True) }}"
+  local OPENPBS_COMMIT="{{ context.config.get_string('global-settings.package_config.openpbs.commit', required=True) }}"
+  local OPENPBS_WORK_DIR="/root/bootstrap/openpbs"
+
+  log_info "Installing OpenPBS version ${OPENPBS_VERSION} from git commit ${OPENPBS_COMMIT}..."
+
+  # Clone repository
+  mkdir -p "${OPENPBS_WORK_DIR}"
+  pushd ${OPENPBS_WORK_DIR} || exit
+  git clone ${OPENPBS_REPO_URL} openpbs
+  cd openpbs || exit
+  git checkout ${OPENPBS_COMMIT}
+  popd || exit
+
+  # Compile and install
+  compile_and_install_openpbs "${OPENPBS_VERSION}" "${OPENPBS_WORK_DIR}/openpbs"
+}
+
+# Install dependencies
+install_openpbs_dependencies
+
+# Determine which installation method to use
+{% set os_requiring_git = ['amazonlinux2023', 'ubuntu2204', 'ubuntu2404'] %}
+{% if context.base_os in ('amazonlinux2', 'rhel8', 'rocky8') or (context.config.get_string('global-settings.package_config.openpbs.type') == 'release' and context.base_os not in os_requiring_git) %}
+install_openpbs_release
+{% else %}
+install_openpbs_git
+{% endif %}
+
+{% endif %}
 # End: Install OpenPBS

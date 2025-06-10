@@ -18,16 +18,24 @@ function install_efa() {
   tar -xf ${EFA_TGZ}
   pushd ${EFA_BOOTSTRAP_DIR}/aws-efa-installer
 
+  {% if context.base_os not in ('ubuntu2204', 'ubuntu2404') %}
   yum remove -y infiniband-diags libibumad libibverbs libibverbs-core librdmacm rdma-core-devel
+  {% endif %}
 
   /bin/bash efa_installer.sh -y
   set_reboot_required "EFA Driver Installed"
   popd
   popd
 }
+
+# Check if EFA is already installed
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+if ! dpkg -l | grep -q "^ii.*efa "; then
+  install_efa
+fi
+{% else %}
 if [[ -z "$(rpm -qa efa)" ]]; then
   install_efa
 fi
+{% endif %}
 # End: Amazon EFA (Elastic Fabric Adapter)
-
-

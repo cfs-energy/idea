@@ -86,7 +86,7 @@ SUPPORTED_CLIENTS = {
     AWS_CLIENT_COGNITO_IDP,
     AWS_CLIENT_KINESIS_STREAM,
     AWS_CLIENT_RESOURCE_GROUPS_TAGGING_API,
-    AWS_CLIENT_BACKUP
+    AWS_CLIENT_BACKUP,
 }
 
 DEFAULT_PRICING_API_REGION = 'us-east-1'
@@ -109,9 +109,7 @@ class AWSClientProviderOptions(SocaBaseModel):
     @staticmethod
     def default():
         return AWSClientProviderOptions(
-            profile=None,
-            region=None,
-            pricing_api_region=None
+            profile=None, region=None, pricing_api_region=None
         )
 
 
@@ -129,11 +127,12 @@ class AwsClientProvider(AwsClientProviderProtocol):
             self.options = options
 
         self._session = Utils.create_boto_session(
-            aws_region=self.options.region,
-            aws_profile=self.options.profile
+            aws_region=self.options.region, aws_profile=self.options.profile
         )
 
-    def get_service_endpoint_url(self, service_name: str) -> Optional[AwsServiceEndpoint]:
+    def get_service_endpoint_url(
+        self, service_name: str
+    ) -> Optional[AwsServiceEndpoint]:
         if self.options is None:
             return None
         if self.options.endpoints is None:
@@ -144,7 +143,6 @@ class AwsClientProvider(AwsClientProviderProtocol):
         return None
 
     def _get_or_build_aws_client(self, service_name, **kwargs):
-
         region_name = None
         if 'region_name' in kwargs:
             region_name = kwargs['region_name']
@@ -169,7 +167,6 @@ class AwsClientProvider(AwsClientProviderProtocol):
                 return self._clients[client_key]
 
             if service_name in (AWS_RESOURCE_DYNAMODB_TABLE, AWS_RESOURCE_S3_BUCKET):
-
                 config = None
 
                 if service_name == AWS_RESOURCE_DYNAMODB_TABLE:
@@ -178,14 +175,18 @@ class AwsClientProvider(AwsClientProviderProtocol):
                     inferred_service_name = AWS_CLIENT_S3
                     config = Config(signature_version='s3v4')
                 else:
-                    raise exceptions.general_exception(f'aws boto3 resource not implemented for service name: {service_name}')
+                    raise exceptions.general_exception(
+                        f'aws boto3 resource not implemented for service name: {service_name}'
+                    )
 
                 aws_endpoint = self.get_service_endpoint_url(inferred_service_name)
                 client = self._session.resource(
                     service_name=inferred_service_name,
                     region_name=region_name,
-                    endpoint_url=aws_endpoint.endpoint_url if aws_endpoint is not None else None,
-                    config=config
+                    endpoint_url=aws_endpoint.endpoint_url
+                    if aws_endpoint is not None
+                    else None,
+                    config=config,
                 )
 
             else:
@@ -197,8 +198,10 @@ class AwsClientProvider(AwsClientProviderProtocol):
                 client = self._session.client(
                     service_name=service_name,
                     region_name=region_name,
-                    endpoint_url=aws_endpoint.endpoint_url if aws_endpoint is not None else None,
-                    config=config
+                    endpoint_url=aws_endpoint.endpoint_url
+                    if aws_endpoint is not None
+                    else None,
+                    config=config,
                 )
 
             self._clients[client_key] = client
@@ -234,7 +237,10 @@ class AwsClientProvider(AwsClientProviderProtocol):
 
     def are_credentials_expired(self) -> bool:
         credentials = self._session.get_credentials()
-        if credentials.method == 'shared-credentials-file' or credentials.method == 'env':
+        if (
+            credentials.method == 'shared-credentials-file'
+            or credentials.method == 'env'
+        ):
             try:
                 self.aws_account_id()
                 return False
@@ -251,7 +257,9 @@ class AwsClientProvider(AwsClientProviderProtocol):
 
     def get_client(self, service_name: str, **kwargs):
         if service_name not in SUPPORTED_CLIENTS:
-            raise exceptions.general_exception(f'AWS Client: "{service_name}" not supported.')
+            raise exceptions.general_exception(
+                f'AWS Client: "{service_name}" not supported.'
+            )
         return self._get_or_build_aws_client(service_name=service_name, **kwargs)
 
     def ssm(self):
@@ -300,8 +308,12 @@ class AwsClientProvider(AwsClientProviderProtocol):
         return self.get_client(service_name=AWS_CLIENT_SERVICE_QUOTAS)
 
     def pricing(self):
-        pricing_api_region = Utils.get_as_string(self.options.pricing_api_region, DEFAULT_PRICING_API_REGION)
-        return self.get_client(service_name=AWS_CLIENT_PRICING, region_name=pricing_api_region)
+        pricing_api_region = Utils.get_as_string(
+            self.options.pricing_api_region, DEFAULT_PRICING_API_REGION
+        )
+        return self.get_client(
+            service_name=AWS_CLIENT_PRICING, region_name=pricing_api_region
+        )
 
     def sqs(self):
         return self.get_client(service_name=AWS_CLIENT_SQS)

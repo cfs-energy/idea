@@ -31,7 +31,8 @@ export const HPC_QUEUE_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<Hpc
     {
         id: 'queue-profile',
         header: 'Queue Profile',
-        cell: queue => queue.name
+        cell: queue => queue.name,
+        sortingField: 'name'
     },
     {
         id: 'queues',
@@ -41,6 +42,11 @@ export const HPC_QUEUE_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<Hpc
                 return '-'
             }
             return queue.queues!.join(', ')
+        },
+        sortingComparator: (a, b) => {
+            const queuesA = a.queues || [];
+            const queuesB = b.queues || [];
+            return queuesA.length - queuesB.length;
         }
     },
     {
@@ -59,6 +65,11 @@ export const HPC_QUEUE_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<Hpc
                     }
                 </div>
             )
+        },
+        sortingComparator: (a, b) => {
+            const projectsA = a.projects || [];
+            const projectsB = b.projects || [];
+            return projectsA.length - projectsB.length;
         }
     },
     {
@@ -67,6 +78,11 @@ export const HPC_QUEUE_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<Hpc
         cell: queue => {
             return (queue.enabled) ? <StatusIndicator type="success">Active</StatusIndicator> :
                 <StatusIndicator type="stopped">Disabled</StatusIndicator>
+        },
+        sortingComparator: (a, b) => {
+            const valueA = a.enabled ? 1 : 0;
+            const valueB = b.enabled ? 1 : 0;
+            return valueA - valueB;
         }
     },
     {
@@ -93,6 +109,16 @@ export const HPC_QUEUE_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<Hpc
                 color: color,
                 fontSize: "small"
             }}>{displayStatus}</b>)
+        },
+        sortingComparator: (a, b) => {
+            // Status priority: active (highest), idle, blocked (lowest)
+            const getStatusValue = (status: string | undefined) => {
+                if (!status) return 0;
+                if (status === 'active') return 3;
+                if (status === 'idle') return 2;
+                return 1; // blocked or other
+            };
+            return getStatusValue(a.status) - getStatusValue(b.status);
         }
     }
 ]
@@ -259,6 +285,8 @@ class Queues extends Component<QueuesProps, QueuesState> {
                     })
                 }}
                 columnDefinitions={HPC_QUEUE_TABLE_COLUMN_DEFINITIONS}
+                defaultSortingColumn="queue-profile"
+                defaultSortingDescending={false}
             />
         )
     }

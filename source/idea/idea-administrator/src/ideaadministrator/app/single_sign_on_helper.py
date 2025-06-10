@@ -47,7 +47,9 @@ class SingleSignOnHelper:
                 aws_profile=aws_profile,
                 enable_aws_client_provider=True,
                 enable_iam_permission_util=True,
-                locale=EnvironmentUtils.get_environment_variable('LC_CTYPE', default='en_US')
+                locale=EnvironmentUtils.get_environment_variable(
+                    'LC_CTYPE', default='en_US'
+                ),
             )
         )
         self.config: ClusterConfig = self.context.config()
@@ -65,24 +67,32 @@ class SingleSignOnHelper:
 
         The `create_or_update_user_pool_client` method can be called multiple times and will update the callback urls returned by this method.
         """
-        load_balancer_dns_name = self.context.config().get_string('cluster.load_balancers.external_alb.load_balancer_dns_name', required=True)
+        load_balancer_dns_name = self.context.config().get_string(
+            'cluster.load_balancers.external_alb.load_balancer_dns_name', required=True
+        )
 
-        custom_dns_name = self.context.config().get_string('cluster.load_balancers.external_alb.certificates.custom_dns_name')
+        custom_dns_name = self.context.config().get_string(
+            'cluster.load_balancers.external_alb.certificates.custom_dns_name'
+        )
         if Utils.is_empty(custom_dns_name):
-            custom_dns_name = self.context.config().get_string('cluster.load_balancers.external_alb.custom_dns_name')
+            custom_dns_name = self.context.config().get_string(
+                'cluster.load_balancers.external_alb.custom_dns_name'
+            )
 
-        cluster_manager_web_context_path = self.context.config().get_string('cluster-manager.server.web_resources_context_path', required=True)
+        cluster_manager_web_context_path = self.context.config().get_string(
+            'cluster-manager.server.web_resources_context_path', required=True
+        )
         if cluster_manager_web_context_path == '/':
             sso_auth_callback_path = '/sso/oauth2/callback'
         else:
-            sso_auth_callback_path = f'{cluster_manager_web_context_path}/oauth2/callback'
+            sso_auth_callback_path = (
+                f'{cluster_manager_web_context_path}/oauth2/callback'
+            )
 
         if not sso_auth_callback_path.startswith('/'):
             sso_auth_callback_path = f'/{sso_auth_callback_path}'
 
-        callback_urls = [
-            f'https://{load_balancer_dns_name}{sso_auth_callback_path}'
-        ]
+        callback_urls = [f'https://{load_balancer_dns_name}{sso_auth_callback_path}']
         if Utils.is_not_empty(custom_dns_name):
             callback_urls.append(f'https://{custom_dns_name}{sso_auth_callback_path}')
         return callback_urls
@@ -91,7 +101,9 @@ class SingleSignOnHelper:
         """
         The redirect URL that must be configured with the IDP.
         """
-        domain_url = self.config.get_string('identity-provider.cognito.domain_url', required=True)
+        domain_url = self.config.get_string(
+            'identity-provider.cognito.domain_url', required=True
+        )
         if provider_type == constants.SSO_IDP_PROVIDER_OIDC:
             return f'{domain_url}/oauth2/idpresponse'
         else:
@@ -102,10 +114,14 @@ class SingleSignOnHelper:
         The entity id required for Azure based SAML providers.
         Refer: https://aws.amazon.com/blogs/security/how-to-set-up-amazon-cognito-for-federated-authentication-using-azure-ad/
         """
-        user_pool_id = self.context.config().get_string('identity-provider.cognito.user_pool_id', required=True)
+        user_pool_id = self.context.config().get_string(
+            'identity-provider.cognito.user_pool_id', required=True
+        )
         return f'urn:amazon:cognito:sp:{user_pool_id}'
 
-    def create_or_update_user_pool_client(self, provider_name: str, refresh_token_validity_hours: int = None) -> Dict:
+    def create_or_update_user_pool_client(
+        self, provider_name: str, refresh_token_validity_hours: int = None
+    ) -> Dict:
         """
         setup the user pool client used for communicating with the IDP.
 
@@ -116,8 +132,12 @@ class SingleSignOnHelper:
         the callback urls
         """
 
-        user_pool_id = self.context.config().get_string('identity-provider.cognito.user_pool_id', required=True)
-        sso_client_id = self.context.config().get_string('identity-provider.cognito.sso_client_id')
+        user_pool_id = self.context.config().get_string(
+            'identity-provider.cognito.user_pool_id', required=True
+        )
+        sso_client_id = self.context.config().get_string(
+            'identity-provider.cognito.sso_client_id'
+        )
         if refresh_token_validity_hours is None or refresh_token_validity_hours <= 0:
             refresh_token_validity_hours = 12
 
@@ -131,7 +151,7 @@ class SingleSignOnHelper:
             'TokenValidityUnits': {
                 'AccessToken': 'hours',
                 'IdToken': 'hours',
-                'RefreshToken': 'hours'
+                'RefreshToken': 'hours',
             },
             'ReadAttributes': [
                 'address',
@@ -156,28 +176,30 @@ class SingleSignOnHelper:
                 'profile',
                 'updated_at',
                 'website',
-                'zoneinfo'
+                'zoneinfo',
             ],
-            'AllowedOAuthFlows': [
-                'code'
-            ],
-            'AllowedOAuthScopes': [
-                'email',
-                'openid',
-                'aws.cognito.signin.user.admin'
-            ],
+            'AllowedOAuthFlows': ['code'],
+            'AllowedOAuthScopes': ['email', 'openid', 'aws.cognito.signin.user.admin'],
             'CallbackURLs': callback_urls,
             'SupportedIdentityProviders': [provider_name],
-            'AllowedOAuthFlowsUserPoolClient': True
+            'AllowedOAuthFlowsUserPoolClient': True,
         }
 
         if Utils.is_not_empty(sso_client_id):
             user_pool_client_request['ClientId'] = sso_client_id
-            update_user_pool_client_result = self.context.aws().cognito_idp().update_user_pool_client(**user_pool_client_request)
+            update_user_pool_client_result = (
+                self.context.aws()
+                .cognito_idp()
+                .update_user_pool_client(**user_pool_client_request)
+            )
             return update_user_pool_client_result['UserPoolClient']
 
         user_pool_client_request['GenerateSecret'] = True
-        create_user_pool_client_result = self.context.aws().cognito_idp().create_user_pool_client(**user_pool_client_request)
+        create_user_pool_client_result = (
+            self.context.aws()
+            .cognito_idp()
+            .create_user_pool_client(**user_pool_client_request)
+        )
         user_pool_client = create_user_pool_client_result['UserPoolClient']
 
         # get custom kms key id for secrets manager if configured
@@ -185,20 +207,19 @@ class SingleSignOnHelper:
         kms_key_id = self.config.get_string('cluster.secretsmanager.kms_key_id')
 
         tags = [
-            {
-                'Key': constants.IDEA_TAG_CLUSTER_NAME,
-                'Value': self.cluster_name
-            },
+            {'Key': constants.IDEA_TAG_CLUSTER_NAME, 'Value': self.cluster_name},
             {
                 'Key': constants.IDEA_TAG_MODULE_NAME,
-                'Value': constants.MODULE_CLUSTER_MANAGER
-            }
+                'Value': constants.MODULE_CLUSTER_MANAGER,
+            },
         ]
 
         secret_name = f'{self.cluster_name}-sso-client-secret'
         try:
-            describe_secret_result = self.context.aws().secretsmanager().describe_secret(
-                SecretId=secret_name
+            describe_secret_result = (
+                self.context.aws()
+                .secretsmanager()
+                .describe_secret(SecretId=secret_name)
             )
         except botocore.exceptions.ClientError as e:
             if e.response['Error']['Code'] == 'ResourceNotFoundException':
@@ -211,20 +232,28 @@ class SingleSignOnHelper:
                 'Name': f'{self.cluster_name}-sso-client-secret',
                 'Description': f'Single Sign-On OAuth2 Client Secret for Cluster: {self.cluster_name}',
                 'Tags': tags,
-                'SecretString': user_pool_client['ClientSecret']
+                'SecretString': user_pool_client['ClientSecret'],
             }
             if Utils.is_not_empty(kms_key_id):
                 create_secret_client_secret_request['KmsKeyId'] = kms_key_id
-            create_secret_client_secret_result = self.context.aws().secretsmanager().create_secret(**create_secret_client_secret_request)
+            create_secret_client_secret_result = (
+                self.context.aws()
+                .secretsmanager()
+                .create_secret(**create_secret_client_secret_request)
+            )
             secret_arn = create_secret_client_secret_result['ARN']
         else:
             update_secret_client_secret_request = {
                 'SecretId': describe_secret_result['ARN'],
-                'SecretString': user_pool_client['ClientSecret']
+                'SecretString': user_pool_client['ClientSecret'],
             }
             if Utils.is_not_empty(kms_key_id):
                 update_secret_client_secret_request['KmsKeyId'] = kms_key_id
-            update_secret_client_secret_result = self.context.aws().secretsmanager().update_secret(**update_secret_client_secret_request)
+            update_secret_client_secret_result = (
+                self.context.aws()
+                .secretsmanager()
+                .update_secret(**update_secret_client_secret_request)
+            )
             secret_arn = update_secret_client_secret_result['ARN']
 
         self._update_config_entry('cognito.sso_client_id', user_pool_client['ClientId'])
@@ -244,7 +273,9 @@ class SingleSignOnHelper:
         saml_metadata_url = Utils.get_value_as_string('saml_metadata_url', kwargs)
         saml_metadata_file = Utils.get_value_as_string('saml_metadata_file', kwargs)
         if Utils.are_empty(saml_metadata_url, saml_metadata_file):
-            raise exceptions.invalid_params('Either one of [saml_metadata_url, saml_metadata_file] is required, when provider_type = SAML')
+            raise exceptions.invalid_params(
+                'Either one of [saml_metadata_url, saml_metadata_file] is required, when provider_type = SAML'
+            )
 
         if Utils.is_not_empty(saml_metadata_file):
             if not Utils.is_file(saml_metadata_file):
@@ -271,8 +302,12 @@ class SingleSignOnHelper:
         oidc_client_id = Utils.get_value_as_string('oidc_client_id', kwargs)
         oidc_client_secret = Utils.get_value_as_string('oidc_client_secret', kwargs)
         oidc_issuer = Utils.get_value_as_string('oidc_issuer', kwargs)
-        oidc_attributes_request_method = Utils.get_value_as_string('oidc_attributes_request_method', kwargs, 'GET')
-        oidc_authorize_scopes = Utils.get_value_as_string('oidc_authorize_scopes', kwargs, 'openid')
+        oidc_attributes_request_method = Utils.get_value_as_string(
+            'oidc_attributes_request_method', kwargs, 'GET'
+        )
+        oidc_authorize_scopes = Utils.get_value_as_string(
+            'oidc_authorize_scopes', kwargs, 'openid'
+        )
         oidc_authorize_url = Utils.get_value_as_string('oidc_authorize_url', kwargs)
         oidc_token_url = Utils.get_value_as_string('oidc_token_url', kwargs)
         oidc_attributes_url = Utils.get_value_as_string('oidc_attributes_url', kwargs)
@@ -310,12 +345,20 @@ class SingleSignOnHelper:
         The `identity-provider.cognito.sso_idp_identifier` config entry value is used as the identifier. if the entry does not exist,
         value of `DEFAULT_IDENTITY_PROVIDER_IDENTIFIER` is used.
         """
-        user_pool_id = self.context.config().get_string('identity-provider.cognito.user_pool_id', required=True)
-        sso_idp_identifier = self.context.config().get_string('identity-provider.cognito.sso_idp_identifier', DEFAULT_IDENTITY_PROVIDER_IDENTIFIER)
+        user_pool_id = self.context.config().get_string(
+            'identity-provider.cognito.user_pool_id', required=True
+        )
+        sso_idp_identifier = self.context.config().get_string(
+            'identity-provider.cognito.sso_idp_identifier',
+            DEFAULT_IDENTITY_PROVIDER_IDENTIFIER,
+        )
         try:
-            result = self.context.aws().cognito_idp().get_identity_provider_by_identifier(
-                UserPoolId=user_pool_id,
-                IdpIdentifier=sso_idp_identifier
+            result = (
+                self.context.aws()
+                .cognito_idp()
+                .get_identity_provider_by_identifier(
+                    UserPoolId=user_pool_id, IdpIdentifier=sso_idp_identifier
+                )
             )
             return result['IdentityProvider']
         except botocore.exceptions.ClientError as e:
@@ -324,7 +367,13 @@ class SingleSignOnHelper:
             else:
                 raise e
 
-    def create_or_update_identity_provider(self, provider_name: str, provider_type: str, provider_email_attribute: str, **kwargs):
+    def create_or_update_identity_provider(
+        self,
+        provider_name: str,
+        provider_type: str,
+        provider_email_attribute: str,
+        **kwargs,
+    ):
         """
         setup the Identity Provider for the Cognito User Pool.
         at the moment, only OIDC and SAML provider types are supported.
@@ -350,23 +399,26 @@ class SingleSignOnHelper:
         elif provider_type == constants.SSO_IDP_PROVIDER_OIDC:
             provider_details = self.get_oidc_provider_details(**kwargs)
         else:
-            raise exceptions.invalid_params('provider type must be one of: SAML or OIDC')
+            raise exceptions.invalid_params(
+                'provider type must be one of: SAML or OIDC'
+            )
 
-        user_pool_id = self.context.config().get_string('identity-provider.cognito.user_pool_id', required=True)
+        user_pool_id = self.context.config().get_string(
+            'identity-provider.cognito.user_pool_id', required=True
+        )
 
         existing_identity_provider = self.get_identity_provider()
-        sso_idp_identifier = self.context.config().get_string('identity-provider.cognito.sso_idp_identifier', DEFAULT_IDENTITY_PROVIDER_IDENTIFIER)
+        sso_idp_identifier = self.context.config().get_string(
+            'identity-provider.cognito.sso_idp_identifier',
+            DEFAULT_IDENTITY_PROVIDER_IDENTIFIER,
+        )
         if existing_identity_provider is not None:
             self.context.aws().cognito_idp().update_identity_provider(
                 UserPoolId=user_pool_id,
                 ProviderName=provider_name,
                 ProviderDetails=provider_details,
-                AttributeMapping={
-                    'email': provider_email_attribute
-                },
-                IdpIdentifiers=[
-                    sso_idp_identifier
-                ]
+                AttributeMapping={'email': provider_email_attribute},
+                IdpIdentifiers=[sso_idp_identifier],
             )
         else:
             self.context.aws().cognito_idp().create_identity_provider(
@@ -374,18 +426,16 @@ class SingleSignOnHelper:
                 ProviderName=provider_name,
                 ProviderType=provider_type,
                 ProviderDetails=provider_details,
-                AttributeMapping={
-                    'email': provider_email_attribute
-                },
-                IdpIdentifiers=[
-                    sso_idp_identifier
-                ]
+                AttributeMapping={'email': provider_email_attribute},
+                IdpIdentifiers=[sso_idp_identifier],
             )
 
         self._update_config_entry('cognito.sso_idp_provider_name', provider_name)
         self._update_config_entry('cognito.sso_idp_provider_type', provider_type)
         self._update_config_entry('cognito.sso_idp_identifier', sso_idp_identifier)
-        self._update_config_entry('cognito.sso_idp_provider_email_attribute', provider_email_attribute)
+        self._update_config_entry(
+            'cognito.sso_idp_provider_email_attribute', provider_email_attribute
+        )
 
     def link_existing_users(self):
         """
@@ -400,19 +450,30 @@ class SingleSignOnHelper:
         `sso=False`
         sending this parameter as part of query string will not trigger the sso flow from the web portal.
         """
-        user_pool_id = self.context.config().get_string('identity-provider.cognito.user_pool_id', required=True)
-        provider_name = self.context.config().get_string('identity-provider.cognito.sso_idp_provider_name', required=True)
-        provider_type = self.context.config().get_string('identity-provider.cognito.sso_idp_provider_type', required=True)
-        cluster_admin_username = self.context.config().get_string('cluster.administrator_username', required=True)
+        user_pool_id = self.context.config().get_string(
+            'identity-provider.cognito.user_pool_id', required=True
+        )
+        provider_name = self.context.config().get_string(
+            'identity-provider.cognito.sso_idp_provider_name', required=True
+        )
+        provider_type = self.context.config().get_string(
+            'identity-provider.cognito.sso_idp_provider_type', required=True
+        )
+        cluster_admin_username = self.context.config().get_string(
+            'cluster.administrator_username', required=True
+        )
 
         if provider_type == constants.SSO_IDP_PROVIDER_OIDC:
             provider_email_attribute = 'email'
         else:
-            provider_email_attribute = self.context.config().get_string('identity-provider.cognito.sso_idp_provider_email_attribute', required=True)
+            provider_email_attribute = self.context.config().get_string(
+                'identity-provider.cognito.sso_idp_provider_email_attribute',
+                required=True,
+            )
 
         while True:
-            list_users_result = self.context.aws().cognito_idp().list_users(
-                UserPoolId=user_pool_id
+            list_users_result = (
+                self.context.aws().cognito_idp().list_users(UserPoolId=user_pool_id)
             )
             users = list_users_result['Users']
             for user in users:
@@ -423,8 +484,12 @@ class SingleSignOnHelper:
                     username = user['Username']
 
                     # exclude system administration users
-                    if username in cluster_admin_username or username.startswith('clusteradmin'):
-                        print(f'system administration user found: {username}. skip linking with IDP.')
+                    if username in cluster_admin_username or username.startswith(
+                        'clusteradmin'
+                    ):
+                        print(
+                            f'system administration user found: {username}. skip linking with IDP.'
+                        )
                         continue
 
                     email = None
@@ -435,7 +500,9 @@ class SingleSignOnHelper:
                         if name == 'email':
                             email = Utils.get_value_as_string('Value', user_attribute)
                         elif name == 'identities':
-                            identities = Utils.get_value_as_list('Value', user_attribute, [])
+                            identities = Utils.get_value_as_list(
+                                'Value', user_attribute, []
+                            )
                             for identity in identities:
                                 if identity['providerName'] == provider_name:
                                     already_linked = True
@@ -450,27 +517,33 @@ class SingleSignOnHelper:
 
                     def admin_link_provider_for_user(**kwargs):
                         print(f'link request: {Utils.to_json(kwargs)}')
-                        self.context.aws().cognito_idp().admin_link_provider_for_user(**kwargs)
+                        self.context.aws().cognito_idp().admin_link_provider_for_user(
+                            **kwargs
+                        )
 
                     admin_link_provider_for_user(
                         UserPoolId=user_pool_id,
                         DestinationUser={
                             'ProviderName': 'Cognito',
                             'ProviderAttributeName': 'cognito:username',
-                            'ProviderAttributeValue': user['Username']
+                            'ProviderAttributeValue': user['Username'],
                         },
                         SourceUser={
                             'ProviderName': provider_name,
                             'ProviderAttributeName': provider_email_attribute,
-                            'ProviderAttributeValue': email
-                        }
+                            'ProviderAttributeValue': email,
+                        },
                     )
                     # sleep for a while to avoid flooding aws with these requests.
                     time.sleep(0.2)
                 except Exception as e:
-                    print(f'failed to link user: {user} with IDP: {provider_name} - {e}')
+                    print(
+                        f'failed to link user: {user} with IDP: {provider_name} - {e}'
+                    )
 
-            pagination_token = Utils.get_value_as_string('PaginationToken', list_users_result)
+            pagination_token = Utils.get_value_as_string(
+                'PaginationToken', list_users_result
+            )
             if Utils.is_empty(pagination_token):
                 break
 
@@ -484,9 +557,7 @@ class SingleSignOnHelper:
         # identity provider
         with self.context.spinner('creating identity provider ...'):
             self.create_or_update_identity_provider(
-                provider_name=provider_name,
-                provider_type=provider_type,
-                **kwargs
+                provider_name=provider_name, provider_type=provider_type, **kwargs
             )
         self.context.success('✓ identity provider created')
 
@@ -494,7 +565,9 @@ class SingleSignOnHelper:
         with self.context.spinner('creating user pool client ...'):
             self.create_or_update_user_pool_client(
                 provider_name=provider_name,
-                refresh_token_validity_hours=Utils.get_value_as_int('refresh_token_validity_hours', kwargs, default=None)
+                refresh_token_validity_hours=Utils.get_value_as_int(
+                    'refresh_token_validity_hours', kwargs, default=None
+                ),
             )
         self.context.success('✓ user pool client created')
 

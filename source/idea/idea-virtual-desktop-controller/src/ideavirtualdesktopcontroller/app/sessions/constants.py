@@ -19,7 +19,7 @@ USER_SESSION_DB_SCHEDULE_KEYS = {
     DayOfWeek.THURSDAY: 'thursday_schedule',
     DayOfWeek.FRIDAY: 'friday_schedule',
     DayOfWeek.SATURDAY: 'saturday_schedule',
-    DayOfWeek.SUNDAY: 'sunday_schedule'
+    DayOfWeek.SUNDAY: 'sunday_schedule',
 }
 USER_SESSION_DB_HIBERNATION_KEY = 'hibernation_enabled'
 USER_SESSION_DB_IS_LAUNCHED_BY_ADMIN_KEY = 'is_launched_by_admin'

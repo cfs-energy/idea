@@ -134,4 +134,3 @@ class VirtualDesktopBaseOSChart extends VirtualDesktopBaseChart<VirtualDesktopBa
 }
 
 export default VirtualDesktopBaseOSChart
-

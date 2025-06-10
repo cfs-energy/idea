@@ -13,7 +13,10 @@ from ideasdk.context import SocaContext
 from ideasdk.utils import Utils
 from ideadatamodel import exceptions
 
-from ideaclustermanager.app.accounts.ldapclient.abstract_ldap_client import AbstractLDAPClient, LdapClientOptions
+from ideaclustermanager.app.accounts.ldapclient.abstract_ldap_client import (
+    AbstractLDAPClient,
+    LdapClientOptions,
+)
 from ideaclustermanager.app.accounts.ldapclient.ldap_utils import LdapUtils
 
 from typing import Dict
@@ -21,7 +24,6 @@ import ldap  # noqa
 
 
 class OpenLDAPClient(AbstractLDAPClient):
-
     def __init__(self, context: SocaContext, options: LdapClientOptions, logger=None):
         if logger is None:
             logger = context.logger('openldap-client')
@@ -47,7 +49,9 @@ class OpenLDAPClient(AbstractLDAPClient):
     def ldap_group_filterstr(self) -> str:
         return '(objectClass=posixGroup)'
 
-    def build_group_filterstr(self, group_name: str = None, username: str = None) -> str:
+    def build_group_filterstr(
+        self, group_name: str = None, username: str = None
+    ) -> str:
         filterstr = self.ldap_group_filterstr
         if group_name is not None:
             filterstr = f'{filterstr}(cn={group_name})'
@@ -78,23 +82,29 @@ class OpenLDAPClient(AbstractLDAPClient):
     def create_service_account(self, username: str, password: str):
         raise exceptions.general_exception('not supported for OpenLDAP')
 
-    def sync_user(self, *,
-                  uid: int,
-                  gid: int,
-                  username: str,
-                  email: str,
-                  login_shell: str,
-                  home_dir: str) -> Dict:
+    def sync_user(
+        self,
+        *,
+        uid: int,
+        gid: int,
+        username: str,
+        email: str,
+        login_shell: str,
+        home_dir: str,
+    ) -> Dict:
         user_dn = self.build_user_dn(username)
         user_attrs = [
-            ('objectClass', [
-                Utils.to_bytes('top'),
-                Utils.to_bytes('person'),
-                Utils.to_bytes('posixAccount'),
-                Utils.to_bytes('shadowAccount'),
-                Utils.to_bytes('inetOrgPerson'),
-                Utils.to_bytes('organizationalPerson')
-            ]),
+            (
+                'objectClass',
+                [
+                    Utils.to_bytes('top'),
+                    Utils.to_bytes('person'),
+                    Utils.to_bytes('posixAccount'),
+                    Utils.to_bytes('shadowAccount'),
+                    Utils.to_bytes('inetOrgPerson'),
+                    Utils.to_bytes('organizationalPerson'),
+                ],
+            ),
             ('uid', [Utils.to_bytes(username)]),
             ('uidNumber', [Utils.to_bytes(str(uid))]),
             ('gidNumber', [Utils.to_bytes(str(gid))]),
@@ -102,7 +112,7 @@ class OpenLDAPClient(AbstractLDAPClient):
             ('cn', [Utils.to_bytes(username)]),
             ('sn', [Utils.to_bytes(username)]),
             ('loginShell', [Utils.to_bytes(login_shell)]),
-            ('homeDirectory', [Utils.to_bytes(home_dir)])
+            ('homeDirectory', [Utils.to_bytes(home_dir)]),
         ]
 
         if self.is_existing_user(username):
@@ -120,12 +130,9 @@ class OpenLDAPClient(AbstractLDAPClient):
     def sync_group(self, group_name: str, gid: int) -> Dict:
         group_dn = self.build_group_dn(group_name)
         group_attrs = [
-            ('objectClass', [
-                Utils.to_bytes('top'),
-                Utils.to_bytes('posixGroup')
-            ]),
+            ('objectClass', [Utils.to_bytes('top'), Utils.to_bytes('posixGroup')]),
             ('gidNumber', [Utils.to_bytes(str(gid))]),
-            ('cn', [Utils.to_bytes(group_name)])
+            ('cn', [Utils.to_bytes(group_name)]),
         ]
 
         if self.is_existing_group(group_name):
@@ -143,13 +150,10 @@ class OpenLDAPClient(AbstractLDAPClient):
     def add_sudo_user(self, username: str):
         user_dn = self.build_sudoer_dn(username)
         user_attrs = [
-            ('objectClass', [
-                Utils.to_bytes('top'),
-                Utils.to_bytes('sudoRole')
-            ]),
+            ('objectClass', [Utils.to_bytes('top'), Utils.to_bytes('sudoRole')]),
             ('sudoHost', [Utils.to_bytes('ALL')]),
             ('sudoUser', [Utils.to_bytes(username)]),
-            ('sudoCommand', [Utils.to_bytes('ALL')])
+            ('sudoCommand', [Utils.to_bytes('ALL')]),
         ]
 
         self.add_s(user_dn, user_attrs)

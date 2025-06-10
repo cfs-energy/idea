@@ -274,7 +274,7 @@ Associated Job Resource: [#scratch\_iops](../user-documentation/supported-ec2-pa
 
 Select whether or not you want to enable system metrics collection
 
-Asociated Job Resource: [#system\_metrics](../user-documentation/supported-ec2-parameters.md#system\_metrics "mention")
+Associated Job Resource: [#system\_metrics](../user-documentation/supported-ec2-parameters.md#system\_metrics "mention")
 
 #### Enable Anonymous Metrics?
 

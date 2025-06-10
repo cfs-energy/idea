@@ -10,9 +10,11 @@
 #  and limitations under the License.
 
 from ideadatamodel import (
-    exceptions, errorcodes,
+    exceptions,
+    errorcodes,
     SocaBaseModel,
-    SocaPayload, SocaListingPayload
+    SocaPayload,
+    SocaListingPayload,
 )
 from ideasdk.server import SocaServer, SocaServerOptions
 from ideasdk.context import SocaContext, SocaContextOptions
@@ -31,6 +33,7 @@ UNIX_SOCKET_FILE = '/tmp/soca/test_socket.sock'
 
 
 # Create sample Calculator API Data Model
+
 
 class CalculateRequest(SocaPayload):
     num1: Optional[int] = Field(default=None)
@@ -58,8 +61,8 @@ class ListHistoryResult(SocaListingPayload):
 
 # Create Calculator API
 
-class CalculatorAPI(BaseAPI):
 
+class CalculatorAPI(BaseAPI):
     def __init__(self):
         self._history = []
 
@@ -73,11 +76,7 @@ class CalculatorAPI(BaseAPI):
         num1 = Utils.get_as_int(payload.num1, 0)
         num2 = Utils.get_as_int(payload.num2, 0)
         result = num1 + num2
-        self._history.append(CalculateHistoryEntry(
-            num1=num1,
-            num2=num2,
-            result=result
-        ))
+        self._history.append(CalculateHistoryEntry(num1=num1, num2=num2, result=result))
         context.success(CalculateResult(result=result))
 
     def multiply(self, context: ApiInvocationContext):
@@ -85,11 +84,7 @@ class CalculatorAPI(BaseAPI):
         num1 = Utils.get_as_int(payload.num1, 0)
         num2 = Utils.get_as_int(payload.num2, 0)
         result = num1 * num2
-        self._history.append(CalculateHistoryEntry(
-            num1=num1,
-            num2=num2,
-            result=result
-        ))
+        self._history.append(CalculateHistoryEntry(num1=num1, num2=num2, result=result))
         context.success(CalculateResult(result=result))
 
     def divide(self, context: ApiInvocationContext):
@@ -102,11 +97,7 @@ class CalculatorAPI(BaseAPI):
 
         result = int(num1 / num2)
 
-        self._history.append(CalculateHistoryEntry(
-            num1=num1,
-            num2=num2,
-            result=result
-        ))
+        self._history.append(CalculateHistoryEntry(num1=num1, num2=num2, result=result))
         context.success(CalculateResult(result=result))
 
     def subtract(self, context: ApiInvocationContext):
@@ -114,11 +105,7 @@ class CalculatorAPI(BaseAPI):
         num1 = Utils.get_as_int(payload.num1, 0)
         num2 = Utils.get_as_int(payload.num2, 0)
         result = num1 - num2
-        self._history.append(CalculateHistoryEntry(
-            num1=num1,
-            num2=num2,
-            result=result
-        ))
+        self._history.append(CalculateHistoryEntry(num1=num1, num2=num2, result=result))
         context.success(CalculateResult(result=result))
 
     def list_history(self, context: ApiInvocationContext):
@@ -140,7 +127,6 @@ class CalculatorAPI(BaseAPI):
 
 # Create Calculator API Invoker
 class ApiInvoker(ApiInvokerProtocol):
-
     def __init__(self):
         self.calculator_api = CalculatorAPI()
 
@@ -160,7 +146,7 @@ def context():
         options=SocaContextOptions(
             module_id='test-server',
             module_name='test-server',
-            config=mock_config.get_config()
+            config=mock_config.get_config(),
         )
     )
 
@@ -179,10 +165,8 @@ def server(context):
             unix_socket_file=UNIX_SOCKET_FILE,
             graceful_shutdown_timeout=1,
             enable_openapi_spec=False,
-            api_path_prefixes=[
-                '/test-server'
-            ]
-        )
+            api_path_prefixes=['/test-server'],
+        ),
     )
     server.initialize()
     server.start()
@@ -199,8 +183,8 @@ def http_client(context):
         context=context,
         options=SocaClientOptions(
             enable_logging=True,
-            endpoint=f'http://localhost:{SERVER_PORT}/test-server/api/v1'
-        )
+            endpoint=f'http://localhost:{SERVER_PORT}/test-server/api/v1',
+        ),
     )
 
 
@@ -211,8 +195,8 @@ def unix_client(context):
         options=SocaClientOptions(
             enable_logging=True,
             endpoint='http://localhost/test-server/api/v1',
-            unix_socket=UNIX_SOCKET_FILE
-        )
+            unix_socket=UNIX_SOCKET_FILE,
+        ),
     )
 
 
@@ -221,12 +205,20 @@ def logger(context):
     return context.logger()
 
 
-def invoke(http_client, unix_client, logger, namespace: str, num1: int, num2: int, assert_result: int):
+def invoke(
+    http_client,
+    unix_client,
+    logger,
+    namespace: str,
+    num1: int,
+    num2: int,
+    assert_result: int,
+):
     logger.info('http')
     result = http_client.invoke_alt(
         namespace,
         payload=CalculateRequest(num1=num1, num2=num2),
-        result_as=CalculateResult
+        result_as=CalculateResult,
     )
     assert result.result == assert_result
 
@@ -234,7 +226,7 @@ def invoke(http_client, unix_client, logger, namespace: str, num1: int, num2: in
     result = unix_client.invoke_alt(
         namespace,
         payload=CalculateRequest(num1=num1, num2=num2),
-        result_as=CalculateResult
+        result_as=CalculateResult,
     )
     assert result.result == assert_result
 
@@ -242,17 +234,13 @@ def invoke(http_client, unix_client, logger, namespace: str, num1: int, num2: in
 def invoke_listing(http_client, unix_client, logger, namespace: str, result_count: int):
     logger.info('http')
     result = http_client.invoke_alt(
-        namespace,
-        payload=ListHistoryRequest(),
-        result_as=ListHistoryResult
+        namespace, payload=ListHistoryRequest(), result_as=ListHistoryResult
     )
     assert len(result.listing) == result_count
 
     logger.info('unix socket')
     result = unix_client.invoke_alt(
-        namespace,
-        payload=ListHistoryRequest(),
-        result_as=ListHistoryResult
+        namespace, payload=ListHistoryRequest(), result_as=ListHistoryResult
     )
     assert len(result.listing) == result_count
 
@@ -272,22 +260,14 @@ def test_server(monkeypatch, http_client, unix_client, logger):
 
     # test any payload (with SimpleNamespace)
     result = http_client.invoke_alt(
-        namespace='Calculator.Add',
-        payload=CalculateRequest(
-            num1=10,
-            num2=20
-        )
+        namespace='Calculator.Add', payload=CalculateRequest(num1=10, num2=20)
     )
     assert result.result == 30
 
     # test exception
     with pytest.raises(exceptions.SocaException) as divide_by_zero:
         http_client.invoke_alt(
-            namespace='Calculator.Divide',
-            payload=CalculateRequest(
-                num1=10,
-                num2=0
-            )
+            namespace='Calculator.Divide', payload=CalculateRequest(num1=10, num2=0)
         )
     assert divide_by_zero.value.error_code == errorcodes.INVALID_PARAMS
 

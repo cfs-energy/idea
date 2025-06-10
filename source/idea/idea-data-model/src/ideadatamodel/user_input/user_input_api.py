@@ -19,18 +19,22 @@ __all__ = (
     'SetParamRequest',
     'SetParamResult',
     'GetParamsRequest',
-    'GetParamsResult'
+    'GetParamsResult',
 )
 
 from pydantic import Field
 
 from ideadatamodel import SocaPayload, SocaListingPayload
-from ideadatamodel.user_input.user_input_model import SocaUserInputModuleMetadata, SocaUserInputChoice
+from ideadatamodel.user_input.user_input_model import (
+    SocaUserInputModuleMetadata,
+    SocaUserInputChoice,
+)
 
 from typing import Optional, List, Any, Dict
 
 
 # Installer.GetModuleMetadata
+
 
 class GetModuleMetadataRequest(SocaPayload):
     module: Optional[str] = Field(default=None)
@@ -41,6 +45,7 @@ class GetModuleMetadataResult(SocaPayload):
 
 
 # Installer.GetParamChoices
+
 
 class GetParamChoicesRequest(SocaListingPayload):
     module: Optional[str] = Field(default=None)
@@ -54,6 +59,7 @@ class GetParamChoicesResult(SocaListingPayload):
 
 # Installer.GetParamDefault
 
+
 class GetParamDefaultRequest(SocaPayload):
     module: Optional[str] = Field(default=None)
     param: Optional[str] = Field(default=None)
@@ -65,6 +71,7 @@ class GetParamDefaultResult(SocaPayload):
 
 
 # Installer.SetParam
+
 
 class SetParamRequest(SocaPayload):
     module: Optional[str] = Field(default=None)
@@ -78,6 +85,7 @@ class SetParamResult(SocaPayload):
 
 
 # Installer.GetParams
+
 
 class GetParamsRequest(SocaPayload):
     module: Optional[str] = Field(default=None)

@@ -9,10 +9,7 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
-__all__ = (
-    'ThreadPoolMaxCapacity',
-    'ThreadPoolExecutor'
-)
+__all__ = ('ThreadPoolMaxCapacity', 'ThreadPoolExecutor')
 
 from typing import Set, List, Tuple
 from threading import Thread, Event
@@ -30,8 +27,13 @@ class ThreadPoolMaxCapacity(Exception):
 
 
 class WorkerThread:
-
-    def __init__(self, context: SocaContextProtocol, thread_pool_name: str, worker_id: int, worker_queue: queue.Queue):
+    def __init__(
+        self,
+        context: SocaContextProtocol,
+        thread_pool_name: str,
+        worker_id: int,
+        worker_queue: queue.Queue,
+    ):
         self.context = context
         self._thread_pool_name = thread_pool_name
         self._worker_id = worker_id
@@ -39,10 +41,7 @@ class WorkerThread:
         self._worker_queue = worker_queue
         self._exit = Event()
         self._idle = Event()
-        self._thread = Thread(
-            name=self.get_name(),
-            target=self.loop
-        )
+        self._thread = Thread(name=self.get_name(), target=self.loop)
 
     def get_name(self) -> str:
         return f'{self._thread_pool_name}-worker-{self._worker_id}'
@@ -67,11 +66,11 @@ class WorkerThread:
                 self._idle.set()
 
     def start(self):
-        self._logger.debug(f"Starting threads...")
+        self._logger.debug('Starting threads...')
         self._thread.start()
 
     def stop(self, wait=False):
-        self._logger.debug(f"Stopping threads...")
+        self._logger.debug('Stopping threads...')
         self._exit.set()
         if wait and self.is_active():
             self._thread.join()
@@ -82,25 +81,27 @@ class ThreadPoolExecutor:
     Thread Pool Executor
     """
 
-    def __init__(self, context: SocaContextProtocol,
-                 thread_pool_name: str,
-                 min_workers: int,
-                 max_workers: int,
-                 enforcement_interval: int = DEFAULT_ENFORCEMENT_INTERVAL,
-                 debug: bool = False):
+    def __init__(
+        self,
+        context: SocaContextProtocol,
+        thread_pool_name: str,
+        min_workers: int,
+        max_workers: int,
+        enforcement_interval: int = DEFAULT_ENFORCEMENT_INTERVAL,
+        debug: bool = False,
+    ):
         self._context = context
         self._logger = context.logger(thread_pool_name)
         self._thread_pool_name = thread_pool_name
         self._min_workers = min_workers
         self._max_workers = max_workers
-        self._enforcement_interval = Utils.get_as_int(enforcement_interval, DEFAULT_ENFORCEMENT_INTERVAL)
+        self._enforcement_interval = Utils.get_as_int(
+            enforcement_interval, DEFAULT_ENFORCEMENT_INTERVAL
+        )
         self._debug = debug
 
         self._worker_id_counter = FastWriteCounter(init=1)
-        self._executor_thread = Thread(
-            name=thread_pool_name,
-            target=self._loop
-        )
+        self._executor_thread = Thread(name=thread_pool_name, target=self._loop)
         self._all_workers: Set[WorkerThread] = set()
         self._active_workers: List[WorkerThread] = []
         self._exit = Event()
@@ -134,7 +135,9 @@ class ThreadPoolExecutor:
             finally:
                 self._exit.wait(self._enforcement_interval)
 
-    def get_worker_counts(self) -> Tuple[int, int, int, int, int, int, List[WorkerThread]]:
+    def get_worker_counts(
+        self,
+    ) -> Tuple[int, int, int, int, int, int, List[WorkerThread]]:
         idle_worker_count = 0
         idle_workers = []
         for worker in self._active_workers:
@@ -144,20 +147,22 @@ class ThreadPoolExecutor:
         required_worker_count = self._worker_queue.qsize()
         active_worker_count = len(self._all_workers)
         total_worker_count = len(self._active_workers)
-        return idle_worker_count, \
-            required_worker_count, \
-            active_worker_count, \
-            total_worker_count, \
-            self._min_workers, \
-            self._max_workers, \
-            idle_workers
+        return (
+            idle_worker_count,
+            required_worker_count,
+            active_worker_count,
+            total_worker_count,
+            self._min_workers,
+            self._max_workers,
+            idle_workers,
+        )
 
     def _create_worker(self):
         worker = WorkerThread(
             context=self._context,
             thread_pool_name=self._thread_pool_name,
             worker_id=self._get_next_worker_id(),
-            worker_queue=self._worker_queue
+            worker_queue=self._worker_queue,
         )
         if self._debug:
             self._logger.debug(f'starting worker: {worker.get_name()}')
@@ -166,28 +171,36 @@ class ThreadPoolExecutor:
         self._active_workers.append(worker)
 
     def _adjust_worker_counts(self):
-
-        idle_worker_count, \
-            required_worker_count, \
-            active_worker_count, \
-            total_worker_count, \
-            min_worker_count, \
-            max_worker_count, \
-            idle_workers = self.get_worker_counts()
+        (
+            idle_worker_count,
+            required_worker_count,
+            active_worker_count,
+            total_worker_count,
+            min_worker_count,
+            max_worker_count,
+            idle_workers,
+        ) = self.get_worker_counts()
 
         if self._debug:
-            self._logger.debug(f'workers - '
-                               f'total: {total_worker_count}, '
-                               f'active: {active_worker_count}, '
-                               f'idle: {idle_worker_count}, '
-                               f'required: {required_worker_count}, '
-                               f'min: {min_worker_count}, '
-                               f'max: {max_worker_count}')
+            self._logger.debug(
+                f'workers - '
+                f'total: {total_worker_count}, '
+                f'active: {active_worker_count}, '
+                f'idle: {idle_worker_count}, '
+                f'required: {required_worker_count}, '
+                f'min: {min_worker_count}, '
+                f'max: {max_worker_count}'
+            )
 
-        if idle_worker_count > required_worker_count and idle_worker_count > min_worker_count:
+        if (
+            idle_worker_count > required_worker_count
+            and idle_worker_count > min_worker_count
+        ):
             # stop idle workers
             if self._debug:
-                self._logger.debug(f'active workers: {total_worker_count}, max: {max_worker_count}. terminating {(total_worker_count - required_worker_count)}')
+                self._logger.debug(
+                    f'active workers: {total_worker_count}, max: {max_worker_count}. terminating {(total_worker_count - required_worker_count)}'
+                )
 
             for worker in idle_workers:
                 if len(self._active_workers) <= min_worker_count:
@@ -198,25 +211,31 @@ class ThreadPoolExecutor:
                 worker.stop(wait=False)
 
         elif idle_worker_count < required_worker_count:
-
             if active_worker_count >= max_worker_count:
                 return
 
             # provision new workers.
             if self._debug:
-                self._logger.debug(f'active workers: {active_worker_count}, required: {required_worker_count} ...')
+                self._logger.debug(
+                    f'active workers: {active_worker_count}, required: {required_worker_count} ...'
+                )
             for _ in range(required_worker_count - idle_worker_count):
                 self._create_worker()
 
     def submit(self, fn, /, *args, **kwargs):
         try:
-            if len(self._active_workers) + self._worker_queue.qsize() >= self._max_workers:
-                self._logger.debug(f" Active+worker_queue.qsize() >= max_workers - raising ThreadPoolMaxCapacity")
+            if (
+                len(self._active_workers) + self._worker_queue.qsize()
+                >= self._max_workers
+            ):
+                self._logger.debug(
+                    ' Active+worker_queue.qsize() >= max_workers - raising ThreadPoolMaxCapacity'
+                )
                 raise ThreadPoolMaxCapacity
 
             self._worker_queue.put((fn, args, kwargs))
         except queue.Full:
-            self._logger.debug(f"Queue full - raising ThreadPoolMaxCapacity")
+            self._logger.debug('Queue full - raising ThreadPoolMaxCapacity')
             raise ThreadPoolMaxCapacity
 
     def start(self):

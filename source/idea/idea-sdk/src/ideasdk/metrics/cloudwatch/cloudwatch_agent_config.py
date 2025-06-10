@@ -16,7 +16,7 @@ __all__ = (
     'CloudWatchAgentLogFileOptions',
     'CloudWatchAgentLogsOptions',
     'CloudWatchAgentConfigOptions',
-    'CloudWatchAgentConfig'
+    'CloudWatchAgentConfig',
 )
 
 from ideadatamodel import SocaBaseModel, exceptions
@@ -41,16 +41,30 @@ class CloudWatchAgentMetricsOptions(SocaBaseModel):
     metrics_collection_interval: Optional[int] = Field(default=None)
     force_flush_interval: Optional[int] = Field(default=None)
     # eg: "aggregation_dimensions" : [["AutoScalingGroupName"], ["InstanceId", "InstanceType"],[]]
-    aggregation_dimensions: Optional[Union[List[str], List[List[str]]]] = Field(default=None)
+    aggregation_dimensions: Optional[Union[List[str], List[List[str]]]] = Field(
+        default=None
+    )
     append_dimensions: Optional[Dict] = Field(default=None)
     # eg. ['ImageId', 'InstanceId', 'InstanceType', 'AutoScalingGroupName']
     include_dimensions: Optional[List[str]] = Field(default=None)
     metrics_collected: List[CloudWatchAgentMetricsCollectedOptions]
 
     @staticmethod
-    def default_options(namespace: str, include: List[str] = None, exclude: List[str] = None) -> 'CloudWatchAgentMetricsOptions':
+    def default_options(
+        namespace: str, include: List[str] = None, exclude: List[str] = None
+    ) -> 'CloudWatchAgentMetricsOptions':
         metrics_collected = []
-        sections = ['cpu', 'disk', 'diskio', 'swap', 'mem', 'net', 'netstat', 'processes', 'statsd']
+        sections = [
+            'cpu',
+            'disk',
+            'diskio',
+            'swap',
+            'mem',
+            'net',
+            'netstat',
+            'processes',
+            'statsd',
+        ]
         for section_name in sections:
             if Utils.is_not_empty(exclude):
                 if section_name in exclude:
@@ -58,22 +72,21 @@ class CloudWatchAgentMetricsOptions(SocaBaseModel):
             if Utils.is_not_empty(include):
                 if section_name not in include:
                     continue
-            metrics_collected.append(CloudWatchAgentMetricsCollectedOptions(
-                name=section_name,
-                enabled=True
-            ))
+            metrics_collected.append(
+                CloudWatchAgentMetricsCollectedOptions(name=section_name, enabled=True)
+            )
 
         # ensures nvidia_gpu is also added
         for section_name in include:
             if section_name not in sections:
-                metrics_collected.append(CloudWatchAgentMetricsCollectedOptions(
-                    name=section_name,
-                    enabled=True
-                ))
+                metrics_collected.append(
+                    CloudWatchAgentMetricsCollectedOptions(
+                        name=section_name, enabled=True
+                    )
+                )
 
         return CloudWatchAgentMetricsOptions(
-            namespace=namespace,
-            metrics_collected=metrics_collected
+            namespace=namespace, metrics_collected=metrics_collected
         )
 
 
@@ -119,9 +132,9 @@ class CloudWatchAgentConfigOptions(SocaBaseModel):
 
 
 class CloudWatchAgentConfig:
-
-    def __init__(self, cluster_config: ClusterConfig, options: CloudWatchAgentConfigOptions):
-
+    def __init__(
+        self, cluster_config: ClusterConfig, options: CloudWatchAgentConfigOptions
+    ):
         self.config = cluster_config
 
         if Utils.is_empty(options.module_id):
@@ -132,16 +145,26 @@ class CloudWatchAgentConfig:
         self.options = options
 
         # defaults
-        self.DEFAULT_METRICS_COLLECTION_INTERVAL = self.config.get_int('metrics.cloudwatch.metrics_collection_interval', 60)
-        self.DEFAULT_METRICS_FORCE_FLUSH_INTERVAL = self.config.get_int('metrics.cloudwatch.force_flush_interval', 60)
-        self.DEFAULT_LOGS_FORCE_FLUSH_INTERVAL = self.config.get_int('cluster.cloudwatch_logs.force_flush_interval', 5)
-        self.DEFAULT_LOGS_RETENTION_IN_DAYS = self.config.get_int('cluster.cloudwatch_logs.retention_in_days', 90)
+        self.DEFAULT_METRICS_COLLECTION_INTERVAL = self.config.get_int(
+            'metrics.cloudwatch.metrics_collection_interval', 60
+        )
+        self.DEFAULT_METRICS_FORCE_FLUSH_INTERVAL = self.config.get_int(
+            'metrics.cloudwatch.force_flush_interval', 60
+        )
+        self.DEFAULT_LOGS_FORCE_FLUSH_INTERVAL = self.config.get_int(
+            'cluster.cloudwatch_logs.force_flush_interval', 5
+        )
+        self.DEFAULT_LOGS_RETENTION_IN_DAYS = self.config.get_int(
+            'cluster.cloudwatch_logs.retention_in_days', 90
+        )
 
         # module id
         self.module_id = options.module_id
 
         # cluster name, aws region
-        self.cluster_name = self.config.get_string('cluster.cluster_name', required=True)
+        self.cluster_name = self.config.get_string(
+            'cluster.cluster_name', required=True
+        )
         self.aws_region = self.config.get_string('cluster.aws.region', required=True)
 
         # platform
@@ -150,19 +173,33 @@ class CloudWatchAgentConfig:
         # vpc endpoints
         self.logs_endpoint_override: Optional[str] = None
         self.metrics_endpoint_override: Optional[str] = None
-        use_vpc_endpoints = self.config.get_bool('cluster.network.use_vpc_endpoints', False)
+        use_vpc_endpoints = self.config.get_bool(
+            'cluster.network.use_vpc_endpoints', False
+        )
         if use_vpc_endpoints:
-            logs_vpc_endpoint_enabled = self.config.get_bool('cluster.network.vpc_interface_endpoints.logs.enabled', False)
+            logs_vpc_endpoint_enabled = self.config.get_bool(
+                'cluster.network.vpc_interface_endpoints.logs.enabled', False
+            )
             if logs_vpc_endpoint_enabled:
-                logs_endpoint_url = self.config.get_string('cluster.network.vpc_interface_endpoints.logs.endpoint_url', required=True)
+                logs_endpoint_url = self.config.get_string(
+                    'cluster.network.vpc_interface_endpoints.logs.endpoint_url',
+                    required=True,
+                )
                 # "endpoint_override": "vpce-XXXXXXXXXXXXXXXXXXXXXXXXX.logs.us-east-1.vpce.amazonaws.com"
                 self.logs_endpoint_override = logs_endpoint_url.replace('https://', '')
 
-            metrics_vpc_endpoint_enabled = self.config.get_bool('cluster.network.vpc_interface_endpoints.monitoring.enabled', False)
+            metrics_vpc_endpoint_enabled = self.config.get_bool(
+                'cluster.network.vpc_interface_endpoints.monitoring.enabled', False
+            )
             if metrics_vpc_endpoint_enabled:
-                metrics_endpoint_url = self.config.get_string('cluster.network.vpc_interface_endpoints.monitoring.endpoint_url', required=True)
+                metrics_endpoint_url = self.config.get_string(
+                    'cluster.network.vpc_interface_endpoints.monitoring.endpoint_url',
+                    required=True,
+                )
                 # "endpoint_override": "vpce-XXXXXXXXXXXXXXXXXXXXXXXXX.monitoring.us-east-1.vpce.amazonaws.com"
-                self.metrics_endpoint_override = metrics_endpoint_url.replace('https://', '')
+                self.metrics_endpoint_override = metrics_endpoint_url.replace(
+                    'https://', ''
+                )
 
         # metrics
         self.enable_metrics = Utils.get_as_bool(options.enable_metrics, False)
@@ -175,7 +212,9 @@ class CloudWatchAgentConfig:
         self.include_dimensions: Optional[List[str]] = None
         if self.enable_metrics:
             if Utils.is_empty(options.metrics):
-                raise exceptions.invalid_params('metrics is required when enable_metrics = True')
+                raise exceptions.invalid_params(
+                    'metrics is required when enable_metrics = True'
+                )
             if Utils.is_empty(options.metrics.metrics_collected):
                 raise exceptions.invalid_params('metrics.metrics_collected is required')
 
@@ -183,8 +222,14 @@ class CloudWatchAgentConfig:
                 self.metrics_namespace = f'{self.cluster_name}/{self.module_id}'
             else:
                 self.metrics_namespace = options.metrics.namespace
-            self.metrics_collection_interval = Utils.get_as_int(options.metrics.metrics_collection_interval, self.DEFAULT_METRICS_COLLECTION_INTERVAL)
-            self.metrics_force_flush_interval = Utils.get_as_int(options.metrics.force_flush_interval, self.DEFAULT_METRICS_FORCE_FLUSH_INTERVAL)
+            self.metrics_collection_interval = Utils.get_as_int(
+                options.metrics.metrics_collection_interval,
+                self.DEFAULT_METRICS_COLLECTION_INTERVAL,
+            )
+            self.metrics_force_flush_interval = Utils.get_as_int(
+                options.metrics.force_flush_interval,
+                self.DEFAULT_METRICS_FORCE_FLUSH_INTERVAL,
+            )
             self.aggregation_dimensions = options.metrics.aggregation_dimensions
             self.append_dimensions = options.metrics.append_dimensions
             self.include_dimensions = options.metrics.include_dimensions
@@ -203,40 +248,60 @@ class CloudWatchAgentConfig:
         self.default_log_stream_name: Optional[str] = None
         if self.enable_logs:
             if Utils.is_empty(options.logs):
-                raise exceptions.invalid_params('logs is required when enable_logs = True')
-            if Utils.is_empty(options.logs.files):
+                raise exceptions.invalid_params(
+                    'logs is required when enable_logs = True'
+                )
+            # For Windows, allow empty files since logs can be collected via windows_events
+            if Utils.is_empty(options.logs.files) and self.platform != 'windows':
                 raise exceptions.invalid_params('logs.files is required')
-            for index, file_config in enumerate(options.logs.files):
-                if Utils.is_empty(file_config.file_path):
-                    raise exceptions.invalid_params(f'logs.files[{index}].file_path is required')
-                if Utils.is_empty(file_config.log_group_name):
-                    raise exceptions.invalid_params(f'logs.files[{index}].log_group_name is required')
-                if Utils.is_empty(file_config.log_stream_name):
-                    raise exceptions.invalid_params(f'logs.files[{index}].log_stream_name is required')
+            # Only validate files if they exist (Windows may have empty files list)
+            if Utils.is_not_empty(options.logs.files):
+                for index, file_config in enumerate(options.logs.files):
+                    if Utils.is_empty(file_config.file_path):
+                        raise exceptions.invalid_params(
+                            f'logs.files[{index}].file_path is required'
+                        )
+                    if Utils.is_empty(file_config.log_group_name):
+                        raise exceptions.invalid_params(
+                            f'logs.files[{index}].log_group_name is required'
+                        )
+                    if Utils.is_empty(file_config.log_stream_name):
+                        raise exceptions.invalid_params(
+                            f'logs.files[{index}].log_stream_name is required'
+                        )
 
-            self.default_log_stream_name = Utils.get_as_string(options.logs.default_log_stream_name, f'{self.module_id}_default_{{ip_address}}')
-            self.logs_force_flush_interval = Utils.get_as_int(options.logs.force_flush_interval, self.DEFAULT_LOGS_FORCE_FLUSH_INTERVAL)
+            self.default_log_stream_name = Utils.get_as_string(
+                options.logs.default_log_stream_name,
+                f'{self.module_id}_default_{{ip_address}}',
+            )
+            self.logs_force_flush_interval = Utils.get_as_int(
+                options.logs.force_flush_interval,
+                self.DEFAULT_LOGS_FORCE_FLUSH_INTERVAL,
+            )
             collected_log_files = []
-            for file_config in options.logs.files:
-                if file_config.retention_in_days is None:
-                    file_config.retention_in_days = self.DEFAULT_LOGS_RETENTION_IN_DAYS
-                collected_log_files.append(Utils.to_dict(file_config))
+            # Only process files if they exist
+            if Utils.is_not_empty(options.logs.files):
+                for file_config in options.logs.files:
+                    if file_config.retention_in_days is None:
+                        file_config.retention_in_days = (
+                            self.DEFAULT_LOGS_RETENTION_IN_DAYS
+                        )
+                    collected_log_files.append(Utils.to_dict(file_config))
             self.collected_log_files = collected_log_files
 
     def build(self) -> Dict:
-
         context = {
             # common
             'utils': Utils,
             'aws_region': self.aws_region,
-
+            'cluster_name': self.cluster_name,
+            'module_id': self.module_id,
             # logs
             'enable_logs': self.enable_logs,
             'logs_endpoint_override': self.logs_endpoint_override,
             'logs_force_flush_interval': self.logs_force_flush_interval,
             'default_log_stream_name': self.default_log_stream_name,
             'collected_log_files': self.collected_log_files,
-
             # metrics
             'enable_metrics': self.enable_metrics,
             'metrics_endpoint_override': self.metrics_endpoint_override,
@@ -246,12 +311,11 @@ class CloudWatchAgentConfig:
             'aggregation_dimensions': self.aggregation_dimensions,
             'append_dimensions': self.append_dimensions,
             'include_dimensions': self.include_dimensions,
-            'metrics_collected': self.metrics_collected
+            'metrics_collected': self.metrics_collected,
         }
 
         env = Jinja2Utils.env_using_package_loader(
-            package_name='ideasdk.metrics.cloudwatch',
-            package_path='templates'
+            package_name='ideasdk.metrics.cloudwatch', package_path='templates'
         )
 
         template = env.get_template(f'amazon-cloudwatch-agent-{self.platform}.yml')

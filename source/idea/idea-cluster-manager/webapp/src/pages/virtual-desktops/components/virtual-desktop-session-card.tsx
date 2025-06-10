@@ -168,7 +168,7 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
     canUpdateSession = () => this.getSession().state === 'STOPPED'
 
     canUpdateSessionPermission = () => {
-        if (this.getSession().base_os === 'windows' && !this.props.isActiveDirectory) {
+        if (this.getSession().base_os?.includes('windows') && !this.props.isActiveDirectory) {
             return false
         }
         return !(this.getSession().state === 'DELETING' || this.getSession().state === 'DELETED')

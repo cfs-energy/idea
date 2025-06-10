@@ -11,8 +11,14 @@
 
 import ideascheduler
 from ideadatamodel import (
-    exceptions, errorcodes, SocaQueueMode, SocaJob, SocaJobState,
-    QueuedJob, LimitCheckResult, HpcQueueProfile
+    exceptions,
+    errorcodes,
+    SocaQueueMode,
+    SocaJob,
+    SocaJobState,
+    QueuedJob,
+    LimitCheckResult,
+    HpcQueueProfile,
 )
 
 from ideasdk.utils import Utils
@@ -67,7 +73,6 @@ class RoundRobinPriorityQueue:
         self._maxsize_per_queue = maxsize_per_queue
 
     def get(self, timeout: float = 1) -> QueuedJob:
-
         if len(self._queues) == 0:
             time.sleep(timeout)
             raise queue.Empty()
@@ -99,7 +104,7 @@ class RoundRobinPriorityQueue:
             else:
                 entry = RoundRobinPriorityQueueEntry(
                     priority_queue=PriorityQueue(maxsize=self._maxsize_per_queue),
-                    group=item.job_group
+                    group=item.job_group,
                 )
                 self._queue_map[item.job_group] = entry
                 self._queues.append(entry)
@@ -131,9 +136,13 @@ class JobProvisioningQueue(JobProvisioningQueueProtocol):
     * checking limits: max instances, max jobs, max capacity at queue and group level.
     """
 
-    def __init__(self, context: ideascheduler.AppContext, queue_profile: HpcQueueProfile):
+    def __init__(
+        self, context: ideascheduler.AppContext, queue_profile: HpcQueueProfile
+    ):
         self._context = context
-        self._logger = context.logger(name=f'job_provisioning_queue_{queue_profile.name}')
+        self._logger = context.logger(
+            name=f'job_provisioning_queue_{queue_profile.name}'
+        )
         self.queue_profile = queue_profile
         self.queue_type = queue_profile.name
 
@@ -141,7 +150,9 @@ class JobProvisioningQueue(JobProvisioningQueueProtocol):
         for queue_name in self.queue_profile.queues:
             self._applicable_queues.add(queue_name)
 
-        self._queue: RoundRobinPriorityQueue = RoundRobinPriorityQueue(maxsize_per_queue=10000)
+        self._queue: RoundRobinPriorityQueue = RoundRobinPriorityQueue(
+            maxsize_per_queue=10000
+        )
         self._queued_jobs: Dict[str, QueuedJob] = {}
         self._clear_processed_jobs_timestamp = None
 
@@ -173,7 +184,7 @@ class JobProvisioningQueue(JobProvisioningQueueProtocol):
 
         raise exceptions.SocaException(
             error_code=errorcodes.GENERAL_ERROR,
-            message=f'queue_name not found: {queue_name}'
+            message=f'queue_name not found: {queue_name}',
         )
 
     @property
@@ -184,8 +195,12 @@ class JobProvisioningQueue(JobProvisioningQueueProtocol):
         return queue_mode
 
     def _compute_fairshare_score(self, job: SocaJob) -> int:
-        running_jobs = self._context.job_cache.list_jobs(queue_type=self.queue_type, job_state=SocaJobState.RUNNING)
-        queued_jobs = self._context.job_cache.list_jobs(queue_type=self.queue_type, job_state=SocaJobState.QUEUED)
+        running_jobs = self._context.job_cache.list_jobs(
+            queue_type=self.queue_type, job_state=SocaJobState.RUNNING
+        )
+        queued_jobs = self._context.job_cache.list_jobs(
+            queue_type=self.queue_type, job_state=SocaJobState.QUEUED
+        )
 
         config_prefix = 'scheduler.job_provisioning.queue_mode.fair_share'
         start_score = self._context.config().get_int(f'{config_prefix}.start_score')
@@ -206,13 +221,19 @@ class JobProvisioningQueue(JobProvisioningQueueProtocol):
                 bonus_score += penalty
             else:
                 resource_count = job.params.nodes + job.total_licenses()
-                score_type = self._context.config().get_string(f'{config_prefix}.score_type')
+                score_type = self._context.config().get_string(
+                    f'{config_prefix}.score_type'
+                )
 
                 if score_type in ('dynamic', 'linear'):
                     c1 = self._context.config().get_float(f'{config_prefix}.c1')
                     c2 = self._context.config().get_float(f'{config_prefix}.c2')
-                    elapsed_time = Utils.current_time_ms() - (job.queue_time.timestamp() * 1000)
-                    bonus_score += resource_count * ((c1 * elapsed_time / (1000 * 60 * 60 * 24)) ** c2)
+                    elapsed_time = Utils.current_time_ms() - (
+                        job.queue_time.timestamp() * 1000
+                    )
+                    bonus_score += resource_count * (
+                        (c1 * elapsed_time / (1000 * 60 * 60 * 24)) ** c2
+                    )
                 else:
                     bonus_score += 1
 
@@ -259,7 +280,6 @@ class JobProvisioningQueue(JobProvisioningQueueProtocol):
             return
 
         with self._lock:
-
             # if job is already queued, update priority and return
             if job.job_id in self._queued_jobs:
                 # job is already queued, update priority and reset any flags
@@ -280,7 +300,7 @@ class JobProvisioningQueue(JobProvisioningQueueProtocol):
                 job_id=job.job_id,
                 job_group=job_group,
                 deleted=None,
-                capacity_added=job.capacity_added
+                capacity_added=job.capacity_added,
             )
             self._queue.put(item=queued_job)
             self._queued_jobs[queued_job.job_id] = queued_job
@@ -301,7 +321,8 @@ class JobProvisioningQueue(JobProvisioningQueueProtocol):
             is_expired = Utils.is_interval_expired(
                 last_run_ms=self._clear_processed_jobs_timestamp,
                 now_ms=now,
-                interval_secs=CLEAR_PROCESSED_JOBS_INTERVAL_SECS)
+                interval_secs=CLEAR_PROCESSED_JOBS_INTERVAL_SECS,
+            )
 
             if not is_expired:
                 return
@@ -322,18 +343,23 @@ class JobProvisioningQueue(JobProvisioningQueueProtocol):
             return False
         return queue_name in self._applicable_queues
 
-    def _is_max_provisioned_instances_limit(self, job: SocaJob) -> Optional[LimitCheckResult]:
-
+    def _is_max_provisioned_instances_limit(
+        self, job: SocaJob
+    ) -> Optional[LimitCheckResult]:
         queue_params = self.queue_profile.queue_management_params
-        count = self._context.instance_cache.get_queue_profile_instance_count(self.queue_type)
-        max_provisioned_instances = Utils.get_as_int(queue_params.max_provisioned_instances, 0)
+        count = self._context.instance_cache.get_queue_profile_instance_count(
+            self.queue_type
+        )
+        max_provisioned_instances = Utils.get_as_int(
+            queue_params.max_provisioned_instances, 0
+        )
         if max_provisioned_instances == 0:
             return None
 
         result = LimitCheckResult(
             limit_type=LIMIT_TYPE_MAX_PROVISIONED_INSTANCES,
             queue_threshold=queue_params.max_provisioned_instances,
-            queue_current=count + job.desired_nodes()
+            queue_current=count + job.desired_nodes(),
         )
         if count + job.desired_nodes() > max_provisioned_instances:
             return result.fail()
@@ -341,7 +367,6 @@ class JobProvisioningQueue(JobProvisioningQueueProtocol):
         return result.ok()
 
     def _is_max_running_jobs_limit(self) -> Optional[LimitCheckResult]:
-
         queue_params = self.queue_profile.queue_management_params
         max_running_jobs = Utils.get_as_int(queue_params.max_running_jobs, 0)
         if max_running_jobs == 0:
@@ -352,7 +377,7 @@ class JobProvisioningQueue(JobProvisioningQueueProtocol):
         result = LimitCheckResult(
             limit_type=LIMIT_TYPE_MAX_RUNNING_JOBS,
             queue_threshold=queue_params.max_provisioned_instances,
-            queue_current=queue_total
+            queue_current=queue_total,
         )
 
         if queue_total + 1 > max_running_jobs:
@@ -385,7 +410,6 @@ class JobProvisioningQueue(JobProvisioningQueueProtocol):
             return self._queue.qsize()
 
     def _check_limits(self, job: SocaJob, timeout: float) -> bool:
-
         def not_ok(limit):
             self.put(job=job)
 
@@ -404,9 +428,7 @@ class JobProvisioningQueue(JobProvisioningQueueProtocol):
                     self._context.metrics.jobs_pending(self.queue_type, pending)
 
                 self._context.job_cache.set_job_provisioning_error(
-                    job_id=job.job_id,
-                    error_code=limit.limit_type,
-                    message=str(limit)
+                    job_id=job.job_id, error_code=limit.limit_type, message=str(limit)
                 )
                 self._block(timeout=timeout)
                 raise queue.Empty()
@@ -430,24 +452,24 @@ class JobProvisioningQueue(JobProvisioningQueueProtocol):
     def get(self, timeout: Optional[float] = 1) -> SocaJob:
         while not self._is_running.is_set():
             try:
-
                 if not self._context.is_ready():
                     while not self._context.is_ready():
                         interval = Utils.get_retry_backoff_interval(
                             current_retry=self._provisioning_not_ready_retry_attempt,
                             max_retries=PROVISIONING_RETRY_BACKOFF_MAX,
-                            backoff_in_seconds=timeout
+                            backoff_in_seconds=timeout,
                         )
                         self._provisioning_not_ready_retry_attempt += 1
                         self._block(interval)
                         if not self._context.is_ready():
                             self._logger.warning('job provisioning not ready. skip.')
-                    self._logger.info(f'accepting jobs for queue profile: {self.queue_profile.name}')
+                    self._logger.info(
+                        f'accepting jobs for queue profile: {self.queue_profile.name}'
+                    )
 
                 queued_job = self._queue.get(timeout=timeout)
                 try:
                     with self._lock:
-
                         job = self._context.job_cache.get_job(queued_job.job_id)
 
                         # job is deleted from scheduler, but was queued previously
@@ -470,7 +492,6 @@ class JobProvisioningQueue(JobProvisioningQueueProtocol):
                     self._remove_queued_job(queued_job)
 
             except queue.Empty:
-
                 raise JobProvisioningQueueEmpty()
 
             except exceptions.SocaException as e:

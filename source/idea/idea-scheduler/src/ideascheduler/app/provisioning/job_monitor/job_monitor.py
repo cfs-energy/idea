@@ -11,15 +11,13 @@
 
 import ideascheduler
 
-from ideadatamodel import (
-    exceptions,
-    SocaJob, SocaJobState,
-    JobUpdates, JobUpdate
-)
+from ideadatamodel import exceptions, SocaJob, SocaJobState, JobUpdates, JobUpdate
 from ideasdk.service import SocaService
 from ideasdk.utils import Utils
 from ideascheduler.app.app_protocols import JobMonitorProtocol
-from ideascheduler.app.provisioning.job_monitor.finished_job_processor import FinishedJobProcessor
+from ideascheduler.app.provisioning.job_monitor.finished_job_processor import (
+    FinishedJobProcessor,
+)
 from ideascheduler.app.scheduler.openpbs.openpbs_qselect import OpenPBSQSelect
 from ideascheduler.app.scheduler.openpbs import OpenPBSEvent
 
@@ -55,29 +53,33 @@ class JobMonitorState:
 
     def job_queued(self, job: SocaJob):
         with self._queued_lock:
-            self.queued_jobs.add(JobUpdate(
-                queue=job.queue,
-                owner=job.owner,
-                timestamp=arrow.utcnow().datetime
-            ))
+            self.queued_jobs.add(
+                JobUpdate(
+                    queue=job.queue, owner=job.owner, timestamp=arrow.utcnow().datetime
+                )
+            )
             self._job_updates_available.set()
 
     def job_modified(self, job: SocaJob):
         with self._modified_lock:
-            self.modified_jobs.add(JobUpdate(
-                queue=job.queue,
-                job_id=job.job_id,
-                timestamp=arrow.utcnow().datetime
-            ))
+            self.modified_jobs.add(
+                JobUpdate(
+                    queue=job.queue,
+                    job_id=job.job_id,
+                    timestamp=arrow.utcnow().datetime,
+                )
+            )
             self._job_updates_available.set()
 
     def job_running(self, job: SocaJob):
         with self._running_lock:
-            self.running_jobs.add(JobUpdate(
-                queue=job.queue,
-                job_id=job.job_id,
-                timestamp=arrow.utcnow().datetime
-            ))
+            self.running_jobs.add(
+                JobUpdate(
+                    queue=job.queue,
+                    job_id=job.job_id,
+                    timestamp=arrow.utcnow().datetime,
+                )
+            )
             self._job_updates_available.set()
 
     def get_updates(self) -> JobUpdates:
@@ -114,9 +116,7 @@ class JobMonitorState:
             self._job_updates_available.clear()
 
         return JobUpdates(
-            queued=queued_jobs,
-            modified=modified_jobs,
-            running=running_jobs
+            queued=queued_jobs, modified=modified_jobs, running=running_jobs
         )
 
     def clear_all(self):
@@ -152,7 +152,9 @@ class JobMonitor(SocaService, JobMonitorProtocol):
         self._context = context
         self._logger = context.logger('job_monitor')
         self._is_running = False
-        self._job_status_queue_url = self._context.config().get_string('scheduler.job_status_sqs_queue_url', required=True)
+        self._job_status_queue_url = self._context.config().get_string(
+            'scheduler.job_status_sqs_queue_url', required=True
+        )
         # job submission monitor polls for jobs submitted via qsub
         self._job_submission_monitor: Optional[Thread] = None
         # job execution monitor chesk for job events after the job has started execution on the compute node
@@ -180,13 +182,13 @@ class JobMonitor(SocaService, JobMonitorProtocol):
         self._context.job_cache.set_ready()
 
     def _submit_to_provisioning_queue(self, jobs: List[SocaJob]):
-
         for job in jobs:
-
             if self._exit.is_set():
                 break
 
-            provisioning_queue = self._context.queue_profiles.get_provisioning_queue(queue_profile_name=job.queue_type)
+            provisioning_queue = self._context.queue_profiles.get_provisioning_queue(
+                queue_profile_name=job.queue_type
+            )
             if provisioning_queue is None:
                 continue
 
@@ -202,20 +204,22 @@ class JobMonitor(SocaService, JobMonitorProtocol):
                 provisioning_queue.put(job=job)
 
     def _sync_all_jobs(self):
-
         # we can call list all jobs and sync all jobs at once, but from metrics, error handling, memory and
         # performance standpoint, it's better to list jobs by queue.
         # this will help mitigate flooding the memory if there are more than 10k jobs per queue
 
         try:
-
             queue_profiles = self._context.queue_profiles.list_queue_profiles()
             for queue_profile in queue_profiles:
                 if not Utils.is_true(queue_profile.enabled):
                     continue
 
                 for queue in queue_profile.queues:
-                    provisioning_queue = self._context.queue_profiles.get_provisioning_queue(queue_profile_name=queue_profile.name)
+                    provisioning_queue = (
+                        self._context.queue_profiles.get_provisioning_queue(
+                            queue_profile_name=queue_profile.name
+                        )
+                    )
                     if provisioning_queue is None:
                         continue
 
@@ -258,7 +262,6 @@ class JobMonitor(SocaService, JobMonitorProtocol):
 
             for queue, targets in query.items():
                 try:
-
                     if self._exit.is_set():
                         break
 
@@ -271,15 +274,16 @@ class JobMonitor(SocaService, JobMonitorProtocol):
                             log_tag='queued-jobs',
                             stack_id='tbd',
                             queue=queue,
-                            job_state=[SocaJobState.QUEUED, SocaJobState.HELD]
+                            job_state=[SocaJobState.QUEUED, SocaJobState.HELD],
                         ).list_jobs_ids()
 
                         has_more = len(queued_job_ids) > 0
 
-                        self._logger.info(f'jobs queued: {len(queued_job_ids)}, fetching ...')
+                        self._logger.info(
+                            f'jobs queued: {len(queued_job_ids)}, fetching ...'
+                        )
 
                         while has_more:
-
                             job_ids_to_fetch = []
                             existing_jobs = []
                             for queued_job_id in queued_job_ids:
@@ -295,29 +299,37 @@ class JobMonitor(SocaService, JobMonitorProtocol):
                             if len(job_ids_to_fetch) == 0:
                                 break
 
-                            queued_jobs = self._context.scheduler.list_jobs(job_ids=job_ids_to_fetch)
+                            queued_jobs = self._context.scheduler.list_jobs(
+                                job_ids=job_ids_to_fetch
+                            )
 
                             self._context.job_cache.sync(jobs=queued_jobs)
 
-                            self._submit_to_provisioning_queue(jobs=queued_jobs + existing_jobs)
+                            self._submit_to_provisioning_queue(
+                                jobs=queued_jobs + existing_jobs
+                            )
 
                             queued_job_ids = OpenPBSQSelect(
                                 context=self._context,
                                 logger=self._logger,
                                 stack_id='tbd',
                                 queue=queue,
-                                job_state=[SocaJobState.QUEUED, SocaJobState.HELD]
+                                job_state=[SocaJobState.QUEUED, SocaJobState.HELD],
                             ).list_jobs_ids()
 
                             has_more = len(processed_jobs) < len(queued_job_ids)
 
                             if has_more:
-                                self._logger.info(f'jobs queued: {len(queued_job_ids)}, '
-                                                  f'fetching additional {len(queued_job_ids) - len(processed_jobs)} job(s) ...')
+                                self._logger.info(
+                                    f'jobs queued: {len(queued_job_ids)}, '
+                                    f'fetching additional {len(queued_job_ids) - len(processed_jobs)} job(s) ...'
+                                )
 
                     else:
                         # otherwise, query for all job_ids
-                        jobs = self._context.scheduler.list_jobs(queue=queue, job_ids=list(targets))
+                        jobs = self._context.scheduler.list_jobs(
+                            queue=queue, job_ids=list(targets)
+                        )
 
                         if len(jobs) == 0:
                             continue
@@ -327,7 +339,9 @@ class JobMonitor(SocaService, JobMonitorProtocol):
                         if job_type == 'modified':
                             self._submit_to_provisioning_queue(jobs=jobs)
 
-                        self._logger.info(f'job update: {job_type}, num jobs: {len(jobs)}')
+                        self._logger.info(
+                            f'job update: {job_type}, num jobs: {len(jobs)}'
+                        )
 
                 except exceptions.SocaException as e:
                     self._logger.warning(str(e))
@@ -338,14 +352,15 @@ class JobMonitor(SocaService, JobMonitorProtocol):
     def _monitor_job_submission(self):
         while not self._exit.is_set():
             try:
-
                 # there are delta updates: queued, modified or running jobs
                 if self._state.is_job_update_available():
                     # get a copy of current state
                     job_updates = self._state.get_updates()
 
                     self._sync_jobs(job_updates=job_updates.queued, job_type='queued')
-                    self._sync_jobs(job_updates=job_updates.modified, job_type='modified')
+                    self._sync_jobs(
+                        job_updates=job_updates.modified, job_type='modified'
+                    )
                     self._sync_jobs(job_updates=job_updates.running, job_type='running')
 
             except Exception as e:
@@ -362,7 +377,10 @@ class JobMonitor(SocaService, JobMonitorProtocol):
                     # delta job updates if any, will be processed at an interval of 1 second
                     self._monitor.wait_for(
                         self._state.is_job_update_available,
-                        self._context.config().get_int('scheduler.job_provisioning.job_submission_queue_interval_seconds', default=1)
+                        self._context.config().get_int(
+                            'scheduler.job_provisioning.job_submission_queue_interval_seconds',
+                            default=1,
+                        ),
                     )
                 finally:
                     self._monitor.release()
@@ -370,10 +388,14 @@ class JobMonitor(SocaService, JobMonitorProtocol):
     def _monitor_job_execution(self):
         while not self._exit.is_set():
             try:
-                result = self._context.aws().sqs().receive_message(
-                    QueueUrl=self._job_status_queue_url,
-                    MaxNumberOfMessages=10,
-                    WaitTimeSeconds=5
+                result = (
+                    self._context.aws()
+                    .sqs()
+                    .receive_message(
+                        QueueUrl=self._job_status_queue_url,
+                        MaxNumberOfMessages=10,
+                        WaitTimeSeconds=5,
+                    )
                 )
                 messages = Utils.get_value_as_list('Messages', result)
                 if messages is None:
@@ -398,24 +420,32 @@ class JobMonitor(SocaService, JobMonitorProtocol):
                         if queue_profile is None:
                             continue
                         job = pbs_event.as_soca_job(
-                            context=self._context,
-                            queue_profile=queue_profile
+                            context=self._context, queue_profile=queue_profile
                         )
 
-                        self._logger.info(f'{job.log_tag} {pbs_event.type} on host: {pbs_event.requestor_host}')
+                        self._logger.info(
+                            f'{job.log_tag} {pbs_event.type} on host: {pbs_event.requestor_host}'
+                        )
                         self.job_status_update(job)
                     except Exception as e:
-                        self._logger.exception(f'failed to process job execution event: {e}')
+                        self._logger.exception(
+                            f'failed to process job execution event: {e}'
+                        )
                     finally:
-                        to_be_deleted.append({
-                            'Id': Utils.get_value_as_string('MessageId', sqs_message),
-                            'ReceiptHandle': Utils.get_value_as_string('ReceiptHandle', sqs_message)
-                        })
+                        to_be_deleted.append(
+                            {
+                                'Id': Utils.get_value_as_string(
+                                    'MessageId', sqs_message
+                                ),
+                                'ReceiptHandle': Utils.get_value_as_string(
+                                    'ReceiptHandle', sqs_message
+                                ),
+                            }
+                        )
 
                 if len(to_be_deleted) > 0:
                     self._context.aws().sqs().delete_message_batch(
-                        QueueUrl=self._job_status_queue_url,
-                        Entries=to_be_deleted
+                        QueueUrl=self._job_status_queue_url, Entries=to_be_deleted
                     )
 
             except Exception as e:
@@ -473,8 +503,7 @@ class JobMonitor(SocaService, JobMonitorProtocol):
         execution_host = execution_hosts[0]
 
         self._context.job_cache.log_job_execution(
-            job_id=job_id,
-            execution_host=execution_host
+            job_id=job_id, execution_host=execution_host
         )
 
     def start(self):

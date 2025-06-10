@@ -30,60 +30,46 @@ def get_default_logging_config(profile: str = 'default'):
                         'format': '[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s'
                     }
                 },
-                'handlers': {
-                    'console': {
-                        'class': 'logging.handlers.StreamHandler'
-                    }
-                },
+                'handlers': {'console': {'class': 'logging.handlers.StreamHandler'}},
                 'profiles': {
                     'default': {
                         'formatter': 'default',
                         'loggers': {
-                            'app': {
-                                'level': 'INFO',
-                                'handlers': ['console']
-                            },
-                            'root': {
-                                'level': 'ERROR',
-                                'handlers': ['console']
-                            }
-                        }
+                            'app': {'level': 'INFO', 'handlers': ['console']},
+                            'root': {'level': 'ERROR', 'handlers': ['console']},
+                        },
                     },
                     'debug': {
                         'formatter': 'default',
                         'loggers': {
-                            'app': {
-                                'level': 'DEBUG',
-                                'handlers': ['console']
-                            },
-                            'root': {
-                                'level': 'ERROR',
-                                'handlers': ['console']
-                            }
-                        }
-                    }
-                }
+                            'app': {'level': 'DEBUG', 'handlers': ['console']},
+                            'root': {'level': 'ERROR', 'handlers': ['console']},
+                        },
+                    },
+                },
             }
         },
         'default': {
-            'logging': {
-                'profile': profile,
-                'default_log_file_name': 'application.log'
-            }
-        }
+            'logging': {'profile': profile, 'default_log_file_name': 'application.log'}
+        },
     }
 
 
 class SocaLogging(SocaLoggingProtocol):
-
-    def __init__(self, config: SocaConfig = None, module_id: str = 'default', default_logging_profile: str = None):
-
+    def __init__(
+        self,
+        config: SocaConfig = None,
+        module_id: str = 'default',
+        default_logging_profile: str = None,
+    ):
         if default_logging_profile is None:
             default_logging_profile = 'default'
 
         if config is None:
             self.module_id = 'default'
-            self._config = SocaConfig(get_default_logging_config(profile=default_logging_profile))
+            self._config = SocaConfig(
+                get_default_logging_config(profile=default_logging_profile)
+            )
         else:
             logging_config = config.get_config(f'{module_id}.logging')
             if logging_config is not None:
@@ -91,7 +77,9 @@ class SocaLogging(SocaLoggingProtocol):
                 self.module_id = module_id
             else:
                 self.module_id = 'default'
-                self._config = SocaConfig(get_default_logging_config(profile=default_logging_profile))
+                self._config = SocaConfig(
+                    get_default_logging_config(profile=default_logging_profile)
+                )
         self._file_handlers = {}
         self._initialize_root_logger()
         logging.captureWarnings(True)
@@ -99,9 +87,7 @@ class SocaLogging(SocaLoggingProtocol):
     def _initialize_root_logger(self):
         root = logging.getLogger()
         self._reset_logger(root)
-        self._build_logger(
-            logger_template=constants.LOGGER_TEMPLATE_ROOT
-        )
+        self._build_logger(logger_template=constants.LOGGER_TEMPLATE_ROOT)
 
     def get_log_dir(self) -> str:
         log_dir = self._config.get_string(f'{self.module_id}.logging.logs_directory')
@@ -113,10 +99,14 @@ class SocaLogging(SocaLoggingProtocol):
         return os.path.join(app_deploy_dir, log_dir)
 
     def _get_default_log_file_name(self):
-        return self._config.get_string(f'{self.module_id}.logging.default_log_file_name', required=True)
+        return self._config.get_string(
+            f'{self.module_id}.logging.default_log_file_name', required=True
+        )
 
     def _build_formatter(self, name):
-        log_format = self._config.get_string(f'cluster.logging.formatters.{name}.format')
+        log_format = self._config.get_string(
+            f'cluster.logging.formatters.{name}.format'
+        )
         return logging.Formatter(fmt=log_format)
 
     def _build_handler(self, handler_name, logger_name: Optional[str]):
@@ -125,13 +115,11 @@ class SocaLogging(SocaLoggingProtocol):
         handler_cls = handler_config['class']
 
         if handler_cls == 'logging.handlers.StreamHandler':
-
             return logging.StreamHandler(stream=sys.stdout)
 
         elif handler_cls == 'logging.handlers.TimedRotatingFileHandler':
-
             create_separate_file = False
-            separate_files = self._get_seperate_files()
+            separate_files = self._get_separate_files()
             if separate_files and len(separate_files) > 0:
                 for separate_file in separate_files:
                     if logger_name.startswith(separate_file):
@@ -154,20 +142,20 @@ class SocaLogging(SocaLoggingProtocol):
                     encoding=constants.DEFAULT_ENCODING,
                     when=handler_config['when'],
                     interval=int(handler_config['interval']),
-                    backupCount=int(handler_config['backupCount'])
+                    backupCount=int(handler_config['backupCount']),
                 )
                 self._file_handlers[logfile] = file_handler
                 return file_handler
         else:
             raise exceptions.SocaException(
                 error_code=errorcodes.CONFIG_ERROR,
-                message=f'logging handler: {handler_cls} not supported'
+                message=f'logging handler: {handler_cls} not supported',
             )
 
     def _get_profile(self):
         return self._config.get_string(f'{self.module_id}.logging.profile')
 
-    def _get_seperate_files(self):
+    def _get_separate_files(self):
         return self._config.get_list(f'{self.module_id}.logging.separate_files')
 
     def _get_enable_debug_logging(self):
@@ -196,13 +184,18 @@ class SocaLogging(SocaLoggingProtocol):
         logger.setLevel(level)
         handler = logging.StreamHandler()
         handler.setLevel(level)
-        handler.setFormatter(logging.Formatter(fmt='[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s'))
+        handler.setFormatter(
+            logging.Formatter(
+                fmt='[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s'
+            )
+        )
         logger.addHandler(handler)
         return logger
 
     def _build_logger(self, logger_template: str = None, logger_name: str = None):
-
-        if logger_template == constants.LOGGER_TEMPLATE_APP and Utils.is_empty(logger_name):
+        if logger_template == constants.LOGGER_TEMPLATE_APP and Utils.is_empty(
+            logger_name
+        ):
             logger_name = 'app'
 
         logger = logging.getLogger(logger_name)
@@ -212,7 +205,9 @@ class SocaLogging(SocaLoggingProtocol):
         settings = self._get_profile_settings()
 
         if settings is None:
-            return self._build_default_logger(logger_template=logger_template, logger=logger)
+            return self._build_default_logger(
+                logger_template=logger_template, logger=logger
+            )
 
         level = settings[f'loggers.{logger_template}.level']
 
@@ -228,8 +223,7 @@ class SocaLogging(SocaLoggingProtocol):
 
         for handler_name in settings[f'loggers.{logger_template}.handlers']:
             handler = self._build_handler(
-                handler_name=handler_name,
-                logger_name=logger_name
+                handler_name=handler_name, logger_name=logger_name
             )
             handler.setLevel(level)
             handler.setFormatter(self._build_formatter(name=settings['formatter']))
@@ -241,12 +235,15 @@ class SocaLogging(SocaLoggingProtocol):
 
     def get_logger(self, logger_name: str = None) -> logging.Logger:
         return self._build_logger(
-            logger_template=constants.LOGGER_TEMPLATE_APP,
-            logger_name=logger_name
+            logger_template=constants.LOGGER_TEMPLATE_APP, logger_name=logger_name
         )
 
-    def get_custom_file_logger(self, params: CustomFileLoggerParams, log_level=logging.CRITICAL, fmt='%(message)s') -> logging.Logger:
-
+    def get_custom_file_logger(
+        self,
+        params: CustomFileLoggerParams,
+        log_level=logging.CRITICAL,
+        fmt='%(message)s',
+    ) -> logging.Logger:
         logger = logging.getLogger(params.logger_name)
 
         for handler in logger.handlers:
@@ -272,7 +269,7 @@ class SocaLogging(SocaLoggingProtocol):
                 encoding=constants.DEFAULT_ENCODING,
                 when=params.when,
                 interval=params.interval,
-                backupCount=params.backupCount
+                backupCount=params.backupCount,
             )
             self._file_handlers[logfile] = file_handler
 

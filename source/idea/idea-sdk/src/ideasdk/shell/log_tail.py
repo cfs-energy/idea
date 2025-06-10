@@ -19,11 +19,13 @@ from rich.text import Text
 
 
 class LogTail:
-
-    def __init__(self, context: SocaCliContext,
-                 files: List[str],
-                 search_tokens: Optional[Union[str, List[str]]],
-                 **kwargs):
+    def __init__(
+        self,
+        context: SocaCliContext,
+        files: List[str],
+        search_tokens: Optional[Union[str, List[str]]],
+        **kwargs,
+    ):
         self.context = context
         self.files = files
         self._search_tokens = search_tokens
@@ -58,7 +60,7 @@ class LogTail:
         if isinstance(cmd, str):
             msg = cmd
         else:
-            msg = " ".join(cmd)
+            msg = ' '.join(cmd)
         if self.is_command:
             self.context.print(msg)
             return False
@@ -67,7 +69,6 @@ class LogTail:
             return True
 
     def _print_logs(self):
-
         tail = sh.Command('tail')
 
         tail_params = []
@@ -112,7 +113,6 @@ class LogTail:
             self.context.print(text)
 
         if has_tokens:
-
             if self.is_and:
                 regex_expr = ''
                 for token in tokens:
@@ -121,23 +121,24 @@ class LogTail:
 
                 tail = tail.bake(*tail_params, _iter=True, _bg=True, _out=print_line)
 
-                if not self._print_cmd(cmd=f'{tail} > custom regex filter: {regex_expr}'):
+                if not self._print_cmd(
+                    cmd=f'{tail} > custom regex filter: {regex_expr}'
+                ):
                     return
 
                 process = tail()
 
             else:
-                regex_expr = f"({'|'.join(tokens)})"
+                regex_expr = f'({"|".join(tokens)})'
 
                 tail = tail.bake(*tail_params, _iter=True, _bg=True, _out=print_line)
 
-                if not self._print_cmd(cmd=f'{tail} | grep -E \'{regex_expr}\''):
+                if not self._print_cmd(cmd=f"{tail} | grep -E '{regex_expr}'"):
                     return
 
                 process = tail()
 
         else:
-
             tail = tail.bake(*tail_params, _iter=True, _bg=True, _out=print_line)
             if not self._print_cmd(cmd=str(tail)):
                 return

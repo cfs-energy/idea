@@ -20,11 +20,11 @@ Statement:
     Action: sqs:SendMessage
     Resource:
       - '{{ context.arns.get_sqs_arn(context.config.get_module_id("virtual-desktop-controller") + "-events.fifo") }}'
-    {%- if context.config.get_string('cluster.sqs.kms_key_id') %}
+    {% if context.config.get_string('cluster.sqs.kms_key_id') %}
   - Action:
       - kms:GenerateDataKey
       - kms:Decrypt
     Resource:
       - '{{ context.arns.kms_sqs_key_arn }}'
     Effect: Allow
-  {%- endif %}
+  {% endif %}

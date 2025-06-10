@@ -10,10 +10,7 @@
 #  and limitations under the License.
 
 
-__all__ = (
-    'ModuleMetadata',
-    'ModuleMetadataHelper'
-)
+__all__ = ('ModuleMetadata', 'ModuleMetadataHelper')
 
 from ideadatamodel import constants, exceptions, SocaBaseModel
 
@@ -28,23 +25,82 @@ class ModuleMetadata(SocaBaseModel):
 
 
 MODULE_METADATA = [
-    ModuleMetadata(name=constants.MODULE_GLOBAL_SETTINGS, title='Global Settings', type=constants.MODULE_TYPE_CONFIG, deployment_priority=0),
-    ModuleMetadata(name=constants.MODULE_BOOTSTRAP, title='Bootstrap', type=constants.MODULE_TYPE_STACK, deployment_priority=1),
-    ModuleMetadata(name=constants.MODULE_CLUSTER, title='Cluster', type=constants.MODULE_TYPE_STACK, deployment_priority=2),
-    ModuleMetadata(name=constants.MODULE_ANALYTICS, title='Analytics', type=constants.MODULE_TYPE_STACK, deployment_priority=3),
-    ModuleMetadata(name=constants.MODULE_METRICS, title='Metrics & Monitoring', type=constants.MODULE_TYPE_STACK, deployment_priority=3),
-    ModuleMetadata(name=constants.MODULE_IDENTITY_PROVIDER, title='Identity Provider', type=constants.MODULE_TYPE_STACK, deployment_priority=3),
-    ModuleMetadata(name=constants.MODULE_DIRECTORYSERVICE, title='Directory Service', type=constants.MODULE_TYPE_STACK, deployment_priority=3),
-    ModuleMetadata(name=constants.MODULE_SHARED_STORAGE, title='Shared Storage', type=constants.MODULE_TYPE_STACK, deployment_priority=4),
-    ModuleMetadata(name=constants.MODULE_CLUSTER_MANAGER, title='Cluster Manager', type=constants.MODULE_TYPE_APP, deployment_priority=5),
-    ModuleMetadata(name=constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER, title='eVDI', type=constants.MODULE_TYPE_APP, deployment_priority=6),
-    ModuleMetadata(name=constants.MODULE_SCHEDULER, title='Scale-Out Computing', type=constants.MODULE_TYPE_APP, deployment_priority=6),
-    ModuleMetadata(name=constants.MODULE_BASTION_HOST, title='Bastion Host', type=constants.MODULE_TYPE_STACK, deployment_priority=7)
+    ModuleMetadata(
+        name=constants.MODULE_GLOBAL_SETTINGS,
+        title='Global Settings',
+        type=constants.MODULE_TYPE_CONFIG,
+        deployment_priority=0,
+    ),
+    ModuleMetadata(
+        name=constants.MODULE_BOOTSTRAP,
+        title='Bootstrap',
+        type=constants.MODULE_TYPE_STACK,
+        deployment_priority=1,
+    ),
+    ModuleMetadata(
+        name=constants.MODULE_CLUSTER,
+        title='Cluster',
+        type=constants.MODULE_TYPE_STACK,
+        deployment_priority=2,
+    ),
+    ModuleMetadata(
+        name=constants.MODULE_ANALYTICS,
+        title='Analytics',
+        type=constants.MODULE_TYPE_STACK,
+        deployment_priority=3,
+    ),
+    ModuleMetadata(
+        name=constants.MODULE_METRICS,
+        title='Metrics & Monitoring',
+        type=constants.MODULE_TYPE_STACK,
+        deployment_priority=3,
+    ),
+    ModuleMetadata(
+        name=constants.MODULE_IDENTITY_PROVIDER,
+        title='Identity Provider',
+        type=constants.MODULE_TYPE_STACK,
+        deployment_priority=3,
+    ),
+    ModuleMetadata(
+        name=constants.MODULE_DIRECTORYSERVICE,
+        title='Directory Service',
+        type=constants.MODULE_TYPE_STACK,
+        deployment_priority=3,
+    ),
+    ModuleMetadata(
+        name=constants.MODULE_SHARED_STORAGE,
+        title='Shared Storage',
+        type=constants.MODULE_TYPE_STACK,
+        deployment_priority=4,
+    ),
+    ModuleMetadata(
+        name=constants.MODULE_CLUSTER_MANAGER,
+        title='Cluster Manager',
+        type=constants.MODULE_TYPE_APP,
+        deployment_priority=5,
+    ),
+    ModuleMetadata(
+        name=constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER,
+        title='eVDI',
+        type=constants.MODULE_TYPE_APP,
+        deployment_priority=6,
+    ),
+    ModuleMetadata(
+        name=constants.MODULE_SCHEDULER,
+        title='Scale-Out Computing',
+        type=constants.MODULE_TYPE_APP,
+        deployment_priority=6,
+    ),
+    ModuleMetadata(
+        name=constants.MODULE_BASTION_HOST,
+        title='Bastion Host',
+        type=constants.MODULE_TYPE_STACK,
+        deployment_priority=7,
+    ),
 ]
 
 
 class ModuleMetadataHelper:
-
     def __init__(self):
         self.module_meta: Dict[str, ModuleMetadata] = {}
         for module_meta in MODULE_METADATA:
@@ -52,7 +108,9 @@ class ModuleMetadataHelper:
 
     def get_module_metadata(self, module_name: str) -> ModuleMetadata:
         if module_name not in self.module_meta:
-            raise exceptions.general_exception(f'module not found for name: {module_name}')
+            raise exceptions.general_exception(
+                f'module not found for name: {module_name}'
+            )
         return self.module_meta[module_name]
 
     def get_module_title(self, module_name: str) -> str:

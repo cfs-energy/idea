@@ -5,17 +5,28 @@
 /**
  * Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
  *
- * Licensed under the Apache License, Version 2.0 (the License). You may not use this file except in compliance
+ * Licensed under the Apache License, Version 2.0 (the "License"). You may not use this file except in compliance
  * with the License. A copy of the License is located at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     https://www.apache.org/licenses/LICENSE-2.0
  *
  * or in the 'license' file accompanying this file. This file is distributed on an 'AS IS' BASIS, WITHOUT WARRANTIES
  * OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
  * and limitations under the License.
  */
-
-export type VirtualDesktopBaseOS = "amazonlinux2" | "rhel8" | "rhel9" | "rocky8" | "rocky9" | "windows" | "ubuntu2204" | "ubuntu2404";
+export type VirtualDesktopBaseOS =
+  | "amazonlinux2"
+  | "amazonlinux2023"
+  | "rhel8"
+  | "rhel9"
+  | "rocky8"
+  | "rocky9"
+  | "ubuntu2204"
+  | "ubuntu2404"
+  | "windows"
+  | "windows2019"
+  | "windows2022"
+  | "windows2025";
 export type VirtualDesktopSessionType = "CONSOLE" | "VIRTUAL";
 export type SocaMemoryUnit = "bytes" | "kib" | "mib" | "gib" | "tib" | "kb" | "mb" | "gb" | "tb";
 export type VirtualDesktopSessionState =
@@ -112,7 +123,6 @@ export type DryRunOption =
   | "json:queue"
   | "notification:email"
   | "debug";
-
 export interface AddSudoUserRequest {
   username?: string;
 }
@@ -162,6 +172,7 @@ export interface AwsProjectBudget {
   budget_limit?: SocaAmount;
   actual_spend?: SocaAmount;
   forecasted_spend?: SocaAmount;
+  is_missing?: boolean;
 }
 export interface SocaAmount {
   amount: number;
@@ -194,7 +205,7 @@ export interface VirtualDesktopSession {
 }
 export interface VirtualDesktopServer {
   server_id?: string;
-  idea_sesssion_id?: string;
+  idea_session_id?: string;
   idea_session_owner?: string;
   instance_id?: string;
   instance_type?: string;
@@ -239,6 +250,7 @@ export interface VirtualDesktopSoftwareStack {
   pool_enabled?: boolean;
   pool_asg_name?: string;
   launch_tenancy?: VirtualDesktopTenancy;
+  allowed_instance_types?: string[];
 }
 export interface Project {
   project_id?: string;
@@ -658,6 +670,7 @@ export interface CreateQueuesRequest {
 export interface CreateQueuesResult {}
 export interface CreateSessionRequest {
   session?: VirtualDesktopSession;
+  admin_custom_instance_type?: boolean;
 }
 export interface CreateSessionResponse {
   session?: VirtualDesktopSession;
@@ -730,6 +743,17 @@ export interface DeleteSessionRequest {
 export interface DeleteSessionResponse {
   failed?: VirtualDesktopSession[];
   success?: VirtualDesktopSession[];
+}
+export interface DeleteSoftwareStackRequest {
+  software_stack?: VirtualDesktopSoftwareStack;
+  software_stacks?: VirtualDesktopSoftwareStack[];
+}
+export interface DeleteSoftwareStackResponse {
+  software_stack?: VirtualDesktopSoftwareStack;
+  software_stacks?: VirtualDesktopSoftwareStack[];
+  success?: boolean;
+  success_list?: VirtualDesktopSoftwareStack[];
+  failed_list?: VirtualDesktopSoftwareStack[];
 }
 export interface DeleteUserRequest {
   username?: string;
@@ -887,13 +911,14 @@ export interface SocaJob {
   job_uid?: string;
   job_group?: string;
   project?: string;
-  name?: string;
+  name?: number | string;
   queue?: string;
   queue_type?: string;
   scaling_mode?: SocaScalingMode;
   owner?: string;
+  owner_email?: string;
   state?: SocaJobState;
-  exit_status?: string;
+  exit_status?: number;
   provisioned?: boolean;
   error_message?: string;
   queue_time?: string;
@@ -1052,7 +1077,6 @@ export interface SocaDateRange {
   start?: string;
   end?: string;
 }
-export interface SocaBaseModel {}
 export interface SocaFilter {
   key?: string;
   value?: unknown;
@@ -1251,7 +1275,7 @@ export interface ListAllowedInstanceTypesForSessionResponse {
   paginator?: SocaPaginator;
   sort_by?: SocaSortBy;
   date_range?: SocaDateRange;
-  listing?: unknown[];
+  listing?: (SocaBaseModel | unknown)[];
   filters?: SocaFilter[];
 }
 export interface ListAllowedInstanceTypesRequest {
@@ -1262,7 +1286,7 @@ export interface ListAllowedInstanceTypesResponse {
   paginator?: SocaPaginator;
   sort_by?: SocaSortBy;
   date_range?: SocaDateRange;
-  listing: unknown[];
+  listing: (SocaBaseModel | unknown)[];
   filters?: SocaFilter[];
 }
 export interface ListClusterHostsRequest {
@@ -1277,7 +1301,7 @@ export interface ListClusterHostsResult {
   paginator?: SocaPaginator;
   sort_by?: SocaSortBy;
   date_range?: SocaDateRange;
-  listing?: unknown[];
+  listing?: (SocaBaseModel | unknown)[];
   filters?: SocaFilter[];
 }
 export interface ListClusterModulesRequest {
@@ -1291,7 +1315,7 @@ export interface ListClusterModulesResult {
   paginator?: SocaPaginator;
   sort_by?: SocaSortBy;
   date_range?: SocaDateRange;
-  listing?: unknown[];
+  listing?: (SocaBaseModel | unknown)[];
   filters?: SocaFilter[];
 }
 export interface ListEmailTemplatesRequest {
@@ -1432,7 +1456,7 @@ export interface SocaComputeNode {
   terminate_when_idle?: number;
   compute_stack?: string;
   stack_id?: string;
-  lifecyle?: string;
+  lifecycle?: string;
   tenancy?: string;
   spot_fleet_request?: string;
   auto_scaling_group?: string;
@@ -1797,6 +1821,7 @@ export interface SignOutRequest {
   sso_auth?: boolean;
 }
 export interface SignOutResult {}
+export interface SocaBaseModel {}
 export interface SocaBatchResponsePayload {
   failed?: unknown[];
   success?: unknown[];

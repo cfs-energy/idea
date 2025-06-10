@@ -1,0 +1,42 @@
+name: Build and Push
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'docs/**'
+  workflow_dispatch:
+    inputs:
+      ecr_repository:
+        description: 'ECR Repository URI (e.g., public.ecr.aws/your-registry or 123456789012.dkr.ecr.us-east-1.amazonaws.com/your-repo)'
+        required: true
+        default: 'public.ecr.aws/s5o2b4m0'
+        type: string
+jobs:
+  build_push:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Development Environment
+        uses: ./.github/actions/setup_dev_environment
+      - name: Pre-commit Linting
+        uses: ./.github/actions/pre-commit
+      - name: Run Unit Tests
+        run: |
+          invoke tests.all
+      - name: Build Modules
+        uses: ./.github/actions/build_modules
+      - name: Configure AWS Credentials for ECR Push
+        uses: aws-actions/configure-aws-credentials@v4.2.1
+        with:
+          audience: sts.amazonaws.com
+          aws-region: us-east-1
+          role-to-assume: ${{ secrets.ECR_ROLE }}
+      - name: Build and Push Docker Image
+        run: |
+          VERSION=$(cat IDEA_VERSION.txt)
+          ECR_REPO="${{ github.event.inputs.ecr_repository || 'public.ecr.aws/s5o2b4m0' }}"
+          invoke docker.build-push-multi "$ECR_REPO" "$VERSION"

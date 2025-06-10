@@ -9,10 +9,7 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
-__all__ = (
-    'GetModuleInfoRequest',
-    'GetModuleInfoResult'
-)
+__all__ = ('GetModuleInfoRequest', 'GetModuleInfoResult')
 
 from ideadatamodel import SocaPayload
 from ideadatamodel.app.app_model import ModuleInfo

@@ -13,12 +13,19 @@ To launch your virtual desktop click "**Launch new Virtual Desktop"** button. Yo
 * **Session Name**: A name for your desktop
 * **Project**: The project your session will get created. Refer to "Projects Management" section under [cluster-manager](../../cluster-manager/ "mention") to learn more about projects.
 * **Operating System**: The operating system you want to use from:
-  * **Linux**
+  * **Linux**:
     * Amazon Linux 2
-    * CentOS 7
-    * Red Hat Enterprise Linux 7
+    * Amazon Linux 2023
+    * Red Hat Enterprise Linux 8
+    * Red Hat Enterprise Linux 9
+    * Rocky Linux 8
+    * Rocky Linux 9
+    * Ubuntu 22.04
+    * Ubuntu 24.04
   * **Windows**:
     * Windows Server 2019
+    * Windows Server 2022
+    * Windows Server 2025
 * **Software Stack**: A software stack is an EC2 AMI with pre-installed and pre-configured applications defined by your cluster administrator. Refer to [virtual-desktop-images-software-stacks.md](../admin-documentation/virtual-desktop-images-software-stacks.md "mention") to learn how to create custom software stack for your team.
 * **Hibernation**: Select whether or not you want to enable hibernation for your session. You must be verify if your EC2 instance supports hibernation first
 * **Virtual Desktop Size:** Instance type to provision. Select of EC2 instance types is based on the list of instances safe-listed by your cluster administrator and the project selected. You can change this value later without having to re-create a new desktop (see [modify-a-virtual-desktop.md](modify-a-virtual-desktop.md "mention"))
@@ -26,6 +33,10 @@ To launch your virtual desktop click "**Launch new Virtual Desktop"** button. Yo
 * **Advanced Options**: Advanced option such as enforcing a subnet ID or choose the DCV sessions type
 
 <figure><img src="../../../.gitbook/assets/mods_vdi_user_create_launch.webp" alt=""><figcaption></figcaption></figure>
+
+{% hint style="info" %}
+The Create Session form has been improved to dynamically show only the options you have permission to use based on your project membership and administrator-defined settings. This makes it easier to select compatible options without encountering permission errors.
+{% endhint %}
 
 Click "**Submit**" button to launch your virtual desktop creation. You will instantly see a new card with your desktop information. Your virtual desktop will be ready within 10-15 minutes. Startup time is based on the image selected, the operating system as well as the instance type.
 

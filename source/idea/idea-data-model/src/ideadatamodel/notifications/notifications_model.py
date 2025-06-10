@@ -10,9 +10,7 @@
 #  and limitations under the License.
 from pydantic import Field
 
-from ideadatamodel import (
-    SocaBaseModel
-)
+from ideadatamodel import SocaBaseModel
 
 from typing import Optional, Dict
 

@@ -81,6 +81,42 @@ Storage Size (GB) must match the size of the EBS volumes attached at the time of
 
 <figure><img src="../../../.gitbook/assets/mods_vdi_admin_stack_register.webp" alt=""><figcaption><p>Fill out the form to create the image</p></figcaption></figure>
 
+### Managing Software Stacks
+
+Once a Software Stack is created, administrators can manage the stacks from the Software Stacks table. The table now supports multi-select functionality, allowing administrators to perform actions on multiple stacks simultaneously.
+
+#### Enable/Disable Software Stacks
+
+Administrators can enable or disable Software Stacks to control their availability to users without deleting them. This is useful when you want to temporarily restrict access to certain stacks.
+
+1. Select one or multiple Software Stacks from the table
+2. Click "**Actions**" and select "**Enable**" or "**Disable**"
+
+Disabled Software Stacks will not appear in the user's selection when creating a new Virtual Desktop.
+
+#### Delete Software Stacks
+
+To completely remove a Software Stack from the system:
+
+1. Select one or multiple Software Stacks from the table
+2. Click "**Actions**" and select "**Delete**"
+
+{% hint style="danger" %}
+Deleting a Software Stack is permanent and cannot be undone. Consider disabling a Software Stack instead if you might need it again in the future.
+{% endhint %}
+
+#### Setting Allowed Instance Types
+
+Administrators can now define which instance types are allowed for each Software Stack. This provides fine-grained control over what compute resources users can select based on the software requirements of each stack.
+
+To set allowed instance types for a Software Stack:
+
+1. Select a Software Stack and click "**Actions**" > "**Edit Software Stack**"
+2. In the "**Allowed Instance Types**" section, specify the instance types that users can select when launching a session with this Software Stack
+3. Click "**Submit**" to save your changes
+
+This setting will override the global instance type restrictions and only show the specified instance types to users when they select this Software Stack during session creation.
+
 ### Use your new Virtual Desktop Software Stack
 
 Once created, the Software Stack will be visible to all users who belong to the associated project(s). Refer to [create-a-virtual-desktop-linux-windows.md](../user-documentation/create-a-virtual-desktop-linux-windows.md "mention") to learn how to launch your desktop with the new image

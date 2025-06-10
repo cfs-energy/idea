@@ -28,23 +28,33 @@ class EC2InstanceType:
 
     @property
     def current_generation(self) -> Optional[bool]:
-        return ModelUtils.get_value_as_bool('CurrentGeneration', self.instance_type_data())
+        return ModelUtils.get_value_as_bool(
+            'CurrentGeneration', self.instance_type_data()
+        )
 
     @property
     def free_tier_eligible(self) -> Optional[bool]:
-        return ModelUtils.get_value_as_bool('FreeTierEligible', self.instance_type_data())
+        return ModelUtils.get_value_as_bool(
+            'FreeTierEligible', self.instance_type_data()
+        )
 
     @property
     def supported_usage_classes(self) -> Optional[List[str]]:
-        return ModelUtils.get_value_as_list('SupportedUsageClasses', self.instance_type_data())
+        return ModelUtils.get_value_as_list(
+            'SupportedUsageClasses', self.instance_type_data()
+        )
 
     @property
     def supported_root_device_types(self) -> Optional[List[str]]:
-        return ModelUtils.get_value_as_list('SupportedRootDeviceTypes', self.instance_type_data())
+        return ModelUtils.get_value_as_list(
+            'SupportedRootDeviceTypes', self.instance_type_data()
+        )
 
     @property
     def supported_virtualization_types(self) -> Optional[List[str]]:
-        return ModelUtils.get_value_as_list('SupportedVirtualizationTypes', self.instance_type_data())
+        return ModelUtils.get_value_as_list(
+            'SupportedVirtualizationTypes', self.instance_type_data()
+        )
 
     @property
     def bare_metal(self) -> Optional[bool]:
@@ -56,12 +66,16 @@ class EC2InstanceType:
 
     @property
     def processor_info_supported_architectures(self) -> Optional[List[str]]:
-        processor_info = ModelUtils.get_value_as_dict('ProcessorInfo', self.instance_type_data())
+        processor_info = ModelUtils.get_value_as_dict(
+            'ProcessorInfo', self.instance_type_data()
+        )
         return ModelUtils.get_value_as_list('SupportedArchitectures', processor_info)
 
     @property
     def processor_info_sustained_click_speed_in_ghz(self) -> Optional[float]:
-        processor_info = ModelUtils.get_value_as_dict('ProcessorInfo', self.instance_type_data())
+        processor_info = ModelUtils.get_value_as_dict(
+            'ProcessorInfo', self.instance_type_data()
+        )
         return ModelUtils.get_value_as_float('SustainedClockSpeedInGhz', processor_info)
 
     @property
@@ -91,32 +105,46 @@ class EC2InstanceType:
 
     @property
     def memory_info_size_in_mib(self) -> Optional[int]:
-        memory_info = ModelUtils.get_value_as_dict('MemoryInfo', self.instance_type_data())
+        memory_info = ModelUtils.get_value_as_dict(
+            'MemoryInfo', self.instance_type_data()
+        )
         return ModelUtils.get_value_as_int('SizeInMiB', memory_info)
 
     @property
     def instance_storage_supported(self) -> Optional[bool]:
-        return ModelUtils.get_value_as_bool('InstanceStorageSupported', self.instance_type_data())
+        return ModelUtils.get_value_as_bool(
+            'InstanceStorageSupported', self.instance_type_data()
+        )
 
     @property
     def instance_storage_info_total_size_in_gb(self) -> Optional[int]:
-        instance_storage_info = ModelUtils.get_value_as_dict('InstanceStorageInfo', self.instance_type_data())
+        instance_storage_info = ModelUtils.get_value_as_dict(
+            'InstanceStorageInfo', self.instance_type_data()
+        )
         return ModelUtils.get_value_as_int('TotalSizeInGB', instance_storage_info)
 
     @property
     def instance_storage_info_disks(self) -> Optional[List[Dict]]:
-        instance_storage_info = ModelUtils.get_value_as_dict('InstanceStorageInfo', self.instance_type_data())
+        instance_storage_info = ModelUtils.get_value_as_dict(
+            'InstanceStorageInfo', self.instance_type_data()
+        )
         return ModelUtils.get_value_as_list('Disks', instance_storage_info)
 
     @property
     def instance_storage_info_nvme_support(self) -> Optional[str]:
-        instance_storage_info = ModelUtils.get_value_as_dict('InstanceStorageInfo', self.instance_type_data())
+        instance_storage_info = ModelUtils.get_value_as_dict(
+            'InstanceStorageInfo', self.instance_type_data()
+        )
         return ModelUtils.get_value_as_string('NvmeSupport', instance_storage_info)
 
     @property
     def instance_storage_info_encryption_support(self) -> Optional[str]:
-        instance_storage_info = ModelUtils.get_value_as_dict('InstanceStorageInfo', self.instance_type_data())
-        return ModelUtils.get_value_as_string('EncryptionSupport', instance_storage_info)
+        instance_storage_info = ModelUtils.get_value_as_dict(
+            'InstanceStorageInfo', self.instance_type_data()
+        )
+        return ModelUtils.get_value_as_string(
+            'EncryptionSupport', instance_storage_info
+        )
 
     @property
     def ebs_info_ebs_optimized_support(self) -> Optional[str]:
@@ -140,68 +168,96 @@ class EC2InstanceType:
 
     @property
     def network_info_network_performance(self) -> Optional[str]:
-        network_info = ModelUtils.get_value_as_dict('NetworkInfo', self.instance_type_data())
+        network_info = ModelUtils.get_value_as_dict(
+            'NetworkInfo', self.instance_type_data()
+        )
         return ModelUtils.get_value_as_string('NetworkPerformance', network_info)
 
     @property
     def network_info_maximum_network_interfaces(self) -> Optional[int]:
-        network_info = ModelUtils.get_value_as_dict('NetworkInfo', self.instance_type_data())
+        network_info = ModelUtils.get_value_as_dict(
+            'NetworkInfo', self.instance_type_data()
+        )
         return ModelUtils.get_value_as_int('MaximumNetworkInterfaces', network_info)
 
     @property
     def network_info_maximum_network_cards(self) -> Optional[int]:
-        network_info = ModelUtils.get_value_as_dict('NetworkInfo', self.instance_type_data())
+        network_info = ModelUtils.get_value_as_dict(
+            'NetworkInfo', self.instance_type_data()
+        )
         return ModelUtils.get_value_as_int('MaximumNetworkCards', network_info)
 
     @property
     def network_info_default_network_card_index(self) -> Optional[int]:
-        network_info = ModelUtils.get_value_as_dict('NetworkInfo', self.instance_type_data())
+        network_info = ModelUtils.get_value_as_dict(
+            'NetworkInfo', self.instance_type_data()
+        )
         return ModelUtils.get_value_as_int('DefaultNetworkCardIndex', network_info)
 
     @property
     def network_info_network_cards(self) -> Optional[List[Dict]]:
-        network_info = ModelUtils.get_value_as_dict('NetworkInfo', self.instance_type_data())
+        network_info = ModelUtils.get_value_as_dict(
+            'NetworkInfo', self.instance_type_data()
+        )
         return ModelUtils.get_value_as_list('NetworkCards', network_info)
 
     @property
     def network_info_ipv4_addresses_per_interface(self) -> Optional[int]:
-        network_info = ModelUtils.get_value_as_dict('NetworkInfo', self.instance_type_data())
+        network_info = ModelUtils.get_value_as_dict(
+            'NetworkInfo', self.instance_type_data()
+        )
         return ModelUtils.get_value_as_int('Ipv4AddressesPerInterface', network_info)
 
     @property
     def network_info_ipv6_addresses_per_interface(self) -> Optional[int]:
-        network_info = ModelUtils.get_value_as_dict('NetworkInfo', self.instance_type_data())
+        network_info = ModelUtils.get_value_as_dict(
+            'NetworkInfo', self.instance_type_data()
+        )
         return ModelUtils.get_value_as_int('Ipv6AddressesPerInterface', network_info)
 
     @property
     def network_info_ipv6_supported(self) -> Optional[bool]:
-        network_info = ModelUtils.get_value_as_dict('NetworkInfo', self.instance_type_data())
+        network_info = ModelUtils.get_value_as_dict(
+            'NetworkInfo', self.instance_type_data()
+        )
         return ModelUtils.get_value_as_bool('Ipv6Supported', network_info)
 
     @property
     def network_info_ena_supported(self) -> Optional[bool]:
-        network_info = ModelUtils.get_value_as_dict('NetworkInfo', self.instance_type_data())
+        network_info = ModelUtils.get_value_as_dict(
+            'NetworkInfo', self.instance_type_data()
+        )
         return ModelUtils.get_value_as_bool('EnaSupport', network_info)
 
     @property
     def network_info_efa_supported(self) -> Optional[bool]:
-        network_info = ModelUtils.get_value_as_dict('NetworkInfo', self.instance_type_data())
+        network_info = ModelUtils.get_value_as_dict(
+            'NetworkInfo', self.instance_type_data()
+        )
         return ModelUtils.get_value_as_bool('EfaSupported', network_info)
 
     @property
     def network_info_efa_info_max_efa_interfaces(self) -> Optional[int]:
-        network_info = ModelUtils.get_value_as_dict('NetworkInfo', self.instance_type_data())
+        network_info = ModelUtils.get_value_as_dict(
+            'NetworkInfo', self.instance_type_data()
+        )
         efa_info = ModelUtils.get_value_as_dict('EfaInfo', network_info)
         return ModelUtils.get_value_as_int('MaximumEfaInterfaces', efa_info)
 
     @property
     def network_info_encryption_in_transit_supported(self) -> Optional[bool]:
-        network_info = ModelUtils.get_value_as_dict('NetworkInfo', self.instance_type_data())
-        return ModelUtils.get_value_as_bool('EncryptionInTransitSupported', network_info)
+        network_info = ModelUtils.get_value_as_dict(
+            'NetworkInfo', self.instance_type_data()
+        )
+        return ModelUtils.get_value_as_bool(
+            'EncryptionInTransitSupported', network_info
+        )
 
     @property
     def network_info_ena_express_supported(self) -> Optional[bool]:
-        network_info = ModelUtils.get_value_as_dict('NetworkInfo', self.instance_type_data())
+        network_info = ModelUtils.get_value_as_dict(
+            'NetworkInfo', self.instance_type_data()
+        )
         return ModelUtils.get_value_as_bool('EnaSrdSupported', network_info)
 
     @property
@@ -226,33 +282,47 @@ class EC2InstanceType:
 
     @property
     def placement_group_info_supported_strategies(self) -> Optional[List[str]]:
-        placement_group_info = ModelUtils.get_value_as_dict('PlacementGroupInfo', self.instance_type_data())
+        placement_group_info = ModelUtils.get_value_as_dict(
+            'PlacementGroupInfo', self.instance_type_data()
+        )
         return ModelUtils.get_value_as_list('SupportedStrategies', placement_group_info)
 
     @property
     def inference_accelerator_info_accelerators(self) -> Optional[List[Dict]]:
-        inference_accelerator_info = ModelUtils.get_value_as_dict('InferenceAcceleratorInfo', self.instance_type_data())
+        inference_accelerator_info = ModelUtils.get_value_as_dict(
+            'InferenceAcceleratorInfo', self.instance_type_data()
+        )
         return ModelUtils.get_value_as_list('Accelerators', inference_accelerator_info)
 
     @property
     def hibernation_supported(self) -> Optional[bool]:
-        return ModelUtils.get_value_as_bool('HibernationSupported', self.instance_type_data())
+        return ModelUtils.get_value_as_bool(
+            'HibernationSupported', self.instance_type_data()
+        )
 
     @property
     def burstable_performance_supported(self) -> Optional[bool]:
-        return ModelUtils.get_value_as_bool('BurstablePerformanceSupported', self.instance_type_data())
+        return ModelUtils.get_value_as_bool(
+            'BurstablePerformanceSupported', self.instance_type_data()
+        )
 
     @property
     def dedicated_hosts_supported(self) -> Optional[bool]:
-        return ModelUtils.get_value_as_bool('DedicatedHostsSupported', self.instance_type_data())
+        return ModelUtils.get_value_as_bool(
+            'DedicatedHostsSupported', self.instance_type_data()
+        )
 
     @property
     def auto_recovery_supported(self) -> Optional[bool]:
-        return ModelUtils.get_value_as_bool('AutoRecoverySupported', self.instance_type_data())
+        return ModelUtils.get_value_as_bool(
+            'AutoRecoverySupported', self.instance_type_data()
+        )
 
     @property
     def supported_boot_modes(self) -> Optional[List[str]]:
-        return ModelUtils.get_value_as_list('SupportedBootModes', self.instance_type_data())
+        return ModelUtils.get_value_as_list(
+            'SupportedBootModes', self.instance_type_data()
+        )
 
     @property
     def is_cpu_options_supported(self) -> Optional[bool]:
@@ -260,7 +330,9 @@ class EC2InstanceType:
         # it's not explicitly called out in aws docs, but this page does not list metal instances for CpuOptions:
         # https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/cpu-options-supported-instances-values.html
         family = self.instance_type.split('.')[0].lower()
-        if (self.bare_metal is True) or (family.startswith(constants.EC2_SERVICE_CPU_OPTIONS_UNSUPPORTED_FAMILY)):
+        if (self.bare_metal is True) or (
+            family.startswith(constants.EC2_SERVICE_CPU_OPTIONS_UNSUPPORTED_FAMILY)
+        ):
             return False
         else:
             return True

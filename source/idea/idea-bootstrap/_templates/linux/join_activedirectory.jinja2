@@ -15,6 +15,62 @@ AWS=$(command -v aws)
 JQ=$(command -v jq)
 REALM=$(command -v realm)
 
+function check_and_leave_domain() {
+  log_info "[Join AD] Checking if instance is already joined to a domain..."
+  if [[ -x "$REALM" ]] && $REALM list &>/dev/null; then
+    local CURRENT_DOMAIN=$($REALM list --name-only 2>/dev/null)
+    if [[ -n "$CURRENT_DOMAIN" ]]; then
+      log_info "[Join AD] Instance is currently joined to domain: $CURRENT_DOMAIN. Performing realm leave..."
+
+      # Stop SSSD service before leaving realm
+      if systemctl is-active --quiet sssd; then
+        log_info "[Join AD] Stopping SSSD service before leaving realm..."
+        systemctl stop sssd
+      fi
+
+      # Attempt realm leave with retries
+      local LEAVE_ATTEMPT_COUNT=0
+      local LEAVE_MAX_ATTEMPTS=3
+      local LEAVE_SUCCESS=false
+
+      while [[ ${LEAVE_ATTEMPT_COUNT} -lt ${LEAVE_MAX_ATTEMPTS} ]] && [[ "${LEAVE_SUCCESS}" == "false" ]]
+      do
+        log_info "[Join AD] Attempt ${LEAVE_ATTEMPT_COUNT} of ${LEAVE_MAX_ATTEMPTS} to leave realm"
+        $REALM leave -v
+
+        if [[ $? -eq 0 ]]; then
+          log_info "[Join AD] Successfully left realm on attempt ${LEAVE_ATTEMPT_COUNT}"
+          LEAVE_SUCCESS=true
+
+          # Clean up any leftover SSSD configuration
+          if [[ -f /etc/sssd/sssd.conf ]]; then
+            log_info "[Join AD] Removing existing SSSD configuration..."
+            rm -f /etc/sssd/sssd.conf
+          fi
+
+          # Remove cached credentials
+          rm -rf /var/lib/sss/db/* 2>/dev/null
+
+          # Wait a moment for everything to settle
+          sleep 5
+        else
+          ((LEAVE_ATTEMPT_COUNT++))
+          if [[ ${LEAVE_ATTEMPT_COUNT} -lt ${LEAVE_MAX_ATTEMPTS} ]]; then
+            local LEAVE_SLEEP_TIME=$(( RANDOM % 10 + 5 ))  # 5-15sec of sleep time
+            log_info "[Join AD] Failed to leave realm. Retrying in ${LEAVE_SLEEP_TIME} seconds... (Attempt ${LEAVE_ATTEMPT_COUNT} of ${LEAVE_MAX_ATTEMPTS})"
+            sleep ${LEAVE_SLEEP_TIME}
+          else
+            log_error "[Join AD] Failed to leave realm after ${LEAVE_MAX_ATTEMPTS} attempts. Proceeding with join operation anyway..."
+          fi
+        fi
+      done
+    else
+      log_info "[Join AD] Instance is not joined to any domain. Proceeding with join operation."
+    fi
+  else
+    log_info "[Join AD] Realm command not available or instance is not joined to any domain. Proceeding with join operation."
+  fi
+}
 
 function ad_automation_sqs_send_message () {
   local PAYLOAD=$($JQ -nc \
@@ -92,14 +148,38 @@ function ad_automation_wait_for_authorization_and_join () {
     export IDEA_HOSTNAME=$(echo "${AD_AUTHORIZATION_ENTRY}" | jq -r '.hostname')
     local LOCAL_HOSTNAME=$(hostname -s)
     log_info "[Join AD] Using a local hostname of ${LOCAL_HOSTNAME^^}  / IDEA Hostname: ${IDEA_HOSTNAME^^} for AD Join operation to domain controller: ${DOMAIN_CONTROLLER}"
-    $REALM join \
-    --one-time-password="${ONE_TIME_PASSWORD}" \
-    --computer-name="${IDEA_HOSTNAME^^}" \
-    --client-software=sssd \
-    --server-software=active-directory \
-    --membership-software=adcli \
-    --verbose \
-    ${DOMAIN_CONTROLLER}
+
+    # Add retry logic for realm join
+    local JOIN_ATTEMPT_COUNT=0
+    local JOIN_MAX_ATTEMPTS=5
+    local JOIN_SUCCESS=false
+
+    while [[ ${JOIN_ATTEMPT_COUNT} -lt ${JOIN_MAX_ATTEMPTS} ]] && [[ "${JOIN_SUCCESS}" == "false" ]]
+    do
+      log_info "[Join AD] Attempt ${JOIN_ATTEMPT_COUNT} of ${JOIN_MAX_ATTEMPTS} to join realm"
+      $REALM join \
+      --one-time-password="${ONE_TIME_PASSWORD}" \
+      --computer-name="${IDEA_HOSTNAME^^}" \
+      --client-software=sssd \
+      --server-software=active-directory \
+      --membership-software=adcli \
+      --verbose \
+      ${DOMAIN_CONTROLLER}
+
+      if [[ $? -eq 0 ]]; then
+        log_info "[Join AD] Successfully joined realm on attempt ${JOIN_ATTEMPT_COUNT}"
+        JOIN_SUCCESS=true
+      else
+        ((JOIN_ATTEMPT_COUNT++))
+        if [[ ${JOIN_ATTEMPT_COUNT} -lt ${JOIN_MAX_ATTEMPTS} ]]; then
+          local JOIN_SLEEP_TIME=$(( RANDOM % 20 + 10 ))  # 10-30sec of sleep time
+          log_info "[Join AD] Failed to join realm. Retrying in ${JOIN_SLEEP_TIME} seconds... (Attempt ${JOIN_ATTEMPT_COUNT} of ${JOIN_MAX_ATTEMPTS})"
+          sleep ${JOIN_SLEEP_TIME}
+        else
+          log_error "[Join AD] Failed to join realm after ${JOIN_MAX_ATTEMPTS} attempts"
+        fi
+      fi
+    done
   else
     local ERROR_CODE=$(echo "${AD_AUTHORIZATION_ENTRY}" | jq -r '.error_code')
     local ERROR_MESSAGE=$(echo "${AD_AUTHORIZATION_ENTRY}" | jq -r '.message')
@@ -110,6 +190,9 @@ function ad_automation_wait_for_authorization_and_join () {
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
 sed -i '/kdc_timesync = 1/a\        rdns = false' /etc/krb5.conf
 {% endif %}
+
+# Check and leave any existing domain before attempting to join
+check_and_leave_domain
 
 ad_automation_request_authorization
 ad_automation_wait_for_authorization_and_join
@@ -182,5 +265,3 @@ if [[ "$?" != "0" ]]; then
 fi
 
 # End: Join ActiveDirectory
-
-

@@ -9,7 +9,6 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
-import ideaclustermanager
 from ideadatamodel import constants, exceptions
 from ideasdk.utils import EnvironmentUtils
 from ideasdk.shell.log_tail import LogTail
@@ -39,32 +38,53 @@ class LogFinder:
             self.files.append(file)
 
     def find_applicable_logs(self):
-        self.add_log_files(files=[
-            os.path.join(EnvironmentUtils.idea_app_deploy_dir(required=True), 'logs', 'application.log')
-        ])
+        self.add_log_files(
+            files=[
+                os.path.join(
+                    EnvironmentUtils.idea_app_deploy_dir(required=True),
+                    'logs',
+                    'application.log',
+                )
+            ]
+        )
 
     def print_logs(self):
         self.find_applicable_logs()
 
         if len(self.files) == 0:
-            raise exceptions.general_exception(
-                message='No log files files found.'
-            )
+            raise exceptions.general_exception(message='No log files files found.')
 
         LogTail(
             context=SocaCliContext(),
             files=self.files,
             search_tokens=self.tokens,
-            **self.kwargs
+            **self.kwargs,
         ).invoke()
 
 
-@click.command(context_settings=constants.CLICK_SETTINGS, short_help='print logs for a specified resource(s)')
+@click.command(
+    context_settings=constants.CLICK_SETTINGS,
+    short_help='print logs for a specified resource(s)',
+)
 @click.argument('tokens', nargs=-1)
-@click.option('--tail', '-t', default=100, help='Lines of recent log file to display. Default: 100')
-@click.option('--follow', '-f', is_flag=True, help='Specify if the logs should be streamed')
-@click.option('--command', '-c', is_flag=True, help='Print the command, instead of printing logs.')
-@click.option('--and', '-a', is_flag=True, help='Specify if the TOKENS should be ANDed instead of ORed.')
+@click.option(
+    '--tail',
+    '-t',
+    default=100,
+    help='Lines of recent log file to display. Default: 100',
+)
+@click.option(
+    '--follow', '-f', is_flag=True, help='Specify if the logs should be streamed'
+)
+@click.option(
+    '--command', '-c', is_flag=True, help='Print the command, instead of printing logs.'
+)
+@click.option(
+    '--and',
+    '-a',
+    is_flag=True,
+    help='Specify if the TOKENS should be ANDed instead of ORed.',
+)
 def logs(tokens, **kwargs):
     """
     idea logs
@@ -85,7 +105,4 @@ def logs(tokens, **kwargs):
     $ ideactl logs -f
 
     """
-    LogFinder(
-        tokens=tokens,
-        kwargs=kwargs
-    ).print_logs()
+    LogFinder(tokens=tokens, kwargs=kwargs).print_logs()

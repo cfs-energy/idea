@@ -76,7 +76,7 @@ You can check the deployment status per module by running:
 ./idea-admin.sh list-modules  \
   --cluster-name <CLUSTER_NAME> \
   --aws-region <REGION>
- 
+
 # example:
 ./idea-admin.sh list-modules --cluster-name idea-dev1 --aws-region us-east-1
 +----------------------------+------------------+--------+----------------------------+--------------+----------+
@@ -136,10 +136,10 @@ You should see `` `values.yml` `` and a `` `config` `` folder. `config` contains
 
 ```bash
 ls ~/.idea/clusters/idea-test/us-east-2/config/
-analytics		directoryservice	metrics
-bastion-host		global-settings		scheduler
-cluster			idea.yml		shared-storage
-cluster-manager		identity-provider	vdc
+analytics       directoryservice    metrics
+bastion-host        global-settings     scheduler
+cluster         idea.yml        shared-storage
+cluster-manager     identity-provider   vdc
 ```
 
 3 - Update your parameter(s)

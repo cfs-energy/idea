@@ -11,7 +11,7 @@ OPENMPI_INSTALL_DIR="{{ context.config.get_string('shared-storage.apps.mount_dir
 mkdir -p "${OPENMPI_WORK_DIR}"
 mkdir -p "${OPENMPI_INSTALL_DIR}"
 
-if [[ ! -d "${OPENMPI_INSTALL_DIR}/openmpi-${OPENMPI_VERSION}" ]]; then
+if [[ ! -d "${OPENMPI_INSTALL_DIR}/${OPENMPI_VERSION}" ]]; then
   pushd "${OPENMPI_WORK_DIR}"
   wget "${OPENMPI_URL}"
   if [[ $(openssl ${OPENMPI_HASH_METHOD} "${OPENMPI_TGZ}" | awk '{print $2}') != "${OPENMPI_HASH}" ]];  then

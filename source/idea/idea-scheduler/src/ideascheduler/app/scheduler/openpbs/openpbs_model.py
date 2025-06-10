@@ -15,9 +15,14 @@ from ideadatamodel import (
     constants,
     SocaBaseModel,
     SocaMemory,
-    SocaJob, SocaJobState, SocaJobExecutionHost, SocaJobExecution, SocaJobExecutionRun,
-    SocaJobExecutionResourcesUsed, SocaJobNotifications,
-    HpcQueueProfile
+    SocaJob,
+    SocaJobState,
+    SocaJobExecutionHost,
+    SocaJobExecution,
+    SocaJobExecutionRun,
+    SocaJobExecutionResourcesUsed,
+    SocaJobNotifications,
+    HpcQueueProfile,
 )
 from ideasdk.utils import Utils
 
@@ -173,12 +178,10 @@ class OpenPBSJob(SocaBaseModel):
 
     @staticmethod
     def _build_soca_job_params(soca_params: Dict[str, str], pbs_params: Dict[str, str]):
-
         if Utils.is_empty(pbs_params):
             return
 
         for key in pbs_params:
-
             if key == 'select':
                 continue
 
@@ -203,7 +206,9 @@ class OpenPBSJob(SocaBaseModel):
                 soca_params[constants.JOB_PARAM_MEMORY] = pbs_params['mem']
                 continue
             if key == 'compute_node':
-                soca_params[constants.JOB_PARAM_COMPUTE_STACK] = pbs_params['compute_node']
+                soca_params[constants.JOB_PARAM_COMPUTE_STACK] = pbs_params[
+                    'compute_node'
+                ]
                 continue
             if key == 'stack_id':
                 soca_params[constants.JOB_PARAM_STACK_ID] = pbs_params['stack_id']
@@ -222,7 +227,9 @@ class OpenPBSJob(SocaBaseModel):
 
         if 'select' in resources:
             select_params = self._parse_select(select=resources['select'])
-            self._build_soca_job_params(soca_params=job_params, pbs_params=select_params)
+            self._build_soca_job_params(
+                soca_params=job_params, pbs_params=select_params
+            )
 
         self._build_soca_job_params(soca_params=job_params, pbs_params=resources)
 
@@ -287,10 +294,7 @@ class OpenPBSJob(SocaBaseModel):
             completed = True
 
         if started or completed:
-            return SocaJobNotifications(
-                started=started,
-                completed=completed
-            )
+            return SocaJobNotifications(started=started, completed=completed)
         return None
 
     def provisioning_time(self) -> Optional[datetime]:
@@ -307,8 +311,9 @@ class OpenPBSJob(SocaBaseModel):
             return None
         return Utils.get_value_as_bool('capacity_added', resources, True)
 
-    def get_soca_execution_hosts(self, event: 'OpenPBSEvent') -> Optional[List[SocaJobExecutionHost]]:
-
+    def get_soca_execution_hosts(
+        self, event: 'OpenPBSEvent'
+    ) -> Optional[List[SocaJobExecutionHost]]:
         if event is None:
             return None
 
@@ -332,16 +337,14 @@ class OpenPBSJob(SocaBaseModel):
         soca_execution_hosts = []
         if event.type == 'runjob':
             for host in execution_hosts:
-                soca_execution_hosts.append(SocaJobExecutionHost(
-                    host=host
-                ))
+                soca_execution_hosts.append(SocaJobExecutionHost(host=host))
         elif event.type.startswith('execjob_'):
             host = event.requestor_host.split('.')[0]
             execution_host = SocaJobExecutionHost(
                 host=host,
                 instance_id=event.instance_id,
                 instance_type=event.instance_type,
-                execution=SocaJobExecution(runs=[])
+                execution=SocaJobExecution(runs=[]),
             )
             soca_execution_hosts.append(execution_host)
 
@@ -350,12 +353,10 @@ class OpenPBSJob(SocaBaseModel):
 
             if event.type == 'execjob_begin':
                 run = SocaJobExecutionRun(
-                    run_id=run_id,
-                    start=arrow.get(str(event.timestamp), 'x').datetime
+                    run_id=run_id, start=arrow.get(str(event.timestamp), 'x').datetime
                 )
                 execution_host.execution.runs.append(run)
             elif event.type == 'execjob_end':
-
                 exit_code = Utils.get_as_int(self.Exit_status)
 
                 if exit_code is not None and exit_code == 0:
@@ -406,14 +407,13 @@ class OpenPBSJob(SocaBaseModel):
                         virtual_memory=virtual_memory,
                         cpus=cpus,
                         gpus=gpus,
-                        cpu_percent=cpu_percent
-                    )
+                        cpu_percent=cpu_percent,
+                    ),
                 )
                 execution_host.execution.runs.append(run)
         return soca_execution_hosts
 
     def get_select(self) -> Optional[str]:
-
         if not Utils.is_empty(self.schedselect):
             select = self.schedselect
         else:
@@ -451,11 +451,13 @@ class OpenPBSJob(SocaBaseModel):
             return None
         return Utils.get_value_as_string('walltime', resources_used)
 
-    def as_soca_job(self, context: ideascheduler.AppContext,
-                    event: Optional['OpenPBSEvent'] = None,
-                    queue_profile: Optional[HpcQueueProfile] = None,
-                    job_builder: Optional[SocaJobBuilder] = None) -> Optional[SocaJob]:
-
+    def as_soca_job(
+        self,
+        context: ideascheduler.AppContext,
+        event: Optional['OpenPBSEvent'] = None,
+        queue_profile: Optional[HpcQueueProfile] = None,
+        job_builder: Optional[SocaJobBuilder] = None,
+    ) -> Optional[SocaJob]:
         # "589.ip-10-0-0-9"
         job_id = None
         if self.id is not None:
@@ -506,9 +508,7 @@ class OpenPBSJob(SocaBaseModel):
 
         if job_builder is None:
             job_builder = SocaJobBuilder(
-                context=context,
-                params=params,
-                queue_profile=queue_profile
+                context=context, params=params, queue_profile=queue_profile
             )
 
         job_params, provisioning_options = job_builder.build()
@@ -516,9 +516,7 @@ class OpenPBSJob(SocaBaseModel):
         # 2:ncpus=1:compute_node=tbd
         select = self.get_select()
         # put the select expression as is for later use during provisioning
-        job_params.custom_params = {
-            'select': select
-        }
+        job_params.custom_params = {'select': select}
 
         provisioning_time = self.provisioning_time()
 
@@ -534,7 +532,9 @@ class OpenPBSJob(SocaBaseModel):
 
         notifications = self.get_notifications()
 
-        cluster_name = Utils.get_as_string(self.get_cluster_name(), context.cluster_name())
+        cluster_name = Utils.get_as_string(
+            self.get_cluster_name(), context.cluster_name()
+        )
 
         # capacity_added
         capacity_added = self.capacity_added()
@@ -572,7 +572,7 @@ class OpenPBSJob(SocaBaseModel):
             provisioning_options=provisioning_options,
             execution_hosts=execution_hosts,
             comment=comment,
-            notifications=notifications
+            notifications=notifications,
         )
 
 
@@ -600,15 +600,20 @@ class OpenPBSEvent(SocaBaseModel):
 
     def __str__(self):
         # all required parameters
-        return f'scheduler: openpbs, name: {self.hook_name}, type: {self.type}, ' \
-               f'requestor: {self.requestor}, requestor_host: {self.requestor_host}'
+        return (
+            f'scheduler: openpbs, name: {self.hook_name}, type: {self.type}, '
+            f'requestor: {self.requestor}, requestor_host: {self.requestor_host}'
+        )
 
     def get_queue(self) -> str:
         pass
 
-    def as_soca_job(self, context: ideascheduler.AppContext,
-                    queue_profile: HpcQueueProfile = None,
-                    job_builder: Optional[SocaJobBuilder] = None) -> SocaJob:
+    def as_soca_job(
+        self,
+        context: ideascheduler.AppContext,
+        queue_profile: HpcQueueProfile = None,
+        job_builder: Optional[SocaJobBuilder] = None,
+    ) -> SocaJob:
         job = self.job
         if job is None:
             job = self.job_o
@@ -620,7 +625,9 @@ class OpenPBSEvent(SocaBaseModel):
         if job.Job_Owner is None:
             job.Job_Owner = self.requestor
 
-        return job.as_soca_job(context=context,
-                               event=self,
-                               queue_profile=queue_profile,
-                               job_builder=job_builder)
+        return job.as_soca_job(
+            context=context,
+            event=self,
+            queue_profile=queue_profile,
+            job_builder=job_builder,
+        )

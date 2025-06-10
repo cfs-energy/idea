@@ -19,6 +19,7 @@ import {SocaFilter, SocaUserInputParamMetadata} from "../../client/data-model";
 import Utils from "../../common/utils";
 import {CollectionPreferencesProps} from "@cloudscape-design/components/collection-preferences/interfaces";
 import {AppContext} from "../../common";
+import {useCollection} from '@cloudscape-design/collection-hooks';
 
 export interface IdeaTableProps<T = any> {
     listing: T[]
@@ -47,6 +48,8 @@ export interface IdeaTableProps<T = any> {
     onPage?: (page: number, type: 'next' | 'prev' | 'page') => void;
     variant?: TableProps.Variant
     stickyHeader?: boolean
+    defaultSortingColumn?: string;
+    defaultSortingDescending?: boolean;
 }
 
 export interface IdeaTableState<T = any> {
@@ -165,9 +168,21 @@ class IdeaTableSelectFilters extends Component<IdeaTableSelectFiltersProps, Idea
     }
 }
 
-class IdeaTable extends Component<IdeaTableProps, IdeaTableState> {
+// Add an interface for the component ref
+export interface IdeaTableRef {
+    reset: () => void;
+    clearSelectedItems: () => void;
+}
 
-    constructor(props: IdeaTableProps) {
+// Extend the IdeaTableProps to include the collection props
+interface IdeaTableClassProps extends IdeaTableProps {
+    collectionProps?: any;
+}
+
+// Export the class component
+export class IdeaTableClass extends Component<IdeaTableClassProps, IdeaTableState> {
+
+    constructor(props: IdeaTableClassProps) {
         super(props);
         this.state = {
             selectedItems: (this.props.selectedItems) ? this.props.selectedItems : [],
@@ -458,6 +473,7 @@ class IdeaTable extends Component<IdeaTableProps, IdeaTableState> {
     render() {
         return (
             <Table
+                {...(this.props.collectionProps || {})}
                 loading={this.props.loading}
                 selectionType={this.props.selectionType}
                 variant={(this.props.variant) ? this.props.variant : 'full-page'}
@@ -487,7 +503,44 @@ class IdeaTable extends Component<IdeaTableProps, IdeaTableState> {
             />
         )
     }
-
 }
 
-export default IdeaTable
+// Update the wrapper to use forwardRef
+const IdeaTableWrapper = React.forwardRef<IdeaTableRef, IdeaTableProps>((props, ref) => {
+    // Get sorted items using the collection hook, but disable pagination
+    const { items, collectionProps } = useCollection(props.listing, {
+        sorting: props.defaultSortingColumn ? {
+            defaultState: {
+                sortingColumn: {
+                    sortingField: props.defaultSortingColumn
+                },
+                isDescending: props.defaultSortingDescending || false
+            }
+        } : {},
+        pagination: undefined // Disable collection hooks pagination - we're using server-side pagination
+    });
+
+    // Create a reference to the class component
+    const tableRef = React.useRef<IdeaTableClass>(null);
+
+    // Forward methods from the class component to the wrapper ref
+    React.useImperativeHandle(ref, () => ({
+        reset: () => {
+            tableRef.current?.reset();
+        },
+        clearSelectedItems: () => {
+            tableRef.current?.clearSelectedItems();
+        }
+    }));
+
+    // Pass the sorted items and collection props to the class component, but omit pagination props
+    return <IdeaTableClass
+        ref={tableRef}
+        {...props}
+        listing={items as any[]}
+        collectionProps={collectionProps}
+    />;
+});
+
+// Export the wrapper function as the default
+export default IdeaTableWrapper;

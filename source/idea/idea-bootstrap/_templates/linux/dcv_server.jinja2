@@ -1,7 +1,7 @@
 # Begin: DCV Server
 
 DCV_GPG_KEY_DCV_SERVER="{{ context.config.get_string('global-settings.package_config.dcv.gpg_key', required=True) }}"
-{%- if context.base_os in ('amazonlinux2') %}
+{% if context.base_os in ('amazonlinux2') %}
 DCV_SERVER_X86_64_URL="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.al2_rhel_centos7.url', required=True) }}"
 DCV_SERVER_X86_64_TGZ="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.al2_rhel_centos7.tgz', required=True) }}"
 DCV_SERVER_X86_64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.al2_rhel_centos7.version', required=True) }}"
@@ -12,7 +12,18 @@ DCV_SERVER_AARCH64_TGZ="{{ context.config.get_string('global-settings.package_co
 DCV_SERVER_AARCH64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.al2_rhel_centos7.version', required=True) }}"
 DCV_SERVER_AARCH64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.al2_rhel_centos7.sha256sum', required=True) }}"
 
-{%- elif context.base_os in ('rhel8', 'rocky8') %}
+{% elif context.base_os in ('amazonlinux2023') %}
+DCV_SERVER_X86_64_URL="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.al2023.url', required=True) }}"
+DCV_SERVER_X86_64_TGZ="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.al2023.tgz', required=True) }}"
+DCV_SERVER_X86_64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.al2023.version', required=True) }}"
+DCV_SERVER_X86_64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.al2023.sha256sum', required=True) }}"
+
+DCV_SERVER_AARCH64_URL="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.al2023.url', required=True) }}"
+DCV_SERVER_AARCH64_TGZ="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.al2023.tgz', required=True) }}"
+DCV_SERVER_AARCH64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.al2023.version', required=True) }}"
+DCV_SERVER_AARCH64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.al2023.sha256sum', required=True) }}"
+
+{% elif context.base_os in ('rhel8', 'rocky8') %}
 DCV_SERVER_X86_64_URL="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.rhel_centos_rocky8.url', required=True) }}"
 DCV_SERVER_X86_64_TGZ="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.rhel_centos_rocky8.tgz', required=True) }}"
 DCV_SERVER_X86_64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.rhel_centos_rocky8.version', required=True) }}"
@@ -23,7 +34,7 @@ DCV_SERVER_AARCH64_TGZ="{{ context.config.get_string('global-settings.package_co
 DCV_SERVER_AARCH64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.rhel_centos_rocky8.version', required=True) }}"
 DCV_SERVER_AARCH64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.rhel_centos_rocky8.sha256sum', required=True) }}"
 
-{%- elif context.base_os in ('rhel9', 'rocky9') %}
+{% elif context.base_os in ('rhel9', 'rocky9') %}
 DCV_SERVER_X86_64_URL="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.rhel_centos_rocky9.url', required=True) }}"
 DCV_SERVER_X86_64_TGZ="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.rhel_centos_rocky9.tgz', required=True) }}"
 DCV_SERVER_X86_64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.rhel_centos_rocky9.version', required=True) }}"
@@ -34,7 +45,7 @@ DCV_SERVER_AARCH64_TGZ="{{ context.config.get_string('global-settings.package_co
 DCV_SERVER_AARCH64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.rhel_centos_rocky9.version', required=True) }}"
 DCV_SERVER_AARCH64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.rhel_centos_rocky9.sha256sum', required=True) }}"
 
-{%- elif context.base_os == 'ubuntu2204' %}
+{% elif context.base_os == 'ubuntu2204' %}
 DCV_SERVER_X86_64_URL="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.ubuntu2204.url', required=True) }}"
 DCV_SERVER_X86_64_TGZ="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.ubuntu2204.tgz', required=True) }}"
 DCV_SERVER_X86_64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.ubuntu2204.version', required=True) }}"
@@ -45,7 +56,7 @@ DCV_SERVER_AARCH64_TGZ="{{ context.config.get_string('global-settings.package_co
 DCV_SERVER_AARCH64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.ubuntu2204.version', required=True) }}"
 DCV_SERVER_AARCH64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.ubuntu2204.sha256sum', required=True) }}"
 
-{%- elif context.base_os == 'ubuntu2404' %}
+{% elif context.base_os == 'ubuntu2404' %}
 DCV_SERVER_X86_64_URL="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.ubuntu2404.url', required=True) }}"
 DCV_SERVER_X86_64_TGZ="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.ubuntu2404.tgz', required=True) }}"
 DCV_SERVER_X86_64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.host.x86_64.linux.ubuntu2404.version', required=True) }}"
@@ -55,41 +66,49 @@ DCV_SERVER_AARCH64_URL="{{ context.config.get_string('global-settings.package_co
 DCV_SERVER_AARCH64_TGZ="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.ubuntu2404.tgz', required=True) }}"
 DCV_SERVER_AARCH64_VERSION="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.ubuntu2404.version', required=True) }}"
 DCV_SERVER_AARCH64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.host.aarch64.linux.ubuntu2404.sha256sum', required=True) }}"
-{%- endif %}
+{% endif %}
 
 log_info "Installing GPU drivers"
 {% if context.is_gpu_instance_type() %}
   sudo rm -rf /etc/X11/XF86Config*
-  {% include '_templates/linux/gpu_drivers.jinja2' %}
+     {% with node_type = 'dcv' %}
+     {% include '_templates/linux/gpu_drivers.jinja2' %}
+     {% endwith %}
 {% else %}
   log_info "GPU InstanceType not detected. Skipping GPU driver installation."
 {% endif %}
 
-{%- if not context.is_gpu_instance_type() and context.vars.session.type.lower() == 'console' %}
-  {%- include '_templates/linux/x_dummy_driver.jinja2' %}
+{% if not context.is_gpu_instance_type() and context.vars.session.type.lower() == 'console' %}
+     {% include '_templates/linux/x_dummy_driver.jinja2' %}
 install_x_dummy_driver
-{%- endif %}
+{% endif %}
 
-{%- if context.base_os in ('amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+{% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
 if [[ -z "$(rpm -qa gnome-terminal)" ]]; then
-{%- elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
 if [[ -z "$(dpkg -l lightdm | grep ^ii)" ]]; then
-{%- endif %}
-{% if context.base_os == 'amazonlinux2' -%}
+{% endif %}
+{% if context.base_os in ('amazonlinux2') %}
   DCV_AMAZONLINUX_PKGS=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.dcv_amazonlinux', required=True)) }})
   yum install -y $(echo ${DCV_AMAZONLINUX_PKGS[*]})
+{% elif context.base_os in ('amazonlinux2023') %}
+  dnf groupinstall "Desktop" -y
+  dnf install -y xsetroot
+     {% include '_templates/linux/colord.jinja2' %}
 {% elif context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+     {% include '_templates/linux/colord.jinja2' %}
   EXCLUDE=()
-  {%- if context.is_amd_gpu() %}
+     {% if context.is_amd_gpu() %}
   # Don't upgrade the kernel and kernel packages to higher versions as AMD GPU driver support is dependent on the kernel version
   EXCLUDE=('kernel*el8_8*')
-  {%- endif %}
+     {% endif %}
   printf -v EXCLUDE_JOINED '%s,' "${EXCLUDE[@]}"
   yum --exclude=${EXCLUDE_JOINED%,} groupinstall "Server with GUI" -y --skip-broken --disablerepo=epel-cisco-openh264
 
   sed -i 's/#WaylandEnable=false/WaylandEnable=false/' /etc/gdm/custom.conf
+  systemctl set-default graphical.target
   systemctl restart gdm
-  # The following is a workaroud to disable the pop-up "Authentication required to refresh system repositories"
+  # The following is a workaround to disable the pop-up "Authentication required to refresh system repositories"
   # see details in https://bugzilla.redhat.com/show_bug.cgi?id=1857654
     echo "[Disable Package Management all Users]
 Identity=unix-user:*
@@ -103,18 +122,18 @@ ResultActive=no" > /etc/polkit-1/localauthority/50-local.d/repos.pkla
    sed -i 's,Exec=/usr/libexec/gsd-subman,#Exec=/usr/libexec/gsd-subman,' /etc/xdg/autostart/org.gnome.SettingsDaemon.Subscription.desktop
    sed -i 's,ExecStart=/usr/libexec/gsd-subman,#ExecStart=/usr/libexec/gsd-subman,' /lib/systemd/user/org.gnome.SettingsDaemon.Subscription.service
    yum -y remove subscription-manager-cockpit
-{%- elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
-  DEBIAN_FRONTEND=noninteractive apt install -y ubuntu-desktop-minimal lightdm libvdpau1 libxcb-damage0 libxcb-xtest0 mesa-vdpau-drivers vdpau-driver-all
+{% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+  DEBIAN_FRONTEND=noninteractive apt install -y ubuntu-desktop-minimal lightdm libvdpau1 libxcb-damage0 libxcb-xtest0 mesa-vdpau-drivers vdpau-driver-all dbus-x11
   echo "/usr/sbin/lightdm" > /etc/X11/default-display-manager
   DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true dpkg-reconfigure lightdm
   echo set shared/default-x-display-manager lightdm | debconf-communicate
   im-config -n xim
+     {% include '_templates/linux/firefox.jinja2' %}
   tee /etc/X11/Xsession.d/99-fix-taskbar << EOF
 export GNOME_SHELL_SESSION_MODE=ubuntu
 export XDG_CURRENT_DESKTOP=ubuntu:GNOME
 export XDG_CONFIG_DIRS=/etc/xdg/xdg-ubuntu:/etc/xdg
 EOF
-  chmod 644 /etc/X11/Xsession.d/99-fix-taskbar
   tee /usr/share/applications/firefox.desktop << EOF
 #!/usr/bin/env xdg-open
 [Desktop Entry]
@@ -127,16 +146,16 @@ Icon=firefox
 Categories=GNOME;GTK;Network;WebBrowser;
 EOF
   update-desktop-database
-{% endif -%}
+{% endif %}
 else
   log_info "Found window manager pre-installed... skipping dcv prereq installation..."
 fi
 
-{%- if context.base_os in ('amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+{% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
 rpm --import ${DCV_GPG_KEY_DCV_SERVER}
-{%- elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
 curl -fsSL "${DCV_GPG_KEY_DCV_SERVER}" | gpg --dearmor | sudo tee /usr/share/keyrings/dcv.gpg > /dev/null
-{%- endif %}
+{% endif %}
 
 machine=$(uname -m) #x86_64 or aarch64
 DCV_SERVER_URL=""
@@ -157,11 +176,34 @@ else
   DCV_SERVER_SHA256_HASH=${DCV_SERVER_AARCH64_SHA256_HASH}
 fi
 
-{%- if context.base_os in ('amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+{% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
 if [[ -z "$(rpm -qa nice-dcv-server)" ]]; then
-{%- elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
 if [[ -z "$(dpkg -l nice-dcv-server | grep ^ii)" ]]; then
-{%- endif %}
+{% endif %}
+
+{% if context.base_os in ('rhel9') %}
+if [[ $machine == "x86_64" ]]; then
+  # Install build dependencies
+  dnf install -y gcc make gmp-devel
+
+  # Download the specific Nettle version (3.4)
+  wget https://ftp.gnu.org/gnu/nettle/nettle-3.4.tar.gz
+  tar -xzf nettle-3.4.tar.gz
+  cd nettle-3.4
+
+  # Configure and build
+  ./configure
+  make
+
+  # Install the libraries system-wide
+  cp .lib/libnettle.so.6* /usr/lib64/
+  ldconfig
+
+  # Clean up
+  cd .. && rm -rf nettle-3.4*
+fi
+{% endif %}
 
   wget ${DCV_SERVER_URL}
   if [[ $(sha256sum ${DCV_SERVER_TGZ} | awk '{print $1}') != ${DCV_SERVER_SHA256_HASH} ]];  then
@@ -171,15 +213,15 @@ if [[ -z "$(dpkg -l nice-dcv-server | grep ^ii)" ]]; then
   tar zxvf ${DCV_SERVER_TGZ}
 
   pushd nice-dcv-${DCV_SERVER_VERSION}
-  {% if context.base_os == 'amazonlinux2' -%}
+  {% if context.base_os in ('amazonlinux2', 'amazonlinux2023') %}
     rpm -ivh nice-xdcv-*.${machine}.rpm
     rpm -ivh nice-dcv-server-*.${machine}.rpm
     rpm -ivh nice-dcv-web-viewer-*.${machine}.rpm
-  {%- elif context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+  {% elif context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
     rpm -ivh nice-xdcv-*.${machine}.rpm --nodeps
     rpm -ivh nice-dcv-server-*.${machine}.rpm --nodeps
     rpm -ivh nice-dcv-web-viewer-*.${machine}.rpm --nodeps
-  {%- elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+  {% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
     dpkg -i nice-xdcv_*.deb
     dpkg -i nice-dcv-server_*.deb
     dpkg -i nice-dcv-web-viewer_*.deb
@@ -192,17 +234,5 @@ if [[ -z "$(dpkg -l nice-dcv-server | grep ^ii)" ]]; then
 else
   log_info "Found nice-dcv-server pre-installed... skipping installation..."
 fi
-
-{% if context.base_os == 'amazonlinux2' %}
-  echo "Base os is {{ context.base_os }}. No need for firewall disabling"
-{% elif context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
-  # RHEL 7.x/8.x and CentOS 7.x/8.x
-  systemctl stop firewalld
-  systemctl disable firewalld
-{% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
-  # Ubuntu
-  systemctl stop ufw
-  systemctl disable ufw
-{% endif %}
 
 # End: DCV Server

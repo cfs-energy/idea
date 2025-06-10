@@ -41,17 +41,17 @@ IDEA_SESSION_ID="{{ context.vars.idea_session_id }}"
 IDEA_SESSION_OWNER="{{ context.vars.session_owner }}"
 
 function install_microphone_redirect() {
-  {%- if context.base_os in ('amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+  {% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
   if [[ -z "$(rpm -qa pulseaudio-utils)" ]]; then
-  {%- elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+  {% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
   if [[ -z "$(dpkg -l pulseaudio-utils | grep ^ii)" ]]; then
-  {%- endif %}
+  {% endif %}
     echo "Installing microphone redirect..."
-    {%- if context.base_os in ('amazonlinux2', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+    {% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
     yum install -y pulseaudio-utils
-    {%- elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+    {% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
     apt install -y pulseaudio-utils
-    {%- endif %}
+    {% endif %}
   else
     log_info "Found pulseaudio-utils pre-installed... skipping installation..."
   fi
@@ -109,6 +109,7 @@ function configure_dcv_host() {
 level=debug
 [session-management]
 virtual-session-xdcv-args=\"-listen tcp\"
+virtual-session-source-profile=false
 [session-management/defaults]
 [session-management/automatic-console-session]
 [display]
@@ -168,9 +169,9 @@ rotation = 'daily'
 
 function configure_usb_remotization() {
   echo "Searching for USB Remotization configurations..."
-  {%- for usb_info in context.config.get_list('vdc.server.usb_remotization', default=[]) %}
+  {% for usb_info in context.config.get_list('vdc.server.usb_remotization', default=[]) %}
     echo -en "{{ usb_info }}\n" >>/etc/dcv/usb-devices.conf
-  {%- endfor %}
+  {% endfor %}
 
 }
 
@@ -183,9 +184,9 @@ function restart_x_server() {
 }
 
 function configure_gl() {
-  {% if context.base_os == 'amazonlinux2' -%}
+  {% if context.base_os in ('amazonlinux2', 'amazonlinux2023') %}
     echo "OS is {{ context.base_os }}, no need for this configuration. NO-OP..."
-  {% elif context.is_gpu_instance_type() -%}
+  {% elif context.is_gpu_instance_type() %}
     if [[ $machine == "x86_64" ]]; then
       echo "Detected GPU instance, configuring GL..."
       local IDEA_SERVICES_PATH="/opt/idea/.services"
@@ -296,29 +297,46 @@ function verify_x_server_is_up() {
   echo "# validating if x server is running ..."
   sleep 10
   local count=0
+  local max_attempts=30  # Maximum wait time: 30 * 10 = 300 seconds (5 minutes)
   local output=$(x_server_validation_command)
+
   while [[ "$output" != "SI:localuser:dcv" && "$output" != "LOCAL:" ]]
   do
     echo -ne "Waiting for X Server to come up.. sleeping for 10 more seconds; ${count} seconds already slept \033[0K\r"
     count=$(($count+10))
     sleep 10
+
+    # Check for common X server issues in log file
+    if [[ -f /var/log/Xorg.0.log ]]; then
+      echo "Checking Xorg logs for errors..."
+      grep -i "(EE)" /var/log/Xorg.0.log | tail -n 5
+    fi
+
     if [[ $(expr $count % 50) == 0 ]]
     then
       echo "Waited 5 times in a row. Was unsuccessful. trying to restart x server again..."
       restart_x_server
     fi
+
+    # Break the loop if we've exceeded the maximum wait time
+    if [[ $count -ge $((max_attempts * 10)) ]]; then
+      echo "ERROR: X server failed to start after ${count} seconds. Continuing with other configuration..."
+      echo "Please check /var/log/Xorg.0.log for more details on the failure."
+      return 1
+    fi
+
     output=$(x_server_validation_command)
   done
-  echo "x server is up an running...."
+  echo "x server is up and running...."
 }
 
 ## -- DCV RELATED EXECUTION BEGINS HERE -- ##
 
 {% include '_templates/linux/dcv_server.jinja2' %}
 {% include '_templates/linux/dcv_session_manager_agent.jinja2' %}
-{%- if context.base_os in ('amazonlinux2') %}
+{% if context.base_os in ('amazonlinux2', 'amazonlinux2023') %}
 {% include '_templates/linux/dcv_server_cert.jinja2' %}
-{%- endif %}
+{% endif %}
 
 install_usb_support
 install_microphone_redirect
@@ -329,10 +347,10 @@ configure_dcv_agent
 configure_usb_remotization
 configure_gl
 machine=$(uname -m) #x86_64 or aarch64
-{%- if context.vars.session.type.lower() == 'console'  %}
+{% if context.vars.session.type.lower() == 'console'  %}
   # X11 does not have to be running if you use Virtual Sessions
-  start_and_validate_x_server
-{%- endif %}
+  # start_and_validate_x_server
+{% endif %}
 start_and_configure_dcv_service
 start_and_configure_dcv_agent_service
 
@@ -345,12 +363,46 @@ fi
 
 {% include '_templates/linux/system_upgrade.jinja2' %}
 
-{%- if context.base_os in ('ubuntu2404') %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+cp /etc/netplan/50-cloud-init.yaml /etc/netplan/50-cloud-init.yaml.bak
+
+# Create a small Python script
+cat > /tmp/update_netplan.py << 'PYEND'
+import yaml
+
+# Read the current configuration
+with open('/etc/netplan/50-cloud-init.yaml', 'r') as f:
+    config = yaml.safe_load(f)
+
+# Set NetworkManager as the renderer
+config['network']['renderer'] = 'NetworkManager'
+
+# Write the updated configuration back
+with open('/etc/netplan/50-cloud-init.yaml', 'w') as f:
+    yaml.dump(config, f, default_flow_style=False)
+PYEND
+
+# Run the Python script
+python3 /tmp/update_netplan.py
+
+# Clean up
+rm /tmp/update_netplan.py
+
+# Apply the new configuration
+netplan apply
+
+# Restart NetworkManager
+systemctl restart NetworkManager
+{% endif %}
+
+
+{% if context.base_os in ('ubuntu2404') %}
 systemctl disable systemd-networkd-wait-online.service
-{%- endif %}
+{% endif %}
 
 # set up crontab to notify controller on reboot
 
+set_reboot_required "Reboot after DCV host configuration"
 REBOOT_REQUIRED=$(cat /root/bootstrap/reboot_required.txt)
 if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
   (crontab -l; echo "@reboot /bin/bash ${SCRIPT_DIR}/configure_dcv_host_post_reboot.sh crontab") | crontab -

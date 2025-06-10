@@ -10,34 +10,42 @@
 #  and limitations under the License.
 
 import ideavirtualdesktopcontroller
-from ideadatamodel import (
-    ListSessionsRequest
-)
+from ideadatamodel import ListSessionsRequest
 from ideasdk.utils import Utils
-from ideavirtualdesktopcontroller.app.clients.events_client.events_client import VirtualDesktopEvent
-from ideavirtualdesktopcontroller.app.events.handlers.base_event_handler import BaseVirtualDesktopControllerEventHandler
+from ideavirtualdesktopcontroller.app.clients.events_client.events_client import (
+    VirtualDesktopEvent,
+)
+from ideavirtualdesktopcontroller.app.events.handlers.base_event_handler import (
+    BaseVirtualDesktopControllerEventHandler,
+)
 
 
 class UserDisabledEventHandler(BaseVirtualDesktopControllerEventHandler):
-
     def __init__(self, context: ideavirtualdesktopcontroller.AppContext):
         super().__init__(context, 'user-state-handler')
 
     def handle_event(self, message_id: str, sender_id: str, event: VirtualDesktopEvent):
         if not self.is_sender_controller_role(sender_id):
-            raise self.message_source_validation_failed(f'Corrupted sender_id: {sender_id}. Ignoring message')
+            raise self.message_source_validation_failed(
+                f'Corrupted sender_id: {sender_id}. Ignoring message'
+            )
 
         username = Utils.get_value_as_string('username', event.detail, None)
 
         if Utils.is_empty(username):
-            self.log_warning(message_id=message_id, message=f'Invalid username {username}. NO=OP. Returning.')
+            self.log_warning(
+                message_id=message_id,
+                message=f'Invalid username {username}. NO=OP. Returning.',
+            )
             return
 
         # get all sessions for user and delete them.
-        response = self.session_db.list_all_for_user(request=ListSessionsRequest(), username=username)
+        response = self.session_db.list_all_for_user(
+            request=ListSessionsRequest(), username=username
+        )
         for session_db_entry in response.listing:
             self.events_utils.publish_idea_session_terminate_event(
                 idea_session_id=session_db_entry.idea_session_id,
                 idea_session_owner=session_db_entry.owner,
-                force=True
+                force=True,
             )

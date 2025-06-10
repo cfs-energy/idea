@@ -29,7 +29,6 @@ class AutoScalingGroup:
 
     @property
     def weighted_capacities(self) -> Optional[Dict[str, int]]:
-
         policy = ModelUtils.get_value_as_dict('MixedInstancesPolicy', self._entry)
         if policy is None:
             return None
@@ -48,7 +47,9 @@ class AutoScalingGroup:
         weighted_capacities = {}
         for override in overrides:
             instance_type = ModelUtils.get_value_as_string('InstanceType', override)
-            weighted_capacity = ModelUtils.get_value_as_int('WeightedCapacity', override)
+            weighted_capacity = ModelUtils.get_value_as_int(
+                'WeightedCapacity', override
+            )
             weighted_capacities[instance_type] = weighted_capacity
 
         return weighted_capacities

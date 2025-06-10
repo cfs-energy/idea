@@ -11,7 +11,8 @@
  * and limitations under the License.
  */
 
-import IdeaTable, {IdeaTableProps} from "./table";
+import IdeaTable, {IdeaTableProps, IdeaTableRef, IdeaTableClass} from "./table";
 
 export default IdeaTable
-export type {IdeaTableProps}
+export {IdeaTableClass}
+export type {IdeaTableProps, IdeaTableRef}

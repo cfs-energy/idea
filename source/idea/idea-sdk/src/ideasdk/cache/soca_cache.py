@@ -10,11 +10,12 @@
 #  and limitations under the License.
 
 from ideasdk.config.soca_config import SocaConfig
-from ideasdk.protocols import \
-    SocaContextProtocol, \
-    SocaCacheProtocol, \
-    CacheProviderProtocol, \
-    CacheTTL
+from ideasdk.protocols import (
+    SocaContextProtocol,
+    SocaCacheProtocol,
+    CacheProviderProtocol,
+    CacheTTL,
+)
 
 import typing as t
 from cacheout import CacheManager, LRUCache
@@ -39,8 +40,13 @@ class SocaCache(SocaCacheProtocol):
 
     """
 
-    def __init__(self, context: SocaContextProtocol, logger: logging.Logger, name,
-                 cache: LRUCache = None):
+    def __init__(
+        self,
+        context: SocaContextProtocol,
+        logger: logging.Logger,
+        name,
+        cache: LRUCache = None,
+    ):
         self._name = name
         self._context = context
         self._logger = logger
@@ -75,7 +81,9 @@ class SocaCache(SocaCacheProtocol):
                 self._logger.debug(f'({self._name}) miss -> {key}')
         return value
 
-    def set(self, key: t.Hashable, value: t.Any, ttl: t.Optional[CacheTTL] = None) -> None:
+    def set(
+        self, key: t.Hashable, value: t.Any, ttl: t.Optional[CacheTTL] = None
+    ) -> None:
         if self._cache is None:
             return None
         if self._logger.isEnabledFor(logging.DEBUG):
@@ -120,10 +128,7 @@ class CacheProvider(CacheProviderProtocol):
     def _init_client(self, key):
         cache = self._cache_manager[key]
         self._soca_cache_clients[key] = SocaCache(
-            context=self._context,
-            logger=self._logger,
-            name=key,
-            cache=cache
+            context=self._context, logger=self._logger, name=key, cache=cache
         )
 
     def _initialize(self):
@@ -142,26 +147,30 @@ class CacheProvider(CacheProviderProtocol):
 
         def build_or_configure(key: str, cache_settings_prefix: str):
             cache = self._get_cache(key=key)
-            maxsize = self._context.config().get_int(f'{cache_settings_prefix}.max_size', default=1000)
-            ttl = self._context.config().get_int(f'{cache_settings_prefix}.ttl_seconds', default=600)
+            maxsize = self._context.config().get_int(
+                f'{cache_settings_prefix}.max_size', default=1000
+            )
+            ttl = self._context.config().get_int(
+                f'{cache_settings_prefix}.ttl_seconds', default=600
+            )
             if cache is None:
                 # initialize settings for brand new cache
-                settings[key] = {
-                    'maxsize': maxsize,
-                    'ttl': ttl
-                }
+                settings[key] = {'maxsize': maxsize, 'ttl': ttl}
             else:
                 # reconfigure the cache ttl and max size parameters if changed at runtime
                 cache.configure(maxsize=maxsize, ttl=ttl)
 
-        build_or_configure(key=CACHE_LONG_TERM, cache_settings_prefix=f'{self.module_id}.cache.long_term')
-        build_or_configure(key=CACHE_SHORT_TERM, cache_settings_prefix=f'{self.module_id}.cache.short_term')
+        build_or_configure(
+            key=CACHE_LONG_TERM,
+            cache_settings_prefix=f'{self.module_id}.cache.long_term',
+        )
+        build_or_configure(
+            key=CACHE_SHORT_TERM,
+            cache_settings_prefix=f'{self.module_id}.cache.short_term',
+        )
 
         if self._cache_manager is None and len(settings.keys()) > 0:
-            self._cache_manager = CacheManager(
-                settings=settings,
-                cache_class=LRUCache
-            )
+            self._cache_manager = CacheManager(settings=settings, cache_class=LRUCache)
             self._init_client(CACHE_LONG_TERM)
             self._init_client(CACHE_SHORT_TERM)
 

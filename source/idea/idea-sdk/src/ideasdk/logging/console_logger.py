@@ -31,33 +31,23 @@ class ConsoleLogger:
 
     def _log(self, level, message):
         try:
-            print(f'[{datetime.datetime.now()}] [{level}] [{self._tag}] {message}', flush=True)
+            print(
+                f'[{datetime.datetime.now()}] [{level}] [{self._tag}] {message}',
+                flush=True,
+            )
         except:  # noqa
             traceback.print_stack()
 
     def info(self, message):
-        self._log(
-            level='INFO',
-            message=message
-        )
+        self._log(level='INFO', message=message)
 
     def warning(self, message):
-        self._log(
-            level='WARNING',
-            message=message
-        )
+        self._log(level='WARNING', message=message)
 
     def error(self, message, print_exc_stack=True):
         level = 'ERROR'
-        self._log(
-            level=level,
-            message=message
-        )
+        self._log(level=level, message=message)
         if print_exc_stack:
             etype, exc, tb = sys.exc_info()
             if etype is not None:
-                traceback.print_exception(
-                    etype=etype,
-                    value=exc,
-                    tb=tb
-                )
+                traceback.print_exception(etype=etype, value=exc, tb=tb)

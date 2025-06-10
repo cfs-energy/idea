@@ -13,7 +13,11 @@ from ideadatamodel import constants, errorcodes, exceptions
 from ideasdk.metrics.cloudwatch.cloudwatch_metrics import CloudWatchMetrics
 from ideasdk.metrics.prometheus.prometheus_metrics import PrometheusMetrics
 from ideasdk.metrics.null_metrics_provider import NullMetrics
-from ideasdk.protocols import MetricsProviderFactoryProtocol, MetricsProviderProtocol, SocaContextProtocol
+from ideasdk.protocols import (
+    MetricsProviderFactoryProtocol,
+    MetricsProviderProtocol,
+    SocaContextProtocol,
+)
 from ideasdk.utils import Utils
 
 from typing import Dict
@@ -21,7 +25,6 @@ from threading import RLock
 
 
 class MetricsProviderFactory(MetricsProviderFactoryProtocol):
-
     def __init__(self, context: SocaContextProtocol):
         self.context = context
         self.logger = context.logger()
@@ -30,7 +33,6 @@ class MetricsProviderFactory(MetricsProviderFactoryProtocol):
         self._metrics_providers: Dict[str, MetricsProviderProtocol] = {}
 
     def get_provider(self, namespace: str) -> MetricsProviderProtocol:
-
         if namespace in self._metrics_providers:
             return self._metrics_providers[namespace]
 
@@ -40,14 +42,21 @@ class MetricsProviderFactory(MetricsProviderFactoryProtocol):
 
         metrics_provider = None
         if provider_name == constants.METRICS_PROVIDER_CLOUDWATCH:
-            metrics_provider = CloudWatchMetrics(context=self.context, namespace=namespace)
-        elif provider_name in (constants.METRICS_PROVIDER_AMAZON_MANAGED_PROMETHEUS, constants.METRICS_PROVIDER_PROMETHEUS):
-            metrics_provider = PrometheusMetrics(context=self.context, namespace=namespace)
+            metrics_provider = CloudWatchMetrics(
+                context=self.context, namespace=namespace
+            )
+        elif provider_name in (
+            constants.METRICS_PROVIDER_AMAZON_MANAGED_PROMETHEUS,
+            constants.METRICS_PROVIDER_PROMETHEUS,
+        ):
+            metrics_provider = PrometheusMetrics(
+                context=self.context, namespace=namespace
+            )
 
         if metrics_provider is None:
             raise exceptions.SocaException(
                 error_code=errorcodes.METRICS_PROVIDER_NOT_FOUND,
-                message=f'metrics provider not found: {provider_name}'
+                message=f'metrics provider not found: {provider_name}',
             )
 
         with self._lock:

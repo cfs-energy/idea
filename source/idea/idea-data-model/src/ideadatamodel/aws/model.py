@@ -27,7 +27,7 @@ __all__ = (
     'EC2PrefixListEntry',
     'CognitoUser',
     'CognitoUserMFAOptions',
-    'CognitoUserPoolPasswordPolicy'
+    'CognitoUserPoolPasswordPolicy',
 )
 
 from pydantic import Field
@@ -128,28 +128,29 @@ class AwsProjectBudget(SocaBaseModel):
     budget_limit: Optional[SocaAmount] = Field(default=None)
     actual_spend: Optional[SocaAmount] = Field(default=None)
     forecasted_spend: Optional[SocaAmount] = Field(default=None)
+    is_missing: Optional[bool] = Field(default=False)
 
 
 class SocaAnonymousMetrics(AWSCustomObject):
-    resource_type = "Custom::SendAnonymousMetrics"
+    resource_type = 'Custom::SendAnonymousMetrics'
     props = {
-        "ServiceToken": (str, True),
-        "DesiredCapacity": (str, True),
-        "InstanceType": (str, True),
-        "Efa": (str, True),
-        "ScratchSize": (str, True),
-        "RootSize": (str, True),
-        "SpotPrice": (str, True),
-        "BaseOS": (str, True),
-        "StackUUID": (str, True),
-        "KeepForever": (str, True),
-        "TerminateWhenIdle": (str, True),
-        "FsxLustre": (str, True),
-        "FsxLustreInfo": (dict, True),
-        "Dcv": (str, True),
-        "Version": (str, True),
-        "Misc": (str, True),
-        "Region": (str, True)
+        'ServiceToken': (str, True),
+        'DesiredCapacity': (str, True),
+        'InstanceType': (str, True),
+        'Efa': (str, True),
+        'ScratchSize': (str, True),
+        'RootSize': (str, True),
+        'SpotPrice': (str, True),
+        'BaseOS': (str, True),
+        'StackUUID': (str, True),
+        'KeepForever': (str, True),
+        'TerminateWhenIdle': (str, True),
+        'FsxLustre': (str, True),
+        'FsxLustreInfo': (dict, True),
+        'Dcv': (str, True),
+        'Version': (str, True),
+        'Misc': (str, True),
+        'Region': (str, True),
     }
 
 

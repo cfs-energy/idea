@@ -9,7 +9,11 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
-from ideasdk.protocols import SocaServiceRegistryProtocol, SocaServiceProtocol, SocaContextProtocol
+from ideasdk.protocols import (
+    SocaServiceRegistryProtocol,
+    SocaServiceProtocol,
+    SocaContextProtocol,
+)
 from ideadatamodel import constants
 from ideasdk.pubsub import SocaPubSub
 

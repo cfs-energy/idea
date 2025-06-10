@@ -24,6 +24,3 @@ Select the queue profile to view additional information such as:
  - Access List
  - Limits
  - Default Compute Stack Parameters
-
-
-

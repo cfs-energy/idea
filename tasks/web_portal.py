@@ -13,13 +13,13 @@ import tasks.idea as idea
 from tasks.tools.typings_generator import TypingsGenerator
 from ideasdk.utils import Utils
 
-from invoke import task, Context
+from invoke import task
 import os
 
 
 @task
 def serve(c):
-    # type: (Context) -> None
+    # type: (Context) -> None # type: ignore
     """
     serve web-portal frontend app in web-browser
     """
@@ -29,7 +29,7 @@ def serve(c):
 
 @task
 def typings(c):
-    # type: (Context) -> None
+    # type: (Context) -> None # type: ignore
     """
     convert idea python models to typescript
     """
@@ -70,6 +70,15 @@ def typings(c):
         tokens = file.split('/')
         modules.append(os.path.join(project_root, *tokens))
 
-    target = os.path.join(project_root, *('source/idea/idea-cluster-manager/webapp/src/client/data-model.ts'.split('/')))
+    target = os.path.join(
+        project_root,
+        *(
+            'source/idea/idea-cluster-manager/webapp/src/client/data-model.ts'.split(
+                '/'
+            )
+        ),
+    )
 
-    converter.generate_typescript_defs(modules, target, exclude={'IdeaOpenAPISpecEntry'})
+    converter.generate_typescript_defs(
+        modules, target, exclude={'IdeaOpenAPISpecEntry'}
+    )

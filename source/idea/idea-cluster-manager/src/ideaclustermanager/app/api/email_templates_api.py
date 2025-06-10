@@ -17,14 +17,13 @@ from ideadatamodel.email_templates import (
     GetEmailTemplateRequest,
     UpdateEmailTemplateRequest,
     DeleteEmailTemplateRequest,
-    ListEmailTemplatesRequest
+    ListEmailTemplatesRequest,
 )
 from ideadatamodel import exceptions
 from ideasdk.utils import Utils
 
 
 class EmailTemplatesAPI(BaseAPI):
-
     def __init__(self, context: ideaclustermanager.AppContext):
         self.context = context
 
@@ -34,24 +33,24 @@ class EmailTemplatesAPI(BaseAPI):
         self.acl = {
             'EmailTemplates.CreateEmailTemplate': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.create_email_template
+                'method': self.create_email_template,
             },
             'EmailTemplates.GetEmailTemplate': {
                 'scope': self.SCOPE_READ,
-                'method': self.get_email_template
+                'method': self.get_email_template,
             },
             'EmailTemplates.UpdateEmailTemplate': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.update_email_template
+                'method': self.update_email_template,
             },
             'EmailTemplates.ListEmailTemplates': {
                 'scope': self.SCOPE_READ,
-                'method': self.list_email_templates
+                'method': self.list_email_templates,
             },
             'EmailTemplates.DeleteEmailTemplate': {
                 'scope': self.SCOPE_WRITE,
-                'method': self.delete_email_template
-            }
+                'method': self.delete_email_template,
+            },
         }
 
     def create_email_template(self, context: ApiInvocationContext):
@@ -87,7 +86,9 @@ class EmailTemplatesAPI(BaseAPI):
             raise exceptions.unauthorized_access()
 
         acl_entry_scope = Utils.get_value_as_string('scope', acl_entry)
-        is_authorized = context.is_authorized(elevated_access=True, scopes=[acl_entry_scope])
+        is_authorized = context.is_authorized(
+            elevated_access=True, scopes=[acl_entry_scope]
+        )
 
         if is_authorized:
             acl_entry['method'](context)

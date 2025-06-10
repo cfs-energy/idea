@@ -1,0 +1,25 @@
+name: Unit Tests
+on:
+  pull_request:
+    paths-ignore:
+      - 'docs/**'
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Development Environment
+        uses: ./.github/actions/setup_dev_environment
+      - name: SDK Tests
+        run: |
+          invoke tests.sdk
+      - name: Cluster Manager Tests
+        run: |
+          invoke tests.cluster-manager
+      - name: Scheduler Tests
+        run: |
+          invoke tests.scheduler
+      - name: Virtual Desktop Controller Tests
+        run: |
+          invoke tests.virtual-desktop-controller

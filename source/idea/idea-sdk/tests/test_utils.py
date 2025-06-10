@@ -202,7 +202,7 @@ def test_utils_get_as_string():
     assert Utils.get_as_string(0.0) == '0.0'
     assert Utils.get_as_string(-0.0) == '-0.0'
     assert Utils.get_as_string(0.0000) == '0.0'
-    assert Utils.get_as_string(9.81E7) == '98100000.0'
+    assert Utils.get_as_string(9.81e7) == '98100000.0'
     assert Utils.get_as_string('9.81E7') == '9.81E7'
     assert Utils.get_as_string({}) == '{}'
     assert Utils.get_as_string([]) == '[]'
@@ -223,7 +223,7 @@ def test_utils_get_as_string():
     assert Utils.get_as_string(l1) == str(l1)
 
     val = Utils.get_as_string('x')
-    assert type(val) == str
+    assert type(val) is str
 
 
 def test_utils_get_as_int():
@@ -239,13 +239,13 @@ def test_utils_get_as_int():
     assert Utils.get_as_int('123.45', 10) == 123
 
     val = Utils.get_as_int(1.0)
-    assert type(val) == int
+    assert type(val) is int
 
     val = Utils.get_as_int('1')
-    assert type(val) == int
+    assert type(val) is int
 
     val = Utils.get_as_int('123.45')
-    assert type(val) == int
+    assert type(val) is int
 
 
 def test_utils_get_as_float():
@@ -263,13 +263,13 @@ def test_utils_get_as_float():
     assert Utils.get_as_float('123.45', 10) == 123.45
 
     val = Utils.get_as_float(1)
-    assert type(val) == float
+    assert type(val) is float
 
     val = Utils.get_as_float('123.45')
-    assert type(val) == float
+    assert type(val) is float
 
     val = Utils.get_as_float(None, 1)
-    assert type(val) == float
+    assert type(val) is float
 
 
 def test_utils_get_as_bool():
@@ -328,17 +328,17 @@ def test_utils_get_as_bool():
 
 def test_utils_get_ec2_block_device_name():
     assert Utils.get_ec2_block_device_name(constants.OS_AMAZONLINUX2) == '/dev/xvda'
-    assert Utils.get_ec2_block_device_name(constants.OS_RHEL7) == '/dev/sda1'
-    assert Utils.get_ec2_block_device_name(constants.OS_CENTOS7) == '/dev/sda1'
+    assert Utils.get_ec2_block_device_name(constants.OS_AMAZONLINUX2023) == '/dev/xvda'
+    assert Utils.get_ec2_block_device_name(constants.OS_RHEL8) == '/dev/sda1'
     assert Utils.get_ec2_block_device_name(constants.OS_WINDOWS) == '/dev/sda1'
     assert Utils.get_ec2_block_device_name('unknown') == '/dev/sda1'
 
 
 def test_utils_get_platform():
     assert Utils.get_platform(constants.OS_WINDOWS) == constants.PLATFORM_WINDOWS
-    assert Utils.get_platform(constants.OS_RHEL7) == constants.PLATFORM_LINUX
+    assert Utils.get_platform(constants.OS_RHEL8) == constants.PLATFORM_LINUX
     assert Utils.get_platform(constants.OS_AMAZONLINUX2) == constants.PLATFORM_LINUX
-    assert Utils.get_platform(constants.OS_CENTOS7) == constants.PLATFORM_LINUX
+    assert Utils.get_platform(constants.OS_AMAZONLINUX2023) == constants.PLATFORM_LINUX
     with pytest.raises(exceptions.SocaException) as exc_info:
         Utils.get_platform('unknown')
     assert isinstance(exc_info.value, exceptions.SocaException)
@@ -352,7 +352,7 @@ def test_utils_convert_tags_dict_to_aws_tags():
         'k3': 3,  # valid, converted to string
         'k4': '',
         '': 'test',
-        'k5': {}
+        'k5': {},
     }
     tag_entries = Utils.convert_tags_dict_to_aws_tags(tags)
     assert len(tag_entries) == 2
@@ -367,7 +367,7 @@ def test_utils_convert_custom_tags_to_key_value_pairs():
         'Key=k2,Value=v2',
         'Key= k 3 , Value= v 3 ',
         'Key=k4,Value=',
-        'Key=,Value=v5'
+        'Key=,Value=v5',
     ]
     tags = Utils.convert_custom_tags_to_key_value_pairs(custom_tags)
     assert len(tags) == 3

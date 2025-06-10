@@ -14,6 +14,7 @@ Cluster Endpoints
 
 This function is used by individual module stacks to expose module API or web endpoints via External and Internal ALBs.
 """
+
 import time
 
 import botocore.exceptions
@@ -30,7 +31,7 @@ logger.setLevel(logging.INFO)
 def find_rule_arn(elbv2_client, listener_arn: str, endpoint_name: str):
     describe_rules_result = elbv2_client.describe_rules(
         ListenerArn=listener_arn,
-        PageSize=100  # ALB no. of rules limit
+        PageSize=100,  # ALB no. of rules limit
     )
 
     rules = describe_rules_result.get('Rules', [])
@@ -44,9 +45,7 @@ def find_rule_arn(elbv2_client, listener_arn: str, endpoint_name: str):
     # added sleep to ensure requests are not being throttled
     for rule_arn in rule_arns:
         try:
-            describe_tag_results = elbv2_client.describe_tags(
-                ResourceArns=[rule_arn]
-            )
+            describe_tag_results = elbv2_client.describe_tags(ResourceArns=[rule_arn])
             tag_descriptions = describe_tag_results.get('TagDescriptions', [])
             for tag_description in tag_descriptions:
                 rule_arn = tag_description.get('ResourceArn')
@@ -75,7 +74,6 @@ def handler(event: dict, context):
     client = HttpClient()
 
     try:
-
         if endpoint_name is None or endpoint_name == '__NOT_PROVIDED__':
             raise ValueError('endpoint_name is required and cannot be empty')
 
@@ -115,18 +113,14 @@ def handler(event: dict, context):
 
         resource_tags = []
         for key, value in tags.items():
-            resource_tags.append({
-                'Key': key,
-                'Value': value
-            })
+            resource_tags.append({'Key': key, 'Value': value})
 
         elbv2_client = boto3.client('elbv2')
 
         if default_action:
             if request_type in ('Create', 'Update'):
                 elbv2_client.modify_listener(
-                    ListenerArn=listener_arn,
-                    DefaultActions=actions
+                    ListenerArn=listener_arn, DefaultActions=actions
                 )
                 logger.info('default action modified')
             else:
@@ -136,15 +130,14 @@ def handler(event: dict, context):
                         {
                             'Type': 'fixed-response',
                             'FixedResponseConfig': {
-                                'MessageBody': json.dumps({
-                                    'success': True,
-                                    'message': 'OK'
-                                }),
+                                'MessageBody': json.dumps(
+                                    {'success': True, 'message': 'OK'}
+                                ),
                                 'StatusCode': '200',
-                                'ContentType': 'application/json'
-                            }
+                                'ContentType': 'application/json',
+                            },
                         }
-                    ]
+                    ],
                 )
                 logger.info('default action reset to fixed response')
 
@@ -154,52 +147,58 @@ def handler(event: dict, context):
                 Conditions=conditions,
                 Priority=priority,
                 Actions=actions,
-                Tags=resource_tags
+                Tags=resource_tags,
             )
             rules = result.get('Rules', [])
             rule_arn = rules[0].get('RuleArn')
             logger.info(f'rule created. rule arn: {rule_arn}')
 
         elif request_type == 'Update':
-            rule_arn = find_rule_arn(elbv2_client, listener_arn=listener_arn, endpoint_name=endpoint_name)
+            rule_arn = find_rule_arn(
+                elbv2_client, listener_arn=listener_arn, endpoint_name=endpoint_name
+            )
             if rule_arn is not None:
                 elbv2_client.modify_rule(
-                    RuleArn=rule_arn,
-                    Conditions=conditions,
-                    Actions=actions
+                    RuleArn=rule_arn, Conditions=conditions, Actions=actions
                 )
                 logger.info(f'rule modified. rule arn: {rule_arn}')
             else:
                 logger.warning('rule not found for target group. rule update skipped.')
 
         elif request_type == 'Delete':
-            rule_arn = find_rule_arn(elbv2_client, listener_arn=listener_arn, endpoint_name=endpoint_name)
+            rule_arn = find_rule_arn(
+                elbv2_client, listener_arn=listener_arn, endpoint_name=endpoint_name
+            )
             if rule_arn is not None:
-                elbv2_client.delete_rule(
-                    RuleArn=rule_arn
-                )
+                elbv2_client.delete_rule(RuleArn=rule_arn)
                 logger.info(f'rule deleted. rule arn: {rule_arn}')
             else:
-                logger.warning('rule could not be deleted. rule arn not found for target group')
+                logger.warning(
+                    'rule could not be deleted. rule arn not found for target group'
+                )
 
-        client.send_cfn_response(CfnResponse(
-            context=context,
-            event=event,
-            status=CfnResponseStatus.SUCCESS,
-            data={},
-            physical_resource_id=endpoint_name
-        ))
+        client.send_cfn_response(
+            CfnResponse(
+                context=context,
+                event=event,
+                status=CfnResponseStatus.SUCCESS,
+                data={},
+                physical_resource_id=endpoint_name,
+            )
+        )
 
     except Exception as e:
         error_message = f'failed to {request_type} endpoint: {endpoint_name} - {e}'
         logger.exception(error_message)
-        client.send_cfn_response(CfnResponse(
-            context=context,
-            event=event,
-            status=CfnResponseStatus.FAILED,
-            data={},
-            physical_resource_id=endpoint_name,
-            reason=error_message
-        ))
+        client.send_cfn_response(
+            CfnResponse(
+                context=context,
+                event=event,
+                status=CfnResponseStatus.FAILED,
+                data={},
+                physical_resource_id=endpoint_name,
+                reason=error_message,
+            )
+        )
     finally:
         client.destroy()

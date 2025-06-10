@@ -16,7 +16,9 @@ from ideadatamodel import constants
 from ideasdk.context import SocaContextOptions
 from ideasdk.app.soca_app_commands import launch_decorator
 from ideasdk.utils import EnvironmentUtils
-from ideavirtualdesktopcontroller.app.virtual_desktop_controller_app import VirtualDesktopControllerApp
+from ideavirtualdesktopcontroller.app.virtual_desktop_controller_app import (
+    VirtualDesktopControllerApp,
+)
 
 import sys
 import click
@@ -31,7 +33,6 @@ def main(**kwargs):
     """
 
     try:
-
         cluster_name = EnvironmentUtils.idea_cluster_name(required=True)
         module_id = EnvironmentUtils.idea_module_id(required=True)
         module_set = EnvironmentUtils.idea_module_set(required=True)
@@ -55,10 +56,10 @@ def main(**kwargs):
                     enable_leader_election=True,
                     enable_metrics=True,
                     metrics_namespace=f'{cluster_name}/{module_id}/controller',
-                    enable_analytics=True
+                    enable_analytics=True,
                 )
             ),
-            **kwargs
+            **kwargs,
         ).launch()
 
     except Exception as e:

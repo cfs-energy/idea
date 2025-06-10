@@ -10,7 +10,9 @@
 #  and limitations under the License.
 
 import ideavirtualdesktopcontroller_meta
-from ideavirtualdesktopcontroller.app.app_context import VirtualDesktopControllerAppContext
+from ideavirtualdesktopcontroller.app.app_context import (
+    VirtualDesktopControllerAppContext,
+)
 
 __name__ = ideavirtualdesktopcontroller_meta.__name__
 __version__ = ideavirtualdesktopcontroller_meta.__version__

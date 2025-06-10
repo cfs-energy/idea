@@ -131,7 +131,7 @@ class AccountSettings extends Component<AccountSettingsProps, AccountSettingsSta
                 {
                     name: 'usernames',
                     title: 'Username',
-                    description: 'Enter the usernames of the user you want to remove from your group',
+                    description: 'Enter the usernames of the user you want to add to your group',
                     multiple: true,
                     validate: {
                         required: true

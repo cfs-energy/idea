@@ -13,7 +13,10 @@ from ideadatamodel import constants
 import click
 
 
-@click.command(context_settings=constants.CLICK_SETTINGS, short_help='Execute commands to clean up before deleting module')
+@click.command(
+    context_settings=constants.CLICK_SETTINGS,
+    short_help='Execute commands to clean up before deleting module',
+)
 @click.option('--delete-databases', is_flag=True)
 def app_module_clean_up(delete_databases: bool):
     """

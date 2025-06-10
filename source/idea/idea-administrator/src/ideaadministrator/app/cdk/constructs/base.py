@@ -9,10 +9,7 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
-__all__ = (
-    'IdeaNagSuppression',
-    'SocaBaseConstruct'
-)
+__all__ = ('IdeaNagSuppression', 'SocaBaseConstruct')
 
 from ideadatamodel import exceptions, errorcodes, constants, SocaBaseModel
 from ideasdk.utils import Utils
@@ -22,9 +19,7 @@ from ideaadministrator.app_context import AdministratorContext
 from typing import Optional, List
 import aws_cdk as cdk
 import constructs
-from aws_cdk import (
-    aws_iam as iam
-)
+from aws_cdk import aws_iam as iam
 from cdk_nag import NagSuppressions
 
 
@@ -34,8 +29,13 @@ class IdeaNagSuppression(SocaBaseModel):
 
 
 class SocaBaseConstruct:
-
-    def __init__(self, context: AdministratorContext, name: str, scope: constructs.IConstruct = None, **kwargs):
+    def __init__(
+        self,
+        context: AdministratorContext,
+        name: str,
+        scope: constructs.IConstruct = None,
+        **kwargs,
+    ):
         self.context = context
         self._name = name
         self._construct_id: Optional[str] = self.get_construct_id()
@@ -73,7 +73,7 @@ class SocaBaseConstruct:
         if Utils.is_empty(self._name):
             raise exceptions.SocaException(
                 error_code=errorcodes.GENERAL_ERROR,
-                message='Invalid CDK Construct. "name" is required.'
+                message='Invalid CDK Construct. "name" is required.',
             )
         return self._name
 
@@ -86,8 +86,12 @@ class SocaBaseConstruct:
 
     @property
     def aws_account_arn(self) -> str:
-        aws_partition = self.context.config().get_string('cluster.aws.partition', required=True)
-        aws_account_id = self.context.config().get_string('cluster.aws.account_id', required=True)
+        aws_partition = self.context.config().get_string(
+            'cluster.aws.partition', required=True
+        )
+        aws_account_id = self.context.config().get_string(
+            'cluster.aws.account_id', required=True
+        )
         return f'arn:{aws_partition}:*:*:{aws_account_id}:*'
 
     @staticmethod
@@ -100,7 +104,9 @@ class SocaBaseConstruct:
         return self.name
 
     # trimmed format - {prefix}-{region}-{name[:10]}-{hash}
-    def build_trimmed_resource_name(self, name: str, region_suffix=False, trim_length=64) -> str:
+    def build_trimmed_resource_name(
+        self, name: str, region_suffix=False, trim_length=64
+    ) -> str:
         prefix = self.resource_name_prefix
         suffix = ''
         if region_suffix:
@@ -114,7 +120,9 @@ class SocaBaseConstruct:
         prefix = self.resource_name_prefix
         resource_name = f'{prefix}-{name}'
         if region_suffix:
-            aws_region = self.context.config().get_string('cluster.aws.region', required=True)
+            aws_region = self.context.config().get_string(
+                'cluster.aws.region', required=True
+            )
             resource_name = f'{resource_name}-{aws_region}'
         return resource_name
 
@@ -132,47 +140,69 @@ class SocaBaseConstruct:
         """
         if construct is None and isinstance(self, constructs.Construct):
             construct = self
-        cdk.Tags.of(construct).add(constants.IDEA_TAG_BACKUP_PLAN, f'{self.cluster_name}-{constants.MODULE_CLUSTER}')
+        cdk.Tags.of(construct).add(
+            constants.IDEA_TAG_BACKUP_PLAN,
+            f'{self.cluster_name}-{constants.MODULE_CLUSTER}',
+        )
 
     def build_instance_profile_arn(self, instance_profile_ref: str):
-        aws_partition = self.context.config().get_string('cluster.aws.partition', required=True)
-        aws_account_id = self.context.config().get_string('cluster.aws.account_id', required=True)
+        aws_partition = self.context.config().get_string(
+            'cluster.aws.partition', required=True
+        )
+        aws_account_id = self.context.config().get_string(
+            'cluster.aws.account_id', required=True
+        )
         return f'arn:{aws_partition}:iam::{aws_account_id}:instance-profile/{instance_profile_ref}'
 
     def is_ds_activedirectory(self) -> bool:
-        return self.context.config().get_string('directoryservice.provider') in (constants.DIRECTORYSERVICE_AWS_MANAGED_ACTIVE_DIRECTORY,
-                                                                                 constants.DIRECTORYSERVICE_ACTIVE_DIRECTORY)
+        return self.context.config().get_string('directoryservice.provider') in (
+            constants.DIRECTORYSERVICE_AWS_MANAGED_ACTIVE_DIRECTORY,
+            constants.DIRECTORYSERVICE_ACTIVE_DIRECTORY,
+        )
 
     def is_ds_openldap(self) -> bool:
-        return self.context.config().get_string('directoryservice.provider') == constants.DIRECTORYSERVICE_OPENLDAP
+        return (
+            self.context.config().get_string('directoryservice.provider')
+            == constants.DIRECTORYSERVICE_OPENLDAP
+        )
 
-    def add_nag_suppression(self, suppressions: List[IdeaNagSuppression], construct: constructs.IConstruct = None, apply_to_children: bool = False):
+    def add_nag_suppression(
+        self,
+        suppressions: List[IdeaNagSuppression],
+        construct: constructs.IConstruct = None,
+        apply_to_children: bool = False,
+    ):
         if construct is None:
             construct = self
         cdk_nag_suppressions = []
         for suppression in suppressions:
-            cdk_nag_suppressions.append({
-                'id': suppression.rule_id,
-                'reason': suppression.reason
-            })
+            cdk_nag_suppressions.append(
+                {'id': suppression.rule_id, 'reason': suppression.reason}
+            )
         if isinstance(construct, cdk.Stack):
             NagSuppressions.add_stack_suppressions(
                 stack=construct,
                 suppressions=cdk_nag_suppressions,
-                apply_to_nested_stacks=apply_to_children
+                apply_to_nested_stacks=apply_to_children,
             )
         else:
             NagSuppressions.add_resource_suppressions(
                 construct=construct,
                 suppressions=cdk_nag_suppressions,
-                apply_to_children=apply_to_children
+                apply_to_children=apply_to_children,
             )
 
     def get_kms_key_arn(self, key_id: str) -> str:
         # arn:AWS_PARTITION:kms:AWS_REGION:ACCOUNT_ID:key/UUID
         if key_id.startswith('arn:'):
             return key_id
-        aws_partition = self.context.config().get_string('cluster.aws.partition', required=True)
-        aws_region = self.context.config().get_string('cluster.aws.region', required=True)
-        aws_account_id = self.context.config().get_string('cluster.aws.account_id', required=True)
+        aws_partition = self.context.config().get_string(
+            'cluster.aws.partition', required=True
+        )
+        aws_region = self.context.config().get_string(
+            'cluster.aws.region', required=True
+        )
+        aws_account_id = self.context.config().get_string(
+            'cluster.aws.account_id', required=True
+        )
         return f'arn:{aws_partition}:kms:{aws_region}:{aws_account_id}:key/{key_id}'

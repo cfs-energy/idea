@@ -34,7 +34,7 @@ __all__ = (
     'SharedStorageVolumeIdPrompt',
     'InstallerPromptFactory',
     'QuickSetupPromptFactory',
-    'SharedStoragePromptFactory'
+    'SharedStoragePromptFactory',
 )
 
 from ideasdk.utils import Utils
@@ -48,7 +48,7 @@ from ideasdk.user_input.framework import (
     SocaUserInputChoice,
     SocaPromptRegistry,
     SocaUserInputParamRegistry,
-    SocaUserInputArgs
+    SocaUserInputArgs,
 )
 from ideadatamodel.user_input import SocaUserInputParamMetadata
 from ideasdk.context import SocaCliContext
@@ -56,7 +56,9 @@ from ideasdk.context import SocaCliContext
 import ideaadministrator
 from ideaadministrator import app_constants
 from ideaadministrator.app_utils import AdministratorUtils
-from ideaadministrator.app.aws_service_availability_helper import AwsServiceAvailabilityHelper
+from ideaadministrator.app.aws_service_availability_helper import (
+    AwsServiceAvailabilityHelper,
+)
 
 from typing import Optional, List, TypeVar
 import validators
@@ -67,20 +69,24 @@ SELECT_CHOICE_OTHER = constants.SELECT_CHOICE_OTHER
 
 
 class DefaultPrompt(SocaPrompt[T]):
-
-    def __init__(self, factory: 'InstallerPromptFactory',
-                 param: SocaUserInputParamMetadata,
-                 default: SocaUserInputDefaultType = None,
-                 choices: SocaUserInputChoicesType = None):
+    def __init__(
+        self,
+        factory: 'InstallerPromptFactory',
+        param: SocaUserInputParamMetadata,
+        default: SocaUserInputDefaultType = None,
+        choices: SocaUserInputChoicesType = None,
+    ):
         if default is None:
             default = self.get_default
         self.factory = factory
-        super().__init__(context=factory.context,
-                         args=factory.args,
-                         param=param,
-                         default=default,
-                         choices=choices,
-                         registry=factory.install_prompts)
+        super().__init__(
+            context=factory.context,
+            args=factory.args,
+            param=param,
+            default=default,
+            choices=choices,
+            registry=factory.install_prompts,
+        )
         self._args = factory.args
         self.context = factory.context
 
@@ -99,13 +105,10 @@ class DefaultPrompt(SocaPrompt[T]):
 
 
 class ClusterNamePrompt(DefaultPrompt[str]):
-
     def __init__(self, factory: 'InstallerPromptFactory'):
-        super().__init__(factory=factory,
-                         param=factory.args.get_meta('cluster_name'))
+        super().__init__(factory=factory, param=factory.args.get_meta('cluster_name'))
 
     def validate(self, value: str):
-
         super().validate(value)
 
         # validate is not called for choice. so we are good here ...
@@ -114,17 +117,23 @@ class ClusterNamePrompt(DefaultPrompt[str]):
             return
 
         if _token == f'{app_constants.CLUSTER_NAME_PREFIX}-{SELECT_CHOICE_OTHER}':
-            raise self.validation_error(message=f'Invalid ClusterName: {_token}. '
-                                                f'"{SELECT_CHOICE_OTHER}" is a reserved keyword and cannot be used in ClusterName.')
+            raise self.validation_error(
+                message=f'Invalid ClusterName: {_token}. '
+                f'"{SELECT_CHOICE_OTHER}" is a reserved keyword and cannot be used in ClusterName.'
+            )
 
         if 'idea' in _token.replace('idea-', '', 1):
-            raise self.validation_error(message=f'Invalid ClusterName: {_token}. '
-                                                f'"{_token}" contains value "idea" and is not allowed.')
+            raise self.validation_error(
+                message=f'Invalid ClusterName: {_token}. '
+                f'"{_token}" contains value "idea" and is not allowed.'
+            )
 
         min_length, max_length = app_constants.CLUSTER_NAME_MIN_MAX_LENGTH
         if not min_length <= len(_token) <= max_length:
-            raise self.validation_error(message=f'ClusterName: ({_token}) length must be between {min_length} and {max_length} characters. '
-                                                f'Current: {len(_token)}')
+            raise self.validation_error(
+                message=f'ClusterName: ({_token}) length must be between {min_length} and {max_length} characters. '
+                f'Current: {len(_token)}'
+            )
 
         regenerate = Utils.get_as_bool(self.args.get('_regenerate'), False)
         if regenerate:
@@ -135,14 +144,20 @@ class ClusterNamePrompt(DefaultPrompt[str]):
             if vpc.cluster_name is None:
                 continue
             if vpc.cluster_name == _token:
-                raise self.validation_error(message=f'Cluster: ({_token}) already exists and is in use by Vpc: {vpc.vpc_id}. '
-                                                    f'Please enter a different cluster name.')
+                raise self.validation_error(
+                    message=f'Cluster: ({_token}) already exists and is in use by Vpc: {vpc.vpc_id}. '
+                    f'Please enter a different cluster name.'
+                )
 
         bootstrap_stack_name = f'{_token}-bootstrap'
-        existing_bootstrap_stack = self.context.aws_util().cloudformation_describe_stack(bootstrap_stack_name)
+        existing_bootstrap_stack = (
+            self.context.aws_util().cloudformation_describe_stack(bootstrap_stack_name)
+        )
         if existing_bootstrap_stack is not None:
-            raise self.validation_error(message=f'Cluster: ({_token}) already exists and is in use by Bootstrap Stack: {bootstrap_stack_name}. '
-                                                f'Please enter a different cluster name.')
+            raise self.validation_error(
+                message=f'Cluster: ({_token}) already exists and is in use by Bootstrap Stack: {bootstrap_stack_name}. '
+                f'Please enter a different cluster name.'
+            )
 
     def filter(self, value: str) -> Optional[str]:
         token = AdministratorUtils.sanitize_cluster_name(value)
@@ -150,7 +165,9 @@ class ClusterNamePrompt(DefaultPrompt[str]):
         return cluster_name
 
     def get_choices(self, refresh: bool = False) -> List[SocaUserInputChoice]:
-        installed_clusters = self.context.get_aws_resources().list_available_cluster_names()
+        installed_clusters = (
+            self.context.get_aws_resources().list_available_cluster_names()
+        )
         choices = []
         for cluster_name in installed_clusters:
             choices.append(SocaUserInputChoice(title=cluster_name, value=cluster_name))
@@ -158,10 +175,8 @@ class ClusterNamePrompt(DefaultPrompt[str]):
 
 
 class AwsProfilePrompt(DefaultPrompt[str]):
-
     def __init__(self, factory: 'InstallerPromptFactory'):
-        super().__init__(factory=factory,
-                         param=factory.args.get_meta('aws_profile'))
+        super().__init__(factory=factory, param=factory.args.get_meta('aws_profile'))
 
     def get_choices(self, refresh: bool = False) -> List[SocaUserInputChoice]:
         profiles = self.context.get_aws_resources().get_aws_profiles(refresh)
@@ -176,8 +191,7 @@ class AwsProfilePrompt(DefaultPrompt[str]):
 # services or functions.
 class AwsProfilePrompt2(DefaultPrompt[str]):
     def __init__(self, factory: 'InstallerPromptFactory'):
-        super().__init__(factory=factory,
-                         param=factory.args.get_meta('aws_profile2'))
+        super().__init__(factory=factory, param=factory.args.get_meta('aws_profile2'))
 
     def get_choices(self, refresh: bool = False) -> List[SocaUserInputChoice]:
         profiles = self.context.get_aws_resources().get_aws_profiles(refresh)
@@ -188,10 +202,8 @@ class AwsProfilePrompt2(DefaultPrompt[str]):
 
 
 class AwsPartitionPrompt(DefaultPrompt[str]):
-
     def __init__(self, factory: 'InstallerPromptFactory'):
-        super().__init__(factory=factory,
-                         param=factory.args.get_meta('aws_partition'))
+        super().__init__(factory=factory, param=factory.args.get_meta('aws_partition'))
 
     def get_choices(self, refresh: bool = False) -> List[SocaUserInputChoice]:
         partitions = self.context.aws().aws_endpoints().list_partitions()
@@ -203,11 +215,12 @@ class AwsPartitionPrompt(DefaultPrompt[str]):
 
 
 class AwsRegionPrompt(DefaultPrompt[str]):
-
     def __init__(self, factory: 'InstallerPromptFactory'):
-        super().__init__(factory=factory,
-                         param=factory.args.get_meta('aws_region'),
-                         default=self.get_default)
+        super().__init__(
+            factory=factory,
+            param=factory.args.get_meta('aws_region'),
+            default=self.get_default,
+        )
 
     def get_partition(self) -> Optional[str]:
         partition_prompt = self.factory.install_prompts.get('aws_partition')
@@ -216,7 +229,11 @@ class AwsRegionPrompt(DefaultPrompt[str]):
     def get_default(self, reset: bool = False) -> Optional[str]:
         region = self.args.get('aws_region')
 
-        partition = self.context.aws().aws_endpoints().get_partition(partition=self.get_partition())
+        partition = (
+            self.context.aws()
+            .aws_endpoints()
+            .get_partition(partition=self.get_partition())
+        )
         regions = partition.regions
         for region_ in regions:
             if region_.region == region:
@@ -230,7 +247,11 @@ class AwsRegionPrompt(DefaultPrompt[str]):
         return Utils.get_value_as_string(partition, defaults)
 
     def get_choices(self, refresh: bool = False) -> List[SocaUserInputChoice]:
-        partition = self.context.aws().aws_endpoints().get_partition(partition=self.get_partition())
+        partition = (
+            self.context.aws()
+            .aws_endpoints()
+            .get_partition(partition=self.get_partition())
+        )
         regions = partition.regions
         choices = []
         for region in regions:
@@ -240,11 +261,10 @@ class AwsRegionPrompt(DefaultPrompt[str]):
 
 
 class ClientIPPrompt(DefaultPrompt[str]):
-
     def __init__(self, factory: 'InstallerPromptFactory'):
-        super().__init__(factory,
-                         param=factory.args.get_meta('client_ip'),
-                         default=self.get_default)
+        super().__init__(
+            factory, param=factory.args.get_meta('client_ip'), default=self.get_default
+        )
 
     def get_default(self, reset: bool = False) -> Optional[str]:
         if not reset:
@@ -266,7 +286,6 @@ class ClientIPPrompt(DefaultPrompt[str]):
         return result
 
     def validate(self, value: str):
-
         super().validate(value)
 
         _tokens = value.split(',')
@@ -281,8 +300,9 @@ class ClientIPPrompt(DefaultPrompt[str]):
 
 
 class SSHKeyPairPrompt(DefaultPrompt[str]):
-
-    def __init__(self, factory: 'InstallerPromptFactory', param: SocaUserInputParamMetadata):
+    def __init__(
+        self, factory: 'InstallerPromptFactory', param: SocaUserInputParamMetadata
+    ):
         super().__init__(factory=factory, param=param)
 
     def get_choices(self, refresh: bool = False) -> List[SocaUserInputChoice]:
@@ -293,25 +313,27 @@ class SSHKeyPairPrompt(DefaultPrompt[str]):
             key_pairs = []
 
         if len(key_pairs) == 0:
-            raise exceptions.soca_exception(error_code=errorcodes.USER_INPUT_FLOW_INTERRUPT,
-                                            message='Unable to find any existing EC2 SSH Key Pairs in this region.'
-                                                    'Create a new EC2 Key Pair from the AWS Console and re-run idea-admin.')
+            raise exceptions.soca_exception(
+                error_code=errorcodes.USER_INPUT_FLOW_INTERRUPT,
+                message='Unable to find any existing EC2 SSH Key Pairs in this region.'
+                'Create a new EC2 Key Pair from the AWS Console and re-run idea-admin.',
+            )
 
         for key_pair in key_pairs:
-            result.append(SocaUserInputChoice(
-                title=key_pair.key_name,
-                value=key_pair.key_name
-            ))
+            result.append(
+                SocaUserInputChoice(title=key_pair.key_name, value=key_pair.key_name)
+            )
 
         return result
 
 
 class VpcCidrBlockPrompt(DefaultPrompt[str]):
-
     def __init__(self, factory: 'InstallerPromptFactory'):
-        super().__init__(factory=factory,
-                         param=factory.args.get_meta('vpc_cidr_block'),
-                         default=self.get_default)
+        super().__init__(
+            factory=factory,
+            param=factory.args.get_meta('vpc_cidr_block'),
+            default=self.get_default,
+        )
 
     def get_default(self, reset: bool = False) -> Optional[str]:
         vpcs = self.context.get_aws_resources().get_vpcs()
@@ -329,7 +351,6 @@ class VpcCidrBlockPrompt(DefaultPrompt[str]):
             return candidate
 
     def validate(self, value: str):
-
         super().validate(value)
 
         vpcs = self.context.get_aws_resources().get_vpcs()
@@ -344,15 +365,15 @@ class VpcCidrBlockPrompt(DefaultPrompt[str]):
             if value == vpc.cidr_block:
                 raise self.validation_error(
                     message=f'VPC CIDR Block: {value} is already used by VPC: {vpc.vpc_id}. Please enter a different CIDR block '
-                            f'to avoid IP Address conflicts between VPCs.'
+                    f'to avoid IP Address conflicts between VPCs.'
                 )
 
 
 class EmailPrompt(DefaultPrompt[str]):
-
-    def __init__(self, factory: 'InstallerPromptFactory', param: SocaUserInputParamMetadata):
-        super().__init__(factory=factory,
-                         param=param)
+    def __init__(
+        self, factory: 'InstallerPromptFactory', param: SocaUserInputParamMetadata
+    ):
+        super().__init__(factory=factory, param=param)
 
     def validate(self, value: str):
         super().validate(value)
@@ -361,24 +382,21 @@ class EmailPrompt(DefaultPrompt[str]):
 
 
 class VpcIdPrompt(DefaultPrompt[str]):
-
     def __init__(self, factory: 'InstallerPromptFactory'):
-        super().__init__(factory=factory,
-                         param=factory.args.get_meta('vpc_id'))
+        super().__init__(factory=factory, param=factory.args.get_meta('vpc_id'))
 
     def get_choices(self, refresh: bool = False) -> List[SocaUserInputChoice]:
         vpcs = self.context.get_aws_resources().get_vpcs(refresh)
 
         if len(vpcs) == 0:
-            raise exceptions.general_exception('Unable to find any existing VPC in this region.')
+            raise exceptions.general_exception(
+                'Unable to find any existing VPC in this region.'
+            )
 
         choices = []
 
         for vpc in vpcs:
-            choices.append(SocaUserInputChoice(
-                title=f'{vpc.title}',
-                value=vpc.vpc_id
-            ))
+            choices.append(SocaUserInputChoice(title=f'{vpc.title}', value=vpc.vpc_id))
 
         return choices
 
@@ -388,11 +406,12 @@ class VpcIdPrompt(DefaultPrompt[str]):
 
 
 class ExistingResourcesPrompt(DefaultPrompt[str]):
-
     def __init__(self, factory: 'InstallerPromptFactory'):
-        super().__init__(factory=factory,
-                         param=factory.args.get_meta('existing_resources'),
-                         default=self.get_default)
+        super().__init__(
+            factory=factory,
+            param=factory.args.get_meta('existing_resources'),
+            default=self.get_default,
+        )
         self.existing_file_systems = False
         self.existing_opensearch = False
         self.existing_subnets = False
@@ -425,10 +444,11 @@ class ExistingResourcesPrompt(DefaultPrompt[str]):
             )
 
     def get_choices(self, refresh: bool = False) -> List[SocaUserInputChoice]:
-
         vpc_id = self.args.get('vpc_id')
         if Utils.is_empty(vpc_id):
-            raise exceptions.general_exception('vpc_id is required to find existing resources')
+            raise exceptions.general_exception(
+                'vpc_id is required to find existing resources'
+            )
 
         alb_public = Utils.get_as_bool(self.args.get('alb_public'), default=True)
 
@@ -439,63 +459,81 @@ class ExistingResourcesPrompt(DefaultPrompt[str]):
         self.vpc_id = vpc_id
 
         with self.context.spinner('search for existing subnets ...'):
-            subnets = self.context.get_aws_resources().get_subnets(vpc_id=vpc_id, refresh=refresh)
+            subnets = self.context.get_aws_resources().get_subnets(
+                vpc_id=vpc_id, refresh=refresh
+            )
             self.existing_subnets = len(subnets) > 0
         with self.context.spinner('search for existing file systems ...'):
-            file_systems = self.context.get_aws_resources().get_file_systems(vpc_id=vpc_id, refresh=refresh)
+            file_systems = self.context.get_aws_resources().get_file_systems(
+                vpc_id=vpc_id, refresh=refresh
+            )
             self.existing_file_systems = len(file_systems) > 0
         with self.context.spinner('search for existing opensearch clusters ...'):
-            opensearch_clusters = self.context.get_aws_resources().get_opensearch_clusters(vpc_id=vpc_id, refresh=refresh)
+            opensearch_clusters = (
+                self.context.get_aws_resources().get_opensearch_clusters(
+                    vpc_id=vpc_id, refresh=refresh
+                )
+            )
             self.existing_opensearch = len(opensearch_clusters) > 0
         with self.context.spinner('search for existing directories ...'):
-            directories = self.context.get_aws_resources().get_directories(vpc_id=vpc_id, refresh=refresh)
+            directories = self.context.get_aws_resources().get_directories(
+                vpc_id=vpc_id, refresh=refresh
+            )
             directory_service_provider = self.args.get('directory_service_provider')
-            self.existing_directories = len(directories) > 0 and directory_service_provider == constants.DIRECTORYSERVICE_AWS_MANAGED_ACTIVE_DIRECTORY
+            self.existing_directories = (
+                len(directories) > 0
+                and directory_service_provider
+                == constants.DIRECTORYSERVICE_AWS_MANAGED_ACTIVE_DIRECTORY
+            )
 
         choices = []
         if self.existing_subnets:
             if alb_public:
-                choices.append(SocaUserInputChoice(
-                    title='Subnets: Public',
-                    value='subnets:public'
-                ))
-            choices.append(SocaUserInputChoice(
-                title='Subnets: Private',
-                value='subnets:private'
-            ))
+                choices.append(
+                    SocaUserInputChoice(title='Subnets: Public', value='subnets:public')
+                )
+            choices.append(
+                SocaUserInputChoice(title='Subnets: Private', value='subnets:private')
+            )
         if self.existing_file_systems:
-            choices.append(SocaUserInputChoice(
-                title='Shared Storage: Apps',
-                value='shared-storage:apps'
-            ))
-            choices.append(SocaUserInputChoice(
-                title='Shared Storage: Data',
-                value='shared-storage:data'
-            ))
+            choices.append(
+                SocaUserInputChoice(
+                    title='Shared Storage: Apps', value='shared-storage:apps'
+                )
+            )
+            choices.append(
+                SocaUserInputChoice(
+                    title='Shared Storage: Data', value='shared-storage:data'
+                )
+            )
         if self.existing_opensearch:
-            choices.append(SocaUserInputChoice(
-                title='Analytics: OpenSearch Clusters',
-                value='analytics:opensearch'
-            ))
+            choices.append(
+                SocaUserInputChoice(
+                    title='Analytics: OpenSearch Clusters', value='analytics:opensearch'
+                )
+            )
         if self.existing_directories:
-            choices.append(SocaUserInputChoice(
-                title='Directory: AWS Managed Microsoft AD',
-                value='directoryservice:aws_managed_activedirectory'
-            ))
+            choices.append(
+                SocaUserInputChoice(
+                    title='Directory: AWS Managed Microsoft AD',
+                    value='directoryservice:aws_managed_activedirectory',
+                )
+            )
         return choices
 
 
 class SubnetIdsPrompt(DefaultPrompt[str]):
-
-    def __init__(self, factory: 'InstallerPromptFactory', param: SocaUserInputParamMetadata):
-        super().__init__(factory=factory,
-                         param=param)
+    def __init__(
+        self, factory: 'InstallerPromptFactory', param: SocaUserInputParamMetadata
+    ):
+        super().__init__(factory=factory, param=param)
 
     def validate(self, value: List[str]):
-
         vpc_id = self.args.get('vpc_id')
         if Utils.is_empty(vpc_id):
-            raise exceptions.general_exception('vpc_id is required to find existing resources')
+            raise exceptions.general_exception(
+                'vpc_id is required to find existing resources'
+            )
         subnets = self.context.get_aws_resources().get_subnets(vpc_id=vpc_id)
         selected_subnets = []
         for subnet in subnets:
@@ -513,15 +551,19 @@ class SubnetIdsPrompt(DefaultPrompt[str]):
         is_outpost_installation = False
         for subnet in selected_subnets:
             if subnet.is_outpost():
-                self.context.debug(f"Subnet: {subnet.subnet_id} is an AWS Outposts Subnet - setting is_outpost_installation to True")
+                self.context.debug(
+                    f'Subnet: {subnet.subnet_id} is an AWS Outposts Subnet - setting is_outpost_installation to True'
+                )
                 is_outpost_installation = True
 
         if is_outpost_installation:
-            self.context.debug(f"Detected installation to AWS Outposts")
+            self.context.debug('Detected installation to AWS Outposts')
 
         selected_azs = []
         for subnet in selected_subnets:
-            if (subnet.availability_zone in selected_azs) and not is_outpost_installation:
+            if (
+                subnet.availability_zone in selected_azs
+            ) and not is_outpost_installation:
                 raise self.validation_error(
                     message='Multiple subnet selection from the same Availability Zone is not supported unless using AWS Outposts.'
                 )
@@ -533,53 +575,70 @@ class SubnetIdsPrompt(DefaultPrompt[str]):
                         message=f'SubnetId: {subnet.subnet_id} is already selected as part of {subnet_ids_alt_title} selection.'
                     )
 
-        if (self.param.name == 'private_subnet_ids') and ((len(selected_subnets) < 2) and not is_outpost_installation):
+        if (self.param.name == 'private_subnet_ids') and (
+            (len(selected_subnets) < 2) and not is_outpost_installation
+        ):
             raise self.validation_error(
                 message='Minimum 2 subnet selections are required to ensure high availability.'
             )
 
     def get_choices(self, refresh: bool = False) -> List[SocaUserInputChoice]:
-
         vpc_id = self.args.get('vpc_id')
         if Utils.is_empty(vpc_id):
-            raise exceptions.general_exception('vpc_id is required to find existing resources')
+            raise exceptions.general_exception(
+                'vpc_id is required to find existing resources'
+            )
 
-        subnets = self.context.get_aws_resources().get_subnets(vpc_id=vpc_id, refresh=refresh)
+        subnets = self.context.get_aws_resources().get_subnets(
+            vpc_id=vpc_id, refresh=refresh
+        )
 
         if len(subnets) == 0:
-            raise exceptions.general_exception(f'Unable to find any existing subnets for vpc: {vpc_id}')
+            raise exceptions.general_exception(
+                f'Unable to find any existing subnets for vpc: {vpc_id}'
+            )
 
         choices = []
 
         for subnet in subnets:
-            choices.append(SocaUserInputChoice(
-                title=subnet.title,
-                value=subnet.subnet_id
-            ))
+            choices.append(
+                SocaUserInputChoice(title=subnet.title, value=subnet.subnet_id)
+            )
 
         return choices
 
 
 class FileSystemIdPrompt(DefaultPrompt[str]):
-
-    def __init__(self, factory: 'InstallerPromptFactory', param: SocaUserInputParamMetadata, storage_provider_key: str, existing_storage_flag_key: Optional[str] = None):
-        super().__init__(factory=factory,
-                         param=param)
+    def __init__(
+        self,
+        factory: 'InstallerPromptFactory',
+        param: SocaUserInputParamMetadata,
+        storage_provider_key: str,
+        existing_storage_flag_key: Optional[str] = None,
+    ):
+        super().__init__(factory=factory, param=param)
         self.existing_storage_flag_key = existing_storage_flag_key
         self.storage_provider_key = storage_provider_key
 
     def get_choices(self, refresh: bool = False) -> List[SocaUserInputChoice]:
-
         vpc_id = self.args.get('vpc_id')
         if Utils.is_empty(vpc_id):
-            raise exceptions.general_exception('vpc_id is required to find existing resources')
+            raise exceptions.general_exception(
+                'vpc_id is required to find existing resources'
+            )
 
-        with self.context.spinner(f'checking available file systems in Vpc: {vpc_id} ...'):
-            file_systems = self.context.get_aws_resources().get_file_systems(vpc_id=vpc_id, refresh=refresh)
+        with self.context.spinner(
+            f'checking available file systems in Vpc: {vpc_id} ...'
+        ):
+            file_systems = self.context.get_aws_resources().get_file_systems(
+                vpc_id=vpc_id, refresh=refresh
+            )
 
         storage_provider = self.args.get(self.storage_provider_key)
         if Utils.is_empty(storage_provider):
-            raise exceptions.general_exception(f'{self.storage_provider_key} is required to find existing file systems')
+            raise exceptions.general_exception(
+                f'{self.storage_provider_key} is required to find existing file systems'
+            )
 
         filtered_file_systems = []
         for file_system in file_systems:
@@ -589,16 +648,17 @@ class FileSystemIdPrompt(DefaultPrompt[str]):
         if len(filtered_file_systems) == 0:
             raise exceptions.soca_exception(
                 error_code=errorcodes.USER_INPUT_FLOW_INTERRUPT,
-                message=f'Unable to find any existing file systems for provider: {storage_provider}'
+                message=f'Unable to find any existing file systems for provider: {storage_provider}',
             )
 
         choices = []
 
         for file_system in filtered_file_systems:
-            choices.append(SocaUserInputChoice(
-                title=file_system.title,
-                value=file_system.file_system_id
-            ))
+            choices.append(
+                SocaUserInputChoice(
+                    title=file_system.title, value=file_system.file_system_id
+                )
+            )
 
         return choices
 
@@ -609,23 +669,31 @@ class FileSystemIdPrompt(DefaultPrompt[str]):
 
 
 class SharedStorageVirtualMachineIdPrompt(DefaultPrompt[str]):
-
-    def __init__(self, factory: 'InstallerPromptFactory', param: SocaUserInputParamMetadata, file_system_id_key: str):
-        super().__init__(factory=factory,
-                         param=param)
+    def __init__(
+        self,
+        factory: 'InstallerPromptFactory',
+        param: SocaUserInputParamMetadata,
+        file_system_id_key: str,
+    ):
+        super().__init__(factory=factory, param=param)
         self.file_system_id_key = file_system_id_key
 
     def get_choices(self, refresh: bool = False) -> List[SocaUserInputChoice]:
-
         vpc_id = self.args.get('vpc_id')
         if Utils.is_empty(vpc_id):
-            raise exceptions.general_exception('vpc_id is required to find existing resources')
+            raise exceptions.general_exception(
+                'vpc_id is required to find existing resources'
+            )
 
         file_system_id = self.args.get(self.file_system_id_key)
         if Utils.is_empty(file_system_id):
-            raise exceptions.general_exception('file_system_id is required to find storage virtual machines')
+            raise exceptions.general_exception(
+                'file_system_id is required to find storage virtual machines'
+            )
 
-        file_systems = self.context.get_aws_resources().get_file_systems(vpc_id=vpc_id, refresh=refresh)
+        file_systems = self.context.get_aws_resources().get_file_systems(
+            vpc_id=vpc_id, refresh=refresh
+        )
 
         target_file_system = None
 
@@ -635,7 +703,9 @@ class SharedStorageVirtualMachineIdPrompt(DefaultPrompt[str]):
                 break
 
         if target_file_system is None:
-            raise exceptions.general_exception(f'Unable to find any existing file systems for file_system_id: {file_system_id}')
+            raise exceptions.general_exception(
+                f'Unable to find any existing file systems for file_system_id: {file_system_id}'
+            )
 
         choices = []
 
@@ -643,39 +713,47 @@ class SharedStorageVirtualMachineIdPrompt(DefaultPrompt[str]):
         for svm_entry in storage_virtual_machines:
             svm_id = target_file_system.get_svm_id(svm_entry)
             title = target_file_system.get_storage_virtual_machine_title(svm_entry)
-            choices.append(SocaUserInputChoice(
-                title=title,
-                value=svm_id
-            ))
+            choices.append(SocaUserInputChoice(title=title, value=svm_id))
 
         return choices
 
 
 class SharedStorageVolumeIdPrompt(DefaultPrompt[str]):
-
-    def __init__(self, factory: 'InstallerPromptFactory', param: SocaUserInputParamMetadata, file_system_id_key: str, svm_id_key: str = None):
-        super().__init__(factory=factory,
-                         param=param)
+    def __init__(
+        self,
+        factory: 'InstallerPromptFactory',
+        param: SocaUserInputParamMetadata,
+        file_system_id_key: str,
+        svm_id_key: str = None,
+    ):
+        super().__init__(factory=factory, param=param)
         self.file_system_id_key = file_system_id_key
         self.svm_id_key = svm_id_key
 
     def get_choices(self, refresh: bool = False) -> List[SocaUserInputChoice]:
-
         vpc_id = self.args.get('vpc_id')
         if Utils.is_empty(vpc_id):
-            raise exceptions.general_exception('vpc_id is required to find existing resources')
+            raise exceptions.general_exception(
+                'vpc_id is required to find existing resources'
+            )
 
         file_system_id = self.args.get(self.file_system_id_key)
         if Utils.is_empty(file_system_id):
-            raise exceptions.general_exception('file_system_id is required to find storage volumes')
+            raise exceptions.general_exception(
+                'file_system_id is required to find storage volumes'
+            )
 
         svm_id = None
         if Utils.is_not_empty(self.svm_id_key):
             svm_id = self.args.get(self.svm_id_key)
             if Utils.is_empty(svm_id):
-                raise exceptions.general_exception('svm_id is required to find storage volumes')
+                raise exceptions.general_exception(
+                    'svm_id is required to find storage volumes'
+                )
 
-        file_systems = self.context.get_aws_resources().get_file_systems(vpc_id=vpc_id, refresh=refresh)
+        file_systems = self.context.get_aws_resources().get_file_systems(
+            vpc_id=vpc_id, refresh=refresh
+        )
 
         target_file_system = None
 
@@ -685,7 +763,9 @@ class SharedStorageVolumeIdPrompt(DefaultPrompt[str]):
                 break
 
         if target_file_system is None:
-            raise exceptions.general_exception(f'Unable to find any existing file systems for file_system_id: {file_system_id}')
+            raise exceptions.general_exception(
+                f'Unable to find any existing file systems for file_system_id: {file_system_id}'
+            )
 
         choices = []
 
@@ -699,38 +779,42 @@ class SharedStorageVolumeIdPrompt(DefaultPrompt[str]):
                     continue
                 if volume_svm_id != svm_id:
                     continue
-            choices.append(SocaUserInputChoice(
-                title=title,
-                value=volume_id
-            ))
+            choices.append(SocaUserInputChoice(title=title, value=volume_id))
 
         return choices
 
 
 class OpenSearchDomainEndpointPrompt(DefaultPrompt[str]):
-
     def __init__(self, factory: 'InstallerPromptFactory'):
-        super().__init__(factory=factory,
-                         param=factory.args.get_meta('opensearch_domain_endpoint'))
+        super().__init__(
+            factory=factory, param=factory.args.get_meta('opensearch_domain_endpoint')
+        )
 
     def get_choices(self, refresh: bool = False) -> List[SocaUserInputChoice]:
-
         vpc_id = self.args.get('vpc_id')
         if Utils.is_empty(vpc_id):
-            raise exceptions.general_exception('vpc_id is required to find existing resources')
+            raise exceptions.general_exception(
+                'vpc_id is required to find existing resources'
+            )
 
-        opensearch_clusters = self.context.get_aws_resources().get_opensearch_clusters(vpc_id=vpc_id, refresh=refresh)
+        opensearch_clusters = self.context.get_aws_resources().get_opensearch_clusters(
+            vpc_id=vpc_id, refresh=refresh
+        )
 
         if len(opensearch_clusters) == 0:
-            raise exceptions.general_exception('Unable to find any existing opensearch clusters')
+            raise exceptions.general_exception(
+                'Unable to find any existing opensearch clusters'
+            )
 
         choices = []
 
         for opensearch_cluster in opensearch_clusters:
-            choices.append(SocaUserInputChoice(
-                title=opensearch_cluster.title,
-                value=opensearch_cluster.vpc_endpoint
-            ))
+            choices.append(
+                SocaUserInputChoice(
+                    title=opensearch_cluster.title,
+                    value=opensearch_cluster.vpc_endpoint,
+                )
+            )
 
         return choices
 
@@ -740,29 +824,31 @@ class OpenSearchDomainEndpointPrompt(DefaultPrompt[str]):
 
 
 class DirectoryServiceIdPrompt(DefaultPrompt[str]):
-
     def __init__(self, factory: 'InstallerPromptFactory'):
-        super().__init__(factory=factory,
-                         param=factory.args.get_meta('directory_id'))
+        super().__init__(factory=factory, param=factory.args.get_meta('directory_id'))
 
     def get_choices(self, refresh: bool = False) -> List[SocaUserInputChoice]:
-
         vpc_id = self.args.get('vpc_id')
         if Utils.is_empty(vpc_id):
-            raise exceptions.general_exception('vpc_id is required to find existing resources')
+            raise exceptions.general_exception(
+                'vpc_id is required to find existing resources'
+            )
 
-        directories = self.context.get_aws_resources().get_directories(vpc_id=vpc_id, refresh=refresh)
+        directories = self.context.get_aws_resources().get_directories(
+            vpc_id=vpc_id, refresh=refresh
+        )
 
         if len(directories) == 0:
-            raise exceptions.general_exception('Unable to find any existing directories')
+            raise exceptions.general_exception(
+                'Unable to find any existing directories'
+            )
 
         choices = []
 
         for directory in directories:
-            choices.append(SocaUserInputChoice(
-                title=directory.title,
-                value=directory.directory_id
-            ))
+            choices.append(
+                SocaUserInputChoice(title=directory.title, value=directory.directory_id)
+            )
 
         return choices
 
@@ -772,10 +858,10 @@ class DirectoryServiceIdPrompt(DefaultPrompt[str]):
 
 
 class PrefixListIdPrompt(DefaultPrompt[str]):
-
     def __init__(self, factory: 'InstallerPromptFactory'):
-        super().__init__(factory=factory,
-                         param=factory.args.get_meta('prefix_list_ids'))
+        super().__init__(
+            factory=factory, param=factory.args.get_meta('prefix_list_ids')
+        )
 
     def get_choices(self, refresh: bool = False) -> List[SocaUserInputChoice]:
         prefix_lists = self.context.get_aws_resources().get_ec2_prefix_lists(refresh)
@@ -783,10 +869,11 @@ class PrefixListIdPrompt(DefaultPrompt[str]):
         choices = []
 
         for prefix_list in prefix_lists:
-            choices.append(SocaUserInputChoice(
-                title=prefix_list.title,
-                value=prefix_list.prefix_list_id
-            ))
+            choices.append(
+                SocaUserInputChoice(
+                    title=prefix_list.title, value=prefix_list.prefix_list_id
+                )
+            )
 
         return choices
 
@@ -801,10 +888,10 @@ class PrefixListIdPrompt(DefaultPrompt[str]):
 
 
 class EnabledModulesPrompt(DefaultPrompt[str]):
-
     def __init__(self, factory: 'InstallerPromptFactory'):
-        super().__init__(factory=factory,
-                         param=factory.args.get_meta('enabled_modules'))
+        super().__init__(
+            factory=factory, param=factory.args.get_meta('enabled_modules')
+        )
 
     def get_choices(self, refresh: bool = False) -> List[SocaUserInputChoice]:
         result = [
@@ -812,144 +899,161 @@ class EnabledModulesPrompt(DefaultPrompt[str]):
                 title='Global Settings (required)',
                 value=constants.MODULE_GLOBAL_SETTINGS,
                 checked=True,
-                disabled=True
+                disabled=True,
             ),
             SocaUserInputChoice(
                 title='Cluster (required)',
                 value=constants.MODULE_CLUSTER,
                 checked=True,
-                disabled=True
+                disabled=True,
             ),
             SocaUserInputChoice(
                 title='Analytics (required)',
                 value=constants.MODULE_ANALYTICS,
                 checked=True,
-                disabled=True
+                disabled=True,
             ),
             SocaUserInputChoice(
                 title='Identity Provider (required)',
                 value=constants.MODULE_IDENTITY_PROVIDER,
                 checked=True,
-                disabled=True
+                disabled=True,
             ),
             SocaUserInputChoice(
                 title='Directory Service (required)',
                 value=constants.MODULE_DIRECTORYSERVICE,
                 checked=True,
-                disabled=True
+                disabled=True,
             ),
             SocaUserInputChoice(
                 title='Shared Storage (required)',
                 value=constants.MODULE_SHARED_STORAGE,
                 checked=True,
-                disabled=True
+                disabled=True,
             ),
             SocaUserInputChoice(
                 title='Cluster Manager (required)',
                 value=constants.MODULE_CLUSTER_MANAGER,
                 checked=True,
-                disabled=True
+                disabled=True,
             ),
             SocaUserInputChoice(
-                title='Metrics and Monitoring',
-                value=constants.MODULE_METRICS
+                title='Metrics and Monitoring', value=constants.MODULE_METRICS
             ),
             SocaUserInputChoice(
                 title='Scale-out Computing on AWS (SOCA) for HPC',
-                value=constants.MODULE_SCHEDULER
+                value=constants.MODULE_SCHEDULER,
             ),
             SocaUserInputChoice(
                 title='Enterprise Virtual Desktop Infrastructure (eVDI)',
-                value=constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER
+                value=constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER,
             ),
             SocaUserInputChoice(
-                title='Bastion Host',
-                value=constants.MODULE_BASTION_HOST
-            )
+                title='Bastion Host', value=constants.MODULE_BASTION_HOST
+            ),
         ]
         return result
 
 
 class MetricsProviderPrompt(DefaultPrompt[str]):
-
     def __init__(self, factory: 'InstallerPromptFactory'):
-        super().__init__(factory=factory,
-                         param=factory.args.get_meta('metrics_provider'))
+        super().__init__(
+            factory=factory, param=factory.args.get_meta('metrics_provider')
+        )
 
     def get_choices(self, refresh: bool = False) -> List[SocaUserInputChoice]:
         aws_region = self.args.get('aws_region')
         if Utils.is_empty(aws_region):
-            raise exceptions.general_exception('aws_region is required to identify available metrics providers.')
+            raise exceptions.general_exception(
+                'aws_region is required to identify available metrics providers.'
+            )
 
         aws_profile = self.args.get('aws_profile')
         aws_secondary_profile = self.args.get('aws_profile2')
 
-        profile_string = f" {aws_profile}"
+        profile_string = f' {aws_profile}'
         if aws_secondary_profile:
-            profile_string = f"s (primary:  {aws_profile}, secondary: {aws_secondary_profile})"
+            profile_string = (
+                f's (primary:  {aws_profile}, secondary: {aws_secondary_profile})'
+            )
 
-        with self.context.spinner(f'checking available services in region: {aws_region} using AWS Profile{profile_string} ...'):
-            availability_helper = AwsServiceAvailabilityHelper(aws_region=aws_region, aws_profile=aws_profile, aws_secondary_profile=aws_secondary_profile)
+        with self.context.spinner(
+            f'checking available services in region: {aws_region} using AWS Profile{profile_string} ...'
+        ):
+            availability_helper = AwsServiceAvailabilityHelper(
+                aws_region=aws_region,
+                aws_profile=aws_profile,
+                aws_secondary_profile=aws_secondary_profile,
+            )
             available_services = availability_helper.get_available_services(aws_region)
 
         result = [
             SocaUserInputChoice(
                 title='AWS CloudWatch',
                 value=constants.METRICS_PROVIDER_CLOUDWATCH,
-                disabled='cloudwatch' not in available_services
+                disabled='cloudwatch' not in available_services,
             ),
             SocaUserInputChoice(
                 title='Amazon Managed Service for Prometheus',
                 value=constants.METRICS_PROVIDER_AMAZON_MANAGED_PROMETHEUS,
-                disabled='aps' not in available_services
+                disabled='aps' not in available_services,
             ),
             SocaUserInputChoice(
                 title='Custom Prometheus Server',
-                value=constants.METRICS_PROVIDER_PROMETHEUS
-            )
+                value=constants.METRICS_PROVIDER_PROMETHEUS,
+            ),
         ]
 
         return result
 
 
 class SharedStorageNamePrompt(DefaultPrompt[str]):
-
     def __init__(self, factory: 'InstallerPromptFactory'):
-        super().__init__(factory=factory,
-                         param=factory.args.get_meta('shared_storage_name'))
+        super().__init__(
+            factory=factory, param=factory.args.get_meta('shared_storage_name')
+        )
 
     def validate(self, value: str):
         is_upgrade = Utils.get_as_bool(self.args.get('_upgrade'), default=False)
         if is_upgrade:
-            existing_config = self.context.config().get_config(f'shared-storage.{value}', default=None)
+            existing_config = self.context.config().get_config(
+                f'shared-storage.{value}', default=None
+            )
             if existing_config is not None:
-                raise self.validation_error(f'A file system named: {value} already exists in shared storage settings')
+                raise self.validation_error(
+                    f'A file system named: {value} already exists in shared storage settings'
+                )
 
         super().validate(value)
 
 
 class SharedStorageProviderPrompt(DefaultPrompt[str]):
-
     def __init__(self, factory: 'InstallerPromptFactory'):
-        super().__init__(factory=factory,
-                         param=factory.args.get_meta('shared_storage_provider'))
+        super().__init__(
+            factory=factory, param=factory.args.get_meta('shared_storage_provider')
+        )
 
     def get_choices(self, refresh: bool = False) -> List[SocaUserInputChoice]:
         use_existing_fs = Utils.get_as_bool(self.args.get('use_existing_fs'), False)
 
         if use_existing_fs:
-
             vpc_id = self.args.get('vpc_id')
             if Utils.is_empty(vpc_id):
-                raise exceptions.general_exception('vpc_id is required to find existing resources')
+                raise exceptions.general_exception(
+                    'vpc_id is required to find existing resources'
+                )
 
-            with self.context.spinner(f'checking available file systems in Vpc: {vpc_id} ...'):
-                file_systems = self.context.get_aws_resources().get_file_systems(vpc_id=vpc_id, refresh=refresh)
+            with self.context.spinner(
+                f'checking available file systems in Vpc: {vpc_id} ...'
+            ):
+                file_systems = self.context.get_aws_resources().get_file_systems(
+                    vpc_id=vpc_id, refresh=refresh
+                )
 
             if len(file_systems) == 0:
                 raise exceptions.soca_exception(
                     error_code=errorcodes.USER_INPUT_FLOW_INTERRUPT,
-                    message=f'Unable to find any existing file systems in VPC: {vpc_id}'
+                    message=f'Unable to find any existing file systems in VPC: {vpc_id}',
                 )
 
             providers = set()
@@ -960,41 +1064,41 @@ class SharedStorageProviderPrompt(DefaultPrompt[str]):
                 SocaUserInputChoice(
                     title='Amazon EFS',
                     value=constants.STORAGE_PROVIDER_EFS,
-                    disabled=constants.STORAGE_PROVIDER_EFS not in providers
+                    disabled=constants.STORAGE_PROVIDER_EFS not in providers,
                 ),
                 SocaUserInputChoice(
                     title='Amazon File Cache',
                     value=constants.STORAGE_PROVIDER_FSX_CACHE,
-                    disabled=constants.STORAGE_PROVIDER_FSX_CACHE not in providers
+                    disabled=constants.STORAGE_PROVIDER_FSX_CACHE not in providers,
                 ),
                 SocaUserInputChoice(
                     title='Amazon FSx for Lustre',
                     value=constants.STORAGE_PROVIDER_FSX_LUSTRE,
-                    disabled=constants.STORAGE_PROVIDER_FSX_LUSTRE not in providers
+                    disabled=constants.STORAGE_PROVIDER_FSX_LUSTRE not in providers,
                 ),
                 SocaUserInputChoice(
                     title='Amazon FSx for NetApp ONTAP',
                     value=constants.STORAGE_PROVIDER_FSX_NETAPP_ONTAP,
-                    disabled=constants.STORAGE_PROVIDER_FSX_NETAPP_ONTAP not in providers
+                    disabled=constants.STORAGE_PROVIDER_FSX_NETAPP_ONTAP
+                    not in providers,
                 ),
                 SocaUserInputChoice(
                     title='Amazon FSx for OpenZFS',
                     value=constants.STORAGE_PROVIDER_FSX_OPENZFS,
-                    disabled=constants.STORAGE_PROVIDER_FSX_OPENZFS not in providers
+                    disabled=constants.STORAGE_PROVIDER_FSX_OPENZFS not in providers,
                 ),
                 SocaUserInputChoice(
                     title='Amazon FSx for Windows File Server',
                     value=constants.STORAGE_PROVIDER_FSX_WINDOWS_FILE_SERVER,
-                    disabled=constants.STORAGE_PROVIDER_FSX_WINDOWS_FILE_SERVER not in providers
-                )
+                    disabled=constants.STORAGE_PROVIDER_FSX_WINDOWS_FILE_SERVER
+                    not in providers,
+                ),
             ]
 
         else:
-
             return [
                 SocaUserInputChoice(
-                    title='Amazon EFS',
-                    value=constants.STORAGE_PROVIDER_EFS
+                    title='Amazon EFS', value=constants.STORAGE_PROVIDER_EFS
                 )
             ]
 
@@ -1004,17 +1108,18 @@ class InstallerPromptFactory:
     Base class for prompt initialization
     """
 
-    def __init__(self, context: SocaCliContext,
-                 param_registry: SocaUserInputParamRegistry,
-                 args: SocaUserInputArgs):
-
+    def __init__(
+        self,
+        context: SocaCliContext,
+        param_registry: SocaUserInputParamRegistry,
+        args: SocaUserInputArgs,
+    ):
         self.context = context
         self.args = args
         self.param_registry = param_registry
 
         self._install_prompts = SocaPromptRegistry(
-            context=self.context,
-            param_spec=self.param_registry
+            context=self.context, param_spec=self.param_registry
         )
 
     @property
@@ -1040,21 +1145,19 @@ class InstallerPromptFactory:
                 raise e
 
         if prompt is None:
-            prompt = DefaultPrompt(
-                factory=self,
-                param=param_meta
-            )
+            prompt = DefaultPrompt(factory=self, param=param_meta)
         return prompt
 
     def build_section(self, module: str, section: str) -> SocaUserInputSection:
-
         section_meta = self.param_registry.get_section(module, section)
         section_params = self.param_registry.get_params(module, section)
         section_prompts = []
 
         for param_meta in section_params:
-
-            if section == 'aws-account' and ideaadministrator.props.use_ec2_instance_metadata_credentials():
+            if (
+                section == 'aws-account'
+                and ideaadministrator.props.use_ec2_instance_metadata_credentials()
+            ):
                 # if administrator app is running inside EC2 Instance with InstanceMetadata credentials,
                 # skip profile selection prompt
                 if param_meta.name == 'aws_profile':
@@ -1065,13 +1168,15 @@ class InstallerPromptFactory:
             section_prompts.append(prompt)
 
         return SocaUserInputSection(
-            context=self.context,
-            section=section_meta,
-            prompts=section_prompts
+            context=self.context, section=section_meta, prompts=section_prompts
         )
 
     @staticmethod
-    def section_callback(context: ideaadministrator.Context, section: SocaUserInputSection, factory: 'InstallerPromptFactory') -> bool:
+    def section_callback(
+        context: ideaadministrator.Context,
+        section: SocaUserInputSection,
+        factory: 'InstallerPromptFactory',
+    ) -> bool:
         """
         the section call back is called by SocaUserInputModule after each section is completed.
 
@@ -1085,7 +1190,6 @@ class InstallerPromptFactory:
         """
 
         if section.name == 'aws-account':
-
             aws_region = factory.args.get('aws_region')
 
             if ideaadministrator.props.use_ec2_instance_metadata_credentials():
@@ -1101,8 +1205,13 @@ class InstallerPromptFactory:
 
         return True
 
-    def build_module(self, user_input_module: str, start_section: int = None, display_info: bool = True, display_steps: bool = True) -> SocaUserInputModule:
-
+    def build_module(
+        self,
+        user_input_module: str,
+        start_section: int = None,
+        display_info: bool = True,
+        display_steps: bool = True,
+    ) -> SocaUserInputModule:
         self.initialize_prompts(user_input_module)
 
         module_meta = self.param_registry.get_module(user_input_module)
@@ -1117,14 +1226,12 @@ class InstallerPromptFactory:
             context=self.context,
             module=module_meta,
             section_callback=self.section_callback,
-            section_callback_kwargs={
-                'factory': self
-            },
+            section_callback_kwargs={'factory': self},
             sections=sections,
             restart_errorcodes=[errorcodes.INSTALLER_MISSING_PERMISSIONS],
             display_info=display_info,
             display_steps=display_steps,
-            start_section=start_section
+            start_section=start_section,
         )
 
 
@@ -1133,9 +1240,12 @@ class QuickSetupPromptFactory(InstallerPromptFactory):
     Initialize Prompts for Quick Setup Installation Flows
     """
 
-    def __init__(self, context: SocaCliContext,
-                 param_registry: SocaUserInputParamRegistry,
-                 args: SocaUserInputArgs):
+    def __init__(
+        self,
+        context: SocaCliContext,
+        param_registry: SocaUserInputParamRegistry,
+        args: SocaUserInputArgs,
+    ):
         super().__init__(context, param_registry, args)
 
     def initialize_prompts(self, user_input_module: str):
@@ -1144,33 +1254,49 @@ class QuickSetupPromptFactory(InstallerPromptFactory):
 
     def initialize_overrides(self):
         self.register(ClusterNamePrompt(factory=self))
-        self.register(EmailPrompt(factory=self, param=self.args.get_meta('administrator_email')))
+        self.register(
+            EmailPrompt(factory=self, param=self.args.get_meta('administrator_email'))
+        )
         self.register(AwsProfilePrompt(factory=self))
         self.register(AwsProfilePrompt2(factory=self))
         self.register(AwsPartitionPrompt(factory=self))
         self.register(AwsRegionPrompt(factory=self))
         self.register(ClientIPPrompt(factory=self))
         self.register(PrefixListIdPrompt(factory=self))
-        self.register(SSHKeyPairPrompt(factory=self, param=self.args.get_meta('ssh_key_pair_name')))
+        self.register(
+            SSHKeyPairPrompt(
+                factory=self, param=self.args.get_meta('ssh_key_pair_name')
+            )
+        )
         self.register(EnabledModulesPrompt(factory=self))
         self.register(MetricsProviderPrompt(factory=self))
         self.register(VpcCidrBlockPrompt(factory=self))
         self.register(VpcIdPrompt(factory=self))
         self.register(ExistingResourcesPrompt(factory=self))
-        self.register(SubnetIdsPrompt(factory=self, param=self.args.get_meta('private_subnet_ids')))
-        self.register(SubnetIdsPrompt(factory=self, param=self.args.get_meta('public_subnet_ids')))
-        self.register(FileSystemIdPrompt(
-            factory=self,
-            param=self.args.get_meta('existing_apps_fs_id'),
-            existing_storage_flag_key='use_existing_apps_fs',
-            storage_provider_key='storage_apps_provider'
-        ))
-        self.register(FileSystemIdPrompt(
-            factory=self,
-            param=self.args.get_meta('existing_data_fs_id'),
-            existing_storage_flag_key='use_existing_data_fs',
-            storage_provider_key='storage_data_provider'
-        ))
+        self.register(
+            SubnetIdsPrompt(
+                factory=self, param=self.args.get_meta('private_subnet_ids')
+            )
+        )
+        self.register(
+            SubnetIdsPrompt(factory=self, param=self.args.get_meta('public_subnet_ids'))
+        )
+        self.register(
+            FileSystemIdPrompt(
+                factory=self,
+                param=self.args.get_meta('existing_apps_fs_id'),
+                existing_storage_flag_key='use_existing_apps_fs',
+                storage_provider_key='storage_apps_provider',
+            )
+        )
+        self.register(
+            FileSystemIdPrompt(
+                factory=self,
+                param=self.args.get_meta('existing_data_fs_id'),
+                existing_storage_flag_key='use_existing_data_fs',
+                storage_provider_key='storage_data_provider',
+            )
+        )
         self.register(OpenSearchDomainEndpointPrompt(factory=self))
         self.register(DirectoryServiceIdPrompt(factory=self))
 
@@ -1180,9 +1306,12 @@ class SharedStoragePromptFactory(InstallerPromptFactory):
     Initialize Prompts for Shared Storage Configuration
     """
 
-    def __init__(self, context: SocaCliContext,
-                 param_registry: SocaUserInputParamRegistry,
-                 args: SocaUserInputArgs):
+    def __init__(
+        self,
+        context: SocaCliContext,
+        param_registry: SocaUserInputParamRegistry,
+        args: SocaUserInputArgs,
+    ):
         super().__init__(context, param_registry, args)
 
     def initialize_prompts(self, user_input_module: str):
@@ -1195,59 +1324,77 @@ class SharedStoragePromptFactory(InstallerPromptFactory):
         self.register(SharedStorageProviderPrompt(factory=self))
 
         # efs
-        self.register(FileSystemIdPrompt(
-            factory=self,
-            param=self.args.get_meta('efs.file_system_id'),
-            storage_provider_key='shared_storage_provider'
-        ))
+        self.register(
+            FileSystemIdPrompt(
+                factory=self,
+                param=self.args.get_meta('efs.file_system_id'),
+                storage_provider_key='shared_storage_provider',
+            )
+        )
 
         # Amazon File Cache
-        self.register(FileSystemIdPrompt(
-            factory=self,
-            param=self.args.get_meta('fsx_cache.file_system_id'),
-            storage_provider_key='shared_storage_provider'
-        ))
+        self.register(
+            FileSystemIdPrompt(
+                factory=self,
+                param=self.args.get_meta('fsx_cache.file_system_id'),
+                storage_provider_key='shared_storage_provider',
+            )
+        )
 
         # lustre
-        self.register(FileSystemIdPrompt(
-            factory=self,
-            param=self.args.get_meta('fsx_lustre.file_system_id'),
-            storage_provider_key='shared_storage_provider'
-        ))
+        self.register(
+            FileSystemIdPrompt(
+                factory=self,
+                param=self.args.get_meta('fsx_lustre.file_system_id'),
+                storage_provider_key='shared_storage_provider',
+            )
+        )
 
         # ontap
-        self.register(FileSystemIdPrompt(
-            factory=self,
-            param=self.args.get_meta('fsx_netapp_ontap.file_system_id'),
-            storage_provider_key='shared_storage_provider'
-        ))
-        self.register(SharedStorageVirtualMachineIdPrompt(
-            factory=self,
-            param=self.args.get_meta('fsx_netapp_ontap.svm_id'),
-            file_system_id_key='fsx_netapp_ontap.file_system_id'
-        ))
-        self.register(SharedStorageVolumeIdPrompt(
-            factory=self,
-            param=self.args.get_meta('fsx_netapp_ontap.volume_id'),
-            file_system_id_key='fsx_netapp_ontap.file_system_id',
-            svm_id_key='fsx_netapp_ontap.svm_id'
-        ))
+        self.register(
+            FileSystemIdPrompt(
+                factory=self,
+                param=self.args.get_meta('fsx_netapp_ontap.file_system_id'),
+                storage_provider_key='shared_storage_provider',
+            )
+        )
+        self.register(
+            SharedStorageVirtualMachineIdPrompt(
+                factory=self,
+                param=self.args.get_meta('fsx_netapp_ontap.svm_id'),
+                file_system_id_key='fsx_netapp_ontap.file_system_id',
+            )
+        )
+        self.register(
+            SharedStorageVolumeIdPrompt(
+                factory=self,
+                param=self.args.get_meta('fsx_netapp_ontap.volume_id'),
+                file_system_id_key='fsx_netapp_ontap.file_system_id',
+                svm_id_key='fsx_netapp_ontap.svm_id',
+            )
+        )
 
         # openzfs
-        self.register(FileSystemIdPrompt(
-            factory=self,
-            param=self.args.get_meta('fsx_openzfs.file_system_id'),
-            storage_provider_key='shared_storage_provider'
-        ))
-        self.register(SharedStorageVolumeIdPrompt(
-            factory=self,
-            param=self.args.get_meta('fsx_openzfs.volume_id'),
-            file_system_id_key='fsx_openzfs.file_system_id'
-        ))
+        self.register(
+            FileSystemIdPrompt(
+                factory=self,
+                param=self.args.get_meta('fsx_openzfs.file_system_id'),
+                storage_provider_key='shared_storage_provider',
+            )
+        )
+        self.register(
+            SharedStorageVolumeIdPrompt(
+                factory=self,
+                param=self.args.get_meta('fsx_openzfs.volume_id'),
+                file_system_id_key='fsx_openzfs.file_system_id',
+            )
+        )
 
         # Windows file server
-        self.register(FileSystemIdPrompt(
-            factory=self,
-            param=self.args.get_meta('fsx_windows_file_server.file_system_id'),
-            storage_provider_key='shared_storage_provider'
-        ))
+        self.register(
+            FileSystemIdPrompt(
+                factory=self,
+                param=self.args.get_meta('fsx_windows_file_server.file_system_id'),
+                storage_provider_key='shared_storage_provider',
+            )
+        )

@@ -12,11 +12,12 @@
  */
 
 import React, {Component, RefObject} from "react";
+import {VirtualDesktopBaseOS, VirtualDesktopSoftwareStack, Project, VirtualDesktopTenancy, SocaUserInputChoice} from '../../../client/data-model'
 import IdeaForm from "../../../components/form";
-import {Project, SocaUserInputChoice, VirtualDesktopBaseOS, VirtualDesktopSoftwareStack, VirtualDesktopTenancy} from "../../../client/data-model";
 import {ProjectsClient} from "../../../client";
 import {AppContext} from "../../../common";
 import Utils from "../../../common/utils";
+import VirtualDesktopUtilsClient from "../../../client/virtual-desktop-utils-client";
 
 export interface VirtualDesktopSoftwareStackEditFormProps {
     softwareStack: VirtualDesktopSoftwareStack
@@ -29,7 +30,11 @@ export interface VirtualDesktopSoftwareStackEditFormProps {
         projects: Project[],
         pool_enabled: boolean,
         pool_asg_name: string,
-        launch_tenancy: VirtualDesktopTenancy
+        launch_tenancy: VirtualDesktopTenancy,
+        allowed_instance_types?: string[],
+        ami_id?: string,
+        min_ram?: number,
+        min_storage?: number
     ) => Promise<boolean>
 }
 
@@ -37,6 +42,7 @@ export interface VirtualDesktopSoftwareStackEditFormState {
     showModal: boolean
     projectChoices: SocaUserInputChoice[]
     tenancyChoices: SocaUserInputChoice[]
+    availableInstanceTypes: SocaUserInputChoice[]
 }
 
 class VirtualDesktopSoftwareStackEditForm extends Component<VirtualDesktopSoftwareStackEditFormProps, VirtualDesktopSoftwareStackEditFormState> {
@@ -48,8 +54,12 @@ class VirtualDesktopSoftwareStackEditForm extends Component<VirtualDesktopSoftwa
         this.state = {
             showModal: false,
             projectChoices: [],
-            tenancyChoices: []
+            tenancyChoices: [],
+            availableInstanceTypes: []
         }
+    }
+    getForm() {
+        return this.form.current!
     }
 
     hideForm() {
@@ -61,45 +71,61 @@ class VirtualDesktopSoftwareStackEditForm extends Component<VirtualDesktopSoftwa
     }
 
     showModal() {
+        console.log('VirtualDesktopSoftwareStackEditForm.showModal called');
         this.setState({
             showModal: true
         }, () => {
-            this.getForm().showModal()
-        })
+            console.log('Form modal state updated to:', this.state.showModal);
+        });
     }
 
     getProjectsClient(): ProjectsClient {
         return AppContext.get().client().projects()
     }
 
-    getForm() {
-        return this.form.current!
+    getVirtualDesktopUtilsClient(): VirtualDesktopUtilsClient {
+        return AppContext.get().client().virtualDesktopUtils()
     }
-
-    setError(errorCode: string, errorMessage: string) {
-        this.getForm().setError(errorCode, errorMessage)
-    }
-
-    getCurrentProjectsChoices(): string[] {
-        let choices: string[] = []
-        this.props.softwareStack.projects?.forEach(project => {
-            choices.push(project.project_id!)
-        })
-        return choices
-    }
-
-
 
     componentDidMount() {
-        this.getProjectsClient().getUserProjects({}).then(result => {
+        console.log('VirtualDesktopSoftwareStackEditForm.componentDidMount');
+        // Automatically show the modal when component mounts
+        this.setState({
+            showModal: true
+        }, () => {
+            // Call showModal on the IdeaForm ref after our own state is updated
+            if (this.form.current) {
+                console.log('Calling showModal on IdeaForm ref');
+                this.form.current.showModal();
+
+                // Explicitly set field values after form has mounted
+                setTimeout(() => {
+                    if (this.form.current) {
+                        if (this.props.softwareStack?.min_ram?.value) {
+                            this.form.current.getFormField('min_ram')?.setValue(this.props.softwareStack.min_ram.value);
+                        }
+                        if (this.props.softwareStack?.min_storage?.value) {
+                            this.form.current.getFormField('min_storage')?.setValue(this.props.softwareStack.min_storage.value);
+                        }
+                    }
+                }, 100); // Short delay to ensure form is ready
+            } else {
+                console.error('Form ref is not available');
+            }
+        });
+
+        // Use listProjects instead of getUserProjects to show all projects to admin users
+        this.getProjectsClient().listProjects({}).then(result => {
             let projectChoices: SocaUserInputChoice[] = []
-            result.projects?.forEach(project => {
-                projectChoices.push({
-                    title: project.title,
-                    value: project.project_id,
-                    description: project.description
+            if (result.listing) {
+                result.listing.forEach((project: Project) => {
+                    projectChoices.push({
+                        title: project.title,
+                        value: project.project_id,
+                        description: project.description
+                    })
                 })
-            })
+            }
             this.setState({
                 projectChoices: projectChoices
             }, () => {
@@ -112,21 +138,64 @@ class VirtualDesktopSoftwareStackEditForm extends Component<VirtualDesktopSoftwa
         this.setState({
             tenancyChoices: Utils.getTenancyChoices()
         }, () => {
-            this.getForm()?.getFormField('tenancy')?.setOptions({
+            this.getForm()?.getFormField('launch_tenancy')?.setOptions({
                 listing: this.state.tenancyChoices
             })
         })
+
+        // Fetch available instance types
+        this.getVirtualDesktopUtilsClient().listAllowedInstanceTypes({}).then((result) => {
+            const instanceTypeOptions: SocaUserInputChoice[] = [];
+            if (result.listing) {
+                // Simple array transformation without any complex filtering
+                result.listing.forEach((instance: any) => {
+                    if (instance.instance_type) {
+                        instanceTypeOptions.push({
+                            title: instance.instance_type,
+                            value: instance.instance_type
+                        });
+                    }
+                });
+            }
+
+            this.setState({
+                availableInstanceTypes: instanceTypeOptions
+            }, () => {
+                this.getForm()?.getFormField('allowed_instance_types')?.setOptions({
+                    listing: this.state.availableInstanceTypes
+                });
+            });
+        }).catch((error: any) => {
+            console.error("Failed to fetch instance types:", error);
+        });
     }
 
     render() {
+        // Helper function to extract project IDs
+        const getProjectIds = () => {
+            let projectIds: string[] = [];
+            this.props.softwareStack.projects?.forEach(project => {
+                if (project.project_id) {
+                    projectIds.push(project.project_id);
+                }
+            });
+            return projectIds;
+        };
+
+        console.log('Rendering VirtualDesktopSoftwareStackEditForm, showModal:', this.state.showModal);
+
         return (
-            this.state.showModal &&
             <IdeaForm
                 ref={this.form}
-                name={"update-software-stack"}
+                name="edit-software-stack"
                 modal={true}
-                title={"Update Software Stack: " + this.props.softwareStack.name}
-                modalSize={"medium"}
+                modalSize="medium"
+                title={`Edit Software Stack: ${this.props.softwareStack.name}`}
+                values={{
+                    ...this.props.softwareStack,
+                    launch_tenancy: this.props.softwareStack.launch_tenancy || 'default',
+                    projects: getProjectIds()
+                }}
                 onCancel={() => {
                     this.hideForm()
                 }}
@@ -156,14 +225,42 @@ class VirtualDesktopSoftwareStackEditForm extends Component<VirtualDesktopSoftwa
                     const pool_enabled = values.pool_enabled
                     const pool_asg_name = values.pool_asg_name
                     const launch_tenancy = values.launch_tenancy
+                    const ami_id = values.ami_id
+                    const allowedInstanceTypes = values.allowed_instance_types || [];
+                    const min_ram = values.min_ram;
+                    const min_storage = values.min_storage;
 
-                    return this.props.onSubmit(stack_id, base_os, name, description, projects, pool_enabled, pool_asg_name, launch_tenancy).then(result => {
+                    return this.props.onSubmit(
+                        stack_id,
+                        base_os,
+                        name,
+                        description,
+                        projects,
+                        pool_enabled,
+                        pool_asg_name,
+                        launch_tenancy,
+                        allowedInstanceTypes,
+                        ami_id,
+                        min_ram,
+                        min_storage
+                    ).then(result => {
                         this.hideForm()
                         return Promise.resolve(result)
                     }).catch(error => {
                         this.getForm().setError(error.errorCode, error.message)
                         return Promise.resolve(false)
                     })
+                }}
+                onFetchOptions={(request) => {
+                    if (request.param === 'allowed_instance_types') {
+                        // Return the available instance types directly without any filtering
+                        return Promise.resolve({
+                            listing: this.state.availableInstanceTypes
+                        });
+                    }
+                    return Promise.resolve({
+                        listing: []
+                    });
                 }}
                 params={[
                     {
@@ -175,7 +272,7 @@ class VirtualDesktopSoftwareStackEditForm extends Component<VirtualDesktopSoftwa
                         default: this.props.softwareStack?.name,
                         validate: {
                             required: true,
-                            regex: '^.{3,24}$'
+                            regex: '^.{3,50}$'
                         }
                     },
                     {
@@ -190,6 +287,37 @@ class VirtualDesktopSoftwareStackEditForm extends Component<VirtualDesktopSoftwa
                         }
                     },
                     {
+                        name: 'ami_id',
+                        title: 'AMI ID',
+                        description: 'Update the AMI ID for this software stack',
+                        help_text: 'AMI ID must start with ami-xxx',
+                        data_type: 'str',
+                        param_type: 'text',
+                        default: this.props.softwareStack?.ami_id
+                    },
+                    {
+                        name: 'min_ram',
+                        title: 'Min. RAM (GB)',
+                        description: 'Enter the min. RAM for your virtual desktop in GBs',
+                        data_type: 'int',
+                        param_type: 'text',
+                        default: this.props.softwareStack?.min_ram?.value,
+                        validate: {
+                            required: true
+                        }
+                    },
+                    {
+                        name: 'min_storage',
+                        title: 'Min. Storage Size (GB)',
+                        description: 'Enter the min. storage size for your virtual desktop in GBs. This must be greater or equal to the root volume size of the AMI.',
+                        data_type: 'int',
+                        param_type: 'text',
+                        default: this.props.softwareStack?.min_storage?.value,
+                        validate: {
+                            required: true
+                        }
+                    },
+                    {
                         name: 'projects',
                         title: 'Projects',
                         description: 'Select applicable projects for the software stack',
@@ -197,7 +325,6 @@ class VirtualDesktopSoftwareStackEditForm extends Component<VirtualDesktopSoftwa
                         param_type: 'select',
                         multiple: true,
                         choices: this.state.projectChoices,
-                        default: this.getCurrentProjectsChoices(),
                         validate: {
                             required: true
                         }
@@ -213,6 +340,20 @@ class VirtualDesktopSoftwareStackEditForm extends Component<VirtualDesktopSoftwa
                         validate: {
                             required: true
                         }
+                    },
+                    {
+                        name: 'allowed_instance_types',
+                        title: 'Allowed Instance Families/Types',
+                        description: 'Enter the instance families or specific types to allow with this software stack',
+                        data_type: 'str',
+                        param_type: 'text',
+                        multiple: true,
+                        default: this.props.softwareStack?.allowed_instance_types || [],
+                        help_text: 'You can enter specific instance types (e.g., t3.xlarge) or families (e.g., g4dn, t3). Leave empty to use global settings.',
+                        validate: {
+                            required: false
+                        },
+                        dynamic_choices: true
                     },
 /*                    {
                         name: 'pool_enabled',
@@ -242,6 +383,9 @@ class VirtualDesktopSoftwareStackEditForm extends Component<VirtualDesktopSoftwa
                     },*/
                 ]}/>
         )
+    }
+    setError(errorCode: string, message: string) {
+        this.getForm().setError(errorCode, message)
     }
 }
 

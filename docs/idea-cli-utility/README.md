@@ -1,2 +1,1 @@
 # IDEA CLI utility
-

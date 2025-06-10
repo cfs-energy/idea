@@ -28,26 +28,25 @@ def handler(event, context):
         tags = event['ResourceProperties']['Tags']
 
         ec2_client = boto3.client('ec2')
-        ec2_client.create_tags(
-            Resources=[resource_id],
-            Tags=tags
-        )
+        ec2_client.create_tags(Resources=[resource_id], Tags=tags)
 
-        http_client.send_cfn_response(CfnResponse(
-            context=context,
-            event=event,
-            status=CfnResponseStatus.SUCCESS,
-            data={},
-            physical_resource_id=resource_id
-        ))
+        http_client.send_cfn_response(
+            CfnResponse(
+                context=context,
+                event=event,
+                status=CfnResponseStatus.SUCCESS,
+                data={},
+                physical_resource_id=resource_id,
+            )
+        )
     except Exception as e:
         logging.exception(f'Failed to Tag EC2 Resource: {e}')
-        http_client.send_cfn_response(CfnResponse(
-            context=context,
-            event=event,
-            status=CfnResponseStatus.FAILED,
-            data={
-                'error': str(e)
-            },
-            physical_resource_id=str(e)
-        ))
+        http_client.send_cfn_response(
+            CfnResponse(
+                context=context,
+                event=event,
+                status=CfnResponseStatus.FAILED,
+                data={'error': str(e)},
+                physical_resource_id=str(e),
+            )
+        )

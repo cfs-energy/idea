@@ -9,20 +9,25 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
-from ideadatamodel import (
-    locale, constants, exceptions, SocaBaseModel
-)
+from ideadatamodel import locale, constants, exceptions, SocaBaseModel
 
 import ideasdk
 from ideasdk.analytics.analytics_service import AnalyticsService
 from ideasdk.protocols import (
-    SocaContextProtocol, CacheProviderProtocol, SocaPubSubProtocol,
-    SocaServiceRegistryProtocol, SocaConfigType
+    SocaContextProtocol,
+    CacheProviderProtocol,
+    SocaPubSubProtocol,
+    SocaServiceRegistryProtocol,
+    SocaConfigType,
 )
 from ideasdk.service import SocaServiceRegistry
 from ideasdk.aws import (
-    AWSClientProviderOptions, AwsClientProvider, IamPermissionUtil,
-    InstanceMetadataUtil, AWSUtil, AwsServiceEndpoint
+    AWSClientProviderOptions,
+    AwsClientProvider,
+    IamPermissionUtil,
+    InstanceMetadataUtil,
+    AWSUtil,
+    AwsServiceEndpoint,
 )
 
 from ideasdk.logging import SocaLogging
@@ -39,6 +44,7 @@ from logging import Logger
 from typing import Optional, List, Dict, Any
 from threading import RLock
 from pydantic import Field
+
 
 class SocaContextOptions(SocaBaseModel):
     cluster_name: Optional[str] = Field(default=None)
@@ -85,16 +91,13 @@ class SocaContextOptions(SocaBaseModel):
             enable_distributed_lock=False,
             enable_leader_election=False,
             enable_analytics=False,
-            config=None
+            config=None,
         )
 
 
 class SocaContext(SocaContextProtocol):
-
     def __init__(self, options: SocaContextOptions = None):
-
         try:
-
             self._lock = RLock()
 
             if options is None:
@@ -113,7 +116,6 @@ class SocaContext(SocaContextProtocol):
 
             is_app_server = Utils.get_as_bool(options.is_app_server, False)
             if is_app_server:
-
                 if Utils.is_empty(options.cluster_name):
                     raise exceptions.invalid_params('cluster_name is required')
                 if Utils.is_empty(options.aws_region):
@@ -129,63 +131,82 @@ class SocaContext(SocaContextProtocol):
                     module_id=options.module_id,
                     module_set=options.module_set,
                     aws_profile=options.aws_profile,
-                    create_subscription=True
+                    create_subscription=True,
                 )
 
-                self._logging = SocaLogging(config=self._config, module_id=options.module_id)
-                self._cache_provider = CacheProvider(context=self, module_id=options.module_id)
+                self._logging = SocaLogging(
+                    config=self._config, module_id=options.module_id
+                )
+                self._cache_provider = CacheProvider(
+                    context=self, module_id=options.module_id
+                )
 
                 self._config.set_logger(self._logging.get_logger('cluster-config'))
 
-            elif options.config is None and Utils.is_not_empty(options.cluster_name) and Utils.is_not_empty(options.aws_region):
-
+            elif (
+                options.config is None
+                and Utils.is_not_empty(options.cluster_name)
+                and Utils.is_not_empty(options.aws_region)
+            ):
                 self._config = ClusterConfig(
                     cluster_name=options.cluster_name,
                     aws_region=options.aws_region,
                     module_id=options.module_id,
                     module_set=options.module_set,
-                    aws_profile=options.aws_profile
+                    aws_profile=options.aws_profile,
                 )
 
-                self._logging = SocaLogging(default_logging_profile=self._options.default_logging_profile)
+                self._logging = SocaLogging(
+                    default_logging_profile=self._options.default_logging_profile
+                )
                 self._cache_provider = CacheProvider(context=self, module_id='default')
 
             else:
-
                 config = Utils.get_as_dict(options.config, {})
                 self._config = SocaConfig(config)
-                self._logging = SocaLogging(module_id='default', default_logging_profile=self._options.default_logging_profile)
+                self._logging = SocaLogging(
+                    module_id='default',
+                    default_logging_profile=self._options.default_logging_profile,
+                )
                 self._cache_provider = CacheProvider(context=self, module_id='default')
 
             # soca sdk defaults
             self._broadcast = SocaPubSub(
-                topic=constants.TOPIC_BROADCAST,
-                logger=self._logging.get_logger()
+                topic=constants.TOPIC_BROADCAST, logger=self._logging.get_logger()
             )
             self._service_registry = SocaServiceRegistry(context=self)
 
             # begin: optional components
             if options.enable_aws_client_provider:
                 endpoints = []
-                if Utils.is_true(options.use_vpc_endpoints) and self.config().get_bool('cluster.network.use_vpc_endpoints', False):
-                    vpc_endpoints = self.config().get_config('cluster.network.vpc_interface_endpoints', {})
+                if Utils.is_true(options.use_vpc_endpoints) and self.config().get_bool(
+                    'cluster.network.use_vpc_endpoints', False
+                ):
+                    vpc_endpoints = self.config().get_config(
+                        'cluster.network.vpc_interface_endpoints', {}
+                    )
                     for service_name in vpc_endpoints:
                         endpoint_config = vpc_endpoints[service_name]
-                        if not Utils.get_value_as_bool('enabled', endpoint_config, False):
+                        if not Utils.get_value_as_bool(
+                            'enabled', endpoint_config, False
+                        ):
                             continue
-                        endpoint_url = Utils.get_value_as_string('endpoint_url', endpoint_config)
+                        endpoint_url = Utils.get_value_as_string(
+                            'endpoint_url', endpoint_config
+                        )
                         if Utils.is_empty(endpoint_url):
                             continue
-                        endpoints.append(AwsServiceEndpoint(
-                            service_name=service_name,
-                            endpoint_url=endpoint_url
-                        ))
+                        endpoints.append(
+                            AwsServiceEndpoint(
+                                service_name=service_name, endpoint_url=endpoint_url
+                            )
+                        )
 
                 self._aws = AwsClientProvider(
                     options=AWSClientProviderOptions(
                         profile=options.aws_profile,
                         region=options.aws_region,
-                        endpoints=endpoints
+                        endpoints=endpoints,
                     )
                 )
 
@@ -193,7 +214,12 @@ class SocaContext(SocaContextProtocol):
             if Utils.is_not_empty(self._options.locale):
                 self._locale = self._options.locale
             else:
-                self._locale = self.config().get_string('cluster.locale', EnvironmentUtils.get_environment_variable('LC_CTYPE', default='en_US'))
+                self._locale = self.config().get_string(
+                    'cluster.locale',
+                    EnvironmentUtils.get_environment_variable(
+                        'LC_CTYPE', default='en_US'
+                    ),
+                )
             locale.init(self._locale)
 
             # iam permission utils
@@ -222,7 +248,9 @@ class SocaContext(SocaContextProtocol):
 
             # metrics
             if options.enable_metrics:
-                self._metrics_service = MetricsService(context=self, default_namespace=options.metrics_namespace)
+                self._metrics_service = MetricsService(
+                    context=self, default_namespace=options.metrics_namespace
+                )
 
         except BaseException as e:
             if self._distributed_lock is not None:
@@ -289,7 +317,9 @@ class SocaContext(SocaContextProtocol):
         return ideasdk.__version__
 
     def cluster_timezone(self) -> str:
-        return self.config().get_string('cluster.timezone', default='America/Los_Angeles')
+        return self.config().get_string(
+            'cluster.timezone', default='America/Los_Angeles'
+        )
 
     def get_aws_solution_id(self) -> str:
         return constants.AWS_SOLUTION_ID

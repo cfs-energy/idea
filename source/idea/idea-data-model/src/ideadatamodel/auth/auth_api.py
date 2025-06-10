@@ -67,7 +67,7 @@ __all__ = (
     'AuthenticateUserResult',
     'GetUserPrivateKeyRequest',
     'GetUserPrivateKeyResult',
-    'OPEN_API_SPEC_ENTRIES_AUTH'
+    'OPEN_API_SPEC_ENTRIES_AUTH',
 )
 
 from pydantic import Field
@@ -80,6 +80,7 @@ from typing import Optional, List, Dict
 
 # CreateUser
 
+
 class CreateUserRequest(SocaPayload):
     user: Optional[User] = Field(default=None)
     email_verified: Optional[bool] = Field(default=None)
@@ -91,6 +92,7 @@ class CreateUserResult(SocaPayload):
 
 # GetUser
 
+
 class GetUserRequest(SocaPayload):
     username: Optional[str] = Field(default=None)
 
@@ -100,6 +102,7 @@ class GetUserResult(SocaPayload):
 
 
 # ModifyUser
+
 
 class ModifyUserRequest(SocaPayload):
     user: Optional[User] = Field(default=None)
@@ -112,6 +115,7 @@ class ModifyUserResult(SocaPayload):
 
 # DeleteUser
 
+
 class DeleteUserRequest(SocaPayload):
     username: Optional[str] = Field(default=None)
 
@@ -121,6 +125,7 @@ class DeleteUserResult(SocaPayload):
 
 
 # EnableUser
+
 
 class EnableUserRequest(SocaPayload):
     username: Optional[str] = Field(default=None)
@@ -132,6 +137,7 @@ class EnableUserResult(SocaPayload):
 
 # DisableUser
 
+
 class DisableUserRequest(SocaPayload):
     username: Optional[str] = Field(default=None)
 
@@ -142,6 +148,7 @@ class DisableUserResult(SocaPayload):
 
 # ListUsers
 
+
 class ListUsersRequest(SocaListingPayload):
     pass
 
@@ -151,6 +158,7 @@ class ListUsersResult(SocaListingPayload):
 
 
 # InitiateAuth
+
 
 class InitiateAuthRequest(SocaPayload):
     client_id: Optional[str] = Field(default=None)
@@ -170,6 +178,7 @@ class InitiateAuthResult(SocaPayload):
 
 # RespondToAuthChallenge
 
+
 class RespondToAuthChallengeRequest(SocaPayload):
     client_id: Optional[str] = Field(default=None)
     session: Optional[str] = Field(default=None)
@@ -188,6 +197,7 @@ class RespondToAuthChallengeResult(SocaPayload):
 
 # ForgotPassword
 
+
 class ForgotPasswordRequest(SocaPayload):
     client_id: Optional[str] = Field(default=None)
     username: Optional[str] = Field(default=None)
@@ -198,6 +208,7 @@ class ForgotPasswordResult(SocaPayload):
 
 
 # ChangePassword
+
 
 class ChangePasswordRequest(SocaPayload):
     username: Optional[str] = Field(default=None)
@@ -211,6 +222,7 @@ class ChangePasswordResult(SocaPayload):
 
 # ResetPassword
 
+
 class ResetPasswordRequest(SocaPayload):
     username: Optional[str] = Field(default=None)
 
@@ -220,6 +232,7 @@ class ResetPasswordResult(SocaPayload):
 
 
 # ConfirmForgotPassword
+
 
 class ConfirmForgotPasswordRequest(SocaPayload):
     client_id: Optional[str] = Field(default=None)
@@ -234,6 +247,7 @@ class ConfirmForgotPasswordResult(SocaPayload):
 
 # SignOut
 
+
 class SignOutRequest(SocaPayload):
     refresh_token: Optional[str] = Field(default=None)
     sso_auth: Optional[bool] = Field(default=None)
@@ -245,6 +259,7 @@ class SignOutResult(SocaPayload):
 
 # GlobalSignOut
 
+
 class GlobalSignOutRequest(SocaPayload):
     username: Optional[str] = Field(default=None)
 
@@ -254,6 +269,7 @@ class GlobalSignOutResult(SocaPayload):
 
 
 # CreateGroup
+
 
 class CreateGroupRequest(SocaPayload):
     group: Optional[Group] = Field(default=None)
@@ -265,6 +281,7 @@ class CreateGroupResult(SocaPayload):
 
 # ModifyGroup
 
+
 class ModifyGroupRequest(SocaPayload):
     group: Optional[Group] = Field(default=None)
 
@@ -274,6 +291,7 @@ class ModifyGroupResult(SocaPayload):
 
 
 # DeleteGroup
+
 
 class DeleteGroupRequest(SocaPayload):
     group_name: Optional[str] = Field(default=None)
@@ -285,6 +303,7 @@ class DeleteGroupResult(SocaPayload):
 
 # EnableGroup
 
+
 class EnableGroupRequest(SocaPayload):
     group_name: Optional[str] = Field(default=None)
 
@@ -294,6 +313,7 @@ class EnableGroupResult(SocaPayload):
 
 
 # DisableGroup
+
 
 class DisableGroupRequest(SocaPayload):
     group_name: Optional[str] = Field(default=None)
@@ -305,6 +325,7 @@ class DisableGroupResult(SocaPayload):
 
 # GetGroup
 
+
 class GetGroupRequest(SocaPayload):
     group_name: Optional[str] = Field(default=None)
 
@@ -315,6 +336,7 @@ class GetGroupResult(SocaPayload):
 
 # ListGroups
 
+
 class ListGroupsRequest(SocaListingPayload):
     username: Optional[str] = Field(default=None)
 
@@ -324,6 +346,7 @@ class ListGroupsResult(SocaListingPayload):
 
 
 # AddUserToGroup
+
 
 class AddUserToGroupRequest(SocaPayload):
     usernames: Optional[List[str]] = Field(default=None)
@@ -336,6 +359,7 @@ class AddUserToGroupResult(SocaPayload):
 
 # RemoveUserFromGroup
 
+
 class RemoveUserFromGroupRequest(SocaPayload):
     usernames: Optional[List[str]] = Field(default=None)
     group_name: Optional[str] = Field(default=None)
@@ -347,6 +371,7 @@ class RemoveUserFromGroupResult(SocaPayload):
 
 # ListUsersInGroup
 
+
 class ListUsersInGroupRequest(SocaListingPayload):
     group_names: Optional[List[str]] = Field(default=None)
 
@@ -356,6 +381,7 @@ class ListUsersInGroupResult(SocaListingPayload):
 
 
 # AddSudoUser
+
 
 class AddSudoUserRequest(SocaPayload):
     username: Optional[str] = Field(default=None)
@@ -367,6 +393,7 @@ class AddSudoUserResult(SocaPayload):
 
 # RemoveSudoUser
 
+
 class RemoveSudoUserRequest(SocaPayload):
     username: Optional[str] = Field(default=None)
 
@@ -376,6 +403,7 @@ class RemoveSudoUserResult(SocaPayload):
 
 
 # AuthenticateUser
+
 
 class AuthenticateUserRequest(SocaPayload):
     username: Optional[str] = Field(default=None)
@@ -387,6 +415,7 @@ class AuthenticateUserResult(SocaPayload):
 
 
 # GetUserPrivateKey
+
 
 class GetUserPrivateKeyRequest(SocaPayload):
     key_format: Optional[str] = Field(default=None)  # pem, ppk
@@ -404,237 +433,237 @@ OPEN_API_SPEC_ENTRIES_AUTH = [
         request=CreateUserRequest,
         result=CreateUserResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Accounts.GetUser',
         request=GetUserRequest,
         result=GetUserResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Accounts.ModifyUser',
         request=ModifyUserRequest,
         result=ModifyUserResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Accounts.EnableUser',
         request=EnableUserRequest,
         result=EnableUserResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Accounts.DisableUser',
         request=DisableUserRequest,
         result=DisableUserResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Accounts.DeleteUser',
         request=DeleteUserRequest,
         result=DeleteUserResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Accounts.ListUsers',
         request=ListUsersRequest,
         result=ListUsersResult,
         is_listing=True,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Accounts.CreateGroup',
         request=CreateGroupRequest,
         result=CreateGroupResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Accounts.GetGroup',
         request=GetGroupRequest,
         result=GetGroupResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Accounts.ModifyGroup',
         request=ModifyGroupRequest,
         result=ModifyGroupResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Accounts.EnableGroup',
         request=EnableGroupRequest,
         result=EnableGroupResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Accounts.DisableGroup',
         request=DisableGroupRequest,
         result=DisableGroupResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Accounts.DeleteGroup',
         request=DeleteGroupRequest,
         result=DeleteGroupResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Accounts.AddUserToGroup',
         request=AddUserToGroupRequest,
         result=AddUserToGroupResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Accounts.RemoveUserFromGroup',
         request=RemoveUserFromGroupRequest,
         result=RemoveUserFromGroupResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Accounts.ListGroups',
         request=ListGroupsRequest,
         result=ListGroupsResult,
         is_listing=True,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Accounts.ListUsersInGroup',
         request=ListUsersInGroupRequest,
         result=ListUsersInGroupResult,
         is_listing=True,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Accounts.AddSudoUser',
         request=AddSudoUserRequest,
         result=AddSudoUserResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Accounts.RemoveSudoUser',
         request=RemoveSudoUserRequest,
         result=RemoveSudoUserResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Accounts.GlobalSignOut',
         request=GlobalSignOutRequest,
         result=GlobalSignOutResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Accounts.ResetPassword',
         request=ResetPasswordRequest,
         result=ResetPasswordResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Auth.InitiateAuth',
         request=InitiateAuthRequest,
         result=InitiateAuthResult,
         is_listing=False,
-        is_public=True
+        is_public=True,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Auth.RespondToAuthChallenge',
         request=RespondToAuthChallengeRequest,
         result=RespondToAuthChallengeResult,
         is_listing=False,
-        is_public=True
+        is_public=True,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Auth.ForgotPassword',
         request=ForgotPasswordRequest,
         result=ForgotPasswordResult,
         is_listing=False,
-        is_public=True
+        is_public=True,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Auth.ConfirmForgotPassword',
         request=ConfirmForgotPasswordRequest,
         result=ConfirmForgotPasswordResult,
         is_listing=False,
-        is_public=True
+        is_public=True,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Auth.ChangePassword',
         request=ChangePasswordRequest,
         result=ChangePasswordResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Auth.GetUser',
         request=GetUserRequest,
         result=GetUserResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Auth.GetGroup',
         request=GetGroupRequest,
         result=GetGroupResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Auth.AddUserToGroup',
         request=AddUserToGroupRequest,
         result=AddUserToGroupResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Auth.RemoveUserFromGroup',
         request=RemoveUserFromGroupRequest,
         result=RemoveUserFromGroupResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Auth.GetUserPrivateKey',
         request=GetUserPrivateKeyRequest,
         result=GetUserPrivateKeyResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Auth.ListUsersInGroup',
         request=ListUsersInGroupRequest,
         result=ListUsersInGroupResult,
         is_listing=True,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Auth.SignOut',
         request=SignOutRequest,
         result=SignOutResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Auth.GlobalSignOut',
         request=GlobalSignOutRequest,
         result=GlobalSignOutResult,
         is_listing=False,
-        is_public=False
-    )
+        is_public=False,
+    ),
 ]

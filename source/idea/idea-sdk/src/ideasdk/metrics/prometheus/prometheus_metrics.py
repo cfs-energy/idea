@@ -43,11 +43,7 @@ class PrometheusMetrics(MetricsProviderProtocol):
 
     @staticmethod
     def _build_metric_key(entry: Dict) -> str:
-        keys = [
-            entry['Namespace'],
-            entry['MetricName'],
-            entry['MetricType']
-        ]
+        keys = [entry['Namespace'], entry['MetricName'], entry['MetricType']]
         dimensions = Utils.get_value_as_list('Dimensions', entry)
         if dimensions is not None:
             for dimension in dimensions:
@@ -56,7 +52,6 @@ class PrometheusMetrics(MetricsProviderProtocol):
         return Utils.sha256(';'.join(keys))
 
     def _get_or_create_metric(self, entry: Dict):
-
         key = self._build_metric_key(entry)
 
         metric = None
@@ -96,13 +91,13 @@ class PrometheusMetrics(MetricsProviderProtocol):
             metric = Counter(
                 name=prometheus_metric_name,
                 documentation=documentation,
-                labelnames=labels
+                labelnames=labels,
             )
         elif metric_type == 'Summary':
             metric = Summary(
                 name=prometheus_metric_name,
                 documentation=documentation,
-                labelnames=labels
+                labelnames=labels,
             )
 
         if metric is not None:
@@ -112,7 +107,6 @@ class PrometheusMetrics(MetricsProviderProtocol):
         return metric
 
     def _process_metric(self, entry: Dict):
-
         metric = self._get_or_create_metric(entry)
 
         if metric is None:

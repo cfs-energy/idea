@@ -22,7 +22,7 @@ from ideaadministrator.app.cdk.stacks import (
     BastionHostStack,
     AnalyticsStack,
     VirtualDesktopControllerStack,
-    MetricsStack
+    MetricsStack,
 )
 
 import aws_cdk as cdk
@@ -35,14 +35,16 @@ class CdkApp:
     IDEA CDK App
     """
 
-    def __init__(self, cluster_name: str,
-                 module_name: str,
-                 module_id: str,
-                 aws_region: str,
-                 deployment_id: str,
-                 termination_protection: bool,
-                 aws_profile: str = None):
-
+    def __init__(
+        self,
+        cluster_name: str,
+        module_name: str,
+        module_id: str,
+        aws_region: str,
+        deployment_id: str,
+        termination_protection: bool,
+        aws_profile: str = None,
+    ):
         self.cluster_name = cluster_name
         self.module_name = module_name
         self.module_id = module_id
@@ -51,7 +53,9 @@ class CdkApp:
         self.deployment_id = deployment_id
         self.termination_protection = termination_protection
 
-        session = Utils.create_boto_session(aws_region=aws_region, aws_profile=aws_profile)
+        session = Utils.create_boto_session(
+            aws_region=aws_region, aws_profile=aws_profile
+        )
 
         sts = session.client('sts')
         result = sts.get_caller_identity()
@@ -60,20 +64,20 @@ class CdkApp:
         self.cdk_app = cdk.App()
 
         # add cdk nag scan
-        enable_nag_scan = Utils.get_as_bool(EnvironmentUtils.get_environment_variable('IDEA_ADMIN_ENABLE_CDK_NAG_SCAN'), True)
+        enable_nag_scan = Utils.get_as_bool(
+            EnvironmentUtils.get_environment_variable('IDEA_ADMIN_ENABLE_CDK_NAG_SCAN'),
+            True,
+        )
         if enable_nag_scan:
             Aspects.of(self.cdk_app).add(AwsSolutionsChecks())
 
-        self.cdk_env = cdk.Environment(
-            account=account_id,
-            region=aws_region
-        )
+        self.cdk_env = cdk.Environment(account=account_id, region=aws_region)
 
     def bootstrap_stack(self):
         SocaBootstrapStack(
             scope=self.cdk_app,
             env=self.cdk_env,
-            stack_name=f'{self.cluster_name}-bootstrap'
+            stack_name=f'{self.cluster_name}-bootstrap',
         )
 
     def cluster_stack(self):
@@ -85,7 +89,7 @@ class CdkApp:
             module_id=self.module_id,
             deployment_id=self.deployment_id,
             termination_protection=self.termination_protection,
-            env=self.cdk_env
+            env=self.cdk_env,
         )
 
     def identity_provider_stack(self):
@@ -97,7 +101,7 @@ class CdkApp:
             module_id=self.module_id,
             deployment_id=self.deployment_id,
             termination_protection=self.termination_protection,
-            env=self.cdk_env
+            env=self.cdk_env,
         )
 
     def directoryservice_stack(self):
@@ -109,7 +113,7 @@ class CdkApp:
             module_id=self.module_id,
             deployment_id=self.deployment_id,
             termination_protection=self.termination_protection,
-            env=self.cdk_env
+            env=self.cdk_env,
         )
 
     def shared_storage_stack(self):
@@ -121,7 +125,7 @@ class CdkApp:
             module_id=self.module_id,
             deployment_id=self.deployment_id,
             termination_protection=self.termination_protection,
-            env=self.cdk_env
+            env=self.cdk_env,
         )
 
     def cluster_manager_stack(self):
@@ -133,7 +137,7 @@ class CdkApp:
             module_id=self.module_id,
             deployment_id=self.deployment_id,
             termination_protection=self.termination_protection,
-            env=self.cdk_env
+            env=self.cdk_env,
         )
 
     def scheduler_stack(self):
@@ -145,7 +149,7 @@ class CdkApp:
             module_id=self.module_id,
             deployment_id=self.deployment_id,
             termination_protection=self.termination_protection,
-            env=self.cdk_env
+            env=self.cdk_env,
         )
 
     def bastion_host_stack(self):
@@ -157,7 +161,7 @@ class CdkApp:
             module_id=self.module_id,
             deployment_id=self.deployment_id,
             termination_protection=self.termination_protection,
-            env=self.cdk_env
+            env=self.cdk_env,
         )
 
     def analytics_stack(self):
@@ -169,7 +173,7 @@ class CdkApp:
             module_id=self.module_id,
             deployment_id=self.deployment_id,
             termination_protection=self.termination_protection,
-            env=self.cdk_env
+            env=self.cdk_env,
         )
 
     def virtual_desktop_controller_stack(self):
@@ -181,7 +185,7 @@ class CdkApp:
             module_id=self.module_id,
             deployment_id=self.deployment_id,
             termination_protection=self.termination_protection,
-            env=self.cdk_env
+            env=self.cdk_env,
         )
 
     def metrics_stack(self):
@@ -193,7 +197,7 @@ class CdkApp:
             module_id=self.module_id,
             deployment_id=self.deployment_id,
             termination_protection=self.termination_protection,
-            env=self.cdk_env
+            env=self.cdk_env,
         )
 
     def build_stack(self):

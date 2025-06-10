@@ -26,7 +26,7 @@ __all__ = (
     'DisableProjectResult',
     'GetUserProjectsRequest',
     'GetUserProjectsResult',
-    'OPEN_API_SPEC_ENTRIES_PROJECTS'
+    'OPEN_API_SPEC_ENTRIES_PROJECTS',
 )
 
 from ideadatamodel import SocaPayload, SocaListingPayload, IdeaOpenAPISpecEntry
@@ -117,48 +117,48 @@ OPEN_API_SPEC_ENTRIES_PROJECTS = [
         request=CreateProjectRequest,
         result=CreateProjectResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Projects.GetProject',
         request=GetProjectRequest,
         result=GetProjectResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Projects.UpdateProject',
         request=UpdateProjectRequest,
         result=UpdateProjectResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Projects.ListProjects',
         request=ListProjectsRequest,
         result=ListProjectsResult,
         is_listing=True,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Projects.GetUserProjects',
         request=GetUserProjectsRequest,
         result=GetUserProjectsResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Projects.EnableProject',
         request=EnableProjectRequest,
         result=EnableProjectResult,
         is_listing=False,
-        is_public=False
+        is_public=False,
     ),
     IdeaOpenAPISpecEntry(
         namespace='Projects.DisableProject',
         request=DisableProjectRequest,
         result=DisableProjectResult,
         is_listing=False,
-        is_public=False
-    )
+        is_public=False,
+    ),
 ]

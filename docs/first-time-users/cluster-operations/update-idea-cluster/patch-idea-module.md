@@ -26,12 +26,12 @@ You also must be running this command on a system that has the permission to upl
 
 ## Example: Updating the `cluster-manager` module of a running IDEA environment
 
-<pre class="language-bash"><code class="lang-bash"># This guide assume your local system followed Developer Onboarding guide 
-# # # # # # # # # # # # # # # # # # # 
+<pre class="language-bash"><code class="lang-bash"># This guide assume your local system followed Developer Onboarding guide
+# # # # # # # # # # # # # # # # # # #
 <strong>#                                   #
 </strong><strong># 1. Generate the dist package.     #
 </strong><strong>#                                   #
-</strong><strong># # # # # # # # # # # # # # # # # # # 
+</strong><strong># # # # # # # # # # # # # # # # # # #
 </strong><strong>$ invoke clean build package
 </strong>------------------------------------------------------------------------------------------------------------------------
 * begin: clean all
@@ -55,15 +55,15 @@ distribution created: idea-dcv-connection-gateway-3.0.0.tar.gz
 * end: package all
 ------------------------------------------------------------------------------------------------------------------------
 
-# # # # # # # # # # # # # # # # # # # 
+# # # # # # # # # # # # # # # # # # #
 #                                   #
 # 2. Run the patch command          #
 #                                   #
-# # # # # # # # # # # # # # # # # # # 
+# # # # # # # # # # # # # # # # # # #
 $ ./idea-admin.sh patch cluster-manager \
    --aws-region us-east-2 \
    --cluster-name idea-prerc
-   
+
 searching for applicable ec2 instances ...
 +---------------------+----------------------------+-------------------------------------------+-------------+---------+
 | Instance Id         | Instance Name              | Host Name                                 | Private IP  | State   |
@@ -71,9 +71,9 @@ searching for applicable ec2 instances ...
 | i-0f45cb&#x3C;REDACTED> | idea-prerc-cluster-manager | ip-10-0-211-98.us-east-2.compute.internal | 10.0.211.98 | running |
 +---------------------+----------------------------+-------------------------------------------+-------------+---------+
 ? Are you sure you want to patch the above running ec2 instances for module: cluster-manager? Yes
-uploading package: /Users/mcrozes/Solution-for-scale-out-computing-on-aws/dist/idea-cluster-manager-3.0.0.tar.gz to 
+uploading package: /Users/mcrozes/Solution-for-scale-out-computing-on-aws/dist/idea-cluster-manager-3.0.0.tar.gz to
 s3://idea-prerc-cluster-us-east-2-&#x3C;REDACTED>/idea/patches/idea-cluster-manager-3.0.0.tar.gz ...
-patch command: sudo /bin/bash /root/bootstrap/latest/cluster-manager/install_app.sh s3://idea-prerc-cluster-us-east-2-&#x3C;REDACTED>/idea/patches/idea-cluster-manager-3.0.0.tar.gz >> 
+patch command: sudo /bin/bash /root/bootstrap/latest/cluster-manager/install_app.sh s3://idea-prerc-cluster-us-east-2-&#x3C;REDACTED>/idea/patches/idea-cluster-manager-3.0.0.tar.gz >>
 /root/bootstrap/logs/patch.log
 Patch execution status for SSM Command Id: 090070ee-aa2a-4bb6-b332-220f90aabfb7
 +---------------------+----------------------------+-------------------------------------------+-------------+---------+--------------+

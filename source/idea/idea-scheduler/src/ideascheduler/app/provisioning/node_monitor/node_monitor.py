@@ -11,7 +11,10 @@
 
 import ideascheduler
 from ideadatamodel import (
-    constants, EC2Instance, EC2InstanceMonitorEvent, SocaComputeNode
+    constants,
+    EC2Instance,
+    EC2InstanceMonitorEvent,
+    SocaComputeNode,
 )
 from ideasdk.service import SocaService
 from ideasdk.pubsub import SocaPubSub
@@ -73,7 +76,10 @@ class NodeMonitorState:
         is_expired = Utils.is_interval_expired(
             last_run_ms=self._last_housekeeper_run,
             now_ms=Utils.current_time_ms(),
-            interval_secs=self._context.config().get_int('scheduler.job_provisioning.node_housekeeping_interval_seconds', default=60)
+            interval_secs=self._context.config().get_int(
+                'scheduler.job_provisioning.node_housekeeping_interval_seconds',
+                default=60,
+            ),
         )
 
         if is_expired:
@@ -108,11 +114,12 @@ class NodeMonitor(SocaService, NodeMonitorProtocol):
 
     def _initialize(self):
         self._topic = SocaPubSub(constants.TOPIC_NODE_MONITOR_EVENTS)
-        self._instance_monitor_topic = SocaPubSub(constants.TOPIC_EC2_INSTANCE_MONITOR_EVENTS)
+        self._instance_monitor_topic = SocaPubSub(
+            constants.TOPIC_EC2_INSTANCE_MONITOR_EVENTS
+        )
 
         self._node_monitor_thread = Thread(
-            name='node-monitor',
-            target=self._monitor_nodes
+            name='node-monitor', target=self._monitor_nodes
         )
         self._housekeeper = NodeHouseKeeper(self._context)
         self._monitor = Condition()
@@ -123,7 +130,9 @@ class NodeMonitor(SocaService, NodeMonitorProtocol):
     def _instance_monitor_subscriber(self, _, message: EC2InstanceMonitorEvent):
         if message.type == constants.EC2_INSTANCE_MONITOR_EVENT_CACHE_REFRESH:
             self._state.instance_cache_refresh_event.set()
-        elif message.type == constants.EC2_INSTANCE_MONITOR_EVENT_INSTANCE_STATE_RUNNING:
+        elif (
+            message.type == constants.EC2_INSTANCE_MONITOR_EVENT_INSTANCE_STATE_RUNNING
+        ):
             self._state.add_running_instance(instance=message.instance)
         self._instance_updates_available_event.set()
 
@@ -134,7 +143,6 @@ class NodeMonitor(SocaService, NodeMonitorProtocol):
         :return:
         """
         try:
-
             if not instance.is_running:
                 return
 
@@ -145,7 +153,9 @@ class NodeMonitor(SocaService, NodeMonitorProtocol):
             if create_or_provision is None:
                 return
 
-            existing_node = self._context.scheduler.get_node(host=create_or_provision.host)
+            existing_node = self._context.scheduler.get_node(
+                host=create_or_provision.host
+            )
 
             if existing_node is not None:
                 return
@@ -159,48 +169,64 @@ class NodeMonitor(SocaService, NodeMonitorProtocol):
                 create_or_provision.job_group = job.get_job_group()
                 create_or_provision.keep_ebs_volumes = job.params.keep_ebs_volumes
                 create_or_provision.root_storage_size = job.params.root_storage_size
-                create_or_provision.scratch_storage_size = job.params.scratch_storage_size
-                create_or_provision.scratch_storage_iops = job.params.scratch_storage_iops
+                create_or_provision.scratch_storage_size = (
+                    job.params.scratch_storage_size
+                )
+                create_or_provision.scratch_storage_iops = (
+                    job.params.scratch_storage_iops
+                )
                 create_or_provision.enable_efa_support = job.params.enable_efa_support
-                create_or_provision.force_reserved_instances = job.params.force_reserved_instances
-                create_or_provision.enable_system_metrics = job.params.enable_system_metrics
-                create_or_provision.enable_anonymous_metrics = job.params.enable_anonymous_metrics
+                create_or_provision.force_reserved_instances = (
+                    job.params.force_reserved_instances
+                )
+                create_or_provision.enable_system_metrics = (
+                    job.params.enable_system_metrics
+                )
+                create_or_provision.enable_anonymous_metrics = (
+                    job.params.enable_anonymous_metrics
+                )
                 create_or_provision.base_os = job.params.base_os
                 create_or_provision.spot = job.params.spot
                 create_or_provision.spot_price = job.params.spot_price
                 create_or_provision.fsx_lustre = job.params.fsx_lustre
                 create_or_provision.enable_ht_support = job.params.enable_ht_support
-                create_or_provision.enable_placement_group = job.params.enable_placement_group
+                create_or_provision.enable_placement_group = (
+                    job.params.enable_placement_group
+                )
 
-            self._context.scheduler.create_node(
-                node=create_or_provision
+            self._context.scheduler.create_node(node=create_or_provision)
+            created_node = self._context.scheduler.get_node(
+                host=create_or_provision.host
             )
-            created_node = self._context.scheduler.get_node(host=create_or_provision.host)
 
-            self._logger.info(f'({str(created_node)}) node created - waiting to be ready.')
+            self._logger.info(
+                f'({str(created_node)}) node created - waiting to be ready.'
+            )
             self._context.metrics.nodes_added(queue_type=instance.soca_queue_type)
 
         except Exception as e:
-            self._logger.exception(f'failed to provision compute node - '
-                                   f'queue_type: {instance.soca_queue_type}, '
-                                   f'queue: {instance.soca_job_queue}, '
-                                   f'host: {instance.private_dns_name}, '
-                                   f'instance_id: {instance.instance_id}, '
-                                   f'Error: {e}')
+            self._logger.exception(
+                f'failed to provision compute node - '
+                f'queue_type: {instance.soca_queue_type}, '
+                f'queue: {instance.soca_job_queue}, '
+                f'host: {instance.private_dns_name}, '
+                f'instance_id: {instance.instance_id}, '
+                f'Error: {e}'
+            )
 
     def _monitor_nodes(self):
         while not self._exit.is_set():
             try:
-
                 self._instance_updates_available_event.clear()
 
                 # (full scan) this will be executed every time InstanceMonitor performs a full refresh
                 if self._state.instance_cache_refresh_event.is_set():
-
                     self._state.instance_cache_refresh_event.clear()
 
-                    compute_instances = self._context.instance_cache.list_compute_instances(
-                        cluster_name=self._context.cluster_name()
+                    compute_instances = (
+                        self._context.instance_cache.list_compute_instances(
+                            cluster_name=self._context.cluster_name()
+                        )
                     )
                     for instance in compute_instances:
                         self._check_and_provision_node(instance=instance)
@@ -219,7 +245,7 @@ class NodeMonitor(SocaService, NodeMonitorProtocol):
                 # (housekeeping) will be performed every HOUSEKEEPING_INTERVAL_SECS
                 #   - housekeeping is an async operation, and should not block node provisioning.
                 #   - provisioning and housekeeping is decoupled.
-                #   - ony one session is active at any given time.
+                #   - only one session is active at any given time.
                 if self._state.should_perform_housekeeping():
                     self._housekeeper.invoke()
 
@@ -229,7 +255,9 @@ class NodeMonitor(SocaService, NodeMonitorProtocol):
                 try:
                     self._monitor.acquire()
                     # instance updates if any, will be processed at an interval of 1 second
-                    self._monitor.wait_for(self._instance_updates_available_event.is_set, 1)
+                    self._monitor.wait_for(
+                        self._instance_updates_available_event.is_set, 1
+                    )
                 finally:
                     self._monitor.release()
 

@@ -14,7 +14,5 @@ from abc import abstractmethod
 
 
 class BaseAPI:
-
     @abstractmethod
-    def invoke(self, context: ApiInvocationContext):
-        ...
+    def invoke(self, context: ApiInvocationContext): ...

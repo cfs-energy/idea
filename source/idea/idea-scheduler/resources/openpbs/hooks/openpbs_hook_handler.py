@@ -89,7 +89,7 @@ Developer Notes:
 
 """
 
-import pbs
+import pbs  # type: ignore[import-unresolved]
 import sys
 import os
 import socket
@@ -107,8 +107,12 @@ DEBUG_MODE = True
 EC2_INSTANCE_METADATA_LATEST = 'http://169.254.169.254/latest'
 EC2_INSTANCE_METADATA_URL_PREFIX = f'{EC2_INSTANCE_METADATA_LATEST}/meta-data'
 EC2_INSTANCE_METADATA_API_URL = f'{EC2_INSTANCE_METADATA_LATEST}/api'
-EC2_INSTANCE_METADATA_URL_INSTANCE_ID = f'{EC2_INSTANCE_METADATA_URL_PREFIX}/instance-id'
-EC2_INSTANCE_METADATA_URL_INSTANCE_TYPE = f'{EC2_INSTANCE_METADATA_URL_PREFIX}/instance-type'
+EC2_INSTANCE_METADATA_URL_INSTANCE_ID = (
+    f'{EC2_INSTANCE_METADATA_URL_PREFIX}/instance-id'
+)
+EC2_INSTANCE_METADATA_URL_INSTANCE_TYPE = (
+    f'{EC2_INSTANCE_METADATA_URL_PREFIX}/instance-type'
+)
 
 EC2_INSTANCE_METADATA_TOKEN_REQUEST_HEADER = 'X-aws-ec2-metadata-token-ttl-seconds'
 EC2_INSTANCE_METADATA_TOKEN_HEADER = 'X-aws-ec2-metadata-token'
@@ -146,7 +150,10 @@ def get_imds_auth_token() -> str:
     :returns: str - A suitable value for follow-up authenticated requests.
     """
     req = Request(url=f'{EC2_INSTANCE_METADATA_API_URL}/token', data=b'', method='PUT')
-    req.add_header(EC2_INSTANCE_METADATA_TOKEN_REQUEST_HEADER, EC2_INSTANCE_METADATA_TOKEN_REQUEST_TTL)
+    req.add_header(
+        EC2_INSTANCE_METADATA_TOKEN_REQUEST_HEADER,
+        EC2_INSTANCE_METADATA_TOKEN_REQUEST_TTL,
+    )
 
     with urlopen(req) as conn:
         content = conn.read()
@@ -345,7 +352,7 @@ HOOK_EVENT_TO_NAME_MAP = {
     0x20000: 'execjob_resize',
     0x40000: 'execjob_abort',
     0x80000: 'execjob_postsuspend',
-    0x100000: 'execjob_preresume'
+    0x100000: 'execjob_preresume',
 }
 
 # SUPPORTED_EVENTS are the only event types currently supported for this script.
@@ -360,7 +367,7 @@ SUPPORTED_EVENTS = [
     HOOK_EVENT_MOVEJOB,
     HOOK_EVENT_RUNJOB,
     HOOK_EVENT_EXECJOB_BEGIN,
-    HOOK_EVENT_EXECJOB_END
+    HOOK_EVENT_EXECJOB_END,
 ]
 
 # we are not performing any critical activities in soca-daemon for these events
@@ -368,7 +375,7 @@ SUPPORTED_EVENTS = [
 ALWAYS_SUCCESS_EVENTS = [
     HOOK_EVENT_RUNJOB,
     HOOK_EVENT_EXECJOB_BEGIN,
-    HOOK_EVENT_EXECJOB_END
+    HOOK_EVENT_EXECJOB_END,
 ]
 
 PRE_EXECUTION_HOOKS = [
@@ -384,7 +391,7 @@ PRE_EXECUTION_HOOKS = [
     HOOK_EVENT_MODIFYVNODE,
     HOOK_EVENT_RESV_BEGIN,
     HOOK_EVENT_RESV_CONFIRM,
-    HOOK_EVENT_MODIFYRESV
+    HOOK_EVENT_MODIFYRESV,
 ]
 EXECUTION_HOOKS = [
     HOOK_EVENT_EXECJOB_BEGIN,
@@ -399,7 +406,7 @@ EXECUTION_HOOKS = [
     HOOK_EVENT_EXECJOB_RESIZE,
     HOOK_EVENT_EXECJOB_ABORT,
     HOOK_EVENT_EXECJOB_POSTSUSPEND,
-    HOOK_EVENT_EXECJOB_PRERESUME
+    HOOK_EVENT_EXECJOB_PRERESUME,
 ]
 
 
@@ -413,7 +420,6 @@ class OpenPBSJob:
         matrix = {}
         header = []
         for line in JOB_PARAM_EVENT_TYPE_MATRIX.splitlines():
-
             if len(line.strip()) == 0:
                 continue
 
@@ -1136,7 +1142,6 @@ class OpenPBSNode:
         return response
 
     def build(self):
-
         pbs_node = {}
         pbs_node['resources_assigned'] = self.resources_assigned
         pbs_node['resources_available'] = self.resources_available
@@ -1199,8 +1204,7 @@ class OpenPBSEvent:
             'execjob_preterm',
             'execjob_epilogue',
             'execjob_preresume',
-            'execjob_postsuspend'
-            'execjob_attach'
+            'execjob_postsuspendexecjob_attach',
         ]:
             if self.event.vnode_list is None:
                 return None
@@ -1214,9 +1218,7 @@ class OpenPBSEvent:
 
     @property
     def job_list(self):
-        if self.type in [
-            'exechost_periodic'
-        ]:
+        if self.type in ['exechost_periodic']:
             if self.event.job_list is None:
                 return None
             response = []
@@ -1229,18 +1231,14 @@ class OpenPBSEvent:
 
     @property
     def argv(self):
-        if self.type in [
-            'execjob_launch'
-        ]:
+        if self.type in ['execjob_launch']:
             if self.event.argv is not None:
                 return str(self.event.argv)
         return None
 
     @property
     def env(self):
-        if self.type in [
-            'execjob_launch'
-        ]:
+        if self.type in ['execjob_launch']:
             if self.event.env is not None:
                 return str(self.event.env)
         return None
@@ -1260,26 +1258,21 @@ class OpenPBSEvent:
             'queuejob',
             'runjob',
             'modifyjob',
-            'movejob'
+            'movejob',
         ]:
             return self.event.job
         return None
 
     @property
     def progname(self):
-        if self.type in [
-            'execjob_launch'
-        ]:
+        if self.type in ['execjob_launch']:
             if self.event.progname is not None:
                 return str(self.event.progname)
         return None
 
     @property
     def vnode_list_fail(self):
-        if self.type in [
-            'execjob_launch',
-            'execjob_prologue'
-        ]:
+        if self.type in ['execjob_launch', 'execjob_prologue']:
             if self.event.vnode_list_fail is None:
                 return None
             response = {}
@@ -1292,39 +1285,29 @@ class OpenPBSEvent:
 
     @property
     def pid(self):
-        if self.type in [
-            'execjob_attach'
-        ]:
+        if self.type in ['execjob_attach']:
             return self.event.pid
         return None
 
     @property
     def job_o(self):
-        if self.type in [
-            'modifyjob'
-        ]:
+        if self.type in ['modifyjob']:
             return self.event.job_o
         return None
 
     @property
     def src_queue(self):
-        if self.type in [
-            'movejob'
-        ]:
+        if self.type in ['movejob']:
             return self.event.src_queue
         return None
 
     @property
     def resv(self):
-        if self.type in [
-            'resvsub',
-            'resv_end'
-        ]:
+        if self.type in ['resvsub', 'resv_end']:
             return self.event.resv
         return None
 
     def build(self) -> dict:
-
         pbs_event = {}
         pbs_event['timestamp'] = start_time
         if self.type.startswith('execjob_'):
@@ -1379,12 +1362,16 @@ def get_env(key, env_type='str', default=None):
 
 
 def get_socket():
-    soca_daemon_unix_socket = get_env('IDEA_SCHEDULER_UNIX_SOCKET', default='/run/idea.sock')
+    soca_daemon_unix_socket = get_env(
+        'IDEA_SCHEDULER_UNIX_SOCKET', default='/run/idea.sock'
+    )
 
     log_debug(f'IDEA_SCHEDULER_UNIX_SOCKET={soca_daemon_unix_socket}')
 
     if not os.path.exists(soca_daemon_unix_socket):
-        raise SocaException('Error: idea-scheduler is not running. Contact administrator to resolve the problem.')
+        raise SocaException(
+            'Error: idea-scheduler is not running. Contact administrator to resolve the problem.'
+        )
 
     socket_client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 
@@ -1423,11 +1410,9 @@ def invoke_soca_scheduler(e) -> dict:
         request = {
             'header': {
                 'namespace': f'OpenPBSHook.{event.type}',
-                'request_id': str(uuid.uuid4())
+                'request_id': str(uuid.uuid4()),
             },
-            'payload': {
-                'event': event_payload
-            }
+            'payload': {'event': event_payload},
         }
         request_payload = json.dumps(request)
         request_payload_bytes = request_payload.encode(DEFAULT_ENCODING)
@@ -1470,11 +1455,20 @@ def invoke_soca_scheduler(e) -> dict:
         return json.loads(response_payload)
 
     except socket.timeout:
-        raise SocaException(f'idea-scheduler is taking a long time ( more than {SOCKET_TIMEOUT_SECS} secs) to respond. '
-                            f'Please try again later or contact your administrator to investigate the problem.')
-    except (ConnectionRefusedError, ConnectionError, ConnectionResetError, ConnectionAbortedError) as exc:
-        raise SocaException(f'Could not connect to idea-scheduler at {address}. '
-                            f'Please contact administrator to investigate the problem. Err: {exc}')
+        raise SocaException(
+            f'idea-scheduler is taking a long time ( more than {SOCKET_TIMEOUT_SECS} secs) to respond. '
+            f'Please try again later or contact your administrator to investigate the problem.'
+        )
+    except (
+        ConnectionRefusedError,
+        ConnectionError,
+        ConnectionResetError,
+        ConnectionAbortedError,
+    ) as exc:
+        raise SocaException(
+            f'Could not connect to idea-scheduler at {address}. '
+            f'Please contact administrator to investigate the problem. Err: {exc}'
+        )
     finally:
         if client:
             client.close()
@@ -1483,14 +1477,12 @@ def invoke_soca_scheduler(e) -> dict:
 e = pbs.event()
 
 try:
-
     if not is_applicable(e):
         raise SystemExit
 
     event_type = e.type
 
     if event_type in PRE_EXECUTION_HOOKS:
-
         # if event is generated due to qsub, qalter etc, and scheduler is invoked via unix socket
 
         response = invoke_soca_scheduler(e)
@@ -1543,22 +1535,27 @@ try:
         request = {
             'header': {
                 'namespace': f'OpenPBSHook.{event.type}',
-                'request_id': message_id
+                'request_id': message_id,
             },
-            'payload': {
-                'event': event_payload
-            }
+            'payload': {'event': event_payload},
         }
         request_payload = json.dumps(request)
-        message_body = base64.b64encode(request_payload.encode(DEFAULT_ENCODING)).decode(DEFAULT_ENCODING)
+        message_body = base64.b64encode(
+            request_payload.encode(DEFAULT_ENCODING)
+        ).decode(DEFAULT_ENCODING)
         queue_url = get_env('IDEA_JOB_STATUS_SQS_QUEUE_URL')
         aws_region = get_env('AWS_DEFAULT_REGION')
-        send_message_command = str(f'AWS_DEFAULT_REGION={aws_region} /bin/aws sqs send-message '
-                                   f'--queue-url {queue_url} '
-                                   f'--message-body "{message_body}" ')
+        send_message_command = str(
+            f'AWS_DEFAULT_REGION={aws_region} /bin/aws sqs send-message '
+            f'--queue-url {queue_url} '
+            f'--message-body "{message_body}" '
+        )
         os.system(send_message_command)
 
-    pbs.logmsg(pbs.LOG_DEBUG, 'HookExecution TotalTime: %s ms' % (round(time.time() * 1000) - start_time))
+    pbs.logmsg(
+        pbs.LOG_DEBUG,
+        'HookExecution TotalTime: %s ms' % (round(time.time() * 1000) - start_time),
+    )
 
 except SystemExit:
     pass

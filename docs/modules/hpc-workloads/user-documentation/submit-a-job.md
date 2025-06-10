@@ -12,7 +12,8 @@ Things to know before you start
 IDEA supports multiple way to submit jobs:
 
 * Regular `qsub` (see below)
-* Web based job submission: [create-web-based-job-submission-worfklows.md](../admin-documentation/create-web-based-job-submission-worfklows.md "mention")
+* Script Workbench: [script-workbench.md](script-workbench.md "mention") for web-based script editing and submission
+* Web based job submission: [create-web-based-job-submission-workflows.md](../admin-documentation/create-web-based-job-submission-workflows.md "mention")
 * HTTP Rest API: ([apis.md](../../../first-time-users/access-your-idea-cluster/apis.md "mention"))
 {% endhint %}
 
@@ -56,19 +57,19 @@ IDEA automatically performs DryRun action to validate whether your job can run o
 
 <pre class="language-bash"><code class="lang-bash"><strong># Example1: Trying to submit a job with an invalid instance type
 </strong><strong>$ qsub -l instance_type=fake_instance -- /bin/sleep 60
-</strong>qsub: Job submission failed and cannot be queued: 
+</strong>qsub: Job submission failed and cannot be queued:
 
-* Below parameters failed to be validated: 
+* Below parameters failed to be validated:
 
 [INVALID_EC2_INSTANCE_TYPE] ec2 instance_type is invalid: fake_instance
 
 # Example2: Trying to submit a job with a very large number of nodes
 [clusteradmin@ip-10-0-142-68 ~]$ qsub -l instance_type=m5.large  -l nodes=6000 -- /bin/sleep 60
-qsub: Job submission failed and cannot be queued: 
+qsub: Job submission failed and cannot be queued:
 
-* Job will not be provisioned due to below errors: 
+* Job will not be provisioned due to below errors:
 
-[ServiceQuota] Following AWS Service Quota needs to be requested from AWS: 
+[ServiceQuota] Following AWS Service Quota needs to be requested from AWS:
 +------------------------------------------------------------------+-----------------+---------------+----------------+
 |                            QuotaName                             | Available vCPUs | Desired vCPUs | Consumed vCPUs |
 +------------------------------------------------------------------+-----------------+---------------+----------------+
@@ -79,6 +80,21 @@ qsub: Job submission failed and cannot be queued:
 
 
 </code></pre>
+
+### Budget Information <a href="#budget-information" id="budget-information"></a>
+
+When submitting a job through the web interface, you can now review the budget consumption for your project directly from the Submit Job page. The new Budget tab provides visibility into:
+
+* Current budget utilization
+* Remaining budget amount
+* Budget period information
+* Historical budget usage trends
+
+This feature helps users understand their spending limits before submitting jobs that might exceed their project's allocated budget. If the budget for your project has been exhausted, you will not be able to submit new jobs until the budget is renewed or increased.
+
+{% hint style="info" %}
+Budget information is directly linked to the selected project. Changing the project in the job submission form will update the budget information displayed.
+{% endhint %}
 
 ### Delete a job from the queue <a href="#delete-a-job-from-the-queue" id="delete-a-job-from-the-queue"></a>
 
@@ -101,6 +117,20 @@ IDEA supports all type of EC2 instance. If you don't specify it, job will use a 
 
 If you want to force utilization of a specific instance type (and not use the default one), simply change the line and modify instance\_type value\
 `#PBS -l [existing_parameters...],instance_type=**instance_type_value**`
+
+### Automatic CPU Calculation <a href="#automatic-cpu-calculation" id="automatic-cpu-calculation"></a>
+
+IDEA automatically calculates the appropriate number of CPUs (ncpus) for your job based on the selected instance type and hyper-threading settings. This ensures that jobs submitted via the API or directly with qsub both get consistent resource allocation.
+
+The ncpus value is determined as follows:
+- When `ht_support=true` (default): ncpus equals the total number of vCPUs for the instance type
+- When `ht_support=false`: ncpus equals the number of physical cores for the instance type
+
+For example:
+- A job using c5.4xlarge with `ht_support=true` will have ncpus=16 (8 cores × 2 threads per core)
+- A job using c5.4xlarge with `ht_support=false` will have ncpus=8 (8 physical cores)
+
+This calculation is performed automatically during job submission, and you don't need to manually specify the ncpus value in most cases.
 
 ### Specify a license restriction (optional) <a href="#specify-a-license-restriction-optional" id="specify-a-license-restriction-optional"></a>
 
@@ -225,7 +255,7 @@ This job will use a user-specified AMI ID which use a operating system different
 #PBS -V -j oe -o my_job_name.qlog
 #PBS -P project_a
 #PBS -q normal
-#PBS -l nodes=5,instance_type=c5.18xlarge,instance_ami=ami-123abcde,base_os=centos7
+#PBS -l nodes=5,instance_type=c5.18xlarge,instance_ami=ami-123abcde,base_os=amazonlinux2023
 ## END PBS SETTINGS
 cd $PBS_O_WORKDIR
 cat $PBS_NODEFILE | sort | uniq > mpi_nodes

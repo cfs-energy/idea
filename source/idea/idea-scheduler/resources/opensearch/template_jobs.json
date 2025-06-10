@@ -31,7 +31,7 @@
         "type": "text",
         "fields": {
           "raw": {
-            "type":  "keyword"
+            "type": "keyword"
           }
         }
       },
@@ -39,7 +39,7 @@
         "type": "text",
         "fields": {
           "raw": {
-            "type":  "keyword"
+            "type": "keyword"
           }
         }
       },
@@ -47,7 +47,7 @@
         "type": "text",
         "fields": {
           "raw": {
-            "type":  "keyword"
+            "type": "keyword"
           }
         }
       },
@@ -55,7 +55,7 @@
         "type": "text",
         "fields": {
           "raw": {
-            "type":  "keyword"
+            "type": "keyword"
           }
         }
       },
@@ -66,7 +66,7 @@
         "type": "text",
         "fields": {
           "raw": {
-            "type":  "keyword"
+            "type": "keyword"
           }
         }
       },
@@ -137,7 +137,7 @@
             "type": "text",
             "fields": {
               "raw": {
-                "type":  "keyword"
+                "type": "keyword"
               }
             }
           },
@@ -145,7 +145,7 @@
             "type": "text",
             "fields": {
               "raw": {
-                "type":  "keyword"
+                "type": "keyword"
               }
             }
           },
@@ -175,7 +175,7 @@
             "type": "text",
             "fields": {
               "raw": {
-                "type":  "keyword"
+                "type": "keyword"
               }
             }
           },
@@ -183,7 +183,7 @@
             "type": "text",
             "fields": {
               "raw": {
-                "type":  "keyword"
+                "type": "keyword"
               }
             }
           },
@@ -191,7 +191,7 @@
             "type": "text",
             "fields": {
               "raw": {
-                "type":  "keyword"
+                "type": "keyword"
               }
             }
           },
@@ -233,7 +233,7 @@
                 "type": "text",
                 "fields": {
                   "raw": {
-                    "type":  "keyword"
+                    "type": "keyword"
                   }
                 }
               },
@@ -294,7 +294,7 @@
             "type": "text",
             "fields": {
               "raw": {
-                "type":  "keyword"
+                "type": "keyword"
               }
             }
           },
@@ -302,7 +302,7 @@
             "type": "text",
             "fields": {
               "raw": {
-                "type":  "keyword"
+                "type": "keyword"
               }
             }
           },
@@ -455,6 +455,9 @@
           },
           "job_usage_percent_with_savings": {
             "type": "float"
+          },
+          "is_missing": {
+            "type": "boolean"
           }
         }
       },
@@ -581,7 +584,7 @@
             "type": "text",
             "fields": {
               "raw": {
-                "type":  "keyword"
+                "type": "keyword"
               }
             }
           },
@@ -665,4 +668,3 @@
     }
   }
 }
-

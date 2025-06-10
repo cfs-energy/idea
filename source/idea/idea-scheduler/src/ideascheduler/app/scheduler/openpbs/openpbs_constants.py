@@ -18,11 +18,11 @@ QALTER_ERROR_CODE_JOB_IS_RUNNING = 167
 
 QMGR_ERROR_CODE_OBJECT_BUSY = 179
 
-QSTAT = "/opt/pbs/bin/qstat"
-QMGR = "/opt/pbs/bin/qmgr"
-PBSNODES = "/opt/pbs/bin/pbsnodes"
-QALTER = "/opt/pbs/bin/qalter"
-QDEL = "/opt/pbs/bin/qdel"
+QSTAT = '/opt/pbs/bin/qstat'
+QMGR = '/opt/pbs/bin/qmgr'
+PBSNODES = '/opt/pbs/bin/pbsnodes'
+QALTER = '/opt/pbs/bin/qalter'
+QDEL = '/opt/pbs/bin/qdel'
 
 CONFIG_FILE_RESOURCE_DEF = '/var/spool/pbs/server_priv/resourcedef'
 CONFIG_FILE_SCHED_CONFIG = '/var/spool/pbs/sched_priv/sched_config'

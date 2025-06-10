@@ -21,17 +21,19 @@ from ideadatamodel.auth import (
     GetUserRequest,
     GetUserResult,
     GetGroupRequest,
-    GetGroupResult
+    GetGroupResult,
 )
 
 from typing import Optional
 
 
 class AccountsClient:
-
-    def __init__(self, context: SocaContextProtocol,
-                 options: SocaClientOptions,
-                 token_service: Optional[TokenService]):
+    def __init__(
+        self,
+        context: SocaContextProtocol,
+        options: SocaClientOptions,
+        token_service: Optional[TokenService],
+    ):
         """
         :param context: Application Context
         :param options: Client Options
@@ -50,12 +52,14 @@ class AccountsClient:
             return None
         return self.token_service.get_access_token()
 
-    def list_users_in_group(self, request: ListUsersInGroupRequest) -> ListUsersInGroupResult:
+    def list_users_in_group(
+        self, request: ListUsersInGroupRequest
+    ) -> ListUsersInGroupResult:
         return self.client.invoke_alt(
             namespace='Accounts.ListUsersInGroup',
             payload=request,
             result_as=ListUsersInGroupResult,
-            access_token=self.get_access_token()
+            access_token=self.get_access_token(),
         )
 
     def get_user(self, request: GetUserRequest) -> GetUserResult:
@@ -63,7 +67,7 @@ class AccountsClient:
             namespace='Accounts.GetUser',
             payload=request,
             result_as=GetUserResult,
-            access_token=self.get_access_token()
+            access_token=self.get_access_token(),
         )
 
     def get_group(self, request: GetGroupRequest) -> GetGroupResult:
@@ -71,7 +75,7 @@ class AccountsClient:
             namespace='Accounts.GetUserGroup',
             payload=request,
             result_as=GetGroupResult,
-            access_token=self.get_access_token()
+            access_token=self.get_access_token(),
         )
 
     def destroy(self):

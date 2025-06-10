@@ -19,58 +19,79 @@ import {VirtualDesktopSession} from "../../../client/data-model";
 import {AppContext} from "../../../common";
 
 function downloadDcvClient(os: string) {
-    let client_settings: any = AppContext.get().getClusterSettingsService().globalSettings.package_config.dcv.clients
-    if (os === 'windows-zip') {
-        window.open(client_settings.windows.zip.url)
-    } else if (os === 'windows-msi') {
-        window.open(client_settings.windows.msi.url)
-    } else if (os === 'macos-m1') {
-        window.open(client_settings.macos.m1.url)
-    } else if (os === 'macos-intel') {
-        window.open(client_settings.macos.intel.url)
-    } else if (os === 'linux-rhel_centos7') {
-        window.open(client_settings.linux.rhel_centos7.url)
-    } else if (os === 'linux-rhel_centos_rocky8') {
-        window.open(client_settings.linux.rhel_centos_rocky8.url)
-    } else if (os === 'linux-rhel_centos_rocky9') {
-        window.open(client_settings.linux.rhel_centos_rocky9.url)
-    } else if (os === 'linux-suse15') {
-        window.open(client_settings.linux.suse15.url)
-    } else if (os === 'ubuntu-ubuntu2004') {
-        window.open(client_settings.linux.ubuntu2004.url)
-    } else if (os === 'ubuntu-ubuntu2204') {
-        window.open(client_settings.linux.ubuntu2204.url)
-    } else if (os === 'ubuntu-ubuntu2404') {
-        window.open(client_settings.linux.ubuntu2404.url)
+    try {
+        const client_settings = AppContext.get()?.getClusterSettingsService()?.globalSettings?.package_config?.dcv?.clients;
+        if (!client_settings) {
+            console.warn('DCV client settings not available');
+            return;
+        }
+
+        if (os === 'windows-zip' && client_settings.windows?.zip?.url) {
+            window.open(client_settings.windows.zip.url);
+        } else if (os === 'windows-msi' && client_settings.windows?.msi?.url) {
+            window.open(client_settings.windows.msi.url);
+        } else if (os === 'macos-m1' && client_settings.macos?.m1?.url) {
+            window.open(client_settings.macos.m1.url);
+        } else if (os === 'macos-intel' && client_settings.macos?.intel?.url) {
+            window.open(client_settings.macos.intel.url);
+        } else if (os === 'linux-rhel_centos7' && client_settings.linux?.rhel_centos7?.url) {
+            window.open(client_settings.linux.rhel_centos7.url);
+        } else if (os === 'linux-rhel_centos_rocky8' && client_settings.linux?.rhel_centos_rocky8?.url) {
+            window.open(client_settings.linux.rhel_centos_rocky8.url);
+        } else if (os === 'linux-rhel_centos_rocky9' && client_settings.linux?.rhel_centos_rocky9?.url) {
+            window.open(client_settings.linux.rhel_centos_rocky9.url);
+        } else if (os === 'linux-suse15' && client_settings.linux?.suse15?.url) {
+            window.open(client_settings.linux.suse15.url);
+        } else if (os === 'ubuntu-ubuntu2004' && client_settings.linux?.ubuntu2004?.url) {
+            window.open(client_settings.linux.ubuntu2004.url);
+        } else if (os === 'ubuntu-ubuntu2204' && client_settings.linux?.ubuntu2204?.url) {
+            window.open(client_settings.linux.ubuntu2204.url);
+        } else if (os === 'ubuntu-ubuntu2404' && client_settings.linux?.ubuntu2404?.url) {
+            window.open(client_settings.linux.ubuntu2404.url);
+        }
+    } catch (error) {
+        console.error('Error downloading DCV client:', error);
     }
 }
 
 function getDCVClientLabelForOSFlavor(os: string): string {
-    let client_settings: any = AppContext.get().getClusterSettingsService().globalSettings.package_config.dcv.clients
-    if (os === 'windows-zip') {
-        return client_settings.windows.zip.label
-    } else if (os === 'windows-msi') {
-        return client_settings.windows.msi.label
-    } else if (os === 'macos-m1') {
-        return client_settings.macos.m1.label
-    } else if (os === 'macos-intel') {
-        return client_settings.macos.intel.label
-    } else if (os === 'linux-rhel_centos7') {
-        return client_settings.linux.rhel_centos7.label
-    } else if (os === 'linux-rhel_centos_rocky8') {
-        return client_settings.linux.rhel_centos_rocky8.label
-    } else if (os === 'linux-rhel_centos_rocky9') {
-        return client_settings.linux.rhel_centos_rocky9.label
-    } else if (os === 'linux-suse15') {
-        return client_settings.linux.suse15.label
-    } else if (os === 'ubuntu-ubuntu2004') {
-        return client_settings.linux.ubuntu2004.label
-    } else if (os === 'ubuntu-ubuntu2204') {
-        return client_settings.linux.ubuntu2204.label
-    } else if (os === 'ubuntu-ubuntu2404') {
-        return client_settings.linux.ubuntu2404.label
+    try {
+        const client_settings = AppContext.get()?.getClusterSettingsService()?.globalSettings?.package_config?.dcv?.clients;
+
+        if (!client_settings) {
+            console.warn('DCV client settings not available');
+            return os; // Return the OS name as fallback
+        }
+
+        // Safe property access with optional chaining
+        if (os === 'windows-zip') {
+            return client_settings.windows?.zip?.label || 'Windows (ZIP)';
+        } else if (os === 'windows-msi') {
+            return client_settings.windows?.msi?.label || 'Windows (MSI)';
+        } else if (os === 'macos-m1') {
+            return client_settings.macos?.m1?.label || 'macOS (Apple Silicon)';
+        } else if (os === 'macos-intel') {
+            return client_settings.macos?.intel?.label || 'macOS (Intel)';
+        } else if (os === 'linux-rhel_centos7') {
+            return client_settings.linux?.rhel_centos7?.label || 'RHEL/CentOS 7';
+        } else if (os === 'linux-rhel_centos_rocky8') {
+            return client_settings.linux?.rhel_centos_rocky8?.label || 'RHEL/CentOS/Rocky 8';
+        } else if (os === 'linux-rhel_centos_rocky9') {
+            return client_settings.linux?.rhel_centos_rocky9?.label || 'RHEL/CentOS/Rocky 9';
+        } else if (os === 'linux-suse15') {
+            return client_settings.linux?.suse15?.label || 'SUSE 15';
+        } else if (os === 'ubuntu-ubuntu2004') {
+            return client_settings.linux?.ubuntu2004?.label || 'Ubuntu 20.04';
+        } else if (os === 'ubuntu-ubuntu2204') {
+            return client_settings.linux?.ubuntu2204?.label || 'Ubuntu 22.04';
+        } else if (os === 'ubuntu-ubuntu2404') {
+            return client_settings.linux?.ubuntu2404?.label || 'Ubuntu 24.04';
+        }
+        return os; // Return the OS name as fallback
+    } catch (error) {
+        console.error('Error getting DCV client label:', error);
+        return os; // Return the OS name as fallback
     }
-    return ''
 }
 
 export interface DcvClientHelpModalProps {

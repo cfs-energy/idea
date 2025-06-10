@@ -32,6 +32,6 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
 # Install Python /apps/python for compute nodes
 # this will not re-install python if it already exists.
-{%- with alias_prefix = 'compute', install_dir = context.config.get_string('shared-storage.apps.mount_dir') + '/python' %}
+{% with alias_prefix = 'compute', install_dir = context.config.get_string('shared-storage.apps.mount_dir') + '/python' %}
   {% include '_templates/linux/python.jinja2' %}
-{%- endwith %}
+{% endwith %}

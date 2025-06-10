@@ -9,10 +9,7 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
-__all__ = (
-    'SocaGenericModel',
-    'SocaBaseModel'
-)
+__all__ = ('SocaGenericModel', 'SocaBaseModel')
 
 from pydantic import ConfigDict, BaseModel
 

@@ -13,16 +13,21 @@ import ideascheduler
 
 from ideasdk.service import SocaService
 from ideadatamodel import (
-    exceptions, errorcodes,
+    exceptions,
+    errorcodes,
     SocaBaseModel,
-    SocaJob, SocaScalingMode, SocaQueueMode,
-    ProvisioningStatus
+    SocaJob,
+    SocaScalingMode,
+    SocaQueueMode,
+    ProvisioningStatus,
 )
 from ideasdk.utils import Utils
 
 from ideascheduler.app.provisioning import (
-    JobProvisioningQueue, JobProvisioningQueueEmpty, CloudFormationStackBuilder,
-    JobProvisioningUtil
+    JobProvisioningQueue,
+    JobProvisioningQueueEmpty,
+    CloudFormationStackBuilder,
+    JobProvisioningUtil,
 )
 from collections import OrderedDict
 from typing import Optional, List, Dict
@@ -31,7 +36,9 @@ import arrow
 import logging
 from pydantic import Field
 from ideascheduler.app.scheduler.openpbs.openpbs_qselect import OpenPBSQSelect
-from ideascheduler.app.provisioning.job_provisioner.batch_capacity_helper import BatchCapacityHelper
+from ideascheduler.app.provisioning.job_provisioner.batch_capacity_helper import (
+    BatchCapacityHelper,
+)
 
 
 class ProvisionJobsResult(SocaBaseModel):
@@ -43,7 +50,9 @@ class ProvisionJobsResult(SocaBaseModel):
     def get_error_code(self) -> str:
         if Utils.is_not_empty(self.error_code):
             return self.error_code
-        if self.exception is not None and isinstance(self.exception, exceptions.SocaException):
+        if self.exception is not None and isinstance(
+            self.exception, exceptions.SocaException
+        ):
             return self.exception.error_code
         else:
             return errorcodes.GENERAL_ERROR
@@ -61,16 +70,19 @@ class ProvisionJobs:
     Provisions a Job or a Batch of Jobs.
     """
 
-    def __init__(self, context: ideascheduler.AppContext, jobs: List[SocaJob], logger: logging.Logger):
+    def __init__(
+        self,
+        context: ideascheduler.AppContext,
+        jobs: List[SocaJob],
+        logger: logging.Logger,
+    ):
         self._context = context
         self._logger = logger
 
         self.jobs = jobs
 
         self.provisioning_util = JobProvisioningUtil(
-            context=self._context,
-            jobs=self.jobs,
-            logger=self._logger
+            context=self._context, jobs=self.jobs, logger=self._logger
         )
 
         self._provisioning_status: Optional[ProvisioningStatus] = None
@@ -101,10 +113,8 @@ class ProvisionJobs:
         return self.provisioning_util.stack.creation_time
 
     def provision_job_in_scheduler(self, job: SocaJob, stack_id: str):
-
         provisioning_time = self._context.scheduler.provision_job(
-            job=job,
-            stack_id=stack_id
+            job=job, stack_id=stack_id
         )
 
         job.provisioned = True
@@ -116,18 +126,20 @@ class ProvisionJobs:
         self._context.job_cache.clear_job_provisioning_error(job.job_id)
 
         if self._logger.isEnabledFor(logging.DEBUG):
-            self._logger.debug(f'{self.log_tag(job)} Provisioned Job: '
-                               f'{Utils.to_json(job)}')
+            self._logger.debug(
+                f'{self.log_tag(job)} Provisioned Job: {Utils.to_json(job)}'
+            )
         else:
-            self._logger.info(f'{self.log_tag(job)} Job Provisioned. ComputeStack: {job.get_compute_stack()}')
+            self._logger.info(
+                f'{self.log_tag(job)} Job Provisioned. ComputeStack: {job.get_compute_stack()}'
+            )
 
         self._context.metrics.jobs_provisioned(queue_type=job.queue_type)
 
         pending_duration = arrow.utcnow() - job.queue_time
 
         self._context.metrics.jobs_pending_duration(
-            queue_type=job.queue_type,
-            duration_secs=pending_duration.seconds
+            queue_type=job.queue_type, duration_secs=pending_duration.seconds
         )
 
     def update_capacity(self):
@@ -155,17 +167,21 @@ class ProvisionJobs:
         else:
             spot_or_asg = 'ASG'
 
-        self._logger.info(f'{self.job.log_tag} {spot_or_asg}: {capacity_info.comment} ({capacity_info})')
+        self._logger.info(
+            f'{self.job.log_tag} {spot_or_asg}: {capacity_info.comment} ({capacity_info})'
+        )
 
         for provisioned_job in provisioned_jobs:
-            self.provision_job_in_scheduler(job=provisioned_job, stack_id=self.provisioning_util.stack.stack_id)
+            self.provision_job_in_scheduler(
+                job=provisioned_job, stack_id=self.provisioning_util.stack.stack_id
+            )
 
         if len(unprovisioned_jobs) > 0:
             raise exceptions.SocaException(
                 error_code=errorcodes.RETRY_JOB_PROVISIONING,
                 message=f'{len(unprovisioned_jobs)} of {len(self.jobs)} could not be provisioned at this time. '
-                        f'Provisioning will be retried for these jobs',
-                ref=unprovisioned_jobs
+                f'Provisioning will be retried for these jobs',
+                ref=unprovisioned_jobs,
             )
 
     def create_new_stack(self):
@@ -185,24 +201,25 @@ class ProvisionJobs:
         self.provisioning_util.check_licenses()
 
         if self.is_batch:
-
             result = BatchCapacityHelper(
                 context=self._context,
                 jobs=self.jobs,
-                provisioned_capacity=self.provisioning_util.provisioned_capacity
+                provisioned_capacity=self.provisioning_util.provisioned_capacity,
             ).invoke()
 
             stack_builder = CloudFormationStackBuilder(
                 context=self._context,
                 job=self.job,
-                target_capacity_override=result.capacity_info.target_capacity
+                target_capacity_override=result.capacity_info.target_capacity,
             )
             stack_id = stack_builder.build()
 
             spot_or_asg = 'ASG'
             if self.job.is_spot_capacity():
                 spot_or_asg = 'SpotFleet'
-            self._logger.info(f'{self.job.log_tag} {spot_or_asg}: {result.capacity_info.comment} ({result.capacity_info})')
+            self._logger.info(
+                f'{self.job.log_tag} {spot_or_asg}: {result.capacity_info.comment} ({result.capacity_info})'
+            )
 
             for job in result.provisioned_jobs:
                 self.provision_job_in_scheduler(job=job, stack_id=stack_id)
@@ -210,8 +227,7 @@ class ProvisionJobs:
 
         else:
             stack_builder = CloudFormationStackBuilder(
-                context=self._context,
-                job=self.job
+                context=self._context, job=self.job
             )
             stack_id = stack_builder.build()
             self.provision_job_in_scheduler(job=self.job, stack_id=stack_id)
@@ -229,12 +245,11 @@ class ProvisionJobs:
             raise exceptions.SocaException(
                 error_code=errorcodes.RETRY_JOB_PROVISIONING,
                 message=f'{len(unprovisioned_jobs)} of {len(self.jobs)} could not be provisioned at this time. '
-                        f'Provisioning will be retried for these jobs',
-                ref=unprovisioned_jobs
+                f'Provisioning will be retried for these jobs',
+                ref=unprovisioned_jobs,
             )
 
     def provision_job_on_shared_capacity(self):
-
         job_group = self.job.get_job_group()
         provisioned_job_group = self.provisioning_util.stack.soca_job_group
 
@@ -242,7 +257,7 @@ class ProvisionJobs:
             raise exceptions.SocaException(
                 error_code=errorcodes.SHARED_CAPACITY_MISMATCH,
                 message=f'Provisioned capacity does not match the desired capacity requirements.'
-                        f'Provisioned: {provisioned_job_group}, Required: {job_group}'
+                f'Provisioned: {provisioned_job_group}, Required: {job_group}',
             )
 
         job_queue = self.job.queue
@@ -251,27 +266,30 @@ class ProvisionJobs:
             raise exceptions.SocaException(
                 error_code=errorcodes.SHARED_CAPACITY_INVALID_QUEUE,
                 message=f'Provisioned capacity queue does not match the desired capacity queue.'
-                        f'Provisioned: {provisioned_job_queue}, Required: {job_queue}'
+                f'Provisioned: {provisioned_job_queue}, Required: {job_queue}',
             )
 
         desired_capacity = self.job.desired_capacity()
         if self.provisioning_util.is_spot_fleet:
             provisioned_capacity = self.provisioning_util.spot_fleet.target_capacity
         else:
-            provisioned_capacity = self.provisioning_util.auto_scaling_group.desired_capacity
+            provisioned_capacity = (
+                self.provisioning_util.auto_scaling_group.desired_capacity
+            )
 
         if desired_capacity > provisioned_capacity:
             raise exceptions.SocaException(
                 error_code=errorcodes.SHARED_CAPACITY_UNAVAILABLE,
                 message=f'Not enough capacity available to run job on shared stack.'
-                        f'desired: {desired_capacity}, provisioned: {provisioned_capacity}'
+                f'desired: {desired_capacity}, provisioned: {provisioned_capacity}',
             )
 
         for job in self.jobs:
-            self.provision_job_in_scheduler(job=job, stack_id=self.provisioning_util.stack.stack_id)
+            self.provision_job_in_scheduler(
+                job=job, stack_id=self.provisioning_util.stack.stack_id
+            )
 
     def handle_completed(self):
-
         # nothing to do for ephemeral capacity.
         # job has already been provisioned in scheduler when stack was created.
         # node housekeeper will deal with additional provisioning statuses and retries.
@@ -279,58 +297,63 @@ class ProvisionJobs:
             return
 
         if self.job.scaling_mode == SocaScalingMode.BATCH:
-
             # batch or dynamic
             self.update_capacity()
 
         else:
-
             # always on or terminate when idle
             self.provision_job_on_shared_capacity()
 
     def print_status(self):
         provisioning_status = self.provisioning_status
-        self._logger.info(f'{self.log_tag()} '
-                          f'Stack: {self.job.get_compute_stack()}, '
-                          f'ProvisioningStatus: {provisioning_status}')
+        self._logger.info(
+            f'{self.log_tag()} '
+            f'Stack: {self.job.get_compute_stack()}, '
+            f'ProvisioningStatus: {provisioning_status}'
+        )
 
     def invoke(self) -> ProvisionJobsResult:
         try:
-
             provisioning_status = self.provisioning_status
             if provisioning_status == ProvisioningStatus.NOT_PROVISIONED:
-
                 self.print_status()
                 self.create_new_stack()
                 return ProvisionJobsResult(status=True)
 
             elif provisioning_status == ProvisioningStatus.COMPLETED:
-
                 self.handle_completed()
                 return ProvisionJobsResult(status=True)
 
-            elif provisioning_status in (ProvisioningStatus.IN_PROGRESS,
-                                         ProvisioningStatus.DELETE_IN_PROGRESS,
-                                         ProvisioningStatus.FAILED,
-                                         ProvisioningStatus.TIMEOUT):
-
+            elif provisioning_status in (
+                ProvisioningStatus.IN_PROGRESS,
+                ProvisioningStatus.DELETE_IN_PROGRESS,
+                ProvisioningStatus.FAILED,
+                ProvisioningStatus.TIMEOUT,
+            ):
                 self.print_status()
                 return ProvisionJobsResult(status=False)
 
             else:
-
                 return ProvisionJobsResult(status=True)
 
         except exceptions.SocaException as e:
-            if e.error_code in (errorcodes.SPOT_FLEET_CAPACITY_UPDATE_IN_PROGRESS,
-                                errorcodes.MAX_PROVISIONED_INSTANCES_LIMIT):
+            if e.error_code in (
+                errorcodes.SPOT_FLEET_CAPACITY_UPDATE_IN_PROGRESS,
+                errorcodes.MAX_PROVISIONED_INSTANCES_LIMIT,
+            ):
                 self._logger.info(f'{self.log_tag()} {e.message}')
-                return ProvisionJobsResult(status=False, error_code=e.error_code, exception=e)
+                return ProvisionJobsResult(
+                    status=False, error_code=e.error_code, exception=e
+                )
             elif e.error_code == errorcodes.RETRY_JOB_PROVISIONING:
                 self._logger.info(f'{self.log_tag()} {e.message}')
-                return ProvisionJobsResult(status=False, unprovisioned_jobs=e.ref, error_code=e.error_code, exception=e)
+                return ProvisionJobsResult(
+                    status=False,
+                    unprovisioned_jobs=e.ref,
+                    error_code=e.error_code,
+                    exception=e,
+                )
             else:
-
                 # need to know the job context, to understand why provisioning is failing.
                 if e.error_code == errorcodes.CLOUDFORMATION_STACK_BUILDER_FAILED:
                     self._logger.error(f'{self.log_tag()} {Utils.to_json(self.job)}')
@@ -341,19 +364,22 @@ class ProvisionJobs:
                     self._logger.error(f'{self.log_tag()} {e}')
 
                 self._context.metrics.job_provisioning_failed(
-                    queue_type=self.job.queue_type,
-                    error_code=e.error_code
+                    queue_type=self.job.queue_type, error_code=e.error_code
                 )
-                return ProvisionJobsResult(status=False, error_code=e.error_code, exception=e)
+                return ProvisionJobsResult(
+                    status=False, error_code=e.error_code, exception=e
+                )
 
         except Exception as e:
-
-            self._logger.exception(f'{self.log_tag()} provisioning failed: {e}', exc_info=e)
-            self._context.metrics.job_provisioning_failed(
-                queue_type=self.job.queue_type,
-                error_code=errorcodes.GENERAL_ERROR
+            self._logger.exception(
+                f'{self.log_tag()} provisioning failed: {e}', exc_info=e
             )
-            return ProvisionJobsResult(status=False, error_code=errorcodes.GENERAL_ERROR, exception=e)
+            self._context.metrics.job_provisioning_failed(
+                queue_type=self.job.queue_type, error_code=errorcodes.GENERAL_ERROR
+            )
+            return ProvisionJobsResult(
+                status=False, error_code=errorcodes.GENERAL_ERROR, exception=e
+            )
 
 
 class JobProvisioner(SocaService):
@@ -379,14 +405,14 @@ class JobProvisioner(SocaService):
     def service_id(self) -> str:
         return f'{self.__class__.__name__}.QueueType.{self._queue.queue_type}'
 
-    def _provision_with_retry_backoff(self, jobs: List[SocaJob], max_retries: int = 5) -> ProvisionJobsResult:
-
+    def _provision_with_retry_backoff(
+        self, jobs: List[SocaJob], max_retries: int = 5
+    ) -> ProvisionJobsResult:
         retry_count = 1
         backoff_in_seconds = 2
         sleep = 2
 
         while not self._exit.is_set():
-
             active_jobs = []
 
             start = Utils.current_time_ms()
@@ -399,15 +425,15 @@ class JobProvisioner(SocaService):
                 self._logger.info(f'{job.log_tag} Job Deleted, skip provisioning.')
 
             total_ms = Utils.current_time_ms() - start
-            self._logger.info(f'total jobs: {len(jobs)}, pre-processing time: {total_ms}ms')
+            self._logger.info(
+                f'total jobs: {len(jobs)}, pre-processing time: {total_ms}ms'
+            )
 
             if len(active_jobs) == 0:
                 return ProvisionJobsResult(status=True)
 
             result = ProvisionJobs(
-                context=self._context,
-                jobs=active_jobs,
-                logger=self._logger
+                context=self._context, jobs=active_jobs, logger=self._logger
             ).invoke()
 
             retry_count += 1
@@ -417,7 +443,10 @@ class JobProvisioner(SocaService):
                 # next job if available.
                 # the job will be picked up in the next minute cycle when job cache is refreshed and job monitor detects
                 # that job is not yet provisioned.
-                if Utils.is_not_empty(result.error_code) and result.error_code == errorcodes.NOT_ENOUGH_LICENSES:
+                if (
+                    Utils.is_not_empty(result.error_code)
+                    and result.error_code == errorcodes.NOT_ENOUGH_LICENSES
+                ):
                     return ProvisionJobsResult(status=True)
 
             if retry_count > max_retries or result.status:
@@ -426,8 +455,7 @@ class JobProvisioner(SocaService):
             self._exit.wait(timeout=sleep)
 
             sleep = Utils.get_retry_backoff_interval(
-                current_retry=retry_count,
-                backoff_in_seconds=backoff_in_seconds
+                current_retry=retry_count, backoff_in_seconds=backoff_in_seconds
             )
 
     def _drain_batch_queue(self) -> Dict[str, List[SocaJob]]:
@@ -445,7 +473,6 @@ class JobProvisioner(SocaService):
         more_jobs_available = True
 
         while more_jobs_available:
-
             if self._exit.is_set():
                 break
 
@@ -478,16 +505,20 @@ class JobProvisioner(SocaService):
                     logger=self._logger,
                     log_tag=f'JobGroup: {job_group}',
                     job_group=job_group,
-                    stack_id='tbd'
+                    stack_id='tbd',
                 ).get_count()
                 current_batch_size = len(jobs)
-                self._logger.info(f'JobGroup: {job_group}, ExpectedBatchSize: {expected_batch_size}, CurrentBatchSize: {len(jobs)}')
+                self._logger.info(
+                    f'JobGroup: {job_group}, ExpectedBatchSize: {expected_batch_size}, CurrentBatchSize: {len(jobs)}'
+                )
                 if expected_batch_size < current_batch_size:
                     # if expected_batch_size less than current batch size, there is a mismatch in expectation.
                     # reset the batch to start clean in the next refresh cycle
                     batches[job_group] = OrderedDict()
-                    self._logger.warning(f'ExpectedBatchSize ({expected_batch_size}) < CurrentBatchSize ({len(jobs)}). '
-                                         f'Possible job update or deletion. Resetting batch.')
+                    self._logger.warning(
+                        f'ExpectedBatchSize ({expected_batch_size}) < CurrentBatchSize ({len(jobs)}). '
+                        f'Possible job update or deletion. Resetting batch.'
+                    )
                 jobs_to_be_provisioned += expected_batch_size
 
             total_jobs = 0
@@ -496,7 +527,12 @@ class JobProvisioner(SocaService):
 
             more_jobs_available = total_jobs < jobs_to_be_provisioned
             if more_jobs_available:
-                self._exit.wait(timeout=self._context.config().get_int('scheduler.job_provisioning.batch_provisioning_wait_interval_seconds', default=3))
+                self._exit.wait(
+                    timeout=self._context.config().get_int(
+                        'scheduler.job_provisioning.batch_provisioning_wait_interval_seconds',
+                        default=3,
+                    )
+                )
 
         result = {}
         for job_group in batches:
@@ -507,25 +543,25 @@ class JobProvisioner(SocaService):
     def _poll_queue(self):
         while not self._exit.is_set():
             try:
-
                 # batch scaling mode - provision all queued jobs in a group at once.
                 if self._queue.queue_profile.scaling_mode == SocaScalingMode.BATCH:
-
                     batches = self._drain_batch_queue()
 
                     for batch in batches.values():
-
                         if batch is None or len(batch) == 0:
                             continue
 
-                        self._logger.info(f'{batch[0].log_tag} Provisioning {len(batch)} jobs in batch ...')
+                        self._logger.info(
+                            f'{batch[0].log_tag} Provisioning {len(batch)} jobs in batch ...'
+                        )
 
                         result = self._provision_with_retry_backoff(jobs=batch)
 
                         if result.status:
-                            self._logger.info(f'{batch[0].log_tag} {len(batch)} jobs in batch provisioned.')
+                            self._logger.info(
+                                f'{batch[0].log_tag} {len(batch)} jobs in batch provisioned.'
+                            )
                         else:
-
                             # unprovisioned jobs are returned when max provisioned instances or max job limits are set
                             # todo - limits is currently not implemented for batch jobs
                             if result.unprovisioned_jobs:
@@ -534,7 +570,7 @@ class JobProvisioner(SocaService):
                                     self._context.job_cache.set_job_provisioning_error(
                                         job_id=job.job_id,
                                         error_code=result.get_error_code(),
-                                        message=result.get_error_message()
+                                        message=result.get_error_message(),
                                     )
                                     self._queue.put(job=job)
                             else:
@@ -543,15 +579,16 @@ class JobProvisioner(SocaService):
                                     self._context.job_cache.set_job_provisioning_error(
                                         job_id=job.job_id,
                                         error_code=result.get_error_code(),
-                                        message=result.get_error_message()
+                                        message=result.get_error_message(),
                                     )
                                     self._queue.put(job=job)
 
-                            self._logger.info(f'{batch[0].log_tag} failed to provision {num_failed_jobs} jobs in batch. '
-                                              f'provisioning will be retried ...')
+                            self._logger.info(
+                                f'{batch[0].log_tag} failed to provision {num_failed_jobs} jobs in batch. '
+                                f'provisioning will be retried ...'
+                            )
 
                 else:
-
                     # ephemeral jobs - one stack per job
                     job = self._queue.get(timeout=1)
 
@@ -565,24 +602,30 @@ class JobProvisioner(SocaService):
                             self._context.job_cache.set_job_provisioning_error(
                                 job_id=job.job_id,
                                 error_code=result.get_error_code(),
-                                message=result.get_error_message()
+                                message=result.get_error_message(),
                             )
                         self._queue.put(job=job)
 
             except JobProvisioningQueueEmpty:
                 pass
             except Exception as e:
-                self._logger.exception(f'exception while processing JobProvisioningQueue: {self._queue.queue_type}, '
-                                       f'Error: {e}')
+                self._logger.exception(
+                    f'exception while processing JobProvisioningQueue: {self._queue.queue_type}, '
+                    f'Error: {e}'
+                )
             finally:
                 # add an artificial delay, after each job provisioning run, to ensure
                 # we don't flood AWS with provisioning requests.
-                self._exit.wait(timeout=self._context.config().get_int('scheduler.job_provisioning.job_provisioning_interval_seconds', default=1))
+                self._exit.wait(
+                    timeout=self._context.config().get_int(
+                        'scheduler.job_provisioning.job_provisioning_interval_seconds',
+                        default=1,
+                    )
+                )
 
     def _initialize(self):
         self._queue_poller_thread = Thread(
-            name=f'job-queue-{self._queue.queue_type}',
-            target=self._poll_queue
+            name=f'job-queue-{self._queue.queue_type}', target=self._poll_queue
         )
         self._exit = Event()
 

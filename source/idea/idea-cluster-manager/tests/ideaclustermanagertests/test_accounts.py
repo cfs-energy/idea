@@ -14,12 +14,7 @@ Test Cases for AccountsService
 """
 
 from ideaclustermanager import AppContext
-from ideadatamodel import (
-    exceptions,
-    errorcodes,
-    User,
-    ListUsersRequest
-)
+from ideadatamodel import exceptions, errorcodes, User, ListUsersRequest
 
 import pytest
 from typing import Optional
@@ -34,9 +29,7 @@ def test_accounts_create_user_missing_username_should_fail(context: AppContext):
     create user with missing username
     """
     with pytest.raises(exceptions.SocaException) as exc_info:
-        context.accounts.create_user(user=User(
-            username=''
-        ))
+        context.accounts.create_user(user=User(username=''))
     assert exc_info.value.error_code == errorcodes.INVALID_PARAMS
     assert 'username is required' in exc_info.value.message
 
@@ -46,9 +39,7 @@ def test_accounts_create_user_invalid_username_should_fail(context: AppContext):
     create user with invalid username
     """
     with pytest.raises(exceptions.SocaException) as exc_info:
-        context.accounts.create_user(user=User(
-            username='Invalid Username'
-        ))
+        context.accounts.create_user(user=User(username='Invalid Username'))
     assert exc_info.value.error_code == errorcodes.INVALID_PARAMS
     assert 'user.username must match regex' in exc_info.value.message
 
@@ -58,9 +49,7 @@ def test_accounts_create_user_system_account_username_should_fail(context: AppCo
     create user with username as system accounts
     """
     with pytest.raises(exceptions.SocaException) as exc_info:
-        context.accounts.create_user(user=User(
-            username='root'
-        ))
+        context.accounts.create_user(user=User(username='root'))
     assert exc_info.value.error_code == errorcodes.INVALID_PARAMS
     assert 'invalid username:' in exc_info.value.message
 
@@ -70,9 +59,7 @@ def test_accounts_create_user_missing_email_should_fail(context: AppContext):
     create user with missing email
     """
     with pytest.raises(exceptions.SocaException) as exc_info:
-        context.accounts.create_user(user=User(
-            username='mockuser1'
-        ))
+        context.accounts.create_user(user=User(username='mockuser1'))
     assert exc_info.value.error_code == errorcodes.INVALID_PARAMS
     assert 'email is required' in exc_info.value.message
 
@@ -82,36 +69,40 @@ def test_accounts_create_user_invalid_email_should_fail(context: AppContext):
     create user with invalid email
     """
     with pytest.raises(exceptions.SocaException) as exc_info:
-        context.accounts.create_user(user=User(
-            username='mockuser1',
-            email='invalid-email'
-        ))
+        context.accounts.create_user(
+            user=User(username='mockuser1', email='invalid-email')
+        )
     assert exc_info.value.error_code == errorcodes.INVALID_PARAMS
     assert 'invalid email:' in exc_info.value.message
 
 
-def test_accounts_create_user_with_verified_email_missing_password_should_fail(context: AppContext):
+def test_accounts_create_user_with_verified_email_missing_password_should_fail(
+    context: AppContext,
+):
     """
     create valid account with email verified and no password
     """
     with pytest.raises(exceptions.SocaException) as exc_info:
-        context.accounts.create_user(user=User(
-            username='mockuser1',
-            email='mockuser1@example.com'
-        ), email_verified=True)
+        context.accounts.create_user(
+            user=User(username='mockuser1', email='mockuser1@example.com'),
+            email_verified=True,
+        )
     assert exc_info.value.error_code == errorcodes.INVALID_PARAMS
-    assert 'user.password is required' in exc_info.value.message
+    assert 'Password is required' in exc_info.value.message
 
 
 def test_accounts_crud_create_user(context: AppContext):
     """
     create user
     """
-    created_user = context.accounts.create_user(user=User(
-        username='accounts_user1',
-        email='accounts_user1@example.com',
-        password='MockPassword_123'
-    ), email_verified=True)
+    created_user = context.accounts.create_user(
+        user=User(
+            username='accounts_user1',
+            email='accounts_user1@example.com',
+            password='MockPassword_123',
+        ),
+        email_verified=True,
+    )
 
     expected_group_name = f'{created_user.username}-user-group'
 
@@ -126,7 +117,9 @@ def test_accounts_crud_create_user(context: AppContext):
     assert user.group_name is not None
     assert user.group_name == expected_group_name
     assert user.additional_groups is not None
-    assert len(user.additional_groups) == 2  # default project group and personal user group
+    assert (
+        len(user.additional_groups) == 2
+    )  # default project group and personal user group
     assert 'default-project-group' in user.additional_groups
     assert expected_group_name in user.additional_groups
     assert user.enabled is not None
@@ -170,7 +163,7 @@ def test_accounts_crud_modify_user(context: AppContext):
         email='accounts_user1_modified@example.com',
         uid=6000,
         gid=6000,
-        login_shell='/bin/csh'
+        login_shell='/bin/csh',
     )
     context.accounts.modify_user(user=modify_user, email_verified=True)
 

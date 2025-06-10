@@ -20,7 +20,7 @@ from ideadatamodel.projects import (
     Project,
     GetProjectResult,
     GetUserProjectsRequest,
-    GetUserProjectsResult
+    GetUserProjectsResult,
 )
 
 from typing import Optional, List
@@ -28,11 +28,13 @@ from cacheout import LRUCache
 
 
 class ProjectsClient:
-
-    def __init__(self, context: SocaContextProtocol,
-                 options: SocaClientOptions,
-                 token_service: Optional[TokenService],
-                 cache_ttl_seconds=30):
+    def __init__(
+        self,
+        context: SocaContextProtocol,
+        options: SocaClientOptions,
+        token_service: Optional[TokenService],
+        cache_ttl_seconds=30,
+    ):
         """
         :param context: Application Context
         :param options: Client Options
@@ -41,10 +43,7 @@ class ProjectsClient:
         self.context = context
         self.logger = context.logger('projects-client')
         self.client = SocaClient(context=context, options=options)
-        self.cache = LRUCache(
-            maxsize=1000,
-            ttl=cache_ttl_seconds
-        )
+        self.cache = LRUCache(maxsize=1000, ttl=cache_ttl_seconds)
 
         if Utils.is_empty(options.unix_socket) and token_service is None:
             raise exceptions.invalid_params('token_service is required for http client')
@@ -68,14 +67,13 @@ class ProjectsClient:
         return result.project
 
     def get_default_project(self) -> GetProjectResult:
-        return self.get_project(GetProjectRequest(
-            project_name='default'
-        ))
+        return self.get_project(GetProjectRequest(project_name='default'))
 
     def get_project(self, request: GetProjectRequest) -> GetProjectResult:
-
         if Utils.are_empty(request.project_id, request.project_name):
-            raise exceptions.invalid_params('either project_id or project_name is required')
+            raise exceptions.invalid_params(
+                'either project_id or project_name is required'
+            )
 
         if Utils.is_not_empty(request.project_id):
             cache_key = f'Projects.GetProject.project_id.{request.project_id}'
@@ -90,14 +88,13 @@ class ProjectsClient:
             namespace='Projects.GetProject',
             payload=request,
             result_as=GetProjectResult,
-            access_token=self.get_access_token()
+            access_token=self.get_access_token(),
         )
 
         self.cache.set(cache_key, result)
         return result
 
     def get_user_projects(self, username: str) -> List[Project]:
-
         if Utils.is_empty(username):
             raise exceptions.invalid_params('username is required')
 
@@ -111,7 +108,7 @@ class ProjectsClient:
             namespace='Projects.GetUserProjects',
             payload=GetUserProjectsRequest(username=username),
             result_as=GetUserProjectsResult,
-            access_token=self.get_access_token()
+            access_token=self.get_access_token(),
         )
 
         self.cache.set(cache_key, result.projects)
