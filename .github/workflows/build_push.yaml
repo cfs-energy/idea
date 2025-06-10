@@ -24,6 +24,8 @@ jobs:
         uses: ./.github/actions/setup_dev_environment
       - name: Pre-commit Linting
         uses: ./.github/actions/pre-commit
+        env:
+          SKIP: no-commit-to-branch
       - name: Run Unit Tests
         run: |
           invoke tests.all
