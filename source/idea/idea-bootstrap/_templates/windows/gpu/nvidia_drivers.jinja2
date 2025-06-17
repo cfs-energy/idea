@@ -16,7 +16,7 @@ function Install-NvidiaGpuDrivers {
        $s3Path = "{{ context.config.get_string('global-settings.gpu_settings.nvidia.windows.s3_bucket_path', required=True) }}"
     }
     elseif ($operatingSystem -like "*windows server 2025*") {
-       $keyPrefix = "*_grid_*_server2025_*.exe"
+       $keyPrefix = "*_grid_*_server2022_*.exe"
        $s3Path = "{{ context.config.get_string('global-settings.gpu_settings.nvidia.windows.s3_bucket_path', required=True) }}"
     }
     else {

@@ -39,7 +39,6 @@ import aiofiles
 import time
 from typing import Dict, List, Any, Tuple
 from zipfile import ZipFile
-from collections import deque
 
 # default lines to prefetch on an initial tail request.
 TAIL_FILE_MAX_LINE_COUNT = 10000
@@ -299,6 +298,15 @@ class FileSystemHelper:
 
         self.check_access(file, check_dir=False, check_read=True, check_write=False)
 
+        # Check file size and reject files that are too large for tail operations
+        file_size = os.path.getsize(file)
+        max_file_size = 10 * 1024 * 1024 * 1024  # 10GB limit
+        if file_size > max_file_size:
+            raise exceptions.soca_exception(
+                error_code=errorcodes.FILE_BROWSER_NOT_A_TEXT_FILE,
+                message=f'file is too large ({file_size / (1024 * 1024 * 1024):.2f} GB) for tail operations. Maximum supported size is {max_file_size / (1024 * 1024 * 1024):.0f} GB.',
+            )
+
         if Utils.is_binary_file(file):
             raise exceptions.soca_exception(
                 error_code=errorcodes.FILE_BROWSER_NOT_A_TEXT_FILE,
@@ -340,11 +348,13 @@ class FileSystemHelper:
                     file_handle.close()
         else:
             # if cursor file does not exist, prefetch last N lines
+            # Use efficient tail algorithm that reads from end of file
+            prefetch_lines = self._tail_file_efficiently(file, max_line_count)
+            for line in prefetch_lines:
+                lines.append(line.strip())
+
+            # Get file size for cursor position
             with open(file, 'r') as f:
-                prefetch_lines = list(deque(f, max_line_count))
-                for line in prefetch_lines:
-                    lines.append(line.strip())
-                # seek to end of file and update cursor
                 f.seek(0, os.SEEK_END)
                 cursor_tokens = [f.tell(), Utils.current_time_ms()]
 
@@ -362,6 +372,98 @@ class FileSystemHelper:
         return TailFileResult(
             file=file, next_token=next_token, lines=lines, line_count=len(lines)
         )
+
+    def _tail_file_efficiently(self, file_path: str, max_lines: int) -> List[str]:
+        """
+        Efficiently read the last N lines from a file without reading the entire file.
+        This method reads from the end of the file backwards in chunks.
+
+        :param file_path: Path to the file
+        :param max_lines: Maximum number of lines to return
+        :return: List of lines from the end of the file
+        """
+        if max_lines <= 0:
+            return []
+
+        try:
+            with open(file_path, 'rb') as f:
+                # Get file size
+                f.seek(0, os.SEEK_END)
+                file_size = f.tell()
+
+                # If file is empty, return empty list
+                if file_size == 0:
+                    return []
+
+                # For small files, just read normally
+                if file_size < 8192:  # 8KB threshold
+                    f.seek(0)
+                    content = f.read().decode('utf-8', errors='replace')
+                    all_lines = content.splitlines()
+                    return (
+                        all_lines[-max_lines:]
+                        if len(all_lines) > max_lines
+                        else all_lines
+                    )
+
+                # For larger files, read backwards in chunks
+                lines = []
+                buffer = b''
+                chunk_size = min(8192, file_size)  # 8KB chunks
+                position = file_size
+
+                while len(lines) < max_lines and position > 0:
+                    # Calculate how much to read
+                    read_size = min(chunk_size, position)
+                    position -= read_size
+
+                    # Read chunk from current position
+                    f.seek(position)
+                    chunk = f.read(read_size)
+
+                    # Prepend to buffer
+                    buffer = chunk + buffer
+
+                    # Split buffer into lines, keeping incomplete line at start
+                    try:
+                        decoded_buffer = buffer.decode('utf-8')
+                    except UnicodeDecodeError:
+                        # Handle encoding issues by replacing problematic characters
+                        decoded_buffer = buffer.decode('utf-8', errors='replace')
+
+                    buffer_lines = decoded_buffer.split('\n')
+
+                    # Keep the first line (potentially incomplete) in buffer for next iteration
+                    if position > 0 and len(buffer_lines) > 1:
+                        # Save incomplete first line for next iteration
+                        incomplete_line = buffer_lines[0]
+                        complete_lines = buffer_lines[1:]
+                        buffer = incomplete_line.encode('utf-8')
+                    else:
+                        # We're at the beginning of file, all lines are complete
+                        complete_lines = buffer_lines
+                        buffer = b''
+
+                    # Add complete lines to our result (in reverse order since we're reading backwards)
+                    complete_lines.reverse()
+                    lines.extend(complete_lines)
+
+                    # If we've read enough lines, break
+                    if len(lines) >= max_lines:
+                        break
+
+                # Reverse the lines to get correct order and limit to max_lines
+                lines.reverse()
+                return lines[-max_lines:] if len(lines) > max_lines else lines
+
+        except Exception as e:
+            # Fallback to simple method for any encoding or IO issues
+            self.logger.warning(
+                f'Efficient tail failed for {file_path}, falling back to simple method: {str(e)}'
+            )
+            with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                all_lines = f.readlines()
+                return [line.rstrip('\n\r') for line in all_lines[-max_lines:]]
 
     def save_file(self, request: SaveFileRequest) -> SaveFileResult:
         file = request.file
