@@ -1,133 +1,18 @@
-# Update IDEA backend resource
+# Update IDEA backend resource (idea-admin.sh deploy)
+
+## Update IDEA backend resource
 
 {% hint style="info" %}
 This page covers different methods for updating your IDEA cluster infrastructure.
 {% endhint %}
 
-# Full Cluster Upgrade
-
-## Overview
-
-The `upgrade-cluster` command combines multiple steps that were previously separate into a single operation:
-
-1. Updating the base OS configuration
-2. Updating infrastructure AMIs
-3. Backing up and regenerating global settings
-4. Deploying all modules with the `--upgrade` flag
-
-## Usage
-
-The basic syntax for the upgrade command is:
-
-```bash
-./idea-admin.sh upgrade-cluster [OPTIONS] [MODULES...]
-```
-
-If no modules are specified, all modules will be upgraded automatically.
-
-### Required Parameters
-
-- `--cluster-name`: Name of your IDEA cluster
-- `--aws-region`: AWS region where the cluster is deployed
-
-### Optional Parameters
-
-- `MODULES`: List of modules to upgrade (e.g., `cluster`, `metrics`, `scheduler`, etc.). If not specified, all modules will be upgraded.
-- `--base-os`: New base OS to upgrade to. If not specified, defaults to `amazonlinux2023`. Supported options are:
-  - `amazonlinux2023` (default)
-  - `rhel8`
-  - `rhel9`
-  - `rocky8`
-  - `rocky9`
-- `--aws-profile`: AWS profile to use for the operation
-- `--termination-protection`: Set CloudFormation stack termination protection (default: true)
-- `--force-build-bootstrap`: Re-build bootstrap package even if directory exists
-- `--rollback/--no-rollback`: Enable/disable stack rollback on failure (default: true)
-- `--optimize-deployment`: Deploy applicable stacks in parallel to speed up the process
-- `--force`: Skip all confirmation prompts
-- `--skip-global-settings-update`: Skip the global settings update if you've already done it
-- `--module-set`: Name of the module set to use (default: default)
-- `--deployment-id`: UUID to identify the deployment
-
-## Examples
-
-### Full Upgrade to Default Base OS (Amazon Linux 2023)
-
-The simplest way to upgrade all infrastructure components:
-
-```bash
-./idea-admin.sh upgrade-cluster \
-  --aws-region us-east-2 \
-  --cluster-name idea-test1 \
-  --aws-profile default
-```
-
-### Full Upgrade with Explicit Base OS
-
-Explicitly specify the base OS (same as default):
-
-```bash
-./idea-admin.sh upgrade-cluster --base-os amazonlinux2023 \
-  --aws-region us-east-2 \
-  --cluster-name idea-test1 \
-  --aws-profile default
-```
-
-### Upgrade Only Specific Modules
-
-To upgrade only the scheduler and cluster-manager components:
-
-```bash
-./idea-admin.sh upgrade-cluster scheduler cluster-manager \
-  --base-os amazonlinux2023 \
-  --aws-region us-east-2 \
-  --cluster-name idea-test1 \
-  --aws-profile default
-```
-
-### Skip Global Settings Update
-
-If you've already updated global settings and want to skip that step:
-
-```bash
-./idea-admin.sh upgrade-cluster --skip-global-settings-update \
-  --aws-region us-east-2 \
-  --cluster-name idea-test1 \
-  --aws-profile default
-```
-
-### Optimize for Speed (experimental)
-
-Use parallel deployment where possible:
-
-```bash
-./idea-admin.sh upgrade-cluster --base-os amazonlinux2023 \
-  --optimize-deployment \
-  --aws-region us-east-2 \
-  --cluster-name idea-test1 \
-  --aws-profile default
-```
-
-## Troubleshooting
-
-If the upgrade fails during the pre-upgrade configuration stage:
-
-1. Make sure your values.yml file correctly reflects your desired configuration
-2. Verify AMI IDs are available in your target region
-
-If the upgrade fails during deployment:
-
-1. Check the CloudFormation console for error details
-2. Fix any issues and retry with the same command
-3. Use `--no-rollback` to prevent stack rollback for easier debugging
-
-# Individual Module Updates (idea-admin.sh deploy)
+## Individual Module Updates (idea-admin.sh deploy)
 
 {% hint style="info" %}
 Use the **Deploy** command if you have made an architecture update outside of core IDEA codebase (e.g: update Lambda function codebase, change ALB listeners, update filesystem mount ..). Refer to [update-idea-configuration.md](update-idea-configuration.md "mention") for other types of updates.
 {% endhint %}
 
-## Standard Upgrade Procedure
+### Standard Upgrade Procedure
 
 After you have made your infrastructure change, run `./idea-admin.sh cdk diff <STACK>` command to preview what infrastructure changes will be performed during the upcoming upgrade deployment.
 
@@ -232,9 +117,9 @@ Once the stack is updated, you can verify the resources have been upgraded corre
 
 <figure><img src="../../../.gitbook/assets/ftu_ops_updatebk_lastmod.webp" alt=""><figcaption></figcaption></figure>
 
-# Global Settings Backup and Upgrade
+## Global Settings Backup and Upgrade
 
-## Overview
+### Overview
 
 The `backup-update-global-settings` command performs only the global settings portion of the upgrade process:
 
@@ -245,7 +130,7 @@ The `backup-update-global-settings` command performs only the global settings po
 
 This is especially useful during development, or when you want to update global settings without performing a full upgrade of the cluster.
 
-## Usage
+### Usage
 
 The basic syntax for the command is:
 
@@ -253,20 +138,20 @@ The basic syntax for the command is:
 ./idea-admin.sh backup-update-global-settings [OPTIONS]
 ```
 
-### Required Parameters
+#### Required Parameters
 
-- `--cluster-name`: Name of your IDEA cluster
-- `--aws-region`: AWS region where the cluster is deployed
+* `--cluster-name`: Name of your IDEA cluster
+* `--aws-region`: AWS region where the cluster is deployed
 
-### Optional Parameters
+#### Optional Parameters
 
-- `--aws-profile`: AWS profile to use for the operation
-- `--force`: Skip all confirmation prompts
-- `--module-set`: Name of the module set to use (default: default)
+* `--aws-profile`: AWS profile to use for the operation
+* `--force`: Skip all confirmation prompts
+* `--module-set`: Name of the module set to use (default: default)
 
-## Examples
+### Examples
 
-### Basic Usage
+#### Basic Usage
 
 ```bash
 ./idea-admin.sh backup-update-global-settings \
@@ -274,7 +159,7 @@ The basic syntax for the command is:
   --aws-region us-east-2
 ```
 
-### With AWS Profile and Force Options
+#### With AWS Profile and Force Options
 
 ```bash
 ./idea-admin.sh backup-update-global-settings \
@@ -284,20 +169,17 @@ The basic syntax for the command is:
   --force
 ```
 
-## When to Use This Command
+### When to Use This Command
 
 This command is particularly useful in the following scenarios:
 
 1. **During development**: When you're making changes to global settings and want to test them without going through a full upgrade cycle.
-
 2. **Configuration updates**: When you need to update global settings configuration but don't want to change the base OS or update AMIs.
-
 3. **Troubleshooting**: When you need to regenerate the configuration files to resolve configuration issues.
-
 4. **Before upgrades**: To create a backup of your current configuration before performing a full upgrade.
 
-## Notes
+### Notes
 
-- This command will create a backup of your current configuration in a directory with a date stamp.
-- The backup will be stored in the path: `~/.idea/clusters/<cluster-name>/<aws-region>/config.golden.<date>`
-- If you need to rollback, you can manually copy the backup directory to restore your previous configuration.
+* This command will create a backup of your current configuration in a directory with a date stamp.
+* The backup will be stored in the path: `~/.idea/clusters/<cluster-name>/<aws-region>/config.golden.<date>`
+* If you need to rollback, you can manually copy the backup directory to restore your previous configuration.
