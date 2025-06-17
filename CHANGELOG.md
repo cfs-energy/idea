@@ -34,11 +34,11 @@ There are two recommended upgrade paths:
    ```
    This command handles all the necessary steps including base OS updates, global settings backup and regeneration, and module upgrades in a single operation.
 
-   Detailed information about the `upgrade-cluster` command can be found in the [IDEA Upgrade Documentation](https://hpc.com/first-time-users/cluster-operations/update-idea-cluster/update-idea-backend-resource).
+   Detailed information about the `upgrade-cluster` command can be found in the [IDEA Upgrade Documentation](https://docs.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/upgrade-cluster).
 
 2. **Alternative: Manual update process**
 
-   If you prefer more control over the upgrade process, follow the detailed instructions in the [IDEA Upgrade Documentation](https://hpc.com/first-time-users/cluster-operations/update-idea-cluster/update-idea-backend-resource).
+   If you prefer more control over the upgrade process, follow the detailed instructions in the [IDEA Upgrade Documentation](https://doca.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/update-idea-backend-resource).
 
 ### **📋 Post Upgrade**
 
