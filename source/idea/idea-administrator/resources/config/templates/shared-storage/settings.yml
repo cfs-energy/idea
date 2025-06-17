@@ -4,9 +4,9 @@
 
 {% macro storage_provider_config(provider, kwargs) %}
 {% if provider == 'efs' %}
-  {% include 'shared-storage/_templates/efs.yml' %}
+{% include 'shared-storage/_templates/efs.yml' %}
 {% elif provider == 'fsx_lustre' %}
-  {% include 'shared-storage/_templates/fsx_lustre.yml' %}
+{% include 'shared-storage/_templates/fsx_lustre.yml' %}
 {% endif %}
 {% endmacro %}
 
@@ -22,7 +22,7 @@ apps:
   #mount_options: "efs _netdev,noresvport,tls,iam 0 0"
   scope:
     - cluster
-  {{ storage_provider_config(provider=storage_apps_provider, kwargs={
+{{ storage_provider_config(provider=storage_apps_provider, kwargs={
       'use_existing_fs': use_existing_apps_fs,
       'file_system_id': existing_apps_fs_id,
       'kms_key_id': kms_key_id,
@@ -46,7 +46,7 @@ data:
   #mount_options: "efs _netdev,noresvport,tls,iam 0 0"
   scope:
     - cluster
-  {{ storage_provider_config(provider=storage_data_provider, kwargs={
+{{ storage_provider_config(provider=storage_data_provider, kwargs={
       'use_existing_fs': use_existing_data_fs,
       'file_system_id': existing_data_fs_id,
       'kms_key_id': kms_key_id,
