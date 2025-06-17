@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
+## [25.06.2] - 2025-06-17
+
+### **🔧 Critical Hotfixes**
+
+This maintenance release addresses critical stability and compatibility issues in the Virtual Desktop Controller (VDC) and Cluster Manager components.
+
+**Upgrade Instructions:**
+* From `25.05.1`: Update only `vdc` and `cluster-manager` (non-service impacting)
+```bash
+./idea-admin.sh upgrade-cluster cluster-manager vdc --aws-region $IDEA_AWS_REGION --cluster-name $IDEA_CLUSTER_NAME
+```
+* From other versions: Run full `upgrade-cluster` ([documentation](https://docs.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/upgrade-cluster))
+
+### **🔄 Updates**
+* Software Stack and Base AMIs updated
+* Fixed changelog link typos
+
+### **🐛 Bug Fixes**
+
+* **TailFile API Optimization**: Refactored to reduce memory consumption and prevent OOM crashes in cluster-manager supervisord process
+* **Windows Server 2025 GPU Support**: Fixed NVIDIA GPU compatibility by using Windows Server 2022 drivers (Windows Server 2025 drivers not yet available from AWS)
+
 ## [25.06.1] - 2025-06-10
 
 > **📋 TL;DR - KEY HIGHLIGHTS**
@@ -38,7 +60,7 @@ There are two recommended upgrade paths:
 
 2. **Alternative: Manual update process**
 
-   If you prefer more control over the upgrade process, follow the detailed instructions in the [IDEA Upgrade Documentation](https://doca.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/update-idea-backend-resource).
+   If you prefer more control over the upgrade process, follow the detailed instructions in the [IDEA Upgrade Documentation](https://docs.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/update-idea-backend-resource).
 
 ### **📋 Post Upgrade**
 
@@ -190,7 +212,7 @@ Added [Script Workbench](https://docs.idea-hpc.com/modules/hpc-workloads/user-do
 ## [3.1.10] - 2024-10-29
 
 ### Notes
-* This upgrade does require an update to the global settings. Please review [Global Settings Upgrade](https://hpc.com/first-time-users/cluster-operations/update-idea-cluster/update-idea-backend-resource#global-settings-backup-and-upgrade) before upgrading.
+* This upgrade does require an update to the global settings. Please review [Global Settings Upgrade](https://docs.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/update-idea-backend-resource#global-settings-backup-and-upgrade) before upgrading.
 * You should update the IDEA CDK Bootstrap to fix [CDK Issue #31885](https://github.com/aws/aws-cdk/issues/31885) - This is a security fix and should be addressed on all CDK stacks regardless of IDEA
   * To update the IDEA CDK Bootstrap for existing deployments, use idea-admin:
     ```
@@ -258,7 +280,7 @@ Added [Script Workbench](https://docs.idea-hpc.com/modules/hpc-workloads/user-do
 ## [3.1.8] - 2024-07-17
 
 ### Notes
-* This upgrade does require an update to the global settings. Please review [Global Settings Upgrade](https://hpc.com/first-time-users/cluster-operations/update-idea-cluster/update-idea-backend-resource#global-settings-backup-and-upgrade) before upgrading.
+* This upgrade does require an update to the global settings. Please review [Global Settings Upgrade](https://docs.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/update-idea-backend-resource#global-settings-backup-and-upgrade) before upgrading.
 * Removed `RHEL 7` and `CentOS 7` due to EOL on 6/30/2024
   * Remove software stacks and existing eVDI deployments that are running `CentOS 7` or `RHEL 7` BEFORE upgrading to IDEA 3.1.8
 
@@ -296,7 +318,7 @@ Added [Script Workbench](https://docs.idea-hpc.com/modules/hpc-workloads/user-do
 ## [3.1.7] - 2024-06-01
 
 ### Notes
-* This upgrade does require an update to the global settings. Please review [Global Settings Upgrade](https://hpc.com/first-time-users/cluster-operations/update-idea-cluster/update-idea-backend-resource#global-settings-backup-and-upgrade) before upgrading.
+* This upgrade does require an update to the global settings. Please review [Global Settings Upgrade](https://docs.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/update-idea-backend-resource#global-settings-backup-and-upgrade) before upgrading.
 * Pre-upgrade script `scripts/pre-upgrade-317.sh` will assist by outputting the cluster settings command to update Base OS AMI as well as rename occurrences in settings for schedule `STOP_ALL_DAY` to `STOP_ON_IDLE`.
 * Schedule Update script included in scripts to be able to update existing sessions to `STOP_ON_IDLE` via API
 
