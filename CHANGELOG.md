@@ -26,6 +26,7 @@ This maintenance release addresses critical stability and compatibility issues i
 * **TailFile API Optimization**: Refactored to reduce memory consumption and prevent OOM crashes in cluster-manager supervisord process
 * **Windows Server 2025 GPU Support**: Fixed NVIDIA GPU compatibility by using Windows Server 2022 drivers (Windows Server 2025 drivers not yet available from AWS)
 * **YAML Config Generation**: Fixed YAML Formatting issue preventing `upgrade-cluster` from running successfully
+* **Scheduler Default Queues**: Fixed placement group default settings for queues that prevented new scheduler deployments
 
 ## [25.06.1] - 2025-06-10
 

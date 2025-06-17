@@ -114,7 +114,7 @@ class SchedulerDefaultSettings:
                         instance_types=['t3.large', 't3.xlarge', 't3.2xlarge'],
                         base_os=compute_node_os,
                         instance_ami=compute_node_ami,
-                        enable_placement_group=True,
+                        enable_placement_group=False,
                     ),
                     projects=[Project(project_id=project.project_id)],
                 )
@@ -142,7 +142,7 @@ class SchedulerDefaultSettings:
                         instance_types=['t3.micro'],
                         base_os=compute_node_os,
                         instance_ami=compute_node_ami,
-                        enable_placement_group=True,
+                        enable_placement_group=False,
                     ),
                     projects=[Project(project_id=project.project_id)],
                 )
