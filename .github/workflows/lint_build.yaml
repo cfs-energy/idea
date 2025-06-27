@@ -17,4 +17,4 @@ jobs:
         uses: ./.github/actions/build_modules
       - name: Build Docker Image
         run: |
-          invoke docker.build
+          invoke docker.build --gha-cache

@@ -110,6 +110,7 @@ Statement:
   Action:
   - backup:DescribeBackupVault
   - backup:CopyIntoBackupVault
+  - backup:TagResource
   Resource: arn:{{ context.aws_partition }}:backup:*:*:backup-vault:*
 
 - Effect: Allow

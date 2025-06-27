@@ -168,6 +168,11 @@ class AnalyticsStack(IdeaBaseStack):
             stream_mode = kinesis.StreamMode.ON_DEMAND
             shard_count = None
 
+        # Get removal policy for Kinesis stream
+        kinesis_removal_policy = self.context.config().get_string(
+            'analytics.kinesis.removal_policy', default='DESTROY'
+        )
+
         self.kinesis_stream = KinesisStream(
             context=self.context,
             name=f'{self.module_id}-kinesis-stream',
@@ -175,6 +180,7 @@ class AnalyticsStack(IdeaBaseStack):
             stream_name=f'{self.module_id}-kinesis-stream',
             stream_mode=stream_mode,
             shard_count=shard_count,
+            removal_policy=cdk.RemovalPolicy(kinesis_removal_policy),
         )
         if self.aws_region in Utils.get_value_as_list(
             'KINESIS_STREAMS_CLOUDFORMATION_UNSUPPORTED_STREAMMODEDETAILS_REGION_LIST',

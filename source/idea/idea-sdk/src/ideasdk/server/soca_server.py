@@ -32,14 +32,18 @@ import pathlib
 import os
 import ssl
 import sanic
+import logging
 from sanic.server import AsyncioServer, serve as create_server, HttpProtocol
 from sanic.server.protocols.websocket_protocol import WebSocketProtocol
+from sanic.views import stream as stream_decorator
 import sanic.config
 import sanic.signals
 import sanic.router
 from sanic.models.handler_types import RouteHandler
 import socket
 from prometheus_client import generate_latest
+import time
+import jwt
 
 DEFAULT_ENABLE_HTTP = True
 DEFAULT_ENABLE_HTTP_FILE_UPLOAD = False
@@ -54,6 +58,7 @@ DEFAULT_UNIX_SOCKET_FILE = '/run/idea.sock'
 DEFAULT_MAX_WORKERS = 16
 DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT = 10
 DEFAULT_ENABLE_AUDIT_LOGS = True
+
 
 # these are never used to serve content but used to serve http content over Unix Domain Sockets
 DUMMY_HOSTNAME = 'localhost'
@@ -768,17 +773,28 @@ class SocaServer(SocaService):
                 handler=self.health_check_route, uri='/healthcheck', methods=['GET']
             )
 
-            # file transfer routes
+            # file transfer routes - always use streaming for memory efficiency
             if self.options.enable_http_file_upload:
+                # Use streaming for file uploads to handle large files without loading into RAM
                 self.add_route(
-                    handler=self.file_upload_route,
+                    handler=self.file_upload_stream_route,
                     uri='/api/v1/upload',
                     methods=['PUT'],
                 )
                 self.add_route(
-                    handler=self.file_upload_route,
+                    handler=self.file_upload_stream_route,
                     uri='/api/v1/<namespace:str>',
                     methods=['PUT'],
+                )
+                self.add_route(
+                    handler=self.generate_download_url_route,
+                    uri='/api/v1/generate-download-url',
+                    methods=['POST'],
+                )
+                self.add_route(
+                    handler=self.generate_download_url_route,
+                    uri='/api/v1/<namespace:str>/generate-download-url',
+                    methods=['POST'],
                 )
                 self.add_route(
                     handler=self.file_download_route,
@@ -904,30 +920,439 @@ class SocaServer(SocaService):
             return None
         return {'token_type': kv[0], 'token': kv[1]}
 
-    async def file_upload_route(self, http_request, **_):
+    @stream_decorator
+    async def file_upload_stream_route(self, http_request, **_):
+        """
+        Stream-based file upload handler that processes large files without loading them into RAM.
+        Uses multipart streaming to handle file uploads efficiently.
+        """
         try:
             username = self._api_invocation_handler.get_username(http_request)
             if Utils.is_empty(username):
                 raise exceptions.unauthorized_access()
 
             cwd = self.get_query_param_as_string('cwd', http_request)
-            files = Utils.get_value_as_list('files[]', http_request.files)
-            helper = FileSystemHelper(self._context, username=username)
-            result = await helper.upload_files(cwd, files)
-            return sanic.response.json(result, dumps=Utils.to_json)
-        except Exception as e:
-            if isinstance(e, exceptions.SocaException):
-                return sanic.response.json(
-                    {'error_code': e.error_code, 'success': False}, dumps=Utils.to_json
+            if Utils.is_empty(cwd):
+                raise exceptions.invalid_params('cwd parameter is required')
+
+            if self._logger.isEnabledFor(logging.DEBUG):
+                self._logger.debug(
+                    f'Streaming file upload request - User: {username}, Directory: {cwd}'
                 )
-            else:
+
+            # Validate directory access before processing upload
+            helper = FileSystemHelper(self._context, username=username)
+            helper.check_access(cwd, check_dir=True, check_read=True, check_write=True)
+
+            # Parse multipart data in streaming fashion
+            result = await self._process_streaming_upload(
+                http_request, helper, cwd, username
+            )
+            return sanic.response.json(result, dumps=Utils.to_json)
+
+        except exceptions.SocaException as e:
+            self._logger.error(
+                f'Streaming file upload failed - User: {username}, Directory: {cwd}, Error: {e.message}'
+            )
+            return sanic.response.json(
+                {'error_code': e.error_code, 'message': e.message, 'success': False},
+                dumps=Utils.to_json,
+            )
+        except Exception as e:
+            self._logger.error(
+                f'Streaming file upload error - User: {username}, Directory: {cwd}, Error: {str(e)}'
+            )
+            return sanic.response.json(
+                {
+                    'error_code': errorcodes.GENERAL_ERROR,
+                    'message': str(e),
+                    'success': False,
+                },
+                dumps=Utils.to_json,
+            )
+
+    async def _process_streaming_upload(
+        self, http_request, helper: FileSystemHelper, cwd: str, username: str
+    ) -> Dict:
+        """
+        Process streaming multipart upload without loading files into memory.
+        """
+        import re
+        import aiofiles
+        import shutil
+        import os
+
+        # Get Content-Type header to extract boundary
+        content_type = http_request.headers.get('content-type', '')
+        boundary_match = re.search(r'boundary=([^;]+)', content_type)
+        if not boundary_match:
+            raise exceptions.invalid_params(
+                'Missing multipart boundary in Content-Type header'
+            )
+
+        boundary = boundary_match.group(1).strip('"')
+        boundary_bytes = f'--{boundary}'.encode()
+        end_boundary_bytes = f'--{boundary}--'.encode()
+
+        files_uploaded = []
+        files_skipped = []
+        files_renamed = []  # Track files that were renamed due to conflicts
+
+        # Buffer for parsing multipart data
+        buffer = b''
+        current_file = None
+        current_file_handle = None
+        current_headers = {}
+        parsing_headers = False
+
+        try:
+            # Stream the request body
+            while True:
+                chunk = await http_request.stream.read()
+                if chunk is None:
+                    break
+
+                buffer += chunk
+
+                # Process buffer for multipart boundaries and data
+                while True:
+                    if current_file is None and not parsing_headers:
+                        # Look for start of new part
+                        boundary_pos = buffer.find(boundary_bytes)
+                        if boundary_pos == -1:
+                            # Keep last len(boundary_bytes) bytes in case boundary spans chunks
+                            if len(buffer) > len(boundary_bytes):
+                                buffer = buffer[-len(boundary_bytes) :]
+                            break
+
+                        # Check if this is the end boundary
+                        if buffer.find(end_boundary_bytes) == boundary_pos:
+                            # End of all parts
+                            buffer = b''
+                            break
+
+                        # Move past boundary and CRLF
+                        buffer = buffer[boundary_pos + len(boundary_bytes) :]
+                        if buffer.startswith(b'\r\n'):
+                            buffer = buffer[2:]
+                        parsing_headers = True
+                        current_headers = {}
+                        continue
+
+                    if parsing_headers:
+                        # Parse headers until we find double CRLF
+                        headers_end = buffer.find(b'\r\n\r\n')
+                        if headers_end == -1:
+                            break  # Need more data
+
+                        headers_data = buffer[:headers_end].decode('utf-8')
+                        buffer = buffer[headers_end + 4 :]  # Skip \r\n\r\n
+
+                        # Parse individual headers
+                        for header_line in headers_data.split('\r\n'):
+                            if ':' in header_line:
+                                key, value = header_line.split(':', 1)
+                                current_headers[key.strip().lower()] = value.strip()
+
+                        # Check if this is a file upload
+                        content_disposition = current_headers.get(
+                            'content-disposition', ''
+                        )
+                        filename_match = re.search(
+                            r'filename="([^"]*)"', content_disposition
+                        )
+
+                        if filename_match:
+                            filename = filename_match.group(1)
+                            secure_filename = Utils.to_secure_filename(filename)
+
+                            if Utils.is_empty(secure_filename):
+                                files_skipped.append(filename)
+                                parsing_headers = False
+                                continue
+
+                            # Handle file name conflicts by auto-renaming
+                            file_path, was_renamed = self._get_unique_file_path(
+                                cwd, secure_filename, username
+                            )
+                            current_file = file_path
+
+                            # Track renamed files
+                            if was_renamed:
+                                files_renamed.append(
+                                    {
+                                        'original_name': filename,
+                                        'final_name': os.path.basename(file_path),
+                                    }
+                                )
+
+                            # Open file for writing
+                            current_file_handle = await aiofiles.open(file_path, 'wb')
+
+                            if self._logger.isEnabledFor(logging.DEBUG):
+                                self._logger.debug(
+                                    f'Starting streaming upload - User: {username}, File: {secure_filename}'
+                                )
+
+                        parsing_headers = False
+                        continue
+
+                    if current_file is not None and current_file_handle is not None:
+                        # Look for next boundary in the data
+                        next_boundary = buffer.find(b'\r\n--' + boundary.encode())
+
+                        if next_boundary == -1:
+                            # No boundary found, write all but last few bytes (in case boundary spans chunks)
+                            if len(buffer) > len(boundary_bytes) + 10:
+                                write_data = buffer[: -len(boundary_bytes) - 10]
+                                buffer = buffer[-len(boundary_bytes) - 10 :]
+                                await current_file_handle.write(write_data)
+                            break
+                        else:
+                            # Found boundary, write data up to boundary
+                            write_data = buffer[:next_boundary]
+                            await current_file_handle.write(write_data)
+
+                            # Close current file
+                            await current_file_handle.close()
+                            current_file_handle = None
+
+                            # Set file ownership
+                            group_name = helper.group_name_helper.get_user_group(
+                                username
+                            )
+                            shutil.chown(current_file, user=username, group=group_name)
+
+                            files_uploaded.append(current_file)
+
+                            if self._logger.isEnabledFor(logging.DEBUG):
+                                file_size = os.path.getsize(current_file)
+                                self._logger.debug(
+                                    f'Completed streaming upload - User: {username}, File: {os.path.basename(current_file)}, Size: {file_size} bytes'
+                                )
+
+                            current_file = None
+
+                            # Move buffer past the CRLF before boundary
+                            buffer = buffer[next_boundary + 2 :]  # Skip \r\n
+                            continue
+
+                    # If we get here, we need more data
+                    break
+
+        finally:
+            # Clean up any open file handle
+            if current_file_handle is not None:
+                await current_file_handle.close()
+                # Remove incomplete file
+                if current_file and os.path.exists(current_file):
+                    os.remove(current_file)
+
+        if self._logger.isEnabledFor(logging.DEBUG):
+            self._logger.debug(
+                f'Streaming upload completed - User: {username}, Directory: {cwd}, '
+                f'Uploaded: {len(files_uploaded)}, Skipped: {len(files_skipped)}, Renamed: {len(files_renamed)}'
+            )
+
+        return {
+            'success': True,
+            'payload': {
+                'files_uploaded': files_uploaded,
+                'files_skipped': files_skipped,
+                'files_renamed': files_renamed,
+            },
+        }
+
+    def _get_unique_file_path(
+        self, directory: str, filename: str, username: str
+    ) -> tuple:
+        """
+        Generate a unique file path by auto-renaming if the file already exists.
+        Returns (file_path, was_renamed)
+        """
+        import os
+
+        original_path = os.path.join(directory, filename)
+
+        # If file doesn't exist, use original name
+        if not os.path.exists(original_path):
+            return original_path, False
+
+        # File exists, generate unique name
+        name, ext = os.path.splitext(filename)
+        counter = 1
+
+        while counter < 1000:  # Prevent infinite loop
+            new_filename = f'{name}({counter}){ext}'
+            new_path = os.path.join(directory, new_filename)
+
+            if not os.path.exists(new_path):
+                if self._logger.isEnabledFor(logging.DEBUG):
+                    self._logger.debug(
+                        f'File conflict resolved - User: {username}, Original: {filename}, Renamed: {new_filename}'
+                    )
+                return new_path, True
+
+            counter += 1
+
+        # If we've tried 1000 variations, use timestamp-based naming as fallback
+        import time
+
+        timestamp = int(time.time())
+        fallback_filename = f'{name}_{timestamp}{ext}'
+        fallback_path = os.path.join(directory, fallback_filename)
+
+        self._logger.warning(
+            f'File conflict fallback - User: {username}, Original: {filename}, Fallback: {fallback_filename}'
+        )
+
+        return fallback_path, True
+
+    async def generate_download_url_route(self, http_request, **_):
+        """Generate a temporary signed URL for secure file downloads"""
+        try:
+            username = self._api_invocation_handler.get_username(http_request)
+            if Utils.is_empty(username):
+                raise exceptions.unauthorized_access()
+
+            # Parse request body
+            body = http_request.json
+            file_path = Utils.get_value_as_string('file', body)
+
+            if self._logger.isEnabledFor(logging.DEBUG):
+                self._logger.debug(
+                    f'Generate download URL request - User: {username}, File: {file_path}'
+                )
+
+            if Utils.is_empty(file_path):
                 return sanic.response.json(
-                    {'error_code': errorcodes.GENERAL_ERROR, 'success': False},
+                    {
+                        'error_code': errorcodes.INVALID_PARAMS,
+                        'message': 'file parameter is required',
+                        'success': False,
+                    },
                     dumps=Utils.to_json,
                 )
 
+            # Validate file/directory access
+            helper = FileSystemHelper(self._context, username=username)
+            if os.path.isdir(file_path):
+                helper.check_access(
+                    file_path, check_dir=True, check_read=True, check_write=False
+                )
+            else:
+                helper.check_access(
+                    file_path, check_dir=False, check_read=True, check_write=False
+                )
+
+            # Generate a temporary token valid for 5 seconds
+            payload = {
+                'username': username,
+                'file': file_path,
+                'exp': int(time.time()) + 5,  # 5 second expiry
+                'iat': int(time.time()),
+                'purpose': 'file_download',
+            }
+
+            # Use the dedicated JWT signing secret from cluster settings
+            jwt_secret = self._get_jwt_signing_secret()
+            temp_token = jwt.encode(payload, jwt_secret, algorithm='HS256')
+
+            # Generate the download URL with the temporary token
+            base_url = f'{http_request.scheme}://{http_request.host}'
+            # Include the API path prefix to ensure proper ALB routing
+            api_path_prefix = (
+                self.options.api_path_prefixes[0]
+                if self.options.api_path_prefixes
+                else ''
+            )
+            download_url = f'{base_url}{api_path_prefix}/api/v1/download?file={Utils.url_encode(file_path)}&temp_token={temp_token}'
+
+            if self._logger.isEnabledFor(logging.DEBUG):
+                self._logger.debug(
+                    f'Download URL generated - User: {username}, File: {file_path}, Expires: 5s'
+                )
+
+            return sanic.response.json(
+                {'download_url': download_url, 'expires_in': 5, 'success': True},
+                dumps=Utils.to_json,
+            )
+
+        except exceptions.SocaException as e:
+            self._logger.error(
+                f'Download URL generation failed - User: {username}, File: {file_path}, Error: {e.message}'
+            )
+            return sanic.response.json(
+                {'error_code': e.error_code, 'message': e.message, 'success': False},
+                dumps=Utils.to_json,
+            )
+        except Exception as e:
+            self._logger.error(
+                f'Download URL generation error - User: {username}, File: {file_path}, Error: {str(e)}'
+            )
+            return sanic.response.json(
+                {
+                    'error_code': errorcodes.GENERAL_ERROR,
+                    'message': str(e),
+                    'success': False,
+                },
+                dumps=Utils.to_json,
+            )
+
     async def file_download_route(self, http_request, **_):
+        username = None
+
+        # Try Bearer token first (for API calls)
         username = self._api_invocation_handler.get_username(http_request)
+
+        # If no Bearer token, try temporary download token (for direct downloads)
+        if Utils.is_empty(username):
+            temp_token = self.get_query_param_as_string('temp_token', http_request)
+            if Utils.is_not_empty(temp_token):
+                try:
+                    import jwt
+
+                    # Decode the temporary token using the same secret
+                    jwt_secret = self._get_jwt_signing_secret()
+                    payload = jwt.decode(temp_token, jwt_secret, algorithms=['HS256'])
+
+                    # Validate the token purpose
+                    if payload.get('purpose') != 'file_download':
+                        raise jwt.InvalidTokenError('Invalid token purpose')
+
+                    username = payload.get('username')
+                    requested_file = self.get_query_param_as_string(
+                        'file', http_request
+                    )
+                    token_file = payload.get('file')
+
+                    # Ensure the token is for the requested file
+                    if requested_file != token_file:
+                        raise jwt.InvalidTokenError('Token file mismatch')
+
+                    if self._logger.isEnabledFor(logging.DEBUG):
+                        self._logger.debug(
+                            f'Valid temporary download token - User: {username}, File: {token_file}'
+                        )
+
+                except jwt.ExpiredSignatureError:
+                    self._logger.warning(
+                        'Temporary download token expired for file download request'
+                    )
+                    return sanic.response.json(
+                        {
+                            'error_code': errorcodes.AUTH_TOKEN_EXPIRED,
+                            'message': 'Download link expired',
+                            'success': False,
+                        },
+                        dumps=Utils.to_json,
+                    )
+                except jwt.InvalidTokenError as e:
+                    self._logger.warning(
+                        f'Invalid temporary download token - Error: {str(e)}'
+                    )
+                    username = None
+
         if Utils.is_empty(username):
             return sanic.response.json(
                 {'error_code': errorcodes.UNAUTHORIZED_ACCESS, 'success': False},
@@ -940,23 +1365,212 @@ class SocaServer(SocaService):
             download_file = download_files[0]
 
         if Utils.is_empty(download_file):
+            self._logger.error(
+                f'File download request missing parameter - User: {username}, Error: file parameter is required'
+            )
             return sanic.response.json(
-                {'error_code': errorcodes.UNAUTHORIZED_ACCESS, 'success': False},
+                {
+                    'error_code': errorcodes.INVALID_PARAMS,
+                    'message': 'file parameter is required',
+                    'success': False,
+                },
                 dumps=Utils.to_json,
             )
 
         helper = FileSystemHelper(self._context, username=username)
         try:
+            if self._logger.isEnabledFor(logging.DEBUG):
+                self._logger.debug(
+                    f'File download access check - User: {username}, File: {download_file}'
+                )
             helper.check_access(download_file, check_read=True, check_write=False)
         except exceptions.SocaException as e:
+            self._logger.error(
+                f'File download access denied - User: {username}, File: {download_file}, Error: {e.message}'
+            )
             return sanic.response.json(
                 {'error_code': e.error_code, 'message': e.message, 'success': False},
                 dumps=Utils.to_json,
             )
 
-        return await sanic.response.file(
-            download_file, filename=os.path.basename(download_file)
+        # Get file info for proper headers
+        if not os.path.exists(download_file):
+            self._logger.error(
+                f'File download failed - User: {username}, File: {download_file}, Error: File not found'
+            )
+            return sanic.response.json(
+                {
+                    'error_code': errorcodes.FILE_NOT_FOUND,
+                    'message': f'File not found: {download_file}',
+                    'success': False,
+                },
+                dumps=Utils.to_json,
+            )
+
+        # Check if the requested item is a directory
+        if os.path.isdir(download_file):
+            self._logger.info(
+                f'Directory download requested - User: {username}, Directory: {download_file}'
+            )
+
+            # Create zip archive for directory download
+            try:
+                from ideadatamodel.filesystem import DownloadFilesRequest
+
+                # Use the FileSystemHelper to create a zip archive
+                download_request = DownloadFilesRequest(files=[download_file])
+                zip_file_path = helper.download_files(download_request)
+
+                # Stream the zip file
+                zip_size = os.path.getsize(zip_file_path)
+                zip_filename = os.path.basename(zip_file_path)
+
+                self._logger.info(
+                    f'Directory zip created - User: {username}, Directory: {download_file}, '
+                    f'Zip: {zip_filename}, Size: {zip_size} bytes'
+                )
+
+                # Log large directory downloads
+                if zip_size > 1024 * 1024 * 1024:  # 1GB+
+                    self._logger.warning(
+                        f'Large directory download - User: {username}, Directory: {download_file}, '
+                        f'Zip size: {zip_size // 1024 // 1024 // 1024}GB'
+                    )
+
+                return await self._stream_file_download(
+                    zip_file_path, zip_filename, zip_size, username
+                )
+
+            except Exception as e:
+                self._logger.error(
+                    f'Directory zip creation failed - User: {username}, Directory: {download_file}, Error: {str(e)}'
+                )
+                return sanic.response.json(
+                    {
+                        'error_code': errorcodes.GENERAL_ERROR,
+                        'message': f'Failed to create directory archive: {str(e)}',
+                        'success': False,
+                    },
+                    dumps=Utils.to_json,
+                )
+        else:
+            # Handle regular file download
+            file_size = os.path.getsize(download_file)
+            filename = os.path.basename(download_file)
+            self._logger.info(
+                f'File download started - User: {username}, File: {download_file}, Size: {file_size} bytes'
+            )
+
+            # Log large file downloads
+            if file_size > 1024 * 1024 * 1024:  # 1GB+
+                self._logger.warning(
+                    f'Large file download - User: {username}, File: {download_file}, '
+                    f'Size: {file_size // 1024 // 1024 // 1024}GB'
+                )
+
+            # Use file_stream for ALL downloads to provide consistent browser progress bars
+            # This ensures users always get download progress regardless of file size
+            return await self._stream_file_download(
+                download_file, filename, file_size, username
+            )
+
+    def _get_adaptive_chunk_size(self, file_size: int) -> int:
+        """
+        Calculate adaptive chunk size based on file size for optimal throughput behind ALB.
+        Larger chunks reduce TCP overhead and improve throughput for high-bandwidth connections.
+
+        Args:
+            file_size: Size of the file in bytes
+
+        Returns:
+            Optimal chunk size in bytes
+        """
+        # Small files (< 1MB): Use 64KB chunks for responsiveness
+        if file_size < 1024 * 1024:
+            return 64 * 1024
+
+        # Medium files (1MB - 10MB): Use 256KB chunks
+        elif file_size < 10 * 1024 * 1024:
+            return 256 * 1024
+
+        # Large files (10MB - 100MB): Use 512KB chunks
+        elif file_size < 100 * 1024 * 1024:
+            return 512 * 1024
+
+        # Very large files (100MB - 1GB): Use 1MB chunks
+        elif file_size < 1024 * 1024 * 1024:
+            return 1024 * 1024
+
+        # Huge files (> 1GB): Use 2MB chunks for maximum throughput
+        else:
+            return 2 * 1024 * 1024
+
+    async def _stream_file_download(
+        self, file_path: str, filename: str, file_size: int, username: str = None
+    ):
+        """
+        Stream file downloads using Sanic's file_stream with proper headers for browser progress.
+        This enables native browser download progress bars for all file sizes.
+        Uses adaptive chunk sizing optimized for ALB and high-bandwidth connections.
+        """
+        import mimetypes
+        import urllib.parse
+
+        # Determine content type
+        content_type, _ = mimetypes.guess_type(file_path)
+        if not content_type:
+            content_type = 'application/octet-stream'
+
+        # Properly encode filename for Content-Disposition header
+        # Use RFC 6266 encoding for international characters
+        encoded_filename = urllib.parse.quote(filename)
+
+        # Calculate optimal chunk size based on file size
+        chunk_size = self._get_adaptive_chunk_size(file_size)
+
+        # Set up headers that enable browser progress bars
+        headers = {
+            'Content-Disposition': f'attachment; filename="{filename}"; filename*=UTF-8\'\'{encoded_filename}',
+            'Content-Length': str(file_size),  # Critical for browser progress
+            'Content-Type': content_type,
+            'Accept-Ranges': 'bytes',  # Enable resume capability
+            'Cache-Control': 'no-cache',  # Prevent caching of potentially sensitive files
+        }
+
+        if self._logger.isEnabledFor(logging.DEBUG):
+            user_context = f'User: {username}, ' if username else ''
+            chunk_size_mb = chunk_size / (1024 * 1024)
+            self._logger.debug(
+                f'File download streaming - {user_context}File: {file_path}, Size: {file_size} bytes, '
+                f'Chunk size: {chunk_size_mb:.1f}MB'
+            )
+
+        # Use Sanic's built-in file_stream which handles chunking efficiently
+        # Adding Content-Length header automatically disables chunked encoding
+        return await sanic.response.file_stream(
+            file_path,
+            chunk_size=chunk_size,  # Adaptive chunk size for optimal throughput
+            headers=headers,
         )
+
+    def _get_jwt_signing_secret(self) -> str:
+        """
+        Get the JWT signing secret for secure download URLs.
+        The secret is created by the cluster-manager CDK stack and its ARN is stored in cluster settings.
+        """
+        # Get the secret ARN from cluster settings
+        secret_arn = self._context.config().get_string(
+            f'{self._context.module_id()}.jwt_signing_secret_arn', required=True
+        )
+
+        # Get the secret value from AWS Secrets Manager
+        response = (
+            self._context.aws().secretsmanager().get_secret_value(SecretId=secret_arn)
+        )
+        secret_data = Utils.from_json(response['SecretString'])
+
+        # The secret is generated with a 'secret' key
+        return secret_data['secret']
 
     def _remove_unix_socket(self):
         if not self.options.enable_unix_socket:

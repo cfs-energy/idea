@@ -32,8 +32,8 @@ def prepare_artifacts(c):
 
 
 @task
-def build(c, no_cache=False):
-    # type: (Context, bool) -> None # type: ignore
+def build(c, no_cache=False, gha_cache=False):
+    # type: (Context, bool, bool) -> None # type: ignore
     """
     build administrator docker image
     """
@@ -49,12 +49,14 @@ def build(c, no_cache=False):
     )
     if no_cache:
         build_cmd = f'{build_cmd} --no-cache'
+    elif gha_cache:
+        build_cmd = f'{build_cmd} --cache-from type=gha --cache-to type=gha,mode=max'
     c.run(build_cmd)
 
 
 @task
-def build_push_multi(c, ecr_registry, ecr_tag, no_cache=False):
-    # type: (Context, str, str, bool) -> None # type: ignore
+def build_push_multi(c, ecr_registry, ecr_tag, no_cache=False, gha_cache=False):
+    # type: (Context, str, str, bool, bool) -> None # type: ignore
     """
     Build and publish docker image to an ECR repository using buildx and IAM instance profile
     """
@@ -78,6 +80,8 @@ def build_push_multi(c, ecr_registry, ecr_tag, no_cache=False):
 
     if no_cache:
         build_cmd = f'{build_cmd} --no-cache'
+    elif gha_cache:
+        build_cmd = f'{build_cmd} --cache-from type=gha --cache-to type=gha,mode=max'
     c.run(build_cmd)
 
 

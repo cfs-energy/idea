@@ -33,6 +33,7 @@ from aws_cdk import (
     aws_elasticloadbalancingv2 as elbv2,
     aws_autoscaling as asg,
     aws_kms as kms,
+    aws_secretsmanager as secretsmanager,
 )
 import constructs
 
@@ -76,6 +77,7 @@ class ClusterManagerStack(IdeaBaseStack):
         self.cluster = ExistingSocaCluster(self.context, self.stack)
 
         self.oauth2_client_secret: Optional[OAuthClientIdAndSecret] = None
+        self.jwt_signing_secret: Optional[cdk.aws_secretsmanager.Secret] = None
         self.cluster_tasks_sqs_queue: Optional[SQSQueue] = None
         self.notifications_sqs_queue: Optional[SQSQueue] = None
         self.cluster_manager_role: Optional[Role] = None
@@ -88,6 +90,7 @@ class ClusterManagerStack(IdeaBaseStack):
         self.user_pool = self.lookup_user_pool()
 
         self.build_oauth2_client()
+        self.build_jwt_signing_secret()
         self.build_access_control_groups(user_pool=self.user_pool)
         self.build_sqs_queues()
         self.build_iam_roles()
@@ -156,6 +159,38 @@ class ClusterManagerStack(IdeaBaseStack):
             scope=self.stack,
             client_id=client.user_pool_client_id,
             client_secret=client_secret.get_att_string('ClientSecret'),
+        )
+
+    def build_jwt_signing_secret(self):
+        """
+        Create a dedicated JWT signing secret for secure file download URLs.
+        This secret is used to sign temporary download tokens.
+        """
+        kms_key_id = self.context.config().get_string(
+            'cluster.secretsmanager.kms_key_id'
+        )
+
+        # Create the JWT signing secret using CloudFormation directly for CDK v2 compatibility
+        self.jwt_signing_secret = secretsmanager.CfnSecret(
+            self.stack,
+            f'{self.module_id}-jwt-signing-secret',
+            name=f'{self.cluster_name}-{self.module_id}-jwt-signing-secret',
+            description=f'JWT signing secret for {self.module_id} secure file downloads',
+            generate_secret_string=secretsmanager.CfnSecret.GenerateSecretStringProperty(
+                secret_string_template='{}',
+                generate_string_key='secret',
+                exclude_characters=' "\'\\/`',
+                include_space=False,
+                password_length=64,
+                require_each_included_type=False,
+            ),
+            kms_key_id=self.get_kms_key_arn(kms_key_id) if kms_key_id else None,
+            tags=[
+                cdk.CfnTag(key='idea:ClusterName', value=self.cluster_name),
+                cdk.CfnTag(key='idea:ModuleName', value=self.module_id),
+                cdk.CfnTag(key='idea:SecretType', value='jwt-signing'),
+                cdk.CfnTag(key='idea:Purpose', value='file-download-authentication'),
+            ],
         )
 
     def build_iam_roles(self):
@@ -591,5 +626,9 @@ class ClusterManagerStack(IdeaBaseStack):
             'asg_name': self.auto_scaling_group.auto_scaling_group_name,
             'asg_arn': self.auto_scaling_group.auto_scaling_group_arn,
         }
+
+        # Add JWT signing secret ARN if available
+        if hasattr(self, 'jwt_signing_secret') and self.jwt_signing_secret is not None:
+            cluster_settings['jwt_signing_secret_arn'] = self.jwt_signing_secret.ref
 
         self.update_cluster_settings(cluster_settings)

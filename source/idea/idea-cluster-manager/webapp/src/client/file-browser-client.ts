@@ -24,8 +24,12 @@ import {
     CreateFileResult,
     DeleteFilesRequest,
     DeleteFilesResult,
+    RenameFileRequest,
+    RenameFileResult,
     TailFileRequest,
-    TailFileResult
+    TailFileResult,
+    CheckFilesPermissionsRequest,
+    CheckFilesPermissionsResult
 } from './data-model'
 import IdeaBaseClient, {IdeaBaseClientProps} from "./base-client";
 
@@ -79,6 +83,20 @@ class FileBrowserClient extends IdeaBaseClient<FileBrowserClientProps> {
     deleteFiles(req: DeleteFilesRequest): Promise<DeleteFilesResult> {
         return this.apiInvoker.invoke_alt<DeleteFilesRequest, DeleteFilesResult>(
             'FileBrowser.DeleteFiles',
+            req
+        )
+    }
+
+    renameFile(req: RenameFileRequest): Promise<RenameFileResult> {
+        return this.apiInvoker.invoke_alt<RenameFileRequest, RenameFileResult>(
+            'FileBrowser.RenameFile',
+            req
+        )
+    }
+
+    checkFilesPermissions(req: CheckFilesPermissionsRequest): Promise<CheckFilesPermissionsResult> {
+        return this.apiInvoker.invoke_alt<CheckFilesPermissionsRequest, CheckFilesPermissionsResult>(
+            'FileBrowser.CheckFilesPermissions',
             req
         )
     }

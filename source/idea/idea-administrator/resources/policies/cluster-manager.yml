@@ -99,6 +99,16 @@ Statement:
     Resource: '*'
     Effect: Allow
 
+  # Allow cluster-manager to access JWT signing secrets for secure file downloads
+  - Action:
+      - secretsmanager:GetSecretValue
+    Condition:
+      StringEquals:
+        secretsmanager:ResourceTag/idea:ClusterName: '{{ context.cluster_name }}'
+        secretsmanager:ResourceTag/idea:SecretType: 'jwt-signing'
+    Resource: '*'
+    Effect: Allow
+
   - Action:
       - cognito-idp:*
     Resource: '{{ context.arns.user_pool_arn }}'

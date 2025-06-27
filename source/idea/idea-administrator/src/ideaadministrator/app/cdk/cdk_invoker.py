@@ -220,6 +220,11 @@ class CdkInvoker:
         if Utils.is_not_empty(self.aws_profile):
             env['AWS_DEFAULT_PROFILE'] = self.aws_profile
 
+        # Also set the default region to ensure CDK uses the region from CLI args,
+        # especially important for GovCloud where region detection might fail
+        if Utils.is_not_empty(self.aws_region):
+            env['AWS_DEFAULT_REGION'] = self.aws_region
+
         env_trace = {}
         for env_key, env_value in env.items():
             # skip sensitive values

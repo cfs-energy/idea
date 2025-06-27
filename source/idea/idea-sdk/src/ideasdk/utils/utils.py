@@ -44,7 +44,7 @@ T = TypeVar('T')
 TRUE_VALUES = ('true', 'yes', 'y', '1')
 FALSE_VALUES = ('false', 'no', 'n', '0')
 
-FILENAME_ASCII_STRIP_RE = re.compile(r'[^A-Za-z0-9_.-]')
+FILENAME_ASCII_STRIP_RE = re.compile(r'[^A-Za-z0-9_.\-()]')
 
 # directory tree constants
 DIRECTORY_TREE_SPACE = '    '

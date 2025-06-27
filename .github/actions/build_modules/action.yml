@@ -3,27 +3,37 @@ description: 'Builds the IDEA data model and modules'
 runs:
   using: 'composite'
   steps:
-    - name: Store data-model.ts hash
+    - name: Store git status before build
       shell: bash
       run: |
-        echo "DATA_MODEL_HASH_BEFORE=$(md5sum source/idea/idea-cluster-manager/webapp/src/client/data-model.ts | cut -d' ' -f1)" >> $GITHUB_ENV
+        git status --porcelain > /tmp/git_status_before.txt
+        echo "Git status before build:"
+        cat /tmp/git_status_before.txt
     - name: Generate TS Data Model
       shell: bash
       run: |
         invoke web-portal.typings
-    - name: Check if generated data-model.ts matches committed version
-      shell: bash
-      run: |
-        DATA_MODEL_HASH_AFTER=$(md5sum source/idea/idea-cluster-manager/webapp/src/client/data-model.ts | cut -d' ' -f1)
-        if [ "$DATA_MODEL_HASH_BEFORE" = "$DATA_MODEL_HASH_AFTER" ]; then
-          echo "✅ Generated data-model.ts matches committed version"
-        else
-          echo "❌ Generated data-model.ts differs from committed version!"
-          echo "The committed data-model.ts file is out of sync with the Pydantic models."
-          echo "Please run 'invoke web-portal.typings' locally and commit the updated file."
-          exit 1
-        fi
     - name: Build Modules
       shell: bash
       run: |
         invoke clean build package
+    - name: Check for changes to tracked files
+      shell: bash
+      run: |
+        git status --porcelain > /tmp/git_status_after.txt
+        echo "Git status after build:"
+        cat /tmp/git_status_after.txt
+
+        # Compare git status before and after
+        if ! diff -q /tmp/git_status_before.txt /tmp/git_status_after.txt > /dev/null; then
+          echo "❌ Build process modified tracked files!"
+          echo ""
+          echo "Files that were modified during build:"
+          diff /tmp/git_status_before.txt /tmp/git_status_after.txt || true
+          echo ""
+          echo "This indicates that generated files are out of sync with the source."
+          echo "Please run the build process locally and commit any generated/modified files."
+          exit 1
+        else
+          echo "✅ No tracked files were modified during build"
+        fi

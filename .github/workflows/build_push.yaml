@@ -41,4 +41,4 @@ jobs:
         run: |
           VERSION=$(cat IDEA_VERSION.txt)
           ECR_REPO="${{ github.event.inputs.ecr_repository || 'public.ecr.aws/s5o2b4m0' }}"
-          invoke docker.build-push-multi "$ECR_REPO" "$VERSION"
+          invoke docker.build-push-multi "$ECR_REPO" "$VERSION" --gha-cache

@@ -107,7 +107,7 @@ dcv_broker:
       scale_out_cooldown: 60 # in seconds
     write_capacity:
       min_units: 5
-      max_units: 20
+      max_units: 101
       target_utilization: 70 # in percentage
       scale_in_cooldown: 60 # in seconds
       scale_out_cooldown: 60 # in seconds

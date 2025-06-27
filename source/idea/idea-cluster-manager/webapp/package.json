@@ -1,6 +1,6 @@
 {
   "name": "web-portal", 
-  "version": "25.06.1", 
+  "version": "25.06.3", 
   "private": true,
   "dependencies": {
     "@aperturerobotics/chonky": "^0.3.1",
