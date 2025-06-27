@@ -6,6 +6,13 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 
 ## [25.06.3] - 2025-06-27
 
+**Upgrade Instructions:**
+* It's recommended to perform a full cluster upgrade as Base AMIs have been updated
+```bash
+./idea-admin.sh upgrade-cluster --aws-region $IDEA_AWS_REGION --cluster-name $IDEA_CLUSTER_NAME
+```
+([Upgrade Documentation](https://docs.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/upgrade-cluster))
+
 ### **🆕 New Features**
 * FileRename API and Renaming Capabilities in Cluster Manager File Browser
   * Users can now rename single or multiple files and directories via the Web UI
@@ -20,6 +27,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
   * Downloading now supports directories and mixed archives of files and directories
 * File Browser Uploading and Downloading now uses file streams to avoid excessive memory consumption and oom crashes
 * TailFile API improved to reduce potential to cause memory leaks in cluster-manager
+* Software Stack and Base AMIs updated
 * Add GHA caching to Docker CI builds
 * Update Python Requirements
 * Update CDK to `2.1019.2`
