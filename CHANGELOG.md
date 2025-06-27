@@ -32,7 +32,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 * **idea-admin AWS Regions**: Fixed a bug not using the specified AWS region when running the `idea-admin` tool
 
 ### **⚠️ Known Issues**
-* **ASG Contention** When an HPC Job is launched and the ASG fails to acquire the total number of nodes, the stack can enter a `ROLLBACK_COMPLETE` state and block further job submission - additional logs added to `node-house-keeper` to debug this in a later release
+* **ASG Contention**: When an HPC Job is launched and the ASG fails to acquire the total number of nodes, the stack can enter a `ROLLBACK_COMPLETE` state and block further job submission - additional logs added to `node-house-keeper` to debug this in a later release
 
 ## [25.06.2] - 2025-06-17
 
