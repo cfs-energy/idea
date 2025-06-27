@@ -1,168 +1,168 @@
 af-south-1:
-  amazonlinux2023: ami-00bfa44b8321a560f
+  amazonlinux2023: ami-0e1cccacbdcb02909
   rhel8: ami-0986e887c7da0ab04
   rhel9: ami-042343858392b77c3
   rocky8: ami-0f6740cc2de201555
   rocky9: ami-065c500503ef793a8
 ap-east-1:
-  amazonlinux2023: ami-0a5e465d791bed879
+  amazonlinux2023: ami-0377be46c0ee1d01c
   rhel8: ami-0206080a7c8a872a2
   rhel9: ami-0baa9e11c33d195ff
   rocky8: ami-0c839768188cedbda
   rocky9: ami-09a6ac7a83c9b4224
 ap-northeast-1:
-  amazonlinux2023: ami-0bb2c57f7cfafb1cb
+  amazonlinux2023: ami-03598bf9d15814511
   rhel8: ami-0aba337bd2258ade8
   rhel9: ami-0e340138fa9f062a6
   rocky8: ami-0025f1507e375f161
   rocky9: ami-0d59d43bebb8bb880
 ap-northeast-2:
-  amazonlinux2023: ami-0c593c3690c32e925
+  amazonlinux2023: ami-03e38f46f79020a70
   rhel8: ami-0aa790f1c5e7a301e
   rhel9: ami-09176d51d11e62f96
   rocky8: ami-05d54bac15231e6fa
   rocky9: ami-0fc21c56f494ded92
 ap-northeast-3:
-  amazonlinux2023: ami-03b1b6c261a78b8e6
+  amazonlinux2023: ami-0ebd9b6d95de445f2
   rhel8: ami-08d8eea71080fe268
   rhel9: ami-00be06c1cfcf07658
   rocky8: ami-039262f94e381ba82
   rocky9: ami-024dfb18c345c4beb
 ap-south-1:
-  amazonlinux2023: ami-0b09627181c8d5778
+  amazonlinux2023: ami-0d03cb826412c6b0f
   rhel8: ami-0d229837c06a6c252
   rhel9: ami-0216c9095ecd0a68f
   rocky8: ami-053ac9a936bd4459e
   rocky9: ami-0321f0c22d67f6571
 ap-south-2:
-  amazonlinux2023: ami-0a89b8a7f72b9cb5d
+  amazonlinux2023: ami-01c837d5176a7605d
   rhel8: ami-0e36f3db7f1a935bc
   rhel9: ami-0c532beca639d9f11
   rocky8: ami-03e7e740ffbaecda1
   rocky9: ami-04272c48c1b4ff2b8
 ap-southeast-1:
-  amazonlinux2023: ami-0435fcf800fb5418d
+  amazonlinux2023: ami-0a3ece531caa5d49d
   rhel8: ami-01bd640fe6430709b
   rhel9: ami-0f537008fe2063073
   rocky8: ami-0506f2d559a79a962
   rocky9: ami-0eb599578e428f04a
 ap-southeast-2:
-  amazonlinux2023: ami-00543daa0ad4d3ea4
+  amazonlinux2023: ami-078772dab3242ee11
   rhel8: ami-078d4122b7180c1d3
   rhel9: ami-08fb3dde9cef9f65a
   rocky8: ami-0c470b32d41481ad6
   rocky9: ami-00306f671305d9f07
 ap-southeast-3:
-  amazonlinux2023: ami-06264663a444cfce6
+  amazonlinux2023: ami-0d239e58dc8f9b09b
   rhel8: ami-03d2a9d4345758faa
   rhel9: ami-0b685d40668a6fa0f
   rocky8: ami-04835cbf92d9614b9
   rocky9: ami-04eb93db33f091ab1
 ap-southeast-4:
-  amazonlinux2023: ami-07fef68382aa56b08
+  amazonlinux2023: ami-0e3f1dd96ca4f22ad
   rhel8: ami-02aac8b7b353bafd2
   rhel9: ami-07f537f11c055cd9f
   rocky9: ami-0a231072f52f72543
 ca-central-1:
-  amazonlinux2023: ami-082b835e9abf75c61
+  amazonlinux2023: ami-0f9cb75652314425a
   rhel8: ami-0e8182918aa55ebe7
   rhel9: ami-00c7a15065f28eab9
   rocky8: ami-0829e4c2a7a2dcce1
   rocky9: ami-079168ddddf82b7e4
 eu-central-1:
-  amazonlinux2023: ami-092ff8e60e2d51e19
+  amazonlinux2023: ami-0229b8f55e5178b65
   rhel8: ami-0c8cb185352129e7f
   rhel9: ami-08b4f658ed02eb8f8
   rocky8: ami-03ca52fa7cdd00b6a
   rocky9: ami-041dc33d5b0f85045
 eu-central-2:
-  amazonlinux2023: ami-0128f569c8a4335a6
+  amazonlinux2023: ami-0feab7363dba6ae89
   rhel8: ami-01fc40c9551d9d489
   rhel9: ami-04599e9a730f379f9
   rocky8: ami-0a5aa73e9c888d9d7
   rocky9: ami-012ca946ca60e62e0
 eu-north-1:
-  amazonlinux2023: ami-05fcfb9614772f051
+  amazonlinux2023: ami-00c8ac9147e19828e
   rhel8: ami-09f2ee4d2a738e1f5
   rhel9: ami-05dfd8c2e1a8d1c1f
   rocky8: ami-07337a8cbe0c562e0
   rocky9: ami-0aceb8e8ac0f3aa8b
 eu-south-1:
-  amazonlinux2023: ami-0cf1ddb884643a1f8
+  amazonlinux2023: ami-055afe96da6db4699
   rhel8: ami-0611ece2c5afd38ef
   rhel9: ami-05bf6706db81325aa
   rocky8: ami-0112b02935b39c072
   rocky9: ami-0efb08822e6210fe2
 eu-south-2:
-  amazonlinux2023: ami-04a3eb359535665e3
+  amazonlinux2023: ami-064df43aa72a8ae42
   rhel8: ami-012166ed8c1ec4123
   rhel9: ami-075487dcb5cd948c0
   rocky8: ami-01e854fdb97099506
   rocky9: ami-04015f6d8ab992d64
 eu-west-1:
-  amazonlinux2023: ami-015b1e8e2a6899bdb
+  amazonlinux2023: ami-0fab1b527ffa9b942
   rhel8: ami-07ba64785df569b50
   rhel9: ami-0d67e8803ee383fdc
   rocky8: ami-0c14153c77f34b870
   rocky9: ami-0f801bce6ee5c08ef
 eu-west-2:
-  amazonlinux2023: ami-0b9dd1f70861d4721
+  amazonlinux2023: ami-0f4f4482537714bd9
   rhel8: ami-0b8065e3402b74cb8
   rhel9: ami-0e6510cc6abb81a9b
   rocky8: ami-020c6cfb9f8b61b53
   rocky9: ami-082a19a0d820f7ad6
 eu-west-3:
-  amazonlinux2023: ami-06b616cc0183ad7dd
+  amazonlinux2023: ami-0f8d3c5dcfaceaa4f
   rhel8: ami-0f85646a0a1575dac
   rhel9: ami-03bc18513b510213f
   rocky8: ami-07b9b3580fd50d52d
   rocky9: ami-0d25699f4e16364b9
 il-central-1:
-  amazonlinux2023: ami-06f6de2981f7e34e5
+  amazonlinux2023: ami-00edc09a6cf431c83
   rhel8: ami-0c5b81a6b148d2639
   rhel9: ami-0f655e7ba628d22d8
 me-central-1:
-  amazonlinux2023: ami-04b75fa257025a13b
+  amazonlinux2023: ami-0ae870a41ac49c254
   rhel8: ami-003717dd3a17873f4
   rhel9: ami-0fb43aa19e7dd6751
   rocky8: ami-04261ed32e4298d90
   rocky9: ami-0513912a18e986c4c
 me-south-1:
-  amazonlinux2023: ami-0155e44a1ab994ae3
+  amazonlinux2023: ami-075476a41ab91fff5
   rhel8: ami-0935531dbf22ed278
   rhel9: ami-0c58eca08d3a31f89
   rocky8: ami-07072a8bd6c72a066
   rocky9: ami-0b606565db394b584
 sa-east-1:
-  amazonlinux2023: ami-0923cbda828605357
+  amazonlinux2023: ami-068990796e29243d5
   rhel8: ami-05e82174e5b185da9
   rhel9: ami-0b410d4fb3cefb463
   rocky8: ami-0070a028fc72c8f48
   rocky9: ami-01a0c4e8f19b6f9dd
 us-east-1:
-  amazonlinux2023: ami-09e6f87a47903347c
+  amazonlinux2023: ami-05ffe3c48a9991133
   rhel8: ami-05969be345d4c5c67
   rhel9: ami-055f190f5416b8118
   rocky8: ami-011ef2017d41cb239
   rocky9: ami-0a73e96a849c232cc
 us-east-2:
-  amazonlinux2023: ami-06971c49acd687c30
+  amazonlinux2023: ami-0c803b171269e2d72
   rhel8: ami-08b46b3777c4d75bb
   rhel9: ami-06a5d87db53294c1f
   rocky8: ami-02391db2758465a87
   rocky9: ami-05150ea4d8a533099
 us-gov-west-1:
-  amazonlinux2023: ami-05d59b42be01faaf5
+  amazonlinux2023: ami-0506479c6bd97252a
   rhel8: ami-008177b99929ea0db
   rhel9: ami-045a012096d84fb13
 us-west-1:
-  amazonlinux2023: ami-0cbad6815f3a09a6d
+  amazonlinux2023: ami-061ad72bc140532fd
   rhel8: ami-025ecdc0145c8b1bf
   rhel9: ami-0e778043029529794
   rocky8: ami-054c64de4b29296be
   rocky9: ami-05b499126863461fc
 us-west-2:
-  amazonlinux2023: ami-05f9478b4deb8d173
+  amazonlinux2023: ami-05ee755be0cd7555c
   rhel8: ami-0aeb132689ea6087f
   rhel9: ami-084e1303b54037f44
   rocky8: ami-0f74cc83310468775

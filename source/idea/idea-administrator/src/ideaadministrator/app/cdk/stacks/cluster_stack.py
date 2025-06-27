@@ -1023,6 +1023,13 @@ class ClusterStack(IdeaBaseStack):
             internet_facing=is_public,
             drop_invalid_header_fields=True,
         )
+        # Configure idle timeout for large file downloads (default 60s -> 600s/10 minutes)
+        external_alb_idle_timeout = self.context.config().get_int(
+            'cluster.load_balancers.external_alb.idle_timeout_seconds', default=600
+        )
+        self.external_alb.set_attribute(
+            'idle_timeout.timeout_seconds', str(external_alb_idle_timeout)
+        )
         if self.external_certificate is not None:
             self.external_alb.node.add_dependency(self.external_certificate)
 
@@ -1037,6 +1044,13 @@ class ClusterStack(IdeaBaseStack):
             vpc_subnets=ec2.SubnetSelection(subnets=self.private_subnets()),
             internet_facing=False,
             drop_invalid_header_fields=True,
+        )
+        # Configure idle timeout for large file downloads (default 60s -> 600s/10 minutes)
+        internal_alb_idle_timeout = self.context.config().get_int(
+            'cluster.load_balancers.internal_alb.idle_timeout_seconds', default=600
+        )
+        self.internal_alb.set_attribute(
+            'idle_timeout.timeout_seconds', str(internal_alb_idle_timeout)
         )
 
         # Manage Access Logs for external/internal Application Load Balancer

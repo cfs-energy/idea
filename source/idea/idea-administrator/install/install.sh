@@ -14,7 +14,7 @@
 # IDEA Administrator Installation Script
 
 IDEA_APP_DEPLOY_DIR="/root/.idea"
-IDEA_CDK_VERSION="2.1016.1"
+IDEA_CDK_VERSION="2.1019.2"
 
 SCRIPT_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 

@@ -21,7 +21,9 @@ from ideadatamodel.filesystem import (
     DownloadFilesResult,
     CreateFileRequest,
     DeleteFilesRequest,
+    RenameFileRequest,
     TailFileRequest,
+    CheckFilesPermissionsRequest,
 )
 from ideasdk.filesystem.filesystem_helper import FileSystemHelper
 
@@ -72,6 +74,18 @@ class FileBrowserAPI(BaseAPI):
         response = helper.delete_files(request)
         context.success(response)
 
+    def rename_file(self, context: ApiInvocationContext):
+        helper = FileSystemHelper(self.context, context.get_username())
+        request = context.get_request_payload_as(RenameFileRequest)
+        response = helper.rename_file(request)
+        context.success(response)
+
+    def check_files_permissions(self, context: ApiInvocationContext):
+        helper = FileSystemHelper(self.context, context.get_username())
+        request = context.get_request_payload_as(CheckFilesPermissionsRequest)
+        response = helper.check_files_permissions(request)
+        context.success(response)
+
     def invoke(self, context: ApiInvocationContext):
         # authorized user access - do not allow app based authorizations to read user files
         if not context.is_authorized_user():
@@ -93,3 +107,7 @@ class FileBrowserAPI(BaseAPI):
             self.create_file(context)
         elif namespace == 'FileBrowser.DeleteFiles':
             self.delete_files(context)
+        elif namespace == 'FileBrowser.RenameFile':
+            self.rename_file(context)
+        elif namespace == 'FileBrowser.CheckFilesPermissions':
+            self.check_files_permissions(context)

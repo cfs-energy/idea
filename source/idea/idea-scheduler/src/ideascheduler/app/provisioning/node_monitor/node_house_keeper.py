@@ -875,6 +875,13 @@ class NodeHouseKeepingSession:
             'scheduler.job_provisioning.stack_provisioning_timeout_seconds'
         )
 
+        self._logger.debug(
+            'retry_provisioning_cleanup: Processing queued/held jobs from database'
+        )
+        self._logger.debug(
+            f'retry_provisioning_cleanup: Stack provisioning timeout: {stack_provisioning_timeout_secs} seconds'
+        )
+
         compute_stacks = {}
 
         for entry in queued_jobs:
@@ -882,12 +889,25 @@ class NodeHouseKeepingSession:
             try:
                 job = self._context.job_cache.convert_db_entry_to_job(entry)
                 if job is None:
+                    self._logger.debug(
+                        'retry_provisioning_cleanup: Skipping entry - could not convert to job'
+                    )
                     continue
+
+                self._logger.debug(
+                    f'{job.log_tag} Processing job in retry_provisioning_cleanup, state: {job.state}, provisioned: {job.provisioned}'
+                )
 
                 if job.state == SocaJobState.HELD:
                     # for jobs that were held previously, fetch the latest copy of the job from scheduler
+                    self._logger.debug(
+                        f'{job.log_tag} Job is HELD, fetching latest state from scheduler'
+                    )
                     job = self._context.scheduler.get_job(job_id=job.job_id)
                     if job.state == SocaJobState.HELD:
+                        self._logger.debug(
+                            f'{job.log_tag} Job still HELD after refresh, skipping'
+                        )
                         continue
                     self._logger.info(
                         f'queue previously held job: {job.log_tag}, state: {job.state}'
@@ -896,15 +916,26 @@ class NodeHouseKeepingSession:
                     continue
 
                 if not job.is_provisioned():
+                    self._logger.debug(
+                        f'{job.log_tag} Job not provisioned, re-queuing for provisioning'
+                    )
                     provisioning_queue = (
                         self._context.queue_profiles.get_provisioning_queue(
                             queue_profile_name=job.queue_type
                         )
                     )
                     if provisioning_queue is None:
+                        self._logger.warning(
+                            f'{job.log_tag} No provisioning queue found for queue_type: {job.queue_type}'
+                        )
                         continue
                     provisioning_queue.put(job=job)
+                    self._logger.debug(f'{job.log_tag} Job re-queued for provisioning')
                     continue
+
+                self._logger.debug(
+                    f'{job.log_tag} Job is provisioned, checking stack status. Stack ID: {job.params.stack_id if job.params else "None"}'
+                )
 
                 provisioning_util = JobProvisioningUtil(
                     context=self._context, jobs=[job], logger=self._logger
@@ -914,11 +945,22 @@ class NodeHouseKeepingSession:
                 # as all batch jobs will point to same cloud formation stack.
                 # implement a local cached copy of the status based on the name of the stack.
                 compute_stack = job.get_compute_stack()
+                self._logger.debug(f'{job.log_tag} Compute stack name: {compute_stack}')
+
                 if compute_stack in compute_stacks:
                     provisioning_status = compute_stacks[compute_stack]
+                    self._logger.debug(
+                        f'{job.log_tag} Using cached provisioning status: {provisioning_status}'
+                    )
                 else:
+                    self._logger.debug(
+                        f'{job.log_tag} Checking stack status via AWS API'
+                    )
                     provisioning_status = provisioning_util.check_status()
                     compute_stacks[compute_stack] = provisioning_status
+                    self._logger.info(
+                        f'{job.log_tag} Stack: {compute_stack}, ProvisioningStatus: {provisioning_status}'
+                    )
 
                 if provisioning_status in (
                     ProvisioningStatus.IN_PROGRESS,
@@ -927,7 +969,7 @@ class NodeHouseKeepingSession:
                     self._logger.info(
                         f'{job.log_tag} '
                         f'Stack: {job.get_compute_stack()}, '
-                        f'ProvisioningStatus: {provisioning_status}'
+                        f'ProvisioningStatus: {provisioning_status} - Stack still in progress, skipping'
                     )
                     continue
 
@@ -935,17 +977,33 @@ class NodeHouseKeepingSession:
                     job.is_shared_capacity()
                     and provisioning_status == ProvisioningStatus.COMPLETED
                 ):
+                    self._logger.debug(
+                        f'{job.log_tag} Shared capacity job with completed stack, skipping cleanup'
+                    )
                     continue
 
                 delete_stack = False
+                self._logger.debug(
+                    f'{job.log_tag} Evaluating cleanup actions for provisioning status: {provisioning_status}'
+                )
 
                 if provisioning_status == ProvisioningStatus.COMPLETED:
+                    self._logger.debug(
+                        f'{job.log_tag} Stack completed successfully, checking timeout'
+                    )
                     creation_time = provisioning_util.stack.creation_time
                     if creation_time is None:
+                        self._logger.warning(
+                            f'{job.log_tag} Stack creation time is None, skipping timeout check'
+                        )
                         continue
 
                     now = arrow.utcnow()
                     delta = now - creation_time
+                    self._logger.debug(
+                        f'{job.log_tag} Stack age: {delta.seconds} seconds, timeout threshold: {stack_provisioning_timeout_secs} seconds'
+                    )
+
                     if delta.seconds < stack_provisioning_timeout_secs:
                         # print log message only after 5 mins have elapsed.
                         if minutes(seconds=delta.seconds) % 5 == 0:
@@ -957,37 +1015,84 @@ class NodeHouseKeepingSession:
                                 f'{job.log_tag} ComputeStack: {job.get_compute_stack()} will be deleted '
                                 f'and retried if job does not start {timeout.humanize()}'
                             )
+                        self._logger.debug(
+                            f'{job.log_tag} Stack not yet timed out, continuing to wait'
+                        )
                         continue
 
+                    self._logger.info(
+                        f'{job.log_tag} Stack has timed out ({delta.seconds}s > {stack_provisioning_timeout_secs}s), marking for deletion'
+                    )
                     delete_stack = True
 
                 elif provisioning_status in (
                     ProvisioningStatus.FAILED,
                     ProvisioningStatus.TIMEOUT,
                 ):
+                    self._logger.info(
+                        f'{job.log_tag} Stack provisioning failed or timed out (status: {provisioning_status}), marking for deletion'
+                    )
                     delete_stack = True
 
                 if delete_stack:
                     stack_name = job.get_compute_stack()
 
                     self._logger.info(
-                        f'Deleting ComputeStack: {stack_name}, Retry provisioning ...'
+                        f'{job.log_tag} Deleting ComputeStack: {stack_name}, Retry provisioning ...'
                     )
 
-                    self.aws_util.cloudformation_delete_stack(stack_name=stack_name)
+                    try:
+                        self.aws_util.cloudformation_delete_stack(stack_name=stack_name)
+                        self._logger.info(
+                            f'{job.log_tag} Successfully initiated stack deletion for: {stack_name}'
+                        )
+                    except Exception as stack_delete_error:
+                        self._logger.error(
+                            f'{job.log_tag} Failed to delete stack {stack_name}: {stack_delete_error}'
+                        )
+                        # Continue with job reset even if stack deletion fails
+                else:
+                    self._logger.debug(f'{job.log_tag} No stack deletion required')
 
-                self._context.scheduler.reset_job(job_id=job.job_id)
+                self._logger.debug(f'{job.log_tag} Resetting job in scheduler')
+                try:
+                    self._context.scheduler.reset_job(job_id=job.job_id)
+                    self._logger.debug(
+                        f'{job.log_tag} Successfully reset job in scheduler'
+                    )
+                except Exception as reset_error:
+                    self._logger.error(
+                        f'{job.log_tag} Failed to reset job in scheduler: {reset_error}'
+                    )
+                    raise  # Re-raise to trigger the outer exception handler
 
-                self._context.job_monitor.job_modified(job=job)
+                self._logger.debug(
+                    f'{job.log_tag} Notifying job monitor of job modification'
+                )
+                try:
+                    self._context.job_monitor.job_modified(job=job)
+                    self._logger.debug(
+                        f'{job.log_tag} Successfully notified job monitor'
+                    )
+                except Exception as monitor_error:
+                    self._logger.error(
+                        f'{job.log_tag} Failed to notify job monitor: {monitor_error}'
+                    )
 
                 self._logger.warning(
                     f'{job.log_tag} CloudFormation Stack provisioning failed or timed-out. '
                     f'Job provisioning will be re-tried.'
                 )
             except Exception as e:
+                job_tag = job.log_tag if job else 'Unknown Job'
                 self._logger.exception(
-                    f'{job.log_tag} provisioning retry clean-up failed. error: {e}'
+                    f'{job_tag} provisioning retry clean-up failed. error: {e}'
                 )
+                # Log additional context for debugging
+                if job:
+                    self._logger.error(
+                        f'{job_tag} Job details - ID: {job.job_id}, State: {job.state}, Provisioned: {job.provisioned}, Stack ID: {job.params.stack_id if job.params else "None"}'
+                    )
 
     def publish_cluster_metrics_and_index_in_opensearch(self):
         nodes = self._context.scheduler.list_nodes()

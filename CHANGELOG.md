@@ -4,6 +4,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
+## [25.06.3] - 2025-06-27
+
+### **🆕 New Features**
+* FileRename API and Renaming Capabilities in Cluster Manager File Browser
+  * Users can now rename single or multiple files and directories via the Web UI
+
+### **🔄 Updates**
+* Backup IAM Policies updated to include `TagResource` this must be completed by 9/30/25 or backups will stop working.
+* Cluster Manager IAM role updated to be able to read the JWT signing secret for file downloads
+* Added additional logging to `node-house-keeper`
+* Updated `build_modules` CI action for better build determinism
+* Refactored file downloads from Cluster Manager File Browser using short lived JWT tokens
+  * Added user feedback for multiple file downloads
+  * Downloading now supports directories and mixed archives of files and directories
+* File Browser Uploading and Downloading now uses file streams to avoid excessive memory consumption and oom crashes
+* TailFile API improved to reduce potential to cause memory leaks in cluster-manager
+* Add GHA caching to Docker CI builds
+* Update Python Requirements
+* Update CDK to `2.1019.2`
+* Increased the DCV broker DynamoDB tables WCU from 20 to 101
+
+### **🐛 Bug Fixes**
+
+* **Kinesis Data Stream Retention**: Kinesis Data Streams now have proper destroy retention and will delete with CloudFormation deletion of analytics stack.
+* **Web UI Memory Leaks**: Fixed Web UI memory leaks in File Browser
+* **idea-admin AWS Regions**: Fixed a bug not using the specified AWS region when running the `idea-admin` tool
+
+### **⚠️ Known Issues**
+* **ASG Contention** When an HPC Job is launched and the ASG fails to acquire the total number of nodes, the stack can enter a `ROLLBACK_COMPLETE` state and block further job submission - additional logs added to `node-house-keeper` to debug this in a later release
+
 ## [25.06.2] - 2025-06-17
 
 ### **🔧 Critical Hotfixes**

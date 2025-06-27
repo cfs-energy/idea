@@ -137,6 +137,9 @@ load_balancers:
   external_alb:
     public: {{alb_public | lower}}
     access_logs: true
+    # Idle timeout in seconds for large file downloads (default: 600 seconds / 10 minutes)
+    # Increase this value if file downloads take longer than the specified timeout
+    idle_timeout_seconds: 600
     certificates:
       # if alb_custom_certificate_provided = false, self signed certificates will be generated for external ALB
       # if alb_custom_certificate_provided = true, import your own certificates to AWS ACM and provide alb_custom_certificate_acm_certificate_arn, alb_custom_dns_name
@@ -148,6 +151,9 @@ load_balancers:
     ssl_policy: ELBSecurityPolicy-FS-1-2-Res-2020-10
   internal_alb:
     access_logs: true
+    # Idle timeout in seconds for large file downloads (default: 600 seconds / 10 minutes)
+    # Increase this value if file downloads take longer than the specified timeout
+    idle_timeout_seconds: 600
     # SSL/TLS Policy on Internal Load Balancer
     # For a list of policies - consult the documentation at https://docs.aws.amazon.com/elasticloadbalancing/latest/application/create-https-listener.html#describe-ssl-policies
     ssl_policy: ELBSecurityPolicy-FS-1-2-Res-2020-10

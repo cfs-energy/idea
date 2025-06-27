@@ -24,6 +24,11 @@ __all__ = (
     'CreateFileResult',
     'DeleteFilesRequest',
     'DeleteFilesResult',
+    'RenameFileRequest',
+    'RenameFileResult',
+    'CheckFilesPermissionsRequest',
+    'CheckFilesPermissionsResult',
+    'FilePermissionResult',
     'OPEN_API_SPEC_ENTRIES_FILE_BROWSER',
 )
 
@@ -107,6 +112,16 @@ class DeleteFilesResult(SocaPayload):
     pass
 
 
+# FileBrowser.RenameFile
+class RenameFileRequest(SocaPayload):
+    file: Optional[str] = Field(default=None)
+    new_name: Optional[str] = Field(default=None)
+
+
+class RenameFileResult(SocaPayload):
+    pass
+
+
 # FileBrowser.CreateFile
 class CreateFileRequest(SocaPayload):
     cwd: Optional[str] = Field(default=None)
@@ -116,6 +131,28 @@ class CreateFileRequest(SocaPayload):
 
 class CreateFileResult(SocaPayload):
     pass
+
+
+# FileBrowser.CheckFilesPermissions
+
+
+class FilePermissionResult(SocaPayload):
+    file: Optional[str] = Field(default=None)
+    has_permission: Optional[bool] = Field(default=None)
+    is_protected: Optional[bool] = Field(default=None)
+    error_code: Optional[str] = Field(default=None)
+    error_message: Optional[str] = Field(default=None)
+
+
+class CheckFilesPermissionsRequest(SocaPayload):
+    files: Optional[List[str]] = Field(default=None)
+    operation: Optional[str] = Field(
+        default='rename'
+    )  # 'rename', 'delete', 'read', 'write'
+
+
+class CheckFilesPermissionsResult(SocaPayload):
+    results: Optional[List[FilePermissionResult]] = Field(default=None)
 
 
 OPEN_API_SPEC_ENTRIES_FILE_BROWSER = [
@@ -165,6 +202,20 @@ OPEN_API_SPEC_ENTRIES_FILE_BROWSER = [
         namespace='FileBrowser.DeleteFiles',
         request=DeleteFilesRequest,
         result=DeleteFilesResult,
+        is_listing=False,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='FileBrowser.RenameFile',
+        request=RenameFileRequest,
+        result=RenameFileResult,
+        is_listing=False,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='FileBrowser.CheckFilesPermissions',
+        request=CheckFilesPermissionsRequest,
+        result=CheckFilesPermissionsResult,
         is_listing=False,
         is_public=False,
     ),

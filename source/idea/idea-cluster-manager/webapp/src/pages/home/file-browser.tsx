@@ -18,7 +18,7 @@ import {AppContext} from "../../common";
 import {ListFilesResult} from '../../client/data-model'
 import {LocalStorageService} from '../../service'
 import Utils from "../../common/utils";
-import {Alert, Box, Button, CodeEditor, ColumnLayout, Container, Header, Link, Modal, SpaceBetween, StatusIndicator, Tabs, Tiles} from "@cloudscape-design/components";
+import {Alert, Box, Button, CodeEditor, ColumnLayout, Container, Header, Link, Modal, SpaceBetween, StatusIndicator, Tabs, Tiles, Table, Input, FormField} from "@cloudscape-design/components";
 import {toast} from "react-toastify";
 import {
     ChonkyActions,
@@ -37,7 +37,7 @@ import 'ace-builds/css/theme/github_light_default.css';
 import 'ace-builds/css/theme/github_dark.css';
 
 import {CodeEditorProps} from "@cloudscape-design/components/code-editor/interfaces";
-import {faDownload, faMicrochip, faRedo, faStar, faTerminal, faTrash, faEdit} from "@fortawesome/free-solid-svg-icons";
+import {faDownload, faMicrochip, faRedo, faStar, faTerminal, faTrash, faEdit, faPencilAlt} from "@fortawesome/free-solid-svg-icons";
 import Uppy from "@uppy/core";
 import XHRUpload from "@uppy/xhr-upload";
 import Dashboard from "@uppy/dashboard";
@@ -80,6 +80,11 @@ export interface IdeaFileBrowserState {
     sshHostIp: string
     sshAccess: boolean
     fileTransferMethod: string
+    filesToRename: FileData[]
+    showRenameModal: boolean
+    renameFormValues: {[fileId: string]: string}
+    renameValidationErrors: {[fileId: string]: string}
+    filePermissions: Map<string, any>
 }
 
 export interface IdeaFileEditorProps {
@@ -160,6 +165,16 @@ const CustomActionTailLogFile = defineFileAction({
     }
 })
 
+const CustomActionRenameFile = defineFileAction({
+    id: 'soca_rename_file',
+    button: {
+        name: 'Rename',
+        toolbar: true,
+        contextMenu: true,
+        icon: faPencilAlt
+    }
+})
+
 /*
  * Override the Chonky default of showing hidden files.
  * We want to default to not showing hidden files.
@@ -179,6 +194,7 @@ const ACTIONS = [
     ChonkyActions.DownloadFiles,
     CustomActionFavorite,
     CustomActionRefresh,
+    CustomActionRenameFile,
     CustomActionTailLogFile,
     CustomActionOpenInScriptEditor,
     CustomActionToggleHiddenFiles
@@ -378,7 +394,12 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
             sshAccess: false,
             fileTransferMethod: 'file-zilla',
             filesToDelete: [],
-            showDeleteConfirmModal: false
+            showDeleteConfirmModal: false,
+            filesToRename: [],
+            showRenameModal: false,
+            renameFormValues: {},
+            renameValidationErrors: {},
+            filePermissions: new Map<string, any>()
         }
         this._fileBrowserClient = AppContext.get().client().fileBrowser()
         this.createFolderForm = React.createRef()
@@ -388,6 +409,8 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
     getCreateFolderForm(): IdeaForm {
         return this.createFolderForm.current!
     }
+
+
 
     adjustFileBrowserHeight() {
         setTimeout(() => {
@@ -580,48 +603,175 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
 
     downloadFiles(files: FileData[]) {
 
-        const download = (file: string) => {
+        const download = (file: string, skipFlashbar = false) => {
             const tokens = file.split('/')
             const fileName = tokens[tokens.length - 1]
-            const fileBrowserEndpointUrl = AppContext.get().client().fileBrowser().getEndpointUrl()
-            const url = `${fileBrowserEndpointUrl}/download?file=${file}`;
+
+            // Get a temporary signed download URL from the server
             AppContext.get().auth().getAccessToken().then(accessToken => {
-                fetch(
-                    url,
-                    {
-                        headers: {
-                            Authorization: `Bearer ${accessToken}`
-                        }
-                    }
-                ).then(response => {
-                    return response.blob()
-                }).then(blob => {
-                    const url = window.URL.createObjectURL(
-                        new Blob([blob]),
-                    );
-                    const link = document.createElement('a');
-                    link.href = url;
-                    link.setAttribute(
-                        'download',
-                        fileName
-                    )
-                    document.body.appendChild(link);
-                    link.click();
-                    document.body.removeChild(link);
+                return fetch(`${AppContext.get().client().fileBrowser().getEndpointUrl()}/generate-download-url`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ file: file })
                 })
+            }).then(response => {
+                if (!response.ok) {
+                    throw new Error(`Failed to generate download URL: ${response.status}`)
+                }
+                return response.json()
+            }).then(result => {
+                // Use the temporary signed URL for native browser download
+                const link = document.createElement('a')
+                link.href = result.download_url
+                link.setAttribute('download', fileName)
+                link.style.display = 'none'
+                document.body.appendChild(link)
+                link.click()
+                document.body.removeChild(link)
+            }).catch(error => {
+                console.error('Download failed:', error)
+                const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+                if (!skipFlashbar) {
+                    this.showToast('download-error', `Failed to download ${fileName}: ${errorMessage}`)
+                }
             })
         }
 
-        if (files.length === 1) {
+        // Determine if we need to show flashbar (for directories, multiple files, or large single files)
+        const needsFlashbar = files.length > 1 ||
+                             files.some(file => file.isDir) ||
+                             files.some(file => file.size && file.size > 10 * 1024 * 1024) // 10MB threshold
+
+        if (files.length === 1 && !needsFlashbar) {
+            // Simple single file download without flashbar
             download(this.getFilePath(files[0]))
         } else {
-            const file_paths: string[] = []
-            files.forEach((file) => file_paths.push(this.getFilePath(file)))
-            this.fileBrowserClient().downloadFiles({
-                files: file_paths
-            }).then(result => {
-                download(result.download_url!)
+            // Show loading feedback for downloads that might take time
+            const downloadId = `download-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+
+            let contentMessage = ''
+            if (files.length === 1 && files[0].isDir) {
+                contentMessage = `Preparing download archive for directory "${files[0].name}"... This may take several minutes for directories with large files.`
+            } else if (files.length === 1) {
+                contentMessage = `Preparing download for large file "${files[0].name}"... This may take several minutes.`
+            } else {
+                contentMessage = `Preparing download archive for ${files.length} files... This may take several minutes for large files.`
+            }
+
+            const preparingItem = {
+                type: 'info' as const,
+                loading: true,
+                header: 'Preparing Download',
+                content: contentMessage,
+                dismissible: false,
+                customId: downloadId
+            }
+
+            // Add the preparing item to current flashbar items
+            this.props.onFlashbarChange({
+                items: [...(this.props.flashbarItems || []), preparingItem]
             })
+
+            if (files.length === 1 && !files[0].isDir) {
+                // Single file download with flashbar
+                download(this.getFilePath(files[0]), true)
+
+                // Replace with success message
+                const successItem = {
+                    type: 'success' as const,
+                    header: 'Download Ready',
+                    content: 'Your download should start automatically.',
+                    dismissible: true,
+                    customId: downloadId
+                }
+
+                // Replace the preparing item with success
+                setTimeout(() => {
+                    const currentItems = this.props.flashbarItems || []
+                    const updatedItems = currentItems.map(item => {
+                        return (item as any).customId === downloadId ? successItem : item
+                    })
+
+                    this.props.onFlashbarChange({
+                        items: updatedItems
+                    })
+
+                    // Auto-remove success message after 5 seconds
+                    setTimeout(() => {
+                        this.props.onFlashbarChange({
+                            items: (this.props.flashbarItems || []).filter(item => (item as any).customId !== downloadId)
+                        })
+                    }, 5000)
+                }, 500) // Small delay to show the preparing state
+            } else {
+                // Multiple files or directory download - use API
+                const file_paths: string[] = []
+                files.forEach((file) => file_paths.push(this.getFilePath(file)))
+                this.fileBrowserClient().downloadFiles({
+                    files: file_paths
+                }).then(result => {
+                    // Replace with success message
+                    const successItem = {
+                        type: 'success' as const,
+                        header: 'Download Ready',
+                        content: 'Download archive is ready! Your download should start automatically.',
+                        dismissible: true,
+                        customId: downloadId
+                    }
+
+                    // Create new items array with the replacement
+                    const currentItems = this.props.flashbarItems || []
+                    const updatedItems = currentItems.map(item => {
+                        return (item as any).customId === downloadId ? successItem : item
+                    })
+
+                    // If no item was replaced, add it
+                    if (!updatedItems.some(item => (item as any).customId === downloadId)) {
+                        updatedItems.push(successItem)
+                    }
+
+                    this.props.onFlashbarChange({
+                        items: updatedItems
+                    })
+
+                    download(result.download_url!, true)
+
+                    // Auto-remove success message after 10 seconds
+                    setTimeout(() => {
+                        this.props.onFlashbarChange({
+                            items: (this.props.flashbarItems || []).filter(item => (item as any).customId !== downloadId)
+                        })
+                    }, 10000)
+                }).catch(error => {
+                    console.error('Download preparation failed:', error)
+                    // Replace with error message using the same pattern as other error handlers
+                    const errorItem = {
+                        type: 'error' as const,
+                        header: 'Download Failed',
+                        content: `Failed to prepare download: ${error.message} (${error.errorCode})`,
+                        dismissible: true,
+                        customId: downloadId
+                    }
+
+                    // Create new items array with the replacement
+                    const currentItems = this.props.flashbarItems || []
+                    const updatedItems = currentItems.map(item =>
+                        (item as any).customId === downloadId ? errorItem : item
+                    )
+
+                    // If no item was replaced, add it
+                    if (!updatedItems.some(item => (item as any).customId === downloadId)) {
+                        updatedItems.push(errorItem)
+                    }
+
+                    this.props.onFlashbarChange({
+                        items: updatedItems
+                    })
+                })
+            }
         }
     }
 
@@ -807,6 +957,351 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
         )
     }
 
+    validateFileName(fileName: string): string | null {
+        if (!fileName || fileName.trim() === '') {
+            return 'File name cannot be empty'
+        }
+
+        // Apply the same validation logic as Utils.to_secure_filename()
+        // Normalize unicode characters (simplified version of Python's NFKD)
+        let normalizedName = fileName.normalize('NFKD')
+
+        // Check for path separators (like Python's os.path.sep and os.path.altsep)
+        if (normalizedName.includes('/') || normalizedName.includes('\\')) {
+            return 'File name cannot contain path separators (/ or \\)'
+        }
+
+        // Apply the same regex pattern as FILENAME_ASCII_STRIP_RE: [^A-Za-z0-9_.\-()]
+        // This allows only letters, numbers, underscore, period, hyphen, and parentheses
+        const invalidCharsRegex = /[^A-Za-z0-9_.\-()]/
+        if (invalidCharsRegex.test(normalizedName)) {
+            return 'File name can only contain letters, numbers, underscore (_), period (.), hyphen (-), and parentheses ()'
+        }
+
+        // Check if the filename would be empty after ASCII conversion and processing
+        // (similar to how Utils.to_secure_filename returns None for empty results)
+        // eslint-disable-next-line no-control-regex
+        const asciiOnly = normalizedName.replace(/[^\x00-\x7F]/g, '') // Remove non-ASCII
+        if (!asciiOnly.trim()) {
+            return 'File name must contain valid ASCII characters'
+        }
+
+        // Check for names that are just dots or underscores (similar to strip('._'))
+        if (/^[._]+$/.test(normalizedName.trim())) {
+            return 'File name cannot be only dots and underscores'
+        }
+
+        // Check length (filesystem limit)
+        if (fileName.length > 255) {
+            return 'File name cannot be longer than 255 characters'
+        }
+
+        return null
+    }
+
+    buildRenameFileModal() {
+        const filesToRename = this.state.filesToRename
+        const renameValues = this.state.renameFormValues
+        const validationErrors = this.state.renameValidationErrors
+
+        const performRename = async (item: FileData, newName: string) => {
+            const itemPath = this.getFilePath(item)
+            return this.fileBrowserClient().renameFile({
+                file: itemPath,
+                new_name: newName
+            })
+        }
+
+        const handleBulkRename = async () => {
+            let successCount = 0
+            let errorCount = 0
+            const errors: string[] = []
+
+            // Use existing permission data from component state (no need to call API again)
+            const permissionMap = this.state.filePermissions
+
+            // Validate inputs (only for items with permission)
+            for (const item of filesToRename) {
+                const filePath = this.getFilePath(item)
+                const permissionInfo = permissionMap.get(filePath)
+
+                // Skip validation for protected files - they'll be skipped during processing
+                if (permissionInfo?.is_protected || !permissionInfo?.has_permission) {
+                    continue
+                }
+
+                const validationError = validationErrors[item.id]
+
+                if (validationError) {
+                    errors.push(`${item.name}: ${validationError}`)
+                    errorCount++
+                }
+            }
+
+            if (errors.length > 0) {
+                this.showToast('rename-validation-error', errors.join(', '))
+                return
+            }
+
+            let skippedCount = 0
+
+            // Process each item
+            for (const item of filesToRename) {
+                try {
+                    const filePath = this.getFilePath(item)
+                    const permissionInfo = permissionMap.get(filePath)
+
+                    // Skip files without permission or protected files
+                    if (permissionInfo?.is_protected || !permissionInfo?.has_permission) {
+                        skippedCount++
+                        continue
+                    }
+
+                    const newName = renameValues[item.id]?.trim()
+                    if (newName && newName !== item.name) {
+                        await performRename(item, newName)
+                        successCount++
+                    }
+                } catch (error: any) {
+                    errorCount++
+                    this.showToast(`rename-error-${item.id}`, `Failed to rename ${item.name}: ${error.message}`)
+                }
+            }
+
+            // Show summary and refresh
+            if (successCount > 0 || skippedCount > 0) {
+                let message = ''
+                if (successCount > 0) {
+                    message += `Successfully renamed ${successCount} item(s)`
+                }
+                if (skippedCount > 0) {
+                    if (message) message += '. '
+                    message += `${skippedCount} protected or inaccessible item(s) were skipped`
+                }
+                this.showToast('rename-success', message, 'info')
+                this.listFiles(this.getCwd(-1)).finally()
+            }
+
+            if (errorCount === 0) {
+                this.closeRenameModal()
+            }
+        }
+
+        const closeRenameModal = () => {
+            this.setState({
+                filesToRename: [],
+                showRenameModal: false,
+                renameFormValues: {},
+                renameValidationErrors: {}
+            })
+        }
+
+        const updateRenameValue = (fileId: string, value: string) => {
+            const validationError = this.validateFileName(value)
+            this.setState({
+                renameFormValues: {
+                    ...this.state.renameFormValues,
+                    [fileId]: value
+                },
+                renameValidationErrors: {
+                    ...this.state.renameValidationErrors,
+                    [fileId]: validationError || ''
+                }
+            })
+        }
+
+        // Initialize form values when files are first loaded
+        if (filesToRename.length > 0 && Object.keys(renameValues).length === 0) {
+            const initialValues: {[fileId: string]: string} = {}
+            const initialErrors: {[fileId: string]: string} = {}
+            filesToRename.forEach(file => {
+                initialValues[file.id] = file.name
+                // Initialize with no errors for current names
+                initialErrors[file.id] = ''
+            })
+            this.setState({
+                renameFormValues: initialValues,
+                renameValidationErrors: initialErrors
+            })
+        }
+
+        // Use the filePermissions from component state
+        const filePermissions = this.state.filePermissions
+
+        // Calculate how many items actually have changed names (excluding protected folders and validation errors)
+        const changedItemsCount = filesToRename.filter(item => {
+            const newName = renameValues[item.id]?.trim()
+            const filePath = this.getFilePath(item)
+            const permissionInfo = filePermissions.get(filePath)
+            const isProtected = permissionInfo?.is_protected || !permissionInfo?.has_permission
+            const hasValidationError = validationErrors[item.id]
+            return !isProtected && !hasValidationError && newName && newName !== item.name
+        }).length
+
+        // Check if there are any validation errors (excluding protected files)
+        const hasValidationErrors = filesToRename.some(item => {
+            const filePath = this.getFilePath(item)
+            const permissionInfo = filePermissions.get(filePath)
+            const isProtected = permissionInfo?.is_protected || !permissionInfo?.has_permission
+            return !isProtected && validationErrors[item.id]
+        })
+
+        return (
+            <Modal
+                visible={this.state.showRenameModal}
+                onDismiss={closeRenameModal}
+                size="large"
+                header={`Rename ${filesToRename.length === 1 ? 'Item' : `${filesToRename.length} Items`}`}
+                footer={
+                    <Box float="right">
+                        <SpaceBetween size="xs" direction="horizontal">
+                            <Button variant="normal" onClick={closeRenameModal}>
+                                Cancel
+                            </Button>
+                            <Button
+                                variant="primary"
+                                onClick={handleBulkRename}
+                                disabled={hasValidationErrors || changedItemsCount === 0}
+                            >
+                                {hasValidationErrors
+                                    ? 'Fix Validation Errors'
+                                    : changedItemsCount === 0
+                                        ? 'No Changes to Apply'
+                                        : `Rename ${changedItemsCount} Item${changedItemsCount === 1 ? '' : 's'}`
+                                }
+                            </Button>
+                        </SpaceBetween>
+                    </Box>
+                }
+            >
+                <SpaceBetween size="m">
+                    <Box>
+                        <p>Enter new names for the selected {filesToRename.length === 1 ? 'item' : 'items'}:</p>
+                    </Box>
+
+                    <Table
+                        columnDefinitions={[
+                            {
+                                id: 'current',
+                                header: 'Current Name',
+                                cell: (item: FileData) => {
+                                    const filePath = this.getFilePath(item)
+                                    const permissionInfo = filePermissions.get(filePath)
+                                    const isProtected = permissionInfo?.is_protected
+                                    const hasPermission = permissionInfo?.has_permission
+                                    return (
+                                        <Box fontWeight="bold">
+                                            <SpaceBetween size="xs" direction="horizontal">
+                                                <Box>
+                                                    {item.isDir ? '📁' : '📄'}
+                                                </Box>
+                                                <Box>
+                                                    {item.name}
+                                                </Box>
+                                            </SpaceBetween>
+                                            {isProtected && (
+                                                <Box fontSize="body-s" color="text-status-warning" margin={{top: 'xxxs'}}>
+                                                    🔒 Protected - cannot be renamed
+                                                </Box>
+                                            )}
+                                            {!isProtected && !hasPermission && (
+                                                <Box fontSize="body-s" color="text-status-error" margin={{top: 'xxxs'}}>
+                                                    ❌ Permission denied
+                                                </Box>
+                                            )}
+                                        </Box>
+                                    )
+                                },
+                                width: '50%'
+                            },
+                            {
+                                id: 'new',
+                                header: 'New Name',
+                                cell: (item: FileData) => {
+                                    const filePath = this.getFilePath(item)
+                                    const permissionInfo = filePermissions.get(filePath)
+                                    const isProtected = permissionInfo?.is_protected
+                                    const hasPermission = permissionInfo?.has_permission
+                                    const isDisabled = isProtected || !hasPermission
+                                    const validationError = validationErrors[item.id]
+                                    const hasError = !isDisabled && !!validationError
+                                    return (
+                                        <FormField
+                                            errorText={hasError ? validationError : undefined}
+                                        >
+                                            <Input
+                                                value={renameValues[item.id] || item.name}
+                                                onChange={(e) => updateRenameValue(item.id, e.detail.value)}
+                                                placeholder={isDisabled ? "Cannot rename" : "Enter new name..."}
+                                                disabled={isDisabled}
+                                                invalid={hasError}
+                                            />
+                                        </FormField>
+                                    )
+                                },
+                                width: '50%'
+                            }
+                        ]}
+                        items={filesToRename}
+                        variant="borderless"
+                        wrapLines={false}
+                    />
+                </SpaceBetween>
+            </Modal>
+        )
+    }
+
+    closeRenameModal = () => {
+        this.setState({
+            filesToRename: [],
+            showRenameModal: false,
+            renameFormValues: {},
+            renameValidationErrors: {},
+            filePermissions: new Map<string, any>()
+        })
+    }
+
+
+
+    checkRenamePermissions(selectedFiles: FileData[]) {
+        const filePaths = selectedFiles.map(file => this.getFilePath(file))
+
+        this.fileBrowserClient().checkFilesPermissions({
+            files: filePaths,
+            operation: 'rename'
+        }).then(result => {
+            if (!result.results) {
+                this.showToast('rename-check-error', 'Failed to check permissions: No results returned')
+                return
+            }
+
+
+
+            // Store permission results to avoid duplicate API calls
+            const permissionMap = new Map<string, any>()
+            result.results.forEach(result => {
+                if (result.file) {
+                    permissionMap.set(result.file, result)
+                }
+            })
+
+            // Proceed with rename for all selected files (protected ones will be handled in the modal)
+            const initialValues: {[fileId: string]: string} = {}
+            selectedFiles.forEach(file => {
+                initialValues[file.id] = file.name
+            })
+            this.setState({
+                filesToRename: selectedFiles,
+                showRenameModal: true,
+                renameFormValues: initialValues,
+                renameValidationErrors: {},
+                filePermissions: permissionMap
+            })
+        }).catch(error => {
+            this.showToast('rename-check-error', `Failed to check permissions: ${error.message}`)
+        })
+    }
+
     getDeleteFileConformModal(): IdeaConfirm {
         return this.deleteFileConfirmModal.current!
     }
@@ -931,6 +1426,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                     <div style={{marginTop: '20px'}}>
                         {this.state.showDeleteConfirmModal && this.buildDeleteFileConfirmModal()}
                         {this.buildCreateFolderForm()}
+                        {this.buildRenameFileModal()}
                         {this.buildFileEditor()}
                         {/*<Container>*/}
                         <Tabs
@@ -995,7 +1491,11 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                                             if (event.state.selectedFiles && event.state.selectedFiles.length > 0) {
                                                                 this.openFileInScriptWorkbench(event.state.selectedFiles[0])
                                                             }
-                                                        }
+                                                                                                } else if (eventId === 'soca_rename_file') {
+                                            if (event.state.selectedFiles && event.state.selectedFiles.length > 0) {
+                                                this.checkRenamePermissions(event.state.selectedFiles)
+                                            }
+                                        }
                                                     }}
 
                                                     defaultFileViewActionId={ChonkyActions.EnableListView.id}

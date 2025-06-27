@@ -738,6 +738,7 @@ class KinesisStream(SocaBaseConstruct, kinesis.Stream):
         stream_name: str,
         stream_mode: kinesis.StreamMode,
         shard_count: Optional[int],
+        removal_policy: Optional[cdk.RemovalPolicy] = None,
     ):
         self.context = context
         kms_key_id = self.context.config().get_string('analytics.kinesis.kms_key_id')
@@ -763,4 +764,5 @@ class KinesisStream(SocaBaseConstruct, kinesis.Stream):
             encryption=kinesis.StreamEncryption.KMS,
             encryption_key=kinesis_encryption_key,
             shard_count=shard_count,
+            removal_policy=removal_policy,
         )

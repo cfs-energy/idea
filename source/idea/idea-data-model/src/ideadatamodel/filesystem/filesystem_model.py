@@ -35,6 +35,9 @@ class FileData(SocaBaseModel):
     icon: Optional[str] = Field(default=None)
     folder_chain_icon: Optional[str] = Field(default=None)
     thumbnail_url: Optional[str] = Field(default=None)
+    can_read: Optional[bool] = Field(default=None)
+    can_write: Optional[bool] = Field(default=None)
+    can_execute: Optional[bool] = Field(default=None)
 
 
 class FileList(SocaBaseModel):

@@ -26,4 +26,5 @@ opensearch:
 kinesis:
   shard_count: 2
   stream_mode: PROVISIONED
+  removal_policy: "DESTROY"  # RETAIN will preserve the stream even if you delete the stack.
   kms_key_id: {{ kms_key_id if kms_key_id else '~' }} # Specify your own CMK to encrypt Kinesis stream. If set to ~ encryption will be managed by the default AWS key

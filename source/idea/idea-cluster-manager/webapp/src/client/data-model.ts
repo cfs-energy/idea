@@ -297,6 +297,20 @@ export interface ChangePasswordRequest {
   new_password?: string;
 }
 export interface ChangePasswordResult {}
+export interface CheckFilesPermissionsRequest {
+  files?: string[];
+  operation?: string;
+}
+export interface CheckFilesPermissionsResult {
+  results?: FilePermissionResult[];
+}
+export interface FilePermissionResult {
+  file?: string;
+  has_permission?: boolean;
+  is_protected?: boolean;
+  error_code?: string;
+  error_message?: string;
+}
 export interface CheckHpcLicenseResourceAvailabilityRequest {
   name?: string;
 }
@@ -840,6 +854,9 @@ export interface FileData {
   icon?: string;
   folder_chain_icon?: string;
   thumbnail_url?: string;
+  can_read?: boolean;
+  can_write?: boolean;
+  can_execute?: boolean;
 }
 export interface FileList {
   cwd?: string;
@@ -1763,6 +1780,11 @@ export interface RemoveUserFromGroupRequest {
 export interface RemoveUserFromGroupResult {
   group?: Group;
 }
+export interface RenameFileRequest {
+  file?: string;
+  new_name?: string;
+}
+export interface RenameFileResult {}
 export interface ResetPasswordRequest {
   username?: string;
 }
