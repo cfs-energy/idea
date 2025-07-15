@@ -6,6 +6,14 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 
 ## [25.07.0] - 2025-07-15
 
+**Upgrade Instructions:**
+* It's recommended to perform a full cluster upgrade as Base AMIs and other settings have been updated
+```bash
+./idea-admin.sh upgrade-cluster --aws-region $IDEA_AWS_REGION --cluster-name $IDEA_CLUSTER_NAME
+```
+([Upgrade Documentation](https://docs.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/upgrade-cluster))
+
+
 ### **🔒 Security Updates**
 * **WAF enabled by default for public ALB deployments**
   * WAF is now automatically enabled for public ALB deployments as a security best practice
