@@ -2392,8 +2392,9 @@ def upgrade_cluster(
     context.info('The upgrade will proceed in the following phases:')
     context.info('1️⃣  Update base OS in values.yml')
     context.info('2️⃣  Configuration backup and global settings update')
-    context.info('3️⃣  Update AMI IDs and module-specific base OS settings')
-    context.info('4️⃣  Module upgrade deployment')
+    context.info('3️⃣  Sync full configuration to add any new values')
+    context.info('4️⃣  Update AMI IDs and module-specific base OS settings')
+    context.info('5️⃣  Module upgrade deployment')
     context.info(
         '⏱️  This process may take 1 hour or more to complete depending on the number of modules.'
     )
@@ -2453,12 +2454,15 @@ def upgrade_cluster(
             raise SystemExit(1)
 
         # PHASE 2: Perform pre-upgrade configuration if not skipped
+        config_generator = None
+        export_dir = None
+
         if not skip_global_settings_update:
             fancy_title(context, 'Phase 2: Global Settings Backup and Update', '💾')
 
             # Now call the helper function to backup and update global settings
             # This will use the updated values.yml with the new base_os
-            _perform_backup_update_global_settings(
+            config_generator, export_dir = _perform_backup_update_global_settings(
                 cluster_name=cluster_name,
                 aws_region=aws_region,
                 aws_profile=aws_profile,
@@ -2466,6 +2470,54 @@ def upgrade_cluster(
                 module_set=module_set,
                 context=context,
             )
+
+        # Optionally sync full configuration to add any new values that don't exist in DynamoDB
+        sync_full_config = force
+        if not force:
+            context.info('')
+            context.info('🔄  Optional: Sync full configuration to add any new values')
+            context.info(
+                "📋  This step will add any new configuration values that don't exist in DynamoDB"
+            )
+            context.info(
+                '📋  without overwriting existing values. This is generally recommended.'
+            )
+            sync_full_config = context.prompt(
+                'Sync full configuration to add new values?', default=True
+            )
+
+        if sync_full_config:
+            # If global settings were skipped, we need to create the config_generator and export_dir
+            if config_generator is None or export_dir is None:
+                context.info('🔧  Setting up configuration objects for full sync...')
+                props = AdministratorProps()
+                cluster_dir = props.cluster_dir(cluster_name)
+                cluster_region_dir = props.cluster_region_dir(cluster_dir, aws_region)
+                export_dir = os.path.join(cluster_region_dir, 'config')
+                values_file_path = os.path.join(cluster_region_dir, 'values.yml')
+
+                # Read the existing values.yml file
+                with open(values_file_path, 'r') as f:
+                    values_dict = Utils.from_yaml(f.read())
+
+                config_generator = ConfigGenerator(values_dict)
+
+                # We need to regenerate config since global settings step was skipped
+                context.info('🔄  Regenerating configuration from values.yml...')
+                config_generator.generate_config_from_templates(
+                    True, cluster_region_dir
+                )
+
+            _sync_full_config_without_overwrite(
+                cluster_name=cluster_name,
+                aws_region=aws_region,
+                aws_profile=aws_profile,
+                config_generator=config_generator,
+                export_dir=export_dir,
+                context=context,
+            )
+        else:
+            context.info('⏭️  Skipping full configuration sync')
 
             # PHASE 3: Update AMI IDs and base_os values in DynamoDB
             fancy_title(context, 'Phase 3: Update AMI IDs and Settings', '🖥️')
@@ -2587,6 +2639,45 @@ def upgrade_cluster(
         raise SystemExit(1)
 
 
+# Helper function to sync full configuration without overwrite
+def _sync_full_config_without_overwrite(
+    cluster_name: str,
+    aws_region: str,
+    aws_profile: str,
+    config_generator: ConfigGenerator,
+    export_dir: str,
+    context=None,
+):
+    """
+    Helper function to sync full configuration without overwrite.
+    This adds any new configuration values that don't exist in DynamoDB.
+    Uses the already-created config_generator and export_dir to avoid redundant work.
+    """
+    if context is None:
+        context = SocaCliContext()
+
+    try:
+        db = ClusterConfigDB(
+            cluster_name=cluster_name, aws_region=aws_region, aws_profile=aws_profile
+        )
+
+        # Sync full config without overwrite to add any new values
+        context.info('🔄  Syncing full configuration to add any new values...')
+        all_config_entries = config_generator.convert_config_to_key_value_pairs(
+            key_prefix='', path=export_dir
+        )
+        context.info(
+            f'📊  Adding {len(all_config_entries)} configuration entries (new values only)...'
+        )
+        db.sync_cluster_settings_in_db(all_config_entries, overwrite=False)
+
+        context.success('✅  Full configuration sync completed successfully')
+        return True
+    except Exception as e:
+        context.error(f'❌  Failed to sync full configuration: {str(e)}')
+        raise
+
+
 # Helper function to perform backup and update global settings
 def _perform_backup_update_global_settings(
     cluster_name: str,
@@ -2703,7 +2794,7 @@ def _perform_backup_update_global_settings(
         db.sync_cluster_settings_in_db(config_entries, overwrite=True)
 
         context.success('✅  Global settings backup and update completed successfully')
-        return True
+        return config_generator, export_dir
     except Exception as e:
         context.error(f'❌  Failed to backup and update global settings: {str(e)}')
         raise
@@ -2731,7 +2822,7 @@ def backup_update_global_settings(
     """
 
     # Use the helper function to perform the actual work
-    _perform_backup_update_global_settings(
+    config_generator, export_dir = _perform_backup_update_global_settings(
         cluster_name=cluster_name,
         aws_region=aws_region,
         aws_profile=aws_profile,

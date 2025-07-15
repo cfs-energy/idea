@@ -29,13 +29,14 @@ __all__ = (
     'VirtualDesktopPublicLoadBalancerAccessSecurityGroup',
     'VirtualDesktopBastionAccessSecurityGroup',
     'VirtualDesktopBrokerSecurityGroup',
+    'WebAcl',
 )
 
 from typing import List, Optional, Dict
 
 import aws_cdk as cdk
 import constructs
-from aws_cdk import aws_ec2 as ec2, aws_logs as logs, aws_iam as iam
+from aws_cdk import aws_ec2 as ec2, aws_logs as logs, aws_iam as iam, aws_wafv2 as wafv2
 
 from ideaadministrator.app.cdk.constructs import (
     SocaBaseConstruct,
@@ -942,3 +943,279 @@ class InternalLoadBalancerSecurityGroup(SecurityGroup):
 
     def setup_egress(self):
         self.add_outbound_traffic_rule()
+
+
+class WebAcl(SocaBaseConstruct):
+    """
+    AWS WAF WebACL for Application Load Balancer protection
+    """
+
+    def __init__(
+        self,
+        context: AdministratorContext,
+        name: str,
+        scope: constructs.Construct,
+        create_tags: Optional[CreateTagsCustomResource] = None,
+    ):
+        super().__init__(context, name)
+        self.scope = scope
+        self.create_tags = create_tags
+
+        self.web_acl = wafv2.CfnWebACL(
+            scope,
+            f'{self.cluster_name}-{name}-web-acl',
+            name=f'{self.cluster_name}-{name}',
+            scope='REGIONAL',
+            default_action=wafv2.CfnWebACL.DefaultActionProperty(allow={}),
+            description=f'WAF WebACL for {self.cluster_name} {name}',
+            rules=self._create_managed_rules(),
+            visibility_config=wafv2.CfnWebACL.VisibilityConfigProperty(
+                cloud_watch_metrics_enabled=True,
+                metric_name=f'{self.cluster_name}-{name}',
+                sampled_requests_enabled=True,
+            ),
+            tags=[
+                cdk.CfnTag(key='Name', value=f'{self.cluster_name}-{name}'),
+                cdk.CfnTag(key='idea:ClusterName', value=self.cluster_name),
+                cdk.CfnTag(key='idea:Module', value='cluster'),
+            ],
+        )
+
+        # Configure CloudWatch Logs for WAF (if enabled)
+        cloudwatch_logs_enabled = context.config().get_bool(
+            'cluster.cloudwatch_logs.enabled', default=False
+        )
+        if cloudwatch_logs_enabled:
+            self._setup_cloudwatch_logging(scope, name)
+
+    def _create_managed_rules(self) -> List[wafv2.CfnWebACL.RuleProperty]:
+        """
+        Create AWS managed rule groups for common web application protection
+        """
+        rules = []
+
+        # AWS Managed Rules - Amazon IP Reputation List
+        # Blocks requests from IP addresses known to be malicious
+        rules.append(
+            wafv2.CfnWebACL.RuleProperty(
+                name='AWS-AWSManagedRulesAmazonIpReputationList',
+                priority=0,
+                statement=wafv2.CfnWebACL.StatementProperty(
+                    managed_rule_group_statement=wafv2.CfnWebACL.ManagedRuleGroupStatementProperty(
+                        vendor_name='AWS',
+                        name='AWSManagedRulesAmazonIpReputationList',
+                    )
+                ),
+                override_action=wafv2.CfnWebACL.OverrideActionProperty(none={}),
+                visibility_config=wafv2.CfnWebACL.VisibilityConfigProperty(
+                    cloud_watch_metrics_enabled=True,
+                    metric_name='AWS-AWSManagedRulesAmazonIpReputationList',
+                    sampled_requests_enabled=True,
+                ),
+            )
+        )
+
+        # AWS Managed Rules - Common Rule Set
+        # Provides protection against common application vulnerabilities (OWASP Top 10)
+        # Exclude SizeRestrictions_BODY and CrossSiteScripting_BODY rules to prevent false positives
+        rules.append(
+            wafv2.CfnWebACL.RuleProperty(
+                name='AWS-AWSManagedRulesCommonRuleSet',
+                priority=1,
+                statement=wafv2.CfnWebACL.StatementProperty(
+                    managed_rule_group_statement=wafv2.CfnWebACL.ManagedRuleGroupStatementProperty(
+                        vendor_name='AWS',
+                        name='AWSManagedRulesCommonRuleSet',
+                        version='Version_1.18',
+                        excluded_rules=[
+                            wafv2.CfnWebACL.ExcludedRuleProperty(
+                                name='SizeRestrictions_BODY'
+                            ),
+                            wafv2.CfnWebACL.ExcludedRuleProperty(
+                                name='CrossSiteScripting_BODY'
+                            ),
+                        ],
+                    )
+                ),
+                override_action=wafv2.CfnWebACL.OverrideActionProperty(none={}),
+                visibility_config=wafv2.CfnWebACL.VisibilityConfigProperty(
+                    cloud_watch_metrics_enabled=True,
+                    metric_name='AWS-AWSManagedRulesCommonRuleSet',
+                    sampled_requests_enabled=True,
+                ),
+            )
+        )
+
+        # AWS Managed Rules - Known Bad Inputs Rule Set
+        # Blocks requests containing patterns known to be malicious
+        rules.append(
+            wafv2.CfnWebACL.RuleProperty(
+                name='AWS-AWSManagedRulesKnownBadInputsRuleSet',
+                priority=2,
+                statement=wafv2.CfnWebACL.StatementProperty(
+                    managed_rule_group_statement=wafv2.CfnWebACL.ManagedRuleGroupStatementProperty(
+                        vendor_name='AWS',
+                        name='AWSManagedRulesKnownBadInputsRuleSet',
+                        version='Version_1.22',
+                    )
+                ),
+                override_action=wafv2.CfnWebACL.OverrideActionProperty(none={}),
+                visibility_config=wafv2.CfnWebACL.VisibilityConfigProperty(
+                    cloud_watch_metrics_enabled=True,
+                    metric_name='AWS-AWSManagedRulesKnownBadInputsRuleSet',
+                    sampled_requests_enabled=True,
+                ),
+            )
+        )
+
+        # AWS Managed Rules - Bot Control Rule Set (Optional)
+        # Provides bot detection and mitigation capabilities
+        # Pricing: $10/month (prorated hourly) + $1 per million requests after first 10M free
+        # Common inspection level provides basic bot detection
+        # Exclude CategoryHttpLibrary and SignalNonBrowserUserAgent rules to prevent false positives
+        bot_control_enabled = self.context.config().get_bool(
+            'cluster.load_balancers.external_alb.waf.bot_control.enabled', default=False
+        )
+
+        if bot_control_enabled:
+            rules.append(
+                wafv2.CfnWebACL.RuleProperty(
+                    name='AWS-AWSManagedRulesBotControlRuleSet',
+                    priority=3,
+                    statement=wafv2.CfnWebACL.StatementProperty(
+                        managed_rule_group_statement=wafv2.CfnWebACL.ManagedRuleGroupStatementProperty(
+                            vendor_name='AWS',
+                            name='AWSManagedRulesBotControlRuleSet',
+                            version='Version_3.2',
+                            excluded_rules=[
+                                wafv2.CfnWebACL.ExcludedRuleProperty(
+                                    name='CategoryHttpLibrary'
+                                ),
+                                wafv2.CfnWebACL.ExcludedRuleProperty(
+                                    name='SignalNonBrowserUserAgent'
+                                ),
+                            ],
+                            managed_rule_group_configs=[
+                                wafv2.CfnWebACL.ManagedRuleGroupConfigProperty(
+                                    aws_managed_rules_bot_control_rule_set=wafv2.CfnWebACL.AWSManagedRulesBotControlRuleSetProperty(
+                                        inspection_level='COMMON'
+                                    )
+                                )
+                            ],
+                        )
+                    ),
+                    override_action=wafv2.CfnWebACL.OverrideActionProperty(none={}),
+                    visibility_config=wafv2.CfnWebACL.VisibilityConfigProperty(
+                        cloud_watch_metrics_enabled=True,
+                        metric_name='AWS-AWSManagedRulesBotControlRuleSet',
+                        sampled_requests_enabled=True,
+                    ),
+                )
+            )
+
+        return rules
+
+    def _setup_cloudwatch_logging(self, scope: constructs.Construct, name: str):
+        """
+        Configure CloudWatch Logs for WAF WebACL following IDEA patterns
+        """
+        # WAF requires log group names to start with 'aws-waf-logs-'
+        # Format: aws-waf-logs-{cluster-name}-{module}-waf-{name}
+        log_group_name = f'aws-waf-logs-{self.cluster_name}-cluster-waf-{name}'
+
+        # Get retention setting from cluster config
+        retention_days = self.context.config().get_int(
+            'cluster.cloudwatch_logs.retention_in_days', None
+        )
+
+        # Create CloudWatch Log Group following IDEA pattern
+        log_group_params = {
+            'log_group_name': log_group_name,
+            'removal_policy': cdk.RemovalPolicy.DESTROY,
+        }
+
+        # Apply retention if configured
+        if retention_days is not None:
+            # Map retention days to CDK enum values
+            retention_mapping = {
+                1: logs.RetentionDays.ONE_DAY,
+                3: logs.RetentionDays.THREE_DAYS,
+                5: logs.RetentionDays.FIVE_DAYS,
+                7: logs.RetentionDays.ONE_WEEK,
+                14: logs.RetentionDays.TWO_WEEKS,
+                30: logs.RetentionDays.ONE_MONTH,
+                60: logs.RetentionDays.TWO_MONTHS,
+                90: logs.RetentionDays.THREE_MONTHS,
+                120: logs.RetentionDays.FOUR_MONTHS,
+                150: logs.RetentionDays.FIVE_MONTHS,
+                180: logs.RetentionDays.SIX_MONTHS,
+                365: logs.RetentionDays.ONE_YEAR,
+                400: logs.RetentionDays.THIRTEEN_MONTHS,
+                545: logs.RetentionDays.EIGHTEEN_MONTHS,
+                731: logs.RetentionDays.TWO_YEARS,
+                1827: logs.RetentionDays.FIVE_YEARS,
+                3653: logs.RetentionDays.TEN_YEARS,
+            }
+
+            if retention_days in retention_mapping:
+                log_group_params['retention'] = retention_mapping[retention_days]
+            else:
+                self.context.logger().warning(
+                    f'Invalid retention days value: {retention_days}. '
+                    f'Valid values are: {list(retention_mapping.keys())}. '
+                    f'Using default retention (never expire).'
+                )
+
+        self.log_group = logs.LogGroup(
+            scope, f'{self.cluster_name}-{name}-waf-log-group', **log_group_params
+        )
+
+        # Add IDEA standard tags to log group
+        cdk.Tags.of(self.log_group).add('Name', f'{self.cluster_name}-{name}-waf-logs')
+        cdk.Tags.of(self.log_group).add('idea:ClusterName', self.cluster_name)
+        cdk.Tags.of(self.log_group).add('idea:Module', 'cluster')
+
+        # Create WAF Logging Configuration with filters
+        logging_config_params = {
+            'log_destination_configs': [self.log_group.log_group_arn],
+            'resource_arn': self.web_acl.attr_arn,
+        }
+
+        # Configure log filters to drop ALLOW actions for cost optimization
+        # This can be controlled via configuration
+        drop_allow_logs = self.context.config().get_bool(
+            'cluster.load_balancers.external_alb.waf.logging.drop_allow_actions',
+            default=True,
+        )
+
+        if drop_allow_logs:
+            logging_config_params['logging_filter'] = {
+                'DefaultBehavior': 'KEEP',
+                'Filters': [
+                    {
+                        'Behavior': 'DROP',
+                        'Requirement': 'MEETS_ANY',
+                        'Conditions': [{'ActionCondition': {'Action': 'ALLOW'}}],
+                    }
+                ],
+            }
+
+        self.logging_configuration = wafv2.CfnLoggingConfiguration(
+            scope,
+            f'{self.cluster_name}-{name}-waf-logging-config',
+            **logging_config_params,
+        )
+
+        # Ensure logging configuration is created after both WebACL and log group
+        self.logging_configuration.node.add_dependency(self.web_acl)
+        self.logging_configuration.node.add_dependency(self.log_group)
+
+    @property
+    def web_acl_arn(self) -> str:
+        """Get the ARN of the Web ACL"""
+        return self.web_acl.attr_arn
+
+    @property
+    def web_acl_id(self) -> str:
+        """Get the ID of the Web ACL"""
+        return self.web_acl.attr_id

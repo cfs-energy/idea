@@ -70,6 +70,10 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
 {% include '_templates/linux/cloudwatch_agent.jinja2' %}
 
+{% include '_templates/linux/fail2ban.jinja2' %}
+
+{% include '_templates/linux/ssh_performance_optimization.jinja2' %}
+
 {% if context.is_metrics_provider_prometheus() %}
      {% include '_templates/linux/prometheus.jinja2' %}
      {% include '_templates/linux/prometheus_node_exporter.jinja2' %}
@@ -116,7 +120,11 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 {% endwith %}
 
 {% with messages = [
-  context.module_name + ' (v'+context.module_version+'), Cluster: ' + context.cluster_name
+  context.module_name + ' (v'+context.module_version+'), Cluster: ' + context.cluster_name,
+  '',
+  'SSH/SCP/SFTP Performance Optimizations: ENABLED',
+  'Run "ssh-help" for performance tips and optimized commands',
+  'Run "test-ssh-performance" to check available ciphers'
 ] %}
   {% include '_templates/linux/motd.jinja2' %}
 {% endwith %}

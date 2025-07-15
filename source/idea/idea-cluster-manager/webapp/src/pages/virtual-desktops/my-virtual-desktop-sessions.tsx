@@ -831,7 +831,19 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
                         })
                         return Promise.resolve(true)
                     }).catch(error => {
-                        this.getUpdateSessionPermissionForm()?.setError(error.errorCode, error.message)
+                        // Extract specific failure reasons from the payload if available
+                        let detailedMessage = error.message
+                        if (error.payload && error.payload.permissions) {
+                            const failureReasons = error.payload.permissions
+                                .filter((permission: any) => permission.failure_reason)
+                                .map((permission: any) => `${permission.failure_reason}`)
+
+                            if (failureReasons.length > 0) {
+                                detailedMessage = failureReasons.join('\n')
+                            }
+                        }
+
+                        this.getUpdateSessionPermissionForm()?.setError(error.errorCode, detailedMessage)
                         return Promise.resolve(false)
                     })
                 }}

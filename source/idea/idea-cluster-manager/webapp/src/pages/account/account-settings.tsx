@@ -19,7 +19,7 @@ import {KeyValue, KeyValueGroup} from "../../components/key-value";
 import {AuthClient} from "../../client";
 import {AppContext} from "../../common";
 import {AuthService} from "../../service";
-import {User} from "../../client/data-model";
+import {User, ListUsersInGroupResult} from "../../client/data-model";
 import IdeaForm from "../../components/form";
 import IdeaAppLayout, {IdeaAppLayoutProps} from "../../components/app-layout";
 import {withRouter} from "../../navigation/navigation-utils";
@@ -91,18 +91,38 @@ class AccountSettings extends Component<AccountSettingsProps, AccountSettingsSta
         })
     }
 
-    fetchUsersInGroup() {
-        return this.getAuthClient().listUsersInGroup({
-            group_names: [this.state.user?.group_name!],
-            paginator: {
-                page_size: 1000
+    async fetchUsersInGroup() {
+        let allUsers: User[] = []
+        let cursor: string | undefined = undefined
+
+        // Fetch all pages of users using cursor-based pagination
+        do {
+            try {
+                const response: ListUsersInGroupResult = await this.getAuthClient().listUsersInGroup({
+                    group_names: [this.state.user?.group_name!],
+                    paginator: {
+                        page_size: 1000,
+                        cursor: cursor
+                    }
+                })
+
+                // Add users from this page
+                if (response.listing) {
+                    allUsers.push(...response.listing)
+                }
+
+                // Get cursor for next page
+                cursor = response.paginator?.cursor
+            } catch (error) {
+                console.error('Error fetching users in group:', error)
+                break
             }
-        }).then(result => {
-            this.setState({
-                usersInGroup: result.listing!
-            })
-            return true
+        } while (cursor) // Continue while there are more pages
+
+        this.setState({
+            usersInGroup: allUsers
         })
+        return true
     }
 
     buildAddUserToGroupForm() {

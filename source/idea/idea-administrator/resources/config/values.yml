@@ -24,6 +24,7 @@ use_vpc_endpoints: false
 # Application LoadBalancer Settings
 # if alb_public = true external ALB will be deployed in public subnet
 # if alb_public = false external ALB will be deployed in private subnet
+# WAF is automatically enabled for public ALB deployments
 alb_public: true
 # if alb_custom_certificate_provided = false, self signed certificates will be generated for external ALB
 # if alb_custom_certificate_provided = true, import your own certificates to AWS ACM and provide alb_custom_certificate_acm_certificate_arn, alb_custom_dns_name

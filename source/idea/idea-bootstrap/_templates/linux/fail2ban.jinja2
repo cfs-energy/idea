@@ -1,0 +1,21 @@
+# Begin: Install Fail2Ban
+{% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+if [[ ! -f "/etc/fail2ban/jail.local" ]]; then
+    cat > /etc/fail2ban/jail.local << 'EOF'
+[sshd]
+enabled = true
+port = ssh
+filter = sshd
+logpath = /var/log/secure
+maxretry = 3
+findtime = 600
+bantime = 3600
+action = iptables[name=SSH, port=ssh, protocol=tcp]
+EOF
+fi
+
+systemctl enable fail2ban
+systemctl start fail2ban
+
+{% endif %}
+# End: Install Fail2Ban

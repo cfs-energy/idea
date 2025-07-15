@@ -26,8 +26,8 @@ AMI_PATTERNS = {
     'ubuntu2404/x86-64': 'ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*',
     'amazonlinux2/arm64': 'amzn2-ami-kernel-5.10-hvm-*-arm64-gp2',
     'amazonlinux2/x86-64': 'amzn2-ami-kernel-5.10-hvm-*-x86_64-gp2',
-    'amazonlinux2023/arm64': 'al2023-ami-2023.7*-kernel-6.1-arm64',
-    'amazonlinux2023/x86-64': 'al2023-ami-2023.7.*-kernel-6.1-x86_64',
+    'amazonlinux2023/arm64': 'al2023-ami-2023.8*-kernel-6.1-arm64',
+    'amazonlinux2023/x86-64': 'al2023-ami-2023.8.*-kernel-6.1-x86_64',
     # Commented out patterns kept for reference
     # "rhel7/x86-64": "RHEL-7.9_HVM-*-x86_64-*",
     'rocky8/arm64': 'Rocky-8-EC2-Base-8.9-*.aarch64-*',

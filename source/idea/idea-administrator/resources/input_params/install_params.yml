@@ -319,7 +319,7 @@ SocaInputParamSpec:
     #--------------------------------------------------------------------------------------------------
     - name: alb_public
       title: "Is ALB Public?"
-      description: "Deploy application load balancer in public subnets?"
+      description: "Deploy application load balancer in public subnets? WAF will be enabled by default"
       param_type: confirm
       data_type: bool
       help_text: "Recommended: Yes"

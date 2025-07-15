@@ -149,6 +149,23 @@ load_balancers:
     # SSL/TLS Policy on External Load Balancer
     # For a list of policies - consult the documentation at https://docs.aws.amazon.com/elasticloadbalancing/latest/application/create-https-listener.html#describe-ssl-policies
     ssl_policy: ELBSecurityPolicy-FS-1-2-Res-2020-10
+    # AWS WAF Configuration
+    waf:
+      enabled: {{alb_public | lower}}
+      # WAF Web ACL will be created with AWS managed rules for protection against common threats
+      # Rules included: AWSManagedRulesAmazonIpReputationList, AWSManagedRulesCommonRuleSet, AWSManagedRulesKnownBadInputsRuleSet
+      # Optional: AWSManagedRulesBotControlRuleSet (enabled by default if public ALB is enabled)
+      # WAF is automatically enabled for public ALB deployments for security best practices
+      bot_control:
+        enabled: {{alb_public | lower}}
+        # Bot Control uses Version 3.2 with Common inspection level
+        # Pricing: $10/month (prorated hourly) + $1 per million requests after first 10M free
+        # Provides protection against automated bots and scrapers
+      logging:
+        # Drop ALLOW actions from WAF logs for cost optimization
+        # When enabled, only blocked/denied requests are logged to CloudWatch
+        # When disabled, all requests (including allowed ones) are logged
+        drop_allow_actions: true
   internal_alb:
     access_logs: true
     # Idle timeout in seconds for large file downloads (default: 600 seconds / 10 minutes)
