@@ -354,8 +354,8 @@ class UpdateSessionPermissionModal extends Component<UpdateSessionPermissionModa
     async fetchAllUsersInGroup(groupNames: string[]) {
         let allUsers: User[] = []
         let filteredUsers: User[] = []
-        let totalUsers = 0
         let cursor: string | undefined = undefined
+        const currentUsername = AppContext.get().auth().getUsername()
 
         // Fetch all pages of users using cursor-based pagination
         do {
@@ -369,13 +369,14 @@ class UpdateSessionPermissionModal extends Component<UpdateSessionPermissionModa
                 })
 
                 // Add users from this page (excluding current user)
-                response.listing?.forEach((user: User) => {
-                    if (AppContext.get().auth().getUsername() === user.username) {
-                        return
+                if (response.listing) {
+                    for (const user of response.listing) {
+                        if (currentUsername === user.username) {
+                            continue
+                        }
+                        allUsers.push(user)
                     }
-                    totalUsers++
-                    allUsers.push(user)
-                })
+                }
 
                 // Get cursor for next page
                 cursor = response.paginator?.cursor
@@ -388,7 +389,7 @@ class UpdateSessionPermissionModal extends Component<UpdateSessionPermissionModa
         // Filter to only include VDI-authorized users
         filteredUsers = allUsers.filter(user => this.isVdiAuthorizedUser(user))
 
-        console.log(`Filtered ${filteredUsers.length} VDI-authorized users out of ${totalUsers} total project members`)
+        console.log(`Filtered ${filteredUsers.length} VDI-authorized users out of ${allUsers.length} total project members`)
 
         this.setState({
             users: filteredUsers,
