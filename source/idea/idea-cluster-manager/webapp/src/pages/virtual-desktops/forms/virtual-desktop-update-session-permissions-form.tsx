@@ -14,7 +14,7 @@
 import React, {Component, RefObject} from "react";
 import {Box, Button, Container, Form, Grid, Header, Modal, SpaceBetween} from "@cloudscape-design/components";
 import {ModalProps} from "@cloudscape-design/components/modal/interfaces";
-import {SocaUserInputChoice, SocaUserInputParamMetadata, User, VirtualDesktopPermissionProfile, VirtualDesktopSession, VirtualDesktopSessionPermission} from "../../../client/data-model";
+import {SocaUserInputChoice, SocaUserInputParamMetadata, User, VirtualDesktopPermissionProfile, VirtualDesktopSession, VirtualDesktopSessionPermission, ListUsersInGroupResult} from "../../../client/data-model";
 import {AuthClient, ProjectsClient, VirtualDesktopClient} from "../../../client";
 import {AppContext} from "../../../common";
 import {IdeaFormField, IdeaFormFieldLifecycleEvent, IdeaFormFieldStateChangeEvent, IdeaFormFieldStateChangeEventHandler} from "../../../components/form-field";
@@ -338,31 +338,71 @@ class UpdateSessionPermissionModal extends Component<UpdateSessionPermissionModa
         }
     }
 
+    isVdiAuthorizedUser(user: User): boolean {
+        // Check if user is cluster administrator
+        if (user.sudo || user.username?.includes('clusteradmin')) {
+            return true
+        }
+
+        // Check if user is member of VDI groups
+        const vdiGroups = ['vdc-users-module-group', 'vdc-administrators-module-group']
+        const userGroups = user.additional_groups || []
+
+        return vdiGroups.some(vdiGroup => userGroups.includes(vdiGroup))
+    }
+
+    async fetchAllUsersInGroup(groupNames: string[]) {
+        let allUsers: User[] = []
+        let filteredUsers: User[] = []
+        let totalUsers = 0
+        let cursor: string | undefined = undefined
+
+        // Fetch all pages of users using cursor-based pagination
+        do {
+            try {
+                const response: ListUsersInGroupResult = await this.getAuthClient().listUsersInGroup({
+                    group_names: groupNames,
+                    paginator: {
+                        page_size: 1000,
+                        cursor: cursor
+                    }
+                })
+
+                // Add users from this page (excluding current user)
+                response.listing?.forEach((user: User) => {
+                    if (AppContext.get().auth().getUsername() === user.username) {
+                        return
+                    }
+                    totalUsers++
+                    allUsers.push(user)
+                })
+
+                // Get cursor for next page
+                cursor = response.paginator?.cursor
+            } catch (error) {
+                console.error('Error fetching users in group:', error)
+                break
+            }
+        } while (cursor) // Continue while there are more pages
+
+        // Filter to only include VDI-authorized users
+        filteredUsers = allUsers.filter(user => this.isVdiAuthorizedUser(user))
+
+        console.log(`Filtered ${filteredUsers.length} VDI-authorized users out of ${totalUsers} total project members`)
+
+        this.setState({
+            users: filteredUsers,
+            userListLoaded: true
+        }, () => {
+            this.createInitRows()
+        })
+    }
+
     componentDidMount() {
         this.getProjectsClient().getProject({
             project_id: this.props.session.project?.project_id
         }).then(response => {
-            let users: User[] = []
-            this.getAuthClient().listUsersInGroup({
-                group_names: response.project?.ldap_groups!,
-                paginator: {
-                    page_size: 1000
-                }
-            }).then(group_response => {
-                group_response.listing?.forEach(user => {
-                    if (AppContext.get().auth().getUsername() === user.username) {
-                        return
-                    }
-                    users.push(user)
-                })
-                this.setState({
-                    users: users,
-                    userListLoaded: true
-                }, () => {
-                    this.createInitRows()
-                })
-            })
-
+            this.fetchAllUsersInGroup(response.project?.ldap_groups!)
         })
 
         this.getVirtualDesktopUtilsClient().listPermissionProfiles({})
@@ -443,10 +483,14 @@ class UpdateSessionPermissionModal extends Component<UpdateSessionPermissionModa
         })
     }
 
-    isActorUnique(name: string): boolean {
+    isActorUnique(name: string, currentRowId: string): boolean {
         let isUnique = true
         Object.keys(this.allRowValues).forEach(row_id => {
-            if (this.allRowValues[row_id].actor === name) {
+            // Skip the current row being edited, only check visible rows, and exclude rows marked for deletion
+            if (row_id !== currentRowId &&
+                this.state.visibleRows[row_id] &&
+                this.allRowValues[row_id].action !== 'delete' &&
+                this.allRowValues[row_id].actor === name) {
                 isUnique = false
             }
         })
@@ -465,7 +509,7 @@ class UpdateSessionPermissionModal extends Component<UpdateSessionPermissionModa
         } else if (event.param.name === 'expiry-date') {
             this.allRowValues[row_id].expiryDate = event.value
         } else if (event.param.name === 'actor') {
-            if (this.isActorUnique(event.value)) {
+            if (this.isActorUnique(event.value, row_id)) {
                 this.allRowValues[row_id].actor = event.value
             } else {
                 event.ref.setState({
@@ -511,33 +555,41 @@ class UpdateSessionPermissionModal extends Component<UpdateSessionPermissionModa
                     variant="embedded"
                     header={<Header
                         description={'Select the username, permission profile and the expiry date of the rules'}
-                        actions={<Button variant={"normal"} onClick={() => {
-                            this.createNewRow()
-                        }}> Add User </Button>}
                         variant={"h2"}/>
                     }
                     errorText={this.state.message}>
-                    <Container
-                        variant={"stacked"}>
-                        {
-                            Object.keys(this.state.allRows).map(row_id => {
-                                let row = this.state.allRows[row_id]
-                                let ref: RefObject<PermissionRow> = React.createRef()
-                                return (
-                                    this.state.visibleRows[row.row_id] && <PermissionRow
-                                        ref={ref}
-                                        key={row.row_id}
-                                        usersList={this.state.users}
-                                        onLifeCycleChange={(event) => this.onLifeCycleChange(event)}
-                                        permissionProfileList={this.state.permissionProfiles}
-                                        existing={row.existing}
-                                        row={row}
-                                        onDeleteButtonClicked={(row_id, buttonState) => this.handleRowDeleteButtonClicked(row_id, buttonState)}
-                                        onStateChange={(event) => this.onStateChange(event)}/>
-                                )
-                            })
-                        }
-                    </Container>
+                    <SpaceBetween direction="vertical" size="m">
+                        <Box color="text-status-info" fontSize="body-s">
+                            <strong>Note:</strong> Only users who are authorized to access Virtual Desktops AND are members of this session's project can be granted access.
+                            If you don't see a user, contact your administrator to grant them VDI permissions and ensure they're added to the project.
+                        </Box>
+                        <Box textAlign="left">
+                            <Button variant={"normal"} onClick={() => {
+                                this.createNewRow()
+                            }}> Add User </Button>
+                        </Box>
+                        <Container
+                            variant={"stacked"}>
+                            {
+                                Object.keys(this.state.allRows).map(row_id => {
+                                    let row = this.state.allRows[row_id]
+                                    let ref: RefObject<PermissionRow> = React.createRef()
+                                    return (
+                                        this.state.visibleRows[row.row_id] && <PermissionRow
+                                            ref={ref}
+                                            key={row.row_id}
+                                            usersList={this.state.users}
+                                            onLifeCycleChange={(event) => this.onLifeCycleChange(event)}
+                                            permissionProfileList={this.state.permissionProfiles}
+                                            existing={row.existing}
+                                            row={row}
+                                            onDeleteButtonClicked={(row_id, buttonState) => this.handleRowDeleteButtonClicked(row_id, buttonState)}
+                                            onStateChange={(event) => this.onStateChange(event)}/>
+                                    )
+                                })
+                            }
+                        </Container>
+                    </SpaceBetween>
                 </Form>
             </form>
         )

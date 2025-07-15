@@ -32,6 +32,9 @@ from ideadatamodel import (
     SocaFilter,
     VirtualDesktopGPU,
     VirtualDesktopArchitecture,
+    VirtualDesktopSessionPermissionActorType,
+    GetUserRequest,
+    GetProjectRequest,
 )
 from ideadatamodel import exceptions
 from ideadatamodel import constants
@@ -214,12 +217,177 @@ class VirtualDesktopAPI(BaseAPI):
 
     def _validate_session_permission_create_request(
         self, permission: VirtualDesktopSessionPermission
-    ) -> tuple[VirtualDesktopSession, bool]:
+    ) -> tuple[VirtualDesktopSessionPermission, bool]:
+        """
+        Comprehensive validation for create session permission requests.
+        Validates that the actor (user/group) is valid and belongs to the same project.
+        """
+        # First validate the basic fields
         is_valid, message = self.validate_create_session_permission_request(permission)
         if not is_valid:
             permission.failure_reason = message
+            return permission, False
 
+        # Additional validation: Check if actor is valid user and belongs to project
+        if permission.actor_type == VirtualDesktopSessionPermissionActorType.USER:
+            is_valid, message = self._validate_user_and_project_membership(
+                username=permission.actor_name,
+                session_project_id=self._get_session_project_id(
+                    permission.idea_session_id, permission.idea_session_owner
+                ),
+            )
+            if not is_valid:
+                permission.failure_reason = message
+                return permission, False
+
+        return permission, True
+
+    def _validate_session_permission_update_request_comprehensive(
+        self, permission: VirtualDesktopSessionPermission
+    ) -> tuple[VirtualDesktopSessionPermission, bool]:
+        """
+        Comprehensive validation for update session permission requests.
+        Validates that the actor (user/group) is valid and belongs to the same project.
+        """
+        # First validate the basic fields using the same logic as create
+        is_valid, message = self.validate_create_session_permission_request(permission)
+        if not is_valid:
+            permission.failure_reason = message
+            return permission, False
+
+        # Additional validation: Check if actor is valid user and belongs to project
+        if permission.actor_type == VirtualDesktopSessionPermissionActorType.USER:
+            is_valid, message = self._validate_user_and_project_membership(
+                username=permission.actor_name,
+                session_project_id=self._get_session_project_id(
+                    permission.idea_session_id, permission.idea_session_owner
+                ),
+            )
+            if not is_valid:
+                permission.failure_reason = message
+                return permission, False
+
+        return permission, True
+
+    def _validate_session_permission_delete_request(
+        self, permission: VirtualDesktopSessionPermission
+    ) -> tuple[VirtualDesktopSessionPermission, bool]:
+        """
+        Validation for delete session permission requests.
+        """
+        is_valid = True
+        if Utils.is_empty(permission.idea_session_id):
+            permission.failure_reason = 'Session ID is required. Unable to identify which session permission to delete.'
+            is_valid = False
+        if Utils.is_empty(permission.actor_name):
+            permission.failure_reason = 'Username is required. Unable to identify which user permission to delete.'
+            is_valid = False
         return permission, is_valid
+
+    def _validate_user_and_project_membership(
+        self, username: str, session_project_id: str
+    ) -> tuple[bool, str]:
+        """
+        Validate that the user exists, is a valid VDI user, and is a member of the specified project.
+        """
+        if Utils.is_empty(username):
+            return (
+                False,
+                'Username is required. Please specify a valid username to share the session with.',
+            )
+
+        if Utils.is_empty(session_project_id):
+            return (
+                False,
+                'Unable to determine session project. Please ensure the session exists and try again.',
+            )
+
+        # Check if user exists and get user details
+        try:
+            user_response = self.context.accounts_client.get_user(
+                GetUserRequest(username=username)
+            )
+            user = user_response.user
+        except Exception:
+            return (
+                False,
+                f'User "{username}" was not found in the system. Please verify the username is correct and that the user account exists.',
+            )
+
+        # Check if user is cluster administrator (bypass VDI group validation)
+        cluster_administrator = self.context.config().get_string(
+            'cluster.administrator_username', required=True
+        )
+        is_cluster_admin = username in cluster_administrator or username.startswith(
+            'clusteradmin'
+        )
+
+        # Validate user is authorized to use VDI (admin or member of VDI groups)
+        if not is_cluster_admin:
+            users_groups = Utils.get_as_list(user.additional_groups, default=[])
+            is_user_part_of_vdi_group = False
+
+            for group in self.VDI_GROUPS:
+                if group in users_groups:
+                    is_user_part_of_vdi_group = True
+                    break
+
+            if not is_user_part_of_vdi_group:
+                return (
+                    False,
+                    f'Cannot share session with "{username}". This user is not authorized to access Virtual Desktops. Please contact your administrator to grant the user appropriate VDI permissions.',
+                )
+
+        # Check if user is member of the same project as the session
+        try:
+            user_projects = self.context.projects_client.get_user_projects(
+                username=username
+            )
+            is_user_part_of_project = False
+
+            for project in user_projects:
+                if project.project_id == session_project_id:
+                    is_user_part_of_project = True
+                    break
+
+            if not is_user_part_of_project:
+                # Get the session project name for better error message
+                session_project_name = "this session's project"
+                try:
+                    project_response = self.context.projects_client.get_project(
+                        GetProjectRequest(project_id=session_project_id)
+                    )
+                    if project_response and project_response.project:
+                        session_project_name = f'"{project_response.project.name}"'
+                except Exception:
+                    pass
+
+                return (
+                    False,
+                    f'Cannot share session with "{username}". This user is not a member of {session_project_name}. Users can only access sessions within their assigned projects. Please contact your administrator if you believe this user should have access.',
+                )
+
+        except Exception:
+            return (
+                False,
+                f'Unable to verify project membership for "{username}". Please try again or contact your administrator if the problem persists.',
+            )
+
+        return True, ''
+
+    def _get_session_project_id(self, session_id: str, session_owner: str) -> str:
+        """
+        Get the project ID for a session.
+        """
+        try:
+            session = self.get_session_if_owner(
+                username=session_owner, idea_session_id=session_id
+            )
+            if session and session.project:
+                return session.project.project_id
+        except Exception:
+            pass
+        return ''
 
     def validate_update_session_permission_request(
         self, request: UpdateSessionPermissionRequest
@@ -244,8 +412,10 @@ class VirtualDesktopAPI(BaseAPI):
 
         if Utils.is_not_empty(request.update):
             for permission in request.update:
-                permission, is_valid = self._validate_session_permission_update_request(
-                    permission
+                permission, is_valid = (
+                    self._validate_session_permission_update_request_comprehensive(
+                        permission
+                    )
                 )
                 if is_valid:
                     session = self.get_session_if_owner(
@@ -259,10 +429,12 @@ class VirtualDesktopAPI(BaseAPI):
                         permission.failure_reason = message
                 is_valid_request = is_valid_request and is_valid
 
-        """
-        for permission in request.delete:
-            pass
-        """
+        if Utils.is_not_empty(request.delete):
+            for permission in request.delete:
+                permission, is_valid = self._validate_session_permission_delete_request(
+                    permission
+                )
+                is_valid_request = is_valid_request and is_valid
 
         if is_valid_request:
             is_valid, message = self._validate_actors_for_session_permission_requests(
@@ -293,33 +465,66 @@ class VirtualDesktopAPI(BaseAPI):
         permission: VirtualDesktopSessionPermission,
     ) -> tuple[bool, str]:
         if Utils.is_empty(permission):
-            return False, 'missing permission object'
+            return (
+                False,
+                'Permission object is required. Please provide valid permission details.',
+            )
         if Utils.is_empty(permission.idea_session_id):
-            return False, 'missing idea_session_id'
+            return (
+                False,
+                'Session ID is required. Please specify which session to share.',
+            )
         if Utils.is_empty(permission.idea_session_owner):
-            return False, 'missing idea_session_owner'
+            return (
+                False,
+                'Session owner is required. Unable to identify the session owner.',
+            )
         if Utils.is_empty(permission.idea_session_name):
-            return False, 'missing idea_session_name'
+            return False, 'Session name is required. Unable to identify the session.'
         if Utils.is_empty(permission.idea_session_instance_type):
-            return False, 'missing idea_session_instance_type'
+            return (
+                False,
+                'Session instance type is required. Unable to determine session configuration.',
+            )
         if Utils.is_empty(permission.idea_session_state):
-            return False, 'missing idea_session_state'
+            return (
+                False,
+                'Session state is required. Unable to determine if session is accessible.',
+            )
         if Utils.is_empty(permission.idea_session_base_os):
-            return False, 'missing idea_session_base_os'
+            return False, 'Session operating system information is required.'
         if Utils.is_empty(permission.idea_session_created_on):
-            return False, 'missing idea_session_created_on'
+            return (
+                False,
+                'Session creation time is required. Unable to validate session details.',
+            )
         if Utils.is_empty(permission.idea_session_type):
-            return False, 'missing idea_session_type'
+            return (
+                False,
+                'Session type is required. Unable to determine session configuration.',
+            )
         if Utils.is_empty(permission.permission_profile) or Utils.is_empty(
             permission.permission_profile.profile_id
         ):
-            return False, 'missing permission_profile.profile_id'
+            return (
+                False,
+                'Permission profile is required. Please select what level of access to grant.',
+            )
         if Utils.is_empty(permission.actor_type):
-            return False, 'missing actor_type'
+            return (
+                False,
+                'Actor type is required. Please specify if sharing with a user or group.',
+            )
         if Utils.is_empty(permission.actor_name):
-            return False, 'missing actor_name'
+            return (
+                False,
+                'Username is required. Please specify who to share the session with.',
+            )
         if Utils.is_empty(permission.expiry_date):
-            return False, 'missing expiry_date'
+            return (
+                False,
+                'Expiry date is required. Please specify when this permission should expire.',
+            )
         return True, ''
 
     @staticmethod

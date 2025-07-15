@@ -4,6 +4,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
+## [25.07.0] - 2025-07-15
+
+### **🔒 Security Updates**
+* **WAF enabled by default for public ALB deployments**
+  * WAF is now automatically enabled for public ALB deployments as a security best practice
+  * For private ALB deployments, WAF remains disabled by default
+  * To manually override, set `cluster.load_balancers.external_alb.waf.enabled` in cluster configuration
+* **WAF Managed Rule Version Updates**:
+  * Common Rule Set updated to Version 1.18 for latest OWASP protection
+  * Known Bad Inputs Rule Set updated to Version 1.22 for enhanced malicious pattern detection
+  * Added optional Bot Control Rule Set (Version 3.2, Common inspection level) - enabled by default for public ALB deployments
+    * Pricing: $10/month + $1 per million requests after first 10M free
+* fail2ban enabled on `bastion-host`
+
+### **🔄 Updates**
+* **Enhanced Upgrade Cluster Command**: Added optional full configuration sync to `upgrade-cluster` command to apply new settings that don't exist in DDB already
+* **Bastion Host Performance Optimizations**: Added TCP buffer optimizations for improved SCP/SFTP transfer performance
+* **WAF Logging Enhancements**: Added CloudWatch logging for WAF with configurable retention and cost optimization
+  * WAF logs use cluster-wide retention settings via `cluster.cloudwatch_logs.retention_in_days`
+  * Added `cluster.load_balancers.external_alb.waf.logging.drop_allow_actions` setting to filter out ALLOW actions for cost optimization (enabled by default)
+* **eVDI Sharing Validation**: Added comprehensive validation to eVDI sharing session permission update API
+```mermaid
+  graph TD
+      A[User attempts to share session] --> B[Validate target user exists]
+      B --> C[Check if cluster admin]
+      C -->|Yes| E[Check project membership]
+      C -->|No| D[Check VDI group membership]
+      D -->|Not in VDI groups| F[❌ Reject: Not authorized for VDI]
+      D -->|In VDI groups| E[Check project membership]
+      E -->|Not in same project| G[❌ Reject: Different project]
+      E -->|In same project| H[✅ Allow share]
+```
+* **eVDI Size Order**: Reversed instance size order to show smallest first
+* **AMI Updates**: Updated AMIs for Base OS and Software Stacks
+* **CDK Telemetry**: Force disable CDK Telemetry collection
+* **SSH Optimization**: Fine tuned SSH optimization settings on Bastion Host
+
+### **🐛 Bug Fixes**
+* Fix Permissions tab in eVDI Session Detail not rendering content when eVDI session is shared
+* Fix isActorUnique method in Desktop Sharing table modal always claiming non-uniqueness
+
+
 ## [25.06.3] - 2025-06-27
 
 **Upgrade Instructions:**

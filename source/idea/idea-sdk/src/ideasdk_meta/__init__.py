@@ -12,4 +12,4 @@
 # pkgconfig for soca-sdk. no dependencies # noqa
 
 __name__ = 'idea-sdk'
-__version__ = '25.06.3'
+__version__ = '25.07.0'

@@ -38,6 +38,7 @@ from ideaadministrator.app.cdk.constructs import (
     IdeaNagSuppression,
     SNSTopic,
     BackupPlan,
+    WebAcl,
 )
 from ideaadministrator import app_constants
 
@@ -55,6 +56,7 @@ from aws_cdk import (
     aws_s3 as s3,
     aws_backup as backup,
     aws_kms as kms,
+    aws_wafv2,
 )
 
 
@@ -124,6 +126,7 @@ class ClusterStack(IdeaBaseStack):
         self.cluster_endpoints_lambda: Optional[LambdaFunction] = None
         self.external_alb: Optional[elbv2.ApplicationLoadBalancer] = None
         self.external_alb_https_listener: Optional[elbv2.CfnListener] = None
+        self.external_alb_waf_web_acl: Optional[WebAcl] = None
         self.internal_alb_dns_record_set: Optional[route53.RecordSet] = None
         self.internal_alb: Optional[elbv2.ApplicationLoadBalancer] = None
         self.internal_alb_https_listener: Optional[elbv2.CfnListener] = None
@@ -1032,6 +1035,27 @@ class ClusterStack(IdeaBaseStack):
         )
         if self.external_certificate is not None:
             self.external_alb.node.add_dependency(self.external_certificate)
+
+        # AWS WAF WebACL for External ALB (if enabled)
+        waf_enabled = self.context.config().get_bool(
+            'cluster.load_balancers.external_alb.waf.enabled', default=False
+        )
+        if waf_enabled:
+            self.external_alb_waf_web_acl = WebAcl(
+                context=self.context,
+                name='external-alb',
+                scope=self.stack,
+            )
+
+            # Associate WAF WebACL with External ALB
+            waf_association = aws_wafv2.CfnWebACLAssociation(
+                self.stack,
+                f'{self.cluster_name}-external-alb-waf-association',
+                resource_arn=self.external_alb.load_balancer_arn,
+                web_acl_arn=self.external_alb_waf_web_acl.web_acl_arn,
+            )
+            waf_association.node.add_dependency(self.external_alb)
+            waf_association.node.add_dependency(self.external_alb_waf_web_acl.web_acl)
 
         # internal ALB - will always be deployed in private subnets
         self.internal_alb = elbv2.ApplicationLoadBalancer(

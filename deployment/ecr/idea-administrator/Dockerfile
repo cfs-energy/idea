@@ -22,6 +22,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV LC_ALL="en_US.UTF-8" \
     LC_CTYPE="en_US.UTF-8" \
     LANG="en_US.UTF-8"
+ENV CDK_DISABLE_CLI_TELEMETRY=true
 
 RUN sed -i -e "s/# $LANG.*/$LANG UTF-8/" /etc/locale.gen \
     && locale-gen "en_US.UTF-8" \

@@ -1,0 +1,22 @@
+# Begin: SSH Performance Optimization for SCP/SFTP
+{% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9', 'ubuntu2204', 'ubuntu2404') %}
+
+log_info "Applying TCP optimizations for improved file transfer performance"
+
+sysctl -w net.core.rmem_max=16777216
+sysctl -w net.core.wmem_max=16777216
+sysctl -w net.ipv4.tcp_rmem="4096 87380 16777216"
+sysctl -w net.ipv4.tcp_wmem="4096 65536 16777216"
+sysctl -w net.core.netdev_max_backlog=5000
+
+cat >> /etc/sysctl.conf << 'EOF'
+# IDEA TCP Optimizations for SSH/SCP/SFTP Performance
+net.core.rmem_max = 16777216
+net.core.wmem_max = 16777216
+net.ipv4.tcp_rmem = 4096 87380 16777216
+net.ipv4.tcp_wmem = 4096 65536 16777216
+net.core.netdev_max_backlog = 5000
+EOF
+
+{% endif %}
+# End: SSH Performance Optimization for SCP/SFTP

@@ -153,8 +153,8 @@ class VirtualDesktopSessionDetail extends Component<VirtualDesktopSessionDetailP
                 <p> None </p>
             )
         } else {
-            this.state.sessionPermissions.map(permission => {
-                return <Grid gridDefinition={[{colspan: 4}, {colspan: 4}, {colspan: 4}]}>
+            return this.state.sessionPermissions.map((permission, index) => {
+                return <Grid key={index} gridDefinition={[{colspan: 4}, {colspan: 4}, {colspan: 4}]}>
                     <KeyValue title={'Actor'} value={permission.actor_name}/>
                     <KeyValue title={'Permission Profile'} value={permission.permission_profile?.profile_id}/>
                     <KeyValue title={'Expiry'} value={permission.expiry_date} type={'date'}/>

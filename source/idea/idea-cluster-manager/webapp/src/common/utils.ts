@@ -486,11 +486,11 @@ class Utils {
         if (a_InstanceFamily === b_InstanceFamily) {
             // same instance family - determine sort
             if (a.MemoryInfo.SizeInMiB === b.MemoryInfo.SizeInMiB) {
-                // Memory sizes are equal in the same family (hpc7a) - sort by reverse vCPU (most vCPU first)
-                return b.VCpuInfo.DefaultVCpus - a.VCpuInfo.DefaultVCpus
+                // Memory sizes are equal in the same family - sort by vCPU (least vCPU first)
+                return a.VCpuInfo.DefaultVCpus - b.VCpuInfo.DefaultVCpus
             } else {
-                // Memory sizes are different - just sort by reversed memory (largest memory first)
-                return b.MemoryInfo.SizeInMiB - a.MemoryInfo.SizeInMiB
+                // Memory sizes are different - sort by memory (smallest memory first)
+                return a.MemoryInfo.SizeInMiB - b.MemoryInfo.SizeInMiB
             }
         } else {
             // diff instance family - return alphabetical

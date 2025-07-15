@@ -254,6 +254,7 @@ package_config:
       - dkms
       - e2fsprogs
       - e2fsprogs-libs
+      - fail2ban
       - gcc
       - gcc-c++
       - gcc-gfortran
