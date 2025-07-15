@@ -24,6 +24,10 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 * **WAF Logging Enhancements**: Added CloudWatch logging for WAF with configurable retention and cost optimization
   * WAF logs use cluster-wide retention settings via `cluster.cloudwatch_logs.retention_in_days`
   * Added `cluster.load_balancers.external_alb.waf.logging.drop_allow_actions` setting to filter out ALLOW actions for cost optimization (enabled by default)
+* **eVDI Size Order**: Reversed instance size order to show smallest first
+* **AMI Updates**: Updated AMIs for Base OS and Software Stacks
+* **CDK Telemetry**: Force disable CDK Telemetry collection
+* **SSH Optimization**: Fine tuned SSH optimization settings on Bastion Host
 * **eVDI Sharing Validation**: Added comprehensive validation to eVDI sharing session permission update API
 ```mermaid
   graph TD
@@ -36,10 +40,6 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
       E -->|Not in same project| G[❌ Reject: Different project]
       E -->|In same project| H[✅ Allow share]
 ```
-* **eVDI Size Order**: Reversed instance size order to show smallest first
-* **AMI Updates**: Updated AMIs for Base OS and Software Stacks
-* **CDK Telemetry**: Force disable CDK Telemetry collection
-* **SSH Optimization**: Fine tuned SSH optimization settings on Bastion Host
 
 ### **🐛 Bug Fixes**
 * Fix Permissions tab in eVDI Session Detail not rendering content when eVDI session is shared
