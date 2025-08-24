@@ -55,6 +55,7 @@ RUN if [ "${OS_ARCH}" = "amd64" ]; then \
 #     && apt update && apt install -y nodejs
 # install nvm and node
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+# hadolint ignore=SC1091
 RUN set -uex && \
     curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v${NVM_VERSION}/install.sh | bash && \
     export NVM_DIR="$HOME/.nvm" && \
