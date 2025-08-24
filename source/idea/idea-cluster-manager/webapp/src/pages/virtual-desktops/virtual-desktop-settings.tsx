@@ -222,7 +222,7 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
                     param_type: 'text',
                     data_type: 'str',
                     help_text: 'Enter time in HH:MM format (e.g., 09:00)',
-                    validate: { 
+                    validate: {
                         required: true,
                         regex: '^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$'
                     }
@@ -237,7 +237,7 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
                     param_type: 'text',
                     data_type: 'str',
                     help_text: 'Enter time in HH:MM format (e.g., 17:00)',
-                    validate: { 
+                    validate: {
                         required: true,
                         regex: '^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$'
                     }
@@ -250,7 +250,7 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
     handleSaveSetting = (settingKey: string) => async (newValue: any): Promise<boolean> => {
         const settingsConfig = this.getSettingsConfig();
         const setting = settingsConfig[settingKey];
-        
+
         if (!setting) {
             console.error(`Unknown setting: ${settingKey}`);
             return false;
@@ -263,11 +263,11 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
     getSettingConfig = (settingKey: string): SocaUserInputParamMetadata => {
         const settingsConfig = this.getSettingsConfig();
         const setting = settingsConfig[settingKey];
-        
+
         if (!setting) {
             throw new Error(`Unknown setting: ${settingKey}`);
         }
-        
+
         return setting.config;
     };
 
@@ -275,19 +275,19 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
     getCurrentValue = (settingKey: string): any => {
         const settingsConfig = this.getSettingsConfig();
         const setting = settingsConfig[settingKey];
-        
+
         if (!setting) {
             return undefined;
         }
-        
+
         // Check if settings are loaded by verifying the object has keys
         // This prevents showing incorrect default values before settings load
         if (Object.keys(this.state.vdcSettings).length === 0) {
             return undefined;
         }
-        
+
         let value = dot.pick(setting.path, this.state.vdcSettings);
-        
+
         // Handle different data types
         if (setting.config.data_type === 'bool') {
             return Utils.asBoolean(value);
@@ -302,7 +302,7 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
     createEditableSetting = (settingKey: string, displayTitle?: string) => {
         const settingsConfig = this.getSettingsConfig();
         const setting = settingsConfig[settingKey];
-        
+
         if (!setting) {
             console.error(`Unknown setting: ${settingKey}`);
             return <div>Error: Unknown setting</div>;
@@ -367,7 +367,7 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
                 shut_down_time: dot.pick('dcv_session.schedule.sunday.shut_down_time', this.state.vdcSettings)
             }
         };
-        
+
         this.defaultScheduleModal.current?.showDefaultSchedule(currentDefaultSchedule);
     };
 
@@ -380,16 +380,16 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
                     schedule: {}
                 }
             };
-            
+
             const daysOfWeek = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
-            
+
             daysOfWeek.forEach(day => {
                 const daySchedule = defaultSchedule[day as keyof VirtualDesktopWeekSchedule];
                 if (daySchedule) {
                     settings.dcv_session.schedule[day] = {
                         type: daySchedule.schedule_type
                     };
-                    
+
                     if (daySchedule.schedule_type === 'CUSTOM_SCHEDULE') {
                         settings.dcv_session.schedule[day].start_up_time = daySchedule.start_up_time;
                         settings.dcv_session.schedule[day].shut_down_time = daySchedule.shut_down_time;
@@ -436,7 +436,7 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
             const settings: any = {};
             const pathParts = settingPath.split('.');
             let current = settings;
-            
+
             // Build nested object structure
             for (let i = 0; i < pathParts.length - 1; i++) {
                 current[pathParts[i]] = {};

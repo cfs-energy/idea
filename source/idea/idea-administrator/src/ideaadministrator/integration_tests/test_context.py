@@ -156,7 +156,7 @@ class TestContext:
 
     def initialize_admin_auth(self):
         max_retries = 5
-        
+
         for attempt in range(max_retries):
             try:
                 if self.admin_auth is None:
@@ -176,7 +176,9 @@ class TestContext:
                     if Utils.is_empty(admin_auth.refresh_token):
                         raise exceptions.general_exception('refresh_token not found')
                 else:
-                    self.idea_context.info('Renewing Admin Authentication Access Token ...')
+                    self.idea_context.info(
+                        'Renewing Admin Authentication Access Token ...'
+                    )
                     result = self._admin_http_client.invoke_alt(
                         'Auth.InitiateAuth',
                         InitiateAuthRequest(
@@ -195,22 +197,26 @@ class TestContext:
 
                 # If we get here, authentication was successful
                 self.admin_auth = admin_auth
-                self.admin_auth_expires_on = arrow.get().shift(seconds=admin_auth.expires_in)
+                self.admin_auth_expires_on = arrow.get().shift(
+                    seconds=admin_auth.expires_in
+                )
                 return
 
             except exceptions.SocaException as e:
                 # Check if this is a connection error that we should retry
                 is_connection_error = (
-                    "CONNECTION_ERROR" in str(e) or 
-                    "Connection reset by peer" in str(e) or
-                    "Connection aborted" in str(e) or
-                    "Connection timed out" in str(e) or
-                    "Connection refused" in str(e)
+                    'CONNECTION_ERROR' in str(e)
+                    or 'Connection reset by peer' in str(e)
+                    or 'Connection aborted' in str(e)
+                    or 'Connection timed out' in str(e)
+                    or 'Connection refused' in str(e)
                 )
-                
+
                 if is_connection_error and attempt < max_retries - 1:
                     delay = 10 * (attempt + 1)  # 10, 20, 30, 40 seconds
-                    auth_type = "Initializing" if self.admin_auth is None else "Renewing"
+                    auth_type = (
+                        'Initializing' if self.admin_auth is None else 'Renewing'
+                    )
                     self.idea_context.info(
                         f'Connection error {auth_type.lower()} admin authentication, retrying in {delay}s... (attempt {attempt + 1}/{max_retries})'
                     )
@@ -218,13 +224,15 @@ class TestContext:
                     continue
                 else:
                     # Final attempt failed or non-connection error
-                    auth_type = "initialize" if self.admin_auth is None else "renew"
-                    self.idea_context.error(f'Failed to {auth_type} admin authentication after {max_retries} attempts. Error: {e}')
+                    auth_type = 'initialize' if self.admin_auth is None else 'renew'
+                    self.idea_context.error(
+                        f'Failed to {auth_type} admin authentication after {max_retries} attempts. Error: {e}'
+                    )
                     raise e
 
     def initialize_non_admin_auth(self):
         max_retries = 5
-        
+
         for attempt in range(max_retries):
             try:
                 if self.non_admin_auth is None:
@@ -244,7 +252,9 @@ class TestContext:
                     if Utils.is_empty(non_admin_auth.refresh_token):
                         raise exceptions.general_exception('refresh_token not found')
                 else:
-                    self.idea_context.info('Renewing Non-Admin Authentication Access Token ...')
+                    self.idea_context.info(
+                        'Renewing Non-Admin Authentication Access Token ...'
+                    )
                     result = self._admin_http_client.invoke_alt(
                         'Auth.InitiateAuth',
                         InitiateAuthRequest(
@@ -269,16 +279,18 @@ class TestContext:
             except exceptions.SocaException as e:
                 # Check if this is a connection error that we should retry
                 is_connection_error = (
-                    "CONNECTION_ERROR" in str(e) or 
-                    "Connection reset by peer" in str(e) or
-                    "Connection aborted" in str(e) or
-                    "Connection timed out" in str(e) or
-                    "Connection refused" in str(e)
+                    'CONNECTION_ERROR' in str(e)
+                    or 'Connection reset by peer' in str(e)
+                    or 'Connection aborted' in str(e)
+                    or 'Connection timed out' in str(e)
+                    or 'Connection refused' in str(e)
                 )
-                
+
                 if is_connection_error and attempt < max_retries - 1:
                     delay = 10 * (attempt + 1)  # 10, 20, 30, 40 seconds
-                    auth_type = "Initializing" if self.non_admin_auth is None else "Renewing"
+                    auth_type = (
+                        'Initializing' if self.non_admin_auth is None else 'Renewing'
+                    )
                     self.idea_context.info(
                         f'Connection error {auth_type.lower()} non-admin authentication, retrying in {delay}s... (attempt {attempt + 1}/{max_retries})'
                     )
@@ -286,8 +298,10 @@ class TestContext:
                     continue
                 else:
                     # Final attempt failed or non-connection error
-                    auth_type = "initialize" if self.non_admin_auth is None else "renew"
-                    self.idea_context.error(f'Failed to {auth_type} non-admin authentication after {max_retries} attempts. Error: {e}')
+                    auth_type = 'initialize' if self.non_admin_auth is None else 'renew'
+                    self.idea_context.error(
+                        f'Failed to {auth_type} non-admin authentication after {max_retries} attempts. Error: {e}'
+                    )
                     raise e
 
     def get_admin_access_token(self) -> str:

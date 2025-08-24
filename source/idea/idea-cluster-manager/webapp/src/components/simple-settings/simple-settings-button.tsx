@@ -18,7 +18,7 @@ export interface SimpleSettingsButtonState {
 }
 
 class SimpleSettingsButton extends Component<SimpleSettingsButtonProps, SimpleSettingsButtonState> {
-    
+
     constructor(props: SimpleSettingsButtonProps) {
         super(props);
         this.state = {
@@ -72,7 +72,7 @@ class SimpleSettingsButton extends Component<SimpleSettingsButtonProps, SimpleSe
                     onClick={this.handleOpenModal}
                     ariaLabel={`Edit ${title.toLowerCase()}`}
                 />
-                
+
                 {isSettingsLoaded && (
                     <SimpleSettingsEditor
                         visible={showModal}
@@ -88,4 +88,4 @@ class SimpleSettingsButton extends Component<SimpleSettingsButtonProps, SimpleSe
     }
 }
 
-export default SimpleSettingsButton; 
+export default SimpleSettingsButton;

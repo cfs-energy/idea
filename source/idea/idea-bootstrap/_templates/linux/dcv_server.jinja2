@@ -220,18 +220,18 @@ fi
     local rpm_args="$2"
     local max_attempts=5
     local wait_time=5
-    
+
     for ((attempt=1; attempt<=max_attempts; attempt++)); do
       if rpm -ivh "$rpm_file" $rpm_args; then
         return 0
       fi
-      
+
       if [[ $attempt -lt $max_attempts ]]; then
         log_info "RPM install attempt $attempt failed, retrying in ${wait_time}s..."
         sleep $wait_time
       fi
     done
-    
+
     log_error "Failed to install $rpm_file after $max_attempts attempts"
     return 1
   }

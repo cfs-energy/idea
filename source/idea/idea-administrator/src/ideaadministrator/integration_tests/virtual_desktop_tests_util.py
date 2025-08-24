@@ -636,13 +636,13 @@ class SessionsTestHelper:
             except Exception as e:
                 # Check if this is a connection error that we should retry
                 is_connection_error = (
-                    "CONNECTION_ERROR" in str(e) or 
-                    "Connection reset by peer" in str(e) or
-                    "Connection aborted" in str(e) or
-                    "Connection timed out" in str(e) or
-                    "Connection refused" in str(e)
+                    'CONNECTION_ERROR' in str(e)
+                    or 'Connection reset by peer' in str(e)
+                    or 'Connection aborted' in str(e)
+                    or 'Connection timed out' in str(e)
+                    or 'Connection refused' in str(e)
                 )
-                
+
                 if is_connection_error and attempt < max_retries - 1:
                     # Increased delay with more aggressive backoff
                     delay = 10 * (attempt + 1)  # 10, 20, 30, 40 seconds
@@ -654,10 +654,11 @@ class SessionsTestHelper:
                 else:
                     # Check if this is an "invalid session" error which means the session was deleted
                     is_session_deleted_error = (
-                        "invalid session.idea_session_id" in str(e) or
-                        "INVALID_PARAMS" in str(e) and "invalid session" in str(e)
+                        'invalid session.idea_session_id' in str(e)
+                        or 'INVALID_PARAMS' in str(e)
+                        and 'invalid session' in str(e)
                     )
-                    
+
                     if is_session_deleted_error:
                         # Log at info level since this is expected after DELETE_SESSION
                         self.context.info(
@@ -1415,12 +1416,16 @@ class SessionWorkflow:
                         )
                     except Exception as e:
                         # If we get an "invalid session" error right after delete, that's expected
-                        if "invalid session.idea_session_id" in str(e):
-                            self.context.info(f'Session {self.session.name} was successfully deleted - stopping workflow')
+                        if 'invalid session.idea_session_id' in str(e):
+                            self.context.info(
+                                f'Session {self.session.name} was successfully deleted - stopping workflow'
+                            )
                             break
                         else:
                             # Re-raise other exceptions (including connection errors)
-                            self.context.error(f'Error retrieving session info after delete: {e}')
+                            self.context.error(
+                                f'Error retrieving session info after delete: {e}'
+                            )
                             raise e
                 else:
                     try:
@@ -1430,12 +1435,14 @@ class SessionWorkflow:
                     except Exception as e:
                         # Handle connection errors gracefully, but fail on other errors
                         is_connection_error = (
-                            "CONNECTION_ERROR" in str(e) or 
-                            "Connection reset by peer" in str(e) or
-                            "Connection aborted" in str(e)
+                            'CONNECTION_ERROR' in str(e)
+                            or 'Connection reset by peer' in str(e)
+                            or 'Connection aborted' in str(e)
                         )
                         if is_connection_error:
-                            self.context.error(f'Persistent connection error for session {self.session.name}: {e}')
+                            self.context.error(
+                                f'Persistent connection error for session {self.session.name}: {e}'
+                            )
                             # Skip this iteration and continue testing
                             time.sleep(30)  # Wait longer before next attempt
                             continue
@@ -1449,13 +1456,18 @@ class SessionWorkflow:
                         f'SESSION STATUS : SESSION NAME {session_response.name} is in {session_response.state} STATE'
                     )
                 else:
-                    self.context.error(f'SESSION STATUS : Session response is None for {self.session.name}')
+                    self.context.error(
+                        f'SESSION STATUS : Session response is None for {self.session.name}'
+                    )
                     break
                 self.context.info('-' * 80)
                 # Reset the delete flag after first check
                 just_completed_delete = False
 
-                if session_response and session_response.state == VirtualDesktopSessionState.READY:
+                if (
+                    session_response
+                    and session_response.state == VirtualDesktopSessionState.READY
+                ):
                     # Test 1 : Stop Session
                     time.sleep(sleep_timer)
                     test_case_results['test_case_name'] = (
@@ -1508,8 +1520,12 @@ class SessionWorkflow:
                 # Continue to next iteration - the session info will be fetched at the top of the loop
 
                 if wait_counter >= 60:
-                    session_name = session_response.name if session_response else self.session.name
-                    session_state = session_response.state if session_response else 'UNKNOWN'
+                    session_name = (
+                        session_response.name if session_response else self.session.name
+                    )
+                    session_state = (
+                        session_response.state if session_response else 'UNKNOWN'
+                    )
                     testcase_error_message = f'TEST STATUS: Exceeded maximum wait time for State to change. Session Name {session_name} is in {session_state} State.Marking tests as Skip status'
                     self.context.error(testcase_error_message)
                     test_case_results['test_case_status'] = (
@@ -1522,7 +1538,10 @@ class SessionWorkflow:
                     break
                 # Continue to next iteration - the session info will be fetched at the top of the loop
 
-                if session_response and session_response.state == VirtualDesktopSessionState.ERROR:
+                if (
+                    session_response
+                    and session_response.state == VirtualDesktopSessionState.ERROR
+                ):
                     testcase_error_message = f'TEST STATUS: Failed to execute tests. Session Name {session_response.name} is in {session_response.state} State.Marking tests as Skip status'
                     self.context.error(testcase_error_message)
                     test_case_results['test_case_status'] = (
@@ -1535,11 +1554,10 @@ class SessionWorkflow:
 
         except (exceptions.SocaException, Exception) as e:
             # Check if this is an expected error after session deletion
-            is_session_deleted_error = (
-                "invalid session.idea_session_id" in str(e) or
-                ("INVALID_PARAMS" in str(e) and "invalid session" in str(e))
+            is_session_deleted_error = 'invalid session.idea_session_id' in str(e) or (
+                'INVALID_PARAMS' in str(e) and 'invalid session' in str(e)
             )
-            
+
             if is_session_deleted_error and session_tests_result:
                 # If we have test results and the session was deleted, this is expected
                 # Check if the last test was DELETE_SESSION
@@ -1548,14 +1566,14 @@ class SessionWorkflow:
                     if isinstance(result, dict) and 'test_case_name' in result:
                         if 'DELETE_SESSION' in result.get('test_case_name', ''):
                             last_test_was_delete = True
-                
+
                 if last_test_was_delete:
                     self.context.info(
                         f'Session {self.session.name} was deleted successfully, ignoring subsequent access errors'
                     )
                     # Don't add a failure result, the tests completed successfully
                     return
-            
+
             # For all other errors, treat as failure
             testcase_error_message = (
                 f'Failed to execute tests for {self.session.name}, Error:{e}'
@@ -1782,7 +1800,7 @@ def _get_user_projects_list(
     context: TestContext, username: str, access_token: str
 ) -> List[Project]:
     max_retries = 5  # Increased from 3 to 5 attempts
-    
+
     for attempt in range(max_retries):
         try:
             list_projects_result = context.get_cluster_manager_client().invoke_alt(
@@ -1795,13 +1813,13 @@ def _get_user_projects_list(
         except exceptions.SocaException as e:
             # Check if this is a connection error that we should retry
             is_connection_error = (
-                "CONNECTION_ERROR" in str(e) or 
-                "Connection reset by peer" in str(e) or
-                "Connection aborted" in str(e) or
-                "Connection timed out" in str(e) or
-                "Connection refused" in str(e)
+                'CONNECTION_ERROR' in str(e)
+                or 'Connection reset by peer' in str(e)
+                or 'Connection aborted' in str(e)
+                or 'Connection timed out' in str(e)
+                or 'Connection refused' in str(e)
             )
-            
+
             if is_connection_error and attempt < max_retries - 1:
                 # Increased delay with more aggressive backoff
                 delay = 10 * (attempt + 1)  # 10, 20, 30, 40 seconds
@@ -1812,7 +1830,9 @@ def _get_user_projects_list(
                 continue
             else:
                 # Final attempt failed or non-connection error
-                context.error(f'Failed to Get User Projects List after {max_retries} attempts. Error : {e}')
+                context.error(
+                    f'Failed to Get User Projects List after {max_retries} attempts. Error : {e}'
+                )
                 raise e
 
 

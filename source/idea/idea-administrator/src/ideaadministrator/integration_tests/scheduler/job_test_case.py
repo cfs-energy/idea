@@ -219,7 +219,7 @@ mkdir -p {self.output_folder}
         # Retry logic to handle race condition between job completion and file I/O
         max_retries = 5
         retry_delay = 2  # seconds
-        
+
         for attempt in range(max_retries):
             try:
                 read_file_result = self.context.get_cluster_manager_client().invoke_alt(
@@ -229,11 +229,11 @@ mkdir -p {self.output_folder}
                     access_token=self.context.get_admin_access_token(),
                 )
                 output_content = Utils.base64_decode(read_file_result.content).strip()
-                
+
                 # If we get non-empty content, return it
                 if output_content:
                     return output_content
-                    
+
                 # If empty content and not the last attempt, wait and retry
                 if attempt < max_retries - 1:
                     self.context.info(
@@ -246,7 +246,7 @@ mkdir -p {self.output_folder}
                         f'Output file still empty for {self.test_case_id} after {max_retries} attempts'
                     )
                     return output_content
-                    
+
             except Exception as e:
                 # If file doesn't exist yet and not the last attempt, wait and retry
                 if attempt < max_retries - 1:
@@ -257,9 +257,9 @@ mkdir -p {self.output_folder}
                 else:
                     # Last attempt - re-raise the exception
                     raise e
-                    
+
         # This should not be reached, but just in case
-        return ""
+        return ''
 
     def verify_output(self):
         try:

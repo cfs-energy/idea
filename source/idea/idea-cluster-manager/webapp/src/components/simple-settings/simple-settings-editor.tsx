@@ -17,7 +17,7 @@ export interface SimpleSettingsEditorState {
 }
 
 class SimpleSettingsEditor extends Component<SimpleSettingsEditorProps, SimpleSettingsEditorState> {
-    
+
     form: RefObject<IdeaForm>;
 
     constructor(props: SimpleSettingsEditorProps) {
@@ -40,14 +40,14 @@ class SimpleSettingsEditor extends Component<SimpleSettingsEditorProps, SimpleSe
         try {
             const formValues = this.form.current?.getValues();
             const settingName = this.props.settingConfig.name;
-            
+
             if (!settingName) {
                 console.error('Setting name is undefined');
                 return;
             }
-            
+
             const newValue = formValues?.[settingName];
-            
+
             const success = await this.props.onSave(newValue);
             if (success) {
                 this.props.onDismiss();
@@ -100,4 +100,4 @@ class SimpleSettingsEditor extends Component<SimpleSettingsEditorProps, SimpleSe
     }
 }
 
-export default SimpleSettingsEditor; 
+export default SimpleSettingsEditor;

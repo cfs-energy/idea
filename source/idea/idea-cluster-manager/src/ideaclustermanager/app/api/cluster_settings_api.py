@@ -94,14 +94,14 @@ class ClusterSettingsAPI(BaseAPI):
                 'dcv_session.schedule.saturday.shut_down_time',
                 'dcv_session.schedule.sunday.type',
                 'dcv_session.schedule.sunday.start_up_time',
-                'dcv_session.schedule.sunday.shut_down_time'
+                'dcv_session.schedule.sunday.shut_down_time',
             ],
             'scheduler': [
                 # Add scheduler settings that should be editable here
             ],
             'cluster-manager': [
                 # Add cluster manager settings that should be editable here
-            ]
+            ],
         }
 
         return allowed_settings.get(module_id, [])
@@ -117,7 +117,7 @@ class ClusterSettingsAPI(BaseAPI):
             """Recursively extract all setting paths from the settings object"""
             paths = []
             for key, value in obj.items():
-                current_path = f"{prefix}.{key}" if prefix else key
+                current_path = f'{prefix}.{key}' if prefix else key
                 if isinstance(value, dict):
                     paths.extend(get_setting_paths(value, current_path))
                 else:
@@ -135,7 +135,9 @@ class ClusterSettingsAPI(BaseAPI):
                 f'Allowed settings for {module_id}: {", ".join(allowed_paths)}'
             )
 
-    def traverse_config_to_entries(self, config_entries: List[Dict], prefix: str, config: Dict):
+    def traverse_config_to_entries(
+        self, config_entries: List[Dict], prefix: str, config: Dict
+    ):
         """
         Convert nested config dictionary to flat key-value pairs for database storage.
         Replicates the functionality of ConfigGenerator.traverse_config.

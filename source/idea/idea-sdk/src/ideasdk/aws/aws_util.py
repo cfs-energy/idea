@@ -546,15 +546,18 @@ class AWSUtil(AWSUtilProtocol):
 
         return result
 
-    def ec2_terminate_instances(self, instance_ids: List[str], force: bool = False, skip_os_shutdown: bool = False):
-        kwargs = {
-            'InstanceIds': instance_ids
-        }
+    def ec2_terminate_instances(
+        self,
+        instance_ids: List[str],
+        force: bool = False,
+        skip_os_shutdown: bool = False,
+    ):
+        kwargs = {'InstanceIds': instance_ids}
         if force:
             kwargs['Force'] = force
         if skip_os_shutdown:
             kwargs['SkipOsShutdown'] = skip_os_shutdown
-        
+
         self.aws().ec2().terminate_instances(**kwargs)
 
     def ec2_describe_reserved_instances(

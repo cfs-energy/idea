@@ -662,16 +662,16 @@ class NodeHouseKeepingSession:
                 continue
 
             self._logger.info(f'{self.log_tag(instance)} terminating ec2 instance')
-            
+
             # Use force termination for instances that are stuck or unresponsive
             # Force termination is used when instances are in shutting-down state for too long
             # or when they are unresponsive to regular termination attempts
             force_terminate = (
-                instance.state in ['shutting-down', 'stopping'] and 
-                instance.launch_time is not None and 
-                (arrow.utcnow() - instance.launch_time).seconds > 300  # 5 minutes
+                instance.state in ['shutting-down', 'stopping']
+                and instance.launch_time is not None
+                and (arrow.utcnow() - instance.launch_time).seconds > 300  # 5 minutes
             )
-            
+
             if force_terminate:
                 self._logger.warning(
                     f'{self.log_tag(instance)} using force termination with skip OS shutdown for stuck instance'
@@ -679,10 +679,12 @@ class NodeHouseKeepingSession:
                 self.aws_util.ec2_terminate_instances(
                     instance_ids=[instance.instance_id],
                     force=True,
-                    skip_os_shutdown=True
+                    skip_os_shutdown=True,
                 )
             else:
-                self.aws_util.ec2_terminate_instances(instance_ids=[instance.instance_id])
+                self.aws_util.ec2_terminate_instances(
+                    instance_ids=[instance.instance_id]
+                )
 
             self._context.metrics.instances_terminated(
                 queue_type=instance.soca_queue_type

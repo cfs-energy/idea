@@ -363,9 +363,13 @@ def update_cdk_version(_, version):
     ) as f:
         f.write(os.linesep.join(updated_lines))
 
-    print(f'updating deployment/ecr/idea-administrator/Dockerfile with cdk version: {version}')
+    print(
+        f'updating deployment/ecr/idea-administrator/Dockerfile with cdk version: {version}'
+    )
     updated_lines = []
-    dockerfile_path = os.path.join(idea.props.deployment_administrator_dir, 'Dockerfile')
+    dockerfile_path = os.path.join(
+        idea.props.deployment_administrator_dir, 'Dockerfile'
+    )
     with open(dockerfile_path, 'r') as f:
         lines = f.read().splitlines()
     for line in lines:

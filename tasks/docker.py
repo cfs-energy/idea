@@ -21,7 +21,9 @@ def get_software_versions():
     """
     Read software versions from software_versions.yml
     """
-    software_versions_file = os.path.join(idea.props.project_root_dir, 'software_versions.yml')
+    software_versions_file = os.path.join(
+        idea.props.project_root_dir, 'software_versions.yml'
+    )
     with open(software_versions_file, 'r') as f:
         return yaml.safe_load(f)
 
@@ -139,10 +141,10 @@ def print_versions(c):
     print current software versions from software_versions.yml
     """
     versions = get_software_versions()
-    print("Software Versions:")
+    print('Software Versions:')
     for key, value in versions.items():
-        print(f"  {key}: {value}")
-    print(f"\nBuild arguments: {get_build_args_from_versions()}")
+        print(f'  {key}: {value}')
+    print(f'\nBuild arguments: {get_build_args_from_versions()}')
 
 
 @task

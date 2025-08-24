@@ -350,4 +350,4 @@ class DefaultScheduleModal extends Component<DefaultScheduleModalProps, DefaultS
     }
 }
 
-export default DefaultScheduleModal 
+export default DefaultScheduleModal

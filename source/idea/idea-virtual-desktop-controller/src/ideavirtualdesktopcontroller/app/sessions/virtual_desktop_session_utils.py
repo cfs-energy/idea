@@ -311,7 +311,9 @@ class VirtualDesktopSessionUtils:
                 self._logger.info(
                     f'dcv session id: {session.dcv_session_id} for user: {session.owner}. Current state: {session.state}. Nothing to delete'
                 )
-                session.force = session_orig.force  # Preserve force flag for stopped sessions too
+                session.force = (
+                    session_orig.force
+                )  # Preserve force flag for stopped sessions too
                 stopped_sessions.append(session)
                 continue
 
@@ -337,7 +339,7 @@ class VirtualDesktopSessionUtils:
         # Handle stopped sessions - group by force parameter for termination
         force_servers = []
         normal_servers = []
-        
+
         for session in stopped_sessions:
             session_db_entries_to_delete.append(session)
             if getattr(session, 'force', False):

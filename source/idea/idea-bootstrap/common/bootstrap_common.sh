@@ -180,9 +180,9 @@ function add_fsx_lustre_to_fstab () {
                               --region "${AWS_DEFAULT_REGION}" \
                               --output text)
   fi
-  
+
   local NEW_ENTRY="${FS_DOMAIN}@tcp:/${FS_MOUNT_NAME} ${MOUNT_DIR}/ ${MOUNT_OPTIONS}"
-  
+
   # Check if exact same entry already exists
   if grep -qF "${NEW_ENTRY}" /etc/fstab; then
     log_info "skip add_fsx_lustre_to_fstab: identical entry already exists for ${MOUNT_DIR}"
@@ -195,7 +195,7 @@ function add_fsx_lustre_to_fstab () {
     # Remove existing entry and add new one
     remove_fsx_lustre_from_fstab "${MOUNT_DIR}"
   fi
-  
+
   echo "${NEW_ENTRY}" >> /etc/fstab
 }
 
@@ -217,7 +217,7 @@ function add_efs_to_fstab () {
   fi
 
   local NEW_ENTRY="${FS_DOMAIN}:/ ${MOUNT_DIR}/ ${MOUNT_OPTIONS}"
-  
+
   # Check if exact same entry already exists
   if grep -qF "${NEW_ENTRY}" /etc/fstab; then
     log_info "skip add_efs_to_fstab: identical entry already exists for ${MOUNT_DIR}"
@@ -251,7 +251,7 @@ function add_fsx_openzfs_to_fstab () {
   fi
 
   local NEW_ENTRY="${FS_DOMAIN}:${FS_VOLUME_PATH} ${MOUNT_DIR}/ ${MOUNT_OPTIONS}"
-  
+
   # Check if exact same entry already exists
   if grep -qF "${NEW_ENTRY}" /etc/fstab; then
     log_info "skip add_openzfs_to_fstab: identical entry already exists for ${MOUNT_DIR}"
@@ -286,7 +286,7 @@ function add_fsx_netapp_ontap_to_fstab () {
   fi
 
   local NEW_ENTRY="${FS_DOMAIN}:${FS_VOLUME_PATH} ${MOUNT_DIR}/ ${MOUNT_OPTIONS}"
-  
+
   # Check if exact same entry already exists
   if grep -qF "${NEW_ENTRY}" /etc/fstab; then
     log_info "skip add_netapp_ontap_to_fstab: identical entry already exists for ${MOUNT_DIR}"

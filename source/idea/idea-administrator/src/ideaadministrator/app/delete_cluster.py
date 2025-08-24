@@ -186,16 +186,16 @@ class DeleteCluster:
                 self.context.info(
                     f'terminating EC2 instance: {ec2_instance.instance_id}'
                 )
-                kwargs = {
-                    'InstanceIds': [ec2_instance.instance_id]
-                }
+                kwargs = {'InstanceIds': [ec2_instance.instance_id]}
                 if self.force:
                     kwargs['Force'] = True
-                    kwargs['SkipOsShutdown'] = True  # Use skip OS shutdown when force is enabled
+                    kwargs['SkipOsShutdown'] = (
+                        True  # Use skip OS shutdown when force is enabled
+                    )
                     self.context.info(
                         f'using force termination with skip OS shutdown for instance: {ec2_instance.instance_id}'
                     )
-                
+
                 self.context.aws().ec2().terminate_instances(**kwargs)
                 self.context.success(
                     f'terminated EC2 instance: {ec2_instance.instance_id}'
