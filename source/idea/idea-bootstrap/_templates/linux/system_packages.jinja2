@@ -35,21 +35,23 @@ EXCLUDE=()
     {% if context.base_os == 'rhel8' %}
       dnf config-manager --set-enabled codeready-builder-for-rhel-8-rhui-rpms
       ADDITIONAL_PKGS_TO_INSTALL=$(echo ${SYSTEM_PKGS_8[*]} ${APPLICATION_PKGS_8[*]})
+      EXCLUDE+=()
 
     {% elif context.base_os == 'rhel9' %}
       dnf config-manager --set-enabled codeready-builder-for-rhel-9-rhui-rpms
       ADDITIONAL_PKGS_TO_INSTALL=$(echo ${SYSTEM_PKGS_9[*]})
-      EXCLUDE+=('kernel*el9_6*')
+      EXCLUDE+=()
 
     {% elif context.base_os == 'rocky8' %}
       dnf config-manager --set-enabled powertools
       ADDITIONAL_PKGS_TO_INSTALL=$(echo ${SYSTEM_PKGS_8[*]} ${APPLICATION_PKGS_8[*]})
+      EXCLUDE+=()
 
     {% elif context.base_os == 'rocky9' %}
       # PowerTool is known as crb on Rocky9 https://wiki.rockylinux.org/rocky/repo/#notes-on-crb
       dnf config-manager --set-enabled crb
       ADDITIONAL_PKGS_TO_INSTALL=$(echo ${SYSTEM_PKGS_9[*]})
-      EXCLUDE+=('kernel*el9_6*')
+      EXCLUDE+=()
     {% endif %}
 
     {% if context.is_amd_gpu() %}
@@ -63,7 +65,7 @@ EXCLUDE=()
     {% endif %}
 
     printf -v EXCLUDE_JOINED '%s,' "${EXCLUDE[@]}"
-    command="dnf --exclude=${EXCLUDE_JOINED%,} install -y $DEFAULT_PACKAGES_FOR_RPM $ADDITIONAL_PKGS_TO_INSTALL"
+    command="dnf --exclude=${EXCLUDE_JOINED%,} install -y --skip-broken $DEFAULT_PACKAGES_FOR_RPM $ADDITIONAL_PKGS_TO_INSTALL"
     MAX_ATTEMPT=10
     CURRENT_ATTEMPT=0
     SLEEP_INTERVAL=5

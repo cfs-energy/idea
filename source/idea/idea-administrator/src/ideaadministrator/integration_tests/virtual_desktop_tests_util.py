@@ -282,6 +282,16 @@ class SessionsTestHelper:
             self.context, self.username, self.access_token
         )
 
+    def _get_fresh_access_token(self) -> str:
+        """
+        Get a fresh access token based on user type to avoid expiration issues in long-running tests.
+        Uses admin token for admin users and non-admin token for regular users.
+        """
+        if self.username == self.context.admin_username:
+            return self.context.get_admin_access_token()
+        else:
+            return self.context.get_non_admin_access_token()
+
     def _get_session_screenshot_payload(self) -> List[VirtualDesktopSessionScreenshot]:
         try:
             session_payload = [
@@ -394,6 +404,8 @@ class SessionsTestHelper:
 
     def get_session_screenshot(self, namespace: str) -> GetSessionScreenshotResponse:
         try:
+            # Get a fresh access token to avoid expiration issues in long-running tests
+            fresh_access_token = self._get_fresh_access_token()
             response = self.context.get_virtual_desktop_controller_client(
                 timeout=7200
             ).invoke_alt(
@@ -402,7 +414,7 @@ class SessionsTestHelper:
                     screenshots=self._get_session_screenshot_payload()
                 ),
                 result_as=GetSessionScreenshotResponse,
-                access_token=self.access_token,
+                access_token=fresh_access_token,
             )
             return response
         except (exceptions.SocaException, Exception) as e:
@@ -410,6 +422,8 @@ class SessionsTestHelper:
 
     def create_software_stack(self) -> CreateSoftwareStackResponse:
         try:
+            # Get a fresh access token to avoid expiration issues in long-running tests
+            fresh_access_token = self._get_fresh_access_token()
             response = self.context.get_virtual_desktop_controller_client(
                 timeout=7200
             ).invoke_alt(
@@ -418,7 +432,7 @@ class SessionsTestHelper:
                     software_stack=self._get_session_software_stack_payload()
                 ),
                 result_as=CreateSoftwareStackResponse,
-                access_token=self.access_token,
+                access_token=fresh_access_token,
             )
             return response
         except (exceptions.SocaException, Exception) as e:
@@ -428,13 +442,15 @@ class SessionsTestHelper:
         self, software_stack: VirtualDesktopSoftwareStack
     ) -> UpdateSoftwareStackResponse:
         try:
+            # Get a fresh access token to avoid expiration issues in long-running tests
+            fresh_access_token = self._get_fresh_access_token()
             response = self.context.get_virtual_desktop_controller_client(
                 timeout=7200
             ).invoke_alt(
                 namespace='VirtualDesktopAdmin.UpdateSoftwareStack',
                 payload=UpdateSoftwareStackRequest(software_stack=software_stack),
                 result_as=UpdateSoftwareStackResponse,
-                access_token=self.access_token,
+                access_token=fresh_access_token,
             )
             return response
 
@@ -461,13 +477,15 @@ class SessionsTestHelper:
                 create=permissions_payload, update=[], delete=[]
             )
 
+            # Get a fresh access token to avoid expiration issues in long-running tests
+            fresh_access_token = self._get_fresh_access_token()
             response = self.context.get_virtual_desktop_controller_client(
                 timeout=7200
             ).invoke_alt(
                 namespace='VirtualDesktop.UpdateSessionPermissions',
                 payload=request,
                 result_as=UpdateSessionPermissionResponse,
-                access_token=self.access_token,
+                access_token=fresh_access_token,
             )
 
             self.context.info('Permission update API call completed')
@@ -481,6 +499,8 @@ class SessionsTestHelper:
     ) -> CreateSoftwareStackFromSessionResponse:
         try:
             software_stack_payload = self._get_session_software_stack_payload()
+            # Get a fresh access token to avoid expiration issues in long-running tests
+            fresh_access_token = self._get_fresh_access_token()
             response = self.context.get_virtual_desktop_controller_client(
                 timeout=7200
             ).invoke_alt(
@@ -489,7 +509,7 @@ class SessionsTestHelper:
                     session=self.session, new_software_stack=software_stack_payload
                 ),
                 result_as=CreateSoftwareStackFromSessionResponse,
-                access_token=self.access_token,
+                access_token=fresh_access_token,
             )
             return response
 
@@ -500,13 +520,15 @@ class SessionsTestHelper:
 
     def update_session(self, namespace: str) -> UpdateSessionResponse:
         try:
+            # Get a fresh access token to avoid expiration issues in long-running tests
+            fresh_access_token = self._get_fresh_access_token()
             response = self.context.get_virtual_desktop_controller_client(
                 timeout=7200
             ).invoke_alt(
                 namespace=namespace,
                 payload=UpdateSessionRequest(session=self.session),
                 result_as=UpdateSessionResponse,
-                access_token=self.access_token,
+                access_token=fresh_access_token,
             )
             return response
 
@@ -517,12 +539,14 @@ class SessionsTestHelper:
 
     def stop_sessions(self, namespace: str) -> StopSessionResponse:
         try:
+            # Get a fresh access token to avoid expiration issues in long-running tests
+            fresh_access_token = self._get_fresh_access_token()
             response = self.context.get_virtual_desktop_controller_client(
                 timeout=7200
             ).invoke_alt(
                 namespace=namespace,
                 payload=StopSessionRequest(sessions=self.session_list),
-                access_token=self.access_token,
+                access_token=fresh_access_token,
             )
             time.sleep(20)
             return response
@@ -533,12 +557,14 @@ class SessionsTestHelper:
 
     def resume_sessions(self, namespace: str) -> ResumeSessionsResponse:
         try:
+            # Get a fresh access token to avoid expiration issues in long-running tests
+            fresh_access_token = self._get_fresh_access_token()
             response = self.context.get_virtual_desktop_controller_client(
                 timeout=7200
             ).invoke_alt(
                 namespace=namespace,
                 payload=ResumeSessionsRequest(sessions=self.session_list),
-                access_token=self.access_token,
+                access_token=fresh_access_token,
             )
             return response
         except (exceptions.SocaException, Exception) as e:
@@ -548,12 +574,14 @@ class SessionsTestHelper:
 
     def reboot_sessions(self, namespace: str) -> RebootSessionResponse:
         try:
+            # Get a fresh access token to avoid expiration issues in long-running tests
+            fresh_access_token = self._get_fresh_access_token()
             response = self.context.get_virtual_desktop_controller_client(
                 timeout=7200
             ).invoke_alt(
                 namespace=namespace,
                 payload=RebootSessionRequest(sessions=self.session_list),
-                access_token=self.access_token,
+                access_token=fresh_access_token,
             )
             return response
         except (exceptions.SocaException, Exception) as e:
@@ -563,12 +591,14 @@ class SessionsTestHelper:
 
     def delete_session(self, namespace: str) -> DeleteSessionResponse:
         try:
+            # Get a fresh access token to avoid expiration issues in long-running tests
+            fresh_access_token = self._get_fresh_access_token()
             response = self.context.get_virtual_desktop_controller_client(
                 timeout=7200
             ).invoke_alt(
                 namespace=namespace,
                 payload=DeleteSessionRequest(sessions=self.session_list),
-                access_token=self.access_token,
+                access_token=fresh_access_token,
             )
             return response
         except (exceptions.SocaException, Exception) as e:
@@ -586,33 +616,72 @@ class SessionsTestHelper:
             )
 
     def get_session_info(self, namespace: str) -> VirtualDesktopSession:
-        try:
-            time.sleep(10)
-            response = self.context.get_virtual_desktop_controller_client(
-                timeout=7200
-            ).invoke_alt(
-                namespace=namespace,
-                payload=GetSessionInfoRequest(session=self.session),
-                access_token=self.access_token,
-            )
-            session_info: VirtualDesktopSession = VirtualDesktopSession(
-                **response.session
-            )
-            return session_info
-        except Exception as e:
-            self.context.error(
-                f'Failed to get Session Info. Session Name: {self.session.name} Error : {e}'
-            )
+        max_retries = 5  # Increased from 3 to 5 attempts
+        for attempt in range(max_retries):
+            try:
+                time.sleep(10)
+                # Get a fresh access token to avoid expiration issues in long-running tests
+                fresh_access_token = self._get_fresh_access_token()
+                response = self.context.get_virtual_desktop_controller_client(
+                    timeout=7200
+                ).invoke_alt(
+                    namespace=namespace,
+                    payload=GetSessionInfoRequest(session=self.session),
+                    access_token=fresh_access_token,
+                )
+                session_info: VirtualDesktopSession = VirtualDesktopSession(
+                    **response.session
+                )
+                return session_info
+            except Exception as e:
+                # Check if this is a connection error that we should retry
+                is_connection_error = (
+                    "CONNECTION_ERROR" in str(e) or 
+                    "Connection reset by peer" in str(e) or
+                    "Connection aborted" in str(e) or
+                    "Connection timed out" in str(e) or
+                    "Connection refused" in str(e)
+                )
+                
+                if is_connection_error and attempt < max_retries - 1:
+                    # Increased delay with more aggressive backoff
+                    delay = 10 * (attempt + 1)  # 10, 20, 30, 40 seconds
+                    self.context.info(
+                        f'Connection error getting session info for {self.session.name}, retrying in {delay}s... (attempt {attempt + 1}/{max_retries})'
+                    )
+                    time.sleep(delay)
+                    continue
+                else:
+                    # Check if this is an "invalid session" error which means the session was deleted
+                    is_session_deleted_error = (
+                        "invalid session.idea_session_id" in str(e) or
+                        "INVALID_PARAMS" in str(e) and "invalid session" in str(e)
+                    )
+                    
+                    if is_session_deleted_error:
+                        # Log at info level since this is expected after DELETE_SESSION
+                        self.context.info(
+                            f'Session no longer exists (likely deleted). Session Name: {self.session.name}'
+                        )
+                    else:
+                        # Final attempt failed or non-connection error
+                        self.context.error(
+                            f'Failed to get Session Info. Session Name: {self.session.name} Error : {e}'
+                        )
+                    # Re-raise the exception so calling code can handle it properly
+                    raise e
 
     def get_software_stack_info(self) -> GetSoftwareStackInfoResponse:
         try:
             time.sleep(10)
+            # Get a fresh access token to avoid expiration issues in long-running tests
+            fresh_access_token = self._get_fresh_access_token()
             response = self.context.get_virtual_desktop_controller_client(
                 timeout=7200
             ).invoke_alt(
                 namespace='VirtualDesktopAdmin.GetSoftwareStackInfo',
                 payload=GetSoftwareStackInfoRequest(stack_id=self.stack_id),
-                access_token=self.access_token,
+                access_token=fresh_access_token,
             )
             return response
         except Exception as e:
@@ -623,6 +692,8 @@ class SessionsTestHelper:
     ) -> GetSessionConnectionInfoResponse:
         try:
             connection_info = self._get_session_connection_info_payload()
+            # Get a fresh access token to avoid expiration issues in long-running tests
+            fresh_access_token = self._get_fresh_access_token()
             response = self.context.get_virtual_desktop_controller_client(
                 timeout=7200
             ).invoke_alt(
@@ -631,7 +702,7 @@ class SessionsTestHelper:
                     connection_info=connection_info[0]
                 ),
                 result_as=GetSessionConnectionInfoResponse,
-                access_token=self.access_token,
+                access_token=fresh_access_token,
             )
             return response
         except Exception as e:
@@ -639,13 +710,15 @@ class SessionsTestHelper:
 
     def update_user_session(self) -> UpdateSessionResponse:
         try:
+            # Get a fresh access token to avoid expiration issues in long-running tests
+            fresh_access_token = self._get_fresh_access_token()
             response = self.context.get_virtual_desktop_controller_client(
                 timeout=7200
             ).invoke_alt(
                 namespace='VirtualDesktopAdmin.UpdateUserSession',
                 payload=UpdateSessionRequest(session=self.session),
                 result_as=UpdateSessionResponse,
-                access_token=self.access_token,
+                access_token=fresh_access_token,
             )
             return response
         except (exceptions.SocaException, Exception) as e:
@@ -662,6 +735,8 @@ class SessionsTestHelper:
                 f'Listing permissions for session {self.idea_session_id}, owner: {session_owner}, requester: {context_username}'
             )
 
+            # Get a fresh access token to avoid expiration issues in long-running tests
+            fresh_access_token = self._get_fresh_access_token()
             response = self.context.get_virtual_desktop_controller_client(
                 timeout=7200
             ).invoke_alt(
@@ -670,7 +745,7 @@ class SessionsTestHelper:
                     idea_session_id=self.idea_session_id, username=session_owner
                 ),
                 result_as=ListPermissionsResponse,
-                access_token=self.access_token,
+                access_token=fresh_access_token,
             )
             return response
         except (exceptions.SocaException, Exception) as e:
@@ -688,7 +763,7 @@ class SessionsTestHelper:
                     username=self.context.admin_username,
                 ),
                 result_as=ListPermissionsResponse,
-                access_token=self.access_token,
+                access_token=self._get_fresh_access_token(),
             )
             return response
         except (exceptions.SocaException, Exception) as e:
@@ -698,13 +773,15 @@ class SessionsTestHelper:
         self,
     ) -> ListAllowedInstanceTypesForSessionResponse:
         try:
+            # Get a fresh access token to avoid expiration issues in long-running tests
+            fresh_access_token = self._get_fresh_access_token()
             response = self.context.get_virtual_desktop_controller_client(
                 timeout=7200
             ).invoke_alt(
                 namespace='VirtualDesktopUtils.ListAllowedInstanceTypesForSession',
                 payload=ListAllowedInstanceTypesForSessionRequest(session=self.session),
                 result_as=ListAllowedInstanceTypesForSessionResponse,
-                access_token=self.access_token,
+                access_token=fresh_access_token,
             )
             return response
         except (exceptions.SocaException, Exception) as e:
@@ -762,6 +839,7 @@ class VirtualDesktopApiHelper:
     def __init__(self, context: TestContext, access_token: str, username: str):
         self.context = context
         self.access_token = access_token
+        self.username = username
         projects_list = _get_user_projects_list(context, username, access_token)
 
         if projects_list is not None:
@@ -770,6 +848,16 @@ class VirtualDesktopApiHelper:
                     self.project = project
 
         self.project_id = self.project.project_id
+
+    def _get_fresh_access_token(self) -> str:
+        """
+        Get a fresh access token based on user type to avoid expiration issues in long-running tests.
+        Uses admin token for admin users and non-admin token for regular users.
+        """
+        if self.username == self.context.admin_username:
+            return self.context.get_admin_access_token()
+        else:
+            return self.context.get_non_admin_access_token()
 
     def _get_virtual_desktop_permission_payload(self) -> List[VirtualDesktopPermission]:
         try:
@@ -813,7 +901,7 @@ class VirtualDesktopApiHelper:
                     profile=self._get_permission_profile_payload()
                 ),
                 result_as=CreatePermissionProfileResponse,
-                access_token=self.access_token,
+                access_token=self._get_fresh_access_token(),
             )
             return response
         except (exceptions.SocaException, Exception) as e:
@@ -831,7 +919,7 @@ class VirtualDesktopApiHelper:
                     profile=self._get_permission_profile_payload()
                 ),
                 result_as=UpdatePermissionProfileResponse,
-                access_token=self.access_token,
+                access_token=self._get_fresh_access_token(),
             )
             return response
         except (exceptions.SocaException, Exception) as e:
@@ -847,7 +935,7 @@ class VirtualDesktopApiHelper:
                     disabled_also=True, project_id=self.project_id
                 ),
                 result_as=ListSoftwareStackResponse,
-                access_token=self.access_token,
+                access_token=self._get_fresh_access_token(),
             )
             return response
         except (exceptions.SocaException, Exception) as e:
@@ -861,7 +949,7 @@ class VirtualDesktopApiHelper:
                 namespace=namespace,
                 payload=ListSessionsRequest(),
                 result_as=ListSessionsResponse,
-                access_token=self.access_token,
+                access_token=self._get_fresh_access_token(),
             )
             return response
         except (exceptions.SocaException, Exception) as e:
@@ -875,7 +963,7 @@ class VirtualDesktopApiHelper:
                 namespace='VirtualDesktopAdmin.ReIndexUserSessions',
                 payload=ReIndexUserSessionsRequest(),
                 result_as=ReIndexUserSessionsResponse,
-                access_token=self.access_token,
+                access_token=self._get_fresh_access_token(),
             )
             return response
         except (exceptions.SocaException, Exception) as e:
@@ -889,7 +977,7 @@ class VirtualDesktopApiHelper:
                 namespace='VirtualDesktopAdmin.ReIndexSoftwareStacks',
                 payload=ReIndexSoftwareStacksRequest(),
                 result_as=ReIndexSoftwareStacksResponse,
-                access_token=self.access_token,
+                access_token=self._get_fresh_access_token(),
             )
             return response
         except (exceptions.SocaException, Exception) as e:
@@ -904,7 +992,7 @@ class VirtualDesktopApiHelper:
                 namespace='VirtualDesktopUtils.ListSupportedOS',
                 payload=ListSupportedOSRequest(),
                 result_as=ListSupportedOSResponse,
-                access_token=self.access_token,
+                access_token=self._get_fresh_access_token(),
             )
             return response
         except (exceptions.SocaException, Exception) as e:
@@ -918,7 +1006,7 @@ class VirtualDesktopApiHelper:
                 namespace='VirtualDesktopUtils.ListSupportedGPU',
                 payload=ListSupportedGPURequest(),
                 result_as=ListSupportedGPUResponse,
-                access_token=self.access_token,
+                access_token=self._get_fresh_access_token(),
             )
             return response
         except (exceptions.SocaException, Exception) as e:
@@ -932,7 +1020,7 @@ class VirtualDesktopApiHelper:
                 namespace='VirtualDesktopUtils.ListScheduleTypes',
                 payload=ListScheduleTypesRequest(),
                 result_as=ListScheduleTypesResponse,
-                access_token=self.access_token,
+                access_token=self._get_fresh_access_token(),
             )
             return response
         except (exceptions.SocaException, Exception) as e:
@@ -946,7 +1034,7 @@ class VirtualDesktopApiHelper:
                 namespace='VirtualDesktopUtils.ListAllowedInstanceTypes',
                 payload=ListAllowedInstanceTypesRequest(),
                 result_as=ListAllowedInstanceTypesResponse,
-                access_token=self.access_token,
+                access_token=self._get_fresh_access_token(),
             )
             return response
         except (exceptions.SocaException, Exception) as e:
@@ -960,7 +1048,7 @@ class VirtualDesktopApiHelper:
                 namespace='VirtualDesktopUtils.ListPermissionProfiles',
                 payload=ListPermissionProfilesRequest(),
                 result_as=ListPermissionProfilesResponse,
-                access_token=self.access_token,
+                access_token=self._get_fresh_access_token(),
             )
             return response
         except (exceptions.SocaException, Exception) as e:
@@ -974,7 +1062,7 @@ class VirtualDesktopApiHelper:
                 namespace='VirtualDesktopUtils.GetPermissionProfile',
                 payload=GetPermissionProfileRequest(profile_id='owner_profile'),
                 result_as=GetPermissionProfileResponse,
-                access_token=self.access_token,
+                access_token=self._get_fresh_access_token(),
             )
             return response
         except (exceptions.SocaException, Exception) as e:
@@ -988,7 +1076,7 @@ class VirtualDesktopApiHelper:
                 namespace='VirtualDesktopUtils.GetBasePermissions',
                 payload=GetBasePermissionsRequest(),
                 result_as=GetBasePermissionsResponse,
-                access_token=self.access_token,
+                access_token=self._get_fresh_access_token(),
             )
             return response
         except (exceptions.SocaException, Exception) as e:
@@ -1003,7 +1091,7 @@ class VirtualDesktopApiHelper:
                 namespace='VirtualDesktopDCV.DescribeServers',
                 payload=DescribeServersRequest(),
                 result_as=DescribeServersResponse,
-                access_token=self.access_token,
+                access_token=self._get_fresh_access_token(),
             )
             return response
         except (exceptions.SocaException, Exception) as e:
@@ -1017,7 +1105,7 @@ class VirtualDesktopApiHelper:
                 namespace='VirtualDesktopDCV.DescribeSessions',
                 payload=DescribeSessionsRequest(),
                 result_as=DescribeSessionsResponse,
-                access_token=self.access_token,
+                access_token=self._get_fresh_access_token(),
             )
             return response
         except (exceptions.SocaException, Exception) as e:
@@ -1033,7 +1121,7 @@ class VirtualDesktopApiHelper:
                 namespace='VirtualDesktopAdmin.DeleteSoftwareStack',
                 payload=DeleteSoftwareStackRequest(software_stack=software_stack),
                 result_as=DeleteSoftwareStackResponse,
-                access_token=self.access_token,
+                access_token=self._get_fresh_access_token(),
             )
             return response
         except (exceptions.SocaException, Exception) as e:
@@ -1315,22 +1403,59 @@ class SessionWorkflow:
         )
         wait_counter = 0
         sleep_timer = 15
+        just_completed_delete = False
 
         try:
             while session_response.state not in VirtualDesktopSessionState.ERROR:
-                session_response = session_helper.get_session_info(
-                    self.get_session_info_namespace
-                )
+                # Only handle "invalid session" error if we just completed a delete operation
+                if just_completed_delete:
+                    try:
+                        session_response = session_helper.get_session_info(
+                            self.get_session_info_namespace
+                        )
+                    except Exception as e:
+                        # If we get an "invalid session" error right after delete, that's expected
+                        if "invalid session.idea_session_id" in str(e):
+                            self.context.info(f'Session {self.session.name} was successfully deleted - stopping workflow')
+                            break
+                        else:
+                            # Re-raise other exceptions (including connection errors)
+                            self.context.error(f'Error retrieving session info after delete: {e}')
+                            raise e
+                else:
+                    try:
+                        session_response = session_helper.get_session_info(
+                            self.get_session_info_namespace
+                        )
+                    except Exception as e:
+                        # Handle connection errors gracefully, but fail on other errors
+                        is_connection_error = (
+                            "CONNECTION_ERROR" in str(e) or 
+                            "Connection reset by peer" in str(e) or
+                            "Connection aborted" in str(e)
+                        )
+                        if is_connection_error:
+                            self.context.error(f'Persistent connection error for session {self.session.name}: {e}')
+                            # Skip this iteration and continue testing
+                            time.sleep(30)  # Wait longer before next attempt
+                            continue
+                        else:
+                            # Re-raise non-connection errors
+                            raise e
                 time.sleep(sleep_timer)
-                self.context.info(
-                    f'SESSION STATUS : SESSION NAME {session_response.name} is in {session_response.state} STATE'
-                )
+                # Safety check to ensure session_response is valid before accessing attributes
+                if session_response is not None:
+                    self.context.info(
+                        f'SESSION STATUS : SESSION NAME {session_response.name} is in {session_response.state} STATE'
+                    )
+                else:
+                    self.context.error(f'SESSION STATUS : Session response is None for {self.session.name}')
+                    break
                 self.context.info('-' * 80)
-                session_response = session_helper.get_session_info(
-                    self.get_session_info_namespace
-                )
+                # Reset the delete flag after first check
+                just_completed_delete = False
 
-                if session_response.state == VirtualDesktopSessionState.READY:
+                if session_response and session_response.state == VirtualDesktopSessionState.READY:
                     # Test 1 : Stop Session
                     time.sleep(sleep_timer)
                     test_case_results['test_case_name'] = (
@@ -1376,15 +1501,16 @@ class SessionWorkflow:
                         test_case_results['test_case_name'], delete_session_namespace
                     )
                     session_tests_result.append(terminate_session_test_case_results)
+                    just_completed_delete = True
                     break
                 wait_counter += 1
                 time.sleep(sleep_timer)
-                session_response = session_helper.get_session_info(
-                    self.get_session_info_namespace
-                )
+                # Continue to next iteration - the session info will be fetched at the top of the loop
 
                 if wait_counter >= 60:
-                    testcase_error_message = f'TEST STATUS: Exceeded maximum wait time for State to change. Session Name {session_response.name} is in {session_response.state} State.Marking tests as Skip status'
+                    session_name = session_response.name if session_response else self.session.name
+                    session_state = session_response.state if session_response else 'UNKNOWN'
+                    testcase_error_message = f'TEST STATUS: Exceeded maximum wait time for State to change. Session Name {session_name} is in {session_state} State.Marking tests as Skip status'
                     self.context.error(testcase_error_message)
                     test_case_results['test_case_status'] = (
                         VirtualDesktopSessionTestResults.SKIP.value
@@ -1394,11 +1520,9 @@ class SessionWorkflow:
                     )
                     session_tests_result.append(test_case_results)
                     break
-                session_response = session_helper.get_session_info(
-                    self.get_session_info_namespace
-                )
+                # Continue to next iteration - the session info will be fetched at the top of the loop
 
-                if session_response.state == VirtualDesktopSessionState.ERROR:
+                if session_response and session_response.state == VirtualDesktopSessionState.ERROR:
                     testcase_error_message = f'TEST STATUS: Failed to execute tests. Session Name {session_response.name} is in {session_response.state} State.Marking tests as Skip status'
                     self.context.error(testcase_error_message)
                     test_case_results['test_case_status'] = (
@@ -1410,6 +1534,29 @@ class SessionWorkflow:
                     session_tests_result.append(test_case_results)
 
         except (exceptions.SocaException, Exception) as e:
+            # Check if this is an expected error after session deletion
+            is_session_deleted_error = (
+                "invalid session.idea_session_id" in str(e) or
+                ("INVALID_PARAMS" in str(e) and "invalid session" in str(e))
+            )
+            
+            if is_session_deleted_error and session_tests_result:
+                # If we have test results and the session was deleted, this is expected
+                # Check if the last test was DELETE_SESSION
+                last_test_was_delete = False
+                for result in session_tests_result:
+                    if isinstance(result, dict) and 'test_case_name' in result:
+                        if 'DELETE_SESSION' in result.get('test_case_name', ''):
+                            last_test_was_delete = True
+                
+                if last_test_was_delete:
+                    self.context.info(
+                        f'Session {self.session.name} was deleted successfully, ignoring subsequent access errors'
+                    )
+                    # Don't add a failure result, the tests completed successfully
+                    return
+            
+            # For all other errors, treat as failure
             testcase_error_message = (
                 f'Failed to execute tests for {self.session.name}, Error:{e}'
             )
@@ -1437,9 +1584,11 @@ class SessionWorkflow:
         test_type: VirtualDesktopSessionTestcases,
     ):
         test_failure_reason = ''
-        self.session = self.session_helper.get_session_info(
-            self.get_session_info_namespace
-        )
+        # Skip getting session info after DELETE_SESSION test since the session no longer exists
+        if test_type != VirtualDesktopSessionTestcases.DELETE_SESSION:
+            self.session = self.session_helper.get_session_info(
+                self.get_session_info_namespace
+            )
         self.context.info(
             self.session_helper.prefix_text
             + f'Completed {test_type} test for {self.session.name}'
@@ -1473,9 +1622,11 @@ class SessionWorkflow:
         session_status: Dict,
         test_type: VirtualDesktopSessionTestcases,
     ):
-        self.session = self.session_helper.get_session_info(
-            self.get_session_info_namespace
-        )
+        # Skip getting session info after DELETE_SESSION test since the session no longer exists
+        if test_type != VirtualDesktopSessionTestcases.DELETE_SESSION:
+            self.session = self.session_helper.get_session_info(
+                self.get_session_info_namespace
+            )
         test_failure_reason = (
             self.session_helper.prefix_text
             + f'Failed to execute {test_type} test.Session Name : {self.session.name}, Session ID : {self.session.idea_session_id} is in invalid State : {self.session.state}. '
@@ -1496,9 +1647,11 @@ class SessionWorkflow:
         error: exceptions.SocaException,
         test_type: VirtualDesktopSessionTestcases,
     ):
-        self.session = self.session_helper.get_session_info(
-            self.get_session_info_namespace
-        )
+        # Skip getting session info after DELETE_SESSION test since the session no longer exists
+        if test_type != VirtualDesktopSessionTestcases.DELETE_SESSION:
+            self.session = self.session_helper.get_session_info(
+                self.get_session_info_namespace
+            )
         test_failure_reason = (
             self.session_helper.prefix_text
             + f'Failed to execute Test {test_type}.Session Name : {self.session.name}, Session ID : {self.session.idea_session_id} - Error: {error}'
@@ -1628,16 +1781,39 @@ def _read_session_test_case_config(context: TestContext):
 def _get_user_projects_list(
     context: TestContext, username: str, access_token: str
 ) -> List[Project]:
-    try:
-        list_projects_result = context.get_cluster_manager_client().invoke_alt(
-            namespace='Projects.GetUserProjects',
-            payload=GetUserProjectsRequest(username=username),
-            result_as=GetUserProjectsResult,
-            access_token=access_token,
-        )
-        return list_projects_result.projects
-    except exceptions.SocaException as e:
-        context.error(f'Failed to Get User Projects List. Error : {e}')
+    max_retries = 5  # Increased from 3 to 5 attempts
+    
+    for attempt in range(max_retries):
+        try:
+            list_projects_result = context.get_cluster_manager_client().invoke_alt(
+                namespace='Projects.GetUserProjects',
+                payload=GetUserProjectsRequest(username=username),
+                result_as=GetUserProjectsResult,
+                access_token=access_token,
+            )
+            return list_projects_result.projects
+        except exceptions.SocaException as e:
+            # Check if this is a connection error that we should retry
+            is_connection_error = (
+                "CONNECTION_ERROR" in str(e) or 
+                "Connection reset by peer" in str(e) or
+                "Connection aborted" in str(e) or
+                "Connection timed out" in str(e) or
+                "Connection refused" in str(e)
+            )
+            
+            if is_connection_error and attempt < max_retries - 1:
+                # Increased delay with more aggressive backoff
+                delay = 10 * (attempt + 1)  # 10, 20, 30, 40 seconds
+                context.info(
+                    f'Connection error getting user projects list for {username}, retrying in {delay}s... (attempt {attempt + 1}/{max_retries})'
+                )
+                time.sleep(delay)
+                continue
+            else:
+                # Final attempt failed or non-connection error
+                context.error(f'Failed to Get User Projects List after {max_retries} attempts. Error : {e}')
+                raise e
 
 
 def _update_test_results(test_case_id: str, test_cases_result: List[Dict]):

@@ -1,12 +1,12 @@
-certifi==2025.6.15
+certifi==2025.8.3
 cffi==1.17.1
-charset-normalizer==3.4.2
-cryptography==45.0.4
+charset-normalizer==3.4.3
+cryptography==45.0.6
 events==0.5
 idna==3.10
 opensearch-py==3.0.0
 pycparser==2.22
 python-dateutil==2.9.0.post0
-requests==2.32.4
+requests==2.32.5
 six==1.17.0
 urllib3==2.5.0

@@ -52,7 +52,9 @@ class ValidateDCVSessionDeletionEventHandler(BaseVirtualDesktopControllerEventHa
         self.session_permission_utils.delete_permissions_for_session(session)
         # delete session entry
         self.session_db.delete(session)
-        self.server_utils.terminate_dcv_hosts([session.server])
+        # Use force termination if session has force flag set
+        force = getattr(session, 'force', False) or False
+        self.server_utils.terminate_dcv_hosts([session.server], force=force)
 
     def handle_event(self, message_id: str, sender_id: str, event: VirtualDesktopEvent):
         if not self.is_sender_controller_role(sender_id):

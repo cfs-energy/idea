@@ -216,13 +216,50 @@ mkdir -p {self.output_folder}
                 raise e
 
     def get_output(self) -> str:
-        read_file_result = self.context.get_cluster_manager_client().invoke_alt(
-            namespace='FileBrowser.ReadFile',
-            payload=ReadFileRequest(file=self.output_file),
-            result_as=ReadFileResult,
-            access_token=self.context.get_admin_access_token(),
-        )
-        return Utils.base64_decode(read_file_result.content).strip()
+        # Retry logic to handle race condition between job completion and file I/O
+        max_retries = 5
+        retry_delay = 2  # seconds
+        
+        for attempt in range(max_retries):
+            try:
+                read_file_result = self.context.get_cluster_manager_client().invoke_alt(
+                    namespace='FileBrowser.ReadFile',
+                    payload=ReadFileRequest(file=self.output_file),
+                    result_as=ReadFileResult,
+                    access_token=self.context.get_admin_access_token(),
+                )
+                output_content = Utils.base64_decode(read_file_result.content).strip()
+                
+                # If we get non-empty content, return it
+                if output_content:
+                    return output_content
+                    
+                # If empty content and not the last attempt, wait and retry
+                if attempt < max_retries - 1:
+                    self.context.info(
+                        f'Output file empty for {self.test_case_id}, retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})'
+                    )
+                    time.sleep(retry_delay)
+                else:
+                    # Last attempt - return whatever we got (might be empty)
+                    self.context.warning(
+                        f'Output file still empty for {self.test_case_id} after {max_retries} attempts'
+                    )
+                    return output_content
+                    
+            except Exception as e:
+                # If file doesn't exist yet and not the last attempt, wait and retry
+                if attempt < max_retries - 1:
+                    self.context.info(
+                        f'Failed to read output file for {self.test_case_id}: {e}, retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})'
+                    )
+                    time.sleep(retry_delay)
+                else:
+                    # Last attempt - re-raise the exception
+                    raise e
+                    
+        # This should not be reached, but just in case
+        return ""
 
     def verify_output(self):
         try:

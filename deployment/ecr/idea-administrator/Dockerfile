@@ -1,6 +1,11 @@
-FROM public.ecr.aws/docker/library/python:3.13.3-slim@sha256:21e39cf1815802d4c6f89a0d3a166cc67ce58f95b6d1639e68a394c99310d2e5
+# Build arguments for software versions
+ARG PYTHON_VERSION=3.13.7
 
+FROM public.ecr.aws/docker/library/python:${PYTHON_VERSION}-slim
 ARG TARGETARCH
+ARG NODE_VERSION=22.18.0
+ARG NVM_VERSION=0.40.3
+ARG AWS_CDK_VERSION=2.1026.0
 
 ENV OS_ARCH="${TARGETARCH:-amd64}"
 
@@ -51,18 +56,17 @@ RUN if [ "${OS_ARCH}" = "amd64" ]; then \
 # install nvm and node
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN set -uex && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates curl gnupg && \
-    mkdir -p /etc/apt/keyrings && \
-    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
-    | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg && \
-    NODE_MAJOR=22 && \
-    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_$NODE_MAJOR.x nodistro main" \
-    > /etc/apt/sources.list.d/nodesource.list && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends nodejs && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v${NVM_VERSION}/install.sh | bash && \
+    export NVM_DIR="$HOME/.nvm" && \
+    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh" && \
+    [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion" && \
+    nvm install ${NODE_VERSION} && \
+    nvm use ${NODE_VERSION} && \
+    nvm alias default ${NODE_VERSION}
+
+# Set up environment variables for nvm and node
+ENV NVM_DIR="/root/.nvm"
+ENV PATH="$NVM_DIR/versions/node/v${NODE_VERSION}/bin:$PATH"
 
 
 

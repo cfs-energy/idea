@@ -13,7 +13,7 @@
 
 import React, {Component, RefObject} from "react";
 
-import {ColumnLayout, Container, Header, Link, SpaceBetween, Table, Tabs} from "@cloudscape-design/components";
+import {ColumnLayout, Container, Header, Link, SpaceBetween, Table, Tabs, Button} from "@cloudscape-design/components";
 import IdeaForm from "../../components/form";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import IdeaAppLayout, {IdeaAppLayoutProps} from "../../components/app-layout";
@@ -25,6 +25,10 @@ import {EnabledDisabledStatusIndicator} from "../../components/common";
 import {Constants} from "../../common/constants";
 import {withRouter} from "../../navigation/navigation-utils";
 import ConfigUtils from "../../common/config-utils";
+import { SimpleSettingsButton } from "../../components/simple-settings";
+import {SocaUserInputParamMetadata, VirtualDesktopWeekSchedule} from "../../client/data-model";
+import VirtualDesktopUtilsClient from "../../client/virtual-desktop-utils-client";
+import DefaultScheduleModal from "./components/default-schedule-modal";
 
 export interface VirtualDesktopSettingsProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
 
@@ -42,10 +46,12 @@ const DEFAULT_ACTIVE_TAB_ID = 'general'
 class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, VirtualDesktopSettingsState> {
 
     generalSettingsForm: RefObject<IdeaForm>
+    defaultScheduleModal: RefObject<DefaultScheduleModal>
 
     constructor(props: VirtualDesktopSettingsProps) {
         super(props);
         this.generalSettingsForm = React.createRef()
+        this.defaultScheduleModal = React.createRef()
         this.state = {
             vdcModuleInfo: {},
             vdcSettings: {},
@@ -54,11 +60,16 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
         }
     }
 
+    getVirtualDesktopUtilsClient(): VirtualDesktopUtilsClient {
+        return AppContext.get().client().virtualDesktopUtils()
+    }
+
     componentDidMount() {
         let promises: Promise<any>[] = []
         const clusterSettingsService = AppContext.get().getClusterSettingsService()
         promises.push(clusterSettingsService.getClusterSettings())
         promises.push(clusterSettingsService.getVirtualDesktopSettings())
+
         Promise.all(promises).then(result => {
             const queryParams = new URLSearchParams(this.props.location.search)
             this.setState({
@@ -69,6 +80,406 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
             })
         })
     }
+
+    // Dynamic settings configuration
+    getSettingsConfig = (): {[key: string]: {config: SocaUserInputParamMetadata, path: string}} => {
+        return {
+            'idle_timeout': {
+                path: 'dcv_session.idle_timeout',
+                config: {
+                    name: 'idle_timeout',
+                    title: 'Idle Timeout (minutes)',
+                    description: 'Time in minutes before idle sessions timeout',
+                    param_type: 'text',
+                    data_type: 'int',
+                    validate: { required: true, min: 1, max: 1440 }
+                }
+            },
+            'idle_timeout_warning': {
+                path: 'dcv_session.idle_timeout_warning',
+                config: {
+                    name: 'idle_timeout_warning',
+                    title: 'Idle Timeout Warning (seconds)',
+                    description: 'Warning time in seconds before timeout',
+                    param_type: 'text',
+                    data_type: 'int',
+                    validate: { required: true, min: 30, max: 3600 }
+                }
+            },
+            'cpu_utilization_threshold': {
+                path: 'dcv_session.cpu_utilization_threshold',
+                config: {
+                    name: 'cpu_utilization_threshold',
+                    title: 'CPU Utilization Threshold (%)',
+                    description: 'CPU threshold percentage for idle detection',
+                    param_type: 'text',
+                    data_type: 'int',
+                    validate: { required: true, min: 1, max: 100 }
+                }
+            },
+            'idle_autostop_delay': {
+                path: 'dcv_session.idle_autostop_delay',
+                config: {
+                    name: 'idle_autostop_delay',
+                    title: 'Idle AutoStop Delay (minutes)',
+                    description: 'Time in minutes before auto-stopping idle instances',
+                    param_type: 'text',
+                    data_type: 'int',
+                    validate: { required: true, min: 5, max: 1440 }
+                }
+            },
+            'additional_security_groups': {
+                path: 'dcv_session.additional_security_groups',
+                config: {
+                    name: 'additional_security_groups',
+                    title: 'Allowed Security Groups',
+                    description: 'Additional security groups that can be attached to virtual desktops',
+                    param_type: 'text',
+                    data_type: 'str',
+                    multiple: true,
+                    help_text: 'Enter one security group ID per line (e.g., sg-12345678)',
+                    validate: { required: false }
+                }
+            },
+            'max_root_volume_memory': {
+                path: 'dcv_session.max_root_volume_memory',
+                config: {
+                    name: 'max_root_volume_memory',
+                    title: 'Max Root Volume Size (GB)',
+                    description: 'Maximum root volume size allowed for virtual desktops',
+                    param_type: 'text',
+                    data_type: 'int',
+                    validate: { required: true, min: 10, max: 1000 }
+                }
+            },
+            'allowed_instance_types': {
+                path: 'dcv_session.instance_types.allow',
+                config: {
+                    name: 'allowed_instance_types',
+                    title: 'Allowed Instance Types',
+                    description: 'Instance types that users can select. Leave empty to allow all types.',
+                    param_type: 'text',
+                    data_type: 'str',
+                    multiple: true,
+                    help_text: 'Enter one instance type or family per line (e.g., t4, t3.xlarge, m5.large)',
+                    validate: { required: false }
+                }
+            },
+            'denied_instance_types': {
+                path: 'dcv_session.instance_types.deny',
+                config: {
+                    name: 'denied_instance_types',
+                    title: 'Denied Instance Types',
+                    description: 'Instance types that users cannot select.',
+                    param_type: 'text',
+                    data_type: 'str',
+                    multiple: true,
+                    help_text: 'Enter one instance type or family per line (e.g., t4, t3.xlarge, m5.large)',
+                    validate: { required: false }
+                }
+            },
+            'subnet_autoretry': {
+                path: 'dcv_session.network.subnet_autoretry',
+                config: {
+                    name: 'subnet_autoretry',
+                    title: 'Subnet AutoRetry',
+                    description: 'Automatically retry deployment on other subnets if the selected subnet fails',
+                    param_type: 'confirm',
+                    data_type: 'bool',
+                    validate: { required: true }
+                }
+            },
+            'randomize_subnets': {
+                path: 'dcv_session.network.randomize_subnets',
+                config: {
+                    name: 'randomize_subnets',
+                    title: 'Randomize Subnets',
+                    description: 'Randomly select subnets for virtual desktop deployment',
+                    param_type: 'confirm',
+                    data_type: 'bool',
+                    validate: { required: true }
+                }
+            },
+            'evdi_subnets': {
+                path: 'dcv_session.network.private_subnets',
+                config: {
+                    name: 'evdi_subnets',
+                    title: 'eVDI Subnets',
+                    description: 'Specific subnets for virtual desktop deployment. Leave empty to use cluster subnets.',
+                    param_type: 'text',
+                    data_type: 'str',
+                    multiple: true,
+                    help_text: 'Enter one subnet ID per line (e.g., subnet-12345678)',
+                    validate: { required: false }
+                }
+            },
+            'working_hours_start': {
+                path: 'dcv_session.working_hours.start_up_time',
+                config: {
+                    name: 'working_hours_start',
+                    title: 'Working Hours Start Time',
+                    description: 'Start time for working hours schedule (24-hour format)',
+                    param_type: 'text',
+                    data_type: 'str',
+                    help_text: 'Enter time in HH:MM format (e.g., 09:00)',
+                    validate: { 
+                        required: true,
+                        regex: '^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$'
+                    }
+                }
+            },
+            'working_hours_end': {
+                path: 'dcv_session.working_hours.shut_down_time',
+                config: {
+                    name: 'working_hours_end',
+                    title: 'Working Hours End Time',
+                    description: 'End time for working hours schedule (24-hour format)',
+                    param_type: 'text',
+                    data_type: 'str',
+                    help_text: 'Enter time in HH:MM format (e.g., 17:00)',
+                    validate: { 
+                        required: true,
+                        regex: '^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$'
+                    }
+                }
+            }
+        };
+    };
+
+    // Generic save handler
+    handleSaveSetting = (settingKey: string) => async (newValue: any): Promise<boolean> => {
+        const settingsConfig = this.getSettingsConfig();
+        const setting = settingsConfig[settingKey];
+        
+        if (!setting) {
+            console.error(`Unknown setting: ${settingKey}`);
+            return false;
+        }
+
+        return this.updateSetting(setting.path, newValue);
+    };
+
+    // Generic method to get setting config
+    getSettingConfig = (settingKey: string): SocaUserInputParamMetadata => {
+        const settingsConfig = this.getSettingsConfig();
+        const setting = settingsConfig[settingKey];
+        
+        if (!setting) {
+            throw new Error(`Unknown setting: ${settingKey}`);
+        }
+        
+        return setting.config;
+    };
+
+    // Generic method to get current setting value
+    getCurrentValue = (settingKey: string): any => {
+        const settingsConfig = this.getSettingsConfig();
+        const setting = settingsConfig[settingKey];
+        
+        if (!setting) {
+            return undefined;
+        }
+        
+        // Check if settings are loaded by verifying the object has keys
+        // This prevents showing incorrect default values before settings load
+        if (Object.keys(this.state.vdcSettings).length === 0) {
+            return undefined;
+        }
+        
+        let value = dot.pick(setting.path, this.state.vdcSettings);
+        
+        // Handle different data types
+        if (setting.config.data_type === 'bool') {
+            return Utils.asBoolean(value);
+        } else if (setting.config.multiple) {
+            return value || [];
+        } else {
+            return value;
+        }
+    };
+
+    // Helper method to create editable setting row
+    createEditableSetting = (settingKey: string, displayTitle?: string) => {
+        const settingsConfig = this.getSettingsConfig();
+        const setting = settingsConfig[settingKey];
+        
+        if (!setting) {
+            console.error(`Unknown setting: ${settingKey}`);
+            return <div>Error: Unknown setting</div>;
+        }
+
+        const title = displayTitle || setting.config.title || settingKey;
+        const settingPath = setting.path;
+        const value = dot.pick(settingPath, this.state.vdcSettings);
+        const suffix = settingPath.includes('timeout') ? (settingPath.includes('warning') ? 'seconds' : 'minutes') :
+                      settingPath.includes('threshold') ? '%' :
+                      settingPath.includes('memory') || settingPath.includes('volume') ? 'GB' : undefined;
+
+        return (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <KeyValue title={title} value={value} suffix={suffix}/>
+                <SimpleSettingsButton
+                    title={`Edit ${title}`}
+                    settingConfig={this.getSettingConfig(settingKey)}
+                    currentValue={this.getCurrentValue(settingKey)}
+                    onSave={this.handleSaveSetting(settingKey)}
+                />
+            </div>
+        );
+    };
+
+    // Show default schedule modal
+    showDefaultScheduleModal = () => {
+        const currentDefaultSchedule: VirtualDesktopWeekSchedule = {
+            monday: {
+                schedule_type: dot.pick('dcv_session.schedule.monday.type', this.state.vdcSettings) || 'STOP_ON_IDLE',
+                start_up_time: dot.pick('dcv_session.schedule.monday.start_up_time', this.state.vdcSettings),
+                shut_down_time: dot.pick('dcv_session.schedule.monday.shut_down_time', this.state.vdcSettings)
+            },
+            tuesday: {
+                schedule_type: dot.pick('dcv_session.schedule.tuesday.type', this.state.vdcSettings) || 'STOP_ON_IDLE',
+                start_up_time: dot.pick('dcv_session.schedule.tuesday.start_up_time', this.state.vdcSettings),
+                shut_down_time: dot.pick('dcv_session.schedule.tuesday.shut_down_time', this.state.vdcSettings)
+            },
+            wednesday: {
+                schedule_type: dot.pick('dcv_session.schedule.wednesday.type', this.state.vdcSettings) || 'STOP_ON_IDLE',
+                start_up_time: dot.pick('dcv_session.schedule.wednesday.start_up_time', this.state.vdcSettings),
+                shut_down_time: dot.pick('dcv_session.schedule.wednesday.shut_down_time', this.state.vdcSettings)
+            },
+            thursday: {
+                schedule_type: dot.pick('dcv_session.schedule.thursday.type', this.state.vdcSettings) || 'STOP_ON_IDLE',
+                start_up_time: dot.pick('dcv_session.schedule.thursday.start_up_time', this.state.vdcSettings),
+                shut_down_time: dot.pick('dcv_session.schedule.thursday.shut_down_time', this.state.vdcSettings)
+            },
+            friday: {
+                schedule_type: dot.pick('dcv_session.schedule.friday.type', this.state.vdcSettings) || 'STOP_ON_IDLE',
+                start_up_time: dot.pick('dcv_session.schedule.friday.start_up_time', this.state.vdcSettings),
+                shut_down_time: dot.pick('dcv_session.schedule.friday.shut_down_time', this.state.vdcSettings)
+            },
+            saturday: {
+                schedule_type: dot.pick('dcv_session.schedule.saturday.type', this.state.vdcSettings) || 'STOP_ON_IDLE',
+                start_up_time: dot.pick('dcv_session.schedule.saturday.start_up_time', this.state.vdcSettings),
+                shut_down_time: dot.pick('dcv_session.schedule.saturday.shut_down_time', this.state.vdcSettings)
+            },
+            sunday: {
+                schedule_type: dot.pick('dcv_session.schedule.sunday.type', this.state.vdcSettings) || 'STOP_ON_IDLE',
+                start_up_time: dot.pick('dcv_session.schedule.sunday.start_up_time', this.state.vdcSettings),
+                shut_down_time: dot.pick('dcv_session.schedule.sunday.shut_down_time', this.state.vdcSettings)
+            }
+        };
+        
+        this.defaultScheduleModal.current?.showDefaultSchedule(currentDefaultSchedule);
+    };
+
+    // Update default schedule settings
+    updateDefaultSchedule = async (defaultSchedule: VirtualDesktopWeekSchedule): Promise<boolean> => {
+        try {
+            // Convert the week schedule to nested settings object for API call
+            const settings: any = {
+                dcv_session: {
+                    schedule: {}
+                }
+            };
+            
+            const daysOfWeek = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+            
+            daysOfWeek.forEach(day => {
+                const daySchedule = defaultSchedule[day as keyof VirtualDesktopWeekSchedule];
+                if (daySchedule) {
+                    settings.dcv_session.schedule[day] = {
+                        type: daySchedule.schedule_type
+                    };
+                    
+                    if (daySchedule.schedule_type === 'CUSTOM_SCHEDULE') {
+                        settings.dcv_session.schedule[day].start_up_time = daySchedule.start_up_time;
+                        settings.dcv_session.schedule[day].shut_down_time = daySchedule.shut_down_time;
+                    } else {
+                        // Clear custom times for non-custom schedules
+                        settings.dcv_session.schedule[day].start_up_time = null;
+                        settings.dcv_session.schedule[day].shut_down_time = null;
+                    }
+                }
+            });
+
+            // Call the cluster settings API to update the settings
+            await AppContext.get().client().clusterSettings().updateModuleSettings({
+                module_id: 'vdc',
+                settings: settings
+            });
+
+            // Refresh the settings to reflect the changes
+            const updatedSettings = await AppContext.get().getClusterSettingsService().getVirtualDesktopSettings();
+            this.setState({
+                vdcSettings: updatedSettings
+            });
+
+            // Show success message
+            this.props.onFlashbarChange({
+                items: [{
+                    type: 'success',
+                    content: 'Default schedule updated successfully. Changes will appear on refresh after a few seconds.',
+                    dismissible: true
+                }]
+            });
+
+            return true;
+        } catch (error) {
+            console.error('Failed to update default schedule:', error);
+            this.defaultScheduleModal.current?.setErrorMessage('Failed to update default schedule. Please try again.');
+            return false;
+        }
+    };
+
+    // Single method to update any setting
+    updateSetting = async (settingPath: string, newValue: any): Promise<boolean> => {
+        try {
+            const settings: any = {};
+            const pathParts = settingPath.split('.');
+            let current = settings;
+            
+            // Build nested object structure
+            for (let i = 0; i < pathParts.length - 1; i++) {
+                current[pathParts[i]] = {};
+                current = current[pathParts[i]];
+            }
+            current[pathParts[pathParts.length - 1]] = newValue;
+
+            const result = await AppContext.get().client().clusterSettings().updateModuleSettings({
+                module_id: dot.pick('module_id', this.state.vdcModuleInfo) || Constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER,
+                settings: settings
+            });
+
+            if (result.success) {
+                this.props.onFlashbarChange({
+                    items: [{
+                        type: 'success',
+                        content: 'Setting updated successfully. Changes will appear on refresh after a few seconds.',
+                        dismissible: true
+                    }]
+                });
+                return true;
+            } else {
+                this.props.onFlashbarChange({
+                    items: [{
+                        type: 'error',
+                        content: 'Failed to update setting',
+                        dismissible: true
+                    }]
+                });
+                return false;
+            }
+        } catch (error: any) {
+            console.error('Error updating setting:', error);
+            this.props.onFlashbarChange({
+                items: [{
+                    type: 'error',
+                    content: `Error updating setting: ${error?.message || error}`,
+                    dismissible: true
+                }]
+            });
+            return false;
+        }
+    };
 
     buildNotificationSettings() {
         let notifications = dot.pick('dcv_session.notifications', this.state.vdcSettings)
@@ -96,6 +507,36 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
                 cell: e => e.email_template
             }
         ]}/>
+    }
+
+    buildGeneralSettings() {
+        return (
+            <Container header={<Header variant={"h2"}>Module Information</Header>}>
+                <ColumnLayout variant={"text-grid"} columns={3}>
+                    <KeyValue title="Module Name" value={dot.pick('name', this.state.vdcModuleInfo)}/>
+                    <KeyValue title="Module ID" value={dot.pick('module_id', this.state.vdcModuleInfo)}/>
+                    <KeyValue title="Version" value={dot.pick('version', this.state.vdcModuleInfo)}/>
+                </ColumnLayout>
+            </Container>
+        )
+    }
+
+    buildPermissionSettings() {
+        return (
+            <Container header={<Header variant={"h2"}>Permission Settings</Header>}>
+                <ColumnLayout variant={"text-grid"} columns={2}>
+                    <KeyValue title="QUIC Support">
+                        <EnabledDisabledStatusIndicator enabled={Utils.asBoolean(dot.pick('dcv_session.quic_support', this.state.vdcSettings))}/>
+                    </KeyValue>
+                    <KeyValue title="Subnet AutoRetry">
+                        <EnabledDisabledStatusIndicator enabled={Utils.asBoolean(dot.pick('dcv_session.network.subnet_autoretry', this.state.vdcSettings))}/>
+                    </KeyValue>
+                    <KeyValue title="Randomize Subnets">
+                        <EnabledDisabledStatusIndicator enabled={Utils.asBoolean(dot.pick('dcv_session.network.randomize_subnets', this.state.vdcSettings))}/>
+                    </KeyValue>
+                </ColumnLayout>
+            </Container>
+        )
     }
 
     render() {
@@ -173,7 +614,7 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
                         href: ''
                     }
                 ]}
-                header={<Header variant={"h1"} description={"Manage virtual desktop settings (Read-Only, use idea-admin.sh to update eVDI settings.)"}>Virtual Desktop Settings</Header>}
+                header={<Header variant={"h1"} description={"Manage virtual desktop settings (Some settings are read-only, use idea-admin.sh to update read-only eVDI settings.)"}>Virtual Desktop Settings</Header>}
                 contentType={"default"}
                 content={
                     <SpaceBetween size={"l"}>
@@ -205,13 +646,29 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
                                                     <KeyValue title="QUIC">
                                                         <EnabledDisabledStatusIndicator enabled={Utils.asBoolean(dot.pick('dcv_session.quic_support', this.state.vdcSettings))}/>
                                                     </KeyValue>
-                                                    <KeyValue title="eVDI Subnets" value={dot.pick('dcv_session.network.private_subnets', this.state.vdcSettings)} clipboard={true}/>
-                                                    <KeyValue title="Subnet AutoRetry">
-                                                        <EnabledDisabledStatusIndicator enabled={Utils.asBoolean(dot.pick('dcv_session.network.subnet_autoretry', this.state.vdcSettings))}/>
-                                                    </KeyValue>
-                                                    <KeyValue title="Randomize Subnets">
-                                                        <EnabledDisabledStatusIndicator enabled={Utils.asBoolean(dot.pick('dcv_session.network.randomize_subnets', this.state.vdcSettings))}/>
-                                                    </KeyValue>
+                                                    {this.createEditableSetting('evdi_subnets')}
+                                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                                        <KeyValue title="Subnet AutoRetry">
+                                                            <EnabledDisabledStatusIndicator enabled={Utils.asBoolean(dot.pick('dcv_session.network.subnet_autoretry', this.state.vdcSettings))}/>
+                                                        </KeyValue>
+                                                        <SimpleSettingsButton
+                                                            title="Edit Subnet AutoRetry"
+                                                            settingConfig={this.getSettingConfig('subnet_autoretry')}
+                                                            currentValue={this.getCurrentValue('subnet_autoretry')}
+                                                            onSave={this.handleSaveSetting('subnet_autoretry')}
+                                                        />
+                                                    </div>
+                                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                                        <KeyValue title="Randomize Subnets">
+                                                            <EnabledDisabledStatusIndicator enabled={Utils.asBoolean(dot.pick('dcv_session.network.randomize_subnets', this.state.vdcSettings))}/>
+                                                        </KeyValue>
+                                                        <SimpleSettingsButton
+                                                            title="Edit Randomize Subnets"
+                                                            settingConfig={this.getSettingConfig('randomize_subnets')}
+                                                            currentValue={this.getCurrentValue('randomize_subnets')}
+                                                            onSave={this.handleSaveSetting('randomize_subnets')}
+                                                        />
+                                                    </div>
                                                 </ColumnLayout>
                                             </Container>
                                             <Container header={<Header variant={"h2"} info={<Link external={true} href={"https://spec.openapis.org/oas/v3.1.0"}>Info</Link>}>OpenAPI Specification</Header>}>
@@ -237,7 +694,11 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
                                     id: 'schedule',
                                     content: (
                                         <SpaceBetween size={"m"}>
-                                            <Container header={<Header variant={"h2"} description={"Default schedule applied to all sessions"}>Default Schedule</Header>}>
+                                            <Container header={<Header variant={"h2"} description={"Default schedule applied to all sessions"} actions={
+                                                <Button variant="primary" onClick={() => this.showDefaultScheduleModal()}>
+                                                    Edit Default Schedules
+                                                </Button>
+                                            }>Default Schedule</Header>}>
                                                 <ColumnLayout variant={"text-grid"} columns={3}>
                                                     <KeyValue title="Monday"
                                                               value={Utils.getScheduleTypeDisplay(dot.pick('dcv_session.schedule.monday.type', this.state.vdcSettings), dot.pick('dcv_session.working_hours.start_up_time', this.state.vdcSettings), dot.pick('dcv_session.working_hours.shut_down_time', this.state.vdcSettings), dot.pick('dcv_session.schedule.monday.start_up_time', this.state.vdcSettings), dot.pick('dcv_session.schedule.monday.shut_down_time', this.state.vdcSettings))}/>
@@ -257,8 +718,8 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
                                             </Container>
                                             <Container header={<Header variant={"h2"}>Working Hours</Header>}>
                                                 <ColumnLayout variant={"text-grid"} columns={3}>
-                                                    <KeyValue title="Start Time" value={dot.pick('dcv_session.working_hours.start_up_time', this.state.vdcSettings)}/>
-                                                    <KeyValue title="End Time" value={dot.pick('dcv_session.working_hours.shut_down_time', this.state.vdcSettings)}/>
+                                                    {this.createEditableSetting('working_hours_start')}
+                                                    {this.createEditableSetting('working_hours_end')}
                                                 </ColumnLayout>
                                             </Container>
                                         </SpaceBetween>
@@ -271,18 +732,18 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
                                         <SpaceBetween size={"m"}>
                                             <Container header={<Header variant={"h2"}>DCV Session</Header>}>
                                                 <ColumnLayout variant={"text-grid"} columns={2}>
-                                                    <KeyValue title="Idle Timeout" value={dot.pick('dcv_session.idle_timeout', this.state.vdcSettings)} suffix={"minutes"}/>
-                                                    <KeyValue title="Idle Timeout Warning" value={dot.pick('dcv_session.idle_timeout_warning', this.state.vdcSettings)} suffix={"seconds"}/>
-                                                    <KeyValue title="CPU Utilization Threshold" value={dot.pick('dcv_session.cpu_utilization_threshold', this.state.vdcSettings)} suffix={"%"}/>
-                                                    <KeyValue title="Idle AutoStop Delay" value={dot.pick('dcv_session.idle_autostop_delay', this.state.vdcSettings)} suffix={"minutes"}/>
+                                                    {this.createEditableSetting('idle_timeout')}
+                                                    {this.createEditableSetting('idle_timeout_warning')}
+                                                    {this.createEditableSetting('cpu_utilization_threshold')}
+                                                    {this.createEditableSetting('idle_autostop_delay')}
                                                 </ColumnLayout>
                                             </Container>
                                             <Container header={<Header variant={"h2"}>DCV Host</Header>}>
                                                 <ColumnLayout variant={"text-grid"} columns={2}>
-                                                    <KeyValue title="Allowed Security Groups" value={dot.pick('dcv_session.additional_security_groups', this.state.vdcSettings)}/>
-                                                    <KeyValue title="Max Root Volume Size" value={dot.pick('dcv_session.max_root_volume_memory', this.state.vdcSettings)} suffix={"GB"}/>
-                                                    <KeyValue title="Allowed Instance Types" value={dot.pick('dcv_session.instance_types.allow', this.state.vdcSettings)}/>
-                                                    <KeyValue title="Denied Instance Types" value={dot.pick('dcv_session.instance_types.deny', this.state.vdcSettings)}/>
+                                                    {this.createEditableSetting('additional_security_groups')}
+                                                    {this.createEditableSetting('max_root_volume_memory')}
+                                                    {this.createEditableSetting('allowed_instance_types')}
+                                                    {this.createEditableSetting('denied_instance_types')}
                                                 </ColumnLayout>
                                             </Container>
                                         </SpaceBetween>
@@ -406,6 +867,10 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
                                     )
                                 }
                             ]}/>
+                        <DefaultScheduleModal
+                            ref={this.defaultScheduleModal}
+                            onScheduleChange={this.updateDefaultSchedule}
+                        />
                     </SpaceBetween>
                 }/>
         )

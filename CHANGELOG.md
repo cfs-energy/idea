@@ -4,6 +4,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
+## [25.08.0] - 2025-08-25
+
+**Upgrade Instructions:**
+* It's recommended to perform a full cluster upgrade as Base AMIs and other settings have been updated
+```bash
+./idea-admin.sh upgrade-cluster --aws-region $IDEA_AWS_REGION --cluster-name $IDEA_CLUSTER_NAME
+```
+([Upgrade Documentation](https://docs.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/upgrade-cluster))
+
+### **✨ New Features**
+* **Web UI Settings Management**: Administrators can now edit various cluster and module settings directly from the web interface
+  * Virtual desktop settings (idle timeouts, CPU thresholds, working hours, subnet configurations)
+  * Default scheduling configurations for desktop sessions
+  * Secure validation ensures only authorized administrators can modify sensitive parameters
+* **Module Settings API**: New secure API endpoint backing the web UI settings functionality
+* **Default Schedule Modal**: Comprehensive scheduling interface for virtual desktop sessions
+* **Enhanced Settings Components**: New UI components (`SimpleSettingsButton`, `SimpleSettingsEditor`) with improved permissions and form handling
+* **Faster EC2 Instance Termination**: Added support for AWS EC2 force termination with skip OS shutdown, improving speed and reliability when stopping or deleting virtual desktops and clusters.
+
+### **🔧 Improvements**
+* **Form Handling**: Dynamic form updates when props change with improved validation
+* **Build System**: Parameterized Docker builds with configurable software versions (Python 3.13.7, Node 22.18.0, AWS CDK 2.1026.0)
+* **TypeScript Support**: Enhanced API client with type safety for new settings functionality
+* **G6F Fractional GPU Instance Support**: Added support for g6f instance types
+
+### **🐛 Bug Fixes**
+* **Shared Storage**: Fixed prebootstrapped AMIs not applying updated EFS/FSx configurations
+* **Cluster Upgrade**: Fixed upgrade-cluster command not executing Phase 3 to update Base OS AMIs under some conditions
+* **Integration Tests**: Fixed auth token expiration errors, race conditions, and connection error handling in scheduler and vdc tests
+* **WAF Configuration**: Fixed WAF blocking legitimate file downloads
+* **Package Installation**: Fixed system and DCV package installation issues on RHEL/Rocky 9
+
+### **📦 Updates**
+* **Core Dependencies**: Updated AWS CDK (2.1026.0), Python (3.13.7), Node (22.18.0), and related packages
+* **GPU Drivers**: Updated NVIDIA GPU drivers to version 580.65.06
+* **AMI Updates**: Refreshed base AMI IDs across all regions for Amazon Linux 2 (arm64/x86_64)
+
 ## [25.07.0] - 2025-07-15
 
 **Upgrade Instructions:**

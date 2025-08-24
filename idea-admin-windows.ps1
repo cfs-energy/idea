@@ -38,7 +38,7 @@ function Verify-Command($type,$message,$command) {
 $IDEADevMode = if ($Env:IDEA_DEV_MODE) {$Env:IDEA_DEV_MODE} else {""}
 $VirtualEnv = if ($Env:VIRTUAL_ENV) {$Env:VIRTUAL_ENV} else {""}
 $ScriptDir = $PSScriptRoot
-$IDEARevision = if ($Env:IDEA_REVISION) {$Env:IDEA_REVISION} else {"v25.07.0"}
+$IDEARevision = if ($Env:IDEA_REVISION) {$Env:IDEA_REVISION} else {"v25.08.0"}
 $IDEADockerRepo = "public.ecr.aws/s5o2b4m0"
 $DocumentationError = "https://docs.idea-hpc.com"
 $AWSProfile = if ($Env:AWS_PROFILE) {$Env:AWS_PROFILE} else {"default"}

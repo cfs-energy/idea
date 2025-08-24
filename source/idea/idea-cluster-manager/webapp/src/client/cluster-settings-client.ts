@@ -19,7 +19,7 @@ import {
     ListClusterHostsRequest,
     ListClusterHostsResult,
     DescribeInstanceTypesRequest,
-    DescribeInstanceTypesResult, GetModuleInfoRequest, GetModuleInfoResult
+    DescribeInstanceTypesResult, GetModuleInfoRequest, GetModuleInfoResult, UpdateModuleSettingsRequest, UpdateModuleSettingsResult
 } from './data-model'
 import IdeaBaseClient, {IdeaBaseClientProps} from "./base-client";
 
@@ -46,6 +46,13 @@ class ClusterSettingsClient extends IdeaBaseClient<ClusterSettingsClientProps> {
     getModuleSettings(req: GetModuleSettingsRequest): Promise<GetModuleSettingsResult> {
         return this.apiInvoker.invoke_alt<GetModuleSettingsRequest, GetModuleSettingsResult>(
             'ClusterSettings.GetModuleSettings',
+            req
+        )
+    }
+
+    updateModuleSettings(req: UpdateModuleSettingsRequest): Promise<UpdateModuleSettingsResult> {
+        return this.apiInvoker.invoke_alt<UpdateModuleSettingsRequest, UpdateModuleSettingsResult>(
+            'ClusterSettings.UpdateModuleSettings',
             req
         )
     }

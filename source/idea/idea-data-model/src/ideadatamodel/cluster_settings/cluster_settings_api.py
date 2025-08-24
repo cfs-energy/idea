@@ -14,6 +14,8 @@ __all__ = (
     'ListClusterModulesResult',
     'GetModuleSettingsResult',
     'GetModuleSettingsRequest',
+    'UpdateModuleSettingsRequest',
+    'UpdateModuleSettingsResult',
     'ListClusterHostsRequest',
     'ListClusterHostsResult',
     'DescribeInstanceTypesRequest',
@@ -48,6 +50,18 @@ class GetModuleSettingsResult(SocaPayload):
     settings: Optional[Any] = Field(default=None)
 
 
+# ClusterSettings.UpdateModuleSettings
+
+
+class UpdateModuleSettingsRequest(SocaPayload):
+    module_id: Optional[str] = Field(default=None)
+    settings: Optional[Any] = Field(default=None)
+
+
+class UpdateModuleSettingsResult(SocaPayload):
+    success: Optional[bool] = Field(default=True)
+
+
 # ClusterSettings.ListClusterHosts
 class ListClusterHostsRequest(SocaListingPayload):
     instance_ids: Optional[List[str]] = Field(default=None)
@@ -78,6 +92,13 @@ OPEN_API_SPEC_ENTRIES_CLUSTER_SETTINGS = [
         namespace='ClusterSettings.GetModuleSettings',
         request=GetModuleSettingsRequest,
         result=GetModuleSettingsResult,
+        is_listing=False,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='ClusterSettings.UpdateModuleSettings',
+        request=UpdateModuleSettingsRequest,
+        result=UpdateModuleSettingsResult,
         is_listing=False,
         is_public=False,
     ),

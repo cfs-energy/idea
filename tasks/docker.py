@@ -12,8 +12,31 @@
 import tasks.idea as idea
 
 import os
+import yaml
 from invoke import task
 import shutil
+
+
+def get_software_versions():
+    """
+    Read software versions from software_versions.yml
+    """
+    software_versions_file = os.path.join(idea.props.project_root_dir, 'software_versions.yml')
+    with open(software_versions_file, 'r') as f:
+        return yaml.safe_load(f)
+
+
+def get_build_args_from_versions():
+    """
+    Get Docker build arguments from software versions
+    """
+    versions = get_software_versions()
+    return (
+        f'--build-arg PYTHON_VERSION={versions["python_version"]} '
+        f'--build-arg NODE_VERSION={versions["node_version"]} '
+        f'--build-arg NVM_VERSION={versions["nvm_version"]} '
+        f'--build-arg AWS_CDK_VERSION={versions["aws_cdk_version"]} '
+    )
 
 
 @task
@@ -41,9 +64,11 @@ def build(c, no_cache=False, gha_cache=False):
     prepare_artifacts(c)
 
     release_version = idea.props.idea_release_version
+    version_args = get_build_args_from_versions()
     build_cmd = str(
         f'docker build '
         f'--build-arg PUBLIC_ECR_TAG=v{release_version} '
+        f'{version_args}'
         f'-t idea-administrator:v{release_version} '
         f'"{idea.props.deployment_administrator_dir}"'
     )
@@ -64,6 +89,7 @@ def build_push_multi(c, ecr_registry, ecr_tag, no_cache=False, gha_cache=False):
     prepare_artifacts(c)
 
     release_version = idea.props.idea_release_version
+    version_args = get_build_args_from_versions()
     build_cmd = (
         f'aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin {ecr_registry} && '
         f'docker buildx ls | grep multi-platform-builder && docker buildx rm multi-platform-builder || echo "No builder to remove" && '
@@ -72,6 +98,7 @@ def build_push_multi(c, ecr_registry, ecr_tag, no_cache=False, gha_cache=False):
         f'docker buildx inspect --bootstrap && '
         f'docker buildx build --push --platform linux/amd64,linux/arm64 '
         f'--build-arg PUBLIC_ECR_TAG=v{release_version} '
+        f'{version_args}'
         f'-t {ecr_registry}/idea-administrator:v{release_version} '
         f'-t {ecr_registry}/idea-administrator:{ecr_tag} '
         f'-t {ecr_registry}/idea-administrator:latest '
@@ -103,6 +130,19 @@ def publish(c, ecr_registry, ecr_tag):
     # Push the tagged images
     c.run(f'docker push {ecr_registry}/{local_image}')
     c.run(f'docker push {ecr_registry}/{latest_image}')
+
+
+@task
+def print_versions(c):
+    # type: (Context) -> None # type: ignore
+    """
+    print current software versions from software_versions.yml
+    """
+    versions = get_software_versions()
+    print("Software Versions:")
+    for key, value in versions.items():
+        print(f"  {key}: {value}")
+    print(f"\nBuild arguments: {get_build_args_from_versions()}")
 
 
 @task

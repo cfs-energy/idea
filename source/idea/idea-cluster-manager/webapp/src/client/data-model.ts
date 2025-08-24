@@ -1989,6 +1989,13 @@ export interface UpdateHpcLicenseResourceRequest {
 export interface UpdateHpcLicenseResourceResult {
   license_resource?: HpcLicenseResource;
 }
+export interface UpdateModuleSettingsRequest {
+  module_id?: string;
+  settings?: unknown;
+}
+export interface UpdateModuleSettingsResult {
+  success?: boolean;
+}
 export interface UpdatePermissionProfileRequest {
   profile?: VirtualDesktopPermissionProfile;
 }

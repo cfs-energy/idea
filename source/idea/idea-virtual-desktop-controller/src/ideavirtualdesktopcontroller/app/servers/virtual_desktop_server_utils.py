@@ -138,19 +138,26 @@ class VirtualDesktopServerUtils:
         response = self.ec2_client.reboot_instances(InstanceIds=instance_ids)
         return Utils.to_dict(response)
 
-    def _terminate_dcv_hosts(self, servers: List[VirtualDesktopServer]) -> dict:
+    def _terminate_dcv_hosts(self, servers: List[VirtualDesktopServer], force: bool = False) -> dict:
         instance_ids = []
         for server in servers:
             instance_ids.append(server.instance_id)
 
-        response = self.ec2_client.terminate_instances(InstanceIds=instance_ids)
+        kwargs = {
+            'InstanceIds': instance_ids
+        }
+        if force:
+            kwargs['Force'] = force
+            kwargs['SkipOsShutdown'] = force  # Use skip OS shutdown when force is enabled
+            
+        response = self.ec2_client.terminate_instances(**kwargs)
         return Utils.to_dict(response)
 
-    def terminate_dcv_hosts(self, servers: List[VirtualDesktopServer]) -> dict:
+    def terminate_dcv_hosts(self, servers: List[VirtualDesktopServer], force: bool = False) -> dict:
         if Utils.is_empty(servers):
             return {}
 
-        terminate_response = self._terminate_dcv_hosts(servers)
+        terminate_response = self._terminate_dcv_hosts(servers, force=force)
         instances = Utils.get_value_as_list(
             'TerminatingInstances', terminate_response, []
         )

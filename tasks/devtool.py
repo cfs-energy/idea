@@ -363,6 +363,19 @@ def update_cdk_version(_, version):
     ) as f:
         f.write(os.linesep.join(updated_lines))
 
+    print(f'updating deployment/ecr/idea-administrator/Dockerfile with cdk version: {version}')
+    updated_lines = []
+    dockerfile_path = os.path.join(idea.props.deployment_administrator_dir, 'Dockerfile')
+    with open(dockerfile_path, 'r') as f:
+        lines = f.read().splitlines()
+    for line in lines:
+        if not line.strip().startswith('ARG AWS_CDK_VERSION='):
+            updated_lines.append(line)
+            continue
+        updated_lines.append(f'ARG AWS_CDK_VERSION={version}')
+    with open(dockerfile_path, 'w') as f:
+        f.write(os.linesep.join(updated_lines))
+
     idea.console.success(
         f'successfully updated IDEA CDK version from {old_version} -> {version}'
     )

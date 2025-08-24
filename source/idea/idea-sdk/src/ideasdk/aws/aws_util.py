@@ -129,7 +129,7 @@ class AWSUtil(AWSUtilProtocol):
         elif family.startswith(('trn1n', 'trn1', 'trn')):
             return 'Trn', False
         elif family.startswith(
-            ('g4dn', 'g4ad', 'g5', 'g5g', 'g6', 'g6e', 'g3s', 'g3', 'g2', 'g')
+            ('g4dn', 'g4ad', 'g5', 'g5g', 'g6', 'g6e', 'g6f', 'g3s', 'g3', 'g2', 'g')
         ):
             return 'G', False
         elif family.startswith(('f1', 'f')):
@@ -546,8 +546,16 @@ class AWSUtil(AWSUtilProtocol):
 
         return result
 
-    def ec2_terminate_instances(self, instance_ids: List[str]):
-        self.aws().ec2().terminate_instances(InstanceIds=instance_ids)
+    def ec2_terminate_instances(self, instance_ids: List[str], force: bool = False, skip_os_shutdown: bool = False):
+        kwargs = {
+            'InstanceIds': instance_ids
+        }
+        if force:
+            kwargs['Force'] = force
+        if skip_os_shutdown:
+            kwargs['SkipOsShutdown'] = skip_os_shutdown
+        
+        self.aws().ec2().terminate_instances(**kwargs)
 
     def ec2_describe_reserved_instances(
         self, instance_types: List[str]

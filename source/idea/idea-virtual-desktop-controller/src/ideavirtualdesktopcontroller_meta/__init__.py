@@ -10,4 +10,4 @@
 #  and limitations under the License.
 
 __name__ = 'idea-virtual-desktop-controller'
-__version__ = '25.07.0'
+__version__ = '25.08.0'
