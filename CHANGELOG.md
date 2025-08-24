@@ -39,7 +39,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 ### **📦 Updates**
 * **Core Dependencies**: Updated AWS CDK (2.1026.0), Python (3.13.7), Node (22.18.0), and related packages
 * **GPU Drivers**: Updated NVIDIA GPU drivers to version 580.65.06
-* **AMI Updates**: Refreshed base AMI IDs across all regions for Amazon Linux 2 (arm64/x86_64)
+* **AMI Updates**: Refreshed base AMI IDs across all regions
 
 ## [25.07.0] - 2025-07-15
 
