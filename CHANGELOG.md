@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
-## [25.08.0] - 2025-08-25
+## [25.08.1] - 2025-08-25
 
 **Upgrade Instructions:**
 * It's recommended to perform a full cluster upgrade as Base AMIs and other settings have been updated
@@ -35,6 +35,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 * **Integration Tests**: Fixed auth token expiration errors, race conditions, and connection error handling in scheduler and vdc tests
 * **WAF Configuration**: Fixed WAF blocking legitimate file downloads
 * **Package Installation**: Fixed system and DCV package installation issues on RHEL/Rocky 9
+* **System Upgrade Determinism**: Only upgrade system packages on new eVDI machines.
 
 ### **📦 Updates**
 * **Core Dependencies**: Updated AWS CDK (2.1026.0), Python (3.13.7), Node (22.18.0), and related packages

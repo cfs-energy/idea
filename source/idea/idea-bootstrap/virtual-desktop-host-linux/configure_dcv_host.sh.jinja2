@@ -361,7 +361,12 @@ if [[ -f ${IDEA_CLUSTER_HOME}/dcv_host/userdata_customizations.sh ]]; then
   /bin/bash ${IDEA_CLUSTER_HOME}/dcv_host/userdata_customizations.sh >> ${BOOTSTRAP_DIR}/logs/userdata_customizations.log 2>&1
 fi
 
-{% include '_templates/linux/system_upgrade.jinja2' %}
+if [[ ! -f ${BOOTSTRAP_DIR}/idea_system_upgraded.log ]]; then
+  {% include '_templates/linux/system_upgrade.jinja2' %}
+  echo "System upgrade completed at $(date)" >> ${BOOTSTRAP_DIR}/idea_system_upgraded.log
+else
+  log_info "Found ${BOOTSTRAP_DIR}/idea_system_upgraded.log... skipping system upgrade..."
+fi
 
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
 cp /etc/netplan/50-cloud-init.yaml /etc/netplan/50-cloud-init.yaml.bak
