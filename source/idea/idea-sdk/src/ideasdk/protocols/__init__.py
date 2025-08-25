@@ -372,7 +372,12 @@ class AWSUtilProtocol(SocaBaseProtocol):
     ) -> Optional[List[EC2SpotFleetInstance]]: ...
 
     @abstractmethod
-    def ec2_terminate_instances(self, instance_ids: List[str]): ...
+    def ec2_terminate_instances(
+        self,
+        instance_ids: List[str],
+        force: bool = False,
+        skip_os_shutdown: bool = False,
+    ): ...
 
     @abstractmethod
     def ec2_describe_reserved_instances(

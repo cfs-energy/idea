@@ -2519,23 +2519,26 @@ def upgrade_cluster(
         else:
             context.info('⏭️  Skipping full configuration sync')
 
-            # PHASE 3: Update AMI IDs and base_os values in DynamoDB
-            fancy_title(context, 'Phase 3: Update AMI IDs and Settings', '🖥️')
-            context.info('🔍 Using AMI ID for selected OS and region...')
-            context.info(f'📌 AMI ID: {ami_id}')
-            context.info(f'📌 Base OS: {base_os}')
+        # PHASE 3: Update AMI IDs and base_os values in DynamoDB
+        # This phase now always runs to ensure infrastructure AMIs are updated
+        fancy_title(context, 'Phase 3: Update AMI IDs and Settings', '🖥️')
+        context.info('🔍 Using AMI ID for selected OS and region...')
+        context.info(f'📌 AMI ID: {ami_id}')
+        context.info(f'📌 Base OS: {base_os}')
 
-            if not force:
-                confirm = context.prompt(
-                    'Continue with AMI and settings updates?', default=True
+        proceed_with_ami_updates = True
+        if not force:
+            confirm = context.prompt(
+                'Continue with AMI and settings updates?', default=True
+            )
+            if not confirm:
+                context.info('⏭️  Skipping AMI updates per user request')
+                context.info(
+                    '📋  Module deployment will proceed with existing AMI configurations'
                 )
-                if not confirm:
-                    context.info('AMI updates aborted by user')
-                    context.info(
-                        'The configuration has been updated, but module-specific AMI settings were not changed.'
-                    )
-                    raise SystemExit(0)
+                proceed_with_ami_updates = False
 
+        if proceed_with_ami_updates:
             # Update AMIs and base_os in DynamoDB
             db = ClusterConfigDB(
                 cluster_name=cluster_name,

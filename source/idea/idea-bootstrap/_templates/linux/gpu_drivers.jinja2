@@ -358,6 +358,15 @@ function install_gpu_drivers () {
         install_nvidia_public_drivers
       fi
       ;;
+    g6f)
+      log_info "Intel / NVIDIA L4"
+      # Tesla driver: Yes, GRID driver: Yes
+      if [[ ${NODE_TYPE} == "dcv" ]]; then
+        install_nvidia_grid_drivers
+      else
+        install_nvidia_public_drivers
+      fi
+      ;;
     g5g)
       log_info "Arm / NVIDIA T4G"
       # Tesla driver: Yes, GRID driver: No

@@ -213,14 +213,37 @@ fi
   tar zxvf ${DCV_SERVER_TGZ}
 
   pushd nice-dcv-${DCV_SERVER_VERSION}
+
+  # Simple retry function for rpm installs to handle lock file errors
+  install_rpm_with_retry() {
+    local rpm_file="$1"
+    local rpm_args="$2"
+    local max_attempts=5
+    local wait_time=5
+
+    for ((attempt=1; attempt<=max_attempts; attempt++)); do
+      if rpm -ivh "$rpm_file" $rpm_args; then
+        return 0
+      fi
+
+      if [[ $attempt -lt $max_attempts ]]; then
+        log_info "RPM install attempt $attempt failed, retrying in ${wait_time}s..."
+        sleep $wait_time
+      fi
+    done
+
+    log_error "Failed to install $rpm_file after $max_attempts attempts"
+    return 1
+  }
+
   {% if context.base_os in ('amazonlinux2', 'amazonlinux2023') %}
-    rpm -ivh nice-xdcv-*.${machine}.rpm
-    rpm -ivh nice-dcv-server-*.${machine}.rpm
-    rpm -ivh nice-dcv-web-viewer-*.${machine}.rpm
+    install_rpm_with_retry "nice-xdcv-*.${machine}.rpm" ""
+    install_rpm_with_retry "nice-dcv-server-*.${machine}.rpm" ""
+    install_rpm_with_retry "nice-dcv-web-viewer-*.${machine}.rpm" ""
   {% elif context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
-    rpm -ivh nice-xdcv-*.${machine}.rpm --nodeps
-    rpm -ivh nice-dcv-server-*.${machine}.rpm --nodeps
-    rpm -ivh nice-dcv-web-viewer-*.${machine}.rpm --nodeps
+    install_rpm_with_retry "nice-xdcv-*.${machine}.rpm" "--nodeps"
+    install_rpm_with_retry "nice-dcv-server-*.${machine}.rpm" "--nodeps"
+    install_rpm_with_retry "nice-dcv-web-viewer-*.${machine}.rpm" "--nodeps"
   {% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
     dpkg -i nice-xdcv_*.deb
     dpkg -i nice-dcv-server_*.deb

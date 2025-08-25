@@ -18,6 +18,7 @@ from ideasdk.config.cluster_config import ClusterConfig
 
 from typing import Optional, Dict, List
 import arrow
+import time
 
 
 class TestContext:
@@ -154,80 +155,154 @@ class TestContext:
         return self.get_client(constants.MODULE_CLUSTER_MANAGER)
 
     def initialize_admin_auth(self):
-        if self.admin_auth is None:
-            self.idea_context.info('Initializing Admin Authentication ...')
-            result = self._admin_http_client.invoke_alt(
-                'Auth.InitiateAuth',
-                InitiateAuthRequest(
-                    auth_flow='USER_PASSWORD_AUTH',
-                    username=self.admin_username,
-                    password=self.admin_password,
-                ),
-                result_as=InitiateAuthResult,
-            )
-            admin_auth = result.auth
-            if Utils.is_empty(admin_auth.access_token):
-                raise exceptions.general_exception('access_token not found')
-            if Utils.is_empty(admin_auth.refresh_token):
-                raise exceptions.general_exception('refresh_token not found')
-        else:
-            self.idea_context.info('Renewing Admin Authentication Access Token ...')
-            result = self._admin_http_client.invoke_alt(
-                'Auth.InitiateAuth',
-                InitiateAuthRequest(
-                    auth_flow='REFRESH_TOKEN_AUTH',
-                    username=self.admin_username,
-                    refresh_token=self.admin_auth.refresh_token,
-                ),
-                result_as=InitiateAuthResult,
-            )
+        max_retries = 5
 
-            admin_auth = result.auth
-            if Utils.is_empty(admin_auth.access_token):
-                raise exceptions.general_exception('access_token not found')
-            # set refresh token from previous auth
-            admin_auth.refresh_token = self.admin_auth.refresh_token
+        for attempt in range(max_retries):
+            try:
+                if self.admin_auth is None:
+                    self.idea_context.info('Initializing Admin Authentication ...')
+                    result = self._admin_http_client.invoke_alt(
+                        'Auth.InitiateAuth',
+                        InitiateAuthRequest(
+                            auth_flow='USER_PASSWORD_AUTH',
+                            username=self.admin_username,
+                            password=self.admin_password,
+                        ),
+                        result_as=InitiateAuthResult,
+                    )
+                    admin_auth = result.auth
+                    if Utils.is_empty(admin_auth.access_token):
+                        raise exceptions.general_exception('access_token not found')
+                    if Utils.is_empty(admin_auth.refresh_token):
+                        raise exceptions.general_exception('refresh_token not found')
+                else:
+                    self.idea_context.info(
+                        'Renewing Admin Authentication Access Token ...'
+                    )
+                    result = self._admin_http_client.invoke_alt(
+                        'Auth.InitiateAuth',
+                        InitiateAuthRequest(
+                            auth_flow='REFRESH_TOKEN_AUTH',
+                            username=self.admin_username,
+                            refresh_token=self.admin_auth.refresh_token,
+                        ),
+                        result_as=InitiateAuthResult,
+                    )
 
-        self.admin_auth = admin_auth
-        self.admin_auth_expires_on = arrow.get().shift(seconds=admin_auth.expires_in)
+                    admin_auth = result.auth
+                    if Utils.is_empty(admin_auth.access_token):
+                        raise exceptions.general_exception('access_token not found')
+                    # set refresh token from previous auth
+                    admin_auth.refresh_token = self.admin_auth.refresh_token
+
+                # If we get here, authentication was successful
+                self.admin_auth = admin_auth
+                self.admin_auth_expires_on = arrow.get().shift(
+                    seconds=admin_auth.expires_in
+                )
+                return
+
+            except exceptions.SocaException as e:
+                # Check if this is a connection error that we should retry
+                is_connection_error = (
+                    'CONNECTION_ERROR' in str(e)
+                    or 'Connection reset by peer' in str(e)
+                    or 'Connection aborted' in str(e)
+                    or 'Connection timed out' in str(e)
+                    or 'Connection refused' in str(e)
+                )
+
+                if is_connection_error and attempt < max_retries - 1:
+                    delay = 10 * (attempt + 1)  # 10, 20, 30, 40 seconds
+                    auth_type = (
+                        'Initializing' if self.admin_auth is None else 'Renewing'
+                    )
+                    self.idea_context.info(
+                        f'Connection error {auth_type.lower()} admin authentication, retrying in {delay}s... (attempt {attempt + 1}/{max_retries})'
+                    )
+                    time.sleep(delay)
+                    continue
+                else:
+                    # Final attempt failed or non-connection error
+                    auth_type = 'initialize' if self.admin_auth is None else 'renew'
+                    self.idea_context.error(
+                        f'Failed to {auth_type} admin authentication after {max_retries} attempts. Error: {e}'
+                    )
+                    raise e
 
     def initialize_non_admin_auth(self):
-        if self.non_admin_auth is None:
-            self.idea_context.info('Initializing Non-Admin Authentication ...')
-            result = self._admin_http_client.invoke_alt(
-                'Auth.InitiateAuth',
-                InitiateAuthRequest(
-                    auth_flow='USER_PASSWORD_AUTH',
-                    username=self.non_admin_username,
-                    password=self.non_admin_password,
-                ),
-                result_as=InitiateAuthResult,
-            )
-            non_admin_auth = result.auth
-            if Utils.is_empty(non_admin_auth.access_token):
-                raise exceptions.general_exception('access_token not found')
-            if Utils.is_empty(non_admin_auth.refresh_token):
-                raise exceptions.general_exception('refresh_token not found')
-        else:
-            self.idea_context.info('Renewing Non-Admin Authentication Access Token ...')
-            result = self._admin_http_client.invoke_alt(
-                'Auth.InitiateAuth',
-                InitiateAuthRequest(
-                    auth_flow='REFRESH_TOKEN_AUTH',
-                    username=self.non_admin_username,
-                    refresh_token=self.non_admin_auth.refresh_token,
-                ),
-                result_as=InitiateAuthResult,
-            )
+        max_retries = 5
 
-            non_admin_auth = result.auth
-            if Utils.is_empty(non_admin_auth.access_token):
-                raise exceptions.general_exception('access_token not found')
+        for attempt in range(max_retries):
+            try:
+                if self.non_admin_auth is None:
+                    self.idea_context.info('Initializing Non-Admin Authentication ...')
+                    result = self._admin_http_client.invoke_alt(
+                        'Auth.InitiateAuth',
+                        InitiateAuthRequest(
+                            auth_flow='USER_PASSWORD_AUTH',
+                            username=self.non_admin_username,
+                            password=self.non_admin_password,
+                        ),
+                        result_as=InitiateAuthResult,
+                    )
+                    non_admin_auth = result.auth
+                    if Utils.is_empty(non_admin_auth.access_token):
+                        raise exceptions.general_exception('access_token not found')
+                    if Utils.is_empty(non_admin_auth.refresh_token):
+                        raise exceptions.general_exception('refresh_token not found')
+                else:
+                    self.idea_context.info(
+                        'Renewing Non-Admin Authentication Access Token ...'
+                    )
+                    result = self._admin_http_client.invoke_alt(
+                        'Auth.InitiateAuth',
+                        InitiateAuthRequest(
+                            auth_flow='REFRESH_TOKEN_AUTH',
+                            username=self.non_admin_username,
+                            refresh_token=self.non_admin_auth.refresh_token,
+                        ),
+                        result_as=InitiateAuthResult,
+                    )
 
-        self.non_admin_auth = non_admin_auth
-        self.non_admin_auth_expires_on = arrow.get().shift(
-            seconds=non_admin_auth.expires_in
-        )
+                    non_admin_auth = result.auth
+                    if Utils.is_empty(non_admin_auth.access_token):
+                        raise exceptions.general_exception('access_token not found')
+
+                # If we get here, authentication was successful
+                self.non_admin_auth = non_admin_auth
+                self.non_admin_auth_expires_on = arrow.get().shift(
+                    seconds=non_admin_auth.expires_in
+                )
+                return
+
+            except exceptions.SocaException as e:
+                # Check if this is a connection error that we should retry
+                is_connection_error = (
+                    'CONNECTION_ERROR' in str(e)
+                    or 'Connection reset by peer' in str(e)
+                    or 'Connection aborted' in str(e)
+                    or 'Connection timed out' in str(e)
+                    or 'Connection refused' in str(e)
+                )
+
+                if is_connection_error and attempt < max_retries - 1:
+                    delay = 10 * (attempt + 1)  # 10, 20, 30, 40 seconds
+                    auth_type = (
+                        'Initializing' if self.non_admin_auth is None else 'Renewing'
+                    )
+                    self.idea_context.info(
+                        f'Connection error {auth_type.lower()} non-admin authentication, retrying in {delay}s... (attempt {attempt + 1}/{max_retries})'
+                    )
+                    time.sleep(delay)
+                    continue
+                else:
+                    # Final attempt failed or non-connection error
+                    auth_type = 'initialize' if self.non_admin_auth is None else 'renew'
+                    self.idea_context.error(
+                        f'Failed to {auth_type} non-admin authentication after {max_retries} attempts. Error: {e}'
+                    )
+                    raise e
 
     def get_admin_access_token(self) -> str:
         if self.admin_auth is None:

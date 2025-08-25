@@ -557,9 +557,14 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
         valid_sessions = []
         failed_sessions = []
         for session in sessions:
+            # Preserve the force flag before validation/completion
+            force = getattr(session, 'force', None)
+
             session, is_valid = self._validate_delete_session_request(session)
             if is_valid:
                 self.complete_delete_session_request(session, context)
+                # Restore the force flag after validation/completion
+                session.force = force
                 valid_sessions.append(session)
             else:
                 failed_sessions.append(session)

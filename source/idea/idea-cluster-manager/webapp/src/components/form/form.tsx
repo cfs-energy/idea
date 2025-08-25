@@ -94,6 +94,15 @@ class IdeaForm extends Component<IdeaFormProps, IdeaFormState> {
         this.triggerVisibility()
     }
 
+    componentDidUpdate(prevProps: IdeaFormProps) {
+        // Update form values when props.values changes
+        if (prevProps.values !== this.props.values) {
+            this.setState({
+                values: (this.props.values) ? this.props.values : {}
+            });
+        }
+    }
+
     isVisible(param: string): boolean {
         if (param in this.state.visibility) {
             return this.state.visibility[param]

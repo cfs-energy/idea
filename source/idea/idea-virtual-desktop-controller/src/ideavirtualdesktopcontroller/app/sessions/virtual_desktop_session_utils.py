@@ -311,6 +311,9 @@ class VirtualDesktopSessionUtils:
                 self._logger.info(
                     f'dcv session id: {session.dcv_session_id} for user: {session.owner}. Current state: {session.state}. Nothing to delete'
                 )
+                session.force = (
+                    session_orig.force
+                )  # Preserve force flag for stopped sessions too
                 stopped_sessions.append(session)
                 continue
 
@@ -322,7 +325,6 @@ class VirtualDesktopSessionUtils:
             sessions_to_delete
         )
 
-        servers_to_delete = []
         session_db_entries_to_delete = []
         for session in success_list:
             session = session_map[session.dcv_session_id]
@@ -334,11 +336,22 @@ class VirtualDesktopSessionUtils:
             )
             success_response_list.append(session)
 
+        # Handle stopped sessions - group by force parameter for termination
+        force_servers = []
+        normal_servers = []
+
         for session in stopped_sessions:
             session_db_entries_to_delete.append(session)
-            servers_to_delete.append(session.server)
+            if getattr(session, 'force', False):
+                force_servers.append(session.server)
+            else:
+                normal_servers.append(session.server)
 
-        self._server_utils.terminate_dcv_hosts(servers_to_delete)
+        # Terminate servers with appropriate force settings
+        if force_servers:
+            self._server_utils.terminate_dcv_hosts(force_servers, force=True)
+        if normal_servers:
+            self._server_utils.terminate_dcv_hosts(normal_servers, force=False)
         for session in session_db_entries_to_delete:
             self._schedule_utils.delete_schedules_for_session(session)
             self._session_permission_utils.delete_permissions_for_session(session)

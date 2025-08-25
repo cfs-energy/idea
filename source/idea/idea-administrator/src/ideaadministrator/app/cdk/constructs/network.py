@@ -1017,7 +1017,7 @@ class WebAcl(SocaBaseConstruct):
 
         # AWS Managed Rules - Common Rule Set
         # Provides protection against common application vulnerabilities (OWASP Top 10)
-        # Exclude SizeRestrictions_BODY and CrossSiteScripting_BODY rules to prevent false positives
+        # Exclude SizeRestrictions_BODY, CrossSiteScripting_BODY, and RestrictedExtensions_QUERYARGUMENTS rules to prevent false positives
         rules.append(
             wafv2.CfnWebACL.RuleProperty(
                 name='AWS-AWSManagedRulesCommonRuleSet',
@@ -1033,6 +1033,9 @@ class WebAcl(SocaBaseConstruct):
                             ),
                             wafv2.CfnWebACL.ExcludedRuleProperty(
                                 name='CrossSiteScripting_BODY'
+                            ),
+                            wafv2.CfnWebACL.ExcludedRuleProperty(
+                                name='RestrictedExtensions_QUERYARGUMENTS'
                             ),
                         ],
                     )

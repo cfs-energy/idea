@@ -168,11 +168,6 @@ function add_fsx_lustre_to_fstab () {
     MOUNT_OPTIONS="lustre defaults,noatime,flock,_netdev 0 0"
   fi
 
-  if grep -q " ${MOUNT_DIR}/" /etc/fstab; then
-    log_info "skip add_fsx_lustre_to_fstab: existing entry found for mount dir: ${MOUNT_DIR}"
-    return 0
-  fi
-
   # handle cases for scratch file systems during SOCA job submission
   if [[ -z "${FS_MOUNT_NAME}" ]]; then
     local FSX_ID
@@ -185,7 +180,23 @@ function add_fsx_lustre_to_fstab () {
                               --region "${AWS_DEFAULT_REGION}" \
                               --output text)
   fi
-  echo "${FS_DOMAIN}@tcp:/${FS_MOUNT_NAME} ${MOUNT_DIR}/ ${MOUNT_OPTIONS}" >> /etc/fstab
+
+  local NEW_ENTRY="${FS_DOMAIN}@tcp:/${FS_MOUNT_NAME} ${MOUNT_DIR}/ ${MOUNT_OPTIONS}"
+
+  # Check if exact same entry already exists
+  if grep -qF "${NEW_ENTRY}" /etc/fstab; then
+    log_info "skip add_fsx_lustre_to_fstab: identical entry already exists for ${MOUNT_DIR}"
+    return 0
+  fi
+
+  # Check if different entry exists for same mount directory
+  if grep -q " ${MOUNT_DIR}/" /etc/fstab; then
+    log_info "Updating existing fsx_lustre fstab entry for mount dir: ${MOUNT_DIR}"
+    # Remove existing entry and add new one
+    remove_fsx_lustre_from_fstab "${MOUNT_DIR}"
+  fi
+
+  echo "${NEW_ENTRY}" >> /etc/fstab
 }
 
 function remove_fsx_lustre_from_fstab () {
@@ -205,12 +216,22 @@ function add_efs_to_fstab () {
     MOUNT_OPTIONS="nfs4 nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport 0 0"
   fi
 
-  if grep -q " ${MOUNT_DIR}/" /etc/fstab; then
-    log_info "skip add_efs_to_fstab: existing entry found for mount dir: ${MOUNT_DIR}"
+  local NEW_ENTRY="${FS_DOMAIN}:/ ${MOUNT_DIR}/ ${MOUNT_OPTIONS}"
+
+  # Check if exact same entry already exists
+  if grep -qF "${NEW_ENTRY}" /etc/fstab; then
+    log_info "skip add_efs_to_fstab: identical entry already exists for ${MOUNT_DIR}"
     return 0
   fi
 
-  echo "${FS_DOMAIN}:/ ${MOUNT_DIR}/ ${MOUNT_OPTIONS}" >> /etc/fstab
+  # Check if different entry exists for same mount directory
+  if grep -q " ${MOUNT_DIR}/" /etc/fstab; then
+    log_info "Updating existing efs fstab entry for mount dir: ${MOUNT_DIR}"
+    # Remove existing entry and add new one
+    remove_efs_from_fstab "${MOUNT_DIR}"
+  fi
+
+  echo "${NEW_ENTRY}" >> /etc/fstab
 }
 
 function remove_efs_from_fstab () {
@@ -229,13 +250,23 @@ function add_fsx_openzfs_to_fstab () {
     MOUNT_OPTIONS="nfs4 nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport 0 0"
   fi
 
-  if grep -q " ${MOUNT_DIR}/" /etc/fstab; then
-    log_info "skip add_openzfs_to_fstab: existing entry found for mount dir: ${MOUNT_DIR}"
+  local NEW_ENTRY="${FS_DOMAIN}:${FS_VOLUME_PATH} ${MOUNT_DIR}/ ${MOUNT_OPTIONS}"
+
+  # Check if exact same entry already exists
+  if grep -qF "${NEW_ENTRY}" /etc/fstab; then
+    log_info "skip add_openzfs_to_fstab: identical entry already exists for ${MOUNT_DIR}"
     return 0
   fi
 
+  # Check if different entry exists for same mount directory
+  if grep -q " ${MOUNT_DIR}/" /etc/fstab; then
+    log_info "Updating existing openzfs fstab entry for mount dir: ${MOUNT_DIR}"
+    # Remove existing entry and add new one
+    remove_fsx_openzfs_from_fstab "${MOUNT_DIR}"
+  fi
+
   # eg. filesystem-dns-name:volume-path /localpath nfs nfsver=version defaults 0 0
-  echo "${FS_DOMAIN}:${FS_VOLUME_PATH} ${MOUNT_DIR}/ ${MOUNT_OPTIONS}" >> /etc/fstab
+  echo "${NEW_ENTRY}" >> /etc/fstab
 }
 
 function remove_fsx_openzfs_from_fstab () {
@@ -254,13 +285,23 @@ function add_fsx_netapp_ontap_to_fstab () {
     MOUNT_OPTIONS="nfs4 nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport 0 0"
   fi
 
-  if grep -q " ${MOUNT_DIR}/" /etc/fstab; then
-    log_info "skip add_netapp_ontap_to_fstab: existing entry found for mount dir: ${MOUNT_DIR}"
+  local NEW_ENTRY="${FS_DOMAIN}:${FS_VOLUME_PATH} ${MOUNT_DIR}/ ${MOUNT_OPTIONS}"
+
+  # Check if exact same entry already exists
+  if grep -qF "${NEW_ENTRY}" /etc/fstab; then
+    log_info "skip add_netapp_ontap_to_fstab: identical entry already exists for ${MOUNT_DIR}"
     return 0
   fi
 
+  # Check if different entry exists for same mount directory
+  if grep -q " ${MOUNT_DIR}/" /etc/fstab; then
+    log_info "Updating existing netapp ontap fstab entry for mount dir: ${MOUNT_DIR}"
+    # Remove existing entry and add new one
+    remove_fsx_netapp_ontap_from_fstab "${MOUNT_DIR}"
+  fi
+
   # eg. svm-dns-name:volume-junction-path /fsx nfs nfsvers=version,defaults 0 0
-  echo "${FS_DOMAIN}:${FS_VOLUME_PATH} ${MOUNT_DIR}/ ${MOUNT_OPTIONS}" >> /etc/fstab
+  echo "${NEW_ENTRY}" >> /etc/fstab
 }
 
 function remove_fsx_netapp_ontap_from_fstab () {
