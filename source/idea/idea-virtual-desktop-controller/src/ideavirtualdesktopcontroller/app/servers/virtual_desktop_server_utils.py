@@ -104,7 +104,8 @@ class VirtualDesktopServerUtils:
             for instance in instances:
                 instance_id = Utils.get_value_as_string('InstanceId', instance, None)
                 server = self._server_db.get(instance_id=instance_id)
-                server.state = 'STOPPED'
+                # Set to STOPPING state - actual STOPPED state will be set when EC2 state change event is received
+                server.state = 'STOPPING'
                 self._server_db.update(server)
 
         if Utils.is_not_empty(servers_to_hibernate):
@@ -145,15 +146,22 @@ class VirtualDesktopServerUtils:
         for server in servers:
             instance_ids.append(server.instance_id)
 
+        # Note: EC2 terminate_instances API only supports InstanceIds and DryRun parameters
+        # Force and SkipOsShutdown are only available for stop_instances, not terminate_instances
         kwargs = {'InstanceIds': instance_ids}
-        if force:
-            kwargs['Force'] = force
-            kwargs['SkipOsShutdown'] = (
-                force  # Use skip OS shutdown when force is enabled
-            )
 
-        response = self.ec2_client.terminate_instances(**kwargs)
-        return Utils.to_dict(response)
+        self._logger.info(
+            f'Attempting to terminate instances: {instance_ids} (force parameter ignored - terminate is always immediate)'
+        )
+        try:
+            response = self.ec2_client.terminate_instances(**kwargs)
+            self._logger.info(
+                f'Successfully initiated termination for instances: {instance_ids}'
+            )
+            return Utils.to_dict(response)
+        except ClientError as e:
+            self._logger.error(f'Failed to terminate instances {instance_ids}: {e}')
+            return {'ERROR': str(e)}
 
     def terminate_dcv_hosts(
         self, servers: List[VirtualDesktopServer], force: bool = False

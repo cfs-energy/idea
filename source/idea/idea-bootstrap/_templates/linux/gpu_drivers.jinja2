@@ -2,7 +2,7 @@
 {% if context.is_gpu_instance_type() %}
 {% if context.is_nvidia_gpu() %}
 
-{% if context.base_os in ('amazonlinux2023') %}
+{% if context.base_os in ('amazonlinux2023',) %}
   dnf check-release-update
   dnf update -y
   dnf install -y dkms
@@ -132,29 +132,7 @@ function install_amd_gpu_drivers() {
   # Enforce pbs stop to avoid pbs restart during amdgpupro install
   systemctl stop pbs
 
-  {% if context.base_os == 'amazonlinux2' %}
-    # Install mesa packages for Amazon Linux 2
-    yum install -y --skip-broken mesa* mesa-libEGL mesa-dri-drivers vulkan vulkan-amdgpu vulkan-devel vulkan-filesystem
-  {% endif %}
-
-  {% if context.base_os in ('amazonlinux2') %}
-    local AWS=$(command -v aws)
-
-    # Check if we're in a GovCloud region
-    if [[ -f /etc/environment ]] && grep -q "AWS_REGION=.*gov" /etc/environment; then
-      local DRIVER_BUCKET_REGION=$(grep "AWS_REGION=" /etc/environment | cut -d= -f2 | tr -d '"')
-      log_info "Detected GovCloud region: ${DRIVER_BUCKET_REGION}"
-    else
-      local DRIVER_BUCKET_REGION=$(curl -s --head {{ context.config.get_string('global-settings.gpu_settings.amd.linux.s3_bucket_url', required=True) }} | grep bucket-region | awk '{print $2}' | tr -d '\r\n')
-    fi
-
-    $AWS --region ${DRIVER_BUCKET_REGION} s3 cp --quiet --recursive {{ context.config.get_string('global-settings.gpu_settings.amd.linux.s3_bucket_path', required=True) }} .
-    tar -xf amdgpu-pro-*rhel*.tar.xz
-    cd $(find . -maxdepth 1 -mindepth 1 -type d -name "amdgpu-pro*rhel*")
-    rpm --import RPM-GPG-KEY-amdgpu
-    /bin/bash ./amdgpu-pro-install -y --opencl=pal,legacy
-
-  {% elif context.base_os in ('rhel8', 'rocky8', 'rhel9', 'rocky9') %}
+  {% if context.base_os in ('rocky8', 'rocky9') %}
     local AMD_RADEON_REPO_BASE_URL="https://repo.radeon.com/amdgpu"
     local AMD_GPU_VERSION="6.4.1"
     local OS_VERSION=$(awk -F= '/^VERSION_ID/ {gsub(/"/, "", $2); print $2}' /etc/os-release)
@@ -165,7 +143,7 @@ function install_amd_gpu_drivers() {
     # Install wget if not available
     if ! command -v wget &> /dev/null; then
       log_info "Installing wget"
-      {% if context.base_os in ('rhel8', 'rocky8', 'rhel9', 'rocky9') %}
+      {% if context.base_os in ('rocky8', 'rocky9') %}
       yum install -y wget
       {% endif %}
     fi
@@ -200,20 +178,9 @@ function install_amd_gpu_drivers() {
     log_info "Running amdgpu-install"
     /bin/amdgpu-install --usecase=workstation --accept-eula -y
 
-  {% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
-    local AMD_VERSION="6.4.1"
-    local AMD_PACKAGE_VERSION="6.4.60401-1"
-    {% if context.base_os == 'ubuntu2204' %}
-    local UBUNTU_CODENAME="jammy"
-    {% elif context.base_os == 'ubuntu2404' %}
-    local UBUNTU_CODENAME="noble"
-    {% endif %}
-
-    wget https://repo.radeon.com/amdgpu-install/${AMD_VERSION}/ubuntu/${UBUNTU_CODENAME}/amdgpu-install_${AMD_PACKAGE_VERSION}_all.deb
-    DEBIAN_FRONTEND=noninteractive apt install -y ./amdgpu-install_${AMD_PACKAGE_VERSION}_all.deb
-
-    amdgpu-install --usecase=workstation --vulkan=pro --opencl=rocr --no-32 -y --accept-eula
-
+  {% else %}
+    log_error "AMD GPU drivers are only supported on Rocky Linux 8 and 9"
+    return 1
   {% endif %}
 
   set_reboot_required "Installed AMD GPU Driver"

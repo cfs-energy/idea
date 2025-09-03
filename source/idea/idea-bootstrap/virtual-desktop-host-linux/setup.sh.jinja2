@@ -71,6 +71,8 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
 {% include '_templates/linux/rsyslog.jinja2' %}
 
+{% include '_templates/linux/set_kernel.jinja2' %}
+
 {% include '_templates/linux/idea_service_account.jinja2' %}
 
 {% include '_templates/linux/aws_ssm.jinja2' %}
@@ -78,6 +80,8 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 {% include '_templates/linux/nfs_utils.jinja2' %}
 
 {% include '_templates/linux/mount_shared_storage.jinja2' %}
+
+{% include '_templates/linux/instance_storage.jinja2' %}
 
 if [[ ! -f ${BOOTSTRAP_DIR}/idea_preinstalled_packages.log ]]; then
   {% if context.base_os in ('amazonlinux2') %}
@@ -155,14 +159,6 @@ fi
 
 {% if context.is_gpu_instance_type() %}
   {% include '_templates/linux/disable_nouveau_drivers.jinja2' %}
-  {% if context.is_amd_gpu()  %}
-    {% if context.base_os in ('amazonlinux2') %}
-      amazon-linux-extras disable kernel-5.10
-      amazon-linux-extras enable kernel-5.4
-      yum install -y kernel
-      set_reboot_required "Pinned AL2 Kernel to 5.4for AMD GPU Driver"
-    {% endif %}
-  {% endif %}
 {% else %}
   log_info "GPU InstanceType not detected. Skipping disabling of Nouveau Drivers..."
 {% endif %}
@@ -170,10 +166,22 @@ fi
 # Cleaning up earlier reboot notifications added by our code.
 crontab -l | grep -v "idea-reboot-do-not-edit-or-delete-idea-notif.sh" | crontab -
 
-if [[ ! -f ${BOOTSTRAP_DIR}/idea_preinstalled_packages.log ]]; then
-  # This reboot is not optional. We need to reboot since we have done sudo yum upgrade.
+# Check if reboot is required for any system changes (packages, GPU setup, kernel changes)
+REBOOT_REQUIRED=$(cat ${BOOTSTRAP_DIR}/reboot_required.txt)
+PACKAGES_INSTALLED=$([[ ! -f ${BOOTSTRAP_DIR}/idea_preinstalled_packages.log ]] && echo "yes" || echo "no")
+
+if [[ "${PACKAGES_INSTALLED}" == "yes" ]] || [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
+  if [[ "${PACKAGES_INSTALLED}" == "yes" ]]; then
+    log_info "Reboot required for package installation and system updates."
+  fi
+  if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
+    log_info "Reboot required for GPU driver preparation (nouveau drivers, kernel changes)."
+  fi
+  log_info "Will continue with DCV host configuration after reboot..."
   (crontab -l; echo "@reboot /bin/bash ${SCRIPT_DIR}/configure_dcv_host.sh crontab >> ${BOOTSTRAP_DIR}/logs/userdata_post_reboot.log 2>&1") | crontab -
+  check_reboot_loop "System configuration reboot"
   reboot
+  exit 0
 else
   /bin/bash ${SCRIPT_DIR}/configure_dcv_host.sh
 fi

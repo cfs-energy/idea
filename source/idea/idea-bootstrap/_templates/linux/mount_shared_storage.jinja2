@@ -5,6 +5,7 @@
     REBOOT_REQUIRED=$(cat /root/bootstrap/reboot_required.txt)
     if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
       (crontab -l; echo "@reboot /bin/bash ${SCRIPT_DIR}/setup.sh crontab >> ${BOOTSTRAP_DIR}/logs/userdata_post_reboot.log 2>&1") | crontab -
+      check_reboot_loop "FSx storage mount reboot"
       reboot
       exit 0
     fi

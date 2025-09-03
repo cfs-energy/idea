@@ -1,7 +1,5 @@
-{% if context.base_os in ('amazonlinux2', 'amazonlinux2023') %}
-  echo "Base os is {{ context.base_os }}. No need for firewall disabling"
-{% elif context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
-  # RHEL 7.x/8.x and CentOS 7.x/8.x
+{% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+  # RHEL, CentOS, Rocky Linux, and Amazon Linux (firewalld-based distros)
   systemctl stop firewalld
   systemctl disable firewalld
   systemctl mask firewalld

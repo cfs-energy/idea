@@ -27,7 +27,9 @@ if [[ "${SOURCE}" == "crontab" ]]; then
   # clean crontab, remove current file from reboot commands
   crontab -l | grep -v 'configure_dcv_host_post_reboot.sh' | crontab -
 fi
+# Clear reboot flag and clean up reboot history since we completed successfully
 echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
+rm -f ${BOOTSTRAP_DIR}/reboot_history.log
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 

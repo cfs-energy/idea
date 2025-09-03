@@ -118,8 +118,11 @@ class VirtualDesktopSessionUtils:
             # Allow forced operations to proceed regardless of session state
             if not (
                 Utils.is_not_empty(session_orig.force) and session_orig.force
-            ) and session.state not in {VirtualDesktopSessionState.READY}:
-                session.failure_reason = f"IDEA session id: {session.idea_session_id}:{session.name} for user: {session.owner} is in {session.state} state. Can't stop. Wait for it to be READY."
+            ) and session.state not in {
+                VirtualDesktopSessionState.READY,
+                VirtualDesktopSessionState.RESUMING,
+            }:
+                session.failure_reason = f"IDEA session id: {session.idea_session_id}:{session.name} for user: {session.owner} is in {session.state} state. Can't stop. Wait for it to be READY or RESUMING."
                 self._logger.error(session.failure_reason)
                 fail_response_list.append(session)
                 continue
@@ -336,22 +339,17 @@ class VirtualDesktopSessionUtils:
             )
             success_response_list.append(session)
 
-        # Handle stopped sessions - group by force parameter for termination
-        force_servers = []
-        normal_servers = []
+        # Handle stopped sessions - always use force termination for deletions
+        servers_to_terminate = []
 
         for session in stopped_sessions:
             session_db_entries_to_delete.append(session)
-            if getattr(session, 'force', False):
-                force_servers.append(session.server)
-            else:
-                normal_servers.append(session.server)
+            if session.server:
+                servers_to_terminate.append(session.server)
 
-        # Terminate servers with appropriate force settings
-        if force_servers:
-            self._server_utils.terminate_dcv_hosts(force_servers, force=True)
-        if normal_servers:
-            self._server_utils.terminate_dcv_hosts(normal_servers, force=False)
+        # Always use force termination for session deletions to ensure immediate cleanup
+        if servers_to_terminate:
+            self._server_utils.terminate_dcv_hosts(servers_to_terminate, force=True)
         for session in session_db_entries_to_delete:
             self._schedule_utils.delete_schedules_for_session(session)
             self._session_permission_utils.delete_permissions_for_session(session)

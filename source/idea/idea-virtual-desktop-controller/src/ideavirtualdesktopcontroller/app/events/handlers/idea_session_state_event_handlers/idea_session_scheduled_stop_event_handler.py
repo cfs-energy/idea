@@ -53,7 +53,10 @@ class IDEASessionScheduledStopEventHandler(BaseVirtualDesktopControllerEventHand
             )
             return
 
-        if session.state not in {VirtualDesktopSessionState.READY}:
+        if session.state not in {
+            VirtualDesktopSessionState.READY,
+            VirtualDesktopSessionState.RESUMING,
+        }:
             self.log_info(
                 message_id=message_id,
                 message=f'Session in state {session.state}. No OP. Returning.',

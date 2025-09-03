@@ -1,5 +1,14 @@
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
-apt update
-apt upgrade -y
-set_reboot_required "Packages Upgraded"
+# System upgrade with error handling to prevent infinite loops
+if apt update; then
+  if apt upgrade -y; then
+    log_info "System packages upgraded successfully"
+    # Only set reboot required if upgrade actually succeeded
+    set_reboot_required "Packages Upgraded"
+  else
+    log_error "apt upgrade failed, but continuing bootstrap process"
+  fi
+else
+  log_error "apt update failed, but continuing bootstrap process"
+fi
 {% endif %}

@@ -6,8 +6,6 @@ APT::Periodic::AutocleanInterval "0";
 APT::Periodic::Unattended-Upgrade "0";
 EOF
 
-
-#apt-mark hold linux-image-aws linux-aws linux-headers-aws
 pro config set apt_news=false
 
 sed -i 's/^Prompt=.*/Prompt=never/' /etc/update-manager/release-upgrades

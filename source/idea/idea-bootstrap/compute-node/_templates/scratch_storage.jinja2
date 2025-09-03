@@ -66,6 +66,13 @@ function setup_scratch_storage_ebs () {
           mkfs -t ext4 /dev/${disk}
           mkdir -p ${SCRATCH_MOUNTPOINT}
           chmod 777 ${SCRATCH_MOUNTPOINT}
+
+          # Check for existing fstab entries for this mount point and remove them
+          if grep -q " ${SCRATCH_MOUNTPOINT}/" /etc/fstab; then
+            echo "Removing existing fstab entry for ${SCRATCH_MOUNTPOINT}"
+            remove_from_fstab "${SCRATCH_MOUNTPOINT}"
+          fi
+
           echo "/dev/${disk} ${SCRATCH_MOUNTPOINT} ext4 defaults 0 0" >> /etc/fstab
       fi
   done
@@ -116,6 +123,13 @@ function setup_scratch_storage_instance_store () {
       mkfs -t ext4 ${VOLUME_LIST}
       mkdir -p ${SCRATCH_MOUNTPOINT}
       chmod 777 ${SCRATCH_MOUNTPOINT}
+
+      # Check for existing fstab entries for this mount point and remove them
+      if grep -q " ${SCRATCH_MOUNTPOINT}/" /etc/fstab; then
+        echo "Removing existing fstab entry for ${SCRATCH_MOUNTPOINT}"
+        remove_from_fstab "${SCRATCH_MOUNTPOINT}"
+      fi
+
       echo "${VOLUME_LIST} ${SCRATCH_MOUNTPOINT} ext4 defaults,nofail 0 0" >> /etc/fstab
 
   elif [[ ${VOLUME_COUNT} -gt 1 ]]; then
@@ -136,6 +150,13 @@ function setup_scratch_storage_instance_store () {
     mdadm --detail --scan | tee -a /etc/mdadm.conf
     mkdir -p ${SCRATCH_MOUNTPOINT}
     chmod 777 ${SCRATCH_MOUNTPOINT}
+
+    # Check for existing fstab entries for this mount point and remove them
+    if grep -q " ${SCRATCH_MOUNTPOINT}/" /etc/fstab; then
+      echo "Removing existing fstab entry for ${SCRATCH_MOUNTPOINT}"
+      remove_from_fstab "${SCRATCH_MOUNTPOINT}"
+    fi
+
     echo "/dev/${DEVICE_NAME} ${SCRATCH_MOUNTPOINT} ext4 defaults,nofail 0 0" >> /etc/fstab
   fi
   {% endraw %}

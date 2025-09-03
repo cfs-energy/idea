@@ -54,11 +54,6 @@ EXCLUDE=()
       EXCLUDE+=()
     {% endif %}
 
-    {% if context.is_amd_gpu() %}
-      # Don't upgrade the kernel and kernel packages to higher versions as AMD GPU driver support is dependent on the kernel version
-      EXCLUDE+=('kernel*el8_8*' 'kernel*el9_2*')
-    {% endif %}
-
     {% if context.job_has_param('enable_efa_support') %}
       # EFA installer provides an older version of this library
       EXCLUDE+=()
@@ -87,14 +82,5 @@ EXCLUDE=()
 
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
   DEBIAN_FRONTEND=noninteractive apt install -yq $DEFAULT_PACKAGES_FOR_DEB
-
-  if [[ $(dpkg -l | grep linux-image | wc -l) -gt "2" ]]; then
-    set_reboot_required "Updated kernel installed"
-  fi
-
 {% endif %}
-
-
-
-
 # End: System Packages Install

@@ -9,7 +9,7 @@ testcases:
     base_os: amazonlinux2023
     software_stack_id: ss-base-amazonlinux2023-arm64-base
     hibernation_enabled: False
-    instance_type: m6g.2xlarge
+    instance_type: m6g.xlarge
     storage_size: 50
   - name: amazonlinux2023-gpu-nvidia
     base_os: amazonlinux2023
@@ -21,7 +21,7 @@ testcases:
     base_os: amazonlinux2
     software_stack_id: ss-base-amazonlinux2-arm64-base
     hibernation_enabled: False
-    instance_type: m6g.2xlarge
+    instance_type: m6g.xlarge
     storage_size: 50
   - name: amazonlinux2-x86_64
     base_os: amazonlinux2
@@ -93,7 +93,7 @@ testcases:
     base_os: rhel8
     software_stack_id: ss-base-rhel8-arm64-base
     hibernation_enabled: False
-    instance_type: m6g.2xlarge
+    instance_type: m6g.xlarge
     storage_size: 50
   - name: rhel8-gpu-nvidia
     base_os: rhel8
@@ -111,7 +111,7 @@ testcases:
     base_os: rhel9
     software_stack_id: ss-base-rhel9-arm64-base
     hibernation_enabled: False
-    instance_type: m6g.2xlarge
+    instance_type: m6g.xlarge
     storage_size: 50
   - name: rhel9-gpu-nvidia
     base_os: rhel9
@@ -129,7 +129,7 @@ testcases:
     base_os: rocky8
     software_stack_id: ss-base-rocky8-arm64-base
     hibernation_enabled: False
-    instance_type: m6g.2xlarge
+    instance_type: m6g.xlarge
     storage_size: 50
   - name: rocky8-gpu-nvidia
     base_os: rocky8
@@ -153,7 +153,7 @@ testcases:
     base_os: rocky9
     software_stack_id: ss-base-rocky9-arm64-base
     hibernation_enabled: False
-    instance_type: m6g.2xlarge
+    instance_type: m6g.xlarge
     storage_size: 50
   - name: rocky9-gpu-nvidia
     base_os: rocky9
@@ -195,7 +195,7 @@ testcases:
     base_os: ubuntu2204
     software_stack_id: ss-base-ubuntu2204-arm64-base
     hibernation_enabled: False
-    instance_type: m6g.2xlarge
+    instance_type: m6g.xlarge
     storage_size: 50
   - name: ubuntu2204-gpu-nvidia
     base_os: ubuntu2204
@@ -213,7 +213,7 @@ testcases:
     base_os: ubuntu2404
     software_stack_id: ss-base-ubuntu2404-arm64-base
     hibernation_enabled: False
-    instance_type: m6g.2xlarge
+    instance_type: m6g.xlarge
     storage_size: 50
   - name: ubuntu2404-gpu-nvidia
     base_os: ubuntu2404

@@ -327,11 +327,22 @@ class ProvisionJobs:
             elif provisioning_status in (
                 ProvisioningStatus.IN_PROGRESS,
                 ProvisioningStatus.DELETE_IN_PROGRESS,
+            ):
+                self.print_status()
+                return ProvisionJobsResult(status=False)
+
+            elif provisioning_status in (
                 ProvisioningStatus.FAILED,
                 ProvisioningStatus.TIMEOUT,
             ):
                 self.print_status()
-                return ProvisionJobsResult(status=False)
+                # For failed/timeout jobs, return a special error code to indicate
+                # they should be left for the node housekeeper to clean up
+                # rather than being continuously retried
+                return ProvisionJobsResult(
+                    status=False,
+                    error_code=errorcodes.CLOUDFORMATION_STACK_BUILDER_FAILED,
+                )
 
             else:
                 return ProvisionJobsResult(status=True)
@@ -448,6 +459,19 @@ class JobProvisioner(SocaService):
                     and result.error_code == errorcodes.NOT_ENOUGH_LICENSES
                 ):
                     return ProvisionJobsResult(status=True)
+
+            # if job has failed due to CloudFormation stack failures (FAILED/TIMEOUT status),
+            # do not block the entire queue and let the node housekeeper handle cleanup.
+            # the job will be reset and retried when the housekeeper runs.
+            if (
+                Utils.is_not_empty(result.error_code)
+                and result.error_code == errorcodes.CLOUDFORMATION_STACK_BUILDER_FAILED
+            ):
+                self._logger.info(
+                    f'{jobs[0].log_tag} CloudFormation stack failed or timed out. '
+                    f'Leaving for node housekeeper to clean up and retry.'
+                )
+                return ProvisionJobsResult(status=True)
 
             if retry_count > max_retries or result.status:
                 return result

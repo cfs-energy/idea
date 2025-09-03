@@ -1,0 +1,318 @@
+# Begin: Kernel Version Management
+
+# OS-specific kernel version patterns (wildcard indicates we want latest in series)
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+TARGET_KERNEL_VERSION="6.8*"
+{% elif context.base_os in ('amazonlinux2023',) %}
+TARGET_KERNEL_VERSION="6.1*"
+{% elif context.base_os in ('amazonlinux2',) %}
+TARGET_KERNEL_VERSION="5.10*"
+{% elif context.base_os in ('rhel8', 'rocky8') %}
+TARGET_KERNEL_VERSION="4.18.0-553*"
+{% elif context.base_os in ('rhel9', 'rocky9') %}
+TARGET_KERNEL_VERSION="5.14.0-570*"
+{% endif %}
+
+
+function apply_kernel_holds() {
+  local target_version="$TARGET_KERNEL_VERSION"
+  local current_kernel=$(uname -r)
+
+  log_info "Applying holds for current kernel ${current_kernel} to prevent further upgrades"
+
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+  # Hold the specific kernel version we're currently running
+  apt-mark hold linux-image-${current_kernel} linux-headers-${current_kernel} linux-modules-${current_kernel} linux-modules-extra-${current_kernel} >/dev/null 2>&1 || true
+
+  # Check if meta-packages point to our target series or need to be removed
+  local target_base="${target_version%\*}"
+  local meta_kernel_version=""
+
+  # Check what kernel version the meta-packages currently point to
+  if dpkg -l linux-aws 2>/dev/null | grep -q "^ii"; then
+    meta_kernel_version=$(apt-cache depends linux-aws | grep -E "Depends: linux-image-aws" | head -1 | cut -d'-' -f4 | cut -d'.' -f1-2 2>/dev/null || echo "")
+  fi
+
+  if [[ -n "$meta_kernel_version" ]] && [[ "$meta_kernel_version" == "${target_base%.*}" ]]; then
+    # Meta-packages point to our target series, hold them
+    log_info "Meta-packages point to target series ${target_base} - holding them"
+    apt-mark hold linux-aws linux-image-aws linux-headers-aws linux-tools-aws >/dev/null 2>&1 || true
+  else
+    # Meta-packages point to wrong series or don't exist, remove them
+    log_info "Meta-packages point to wrong kernel series or don't exist - removing them"
+    DEBIAN_FRONTEND=noninteractive apt remove -y linux-aws linux-image-aws linux-headers-aws linux-tools-aws >/dev/null 2>&1 || true
+  fi
+
+{% elif context.base_os in ('amazonlinux2',) %}
+  # For AL2, kernel version is managed via amazon-linux-extras
+  log_info "Kernel version managed via amazon-linux-extras - holding current kernel packages"
+  # Note: AL2 doesn't have apt-mark, and amazon-linux-extras handles version locking
+
+{% elif context.base_os in ('amazonlinux2023',) %}
+  # Install dnf-plugin-versionlock if not already present
+  if ! dnf list installed dnf-plugin-versionlock >/dev/null 2>&1; then
+    log_info "Installing dnf-plugin-versionlock for kernel version management"
+    dnf install -y dnf-plugin-versionlock >/dev/null 2>&1 || true
+  fi
+  # Lock the specific current kernel version
+  dnf versionlock kernel-${current_kernel} kernel-devel-${current_kernel} kernel-headers-${current_kernel} >/dev/null 2>&1 || true
+
+{% elif context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+  # Install dnf-plugin-versionlock if not already present
+  if ! dnf list installed dnf-plugin-versionlock >/dev/null 2>&1; then
+    log_info "Installing dnf-plugin-versionlock for kernel version management"
+    dnf install -y dnf-plugin-versionlock >/dev/null 2>&1 || true
+  fi
+  # Lock the specific current kernel version
+  dnf versionlock kernel-${current_kernel} kernel-core-${current_kernel} kernel-devel-${current_kernel} kernel-headers-${current_kernel} >/dev/null 2>&1 || true
+{% endif %}
+}
+
+function remove_unwanted_kernels() {
+  local target_version="$TARGET_KERNEL_VERSION"
+  local target_base="${target_version%\*}"  # Remove wildcard for pattern matching
+  local current_kernel=$(uname -r)
+
+  log_info "Removing all non-target kernel packages (keeping only ${target_version} series)"
+
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+  # Find all installed kernel packages that don't match our target series
+  PACKAGES_TO_REMOVE=$(apt list --installed 2>/dev/null | grep -E "linux-(image|headers|modules|modules-extra)" | grep -v "${target_base}" | cut -d'/' -f1 | tr '\n' ' ')
+
+  if [[ -n "$PACKAGES_TO_REMOVE" ]]; then
+    log_info "Found non-target kernel packages to remove: $PACKAGES_TO_REMOVE"
+    # Unhold packages before removal
+    apt-mark unhold $PACKAGES_TO_REMOVE >/dev/null 2>&1 || true
+    # Remove packages
+    DEBIAN_FRONTEND=noninteractive apt purge -y $PACKAGES_TO_REMOVE 2>/dev/null || true
+    # Clean up orphaned packages
+    DEBIAN_FRONTEND=noninteractive apt autoremove -y 2>/dev/null || true
+  else
+    log_info "No non-target kernel packages found to remove"
+  fi
+
+{% elif context.base_os in ('amazonlinux2',) %}
+  # For AL2, use built-in package-cleanup to remove old kernels
+  log_info "Using package-cleanup to remove old kernels (keeping only current target)"
+  package-cleanup --oldkernels --count=1 -y >/dev/null 2>&1 || true
+
+{% elif context.base_os in ('amazonlinux2023',) %}
+  # Find all installed kernel packages that don't match our target version
+  PACKAGES_TO_REMOVE=$(rpm -qa kernel kernel-devel kernel-headers | grep -v "${target_base}" | tr '\n' ' ')
+
+  if [[ -n "$PACKAGES_TO_REMOVE" ]]; then
+    log_info "Found non-target kernel packages to remove: $PACKAGES_TO_REMOVE"
+    dnf remove -y $PACKAGES_TO_REMOVE >/dev/null 2>&1 || true
+  else
+    log_info "No non-target kernel packages found to remove"
+  fi
+
+{% elif context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+  # Find all installed kernel packages that don't match our target version
+  PACKAGES_TO_REMOVE=$(rpm -qa kernel kernel-core kernel-devel kernel-headers | grep -v "${target_base}" | tr '\n' ' ')
+
+  if [[ -n "$PACKAGES_TO_REMOVE" ]]; then
+    log_info "Found non-target kernel packages to remove: $PACKAGES_TO_REMOVE"
+    dnf remove -y $PACKAGES_TO_REMOVE >/dev/null 2>&1 || true
+  else
+    log_info "No non-target kernel packages found to remove"
+  fi
+{% endif %}
+}
+
+function install_target_kernel() {
+  local target_version="$TARGET_KERNEL_VERSION"
+  local target_base="${target_version%\*}"  # Remove wildcard for some operations
+  local current_kernel=$(uname -r)
+
+  log_info "Installing target kernel ${target_version}"
+
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+  # Update package cache
+  apt-get update
+
+  # Install target kernel packages (use base version for Ubuntu meta-packages)
+  if DEBIAN_FRONTEND=noninteractive apt install -y \
+      linux-aws-${target_base} \
+      linux-image-aws-${target_base} \
+      linux-headers-aws-${target_base} \
+      linux-modules-extra-aws-${target_base} \
+      --allow-change-held-packages; then
+    log_info "Target kernel ${target_version} packages installed successfully"
+  else
+    log_error "Failed to install target kernel ${target_version} packages"
+    return 1
+  fi
+
+{% elif context.base_os in ('amazonlinux2',) %}
+  # Use amazon-linux-extras for AL2 kernel management (simpler and more reliable)
+  log_info "Using amazon-linux-extras to manage kernel version for Amazon Linux 2"
+
+  # Disable current kernel extra
+  amazon-linux-extras disable kernel-5.10 >/dev/null 2>&1 || true
+  amazon-linux-extras disable kernel-5.4 >/dev/null 2>&1 || true
+
+  # Enable target kernel extra
+  if amazon-linux-extras enable kernel-${target_base}; then
+    log_info "Enabled kernel-${target_base} via amazon-linux-extras"
+
+    # Install the kernel
+    if yum install -y kernel; then
+      log_info "Target kernel ${target_version} installed successfully via amazon-linux-extras"
+    else
+      log_error "Failed to install kernel via amazon-linux-extras"
+      return 1
+    fi
+  else
+    log_error "Failed to enable kernel-${target_base} via amazon-linux-extras"
+    return 1
+  fi
+
+{% elif context.base_os in ('amazonlinux2023',) %}
+  # AL2023 uses dnf approach
+  if dnf install -y kernel-${TARGET_KERNEL_VERSION} kernel-devel-${TARGET_KERNEL_VERSION} kernel-headers-${TARGET_KERNEL_VERSION}; then
+    log_info "Target kernel ${target_version} packages installed successfully"
+  else
+    log_error "Failed to install target kernel ${target_version} packages"
+    return 1
+  fi
+
+{% elif context.base_os in ('rhel8', 'rocky8') %}
+  # RHEL8/Rocky8 install latest in target series
+  log_info "Installing latest kernel in ${target_version} series"
+  if dnf install -y kernel-${TARGET_KERNEL_VERSION} kernel-core-${TARGET_KERNEL_VERSION} kernel-devel-${TARGET_KERNEL_VERSION} kernel-headers-${TARGET_KERNEL_VERSION}; then
+    log_info "Latest kernel in ${target_version} series installed successfully"
+  else
+    log_error "Failed to install latest kernel in ${target_version} series"
+    return 1
+  fi
+
+{% elif context.base_os in ('rhel9', 'rocky9') %}
+  # RHEL9/Rocky9 install latest in target series
+  log_info "Installing latest kernel in ${target_version} series"
+  if dnf install -y kernel-${TARGET_KERNEL_VERSION} kernel-core-${TARGET_KERNEL_VERSION} kernel-devel-${TARGET_KERNEL_VERSION} kernel-headers-${TARGET_KERNEL_VERSION}; then
+    log_info "Latest kernel in ${target_version} series installed successfully"
+  else
+    log_error "Failed to install latest kernel in ${target_version} series"
+    return 1
+  fi
+{% endif %}
+}
+
+function set_kernel_version() {
+  # Skip kernel management on captured images that already went through bootstrap
+  if [[ -f ${BOOTSTRAP_DIR}/idea_preinstalled_packages.log ]] || [[ -f ${BOOTSTRAP_DIR}/idea_system_upgraded.log ]]; then
+    log_info "Found existing bootstrap logs - skipping kernel management on captured image"
+    return 0
+  fi
+
+  local target_version="$TARGET_KERNEL_VERSION"
+  local target_base="${target_version%\*}"  # Remove wildcard for pattern matching
+  local current_kernel=$(uname -r)
+
+  log_info "Current kernel: $current_kernel"
+  log_info "Target kernel version: $target_version"
+
+  # Check if we're already running the target kernel series
+  if [[ "$current_kernel" == *"$target_base"* ]]; then
+    log_info "Confirmed running target kernel series $target_base - pinning current version"
+    apply_kernel_holds
+    remove_unwanted_kernels
+    return 0
+  fi
+
+  # Check if target kernel is already installed
+  local kernel_installed=false
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+  if apt list --installed 2>/dev/null | grep -q "linux-image.*${target_base}"; then
+    kernel_installed=true
+  fi
+{% elif context.base_os in ('amazonlinux2',) %}
+  # For AL2, check if the target kernel extra is already enabled and kernel is installed
+  if amazon-linux-extras list | grep -q "kernel-${target_base}.*enabled" && rpm -qa kernel | grep -q "${target_base}"; then
+    kernel_installed=true
+  fi
+{% elif context.base_os in ('amazonlinux2023',) %}
+  if rpm -qa kernel | grep -q "${target_base}"; then
+    kernel_installed=true
+  fi
+{% elif context.base_os in ('rhel8', 'rocky8') %}
+  # For RHEL8/Rocky8, check for any kernel in the target series
+  if rpm -qa kernel | grep -q "${target_base}"; then
+    kernel_installed=true
+  fi
+{% elif context.base_os in ('rhel9', 'rocky9') %}
+  # For RHEL9/Rocky9, check for any kernel in the target series
+  if rpm -qa kernel | grep -q "${target_base}"; then
+    kernel_installed=true
+  fi
+{% endif %}
+
+  # Install target kernel if not already installed
+  if [[ "$kernel_installed" != "true" ]]; then
+    log_info "Target kernel ${target_version} not installed, installing..."
+    install_target_kernel
+  else
+    log_info "Target kernel ${target_version} already installed"
+  fi
+
+  # Apply holds to prevent unwanted upgrades
+  apply_kernel_holds
+
+  # Set default boot kernel
+  if [[ -f /etc/default/grub ]]; then
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+    # Update GRUB to default to target kernel
+    sed -i 's/^GRUB_DEFAULT=.*/GRUB_DEFAULT="1>2"/' /etc/default/grub
+    update-grub
+{% elif context.base_os in ('amazonlinux2',) %}
+    # For Amazon Linux 2, amazon-linux-extras handles everything automatically (including GRUB)
+    log_info "Amazon Linux 2 kernel switching is fully managed by amazon-linux-extras - no GRUB changes needed"
+
+{% elif context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+    # For other RHEL-based systems, set GRUB_DEFAULT to 0 to boot the latest (target) kernel
+    sed -i 's/^GRUB_DEFAULT=.*/GRUB_DEFAULT=0/' /etc/default/grub
+    {% if context.base_os in ('amazonlinux2023',) %}
+    grub2-mkconfig -o /boot/grub2/grub.cfg
+    {% elif context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+    grub2-mkconfig -o /etc/grub2.cfg
+    {% endif %}
+{% endif %}
+    log_info "Updated GRUB to boot kernel ${target_version} by default"
+  fi
+
+  # Only reboot if we're not already running the target kernel
+  if [[ "$current_kernel" != *"$target_base"* ]]; then
+    # Verify target kernel will be available on next boot
+    if ls /boot/vmlinuz-*${target_base}* >/dev/null 2>&1; then
+      log_info "Kernel ${target_version} found in /boot, rebooting to activate"
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+      set_reboot_required "Ubuntu kernel version change to ${target_version}"
+{% elif context.base_os in ('amazonlinux2', 'amazonlinux2023') %}
+      set_reboot_required "Amazon Linux kernel version change to ${target_version}"
+{% elif context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+      set_reboot_required "RHEL kernel version change to ${target_version}"
+{% endif %}
+
+      # Set up crontab to continue bootstrap after reboot
+      (crontab -l 2>/dev/null | grep -v 'setup.sh'; echo "@reboot /bin/bash ${SCRIPT_DIR}/setup.sh crontab >> ${BOOTSTRAP_DIR}/logs/userdata_post_reboot.log 2>&1") | crontab -
+
+      check_reboot_loop "Kernel installation reboot"
+      reboot
+      exit 0
+    else
+      log_error "Kernel ${target_version} not found in /boot after installation"
+      return 1
+    fi
+  else
+    log_info "Already running target kernel ${target_version} - pinning current version"
+    apply_kernel_holds
+    remove_unwanted_kernels
+  fi
+}
+
+# Execute kernel version management for all supported distributions
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+set_kernel_version
+{% endif %}
+# End: Kernel Version Management

@@ -124,4 +124,5 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 REBOOT_REQUIRED=$(cat /root/bootstrap/reboot_required.txt)
 if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
   reboot
+  exit 0
 fi

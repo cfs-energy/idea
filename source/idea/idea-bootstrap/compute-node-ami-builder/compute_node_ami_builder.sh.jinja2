@@ -65,6 +65,7 @@ if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
   log_info "reboot required. compute_node_ami_builder_post_reboot.sh will be executed after reboot ..."
   (crontab -l; echo "@reboot /bin/bash ${SCRIPT_DIR}/compute_node_ami_builder_post_reboot.sh >> ${IDEA_COMPUTE_NODE_AMI_BUILDER_LOGS_DIR}/compute_node_ami_builder_bootstrap.log 2>&1") | crontab -
   reboot
+  exit 0
 else
   mount -a
   log_info "reboot not required. executing compute_node_ami_builder_post_reboot.sh ..."

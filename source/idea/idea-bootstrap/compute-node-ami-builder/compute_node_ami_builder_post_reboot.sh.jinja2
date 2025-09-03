@@ -23,6 +23,7 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 REBOOT_REQUIRED=$(cat /root/bootstrap/reboot_required.txt)
 if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
   reboot
+  exit 0
 else
 
   # user data customizations
@@ -33,20 +34,12 @@ else
   # clean-up: shared storage mounts
   {% for name, storage in context.config.get_config('shared-storage').items() %}
   {% if context.eval_shared_storage_scope(shared_storage=storage) %}
-  {% if storage.provider == 'efs' %}
-  remove_efs_from_fstab "{{ storage.mount_dir }}"
-  {% endif %}
-  {% if storage.provider == 'fsx_lustre' %}
-  remove_fsx_lustre_from_fstab "{{ storage.mount_dir }}"
-  {% endif %}
-  {% if storage.provider == 'fsx_netapp_ontap' %}
-  remove_fsx_netapp_ontap_from_fstab "{{ storage.mount_dir }}"
-  {% endif %}
-  {% if storage.provider == 'fsx_openzfs' %}
-  remove_fsx_openzfs_from_fstab "{{ storage.mount_dir }}"
-  {% endif %}
+  remove_from_fstab "{{ storage.mount_dir }}"
   {% endif %}
   {% endfor %}
+
+  # clean-up: instance storage mounts
+  remove_from_fstab "/scratch"
 
   # clean-up
   rm -rf /var/tmp/* /tmp/* /var/crash/*

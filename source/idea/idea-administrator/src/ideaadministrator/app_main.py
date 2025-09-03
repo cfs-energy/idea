@@ -2787,6 +2787,9 @@ def _perform_backup_update_global_settings(
         # Update global settings in DDB
         context.info('📤  Updating global settings in DynamoDB...')
 
+        context.info('🗑️  Deleting existing global settings to ensure clean state...')
+        db.delete_config_entries('global-settings.')
+
         context.info('🔍  Preparing global settings for synchronization...')
         config_entries = config_generator.convert_config_to_key_value_pairs(
             key_prefix='global-settings', path=export_dir

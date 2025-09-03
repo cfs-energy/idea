@@ -1,9 +1,9 @@
 # Begin: Configure chronyd
 {% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
-yum remove -y ntp
+yum remove -y ntp || true
 {% endif %}
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
-apt remove -y ntp
+apt remove -y ntp || true
 {% endif %}
 
 mv /etc/chrony.conf  /etc/chrony.conf.original
@@ -34,6 +34,8 @@ logdir /var/log/chrony
 dumponexit
 dumpdir /var/run/chrony
 " > /etc/chrony.conf
-systemctl enable chronyd
+# Enable and start chronyd service (handle potential alias/link issues)
+systemctl enable chrony || systemctl enable chronyd || true
+systemctl start chrony || systemctl start chronyd || true
 
 # End: Configure chronyd

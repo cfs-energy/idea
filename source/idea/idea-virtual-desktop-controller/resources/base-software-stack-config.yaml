@@ -796,88 +796,88 @@ rhel9:
     default-min-storage-value: 20
     default-name: 'RHEL 9 - arm64'
     af-south-1:
-      - ami-id: ami-076c22d94ede96f40
+      - ami-id: ami-06d2aa85dd03bd7d1
         ss-id-suffix: base
     ap-east-1:
-      - ami-id: ami-0f2e29effdfbfa389
+      - ami-id: ami-03192149223a29330
         ss-id-suffix: base
     ap-northeast-1:
-      - ami-id: ami-01d637cfcc67a34b3
+      - ami-id: ami-0dac2d448a7380467
         ss-id-suffix: base
     ap-northeast-2:
-      - ami-id: ami-04ea05307718ee73d
+      - ami-id: ami-0937436cf8d57a039
         ss-id-suffix: base
     ap-northeast-3:
-      - ami-id: ami-0d8888ae7e8aa55d7
+      - ami-id: ami-0851fdef6e243a4dc
         ss-id-suffix: base
     ap-south-1:
-      - ami-id: ami-0cc35bc7a5f46a4c8
+      - ami-id: ami-0cddb5d6cc75103df
         ss-id-suffix: base
     ap-south-2:
-      - ami-id: ami-0d06608cb135615ed
+      - ami-id: ami-059c8cbc81b29ebe3
         ss-id-suffix: base
     ap-southeast-1:
-      - ami-id: ami-02d035d9de2a81b56
+      - ami-id: ami-0659e7f2ccfbaaa33
         ss-id-suffix: base
     ap-southeast-2:
-      - ami-id: ami-00a3edaebe355a359
+      - ami-id: ami-076588b075aa18b00
         ss-id-suffix: base
     ap-southeast-3:
-      - ami-id: ami-0e588f43db64e03d9
+      - ami-id: ami-043bf6f45bc422d79
         ss-id-suffix: base
     ap-southeast-4:
-      - ami-id: ami-06d344428cdd402f7
+      - ami-id: ami-068a3d5725d494fa2
         ss-id-suffix: base
     ca-central-1:
-      - ami-id: ami-0a32d93b6cc77812e
+      - ami-id: ami-0bd0abecf40a36c89
         ss-id-suffix: base
     eu-central-1:
-      - ami-id: ami-0ff3a43e31c91d251
+      - ami-id: ami-095c4dfdbee0dee13
         ss-id-suffix: base
     eu-central-2:
-      - ami-id: ami-0f2ecbc6c1a3a1795
+      - ami-id: ami-0cacd98d7a75aebf3
         ss-id-suffix: base
     eu-north-1:
-      - ami-id: ami-0325759d4376679c3
+      - ami-id: ami-088a669a951717d29
         ss-id-suffix: base
     eu-south-1:
-      - ami-id: ami-0977e5bf675df2a10
+      - ami-id: ami-05f8d66095fed837a
         ss-id-suffix: base
     eu-south-2:
-      - ami-id: ami-0f496d45ad83923be
+      - ami-id: ami-0a497cc2d06ec830a
         ss-id-suffix: base
     eu-west-1:
-      - ami-id: ami-0d3ae9873b20ed593
+      - ami-id: ami-0c7dd36917130661a
         ss-id-suffix: base
     eu-west-2:
-      - ami-id: ami-047530fc80650080f
+      - ami-id: ami-0fc3dc0740d6656c3
         ss-id-suffix: base
     eu-west-3:
-      - ami-id: ami-0b6a596042e9344b3
+      - ami-id: ami-0579b17163cd4dc73
         ss-id-suffix: base
     il-central-1:
-      - ami-id: ami-02effec170c0855b0
+      - ami-id: ami-04afdf3d6a7632b22
         ss-id-suffix: base
     me-central-1:
-      - ami-id: ami-0ecb44099bfd26f82
+      - ami-id: ami-0d06305e264e7b9e0
         ss-id-suffix: base
     me-south-1:
-      - ami-id: ami-0bb320ba3464fb252
+      - ami-id: ami-06bb556b3ada270b1
         ss-id-suffix: base
     sa-east-1:
-      - ami-id: ami-0d50e061257f99675
+      - ami-id: ami-062bbc19c4833391e
         ss-id-suffix: base
     us-east-1:
-      - ami-id: ami-018fd0423e3ed3e58
+      - ami-id: ami-01efe47be56f52d02
         ss-id-suffix: base
     us-east-2:
-      - ami-id: ami-06f700fb78c29f1a0
+      - ami-id: ami-06c196bebe58b0c28
         ss-id-suffix: base
     us-west-1:
-      - ami-id: ami-0c84e312c555c71c1
+      - ami-id: ami-021f957060d13c1e1
         ss-id-suffix: base
     us-west-2:
-      - ami-id: ami-0863a659a50ca71d7
+      - ami-id: ami-0cfc0330d1b2401bd
         ss-id-suffix: base
     us-gov-west-1:
       - ami-id: ami-06ac1fe9004042996
@@ -890,88 +890,88 @@ rhel9:
     default-min-storage-value: 20
     default-name: 'RHEL 9 - x86_64'
     af-south-1:
-      - ami-id: ami-042343858392b77c3
+      - ami-id: ami-095957153df81c45c
         ss-id-suffix: base
     ap-east-1:
-      - ami-id: ami-0baa9e11c33d195ff
+      - ami-id: ami-0e9fc4febc7be2b44
         ss-id-suffix: base
     ap-northeast-1:
-      - ami-id: ami-0e340138fa9f062a6
+      - ami-id: ami-0c8576e9021325617
         ss-id-suffix: base
     ap-northeast-2:
-      - ami-id: ami-09176d51d11e62f96
+      - ami-id: ami-0090b5923aa899b3e
         ss-id-suffix: base
     ap-northeast-3:
-      - ami-id: ami-00be06c1cfcf07658
+      - ami-id: ami-0445f6fd13acf90bb
         ss-id-suffix: base
     ap-south-1:
-      - ami-id: ami-0216c9095ecd0a68f
+      - ami-id: ami-0d4c71635894eb376
         ss-id-suffix: base
     ap-south-2:
-      - ami-id: ami-0c532beca639d9f11
+      - ami-id: ami-06e45ac1eb97fe97b
         ss-id-suffix: base
     ap-southeast-1:
-      - ami-id: ami-0f537008fe2063073
+      - ami-id: ami-0c948fd4c2f5a354e
         ss-id-suffix: base
     ap-southeast-2:
-      - ami-id: ami-08fb3dde9cef9f65a
+      - ami-id: ami-07ea93aa60e095fde
         ss-id-suffix: base
     ap-southeast-3:
-      - ami-id: ami-0b685d40668a6fa0f
+      - ami-id: ami-03f854dd23109d9ee
         ss-id-suffix: base
     ap-southeast-4:
-      - ami-id: ami-07f537f11c055cd9f
+      - ami-id: ami-0c59fd474ddff1bda
         ss-id-suffix: base
     ca-central-1:
-      - ami-id: ami-00c7a15065f28eab9
+      - ami-id: ami-03fb74a78bd17729f
         ss-id-suffix: base
     eu-central-1:
-      - ami-id: ami-08b4f658ed02eb8f8
+      - ami-id: ami-00cf7a24d4f964306
         ss-id-suffix: base
     eu-central-2:
-      - ami-id: ami-04599e9a730f379f9
+      - ami-id: ami-0b7041e1b9dde0dd6
         ss-id-suffix: base
     eu-north-1:
-      - ami-id: ami-05dfd8c2e1a8d1c1f
+      - ami-id: ami-04c224411e430f285
         ss-id-suffix: base
     eu-south-1:
-      - ami-id: ami-05bf6706db81325aa
+      - ami-id: ami-09b8a3308faf219c6
         ss-id-suffix: base
     eu-south-2:
-      - ami-id: ami-075487dcb5cd948c0
+      - ami-id: ami-08367221b727170ac
         ss-id-suffix: base
     eu-west-1:
-      - ami-id: ami-0d67e8803ee383fdc
+      - ami-id: ami-0a59bff376e2065c3
         ss-id-suffix: base
     eu-west-2:
-      - ami-id: ami-0e6510cc6abb81a9b
+      - ami-id: ami-012fcb4f119bf9440
         ss-id-suffix: base
     eu-west-3:
-      - ami-id: ami-03bc18513b510213f
+      - ami-id: ami-054c205f2a3813893
         ss-id-suffix: base
     il-central-1:
-      - ami-id: ami-0f655e7ba628d22d8
+      - ami-id: ami-0c61f2894f5e0244b
         ss-id-suffix: base
     me-central-1:
-      - ami-id: ami-0fb43aa19e7dd6751
+      - ami-id: ami-079b05c070274bc18
         ss-id-suffix: base
     me-south-1:
-      - ami-id: ami-0c58eca08d3a31f89
+      - ami-id: ami-0c2ed3db7052c018f
         ss-id-suffix: base
     sa-east-1:
-      - ami-id: ami-0b410d4fb3cefb463
+      - ami-id: ami-035e0d01416627008
         ss-id-suffix: base
     us-east-1:
-      - ami-id: ami-055f190f5416b8118
+      - ami-id: ami-00f1cb0e129bb040e
         ss-id-suffix: base
     us-east-2:
-      - ami-id: ami-06a5d87db53294c1f
+      - ami-id: ami-0919ab58157b7ed85
         ss-id-suffix: base
     us-west-1:
-      - ami-id: ami-0e778043029529794
+      - ami-id: ami-054f42fd684bb7451
         ss-id-suffix: base
     us-west-2:
-      - ami-id: ami-084e1303b54037f44
+      - ami-id: ami-06fc763747998da87
         ss-id-suffix: base
     us-gov-west-1:
       - ami-id: ami-045a012096d84fb13
@@ -1156,85 +1156,85 @@ rocky9:
     default-min-storage-value: 20
     default-name: 'Rocky Linux 9 - arm64'
     af-south-1:
-      - ami-id: ami-032c3835e9832fd12
+      - ami-id: ami-0a0ca108283428eca
         ss-id-suffix: base
     ap-east-1:
-      - ami-id: ami-0d964598089831220
+      - ami-id: ami-0f64f1749b924bb73
         ss-id-suffix: base
     ap-northeast-1:
-      - ami-id: ami-0729d609e02f3d07e
+      - ami-id: ami-0fabc90488c833b21
         ss-id-suffix: base
     ap-northeast-2:
-      - ami-id: ami-008cbf88be202d702
+      - ami-id: ami-00ae06c981dd2a581
         ss-id-suffix: base
     ap-northeast-3:
-      - ami-id: ami-0c8b368521555d764
+      - ami-id: ami-0e365c1ead7813845
         ss-id-suffix: base
     ap-south-1:
-      - ami-id: ami-02edb75e2c70658b3
+      - ami-id: ami-07a2cc29a3a3a2732
         ss-id-suffix: base
     ap-south-2:
-      - ami-id: ami-020a12fe66f5843a7
+      - ami-id: ami-0d34f3d667dc12c9b
         ss-id-suffix: base
     ap-southeast-1:
-      - ami-id: ami-0ba1074a8296fdcd8
+      - ami-id: ami-03e23024c8b29ef56
         ss-id-suffix: base
     ap-southeast-2:
-      - ami-id: ami-0298a74ae0a53e4fd
+      - ami-id: ami-02093a6302f5dc4f8
         ss-id-suffix: base
     ap-southeast-3:
-      - ami-id: ami-0da68f84bc59513ad
+      - ami-id: ami-08079b26c2caaae55
         ss-id-suffix: base
     ap-southeast-4:
-      - ami-id: ami-0635c401709f8e448
+      - ami-id: ami-076b4c1ba2492928f
         ss-id-suffix: base
     ca-central-1:
-      - ami-id: ami-05d0b813bca2f9f14
+      - ami-id: ami-0fdd24d72ef5e64de
         ss-id-suffix: base
     eu-central-1:
-      - ami-id: ami-074571e46551c0e25
+      - ami-id: ami-0899e48d70f37fb63
         ss-id-suffix: base
     eu-central-2:
-      - ami-id: ami-006542c437f4b33eb
+      - ami-id: ami-0250579b4692895c7
         ss-id-suffix: base
     eu-north-1:
-      - ami-id: ami-0ce2f4e34b004b2e5
+      - ami-id: ami-03fe4312941aeae48
         ss-id-suffix: base
     eu-south-1:
-      - ami-id: ami-0793f1de745d09710
+      - ami-id: ami-09adf4ce07da461b8
         ss-id-suffix: base
     eu-south-2:
-      - ami-id: ami-0f3e1d508ae0f398a
+      - ami-id: ami-0c9dbaeb7f03288e6
         ss-id-suffix: base
     eu-west-1:
-      - ami-id: ami-0aa36620eec68c35b
+      - ami-id: ami-04bf9bc733f04418f
         ss-id-suffix: base
     eu-west-2:
-      - ami-id: ami-0608880d1505d57e4
+      - ami-id: ami-000cf9ebed535f9e3
         ss-id-suffix: base
     eu-west-3:
-      - ami-id: ami-007ef75762a1e6993
+      - ami-id: ami-06a716075f219a248
         ss-id-suffix: base
     me-central-1:
-      - ami-id: ami-043590d7a6eab97db
+      - ami-id: ami-0189209a378710af4
         ss-id-suffix: base
     me-south-1:
-      - ami-id: ami-0fadb35606d8d934f
+      - ami-id: ami-0fb1569b873ba3a87
         ss-id-suffix: base
     sa-east-1:
-      - ami-id: ami-0271cfac80b1bd6ca
+      - ami-id: ami-03e18d3228a6805b9
         ss-id-suffix: base
     us-east-1:
-      - ami-id: ami-0fe5c47737d880603
+      - ami-id: ami-0091bb44bfaef1c17
         ss-id-suffix: base
     us-east-2:
-      - ami-id: ami-0cc73a60867904383
+      - ami-id: ami-08dc10d7a4f808a53
         ss-id-suffix: base
     us-west-1:
-      - ami-id: ami-0a847b1f5c927325b
+      - ami-id: ami-080987d6f84cef268
         ss-id-suffix: base
     us-west-2:
-      - ami-id: ami-0e4567b8d81c01c5f
+      - ami-id: ami-0564a7e650e9e8d5a
         ss-id-suffix: base
   x86-64:
     default-description: 'Rocky Linux 9 - x86_64'
@@ -1244,85 +1244,85 @@ rocky9:
     default-min-storage-value: 20
     default-name: 'Rocky Linux 9 - x86_64'
     af-south-1:
-      - ami-id: ami-065c500503ef793a8
+      - ami-id: ami-0d1c77289fe17484a
         ss-id-suffix: base
     ap-east-1:
-      - ami-id: ami-09a6ac7a83c9b4224
+      - ami-id: ami-09b42a680f493b03c
         ss-id-suffix: base
     ap-northeast-1:
-      - ami-id: ami-0d59d43bebb8bb880
+      - ami-id: ami-0bdd4b6c4c6feca84
         ss-id-suffix: base
     ap-northeast-2:
-      - ami-id: ami-0fc21c56f494ded92
+      - ami-id: ami-06b18c6a9a323f75f
         ss-id-suffix: base
     ap-northeast-3:
-      - ami-id: ami-024dfb18c345c4beb
+      - ami-id: ami-02da14a96759f4bdf
         ss-id-suffix: base
     ap-south-1:
-      - ami-id: ami-0321f0c22d67f6571
+      - ami-id: ami-08e313580b7dba0a6
         ss-id-suffix: base
     ap-south-2:
-      - ami-id: ami-04272c48c1b4ff2b8
+      - ami-id: ami-0aceb9334e1c25d36
         ss-id-suffix: base
     ap-southeast-1:
-      - ami-id: ami-0eb599578e428f04a
+      - ami-id: ami-0058131e22d7c740c
         ss-id-suffix: base
     ap-southeast-2:
-      - ami-id: ami-00306f671305d9f07
+      - ami-id: ami-0e3d660a2b0748434
         ss-id-suffix: base
     ap-southeast-3:
-      - ami-id: ami-04eb93db33f091ab1
+      - ami-id: ami-08187f3dae26981ad
         ss-id-suffix: base
     ap-southeast-4:
-      - ami-id: ami-0a231072f52f72543
+      - ami-id: ami-07fb36516f7d1f529
         ss-id-suffix: base
     ca-central-1:
-      - ami-id: ami-079168ddddf82b7e4
+      - ami-id: ami-0dc728f2209249218
         ss-id-suffix: base
     eu-central-1:
-      - ami-id: ami-041dc33d5b0f85045
+      - ami-id: ami-0974816532424c446
         ss-id-suffix: base
     eu-central-2:
-      - ami-id: ami-012ca946ca60e62e0
+      - ami-id: ami-0bade0ccdcb3b5d42
         ss-id-suffix: base
     eu-north-1:
-      - ami-id: ami-0aceb8e8ac0f3aa8b
+      - ami-id: ami-08a91dd538f707083
         ss-id-suffix: base
     eu-south-1:
-      - ami-id: ami-0efb08822e6210fe2
+      - ami-id: ami-09157a1cc0d8d7bd8
         ss-id-suffix: base
     eu-south-2:
-      - ami-id: ami-04015f6d8ab992d64
+      - ami-id: ami-09ff808003eb6a15f
         ss-id-suffix: base
     eu-west-1:
-      - ami-id: ami-0f801bce6ee5c08ef
+      - ami-id: ami-09f73ba1beba9ad07
         ss-id-suffix: base
     eu-west-2:
-      - ami-id: ami-082a19a0d820f7ad6
+      - ami-id: ami-05a5686f0de7aa5d5
         ss-id-suffix: base
     eu-west-3:
-      - ami-id: ami-0d25699f4e16364b9
+      - ami-id: ami-05e6a5fbf52bcf86a
         ss-id-suffix: base
     me-central-1:
-      - ami-id: ami-0513912a18e986c4c
+      - ami-id: ami-03102da6cb6cc7c39
         ss-id-suffix: base
     me-south-1:
-      - ami-id: ami-0b606565db394b584
+      - ami-id: ami-0f1af60b10870546d
         ss-id-suffix: base
     sa-east-1:
-      - ami-id: ami-01a0c4e8f19b6f9dd
+      - ami-id: ami-01d0e68ff218b8ad8
         ss-id-suffix: base
     us-east-1:
-      - ami-id: ami-0a73e96a849c232cc
+      - ami-id: ami-0f2425d4cce4e97dd
         ss-id-suffix: base
     us-east-2:
-      - ami-id: ami-05150ea4d8a533099
+      - ami-id: ami-0e529d862bbe9899c
         ss-id-suffix: base
     us-west-1:
-      - ami-id: ami-05b499126863461fc
+      - ami-id: ami-0112e62b61894b311
         ss-id-suffix: base
     us-west-2:
-      - ami-id: ami-08f2642bb132b988c
+      - ami-id: ami-0adebe3adcec1fa34
         ss-id-suffix: base
 windows2019:
   x86-64:

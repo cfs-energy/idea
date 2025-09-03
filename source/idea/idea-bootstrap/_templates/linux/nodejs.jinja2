@@ -1,7 +1,7 @@
 # Begin: Install NodeJS
 # Usage: Ensure NVM_DIR environment variable is added to /etc/environment when nodejs is installed.
 
-{% if context.base_os in ('amazonlinux2') %}
+{% if context.base_os in ('amazonlinux2',) %}
 IDEA_NODE_VERSION="16.20.2"
 {% else %}
 IDEA_NODE_VERSION="{{ context.config.get_string('global-settings.package_config.nodejs.version', required=True) }}"

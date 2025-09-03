@@ -176,7 +176,7 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
 
     canReboot = () => this.getSession().state === 'READY' || this.getSession().state === 'ERROR'
 
-    canStop = () => this.getSession().state === 'READY'
+    canStop = () => this.getSession().state === 'READY' || this.getSession().state === 'STOPPING' || this.getSession().state === 'RESUMING'
 
     canDelete = () => {
         const status = this.getSession().state
@@ -348,7 +348,7 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
                     },
                     {
                         id: "stop",
-                        text: (this.getSession().hibernation_enabled) ? 'Hibernate' : 'Stop',
+                        text: this.getSession().state === 'STOPPING' ? 'Force Stop' : (this.getSession().hibernation_enabled) ? 'Hibernate' : 'Stop',
                         disabled: !this.canStop(),
                         iconSvg: (this.getSession().hibernation_enabled) ? <FontAwesomeIcon icon={faStopCircle} size="xs"/> : <FontAwesomeIcon icon={faStop} size="xs"/>
                     },

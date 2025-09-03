@@ -1,17 +1,11 @@
 # Begin: Install cjson-devel from source
 function install_cjson_devel () {
+
   # Check if cjson is already installed
-  {% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
-  if [ -f "/usr/lib/x86_64-linux-gnu/libcjson.so" ]; then
+  if ldconfig -p | grep -q libcjson.so; then
     log_info "cjson-devel already installed."
     return 0
   fi
-  {% else %}
-  if [ -f "/lib64/libcjson.so" ]; then
-    log_info "cjson-devel already installed."
-    return 0
-  fi
-  {% endif %}
 
   log_info "Building cjson-devel from source"
 
