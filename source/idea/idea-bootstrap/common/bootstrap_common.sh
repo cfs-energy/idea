@@ -36,6 +36,25 @@ function log_debug() {
 function set_reboot_required () {
   log_info "Reboot Required: ${1}"
   echo -n "yes" > ${BOOTSTRAP_DIR}/reboot_required.txt
+  echo "$(date): ${1}" >> ${BOOTSTRAP_DIR}/reboot_history.log
+}
+
+function check_reboot_loop () {
+  local max_reboots=10
+  local reason="${1}"
+
+  if [[ -f ${BOOTSTRAP_DIR}/reboot_history.log ]]; then
+    local reboot_count
+    reboot_count=$(wc -l < ${BOOTSTRAP_DIR}/reboot_history.log)
+    if [[ $reboot_count -ge $max_reboots ]]; then
+      log_error "INFINITE LOOP DETECTED: Too many reboots ($reboot_count). Last reason: ${reason}"
+      log_error "Reboot history:"
+      cat ${BOOTSTRAP_DIR}/reboot_history.log
+      # Disable further reboots and exit
+      echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
+      exit 1
+    fi
+  fi
 }
 
 function get_reboot_required () {

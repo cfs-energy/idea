@@ -4,6 +4,58 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
+## [25.09.0] - 2025-09-03
+
+**Upgrade Instructions:**
+* It's recommended to perform a full cluster upgrade as Base AMIs and other settings have been updated
+```bash
+./idea-admin.sh upgrade-cluster --aws-region $IDEA_AWS_REGION --cluster-name $IDEA_CLUSTER_NAME
+```
+([Upgrade Documentation](https://docs.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/upgrade-cluster))
+
+### **✨ New Features**
+* **Instance Storage Support for VDI**: Automatic detection and configuration of instance storage on virtual desktop hosts
+  * **Windows VDI**: Detects NVMe and ephemeral drives, formats as NTFS or creates Storage Pool for multiple disks
+  * **Linux VDI**: Detects NVMe and ephemeral drives, formats as ext4 or creates RAID 0 for multiple disks
+  * Supports instance types with local storage (e.g., C5d, M5d, R5d, I3, etc.)
+* **Force Stop for Virtual Desktop Sessions**: Added ability to force stop virtual desktop sessions
+  * Available when sessions are in STOPPING state for immediate cleanup
+  * Provides faster termination when normal stop process is stuck or slow
+
+### **🔧 Improvements**
+* **OpenPBS Scheduler**: Updated to latest commit for improved stability and bug fixes
+* **AMI Updates**: Updated base AMI IDs across all regions
+* **DCV Package Management**: Simplified DCV package configuration for automatic latest version updates
+  * Updated all DCV components (server, agent, broker, connection gateway) to use dynamic "latest" URLs
+  * Implemented dynamic SHA256 checksum verification for enhanced security
+  * Added AL2023 support for DCV connection gateway
+* **Kernel Management**: Improved kernel version control across supported distributions
+  * New `set_kernel` function allows for deterministic Kernel handling across all OS
+  * Enhanced compatibility with FSx Lustre and other services
+* **Cross-Platform Compatibility**: Enhanced support across different Linux distributions
+* **Bootstrap Process**: Enhanced installation and configuration reliability
+  * Enhanced system upgrade error handling with better logging
+  * Improved instance storage detection and configuration
+
+### **🐛 Bug Fixes**
+* **DCV Session Validation**: Fixed instances running indefinitely when DCV broker validation gets stuck
+  * Added configurable timeout (`dcv_session.validation_timeout_minutes`, default: 2 minutes)
+  * Forces EC2 stop/terminate actions after timeout to prevent cost overruns
+* **HPC Job Provisioner**: Fixed CloudFormation stack failures blocking entire queue processing
+  * Failed/timeout jobs now properly hand off to node housekeeper for cleanup and retry
+* **Virtual Desktop Session Management**: Enhanced session state handling for better reliability
+* **Bootstrap Process**: Fixed various installation and configuration issues
+  * New reboot loop detection to prevent infinite reboot cycles
+  * Fixed system upgrade process to prevent failures and infinite loops
+  * Fixed EFA driver installation error handling
+  * Fixed scratch storage fstab entry conflicts
+  * Fixed chronyd service reliability issues with fallback handling
+* **Cross-Platform Installation**: Fixed installation issues across different distributions
+  * Fixed cJSON library detection using ldconfig for cross-platform compatibility
+  * Fixed package error handling to prevent script failures
+* **Cluster Upgrade Process**: Enhanced global settings update reliability
+  * Fixed potential stale configuration by deleting existing global settings before update
+
 ## [25.08.1] - 2025-08-25
 
 **Upgrade Instructions:**

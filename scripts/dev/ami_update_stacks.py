@@ -18,8 +18,8 @@ AMI_PATTERNS = {
     'windows2025/x86-64/base': 'Windows_Server-2025-English-Full-Base-2025.*',
     'rhel8/arm64': 'RHEL-8.10.0_HVM-*-arm64-*',
     'rhel8/x86-64': 'RHEL-8.10.0_HVM-*-x86_64-*',
-    'rhel9/arm64': 'RHEL-9.5.0_HVM-*-arm64-*',
-    'rhel9/x86-64': 'RHEL-9.5.0_HVM-*-x86_64-*',
+    'rhel9/arm64': 'RHEL-9.6.0_HVM-*-arm64-*',
+    'rhel9/x86-64': 'RHEL-9.6.0_HVM-*-x86_64-*',
     'ubuntu2204/arm64': 'ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-arm64-server-*',
     'ubuntu2204/x86-64': 'ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*',
     'ubuntu2404/arm64': 'ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-arm64-server-*',
@@ -32,8 +32,8 @@ AMI_PATTERNS = {
     # "rhel7/x86-64": "RHEL-7.9_HVM-*-x86_64-*",
     'rocky8/arm64': 'Rocky-8-EC2-Base-8.9-*.aarch64-*',
     'rocky8/x86-64': 'Rocky-8-EC2-Base-8.9-*.x86_64-*',
-    'rocky9/arm64': 'Rocky-9-EC2-Base-9.5-*.aarch64-*',
-    'rocky9/x86-64': 'Rocky-9-EC2-Base-9.5-*.x86_64-*',
+    'rocky9/arm64': 'Rocky-9-EC2-Base-9.6-*.aarch64-*',
+    'rocky9/x86-64': 'Rocky-9-EC2-Base-9.6-*.x86_64-*',
 }
 
 # Generating a timestamp

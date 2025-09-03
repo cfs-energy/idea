@@ -411,7 +411,9 @@ set_reboot_required "Reboot after DCV host configuration"
 REBOOT_REQUIRED=$(cat /root/bootstrap/reboot_required.txt)
 if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
   (crontab -l; echo "@reboot /bin/bash ${SCRIPT_DIR}/configure_dcv_host_post_reboot.sh crontab") | crontab -
+  check_reboot_loop "Reboot after DCV host configuration"
   reboot
+  exit 0
 else
   /bin/bash ${SCRIPT_DIR}/configure_dcv_host_post_reboot.sh
 fi

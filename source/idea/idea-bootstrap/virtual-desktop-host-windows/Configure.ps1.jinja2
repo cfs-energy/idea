@@ -16,6 +16,7 @@
 {% include '_templates/windows/tag_ebs_volumes.jinja2' %}
 {% include '_templates/windows/tag_network_interface.jinja2' %}
 {% include '_templates/windows/mount_shared_storage.jinja2' %}
+{% include '_templates/windows/configure_instance_storage.jinja2' %}
 {% include '_templates/windows/dcv/dcv_permissions.jinja2' %}
 {% include '_templates/windows/cloudwatch_agent.jinja2' %}
 
@@ -202,6 +203,9 @@ function Configure-WindowsEC2Instance {
   } else {
       Write-ToLog -Message "No GPU detected on this machine"
   }
+
+  Write-ToLog -Message "Configuring instance storage (if available)"
+  Configure-InstanceStorage
 
   Write-ToLog -Message "Tagging EBS Volumes"
   Tag-EbsVolumes

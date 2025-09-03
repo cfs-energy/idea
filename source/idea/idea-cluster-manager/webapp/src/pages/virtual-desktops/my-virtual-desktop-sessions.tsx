@@ -549,7 +549,12 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
     onStopSession = (session: VirtualDesktopSession): Promise<boolean> => {
         let actionTitle = "Stop Virtual Desktop"
         let actionText = "Are you sure you want to stop virtual desktop: " + session.name + "?"
-        if (session.hibernation_enabled) {
+        let isForceStop = session.state === 'STOPPING'
+
+        if (isForceStop) {
+            actionTitle = "Force Stop Virtual Desktop"
+            actionText = "Are you sure you want to force stop virtual desktop: " + session.name + "? This will forcefully terminate the session."
+        } else if (session.hibernation_enabled) {
             actionTitle = "Hibernate Virtual Desktop"
             actionText = "Are you sure you want to hibernate virtual desktop: " + session.name + "?"
         }
@@ -565,7 +570,8 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
                             sessions: [
                                 {
                                     idea_session_id: this.state.selectedSession?.idea_session_id,
-                                    dcv_session_id: this.state.selectedSession?.dcv_session_id
+                                    dcv_session_id: this.state.selectedSession?.dcv_session_id,
+                                    force: isForceStop
                                 }
                             ]
                         }).then(result => {

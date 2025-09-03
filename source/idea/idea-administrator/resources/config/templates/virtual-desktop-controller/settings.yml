@@ -163,6 +163,7 @@ dcv_session:
   max_root_volume_memory: 1000 # in GB
   additional_security_groups: []
   allowed_sessions_per_user: 5
+  validation_timeout_minutes: 2 # Maximum time to wait for DCV broker validation before forcing EC2 stop/terminate to prevent indefinite running costs
   instance_types:
     allow: # Supports both instance families and types. E.g. specify t3 for family and t3.large for instance type
       - t3
@@ -194,6 +195,7 @@ dcv_session:
 
   # instance metadata access method
   metadata_http_tokens: "required"  # supported values are "required" for IMDSv2 or "optional" for IMDSv1
+
   notifications:
     provisioning:
       enabled: false
@@ -276,6 +278,11 @@ dcv_session:
   default_profiles:
     admin: admin_profile
     owner: owner_profile
+
+# Instance storage configuration for virtual desktop sessions
+instance_storage:
+  # Configure mount point for instance store devices (NVMe/SSD)
+  mount_point: /scratch
 
 logging:
   logs_directory: /opt/idea/app/logs

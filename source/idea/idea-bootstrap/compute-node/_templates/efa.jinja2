@@ -22,8 +22,13 @@ function install_efa() {
   yum remove -y infiniband-diags libibumad libibverbs libibverbs-core librdmacm rdma-core-devel
   {% endif %}
 
-  /bin/bash efa_installer.sh -y
-  set_reboot_required "EFA Driver Installed"
+  if /bin/bash efa_installer.sh -y; then
+    log_info "EFA Driver installed successfully"
+    set_reboot_required "EFA Driver Installed"
+  else
+    log_error "Failed to install EFA Driver"
+    return 1
+  fi
   popd
   popd
 }

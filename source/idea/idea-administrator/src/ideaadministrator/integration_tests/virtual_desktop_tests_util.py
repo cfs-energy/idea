@@ -2010,6 +2010,7 @@ def create_batch_sessions(
         return created_sessions
     except exceptions.SocaException as e:
         context.error(f'Failed to Create Batch Sessions. Error : {e}')
+        raise
 
 
 def create_session(
@@ -2038,6 +2039,7 @@ def create_session(
         return session
     except (exceptions.SocaException, Exception) as e:
         context.error(f'Failed to Create Session for {session.name}. Error : {e}')
+        raise
 
 
 def get_unique_test_profile_id():

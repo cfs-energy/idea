@@ -1,0 +1,101 @@
+# Begin: Configure Instance Storage
+function Configure-InstanceStorage {
+    <#
+        .SYNOPSIS
+            Configure instance storage as additional drives when available
+        .DESCRIPTION
+            Detects instance store volumes (NVMe or ephemeral drives) and configures them as additional drives.
+            For single volume: formats as NTFS and assigns drive letter
+            For multiple volumes: creates storage pool and assigns drive letter
+    #>
+
+    Write-ToLog -Message "Checking for instance storage devices..." -Level 'Info'
+
+    # Debug: Log all physical disks for troubleshooting
+    $AllDisks = Get-PhysicalDisk
+    Write-ToLog -Message "Found $($AllDisks.Count) total physical disk(s):" -Level 'Info'
+    foreach ($Disk in $AllDisks) {
+        $DiskSize = [math]::Round($Disk.Size/1GB, 2)
+        $PartitionStyle = if ($Disk.PartitionStyle) { $Disk.PartitionStyle } else { "Uninitialized" }
+        Write-ToLog -Message "  Disk $($Disk.DeviceId): $($Disk.BusType) - $DiskSize GB - Status: $($Disk.OperationalStatus) - PartitionStyle: $PartitionStyle - MediaType: $($Disk.MediaType)" -Level 'Info'
+    }
+
+    # Identify the boot disk by finding which disk contains the C: drive
+    $BootDiskNumber = (Get-Partition -DriveLetter C).DiskNumber
+    Write-ToLog -Message "Boot disk identified as Disk $BootDiskNumber" -Level 'Info'
+
+    # Get all physical disks that are not already initialized and could be instance store
+    # Instance store can be NVMe (newer instances) or other types (older instances)
+    $InstanceStoreDisks = Get-PhysicalDisk | Where-Object {
+        $_.OperationalStatus -eq 'OK' -and
+        ($_.PartitionStyle -eq 'RAW' -or $_.PartitionStyle -eq 'Unknown' -or [string]::IsNullOrEmpty($_.PartitionStyle)) -and
+        $_.Size -gt 0 -and
+        $_.DeviceId -ne $BootDiskNumber  # Exclude boot disk
+    }
+
+    if (-not $InstanceStoreDisks) {
+        Write-ToLog -Message "No instance storage detected on this machine" -Level 'Info'
+        return
+    }
+
+    $DiskCount = ($InstanceStoreDisks | Measure-Object).Count
+    $TotalSize = [math]::Round(($InstanceStoreDisks | Measure-Object -Property Size -Sum).Sum/1GB, 2)
+    Write-ToLog -Message "Detected $DiskCount instance storage disk(s) - Total size: $TotalSize GB" -Level 'Info'
+
+    # Log details about each detected disk
+    foreach ($Disk in $InstanceStoreDisks) {
+        $DiskSize = [math]::Round($Disk.Size/1GB, 2)
+        Write-ToLog -Message "  Disk $($Disk.Number): $($Disk.BusType) - $DiskSize GB - $($Disk.MediaType)" -Level 'Info'
+    }
+
+    try {
+        if ($DiskCount -eq 1) {
+            # Single instance store disk - format as NTFS and assign drive letter
+            $Disk = $InstanceStoreDisks[0]
+            Write-ToLog -Message "Configuring single instance storage disk (Size: $([math]::Round($Disk.Size/1GB, 2)) GB)" -Level 'Info'
+
+            # Initialize the disk
+            Initialize-Disk -Number $Disk.DeviceId -PartitionStyle GPT -Confirm:$false
+
+            # Create partition using all available space
+            $Partition = New-Partition -DiskNumber $Disk.DeviceId -UseMaximumSize -AssignDriveLetter
+
+            # Format as NTFS with quick format
+            Format-Volume -DriveLetter $Partition.DriveLetter -FileSystem NTFS -NewFileSystemLabel "Ephemeral Instance Storage" -Confirm:$false -Force
+
+            $DriveSize = [math]::Round((Get-Volume -DriveLetter $Partition.DriveLetter).Size/1GB, 2)
+            Write-ToLog -Message "Instance storage configured as drive $($Partition.DriveLetter): ($DriveSize GB)" -Level 'Info'
+
+        } elseif ($DiskCount -gt 1) {
+            # Multiple instance store disks - create storage pool for better performance
+            Write-ToLog -Message "Configuring $DiskCount instance storage disks as storage pool" -Level 'Info'
+
+            # Initialize all disks
+            foreach ($Disk in $InstanceStoreDisks) {
+                Initialize-Disk -Number $Disk.DeviceId -PartitionStyle GPT -Confirm:$false
+                Write-ToLog -Message "Initialized disk $($Disk.DeviceId) (Size: $([math]::Round($Disk.Size/1GB, 2)) GB)" -Level 'Info'
+            }
+
+            # Create storage pool using all instance store disks
+            $StoragePool = New-StoragePool -FriendlyName "InstanceStorePool" -StorageSubSystemFriendlyName "Windows Storage*" -PhysicalDisks $InstanceStoreDisks
+
+            # Create virtual disk using all available space with Simple resilience (equivalent to RAID 0)
+            $VirtualDisk = New-VirtualDisk -StoragePoolFriendlyName $StoragePool.FriendlyName -FriendlyName "InstanceStoreVirtualDisk" -ResiliencySettingName "Simple" -UseMaximumSize
+
+            # Initialize and create partition
+            Initialize-Disk -VirtualDisk $VirtualDisk -PartitionStyle GPT -Confirm:$false
+            $DiskNumber = (Get-Disk | Where-Object { $_.FriendlyName -eq $VirtualDisk.FriendlyName }).Number
+            $Partition = New-Partition -DiskNumber $DiskNumber -UseMaximumSize -AssignDriveLetter
+
+            # Format as NTFS
+            Format-Volume -DriveLetter $Partition.DriveLetter -FileSystem NTFS -NewFileSystemLabel "Ephemeral Instance Storage" -Confirm:$false -Force
+
+            $PoolSize = [math]::Round((Get-Volume -DriveLetter $Partition.DriveLetter).Size/1GB, 2)
+            Write-ToLog -Message "Instance storage pool configured as drive $($Partition.DriveLetter): ($PoolSize GB)" -Level 'Info'
+        }
+    } catch {
+        Write-ToLog -Message "Error configuring instance storage: $($_.Exception.Message)" -Level 'Error'
+        Write-ToLog -Message "Instance storage configuration failed, continuing with setup..." -Level 'Warn'
+    }
+}
+# End: Configure Instance Storage

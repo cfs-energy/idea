@@ -6,15 +6,21 @@
 #
 {% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9', 'ubuntu2204', 'ubuntu2404') %}
   function install_stunnel () {
-     {% if context.base_os in ('amazonlinux2') %}
+     {% if context.base_os in ('amazonlinux2',) %}
     STUNNEL_CMD='stunnel5'
-     {% elif context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9', 'ubuntu2204', 'ubuntu2404') %}
+     {% elif context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
     STUNNEL_CMD='stunnel'
+     {% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+    STUNNEL_CMD='stunnel4'
      {% endif %}
   which ${STUNNEL_CMD} > /dev/null 2>&1
   if [[ "$?" != "0" ]]; then
     log_info "Installing stunnel for {{ context.base_os }}"
+     {% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
       yum install -y ${STUNNEL_CMD}
+     {% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+      apt install -y ${STUNNEL_CMD}
+     {% endif %}
   else
     log_info "Found existing stunnel on system"
   fi
@@ -29,15 +35,6 @@
   fi
 }
 install_stunnel
-
-{% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
-
-if [[ -z "$(dpkg -l stunnel4 | grep ^ii)" ]]; then
-  apt update
-  apt install -y stunnel4
-else
-  log_info "Found existing stunnel on system"
-fi
 
 {% endif %}
 

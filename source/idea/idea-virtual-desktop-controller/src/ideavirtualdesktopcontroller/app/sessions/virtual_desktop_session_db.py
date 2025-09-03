@@ -11,6 +11,7 @@
 from typing import Union, Dict, List, Optional
 
 import ideavirtualdesktopcontroller
+from botocore.exceptions import ClientError
 from ideadatamodel import (
     VirtualDesktopSession,
     VirtualDesktopBaseOS,
@@ -375,9 +376,21 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
         self, session: VirtualDesktopSession
     ) -> Dict:
         db_dict = self.convert_session_object_to_db_dict(session)
-        response = self._ec2_client.describe_instances(
-            InstanceIds=[session.server.instance_id]
-        )
+        try:
+            response = self._ec2_client.describe_instances(
+                InstanceIds=[session.server.instance_id]
+            )
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'InvalidInstanceID.NotFound':
+                self._logger.warning(
+                    f'Instance {session.server.instance_id} for session {session.idea_session_id} no longer exists. '
+                    f'Indexing session without EC2 instance details.'
+                )
+                return db_dict
+            else:
+                # Re-raise other ClientErrors
+                raise e
+
         reservation = Utils.get_value_as_list('Reservations', response, default=[])
         if Utils.is_empty(reservation):
             return db_dict

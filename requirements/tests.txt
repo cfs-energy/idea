@@ -1,4 +1,4 @@
-coverage[toml]==7.10.4
+coverage[toml]==7.10.6
 iniconfig==2.1.0
 memory-profiler==0.61.0
 packaging==25.0
