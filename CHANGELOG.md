@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
+## [25.09.1] - 2025-09-22
+
+**Upgrade Instructions:**
+* It's recommended to perform a full cluster upgrade as Base AMIs and other settings have been updated
+* If you are already on `25.09.0` only an update to the `scheduler` module is required.
+```bash
+./idea-admin.sh upgrade-cluster --aws-region $IDEA_AWS_REGION --cluster-name $IDEA_CLUSTER_NAME
+```
+([Upgrade Documentation](https://docs.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/upgrade-cluster))
+
+### **🐛 Bug Fixes**
+* **Node House Keeper**: Fixed completed jobs not being properly removed and cleaned up
+
+### **🔧 Improvements**
+* **Node House Keeper**: Added additional debug logging
+
 ## [25.09.0] - 2025-09-03
 
 **Upgrade Instructions:**

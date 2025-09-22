@@ -246,8 +246,23 @@ class NodeHouseKeepingSession:
 
         if instance.is_soca_ephemeral_capacity:
             job = self._context.job_cache.get_job(job_id=instance.soca_job_id)
-            if job is not None:
+            if job is not None and job.state in (
+                SocaJobState.QUEUED,
+                SocaJobState.RUNNING,
+                SocaJobState.HELD,
+            ):
+                self._logger.debug(
+                    f'{self.log_tag(instance)} cannot terminate - job {instance.soca_job_id} is {job.state}'
+                )
                 return False
+            elif job is not None:
+                self._logger.debug(
+                    f'{self.log_tag(instance)} can terminate - job {instance.soca_job_id} is {job.state}'
+                )
+            else:
+                self._logger.debug(
+                    f'{self.log_tag(instance)} can terminate - job {instance.soca_job_id} not in cache'
+                )
 
         if instance.soca_keep_forever and instance.soca_terminate_when_idle == 0:
             return False
@@ -393,6 +408,9 @@ class NodeHouseKeepingSession:
             if not self._can_terminate(instance=instance, node=node):
                 continue
 
+            self._logger.debug(
+                f'{self.log_tag(instance)} adding as candidate for deletion'
+            )
             self._add_candidate_for_deletion(instance=instance)
 
     def pass2_compute_present_capacities(self):
@@ -585,6 +603,9 @@ class NodeHouseKeepingSession:
                     ref.soca_queue_type,
                     self.log_info(ref, 'Stack', ref.soca_compute_stack),
                 )
+                self._logger.debug(
+                    f'{self.log_tag(ref)} marking stack for deletion: {ref.soca_compute_stack}'
+                )
                 self.stacks_to_delete.add(ref.soca_compute_stack)
             else:
                 self.spot_fleet_info[spot_fleet_request_id] = (
@@ -612,6 +633,9 @@ class NodeHouseKeepingSession:
                 self.stack_info[ref.soca_compute_stack] = (
                     ref.soca_queue_type,
                     self.log_info(ref, 'Stack', ref.soca_compute_stack),
+                )
+                self._logger.debug(
+                    f'{self.log_tag(ref)} marking stack for deletion: {ref.soca_compute_stack}'
                 )
                 self.stacks_to_delete.add(ref.soca_compute_stack)
             else:
@@ -877,6 +901,9 @@ class NodeHouseKeepingSession:
         for stack_name in self.stacks_to_delete:
             queue_type, info = self.stack_info[stack_name]
             self._logger.info(f'{info} deleting stack')
+            self._logger.debug(
+                f'initiating CloudFormation stack deletion: {stack_name}'
+            )
             self.aws_util.cloudformation_delete_stack(stack_name=stack_name)
             time.sleep(0.3)
             self._context.metrics.stacks_deleted(queue_type)
