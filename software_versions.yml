@@ -1,4 +1,4 @@
-aws_cdk_version: 2.1026.0
-node_version: 22.18.0
+aws_cdk_version: 2.1031.2
+node_version: 22.21.1
 nvm_version: 0.40.3
-python_version: 3.13.7
+python_version: 3.13.9

@@ -128,6 +128,9 @@ job_provisioning:
     # refer to https://docs.aws.amazon.com/autoscaling/ec2/APIReference/API_InstancesDistribution.html for more info
     on_demand_allocation_strategy: prioritized # can be one of [prioritized, lowest-price]
 
+  # How often (seconds) to run the periodic job reconciler
+  job_periodic_check_interval_seconds: 60
+
   # Placement Group config
   placement_group:
     # refer to: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-placementgroup.html for more details
