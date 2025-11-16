@@ -442,8 +442,8 @@ package_config:
   {% if 'scheduler' in enabled_modules %}
   efa:
     version: "1.41.0"
-    url: "https://efa-installer.amazonaws.com/aws-efa-installer-1.41.0.tar.gz"
-    checksum: "19ebd76b5f7d69f8d37d48ab2beedc65767920c2788c83c5a21537252d938540b682e7c8197b3cc516afcff22365424d"
+    url: "https://efa-installer.amazonaws.com/aws-efa-installer-1.44.0.tar.gz"
+    checksum: "6a7c41e815c8187bac7a0d9690bfa561bfecaa3e47fec0d9d53a0a383282edcf2e163c042d858cb5385c452cba89dc2d"
     checksum_method: sha384
   openpbs:
     version: "23.06.06"
@@ -451,7 +451,7 @@ package_config:
     checksum: "8a4d7f9c326fd1de5c103e700422bc4d49edc9d50f142c033e9e7de8d10d52f5c4f92e902e107b8e89d3e12c147ebef4"
     checksum_method: sha384
     repo_url: "https://github.com/openpbs/openpbs.git"
-    commit: "5efba714a8e80a69d0b57136c7bfd8b82c26d668"
+    commit: "4c11ca4a13992802efb450a15be9e82ea501c965"
     # For non-AL2 since openpbs is getting fairly regular updates in git but not tagged releases,
     # we're using the latest commit on the main branch as the version.
     # additional customizations can be implemented in idea-bootstrap/_templates/linux/openpbs.jinja2

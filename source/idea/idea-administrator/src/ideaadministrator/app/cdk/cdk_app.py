@@ -28,6 +28,7 @@ from ideaadministrator.app.cdk.stacks import (
 import aws_cdk as cdk
 from aws_cdk import Aspects
 from cdk_nag import AwsSolutionsChecks
+import warnings
 
 
 class CdkApp:
@@ -45,6 +46,13 @@ class CdkApp:
         termination_protection: bool,
         aws_profile: str = None,
     ):
+        # Suppress typeguard warning about IReusableStackSynthesizer protocol
+        warnings.filterwarnings(
+            'ignore',
+            message='.*IReusableStackSynthesizer.*non-runtime protocol.*',
+            category=UserWarning,
+        )
+
         self.cluster_name = cluster_name
         self.module_name = module_name
         self.module_id = module_id

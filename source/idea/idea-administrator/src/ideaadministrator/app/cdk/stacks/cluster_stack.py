@@ -1221,7 +1221,6 @@ class ClusterStack(IdeaBaseStack):
                 target=route53.RecordTarget.from_alias(
                     route53_targets.LoadBalancerTarget(self.internal_alb)
                 ),
-                ttl=cdk.Duration.minutes(5),
                 record_name=f'internal-alb.{self.private_hosted_zone.zone_name}',
                 zone=self.private_hosted_zone,
             )

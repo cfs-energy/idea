@@ -349,9 +349,9 @@ class JobMonitor(SocaService, JobMonitorProtocol):
         except Exception as e:
             self._logger.exception(f'failed to process {job_type} jobs', exc_info=e)
 
-    def _periodic_job_check(self):
+    def _job_reconciler(self):
         """
-        Periodic polling fallback to catch jobs missed by hooks.
+        Job reconciliation fallback to catch jobs missed by hooks.
         This handles cases where PBS hooks don't fire immediately or fail.
         """
         try:
@@ -368,7 +368,7 @@ class JobMonitor(SocaService, JobMonitorProtocol):
                     queued_job_ids = OpenPBSQSelect(
                         context=self._context,
                         logger=self._logger,
-                        log_tag='periodic-check',
+                        log_tag='job-reconciler',
                         stack_id='tbd',
                         queue=queue,
                         job_state=[SocaJobState.QUEUED, SocaJobState.HELD],
@@ -376,7 +376,7 @@ class JobMonitor(SocaService, JobMonitorProtocol):
 
                     if len(queued_job_ids) > 0:
                         self._logger.info(
-                            f'periodic check found {len(queued_job_ids)} queued job(s) in queue {queue}: {queued_job_ids}'
+                            f'job reconciler found {len(queued_job_ids)} queued job(s) in queue {queue}: {queued_job_ids}'
                         )
                         queued_jobs = self._context.scheduler.list_jobs(
                             job_ids=queued_job_ids
@@ -385,7 +385,7 @@ class JobMonitor(SocaService, JobMonitorProtocol):
                         self._submit_to_provisioning_queue(jobs=queued_jobs)
 
         except Exception as e:
-            self._logger.exception(f'periodic job check failed: {e}')
+            self._logger.exception(f'job reconciler failed: {e}')
 
     def _monitor_job_submission(self):
         while not self._exit.is_set():
@@ -401,19 +401,19 @@ class JobMonitor(SocaService, JobMonitorProtocol):
                     )
                     self._sync_jobs(job_updates=job_updates.running, job_type='running')
 
-                # Periodic polling fallback - check PBS directly every N seconds
+                # Job reconciler fallback - check PBS directly every N seconds
                 # This catches jobs when hooks fail to fire immediately
                 now = arrow.utcnow()
-                periodic_interval = self._context.config().get_int(
-                    'scheduler.job_provisioning.job_periodic_check_interval_seconds',
+                reconciler_interval = self._context.config().get_int(
+                    'scheduler.job_provisioning.job_reconciler_interval_seconds',
                     default=60,
                 )
                 if (
                     self._state._last_periodic_run is None
                     or (now - self._state._last_periodic_run).total_seconds()
-                    >= periodic_interval
+                    >= reconciler_interval
                 ):
-                    self._periodic_job_check()
+                    self._job_reconciler()
                     self._state._last_periodic_run = now
 
             except Exception as e:
@@ -425,7 +425,7 @@ class JobMonitor(SocaService, JobMonitorProtocol):
                     # need to better handle scenario when wait_for timeout occurs exactly at the same time as
                     # as job is queued from the hook. the scheduler might not return the queued job as the job
                     # is not yet queued (race condition).
-                    # worst case scenario is job will be caught in the periodic check after a short delay (default 10 seconds).
+                    # worst case scenario is job will be caught in the job reconciler after a short delay (default 60 seconds).
 
                     # delta job updates if any, will be processed at an interval of 1 second
                     self._monitor.wait_for(

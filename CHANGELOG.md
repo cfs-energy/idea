@@ -13,19 +13,24 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 ```
 ([Upgrade Documentation](https://docs.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/upgrade-cluster))
 
-### **🐛 Bug Fixes**
-* **HPC Job Monitor**: Fixed job monitor thread crash from unhandled exceptions in finished job processor
-* **HPC Job Provisioning**: Fixed jobs getting stuck when PBS hooks don't fire immediately
-  * Added periodic polling fallback to catch missed jobs
-* **EC2 Instance Type Cache**: Fixed cache overflow preventing job provisioning for new instance types
-  * Enhanced with larger size and on-demand fetching
-
 ### **🔧 Improvements**
 * **Dependencies**: Updated AWS CDK (2.1031.2), Python (3.13.9), Node (22.21.1), and all Python packages
 * **NVIDIA GPU Drivers**: Updated driver versions
   * LTSB from `470.239.06` to `470.256.02`
   * Production from `580.65.06` to `580.105.08`
-* **HPC Job Provisioning**: Added configurable periodic job check interval (`scheduler.job_provisioning.job_periodic_check_interval_seconds`, default: 60 seconds)
+* **AMI Updates**: Refreshed base and software stack AMI IDs across all regions
+  * Amazon Linux 2023 updated to kernel 6.12
+* **HPC Job Provisioning**: Added configurable job reconciler interval (`scheduler.job_provisioning.job_reconciler_interval_seconds`, default: 60 seconds)
+* **FSx Lustre Support**: Added FSx Lustre support for modern kernels
+
+### **🐛 Bug Fixes**
+* **HPC Job Monitor**: Fixed job monitor thread crash from unhandled exceptions in finished job processor
+* **HPC Job Provisioning**: Fixed jobs getting stuck when PBS hooks don't fire immediately
+  * Added job reconciler fallback to catch missed jobs
+* **EC2 Instance Type Cache**: Fixed cache overflow preventing job provisioning for new instance types
+  * Enhanced with larger size and on-demand fetching
+* **Lustre Client Repo**: Fixed repo family on Ubuntu
+* **CDK Template**: Removed invalid TTL on Alias record
 
 ## [25.09.1] - 2025-09-22
 
