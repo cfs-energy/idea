@@ -31,6 +31,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
   * Enhanced with larger size and on-demand fetching
 * **Lustre Client Repo**: Fixed repo family on Ubuntu
 * **CDK Template**: Removed invalid TTL on Alias record
+* **GovCloud VDC Deployment**: Fixed EventBridge scheduler rule deployment failure in AWS GovCloud
 
 ## [25.09.1] - 2025-09-22
 
