@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
-## [25.11.0] - 2025-11-TBD
+## [25.12.0] - 2025-12-17
 
 **Upgrade Instructions:**
 * It's recommended to perform a full cluster upgrade as Base AMIs and other settings have been updated
