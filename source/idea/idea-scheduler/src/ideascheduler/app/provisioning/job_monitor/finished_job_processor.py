@@ -265,10 +265,19 @@ class FinishedJobProcessor:
     def _poll_finished_jobs(self):
         while not self._exit.is_set():
             try:
+                self._logger.debug('FinishedJobProcessor: Starting processing cycle')
+
                 jobs_table = self._context.job_cache.get_jobs_table()
 
-                active_job_ids = OpenPBSQSelect(self._context).list_jobs_ids()
-                active_job_ids = set(active_job_ids)
+                try:
+                    active_job_ids = OpenPBSQSelect(self._context).list_jobs_ids()
+                    active_job_ids = set(active_job_ids)
+                    self._logger.debug(
+                        f'FinishedJobProcessor: Retrieved {len(active_job_ids)} active jobs from PBS'
+                    )
+                except Exception as e:
+                    self._logger.error(f'Failed to get active job IDs from PBS: {e}')
+                    continue
 
                 jobs_deleted = 0
                 jobs_finished = 0
@@ -292,6 +301,9 @@ class FinishedJobProcessor:
                             entry
                         )
                         if completed_job is None:
+                            self._logger.warning(
+                                f'Failed to convert job {job_id} from cache entry, skipping'
+                            )
                             continue
 
                         # if job was not provisioned, it was most certainly deleted using qdel
@@ -311,7 +323,13 @@ class FinishedJobProcessor:
                         self._logger.exception(f'failed to process finished job: {e}')
 
                 if len(jobs_ids_to_delete) > 0:
-                    self._context.job_cache.delete_jobs(job_ids=jobs_ids_to_delete)
+                    try:
+                        self._logger.debug(
+                            f'FinishedJobProcessor: Deleting {len(jobs_ids_to_delete)} jobs from cache'
+                        )
+                        self._context.job_cache.delete_jobs(job_ids=jobs_ids_to_delete)
+                    except Exception as e:
+                        self._logger.error(f'Failed to delete jobs from cache: {e}')
 
                 if jobs_deleted + jobs_finished > 0:
                     self._logger.info(
@@ -320,6 +338,18 @@ class FinishedJobProcessor:
 
                 if len(finished_jobs) > 0:
                     self._process_finished_jobs(finished_jobs)
+
+                self._logger.debug(
+                    'FinishedJobProcessor: Processing cycle completed successfully'
+                )
+
+            except Exception as e:
+                # CRITICAL: Top-level exception handler to prevent thread death
+                # This catches any unhandled exception that would otherwise kill the thread
+                self._logger.exception(
+                    f'CRITICAL: Unhandled exception in FinishedJobProcessor cycle: {e}'
+                )
+                # Thread continues running despite the exception
 
             finally:
                 if not self._exit.is_set():

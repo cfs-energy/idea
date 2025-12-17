@@ -400,7 +400,14 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
         schedule_trigger_rule.add_target(
             events_targets.LambdaFunction(scheduled_event_transformer_lambda)
         )
-        self.add_common_tags(schedule_trigger_rule)
+
+        # CloudFormation doesn't support Tags on EventBridge Rules in GovCloud
+        # even though the Console UI shows the capability
+        aws_partition = self.context.config().get_string(
+            'cluster.aws.partition', required=True
+        )
+        if aws_partition != 'aws-us-gov':
+            self.add_common_tags(schedule_trigger_rule)
 
     def build_oauth2_client(self):
         # add resource server

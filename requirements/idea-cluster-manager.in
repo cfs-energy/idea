@@ -1,5 +1,5 @@
 -r idea-sdk.in
-git+https://github.com/Supervisor/supervisor.git@main
+supervisor
 sanic
 python-ldap
 ldappool

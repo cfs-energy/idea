@@ -3,8 +3,72 @@ import oyaml as yaml
 import shutil
 import datetime
 import concurrent.futures
+import argparse
 from typing import Optional, Tuple
 from botocore.exceptions import ClientError
+
+# Parse command-line arguments
+parser = argparse.ArgumentParser(
+    description='Update AMI IDs in base-software-stack-config.yaml'
+)
+parser.add_argument('--rhel8', action='store_true', help='Update only RHEL 8 AMIs')
+parser.add_argument('--rhel9', action='store_true', help='Update only RHEL 9 AMIs')
+parser.add_argument(
+    '--rocky8', action='store_true', help='Update only Rocky Linux 8 AMIs'
+)
+parser.add_argument(
+    '--rocky9', action='store_true', help='Update only Rocky Linux 9 AMIs'
+)
+parser.add_argument(
+    '--ubuntu2204', action='store_true', help='Update only Ubuntu 22.04 AMIs'
+)
+parser.add_argument(
+    '--ubuntu2404', action='store_true', help='Update only Ubuntu 24.04 AMIs'
+)
+parser.add_argument(
+    '--amazonlinux2', action='store_true', help='Update only Amazon Linux 2 AMIs'
+)
+parser.add_argument(
+    '--amazonlinux2023', action='store_true', help='Update only Amazon Linux 2023 AMIs'
+)
+parser.add_argument(
+    '--windows2019', action='store_true', help='Update only Windows Server 2019 AMIs'
+)
+parser.add_argument(
+    '--windows2022', action='store_true', help='Update only Windows Server 2022 AMIs'
+)
+parser.add_argument(
+    '--windows2025', action='store_true', help='Update only Windows Server 2025 AMIs'
+)
+args = parser.parse_args()
+
+# Determine which AMI types to update
+selected_ami_types = []
+if args.rhel8:
+    selected_ami_types.append('rhel8')
+if args.rhel9:
+    selected_ami_types.append('rhel9')
+if args.rocky8:
+    selected_ami_types.append('rocky8')
+if args.rocky9:
+    selected_ami_types.append('rocky9')
+if args.ubuntu2204:
+    selected_ami_types.append('ubuntu2204')
+if args.ubuntu2404:
+    selected_ami_types.append('ubuntu2404')
+if args.amazonlinux2:
+    selected_ami_types.append('amazonlinux2')
+if args.amazonlinux2023:
+    selected_ami_types.append('amazonlinux2023')
+if args.windows2019:
+    selected_ami_types.append('windows2019')
+if args.windows2022:
+    selected_ami_types.append('windows2022')
+if args.windows2025:
+    selected_ami_types.append('windows2025')
+
+# If no specific AMI types selected, update all
+update_all = len(selected_ami_types) == 0
 
 # Define file paths as constants
 CONFIG_FILE_PATH = '../../source/idea/idea-virtual-desktop-controller/resources/base-software-stack-config.yaml'
@@ -26,8 +90,8 @@ AMI_PATTERNS = {
     'ubuntu2404/x86-64': 'ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*',
     'amazonlinux2/arm64': 'amzn2-ami-kernel-5.10-hvm-*-arm64-gp2',
     'amazonlinux2/x86-64': 'amzn2-ami-kernel-5.10-hvm-*-x86_64-gp2',
-    'amazonlinux2023/arm64': 'al2023-ami-2023.8*-kernel-6.1-arm64',
-    'amazonlinux2023/x86-64': 'al2023-ami-2023.8.*-kernel-6.1-x86_64',
+    'amazonlinux2023/arm64': 'al2023-ami-2023.9.*-kernel-6.12-arm64',
+    'amazonlinux2023/x86-64': 'al2023-ami-2023.9.*-kernel-6.12-x86_64',
     # Commented out patterns kept for reference
     # "rhel7/x86-64": "RHEL-7.9_HVM-*-x86_64-*",
     'rocky8/arm64': 'Rocky-8-EC2-Base-8.9-*.aarch64-*',
@@ -173,6 +237,10 @@ ami_lookup_tasks = []
 
 # First prepare non-Windows AMI lookup tasks
 for ami_type in [t for t in data if not t.startswith('windows')]:
+    # Skip if not in selected types (when filtering is active)
+    if not update_all and ami_type not in selected_ami_types:
+        continue
+
     for architecture_type in data[ami_type]:
         if architecture_type not in ['arm64', 'x86-64']:
             continue
@@ -186,6 +254,10 @@ for ami_type in [t for t in data if not t.startswith('windows')]:
 # Then prepare Windows AMI lookup tasks - one per Windows version per region
 for windows_type in ['windows2019', 'windows2022', 'windows2025']:
     if windows_type not in data:
+        continue
+
+    # Skip if not in selected types (when filtering is active)
+    if not update_all and windows_type not in selected_ami_types:
         continue
 
     for region in [
@@ -206,6 +278,12 @@ for windows_type in ['windows2019', 'windows2022', 'windows2025']:
 
 # Windows AMI results cache
 windows_ami_cache = {}  # format: {(windows_type, region): ami_id}
+
+# Print what we're updating
+if update_all:
+    print('Updating ALL AMI types...')
+else:
+    print(f'Updating selected AMI types: {", ".join(selected_ami_types)}')
 
 print(
     f'Starting parallel AMI lookups for {len(ami_lookup_tasks)} tasks with {MAX_WORKERS} workers...'

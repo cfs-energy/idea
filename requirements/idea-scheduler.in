@@ -1,5 +1,5 @@
 -r idea-sdk.in
 cachetools
 prettytable
-git+https://github.com/Supervisor/supervisor.git@main
+supervisor
 sanic

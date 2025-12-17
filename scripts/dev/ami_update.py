@@ -18,7 +18,7 @@ AMI_NAME_MAPPINGS = {
     'rocky8': 'Rocky-8-EC2-Base-8.9-*.x86_64-*',
     'rocky9': 'Rocky-9-EC2-Base-9.6-*.x86_64-*',
     # "amazonlinux2": "amzn2-ami-kernel-5.10-hvm-*-x86_64-gp2",
-    'amazonlinux2023': 'al2023-ami-2023.8.*-kernel-6.1-x86_64',
+    'amazonlinux2023': 'al2023-ami-2023.9.*-kernel-6.12-x86_64',
 }
 
 # Generating a timestamp
