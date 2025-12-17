@@ -12,4 +12,4 @@
 # pkg config for idea-admin. no dependencies.
 
 __name__ = 'idea-administrator'
-__version__ = '25.11.0'
+__version__ = '25.12.0'
