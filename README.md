@@ -2,7 +2,7 @@
 
 **Read Me First**
 
-IDEA is **NOT** supported by AWS. Do **NOT** expect support from AWS for IDEA. If you're looking for a supported solution, please look to AWS RES.
+IDEA is **NOT** supported by AWS. Do **NOT** expect support from AWS for IDEA. If you're looking for a supported solution, please look to AWS RES or EDH.
 
 AWS has decided to take a different direction with IDEA and pursue RES (https://github.com/aws/res). Until RES achieves feature parity with IDEA, this repository will be the authoritative source for IDEA updates, patches, and information.
 
