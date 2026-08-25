@@ -15,7 +15,7 @@ import React, {Component} from "react";
 
 import {Button, Container, Header, SpaceBetween} from "@cloudscape-design/components";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
-import ReactJson from "react-json-view";
+import ReactJson from "@microlink/react-json-view";
 import {AppContext} from "../../common";
 import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
 import {faSpinner} from "@fortawesome/free-solid-svg-icons/faSpinner";

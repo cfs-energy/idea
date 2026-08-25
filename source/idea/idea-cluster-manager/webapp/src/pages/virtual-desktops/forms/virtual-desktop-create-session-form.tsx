@@ -47,7 +47,7 @@ export interface VirtualDesktopCreateSessionFormState {
 }
 
 class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSessionFormProps, VirtualDesktopCreateSessionFormState> {
-    form: RefObject<IdeaForm>
+    form: RefObject<IdeaForm | null>
     instanceTypesInfo: any
     defaultInstanceTypeChoices: SocaUserInputChoice[]
     // Flag to prevent duplicate API calls when hibernation is changed programmatically
@@ -791,7 +791,7 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
 
                         if (osSelected && stackSelected) {
                             if (event.value === 'windows2019' || event.value === 'windows2022' || event.value === 'windows2025' ||
-                                event.value === 'amazonlinux2' || event.value === 'amazonlinux2023' ||
+                                event.value === 'amazonlinux2023' ||
                                 event.value === 'rhel8' || event.value === 'rhel9' ||
                                 event.value === 'rocky8' || event.value === 'rocky9' ||
                                 event.value === 'ubuntu2204') {
@@ -868,7 +868,7 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
                         if (hibernation && baseOs) {
                             // Enable or disable based on OS compatibility with hibernation
                             if (baseOs === 'windows2019' || baseOs === 'windows2022' || baseOs === 'windows2025' ||
-                                baseOs === 'amazonlinux2' || baseOs === 'amazonlinux2023' ||
+                                baseOs === 'amazonlinux2023' ||
                                 baseOs === 'rhel8' || baseOs === 'rhel9' ||
                                 baseOs === 'rocky8' || baseOs === 'rocky9' ||
                                 baseOs === 'ubuntu2204') {

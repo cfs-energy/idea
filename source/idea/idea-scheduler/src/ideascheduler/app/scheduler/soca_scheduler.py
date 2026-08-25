@@ -58,6 +58,9 @@ class SocaScheduler(SocaSchedulerProtocol):
     def get_node(self, host: str, **kwargs) -> Optional[SocaComputeNode]:
         return self._scheduler.get_node(host=host, **kwargs)
 
+    def find_node(self, hosts: List[str], **kwargs) -> Optional[SocaComputeNode]:
+        return self._scheduler.find_node(hosts=hosts, **kwargs)
+
     def delete_node(self, host: str) -> bool:
         return self._scheduler.delete_node(host=host)
 
@@ -145,8 +148,14 @@ class SocaScheduler(SocaSchedulerProtocol):
     def set_job_attributes(self, job_id: str, attributes: Dict[str, Any]) -> bool:
         return self._scheduler.set_job_attributes(job_id=job_id, attributes=attributes)
 
+    def set_job_comment(self, job_id: str, comment: str) -> bool:
+        return self._scheduler.set_job_comment(job_id=job_id, comment=comment)
+
     def provision_job(self, job: SocaJob, stack_id: str) -> int:
         return self._scheduler.provision_job(job=job, stack_id=stack_id)
 
     def reset_job(self, job_id: str) -> bool:
         return self._scheduler.reset_job(job_id=job_id)
+
+    def hold_job(self, job_id: str) -> bool:
+        return self._scheduler.hold_job(job_id=job_id)

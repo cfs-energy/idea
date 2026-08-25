@@ -310,7 +310,13 @@ class AccountsService:
     ) -> ListUsersInGroupResult:
         return self.group_members_dao.list_users_in_group(request)
 
-    def add_users_to_group(self, usernames: List[str], group_name: str):
+    def add_users_to_group(
+        self, usernames: List[str], group_name: str, notify: bool = True
+    ):
+        """
+        notify=False skips the membership task so a caller that may still roll the
+        membership back can queue it once the account is complete.
+        """
         if Utils.is_empty(usernames):
             raise exceptions.invalid_params('usernames is required')
 
@@ -364,15 +370,21 @@ class AccountsService:
                     username=username, group_name=group_name
                 )
 
-            self.task_manager.send(
-                task_name='accounts.group-membership-updated',
-                payload={
-                    'group_name': group_name,
-                    'username': username,
-                    'operation': 'add',
-                },
-                message_group_id=username,
-            )
+            if notify:
+                self.send_group_membership_updated(group_name, username, 'add')
+
+    def send_group_membership_updated(
+        self, group_name: str, username: str, operation: str
+    ):
+        self.task_manager.send(
+            task_name='accounts.group-membership-updated',
+            payload={
+                'group_name': group_name,
+                'username': username,
+                'operation': operation,
+            },
+            message_group_id=username,
+        )
 
     def remove_user_from_groups(self, username: str, group_names: List[str]):
         """
@@ -710,94 +722,178 @@ class AccountsService:
             f'creating Cognito user pool entry: {username} , uid: {uid}, gid: {gid}, Group Name: {group_name}, Email: {email} , email_verified: {email_verified}'
         )
 
-        self.user_pool.admin_create_user(
-            username=username,
-            email=email,
-            password=password,
-            email_verified=email_verified,
-        )
+        # every step below persists state; track what this call creates so a failure partway
+        # through can be unwound instead of leaving an account that exists but can't sign in.
+        created_pool_user = False
+        created_group = False
+        created_db_user = False
+        joined_groups: List[str] = []
 
-        if self.is_sso_enabled():
-            self.logger.debug(f'Performing IDP Link for {username} / {email}')
-            self.user_pool.admin_link_idp_for_user(username, email)
-
-        if sudo:
-            self.logger.debug(f'Performing SUDO for {username}')
-            self.user_pool.admin_add_sudo_user(username)
-
-        # additional groups
-        additional_groups = Utils.get_as_list(user.additional_groups, default=[])
-        self.logger.debug(f'Additional groups for {username}: {additional_groups}')
-        if group_name in additional_groups:
-            additional_groups.remove(group_name)
-
-        # We may have an existing group that we are getting mapped to
-        existing_group = self.group_dao.get_group(group_name=group_name)
-        if existing_group is None:
-            self.logger.debug(
-                f'Creating new group for {username}: GroupName: {group_name}'
+        try:
+            # the pool entry exists before the password is set, so a failure inside
+            # this call can leave it behind. admin_delete_user tolerates a missing user.
+            created_pool_user = True
+            self.user_pool.admin_create_user(
+                username=username,
+                email=email,
+                password=password,
+                email_verified=email_verified,
             )
-            self.group_dao.create_group(
+
+            if self.is_sso_enabled():
+                self.logger.debug(f'Performing IDP Link for {username} / {email}')
+                self.user_pool.admin_link_idp_for_user(username, email)
+
+            if sudo:
+                self.logger.debug(f'Performing SUDO for {username}')
+                self.user_pool.admin_add_sudo_user(username)
+
+            # additional groups
+            additional_groups = Utils.get_as_list(user.additional_groups, default=[])
+            self.logger.debug(f'Additional groups for {username}: {additional_groups}')
+            if group_name in additional_groups:
+                additional_groups.remove(group_name)
+
+            # We may have an existing group that we are getting mapped to
+            existing_group = self.group_dao.get_group(group_name=group_name)
+            if existing_group is None:
+                self.logger.debug(
+                    f'Creating new group for {username}: GroupName: {group_name}'
+                )
+                self.group_dao.create_group(
+                    {
+                        'title': f"{username}'s Personal User Group",
+                        'group_name': group_name,
+                        'gid': gid,
+                        'group_type': constants.GROUP_TYPE_USER,
+                        'ref': username,
+                        'enabled': True,
+                    }
+                )
+                created_group = True
+            else:
+                self.logger.debug(
+                    f'No need to create group for username: {username}:   Group ({group_name}) already exists.'
+                )
+
+            created_user = self.user_dao.create_user(
                 {
-                    'title': f"{username}'s Personal User Group",
-                    'group_name': group_name,
+                    'username': username,
+                    'email': email,
+                    'uid': uid,
                     'gid': gid,
-                    'group_type': constants.GROUP_TYPE_USER,
-                    'ref': username,
+                    'group_name': group_name,
+                    'additional_groups': additional_groups,
+                    'login_shell': login_shell,
+                    'home_dir': home_dir,
+                    'sudo': sudo,
                     'enabled': True,
                 }
             )
-        else:
+            created_db_user = True
+            self.logger.debug(f'Adding user {username} to specific group {group_name}')
+            self.add_users_to_group([username], group_name, notify=False)
+            joined_groups.append(group_name)
+
+            default_project_group = self.group_name_helper.get_default_project_group()
             self.logger.debug(
-                f'No need to create group for username: {username}:   Group ({group_name}) already exists.'
+                f'Adding user {username} to default group: {default_project_group}'
+            )
+            self.add_users_to_group([username], default_project_group, notify=False)
+            joined_groups.append(default_project_group)
+
+            for additional_group in additional_groups:
+                self.logger.debug(
+                    f'Adding username {username} to additional group: {additional_group}'
+                )
+                self.add_users_to_group([username], additional_group, notify=False)
+                joined_groups.append(additional_group)
+
+            if Utils.is_not_empty(password):
+                self.change_ldap_password(username, password)
+
+            # queued only after the last step that can fail, so directory work never
+            # races a rollback of the account it targets.
+            self.task_manager.send(
+                task_name='accounts.sync-user',
+                payload={'username': username},
+                message_group_id=username,
+                message_dedupe_id=f'{username}.create-user.{nonce()}',
+            )
+            for joined_group in joined_groups:
+                self.send_group_membership_updated(joined_group, username, 'add')
+            self.task_manager.send(
+                task_name='accounts.create-home-directory',
+                payload={'username': username},
+                message_group_id=username,
             )
 
-        created_user = self.user_dao.create_user(
-            {
-                'username': username,
-                'email': email,
-                'uid': uid,
-                'gid': gid,
-                'group_name': group_name,
-                'additional_groups': additional_groups,
-                'login_shell': login_shell,
-                'home_dir': home_dir,
-                'sudo': sudo,
-                'enabled': True,
-            }
-        )
-        self.task_manager.send(
-            task_name='accounts.sync-user',
-            payload={'username': username},
-            message_group_id=username,
-            message_dedupe_id=f'{username}.create-user.{nonce()}',
-        )
-        self.logger.debug(f'Adding user {username} to specific group {group_name}')
-        self.add_users_to_group([username], group_name)
-
-        self.logger.debug(
-            f'Adding user {username} to default group: {self.group_name_helper.get_default_project_group()}'
-        )
-        self.add_users_to_group(
-            [username], self.group_name_helper.get_default_project_group()
-        )
-
-        for additional_group in additional_groups:
-            self.logger.debug(
-                f'Adding username {username} to additional group: {additional_group}'
+            return self.user_dao.convert_from_db(created_user)
+        except Exception:
+            self._rollback_create_user(
+                username=username,
+                group_name=group_name,
+                joined_groups=joined_groups,
+                created_pool_user=created_pool_user,
+                created_group=created_group,
+                created_db_user=created_db_user,
             )
-            self.add_users_to_group([username], additional_group)
+            raise
 
-        self.task_manager.send(
-            task_name='accounts.create-home-directory',
-            payload={'username': username},
-            message_group_id=username,
+    def _rollback_create_user(
+        self,
+        username: str,
+        group_name: str,
+        joined_groups: List[str],
+        created_pool_user: bool,
+        created_group: bool,
+        created_db_user: bool,
+    ):
+        """
+        undo the artifacts a failed create_user call already persisted.
+        each step is best effort and its failure is logged, never raised: the caller
+        must still see the error that caused the create to fail.
+        """
+        self.logger.warning(
+            f'create user failed for: {username}. rolling back partial account.'
         )
 
-        if Utils.is_not_empty(password):
-            self.change_ldap_password(username, password)
+        if len(joined_groups) > 0:
+            try:
+                self.remove_user_from_groups(username, list(reversed(joined_groups)))
+            except Exception as e:
+                self.logger.warning(
+                    f'rollback: could not remove {username} from groups {joined_groups}: {e}'
+                )
+                for joined_group in reversed(joined_groups):
+                    try:
+                        self.group_members_dao.delete_membership(joined_group, username)
+                    except Exception as e:
+                        self.logger.warning(
+                            f'rollback: could not remove {username} from group {joined_group}: {e}'
+                        )
 
-        return self.user_dao.convert_from_db(created_user)
+        if created_db_user:
+            try:
+                self.user_dao.delete_user(username=username)
+            except Exception as e:
+                self.logger.warning(f'rollback: could not delete user {username}: {e}')
+
+        if created_group:
+            try:
+                self.group_dao.delete_group(group_name)
+            except Exception as e:
+                self.logger.warning(
+                    f'rollback: could not delete group {group_name}: {e}'
+                )
+
+        if created_pool_user:
+            try:
+                self.user_pool.admin_delete_user(username=username)
+            except Exception as e:
+                self.logger.warning(
+                    f'rollback: could not delete user pool entry {username}: {e}'
+                )
 
     def modify_user(self, user: User, email_verified: bool = False) -> User:
         """

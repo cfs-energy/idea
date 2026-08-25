@@ -18,6 +18,22 @@ All IDEA generated tags are prefixed with "**idea:**"
 
 #### Step1: Enable Cost Allocation Tags <a href="#step1-enable-cost-allocation-tags" id="step1-enable-cost-allocation-tags"></a>
 
+{% hint style="warning" %}
+This step cannot be done from the account IDEA runs in if that account is a member of an AWS
+Organization. AWS is explicit: "Only the management account in an organization and single accounts
+that aren't members of an organization have access to the **cost allocation tags** manager in the
+Billing console." A member account has no Cost allocation tags page, so somebody with access to the
+management account has to activate the `idea:` tag keys.
+
+IDEA cannot do this for you, and nothing fails loudly when it has not been done. Until the tag keys
+are active, `idea:` tags do not appear in Cost Explorer and a budget filtered on them reads as no
+spend, which looks the same as a project that has not spent anything.
+
+Tag keys can take up to 24 hours to appear on the cost allocation tags page, and up to another 24
+hours to activate after that. Activation is not retroactive: costs incurred before the key was
+active are not attributed to it unless the management account requests a backfill.
+{% endhint %}
+
 Click on your account name (top right on the screen) then click "**Billing Dashboard**". Once connected to your Billing dashboard, click "**Cost Allocation Tags**" on the left sidebar.
 
 ![Cost Allocation section is available via the left sidebar](https://awslabs.github.io/scale-out-computing-on-aws/imgs/budget-2.png)

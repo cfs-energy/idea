@@ -1,4 +1,4 @@
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
 # System upgrade with error handling to prevent infinite loops
 if apt update; then
   if apt upgrade -y; then

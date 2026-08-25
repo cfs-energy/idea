@@ -69,7 +69,7 @@ class VirtualDesktopServerDB(VirtualDesktopNotifiableDB):
         if Utils.is_empty(server):
             return {}
 
-        return {
+        db_dict = {
             servers_constants.DCV_HOST_DB_HASH_KEY: server.instance_id,
             servers_constants.DCV_HOST_DB_INSTANCE_TYPE_KEY: server.instance_type,
             servers_constants.DCV_HOST_DB_IDEA_SESSION_ID_KEY: server.idea_session_id,
@@ -79,6 +79,15 @@ class VirtualDesktopServerDB(VirtualDesktopNotifiableDB):
             if Utils.is_empty(server.locked)
             else server.locked,
         }
+
+        # which instance profile the host actually launched under; omitted rather than written
+        # empty, since update() writes every key it is given and would erase what was recorded.
+        if Utils.is_not_empty(server.instance_profile_arn):
+            db_dict[servers_constants.DCV_HOST_DB_INSTANCE_PROFILE_ARN_KEY] = (
+                server.instance_profile_arn
+            )
+
+        return db_dict
 
     @staticmethod
     def convert_db_entry_to_server_object(
@@ -102,6 +111,9 @@ class VirtualDesktopServerDB(VirtualDesktopNotifiableDB):
             ),
             locked=Utils.get_value_as_bool(
                 servers_constants.DCV_HOST_DB_LOCKED_KEY, db_entry, False
+            ),
+            instance_profile_arn=Utils.get_value_as_string(
+                servers_constants.DCV_HOST_DB_INSTANCE_PROFILE_ARN_KEY, db_entry
             ),
         )
 

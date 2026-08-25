@@ -1,16 +1,16 @@
 # Begin: Kernel Version Management
 
-# OS-specific kernel version patterns (wildcard indicates we want latest in series)
+# kernel series here match what the FSx for Lustre client ships modules for (wildcard = latest in series).
+# rhel10, rocky10, ubuntu2604 are absent: only the eVDI setup includes this template, none has eVDI support.
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
 TARGET_KERNEL_VERSION="6.8*"
 {% elif context.base_os in ('amazonlinux2023',) %}
 TARGET_KERNEL_VERSION="6.1*"
-{% elif context.base_os in ('amazonlinux2',) %}
-TARGET_KERNEL_VERSION="5.10*"
 {% elif context.base_os in ('rhel8', 'rocky8') %}
 TARGET_KERNEL_VERSION="4.18.0-553*"
 {% elif context.base_os in ('rhel9', 'rocky9') %}
-TARGET_KERNEL_VERSION="5.14.0-570*"
+{# 5.14.0-687 is the EL 9.8 kernel series; fsx_lustre_client.jinja2 carries the matching arm #}
+TARGET_KERNEL_VERSION="5.14.0-687*"
 {% endif %}
 
 
@@ -42,11 +42,6 @@ function apply_kernel_holds() {
     log_info "Meta-packages point to wrong kernel series or don't exist - removing them"
     DEBIAN_FRONTEND=noninteractive apt remove -y linux-aws linux-image-aws linux-headers-aws linux-tools-aws >/dev/null 2>&1 || true
   fi
-
-{% elif context.base_os in ('amazonlinux2',) %}
-  # For AL2, kernel version is managed via amazon-linux-extras
-  log_info "Kernel version managed via amazon-linux-extras - holding current kernel packages"
-  # Note: AL2 doesn't have apt-mark, and amazon-linux-extras handles version locking
 
 {% elif context.base_os in ('amazonlinux2023',) %}
   # Install dnf-plugin-versionlock if not already present
@@ -90,11 +85,6 @@ function remove_unwanted_kernels() {
   else
     log_info "No non-target kernel packages found to remove"
   fi
-
-{% elif context.base_os in ('amazonlinux2',) %}
-  # For AL2, use built-in package-cleanup to remove old kernels
-  log_info "Using package-cleanup to remove old kernels (keeping only current target)"
-  package-cleanup --oldkernels --count=1 -y >/dev/null 2>&1 || true
 
 {% elif context.base_os in ('amazonlinux2023',) %}
   # Find all installed kernel packages that don't match our target version
@@ -141,30 +131,6 @@ function install_target_kernel() {
     log_info "Target kernel ${target_version} packages installed successfully"
   else
     log_error "Failed to install target kernel ${target_version} packages"
-    return 1
-  fi
-
-{% elif context.base_os in ('amazonlinux2',) %}
-  # Use amazon-linux-extras for AL2 kernel management (simpler and more reliable)
-  log_info "Using amazon-linux-extras to manage kernel version for Amazon Linux 2"
-
-  # Disable current kernel extra
-  amazon-linux-extras disable kernel-5.10 >/dev/null 2>&1 || true
-  amazon-linux-extras disable kernel-5.4 >/dev/null 2>&1 || true
-
-  # Enable target kernel extra
-  if amazon-linux-extras enable kernel-${target_base}; then
-    log_info "Enabled kernel-${target_base} via amazon-linux-extras"
-
-    # Install the kernel
-    if yum install -y kernel; then
-      log_info "Target kernel ${target_version} installed successfully via amazon-linux-extras"
-    else
-      log_error "Failed to install kernel via amazon-linux-extras"
-      return 1
-    fi
-  else
-    log_error "Failed to enable kernel-${target_base} via amazon-linux-extras"
     return 1
   fi
 
@@ -227,11 +193,6 @@ function set_kernel_version() {
   if apt list --installed 2>/dev/null | grep -q "linux-image.*${target_base}"; then
     kernel_installed=true
   fi
-{% elif context.base_os in ('amazonlinux2',) %}
-  # For AL2, check if the target kernel extra is already enabled and kernel is installed
-  if amazon-linux-extras list | grep -q "kernel-${target_base}.*enabled" && rpm -qa kernel | grep -q "${target_base}"; then
-    kernel_installed=true
-  fi
 {% elif context.base_os in ('amazonlinux2023',) %}
   if rpm -qa kernel | grep -q "${target_base}"; then
     kernel_installed=true
@@ -265,10 +226,6 @@ function set_kernel_version() {
     # Update GRUB to default to target kernel
     sed -i 's/^GRUB_DEFAULT=.*/GRUB_DEFAULT="1>2"/' /etc/default/grub
     update-grub
-{% elif context.base_os in ('amazonlinux2',) %}
-    # For Amazon Linux 2, amazon-linux-extras handles everything automatically (including GRUB)
-    log_info "Amazon Linux 2 kernel switching is fully managed by amazon-linux-extras - no GRUB changes needed"
-
 {% elif context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
     # For other RHEL-based systems, set GRUB_DEFAULT to 0 to boot the latest (target) kernel
     sed -i 's/^GRUB_DEFAULT=.*/GRUB_DEFAULT=0/' /etc/default/grub
@@ -288,7 +245,7 @@ function set_kernel_version() {
       log_info "Kernel ${target_version} found in /boot, rebooting to activate"
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
       set_reboot_required "Ubuntu kernel version change to ${target_version}"
-{% elif context.base_os in ('amazonlinux2', 'amazonlinux2023') %}
+{% elif context.base_os in ('amazonlinux2023',) %}
       set_reboot_required "Amazon Linux kernel version change to ${target_version}"
 {% elif context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
       set_reboot_required "RHEL kernel version change to ${target_version}"
@@ -312,7 +269,7 @@ function set_kernel_version() {
 }
 
 # Execute kernel version management for all supported distributions
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
 set_kernel_version
 {% endif %}
 # End: Kernel Version Management

@@ -574,7 +574,7 @@ class UpdateSessionPermissionModal extends Component<UpdateSessionPermissionModa
                             {
                                 Object.keys(this.state.allRows).map(row_id => {
                                     let row = this.state.allRows[row_id]
-                                    let ref: RefObject<PermissionRow> = React.createRef()
+                                    let ref: RefObject<PermissionRow | null> = React.createRef()
                                     return (
                                         this.state.visibleRows[row.row_id] && <PermissionRow
                                             ref={ref}

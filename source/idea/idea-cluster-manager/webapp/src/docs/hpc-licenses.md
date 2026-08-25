@@ -23,7 +23,7 @@ Specify the number of licenses to be reserved for non-HPC usage.
 
 #### Availability Check Script
 
-Script to retrieve the number of licenses available. IDEA provides a basic example (license_checks.py). You can extend it or create new script to match your own requirements. The output of the script must be an integer.
+Script to retrieve the number of licenses available. IDEA provides a basic example (license_check.py). You can extend it or create new script to match your own requirements. The output of the script must be an integer.
 
 ### Edit a license resource
 

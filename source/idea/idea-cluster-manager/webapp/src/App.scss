@@ -80,7 +80,7 @@ code.idea-code-block {
     font-size: 13px !important;
     margin: 6px 0 !important;
     border-radius: 4px !important;
-    border-left: 3px solid #0972d3 !important;
+    border-left: 3px solid awsui.$color-text-link-default !important;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2) !important;
     overflow: auto !important;
     max-width: 100% !important;
@@ -111,16 +111,6 @@ code.idea-code-block {
     .ssh-command-box {
         background-color: #1a1a1a !important;
         border-left-color: #1a9fff !important;
-    }
-}
-
-.awsui-dark-mode {
-    .chonky-chonkyRoot {
-        background-color: awsui.$color-background-container-content;
-    }
-
-    .chonky-dropdownList, .chonky-contextMenuList {
-        background-color: awsui.$color-background-container-header;
     }
 }
 
@@ -180,9 +170,108 @@ code.idea-code-block {
 
 // file browser
 .soca-file-browser {
-    .chonky-chonkyRoot {
+    .soca-file-browser-path {
+        padding-bottom: awsui.$space-scaled-xs;
+    }
+
+    // A path longer than the page scrolls inside here rather than widening the
+    // page. It is scrolled to the current directory on every listing, because
+    // the deep end is the end people are working at (see scrollTrailToEnd).
+    .soca-file-browser-path-trail {
+        align-items: center;
+        display: flex;
+        gap: awsui.$space-scaled-xs;
+        overflow-x: auto;
+        white-space: nowrap;
+    }
+
+    .soca-file-browser-path-segment {
+        display: inline-flex;
+        align-items: center;
+        flex: 0 0 auto;
+    }
+
+    // The empty space beside the trail. Clicking it types a path; it is a real
+    // button so that tabbing to it does too.
+    .soca-file-browser-path-edit {
+        background: none;
         border: none;
-        border-radius: 10px;
+        cursor: text;
+        flex: 1 0 4rem;
+        min-height: awsui.$space-scaled-l;
+        padding: 0;
+        // Contains the hidden label, which would otherwise be positioned
+        // against whatever happens to be the nearest positioned ancestor.
+        position: relative;
+
+        &:focus-visible {
+            outline: 2px solid awsui.$color-border-item-focused;
+            outline-offset: -2px;
+        }
+    }
+
+    // Read out, not shown: what the empty space is for.
+    .soca-file-browser-path-edit-label {
+        clip-path: inset(50%);
+        height: 1px;
+        overflow: hidden;
+        position: absolute;
+        white-space: nowrap;
+        width: 1px;
+    }
+
+    .soca-file-browser-path-separator {
+        color: awsui.$color-text-body-secondary;
+        padding: 0 awsui.$space-scaled-xxs;
+    }
+
+    .soca-file-browser-filter {
+        align-items: center;
+        display: flex;
+        flex-wrap: wrap;
+        gap: awsui.$space-scaled-m;
+        max-inline-size: 40rem;
+    }
+
+    .soca-file-browser-filter-count {
+        color: awsui.$color-text-body-secondary;
+        font-size: awsui.$font-size-body-s;
+    }
+
+    .soca-file-browser-name {
+        align-items: baseline;
+        display: inline-flex;
+        gap: awsui.$space-scaled-xs;
+    }
+
+    // Anchored to the pointer, so it is positioned in the viewport rather than
+    // in the table, and stacked above the sticky table chrome.
+    .soca-file-browser-menu {
+        background-color: awsui.$color-background-dropdown-item-default;
+        border: awsui.$border-width-dropdown solid awsui.$color-border-dropdown-container;
+        border-radius: awsui.$border-radius-dropdown;
+        box-shadow: awsui.$shadow-container-active;
+        display: flex;
+        flex-direction: column;
+        min-width: 200px;
+        padding: awsui.$space-scaled-xxs 0;
+        position: fixed;
+        z-index: 2000;
+    }
+
+    .soca-file-browser-menu-item {
+        background: none;
+        border: none;
+        color: awsui.$color-text-dropdown-item-default;
+        cursor: pointer;
+        font-size: awsui.$font-size-body-m;
+        padding: awsui.$space-scaled-xxs awsui.$space-scaled-l;
+        text-align: start;
+        white-space: nowrap;
+
+        &:hover {
+            background-color: awsui.$color-background-dropdown-item-hover;
+        }
     }
 }
 
@@ -242,21 +331,21 @@ code.idea-code-block {
 
 // confirm dialog
 .idea-confirm-danger-button {
-    background-color: #d13212 !important;
-    border-color: #d13212 !important;
+    background-color: awsui.$color-text-status-error !important;
+    border-color: awsui.$color-text-status-error !important;
 
+    // Cloudscape exposes no darker error token, so darken the token instead of
+    // hardcoding a second red that will drift from it.
     &:hover {
-        background-color: #be2b0d !important;
-        border-color: #be2b0d !important;
+        filter: brightness(0.9);
     }
 }
 
 .danger-confirm-button-container button {
-    background-color: #d13212 !important;
-    border-color: #d13212 !important;
+    background-color: awsui.$color-text-status-error !important;
+    border-color: awsui.$color-text-status-error !important;
 
     &:hover {
-        background-color: #be2b0d !important;
-        border-color: #be2b0d !important;
+        filter: brightness(0.9);
     }
 }

@@ -37,7 +37,7 @@ export interface HpcSchedulerSettingsState {
 
 class HpcSchedulerSettings extends Component<HpcSchedulerSettingsProps, HpcSchedulerSettingsState> {
 
-    generalSettingsForm: RefObject<IdeaForm>
+    generalSettingsForm: RefObject<IdeaForm | null>
 
     constructor(props: HpcSchedulerSettingsProps) {
         super(props);

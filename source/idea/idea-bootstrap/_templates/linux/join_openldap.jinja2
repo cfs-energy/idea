@@ -68,7 +68,7 @@ mkdir -p /etc/openldap/cacerts/
 DS_TLS_CERTIFICATE=$(get_secret "${IDEA_DS_TLS_CERTIFICATE_SECRET_ARN}")
 echo -n "${DS_TLS_CERTIFICATE}" > /etc/openldap/cacerts/openldap-server.pem
 
-{% if context.base_os in ('amazonlinux2', 'amazonlinux2023') %}
+{% if context.base_os == 'amazonlinux2023' %}
 authconfig --disablesssd \
            --disablesssdauth \
            --disableldap \
@@ -97,7 +97,7 @@ authconfig --enablesssd \
            --enablecachecreds \
            --updateall
 {% endif %}
-{% if context.base_os in ('rhel8','rhel9', 'rocky8', 'rocky9') %}
+{% if context.base_os in ('rhel8','rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
 openssl rehash /etc/openldap/cacerts
 
 systemctl stop sssd
@@ -108,7 +108,7 @@ authselect select sssd with-mkhomedir --force
 systemctl enable oddjobd
 systemctl restart oddjobd
 {% endif %}
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
 pam-auth-update --enable sss
 {% endif %}
 

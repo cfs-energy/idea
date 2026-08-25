@@ -179,10 +179,12 @@ class ArnBuilder:
 
     @property
     def service_role_arns(self) -> List[str]:
+        # the service linked role path is literally 'aws-service-role' in every partition,
+        # including aws-us-gov and aws-cn. only the arn prefix is partition specific.
         def role_arn(service) -> str:
             return str(
                 f'arn:{self.config.get_string("cluster.aws.partition")}:iam::{self.config.get_string("cluster.aws.account_id")}:'
-                f'role/{self.config.get_string("cluster.aws.partition")}-service-role/{service}'
+                f'role/aws-service-role/{service}'
             )
 
         return [
@@ -195,6 +197,90 @@ class ArnBuilder:
             role_arn(f'spotfleet.{self.config.get_string("cluster.aws.dns_suffix")}/*'),
             role_arn(f'fsx.{self.config.get_string("cluster.aws.dns_suffix")}/*'),
         ]
+
+    @property
+    def project_role_path(self) -> str:
+        # iam path for per-project instance roles. such roles are created at runtime, not by cdk.
+        cluster_name = self.config.get_string('cluster.cluster_name', required=True)
+        return f'/idea/{cluster_name}/projects/'
+
+    def get_project_role_arn(self, role_name: str = '*') -> str:
+        return self.get_arn(
+            service='iam',
+            aws_region='',
+            resource=f'role{self.project_role_path}{role_name}',
+        )
+
+    def get_project_instance_profile_arn(self, name: str = '*') -> str:
+        return self.get_arn(
+            service='iam',
+            aws_region='',
+            resource=f'instance-profile{self.project_role_path}{name}',
+        )
+
+    def get_project_policy_arn(self, name: str = '*') -> str:
+        return self.get_arn(
+            service='iam',
+            aws_region='',
+            resource=f'policy{self.project_role_path}{name}',
+        )
+
+    def get_project_permissions_boundary_arn(self) -> str:
+        # boundary for project roles. built by the cluster-manager stack, named here
+        # so the policy template and the runtime provisioner resolve the same arn.
+        cluster_name = self.config.get_string('cluster.cluster_name', required=True)
+        aws_region = self.config.get_string('cluster.aws.region', required=True)
+        module_id = self.config.get_module_id(constants.MODULE_CLUSTER_MANAGER)
+        return self.get_arn(
+            service='iam',
+            aws_region='',
+            resource=f'policy/{cluster_name}-{aws_region}-{module_id}-project-boundary',
+        )
+
+    @property
+    def bedrock_invocation_log_group_name(self) -> str:
+        # named here so the cdk stack, the delivery role policy and the runtime
+        # aggregator cannot disagree about the destination.
+        cluster_name = self.config.get_string('cluster.cluster_name', required=True)
+        module_id = self.config.get_module_id(constants.MODULE_CLUSTER_MANAGER)
+        return f'/{cluster_name}/{module_id}/bedrock-invocations'
+
+    @property
+    def bedrock_invocation_log_group_arn(self) -> str:
+        return self.get_arn(
+            service='logs',
+            resource=f'log-group:{self.bedrock_invocation_log_group_name}',
+        )
+
+    @property
+    def bedrock_application_inference_profile_arn(self) -> str:
+        return self.get_arn(
+            service='bedrock', resource='application-inference-profile/*'
+        )
+
+    @property
+    def bedrock_system_inference_profile_arn(self) -> str:
+        return self.get_arn(service='bedrock', resource='inference-profile/*')
+
+    @property
+    def bedrock_any_system_inference_profile_arn(self) -> str:
+        # region and account wildcarded: a deny on system profiles has to cover
+        # every region a caller could reach, not only the cluster's own.
+        return self.get_arn(
+            service='bedrock',
+            resource='inference-profile/*',
+            aws_account_id='*',
+            aws_region='*',
+        )
+
+    @property
+    def bedrock_foundation_model_arn(self) -> str:
+        return self.get_arn(
+            service='bedrock',
+            resource='foundation-model/*',
+            aws_account_id='',
+            aws_region='*',
+        )
 
     @property
     def ses_arn(self) -> str:

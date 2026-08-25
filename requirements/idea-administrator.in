@@ -1,7 +1,9 @@
 -r idea-sdk.in
 colored
-ipaddress
 sanic
 aws-cdk-lib
-cdk-nag
+# cdk-nag 3.x re-implements NagPack as an IPolicyValidationPlugin and drops
+# NagSuppressions (ImportError). Used by cdk_app.py:30/80 and constructs/base.py:23
+# via ~43 add_nag_suppression call sites; migrating is its own ticket.
+cdk-nag<3
 prettytable

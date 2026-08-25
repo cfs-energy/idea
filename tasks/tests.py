@@ -184,6 +184,17 @@ def administrator(c, keywords=None, params=None, capture_output=False, cov_repor
     raise SystemExit(exit_code)
 
 
+@task(name='web-portal')
+def web_portal(c):
+    # type: (Context) -> None
+    """
+    run cluster-manager web-portal (webapp) tests via vitest
+    """
+    idea.console.print_header_block('executing unit tests for: web-portal')
+    with c.cd(idea.props.cluster_manager_webapp_dir):
+        c.run('yarn install --frozen-lockfile && yarn test')
+
+
 @task(name='all', iterable=['params'], default=True)
 def run_all(c, keywords=None, params=None, capture_output=False, cov_report=None):
     # type: (Context, str, List[str], bool, str) -> None
@@ -206,5 +217,11 @@ def run_all(c, keywords=None, params=None, capture_output=False, cov_report=None
         except SystemExit as e:
             if e.code != 0:
                 exit_code = e.code
+
+    # web-portal takes no test parameters, so it is invoked outside the loop
+    try:
+        web_portal(c)
+    except invoke.exceptions.UnexpectedExit:
+        exit_code = 1
 
     raise SystemExit(exit_code)

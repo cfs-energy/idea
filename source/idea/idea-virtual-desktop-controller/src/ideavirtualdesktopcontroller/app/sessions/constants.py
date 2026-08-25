@@ -12,6 +12,7 @@ USER_SESSION_DB_DESCRIPTION_KEY = 'description'
 USER_SESSION_DB_DCV_SESSION_ID_KEY = 'dcv_session_id'
 USER_SESSION_DB_SESSION_TYPE_KEY = 'session_type'
 USER_SESSION_DB_STATE_KEY = 'state'
+USER_SESSION_DB_FAILURE_REASON_KEY = 'failure_reason'
 USER_SESSION_DB_SCHEDULE_KEYS = {
     DayOfWeek.MONDAY: 'monday_schedule',
     DayOfWeek.TUESDAY: 'tuesday_schedule',
@@ -22,7 +23,12 @@ USER_SESSION_DB_SCHEDULE_KEYS = {
     DayOfWeek.SUNDAY: 'sunday_schedule',
 }
 USER_SESSION_DB_HIBERNATION_KEY = 'hibernation_enabled'
+USER_SESSION_DB_IDLE_AUTOSTOP_DELAY_KEY = 'idle_autostop_delay'
 USER_SESSION_DB_IS_LAUNCHED_BY_ADMIN_KEY = 'is_launched_by_admin'
+USER_SESSION_DB_REAPER_EXEMPT_KEY = 'reaper_exempt'
+USER_SESSION_DB_REAPER_EXEMPT_REASON_KEY = 'reaper_exempt_reason'
+USER_SESSION_DB_REAPER_WARNING_SENT_ON_KEY = 'reaper_warning_sent_on'
+USER_SESSION_DB_REAPER_WARNING_STOP_TIME_KEY = 'reaper_warning_stop_time'
 USER_SESSION_DB_SESSION_LOCKED_KEY = 'locked'
 USER_SESSION_DB_PROJECT_KEY = 'project'
 USER_SESSION_DB_PROJECT_ID_KEY = 'project_id'

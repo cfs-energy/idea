@@ -41,11 +41,11 @@ spec:
                       }
                     },
                     {
-                      "name": "My AL2 Session",
+                      "name": "My AL2023 Session",
                       "owner": "testuser2",
                       "software_stack": {
-                        "base_os": "amazonlinux2",
-                        "id": "ss-base-us-west-2-amazonlinux2-x86-64-base"
+                        "base_os": "amazonlinux2023",
+                        "id": "ss-base-us-west-2-amazonlinux2023-x86-64-base"
                       },
                       "hibernation_enabled": false,
                       "server": {
@@ -97,7 +97,7 @@ spec:
                     {
                       "dcv_session_id": "",
                       "idea_session_id": "78204668-fb46-49b0-9df6-a64060ea189b",
-                      "name": "My AL2 Session",
+                      "name": "My AL2023 Session",
                       "owner": "testuser2",
                       "type": "VIRTUAL",
                       "server": {
@@ -108,8 +108,8 @@ spec:
                       "state": "PROVISIONING",
                       "description": "",
                       "software_stack": {
-                        "id": "ss-base-us-west-2-amazonlinux2-x86-64-base",
-                        "base_os": "amazonlinux2"
+                        "id": "ss-base-us-west-2-amazonlinux2023-x86-64-base",
+                        "base_os": "amazonlinux2023"
                       },
                       "schedule": {
 
@@ -150,7 +150,7 @@ spec:
                   }
                 }
               }
-          - name: Create new AL2 Session (as user "testuser")
+          - name: Create new AL2023 Session (as user "testuser")
             value: |
               {
                 "header": {
@@ -160,11 +160,11 @@ spec:
                 },
                 "payload": {
                   "session": {
-                    "name": "My AL2 Session",
+                    "name": "My AL2023 Session",
                     "owner": "testuser",
                     "software_stack": {
-                      "base_os": "amazonlinux2",
-                      "id": "ss-base-us-west-2-amazonlinux2-x86-64-base"
+                      "base_os": "amazonlinux2023",
+                      "id": "ss-base-us-west-2-amazonlinux2023-x86-64-base"
                     },
                     "hibernation_enabled": false,
                     "server": {
@@ -213,7 +213,7 @@ spec:
                   "request_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6"
                 }
               }
-          - name: Create new AL2 Session (as user "testuser")
+          - name: Create new AL2023 Session (as user "testuser")
             value: |
               {
                 "success": true,
@@ -221,7 +221,7 @@ spec:
                   "session": {
                     "dcv_session_id": "",
                     "idea_session_id": "78204668-fb46-49b0-9df6-a64060ea189a",
-                    "name": "My AL2 Session",
+                    "name": "My AL2023 Session",
                     "owner": "testuser",
                     "type": "VIRTUAL",
                     "server": {
@@ -232,8 +232,8 @@ spec:
                     "state": "PROVISIONING",
                     "description": "",
                     "software_stack": {
-                      "id": "ss-base-us-west-2-amazonlinux2-x86-64-base",
-                      "base_os": "amazonlinux2"
+                      "id": "ss-base-us-west-2-amazonlinux2023-x86-64-base",
+                      "base_os": "amazonlinux2023"
                     },
                     "schedule": {
 
@@ -279,7 +279,7 @@ spec:
                     "stack_id": "ss-12345678-abcd-1234-efgh-123456789012",
                     "name": "My Custom Software Stack",
                     "description": "Custom software stack for data science",
-                    "base_os": "amazonlinux2",
+                    "base_os": "amazonlinux2023",
                     "created_on": "2022-08-24T21:08:03.179000+00:00",
                     "updated_on": "2022-08-24T21:08:03.180000+00:00"
                   },

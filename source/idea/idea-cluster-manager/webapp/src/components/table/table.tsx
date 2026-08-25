@@ -172,6 +172,7 @@ class IdeaTableSelectFilters extends Component<IdeaTableSelectFiltersProps, Idea
 export interface IdeaTableRef {
     reset: () => void;
     clearSelectedItems: () => void;
+    setSelectedItems: (items: any[]) => void;
 }
 
 // Extend the IdeaTableProps to include the collection props
@@ -203,6 +204,24 @@ export class IdeaTableClass extends Component<IdeaTableClassProps, IdeaTableStat
 
     }
 
+    // visibleContent is a snapshot of the columns present at mount, so a column added
+    // later (a feature flag resolving) would render as hidden until it is added here.
+    componentDidUpdate(prevProps: IdeaTableClassProps) {
+        const knownColumnIds = (prevProps.columnDefinitions ?? []).map(colDef => `${colDef.id}`)
+        const addedColumnIds = (this.props.columnDefinitions ?? [])
+            .map(colDef => `${colDef.id}`)
+            .filter(colId => !knownColumnIds.includes(colId))
+        if (addedColumnIds.length === 0) {
+            return
+        }
+        this.setState({
+            tablePreferences: {
+                ...this.state.tablePreferences,
+                visibleContent: [...(this.state.tablePreferences.visibleContent ?? []), ...addedColumnIds]
+            }
+        })
+    }
+
     reset() {
         this.setState({
             selectedItems: [],
@@ -213,6 +232,14 @@ export class IdeaTableClass extends Component<IdeaTableClassProps, IdeaTableStat
     clearSelectedItems() {
         this.setState({
             selectedItems: []
+        })
+    }
+
+    // items must be the objects from the current listing: Cloudscape matches the
+    // selection by reference unless a trackBy is given.
+    setSelectedItems(items: any[]) {
+        this.setState({
+            selectedItems: items
         })
     }
 
@@ -530,6 +557,9 @@ const IdeaTableWrapper = React.forwardRef<IdeaTableRef, IdeaTableProps>((props, 
         },
         clearSelectedItems: () => {
             tableRef.current?.clearSelectedItems();
+        },
+        setSelectedItems: (items: any[]) => {
+            tableRef.current?.setSelectedItems(items);
         }
     }));
 

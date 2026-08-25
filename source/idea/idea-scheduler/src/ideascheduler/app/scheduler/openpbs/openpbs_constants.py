@@ -23,6 +23,7 @@ QMGR = '/opt/pbs/bin/qmgr'
 PBSNODES = '/opt/pbs/bin/pbsnodes'
 QALTER = '/opt/pbs/bin/qalter'
 QDEL = '/opt/pbs/bin/qdel'
+QHOLD = '/opt/pbs/bin/qhold'
 
 CONFIG_FILE_RESOURCE_DEF = '/var/spool/pbs/server_priv/resourcedef'
 CONFIG_FILE_SCHED_CONFIG = '/var/spool/pbs/sched_priv/sched_config'

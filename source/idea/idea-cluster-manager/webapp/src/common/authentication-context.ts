@@ -420,7 +420,7 @@ export class IdeaAuthenticationContext {
                 this.saveAuthResult(result.payload.auth, this.ssoAuth)
                 return true
             } else {
-                if (result.error_code === NETWORK_TIMEOUT || result.error_code === NETWORK_ERROR || result.error_code === SERVER_ERROR) {
+                if (result.error_code === REQUEST_TIMEOUT || result.error_code === NETWORK_ERROR || result.error_code === SERVER_ERROR) {
                     this.logger.debug(`Network or server error encountered: ${result.error_code}`)
                     throw result
                 } else {

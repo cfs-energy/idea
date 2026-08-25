@@ -206,11 +206,37 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
                     sessions_constants.USER_SESSION_DB_STATE_KEY, db_entry
                 )
             ],
+            failure_reason=Utils.get_value_as_string(
+                sessions_constants.USER_SESSION_DB_FAILURE_REASON_KEY,
+                db_entry,
+                default=None,
+            ),
             hibernation_enabled=Utils.get_value_as_bool(
                 sessions_constants.USER_SESSION_DB_HIBERNATION_KEY, db_entry
             ),
+            idle_autostop_delay=Utils.get_value_as_int(
+                sessions_constants.USER_SESSION_DB_IDLE_AUTOSTOP_DELAY_KEY, db_entry
+            ),
             is_launched_by_admin=Utils.get_value_as_bool(
                 sessions_constants.USER_SESSION_DB_IS_LAUNCHED_BY_ADMIN_KEY, db_entry
+            ),
+            reaper_exempt=Utils.get_value_as_bool(
+                sessions_constants.USER_SESSION_DB_REAPER_EXEMPT_KEY, db_entry
+            ),
+            reaper_exempt_reason=Utils.get_value_as_string(
+                sessions_constants.USER_SESSION_DB_REAPER_EXEMPT_REASON_KEY, db_entry
+            ),
+            reaper_warning_sent_on=Utils.to_datetime(
+                Utils.get_value_as_int(
+                    sessions_constants.USER_SESSION_DB_REAPER_WARNING_SENT_ON_KEY,
+                    db_entry,
+                )
+            ),
+            reaper_warning_stop_time=Utils.to_datetime(
+                Utils.get_value_as_int(
+                    sessions_constants.USER_SESSION_DB_REAPER_WARNING_STOP_TIME_KEY,
+                    db_entry,
+                )
             ),
             schedule=VirtualDesktopWeekSchedule(
                 monday=self._schedule_db.convert_db_dict_to_schedule_object(
@@ -323,11 +349,24 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
             sessions_constants.USER_SESSION_DB_DCV_SESSION_ID_KEY: session.dcv_session_id,
             sessions_constants.USER_SESSION_DB_SESSION_TYPE_KEY: session.type,
             sessions_constants.USER_SESSION_DB_STATE_KEY: session.state,
+            # the failure reason has to outlive the request that set it, so it can be seen
+            # later; written as None when there is none, so it does not survive the desktop recovering.
+            sessions_constants.USER_SESSION_DB_FAILURE_REASON_KEY: session.failure_reason,
             sessions_constants.USER_SESSION_DB_SESSION_LOCKED_KEY: False
             if Utils.is_empty(session.locked)
             else session.locked,
             sessions_constants.USER_SESSION_DB_HIBERNATION_KEY: session.hibernation_enabled,
+            sessions_constants.USER_SESSION_DB_IDLE_AUTOSTOP_DELAY_KEY: session.idle_autostop_delay,
             sessions_constants.USER_SESSION_DB_IS_LAUNCHED_BY_ADMIN_KEY: session.is_launched_by_admin,
+            sessions_constants.USER_SESSION_DB_REAPER_EXEMPT_KEY: session.reaper_exempt,
+            sessions_constants.USER_SESSION_DB_REAPER_EXEMPT_REASON_KEY: session.reaper_exempt_reason,
+            # None rather than 0: to_milliseconds(None) is 0, which would read back as 1970
+            sessions_constants.USER_SESSION_DB_REAPER_WARNING_SENT_ON_KEY: None
+            if session.reaper_warning_sent_on is None
+            else Utils.to_milliseconds(session.reaper_warning_sent_on),
+            sessions_constants.USER_SESSION_DB_REAPER_WARNING_STOP_TIME_KEY: None
+            if session.reaper_warning_stop_time is None
+            else Utils.to_milliseconds(session.reaper_warning_stop_time),
             sessions_constants.USER_SESSION_DB_PROJECT_KEY: {
                 sessions_constants.USER_SESSION_DB_PROJECT_ID_KEY: session.project.project_id,
                 sessions_constants.USER_SESSION_DB_PROJECT_TITLE_KEY: session.project.title,

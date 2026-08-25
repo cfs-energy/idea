@@ -585,7 +585,7 @@ def ami_builder():
 )
 @click.option(
     '--base-os',
-    help='BaseOS of the AMI. Must be one of: [amazonlinux2, amazonlinux2023, ubuntu2204, ubuntu2404, rhel8, rhel9, rocky8, rocky9]',
+    help='BaseOS of the AMI. Must be one of: [amazonlinux2023, ubuntu2204, ubuntu2404, rhel8, rhel9, rhel10, rocky8, rocky9, rocky10]',
 )
 @click.option(
     '--instance-type',
@@ -685,7 +685,7 @@ def build(no_stop: bool, no_terminate: bool, security_group_ids: str, **kwargs):
 )
 @click.option(
     '--base-os',
-    help='BaseOS of the AMI. Must be one of: [amazonlinux2, amazonlinux2023, ubuntu2204, ubuntu2404, rhel8, rhel9, rocky8, rocky9]',
+    help='BaseOS of the AMI. Must be one of: [amazonlinux2023, ubuntu2204, ubuntu2404, rhel8, rhel9, rhel10, rocky8, rocky9, rocky10]',
 )
 @click.option(
     '--instance-type',

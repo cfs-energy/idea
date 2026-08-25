@@ -7,11 +7,15 @@ IDEA made job submission on EC2 very easy and is fully integrated with EC2. Belo
 #### **base\_os**
 
 * Description: Reference to the base OS of the AMI you are using
-* Allowed Values: `amazonlinux2` `amazonlinux2023` `rhel7` `rhel8` `rhel9` `rocky8` `rocky9` `ubuntu2204` `ubuntu2404`
+* Allowed Values: `amazonlinux2023` `rhel8` `rhel9` `rhel10` `rocky8` `rocky9` `rocky10` `ubuntu2204` `ubuntu2404`
 * Default: If not specified, value default to the OS of the install AMI
 * Examples:
   * `-l base_os=amazonlinux2023`: Instances provisioned will be deployed against Amazon Linux 2023 manifest
   * `-l base_os=ubuntu2404`: Instances provisioned will be deployed against Ubuntu 24.04 manifest
+
+{% hint style="info" %}
+Support varies by region and hardware feature (EFA, GPU, FSx Lustre). See the [Supported OS & hardware matrix](supported-os-hardware-matrix.md). `amazonlinux2` is not an accepted value (EOL 2026-06-30). The `ubuntu2204`/`ubuntu2404` values are accepted but IDEA publishes no Ubuntu AMIs, so a job using them must also pass a custom `instance_ami`.
+{% endhint %}
 
 #### **ht\_support**
 
@@ -37,7 +41,7 @@ If you are planning to use an AMI which is _not using the same OS_ as the schedu
 #### **instance\_profile**
 
 * Description: Reference to a custom IAM role to use. Make sure to specify the Instance Profile name and not IAM role name. Refer to the pre-requisites below before using custom IAM role.
-* Default: Use the default IAM instance profile configured by IDEA
+* Default: Use the default IAM instance profile configured by IDEA. When the project has Bedrock enabled, the project's instance profile is applied instead; a different `instance_profile` is rejected at submission. See [Use an AI model in a job](use-an-ai-model-in-a-job.md)
 * Examples:
   * `-l instance_profile=CustomInstanceProfileName`: Compute nodes will a custom IAM Role.
 
@@ -61,6 +65,7 @@ You can specify multiple instances type using "+" sign. When using more than 1 i
 #### **nodes**
 
 * Description:The number of EC2 instance to provision
+* Default limit: 100 nodes per job. Requesting more is rejected at submission time; ask your cluster administrator to raise the limit for your queue or cluster if you need more.
 * Examples:
   * `-l nodes=5`: Provision 5 EC2 instances
 
@@ -124,6 +129,10 @@ This parameter is ignored if `spot_price` is not specified `spot_allocation_coun
 
 {% hint style="info" %}
 `spot_price` is capped to On-Demand price (e.g: Assuming you are provisioning a t3.medium, AWS will default maximum spot price to 0.418 (OD price) even though you specified `-l spot_price=15`)
+{% endhint %}
+
+{% hint style="warning" %}
+Some instance types are On-Demand only, the HPC families among them. A spot request on one is rejected at submission. The check reads the `SupportedUsageClasses` field EC2 publishes for the instance type, so it stays correct as AWS adds families. A type that does not report the field is treated as spot capable rather than refused.
 {% endhint %}
 
 #### **subnet\_id**
@@ -193,6 +202,10 @@ It is recommended to set the IOPs to 3x storage capacity of your EBS disk
 {% endhint %}
 
 ### FSx for Lustre <a href="#fsx-for-lustre" id="fsx-for-lustre"></a>
+
+{% hint style="warning" %}
+The FSx Lustre client is not installed on every `base_os`: `rhel10`/`rocky10` need an EL 10.1/10.2 AMI. A node without the client joins the cluster with the filesystem unmounted. See [FSx Lustre client support](supported-os-hardware-matrix.md#fsx-lustre-client-support).
+{% endhint %}
 
 #### **fsx\_lustre**
 
@@ -281,7 +294,7 @@ This parameter is ignored unless you have specified `fsx_lustre=True`
 * Example: `-l efa_support=True`: Deploy an EFA device on all the nodes
 
 {% hint style="info" %}
-You must use an EFA compatible instance, otherwise your job will stay in the queue
+You must use an EFA compatible instance. `efa_support` on an instance type without EFA is rejected at submission. The check reads live EC2 instance type data, so newer families work without a code change.
 {% endhint %}
 
 #### **ht\_support**
@@ -302,6 +315,10 @@ _Enabled by default_
 
 {% hint style="info" %}
 Placement group is enabled by default as long as the number of nodes provisioned is greater than 1
+{% endhint %}
+
+{% hint style="info" %}
+The strategy is a cluster-wide setting, `scheduler.job_provisioning.placement_group.strategy` (`cluster`, `partition` or `spread`, default `cluster`). A job is rejected at submission if any requested instance type does not support the configured strategy.
 {% endhint %}
 
 ### Others <a href="#others" id="others"></a>

@@ -1,7 +1,26 @@
 # Begin: Configure OpenPBS Compute Node
 {% include '_templates/linux/openpbs.jinja2' %}
 
+# the scheduler registers compute nodes by private ipv4, the mom must report the same
+INSTANCE_NODE_NAME=$(get_server_ip)
 INSTANCE_HOSTNAME=$(hostname)
+INSTANCE_SHORT_HOSTNAME=$(hostname -s)
+
+# an empty value here registers the mom under a name the scheduler never uses, and the
+# node sits down with no diagnostic. fail the bootstrap instead.
+if [[ -z "${INSTANCE_NODE_NAME}" ]]; then
+  log_error "unable to determine the private ipv4 address of this instance"
+  exit 1
+fi
+
+# pbs_mom exits at startup if it can't resolve its own hostname or the scheduler's, and neither
+# is in DNS; keyed on hostname so an ami-baked line for a recycled ip can't suppress this one.
+grep -qE "(^|[[:space:]])${INSTANCE_HOSTNAME}([[:space:]]|$)" /etc/hosts || echo "${INSTANCE_NODE_NAME} ${INSTANCE_HOSTNAME} ${INSTANCE_SHORT_HOSTNAME}" >> /etc/hosts
+{% set scheduler_private_ip = context.config.get_string('scheduler.private_ip') %}
+{% if scheduler_private_ip %}
+{% set scheduler_dns_name = context.config.get_string('scheduler.private_dns_name', required=True) %}
+grep -q "^{{ scheduler_private_ip }} " /etc/hosts || echo "{{ scheduler_private_ip }} {{ scheduler_dns_name }} {{ scheduler_dns_name.split('.')[0] }}" >> /etc/hosts
+{% endif %}
 
 echo -e "PBS_SERVER={{ context.config.get_string('scheduler.private_dns_name', required=True).split('.')[0] }}
 PBS_START_SERVER=0
@@ -9,7 +28,8 @@ PBS_START_SCHED=0
 PBS_START_COMM=0
 PBS_START_MOM=1
 PBS_EXEC=/opt/pbs
-PBS_LEAF_NAME=$INSTANCE_HOSTNAME
+PBS_LEAF_NAME=$INSTANCE_NODE_NAME
+PBS_MOM_NODE_NAME=$INSTANCE_NODE_NAME
 PBS_HOME=/var/spool/pbs
 PBS_CORE_LIMIT=unlimited
 PBS_SCP=/usr/bin/scp

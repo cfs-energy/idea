@@ -19,8 +19,6 @@ import {AppContext} from "../../common";
 import Utils from "../../common/utils";
 import IdeaForm from "../form";
 
-const TITLE_CLASS_NAME = 'awsui_title_k5dlb_14a5k_195'
-
 export interface IdeaNavbarProps {
     logo?: IdeaNavbarLogo
     items?: IdeaNavbarItem[]
@@ -49,7 +47,7 @@ export interface IdeaNavbarLogo {
 
 class IdeaNavbar extends Component<IdeaNavbarProps, IdeaNavbarState> {
 
-    preferencesForm: RefObject<IdeaForm>
+    preferencesForm: RefObject<IdeaForm | null>
 
     constructor(props: IdeaNavbarProps) {
         super(props);
@@ -62,10 +60,6 @@ class IdeaNavbar extends Component<IdeaNavbarProps, IdeaNavbarState> {
     }
 
     componentDidMount() {
-        let title = document.getElementsByClassName(TITLE_CLASS_NAME)
-        if (title.length > 0) {
-            title.item(0)!.setAttribute('style', 'overflow: visible;')
-        }
         const darkMode = AppContext.get().isDarkMode()
         const compactMode = AppContext.get().isCompactMode()
         this.setState({

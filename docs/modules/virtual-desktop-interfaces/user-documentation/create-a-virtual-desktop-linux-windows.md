@@ -14,7 +14,6 @@ To launch your virtual desktop click "**Launch new Virtual Desktop"** button. Yo
 * **Project**: The project your session will get created. Refer to "Projects Management" section under [cluster-manager](../../cluster-manager/ "mention") to learn more about projects.
 * **Operating System**: The operating system you want to use from:
   * **Linux**:
-    * Amazon Linux 2
     * Amazon Linux 2023
     * Red Hat Enterprise Linux 8
     * Red Hat Enterprise Linux 9
@@ -48,6 +47,10 @@ Wait a couple of minutes until your desktop is ready.
 IDEA automatically detects GPU instances and install the relevant drivers (NVIDIA GRID, NVIDIA Tesla, AMD) automatically
 {% endhint %}
 
+{% hint style="info" %}
+By default, your desktop stops itself when it has been idle: no one connected and CPU use below the cluster threshold for `virtual-desktop-controller.dcv_session.idle_autostop_delay`, 60 minutes out of the box. You can set your own delay per session, up to `virtual-desktop-controller.dcv_session.idle_autostop_delay_max`, 240 minutes out of the box. See [virtual-desktop-scheduling.md](virtual-desktop-scheduling.md "mention") to review or change it.
+{% endhint %}
+
 ## How to access your Windows or Linux desktop
 
 Once your virtual desktop is up and running, you can click the card and connect it either via web or DCV client.
@@ -75,3 +78,24 @@ Click "**DCV Session File**" button to download your `.dcv` file. To open this f
 Click **Actions** then **Show Infos** to retrieve your session information such as instance type, subnet id, operating system etc ...
 
 <figure><img src="../../../.gitbook/assets/mods_vdi_user_create_info.webp" alt=""><figcaption><p>Get detailed information about your virtual desktop</p></figcaption></figure>
+
+## If your desktop does not start
+
+Large sizes are the ones most likely to be refused, because there are fewer of them and
+administrators limit which ones can be used. IDEA tells you which of these happened.
+
+**The Submit button returns an error straight away.** The message says what to change. The
+common ones are:
+
+* The size you picked is not one your administrator makes available. Pick another size from the
+  list.
+* The size does not have enough memory, the right processor, or the graphics card the desktop
+  image needs. Pick a size that does.
+* You already have as many desktops as you are allowed. Delete one you no longer need.
+* AWS has no capacity for that size right now. Pick a smaller size, or try again in a few
+  minutes.
+
+**The card sits in Provisioning.** While a session is Provisioning, Initializing, Creating or
+Resuming, the card shows how long it has been waiting. Large sizes and Windows images take longer.
+If it has been waiting far longer than that, delete the session and either try again or ask your
+administrator.

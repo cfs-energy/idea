@@ -1,0 +1,76 @@
+Version: '2012-10-17'
+Statement:
+
+  # permissions ceiling for per-project instance roles; effective access is the intersection of this boundary and the
+  # attached policies, so every action they grant must be listed here (enforced by idea-administrator/tests/test_project_role_boundary.py).
+  - Action:
+      - bedrock:GetInferenceProfile
+      - bedrock:InvokeModel
+      - bedrock:InvokeModelWithResponseStream
+      - bedrock:ListInferenceProfiles
+      - dynamodb:GetItem
+      - ec2:CreateTags
+      - ec2:DescribeInstanceTypes
+      - ec2:DescribeNetworkInterfaces
+      - ec2:DescribeTags
+      - ec2:DescribeVolumes
+      - fsx:CreateDataRepositoryTask
+      - fsx:DescribeFileSystems
+      - kms:CreateGrant
+      - kms:Decrypt
+      - kms:DescribeKey
+      - kms:Encrypt
+      - kms:GenerateDataKey
+      - logs:CreateLogGroup
+      - logs:CreateLogStream
+      - logs:DescribeLogGroups
+      - logs:DescribeLogStreams
+      - logs:PutLogEvents
+      - logs:PutRetentionPolicy
+      - s3:GetObject
+      - s3:ListBucket
+      - secretsmanager:GetSecretValue
+      - sqs:ChangeMessageVisibility
+      - sqs:DeleteMessage
+      - sqs:GetQueueAttributes
+      - sqs:GetQueueUrl
+      - sqs:ReceiveMessage
+      - sqs:SendMessage
+      - sts:GetCallerIdentity
+      - tag:GetResources
+      - tag:GetTagKeys
+      - tag:GetTagValues
+    Resource: '*'
+    Effect: Allow
+    Sid: ProjectRoleServiceCeiling
+
+  # The AWS managed policies attached alongside the host policy. Their contents are
+  # maintained by AWS, so these are bounded at prefix level to survive an update.
+  - Action:
+      - aps:RemoteWrite
+      - cloudwatch:PutMetricData
+      - ec2messages:*
+      - ssm:*
+      - ssmmessages:*
+    Resource: '*'
+    Effect: Allow
+    Sid: ProjectRoleManagedPolicyCeiling
+
+  # a foundation model may only be invoked through its application inference profile, since that's what carries the cost allocation tag.
+  # the system profile it's copied from is denied below for the same reason: invoking it directly would carry no project tag.
+  - Action:
+      - bedrock:InvokeModel
+      - bedrock:InvokeModelWithResponseStream
+    Resource: '{{ context.arns.bedrock_foundation_model_arn }}'
+    Effect: Deny
+    Sid: DenyFoundationModelInvokeOutsideInferenceProfile
+    Condition:
+      'Null':
+        bedrock:InferenceProfileArn: 'true'
+
+  - Action:
+      - bedrock:InvokeModel
+      - bedrock:InvokeModelWithResponseStream
+    Resource: '{{ context.arns.bedrock_any_system_inference_profile_arn }}'
+    Effect: Deny
+    Sid: DenySystemInferenceProfileInvoke

@@ -15,10 +15,13 @@ Test Cases for SocaJobBuilder
 
 from typing import Dict, Optional
 
+import pytest
+
 from ideadatamodel import (
     constants,
     SocaBaseModel,
     JobValidationResult,
+    JobValidationResultEntry,
     SocaJob,
     SocaJobParams,
     SocaJobProvisioningOptions,
@@ -78,6 +81,14 @@ def build_and_validate(
         provisioning_options=provisioning_options,
         success=validation_result.is_valid(),
     )
+
+
+def get_validation_messages(result: BuildAndValidateResult) -> list:
+    return [
+        entry.message
+        for entry in result.validation_result.results
+        if entry.message is not None
+    ]
 
 
 def test_job_builder_basic(context):
@@ -509,9 +520,9 @@ def test_job_builder_basic_invalid_no_of_cpus(context):
     assert result.success is False
 
 
-def test_job_builder_base_os_amazonlinux2(context):
+def test_job_builder_base_os_amazonlinux2_rejected(context):
     """
-    base os (amazonlinux2)
+    base os (amazonlinux2) reached end-of-life and must be rejected
     """
     result = build_and_validate(
         context=context,
@@ -520,10 +531,11 @@ def test_job_builder_base_os_amazonlinux2(context):
             'cpus': 1,
             'instance_type': 't3.micro',
             'base_os': constants.OS_AMAZONLINUX2,
+            'instance_ami': 'ami-0123456789abcdef0',
         },
     )
-    assert result.success is True
-    assert result.job_params.base_os == constants.OS_AMAZONLINUX2
+    assert result.success is False
+    assert result.validation_result.results[0].error_code == constants.JOB_PARAM_BASE_OS
 
 
 def test_job_builder_base_os_amazonlinux2023(context):
@@ -1335,3 +1347,947 @@ def test_job_builder_restricted_param_instance_type_ok(context):
     assert result.success is True
     assert result.job_params.instance_types is not None
     assert result.job_params.instance_types[0] == 'c5.large'
+
+
+def test_job_builder_gpus_non_gpu_instance_invalid(context):
+    """
+    gpus requested on an instance type with no GPUs
+    """
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 1, 'cpus': 1, 'instance_type': 't3.micro', 'gpus': 1},
+    )
+    assert result.success is False
+
+
+def test_job_builder_gpus_gpu_instance_valid(context):
+    """
+    gpus requested on an instance type with sufficient GPUs
+    """
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 1, 'cpus': 1, 'instance_type': 'g4dn.xlarge', 'gpus': 1},
+    )
+    assert result.success is True
+    assert result.job_params.gpus == 1
+
+
+def test_job_builder_gpus_exceeds_available_invalid(context):
+    """
+    gpus requested exceeds the GPUs available on the instance type
+    """
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 1, 'cpus': 1, 'instance_type': 'g4dn.xlarge', 'gpus': 2},
+    )
+    assert result.success is False
+    messages = get_validation_messages(result)
+    assert any(
+        'requested gpus: (2)' in message and 'g4dn.xlarge (1 GPUs)' in message
+        for message in messages
+    )
+
+
+def test_job_builder_gpus_queue_default_exceeds_available_invalid(context):
+    """
+    the queue profile default gpus exceeds the GPUs available on the instance type - jobs
+    submitted without gpus are provisioned with that default and must be rejected too
+    """
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 1, 'cpus': 1, 'instance_type': 'g4dn.xlarge'},
+        queue_profile=HpcQueueProfile(
+            name='mock-queue-profile',
+            default_job_params=SocaJobParams(gpus=2),
+        ),
+    )
+    assert result.success is False
+    messages = get_validation_messages(result)
+    assert any(
+        'queue profile default requests gpus: (2)' in message
+        and 'g4dn.xlarge (1 GPUs)' in message
+        for message in messages
+    )
+
+
+def test_job_builder_gpus_queue_default_within_available_valid(context):
+    """
+    the queue profile default gpus is satisfied by the instance type
+    """
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 1, 'cpus': 1, 'instance_type': 'g4dn.xlarge'},
+        queue_profile=HpcQueueProfile(
+            name='mock-queue-profile',
+            default_job_params=SocaJobParams(gpus=1),
+        ),
+    )
+    assert result.success is True
+    assert result.job_params.gpus == 1
+
+
+def test_job_builder_gpus_queue_default_unresolvable_instance_type_skipped(context):
+    """
+    a queue profile default instance type that cannot be resolved is not marked failed by
+    the instance_types checks - the GPU count check reaches it and must not raise
+    """
+    builder = SocaJobBuilder(
+        context=context,
+        params={'nodes': 1},
+        queue_profile=HpcQueueProfile(
+            name='mock-queue-profile',
+            default_job_params=SocaJobParams(
+                gpus=2, instance_types=['zz9.nonexistent']
+            ),
+        ),
+    )
+    validation_result = builder.validate()
+    messages = [
+        entry.message
+        for entry in validation_result.results
+        if entry.message is not None
+    ]
+    assert not any('requests gpus' in message for message in messages)
+
+
+def test_job_builder_instance_ami_base_os_mismatch_invalid(context):
+    """
+    instance_ami is the cluster compute node AMI, registered for the cluster base_os -
+    pairing it with a different base_os bootstraps the node for an OS it does not carry
+    """
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': 1,
+            'cpus': 1,
+            'instance_type': 't3.micro',
+            'base_os': 'rhel9',
+            'instance_ami': 'ami-mockclustersettings',
+        },
+    )
+    assert result.success is False
+    messages = get_validation_messages(result)
+    assert any(
+        'ami-mockclustersettings' in message
+        and 'registered for base_os: (amazonlinux2023)' in message
+        and 'requested base_os: (rhel9)' in message
+        for message in messages
+    )
+
+
+def test_job_builder_instance_ami_base_os_match_valid(context):
+    """
+    instance_ami is the cluster compute node AMI and base_os matches what it was built for
+    """
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': 1,
+            'cpus': 1,
+            'instance_type': 't3.micro',
+            'base_os': 'amazonlinux2023',
+            'instance_ami': 'ami-mockclustersettings',
+        },
+    )
+    assert result.success is True
+    assert result.job_params.instance_ami == 'ami-mockclustersettings'
+
+
+def test_job_builder_instance_ami_unknown_base_os_mismatch_allowed(context):
+    """
+    an AMI the cluster does not know about carries no base_os the submit path can read -
+    absence from the known map is not evidence of a mismatch
+    """
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': 1,
+            'cpus': 1,
+            'instance_type': 't3.micro',
+            'base_os': 'rhel9',
+            'instance_ami': 'ami-0123456789abcdef0',
+        },
+    )
+    assert result.success is True
+    assert result.job_params.base_os == 'rhel9'
+
+
+def test_job_builder_instance_ami_base_os_from_queue_default_blames_queue_profile(
+    context,
+):
+    """
+    the base_os came from the queue profile, not from the submission, so the message has
+    to name the queue profile - telling the user they requested it sends them nowhere.
+    """
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': 1,
+            'cpus': 1,
+            'instance_type': 't3.micro',
+            'instance_ami': 'ami-mockclustersettings',
+        },
+        queue_profile=HpcQueueProfile(
+            name='mock-queue-profile',
+            default_job_params=SocaJobParams(base_os=constants.OS_RHEL9),
+        ),
+    )
+    assert result.success is False
+    messages = get_validation_messages(result)
+    assert any(
+        'queue profile default requests base_os: (rhel9)' in message
+        and 'ami-mockclustersettings' in message
+        and 'registered for base_os: (amazonlinux2023)' in message
+        for message in messages
+    )
+    assert not any('requested base_os' in message for message in messages)
+
+
+def test_job_builder_instance_ami_queue_default_base_os_mismatch_invalid(context):
+    """
+    the queue profile default AMI is registered for the queue profile base_os - requesting
+    that AMI with a different base_os is the same mismatch
+    """
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': 1,
+            'cpus': 1,
+            'instance_type': 't3.micro',
+            'base_os': 'rocky9',
+            'instance_ami': 'ami-queueprofile',
+        },
+        queue_profile=HpcQueueProfile(
+            name='mock-queue-profile',
+            default_job_params=SocaJobParams(
+                instance_ami='ami-queueprofile', base_os=constants.OS_RHEL9
+            ),
+        ),
+    )
+    assert result.success is False
+    messages = get_validation_messages(result)
+    assert any(
+        'ami-queueprofile' in message
+        and 'registered for base_os: (rhel9)' in message
+        and 'requested base_os: (rocky9)' in message
+        for message in messages
+    )
+
+
+def test_job_builder_base_os_default_ami_mismatch_invalid(context):
+    """
+    base_os is overridden without an instance_ami - the default AMI is built
+    for the default base_os and cannot be used
+    """
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 1, 'cpus': 1, 'instance_type': 't3.micro', 'base_os': 'rhel9'},
+    )
+    assert result.success is False
+
+
+def test_job_builder_base_os_matches_default_os_valid(context):
+    """
+    base_os matches the cluster default compute node os - the default AMI applies
+    """
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': 1,
+            'cpus': 1,
+            'instance_type': 't3.micro',
+            'base_os': 'amazonlinux2023',
+        },
+    )
+    assert result.success is True
+
+
+def test_job_builder_base_os_override_with_ami_valid(context):
+    """
+    base_os is overridden along with a matching instance_ami
+    """
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': 1,
+            'cpus': 1,
+            'instance_type': 't3.micro',
+            'base_os': 'rhel9',
+            'instance_ami': 'ami-0123456789abcdef0',
+        },
+    )
+    assert result.success is True
+    assert result.job_params.base_os == 'rhel9'
+    assert result.job_params.instance_ami == 'ami-0123456789abcdef0'
+
+
+def test_job_builder_base_os_ubuntu2604_rejected(context):
+    """
+    ubuntu2604 is not a supported base_os: Amazon DCV, the FSx Lustre client and the
+    pinned EFA installer publish nothing for it, so it is absent from ALLOWED_BASEOS
+    """
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': 1,
+            'cpus': 1,
+            'instance_type': 't3.micro',
+            'base_os': 'ubuntu2604',
+            'instance_ami': 'ami-0123456789abcdef0',
+        },
+    )
+    assert result.success is False
+    assert result.validation_result.results[0].error_code == constants.JOB_PARAM_BASE_OS
+
+
+def test_job_builder_efa_unsupported_base_os_invalid(context, monkeypatch):
+    """
+    EFA is enabled but the base_os has no working EFA bootstrap support.
+
+    rhel9 is not in UNSUPPORTED_BASE_OS_JOB_FEATURES - the entry is injected here to
+    exercise the guard itself rather than any particular base_os.
+    """
+    monkeypatch.setitem(
+        constants.UNSUPPORTED_BASE_OS_JOB_FEATURES,
+        constants.OS_RHEL9,
+        (constants.JOB_FEATURE_EFA,),
+    )
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': 1,
+            'cpus': 18,
+            'instance_type': 'c5n.18xlarge',
+            'efa_support': 'true',
+            'base_os': constants.OS_RHEL9,
+            'instance_ami': 'ami-0123456789abcdef0',
+        },
+    )
+    assert result.success is False
+    messages = [
+        entry.message
+        for entry in result.validation_result.results
+        if entry.message is not None
+    ]
+    assert any('EFA is not supported' in message for message in messages)
+
+
+@pytest.mark.parametrize('base_os', [constants.OS_RHEL10, constants.OS_ROCKY10])
+def test_job_builder_efa_el10_invalid(context, base_os):
+    """
+    EFA on rhel10/rocky10 is rejected at submission: the pinned EFA installer does not
+    recognize EL10 and exits, so the node would come up without the RDMA stack
+    """
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': 1,
+            'cpus': 18,
+            'instance_type': 'c5n.18xlarge',
+            'efa_support': 'true',
+            'base_os': base_os,
+            'instance_ami': 'ami-0123456789abcdef0',
+        },
+    )
+    assert result.success is False
+    messages = [
+        entry.message
+        for entry in result.validation_result.results
+        if entry.message is not None
+    ]
+    assert any('EFA is not supported' in message for message in messages)
+
+
+def test_job_builder_efa_el10_without_efa_valid(context):
+    """
+    the EFA guard is feature-scoped: an EL10 job that does not ask for EFA still validates
+    """
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': 1,
+            'cpus': 18,
+            'instance_type': 'c5n.18xlarge',
+            'base_os': constants.OS_RHEL10,
+            'instance_ami': 'ami-0123456789abcdef0',
+        },
+    )
+    assert result.success is True
+
+
+def test_job_builder_instance_types_mixed_gpu_invalid(context):
+    """
+    instance types mix GPU and non-GPU families - the bootstrap is rendered for the first
+    instance type only, so a GPU node from this list can come up without drivers
+    """
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 1, 'cpus': 1, 'instance_type': 'g4dn.xlarge+c5.large'},
+    )
+    assert result.success is False
+    messages = [
+        entry.message
+        for entry in result.validation_result.results
+        if entry.message is not None
+    ]
+    assert any(
+        'mix GPU and non-GPU instance families' in message for message in messages
+    )
+    assert any(
+        'GPU: [g4dn.xlarge]' in message and 'non-GPU: [c5.large]' in message
+        for message in messages
+    )
+
+
+def test_job_builder_instance_types_mixed_gpu_first_non_gpu_invalid(context):
+    """
+    mixed list is rejected irrespective of the ordering of the instance types
+    """
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 1, 'cpus': 1, 'instance_type': 'c5.large+g4dn.xlarge'},
+    )
+    assert result.success is False
+
+
+def test_job_builder_instance_types_all_gpu_valid(context):
+    """
+    all requested instance types are GPU families
+    """
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 1, 'cpus': 1, 'instance_type': 'g4dn.xlarge+g5.xlarge'},
+    )
+    assert result.success is True
+    assert result.job_params.instance_types == ['g4dn.xlarge', 'g5.xlarge']
+
+
+def test_job_builder_instance_types_all_non_gpu_valid(context):
+    """
+    all requested instance types are non-GPU families
+    """
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 1, 'cpus': 1, 'instance_type': 'c5.large+c5.xlarge+t3.micro'},
+    )
+    assert result.success is True
+    assert result.job_params.instance_types == ['c5.large', 'c5.xlarge', 't3.micro']
+
+
+def test_job_builder_instance_types_single_gpu_valid(context):
+    """
+    a single GPU instance type is not a mixed list
+    """
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 1, 'cpus': 1, 'instance_type': 'g4dn.xlarge'},
+    )
+    assert result.success is True
+    assert result.job_params.instance_types == ['g4dn.xlarge']
+
+
+def test_job_builder_instance_types_mixed_gpu_queue_default_invalid(context):
+    """
+    queue profile default instance types mix GPU and non-GPU families - jobs submitted without
+    an instance type are provisioned from that list and must be rejected too
+    """
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 1, 'cpus': 1},
+        queue_profile=HpcQueueProfile(
+            name='mock-queue-profile',
+            default_job_params=SocaJobParams(
+                instance_types=['c5.large', 'g4dn.xlarge']
+            ),
+        ),
+    )
+    assert result.success is False
+    messages = [
+        entry.message
+        for entry in result.validation_result.results
+        if entry.message is not None
+    ]
+    assert any(
+        'queue profile default instance types' in message for message in messages
+    )
+
+
+def test_job_builder_instance_types_all_gpu_queue_default_valid(context):
+    """
+    queue profile default instance types are all GPU families
+    """
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 1, 'cpus': 1},
+        queue_profile=HpcQueueProfile(
+            name='mock-queue-profile',
+            default_job_params=SocaJobParams(
+                instance_types=['g4dn.xlarge', 'g5.xlarge']
+            ),
+        ),
+    )
+    assert result.success is True
+    assert result.job_params.instance_types == ['g4dn.xlarge', 'g5.xlarge']
+
+
+def get_nodes_validation_entry(
+    result: BuildAndValidateResult,
+) -> Optional[JobValidationResultEntry]:
+    for entry in result.validation_result.results:
+        if entry.error_code == constants.JOB_PARAM_NODES:
+            return entry
+    return None
+
+
+def test_job_builder_max_nodes_per_job_default_ok(context):
+    """
+    node count at the cluster wide max_nodes_per_job default is accepted
+    """
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': constants.DEFAULT_MAX_NODES_PER_JOB,
+            'cpus': 1,
+            'instance_type': 't3.micro',
+        },
+    )
+    assert result.success is True
+    assert result.job_params.nodes == constants.DEFAULT_MAX_NODES_PER_JOB
+
+
+def test_job_builder_max_nodes_per_job_default_fail(context):
+    """
+    node count above the cluster wide max_nodes_per_job default is rejected
+    """
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': constants.DEFAULT_MAX_NODES_PER_JOB + 1,
+            'cpus': 1,
+            'instance_type': 't3.micro',
+        },
+    )
+    assert result.success is False
+    entry = get_nodes_validation_entry(result)
+    assert entry is not None
+    assert f'{constants.DEFAULT_MAX_NODES_PER_JOB} nodes' in entry.message
+
+
+def test_job_builder_max_nodes_per_job_cluster_setting(context):
+    """
+    scheduler.job_provisioning.max_nodes_per_job overrides the built-in default
+    """
+    context.config().put('scheduler.job_provisioning.max_nodes_per_job', 4)
+
+    result = build_and_validate(
+        context=context, params={'nodes': 4, 'cpus': 1, 'instance_type': 't3.micro'}
+    )
+    assert result.success is True
+
+    result = build_and_validate(
+        context=context, params={'nodes': 5, 'cpus': 1, 'instance_type': 't3.micro'}
+    )
+    assert result.success is False
+    assert get_nodes_validation_entry(result) is not None
+
+
+def test_job_builder_max_nodes_per_job_unlimited(context):
+    """
+    scheduler.job_provisioning.max_nodes_per_job = 0 implies no limit
+    """
+    context.config().put('scheduler.job_provisioning.max_nodes_per_job', 0)
+
+    result = build_and_validate(
+        context=context, params={'nodes': 5000, 'cpus': 1, 'instance_type': 't3.micro'}
+    )
+    assert result.success is True
+
+
+def test_job_builder_max_nodes_per_job_queue_profile(context):
+    """
+    queue profile max_nodes_per_job takes precedence over the cluster setting
+    """
+    queue_profile = HpcQueueProfile(
+        name='mock-queue-profile',
+        queue_management_params=SocaQueueManagementParams(max_nodes_per_job=2),
+    )
+
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 2, 'cpus': 1, 'instance_type': 't3.micro'},
+        queue_profile=queue_profile,
+    )
+    assert result.success is True
+
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 3, 'cpus': 1, 'instance_type': 't3.micro'},
+        queue_profile=queue_profile,
+    )
+    assert result.success is False
+    entry = get_nodes_validation_entry(result)
+    assert entry is not None
+    assert '2 nodes' in entry.message
+
+
+def test_job_builder_max_nodes_per_job_queue_profile_zero(context):
+    """
+    queue profile max_nodes_per_job = 0 falls back to the cluster setting
+    """
+    context.config().put('scheduler.job_provisioning.max_nodes_per_job', 4)
+
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 5, 'cpus': 1, 'instance_type': 't3.micro'},
+        queue_profile=HpcQueueProfile(
+            name='mock-queue-profile',
+            queue_management_params=SocaQueueManagementParams(max_nodes_per_job=0),
+        ),
+    )
+    assert result.success is False
+    assert get_nodes_validation_entry(result) is not None
+
+
+def test_job_builder_max_nodes_per_job_default_job_params(context):
+    """
+    a queue profile default node count above the limit is rejected,
+    even when the job does not provide the nodes parameter
+    """
+    context.config().put('scheduler.job_provisioning.max_nodes_per_job', 4)
+
+    result = build_and_validate(
+        context=context,
+        params={'cpus': 1, 'instance_type': 't3.micro'},
+        queue_profile=HpcQueueProfile(
+            name='mock-queue-profile',
+            default_job_params=SocaJobParams(nodes=8),
+        ),
+    )
+    assert result.success is False
+    assert get_nodes_validation_entry(result) is not None
+
+
+# hpc6a/hpc6id/hpc7a/hpc7g/hpc8a are on-demand only, SMT-disabled, and EFA-capable; these tests
+# assert IDEA reads that from instance type data, not a hardcoded family list, so new families just work.
+
+
+def test_job_builder_hpc_instance_type_ondemand_valid(context):
+    """
+    on-demand job on an HPC instance type
+    """
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 2, 'cpus': 192, 'instance_type': 'hpc7a.96xlarge'},
+    )
+    assert result.success is True
+
+
+def test_job_builder_hpc_instance_type_spot_rejected(context):
+    """
+    HPC instance types are not offered as spot instances
+    """
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': 2,
+            'cpus': 192,
+            'instance_type': 'hpc7a.96xlarge',
+            'spot': 'true',
+        },
+    )
+    assert result.success is False
+    assert any(
+        entry.error_code == constants.JOB_PARAM_SPOT
+        for entry in result.validation_result.results
+    )
+
+
+def test_job_builder_hpc_instance_type_spot_price_rejected(context):
+    """
+    spot_price implies spot capacity, so it must be rejected for HPC instance types too
+    """
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': 1,
+            'cpus': 64,
+            'instance_type': 'hpc7g.16xlarge',
+            'spot_price': 'auto',
+        },
+    )
+    assert result.success is False
+
+
+def test_job_builder_hpc_instance_type_spot_queue_default_rejected(context):
+    """
+    spot enabled by the queue profile default must be validated as well
+    """
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 1, 'cpus': 192, 'instance_type': 'hpc7a.96xlarge'},
+        queue_profile=HpcQueueProfile(
+            name='mock-queue-profile',
+            default_job_params=SocaJobParams(spot=True),
+        ),
+    )
+    assert result.success is False
+
+
+def test_job_builder_spot_supported_instance_type_valid(context):
+    """
+    instance types that do support spot are unaffected
+    """
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': 1,
+            'cpus': 18,
+            'instance_type': 'c5n.18xlarge',
+            'spot': 'true',
+        },
+    )
+    assert result.success is True
+
+
+def test_job_builder_hpc_instance_type_efa_valid(context):
+    """
+    EFA on an HPC family that is not named anywhere in the source tree
+    """
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': 2,
+            'cpus': 192,
+            'instance_type': 'hpc7a.96xlarge',
+            'efa_support': 'true',
+        },
+    )
+    assert result.success is True
+    assert result.job_params.enable_efa_support is True
+
+
+def test_job_builder_hpc_graviton_instance_type_efa_valid(context):
+    """
+    EFA on the arm64 HPC family
+    """
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': 2,
+            'cpus': 64,
+            'instance_type': 'hpc7g.16xlarge',
+            'efa_support': 'true',
+            'instance_ami': 'ami-arm64mockimage00',
+        },
+    )
+    assert result.success is True
+
+
+def test_job_builder_hpc_instance_type_cpu_options_unsupported(context):
+    """
+    HPC instance types have SMT disabled and no configurable CpuOptions.
+    the launch template must not request CpuOptions for them.
+    """
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 1, 'cpus': 192, 'instance_type': 'hpc7a.96xlarge'},
+    )
+    assert result.success is True
+    assert result.provisioning_options.instance_types[0].cpu_options_supported is False
+
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': 1,
+            'cpus': 64,
+            'instance_type': 'hpc7g.16xlarge',
+            'instance_ami': 'ami-arm64mockimage00',
+        },
+    )
+    assert result.success is True
+    assert result.provisioning_options.instance_types[0].cpu_options_supported is False
+
+
+def test_job_builder_cpu_options_supported_unaffected(context):
+    """
+    non-HPC instance types keep CpuOptions support
+    """
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 1, 'cpus': 36, 'instance_type': 'c5n.18xlarge'},
+    )
+    assert result.success is True
+    assert result.provisioning_options.instance_types[0].cpu_options_supported is True
+
+
+def test_job_builder_hpc_instance_type_placement_group_valid(context):
+    """
+    HPC instance types support cluster placement groups, which is the configured default
+    """
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': 2,
+            'cpus': 192,
+            'instance_type': 'hpc7a.96xlarge',
+            'placement_group': 'true',
+        },
+    )
+    assert result.success is True
+
+
+def test_job_builder_placement_group_validates_configured_strategy(context):
+    """
+    the strategy validated must be the one CloudFormationStackBuilder will request,
+    not a hardcoded 'cluster'.
+    """
+    context.config().put(
+        'scheduler.job_provisioning.placement_group.strategy', 'spread'
+    )
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': 2,
+            'cpus': 192,
+            'instance_type': 'hpc7a.96xlarge',
+            'placement_group': 'true',
+        },
+    )
+    assert result.success is False
+    assert any(
+        entry.error_code == constants.JOB_PARAM_ENABLE_PLACEMENT_GROUP
+        and 'spread' in entry.message
+        for entry in result.validation_result.results
+    )
+
+
+def test_job_builder_placement_group_rejects_invalid_configured_strategy(context):
+    """
+    a mistyped strategy in cluster settings must fail at submit, not at stack create
+    """
+    context.config().put(
+        'scheduler.job_provisioning.placement_group.strategy', 'clustered'
+    )
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': 2,
+            'cpus': 36,
+            'instance_type': 'c5n.18xlarge',
+            'placement_group': 'true',
+        },
+    )
+    assert result.success is False
+
+
+def test_job_builder_instance_types_mixed_architecture_invalid(context):
+    """
+    instance types that share no processor architecture cannot be served by one AMI
+    """
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 1, 'cpus': 1, 'instance_type': 'hpc7g.16xlarge+c5.large'},
+    )
+    assert result.success is False
+    messages = [
+        entry.message
+        for entry in result.validation_result.results
+        if entry.message is not None
+    ]
+    assert any(
+        'do not share a processor architecture' in message for message in messages
+    )
+    assert any(
+        'hpc7g.16xlarge (arm64)' in message and 'c5.large (x86_64)' in message
+        for message in messages
+    )
+
+
+def test_job_builder_instance_types_arm64_with_x86_64_ami_invalid(context):
+    """
+    an arm64 instance type against the cluster default x86_64 AMI is rejected at submit
+    """
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 1, 'cpus': 1, 'instance_type': 'hpc7g.16xlarge'},
+    )
+    assert result.success is False
+    messages = [
+        entry.message
+        for entry in result.validation_result.results
+        if entry.message is not None
+    ]
+    assert any(
+        'run arm64' in message and 'ami-mockclustersettings) is x86_64' in message
+        for message in messages
+    )
+
+
+def test_job_builder_instance_types_x86_64_with_arm64_ami_invalid(context):
+    """
+    the mismatch is rejected in the other direction too
+    """
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': 1,
+            'cpus': 1,
+            'instance_type': 'c5.large',
+            'instance_ami': 'ami-arm64mockimage00',
+        },
+    )
+    assert result.success is False
+    messages = [
+        entry.message
+        for entry in result.validation_result.results
+        if entry.message is not None
+    ]
+    assert any(
+        'run x86_64' in message and 'ami-arm64mockimage00) is arm64' in message
+        for message in messages
+    )
+
+
+def test_job_builder_instance_types_arm64_with_arm64_ami_valid(context):
+    """
+    an arm64 instance type with an arm64 AMI is accepted
+    """
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': 1,
+            'cpus': 1,
+            'instance_type': 'hpc7g.16xlarge',
+            'instance_ami': 'ami-arm64mockimage00',
+        },
+    )
+    assert result.success is True
+    assert result.job_params.instance_types == ['hpc7g.16xlarge']
+
+
+def test_job_builder_instance_types_mixed_architecture_queue_default_invalid(context):
+    """
+    a queue profile default list that mixes architectures is rejected for jobs that do not
+    request instance types of their own
+    """
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 1, 'cpus': 1},
+        queue_profile=HpcQueueProfile(
+            name='mock-queue-profile',
+            default_job_params=SocaJobParams(
+                instance_types=['c5.large', 'hpc7g.16xlarge']
+            ),
+        ),
+    )
+    assert result.success is False
+    messages = [
+        entry.message
+        for entry in result.validation_result.results
+        if entry.message is not None
+    ]
+    assert any(
+        'The queue profile default instance types do not share a processor architecture'
+        in message
+        for message in messages
+    )

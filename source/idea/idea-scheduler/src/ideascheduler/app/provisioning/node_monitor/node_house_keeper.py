@@ -12,9 +12,11 @@
 import ideascheduler
 from ideadatamodel import (
     exceptions,
+    errorcodes,
     SocaCapacityType,
     SocaComputeNode,
     SocaComputeNodeState,
+    SocaJob,
     SocaJobState,
     ProvisioningStatus,
     EC2Instance,
@@ -23,6 +25,10 @@ from ideasdk.utils import Utils
 from ideasdk.metrics import BaseMetrics
 
 from ideascheduler.app.provisioning import JobProvisioningUtil
+from ideascheduler.app.provisioning.lifecycle_events import (
+    REASON_CLASS_CLOUDFORMATION,
+    REASON_CLASS_STACK_TIMEOUT,
+)
 from ideascheduler.app.scheduler.openpbs.openpbs_qselect import OpenPBSQSelect
 
 from typing import Dict, List, Optional, Set, Union, Tuple
@@ -40,6 +46,10 @@ CapacityTuple = Tuple[CurrentCapacity, DesiredCapacity]
 QueueType = str
 LogInfo = str
 InfoTuple = Tuple[QueueType, LogInfo]
+
+# a stack younger than this is still coming up normally: an unfulfilled launch is only
+# worth reporting to the job owner once the stack has had time to produce a node.
+CAPACITY_FAILURE_REASON_MIN_STACK_AGE_SECS = 300
 
 
 class NodeHouseKeepingSession:
@@ -93,7 +103,7 @@ class NodeHouseKeepingSession:
                 s += f'JobId: {instance.soca_job_id}'
             else:
                 s += f'JobGroup: {instance.soca_job_group}'
-            s += f', Host: {instance.private_dns_name}'
+            s += f', Host: {instance.node_host}'
             s += f', InstanceId: {instance.instance_id}'
             s += f', QueueType: {instance.soca_queue_type}'
         elif isinstance(instance, SocaComputeNode):
@@ -114,7 +124,7 @@ class NodeHouseKeepingSession:
             s += f'JobId: {instance.soca_job_id}'
         else:
             s += f'JobGroup: {instance.soca_job_group}'
-        s += f', Host: {instance.private_dns_name}'
+        s += f', Host: {instance.node_host}'
         s += f', InstanceId: {instance.instance_id}'
         s += f', QueueType: {instance.soca_queue_type}'
         s += f') {key}={value}'
@@ -280,11 +290,13 @@ class NodeHouseKeepingSession:
 
             last_used = arrow.get(last_used)
             terminate_after = last_used.shift(minutes=terminate_when_idle)
-            terminate_after_delta = arrow.utcnow() - terminate_after
+            terminate_after_delta_secs = int(
+                (arrow.utcnow() - terminate_after).total_seconds()
+            )
             if terminate_after > arrow.utcnow():
                 # log example:
                 # (JobId: 1034, Host: ip-10-0-79-226) node was last used 5 seconds ago. terminate when idle: 3 minutes.
-                if minutes(seconds=terminate_after_delta.seconds) % 5 == 0:
+                if minutes(seconds=terminate_after_delta_secs) % 5 == 0:
                     terminate = arrow.utcnow().shift(minutes=terminate_when_idle)
                     self._logger.info(
                         f'{self.log_tag(instance)} node was last used {last_used.humanize()}. '
@@ -304,8 +316,8 @@ class NodeHouseKeepingSession:
                 )
                 return False
 
-            if minutes(terminate_after_delta.seconds) > 5:
-                if minutes(seconds=terminate_after_delta.seconds) % 5 == 0:
+            if minutes(seconds=terminate_after_delta_secs) > 5:
+                if minutes(seconds=terminate_after_delta_secs) % 5 == 0:
                     terminate = arrow.utcnow().shift(minutes=terminate_when_idle)
                     self._logger.info(
                         f'{self.log_tag(instance)} node was last used {last_used.humanize()}, '
@@ -481,6 +493,36 @@ class NodeHouseKeepingSession:
                         ref.aws_autoscaling_group_name
                     ]
 
+    @staticmethod
+    def _registered_host(node: Optional[SocaComputeNode], fallback: str) -> str:
+        """
+        the name the scheduler knows the node by, which is what state changes must target.
+        """
+        if node is not None and Utils.is_not_empty(node.host):
+            return node.host
+        return fallback
+
+    def _delete_node_by_any_name(self, hosts: List[str]):
+        """
+        delete the node under the first name that works, raising the last error if none do.
+        """
+        if Utils.is_empty(hosts):
+            raise exceptions.SocaException(
+                error_code=errorcodes.SCHEDULER_ERROR,
+                message='no registered node name to delete',
+            )
+        last_error = None
+        for host in hosts:
+            try:
+                self._context.scheduler.delete_node(host=host)
+                return
+            except exceptions.SocaException as e:
+                # a busy node is a definitive answer about a name that exists
+                if e.error_code == errorcodes.SCHEDULER_NODE_BUSY:
+                    raise
+                last_error = e
+        raise last_error
+
     def pass4_set_offline(self):
         """
         set offline
@@ -495,32 +537,46 @@ class NodeHouseKeepingSession:
         # fetch node from scheduler and filter again
 
         nodes_to_set_offline = set()
+        # offline by the name the scheduler answered with. a node registered before the
+        # switch to private ipv4 still answers to its private dns name.
+        offline_hosts: Dict[str, str] = {}
         for instances in self.spot_fleet_instances.values():
             for instance in instances:
-                node = self._context.scheduler.get_node(host=instance.private_dns_name)
+                node = self._context.scheduler.find_node(
+                    hosts=instance.node_host_candidates
+                )
                 if node is None:
                     continue
                 if node.has_state(
                     SocaComputeNodeState.BUSY, SocaComputeNodeState.JOB_BUSY
                 ):
                     continue
+                offline_hosts[instance.instance_id] = self._registered_host(
+                    node=node, fallback=instance.node_host
+                )
                 nodes_to_set_offline.add(instance)
 
         for instances in self.auto_scaling_group_instances.values():
             for instance in instances:
-                node = self._context.scheduler.get_node(host=instance.private_dns_name)
+                node = self._context.scheduler.find_node(
+                    hosts=instance.node_host_candidates
+                )
                 if node is None:
                     continue
                 if node.has_state(
                     SocaComputeNodeState.BUSY, SocaComputeNodeState.JOB_BUSY
                 ):
                     continue
+                offline_hosts[instance.instance_id] = self._registered_host(
+                    node=node, fallback=instance.node_host
+                )
                 nodes_to_set_offline.add(instance)
 
-        for node in nodes_to_set_offline:
-            self._logger.info(f'{self.log_tag(node)} set offline')
+        for instance in nodes_to_set_offline:
+            self._logger.info(f'{self.log_tag(instance)} set offline')
             self._context.scheduler.set_node_state(
-                host=node.private_dns_name, state=SocaComputeNodeState.OFFLINE
+                host=offline_hosts[instance.instance_id],
+                state=SocaComputeNodeState.OFFLINE,
             )
 
         # filter the updated instances from ASG and SpotFleet
@@ -666,13 +722,22 @@ class NodeHouseKeepingSession:
             self._logger.info(f'{self.log_tag(node)} deleting node')
 
             if isinstance(node, SocaComputeNode):
-                host = node.host
+                hosts = [node.host]
                 queue_type = node.queue_type
             else:
-                host = node.private_dns_name
+                registered = self._context.scheduler.find_node(
+                    hosts=node.node_host_candidates
+                )
+                # a lookup that answers nothing is not proof of the name: an upgraded
+                # cluster still carries nodes registered under the legacy name.
+                hosts = (
+                    [registered.host]
+                    if registered is not None and Utils.is_not_empty(registered.host)
+                    else list(node.node_host_candidates)
+                )
                 queue_type = node.soca_queue_type
             try:
-                self._context.scheduler.delete_node(host=host)
+                self._delete_node_by_any_name(hosts=hosts)
                 self._context.metrics.nodes_deleted(queue_type=queue_type)
             except exceptions.SocaException as e:
                 self._logger.warning(f'{self.log_tag(node)} {e.message}')
@@ -693,7 +758,8 @@ class NodeHouseKeepingSession:
             force_terminate = (
                 instance.state in ['shutting-down', 'stopping']
                 and instance.launch_time is not None
-                and (arrow.utcnow() - instance.launch_time).seconds > 300  # 5 minutes
+                and (arrow.utcnow() - instance.launch_time).total_seconds()
+                > 300  # 5 minutes
             )
 
             if force_terminate:
@@ -714,9 +780,10 @@ class NodeHouseKeepingSession:
                 queue_type=instance.soca_queue_type
             )
 
-            duration = instance.launch_time - arrow.utcnow()
+            duration = arrow.utcnow() - instance.launch_time
             self._context.metrics.instances_running_duration(
-                queue_type=instance.soca_queue_type, duration_secs=duration.seconds
+                queue_type=instance.soca_queue_type,
+                duration_secs=int(duration.total_seconds()),
             )
 
             # Send AD automation event to delete the computer object
@@ -908,6 +975,66 @@ class NodeHouseKeepingSession:
             time.sleep(0.3)
             self._context.metrics.stacks_deleted(queue_type)
 
+    def _read_capacity_failure_reason(
+        self, provisioning_util: JobProvisioningUtil
+    ) -> Optional[str]:
+        """
+        read why a still-creating stack has no node yet, once the stack is old enough to
+        be worth asking about and every 5 minutes after that. a stack that comes up at
+        the usual pace never reaches the gate, so it costs no extra api calls.
+        """
+        creation_time = provisioning_util.stack.creation_time
+        if creation_time is None:
+            return None
+        delta_secs = int((arrow.utcnow() - creation_time).total_seconds())
+        if delta_secs < CAPACITY_FAILURE_REASON_MIN_STACK_AGE_SECS:
+            return None
+        if minutes(seconds=delta_secs) % 5 != 0:
+            return None
+        return provisioning_util.get_capacity_failure_reason()
+
+    def publish_capacity_failure_reason(
+        self,
+        job: SocaJob,
+        provisioning_util: JobProvisioningUtil,
+        reasons: Dict[str, Optional[str]],
+    ):
+        """
+        record why a job whose stack is still creating has no node yet, so the job owner
+        is not left guessing while cloudformation waits out its stabilization window.
+
+        the reason is read once per compute stack per housekeeping cycle: a batch job
+        group shares one stack, and one describe per job would flood the api.
+        """
+        compute_stack = job.get_compute_stack()
+        if compute_stack in reasons:
+            reason = reasons[compute_stack]
+        else:
+            reason = self._read_capacity_failure_reason(
+                provisioning_util=provisioning_util
+            )
+            reasons[compute_stack] = reason
+
+        if Utils.is_empty(reason):
+            return
+
+        self._logger.warning(
+            f'{job.log_tag} ComputeStack: {compute_stack} has not launched a node: {reason}'
+        )
+        self._context.job_cache.set_job_provisioning_error(
+            job_id=job.job_id,
+            error_code=errorcodes.CAPACITY_UNAVAILABLE,
+            message=reason,
+        )
+        lifecycle_events = self._context.lifecycle_events
+        if lifecycle_events is not None:
+            lifecycle_events.capacity_wait(
+                job=job,
+                error_code=errorcodes.CAPACITY_UNAVAILABLE,
+                message=reason,
+                attempt_number=lifecycle_events.attempts_consumed(job=job),
+            )
+
     def retry_provisioning_cleanup(self):
         """
         retry provisioning clean-up
@@ -932,6 +1059,7 @@ class NodeHouseKeepingSession:
         )
 
         compute_stacks = {}
+        capacity_failure_reasons: Dict[str, Optional[str]] = {}
 
         for entry in queued_jobs:
             job = None
@@ -960,6 +1088,10 @@ class NodeHouseKeepingSession:
                         continue
                     self._logger.info(
                         f'queue previously held job: {job.log_tag}, state: {job.state}'
+                    )
+                    # a released job gets a fresh provisioning retry budget
+                    self._context.job_cache.clear_job_provisioning_retries(
+                        job_id=job.job_id
                     )
                     self._context.job_monitor.job_modified(job=job)
                     continue
@@ -1011,6 +1143,16 @@ class NodeHouseKeepingSession:
                         f'{job.log_tag} Stack: {compute_stack}, ProvisioningStatus: {provisioning_status}'
                     )
 
+                if provisioning_status is None:
+                    # check_status returned an unmapped status; resetting the job here would
+                    # detach it from a stack nothing then deletes, so it could never provision again.
+                    self._logger.warning(
+                        f'{job.log_tag} '
+                        f'Stack: {compute_stack}, '
+                        f'unmapped stack status - leaving job and stack untouched'
+                    )
+                    continue
+
                 if provisioning_status in (
                     ProvisioningStatus.IN_PROGRESS,
                     ProvisioningStatus.DELETE_IN_PROGRESS,
@@ -1020,6 +1162,12 @@ class NodeHouseKeepingSession:
                         f'Stack: {job.get_compute_stack()}, '
                         f'ProvisioningStatus: {provisioning_status} - Stack still in progress, skipping'
                     )
+                    if provisioning_status == ProvisioningStatus.IN_PROGRESS:
+                        self.publish_capacity_failure_reason(
+                            job=job,
+                            provisioning_util=provisioning_util,
+                            reasons=capacity_failure_reasons,
+                        )
                     continue
 
                 if (
@@ -1048,16 +1196,16 @@ class NodeHouseKeepingSession:
                         continue
 
                     now = arrow.utcnow()
-                    delta = now - creation_time
+                    delta_secs = int((now - creation_time).total_seconds())
                     self._logger.debug(
-                        f'{job.log_tag} Stack age: {delta.seconds} seconds, timeout threshold: {stack_provisioning_timeout_secs} seconds'
+                        f'{job.log_tag} Stack age: {delta_secs} seconds, timeout threshold: {stack_provisioning_timeout_secs} seconds'
                     )
 
-                    if delta.seconds < stack_provisioning_timeout_secs:
+                    if delta_secs < stack_provisioning_timeout_secs:
                         # print log message only after 5 mins have elapsed.
-                        if minutes(seconds=delta.seconds) % 5 == 0:
+                        if minutes(seconds=delta_secs) % 5 == 0:
                             timeout_in_secs = (
-                                stack_provisioning_timeout_secs - delta.seconds
+                                stack_provisioning_timeout_secs - delta_secs
                             )
                             timeout = arrow.utcnow().shift(seconds=timeout_in_secs)
                             self._logger.info(
@@ -1070,9 +1218,14 @@ class NodeHouseKeepingSession:
                         continue
 
                     self._logger.info(
-                        f'{job.log_tag} Stack has timed out ({delta.seconds}s > {stack_provisioning_timeout_secs}s), marking for deletion'
+                        f'{job.log_tag} Stack has timed out ({delta_secs}s > {stack_provisioning_timeout_secs}s), marking for deletion'
                     )
                     delete_stack = True
+                    stack_failure_reason_class = REASON_CLASS_STACK_TIMEOUT
+                    stack_failure_message = (
+                        f'stack created but job did not start within '
+                        f'{stack_provisioning_timeout_secs}s'
+                    )
 
                 elif provisioning_status in (
                     ProvisioningStatus.FAILED,
@@ -1082,6 +1235,8 @@ class NodeHouseKeepingSession:
                         f'{job.log_tag} Stack provisioning failed or timed out (status: {provisioning_status}), marking for deletion'
                     )
                     delete_stack = True
+                    stack_failure_reason_class = REASON_CLASS_CLOUDFORMATION
+                    stack_failure_message = f'ProvisioningStatus: {provisioning_status}'
 
                 if delete_stack:
                     stack_name = job.get_compute_stack()
@@ -1089,6 +1244,16 @@ class NodeHouseKeepingSession:
                     self._logger.info(
                         f'{job.log_tag} Deleting ComputeStack: {stack_name}, Retry provisioning ...'
                     )
+
+                    lifecycle_events = self._context.lifecycle_events
+                    if lifecycle_events is not None:
+                        lifecycle_events.stack_failed(
+                            job=job,
+                            error_code=errorcodes.CLOUDFORMATION_STACK_BUILDER_FAILED,
+                            message=stack_failure_message,
+                            reason_class=stack_failure_reason_class,
+                            attempt_number=lifecycle_events.attempts_consumed(job=job),
+                        )
 
                     try:
                         self.aws_util.cloudformation_delete_stack(stack_name=stack_name)
@@ -1114,6 +1279,15 @@ class NodeHouseKeepingSession:
                         f'{job.log_tag} Failed to reset job in scheduler: {reset_error}'
                     )
                     raise  # Re-raise to trigger the outer exception handler
+
+                if delete_stack:
+                    retries_exhausted = provisioning_util.track_provisioning_failure(
+                        job=job,
+                        message=f'CloudFormation stack {job.get_compute_stack()} provisioning '
+                        f'failed or timed out (status: {provisioning_status}).',
+                    )
+                    if retries_exhausted:
+                        continue
 
                 self._logger.debug(
                     f'{job.log_tag} Notifying job monitor of job modification'

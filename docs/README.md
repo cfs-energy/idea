@@ -26,8 +26,8 @@ IDEA is deployed? Let's see how to interact with it:
 
 IDEA is a framework on which you can deploy multiple independent modules based on your own requirements. Select the module (Scale-Out Workloads, Engineering Virtual Desktops ..) below to learn more.
 
-{% content-ref url="https://github.com/cfs-energy-internal/idea/blob/docs/docs/broken-reference/README.md" %}
-[https://github.com/cfs-energy-internal/idea/blob/docs/docs/broken-reference/README.md](https://github.com/cfs-energy-internal/idea/blob/docs/docs/broken-reference/README.md)
+{% content-ref url="https://github.com/cfs-energy/idea" %}
+[https://github.com/cfs-energy/idea](https://github.com/cfs-energy/idea)
 {% endcontent-ref %}
 
 ## Key Features <a href="#easy-installation" id="easy-installation"></a>
@@ -74,7 +74,7 @@ Submit your Scale-Out Workloads simulation easily via a simple [NoCode web-based
 
 ### OS agnostic and support for custom AMI <a href="#os-agnostic-and-support-for-custom-ami" id="os-agnostic-and-support-for-custom-ami"></a>
 
-Customers can integrate their Amazon Linux 2, Amazon Linux 2023, RHEL, Rocky Linux, or Ubuntu AMIs automatically by simply using `-l instance_ami=<ami_id>` at job submission. There is no limitation in term of AMI numbers (you can have 10 jobs running simultaneously using 10 different AMIs). IDEA supports heterogeneous environment, so you can have concurrent jobs running different operating system on the same cluster.
+Customers can integrate their Amazon Linux 2023, RHEL, Rocky Linux, or Ubuntu AMIs automatically by simply using `-l instance_ami=<ami_id>` at job submission. There is no limitation in term of AMI numbers (you can have 10 jobs running simultaneously using 10 different AMIs). IDEA supports heterogeneous environment, so you can have concurrent jobs running different operating system on the same cluster. See the [Supported OS & hardware matrix](modules/hpc-workloads/user-documentation/supported-os-hardware-matrix.md) for `base_os` support, EFA/GPU wiring, and per-region AMI coverage.
 
 {% hint style="warning" %}
 **AMI using OS different than the scheduler**

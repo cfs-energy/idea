@@ -17,7 +17,11 @@ import {IdeaAuthenticationContext} from "../common/authentication-context";
 import {JwtTokenClaims} from "../common/token-utils";
 import {Constants} from "../common/constants";
 import AppLogger from "../common/app-logger";
-import {AUTH_TOKEN_EXPIRED} from "../common/error-codes";
+import {AUTH_TOKEN_EXPIRED, REQUEST_TIMEOUT} from "../common/error-codes";
+
+// the service worker owns the network timeout, so this only bounds the case where it never
+// replies at all. it stays above that timeout so it cannot pre-empt a real answer.
+const SERVICE_WORKER_REPLY_TIMEOUT = 660000
 
 export interface IdeaHeader {
     namespace: string
@@ -70,7 +74,21 @@ export class IdeaApiInvoker {
     async invoke_service_worker(message: any): Promise<any> {
         return new Promise((resolve, reject) => {
             let messageChannel = new MessageChannel()
+            // a worker that never posts back (an unrecognized message type, or one terminated
+            // mid-request) leaves this promise pending, so the wait is capped and failed here.
+            const timeout = setTimeout(() => {
+                messageChannel.port1.onmessage = null
+                this.logger.error(`service worker did not respond to: ${message.type}`)
+                resolve({
+                    response: {
+                        success: false,
+                        error_code: REQUEST_TIMEOUT,
+                        message: 'Request timed-out'
+                    }
+                })
+            }, SERVICE_WORKER_REPLY_TIMEOUT)
             messageChannel.port1.onmessage = (event) => {
+                clearTimeout(timeout)
                 if(event.data.error) {
                     this.logger.error(event.data.error)
                     reject(event.data.error)

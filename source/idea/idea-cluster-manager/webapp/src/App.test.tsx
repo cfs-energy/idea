@@ -11,12 +11,23 @@
  * and limitations under the License.
  */
 
-import React from 'react';
 import { render, screen } from '@testing-library/react';
+import { HashRouter } from 'react-router-dom';
 import App from './App';
+import { initTestAppContext } from './test-support';
 
-test('renders learn react link', () => {
-  render(<App />);
-  const linkElement = screen.getByText(/learn react/i);
-  expect(linkElement).toBeInTheDocument();
+describe('web portal app', () => {
+    it('mounts and shows the sign-in page when not authenticated', async () => {
+        initTestAppContext();
+        // HashRouter as in index.tsx: IdeaAuthenticatedRoute derives the current
+        // route from window.location.hash.
+        render(
+            <HashRouter>
+                <App />
+            </HashRouter>
+        );
+        const signInElements = await screen.findAllByText('Sign In');
+        expect(signInElements.length).toBeGreaterThan(0);
+        expect(screen.getByText('Integrated Digital Engineering on AWS')).toBeInTheDocument();
+    });
 });

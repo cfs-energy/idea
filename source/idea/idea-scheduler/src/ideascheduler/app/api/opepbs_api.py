@@ -126,8 +126,6 @@ class OpenPBSAPI(BaseAPI):
                 else:
                     job = pbs_context.job
 
-                    self.context.job_monitor.job_queued(job=job)
-
                     select = Utils.get_value_as_string(
                         'select', job.params.custom_params, ''
                     )
@@ -139,6 +137,14 @@ class OpenPBSAPI(BaseAPI):
 
                     pbs_context.get_bom_cost()
                     pbs_context.get_budget_usage()
+
+                    # accepted must be True here: a None left commit() a no-op,
+                    # defeating client_submission_id dedupe, and misreported the result.
+                    pbs_context.job_submission_result.accepted = True
+
+                    # signal the job monitor as late as possible: the job is not
+                    # visible in the scheduler until this hook response is accepted
+                    self.context.job_monitor.job_queued(job=job)
 
                     pbs_context.api_context.success(
                         OpenPBSHookResult(
@@ -198,10 +204,8 @@ class OpenPBSAPI(BaseAPI):
             )
 
     def invoke(self, context: ApiInvocationContext):
-        # this API can be invoked only via root users or administrators.
-        # since openpbs runs as root, the hooks executed on scheduler can invoke the unix socket on /run/idea.sock
-        # job_status events are executed via job_monitor and are published by mom hooks executed on compute nodes
-        # the execution hooks are sent to the job status events SQS queue.
+        # only root/administrators invoke this: openpbs (as root) calls /run/idea.sock.
+        # job_status events reach us from mom hooks on compute nodes via the SQS queue.
 
         if not context.is_administrator():
             raise exceptions.unauthorized_access()

@@ -312,35 +312,41 @@ class JobRow:
 
         datetime_info += f'Durations:{os.linesep}'
         if self.job.queue_time and self.job.provisioning_time:
-            pending = (self.job.provisioning_time - self.job.queue_time).seconds
+            pending = int(
+                (self.job.provisioning_time - self.job.queue_time).total_seconds()
+            )
             datetime_info += f'- Pending: {duration(pending)}{os.linesep}'
         elif self.job.queue_time:
-            pending = (arrow.utcnow() - self.job.queue_time).seconds
+            pending = int((arrow.utcnow() - self.job.queue_time).total_seconds())
             datetime_info += (
                 f'- Queued: {duration(pending, absolute=False)}{os.linesep}'
             )
 
         if self.job.start_time and self.job.provisioning_time:
-            pending = (self.job.start_time - self.job.provisioning_time).seconds
+            pending = int(
+                (self.job.start_time - self.job.provisioning_time).total_seconds()
+            )
             datetime_info += f'- Provision: {duration(pending)}{os.linesep}'
         elif self.job.provisioning_time:
-            provisioning = (arrow.utcnow() - self.job.provisioning_time).seconds
+            provisioning = int(
+                (arrow.utcnow() - self.job.provisioning_time).total_seconds()
+            )
             datetime_info += (
                 f'- ProvStarted: {duration(provisioning, absolute=False)}{os.linesep}'
             )
 
         if self.job.end_time and self.job.start_time:
-            execution = (self.job.end_time - self.job.start_time).seconds
+            execution = int((self.job.end_time - self.job.start_time).total_seconds())
             datetime_info += f'- Execution: {duration(execution)}{os.linesep}'
         elif self.job.start_time:
-            execution = (arrow.utcnow() - self.job.start_time).seconds
+            execution = int((arrow.utcnow() - self.job.start_time).total_seconds())
             datetime_info += (
                 f'- ExecStarted: {duration(execution, absolute=False)}{os.linesep}'
             )
 
         if self.job.queue_time and self.job.end_time:
             total_time = self.job.end_time - self.job.queue_time
-            datetime_info += f'- Total: {duration(total_time.seconds)}'
+            datetime_info += f'- Total: {duration(int(total_time.total_seconds()))}'
 
         return datetime_info
 

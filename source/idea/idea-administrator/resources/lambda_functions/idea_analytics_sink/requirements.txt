@@ -1,1 +1,4 @@
-opensearch-py
+# Built with `pip install -r requirements.txt ... --upgrade` (idea_code_asset.py),
+# so an unpinned entry here silently bypasses requirements/idea-dev-lambda.txt.
+# Keep in sync with that lock.
+opensearch-py==3.0.0

@@ -42,6 +42,8 @@ LIMIT_CHECK_OK = 0
 LIMIT_CHECK_NOT_OK_QUEUE = 1
 LIMIT_CHECK_NOT_OK_JOB_GROUP = 2
 
+QUEUE_LIMIT_REASON = 'queue is at its configured limit'
+
 
 class JobProvisioningQueueEmpty(Exception):
     pass
@@ -336,7 +338,8 @@ class JobProvisioningQueue(JobProvisioningQueueProtocol):
 
     def _remove_queued_job(self, job: QueuedJob):
         with self._lock:
-            del self._queued_jobs[job.job_id]
+            # pop, not del: the job may already have been re-queued and released
+            self._queued_jobs.pop(job.job_id, None)
 
     def _is_queue_applicable(self, queue_name: Optional[str] = None) -> bool:
         if queue_name is None:
@@ -374,10 +377,12 @@ class JobProvisioningQueue(JobProvisioningQueueProtocol):
 
         queue_total = self._context.job_cache.get_active_jobs(self.queue_type)
 
+        # threshold/current must describe the limit being checked, or is_queue_limit() reads
+        # the wrong field: a queue breach gets handled as a job-group breach and never blocks.
         result = LimitCheckResult(
             limit_type=LIMIT_TYPE_MAX_RUNNING_JOBS,
-            queue_threshold=queue_params.max_provisioned_instances,
-            queue_current=queue_total,
+            queue_threshold=max_running_jobs,
+            queue_current=queue_total + 1,
         )
 
         if queue_total + 1 > max_running_jobs:
@@ -421,14 +426,29 @@ class JobProvisioningQueue(JobProvisioningQueueProtocol):
                 if self._limit_flag_set:
                     delta = arrow.utcnow() - self._limit_flag_set
 
-                if delta is None or delta.seconds > 60:
+                if delta is None or delta.total_seconds() > 60:
                     self._limit_flag_set = arrow.utcnow()
                     pending = self._queue.qsize()
                     self._logger.info(f'{limit}, PendingJobs: {pending}')
                     self._context.metrics.jobs_pending(self.queue_type, pending)
+                    lifecycle_events = self._context.lifecycle_events
+                    if lifecycle_events is not None:
+                        lifecycle_events.held_at_cap(
+                            queue_profile=self.queue_type,
+                            limit_type=limit.limit_type,
+                            queue_threshold=limit.queue_threshold,
+                            queue_current=limit.queue_current,
+                            pending_jobs=pending,
+                            job=job,
+                            attempt_number=lifecycle_events.attempts_consumed(job=job),
+                        )
 
+                # the job owner gets the limit type only. str(limit) carries the queue
+                # threshold and current usage, which are cluster-wide values.
                 self._context.job_cache.set_job_provisioning_error(
-                    job_id=job.job_id, error_code=limit.limit_type, message=str(limit)
+                    job_id=job.job_id,
+                    error_code=limit.limit_type,
+                    message=QUEUE_LIMIT_REASON,
                 )
                 self._block(timeout=timeout)
                 raise queue.Empty()
@@ -468,28 +488,29 @@ class JobProvisioningQueue(JobProvisioningQueueProtocol):
                     )
 
                 queued_job = self._queue.get(timeout=timeout)
-                try:
-                    with self._lock:
-                        job = self._context.job_cache.get_job(queued_job.job_id)
+                # the job has left the priority queue, so release its de-dup entry now:
+                # otherwise a re-queue during the checks below is discarded as already-queued.
+                self._remove_queued_job(queued_job)
 
-                        # job is deleted from scheduler, but was queued previously
-                        # could happen with retry jobs or when job is stuck in queue due to limits
-                        # if job is deleted, remove from job tracker
-                        if job is None:
-                            continue
+                with self._lock:
+                    job = self._context.job_cache.get_job(queued_job.job_id)
 
-                        # job state has changed - could happen with retry jobs.
-                        if job.state != SocaJobState.QUEUED:
-                            continue
+                    # job is deleted from scheduler, but was queued previously
+                    # could happen with retry jobs or when job is stuck in queue due to limits
+                    # if job is deleted, remove from job tracker
+                    if job is None:
+                        continue
 
-                        # decide if queue needs to be blocked
-                        # if blocked, current job will be added to retry queue
-                        if not self._check_limits(job=job, timeout=timeout):
-                            continue
+                    # job state has changed - could happen with retry jobs.
+                    if job.state != SocaJobState.QUEUED:
+                        continue
 
-                        return job
-                finally:
-                    self._remove_queued_job(queued_job)
+                    # decide if queue needs to be blocked
+                    # if blocked, current job will be added to retry queue
+                    if not self._check_limits(job=job, timeout=timeout):
+                        continue
+
+                    return job
 
             except queue.Empty:
                 raise JobProvisioningQueueEmpty()

@@ -11,6 +11,7 @@
 
 from ideadatamodel import constants, SocaAnyPayload
 from ideasdk.bootstrap import BootstrapUserDataBuilder
+from ideasdk.context import ArnBuilder
 from ideasdk.utils import Utils
 
 import ideaadministrator
@@ -34,6 +35,7 @@ import constructs
 from aws_cdk import (
     aws_ec2 as ec2,
     aws_cognito as cognito,
+    aws_iam as iam,
     aws_sqs as sqs,
     aws_route53 as route53,
     aws_elasticloadbalancingv2 as elbv2,
@@ -80,6 +82,7 @@ class SchedulerStack(IdeaBaseStack):
             'bootstrap_package_uri'
         )
         self.cluster = ExistingSocaCluster(self.context, self.stack)
+        self.arn_builder = ArnBuilder(self.context.config())
 
         self.oauth2_client_secret: Optional[OAuthClientIdAndSecret] = None
         self.scheduler_role: Optional[Role] = None
@@ -258,6 +261,19 @@ class SchedulerStack(IdeaBaseStack):
             )
         )
 
+    def is_bedrock_enabled_for_jobs(self) -> bool:
+        """
+        compute nodes run under project roles only when the cluster integration and the
+        scheduler opt-in are both on. read at synth time, so the grants that depend on
+        it exist only in a deployment that asked for them.
+        """
+        cluster_manager_module_id = self.context.config().get_module_id(
+            constants.MODULE_CLUSTER_MANAGER
+        )
+        return self.context.config().get_bool(
+            f'{cluster_manager_module_id}.bedrock.enabled', False
+        ) and self.context.config().get_bool(f'{self.module_id}.bedrock.enabled', False)
+
     def build_sqs_queue(self):
         kms_key_id = self.context.config().get_string('cluster.sqs.kms_key_id')
 
@@ -283,6 +299,24 @@ class SchedulerStack(IdeaBaseStack):
         )
         self.add_common_tags(self.job_status_sqs_queue)
         self.add_common_tags(self.job_status_sqs_queue.dead_letter_queue.queue)
+
+        if self.is_bedrock_enabled_for_jobs():
+            # bedrock project-role compute nodes carry the dcv host policy, not the compute-node
+            # policy, so the execution hooks' job-status send needs its own grant, scoped to per-project IAM roles.
+            self.job_status_sqs_queue.add_to_resource_policy(
+                iam.PolicyStatement(
+                    sid='ProjectRoleJobStatusEvents',
+                    effect=iam.Effect.ALLOW,
+                    actions=['sqs:SendMessage'],
+                    resources=[self.job_status_sqs_queue.queue_arn],
+                    principals=[iam.AnyPrincipal()],
+                    conditions={
+                        'ArnLike': {
+                            'aws:PrincipalArn': self.arn_builder.get_project_role_arn()
+                        }
+                    },
+                )
+            )
 
     def build_security_groups(self):
         self.scheduler_security_group = SchedulerSecurityGroup(
@@ -627,5 +661,12 @@ class SchedulerStack(IdeaBaseStack):
                 'job_status_sqs_queue_url': self.job_status_sqs_queue.queue_url,
             }
         )
+
+        # iam:PassRole for project roles is granted only at deploy time when bedrock-for-jobs is
+        # enabled, not by toggling it at runtime; written under the same gate so the scheduler can detect a refusal.
+        if self.is_bedrock_enabled_for_jobs():
+            cluster_settings['bedrock.project_pass_role_arn'] = (
+                self.arn_builder.get_project_role_arn()
+            )
 
         self.update_cluster_settings(cluster_settings)

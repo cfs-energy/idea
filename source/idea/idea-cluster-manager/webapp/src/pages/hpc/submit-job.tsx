@@ -12,6 +12,7 @@
  */
 
 import React, {Component, RefObject} from "react";
+import {v4 as uuid} from "uuid";
 
 import IdeaForm from "../../components/form";
 import {
@@ -45,12 +46,19 @@ import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import {JobTemplate} from "../../service/job-templates-service";
 import IdeaAppLayout, {IdeaAppLayoutProps} from "../../components/app-layout";
 import {withRouter} from "../../navigation/navigation-utils";
+import {updateJobScriptSelect} from "./pbs-select";
 
-const nunjucks = require('nunjucks')
+import nunjucks from "nunjucks"
 
 
 export interface SubmitJobProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
 
+}
+
+export interface JobSizeEstimate {
+    nodeCount: number
+    cpusPerInstance: number
+    instanceType: string
 }
 
 export interface SubmitJobState {
@@ -78,10 +86,23 @@ export interface SubmitJobState {
     jobScript?: string
     activeTab: string
 
+    jobSizeEstimate?: JobSizeEstimate
+    showJobSizeConfirmModal: boolean
+
     errorMessage: string
     submitJobLoading: boolean
     dryRunLoading: boolean
+
+    // idempotency key for Scheduler.SubmitJob. stable while the same submission is retried,
+    // regenerated once a submission has been accepted so the next one is a new job.
+    clientSubmissionId: string
 }
+
+// no. of compute nodes above which the user must explicitly confirm the submission.
+const JOB_SIZE_CONFIRM_NODE_COUNT = 10
+
+// job params that change the no. of compute nodes the job will request.
+const JOB_SIZE_PARAMS = ['cpus', 'instance_type', 'ht_support', 'enable_ht_support', 'queue', 'queue_name']
 
 const TAB_SUBMIT_JOB = 'submit-job'
 const TAB_COST_ESTIMATES = 'cost-estimates'
@@ -92,13 +113,18 @@ const TAB_JOB_PARAMETERS = 'job-parameters'
 
 class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
 
-    jobSubmissionForm: RefObject<IdeaForm>
-    saveJobTemplateForm: RefObject<IdeaForm>
+    jobSubmissionForm: RefObject<IdeaForm | null>
+    saveJobTemplateForm: RefObject<IdeaForm | null>
+    instanceTypeOptionsCacheKey: string | null
+    instanceTypeOptionsCache: SocaInstanceTypeOptions[]
+    jobSizeEstimateTimeout: any | null = null
 
     constructor(props: SubmitJobProps) {
         super(props);
         this.jobSubmissionForm = React.createRef()
         this.saveJobTemplateForm = React.createRef()
+        this.instanceTypeOptionsCacheKey = null
+        this.instanceTypeOptionsCache = []
         this.state = {
             splitPanelOpen: false,
 
@@ -122,9 +148,13 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
             showApplicationSelectModal: false,
             activeTab: 'submit-job',
 
+            showJobSizeConfirmModal: false,
+
             errorMessage: '',
             submitJobLoading: false,
-            dryRunLoading: false
+            dryRunLoading: false,
+
+            clientSubmissionId: uuid()
         }
         nunjucks.configure({
             autoescape: false
@@ -149,6 +179,36 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
 
     componentDidMount() {
         this.initialize()
+    }
+
+    getErrorMessage = (error: any): string => {
+        if (Utils.isNotEmpty(error?.message)) {
+            return error.message
+        }
+        if (Utils.isNotEmpty(error?.errorCode)) {
+            return `Request failed with error code: ${error.errorCode}`
+        }
+        return `${error}`
+    }
+
+    onError = (error: any, header: string) => {
+        this.props.onFlashbarChange({
+            items: [
+                {
+                    type: 'error',
+                    header: header,
+                    content: this.getErrorMessage(error),
+                    dismissible: true
+                }
+            ]
+        })
+    }
+
+    componentWillUnmount() {
+        if (this.jobSizeEstimateTimeout) {
+            clearTimeout(this.jobSizeEstimateTimeout)
+            this.jobSizeEstimateTimeout = null
+        }
     }
 
     loadApplication(application: HpcApplication) {
@@ -182,7 +242,14 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
 
         let state: any = null
         if (stateBase64) {
-            state = JSON.parse(atob(stateBase64))
+            // ?state= is user-editable and template_data comes from stored job templates;
+            // a corrupt value must not throw inside componentDidMount and blank the page
+            try {
+                state = JSON.parse(atob(stateBase64))
+            } catch (error) {
+                console.error('failed to decode job submission state', error)
+                state = null
+            }
         }
 
         if (state && state.applicationId) {
@@ -192,6 +259,8 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                 if (result.applications?.length > 0) {
                     this.loadApplication(result.applications[0])
                 }
+            }).catch(error => {
+                this.onError(error, 'Failed to load the application')
             })
         }
 
@@ -239,7 +308,8 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
     resetForm() {
         this.setState({
             application: undefined,
-            submitJobResult: undefined
+            submitJobResult: undefined,
+            jobSizeEstimate: undefined
         }, () => {
             this.props.searchParams.set('state', '')
         })
@@ -335,7 +405,7 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                     resolve(true)
                 })
             }).catch(error => {
-                reject(false)
+                reject(error)
             })
         })
     }
@@ -345,6 +415,8 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
             this.setState({
                 showJobTemplatesModal: true
             })
+        }).catch(error => {
+            this.onError(error, 'Failed to load job templates')
         })
     }
 
@@ -355,6 +427,8 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
             }, () => {
                 this.getSaveJobTemplateForm().showModal()
             })
+        }).catch(error => {
+            this.onError(error, 'Failed to load job templates')
         })
     }
 
@@ -401,6 +475,8 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                                   title: values.title,
                                   description: values.description,
                                   template_data: this.buildUrlState()
+                              }).catch(error => {
+                                  this.onError(error, 'Failed to save the job template')
                               }).finally(onCancel)
                           } else {
                               AppContext.get().jobTemplates().updateJobTemplate({
@@ -408,6 +484,8 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                                   title: values.title,
                                   description: values.description,
                                   template_data: this.buildUrlState()
+                              }).catch(error => {
+                                  this.onError(error, 'Failed to update the job template')
                               }).finally(onCancel)
                           }
                       }}
@@ -470,12 +548,16 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
         }
         const onDeleteJobTemplate = () => {
             AppContext.get().jobTemplates().deleteJobTemplate(this.state.selectedJobTemplateId!).then(() => {
-                this.loadAllJobTemplates().finally(() => {
+                this.loadAllJobTemplates().catch(error => {
+                    this.onError(error, 'Failed to load job templates')
+                }).finally(() => {
                     this.setState({
                         selectedJobTemplateId: null
                     })
                 })
-            }).finally()
+            }).catch(error => {
+                this.onError(error, 'Failed to delete the job template')
+            })
         }
         const onLoadJobTemplate = () => {
             AppContext.get().jobTemplates().getJobTemplate(this.state.selectedJobTemplateId!).then(jobTemplate => {
@@ -486,6 +568,8 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                 }, () => {
                     this.initialize(jobTemplate.template_data)
                 })
+            }).catch(error => {
+                this.onError(error, 'Failed to load the job template')
             })
         }
         return (
@@ -657,6 +741,8 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                                             filteredApplications: [...listing],
                                             showApplicationSelectModal: true
                                         })
+                                    }).catch(error => {
+                                        this.onError(error, 'Failed to list applications')
                                     })
                                 }}><FontAwesomeIcon icon={faEdit}/></Button>
                             </SpaceBetween>
@@ -682,17 +768,77 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                                 showHeader={false}
                                 showActions={false}
                                 values={this.state.jobSubmissionParameters}
+                                onStateChange={(event) => {
+                                    if (JOB_SIZE_PARAMS.includes(event.param.name!)) {
+                                        this.scheduleJobSizeEstimate()
+                                    }
+                                }}
                                 params={this.getJobSubmissionFormTemplateParams()}/>
                         }
+                        {this.buildJobSizeEstimate()}
                     </SpaceBetween>
                 </Form>
             </div>
         )
     }
 
+    buildJobSizeEstimate() {
+        const jobSizeEstimate = this.state.jobSizeEstimate
+        if (!jobSizeEstimate) {
+            return
+        }
+        const isLargeJob = jobSizeEstimate.nodeCount >= JOB_SIZE_CONFIRM_NODE_COUNT
+        return (
+            <Alert type={(isLargeJob) ? 'warning' : 'info'} header="Compute Nodes">
+                This job will request <strong>{jobSizeEstimate.nodeCount}</strong> x <strong>{jobSizeEstimate.instanceType}</strong> node(s),
+                one EC2 instance per node, at {jobSizeEstimate.cpusPerInstance} cpus per node.
+                {isLargeJob && <p>The node count is computed from the requested cpus. Reduce cpus if this is not what you intended.</p>}
+            </Alert>
+        )
+    }
+
+    buildJobSizeConfirmModal() {
+        const jobSizeEstimate = this.state.jobSizeEstimate
+        const onCancel = () => {
+            this.setState({
+                showJobSizeConfirmModal: false
+            })
+        }
+        return (
+            <Modal visible={this.state.showJobSizeConfirmModal}
+                   size="medium"
+                   onDismiss={onCancel}
+                   header="Confirm Job Size"
+                   footer={
+                       <Box float="right">
+                           <SpaceBetween size="xs" direction="horizontal">
+                               <Button variant="normal" onClick={onCancel}>Cancel</Button>
+                               <Button variant="primary" onClick={() => {
+                                   this.setState({
+                                       showJobSizeConfirmModal: false
+                                   }, () => {
+                                       this.runSubmitJob()
+                                   })
+                               }}>Submit Job</Button>
+                           </SpaceBetween>
+                       </Box>
+                   }>
+                <Alert type="warning">
+                    This job will provision <strong>{jobSizeEstimate?.nodeCount}</strong> x <strong>{jobSizeEstimate?.instanceType}</strong> EC2
+                    instances ({jobSizeEstimate?.cpusPerInstance} cpus per node). The node count is computed from the requested cpus.
+                    Cancel and reduce cpus if this is not what you intended.
+                </Alert>
+            </Modal>
+        )
+    }
+
     onDryRun = () => {
+        // clear the previous result so a failed run doesn't leave the last success on screen.
+        // pin the form tab: with submitJobResult unset, the result tabs are disabled and would render blank.
         this.setState({
             errorMessage: '',
+            submitJobResult: undefined,
+            activeTab: 'submit-job',
             dryRunLoading: true
         })
         this.submitJob(true)
@@ -703,7 +849,7 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                 })
             }, (error) => {
                 this.setState({
-                    errorMessage: error.message,
+                    errorMessage: this.getErrorMessage(error),
                     activeTab: 'submit-job',
                     dryRunLoading: false
                 })
@@ -711,8 +857,32 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
     }
 
     onSubmitJob = () => {
+        // the previous dry-run result is NOT cleared here: cancelling the size confirmation
+        // modal must be a no-op, so clearing waits until runSubmitJob() actually runs.
         this.setState({
             errorMessage: '',
+            submitJobLoading: true
+        }, () => {
+            // a job that provisions more than a handful of instances must be confirmed by the user.
+            // a transient estimate failure skips confirmation; max_nodes_per_job on the server is the backstop.
+            this.updateJobSizeEstimate().then(jobSizeEstimate => {
+                if (jobSizeEstimate && jobSizeEstimate.nodeCount >= JOB_SIZE_CONFIRM_NODE_COUNT) {
+                    this.setState({
+                        showJobSizeConfirmModal: true,
+                        submitJobLoading: false
+                    })
+                } else {
+                    this.runSubmitJob()
+                }
+            })
+        })
+    }
+
+    runSubmitJob = () => {
+        this.setState({
+            errorMessage: '',
+            submitJobResult: undefined,
+            activeTab: 'submit-job',
             submitJobLoading: true
         }, () => {
             this.submitJob(false)
@@ -723,7 +893,7 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                     })
                 }, (error) => {
                     this.setState({
-                        errorMessage: error.message,
+                        errorMessage: this.getErrorMessage(error),
                         activeTab: 'submit-job',
                         submitJobLoading: false
                     })
@@ -982,12 +1152,22 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
         return typeof this.state.submitJobResult?.job !== 'undefined'
     }
 
+    hasSubmitJobResult = () => {
+        return this.state.submitJobResult != null
+    }
+
+    // a successful dry run returns accepted = false, and a job script submitted via the bash
+    // interpreter is accepted without a job object.
+    isAccepted = () => {
+        return this.isSubmitted() || Utils.asBoolean(this.state.submitJobResult?.accepted)
+    }
+
     hasSubmissionErrors = () => {
         return Utils.isNotEmpty(this.state.errorMessage)
     }
 
     isDryRun = () => {
-        return this.isSubmitted() && Utils.asBoolean(this.state.submitJobResult?.dry_run)
+        return this.hasSubmitJobResult() && Utils.asBoolean(this.state.submitJobResult?.dry_run)
     }
 
     hasValidationErrors = () => {
@@ -1022,7 +1202,9 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
             )
         }
 
-        if (this.isSubmitted()) {
+        // gate on the result and not on result.job: a rejected job is returned without a job object,
+        // carrying the validations that explain the rejection.
+        if (this.hasSubmitJobResult()) {
             if (this.hasValidationErrors() || this.hasIncidentalErrors()) {
                 const errors: JobValidationResultEntry[] = []
                 if (this.hasValidationErrors()) {
@@ -1069,13 +1251,13 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                                ]}/>
                     </ColumnLayout>
                 )
-            } else {
+            } else if (this.isAccepted()) {
                 if (this.isDryRun()) {
                     return (
                         <ColumnLayout columns={1}>
                             <h3>Dry Run Results</h3>
                             <StatusIndicator type="success">Job can be submitted successfully</StatusIndicator>
-                            {buildPostSubmissionLinks()}
+                            {this.isSubmitted() && buildPostSubmissionLinks()}
                         </ColumnLayout>
                     )
                 } else {
@@ -1092,9 +1274,21 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                                         this.props.navigate('/home/active-jobs')
                                     }}>Show Active Jobs</Button>
                         </SpaceBetween>
-                        {buildPostSubmissionLinks()}
+                        {this.isSubmitted() && buildPostSubmissionLinks()}
                     </ColumnLayout>
                 }
+            } else {
+                // job was rejected without any validation entry - never render the neutral empty state.
+                return (
+                    <div>
+                        <Box variant="h3" color="text-status-error"><FontAwesomeIcon icon={faCircleMinus}/> Job Submission Failed</Box>
+                        <p>
+                            <StatusIndicator type="error">
+                                {(this.hasSubmissionErrors()) ? this.state.errorMessage : 'Job was not accepted by the scheduler and no reason was returned. Contact your cluster administrator.'}
+                            </StatusIndicator>
+                        </p>
+                    </div>
+                )
             }
         } else if (this.hasSubmissionErrors()) {
             return (
@@ -1173,19 +1367,37 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
         }
     }
 
-    getInstanceTypeCpuCount(instanceTypeOptions: SocaInstanceTypeOptions[]): number {
-        const instanceTypes = this.getSelectedInstanceTypes()
-        if (Utils.isEmpty(instanceTypes)) {
-            return 0
+    getJobSubmissionFormValues(): any {
+        const form = this.getJobSubmissionForm()
+        if (!form) {
+            return null
         }
-        const instanceType = instanceTypes[0]
-        let cpuCount = 0
+        return form.getValues()
+    }
+
+    /** the instance type that sizes the job: the smallest by cpu count of the selected types, or of the
+     * queue profile defaults. The name is tracked so the size Alert pairs the count with its type. */
+    getSmallestInstanceTypeOption(instanceTypeOptions: SocaInstanceTypeOptions[], values?: any): { name: string, cpuCount: number } | null {
+        const instanceTypes = this.getSelectedInstanceTypes(values)
+        let smallest: { name: string, cpuCount: number } | null = null
         instanceTypeOptions.forEach(instanceTypeOption => {
-            if (instanceType === instanceTypeOption.name) {
-                cpuCount = Utils.asNumber(instanceTypeOption.threads_per_core, 0) * Utils.asNumber(instanceTypeOption.default_core_count, 0)
+            if (instanceTypes.length > 0 && instanceTypes.indexOf(Utils.asString(instanceTypeOption.name)) < 0) {
+                return
+            }
+            const optionCpuCount = Utils.asNumber(instanceTypeOption.threads_per_core, 0) * Utils.asNumber(instanceTypeOption.default_core_count, 0)
+            if (isNaN(optionCpuCount) || optionCpuCount <= 0) {
+                return
+            }
+            if (smallest === null || optionCpuCount < smallest.cpuCount) {
+                smallest = {name: Utils.asString(instanceTypeOption.name), cpuCount: optionCpuCount}
             }
         })
-        return cpuCount
+        return smallest
+    }
+
+    getUnknownInstanceTypes(instanceTypeOptions: SocaInstanceTypeOptions[]): string[] {
+        const instanceTypeNames = instanceTypeOptions.map(instanceTypeOption => Utils.asString(instanceTypeOption.name))
+        return this.getSelectedInstanceTypes().filter(instanceType => instanceTypeNames.indexOf(instanceType) < 0)
     }
 
     getSelectedProjectName(): string | null {
@@ -1198,8 +1410,10 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
         return this.state.selectedProject.value!
     }
 
-    getSelectedQueue(): string | null {
-        const values = this.getJobSubmissionParameters()
+    getSelectedQueue(values?: any): string | null {
+        if (!values) {
+            values = this.getJobSubmissionParameters()
+        }
         if (!values) {
             return null
         }
@@ -1212,8 +1426,10 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
         return null
     }
 
-    getSelectedInstanceTypes(): string[] {
-        const values = this.getJobSubmissionParameters()
+    getSelectedInstanceTypes(values?: any): string[] {
+        if (!values) {
+            values = this.getJobSubmissionParameters()
+        }
         if (!values) {
             return []
         }
@@ -1221,10 +1437,14 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
             return []
         }
         return values.instance_type.split('+')
+            .map((instanceType: string) => instanceType.trim())
+            .filter((instanceType: string) => Utils.isNotEmpty(instanceType))
     }
 
-    isHyperThreadingEnabled(): boolean | undefined {
-        const values = this.getJobSubmissionParameters()
+    isHyperThreadingEnabled(values?: any): boolean | undefined {
+        if (!values) {
+            values = this.getJobSubmissionParameters()
+        }
         if (!values) {
             return
         }
@@ -1236,6 +1456,93 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
         }
     }
 
+    /** instance type options only change with the instance types, hyper-threading and queue selection.
+     * cached so that editing cpus does not call the API on every keystroke. */
+    getInstanceTypeOptionsCached(instanceTypes: string[], enableHtSupport: boolean | undefined, queueName: string | null): Promise<SocaInstanceTypeOptions[]> {
+        const cacheKey = `${instanceTypes.join('+')}|${enableHtSupport}|${queueName}`
+        if (this.instanceTypeOptionsCacheKey === cacheKey) {
+            return Promise.resolve(this.instanceTypeOptionsCache)
+        }
+        return this.getSchedulerClient().getInstanceTypeOptions({
+            enable_ht_support: enableHtSupport,
+            instance_types: instanceTypes,
+            queue_name: (queueName) ? queueName : undefined
+        }).then(result => {
+            this.instanceTypeOptionsCache = (result.instance_types) ? result.instance_types : []
+            this.instanceTypeOptionsCacheKey = cacheKey
+            return this.instanceTypeOptionsCache
+        })
+    }
+
+    computeNodeCount(cpus: any, cpusPerInstance: number): number {
+        if (cpusPerInstance <= 0) {
+            return 0
+        }
+        const nodeCount = Math.ceil(Utils.asNumber(cpus, 0) / cpusPerInstance)
+        if (!isFinite(nodeCount) || nodeCount <= 0) {
+            return 0
+        }
+        return nodeCount
+    }
+
+    /** computes the no. of compute nodes the job will request, using the same inputs as the generated
+     * #PBS -l select= line. returns null when it cannot be computed from the current form. */
+    computeJobSizeEstimate(values: any): Promise<JobSizeEstimate | null> {
+        if (!values) {
+            return Promise.resolve(null)
+        }
+        // no early return on an empty selection: generateJobScript sizes the job from the
+        // queue profile default options in that case, and the estimate must match the script
+        const instanceTypes = this.getSelectedInstanceTypes(values)
+        return this.getInstanceTypeOptionsCached(instanceTypes, this.isHyperThreadingEnabled(values), this.getSelectedQueue(values)).then(instanceTypeOptions => {
+            const smallest = this.getSmallestInstanceTypeOption(instanceTypeOptions, values)
+            if (!smallest) {
+                return null
+            }
+            const nodeCount = this.computeNodeCount(values.cpus, smallest.cpuCount)
+            if (nodeCount === 0) {
+                return null
+            }
+            return {
+                nodeCount: nodeCount,
+                cpusPerInstance: smallest.cpuCount,
+                instanceType: smallest.name
+            }
+        })
+    }
+
+    /**
+     * debounced so that typing in a text based job param does not fetch instance type options per keystroke.
+     */
+    scheduleJobSizeEstimate() {
+        if (this.jobSizeEstimateTimeout) {
+            clearTimeout(this.jobSizeEstimateTimeout)
+        }
+        this.jobSizeEstimateTimeout = setTimeout(() => {
+            this.jobSizeEstimateTimeout = null
+            this.updateJobSizeEstimate()
+        }, 500)
+    }
+
+    updateJobSizeEstimate(): Promise<JobSizeEstimate | null> {
+        if (this.jobSizeEstimateTimeout) {
+            clearTimeout(this.jobSizeEstimateTimeout)
+            this.jobSizeEstimateTimeout = null
+        }
+        return this.computeJobSizeEstimate(this.getJobSubmissionFormValues())
+            .then(jobSizeEstimate => {
+                this.setState({
+                    jobSizeEstimate: (jobSizeEstimate) ? jobSizeEstimate : undefined
+                })
+                return jobSizeEstimate
+            }, () => {
+                this.setState({
+                    jobSizeEstimate: undefined
+                })
+                return null
+            })
+    }
+
     generateJobScript(): Promise<string> {
         const queueName = this.getSelectedQueue()
         const projectName = this.getSelectedProjectName()
@@ -1245,11 +1552,7 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                 message: 'queue or project are required to generate the job script.'
             }))
         }
-        return this.getSchedulerClient().getInstanceTypeOptions({
-            enable_ht_support: this.isHyperThreadingEnabled(),
-            instance_types: this.getSelectedInstanceTypes(),
-            queue_name: (queueName) ? queueName : undefined
-        }).then(result => {
+        return this.getInstanceTypeOptionsCached(this.getSelectedInstanceTypes(), this.isHyperThreadingEnabled(), queueName).then(instanceTypeOptions => {
 
             if (!this.state.application?.job_script_template) {
                 throw new IdeaException({
@@ -1271,47 +1574,45 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
             })
 
             // begin select statement computation
-            let cpusPerInstance = this.getInstanceTypeCpuCount(result.instance_types!)
-            let nodeCount = Math.ceil(Utils.asNumber(values.cpus) / cpusPerInstance) | 0
-            if (nodeCount === 0) {
+            const unknownInstanceTypes = this.getUnknownInstanceTypes(instanceTypeOptions)
+            if (unknownInstanceTypes.length > 0) {
                 throw new IdeaException({
                     errorCode: 'INVALID_PARAMS',
-                    message: `Node computation failed. Nodes Count = ${nodeCount}`
+                    message: `Instance type options not found for: ${unknownInstanceTypes.join(', ')}`
                 })
             }
+            // size from the smallest option and label it with that option's name, so the estimate
+            // and confirmation modal show a consistent type/cpu pair (matches computeJobSizeEstimate).
+            const smallest = this.getSmallestInstanceTypeOption(instanceTypeOptions, values)
+            if (!smallest) {
+                throw new IdeaException({
+                    errorCode: 'INVALID_PARAMS',
+                    message: 'Node computation failed. Unable to compute the cpu count of the selected instance type.'
+                })
+            }
+            const cpusPerInstance = smallest.cpuCount
+            const requestedCpus = Utils.asNumber(values.cpus, 0)
+            if (isNaN(requestedCpus) || requestedCpus <= 0) {
+                throw new IdeaException({
+                    errorCode: 'INVALID_PARAMS',
+                    message: `Node computation failed. cpus must be greater than 0, found: ${values.cpus}`
+                })
+            }
+            const nodeCount = Math.ceil(requestedCpus / cpusPerInstance)
 
+            this.setState({
+                jobSizeEstimate: {
+                    nodeCount: nodeCount,
+                    cpusPerInstance: cpusPerInstance,
+                    instanceType: smallest.name
+                }
+            })
+
+            // begin parameter replacement. it runs before the select update: a templated select line
+            // ({{ ncpus }} / %ncpus%) is not a parsable PBS directive until the placeholders are gone.
             let jobScript = this.state.application.job_script_template!
-            const lines = jobScript.split('\n')
-            const updatedLines = []
-            let shebangIndex = -1
-            let selectUpdated = false
-            const select = `#PBS -l select=${nodeCount}:ncpus=${cpusPerInstance}`
-            for (let i = 0; i < lines.length; i++) {
-                let line = lines[i]
-
-                if (line.trim().startsWith('#!')) {
-                    shebangIndex = i
-                } else if (line.trim().startsWith('#PBS -l select=')) {
-                    line = select
-                    selectUpdated = true
-                }
-
-                updatedLines.push(line)
-            }
-
-            if (!selectUpdated) {
-                if (shebangIndex >= 0) {
-                    updatedLines.splice(shebangIndex + 1, 0, select, '# Added by IDEA Web Portal')
-                } else {
-                    updatedLines.splice(0, 0, select, '# Added by IDEA Web Portal')
-                }
-            }
-
-            jobScript = updatedLines.join('\n')
-
-            // begin parameter replacement
             if (this.state.application?.job_script_type && this.state.application?.job_script_type === 'jinja2') {
-                return nunjucks.renderString(jobScript, values)
+                jobScript = nunjucks.renderString(jobScript, values)
             } else {
                 jobScript = jobScript.replaceAll(`%project_name%`, values.project_name)
                 params.forEach((param) => {
@@ -1328,7 +1629,8 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                 })
             }
 
-            return jobScript
+            // chunk resources authored in the template (mpiprocs, mem, place, ...) are preserved
+            return updateJobScriptSelect(jobScript, nodeCount, cpusPerInstance)
         })
     }
 
@@ -1340,6 +1642,7 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                         errorCode: 'SUBMIT_JOB_FAILED',
                         message: 'Failed to generate job submission script'
                     }))
+                    return
                 }
                 this.updateUrlState()
                 this.setState({
@@ -1349,10 +1652,14 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                         project: this.state.selectedProject?.value,
                         dry_run: dryRun,
                         job_script_interpreter: this.state.application?.job_script_interpreter,
-                        job_script: btoa(jobScript)
+                        job_script: btoa(jobScript),
+                        client_submission_id: this.state.clientSubmissionId
                     }).then(result => {
                         this.setState({
-                            submitJobResult: result
+                            submitJobResult: result,
+                            // the id only rotates once a job is queued, so a retry after a failure
+                            // returns the first result instead of submitting the job again.
+                            clientSubmissionId: (!dryRun && Utils.asBoolean(result.accepted)) ? uuid() : this.state.clientSubmissionId
                         }, () => {
                             resolve({})
                         })
@@ -1399,6 +1706,7 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                     <div>
                         {this.buildApplicationSelectModal()}
                         {this.buildJobTemplatesSelectionModal()}
+                        {this.buildJobSizeConfirmModal()}
                         {this.state.showSaveJobTemplatesModal && this.buildSaveJobTemplateForm()}
                         <Container className={"hpc-submit-job"}>
                             <Tabs

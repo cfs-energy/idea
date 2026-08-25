@@ -5,14 +5,7 @@ GDM_CONFIG_RHEL_PATH="/etc/gdm/custom.conf"
 GDM_CONFIG_DEBIAN_PATH="/etc/gdm3/custom.conf"
 
 DCV_GPG_KEY_DCV_SERVER="{{ context.config.get_string('global-settings.package_config.dcv.gpg_key', required=True) }}"
-{% if context.base_os in ('amazonlinux2',) %}
-DCV_SERVER_X86_64_URL="{{ context.config.get_string('global-settings.package_config.dcv.x86_64.linux.al2.url', required=True) }}"
-DCV_SERVER_X86_64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.x86_64.linux.al2.sha256sum', required=True) }}"
-
-DCV_SERVER_AARCH64_URL="{{ context.config.get_string('global-settings.package_config.dcv.aarch64.linux.al2.url', required=True) }}"
-DCV_SERVER_AARCH64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.aarch64.linux.al2.sha256sum', required=True) }}"
-
-{% elif context.base_os in ('amazonlinux2023',) %}
+{% if context.base_os in ('amazonlinux2023',) %}
 DCV_SERVER_X86_64_URL="{{ context.config.get_string('global-settings.package_config.dcv.x86_64.linux.al2023.url', required=True) }}"
 DCV_SERVER_X86_64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.x86_64.linux.al2023.sha256sum', required=True) }}"
 
@@ -51,27 +44,23 @@ DCV_SERVER_AARCH64_SHA256_HASH="{{ context.config.get_string('global-settings.pa
 log_info "Installing GPU drivers"
 {% if context.is_gpu_instance_type() %}
   sudo rm -rf /etc/X11/XF86Config*
-     {% with node_type = 'dcv' %}
-     {% include '_templates/linux/gpu_drivers.jinja2' %}
-     {% endwith %}
-{% else %}
-  log_info "GPU InstanceType not detected. Skipping GPU driver installation."
 {% endif %}
+{# always included: the template verifies the detected gpu hardware has a driver, gpu instance type or not #}
+{% with node_type = 'dcv' %}
+{% include '_templates/linux/gpu_drivers.jinja2' %}
+{% endwith %}
 
 {% if not context.is_gpu_instance_type() and context.vars.session.type.lower() == 'console' %}
      {% include '_templates/linux/x_dummy_driver.jinja2' %}
 install_x_dummy_driver
 {% endif %}
 
-{% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+{% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
 if [[ -z "$(rpm -qa gnome-terminal)" ]]; then
 {% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
 if [[ -z "$(dpkg -l gnome-terminal | grep ^ii)" ]]; then
 {% endif %}
-{% if context.base_os in ('amazonlinux2',) %}
-  DCV_AMAZONLINUX_PKGS=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.dcv_amazonlinux', required=True)) }})
-  yum install -y $(echo ${DCV_AMAZONLINUX_PKGS[*]})
-{% elif context.base_os in ('amazonlinux2023',) %}
+{% if context.base_os in ('amazonlinux2023',) %}
   dnf groupinstall "Desktop" -y
   dnf install -y xsetroot
 {% elif context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
@@ -127,7 +116,7 @@ else
   log_info "Found window manager pre-installed... skipping dcv prereq installation..."
 fi
 
-{% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+{% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
 rpm --import ${DCV_GPG_KEY_DCV_SERVER}
 {% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
 curl -fsSL "${DCV_GPG_KEY_DCV_SERVER}" | gpg --dearmor | sudo tee /usr/share/keyrings/dcv.gpg > /dev/null
@@ -146,7 +135,7 @@ else
   DCV_SERVER_SHA256_HASH=${DCV_SERVER_AARCH64_SHA256_HASH}
 fi
 
-{% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+{% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
 if [[ -z "$(rpm -qa nice-dcv-server)" ]]; then
 {% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
 if [[ -z "$(dpkg -l nice-dcv-server | grep ^ii)" ]]; then
@@ -212,7 +201,7 @@ fi
     return 1
   }
 
-  {% if context.base_os in ('amazonlinux2', 'amazonlinux2023') %}
+  {% if context.base_os in ('amazonlinux2023',) %}
     install_rpm_with_retry "nice-xdcv-*.${machine}.rpm" ""
     install_rpm_with_retry "nice-dcv-server-*.${machine}.rpm" ""
     install_rpm_with_retry "nice-dcv-web-viewer-*.${machine}.rpm" ""

@@ -1,18 +1,10 @@
 # Begin: FSx Lustre Client
 
-# Kernel management is now handled separately by set_kernel.jinja2
-# Removed check_kernel_update function - no longer needed
+# Kernel management is handled separately by set_kernel.jinja2.
 
-{% if context.base_os == 'amazonlinux2' %}
-if [[ -z "$(rpm -qa lustre-client)" ]]; then
-  # Check if kernel update is pending
-  check_kernel_update || amazon-linux-extras install -y lustre
-fi
-{% endif %}
 {% if context.base_os == 'amazonlinux2023' %}
 if [[ -z "$(rpm -qa lustre-client)" ]]; then
-  # Check if kernel update is pending
-  check_kernel_update || dnf install -y lustre-client
+  dnf install -y lustre-client
 fi
 {% endif %}
 {% if context.base_os in ('rhel8', 'rocky8') %}
@@ -102,6 +94,33 @@ if [[ -z "$(rpm -qa lustre-client)" ]]; then
     fi
 fi
 {% endif %}
+{% if context.base_os in ('rhel10', 'rocky10') %}
+{# The FSx for Lustre repo publishes el/10 (=10.2) and el/10.1 for x86_64 and aarch64
+   (lustre client 2.15.6). EL 10.0 (kernel 6.12.0-55*) has no client build. The el/10
+   .repo file sets gpgcheck=1 but carries no gpgkey= line, so the explicit rpm --import
+   below is required even though the AWS install doc omits it. Note: EL10 clients cannot
+   mount Lustre 2.10/2.12 filesystems - new scratch filesystems default to 2.15, but an
+   imported pre-2.15 filesystem will not mount from these nodes. #}
+if [[ -z "$(rpm -qa lustre-client)" ]]; then
+  kernel=$(uname -r)
+  machine=$(uname -m)
+  log_info "Found kernel version: $kernel running on: $machine"
+  if [[ $kernel == 6.12.0-211* || $kernel == 6.12.0-124* ]]; then
+    curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
+    sudo rpm --import /tmp/fsx-rpm-public-key.asc
+    sudo curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/10/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
+    if [[ $kernel == 6.12.0-124* ]]; then
+      # 6.12.0-124* is the EL 10.1 kernel series; el/10 targets 10.2 (6.12.0-211*)
+      sudo sed -i 's#10#10.1#' /etc/yum.repos.d/aws-fsx.repo
+    fi
+    sudo yum clean all
+    sudo yum install -y kmod-lustre-client lustre-client
+    set_reboot_required "FSx for Lustre client installed"
+  else
+    log_error "Can't install FSx for Lustre client: kernel version $kernel does not match a supported series (6.12.0-211* for EL 10.2, 6.12.0-124* for EL 10.1). EL 10.0 has no FSx Lustre client - use a 10.1 or 10.2 AMI."
+  fi
+fi
+{% endif %}
 {% if context.base_os in ('rhel9', 'rocky9') %}
 if [[ -z "$(rpm -qa lustre-client)" ]]; then
   # Check current kernel version first
@@ -110,17 +129,13 @@ if [[ -z "$(rpm -qa lustre-client)" ]]; then
   log_info "Found kernel version: $kernel running on: $machine"
 
   # Only update kernel if not already on a supported version
-  if [[ ! ($kernel == *"5.14.0-427"*$machine || $kernel == *"5.14.0-362"*$machine || $kernel == *"5.14.0-70"*$machine || $kernel == *"5.14.0-503"*$machine || $kernel == *"5.14.0-570"*$machine || $kernel == *"5.14.0-611"*$machine) ]]; then
+  if [[ ! ($kernel == *"5.14.0-427"*$machine || $kernel == *"5.14.0-362"*$machine || $kernel == *"5.14.0-70"*$machine || $kernel == *"5.14.0-503"*$machine || $kernel == *"5.14.0-570"*$machine || $kernel == *"5.14.0-611"*$machine || $kernel == *"5.14.0-687"*$machine) ]]; then
     log_info "Current kernel is not a supported version for FSx Lustre. Updating kernel..."
     yum install -y kernel kernel-devel
   else
     log_info "Current kernel version $kernel is supported for FSx Lustre. Skipping kernel update."
   fi
 
-  # Check if kernel update is pending
-  if check_kernel_update; then
-    log_info "Skipping Lustre client installation until after reboot for kernel update"
-  else
     kernel=$(uname -r)
     machine=$(uname -m)
     log_info "Found kernel version: $kernel running on: $machine"
@@ -172,11 +187,26 @@ if [[ -z "$(rpm -qa lustre-client)" ]]; then
       sudo yum clean all
       sudo yum install -y kmod-lustre-client lustre-client
       set_reboot_required "FSx for Lustre client installed"
+    elif [[ $kernel == *"5.14.0-687"*$machine ]]; then
+      # EL 9.8 kernel series; ami_update.py's de-staled RHEL-9.*/Rocky-9.* patterns
+      # resolve to 9.8 AMIs once published, so this arm must exist before they do
+      curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
+      sudo rpm --import /tmp/fsx-rpm-public-key.asc
+      sudo curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/9/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
+      sudo sed -i 's#9#9.8#' /etc/yum.repos.d/aws-fsx.repo
+      sudo yum clean all
+      sudo yum install -y kmod-lustre-client lustre-client
+      set_reboot_required "FSx for Lustre client installed"
     else
-      log_error "Can't install FSx for Lustre client as kernel version $kernel isn't matching expected versions: (x86_64: 5.14.0-70, -362, -427, -503, -570, -611)!"
+      log_error "Can't install FSx for Lustre client as kernel version $kernel isn't matching expected versions: (x86_64: 5.14.0-70, -362, -427, -503, -570, -611, -687)!"
     fi
-  fi
 fi
+{% endif %}
+{% if context.base_os == 'ubuntu2604' %}
+{# The FSx for Lustre ubuntu repo publishes no 'resolute' suite and no lustre-client-modules
+   for the 7.0.0-*-aws ABI, so adding ubuntu2604 below would write a permanently 404ing apt
+   source. Re-add it only once that suite carries modules for the resolute linux-aws ABI. #}
+log_error "FSx for Lustre client is not available for Ubuntu 26.04: the FSx client repo publishes no 'resolute' suite and no modules for the 7.0 kernel. Lustre filesystems will NOT be mounted on this node."
 {% endif %}
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
   if [[ -z "$(dpkg -l lustre-client-utils | grep ^ii)" ]]; then
@@ -188,8 +218,9 @@ fi
       set_reboot_required "FSx for Lustre client installed"
       log_info "FSx Lustre client installed successfully"
     else
-      log_error "Failed to install FSx Lustre client - dpkg may be interrupted"
-      return 1
+      # no top-level `return`: this template is included at script scope, where
+      # bash rejects `return` with an error and continues anyway
+      log_error "Failed to install FSx Lustre client - dpkg may be interrupted. Lustre filesystems will NOT be mounted on this node."
     fi
   else
     log_info "Lustre Client Already Installed"

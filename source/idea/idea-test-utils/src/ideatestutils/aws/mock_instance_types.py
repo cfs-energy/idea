@@ -16,7 +16,16 @@ from ideadatamodel import exceptions, errorcodes
 
 from typing import List
 
-MOCK_INSTANCE_TYPES = ['t3.micro', 'c5.large', 'c5.xlarge', 'c5n.18xlarge']
+MOCK_INSTANCE_TYPES = [
+    't3.micro',
+    'c5.large',
+    'c5.xlarge',
+    'c5n.18xlarge',
+    'g4dn.xlarge',
+    'g5.xlarge',
+    'hpc7a.96xlarge',
+    'hpc7g.16xlarge',
+]
 
 
 class MockInstanceTypes:

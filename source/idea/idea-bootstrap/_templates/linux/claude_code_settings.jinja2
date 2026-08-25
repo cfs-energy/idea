@@ -1,0 +1,116 @@
+# Begin: claude code defaults
+{% if context.vars.bedrock_env %}
+# Seeded as *user* settings: managed settings cannot be overridden and these are meant to be.
+mkdir -p /etc/idea
+cat > /etc/idea/claude-code-defaults.json <<'IDEA_CLAUDE_DEFAULTS'
+{
+  "outputStyle": {{ context.vars.claude_code_output_style | tojson }},
+{% if context.vars.claude_code_permission_mode %}  "permissions": {
+    "defaultMode": {{ context.vars.claude_code_permission_mode | tojson }}
+  },
+{% endif %}  "autoMode": {
+    "environment": [
+{% for entry in context.vars.auto_mode_environment %}      {{ entry | tojson }}{{ "," if not loop.last }}
+{% endfor %}    ]
+  }
+}
+IDEA_CLAUDE_DEFAULTS
+chmod 0644 /etc/idea/claude-code-defaults.json
+
+# Home directories roam between desktops, so "write the file if it is missing" only ever fires once
+# per user. This adds the keys a user has never been offered and leaves everything else alone: a key
+# they deleted stays deleted, because seeded paths are recorded.
+cat > /etc/idea/seed-claude-code-settings.py <<'IDEA_CLAUDE_SEED'
+import json
+import os
+import sys
+
+DEFAULTS = '/etc/idea/claude-code-defaults.json'
+SEEDED_PATHS = ('outputStyle', 'permissions.defaultMode', 'autoMode.environment')
+
+
+def read(path, fallback):
+    try:
+        with open(path) as handle:
+            return json.load(handle)
+    except Exception:
+        return fallback
+
+
+def get(tree, path):
+    node = tree
+    for part in path.split('.'):
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    return node
+
+
+def put(tree, path, value):
+    parts = path.split('.')
+    node = tree
+    for part in parts[:-1]:
+        if not isinstance(node.get(part), dict):
+            node[part] = {}
+        node = node[part]
+    node[parts[-1]] = value
+
+
+def main():
+    defaults = read(DEFAULTS, None)
+    if not isinstance(defaults, dict):
+        return 0
+
+    home = os.environ.get('HOME') or os.path.expanduser('~')
+    settings_path = os.path.join(home, '.claude', 'settings.json')
+    marker_path = os.path.join(home, '.claude', '.idea-seeded')
+
+    settings = read(settings_path, {})
+    if not isinstance(settings, dict):
+        return 0
+    already = read(marker_path, [])
+    if not isinstance(already, list):
+        already = []
+
+    added = []
+    for path in SEEDED_PATHS:
+        value = get(defaults, path)
+        if value is None:
+            continue
+        if path in already:
+            continue  # offered before; if it is gone the user removed it
+        if get(settings, path) is not None:
+            already.append(path)  # user already has their own, never touch it
+            continue
+        put(settings, path, value)
+        already.append(path)
+        added.append(path)
+
+    os.makedirs(os.path.dirname(settings_path), exist_ok=True)
+    if added:
+        # replaced rather than rewritten in place: a partial write would leave the user
+        # without the settings file they had.
+        tmp_path = settings_path + '.tmp'
+        with open(tmp_path, 'w') as handle:
+            json.dump(settings, handle, indent=2)
+        os.replace(tmp_path, settings_path)
+    # written last, so the marker never records keys that did not reach the settings file.
+    with open(marker_path, 'w') as handle:
+        json.dump(sorted(set(already)), handle)
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
+IDEA_CLAUDE_SEED
+chmod 0644 /etc/idea/seed-claude-code-settings.py
+
+cat > /etc/profile.d/idea-claude-code.sh <<'IDEA_CLAUDE_PROFILE'
+# IDEA adds Claude Code defaults it has not offered you before. It never changes a setting you set,
+# and a key you delete stays deleted. See ~/.claude/.idea-seeded for what it has offered.
+# root and the system accounts below uid 1000 are skipped: nothing is seeded into their homes.
+[ -r /etc/idea/seed-claude-code-settings.py ] && [ "$(id -u)" -ge 1000 ] && python3 /etc/idea/seed-claude-code-settings.py >/dev/null 2>&1
+IDEA_CLAUDE_PROFILE
+chmod 0644 /etc/profile.d/idea-claude-code.sh
+{% endif %}
+# End: claude code defaults

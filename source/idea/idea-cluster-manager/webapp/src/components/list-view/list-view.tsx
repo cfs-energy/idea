@@ -13,6 +13,7 @@
 
 import React, {Component} from "react";
 import {
+    Box,
     Button,
     ButtonDropdown,
     DateRangePicker,
@@ -20,7 +21,8 @@ import {
     Flashbar,
     FlashbarProps,
     Header, PropertyFilterProps,
-    SpaceBetween
+    SpaceBetween,
+    Toggle
 } from "@cloudscape-design/components";
 import {ButtonDropdownProps} from "@cloudscape-design/components/button-dropdown/interfaces";
 import IdeaTable, {IdeaTableRef} from "../table";
@@ -29,6 +31,10 @@ import {NonCancelableEventHandler} from "@cloudscape-design/components/internal/
 import {SocaDateRange, SocaFilter, SocaListingPayload, SocaPaginator, SocaUserInputParamMetadata} from "../../client/data-model";
 import Utils from "../../common/utils";
 import {CollectionPreferencesProps} from "@cloudscape-design/components/collection-preferences/interfaces";
+
+// the backing list calls contend with server-side locks, so a poll can never be
+// faster than this no matter what a caller asks for
+export const MIN_AUTO_REFRESH_INTERVAL_SECONDS = 30
 
 export interface IdeaListViewAction {
     id: string
@@ -51,6 +57,9 @@ export interface IdeaListViewProps<T = any> {
     selectedItems?: T[]
     selectionType?: TableProps.SelectionType
     onFetchRecords?: () => Promise<SocaListingPayload>
+    // called after every successful fetch, once the selection has been cleared,
+    // so the page can reconcile anything it tracks against the new listing
+    onRecordsFetched?: (listing: T[]) => void
     showPreferences?: boolean
     onPreferenceChange?: (detail: CollectionPreferencesProps.Preferences<T>) => void
     preferencesKey?: string
@@ -82,6 +91,8 @@ export interface IdeaListViewProps<T = any> {
     enableExportToCsv?: boolean;
     csvFilename?: string | (() => string);
     onExportAllRecords?: () => Promise<any[]>;
+    showLastRefreshed?: boolean;
+    enableAutoRefresh?: boolean;
 }
 
 export interface IdeaListViewState<T = any> {
@@ -92,6 +103,8 @@ export interface IdeaListViewState<T = any> {
     currentPage: number
     totalPages: number
     dateRangePickerValue?: DateRangePickerProps.Value
+    lastRefreshedAt?: Date
+    autoRefresh: boolean
 
     listingRequest: IdeaListingRequestType
 }
@@ -106,7 +119,8 @@ export interface IdeaListingRequestType {
 
 class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
 
-    table: React.RefObject<IdeaTableRef>
+    table: React.RefObject<IdeaTableRef | null>
+    private autoRefreshTimer?: ReturnType<typeof setInterval>
 
     constructor(props: IdeaListViewProps) {
         super(props);
@@ -119,6 +133,7 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
             flashBarItems: [],
             currentPage: 1,
             totalPages: 1,
+            autoRefresh: false,
             dateRangePickerValue: this.props.dateRange,
             listingRequest: {
                 filters: this.defaultFilters(),
@@ -182,6 +197,13 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
         return null
     }
 
+    setSelectedItems(items: any[]) {
+        this.table.current?.setSelectedItems(items)
+        this.setState({
+            selectedItems: items
+        })
+    }
+
     isAnySelected(): boolean {
         return this.state.selectedItems.length > 0
     }
@@ -205,7 +227,51 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
     }
 
     componentDidMount() {
+        document.addEventListener('visibilitychange', this.onVisibilityChange)
         this.fetchRecords()
+    }
+
+    componentWillUnmount() {
+        document.removeEventListener('visibilitychange', this.onVisibilityChange)
+        this.stopAutoRefresh()
+    }
+
+    isAutoRefreshEnabled(): boolean {
+        return this.props.enableAutoRefresh === true
+    }
+
+    private onVisibilityChange = () => {
+        if (document.hidden) {
+            this.stopAutoRefresh()
+        } else if (this.state.autoRefresh) {
+            this.startAutoRefresh()
+        }
+    }
+
+    private startAutoRefresh() {
+        this.stopAutoRefresh()
+        this.autoRefreshTimer = setInterval(() => {
+            // never stack a request on one already in flight, and stay off the
+            // backend entirely while the tab is in the background
+            if (this.state.loading || document.hidden) {
+                return
+            }
+            this.fetchRecords()
+        }, MIN_AUTO_REFRESH_INTERVAL_SECONDS * 1000)
+    }
+
+    private stopAutoRefresh() {
+        if (this.autoRefreshTimer != null) {
+            clearInterval(this.autoRefreshTimer)
+            this.autoRefreshTimer = undefined
+        }
+    }
+
+    getLastRefreshedLabel(): string {
+        if (this.state.lastRefreshedAt == null) {
+            return 'Loading...'
+        }
+        return `Last updated ${this.state.lastRefreshedAt.toLocaleTimeString()}`
     }
 
     fetchRecords() {
@@ -221,6 +287,9 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
                     this.setState({
                         selectedItems: [],
                         listing: listing,
+                        // stamped on success only: a failed refresh must not make
+                        // the data on screen look newer than it is
+                        lastRefreshedAt: new Date(),
                         listingRequest: {
                             ...this.state.listingRequest,
                             ...result,
@@ -228,7 +297,14 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
                             paginator: (result.paginator) ? result.paginator : this.defaultPaginator(),
                             dateRange: (result.date_range) ? result.date_range : this.defaultDateRange()
                         }
+                    }, () => {
+                        if (this.props.onRecordsFetched) {
+                            this.props.onRecordsFetched(listing)
+                        }
                     })
+                }).catch((error) => {
+                    // leaves the previous listing and its last-updated time in place
+                    console.error('Failed to fetch records:', error)
                 }).finally(() => {
                     this.setState({
                         loading: false
@@ -406,7 +482,28 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
         return (
             <SpaceBetween direction="horizontal"
                           size="xs">
-                {this.props.onRefresh && <Button variant="normal" iconName="refresh" onClick={() => {
+                {this.props.showLastRefreshed &&
+                    <Box variant="small" color="text-status-inactive" padding={{top: 'xs'}}>
+                        {this.getLastRefreshedLabel()}
+                    </Box>}
+                {this.isAutoRefreshEnabled() &&
+                    <Box padding={{top: 'xs'}}>
+                        <Toggle checked={this.state.autoRefresh}
+                                onChange={(event) => {
+                                    this.setState({
+                                        autoRefresh: event.detail.checked
+                                    }, () => {
+                                        if (this.state.autoRefresh) {
+                                            this.startAutoRefresh()
+                                        } else {
+                                            this.stopAutoRefresh()
+                                        }
+                                    })
+                                }}>
+                            {`Auto refresh every ${MIN_AUTO_REFRESH_INTERVAL_SECONDS}s`}
+                        </Toggle>
+                    </Box>}
+                {this.props.onRefresh && <Button variant="normal" iconName="refresh" ariaLabel="Refresh" onClick={() => {
                     if (this.props.onRefresh) {
                         this.props.onRefresh()
                     }
@@ -731,7 +828,7 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
     /**
      * Attempt to extract text from a React element for CSV export
      */
-    private extractTextFromReactElement(element: React.ReactElement): string {
+    private extractTextFromReactElement(element: React.ReactElement<any>): string {
         // Simple implementation to extract text from React elements
         if (!element) return '';
 

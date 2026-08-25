@@ -186,9 +186,10 @@ def cdk_nag_scan(c, cluster_name, aws_region, aws_profile=None, module_name=None
             cluster_cdk_dir = ideaadministrator.props.cluster_cdk_dir(
                 cluster_name=cluster_name, aws_region=aws_region
             )
+            # cdk synth writes to the per-module output directory (CdkInvoker: --output cdk.out.<module_id>)
             report_file = os.path.join(
                 cluster_cdk_dir,
-                'cdk.out',
+                f'cdk.out.{module_id}',
                 f'AwsSolutions-{cluster_name}-{module_id}-NagReport.csv',
             )
 

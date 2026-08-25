@@ -22,12 +22,7 @@ import 'react-toastify/dist/ReactToastify.css';
 import {AppContext} from "./common";
 import Utils from "./common/utils";
 import * as serviceWorkerRegistration from './service-worker-registration'
-import {ChonkyIconFA} from "@aperturerobotics/chonky-icon-fontawesome";
 import AppLogger from "./common/app-logger";
-
-import {setChonkyDefaults} from "@aperturerobotics/chonky";
-
-setChonkyDefaults({iconComponent: ChonkyIconFA})
 
 declare global {
     interface Window {

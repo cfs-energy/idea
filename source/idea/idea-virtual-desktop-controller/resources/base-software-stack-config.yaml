@@ -1,186 +1,3 @@
-amazonlinux2:
-  arm64:
-    default-description: 'Amazon Linux 2 - arm64'
-    default-min-ram-unit: gb
-    default-min-ram-value: 4
-    default-min-storage-unit: gb
-    default-min-storage-value: 20
-    default-name: 'Amazon Linux 2 - arm64'
-    af-south-1:
-      - ami-id: ami-0a2585b4ca52b94d1
-        ss-id-suffix: base
-    ap-east-1:
-      - ami-id: ami-08ecfca52712e5d32
-        ss-id-suffix: base
-    ap-northeast-1:
-      - ami-id: ami-006274d53c9358f5e
-        ss-id-suffix: base
-    ap-northeast-2:
-      - ami-id: ami-0339ef5690bd7caaf
-        ss-id-suffix: base
-    ap-northeast-3:
-      - ami-id: ami-0916e85f3d35f65cc
-        ss-id-suffix: base
-    ap-south-1:
-      - ami-id: ami-071b05da762ccc22e
-        ss-id-suffix: base
-    ap-south-2:
-      - ami-id: ami-0e4dea1171c0deeeb
-        ss-id-suffix: base
-    ap-southeast-1:
-      - ami-id: ami-0a62196bff61b9ae1
-        ss-id-suffix: base
-    ap-southeast-2:
-      - ami-id: ami-0e5323f41096dd1df
-        ss-id-suffix: base
-    ap-southeast-3:
-      - ami-id: ami-091235c964ef5d62a
-        ss-id-suffix: base
-    ap-southeast-4:
-      - ami-id: ami-09f51262b343502e5
-        ss-id-suffix: base
-    ca-central-1:
-      - ami-id: ami-0c8285a6b92ed295d
-        ss-id-suffix: base
-    eu-central-1:
-      - ami-id: ami-06ffe8f656279e7ce
-        ss-id-suffix: base
-    eu-central-2:
-      - ami-id: ami-008bc6ef501284c20
-        ss-id-suffix: base
-    eu-north-1:
-      - ami-id: ami-0914c5a39ca276f0d
-        ss-id-suffix: base
-    eu-south-1:
-      - ami-id: ami-0d6c9a3cd5dd24b3f
-        ss-id-suffix: base
-    eu-south-2:
-      - ami-id: ami-0e6570b491ce43d87
-        ss-id-suffix: base
-    eu-west-1:
-      - ami-id: ami-04c55c52a976524b1
-        ss-id-suffix: base
-    eu-west-2:
-      - ami-id: ami-03292d9f4fa62b337
-        ss-id-suffix: base
-    eu-west-3:
-      - ami-id: ami-00838d5c3adb200d2
-        ss-id-suffix: base
-    me-central-1:
-      - ami-id: ami-07ee47101b78e83a6
-        ss-id-suffix: base
-    me-south-1:
-      - ami-id: ami-0f7b77460abeb015b
-        ss-id-suffix: base
-    sa-east-1:
-      - ami-id: ami-0114d06552760da4b
-        ss-id-suffix: base
-    us-east-1:
-      - ami-id: ami-0de1a3fc027903221
-        ss-id-suffix: base
-    us-east-2:
-      - ami-id: ami-015a4889e1ec77b63
-        ss-id-suffix: base
-    us-gov-west-1:
-      - ami-id: ami-078705f452e7927cf
-        ss-id-suffix: base
-    us-west-1:
-      - ami-id: ami-0d37ad4aefbf11690
-        ss-id-suffix: base
-    us-west-2:
-      - ami-id: ami-0211de8982bbf4738
-        ss-id-suffix: base
-  x86-64:
-    default-description: 'Amazon Linux 2 - x86_64'
-    default-min-ram-unit: gb
-    default-min-ram-value: 4
-    default-min-storage-unit: gb
-    default-min-storage-value: 20
-    default-name: 'Amazon Linux 2 - x86_64'
-    af-south-1:
-      - ami-id: ami-04c8e1aa34b989992
-        ss-id-suffix: base
-    ap-east-1:
-      - ami-id: ami-09e664c1cd4511db5
-        ss-id-suffix: base
-    ap-northeast-1:
-      - ami-id: ami-06315a16484d67634
-        ss-id-suffix: base
-    ap-northeast-2:
-      - ami-id: ami-039fbed7056a2b165
-        ss-id-suffix: base
-    ap-northeast-3:
-      - ami-id: ami-070bf14e6b2c1b2f4
-        ss-id-suffix: base
-    ap-south-1:
-      - ami-id: ami-0478c83d13a37ada6
-        ss-id-suffix: base
-    ap-south-2:
-      - ami-id: ami-046ab5720304b7d6a
-        ss-id-suffix: base
-    ap-southeast-1:
-      - ami-id: ami-08a02fb69cb230901
-        ss-id-suffix: base
-    ap-southeast-2:
-      - ami-id: ami-03cd39a56bc429c77
-        ss-id-suffix: base
-    ap-southeast-3:
-      - ami-id: ami-048ae70caf91ab598
-        ss-id-suffix: base
-    ap-southeast-4:
-      - ami-id: ami-039a563d7e6f463bb
-        ss-id-suffix: base
-    ca-central-1:
-      - ami-id: ami-00774b6fb10bc333d
-        ss-id-suffix: base
-    eu-central-1:
-      - ami-id: ami-0bf973d5da082bbfc
-        ss-id-suffix: base
-    eu-central-2:
-      - ami-id: ami-09b18fd7bfd99cca0
-        ss-id-suffix: base
-    eu-north-1:
-      - ami-id: ami-0692f803ff39aca48
-        ss-id-suffix: base
-    eu-south-1:
-      - ami-id: ami-02ede56d37a57cfc7
-        ss-id-suffix: base
-    eu-south-2:
-      - ami-id: ami-0e344a69ab0e19a66
-        ss-id-suffix: base
-    eu-west-1:
-      - ami-id: ami-00aef265a2ba791ad
-        ss-id-suffix: base
-    eu-west-2:
-      - ami-id: ami-05b16ea36df9c45a9
-        ss-id-suffix: base
-    eu-west-3:
-      - ami-id: ami-01a24651a50a4e6ef
-        ss-id-suffix: base
-    me-central-1:
-      - ami-id: ami-01ac948ef4290bf89
-        ss-id-suffix: base
-    me-south-1:
-      - ami-id: ami-08c095377062fd334
-        ss-id-suffix: base
-    sa-east-1:
-      - ami-id: ami-07dae1e87346cf162
-        ss-id-suffix: base
-    us-east-1:
-      - ami-id: ami-0c713bebb27813cec
-        ss-id-suffix: base
-    us-east-2:
-      - ami-id: ami-01fc6397ad6936b6e
-        ss-id-suffix: base
-    us-gov-west-1:
-      - ami-id: ami-0c8cca7741249023e
-        ss-id-suffix: base
-    us-west-1:
-      - ami-id: ami-00030a0c00dae5e52
-        ss-id-suffix: base
-    us-west-2:
-      - ami-id: ami-00a61c67562abcf87
-        ss-id-suffix: base
 amazonlinux2023:
   arm64:
     default-description: 'Amazon Linux 2023 - arm64'
@@ -1333,72 +1150,72 @@ windows2019:
     default-min-storage-value: 40
     default-name: 'Windows 2019 - x86_64'
     af-south-1:
-      - ami-id: ami-0dbe8150fd249e626
+      - ami-id: ami-0b285f8331867d6d1
         description: Windows 2019
         name: Windows 2019
         ss-id-suffix: base
     ap-east-1:
-      - ami-id: ami-079ee1649117aa3ac
+      - ami-id: ami-0377b6eac80fd5ecf
         description: Windows 2019
         name: Windows 2019
         ss-id-suffix: base
     ap-northeast-1:
-      - ami-id: ami-0efbe768263af5d10
+      - ami-id: ami-09da370958b0fbab5
         description: Windows 2019
         name: Windows 2019
         ss-id-suffix: base
     ap-northeast-2:
-      - ami-id: ami-0d52ee09942a6aa59
+      - ami-id: ami-044fc53c69efedf16
         description: Windows 2019
         name: Windows 2019
         ss-id-suffix: base
     ap-south-1:
-      - ami-id: ami-0e4a35fed5861133f
+      - ami-id: ami-05eae3f8305fcd10a
         description: Windows 2019
         name: Windows 2019
         ss-id-suffix: base
     ap-southeast-1:
-      - ami-id: ami-030aa2cf26fd3fcab
+      - ami-id: ami-0369417f27b9cc9f9
         description: Windows 2019
         name: Windows 2019
         ss-id-suffix: base
     ap-southeast-2:
-      - ami-id: ami-03b101f0b89adf2eb
+      - ami-id: ami-0fcc6b5f7f1f72e97
         description: Windows 2019
         name: Windows 2019
         ss-id-suffix: base
     ca-central-1:
-      - ami-id: ami-0ef324e4cd8d97875
+      - ami-id: ami-06622bd215555506e
         description: Windows 2019
         name: Windows 2019
         ss-id-suffix: base
     eu-central-1:
-      - ami-id: ami-0852a4ffb1d7b687f
+      - ami-id: ami-07e92474d60421a81
         description: Windows 2019
         name: Windows 2019
         ss-id-suffix: base
     eu-north-1:
-      - ami-id: ami-05685a907dd80d96c
+      - ami-id: ami-0446abd1748fa7634
         description: Windows 2019
         name: Windows 2019
         ss-id-suffix: base
     eu-south-1:
-      - ami-id: ami-066c633f7d1799cc5
+      - ami-id: ami-04dac1b954016ec27
         description: Windows 2019
         name: Windows 2019
         ss-id-suffix: base
     eu-west-1:
-      - ami-id: ami-05f66f1b481368355
+      - ami-id: ami-00e3e991942dd0a78
         description: Windows 2019
         name: Windows 2019
         ss-id-suffix: base
     eu-west-2:
-      - ami-id: ami-0dfb58a0ca05ad98f
+      - ami-id: ami-01e66df1b14bd3b4c
         description: Windows 2019
         name: Windows 2019
         ss-id-suffix: base
     eu-west-3:
-      - ami-id: ami-0a4c1700182f3bc09
+      - ami-id: ami-019e6716ce5dbfdef
         description: Windows 2019
         name: Windows 2019
         ss-id-suffix: base
@@ -1408,27 +1225,27 @@ windows2019:
         name: Windows 2019
         ss-id-suffix: base
     sa-east-1:
-      - ami-id: ami-08a1f648be13145cb
+      - ami-id: ami-00e308660a905cfd6
         description: Windows 2019
         name: Windows 2019
         ss-id-suffix: base
     us-east-1:
-      - ami-id: ami-07ef6937cf3893b6b
+      - ami-id: ami-07fede2e6cf6d7f22
         description: Windows 2019
         name: Windows 2019
         ss-id-suffix: base
     us-east-2:
-      - ami-id: ami-0e1b92804ef3c49af
+      - ami-id: ami-04b3c29ef501ff4ce
         description: Windows 2019
         name: Windows 2019
         ss-id-suffix: base
     us-west-1:
-      - ami-id: ami-05aa30cc35d4f4e78
+      - ami-id: ami-0ade205aff65b3506
         description: Windows 2019
         name: Windows 2019
         ss-id-suffix: base
     us-west-2:
-      - ami-id: ami-0948bfde6d7c1b495
+      - ami-id: ami-0c8ad6d0e5c9d9297
         description: Windows 2019
         name: Windows 2019
         ss-id-suffix: base
@@ -1446,72 +1263,72 @@ windows2022:
     default-min-storage-value: 40
     default-name: 'Windows 2022 - x86_64'
     af-south-1:
-      - ami-id: ami-0440056477823a750
+      - ami-id: ami-0a8b0b33f5b4ec3c3
         description: Windows 2022
         name: Windows 2022
         ss-id-suffix: base
     ap-east-1:
-      - ami-id: ami-018436cea6e70919d
+      - ami-id: ami-0dfc23ba58a65663c
         description: Windows 2022
         name: Windows 2022
         ss-id-suffix: base
     ap-northeast-1:
-      - ami-id: ami-003132f484ae638fb
+      - ami-id: ami-0411b7a71dc4cd12f
         description: Windows 2022
         name: Windows 2022
         ss-id-suffix: base
     ap-northeast-2:
-      - ami-id: ami-0539d5248d64c47b8
+      - ami-id: ami-006097c6031d9d8f7
         description: Windows 2022
         name: Windows 2022
         ss-id-suffix: base
     ap-south-1:
-      - ami-id: ami-0461fa01e655a4ad6
+      - ami-id: ami-074ed8814cda18d42
         description: Windows 2022
         name: Windows 2022
         ss-id-suffix: base
     ap-southeast-1:
-      - ami-id: ami-03be241adb5d86153
+      - ami-id: ami-03fa40c68655f61e9
         description: Windows 2022
         name: Windows 2022
         ss-id-suffix: base
     ap-southeast-2:
-      - ami-id: ami-0dd05e08aa1cb22a9
+      - ami-id: ami-0d467c7d50af8415d
         description: Windows 2022
         name: Windows 2022
         ss-id-suffix: base
     ca-central-1:
-      - ami-id: ami-0d78daeff2f737316
+      - ami-id: ami-0063473985e3644ec
         description: Windows 2022
         name: Windows 2022
         ss-id-suffix: base
     eu-central-1:
-      - ami-id: ami-032c954118df38cd0
+      - ami-id: ami-09e8e9c7cadc0c5c1
         description: Windows 2022
         name: Windows 2022
         ss-id-suffix: base
     eu-north-1:
-      - ami-id: ami-00da059f43ed8af30
+      - ami-id: ami-0a0b496d17d35b98c
         description: Windows 2022
         name: Windows 2022
         ss-id-suffix: base
     eu-south-1:
-      - ami-id: ami-02876dfd918022bd4
+      - ami-id: ami-07a693d427d6957a3
         description: Windows 2022
         name: Windows 2022
         ss-id-suffix: base
     eu-west-1:
-      - ami-id: ami-03fcec7e979752797
+      - ami-id: ami-076227f0cd30f121f
         description: Windows 2022
         name: Windows 2022
         ss-id-suffix: base
     eu-west-2:
-      - ami-id: ami-07c7ade22c224d6fe
+      - ami-id: ami-0fefc85cd3364e219
         description: Windows 2022
         name: Windows 2022
         ss-id-suffix: base
     eu-west-3:
-      - ami-id: ami-06c7e975fc3d5e67f
+      - ami-id: ami-06a430cd2cfc75d92
         description: Windows 2022
         name: Windows 2022
         ss-id-suffix: base
@@ -1521,27 +1338,27 @@ windows2022:
         name: Windows 2022
         ss-id-suffix: base
     sa-east-1:
-      - ami-id: ami-083cb1c0b5e58b05d
+      - ami-id: ami-05d9e2c25c0749e8f
         description: Windows 2022
         name: Windows 2022
         ss-id-suffix: base
     us-east-1:
-      - ami-id: ami-0159172a5a821bafd
+      - ami-id: ami-040a155879de85e73
         description: Windows 2022
         name: Windows 2022
         ss-id-suffix: base
     us-east-2:
-      - ami-id: ami-08f787888f20cc63c
+      - ami-id: ami-0a6027e5bf7199725
         description: Windows 2022
         name: Windows 2022
         ss-id-suffix: base
     us-west-1:
-      - ami-id: ami-07d1169edc703a15b
+      - ami-id: ami-0598d1557a83697f1
         description: Windows 2022
         name: Windows 2022
         ss-id-suffix: base
     us-west-2:
-      - ami-id: ami-06c51948c651b8e45
+      - ami-id: ami-05eea18612b5be529
         description: Windows 2022
         name: Windows 2022
         ss-id-suffix: base
@@ -1559,72 +1376,72 @@ windows2025:
     default-min-storage-value: 40
     default-name: 'Windows 2025 - x86_64'
     af-south-1:
-      - ami-id: ami-06f014aa9ca67c9aa
+      - ami-id: ami-07793bbd74ac6b19d
         description: Windows 2025
         name: Windows 2025
         ss-id-suffix: base
     ap-east-1:
-      - ami-id: ami-0845e4e7252a8d101
+      - ami-id: ami-04748b8c0da79aaf6
         description: Windows 2025
         name: Windows 2025
         ss-id-suffix: base
     ap-northeast-1:
-      - ami-id: ami-0b51e695d29ce106d
+      - ami-id: ami-0c8c5308226f34f90
         description: Windows 2025
         name: Windows 2025
         ss-id-suffix: base
     ap-northeast-2:
-      - ami-id: ami-045293d19d738a663
+      - ami-id: ami-015ad347d2c73d328
         description: Windows 2025
         name: Windows 2025
         ss-id-suffix: base
     ap-south-1:
-      - ami-id: ami-0ae0093476c7a1da6
+      - ami-id: ami-0bab3e522d0116a53
         description: Windows 2025
         name: Windows 2025
         ss-id-suffix: base
     ap-southeast-1:
-      - ami-id: ami-0fd85f9a5f419db8a
+      - ami-id: ami-0a86a129e8f9b80c9
         description: Windows 2025
         name: Windows 2025
         ss-id-suffix: base
     ap-southeast-2:
-      - ami-id: ami-06bbf8059c35349ab
+      - ami-id: ami-06c1529cd68c0bd49
         description: Windows 2025
         name: Windows 2025
         ss-id-suffix: base
     ca-central-1:
-      - ami-id: ami-0560600f1d3c03b3a
+      - ami-id: ami-04235fd4e87bc592a
         description: Windows 2025
         name: Windows 2025
         ss-id-suffix: base
     eu-central-1:
-      - ami-id: ami-0fc9005ac913da1f6
+      - ami-id: ami-0288c9b131a0c7082
         description: Windows 2025
         name: Windows 2025
         ss-id-suffix: base
     eu-north-1:
-      - ami-id: ami-010e40c6557403885
+      - ami-id: ami-0fde79fc8948d05a2
         description: Windows 2025
         name: Windows 2025
         ss-id-suffix: base
     eu-south-1:
-      - ami-id: ami-0c4f2859a07abb28b
+      - ami-id: ami-09d4ee6823deeae05
         description: Windows 2025
         name: Windows 2025
         ss-id-suffix: base
     eu-west-1:
-      - ami-id: ami-0f4dbc4289c547d4d
+      - ami-id: ami-01a5cf4a00c7d0f3b
         description: Windows 2025
         name: Windows 2025
         ss-id-suffix: base
     eu-west-2:
-      - ami-id: ami-0c7f78741f81ce0c4
+      - ami-id: ami-08a06c03d368d86da
         description: Windows 2025
         name: Windows 2025
         ss-id-suffix: base
     eu-west-3:
-      - ami-id: ami-0b6b0673ea2782973
+      - ami-id: ami-0687d056e05a7ec13
         description: Windows 2025
         name: Windows 2025
         ss-id-suffix: base
@@ -1634,27 +1451,27 @@ windows2025:
         name: Windows 2025
         ss-id-suffix: base
     sa-east-1:
-      - ami-id: ami-0503d11fdab70a85b
+      - ami-id: ami-0cb55530170020dfe
         description: Windows 2025
         name: Windows 2025
         ss-id-suffix: base
     us-east-1:
-      - ami-id: ami-0b4bc1e90f30ca1ec
+      - ami-id: ami-04fca11ec6cc2ddab
         description: Windows 2025
         name: Windows 2025
         ss-id-suffix: base
     us-east-2:
-      - ami-id: ami-0325e1499e14d1d8f
+      - ami-id: ami-05c015dd30433bdb9
         description: Windows 2025
         name: Windows 2025
         ss-id-suffix: base
     us-west-1:
-      - ami-id: ami-0d2835c4b3f78d0ad
+      - ami-id: ami-071247a7ce57f9c10
         description: Windows 2025
         name: Windows 2025
         ss-id-suffix: base
     us-west-2:
-      - ami-id: ami-0c70d556495b25a90
+      - ami-id: ami-031c9f613c7f5fd53
         description: Windows 2025
         name: Windows 2025
         ss-id-suffix: base

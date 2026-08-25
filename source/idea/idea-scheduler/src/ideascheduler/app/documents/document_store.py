@@ -28,10 +28,35 @@ from ideasdk.utils import Utils
 from ideasdk.aws.opensearch.aws_opensearch_client import AwsOpenSearchClient
 
 from ideascheduler.app.app_protocols import DocumentStoreProtocol
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 import arrow
 
 DYNAMIC_CONFIGURATION_KEY = 'DYNAMIC_CONFIGURATION'
+KEYWORD_SUBFIELD = 'raw'
+
+
+def find_keyword_subfield_paths(properties: Dict, prefix: str = '') -> Set[str]:
+    """
+    dotted paths of analysed fields in an index mapping that declare a keyword sub-field.
+
+    a terms query on the analysed field matches tokens rather than the stored value, so
+    an exact-match filter has to target the sub-field.
+    """
+    paths = set()
+    if not isinstance(properties, dict):
+        return paths
+    for name, mapping in properties.items():
+        if not isinstance(mapping, dict):
+            continue
+        path = f'{prefix}{name}'
+        subfields = mapping.get('fields')
+        if mapping.get('type') == 'text' and isinstance(subfields, dict):
+            if KEYWORD_SUBFIELD in subfields:
+                paths.add(path)
+        nested = mapping.get('properties')
+        if isinstance(nested, dict):
+            paths.update(find_keyword_subfield_paths(nested, f'{path}.'))
+    return paths
 
 
 class DocumentStore(DocumentStoreProtocol):
@@ -44,6 +69,8 @@ class DocumentStore(DocumentStoreProtocol):
         self.logger = context.logger(name='document-store')
         self._is_initialized = False
         self.opensearch_client: Optional[AwsOpenSearchClient] = None
+        self._jobs_keyword_subfields: Set[str] = set()
+        self._nodes_keyword_subfields: Set[str] = set()
 
     def is_enabled(self) -> bool:
         domain_endpoint = self.context.config().get_string(
@@ -218,6 +245,60 @@ class DocumentStore(DocumentStoreProtocol):
                 error_code=errorcodes.DOCUMENT_STORE_CONFIG_ERROR, message=str(e), exc=e
             )
 
+    def _read_keyword_subfields(self, template_file: str) -> Set[str]:
+        """
+        read the index template and return the fields whose exact-match filters must
+        target the keyword sub-field. an unreadable template leaves filters unchanged.
+        """
+        try:
+            with open(template_file) as f:
+                template = Utils.from_json(f.read())
+            mappings = Utils.get_value_as_dict('mappings', template, {})
+            properties = Utils.get_value_as_dict('properties', mappings, {})
+            return find_keyword_subfield_paths(properties)
+        except Exception as e:
+            self.logger.warning(
+                f'failed to read field mappings from template: {template_file}. '
+                f'exact-match filters will target the analysed field. Error: {e}'
+            )
+            return set()
+
+    def _verify_keyword_subfields(
+        self, alias: str, expected: Set[str]
+    ) -> Dict[str, List[str]]:
+        """
+        report any index behind the alias whose live mapping lacks a keyword sub-field
+        the filters target. such an index matches nothing on an exact-match filter,
+        which reads as an empty listing rather than as an error.
+
+        :return: index name -> the sub-fields it is missing
+        """
+        missing_by_index: Dict[str, List[str]] = {}
+        if len(expected) == 0:
+            return missing_by_index
+        try:
+            mappings = self.opensearch_client.os_client.indices.get_mapping(index=alias)
+        except Exception as e:
+            self.logger.warning(
+                f'unable to read live field mappings for alias: {alias}. '
+                f'exact-match filters are derived from the index template. Error: {e}'
+            )
+            return missing_by_index
+        for index_name, index_mapping in Utils.get_as_dict(mappings, {}).items():
+            properties = Utils.get_value_as_dict(
+                'properties', Utils.get_value_as_dict('mappings', index_mapping, {}), {}
+            )
+            missing = sorted(expected - find_keyword_subfield_paths(properties))
+            if len(missing) == 0:
+                continue
+            missing_by_index[index_name] = missing
+            self.logger.error(
+                f'index {index_name} has no {KEYWORD_SUBFIELD} sub-field for: '
+                f'{", ".join(missing)}. filters on those fields match nothing in this '
+                f'index; it predates the current template and needs reindexing.'
+            )
+        return missing_by_index
+
     def initialize(self):
         """
         creates or updates the index templates in opensearch
@@ -255,6 +336,9 @@ class DocumentStore(DocumentStoreProtocol):
                 number_of_shards=jobs_number_of_shards,
                 number_of_replicas=jobs_number_of_replicas,
             )
+            self._jobs_keyword_subfields = self._read_keyword_subfields(
+                jobs_template_file
+            )
 
             nodes_number_of_shards = self.context.config().get_int(
                 'scheduler.opensearch.nodes.number_of_shards', default_number_of_shards
@@ -276,6 +360,16 @@ class DocumentStore(DocumentStoreProtocol):
                 alias=self._nodes_alias,
                 number_of_shards=nodes_number_of_shards,
                 number_of_replicas=nodes_number_of_replicas,
+            )
+            self._nodes_keyword_subfields = self._read_keyword_subfields(
+                nodes_template_file
+            )
+
+            self._verify_keyword_subfields(
+                alias=self._jobs_alias, expected=self._jobs_keyword_subfields
+            )
+            self._verify_keyword_subfields(
+                alias=self._nodes_alias, expected=self._nodes_keyword_subfields
             )
 
             self._is_initialized = True
@@ -312,8 +406,22 @@ class DocumentStore(DocumentStoreProtocol):
             index_name=self._nodes_index, docs=docs
         )
 
+    @staticmethod
+    def _term_key(key: str, keyword_subfields: Set[str]) -> str:
+        """
+        the field an exact-match filter has to target. already-qualified keys and fields
+        mapped as keyword are left alone.
+        """
+        if key in keyword_subfields:
+            return f'{key}.{KEYWORD_SUBFIELD}'
+        return key
+
     def _search(
-        self, index: str, options: SocaListingPayload, default_sort_by: str
+        self,
+        index: str,
+        options: SocaListingPayload,
+        default_sort_by: str,
+        keyword_subfields: Set[str],
     ) -> Dict:
         term_filters = []
         if Utils.is_not_empty(options.filters):
@@ -336,7 +444,10 @@ class DocumentStore(DocumentStoreProtocol):
                         value = listing_filter.value
                     else:
                         value = [listing_filter.value]
-                    term_filters.append({'terms': {listing_filter.key: value}})
+                    # a terms query is an exact match, so an analysed field has to be
+                    # addressed by its keyword sub-field.
+                    term_key = self._term_key(listing_filter.key, keyword_subfields)
+                    term_filters.append({'terms': {term_key: value}})
 
         filters = []
         if options.date_range:
@@ -389,7 +500,10 @@ class DocumentStore(DocumentStoreProtocol):
             )
 
         results = self._search(
-            index=self._jobs_alias, options=options, default_sort_by='queue_time:desc'
+            index=self._jobs_alias,
+            options=options,
+            default_sort_by='queue_time:desc',
+            keyword_subfields=self._jobs_keyword_subfields,
         )
 
         hits = Utils.get_value_as_dict('hits', results)
@@ -412,6 +526,52 @@ class DocumentStore(DocumentStoreProtocol):
             ),
         )
 
+    def _get_first_job(self, query: Dict) -> Optional[SocaJob]:
+        results = self.opensearch_client.os_client.search(
+            index=self._jobs_alias,
+            sort='queue_time:desc',
+            size=1,
+            from_=0,
+            body={'query': query},
+        )
+        hits = Utils.get_value_as_dict('hits', results)
+        entries = Utils.get_value_as_list('hits', hits, [])
+        if len(entries) == 0:
+            return None
+        source = Utils.get_value_as_dict('_source', entries[0])
+        if source is None:
+            return None
+        return SocaJob(**source)
+
+    def get_job(
+        self,
+        job_uid: Optional[str] = None,
+        job_id: Optional[str] = None,
+        owner: Optional[str] = None,
+        **kwargs,
+    ) -> Optional[SocaJob]:
+        """
+        read one indexed job.
+
+        job_uid names the job exactly: jobs are indexed under it, so it is matched as
+        the document id and does not depend on how the field itself is mapped. a job id
+        is a scheduler sequence number that restarts when the scheduler host is
+        replaced, so several jobs can carry it and the most recently queued is returned.
+        """
+        if not self.is_enabled() or not self.is_initialized():
+            return None
+        if Utils.is_not_empty(job_uid):
+            return self._get_first_job({'ids': {'values': [job_uid]}})
+        if Utils.is_empty(job_id):
+            return None
+        subfields = self._jobs_keyword_subfields
+        term_filters = [{'terms': {self._term_key('job_id', subfields): [job_id]}}]
+        if Utils.is_not_empty(owner):
+            term_filters.append(
+                {'terms': {self._term_key('owner', subfields): [owner]}}
+            )
+        return self._get_first_job({'bool': {'must': term_filters}})
+
     def search_nodes(self, options: ListNodesRequest, **kwargs) -> ListNodesResult:
         if not self.is_enabled() or not self.is_initialized():
             return ListNodesResult(
@@ -422,7 +582,10 @@ class DocumentStore(DocumentStoreProtocol):
             )
 
         results = self._search(
-            index=self._nodes_alias, options=options, default_sort_by='launch_time:desc'
+            index=self._nodes_alias,
+            options=options,
+            default_sort_by='launch_time:desc',
+            keyword_subfields=self._nodes_keyword_subfields,
         )
 
         hits = Utils.get_value_as_dict('hits', results)

@@ -34,6 +34,7 @@ from ideaadministrator.app.installer_params import QuickSetupPromptFactory
 from ideaadministrator.app_props import AdministratorProps
 from ideaadministrator.app.cdk.cdk_invoker import CdkInvoker
 from ideaadministrator.app.config_generator import ConfigGenerator
+from ideaadministrator.app.region_ami_config import resolve_region_ami
 from ideaadministrator.app.delete_cluster import DeleteCluster
 from ideaadministrator.app.patch_helper import PatchHelper
 from ideaadministrator.app.deployment_helper import DeploymentHelper
@@ -51,6 +52,7 @@ from ideaadministrator.app.directory_service_helper import DirectoryServiceHelpe
 from ideaadministrator.app.shared_storage_helper import SharedStorageHelper
 
 from prettytable import PrettyTable
+from typing import Dict, List, Tuple
 import os
 import sys
 import click
@@ -2293,6 +2295,324 @@ def fancy_title(context, title, emoji=None):
     context.print('')
 
 
+def _scan_module_table(db: ClusterConfigDB, table_name: str) -> List[Dict]:
+    """
+    Every item of a module table.
+    A table that does not exist (module not deployed) yields no items.
+    """
+    items = []
+    try:
+        table = db.aws.dynamodb_table().Table(table_name)
+        last_evaluated_key = None
+        while True:
+            if last_evaluated_key is not None:
+                result = table.scan(ExclusiveStartKey=last_evaluated_key)
+            else:
+                result = table.scan()
+            items += Utils.get_value_as_list('Items', result, [])
+            last_evaluated_key = Utils.get_value_as_dict('LastEvaluatedKey', result)
+            if last_evaluated_key is None:
+                break
+    except botocore.exceptions.ClientError as e:
+        if e.response['Error']['Code'] != 'ResourceNotFoundException':
+            raise
+    return items
+
+
+def _find_eol_base_os_references(db: ClusterConfigDB) -> List[str]:
+    """
+    Cluster settings (including scheduler.compute_node_os) and HPC queue profiles that still
+    reference an end-of-life base_os. These are edited rather than deleted, so they stay a hard
+    stop for the upgrade.
+    """
+    findings = []
+
+    for entry in db.get_config_entries():
+        key = Utils.get_value_as_string('key', entry, '')
+        value = Utils.get_value_as_string('value', entry)
+        if value in constants.EOL_BASEOS and (
+            key.endswith('base_os') or key.endswith('compute_node_os')
+        ):
+            findings.append(f'cluster setting {key} = {value}')
+
+    for module in db.get_cluster_modules():
+        module_id = Utils.get_value_as_string('module_id', module)
+        if Utils.is_empty(module_id):
+            continue
+        if Utils.get_value_as_string('name', module) != constants.MODULE_SCHEDULER:
+            continue
+        for item in _scan_module_table(
+            db, f'{db.cluster_name}.{module_id}.queue-profiles'
+        ):
+            base_os = Utils.get_value_as_string('param_base_os', item)
+            if base_os in constants.EOL_BASEOS:
+                name = Utils.get_value_as_string(
+                    'queue_profile_name', item, '<unnamed>'
+                )
+                findings.append(f'HPC queue profile {name} = {base_os}')
+
+    return findings
+
+
+def _delete_eol_software_stacks(context, db: ClusterConfigDB):
+    """
+    Delete eVDI software stacks on an end-of-life base_os: they can no longer launch, and the
+    admin cannot edit a stack's base_os. A stack a live session still references aborts the
+    upgrade instead, with nothing deleted, because that desktop must be deleted by hand first.
+    """
+    for module in db.get_cluster_modules():
+        module_id = Utils.get_value_as_string('module_id', module)
+        module_name = Utils.get_value_as_string('name', module)
+        if (
+            Utils.is_empty(module_id)
+            or module_name != constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER
+        ):
+            continue
+
+        stacks_table = f'{db.cluster_name}.{module_id}.controller.software-stacks'
+        eol_stacks = [
+            stack
+            for stack in _scan_module_table(db, stacks_table)
+            if Utils.get_value_as_string('base_os', stack) in constants.EOL_BASEOS
+        ]
+        if Utils.is_empty(eol_stacks):
+            continue
+
+        eol_stack_ids = {
+            Utils.get_value_as_string('stack_id', stack) for stack in eol_stacks
+        }
+        sessions = []
+        for session in _scan_module_table(
+            db, f'{db.cluster_name}.{module_id}.controller.user-sessions'
+        ):
+            if Utils.get_value_as_string('state', session, '').upper() == 'DELETED':
+                continue
+            software_stack = Utils.get_value_as_dict('software_stack', session, {})
+            stack_id = Utils.get_value_as_string('stack_id', software_stack)
+            stack_base_os = Utils.get_value_as_string('base_os', software_stack)
+            session_base_os = Utils.get_value_as_string('base_os', session)
+            if (
+                stack_id in eol_stack_ids
+                or stack_base_os in constants.EOL_BASEOS
+                or session_base_os in constants.EOL_BASEOS
+            ):
+                owner = Utils.get_value_as_string('owner', session, '<unknown>')
+                idea_session_id = Utils.get_value_as_string(
+                    'idea_session_id', session, '<unknown>'
+                )
+                sessions.append(
+                    f'session {idea_session_id} owned by {owner} on software stack '
+                    f'{stack_id or stack_base_os or session_base_os}'
+                )
+
+        if Utils.is_not_empty(sessions):
+            context.error(
+                f'{len(sessions)} virtual desktop session(s) still use a Base OS that has '
+                f'reached end-of-life. Nothing has been deleted.'
+            )
+            for session in sessions:
+                context.error(f'  - {session}')
+            context.error('Delete these virtual desktops, then re-run upgrade-cluster.')
+            raise SystemExit(1)
+
+        table = db.aws.dynamodb_table().Table(stacks_table)
+        for stack in eol_stacks:
+            stack_id = Utils.get_value_as_string('stack_id', stack)
+            table.delete_item(
+                Key={
+                    'base_os': Utils.get_value_as_string('base_os', stack),
+                    'stack_id': stack_id,
+                }
+            )
+            name = Utils.get_value_as_string('name', stack, '<unnamed>')
+            architecture = Utils.get_value_as_string('architecture', stack, '<unknown>')
+            context.info(
+                f'deleted end-of-life eVDI software stack {stack_id} ({name}, {architecture})'
+            )
+        context.info(
+            f'deleted {len(eol_stacks)} end-of-life eVDI software stack(s) from {stacks_table}'
+        )
+
+
+def _check_eol_base_os(context, cluster_name: str, aws_region: str, aws_profile: str):
+    """
+    Clear every end-of-life base_os reference before the upgrade. Cluster settings and queue
+    profiles are migrated by the admin, eVDI software stacks are deleted here once no session
+    references them.
+    """
+    db = ClusterConfigDB(
+        cluster_name=cluster_name, aws_region=aws_region, aws_profile=aws_profile
+    )
+    findings = _find_eol_base_os_references(db)
+    if Utils.is_not_empty(findings):
+        replacements = ', '.join(
+            f'{eol} -> {replacement}'
+            for eol, replacement in constants.EOL_BASEOS.items()
+        )
+        context.error(
+            'This cluster still references a Base OS that has reached end-of-life and is no '
+            'longer supported by IDEA. The upgrade cannot continue until every reference is '
+            f'migrated ({replacements}).'
+        )
+        for finding in findings:
+            context.error(f'  - {finding}')
+        context.error(
+            'Migrate the cluster settings and HPC queue profiles above to the replacement Base '
+            'OS, then re-run upgrade-cluster.'
+        )
+        raise SystemExit(1)
+
+    _delete_eol_software_stacks(context, db)
+
+
+def build_ami_update_entries(ami_id: str, base_os: str) -> List[str]:
+    """
+    Build the `config set` entries applied by upgrade_cluster Phase 3.
+    Every module that templates base_os / instance_ami must appear here, or the
+    module keeps its pre-upgrade OS while the rest of the cluster moves.
+    """
+    return [
+        f'Key=bastion-host.base_os,Type=string,Value={base_os}',
+        f'Key=bastion-host.instance_ami,Type=string,Value={ami_id}',
+        f'Key=cluster-manager.ec2.autoscaling.base_os,Type=string,Value={base_os}',
+        f'Key=cluster-manager.ec2.autoscaling.instance_ami,Type=string,Value={ami_id}',
+        f'Key=directoryservice.base_os,Type=string,Value={base_os}',
+        f'Key=directoryservice.instance_ami,Type=string,Value={ami_id}',
+        f'Key=scheduler.base_os,Type=string,Value={base_os}',
+        f'Key=scheduler.instance_ami,Type=string,Value={ami_id}',
+        f'Key=scheduler.compute_node_os,Type=string,Value={base_os}',
+        f'Key=scheduler.compute_node_ami,Type=string,Value={ami_id}',
+        f'Key=vdc.controller.autoscaling.base_os,Type=string,Value={base_os}',
+        f'Key=vdc.controller.autoscaling.instance_ami,Type=string,Value={ami_id}',
+        f'Key=vdc.dcv_broker.autoscaling.base_os,Type=string,Value={base_os}',
+        f'Key=vdc.dcv_broker.autoscaling.instance_ami,Type=string,Value={ami_id}',
+        f'Key=vdc.dcv_connection_gateway.autoscaling.base_os,Type=string,Value={base_os}',
+        f'Key=vdc.dcv_connection_gateway.autoscaling.instance_ami,Type=string,Value={ami_id}',
+    ]
+
+
+def get_module_instance_ids(
+    cluster_name: str, aws_region: str, aws_profile: str, cfn
+) -> List[Tuple[str, str]]:
+    """
+    (stack_name, instance_id) for every AWS::EC2::Instance the cluster's module stacks own. Module
+    ids come from the cluster config because stack names are {cluster_name}-{module_id}: a hardcoded
+    list omits modules outright and is wrong for any cluster with non-default module ids.
+    """
+    db = ClusterConfigDB(
+        cluster_name=cluster_name, aws_region=aws_region, aws_profile=aws_profile
+    )
+    found = []
+    for module in db.get_cluster_modules():
+        module_id = Utils.get_value_as_string('module_id', module)
+        stack_name = (
+            Utils.get_value_as_string('stack_name', module)
+            or f'{cluster_name}-{module_id}'
+        )
+        try:
+            for page in cfn.get_paginator('list_stack_resources').paginate(
+                StackName=stack_name
+            ):
+                for resource in page['StackResourceSummaries']:
+                    if resource['ResourceType'] == 'AWS::EC2::Instance':
+                        found.append((stack_name, resource['PhysicalResourceId']))
+        except botocore.exceptions.ClientError as e:
+            error = e.response['Error']
+            if error.get('Code') == 'ValidationError' and 'does not exist' in error.get(
+                'Message', ''
+            ):
+                continue  # module not deployed
+            # AccessDenied, throttling and friends are not "not deployed": swallowing them
+            # silently skips instances that are protected, and cfn deletes them silently too.
+            raise
+    return found
+
+
+def clear_termination_protection(
+    instances: List[Tuple[str, str]], ec2, context
+) -> List[Tuple[str, str]]:
+    """
+    Clear protection so cfn can delete an instance it replaces, and return what was cleared. Only
+    instances that had it on, so one that was never protected does not come back protected.
+    """
+    cleared = []
+    for stack_name, instance_id in instances:
+        try:
+            attribute = ec2.describe_instance_attribute(
+                InstanceId=instance_id, Attribute='disableApiTermination'
+            )
+            if not attribute['DisableApiTermination']['Value']:
+                continue
+            ec2.modify_instance_attribute(
+                InstanceId=instance_id, DisableApiTermination={'Value': False}
+            )
+            cleared.append((stack_name, instance_id))
+            context.info(
+                f'cleared instance termination protection on {instance_id} ({stack_name})'
+            )
+        except Exception as e:
+            context.warning(
+                f'could not clear termination protection on {instance_id} ({stack_name}): {e}. '
+                f'If this upgrade replaces it, verify the old host is terminated afterwards.'
+            )
+    return cleared
+
+
+def restore_termination_protection(cleared: List[Tuple[str, str]], ec2, context):
+    """
+    Re-protect what the sweep cleared. Filters by instance-id rather than passing ids directly,
+    because describe_instances fails the whole call when one id has already been replaced.
+    """
+    if not cleared:
+        return
+    alive = {
+        instance['InstanceId']
+        for reservation in ec2.describe_instances(
+            Filters=[
+                {'Name': 'instance-id', 'Values': [i for _, i in cleared]},
+                {
+                    'Name': 'instance-state-name',
+                    'Values': ['pending', 'running', 'stopping', 'stopped'],
+                },
+            ]
+        )['Reservations']
+        for instance in reservation['Instances']
+    }
+    for stack_name, instance_id in cleared:
+        if instance_id not in alive:
+            context.info(
+                f'{instance_id} ({stack_name}) was replaced by the upgrade, so it has no '
+                f'termination protection to restore'
+            )
+            continue
+        try:
+            ec2.modify_instance_attribute(
+                InstanceId=instance_id, DisableApiTermination={'Value': True}
+            )
+            context.info(
+                f'restored instance termination protection on {instance_id} ({stack_name})'
+            )
+        except Exception as e:
+            context.warning(
+                f'could not restore termination protection on {instance_id} '
+                f'({stack_name}): {e}. Re-enable it by hand.'
+            )
+
+
+def _warn_termination_protection_cleared(context, cleared: List[Tuple[str, str]]):
+    """
+    Name the instances an aborted upgrade left unprotected. Deliberately not restored: a rollback
+    may still need to delete them, and re-protecting mid-rollback strands one outside its stack.
+    """
+    if not cleared:
+        return
+    context.warning(
+        f'termination protection is still cleared on '
+        f'{", ".join(instance_id for _, instance_id in cleared)}. '
+        f'Re-enable it by hand once the cluster is stable.'
+    )
+
+
 @click.command()
 @click.option('--cluster-name', required=True, help='Cluster Name')
 @click.option('--aws-region', required=True, help='AWS Region')
@@ -2306,7 +2626,7 @@ def fancy_title(context, title, emoji=None):
 @click.option(
     '--base-os',
     default='amazonlinux2023',
-    help='New base OS to upgrade to (e.g., amazonlinux2023, rhel8, rhel9, rocky8, rocky9). Default: amazonlinux2023',
+    help='New base OS to upgrade to (e.g., amazonlinux2023, rhel8, rhel9, rhel10, rocky8, rocky9, rocky10). Default: amazonlinux2023',
 )
 @click.option(
     '--force-build-bootstrap',
@@ -2372,12 +2692,66 @@ def upgrade_cluster(
         all_modules = False
 
     # Validate base OS
-    if base_os not in ('amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9'):
-        valid_os = ['amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9']
+    if base_os in constants.EOL_BASEOS:
+        context.error(
+            f'Base OS {base_os} has reached end-of-life and is no longer supported by IDEA. '
+            f'Upgrade to {constants.EOL_BASEOS[base_os]} instead.'
+        )
+        raise SystemExit(1)
+
+    valid_os = [
+        'amazonlinux2023',
+        'rhel8',
+        'rhel9',
+        'rhel10',
+        'rocky8',
+        'rocky9',
+        'rocky10',
+    ]
+    if base_os not in valid_os:
         context.error(
             f'Invalid base_os: {base_os}. Must be one of: {", ".join(valid_os)}'
         )
         raise SystemExit(1)
+
+    # EL10 ships no Amazon DCV packages, so upgrading the eVDI control plane
+    # (broker/gateway/controller) breaks every session; refuse here rather than rely on menu text.
+    if base_os in ('rhel10', 'rocky10'):
+        try:
+            db_check = ClusterConfigDB(
+                cluster_name=cluster_name,
+                aws_region=aws_region,
+                aws_profile=aws_profile,
+            )
+            deployed_modules = db_check.get_cluster_modules()
+        except Exception as e:
+            context.error(
+                f'Could not read the cluster modules table to validate {base_os} '
+                f'eVDI compatibility: {e}'
+            )
+            raise SystemExit(1)
+        for cluster_module in deployed_modules:
+            if (
+                cluster_module.get('name')
+                == constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER
+                and cluster_module.get('status') == 'deployed'
+            ):
+                context.error(
+                    f'base_os {base_os} is not supported on clusters with the '
+                    f'virtual-desktop-controller module deployed: Amazon DCV publishes '
+                    f'no EL10 packages, so the eVDI broker/gateway/controller would '
+                    f'redeploy without DCV installed. Use rhel9/rocky9 (or remove the '
+                    f'eVDI module) instead.'
+                )
+                raise SystemExit(1)
+
+    # Fail before any change is made if the cluster still points at an end-of-life Base OS.
+    _check_eol_base_os(
+        context=context,
+        cluster_name=cluster_name,
+        aws_region=aws_region,
+        aws_profile=aws_profile,
+    )
 
     # Display upgrade context information
     fancy_title(context, 'IDEA Cluster Upgrade', '🚀')
@@ -2405,6 +2779,9 @@ def upgrade_cluster(
             context.info('Upgrade aborted by user')
             raise SystemExit(0)
 
+    # bound before the try so the failure path can always report what the sweep cleared
+    cleared_protection: List[Tuple[str, str]] = []
+
     try:
         # PHASE 1: Update base_os in values.yml
         fancy_title(context, 'Phase 1: Update Base OS in values.yml', '📝')
@@ -2417,12 +2794,13 @@ def upgrade_cluster(
         with open(ami_config_path, 'r') as f:
             ami_config = Utils.from_yaml(f.read())
 
-        region_config = ami_config.get(aws_region, {})
-        ami_id = region_config.get(base_os)
-
-        if not ami_id:
+        try:
+            ami_id = resolve_region_ami(
+                regions_config=ami_config, aws_region=aws_region, base_os=base_os
+            )
+        except exceptions.SocaException as e:
             context.error(
-                f'Could not find AMI ID for base OS {base_os} in region {aws_region}'
+                f'Could not find AMI ID for base OS {base_os} in region {aws_region}: {e}'
             )
             raise SystemExit(1)
 
@@ -2547,21 +2925,7 @@ def upgrade_cluster(
             )
 
             context.info('🔄 Updating AMI IDs and base_os values in DynamoDB...')
-            ami_updates = [
-                f'Key=scheduler.compute_node_ami,Type=string,Value={ami_id}',
-                f'Key=vdc.dcv_broker.autoscaling.instance_ami,Type=string,Value={ami_id}',
-                f'Key=vdc.dcv_connection_gateway.autoscaling.instance_ami,Type=string,Value={ami_id}',
-                f'Key=scheduler.instance_ami,Type=string,Value={ami_id}',
-                f'Key=bastion-host.instance_ami,Type=string,Value={ami_id}',
-                f'Key=vdc.controller.autoscaling.instance_ami,Type=string,Value={ami_id}',
-                f'Key=cluster-manager.ec2.autoscaling.instance_ami,Type=string,Value={ami_id}',
-                f'Key=vdc.dcv_broker.autoscaling.base_os,Type=string,Value={base_os}',
-                f'Key=vdc.dcv_connection_gateway.autoscaling.base_os,Type=string,Value={base_os}',
-                f'Key=scheduler.base_os,Type=string,Value={base_os}',
-                f'Key=cluster-manager.ec2.autoscaling.base_os,Type=string,Value={base_os}',
-                f'Key=vdc.controller.autoscaling.base_os,Type=string,Value={base_os}',
-                f'Key=bastion-host.base_os,Type=string,Value={base_os}',
-            ]
+            ami_updates = build_ami_update_entries(ami_id=ami_id, base_os=base_os)
 
             for entry in ami_updates:
                 tokens = entry.split(',', 2)
@@ -2616,6 +2980,34 @@ def upgrade_cluster(
                 )
                 raise SystemExit(0)
 
+        # an app-module upgrade can replace the module's ec2 instance; termination protection makes
+        # cfn's delete of the original fail silently, leaving a running host no stack references.
+        ec2 = None
+        try:
+            import boto3
+
+            session = (
+                boto3.Session(profile_name=aws_profile)
+                if Utils.is_not_empty(aws_profile)
+                else boto3.Session()
+            )
+            ec2 = session.client('ec2', region_name=aws_region)
+            cleared_protection = clear_termination_protection(
+                get_module_instance_ids(
+                    cluster_name,
+                    aws_region,
+                    aws_profile,
+                    session.client('cloudformation', region_name=aws_region),
+                ),
+                ec2,
+                context,
+            )
+        except Exception as e:
+            context.warning(
+                f'pre-upgrade termination-protection sweep failed: {e}. '
+                f'Verify replaced instances are terminated after the upgrade.'
+            )
+
         # Deploy all modules with upgrade flag
         DeploymentHelper(
             cluster_name=cluster_name,
@@ -2632,6 +3024,13 @@ def upgrade_cluster(
             rollback=rollback,
         ).invoke()
 
+        try:
+            restore_termination_protection(cleared_protection, ec2, context)
+        except Exception as e:
+            context.warning(
+                f'could not restore termination protection: {e}. Re-enable it by hand.'
+            )
+
         fancy_title(context, 'Cluster Upgrade Completed', '🎉')
         context.success('✅ All upgrade phases completed successfully')
         context.info(
@@ -2639,7 +3038,13 @@ def upgrade_cluster(
         )
     except Exception as e:
         context.error(f'❌ Failed to complete upgrade: {str(e)}')
+        _warn_termination_protection_cleared(context, cleared_protection)
         raise SystemExit(1)
+    except BaseException:
+        # SystemExit and KeyboardInterrupt leave the instances unprotected just the same, so the
+        # report has to run before the interpreter goes away.
+        _warn_termination_protection_cleared(context, cleared_protection)
+        raise
 
 
 # Helper function to sync full configuration without overwrite

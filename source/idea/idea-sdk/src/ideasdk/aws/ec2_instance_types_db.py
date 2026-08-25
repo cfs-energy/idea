@@ -11,14 +11,16 @@
 
 from ideasdk.protocols import SocaContextProtocol
 from ideasdk.utils import Utils
+from ideasdk.utils.error_redaction import redact_aws_identifiers
 from ideadatamodel import exceptions, errorcodes, EC2InstanceType
 
-from typing import Optional, Set, List
+from typing import Dict, Optional, Set, List
 from cacheout import Cache
 from threading import RLock
+import botocore.exceptions
 
 INSTANCE_TYPES_CACHE_SIZE: int = (
-    2048  # AWS has 700-800+ instance types; use 2x for headroom
+    2048  # minimum size. grown to 2x the region inventory when that is larger
 )
 INSTANCE_TYPES_TTL_SECS: int = 15 * 24 * 60 * 60  # 15 days
 
@@ -28,6 +30,24 @@ INSTANCE_TYPES_TTL_SECS: int = 15 * 24 * 60 * 60  # 15 days
 FALLBACK_INSTANCE_TYPES_REFRESH_INTERVAL = int(
     12 * 60 * 60
 )  # 12-hours default. Value is in seconds
+
+# EC2 API error codes that mean the lookup failed, not that the instance type is
+# unknown. These must not be reported to the user as an invalid instance type.
+TRANSIENT_EC2_ERROR_CODES = (
+    'AccessDenied',
+    'AccessDeniedException',
+    'AuthFailure',
+    'InternalError',
+    'InternalFailure',
+    'RequestExpired',
+    'RequestLimitExceeded',
+    'RequestThrottled',
+    'ServiceUnavailable',
+    'Throttling',
+    'ThrottlingException',
+    'Unavailable',
+    'UnauthorizedOperation',
+)
 
 
 class EC2InstanceTypesDB:
@@ -45,16 +65,23 @@ class EC2InstanceTypesDB:
         self._instance_types_lock = RLock()
         self._add_instance_data_to_cache()
 
+    def _build_cache(self, instance_types: Dict[str, EC2InstanceType]) -> Cache:
+        """
+        Build a fully populated cache sized to hold every entry.
+        Sizing up front is what keeps a large region from evicting instance
+        types that were collected from an earlier page.
+        """
+        _maxsize: int = max(INSTANCE_TYPES_CACHE_SIZE, len(instance_types) * 2)
+        _cache = Cache(maxsize=_maxsize, ttl=INSTANCE_TYPES_TTL_SECS)
+        _cache.set_many(instance_types)
+        return _cache
+
     def _add_instance_data_to_cache(self):
         _start_ec2_data: int = Utils.current_time_ms()
         self._logger.debug('Starting EC2 instance type cache collection')
 
         with self._instance_types_lock:
-            if self._cache.size():
-                self._logger.info(
-                    f'Emptying EC2 instance type cache: {self._cache.size()}'
-                )
-                self._cache.clear()
+            _instance_types_by_name: Dict[str, EC2InstanceType] = {}
 
             try:
                 _ec2_paginator = (
@@ -85,15 +112,18 @@ class EC2InstanceTypesDB:
                                 message=f'ec2 instance_type is invalid: {_instance_name}',
                             )
 
-                        self._cache.set(
-                            key=_instance_name,
-                            value=EC2InstanceType(data=_instance_data),
+                        _instance_types_by_name[_instance_name] = EC2InstanceType(
+                            data=_instance_data
                         )
 
                     _page_stop: int = Utils.current_time_ms()
                     self._logger.debug(
-                        f'Instance Type Cache - Page #{_page_num}: Added {len(_instance_types)} to {self._cache.size()} - duration {_page_stop - _page_start}ms'
+                        f'Instance Type Cache - Page #{_page_num}: Added {len(_instance_types)} to {len(_instance_types_by_name)} - duration {_page_stop - _page_start}ms'
                     )
+
+                # published in a single step so concurrent readers always observe a
+                # complete cache, never a cleared or half-filled one
+                self._cache = self._build_cache(_instance_types_by_name)
 
                 _end_ec2_data: int = Utils.current_time_ms()
                 self._cache_last_refresh = Utils.current_time()
@@ -109,9 +139,12 @@ class EC2InstanceTypesDB:
                 )
                 # Set last refresh time anyway to avoid hammering the API
                 self._cache_last_refresh = Utils.current_time()
-                # Re-raise if cache is empty - this is a critical failure
+                # An already populated cache is more complete than a partial collection,
+                # so it is retained. Re-raise only when nothing is available at all.
                 if self._cache.size() == 0:
-                    raise
+                    if not _instance_types_by_name:
+                        raise
+                    self._cache = self._build_cache(_instance_types_by_name)
 
     def _instance_type_names_from_botocore(self) -> List[str]:
         """
@@ -123,12 +156,33 @@ class EC2InstanceTypesDB:
     def all_instance_type_names(self) -> Set[str]:
         return set(self._cache.keys())
 
+    def _is_cache_stale(self) -> bool:
+        return (
+            Utils.current_time() - self._cache_refresh_interval
+        ) > self._cache_last_refresh
+
+    def _refresh_cache_if_stale(self):
+        if not self._is_cache_stale():
+            return
+
+        with self._instance_types_lock:
+            # re-checked under the lock so callers queued behind an in-flight
+            # refresh do not each trigger another full pagination
+            if not self._is_cache_stale():
+                return
+            self._logger.debug(
+                f'Refreshing EC2 Describe_Instance_Types cache... Last refresh: {self._cache_last_refresh} . Current: {Utils.current_time()}  MaxAllowed: {self._cache_refresh_interval}'
+            )
+            self._add_instance_data_to_cache()
+
     def _fetch_single_instance_type(
         self, instance_type: str
     ) -> Optional[EC2InstanceType]:
         """
         Fetch a single instance type from AWS EC2 API.
         Returns None if the instance type doesn't exist in the region.
+        Raises SocaException if the lookup itself failed, so that a transient AWS
+        error is never reported back to the user as an invalid instance type.
         """
         try:
             response = (
@@ -136,33 +190,44 @@ class EC2InstanceTypesDB:
                 .ec2()
                 .describe_instance_types(InstanceTypes=[instance_type])
             )
-            instance_types = Utils.get_value_as_list(
-                key='InstanceTypes', obj=response, default=[]
+        except botocore.exceptions.ClientError as e:
+            _error_code = Utils.get_value_as_string(
+                key='Code',
+                obj=Utils.get_value_as_dict(key='Error', obj=e.response, default={}),
+                default='',
             )
-            if instance_types:
-                instance_data = instance_types[0]
-                ec2_instance_type = EC2InstanceType(data=instance_data)
-                # Cache the instance type for future use
-                with self._instance_types_lock:
-                    self._cache.set(key=instance_type, value=ec2_instance_type)
-                self._logger.info(
-                    f'Successfully fetched and cached instance type: {instance_type}'
+            if _error_code in TRANSIENT_EC2_ERROR_CODES:
+                raise exceptions.SocaException(
+                    error_code=errorcodes.GENERAL_ERROR,
+                    message=f'failed to look up ec2 instance_type: {instance_type} - {redact_aws_identifiers(e)}',
                 )
-                return ec2_instance_type
+            self._logger.debug(
+                f'EC2 rejected instance type {instance_type}: {_error_code}'
+            )
             return None
         except Exception as e:
-            self._logger.debug(
-                f'Failed to fetch instance type {instance_type} from AWS: {e}'
+            raise exceptions.SocaException(
+                error_code=errorcodes.GENERAL_ERROR,
+                message=f'failed to look up ec2 instance_type: {instance_type} - {redact_aws_identifiers(e)}',
             )
+
+        instance_types = Utils.get_value_as_list(
+            key='InstanceTypes', obj=response, default=[]
+        )
+        if not instance_types:
             return None
 
+        ec2_instance_type = EC2InstanceType(data=instance_types[0])
+        # Cache the instance type for future use
+        with self._instance_types_lock:
+            self._cache.set(key=instance_type, value=ec2_instance_type)
+        self._logger.info(
+            f'Successfully fetched and cached instance type: {instance_type}'
+        )
+        return ec2_instance_type
+
     def get(self, instance_type: str) -> Optional[EC2InstanceType]:
-        _current_time: int = Utils.current_time()
-        if (_current_time - self._cache_refresh_interval) > self._cache_last_refresh:
-            self._logger.debug(
-                f'Refreshing EC2 Describe_Instance_Types cache... Last refresh: {self._cache_last_refresh} . Current: {_current_time}  MaxAllowed: {self._cache_refresh_interval}'
-            )
-            self._add_instance_data_to_cache()
+        self._refresh_cache_if_stale()
 
         # Check cache first
         if instance_type in self._cache:

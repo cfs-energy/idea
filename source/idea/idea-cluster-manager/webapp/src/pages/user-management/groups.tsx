@@ -38,11 +38,11 @@ export interface GroupsState {
 
 class Groups extends Component<GroupsProps, GroupsState> {
 
-    createGroupForm: RefObject<IdeaForm>
-    deleteGroupConfirmModal: RefObject<IdeaConfirm>
-    removeUserFromGroupConfirmModal: RefObject<IdeaConfirm>
-    listing: RefObject<IdeaListView>
-    userListing: RefObject<IdeaListView>
+    createGroupForm: RefObject<IdeaForm | null>
+    deleteGroupConfirmModal: RefObject<IdeaConfirm | null>
+    removeUserFromGroupConfirmModal: RefObject<IdeaConfirm | null>
+    listing: RefObject<IdeaListView | null>
+    userListing: RefObject<IdeaListView | null>
 
     constructor(props: GroupsProps) {
         super(props);

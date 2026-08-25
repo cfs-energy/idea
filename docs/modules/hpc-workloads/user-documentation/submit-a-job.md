@@ -63,23 +63,28 @@ IDEA automatically performs DryRun action to validate whether your job can run o
 
 [INVALID_EC2_INSTANCE_TYPE] ec2 instance_type is invalid: fake_instance
 
-# Example2: Trying to submit a job with a very large number of nodes
+# Example2: Trying to submit a job with more nodes than the per-job limit allows
 [clusteradmin@ip-10-0-142-68 ~]$ qsub -l instance_type=m5.large  -l nodes=6000 -- /bin/sleep 60
 qsub: Job submission failed and cannot be queued:
 
-* Job will not be provisioned due to below errors:
+* Below parameters failed to be validated:
 
-[ServiceQuota] Following AWS Service Quota needs to be requested from AWS:
-+------------------------------------------------------------------+-----------------+---------------+----------------+
-|                            QuotaName                             | Available vCPUs | Desired vCPUs | Consumed vCPUs |
-+------------------------------------------------------------------+-----------------+---------------+----------------+
-| Running On-Demand Standard (A, C, D, H, I, M, R, T, Z) instances |        32       |     12000     |       24       |
-+------------------------------------------------------------------+-----------------+---------------+----------------+
- Please contact administrator to request these AWS Service Quotas.
-[EC2DryRunFailed] EC2 dry run failed for instance_type: m5.large, Err: An error occurred (ResourceCountExceeded) when calling the RunInstances operation: You have exceeded the number of resources allowed in a single call of this type
+[nodes] You have requested 6000 nodes, but a single job can request at most 100 nodes. Reduce the no. of nodes (the web portal computes nodes from the requested cpus) or ask your cluster administrator to raise the limit.
 
 
 </code></pre>
+
+Two separate limits cap your node count.
+
+| Limit | Set by | Symptom | Fix |
+| --- | --- | --- | --- |
+| `max_nodes_per_job`, default 100 | IDEA, per cluster or per queue profile | Refused at `qsub`, nothing launches | Ask your administrator to raise it |
+| EC2 and Auto Scaling service quotas | Your AWS account | Accepted, then AWS refuses during provisioning | Request a quota increase |
+
+{% hint style="info" %}
+Raising IDEA's limit does not create capacity. The `qsub` refusal is deliberate: without it the job is
+accepted, instances launch, and the job fails part-way through.
+{% endhint %}
 
 ### Budget Information <a href="#budget-information" id="budget-information"></a>
 
@@ -199,10 +204,10 @@ This job will use a 3 c5.18xlarge instances
 ## END PBS SETTINGS
 cd $PBS_O_WORKDIR
 cat $PBS_NODEFILE | sort | uniq > mpi_nodes
-export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/apps/openmpi/4.0.1/bin/
-export PATH=$PATH:/apps/openmpi/4.0.1/bin/
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/apps/openmpi/5.0.7/$(uname -m)/bin/
+export PATH=$PATH:/apps/openmpi/5.0.7/$(uname -m)/bin/
 # c5.18xlarge is 36 cores so -np is 36 * 3 hosts
-/apps/openmpi/4.0.1/bin/mpirun --hostfile mpi_nodes -np 108 script.sh > my_output.log
+/apps/openmpi/5.0.7/$(uname -m)/bin/mpirun --hostfile mpi_nodes -np 108 script.sh > my_output.log
 ```
 
 **Run a simple script on 3 nodes using custom License Restriction**
@@ -219,10 +224,10 @@ This job will only start if we have at least 4 Comsol Acoustic licenses availabl
 ## END PBS SETTINGS
 cd $PBS_O_WORKDIR
 cat $PBS_NODEFILE | sort | uniq > mpi_nodes
-export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/apps/openmpi/4.0.1/lib/
-export PATH=$PATH:/apps/openmpi/4.0.1/bin/
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/apps/openmpi/5.0.7/$(uname -m)/lib/
+export PATH=$PATH:/apps/openmpi/5.0.7/$(uname -m)/bin/
 # c5.18xlarge is 36 cores so -np is 36 * 3 hosts
-/apps/openmpi/4.0.1/bin/mpirun --hostfile mpi_nodes -np 108 script.sh > my_output.log
+/apps/openmpi/5.0.7/$(uname -m)/bin/mpirun --hostfile mpi_nodes -np 108 script.sh > my_output.log
 ```
 
 **Run a simple script on 5 nodes using custom AMI**
@@ -239,10 +244,10 @@ This job will use a user-specified AMI ID
 ## END PBS SETTINGS
 cd $PBS_O_WORKDIR
 cat $PBS_NODEFILE | sort | uniq > mpi_nodes
-export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/apps/openmpi/4.0.1/lib/
-export PATH=$PATH:/apps/openmpi/4.0.1/bin/
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/apps/openmpi/5.0.7/$(uname -m)/lib/
+export PATH=$PATH:/apps/openmpi/5.0.7/$(uname -m)/bin/
 # c5.18xlarge is 36 cores so -np is 36 * 5 hosts
-/apps/openmpi/4.0.1/bin/mpirun --hostfile mpi_nodes -np 180 script.sh > my_output.log
+/apps/openmpi/5.0.7/$(uname -m)/bin/mpirun --hostfile mpi_nodes -np 180 script.sh > my_output.log
 ```
 
 **Run a simple script on 5 nodes using custom AMI using a different OS**
@@ -259,10 +264,10 @@ This job will use a user-specified AMI ID which use a operating system different
 ## END PBS SETTINGS
 cd $PBS_O_WORKDIR
 cat $PBS_NODEFILE | sort | uniq > mpi_nodes
-export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/apps/openmpi/4.0.1/lib/
-export PATH=$PATH:/apps/openmpi/4.0.1/bin/
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/apps/openmpi/5.0.7/$(uname -m)/lib/
+export PATH=$PATH:/apps/openmpi/5.0.7/$(uname -m)/bin/
 # c5.18xlarge is 36 cores so -np is 36 * 5 hosts
-/apps/openmpi/4.0.1/bin/mpirun --hostfile mpi_nodes -np 180 script.sh > my_output.log
+/apps/openmpi/5.0.7/$(uname -m)/bin/mpirun --hostfile mpi_nodes -np 180 script.sh > my_output.log
 ```
 
 **Run a simple script on 5 m5.24xlarge SPOT instances as long as instance price is lower than $2.5 per hour**
@@ -279,10 +284,10 @@ This job will use SPOT instances. Instances will be automatically terminated if 
 ## END PBS SETTINGS
 cd $PBS_O_WORKDIR
 cat $PBS_NODEFILE | sort | uniq > mpi_nodes
-export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/apps/openmpi/4.0.1/lib/
-export PATH=$PATH:/apps/openmpi/4.0.1/bin/
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/apps/openmpi/5.0.7/$(uname -m)/lib/
+export PATH=$PATH:/apps/openmpi/5.0.7/$(uname -m)/bin/
 # m5.24xlarge is 48 cores so -np is 48 * 5 hosts
-/apps/openmpi/4.0.1/bin/mpirun --hostfile mpi_nodes -np 240 script.sh > my_output.log
+/apps/openmpi/5.0.7/$(uname -m)/bin/mpirun --hostfile mpi_nodes -np 240 script.sh > my_output.log
 ```
 
 **Run a simple script on 5 m5.24xlarge SPOT instances as long as instance price is lower than OD price**
@@ -297,10 +302,10 @@ export PATH=$PATH:/apps/openmpi/4.0.1/bin/
 ## END PBS SETTINGS
 cd $PBS_O_WORKDIR
 cat $PBS_NODEFILE | sort | uniq > mpi_nodes
-export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/apps/openmpi/4.0.1/lib/
-export PATH=$PATH:/apps/openmpi/4.0.1/bin/
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/apps/openmpi/5.0.7/$(uname -m)/lib/
+export PATH=$PATH:/apps/openmpi/5.0.7/$(uname -m)/bin/
 # m5.24xlarge is 48 cores so -np is 48 * 5 hosts
-/apps/openmpi/4.0.1/bin/mpirun --hostfile mpi_nodes -np 240 script.sh > my_output.log
+/apps/openmpi/5.0.7/$(uname -m)/bin/mpirun --hostfile mpi_nodes -np 240 script.sh > my_output.log
 ```
 
 **Submit a job with EFA**
@@ -317,10 +322,10 @@ Make sure to use an instance type supported by EFA [https://docs.aws.amazon.com/
 ## END PBS SETTINGS
 cd $PBS_O_WORKDIR
 cat $PBS_NODEFILE | sort | uniq > mpi_nodes
-export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/apps/openmpi/4.0.1/lib/
-export PATH=$PATH:/apps/openmpi/4.0.1/bin/
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/apps/openmpi/5.0.7/$(uname -m)/lib/
+export PATH=$PATH:/apps/openmpi/5.0.7/$(uname -m)/bin/
 # c5n.18xlarge is 36 cores so -np is 36 * 5
-/apps/openmpi/4.0.1/bin/mpirun --hostfile mpi_nodes -np 180 script.sh > my_output.log
+/apps/openmpi/5.0.7/$(uname -m)/bin/mpirun --hostfile mpi_nodes -np 180 script.sh > my_output.log
 ```
 
 **Use 50 c5.xlarge for your job and fallback to m5.xlarge and r5.xlarge if capacity is not available**
@@ -342,10 +347,10 @@ AWS honors the instance order, so it will try to provision 50 c5.large first and
 ## END PBS SETTINGS
 cd $PBS_O_WORKDIR
 cat $PBS_NODEFILE | sort | uniq > mpi_nodes
-export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/apps/openmpi/4.0.1/lib/
-export PATH=$PATH:/apps/openmpi/4.0.1/bin/
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/apps/openmpi/5.0.7/$(uname -m)/lib/
+export PATH=$PATH:/apps/openmpi/5.0.7/$(uname -m)/bin/
 # c5n.18xlarge is 36 cores so -np is 36 * 5
-/apps/openmpi/4.0.1/bin/mpirun --hostfile mpi_nodes -np 180 script.sh > my_output.log
+/apps/openmpi/5.0.7/$(uname -m)/bin/mpirun --hostfile mpi_nodes -np 180 script.sh > my_output.log
 ```
 
 **Use multiple SPOT instance type**
@@ -360,10 +365,10 @@ export PATH=$PATH:/apps/openmpi/4.0.1/bin/
 ## END PBS SETTINGS
 cd $PBS_O_WORKDIR
 cat $PBS_NODEFILE | sort | uniq > mpi_nodes
-export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/apps/openmpi/4.0.1/lib/
-export PATH=$PATH:/apps/openmpi/4.0.1/bin/
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/apps/openmpi/5.0.7/$(uname -m)/lib/
+export PATH=$PATH:/apps/openmpi/5.0.7/$(uname -m)/bin/
 # c5n.18xlarge is 36 cores so -np is 36 * 5
-/apps/openmpi/4.0.1/bin/mpirun --hostfile mpi_nodes -np 180 script.sh > my_output.log
+/apps/openmpi/5.0.7/$(uname -m)/bin/mpirun --hostfile mpi_nodes -np 180 script.sh > my_output.log
 ```
 
 **Provision 50 instances (10 On-Demand and 40 SPOT)**
@@ -378,10 +383,10 @@ export PATH=$PATH:/apps/openmpi/4.0.1/bin/
 ## END PBS SETTINGS
 cd $PBS_O_WORKDIR
 cat $PBS_NODEFILE | sort | uniq > mpi_nodes
-export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/apps/openmpi/4.0.1/lib/
-export PATH=$PATH:/apps/openmpi/4.0.1/bin/
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/apps/openmpi/5.0.7/$(uname -m)/lib/
+export PATH=$PATH:/apps/openmpi/5.0.7/$(uname -m)/bin/
 # c5n.18xlarge is 36 cores so -np is 36 * 5
-/apps/openmpi/4.0.1/bin/mpirun --hostfile mpi_nodes -np 180 script.sh > my_output.log
+/apps/openmpi/5.0.7/$(uname -m)/bin/mpirun --hostfile mpi_nodes -np 180 script.sh > my_output.log
 ```
 
 **Multi-lines parameters**
@@ -396,14 +401,14 @@ Custom AMI running on a different distribution than the scheduler, with EFA enab
 #PBS -q normal
 ## Resources can be specified on multiple lines
 #PBS -l nodes=5,instance_type=c5n.18xlarge,efa_support=yes
-#PBS -l placement_group=false,base_os=rhel7,ami_id=ami-12345,subnet_id=sub-abcde
+#PBS -l placement_group=false,base_os=rhel9,ami_id=ami-12345,subnet_id=sub-abcde
 ## END PBS SETTINGS
 cd $PBS_O_WORKDIR
 cat $PBS_NODEFILE | sort | uniq > mpi_nodes
-export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/apps/openmpi/4.0.1/lib/
-export PATH=$PATH:/apps/openmpi/4.0.1/bin/
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/apps/openmpi/5.0.7/$(uname -m)/lib/
+export PATH=$PATH:/apps/openmpi/5.0.7/$(uname -m)/bin/
 # c5n.18xlarge is 36 cores so -np is 36 * 5
-/apps/openmpi/4.0.1/bin/mpirun --hostfile mpi_nodes -np 180 script.sh > my_output.log
+/apps/openmpi/5.0.7/$(uname -m)/bin/mpirun --hostfile mpi_nodes -np 180 script.sh > my_output.log
 ```
 
 ### Examples for `job-shared` queue <a href="#examples-for-job-shared-queue" id="examples-for-job-shared-queue"></a>

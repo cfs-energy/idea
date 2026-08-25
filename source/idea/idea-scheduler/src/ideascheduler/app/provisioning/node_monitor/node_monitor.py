@@ -153,8 +153,8 @@ class NodeMonitor(SocaService, NodeMonitorProtocol):
             if create_or_provision is None:
                 return
 
-            existing_node = self._context.scheduler.get_node(
-                host=create_or_provision.host
+            existing_node = self._context.scheduler.find_node(
+                hosts=instance.node_host_candidates
             )
 
             if existing_node is not None:
@@ -209,7 +209,7 @@ class NodeMonitor(SocaService, NodeMonitorProtocol):
                 f'failed to provision compute node - '
                 f'queue_type: {instance.soca_queue_type}, '
                 f'queue: {instance.soca_job_queue}, '
-                f'host: {instance.private_dns_name}, '
+                f'host: {instance.node_host}, '
                 f'instance_id: {instance.instance_id}, '
                 f'Error: {e}'
             )

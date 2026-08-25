@@ -45,11 +45,7 @@ export type VirtualDesktopGPU = "NO_GPU" | "NVIDIA" | "AMD";
 export type VirtualDesktopTenancy = "default" | "dedicated" | "host";
 export type DayOfWeek = "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday";
 export type VirtualDesktopScheduleType =
-  | "WORKING_HOURS"
-  | "STOP_ON_IDLE"
-  | "START_ALL_DAY"
-  | "CUSTOM_SCHEDULE"
-  | "NO_SCHEDULE";
+  "WORKING_HOURS" | "STOP_ON_IDLE" | "START_ALL_DAY" | "CUSTOM_SCHEDULE" | "NO_SCHEDULE";
 export type SocaUserInputParamType =
   | "text"
   | "password"
@@ -105,24 +101,12 @@ export type SocaComputeNodeState =
   | "wait-provisioning"
   | "initializing";
 export type SocaComputeNodeSharing =
-  | "default-excl"
-  | "default-exlchost"
-  | "default-shared"
-  | "force-excl"
-  | "force-exclhost"
-  | "ignore-excl";
+  "default-excl" | "default-exlchost" | "default-shared" | "force-excl" | "force-exclhost" | "ignore-excl";
 export type VirtualDesktopSessionPermissionActorType = "USER" | "GROUP";
 export type SocaJobPlacementArrangement = "free" | "pack" | "scatter" | "vscatter";
 export type SocaJobPlacementSharing = "excl" | "shared" | "exclhost" | "vscatter";
 export type DryRunOption =
-  | "true"
-  | "json:job"
-  | "json:bom"
-  | "json:budget"
-  | "json:quota"
-  | "json:queue"
-  | "notification:email"
-  | "debug";
+  "true" | "json:job" | "json:bom" | "json:budget" | "json:quota" | "json:queue" | "notification:email" | "debug";
 export interface AddSudoUserRequest {
   username?: string;
 }
@@ -201,6 +185,11 @@ export interface VirtualDesktopSession {
   hibernation_enabled?: boolean;
   is_launched_by_admin?: boolean;
   locked?: boolean;
+  idle_autostop_delay?: number;
+  reaper_exempt?: boolean;
+  reaper_exempt_reason?: string;
+  reaper_warning_sent_on?: string;
+  reaper_warning_stop_time?: string;
   failure_reason?: string;
 }
 export interface VirtualDesktopServer {
@@ -261,9 +250,65 @@ export interface Project {
   ldap_groups?: string[];
   enable_budgets?: boolean;
   budget?: AwsProjectBudget;
+  bedrock?: ProjectBedrockConfig;
+  bedrock_usage?: ProjectBedrockUsage;
+  bedrock_budget?: ProjectBedrockBudget;
   tags?: SocaKeyValue[];
   created_on?: string;
   updated_on?: string;
+}
+export interface ProjectBedrockConfig {
+  enabled?: boolean;
+  model_ids?: string[];
+  role_arn?: string;
+  instance_profile_arn?: string;
+  inference_profile_arns?: {
+    [k: string]: string;
+  };
+  model_errors?: {
+    [k: string]: string;
+  };
+  policy_errors?: {
+    [k: string]: string;
+  };
+}
+export interface ProjectBedrockUsage {
+  period?: string;
+  username?: string;
+  invocations?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+  by_user?: BedrockUserUsage[];
+  by_model?: BedrockModelUsage[];
+  updated_on?: string;
+  is_unavailable?: boolean;
+  spend?: SocaAmount;
+  spend_is_unavailable?: boolean;
+}
+export interface BedrockUserUsage {
+  username?: string;
+  invocations?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+}
+export interface BedrockModelUsage {
+  model_id?: string;
+  invocations?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+}
+export interface ProjectBedrockBudget {
+  action?: string;
+  status?: string;
+  budget_name?: string;
+  budget_limit?: SocaAmount;
+  actual_spend?: SocaAmount;
+  usage_percent?: number;
+  bedrock_spend_percent?: number;
+  message?: string;
 }
 export interface SocaKeyValue {
   key?: string;
@@ -595,6 +640,7 @@ export interface SocaQueueManagementParams {
   max_running_jobs?: number;
   max_provisioned_instances?: number;
   max_provisioned_capacity?: number;
+  max_nodes_per_job?: number;
   wait_on_any_job_with_license?: boolean;
   allowed_instance_types?: string[];
   excluded_instance_types?: string[];
@@ -917,6 +963,7 @@ export interface SocaInstanceTypeOptions {
 }
 export interface GetJobRequest {
   job_id?: string;
+  job_uid?: string;
 }
 export interface GetJobResult {
   job?: SocaJob;
@@ -938,6 +985,9 @@ export interface SocaJob {
   exit_status?: number;
   provisioned?: boolean;
   error_message?: string;
+  provisioning_attempt?: number;
+  max_provisioning_attempts?: number;
+  blocking_limit_type?: string;
   queue_time?: string;
   provisioning_time?: string;
   start_time?: string;
@@ -1838,6 +1888,15 @@ export interface SetParamResult {
   value?: unknown;
   refresh?: boolean;
 }
+export interface SetSessionReaperExemptionRequest {
+  idea_session_id?: string;
+  owner?: string;
+  exempt?: boolean;
+  reason?: string;
+}
+export interface SetSessionReaperExemptionResponse {
+  session?: VirtualDesktopSession;
+}
 export interface SignOutRequest {
   refresh_token?: string;
   sso_auth?: boolean;
@@ -1946,6 +2005,7 @@ export interface SubmitJobRequest {
   dry_run?: boolean;
   job_script_interpreter?: string;
   job_script?: string;
+  client_submission_id?: string;
 }
 export interface SubmitJobResult {
   dry_run?: DryRunOption;

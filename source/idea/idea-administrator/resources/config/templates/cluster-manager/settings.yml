@@ -29,13 +29,8 @@ web_portal:
   subtitle: ~
   copyright_text: 'Copyright {year} Amazon Inc. or its affiliates. All Rights Reserved.'
 
-  # session management refers to client side session management
-  # valid values are one of: [in-memory, local-storage]
-  # * in-memory: implies access tokens and refresh tokens will be saved in-memory within ServerWorker instance in WebBrowser. (recommended)
-  # * local-storage: implies access tokens and refresh tokens will be saved in browser local storage.
-  # Note: ServiceWorkers cannot be activated on Browsers when serving over insecure HTTPS/TLS context. Unless you are using valid TLS certs, ServiceWorkers will not be activated.
-  # Web Portal implementation will fall back to local-storage for session management when ServiceWorker cannot be installed.
-  # Change below value to local-storage only if you want to disable ServiceWorker based session management.
+  # valid values: in-memory (recommended), local-storage
+  # falls back to local-storage automatically when the browser can't activate a serviceworker (e.g. no valid tls cert)
   session_management: in-memory
 
   # front end default log level
@@ -48,6 +43,14 @@ web_portal:
   # log level can be overridden by user by setting the `idea.log-level` local storage key using browser console
   # eg. localStorage.setItem('idea.log-level', '4')
   default_log_level: 3
+
+  # optional external dashboard embedded in the web portal via a sandboxed iframe.
+  # the nav entry and page stay hidden unless enabled is true and url is an http(s) url.
+  # url must be reachable from the user's browser and must permit framing by the web portal origin.
+  custom_dashboard:
+    enabled: false
+    title: 'Dashboard'
+    url: ~
 
 oauth2_client:
   # cluster manager OAuth 2.0 client is used for managing authentication for web-portal (when single sign-on is disabled)
@@ -101,6 +104,35 @@ notifications:
   # email notifications are supported at the moment. slack, sms and other channels will be supported in a future release.
   email:
     enabled: true
+
+# nothing is provisioned while enabled is false. toggling it requires a redeploy of both
+# cluster-manager and virtual-desktop-controller; disable per-project before disabling here.
+bedrock:
+  enabled: false
+  # empty by design: approving a model here subscribes this account to its marketplace
+  # terms and pricing on first invocation. ids are region-specific.
+  model_ids: []
+  # one config per aws account and region, covering every bedrock caller there, not just
+  # idea; left false, usage tracking reports zero spend silently.
+  invocation_logging:
+    manage_configuration: true         # false: never touch the account and region configuration
+    log_retention_in_days: 30
+    include_request_response_data: false  # true also delivers prompts and completions to the log group
+  usage:
+    enabled: true
+    interval_minutes: 60               # how often invocation records are aggregated
+    lookback_days: 2                   # trailing days recomputed on every run (must be <= log_retention_in_days)
+    max_query_results: 10000
+    query_timeout_seconds: 300
+    retention_days: 400                # time to live on the usage rows
+    max_users_per_project: 50          # per-user rows returned with a project
+  # off by default. spend is the project's actual bedrock cost from cost explorer, about a
+  # day behind and never estimated; an exhausted budget blocks new desktops/jobs but does
+  # not revoke access from one already running.
+  budgets:
+    enabled: false
+    action: block                      # block: withhold model access and hold jobs. warn: report only
+    warning_percent: 80                # report a warning at this percent of the limit
 
 #
 # Control Task Manager settings

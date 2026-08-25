@@ -42,6 +42,7 @@ from ideaadministrator.app.cdk.constructs import (
     SocaBaseConstruct,
     CreateTagsCustomResource,
     IdeaNagSuppression,
+    LOG_RETENTION_DAYS,
 )
 from ideaadministrator.app_context import AdministratorContext
 from ideadatamodel import constants
@@ -1139,34 +1140,13 @@ class WebAcl(SocaBaseConstruct):
 
         # Apply retention if configured
         if retention_days is not None:
-            # Map retention days to CDK enum values
-            retention_mapping = {
-                1: logs.RetentionDays.ONE_DAY,
-                3: logs.RetentionDays.THREE_DAYS,
-                5: logs.RetentionDays.FIVE_DAYS,
-                7: logs.RetentionDays.ONE_WEEK,
-                14: logs.RetentionDays.TWO_WEEKS,
-                30: logs.RetentionDays.ONE_MONTH,
-                60: logs.RetentionDays.TWO_MONTHS,
-                90: logs.RetentionDays.THREE_MONTHS,
-                120: logs.RetentionDays.FOUR_MONTHS,
-                150: logs.RetentionDays.FIVE_MONTHS,
-                180: logs.RetentionDays.SIX_MONTHS,
-                365: logs.RetentionDays.ONE_YEAR,
-                400: logs.RetentionDays.THIRTEEN_MONTHS,
-                545: logs.RetentionDays.EIGHTEEN_MONTHS,
-                731: logs.RetentionDays.TWO_YEARS,
-                1827: logs.RetentionDays.FIVE_YEARS,
-                3653: logs.RetentionDays.TEN_YEARS,
-            }
-
-            if retention_days in retention_mapping:
-                log_group_params['retention'] = retention_mapping[retention_days]
+            if retention_days in LOG_RETENTION_DAYS:
+                log_group_params['retention'] = LOG_RETENTION_DAYS[retention_days]
             else:
                 self.context.logger().warning(
                     f'Invalid retention days value: {retention_days}. '
-                    f'Valid values are: {list(retention_mapping.keys())}. '
-                    f'Using default retention (never expire).'
+                    f'Valid values are: {list(LOG_RETENTION_DAYS.keys())}. '
+                    f'Using the CDK default retention (two years).'
                 )
 
         self.log_group = logs.LogGroup(

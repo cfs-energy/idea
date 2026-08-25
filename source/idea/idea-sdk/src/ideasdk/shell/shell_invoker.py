@@ -176,7 +176,13 @@ class ShellInvoker:
         skip_error_logging=False,
         env: Optional[Dict] = None,
         cmd_input=None,
+        timeout: Optional[float] = None,
     ) -> ShellInvocationResult:
+        """
+        invoke cmd and wait for it to finish.
+        timeout is in seconds; on expiry the child is killed and subprocess.TimeoutExpired
+        is raised. timeout=None waits forever.
+        """
         start_time = Utils.current_time_ms()
 
         result = subprocess.run(
@@ -187,6 +193,7 @@ class ShellInvoker:
             text=text,
             cwd=self.cwd,
             env=env,
+            timeout=timeout,
         )
 
         total_time = Utils.current_time_ms() - start_time

@@ -13,10 +13,12 @@ import {
     StatusIndicator,
     Table,
 } from "@cloudscape-design/components";
+import { v4 as uuid } from "uuid";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faBug, faCheckCircle, faCircleMinus, faMicrochip } from "@fortawesome/free-solid-svg-icons";
-import { SubmitJobResult } from "../../client/data-model";
-import { FileBrowserClient, SchedulerClient } from "../../client";
+import { Project, SubmitJobResult } from "../../client/data-model";
+import { FileBrowserClient, ProjectsClient, SchedulerClient } from "../../client";
+import { ProjectBedrockModels } from "../../components/common";
 import { AppContext } from "../../common";
 import Utils from "../../common/utils";
 import { IdeaSideNavigationProps } from "../../components/side-navigation";
@@ -42,8 +44,9 @@ import 'ace-builds/css/theme/vibrant_ink.css';
 
 // Import Ace editor directly
 import ace from 'ace-builds';
-// Use webpack resolver
-import 'ace-builds/webpack-resolver';
+// Registers mode/theme/ext loaders. Workers are not covered; this page only uses
+// mode-sh, which has no worker (see src/common/ace-worker-urls.ts).
+import 'ace-builds/esm-resolver';
 // Import sh mode for shell script syntax highlighting
 import 'ace-builds/src-noconflict/mode-sh';
 // Import themes
@@ -64,6 +67,7 @@ export interface ScriptWorkbenchProps extends IdeaSideNavigationProps {
 
 export interface ScriptWorkbenchState {
     jobScript: string;
+    clientSubmissionId: string;
     errorMessage: string;
     submitJobLoading: boolean;
     dryRunLoading: boolean;
@@ -73,6 +77,7 @@ export interface ScriptWorkbenchState {
     fileUploadError: string;
     isLoading: boolean;
     scriptModifiedSinceDryRun: boolean;
+    projects: Project[];
 }
 
 interface AvailableVariableProps {
@@ -149,6 +154,7 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
         console.log("ScriptWorkbench constructor", props);
         this.state = {
             jobScript: "",
+            clientSubmissionId: uuid(),
             errorMessage: "",
             submitJobLoading: false,
             dryRunLoading: false,
@@ -157,6 +163,7 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
             fileUploadError: "",
             isLoading: false,
             scriptModifiedSinceDryRun: false,
+            projects: [],
         };
     }
 
@@ -181,6 +188,15 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
             isLoading: false
         });
 
+        this.getProjectsClient().getUserProjects({
+            username: AppContext.get().auth().getUsername()
+        }).then((result) => {
+            this.setState({projects: result.projects ?? []});
+        }).catch(() => {
+            // the models block is additive: without the project list it simply does not render
+            this.setState({projects: []});
+        });
+
         // Check if file path is provided in URL
         const filePath = this.props.searchParams.get('file');
         if (filePath) {
@@ -190,6 +206,39 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
 
     componentWillUnmount() {
         // Cleanup if needed in the future
+    }
+
+    getProjectsClient(): ProjectsClient {
+        return AppContext.get().client().projects();
+    }
+
+    /** The project named by the script's own #PBS -P directive, when the user is a member of it.
+     * Directives are read at the start of a line only, and qsub applies the last -P, so the
+     * script is scanned from the bottom up. */
+    getScriptProject(): Project | undefined {
+        const lines = this.state.jobScript.split('\n');
+        for (let index = lines.length - 1; index >= 0; index--) {
+            const match = lines[index].match(/^#PBS\s+-P\s+(\S+)/i);
+            if (match !== null) {
+                return this.state.projects.find((project) => project.name === match[1]);
+            }
+        }
+        return undefined;
+    }
+
+    buildProjectAiModelsSection() {
+        const project = this.getScriptProject();
+        if (!project?.bedrock?.enabled) {
+            return null;
+        }
+        return (
+            <FormField
+                label="AI Models"
+                description={`Approved for ${project.title ?? project.name}. Compute nodes reach them through the project's instance profile, so the script does not carry credentials.`}
+            >
+                <ProjectBedrockModels project={project}/>
+            </FormField>
+        );
     }
 
     getSchedulerClient(): SchedulerClient {
@@ -248,22 +297,30 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
         return this.isSubmitted() && Utils.asBoolean(this.state.submitJobResult?.dry_run);
     }
 
+    hasValidationErrors(): boolean {
+        const results = this.state.submitJobResult?.validations?.results;
+        return results !== undefined && results.length > 0;
+    }
+
+    hasIncidentalErrors(): boolean {
+        const results = this.state.submitJobResult?.incidentals?.results;
+        return results !== undefined && results.length > 0;
+    }
+
     isDryRunSuccessful(): boolean {
         // For dry runs, success is determined by empty validation errors AND no incidental errors
         if (!this.isDryRun()) {
             return false;
         }
 
-        // Check if there are any validation errors
-        const hasValidationErrors = this.state.submitJobResult?.validations?.results &&
-                                   this.state.submitJobResult.validations.results.length > 0;
-
-        // Check if there are any incidental errors
-        const hasIncidentalErrors = this.state.submitJobResult?.incidentals?.results &&
-                                   this.state.submitJobResult.incidentals.results.length > 0;
-
         // Dry run is successful only if there are no validation or incidental errors
-        return !hasValidationErrors && !hasIncidentalErrors;
+        return !this.hasValidationErrors() && !this.hasIncidentalErrors();
+    }
+
+    // a rejected submission is returned as a successful API call carrying accepted = false, and its
+    // job keeps the placeholder id. a job script run through the bash interpreter has no job at all.
+    isAccepted(): boolean {
+        return this.isJobSubmissionSuccessful() || Utils.asBoolean(this.state.submitJobResult?.accepted);
     }
 
     canSubmitJob(): boolean {
@@ -429,10 +486,14 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
             this.getSchedulerClient().submitJob({
                 job_script_interpreter: "pbs",
                 job_script: base64Script,
-                dry_run: dryRun
+                dry_run: dryRun,
+                client_submission_id: this.state.clientSubmissionId
             }).then(result => {
                 this.setState({
-                    submitJobResult: result
+                    submitJobResult: result,
+                    // a new id only once the job is really queued, so a retry after a
+                    // timeout still deduplicates against the first attempt
+                    clientSubmissionId: (!dryRun && Utils.asBoolean(result.accepted)) ? uuid() : this.state.clientSubmissionId
                 }, () => {
                     // Log dry run results to help with debugging
                     if (dryRun) {
@@ -693,114 +754,22 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
                     );
                 }
                 // Failed dry run
-                else if (this.isDryRun() && !this.isDryRunSuccessful()) {
-                    return (
-                        <SpaceBetween size="l" direction="vertical">
-                            <Alert type="error" header="Validation Failed">
-                                <Box variant="h3">
-                                    <FontAwesomeIcon icon={faCircleMinus} /> Your job script cannot be submitted due to the following issues:
-                                </Box>
-                            </Alert>
-
-                            {this.state.submitJobResult?.validations?.results && this.state.submitJobResult.validations.results.length > 0 && (
-                                <Container
-                                    header={<Header>Script Validation Errors</Header>}
-                                >
-                                    <SpaceBetween size="s" direction="vertical">
-                                        <Box color="text-status-error">
-                                            Please correct the following issues in your job script:
-                                        </Box>
-                                        <Table
-                                            items={this.state.submitJobResult.validations.results.map((result, idx) => ({
-                                                id: idx.toString(),
-                                                message: result.message,
-                                                type: "Validation Error"
-                                            }))}
-                                            columnDefinitions={[
-                                                {
-                                                    id: "type",
-                                                    header: "Type",
-                                                    cell: item => (
-                                                        <StatusIndicator type="error">{item.type}</StatusIndicator>
-                                                    ),
-                                                    width: 150
-                                                },
-                                                {
-                                                    id: "message",
-                                                    header: "Message",
-                                                    cell: item => item.message
-                                                }
-                                            ]}
-                                            trackBy="id"
-                                            variant="embedded"
-                                            empty={<Box textAlign="center">No validation errors</Box>}
-                                        />
-                                        <Box variant="small">
-                                            <Link external href="https://docs.idea-hpc.com/modules/hpc-workloads/user-documentation/submit-a-job">
-                                                Learn more about job submission requirements
-                                            </Link>
-                                        </Box>
-                                    </SpaceBetween>
-                                </Container>
-                            )}
-
-                            {this.state.submitJobResult?.incidentals?.results && this.state.submitJobResult.incidentals.results.length > 0 && (
-                                <Container
-                                    header={<Header>Authorization Errors</Header>}
-                                >
-                                    <SpaceBetween size="s" direction="vertical">
-                                        <Box color="text-status-error">
-                                            You don't have the required permissions:
-                                        </Box>
-                                        <Table
-                                            items={this.state.submitJobResult.incidentals.results.map((result, idx) => ({
-                                                id: idx.toString(),
-                                                error_code: result.error_code || "Error",
-                                                message: result.message
-                                            }))}
-                                            columnDefinitions={[
-                                                {
-                                                    id: "error_code",
-                                                    header: "Error Type",
-                                                    cell: item => (
-                                                        <StatusIndicator type="warning">{item.error_code}</StatusIndicator>
-                                                    ),
-                                                    width: 150
-                                                },
-                                                {
-                                                    id: "message",
-                                                    header: "Message",
-                                                    cell: item => item.message
-                                                }
-                                            ]}
-                                            trackBy="id"
-                                            variant="embedded"
-                                            empty={<Box textAlign="center">No permission errors</Box>}
-                                        />
-                                        <Box variant="small">
-                                            Contact your administrator if you need access to additional projects or queues.
-                                        </Box>
-                                    </SpaceBetween>
-                                </Container>
-                            )}
-
-                            <Alert type="info">
-                                <SpaceBetween size="s" direction="vertical">
-                                    <div>To resolve these issues:</div>
-                                    <ul>
-                                        <li>Check your PBS directives for correct syntax</li>
-                                        <li>Verify you're using a valid project name</li>
-                                        <li>Ensure you have permission to use the specified queue</li>
-                                        <li>Verify instance_type and nodes specifications</li>
-                                    </ul>
-                                    <div>Click <strong>Dry Run</strong> again after making changes.</div>
-                                </SpaceBetween>
-                            </Alert>
-                        </SpaceBetween>
+                else if (this.isDryRun()) {
+                    return this.buildSubmissionFailureDetails(
+                        "Validation Failed",
+                        "Your job script cannot be submitted due to the following issues:"
+                    );
+                }
+                // Rejected submission: the scheduler returns accepted = false with the
+                // reasons in validations/incidentals.
+                else if (!this.isAccepted()) {
+                    return this.buildSubmissionFailureDetails(
+                        "Job Submission Failed",
+                        "The scheduler did not queue your job for the following reasons:"
                     );
                 }
                 // Successful job submission
-                else if (this.isJobSubmissionSuccessful()) {
+                else {
                     return (
                         <ColumnLayout columns={1}>
                             <Box variant="h3" color="text-status-success">
@@ -900,6 +869,123 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
         }
     }
 
+    buildSubmissionFailureDetails(header: string, intro: string) {
+        return (
+            <SpaceBetween size="l" direction="vertical">
+                <Alert type="error" header={header}>
+                    <Box variant="h3">
+                        <FontAwesomeIcon icon={faCircleMinus} /> {intro}
+                    </Box>
+                </Alert>
+
+                {!this.hasValidationErrors() && !this.hasIncidentalErrors() && (
+                    <Container
+                        header={<Header>Reason</Header>}
+                    >
+                        <Box color="text-status-error">
+                            The scheduler did not return a reason. Contact your cluster administrator.
+                        </Box>
+                    </Container>
+                )}
+
+                {this.state.submitJobResult?.validations?.results && this.state.submitJobResult.validations.results.length > 0 && (
+                    <Container
+                        header={<Header>Script Validation Errors</Header>}
+                    >
+                        <SpaceBetween size="s" direction="vertical">
+                            <Box color="text-status-error">
+                                Please correct the following issues in your job script:
+                            </Box>
+                            <Table
+                                items={this.state.submitJobResult.validations.results.map((result, idx) => ({
+                                    id: idx.toString(),
+                                    message: result.message,
+                                    type: "Validation Error"
+                                }))}
+                                columnDefinitions={[
+                                    {
+                                        id: "type",
+                                        header: "Type",
+                                        cell: item => (
+                                            <StatusIndicator type="error">{item.type}</StatusIndicator>
+                                        ),
+                                        width: 150
+                                    },
+                                    {
+                                        id: "message",
+                                        header: "Message",
+                                        cell: item => item.message
+                                    }
+                                ]}
+                                trackBy="id"
+                                variant="embedded"
+                                empty={<Box textAlign="center">No validation errors</Box>}
+                            />
+                            <Box variant="small">
+                                <Link external href="https://docs.idea-hpc.com/modules/hpc-workloads/user-documentation/submit-a-job">
+                                    Learn more about job submission requirements
+                                </Link>
+                            </Box>
+                        </SpaceBetween>
+                    </Container>
+                )}
+
+                {this.state.submitJobResult?.incidentals?.results && this.state.submitJobResult.incidentals.results.length > 0 && (
+                    <Container
+                        header={<Header>Authorization Errors</Header>}
+                    >
+                        <SpaceBetween size="s" direction="vertical">
+                            <Box color="text-status-error">
+                                You don't have the required permissions:
+                            </Box>
+                            <Table
+                                items={this.state.submitJobResult.incidentals.results.map((result, idx) => ({
+                                    id: idx.toString(),
+                                    error_code: result.error_code || "Error",
+                                    message: result.message
+                                }))}
+                                columnDefinitions={[
+                                    {
+                                        id: "error_code",
+                                        header: "Error Type",
+                                        cell: item => (
+                                            <StatusIndicator type="warning">{item.error_code}</StatusIndicator>
+                                        ),
+                                        width: 150
+                                    },
+                                    {
+                                        id: "message",
+                                        header: "Message",
+                                        cell: item => item.message
+                                    }
+                                ]}
+                                trackBy="id"
+                                variant="embedded"
+                                empty={<Box textAlign="center">No permission errors</Box>}
+                            />
+                            <Box variant="small">
+                                Contact your administrator if you need access to additional projects or queues.
+                            </Box>
+                        </SpaceBetween>
+                    </Container>
+                )}
+
+                <Alert type="info">
+                    <SpaceBetween size="s" direction="vertical">
+                        <div>To resolve these issues:</div>
+                        <ul>
+                            <li>Check your PBS directives for correct syntax</li>
+                            <li>Verify you're using a valid project name</li>
+                            <li>Ensure you have permission to use the specified queue</li>
+                            <li>Verify instance_type and nodes specifications</li>
+                        </ul>
+                        <div>Click <strong>Dry Run</strong> again after making changes.</div>
+                    </SpaceBetween>
+                </Alert>
+            </SpaceBetween>
+        );
+    }
+
     // Add a debugging method to help troubleshoot dry run results
     logDryRunResults(): void {
         if (this.isDryRun() && this.state.submitJobResult) {
@@ -953,6 +1039,7 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
                     </Box>
 
                     {this.buildRequiredVariablesSection()}
+                    {this.buildProjectAiModelsSection()}
 
                     <FormField
                         label="PBS Job Script"

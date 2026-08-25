@@ -1,12 +1,12 @@
 # Begin: Install OpenPBS
-{% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9', 'ubuntu2204', 'ubuntu2404') %}
+{% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10', 'ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
 
 function install_openpbs_dependencies() {
   OPENPBS_PKGS="{{ ' '.join(context.config.get_list('global-settings.package_config.openpbs.packages')) }}"
-  {% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+  {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
   yum install -y --skip-broken $(echo ${OPENPBS_PKGS[*]})
   {% endif %}
-  {% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+  {% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
   apt install -y $(echo ${OPENPBS_PKGS[*]})
   {% endif %}
   {% include '_templates/linux/cjson_devel.jinja2' %}
@@ -35,7 +35,11 @@ function compile_and_install_openpbs() {
   local NUM_PROCS=`nproc --all`
   local MAKE_FLAGS="-j${NUM_PROCS}"
   make ${MAKE_FLAGS}
-  make install ${MAKE_FLAGS}
+  if ! make install ${MAKE_FLAGS}; then
+    log_error "OpenPBS ${OPENPBS_VERSION} build failed, nothing was installed to /opt/pbs"
+    popd
+    return 1
+  fi
   /opt/pbs/libexec/pbs_postinstall
   chmod 4755 /opt/pbs/sbin/pbs_iff /opt/pbs/sbin/pbs_rcp
   popd || exit
@@ -74,14 +78,31 @@ function install_openpbs_release() {
   compile_and_install_openpbs "${OPENPBS_VERSION}" "${EXTRACT_DIR}"
 }
 
+function check_openpbs_git_installed() {
+  local OPENPBS_VERSION=$1
+  local OPENPBS_COMMIT=$2
+  check_openpbs_installed "${OPENPBS_VERSION}" || return 1
+  # qstat --version does not change across commits of the same version; compare
+  # the commit recorded at install time so a pin bump reaches existing nodes/AMIs
+  local OPENPBS_INSTALLED_COMMIT=""
+  if [[ -f /opt/pbs/.idea_openpbs_commit ]]; then
+    OPENPBS_INSTALLED_COMMIT=$(cat /opt/pbs/.idea_openpbs_commit)
+  fi
+  if [[ "${OPENPBS_INSTALLED_COMMIT}" == "${OPENPBS_COMMIT}" ]]; then
+    log_info "OpenPBS ${OPENPBS_VERSION} (commit ${OPENPBS_COMMIT}) is already installed."
+    return 0
+  fi
+  return 1
+}
+
 function install_openpbs_git() {
   local OPENPBS_VERSION="{{ context.config.get_string('global-settings.package_config.openpbs.version', required=True) }}"
+  local OPENPBS_COMMIT="{{ context.config.get_string('global-settings.package_config.openpbs.commit', required=True) }}"
 
-  # Check if already installed with correct version
-  check_openpbs_installed "${OPENPBS_VERSION}" && return 0
+  # Check if already installed with correct version AND commit
+  check_openpbs_git_installed "${OPENPBS_VERSION}" "${OPENPBS_COMMIT}" && return 0
 
   local OPENPBS_REPO_URL="{{ context.config.get_string('global-settings.package_config.openpbs.repo_url', required=True) }}"
-  local OPENPBS_COMMIT="{{ context.config.get_string('global-settings.package_config.openpbs.commit', required=True) }}"
   local OPENPBS_WORK_DIR="/root/bootstrap/openpbs"
 
   log_info "Installing OpenPBS version ${OPENPBS_VERSION} from git commit ${OPENPBS_COMMIT}..."
@@ -94,16 +115,19 @@ function install_openpbs_git() {
   git checkout ${OPENPBS_COMMIT}
   popd || exit
 
-  # Compile and install
-  compile_and_install_openpbs "${OPENPBS_VERSION}" "${OPENPBS_WORK_DIR}/openpbs"
+  # the marker is what check_openpbs_git_installed trusts, so only record a build that succeeded
+  compile_and_install_openpbs "${OPENPBS_VERSION}" "${OPENPBS_WORK_DIR}/openpbs" || return 1
+  echo -n "${OPENPBS_COMMIT}" > /opt/pbs/.idea_openpbs_commit
 }
 
 # Install dependencies
 install_openpbs_dependencies
 
 # Determine which installation method to use
-{% set os_requiring_git = ['amazonlinux2023', 'ubuntu2204', 'ubuntu2404'] %}
-{% if context.base_os in ('amazonlinux2', 'rhel8', 'rocky8') or (context.config.get_string('global-settings.package_config.openpbs.type') == 'release' and context.base_os not in os_requiring_git) %}
+# rhel10/rocky10 ship gcc 14, which rejects the v23.06.06 tarball with 24 incompatible-pointer-type
+# errors in pbs_tclWrap.c; only the git branch carries the fix, so the release path is not offered.
+{% set os_requiring_git = ['amazonlinux2023', 'rhel10', 'rocky10', 'ubuntu2204', 'ubuntu2404', 'ubuntu2604'] %}
+{% if context.base_os in ('rhel8', 'rocky8') or (context.config.get_string('global-settings.package_config.openpbs.type') == 'release' and context.base_os not in os_requiring_git) %}
 install_openpbs_release
 {% else %}
 install_openpbs_git

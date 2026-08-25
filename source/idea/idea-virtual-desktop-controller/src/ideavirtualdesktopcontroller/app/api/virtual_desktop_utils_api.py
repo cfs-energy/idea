@@ -9,7 +9,7 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 import ideavirtualdesktopcontroller
-from ideadatamodel import exceptions, errorcodes
+from ideadatamodel import exceptions, errorcodes, constants
 from ideadatamodel.virtual_desktop import (
     ListSupportedOSResponse,
     ListScheduleTypesResponse,
@@ -174,8 +174,12 @@ class VirtualDesktopUtilsAPI(VirtualDesktopAPI):
 
     @staticmethod
     def list_supported_os(context: ApiInvocationContext):
+        # EOL members stay in the enum so existing records still deserialize, but are never
+        # offered for new sessions or software stacks.
         supported_os = []
         for os in VirtualDesktopBaseOS:
+            if os.value in constants.EOL_BASEOS:
+                continue
             supported_os.append(os)
         context.success(ListSupportedOSResponse(listing=supported_os))
 

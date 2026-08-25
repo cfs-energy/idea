@@ -4,21 +4,19 @@
 # https://docs.aws.amazon.com/efs/latest/ug/encryption-in-transit.html
 # Mounts will appear connecting to localhost / '127.0.0.1' as they are tunneled in TLS.
 #
-{% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9', 'ubuntu2204', 'ubuntu2404') %}
+{% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10', 'ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
   function install_stunnel () {
-     {% if context.base_os in ('amazonlinux2',) %}
-    STUNNEL_CMD='stunnel5'
-     {% elif context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+     {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
     STUNNEL_CMD='stunnel'
-     {% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+     {% elif context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
     STUNNEL_CMD='stunnel4'
      {% endif %}
   which ${STUNNEL_CMD} > /dev/null 2>&1
   if [[ "$?" != "0" ]]; then
     log_info "Installing stunnel for {{ context.base_os }}"
-     {% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+     {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
       yum install -y ${STUNNEL_CMD}
-     {% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+     {% elif context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
       apt install -y ${STUNNEL_CMD}
      {% endif %}
   else

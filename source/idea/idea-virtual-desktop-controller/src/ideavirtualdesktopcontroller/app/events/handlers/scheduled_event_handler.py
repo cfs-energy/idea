@@ -92,3 +92,40 @@ class ScheduledEventHandler(BaseVirtualDesktopControllerEventHandler):
                 idea_session_id=session_info[0],
                 idea_session_owner=session_info[1],
             )
+
+        # desktops whose host never became usable. nothing else moves them out of
+        # PROVISIONING, and the instance is billed for as long as they sit there.
+        try:
+            failed = self.session_utils.fail_stuck_provisioning_sessions()
+            if failed > 0:
+                self.log_warning(
+                    message_id=message_id,
+                    message=f'Failed {failed} desktop(s) whose host never finished provisioning',
+                )
+        except Exception as e:
+            self.log_exception(message_id=message_id, exception=e)
+
+        # desktops that launched before their project's bedrock instance profile existed.
+        # last, and never fatal: schedules and permission expiry must not be retried for it
+        try:
+            repaired = self.session_utils.repair_project_instance_profiles()
+            if repaired > 0:
+                self.log_info(
+                    message_id=message_id,
+                    message=f'Moved {repaired} desktop(s) onto their project profile',
+                )
+        except Exception as e:
+            self.log_exception(message_id=message_id, exception=e)
+
+        # stopped desktops past the reaper cutoff, and records whose instance is gone. opt-in,
+        # and on its own short budget so this handler stays inside the queue visibility timeout.
+        try:
+            counters = self.session_utils.reap_stopped_sessions()
+            deleted = counters.get('reaped', 0) + counters.get('orphans_cleaned', 0)
+            if deleted > 0:
+                self.log_info(
+                    message_id=message_id,
+                    message=f'The stopped desktop reaper deleted {deleted} desktop(s)',
+                )
+        except Exception as e:
+            self.log_exception(message_id=message_id, exception=e)

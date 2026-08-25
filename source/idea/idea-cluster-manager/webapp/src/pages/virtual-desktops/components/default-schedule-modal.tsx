@@ -34,7 +34,7 @@ interface DefaultScheduleDayOfWeekScheduleState {
 
 class DefaultScheduleDayOfWeekSchedule extends Component<DefaultScheduleDayOfWeekScheduleProps, DefaultScheduleDayOfWeekScheduleState> {
 
-    timeRangeSlider: RefObject<IdeaTimeRangeSlider>
+    timeRangeSlider: RefObject<IdeaTimeRangeSlider | null>
 
     constructor(props: DefaultScheduleDayOfWeekScheduleProps) {
         super(props);
@@ -150,13 +150,13 @@ interface DefaultScheduleModalState {
 
 class DefaultScheduleModal extends Component<DefaultScheduleModalProps, DefaultScheduleModalState> {
 
-    mondaySchedule: RefObject<DefaultScheduleDayOfWeekSchedule>
-    tuesdaySchedule: RefObject<DefaultScheduleDayOfWeekSchedule>
-    wednesdaySchedule: RefObject<DefaultScheduleDayOfWeekSchedule>
-    thursdaySchedule: RefObject<DefaultScheduleDayOfWeekSchedule>
-    fridaySchedule: RefObject<DefaultScheduleDayOfWeekSchedule>
-    saturdaySchedule: RefObject<DefaultScheduleDayOfWeekSchedule>
-    sundaySchedule: RefObject<DefaultScheduleDayOfWeekSchedule>
+    mondaySchedule: RefObject<DefaultScheduleDayOfWeekSchedule | null>
+    tuesdaySchedule: RefObject<DefaultScheduleDayOfWeekSchedule | null>
+    wednesdaySchedule: RefObject<DefaultScheduleDayOfWeekSchedule | null>
+    thursdaySchedule: RefObject<DefaultScheduleDayOfWeekSchedule | null>
+    fridaySchedule: RefObject<DefaultScheduleDayOfWeekSchedule | null>
+    saturdaySchedule: RefObject<DefaultScheduleDayOfWeekSchedule | null>
+    sundaySchedule: RefObject<DefaultScheduleDayOfWeekSchedule | null>
 
     clockInterval: any
 

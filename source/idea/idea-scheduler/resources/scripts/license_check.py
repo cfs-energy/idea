@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python3
 
 #  Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #
@@ -30,7 +30,7 @@ if __name__ == '__main__':
     arg = parser.parse_args()
     lmstat_path = 'PATH_TO_LMUTIL'
     if lmstat_path == 'PATH_TO_LMUTIL':
-        print('Please specify a link to your lmutil binary (edit line 30 of this file)')
+        print('Please set lmstat_path in this script to the path of your lmutil binary')
         sys.exit(1)
 
     lmstat_cmd = [

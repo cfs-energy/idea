@@ -14,15 +14,20 @@
 import React, {Component, RefObject} from "react";
 
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
-import {Button, ButtonDropdown, ColumnLayout, Container, Header, SpaceBetween, Tabs} from "@cloudscape-design/components";
+import {Box, Button, ButtonDropdown, ColumnLayout, Container, Header, SpaceBetween, StatusIndicator, Table, Tabs} from "@cloudscape-design/components";
+import {TableProps} from "@cloudscape-design/components/table/interfaces";
 import {KeyValue, KeyValueGroup} from "../../components/key-value";
-import {AuthClient} from "../../client";
+import {CopyToClipBoard, ProjectBedrockModels} from "../../components/common";
+import {AuthClient, ProjectsClient} from "../../client";
 import {AppContext} from "../../common";
 import {AuthService} from "../../service";
-import {User, ListUsersInGroupResult} from "../../client/data-model";
+import {User, ListUsersInGroupResult, Project} from "../../client/data-model";
 import IdeaForm from "../../components/form";
 import IdeaAppLayout, {IdeaAppLayoutProps} from "../../components/app-layout";
 import {withRouter} from "../../navigation/navigation-utils";
+import Utils from "../../common/utils";
+import dot from "dot-object";
+import {Constants} from "../../common/constants";
 
 export interface AccountSettingsProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
 
@@ -31,13 +36,54 @@ export interface AccountSettingsProps extends IdeaAppLayoutProps, IdeaSideNaviga
 export interface AccountSettingsState {
     user: User | null
     usersInGroup: User[] | null
+    projects: Project[] | null
+    projectsError: string | null
+    bedrockEnabled: boolean
+}
+
+const MY_PROJECTS_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<Project>[] = [
+    {
+        id: 'title',
+        header: 'Title',
+        cell: project => project.title
+    },
+    {
+        id: 'name',
+        header: 'Project Code',
+        cell: project => project.name
+    },
+    {
+        id: 'description',
+        header: 'Description',
+        cell: project => project.description || '-'
+    },
+    {
+        id: 'enabled',
+        header: 'Status',
+        cell: project => (project.enabled) ? <StatusIndicator type="success">Enabled</StatusIndicator> :
+            <StatusIndicator type="stopped">Disabled</StatusIndicator>
+    },
+    {
+        id: 'ldap-groups',
+        header: 'Groups',
+        cell: project => (project.ldap_groups && project.ldap_groups.length > 0) ? project.ldap_groups.join(', ') : '-'
+    }
+]
+
+// shown only when bedrock.enabled. Renders the project model list with the same
+// component as the script workbench.
+const MY_PROJECTS_BEDROCK_COLUMN_DEFINITION: TableProps.ColumnDefinition<Project> = {
+    id: 'bedrock-models',
+    header: 'AI Models',
+    minWidth: 260,
+    cell: project => <ProjectBedrockModels project={project}/>
 }
 
 class AccountSettings extends Component<AccountSettingsProps, AccountSettingsState> {
 
-    changePasswordForm: RefObject<IdeaForm>
-    addUserToGroupForm: RefObject<IdeaForm>
-    removeUserFromGroupForm: RefObject<IdeaForm>
+    changePasswordForm: RefObject<IdeaForm | null>
+    addUserToGroupForm: RefObject<IdeaForm | null>
+    removeUserFromGroupForm: RefObject<IdeaForm | null>
 
     constructor(props: AccountSettingsProps) {
         super(props);
@@ -46,13 +92,24 @@ class AccountSettings extends Component<AccountSettingsProps, AccountSettingsSta
         this.removeUserFromGroupForm = React.createRef()
         this.state = {
             user: null,
-            usersInGroup: null
+            usersInGroup: null,
+            projects: null,
+            projectsError: null,
+            bedrockEnabled: false
         }
     }
 
     componentDidMount() {
         this.fetchUser().then(() => {
             this.fetchUsersInGroup().finally()
+        })
+        this.fetchProjects().finally()
+        AppContext.get().getClusterSettingsService().getModuleSettings(Constants.MODULE_CLUSTER_MANAGER).then(settings => {
+            this.setState({
+                bedrockEnabled: Utils.asBoolean(dot.pick('bedrock.enabled', settings), false)
+            })
+        }).catch(error => {
+            console.error(error)
         })
     }
 
@@ -62,6 +119,10 @@ class AccountSettings extends Component<AccountSettingsProps, AccountSettingsSta
 
     getAuthClient(): AuthClient {
         return AppContext.get().client().auth()
+    }
+
+    getProjectsClient(): ProjectsClient {
+        return AppContext.get().client().projects()
     }
 
     getChangePasswordForm(): IdeaForm {
@@ -87,6 +148,40 @@ class AccountSettings extends Component<AccountSettingsProps, AccountSettingsSta
             }).catch(e => {
                 console.error(e)
                 reject(false)
+            })
+        })
+    }
+
+    fetchProjects(): Promise<boolean> {
+        return new Promise<boolean>((resolve) => {
+            this.getProjectsClient().getUserProjects({
+                username: AppContext.get().auth().getUsername()
+            }).then(result => {
+                this.setState({
+                    projects: result.projects ?? [],
+                    projectsError: null
+                }, () => {
+                    resolve(true)
+                })
+            }).catch(e => {
+                // null projects would leave the tab loading forever; record the error so the empty slot
+                // can tell a failed fetch apart from a user who genuinely belongs to no projects.
+                this.setState({
+                    projects: [],
+                    projectsError: e?.message ?? `${e}`
+                }, () => {
+                    this.props.onFlashbarChange({
+                        items: [
+                            {
+                                type: 'error',
+                                header: 'Failed to load your projects',
+                                content: e?.message ?? `${e}`,
+                                dismissible: true
+                            }
+                        ]
+                    })
+                    resolve(false)
+                })
             })
         })
     }
@@ -358,6 +453,29 @@ class AccountSettings extends Component<AccountSettingsProps, AccountSettingsSta
                                                         <KeyValue title="Additional users in my group" value={getUsersInGroup()}/>
                                                     </KeyValueGroup>
                                                 </ColumnLayout>
+                                            )
+                                        },
+                                        {
+                                            id: 'projects',
+                                            label: 'My Projects',
+                                            content: (
+                                                <Table
+                                                    variant="embedded"
+                                                    items={this.state.projects ?? []}
+                                                    loading={this.state.projects === null}
+                                                    loadingText="Retrieving your projects ..."
+                                                    columnDefinitions={(this.state.bedrockEnabled) ? [...MY_PROJECTS_TABLE_COLUMN_DEFINITIONS, MY_PROJECTS_BEDROCK_COLUMN_DEFINITION] : MY_PROJECTS_TABLE_COLUMN_DEFINITIONS}
+                                                    empty={this.state.projectsError
+                                                        ? <Box textAlign="center" color="inherit">
+                                                            <b>Could not load your projects</b>
+                                                            <Box variant="p" color="inherit">{this.state.projectsError}</Box>
+                                                            <Button onClick={() => this.setState({projects: null, projectsError: null}, () => this.fetchProjects().finally())}>Retry</Button>
+                                                        </Box>
+                                                        : <Box textAlign="center" color="inherit">
+                                                            <b>No projects</b>
+                                                            <Box variant="p" color="inherit">You are not a member of any project.</Box>
+                                                        </Box>}
+                                                />
                                             )
                                         }
                                     ]}

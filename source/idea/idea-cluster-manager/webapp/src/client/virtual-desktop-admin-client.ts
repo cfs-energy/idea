@@ -18,6 +18,8 @@ import {
     GetSessionInfoResponse,
     UpdateSessionRequest,
     UpdateSessionResponse,
+    SetSessionReaperExemptionRequest,
+    SetSessionReaperExemptionResponse,
     DeleteSessionRequest,
     DeleteSessionResponse,
     ListSessionsRequest,
@@ -88,6 +90,13 @@ class VirtualDesktopAdminClient extends IdeaBaseClient<VirtualDesktopAdminClient
     updateSession(req: UpdateSessionRequest): Promise<UpdateSessionResponse> {
         return this.apiInvoker.invoke_alt<UpdateSessionRequest, UpdateSessionResponse>(
             'VirtualDesktopAdmin.UpdateSession',
+            req
+        )
+    }
+
+    setSessionReaperExemption(req: SetSessionReaperExemptionRequest): Promise<SetSessionReaperExemptionResponse> {
+        return this.apiInvoker.invoke_alt<SetSessionReaperExemptionRequest, SetSessionReaperExemptionResponse>(
+            'VirtualDesktopAdmin.SetSessionReaperExemption',
             req
         )
     }

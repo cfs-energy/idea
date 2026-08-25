@@ -18,11 +18,13 @@ from ideasdk.utils import GroupNameHelper
 
 import ideaclustermanager
 from ideaclustermanager.app.api.api_invoker import ClusterManagerApiInvoker
+from ideaclustermanager.app.projects.bedrock_usage_service import BedrockUsageService
 from ideaclustermanager.app.projects.projects_service import ProjectsService
 from ideaclustermanager.app.projects.project_tasks import (
     ProjectEnabledTask,
     ProjectDisabledTask,
     ProjectGroupsUpdatedTask,
+    ProjectBedrockReconcileTask,
 )
 from ideaclustermanager.app.accounts.accounts_service import AccountsService
 from ideaclustermanager.app.accounts.cognito_user_pool import (
@@ -87,6 +89,7 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
         )
         self.context = context
         self.web_portal: Optional[WebPortal] = None
+        self.bedrock_usage: Optional[BedrockUsageService] = None
 
     def app_initialize(self):
         # group name helper
@@ -163,6 +166,7 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
                 ProjectEnabledTask(self.context),
                 ProjectDisabledTask(self.context),
                 ProjectGroupsUpdatedTask(self.context),
+                ProjectBedrockReconcileTask(self.context),
             ],
         )
 
@@ -182,6 +186,11 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
             context=self.context,
             accounts_service=self.context.accounts,
             task_manager=self.context.task_manager,
+        )
+
+        # bedrock usage tracking
+        self.bedrock_usage = BedrockUsageService(
+            context=self.context, projects_service=self.context.projects
         )
 
         # email templates
@@ -205,6 +214,9 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
         self.context.task_manager.start()
         self.context.notifications.start()
 
+        if self.bedrock_usage is not None:
+            self.bedrock_usage.start()
+
         try:
             self.context.distributed_lock().acquire(key='initialize-defaults')
             self.context.accounts.create_defaults()
@@ -222,3 +234,6 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
 
         if self.context.notifications is not None:
             self.context.notifications.stop()
+
+        if self.bedrock_usage is not None:
+            self.bedrock_usage.stop()

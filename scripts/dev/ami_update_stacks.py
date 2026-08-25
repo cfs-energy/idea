@@ -1,3 +1,4 @@
+import re
 import boto3
 import oyaml as yaml
 import shutil
@@ -13,11 +14,15 @@ parser = argparse.ArgumentParser(
 )
 parser.add_argument('--rhel8', action='store_true', help='Update only RHEL 8 AMIs')
 parser.add_argument('--rhel9', action='store_true', help='Update only RHEL 9 AMIs')
+parser.add_argument('--rhel10', action='store_true', help='Update only RHEL 10 AMIs')
 parser.add_argument(
     '--rocky8', action='store_true', help='Update only Rocky Linux 8 AMIs'
 )
 parser.add_argument(
     '--rocky9', action='store_true', help='Update only Rocky Linux 9 AMIs'
+)
+parser.add_argument(
+    '--rocky10', action='store_true', help='Update only Rocky Linux 10 AMIs'
 )
 parser.add_argument(
     '--ubuntu2204', action='store_true', help='Update only Ubuntu 22.04 AMIs'
@@ -26,7 +31,7 @@ parser.add_argument(
     '--ubuntu2404', action='store_true', help='Update only Ubuntu 24.04 AMIs'
 )
 parser.add_argument(
-    '--amazonlinux2', action='store_true', help='Update only Amazon Linux 2 AMIs'
+    '--ubuntu2604', action='store_true', help='Update only Ubuntu 26.04 AMIs'
 )
 parser.add_argument(
     '--amazonlinux2023', action='store_true', help='Update only Amazon Linux 2023 AMIs'
@@ -48,16 +53,20 @@ if args.rhel8:
     selected_ami_types.append('rhel8')
 if args.rhel9:
     selected_ami_types.append('rhel9')
+if args.rhel10:
+    selected_ami_types.append('rhel10')
 if args.rocky8:
     selected_ami_types.append('rocky8')
 if args.rocky9:
     selected_ami_types.append('rocky9')
+if args.rocky10:
+    selected_ami_types.append('rocky10')
 if args.ubuntu2204:
     selected_ami_types.append('ubuntu2204')
 if args.ubuntu2404:
     selected_ami_types.append('ubuntu2404')
-if args.amazonlinux2:
-    selected_ami_types.append('amazonlinux2')
+if args.ubuntu2604:
+    selected_ami_types.append('ubuntu2604')
 if args.amazonlinux2023:
     selected_ami_types.append('amazonlinux2023')
 if args.windows2019:
@@ -73,32 +82,79 @@ update_all = len(selected_ami_types) == 0
 # Define file paths as constants
 CONFIG_FILE_PATH = '../../source/idea/idea-virtual-desktop-controller/resources/base-software-stack-config.yaml'
 
-# Define AMI patterns
+# Minor releases are wildcarded so these keep resolving across point releases; the
+# highest minor wins, newest CreationDate breaking ties. '_HVM-' excludes '_HVM_BETA-'.
 AMI_PATTERNS = {
     # OS_TYPE/ARCH or OS_TYPE/ARCH/SUFFIX
     # Windows patterns - all versions will use the same pattern
-    'windows2019/x86-64/base': 'Windows_Server-2019-English-Full-Base-2025.*',
-    'windows2022/x86-64/base': 'Windows_Server-2022-English-Full-Base-2025.*',
-    'windows2025/x86-64/base': 'Windows_Server-2025-English-Full-Base-2025.*',
-    'rhel8/arm64': 'RHEL-8.10.0_HVM-*-arm64-*',
-    'rhel8/x86-64': 'RHEL-8.10.0_HVM-*-x86_64-*',
-    'rhel9/arm64': 'RHEL-9.6.0_HVM-*-arm64-*',
-    'rhel9/x86-64': 'RHEL-9.6.0_HVM-*-x86_64-*',
-    'ubuntu2204/arm64': 'ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-arm64-server-*',
-    'ubuntu2204/x86-64': 'ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*',
-    'ubuntu2404/arm64': 'ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-arm64-server-*',
-    'ubuntu2404/x86-64': 'ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*',
-    'amazonlinux2/arm64': 'amzn2-ami-kernel-5.10-hvm-*-arm64-gp2',
-    'amazonlinux2/x86-64': 'amzn2-ami-kernel-5.10-hvm-*-x86_64-gp2',
-    'amazonlinux2023/arm64': 'al2023-ami-2023.9.*-kernel-6.12-arm64',
-    'amazonlinux2023/x86-64': 'al2023-ami-2023.9.*-kernel-6.12-x86_64',
-    # Commented out patterns kept for reference
-    # "rhel7/x86-64": "RHEL-7.9_HVM-*-x86_64-*",
-    'rocky8/arm64': 'Rocky-8-EC2-Base-8.9-*.aarch64-*',
-    'rocky8/x86-64': 'Rocky-8-EC2-Base-8.9-*.x86_64-*',
-    'rocky9/arm64': 'Rocky-9-EC2-Base-9.6-*.aarch64-*',
-    'rocky9/x86-64': 'Rocky-9-EC2-Base-9.6-*.x86_64-*',
+    # suffix is the build date (YYYY.MM.DD); don't pin the year - AWS retains only the
+    # most recent releases, so a pinned year eventually matches nothing.
+    'windows2019/x86-64/base': 'Windows_Server-2019-English-Full-Base-*',
+    'windows2022/x86-64/base': 'Windows_Server-2022-English-Full-Base-*',
+    'windows2025/x86-64/base': 'Windows_Server-2025-English-Full-Base-*',
+    'rhel8/arm64': 'RHEL-8.*_HVM-*-arm64-*',
+    'rhel8/x86-64': 'RHEL-8.*_HVM-*-x86_64-*',
+    'rhel9/arm64': 'RHEL-9.*_HVM-*-arm64-*',
+    'rhel9/x86-64': 'RHEL-9.*_HVM-*-x86_64-*',
+    'rhel10/arm64': 'RHEL-10.*_HVM-*-arm64-*',
+    'rhel10/x86-64': 'RHEL-10.*_HVM-*-x86_64-*',
+    # Lookup patterns, not a support claim: this table is what the tool CAN resolve.
+    # ubuntu2604 is not in ALLOWED_BASEOS and has no eVDI software stack.
+    'ubuntu2204/arm64': 'ubuntu/images/hvm-ssd*/ubuntu-*-22.04-arm64-server-*',
+    'ubuntu2204/x86-64': 'ubuntu/images/hvm-ssd*/ubuntu-*-22.04-amd64-server-*',
+    'ubuntu2404/arm64': 'ubuntu/images/hvm-ssd*/ubuntu-*-24.04-arm64-server-*',
+    'ubuntu2404/x86-64': 'ubuntu/images/hvm-ssd*/ubuntu-*-24.04-amd64-server-*',
+    'ubuntu2604/arm64': 'ubuntu/images/hvm-ssd*/ubuntu-*-26.04-arm64-server-*',
+    'ubuntu2604/x86-64': 'ubuntu/images/hvm-ssd*/ubuntu-*-26.04-amd64-server-*',
+    'amazonlinux2023/arm64': 'al2023-ami-2023.*-kernel-*-arm64',
+    'amazonlinux2023/x86-64': 'al2023-ami-2023.*-kernel-*-x86_64',
+    'rocky8/arm64': 'Rocky-8-EC2-Base-8.*-*.aarch64-*',
+    'rocky8/x86-64': 'Rocky-8-EC2-Base-8.*-*.x86_64-*',
+    'rocky9/arm64': 'Rocky-9-EC2-Base-9.*-*.aarch64-*',
+    'rocky9/x86-64': 'Rocky-9-EC2-Base-9.*-*.x86_64-*',
+    'rocky10/arm64': 'Rocky-10-EC2-Base-10.*-*.aarch64-*',
+    'rocky10/x86-64': 'Rocky-10-EC2-Base-10.*-*.x86_64-*',
 }
+
+# describe_images Owners per AMI type. Filtering on 'amazon' only returns
+# Amazon-published images, which excludes every Red Hat, Rocky and Canonical AMI.
+AMI_OWNERS = {
+    'amazonlinux2023': ['amazon'],
+    'windows2019': ['amazon'],
+    'windows2022': ['amazon'],
+    'windows2025': ['amazon'],
+    # Red Hat Inc. (commercial partitions)
+    'rhel8': ['309956199498'],
+    'rhel9': ['309956199498'],
+    'rhel10': ['309956199498'],
+    # RESF only - Marketplace excluded deliberately: a Marketplace-backed id in the shipped
+    # map means OptInRequired on the first rocky job in every fresh account.
+    'rocky8': ['792107900819'],
+    'rocky9': ['792107900819'],
+    'rocky10': ['792107900819'],
+    # Canonical
+    'ubuntu2204': ['099720109477'],
+    'ubuntu2404': ['099720109477'],
+    'ubuntu2604': ['099720109477'],
+}
+
+# a vendor can republish an older minor, making it the newest by date (RHEL-9.6.0_HVM-20260811
+# vs RHEL-9.8.0_HVM-20260728), so rank on the minor in the name before the date.
+MINOR_VERSION_PATTERNS = (
+    r'RHEL-(\d+)\.(\d+)',
+    r'Rocky-\d+-EC2-Base-(\d+)\.(\d+)',
+    r'al2023-ami-2023\.(\d+)\.(\d+)',
+)
+
+
+def image_sort_key(image: dict) -> Tuple[int, int, str]:
+    # Windows and Ubuntu names carry a date, not a minor: no pattern matches and date order stands.
+    for pattern in MINOR_VERSION_PATTERNS:
+        match = re.match(pattern, image.get('Name', ''))
+        if match:
+            return (int(match.group(1)), int(match.group(2)), image['CreationDate'])
+    return (0, 0, image['CreationDate'])
+
 
 # Generating a timestamp
 timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -146,11 +202,7 @@ def get_ami(
         ami_name = AMI_PATTERNS[pattern_key]
         print(f'AMI name filter: {ami_name}')
 
-        # Use aws-marketplace only for rocky8 and rocky9
-        if ami_type in ['rocky8', 'rocky9']:
-            owners = ['aws-marketplace']
-        else:
-            owners = ['amazon']
+        owners = AMI_OWNERS.get(ami_type, ['amazon'])
 
         session = boto3.Session(profile_name=profile)
         ec2 = session.client('ec2', region_name=region)
@@ -168,7 +220,7 @@ def get_ami(
             )
             return None
 
-        # Sort by creation date to get the most recent one
+        # gaming variants share the base name but are a different product
         valid_amis = [
             ami
             for ami in response['Images']
@@ -182,9 +234,7 @@ def get_ami(
             )
             return None
 
-        ami_id = sorted(valid_amis, key=lambda x: x['CreationDate'], reverse=True)[0][
-            'ImageId'
-        ]
+        ami_id = sorted(valid_amis, key=image_sort_key, reverse=True)[0]['ImageId']
         return ami_id
     except ClientError as e:
         print(f'   Failed to get AMI for {region} - {pattern_key}. Error: {str(e)}')

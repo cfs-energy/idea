@@ -197,6 +197,7 @@ def context(ddb_local):
     mock_cognito_idp.admin_update_user_attributes = mock_function
     mock_cognito_idp.admin_enable_user = mock_function
     mock_cognito_idp.admin_disable_user = mock_function
+    mock_cognito_idp.admin_delete_user = mock_function
 
     # Add the describe_user_pool method that returns a mock password policy
     def mock_describe_user_pool(*args, **kwargs):

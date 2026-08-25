@@ -33,6 +33,7 @@ from ideascheduler.app.provisioning import (
     JobSubmissionTracker,
     JobProvisioner,
     HpcQueueProfilesService,
+    ProvisioningLifecycleEvents,
 )
 from ideascheduler.app.scheduler import SocaScheduler
 from ideascheduler.app.documents import DocumentStore
@@ -165,6 +166,9 @@ class SchedulerApp(ideasdk.app.SocaApp):
             time.sleep(5)
 
         self.context.metrics = JobProvisioningMetrics(context=self.context)
+        self.context.lifecycle_events = ProvisioningLifecycleEvents(
+            context=self.context
+        )
         self.context.job_cache = JobCache(context=self.context)
         self.context.job_monitor = JobMonitor(context=self.context)
         self.context.node_monitor = NodeMonitor(context=self.context)

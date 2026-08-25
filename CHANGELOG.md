@@ -4,6 +4,110 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
+## [26.08.0] - TBD
+
+**Upgrade Instructions:**
+* Amazon Linux 2 is removed as a base OS (EOL 2026-06-30). Move AL2 settings and queue profiles to `amazonlinux2023` before upgrading
+* The upgrade preflight deletes virtual desktop software stacks whose base OS is Amazon Linux 2 and logs each one; if a desktop session still references one, it stops with the list instead
+* A full cluster upgrade is recommended; base AMIs, dependencies and settings have all changed
+* Jobs over 100 nodes are rejected by default: raise `scheduler.job_provisioning.max_nodes_per_job` if needed
+* The DCV host policy becomes a customer-managed policy, so clusters near the limit of 10 managed policies per role need headroom
+* Job-shared capacity is matched on more job parameters, so shared compute stacks created before the upgrade are not reused by new submissions and idle out normally
+* Enabling `cluster-manager.bedrock.enabled` needs `cluster-manager` and `virtual-desktop-controller` redeployed
+* To disable Bedrock, turn it off per project, let the reconcile run, then set the flag false and redeploy
+* Bedrock for jobs is separate: set `scheduler.bedrock.enabled` and redeploy `scheduler` as well
+* Bedrock spend only reaches a project budget once the `idea:` cost allocation tags are active, which only the organization's management account can do
+* Bedrock model invocation logging is now managed by default, and it captures every Bedrock caller in the account, not only IDEA's; set `invocation_logging.manage_configuration` false to leave it alone
+```bash
+./idea-admin.sh upgrade-cluster --aws-region $IDEA_AWS_REGION --cluster-name $IDEA_CLUSTER_NAME
+```
+([Upgrade Documentation](https://docs.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/upgrade-cluster))
+
+### **✨ New Features**
+* **New Base OS Support**: Rocky Linux 10 and RHEL 10 for compute nodes, not virtual desktops
+* **Per-Job Node Cap**: `scheduler.job_provisioning.max_nodes_per_job`, default 100
+* **Per-Session Idle Auto-Stop**: Users set their own idle stop delay, bounded by an admin cap
+* **Amazon Bedrock for Projects**: Per-project model allowlist with scoped IAM and usage tags (default off)
+* **Bedrock Usage Tracking**: Per-project and per-user token totals beside project budgets
+* **Bedrock for HPC Jobs**: Compute nodes run under their project's Bedrock role, `scheduler.bedrock.enabled` (default off)
+* **Bedrock Budget Enforcement**: An over-budget project stops getting model access, and is told what share of its spend was Bedrock (default off)
+* **Waiting Job Signals**: Which provisioning attempt a queued job is on, and which limit is holding it
+* **Job Detail Fields**: Queued time, elapsed vs requested walltime, exit status, and error message
+* **Held Jobs Kept**: A job held at the retry cap stays in Completed Jobs with its reason
+* **Clear Provisioning Status**: A real provisioning comment in qstat instead of "Can Never Run"
+* **Provisioning Lifecycle Events**: Structured event log for attempts, retries, and outcomes
+* **Job List Auto-Refresh**: Opt-in polling on your own Active Jobs, plus a last-updated time
+* **My Projects**: Account settings shows the user's project memberships
+* **Custom Dashboard**: Optional external dashboard in a sandboxed iframe (default off)
+* **Stopped Desktop Reaper**: Opt-in cleanup of desktops stopped longer than a cutoff and of session records whose instance is gone, through the normal delete path, with an optional owner notice before deletion and an admin per-session exemption (default off, dry run first)
+
+### **🔧 Improvements**
+* **Web Portal**: Migrated to Vite, uplifted to React 19 and current Cloudscape
+* **File Browser**: Rebuilt on Cloudscape with sortable columns and an editable path bar, replacing chonky, which is no longer maintained
+* **File Browser Select All**: Select-all covers the visible page (100 rows), so a larger directory is acted on a page at a time
+* **Dependencies**: Updated AWS CDK, Python (3.13.15), Node (22.23.2), and all Python packages
+* **AMI Updates**: Refreshed base AMI IDs across all regions and fixed the lookup tooling
+* **HPC Instance Families**: Fixed quota accounting so new hpc* types work without code changes
+* **GPU Bootstrap**: Fails loudly when no driver mapping exists instead of booting driverless
+* **Submit-Time Validation**: Rejects known-broken job configurations at qsub with a clear reason
+* **Bounded Provisioning Retries**: Failed jobs are held with a visible reason instead of retrying forever
+* **Virtual Desktop Requests**: A refused desktop names the real reason instead of a generic message
+* **Idle Detection**: Counts ssh sessions without a terminal, so remote editors keep a desktop alive
+* **Multi-Rail EFA**: Optional support for multiple EFA interfaces on capable types (default off)
+* **Virtual Desktop IAM**: DCV host permissions are now a customer-managed policy
+* **Windows**: Fixed GPU display-driver installation and NVIDIA GRID driver selection
+
+### **🐛 Bug Fixes**
+* **Job Costs**: Runtimes over 24 hours no longer lose whole days; terminated jobs billed on elapsed time
+* **CORS Preflight**: OPTIONS requests no longer return 500
+* **Submit Errors**: A rejected submission shows the reason instead of nothing, on both submit paths
+* **Desktop Actions**: Failed start, stop, reboot, and delete now report the failure
+* **Deleting a Desktop**: Deleting a session the database cannot find now says so, instead of failing with an internal error
+* **Web Portal Requests**: A request that never gets a reply fails visibly instead of spinning forever
+* **User Creation**: A failed create no longer leaves an account that cannot sign in
+* **Bedrock Teardown**: Project roles release the permissions boundary before it is deleted, so a cluster that has used Bedrock can be torn down
+* **Bedrock Log Group**: The invocation log group is adopted when it already exists, so turning Bedrock back on no longer fails the deploy
+* **Completed Jobs**: Hyphenated usernames now see their own jobs
+* **Completed Job by Id**: A job id reused after the scheduler host is replaced no longer returns a different job's record and costs; `Scheduler.GetCompletedJob` also accepts `job_uid`, which names one job
+* **HPC Job Monitor**: Fixed jobs stuck in Provisioning until a second submission
+* **Instance Type Cache**: Fixed valid instance types being rejected during cache refresh
+* **Submit Form**: Backend errors shown to the user; duplicate submissions prevented
+* **Queue Management**: Deleting a busy queue no longer leaves it disabled
+* **Job Scripts**: User select directives are no longer overwritten by a site template
+* **Job-Shared Queues**: Capacity reuse now respects base OS
+* **Job Provisioning**: A job that trips a queue limit stays queued instead of being dropped
+* **Rolled-Back Compute Stacks**: A stack left in ROLLBACK_COMPLETE is now deleted and the job re-provisioned, instead of the job waiting forever on a stack that can never be reused
+* **Capacity Failures**: A job waiting on an instance type EC2 cannot launch now shows the reason, from the scaling activity, in `qstat -f` and the scheduler log
+* **Compute Node Registration**: Nodes registered and offlined by private IPv4, not private DNS
+* **Bootstrap Retries**: ENI tagging, EBS tagging, and the PBS restart now actually retry
+* **EBS Tagging**: Volume ids are passed as separate values, so tagging no longer fails
+* **EFA on Ubuntu**: Fixed install guard and missing kernel headers
+* **Floating Licenses**: The availability check runs under python3
+* **License Server Outages**: An unreachable, slow or unparsable license server no longer rejects submissions; only a server reporting no seats does
+* **Never-Started Jobs**: A job that never got capacity leaves its cost unset rather than zero, so it is not read as a run that was free
+* **Virtual Desktops**: The bootstrap package is built once per request, not per subnet retry
+* **CDK Commands**: Removed a deploy-only change set flag appended to every command
+* **Admin Image Selection**: `idea-admin.sh` uses a locally built administrator image instead of pulling the released one over it, and now prints the image and its build date
+* **Bedrock Project Roles**: The project permissions boundary no longer voids the CloudWatch agent's tag and log-group reads, and an administrator-supplied EC2 managed policy the boundary cannot honor is refused with a reason instead of attached and dead
+* **Bedrock Desktop Access**: A desktop that launched before its project's instance profile existed is moved onto that profile instead of keeping the shared one for life, and is marked in the portal until it is
+* **EFS Mount Helper on RHEL, Rocky and Ubuntu**: Built from a pinned efs-utils release (`global-settings.package_config.efs_utils.version`) with a current Rust toolchain from rustup, so an EL 10 node no longer fails bootstrap when the AWS SDK crates require a newer compiler than the distribution ships
+* **EFA on EL 10**: `rhel10` and `rocky10` jobs asking for EFA are rejected at submission, and a failed EFA install now fails the node instead of joining the scheduler without RDMA
+* **Held Jobs**: A job held before it got capacity no longer launches a compute stack the scheduler will never use
+* **Queue Profile Updates**: A queue that could not be deleted stays on the queue profile, so its queued jobs keep being provisioned
+* **Idle Detection**: The last ssh disconnect is read from a sortable timestamp, so a stale logout no longer stops a desktop with no grace period
+* **File Browser Shift-Click**: The range anchor now resolves against the current listing, so navigating, paging, sorting or filtering before the next Shift-click no longer selects a stale range
+* **Stuck Desktop Provisioning**: A desktop whose host never becomes usable now fails after `virtual-desktop-controller.dcv_session.provisioning_timeout_seconds` (default 1800) with the reason the host recorded, and its instance is released instead of billing forever
+* **Misc**: PuTTY download URL, unpinned Lambda deps, a qstat parse crash, silent CloudFormation failures
+
+### **🔒 Security Updates**
+* **Job Scripts**: Job names are sanitized before use in a file path; writes no longer follow symlinks
+* **Job Reads**: Fetching a job by id now requires ownership
+* **Module Settings**: Non-admin users receive only the settings the portal needs
+* **Projects**: Non-admin queries are scoped to the requesting user
+* **Module Info**: Version details now require authentication
+* **Queue Limits**: The provisioning error no longer carries a cluster-wide threshold
+* **Virtual Desktops**: The instance profile is chosen server-side, not taken from the request
+
 ## [25.12.0] - 2025-12-17
 
 **Upgrade Instructions:**

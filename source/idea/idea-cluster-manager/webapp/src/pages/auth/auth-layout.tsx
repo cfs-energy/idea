@@ -20,7 +20,7 @@ import AppLogger from "../../common/app-logger";
 
 export interface AuthLayoutProps {
     loading?: boolean
-    content: JSX.Element
+    content: React.JSX.Element
 }
 
 export interface AuthLayoutState {

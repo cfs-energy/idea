@@ -16,15 +16,15 @@ function get_cloudwatch_agent_download_link() {
   sed -i "s/%region%/${AWS_REGION}/g" ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}/cloudwatch_download_link.txt
   local BASE_OS="{{ context.base_os }}"
   case $BASE_OS in
-    amazonlinux2 | amazonlinux2023)
+    amazonlinux2023)
       sed -i 's/%os%/amazon_linux/g' ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}/cloudwatch_download_link.txt
       sed -i 's/%ext%/rpm/g' ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}/cloudwatch_download_link.txt
       ;;
-    rhel8 | rhel9 | rocky8 | rocky9)
+    rhel8 | rhel9 | rhel10 | rocky8 | rocky9 | rocky10)
       sed -i 's/%os%/redhat/g' ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}/cloudwatch_download_link.txt
       sed -i 's/%ext%/rpm/g' ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}/cloudwatch_download_link.txt
       ;;
-    ubuntu2204 | ubuntu2404)
+    ubuntu2204 | ubuntu2404 | ubuntu2604)
       sed -i 's/%os%/ubuntu/g' ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}/cloudwatch_download_link.txt
       sed -i 's/%ext%/deb/g' ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR}/cloudwatch_download_link.txt
       ;;
@@ -51,9 +51,9 @@ else
   pushd ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR} || exit
   wget "${CLOUDWATCH_AGENT_DOWNLOAD_LINK}"
 
-{% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+{% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
   rpm -U ./${CLOUDWATCH_AGENT_PACKAGE_NAME}
-{% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% elif context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
   dpkg -i ./${CLOUDWATCH_AGENT_PACKAGE_NAME}
 {% endif %}
 

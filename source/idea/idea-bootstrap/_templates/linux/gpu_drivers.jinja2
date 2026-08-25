@@ -1,4 +1,96 @@
 # Begin: Install GPU Drivers - Is GPU Instance Type: {{ context.is_gpu_instance_type() }}
+
+# set to "yes" when install_gpu_drivers() dispatches to a driver installer for the instance family.
+GPU_DRIVER_MAPPING_FOUND="no"
+GPU_PCI_DEVICES_DIR="${GPU_PCI_DEVICES_DIR:-/sys/bus/pci/devices}"
+
+function detect_gpu_hardware () {
+  # reports the gpu vendor present on the pci bus: nvidia, amd or none.
+  # sysfs is read directly instead of lspci, as pciutils is not installed on all base_os.
+  local DEVICE_CLASS
+  local DEVICE_VENDOR
+  for DEVICE in ${GPU_PCI_DEVICES_DIR}/*; do
+    [[ -r "${DEVICE}/class" && -r "${DEVICE}/vendor" ]] || continue
+    DEVICE_CLASS=$(cat "${DEVICE}/class")
+    # pci base class 0x03: display controller (0x0300 vga, 0x0302 3d)
+    [[ "${DEVICE_CLASS}" == 0x03* ]] || continue
+    DEVICE_VENDOR=$(cat "${DEVICE}/vendor")
+    case "${DEVICE_VENDOR}" in
+      0x10de)
+        echo -n "nvidia"
+        return 0
+        ;;
+      0x1002)
+        echo -n "amd"
+        return 0
+        ;;
+    esac
+  done
+  echo -n "none"
+}
+
+function is_gpu_driver_installed () {
+  # same checks the driver installers use for idempotency
+  local GPU_VENDOR="${1}"
+  case "${GPU_VENDOR}" in
+    nvidia)
+      command -v nvidia-smi > /dev/null 2>&1
+      ;;
+    amd)
+      command -v /opt/amdgpu-pro/bin/clinfo > /dev/null 2>&1
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
+function fail_gpu_drivers () {
+  local BOOTSTRAP_STATUS="${1}"
+  local REASON="${2}"
+
+  log_error "GPU driver bootstrap failed: ${REASON}"
+  log_error "Aborting bootstrap, this node will not join the cluster. Review global-settings.gpu_settings.instance_families and the driver mapping in gpu_drivers.jinja2."
+  mkdir -p "${BOOTSTRAP_DIR}"
+  echo "${REASON}" > "${BOOTSTRAP_DIR}/gpu_drivers_failed.txt"
+
+  local AWS=$(command -v aws)
+  local AWS_INSTANCE_ID=$(instance_id)
+  $AWS ec2 create-tags \
+      --resources "${AWS_INSTANCE_ID}" \
+      --region "{{ context.aws_region }}" \
+      --tags "Key=idea:BootstrapStatus,Value=${BOOTSTRAP_STATUS}" || log_warning "unable to tag ${AWS_INSTANCE_ID} with idea:BootstrapStatus=${BOOTSTRAP_STATUS}"
+
+  exit 1
+}
+
+function verify_gpu_drivers () {
+  # the instance family the bootstrap was rendered for is not necessarily the family that was
+  # launched: jobs may request multiple instance types. detect the hardware instead of trusting it.
+  local GPU_VENDOR=$(detect_gpu_hardware)
+  local INSTANCE_TYPE=$(instance_type)
+  local INSTANCE_FAMILY=$(instance_family)
+
+  if [[ "${GPU_VENDOR}" == "none" ]]; then
+    log_info "No GPU hardware detected on ${INSTANCE_TYPE}. Skipping GPU driver verification."
+    return 0
+  fi
+
+  if is_gpu_driver_installed "${GPU_VENDOR}"; then
+    log_info "Verified ${GPU_VENDOR} GPU driver is installed on ${INSTANCE_TYPE}."
+    return 0
+  fi
+
+  {% if context.fail_on_missing_gpu_driver() %}
+  if [[ "${GPU_DRIVER_MAPPING_FOUND}" == "no" ]]; then
+    fail_gpu_drivers "gpu-driver-mapping-missing" "${INSTANCE_TYPE} has ${GPU_VENDOR} GPU hardware, but no GPU driver mapping exists for instance family: ${INSTANCE_FAMILY}"
+  fi
+  fail_gpu_drivers "gpu-driver-install-failed" "${INSTANCE_TYPE} has ${GPU_VENDOR} GPU hardware, but the driver installation did not produce a usable driver"
+  {% else %}
+  log_error "${INSTANCE_TYPE} has ${GPU_VENDOR} GPU hardware without a usable driver. Continuing: global-settings.gpu_settings.fail_on_missing_driver is disabled."
+  {% endif %}
+}
+
 {% if context.is_gpu_instance_type() %}
 {% if context.is_nvidia_gpu() %}
 
@@ -7,10 +99,138 @@
   dnf update -y
   dnf install -y dkms
   systemctl enable --now dkms
-  if (uname -r | grep -q ^6.12.); then
-    dnf install -y kernel-devel-$(uname -r)  kernel6.12-modules-extra
-  else
-    dnf install -y kernel-devel-$(uname -r)  kernel-modules-extra
+
+  KERNEL_SRC_DIR="${KERNEL_SRC_DIR:-/usr/src/kernels}"
+  KERNEL_MODULES_DIR="${KERNEL_MODULES_DIR:-/lib/modules}"
+  KERNEL_BOOT_DIR="${KERNEL_BOOT_DIR:-/boot}"
+  KERNEL_ALIGNMENT_MARKER="${BOOTSTRAP_DIR}/gpu_kernel_alignment.txt"
+
+function kernel_build_tree_present () {
+  # dkms and the .run installer reach the build tree via /lib/modules/<kernel>/build;
+  # no tree for the running kernel means nothing loadable can be built.
+  local KERNEL="${1}"
+  [[ -d "${KERNEL_SRC_DIR}/${KERNEL}" || -d "${KERNEL_MODULES_DIR}/${KERNEL}/build" ]]
+}
+
+function kernel_package_families () {
+  # amazonlinux ships non-default kernel series as their own package family (e.g. kernel6.12-devel);
+  # plain kernel-devel resolves to the default series and builds an unloadable module.
+  local KERNEL="${1}"
+  local OWNER=$(rpm -qf "${KERNEL_BOOT_DIR}/vmlinuz-${KERNEL}" --queryformat '%{NAME}\n' 2>/dev/null | head -1)
+  local FAMILIES=""
+  if [[ "${OWNER}" == kernel* ]]; then
+    FAMILIES="${OWNER}"
+  fi
+  local CANDIDATE
+  for CANDIDATE in "kernel$(echo "${KERNEL}" | cut -d. -f1,2)" "kernel"; do
+    [[ " ${FAMILIES} " == *" ${CANDIDATE} "* ]] || FAMILIES="${FAMILIES} ${CANDIDATE}"
+  done
+  echo -n "${FAMILIES}"
+}
+
+function install_kernel_modules_extra () {
+  # drm ships in modules-extra and nvidia.ko links against it: without drm the driver compiles and
+  # then fails to load on an unknown symbol, so for a GPU host this package is not optional.
+  local KERNEL=$(uname -r)
+  if [[ -n "$(find "${KERNEL_MODULES_DIR}/${KERNEL}" -name 'drm.ko*' 2>/dev/null | head -1)" ]]; then
+    return 0
+  fi
+
+  local FAMILY
+  for FAMILY in $(kernel_package_families "${KERNEL}"); do
+    if dnf install -y "${FAMILY}-modules-extra-${KERNEL}"; then
+      log_info "Installed ${FAMILY}-modules-extra-${KERNEL}"
+      return 0
+    fi
+  done
+
+  log_warning "No modules-extra package for ${KERNEL}: the NVIDIA driver will build but not load."
+  return 1
+}
+
+function install_kernel_devel () {
+  local KERNEL=$(uname -r)
+  # before the header check, not after: another package can have already pulled the header tree, and
+  # modules-extra must not be skipped along with it.
+  install_kernel_modules_extra
+  if kernel_build_tree_present "${KERNEL}"; then
+    log_info "Kernel headers for ${KERNEL} are already installed."
+    return 0
+  fi
+
+  local FAMILY
+  for FAMILY in $(kernel_package_families "${KERNEL}"); do
+    if dnf install -y "${FAMILY}-devel-${KERNEL}" && kernel_build_tree_present "${KERNEL}"; then
+      log_info "Installed ${FAMILY}-devel-${KERNEL}"
+      return 0
+    fi
+  done
+
+  log_warning "No kernel-devel package is available for the running kernel ${KERNEL}."
+  return 1
+}
+
+function boot_kernel_with_headers () {
+  # amazonlinux carries kernel-devel only for the kernel currently in the repo; an AMI whose kernel
+  # was superseded can't build any module, so install and boot the kernel the repo does carry.
+  local KERNEL=$(uname -r)
+  local SERIES=$(echo "${KERNEL}" | cut -d. -f1,2)
+
+  if [[ -f "${KERNEL_ALIGNMENT_MARKER}" ]]; then
+    log_error "Already booted $(cat ${KERNEL_ALIGNMENT_MARKER}) to obtain kernel headers and ${KERNEL} still has none."
+    return 1
+  fi
+
+  local FAMILY
+  for FAMILY in $(kernel_package_families "${KERNEL}"); do
+    # set_kernel.jinja2 versionlocks the running kernel, and that pin is part of what strands it
+    # without headers, so this install has to bypass the lock.
+    dnf install -y --disableplugin=versionlock "${FAMILY}" "${FAMILY}-devel" "${FAMILY}-modules-extra" && break
+  done
+
+  local TARGET_KERNEL=""
+  local CANDIDATE
+  for CANDIDATE in $(ls -1 "${KERNEL_SRC_DIR}" 2>/dev/null | sort -V -r); do
+    # same series only: a series change swaps out every other kernel module on the host
+    [[ "${CANDIDATE}" == "${SERIES}".* && -f "${KERNEL_BOOT_DIR}/vmlinuz-${CANDIDATE}" ]] || continue
+    TARGET_KERNEL="${CANDIDATE}"
+    break
+  done
+
+  if [[ -z "${TARGET_KERNEL}" || "${TARGET_KERNEL}" == "${KERNEL}" ]]; then
+    log_error "No installed ${SERIES} kernel has a matching header tree in ${KERNEL_SRC_DIR}."
+    return 1
+  fi
+
+  log_warning "Booting ${TARGET_KERNEL} to build the NVIDIA driver: no repo carries headers for ${KERNEL}."
+  echo "${TARGET_KERNEL}" > "${KERNEL_ALIGNMENT_MARKER}"
+  if command -v grubby > /dev/null 2>&1; then
+    grubby --set-default "${KERNEL_BOOT_DIR}/vmlinuz-${TARGET_KERNEL}" || log_warning "unable to make ${TARGET_KERNEL} the default boot kernel"
+  fi
+  set_reboot_required "Kernel ${TARGET_KERNEL} carries the headers the NVIDIA driver builds against"
+  mkdir -p "${BOOTSTRAP_DIR}/logs"
+  # this template is rendered into the calling bootstrap script: re-enter that script after the
+  # reboot, so the driver install runs again on a kernel whose headers are installed.
+  local RESUME_SCRIPT=$(basename "${BASH_SOURCE[0]}")
+  (crontab -l 2>/dev/null | grep -v "${RESUME_SCRIPT}"; echo "@reboot /bin/bash ${SCRIPT_DIR}/${RESUME_SCRIPT} crontab >> ${BOOTSTRAP_DIR}/logs/userdata_post_reboot.log 2>&1") | crontab -
+  check_reboot_loop "Kernel ${TARGET_KERNEL} for NVIDIA driver build"
+  reboot
+  exit 0
+}
+
+  if command -v nvidia-smi > /dev/null 2>&1; then
+    log_info "GPU driver already installed. Skipping kernel header preparation."
+  elif [[ "$(detect_gpu_hardware)" != "nvidia" ]]; then
+    # the bootstrap may have been rendered for an nvidia family and launched on another
+    log_info "No NVIDIA GPU hardware detected. Skipping kernel header preparation."
+  elif ! install_kernel_devel; then
+    # boot_kernel_with_headers reboots and does not return when it can align the kernel
+    boot_kernel_with_headers
+    {% if context.fail_on_missing_gpu_driver() %}
+    fail_gpu_drivers "gpu-kernel-devel-missing" "no kernel-devel is available for the running kernel $(uname -r), so the NVIDIA kernel module cannot be built for it"
+    {% else %}
+    log_error "No kernel-devel for $(uname -r): the NVIDIA driver build will fail. Continuing: global-settings.gpu_settings.fail_on_missing_driver is disabled."
+    {% endif %}
   fi
 {% endif %}
 
@@ -32,35 +252,42 @@ function install_nvidia_grid_drivers () {
     local DRIVER_BUCKET_REGION=$(grep "AWS_REGION=" /etc/environment | cut -d= -f2 | tr -d '"')
     log_info "Detected GovCloud region: ${DRIVER_BUCKET_REGION}"
   else
-    # Special handling for Amazon Linux 2 with kernel 4.14
-    if [[ $(uname -a) =~ "amzn2" ]] && [[ $(uname -r) =~ ^4.14 ]]; then
-      log_info "Detected Amazon Linux 2 with kernel 4.14, using specific GRID driver path"
-      local DRIVER_BUCKET_REGION=$(curl -s --head {{ context.config.get_string('global-settings.gpu_settings.nvidia.linux.s3_bucket_url', required=True) }} | grep bucket-region | awk '{print $2}' | tr -d '\r\n')
-      $AWS --region ${DRIVER_BUCKET_REGION} s3 cp --quiet --recursive s3://ec2-linux-nvidia-drivers/grid-17.1/ .
-      popd
-      return 0
-    else
-      local DRIVER_BUCKET_REGION=$(curl -s --head {{ context.config.get_string('global-settings.gpu_settings.nvidia.linux.s3_bucket_url', required=True) }} | grep bucket-region | awk '{print $2}' | tr -d '\r\n')
-    fi
+    local DRIVER_BUCKET_REGION=$(curl -s --head {{ context.config.get_string('global-settings.gpu_settings.nvidia.linux.s3_bucket_url', required=True) }} | grep bucket-region | awk '{print $2}' | tr -d '\r\n')
   fi
 
-  $AWS --region ${DRIVER_BUCKET_REGION} s3 cp --quiet --recursive {{ context.config.get_string('global-settings.gpu_settings.nvidia.linux.s3_bucket_path', required=True) }} .
+  local DRIVER_S3_PATH="{{ context.config.get_string('global-settings.gpu_settings.nvidia.linux.s3_bucket_path', required=True) }}"
+  if [[ $(uname -a) =~ "amzn2" ]] && [[ $(uname -r) =~ ^4.14 ]]; then
+    log_info "Detected Amazon Linux 2 with kernel 4.14, using specific GRID driver path"
+    DRIVER_S3_PATH="s3://ec2-linux-nvidia-drivers/grid-17.1/"
+  fi
+
+  $AWS --region ${DRIVER_BUCKET_REGION} s3 cp --quiet --recursive ${DRIVER_S3_PATH} .
 
   local x_server_pid=$(cat /tmp/.X0-lock)
   if [[ ! -z "${x_server_pid}" ]]; then
     kill $x_server_pid
   fi
 
+  local INSTALLER_RC=0
   if [[ $(uname -a) =~ "amzn2" ]] && [[ $(uname -r) =~ ^5.10 ]]
   then
-      CC=/usr/bin/gcc10-cc /bin/sh NVIDIA-Linux-x86_64*.run --no-precompiled-interface --run-nvidia-xconfig --no-questions --accept-license --dkms --silent
+      CC=/usr/bin/gcc10-cc /bin/sh NVIDIA-Linux-x86_64*.run --no-precompiled-interface --run-nvidia-xconfig --no-questions --accept-license --dkms --silent || INSTALLER_RC=$?
   else
-      /bin/sh NVIDIA-Linux-x86_64*.run --no-precompiled-interface --run-nvidia-xconfig --no-questions --accept-license --dkms --silent
+      /bin/sh NVIDIA-Linux-x86_64*.run --no-precompiled-interface --run-nvidia-xconfig --no-questions --accept-license --dkms --silent || INSTALLER_RC=$?
+  fi
+  if [[ "${INSTALLER_RC}" != "0" ]]; then
+    # without this the log reads as a successful install and the failure only surfaces at the
+    # nvidia-smi check hundreds of lines later, naming the wrong thing.
+    log_error "NVIDIA driver installer exited ${INSTALLER_RC}. See /var/log/nvidia-installer.log for the reason."
   fi
 
   log_info "X server configuration for GPU start..."
   local NVIDIAXCONFIG=$(which nvidia-xconfig)
-  $NVIDIAXCONFIG --preserve-busid --enable-all-gpus
+  if [[ -n "${NVIDIAXCONFIG}" ]]; then
+    $NVIDIAXCONFIG --preserve-busid --enable-all-gpus
+  else
+    log_warning "nvidia-xconfig not found, skipping X server configuration for GPU"
+  fi
   log_info "X server configuration for GPU end..."
   set_reboot_required "Installed NVIDIA Grid Driver"
   popd
@@ -93,22 +320,36 @@ function install_nvidia_public_drivers() {
   pushd /root/bootstrap/gpu_drivers
 
   local MACHINE=$(uname -m)
-  curl -fSsl -O https://us.download.nvidia.com/tesla/${DRIVER_VERSION}/NVIDIA-Linux-${MACHINE}-${DRIVER_VERSION}.run
+  local DRIVER_RUN="NVIDIA-Linux-${MACHINE}-${DRIVER_VERSION}.run"
+  if ! curl -fSsl -O https://us.download.nvidia.com/tesla/${DRIVER_VERSION}/${DRIVER_RUN}; then
+    log_error "Download of ${DRIVER_RUN} from us.download.nvidia.com failed, no driver was installed."
+    popd
+    return 1
+  fi
 
   local x_server_pid=$(cat /tmp/.X0-lock)
   if [[ ! -z "${x_server_pid}" ]]; then
     kill $x_server_pid
   fi
 
+  local INSTALLER_RC=0
   if [[ $(uname -a) =~ "amzn2" ]] && [[ $(uname -r) =~ ^5.10 ]]
   then
-      CC=/usr/bin/gcc10-cc /bin/sh NVIDIA-Linux-${MACHINE}-${DRIVER_VERSION}.run -q -a -n -s --dkms
+      CC=/usr/bin/gcc10-cc /bin/sh ${DRIVER_RUN} -q -a -n -s --dkms || INSTALLER_RC=$?
   else
-      /bin/sh NVIDIA-Linux-${MACHINE}-${DRIVER_VERSION}.run -q -a -n -s --dkms
+      /bin/sh ${DRIVER_RUN} -q -a -n -s --dkms || INSTALLER_RC=$?
   fi
+  if [[ "${INSTALLER_RC}" != "0" ]]; then
+    log_error "NVIDIA driver installer exited ${INSTALLER_RC}. See /var/log/nvidia-installer.log for the reason."
+  fi
+
   log_info "X server configuration for GPU start..."
   local NVIDIAXCONFIG=$(which nvidia-xconfig)
-  $NVIDIAXCONFIG --preserve-busid --enable-all-gpus
+  if [[ -n "${NVIDIAXCONFIG}" ]]; then
+    $NVIDIAXCONFIG --preserve-busid --enable-all-gpus
+  else
+    log_warning "nvidia-xconfig not found, skipping X server configuration for GPU"
+  fi
   log_info "X server configuration for GPU end..."
   set_reboot_required "Installed NVIDIA Public Driver"
 
@@ -270,6 +511,8 @@ function install_gpu_drivers () {
   local MACHINE=$(uname -m)
   log_info "Detected GPU instance type: ${INSTANCE_TYPE}. Installing GPU Drivers ..."
 
+  GPU_DRIVER_MAPPING_FOUND="yes"
+
   # refer to: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/install-nvidia-driver.html
   # Available drivers by instance type for Tesla vs Grid mapping.
   # we'll use NODE_TYPE="dcv" to install Grid drivers and NODE_TYPE="compute" to install Tesla drivers.
@@ -277,6 +520,23 @@ function install_gpu_drivers () {
     p5)
       log_info "AMD / NVIDIA H100"
       # Tesla driver: Yes, GRID driver: No
+      install_nvidia_public_drivers
+      ;;
+    p5e|p5en)
+      log_info "Intel / NVIDIA H200"
+      # Tesla driver: Yes, GRID driver: No - same install path as p5
+      install_nvidia_public_drivers
+      ;;
+    p6-b200)
+      log_info "Intel / NVIDIA B200"
+      # Tesla driver: Yes, GRID driver: No. Blackwell requires driver >= 570;
+      # nvidia_public_driver_versions pins the production driver which covers it.
+      install_nvidia_public_drivers
+      ;;
+    p6e-gb200)
+      log_info "Arm / NVIDIA GB200 (Grace-Blackwell)"
+      # Tesla driver: Yes, GRID driver: No. aarch64 .run install path, same as g5g.
+      # not runtime-verified on GB200; a failed install aborts bootstrap via verify_gpu_drivers.
       install_nvidia_public_drivers
       ;;
     p4d|p4de)
@@ -307,9 +567,9 @@ function install_gpu_drivers () {
         install_nvidia_public_drivers
       fi
       ;;
-    g6)
+    g6|gr6)
       log_info "Intel / NVIDIA L4"
-      # Tesla driver: Yes, GRID driver: Yes
+      # Tesla driver: Yes, GRID driver: Yes (gr6 carries the same L4 GPUs as g6)
       if [[ ${NODE_TYPE} == "dcv" ]]; then
         install_nvidia_grid_drivers
       else
@@ -367,6 +627,10 @@ function install_gpu_drivers () {
       # Tesla driver: Yes, GRID driver: No
       install_nvidia_public_drivers
       ;;
+    *)
+      GPU_DRIVER_MAPPING_FOUND="no"
+      log_warning "No GPU driver mapping for instance family: ${INSTANCE_FAMILY}"
+      ;;
   esac
 }
 
@@ -377,4 +641,6 @@ sed -i '/^Section\ "Device"/a \ \ \ \ \option \ \ \ \ \ \ \ \ "HardDPMS" "false"
 {% else %}
 log_info "GPU InstanceType not detected. Skip."
 {% endif %}
+
+verify_gpu_drivers
 # End: Install GPU Drivers

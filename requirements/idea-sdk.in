@@ -23,7 +23,10 @@ fastcounter
 psutil
 blinker
 troposphere
-opensearch-py
+# opensearch-py>=3.1 hard-depends on opensearch-protobufs, pulling grpcio+protobuf
+# (measured +21MB unzipped) for a gRPC transport this codebase never constructs;
+# aws_opensearch_client.py uses only the HTTP client and helpers.bulk.
+opensearch-py<3.1
 Jinja2
 certifi
 cryptography

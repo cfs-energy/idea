@@ -22,17 +22,70 @@ from ideadatamodel.cluster_settings import (
     UpdateModuleSettingsResult,
     DescribeInstanceTypesResult,
 )
-from ideadatamodel import exceptions, constants
+from ideadatamodel import exceptions, errorcodes, constants
 from ideasdk.utils import Utils
 
+from ideaclustermanager.app.projects.bedrock_provisioner import (
+    validate_no_global_profiles,
+)
+
 from threading import RLock
-from typing import List, Dict
+from typing import List, Dict, Optional
+
+# module settings served to non-elevated callers, keyed by module name; everything else in a
+# module's config is admin-only. derived from the webapp's non-admin call sites.
+USER_VISIBLE_MODULE_SETTINGS: Dict[str, List[str]] = {
+    constants.MODULE_GLOBAL_SETTINGS: [
+        'module_sets',
+        'package_config.dcv.clients',
+    ],
+    constants.MODULE_CLUSTER: [
+        'cluster_name',
+        'locale',
+        'timezone',
+    ],
+    constants.MODULE_CLUSTER_MANAGER: [
+        # feature flag only. the catalog is admin-only; a user's own allowed
+        # model ids travel on the project record, not in module settings.
+        'bedrock.enabled',
+        # optional embedded dashboard; the web portal reads these to decide whether to
+        # render the nav entry and page
+        'web_portal.custom_dashboard.enabled',
+        'web_portal.custom_dashboard.title',
+        'web_portal.custom_dashboard.url',
+    ],
+    constants.MODULE_DIRECTORYSERVICE: [
+        'provider',
+    ],
+    constants.MODULE_SHARED_STORAGE: [
+        'apps.mount_dir',
+    ],
+    constants.MODULE_BASTION_HOST: [
+        'public',
+        'public_ip',
+        'private_ip',
+    ],
+    constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER: [
+        'dcv_session.working_hours.start_up_time',
+        'dcv_session.working_hours.shut_down_time',
+        'dcv_session.max_root_volume_memory',
+        # per-session idle autostop (schedule modal + session card render these)
+        'dcv_session.idle_autostop_delay',
+        'dcv_session.idle_autostop_delay_max',
+    ],
+}
+
+_MISSING = object()
 
 
 class ClusterSettingsAPI(BaseAPI):
     def __init__(self, context: ideaclustermanager.AppContext):
         self.context = context
         self.instance_types_lock = RLock()
+
+    def _scope(self, access: str) -> str:
+        # app (client-credentials) tokens are authorized by module scope, users by elevation
+        return f'{self.context.module_id()}/{access}'
 
     def list_cluster_modules(self, context: ApiInvocationContext):
         cluster_modules = self.context.get_cluster_modules()
@@ -46,10 +99,57 @@ class ClusterSettingsAPI(BaseAPI):
             raise exceptions.invalid_params('module_id is required')
 
         module_config = self.context.config().get_config(module_id, module_id=module_id)
+        settings = module_config.as_plain_ordered_dict()
 
-        context.success(
-            GetModuleSettingsResult(settings=module_config.as_plain_ordered_dict())
-        )
+        if not context.is_authorized(
+            elevated_access=True, scopes=[self._scope('read')]
+        ):
+            settings = self.build_user_module_settings(
+                module_name=self.get_module_name(module_id), settings=settings
+            )
+
+        context.success(GetModuleSettingsResult(settings=settings))
+
+    def get_module_name(self, module_id: str) -> Optional[str]:
+        """
+        Resolve a module_id to its module name. global-settings is registered as a
+        config module under its own name, so the branch only saves a table read.
+        """
+        if module_id == constants.MODULE_GLOBAL_SETTINGS:
+            return constants.MODULE_GLOBAL_SETTINGS
+        module_info = self.context.get_cluster_module_info(module_id)
+        if module_info is None:
+            return None
+        return Utils.get_value_as_string('name', module_info)
+
+    def build_user_module_settings(
+        self, module_name: Optional[str], settings: Dict
+    ) -> Dict:
+        """
+        Project module settings down to the allowlisted paths for non-elevated
+        callers. Parent dicts of allowlisted paths are always present so the
+        webapp can traverse them; unknown modules project to an empty dict.
+        """
+        allowed_paths = USER_VISIBLE_MODULE_SETTINGS.get(module_name, [])
+        result: Dict = {}
+        for path in allowed_paths:
+            keys = path.split('.')
+
+            target = result
+            for key in keys[:-1]:
+                target = target.setdefault(key, {})
+
+            value = settings
+            for key in keys:
+                if not isinstance(value, dict) or key not in value:
+                    value = _MISSING
+                    break
+                value = value[key]
+
+            if value is not _MISSING:
+                target[keys[-1]] = value
+
+        return result
 
     def get_allowed_settings_for_module(self, module_id: str) -> List[str]:
         """
@@ -62,10 +162,17 @@ class ClusterSettingsAPI(BaseAPI):
                 'dcv_session.idle_timeout_warning',
                 'dcv_session.cpu_utilization_threshold',
                 'dcv_session.idle_autostop_delay',
+                'dcv_session.idle_autostop_delay_max',
                 'dcv_session.additional_security_groups',
                 'dcv_session.max_root_volume_memory',
                 'dcv_session.instance_types.allow',
                 'dcv_session.instance_types.deny',
+                # Stopped desktop reaper; keep_tags stays on idea-admin.sh
+                'dcv_session.stopped_session_reaper.enabled',
+                'dcv_session.stopped_session_reaper.dry_run',
+                'dcv_session.stopped_session_reaper.stopped_after_days',
+                'dcv_session.stopped_session_reaper.warn_days_before',
+                'dcv_session.stopped_session_reaper.max_per_pass',
                 # Network settings
                 'dcv_session.network.subnet_autoretry',
                 'dcv_session.network.randomize_subnets',
@@ -100,7 +207,10 @@ class ClusterSettingsAPI(BaseAPI):
                 # Add scheduler settings that should be editable here
             ],
             'cluster-manager': [
-                # Add cluster manager settings that should be editable here
+                # feature flag and the org-approved model catalog. edited from the
+                # bedrock tab on the cluster settings page.
+                'bedrock.enabled',
+                'bedrock.model_ids',
             ],
         }
 
@@ -161,7 +271,9 @@ class ClusterSettingsAPI(BaseAPI):
                 config_entries.append({'key': path_prefix, 'value': value})
 
     def update_module_settings(self, context: ApiInvocationContext):
-        if not context.is_authorized(elevated_access=True):
+        if not context.is_authorized(
+            elevated_access=True, scopes=[self._scope('write')]
+        ):
             raise exceptions.unauthorized_access()
 
         request = context.get_request_payload_as(UpdateModuleSettingsRequest)
@@ -175,6 +287,7 @@ class ClusterSettingsAPI(BaseAPI):
 
         # Validate that only allowed settings are being updated
         self.validate_settings_allowed(module_id, request.settings)
+        self.validate_bedrock_settings(module_id, request.settings)
 
         # Convert nested settings to flat config entries
         config_entries = []
@@ -186,11 +299,80 @@ class ClusterSettingsAPI(BaseAPI):
             config_entries=config_entries, overwrite=True
         )
 
-        # Config automatically updates via DynamoDB stream subscriptions
+        self.reconcile_bedrock_projects(module_id, request.settings)
+
         context.success(UpdateModuleSettingsResult(success=True))
 
+    def validate_bedrock_settings(self, module_id: str, settings: dict) -> None:
+        """
+        the catalog is checked here so an unsupported model id is reported to the
+        administrator who entered it, instead of being skipped at provision time.
+        """
+        config = self.context.config()
+        if module_id != config.get_module_id(constants.MODULE_CLUSTER_MANAGER):
+            return
+        bedrock = Utils.get_value_as_dict('bedrock', settings, {})
+        if 'model_ids' not in bedrock:
+            return
+        validate_no_global_profiles(
+            Utils.get_value_as_list('model_ids', bedrock, []),
+            config.get_string('cluster.aws.partition', ''),
+            config.get_string('cluster.aws.region', ''),
+        )
+
+    def read_bedrock_settings_from_db(self, module_id: str) -> dict:
+        """
+        the values as stored, read back after the write. the in-memory config tree is
+        built once at construction and only refreshes on the dynamodb stream poller
+        (10-30s), so it still holds the pre-change values at this point.
+        """
+        db = self.context.config().db
+        enabled_entry = db.get_config_entry(f'{module_id}.bedrock.enabled')
+        model_ids_entry = db.get_config_entry(f'{module_id}.bedrock.model_ids')
+        return {
+            'enabled': Utils.get_value_as_bool('value', enabled_entry, False),
+            'model_ids': Utils.get_value_as_list('value', model_ids_entry, []),
+        }
+
+    def reconcile_bedrock_projects(self, module_id: str, settings: dict) -> None:
+        """
+        the feature flag and the model catalog change what every project resolves
+        to, so each one is reconciled. the intended values travel with the task, since
+        the reconcile cannot read them back out of the in-memory config yet.
+        """
+        if module_id != self.context.config().get_module_id(
+            constants.MODULE_CLUSTER_MANAGER
+        ):
+            return
+        bedrock = Utils.get_value_as_dict('bedrock', settings, {})
+        if 'enabled' not in bedrock and 'model_ids' not in bedrock:
+            return
+        try:
+            self.context.projects.send_bedrock_reconcile_all(
+                cluster_bedrock=self.read_bedrock_settings_from_db(module_id)
+            )
+        except Exception as e:
+            self.context.logger().error(
+                f'failed to enqueue bedrock reconcile after a settings update: {e}'
+            )
+            # the setting is already written. reporting success here would hide that
+            # no project was brought in line with it.
+            raise exceptions.soca_exception(
+                error_code=errorcodes.GENERAL_ERROR,
+                message=(
+                    f'{module_id}.bedrock was saved but projects were not reconciled: '
+                    f'{e}. save the setting again, or save each project, to retry.'
+                ),
+            )
+
     def list_cluster_hosts(self, context: ApiInvocationContext):
-        # returns all infrastructure instances
+        # returns all infrastructure instances; ip/instance-id/subnet details are admin-only,
+        # and the sole consumer is the admin cluster status page.
+        if not context.is_authorized(
+            elevated_access=True, scopes=[self._scope('read')]
+        ):
+            raise exceptions.unauthorized_access()
+
         request = context.get_request_payload_as(ListClusterHostsRequest)
         ec2_instances = self.context.aws_util().ec2_describe_instances(
             filters=[

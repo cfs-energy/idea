@@ -49,7 +49,7 @@ lmutil binary is not included with IDEA. You are required to upload it manually 
 arg = parser.parse_args()
 lmstat_path = "PATH_TO_LMUTIL"
 if lmstat_path == "PATH_TO_LMUTIL":
-    print('Please specify a link to your lmutil binary (edit line 30 of this file')
+    print('Please set lmstat_path in this script to the path of your lmutil binary')
     sys.exit(1)
 ```
 
@@ -60,7 +60,7 @@ You do not need to install FlexLM server manager. Only `lmutil` binary is requir
 {% hint style="warning" %}
 lmutil and RHEL based distro
 
-FlexLM may requires 32 bits lib depending your system. If launching `lmutil` returns an `ELF` version mismatch, simply install `yum install redhat-lsb` (or equivalent
+lmutil is distributed as an x86_64 binary and may need 32 bit compatibility libraries. `redhat-lsb` supplies them on EL8 and is not available on EL9 or later, where `glibc.i686` and `libnsl` are the equivalent.
 {% endhint %}
 
 ## How to retrieve number of licenses available <a href="#how-to-retrieve-number-of-licenses-available" id="how-to-retrieve-number-of-licenses-available"></a>
@@ -78,7 +78,7 @@ To avoid permission issue, it's recommended to create a copy of the file and mov
 Let say you have 30 ccmp licenses and 4 are currently in use. The command below will list how many licenses are currently available to use for your jobs:
 
 ```bash
-python /apps/utils/license_check.py -s lic1.idea-licenses.internal -p 1999 -f ccmppower
+python3 /apps/utils/license_check.py -s lic1.idea-licenses.internal -p 1999 -f ccmppower
 26
 ```
 
@@ -99,7 +99,7 @@ Navigate to "**Licenses**" under "**Scale-Out Computing**" section on your IDEA 
 In our example, the availability check script command is:
 
 ```
-python /apps/utils/license_check.py --server lic1.idea-licenses.internal \
+python3 /apps/utils/license_check.py --server lic1.idea-licenses.internal \
   --port 1999 \
   --feature ccmppower
 ```

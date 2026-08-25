@@ -35,6 +35,7 @@ import UpdateHpcApplication from "./pages/hpc/update-hpc-application";
 import SubmitJob from "./pages/hpc/submit-job";
 import AccountSettings from "./pages/account/account-settings";
 import SSHAccess from "./pages/home/ssh-access";
+import CustomDashboard from "./pages/home/custom-dashboard";
 import ClusterSettings from "./pages/cluster-admin/cluster-settings";
 import ClusterStatus from "./pages/cluster-admin/cluster-status";
 import Projects from "./pages/cluster-admin/projects";
@@ -60,6 +61,9 @@ import IdeaLogTail from "./pages/home/log-tail";
 import Utils from './common/utils';
 import ScriptWorkbench from "./pages/hpc/script-workbench";
 
+// context-help markdown, emitted as hashed asset URLs and fetched on demand
+// (replaces CRA's dynamic require of ./docs/<pageId>.md)
+const DOC_URLS = import.meta.glob('./docs/*.md', {query: '?url', import: 'default', eager: true}) as Record<string, string>
 
 export interface IdeaWebPortalAppProps extends IdeaAppNavigationProps {
 }
@@ -186,8 +190,11 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
     }
 
     fetchContextHelp = (pageId: string) => {
-        let helpContent = require(`./docs/${pageId}.md`)
-        let footer = require(`./docs/_footer.md`)
+        let helpContent = DOC_URLS[`./docs/${pageId}.md`]
+        let footer = DOC_URLS['./docs/_footer.md']
+        if (helpContent == null || footer == null) {
+            return
+        }
         fetch(helpContent).then(helpContentResponse => {
             fetch(footer).then(footerResponse => {
                 helpContentResponse.text().then(content => {
@@ -443,6 +450,22 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
                     <IdeaAuthenticatedRoute isLoggedIn={this.state.isLoggedIn}>
                         <SSHAccess
                             ideaPageId="ssh-access"
+                            toolsOpen={this.state.toolsOpen}
+                            tools={this.state.tools}
+                            onToolsChange={this.onToolsChange}
+                            onPageChange={this.onPageChange}
+                            sideNavItems={this.state.sideNavItems}
+                            sideNavHeader={this.state.sideNavHeader}
+                            onSideNavChange={this.onSideNavChange}
+                            onFlashbarChange={this.onFlashbarChange}
+                            flashbarItems={this.state.flashbarItems}
+                        />
+                    </IdeaAuthenticatedRoute>
+                }/>
+                <Route path="/home/custom-dashboard" element={
+                    <IdeaAuthenticatedRoute isLoggedIn={this.state.isLoggedIn}>
+                        <CustomDashboard
+                            ideaPageId="custom-dashboard"
                             toolsOpen={this.state.toolsOpen}
                             tools={this.state.tools}
                             onToolsChange={this.onToolsChange}

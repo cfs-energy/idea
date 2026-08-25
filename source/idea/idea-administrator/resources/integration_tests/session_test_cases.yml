@@ -17,24 +17,6 @@ testcases:
     hibernation_enabled: False
     instance_type: g4dn.xlarge
     storage_size: 50
-  - name: amazonlinux2-arm
-    base_os: amazonlinux2
-    software_stack_id: ss-base-amazonlinux2-arm64-base
-    hibernation_enabled: False
-    instance_type: m6g.xlarge
-    storage_size: 50
-  - name: amazonlinux2-x86_64
-    base_os: amazonlinux2
-    software_stack_id: ss-base-amazonlinux2-x86-64-base
-    hibernation_enabled: False
-    instance_type: t3.xlarge
-    storage_size: 50
-  - name: amazonlinux2-gpu-nvidia
-    base_os: amazonlinux2
-    software_stack_id: ss-base-amazonlinux2-x86-64-base
-    hibernation_enabled: False
-    instance_type: g4dn.xlarge
-    storage_size: 50
   - name: windows2019-x86_64
     base_os: windows2019
     software_stack_id: ss-base-windows2019-x86-64-base
@@ -167,12 +149,6 @@ testcases:
     hibernation_enabled: False
     instance_type: g4ad.xlarge
     storage_size: 50
-  # - name: amazonlinux2-gpu-amd
-  #   base_os: amazonlinux2
-  #   software_stack_id: ss-base-amazonlinux2-x86-64-base
-  #   hibernation_enabled: False
-  #   instance_type: g4ad.xlarge
-  #   storage_size: 50
   # - name: ubuntu2204-gpu-amd
   #   base_os: ubuntu2204
   #   software_stack_id: ss-base-ubuntu2204-x86-64-base

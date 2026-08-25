@@ -23,3 +23,6 @@ jobs:
       - name: Virtual Desktop Controller Tests
         run: |
           invoke tests.virtual-desktop-controller
+      - name: Web Portal Tests
+        run: |
+          invoke tests.web-portal

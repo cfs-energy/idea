@@ -16,7 +16,7 @@ function Install-NvidiaGpuDrivers {
        $s3Path = "{{ context.config.get_string('global-settings.gpu_settings.nvidia.windows.s3_bucket_path', required=True) }}"
     }
     elseif ($operatingSystem -like "*windows server 2025*") {
-       $keyPrefix = "*_grid_*_server2022_*.exe"
+       $keyPrefix = "*_grid_*_server2025_*.exe"
        $s3Path = "{{ context.config.get_string('global-settings.gpu_settings.nvidia.windows.s3_bucket_path', required=True) }}"
     }
     else {
@@ -30,33 +30,53 @@ function Install-NvidiaGpuDrivers {
         }
         else {
             Write-ToLog -Message "About to install NVIDIA Grid drivers"
-            $bucketUrl = "{{ context.config.get_string('global-settings.gpu_settings.nvidia.windows.s3_bucket_url', required=True) }}"
-            $bucketRegion = (Invoke-WebRequest -Method Head -Uri $bucketUrl -UseBasicParsing).Headers["x-amz-bucket-region"]
+            $awsRegion = "{{ context.config.get_string('cluster.aws.region', required=True) }}"
+            if ($awsRegion -like "us-gov-*") {
+                # the bucket_url points at the commercial partition and is not reachable from GovCloud.
+                # the driver bucket is in the cluster region instead.
+                Write-ToLog -Message "Detected GovCloud region: ${awsRegion}"
+                $bucketRegion = $awsRegion
+            }
+            else {
+                $bucketUrl = "{{ context.config.get_string('global-settings.gpu_settings.nvidia.windows.s3_bucket_url', required=True) }}"
+                $bucketRegion = (Invoke-WebRequest -Method Head -Uri $bucketUrl -UseBasicParsing).Headers["x-amz-bucket-region"]
+            }
             $installerFolderPrefix = "nvidia_grid_driver"
             Write-ToLog -Message "Downloading Nvidia Drivers from S3"
             $env:Path += ";C:\Program Files\Amazon\AWSCLIV2\"
 
             aws s3 cp --region $bucketRegion --quiet $s3Path "C:\IDEA\Assets\${installerFolderPrefix}" --recursive --exclude "*" --include "$keyPrefix*"
 
+            # aws s3 cp with no matching key exits 0 and copies nothing, so check for the installer
+            $driverFile = Get-ChildItem -Path "C:\IDEA\Assets\${installerFolderPrefix}" -Filter $keyPrefix -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $driverFile) {
+                Write-ToLog -Message "No file matching ${keyPrefix} was copied from ${s3Path}, cannot install NVIDIA drivers" -Level 'Error'
+                exit 1
+            }
+
             Write-ToLog -Message "Disabling Licensing Page"
             reg add "HKLM\SOFTWARE\NVIDIA Corporation\Global\GridLicensing" /v NvCplDisableManageLicensePage /t REG_DWORD /d 1 /f
 
             # https://enterprise-support.nvidia.com/s/article/Silent-Install-of-GRID-VM-Driver-for-Windows
             Write-ToLog -Message "Installing Nvidia Drivers"
-            $driverFileName = (Get-ChildItem -Path "C:\IDEA\Assets\${installerFolderPrefix}" -Filter $keyPrefix).Name
             Set-ExecutionPolicy RemoteSigned -Scope Process
 
-            # Extract Driver Content from the self-extractubg executable
+            # Extract Driver Content from the self-extracting executable
             Write-ToLog -Message "Extracting driver files"
 
             $env:Path += ";C:\Program Files\7-Zip\"
-            7z x "C:\IDEA\Assets\${installerFolderPrefix}\$keyPrefix" -o"C:\IDEA\Assets\${installerFolderPrefix}" -y
+            7z x $driverFile.FullName -o"C:\IDEA\Assets\${installerFolderPrefix}" -y
 
             # Install Driver
             Write-ToLog -Message "About to execute C:\IDEA\Assets\${installerFolderPrefix}\setup.exe with Arguments -n -s"
             $installDriver = Start-Process -FilePath "C:\IDEA\Assets\${installerFolderPrefix}\setup.exe" -ArgumentList "-n", "-s" -Wait -PassThru
             $exitCode = $installDriver.ExitCode
             Write-ToLog -Message "Exit Code ${exitCode}"
+            # 3010 is ERROR_SUCCESS_REBOOT_REQUIRED; the host reboots after bootstrap anyway
+            if ($exitCode -ne 0 -and $exitCode -ne 3010) {
+                Write-ToLog -Message "NVIDIA driver setup.exe failed with exit code ${exitCode}" -Level 'Error'
+                exit 1
+            }
 
             Write-ToLog -Message "NVIDIA Grid driver installed, reboot will be done at the end of the bootstrap sequence"
         }

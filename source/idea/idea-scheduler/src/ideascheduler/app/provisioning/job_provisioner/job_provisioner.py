@@ -17,6 +17,7 @@ from ideadatamodel import (
     errorcodes,
     SocaBaseModel,
     SocaJob,
+    SocaJobState,
     SocaScalingMode,
     SocaQueueMode,
     ProvisioningStatus,
@@ -40,12 +41,34 @@ from ideascheduler.app.provisioning.job_provisioner.batch_capacity_helper import
     BatchCapacityHelper,
 )
 
+# wait states: capacity, licenses, quota headroom, or an in-flight update. these self-heal
+# and are excluded from the provisioning retry cap (not configuration failures).
+PROVISIONING_WAIT_ERROR_CODES = (
+    errorcodes.SPOT_FLEET_CAPACITY_UPDATE_IN_PROGRESS,
+    errorcodes.MAX_PROVISIONED_INSTANCES_LIMIT,
+    errorcodes.RETRY_JOB_PROVISIONING,
+    errorcodes.NOT_ENOUGH_LICENSES,
+    errorcodes.BEDROCK_ACCESS_NOT_READY,
+    errorcodes.SERVICE_QUOTA_NOT_AVAILABLE,
+    errorcodes.SHARED_CAPACITY_MISMATCH,
+    errorcodes.SHARED_CAPACITY_UNAVAILABLE,
+    errorcodes.EC2_RESERVED_INSTANCES_NOT_AVAILABLE,
+)
+
+# pbs's own comment ("Can Never Run: Not enough total nodes available") reads as terminal to
+# the owner, but isn't: idea adds the nodes on demand and the job usually starts minutes later.
+JOB_COMMENT_PROVISIONING = 'IDEA: provisioning compute capacity for this job'
+
 
 class ProvisionJobsResult(SocaBaseModel):
     error_code: Optional[str] = Field(default=None)
+    message: Optional[str] = Field(default=None)
     status: Optional[bool] = Field(default=None)
     unprovisioned_jobs: Optional[List[SocaJob]] = Field(default=None)
     exception: Optional[Exception] = Field(default=None)
+    # a failed compute stack was deleted during this cycle, so the cycle is a real
+    # provisioning failure and must be counted against the job's retry budget.
+    stack_deleted: Optional[bool] = Field(default=None)
 
     def get_error_code(self) -> str:
         if Utils.is_not_empty(self.error_code):
@@ -60,6 +83,8 @@ class ProvisionJobsResult(SocaBaseModel):
     def get_error_message(self) -> str:
         if self.exception is not None:
             return str(self.exception)
+        if Utils.is_not_empty(self.message):
+            return self.message
         if Utils.is_not_empty(self.error_code):
             return self.error_code
         return 'Unknown Error'
@@ -75,9 +100,16 @@ class ProvisionJobs:
         context: ideascheduler.AppContext,
         jobs: List[SocaJob],
         logger: logging.Logger,
+        attempt_number: Optional[int] = None,
+        cycle_attempt: int = 1,
     ):
         self._context = context
         self._logger = logger
+        self._lifecycle_events = context.lifecycle_events
+        # attempt_number is the job-scoped attempt, cycle_attempt the retry index within it;
+        # both are stamped on every lifecycle event so a consumer can join them to the attempt.
+        self._attempt_number = attempt_number
+        self._cycle_attempt = cycle_attempt
 
         self.jobs = jobs
 
@@ -101,7 +133,7 @@ class ProvisionJobs:
         return self.job.log_tag
 
     @property
-    def provisioning_status(self) -> ProvisioningStatus:
+    def provisioning_status(self) -> Optional[ProvisioningStatus]:
         if self._provisioning_status is not None:
             return self._provisioning_status
 
@@ -139,8 +171,29 @@ class ProvisionJobs:
         pending_duration = arrow.utcnow() - job.queue_time
 
         self._context.metrics.jobs_pending_duration(
-            queue_type=job.queue_type, duration_secs=pending_duration.seconds
+            queue_type=job.queue_type,
+            duration_secs=int(pending_duration.total_seconds()),
         )
+
+    def raise_if_capacity_signature_differs(self):
+        """
+        job_group alone can collide across jobs with differing params; capacity_signature covers the
+        full set. A stack provisioned before signatures existed has none and is matched by job_group.
+        """
+        capacity_signature = self.job.get_capacity_signature()
+        provisioned_capacity_signature = (
+            self.provisioning_util.stack.soca_capacity_signature
+        )
+        if (
+            provisioned_capacity_signature is not None
+            and capacity_signature != provisioned_capacity_signature
+        ):
+            raise exceptions.SocaException(
+                error_code=errorcodes.SHARED_CAPACITY_MISMATCH,
+                message=f'Provisioned capacity does not match the desired capacity requirements.'
+                f'Provisioned signature: {provisioned_capacity_signature}, '
+                f'Required signature: {capacity_signature}',
+            )
 
     def update_capacity(self):
         """
@@ -148,7 +201,11 @@ class ProvisionJobs:
         :return: List of SocaJobs that could not be provisioned due to limits
         """
 
+        self.raise_if_capacity_signature_differs()
+
         self.provisioning_util.check_budgets()
+
+        self.provisioning_util.check_bedrock()
 
         self.provisioning_util.check_service_quota()
 
@@ -192,6 +249,8 @@ class ProvisionJobs:
 
         self.provisioning_util.check_budgets()
 
+        self.provisioning_util.check_bedrock()
+
         self.provisioning_util.ec2_dry_run()
 
         self.provisioning_util.check_service_quota()
@@ -233,6 +292,15 @@ class ProvisionJobs:
             self.provision_job_in_scheduler(job=self.job, stack_id=stack_id)
             unprovisioned_jobs = []
 
+        if self._lifecycle_events is not None:
+            self._lifecycle_events.stack_created(
+                job=self.job,
+                stack_id=stack_id,
+                job_count=len(self.jobs),
+                attempt_number=self._attempt_number,
+                cycle_attempt=self._cycle_attempt,
+            )
+
         # publish metrics
         self._context.metrics.stacks_created(queue_type=self.job.queue_type)
 
@@ -250,6 +318,10 @@ class ProvisionJobs:
             )
 
     def provision_job_on_shared_capacity(self):
+        # shared capacity already carries an instance profile: a job whose project
+        # expects bedrock access must not be placed on nodes that do not carry it.
+        self.provisioning_util.check_bedrock()
+
         job_group = self.job.get_job_group()
         provisioned_job_group = self.provisioning_util.stack.soca_job_group
 
@@ -259,6 +331,8 @@ class ProvisionJobs:
                 message=f'Provisioned capacity does not match the desired capacity requirements.'
                 f'Provisioned: {provisioned_job_group}, Required: {job_group}',
             )
+
+        self.raise_if_capacity_signature_differs()
 
         job_queue = self.job.queue
         provisioned_job_queue = self.provisioning_util.stack.soca_job_queue
@@ -312,6 +386,31 @@ class ProvisionJobs:
             f'ProvisioningStatus: {provisioning_status}'
         )
 
+    def delete_failed_stack(self) -> bool:
+        """
+        delete a compute stack that is in a failed terminal state.
+
+        such a stack can never provision the job, and its name blocks a new stack for
+        the same job. the node housekeeper only inspects jobs that still hold a stack,
+        so for a job that holds none this is the only place it gets removed.
+
+        :return: True if the deletion was requested
+        """
+        stack_name = self.job.get_compute_stack()
+        try:
+            self.provisioning_util.aws_util.cloudformation_delete_stack(
+                stack_name=stack_name
+            )
+            self._logger.info(
+                f'{self.log_tag()} Deleting ComputeStack: {stack_name}, Retry provisioning ...'
+            )
+            return True
+        except Exception as e:
+            self._logger.error(
+                f'{self.log_tag()} Failed to delete ComputeStack {stack_name}: {e}'
+            )
+            return False
+
     def invoke(self) -> ProvisionJobsResult:
         try:
             provisioning_status = self.provisioning_status
@@ -336,15 +435,39 @@ class ProvisionJobs:
                 ProvisioningStatus.TIMEOUT,
             ):
                 self.print_status()
-                # For failed/timeout jobs, return a special error code to indicate
-                # they should be left for the node housekeeper to clean up
-                # rather than being continuously retried
+                if self._lifecycle_events is not None:
+                    self._lifecycle_events.stack_failed(
+                        job=self.job,
+                        error_code=errorcodes.CLOUDFORMATION_STACK_BUILDER_FAILED,
+                        message=f'ProvisioningStatus: {provisioning_status}',
+                        attempt_number=self._attempt_number,
+                        cycle_attempt=self._cycle_attempt,
+                    )
+                stack_deleted = False
+                if (
+                    provisioning_status == ProvisioningStatus.FAILED
+                    and not self.job.is_provisioned()
+                ):
+                    # the job holds no stack, so the housekeeper will never look at this one:
+                    # delete it here or the job waits forever on an unreusable stack name.
+                    stack_deleted = self.delete_failed_stack()
+                # for a stack the job still holds, cleanup and the job reset belong to
+                # the node housekeeper rather than another provisioning attempt.
                 return ProvisionJobsResult(
                     status=False,
                     error_code=errorcodes.CLOUDFORMATION_STACK_BUILDER_FAILED,
+                    message=f'compute node provisioning {provisioning_status.value}',
+                    stack_deleted=stack_deleted,
                 )
 
             else:
+                # a stack status check_status does not map. do not touch the stack or the
+                # job: the housekeeper reports it and leaves both alone.
+                self._logger.warning(
+                    f'{self.log_tag()} '
+                    f'Stack: {self.job.get_compute_stack()}, '
+                    f'unmapped stack status - skipping provisioning'
+                )
                 return ProvisionJobsResult(status=True)
 
         except exceptions.SocaException as e:
@@ -353,11 +476,29 @@ class ProvisionJobs:
                 errorcodes.MAX_PROVISIONED_INSTANCES_LIMIT,
             ):
                 self._logger.info(f'{self.log_tag()} {e.message}')
+                if self._lifecycle_events is not None:
+                    self._lifecycle_events.capacity_wait(
+                        job=self.job,
+                        error_code=e.error_code,
+                        message=e.message,
+                        job_count=len(self.jobs),
+                        attempt_number=self._attempt_number,
+                        cycle_attempt=self._cycle_attempt,
+                    )
                 return ProvisionJobsResult(
                     status=False, error_code=e.error_code, exception=e
                 )
             elif e.error_code == errorcodes.RETRY_JOB_PROVISIONING:
                 self._logger.info(f'{self.log_tag()} {e.message}')
+                if self._lifecycle_events is not None:
+                    self._lifecycle_events.capacity_wait(
+                        job=self.job,
+                        error_code=e.error_code,
+                        message=e.message,
+                        job_count=len(e.ref) if e.ref else len(self.jobs),
+                        attempt_number=self._attempt_number,
+                        cycle_attempt=self._cycle_attempt,
+                    )
                 return ProvisionJobsResult(
                     status=False,
                     unprovisioned_jobs=e.ref,
@@ -377,6 +518,26 @@ class ProvisionJobs:
                 self._context.metrics.job_provisioning_failed(
                     queue_type=self.job.queue_type, error_code=e.error_code
                 )
+                if self._lifecycle_events is not None:
+                    # designed wait states (licenses, quota headroom, stale shared
+                    # stacks) are waits in the event stream, not stack failures.
+                    if e.error_code in PROVISIONING_WAIT_ERROR_CODES:
+                        self._lifecycle_events.capacity_wait(
+                            job=self.job,
+                            error_code=e.error_code,
+                            message=str(e),
+                            job_count=len(self.jobs),
+                            attempt_number=self._attempt_number,
+                            cycle_attempt=self._cycle_attempt,
+                        )
+                    else:
+                        self._lifecycle_events.stack_failed(
+                            job=self.job,
+                            error_code=e.error_code,
+                            message=str(e),
+                            attempt_number=self._attempt_number,
+                            cycle_attempt=self._cycle_attempt,
+                        )
                 return ProvisionJobsResult(
                     status=False, error_code=e.error_code, exception=e
                 )
@@ -388,6 +549,14 @@ class ProvisionJobs:
             self._context.metrics.job_provisioning_failed(
                 queue_type=self.job.queue_type, error_code=errorcodes.GENERAL_ERROR
             )
+            if self._lifecycle_events is not None:
+                self._lifecycle_events.stack_failed(
+                    job=self.job,
+                    error_code=errorcodes.GENERAL_ERROR,
+                    message=str(e),
+                    attempt_number=self._attempt_number,
+                    cycle_attempt=self._cycle_attempt,
+                )
             return ProvisionJobsResult(
                 status=False, error_code=errorcodes.GENERAL_ERROR, exception=e
             )
@@ -416,24 +585,118 @@ class JobProvisioner(SocaService):
     def service_id(self) -> str:
         return f'{self.__class__.__name__}.QueueType.{self._queue.queue_type}'
 
+    def _track_failed_jobs(
+        self, jobs: List[SocaJob], result: ProvisionJobsResult
+    ) -> List[SocaJob]:
+        """
+        apply the provisioning retry cap to a failed provisioning cycle.
+        returns the jobs that may be re-queued; jobs held after exhausting
+        their retries are excluded.
+        """
+        if result.exception is None and Utils.is_empty(result.error_code):
+            # stack still in progress - not a failure
+            return jobs
+        if result.get_error_code() in PROVISIONING_WAIT_ERROR_CODES:
+            return jobs
+
+        provisioning_util = JobProvisioningUtil(
+            context=self._context, jobs=jobs, logger=self._logger
+        )
+        requeue_jobs = []
+        for job in jobs:
+            retries_exhausted = provisioning_util.track_provisioning_failure(
+                job=job, message=result.get_error_message()
+            )
+            if not retries_exhausted:
+                requeue_jobs.append(job)
+        return requeue_jobs
+
+    def _set_provisioning_comment(
+        self,
+        jobs: List[SocaJob],
+        attempt: Optional[int],
+        applied: Optional[Dict[str, str]] = None,
+    ):
+        """
+        tell the job owner why the job is still queued: idea is provisioning capacity for it.
+
+        the pbs scheduler owns the comment attribute and rewrites it on a later scheduling
+        cycle, so the value is re-asserted on every provisioning pass and a failure to write
+        it never affects provisioning. applied records what each job was told within a
+        pass: an unchanged comment costs no qalter.
+        """
+        comment = JOB_COMMENT_PROVISIONING
+        if attempt is not None:
+            comment = f'{comment} (attempt {attempt})'
+        if applied is None:
+            applied = {}
+        for job in jobs:
+            if job.is_provisioned() or applied.get(job.job_id) == comment:
+                continue
+            try:
+                self._context.scheduler.set_job_comment(
+                    job_id=job.job_id, comment=comment
+                )
+                applied[job.job_id] = comment
+            except Exception as e:
+                self._logger.warning(f'{job.log_tag} failed to set job comment: {e}')
+
+    def _is_job_provisionable(self, job: SocaJob) -> bool:
+        """
+        read the job's live state from the scheduler, before any capacity is launched.
+
+        a held job's record still exists, so an existence check (qstat's exit code) launches
+        instances for a job the scheduler will never dispatch. a state that cannot be read
+        skips the cycle: the job stays in the scheduler and the job monitor re-submits it.
+        """
+        try:
+            live_job = self._context.scheduler.get_job(job_id=job.job_id)
+        except Exception as e:
+            self._logger.warning(
+                f'{job.log_tag} failed to read job state, skip provisioning: {e}'
+            )
+            return False
+
+        if live_job is None:
+            self._logger.info(f'{job.log_tag} Job Deleted, skip provisioning.')
+            return False
+
+        if live_job.state != SocaJobState.QUEUED:
+            self._logger.info(
+                f'{job.log_tag} Job state: {live_job.state}, skip provisioning.'
+            )
+            return False
+
+        return True
+
     def _provision_with_retry_backoff(
         self, jobs: List[SocaJob], max_retries: int = 5
     ) -> ProvisionJobsResult:
         retry_count = 1
         backoff_in_seconds = 2
         sleep = 2
+        last_error_code = None
+
+        # the whole loop is one job-scoped attempt: the persistent retry count increments once
+        # after it returns, so read attempt_number here and index retries within it separately.
+        lifecycle_events = self._context.lifecycle_events
+        attempt_number = (
+            lifecycle_events.current_attempt(job=jobs[0])
+            if lifecycle_events is not None
+            else None
+        )
+        comments_applied: Dict[str, str] = {}
 
         while not self._exit.is_set():
             active_jobs = []
 
             start = Utils.current_time_ms()
 
-            # check for first job in the batch if it's deleted. if deleted, skip entire batch
+            # check the live state of the first job in the batch. if the scheduler will not
+            # dispatch it (deleted, held), skip the entire batch
             job = jobs[0]
-            if self._context.scheduler.is_job_queued_or_running(job_id=job.job_id):
+            if self._is_job_provisionable(job=job):
                 active_jobs = jobs
-            else:
-                self._logger.info(f'{job.log_tag} Job Deleted, skip provisioning.')
 
             total_ms = Utils.current_time_ms() - start
             self._logger.info(
@@ -443,34 +706,75 @@ class JobProvisioner(SocaService):
             if len(active_jobs) == 0:
                 return ProvisionJobsResult(status=True)
 
+            if lifecycle_events is not None:
+                if retry_count == 1:
+                    lifecycle_events.job_provisioning_attempt(
+                        job=active_jobs[0],
+                        attempt_number=attempt_number,
+                        job_count=len(active_jobs),
+                        cycle_attempt=retry_count,
+                    )
+                else:
+                    lifecycle_events.job_provisioning_retry(
+                        job=active_jobs[0],
+                        attempt_number=attempt_number,
+                        error_code=last_error_code,
+                        job_count=len(active_jobs),
+                        cycle_attempt=retry_count,
+                    )
+
+            self._set_provisioning_comment(
+                jobs=active_jobs, attempt=attempt_number, applied=comments_applied
+            )
+
             result = ProvisionJobs(
-                context=self._context, jobs=active_jobs, logger=self._logger
+                context=self._context,
+                jobs=active_jobs,
+                logger=self._logger,
+                attempt_number=attempt_number,
+                cycle_attempt=retry_count,
             ).invoke()
+
+            if not result.status:
+                last_error_code = result.get_error_code()
 
             retry_count += 1
 
             if self._queue.queue_mode == SocaQueueMode.LICENSE_OPTIMIZED:
-                # if job has failed due to unavailability of licenses, do not block the entire queue and try provisioning
-                # next job if available.
-                # the job will be picked up in the next minute cycle when job cache is refreshed and job monitor detects
-                # that job is not yet provisioned.
+                # a license failure should not block the whole queue: skip to the next job, the
+                # job monitor re-submits this one once the cache refreshes and it's still unprovisioned.
                 if (
                     Utils.is_not_empty(result.error_code)
                     and result.error_code == errorcodes.NOT_ENOUGH_LICENSES
                 ):
                     return ProvisionJobsResult(status=True)
 
-            # if job has failed due to CloudFormation stack failures (FAILED/TIMEOUT status),
-            # do not block the entire queue and let the node housekeeper handle cleanup.
-            # the job will be reset and retried when the housekeeper runs.
+            # a CloudFormation failure (FAILED/TIMEOUT) should not block the whole queue either:
+            # cleanup is either the failed stack deleted this cycle, or the housekeeper's job.
             if (
                 Utils.is_not_empty(result.error_code)
                 and result.error_code == errorcodes.CLOUDFORMATION_STACK_BUILDER_FAILED
             ):
-                self._logger.info(
-                    f'{jobs[0].log_tag} CloudFormation stack failed or timed out. '
-                    f'Leaving for node housekeeper to clean up and retry.'
-                )
+                for job in active_jobs:
+                    self._context.job_cache.set_job_provisioning_error(
+                        job_id=job.job_id,
+                        error_code=result.get_error_code(),
+                        message=result.get_error_message(),
+                    )
+                if Utils.is_true(result.stack_deleted):
+                    self._logger.info(
+                        f'{jobs[0].log_tag} CloudFormation stack failed and was deleted. '
+                        f'Job provisioning will be re-tried.'
+                    )
+                else:
+                    self._logger.info(
+                        f'{jobs[0].log_tag} CloudFormation stack failed or timed out. '
+                        f'Leaving for node housekeeper to clean up and retry.'
+                    )
+                if result.exception is not None or Utils.is_true(result.stack_deleted):
+                    # stack creation failed, or the failed stack was deleted here - either way
+                    # the housekeeper won't see it (it only counts stacks a job still holds).
+                    self._track_failed_jobs(jobs=active_jobs, result=result)
                 return ProvisionJobsResult(status=True)
 
             if retry_count > max_retries or result.status:
@@ -481,6 +785,34 @@ class JobProvisioner(SocaService):
             sleep = Utils.get_retry_backoff_interval(
                 current_retry=retry_count, backoff_in_seconds=backoff_in_seconds
             )
+
+    def _drop_undispatchable_jobs(self, jobs: Dict[str, SocaJob]):
+        """
+        refresh a batch from the scheduler and drop the jobs it will not dispatch.
+
+        no pbs hook fires on qhold, so the cache still reads QUEUED for a held job. the
+        expected batch size counts queued jobs only, so a held job kept in the batch waits
+        for a count the batch can never reach. one qstat per batch, not one per job.
+        """
+        if len(jobs) == 0:
+            return
+        try:
+            live_jobs = self._context.scheduler.list_jobs(job_ids=list(jobs.keys()))
+        except Exception as e:
+            self._logger.warning(f'failed to refresh batch job states: {e}')
+            return
+        live_by_id = {live_job.job_id: live_job for live_job in live_jobs}
+        for job_id in list(jobs.keys()):
+            live_job = live_by_id.get(job_id)
+            if live_job is not None and live_job.state == SocaJobState.QUEUED:
+                continue
+            if live_job is not None:
+                self._context.job_cache.sync(jobs=[live_job])
+            state = 'deleted' if live_job is None else live_job.state
+            self._logger.info(
+                f'{jobs[job_id].log_tag} state: {state}, dropped from batch'
+            )
+            del jobs[job_id]
 
     def _drain_batch_queue(self) -> Dict[str, List[SocaJob]]:
         """
@@ -524,12 +856,16 @@ class JobProvisioner(SocaService):
 
             jobs_to_be_provisioned = 0
             for job_group, jobs in batches.items():
+                self._drop_undispatchable_jobs(jobs)
+                # count only QUEUED jobs: held and waiting jobs share job_group/stack_id=tbd
+                # but never reach the provisioning queue, and counting them wedges this loop.
                 expected_batch_size = OpenPBSQSelect(
                     context=self._context,
                     logger=self._logger,
                     log_tag=f'JobGroup: {job_group}',
                     job_group=job_group,
                     stack_id='tbd',
+                    job_state=[SocaJobState.QUEUED],
                 ).get_count()
                 current_batch_size = len(jobs)
                 self._logger.info(
@@ -589,23 +925,26 @@ class JobProvisioner(SocaService):
                             # unprovisioned jobs are returned when max provisioned instances or max job limits are set
                             # todo - limits is currently not implemented for batch jobs
                             if result.unprovisioned_jobs:
-                                num_failed_jobs = len(result.unprovisioned_jobs)
-                                for job in result.unprovisioned_jobs:
-                                    self._context.job_cache.set_job_provisioning_error(
-                                        job_id=job.job_id,
-                                        error_code=result.get_error_code(),
-                                        message=result.get_error_message(),
-                                    )
-                                    self._queue.put(job=job)
+                                failed_jobs = result.unprovisioned_jobs
                             else:
-                                num_failed_jobs = len(batch)
-                                for job in batch:
+                                failed_jobs = batch
+
+                            num_failed_jobs = len(failed_jobs)
+                            # a stack-still-in-progress cycle has no error code or exception;
+                            # recording it would overwrite an informative message with GENERAL_ERROR.
+                            if result.exception is not None or Utils.is_not_empty(
+                                result.error_code
+                            ):
+                                for job in failed_jobs:
                                     self._context.job_cache.set_job_provisioning_error(
                                         job_id=job.job_id,
                                         error_code=result.get_error_code(),
                                         message=result.get_error_message(),
                                     )
-                                    self._queue.put(job=job)
+                            for job in self._track_failed_jobs(
+                                jobs=failed_jobs, result=result
+                            ):
+                                self._queue.put(job=job)
 
                             self._logger.info(
                                 f'{batch[0].log_tag} failed to provision {num_failed_jobs} jobs in batch. '
@@ -628,7 +967,8 @@ class JobProvisioner(SocaService):
                                 error_code=result.get_error_code(),
                                 message=result.get_error_message(),
                             )
-                        self._queue.put(job=job)
+                        if len(self._track_failed_jobs(jobs=[job], result=result)) > 0:
+                            self._queue.put(job=job)
 
             except JobProvisioningQueueEmpty:
                 pass

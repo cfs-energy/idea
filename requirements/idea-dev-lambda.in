@@ -1,2 +1,4 @@
-opensearch-py
+# See idea-sdk.in: >=3.1 adds a mandatory grpcio/protobuf stack (+21MB unzipped)
+# that this Lambda bundle never uses.
+opensearch-py<3.1
 cryptography

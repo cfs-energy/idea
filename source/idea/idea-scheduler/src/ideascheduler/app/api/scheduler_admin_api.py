@@ -60,6 +60,9 @@ from ideascheduler.app.scheduler.job_param_builder import SocaJobBuilder
 from ideascheduler.app.provisioning.job_provisioner.cloudformation_stack_builder import (
     CloudFormationStackBuilder,
 )
+from ideascheduler.app.provisioning.job_provisioner.job_provisioning_util import (
+    JobProvisioningUtil,
+)
 
 from typing import Optional
 
@@ -417,6 +420,7 @@ class SchedulerAdminAPI(BaseAPI):
             params=Utils.to_dict(job_params),
             queue_profile=queue_profile,
             stack_uuid=queue_profile.stack_uuid,
+            project=project_name,
         )
         params, provisioning_options = builder.build()
 
@@ -446,6 +450,10 @@ class SchedulerAdminAPI(BaseAPI):
                 f'cloud formation stack: {job.get_compute_stack()} already exists for queue profile: '
                 f'{queue_profile_name}'
             )
+
+        # always-on capacity bypasses the job provisioner, so the bedrock check runs here too -
+        # otherwise nodes get created for a project whose models they can't reach.
+        JobProvisioningUtil(context=self.context, jobs=[job]).check_bedrock()
 
         try:
             stack_id = CloudFormationStackBuilder(context=self.context, job=job).build()

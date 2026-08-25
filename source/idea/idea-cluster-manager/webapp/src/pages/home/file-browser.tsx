@@ -18,18 +18,12 @@ import {AppContext} from "../../common";
 import {ListFilesResult} from '../../client/data-model'
 import {LocalStorageService} from '../../service'
 import Utils from "../../common/utils";
-import {Alert, Box, Button, CodeEditor, ColumnLayout, Container, Header, Link, Modal, SpaceBetween, StatusIndicator, Tabs, Tiles, Table, Input, FormField} from "@cloudscape-design/components";
+import {registerAceWorkerUrls} from "../../common/ace-worker-urls";
+import {Alert, Box, Button, ButtonDropdown, CodeEditor, ColumnLayout, Container, Header, Link, Modal, SpaceBetween, StatusIndicator, Tabs, Tiles, Table, Input, FormField} from "@cloudscape-design/components";
+import {ButtonDropdownProps} from "@cloudscape-design/components/button-dropdown/interfaces";
 import {toast} from "react-toastify";
-import {
-    ChonkyActions,
-    FileData,
-    FileNavbar,
-    FileBrowser,
-    FileToolbar,
-    FileList,
-    FileContextMenu,
-    defineFileAction
-} from "@aperturerobotics/chonky";
+import FileBrowserTable, {entryKey, FileBrowserEntry, FileBrowserMenuItem} from "./file-browser-table";
+import FileBrowserPath, {describeListingFailure} from "./file-browser-path";
 
 import 'ace-builds/css/ace.css';
 import 'ace-builds/css/theme/dawn.css';
@@ -37,7 +31,7 @@ import 'ace-builds/css/theme/github_light_default.css';
 import 'ace-builds/css/theme/github_dark.css';
 
 import {CodeEditorProps} from "@cloudscape-design/components/code-editor/interfaces";
-import {faDownload, faMicrochip, faRedo, faStar, faTerminal, faTrash, faEdit, faPencilAlt} from "@fortawesome/free-solid-svg-icons";
+import {faDownload} from "@fortawesome/free-solid-svg-icons";
 import Uppy from "@uppy/core";
 import XHRUpload from "@uppy/xhr-upload";
 import Dashboard from "@uppy/dashboard";
@@ -52,25 +46,19 @@ import {Constants} from "../../common/constants";
 import IdeaConfirm from "../../components/modals";
 import {withRouter} from "../../navigation/navigation-utils";
 
-// Filter out JSS-related warning messages
-const originalConsoleWarn = console.warn;
-console.warn = function filterWarnings(msg, ...args) {
-    // Check if the message includes the JSS warning we want to hide
-    if (typeof msg === 'string' && msg.includes('[JSS] <Hook />\'s styles function doesn\'t rely on the "theme" argument')) {
-        return;
-    }
-    originalConsoleWarn(msg, ...args);
-};
-
 export interface IdeaFileBrowserProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
 
 }
 
 export interface IdeaFileBrowserState {
-    files: FileData[]
-    favorites: FileData[]
-    folderChain: FileData[]
-    filesToDelete: FileData[]
+    files: FileBrowserEntry[]
+    favorites: FileBrowserEntry[]
+    cwd: string
+    listing: boolean
+    selectedFiles: FileBrowserEntry[]
+    selectedFavorites: FileBrowserEntry[]
+    showHiddenFiles: boolean
+    filesToDelete: FileBrowserEntry[]
     showDeleteConfirmModal: boolean
     editorOpen: boolean
     fileUploadResult: any
@@ -80,11 +68,19 @@ export interface IdeaFileBrowserState {
     sshHostIp: string
     sshAccess: boolean
     fileTransferMethod: string
-    filesToRename: FileData[]
+    filesToRename: FileBrowserEntry[]
     showRenameModal: boolean
     renameFormValues: {[fileId: string]: string}
     renameValidationErrors: {[fileId: string]: string}
     filePermissions: Map<string, any>
+}
+
+/** One operation on the current selection, offered by the toolbar and the row menu. */
+interface FileBrowserAction {
+    id: string
+    text: string
+    enabled: boolean
+    run: () => void
 }
 
 export interface IdeaFileEditorProps {
@@ -105,106 +101,6 @@ export interface IdeaFileEditorState {
     onSaveMessage: React.ReactNode | null
 }
 
-const CustomActionSubmitJob = defineFileAction({
-    id: 'soca_submit_job',
-    button: {
-        name: 'Submit Job',
-        toolbar: true,
-        contextMenu: true,
-        icon: faMicrochip
-    }
-})
-
-const CustomActionOpenInScriptEditor = defineFileAction({
-    id: 'soca_open_in_script_workbench',
-    button: {
-        name: 'Open in Script Workbench',
-        toolbar: false,
-        contextMenu: true,
-        icon: faEdit
-    }
-})
-
-const CustomActionFavorite = defineFileAction({
-    id: 'soca_favorite',
-    button: {
-        name: 'Favorite',
-        toolbar: true,
-        contextMenu: true,
-        icon: faStar
-    }
-})
-
-const CustomActionRemoveFavorite = defineFileAction({
-    id: 'soca_remove_favorite',
-    button: {
-        name: 'Remove Favorite',
-        toolbar: true,
-        contextMenu: true,
-        icon: faTrash
-    }
-})
-
-const CustomActionRefresh = defineFileAction({
-    id: 'soca_refresh',
-    button: {
-        name: 'Refresh',
-        toolbar: true,
-        contextMenu: true,
-        icon: faRedo
-    }
-})
-
-const CustomActionTailLogFile = defineFileAction({
-    id: 'soca_tail_log_file',
-    button: {
-        name: 'Tail File',
-        toolbar: false,
-        contextMenu: true,
-        icon: faTerminal
-    }
-})
-
-const CustomActionRenameFile = defineFileAction({
-    id: 'soca_rename_file',
-    button: {
-        name: 'Rename',
-        toolbar: true,
-        contextMenu: true,
-        icon: faPencilAlt
-    }
-})
-
-/*
- * Override the Chonky default of showing hidden files.
- * We want to default to not showing hidden files.
- */
-const CustomActionToggleHiddenFiles = (
-    JSON.parse(JSON.stringify(ChonkyActions.ToggleHiddenFiles))
-)
-CustomActionToggleHiddenFiles.option.defaultValue = false
-CustomActionToggleHiddenFiles.button.toolbar = true
-
-const ACTIONS = [
-    ChonkyActions.OpenFiles,
-    ChonkyActions.UploadFiles,
-    ChonkyActions.CreateFolder,
-    ChonkyActions.DeleteFiles,
-    ChonkyActions.CopyFiles,
-    ChonkyActions.DownloadFiles,
-    CustomActionFavorite,
-    CustomActionRefresh,
-    CustomActionRenameFile,
-    CustomActionTailLogFile,
-    CustomActionOpenInScriptEditor,
-    CustomActionToggleHiddenFiles
-]
-
-const FAVORITE_ACTIONS = [
-    ChonkyActions.OpenFiles,
-    CustomActionRemoveFavorite
-]
-
 class IdeaFileEditorModal extends Component<IdeaFileEditorProps, IdeaFileEditorState> {
 
     onSaveTimeout: any | null = null
@@ -223,7 +119,9 @@ class IdeaFileEditorModal extends Component<IdeaFileEditorProps, IdeaFileEditorS
 
     componentDidMount() {
         import('ace-builds').then(ace => {
-            import('ace-builds/webpack-resolver').then(() => {
+            import('ace-builds/esm-resolver').then(() => {
+                // esm-resolver does not register worker URLs; see ace-worker-urls.ts
+                registerAceWorkerUrls(ace)
                 ace.config.set('useStrictCSP', true)
                 ace.config.set('loadWorkerFromBlob', false)
 
@@ -362,10 +260,10 @@ const FILE_BROWSER_API_PATH = '/cluster-manager/api/v1'
 
 class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserState> {
 
-    fileEditor: RefObject<IdeaFileEditorModal>
+    fileEditor: RefObject<IdeaFileEditorModal | null>
     _fileBrowserClient: FileBrowserClient
-    createFolderForm: RefObject<IdeaForm>
-    deleteFileConfirmModal: RefObject<IdeaConfirm>
+    createFolderForm: RefObject<IdeaForm | null>
+    deleteFileConfirmModal: RefObject<IdeaConfirm | null>
     localStorage: LocalStorageService
 
 
@@ -384,7 +282,11 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
         this.state = {
             files: [],
             favorites: [],
-            folderChain: [],
+            cwd: '/',
+            listing: true,
+            selectedFiles: [],
+            selectedFavorites: [],
+            showHiddenFiles: false,
             editorOpen: false,
             fileUploadResult: null,
             activeTabId: 'files',
@@ -412,16 +314,6 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
 
 
 
-    adjustFileBrowserHeight() {
-        setTimeout(() => {
-            let fileBrowsers = document.getElementsByClassName('soca-file-browser')
-            for (let i = 0; i < fileBrowsers.length; i++) {
-                let fileBrowser = fileBrowsers[i]
-                fileBrowser.setAttribute('style', `height: 100vh`)
-            }
-        }, 100)
-    }
-
     componentDidMount() {
         AppContext.get().getClusterSettingsService().getModuleSettings(Constants.MODULE_BASTION_HOST).then(moduleInfo => {
             this.setState({
@@ -435,22 +327,16 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                 })
             }
         })
-        this.adjustFileBrowserHeight()
         this.listFavorites()
         const cwd = this.props.searchParams.get('cwd')
         this.listFiles((cwd) ? cwd : undefined).finally()
-    }
-
-    componentWillUnmount() {
-        let appContent = document.getElementsByClassName('soca-app-content')[0]
-        appContent.removeAttribute('style')
     }
 
     fileBrowserClient(): FileBrowserClient {
         return this._fileBrowserClient
     }
 
-    convert(payload?: ListFilesResult): FileData[] {
+    convert(payload?: ListFilesResult): FileBrowserEntry[] {
         if (payload?.listing == null) {
             return []
         }
@@ -468,37 +354,11 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
         return files
     }
 
-    buildFolderChain(cwd: string): FileData[] {
-        const tokens = cwd.split('/')
-        const result: FileData[] = []
-        let index = 0
-        result.push({id: 'root', name: 'root', isDir: true, folderChain: true, index: index++})
-        tokens.forEach((token) => {
-            if (Utils.isEmpty(token)) {
-                return true
-            }
-            result.push({id: token, name: token, isDir: true, folderChain: true, index: index++})
-        })
-        return result
+    getCwd(): string {
+        return this.state.cwd
     }
 
-    getCwd(index: number): string {
-        const tokens: string[] = []
-        const folderChain = this.state.folderChain
-        if (index === 0) {
-            return '/'
-        }
-        for (let i = 1; i < folderChain.length; i++) {
-            const entry = folderChain[i]
-            tokens.push(entry.name)
-            if (index === entry.index) {
-                break
-            }
-        }
-        return '/' + tokens.join('/')
-    }
-
-    checkFileSize(file: FileData): boolean {
+    checkFileSize(file: FileBrowserEntry): boolean {
         const maxFileSize = 5 * 1024 * 1024; // 5MB in bytes
         if (file.size && file.size > maxFileSize) {
             const fileSizeMB = (file.size / (1024 * 1024)).toFixed(2);
@@ -522,7 +382,10 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
         }
     }
 
-    listFiles(cwd?: string): Promise<boolean> {
+    /** List a directory. `onError` takes the failure instead of the toast, for callers that show it
+     * somewhere the user is already looking. */
+    listFiles(cwd?: string, onError?: (error: any) => void): Promise<boolean> {
+        this.setState({listing: true})
         return this.fileBrowserClient().listFiles({
             cwd: cwd
         }).then((result: ListFilesResult) => {
@@ -530,11 +393,30 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
             this.props.setSearchParams(this.props.searchParams)
             this.setState({
                 files: this.convert(result),
-                folderChain: this.buildFolderChain(result.cwd!)
+                cwd: Utils.asString(result.cwd, '/'),
+                selectedFiles: [],
+                listing: false
             })
-        }).then(() => {
             return true
+        }).catch(error => {
+            // the listing the user is looking at stays put; only the failure is new
+            this.setState({listing: false})
+            if (onError != null) {
+                onError(error)
+            } else {
+                this.showToast(error.errorCode, error.message)
+            }
+            return false
         })
+    }
+
+    /** Open a path the user typed. Resolves to null when it opened, or to the message the path bar
+     * should show when it did not. */
+    navigateToTypedPath(path: string): Promise<string | null> {
+        const failure: {message: string | null} = {message: null}
+        return this.listFiles(path, (error) => {
+            failure.message = describeListingFailure(path, error)
+        }).then((listed) => (listed ? null : (failure.message ?? `Cannot open ${path}.`)))
     }
 
     listFavorites() {
@@ -551,9 +433,9 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
         })
     }
 
-    addFavorite(file: FileData) {
+    addFavorite(file: FileBrowserEntry) {
         const favorites = [...this.state.favorites]
-        const path = `${this.getCwd(-1)}/${file.name}`
+        const path = `${this.getCwd()}/${file.name}`
         const parent = path.substring(0, path.lastIndexOf('/'))
         const favorite = {
             id: file.id,
@@ -573,7 +455,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
         }
     }
 
-    removeFavorite(file: FileData) {
+    removeFavorite(file: FileBrowserEntry) {
         const favorites = [...this.state.favorites]
         for (let i = 0; i < favorites.length; i++) {
             let favorite = favorites[i]
@@ -588,10 +470,10 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
         }
     }
 
-    getFilePath(file: FileData): string {
+    getFilePath(file: FileBrowserEntry): string {
         let path = file.path
         if (path == null) {
-            let cwd = this.getCwd(-1)
+            let cwd = this.getCwd()
             if (cwd === '/') {
                 path = '/' + file.name
             } else {
@@ -601,7 +483,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
         return path
     }
 
-    downloadFiles(files: FileData[]) {
+    downloadFiles(files: FileBrowserEntry[]) {
 
         const download = (file: string, skipFlashbar = false) => {
             const tokens = file.split('/')
@@ -775,45 +657,28 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
         }
     }
 
-    onOpenSelection(payload?: FileData) {
+    onOpenSelection(payload?: FileBrowserEntry) {
         if (payload == null) {
             return
         }
-        if (payload.folderChain) {
-            this.listFiles(this.getCwd(payload.index))
-                .catch(error => {
-                    this.showToast(error.errorCode, error.message)
-                })
-                .finally()
-        } else if (payload.isDir) {
-            let cwd = this.getCwd(-1)
-            let targetDir = ''
-            if (cwd === '/') {
-                targetDir = '/' + payload.name
-            } else {
-                targetDir = cwd + '/' + payload.name
-            }
-            this.listFiles(targetDir)
-                .catch(error => {
-                    this.showToast(error.errorCode, error.message)
-                })
-                .finally()
+        if (payload.isDir) {
+            this.listFiles(this.getFilePath(payload)).finally()
         } else {
             this.openFile(payload)
         }
     }
 
-    onOpenFavorite(payload?: FileData) {
+    onOpenFavorite(payload?: FileBrowserEntry) {
         if (payload == null) {
             return
         }
         if (payload.isDir) {
-            this.listFiles(payload.path).then(() => {
-                this.setState({
-                    activeTabId: 'files'
-                }, () => {
-                    this.adjustFileBrowserHeight()
-                })
+            this.listFiles(payload.path).then((listed) => {
+                if (listed) {
+                    this.setState({
+                        activeTabId: 'files'
+                    })
+                }
             })
         } else {
             this.openFile(payload)
@@ -842,7 +707,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
         )
     }
 
-    openFile(file: FileData) {
+    openFile(file: FileBrowserEntry) {
         // Check file size before attempting to open
         if (!this.checkFileSize(file)) {
             return;
@@ -866,7 +731,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
         })
     }
 
-    openFileInScriptWorkbench(file: FileData) {
+    openFileInScriptWorkbench(file: FileBrowserEntry) {
         // Check file size before attempting to open
         if (!this.checkFileSize(file)) {
             return;
@@ -901,7 +766,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                     theme: (AppContext.get().isDarkMode() ? 'dark' : 'light')
                 })
                 .use(XHRUpload, {
-                    endpoint: `${httpEndpoint}${FILE_BROWSER_API_PATH}/upload?cwd=${this.getCwd(-1)}`,
+                    endpoint: `${httpEndpoint}${FILE_BROWSER_API_PATH}/upload?cwd=${this.getCwd()}`,
                     headers: {
                         'Authorization': `Bearer ${accessToken}`
                     },
@@ -913,7 +778,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
             const dashboard: Dashboard = uppy.getPlugin('Dashboard')!
             dashboard.openModal()
             uppy.on('complete', () => {
-                this.listFiles(this.getCwd(-1)).finally()
+                this.listFiles(this.getCwd()).finally()
             })
         })
     }
@@ -931,11 +796,11 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                           }
                           const values = this.getCreateFolderForm().getValues()
                           this.fileBrowserClient().createFile({
-                              cwd: this.getCwd(-1),
+                              cwd: this.getCwd(),
                               filename: values.name,
                               is_folder: true
                           }).then(() => {
-                              this.listFiles(this.getCwd(-1)).finally()
+                              this.listFiles(this.getCwd()).finally()
                               this.getCreateFolderForm().hideModal()
                           }).catch(error => {
                               this.getCreateFolderForm().setError(error.errorCode, error.message)
@@ -1004,7 +869,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
         const renameValues = this.state.renameFormValues
         const validationErrors = this.state.renameValidationErrors
 
-        const performRename = async (item: FileData, newName: string) => {
+        const performRename = async (item: FileBrowserEntry, newName: string) => {
             const itemPath = this.getFilePath(item)
             return this.fileBrowserClient().renameFile({
                 file: itemPath,
@@ -1079,7 +944,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                     message += `${skippedCount} protected or inaccessible item(s) were skipped`
                 }
                 this.showToast('rename-success', message, 'info')
-                this.listFiles(this.getCwd(-1)).finally()
+                this.listFiles(this.getCwd()).finally()
             }
 
             if (errorCount === 0) {
@@ -1184,7 +1049,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                             {
                                 id: 'current',
                                 header: 'Current Name',
-                                cell: (item: FileData) => {
+                                cell: (item: FileBrowserEntry) => {
                                     const filePath = this.getFilePath(item)
                                     const permissionInfo = filePermissions.get(filePath)
                                     const isProtected = permissionInfo?.is_protected
@@ -1217,7 +1082,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                             {
                                 id: 'new',
                                 header: 'New Name',
-                                cell: (item: FileData) => {
+                                cell: (item: FileBrowserEntry) => {
                                     const filePath = this.getFilePath(item)
                                     const permissionInfo = filePermissions.get(filePath)
                                     const isProtected = permissionInfo?.is_protected
@@ -1263,7 +1128,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
 
 
 
-    checkRenamePermissions(selectedFiles: FileData[]) {
+    checkRenamePermissions(selectedFiles: FileBrowserEntry[]) {
         const filePaths = selectedFiles.map(file => this.getFilePath(file))
 
         this.fileBrowserClient().checkFilesPermissions({
@@ -1320,12 +1185,12 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                 onConfirm={() => {
                     const toDelete: string[] = []
                     this.state.filesToDelete.forEach((file) => {
-                        toDelete.push(`${this.getCwd(-1)}/${file.name}`)
+                        toDelete.push(this.getFilePath(file))
                     })
                     this.fileBrowserClient().deleteFiles({
                         files: toDelete
                     }).then(() => {
-                        this.listFiles(this.getCwd(-1)).finally()
+                        this.listFiles(this.getCwd()).finally()
                     }).catch(error => {
                         if (error.errorCode === 'UNAUTHORIZED_ACCESS') {
                             this.showToast(error.errorCode, 'Permission denied')
@@ -1342,7 +1207,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
         )
     }
 
-    deleteFiles(files: FileData[]) {
+    deleteFiles(files: FileBrowserEntry[]) {
         this.setState({
             filesToDelete: files,
             showDeleteConfirmModal: true
@@ -1371,27 +1236,157 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
         })
     }
 
+    isSchedulerDeployed(): boolean {
+        return AppContext.get().getClusterSettingsService().isSchedulerDeployed()
+    }
+
+    copyPath(file: FileBrowserEntry) {
+        const path = this.getFilePath(file)
+        Utils.copyToClipBoard(path).then(status => {
+            if (status) {
+                this.showToast(path, `${file.name} path copied to clipboard`, 'info')
+            }
+        })
+    }
+
+    tailFile(file: FileBrowserEntry) {
+        Utils.openNewTab(`/#/home/file-browser/tail?file=${this.getCwd()}/${file.name}&cwd=${this.getCwd()}`)
+    }
+
+    /** Right-clicking outside the selection moves the selection to that entry. */
+    selectForContextMenu(entry: FileBrowserEntry, tab: 'files' | 'favorites') {
+        const selected = (tab === 'files') ? this.state.selectedFiles : this.state.selectedFavorites
+        if (selected.some((item) => entryKey(item) === entryKey(entry))) {
+            return
+        }
+        if (tab === 'files') {
+            this.setState({selectedFiles: [entry]})
+        } else {
+            this.setState({selectedFavorites: [entry]})
+        }
+    }
+
+    filesActions(): FileBrowserAction[] {
+        const selected = this.state.selectedFiles
+        const any = selected.length > 0
+        const actions: FileBrowserAction[] = [
+            {id: 'open', text: 'Open', enabled: selected.length === 1, run: () => this.onOpenSelection(selected[0])},
+            {id: 'download', text: 'Download files', enabled: any, run: () => this.downloadFiles(selected)},
+            {id: 'copy', text: 'Copy selection', enabled: any, run: () => this.copyPath(selected[0])},
+            {id: 'rename', text: 'Rename', enabled: any, run: () => this.checkRenamePermissions(selected)},
+            {id: 'delete', text: 'Delete files', enabled: any, run: () => this.deleteFiles(selected)},
+            {id: 'favorite', text: 'Favorite', enabled: any, run: () => selected.forEach((file) => this.addFavorite(file))},
+            {id: 'tail', text: 'Tail File', enabled: any, run: () => this.tailFile(selected[0])},
+            {
+                id: 'workbench',
+                text: 'Open in Script Workbench',
+                enabled: any,
+                run: () => this.openFileInScriptWorkbench(selected[0])
+            }
+        ]
+        if (this.isSchedulerDeployed()) {
+            actions.push({
+                id: 'submit-job',
+                text: 'Submit Job',
+                enabled: any,
+                run: () => this.props.navigate(`/soca/jobs/submit-job?input_file=${this.getCwd()}/${selected[0].name}`)
+            })
+        }
+        return actions
+    }
+
+    favoritesActions(): FileBrowserAction[] {
+        const selected = this.state.selectedFavorites
+        const any = selected.length > 0
+        const actions: FileBrowserAction[] = [
+            {id: 'open', text: 'Open', enabled: selected.length === 1, run: () => this.onOpenFavorite(selected[0])},
+            {
+                id: 'remove-favorite',
+                text: 'Remove Favorite',
+                enabled: any,
+                run: () => selected.forEach((file) => this.removeFavorite(file))
+            }
+        ]
+        if (this.isSchedulerDeployed()) {
+            actions.push({
+                id: 'submit-job',
+                text: 'Submit Job',
+                enabled: any,
+                run: () => this.props.navigate(`/soca/jobs/submit-job?input_location=${selected[0].path}`)
+            })
+        }
+        return actions
+    }
+
+    buildMenuItems(actions: FileBrowserAction[], extra: FileBrowserMenuItem[] = []): FileBrowserMenuItem[] {
+        const items: FileBrowserMenuItem[] = actions
+            .filter((action) => action.enabled)
+            .map((action) => ({id: action.id, text: action.text, onClick: action.run}))
+        return items.concat(extra)
+    }
+
+    buildDropdown(actions: FileBrowserAction[], ids: string[]) {
+        const items: ButtonDropdownProps.Item[] = []
+        ids.forEach((id) => {
+            const action = actions.find((candidate) => candidate.id === id)
+            if (action != null) {
+                items.push({id: action.id, text: action.text, disabled: !action.enabled})
+            }
+        })
+        return (
+            <ButtonDropdown
+                items={items}
+                onItemClick={(event) => actions.find((action) => action.id === event.detail.id)?.run()}
+            >
+                Actions
+            </ButtonDropdown>
+        )
+    }
+
+    buildPathNav() {
+        return (
+            <FileBrowserPath
+                path={this.getCwd()}
+                onNavigate={(path) => this.listFiles(path).finally()}
+                onSubmitPath={(path) => this.navigateToTypedPath(path)}
+            />
+        )
+    }
+
+    buildFilesToolbar(actions: FileBrowserAction[]) {
+        const action = (id: string) => actions.find((candidate) => candidate.id === id)
+        const favorite = action('favorite')!
+        const rename = action('rename')!
+        const submitJob = action('submit-job')
+        return (
+            <SpaceBetween size="xs" direction="horizontal">
+                <Button iconName="refresh" onClick={() => this.listFiles(this.getCwd()).finally()}>Refresh</Button>
+                <Button disabled={!favorite.enabled} onClick={() => favorite.run()}>Favorite</Button>
+                <Button disabled={!rename.enabled} onClick={() => rename.run()}>Rename</Button>
+                {submitJob != null && <Button disabled={!submitJob.enabled} onClick={() => submitJob.run()}>Submit Job</Button>}
+                {this.buildDropdown(actions, ['open', 'download', 'copy', 'delete', 'tail', 'workbench'])}
+                <Button onClick={() => this.getCreateFolderForm().showModal()}>Create folder</Button>
+                <Button variant="primary" onClick={() => this.showUploadModal()}>Upload files</Button>
+                <ButtonDropdown
+                    variant="icon"
+                    ariaLabel="View options"
+                    items={[
+                        {
+                            id: 'toggle-hidden',
+                            text: 'Show hidden files',
+                            iconName: this.state.showHiddenFiles ? 'check' : undefined
+                        }
+                    ]}
+                    onItemClick={() => this.setState({showHiddenFiles: !this.state.showHiddenFiles})}
+                />
+            </SpaceBetween>
+        )
+    }
+
     render() {
 
-        const getPath = (fileName: string): string => {
-            return `${this.getCwd(-1)}/${fileName}`
-        }
-
-        const getFileBrowserActions = () => {
-            let actions = [...ACTIONS]
-            if (AppContext.get().getClusterSettingsService().isSchedulerDeployed()) {
-                actions.push(CustomActionSubmitJob)
-            }
-            return actions
-        }
-
-        const getFavoriteActions = () => {
-            let actions = [...FAVORITE_ACTIONS]
-            if (AppContext.get().getClusterSettingsService().isSchedulerDeployed()) {
-                actions.push(CustomActionSubmitJob)
-            }
-            return actions
-        }
+        const filesActions = this.filesActions()
+        const favoritesActions = this.favoritesActions()
 
         return (
             <IdeaAppLayout
@@ -1433,8 +1428,6 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                             onChange={(event) => {
                                 this.setState({
                                     activeTabId: event.detail.activeTabId
-                                }, () => {
-                                    this.adjustFileBrowserHeight()
                                 })
                             }}
                             activeTabId={this.state.activeTabId}
@@ -1443,114 +1436,41 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                     id: 'files',
                                     label: 'My Files',
                                     content: (
-                                        <Container disableContentPaddings={true}>
-                                            <div className="soca-file-browser" style={{height: '100vh - 200px'}}>
-                                                <FileBrowser
-                                                    darkMode={AppContext.get().isDarkMode()}
-                                                    folderChain={this.state.folderChain}
-                                                    files={this.state.files}
-                                                    fileActions={getFileBrowserActions()}
-                                                    disableDragAndDrop={true}
-                                                    onFileAction={(event) => {
-                                                        const eventId: string = event.id
-                                                        if (event.id === ChonkyActions.OpenFiles.id) {
-                                                            this.onOpenSelection(event.payload.targetFile === undefined ? event.payload.files[0]: event.payload.targetFile)
-                                                        } else if (event.id === ChonkyActions.UploadFiles.id) {
-                                                            this.showUploadModal()
-                                                        } else if (event.id === ChonkyActions.DownloadFiles.id) {
-                                                            this.downloadFiles(event.state.selectedFiles)
-                                                        } else if (event.id === ChonkyActions.CreateFolder.id) {
-                                                            this.getCreateFolderForm().showModal()
-                                                        } else if (event.id === ChonkyActions.DeleteFiles.id) {
-                                                            this.deleteFiles(event.state.selectedFiles)
-                                                        } else if (event.id === ChonkyActions.CopyFiles.id) {
-                                                            if (event.state.selectedFiles && event.state.selectedFiles.length > 0) {
-                                                                const name = event.state.selectedFiles[0].name
-                                                                const path = getPath(name)
-                                                                Utils.copyToClipBoard(path).then(status => {
-                                                                    if (status) {
-                                                                        this.showToast(path, `${name} path copied to clipboard`, 'info')
-                                                                    }
-                                                                })
-                                                            }
-                                                        } else if (eventId === 'soca_refresh') {
-                                                            this.listFiles(this.getCwd(-1)).finally()
-                                                        } else if (eventId === 'soca_submit_job') {
-                                                            if (event.state.selectedFiles && event.state.selectedFiles.length > 0) {
-                                                                this.props.navigate(`/soca/jobs/submit-job?input_file=${this.getCwd(-1)}/${event.state.selectedFiles[0].name}`)
-                                                            }
-                                                        } else if (eventId === 'soca_favorite') {
-                                                            if (event.state.selectedFiles && event.state.selectedFiles.length > 0) {
-                                                                event.state.selectedFiles.forEach((file) => this.addFavorite(file))
-                                                            }
-                                                        } else if (eventId === 'soca_tail_log_file') {
-                                                            if (event.state.selectedFiles && event.state.selectedFiles.length > 0) {
-                                                                Utils.openNewTab(`/#/home/file-browser/tail?file=${this.getCwd(-1)}/${event.state.selectedFiles[0].name}&cwd=${this.getCwd(-1)}`)
-                                                            }
-                                                        } else if (eventId === 'soca_open_in_script_workbench') {
-                                                            if (event.state.selectedFiles && event.state.selectedFiles.length > 0) {
-                                                                this.openFileInScriptWorkbench(event.state.selectedFiles[0])
-                                                            }
-                                                                                                } else if (eventId === 'soca_rename_file') {
-                                            if (event.state.selectedFiles && event.state.selectedFiles.length > 0) {
-                                                this.checkRenamePermissions(event.state.selectedFiles)
-                                            }
-                                        }
-                                                    }}
-
-                                                    defaultFileViewActionId={ChonkyActions.EnableListView.id}
-                                                    disableDefaultFileActions={[
-                                                        ChonkyActions.CopyFiles.id,
-                                                        ChonkyActions.ToggleShowFoldersFirst.id
-                                                    ]}
-
-                                                >
-                                                    <FileNavbar/>
-                                                    <FileToolbar/>
-                                                    <FileList/>
-                                                    <FileContextMenu/>
-                                                </FileBrowser>
-                                            </div>
-                                        </Container>
+                                        <FileBrowserTable
+                                            title="My Files"
+                                            entries={this.state.files}
+                                            selectedEntries={this.state.selectedFiles}
+                                            onSelectionChange={(entries) => this.setState({selectedFiles: entries})}
+                                            onOpen={(entry) => this.onOpenSelection(entry)}
+                                            onContextMenu={(entry) => this.selectForContextMenu(entry, 'files')}
+                                            menuItems={this.buildMenuItems(filesActions, [
+                                                {
+                                                    id: 'toggle-hidden',
+                                                    text: 'Show hidden files',
+                                                    onClick: () => this.setState({showHiddenFiles: !this.state.showHiddenFiles})
+                                                }
+                                            ])}
+                                            actions={this.buildFilesToolbar(filesActions)}
+                                            path={this.buildPathNav()}
+                                            loading={this.state.listing}
+                                            showHiddenFiles={this.state.showHiddenFiles}
+                                        />
                                     )
                                 },
                                 {
                                     id: 'favorites',
                                     label: 'Favorites',
                                     content: (
-                                        <Container disableContentPaddings={true}>
-                                            <div className="soca-file-browser" style={{height: '100vh - 200px'}}>
-                                                <FileBrowser
-                                                    darkMode={AppContext.get().isDarkMode()}
-                                                    folderChain={this.state.folderChain}
-                                                    files={this.state.favorites}
-                                                    fileActions={getFavoriteActions()}
-                                                    disableDragAndDrop={true}
-                                                    onFileAction={(event) => {
-                                                        const eventId: string = event.id
-                                                        if (event.id === ChonkyActions.OpenFiles.id) {
-                                                            this.onOpenFavorite(event.payload.targetFile)
-                                                        } else if (eventId === 'soca_submit_job') {
-                                                            const targetFile = event.state.selectedFiles[0]
-                                                            this.props.navigate(`/soca/jobs/submit-job?input_location=${targetFile.path}`)
-                                                        } else if (eventId === 'soca_remove_favorite') {
-                                                            if (event.state.selectedFiles && event.state.selectedFiles.length > 0) {
-                                                                event.state.selectedFiles.forEach((file) => this.removeFavorite(file))
-                                                            }
-                                                        }
-                                                    }}
-                                                    defaultFileViewActionId={ChonkyActions.EnableListView.id}
-                                                    disableDefaultFileActions={[
-                                                        ChonkyActions.CopyFiles.id,
-                                                        ChonkyActions.ToggleShowFoldersFirst.id
-                                                    ]}
-                                                >
-                                                    <FileToolbar/>
-                                                    <FileList/>
-                                                    <FileContextMenu/>
-                                                </FileBrowser>
-                                            </div>
-                                        </Container>
+                                        <FileBrowserTable
+                                            title="Favorites"
+                                            entries={this.state.favorites}
+                                            selectedEntries={this.state.selectedFavorites}
+                                            onSelectionChange={(entries) => this.setState({selectedFavorites: entries})}
+                                            onOpen={(entry) => this.onOpenFavorite(entry)}
+                                            onContextMenu={(entry) => this.selectForContextMenu(entry, 'favorites')}
+                                            menuItems={this.buildMenuItems(favoritesActions)}
+                                            actions={this.buildDropdown(favoritesActions, ['open', 'remove-favorite', 'submit-job'])}
+                                        />
                                     )
                                 },
                                 {

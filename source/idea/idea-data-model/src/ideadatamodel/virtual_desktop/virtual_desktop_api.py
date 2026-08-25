@@ -20,6 +20,8 @@ __all__ = (
     'GetSessionScreenshotResponse',
     'UpdateSessionRequest',
     'UpdateSessionResponse',
+    'SetSessionReaperExemptionRequest',
+    'SetSessionReaperExemptionResponse',
     'GetSessionInfoRequest',
     'GetSessionInfoResponse',
     'DeleteSessionRequest',
@@ -152,6 +154,19 @@ class UpdateSessionRequest(SocaPayload):
 
 # VirtualDesktop.UpdateSession - Response
 class UpdateSessionResponse(SocaPayload):
+    session: Optional[VirtualDesktopSession] = Field(default=None)
+
+
+# VirtualDesktopAdmin.SetSessionReaperExemption - Request
+class SetSessionReaperExemptionRequest(SocaPayload):
+    idea_session_id: Optional[str] = Field(default=None)
+    owner: Optional[str] = Field(default=None)
+    exempt: Optional[bool] = Field(default=None)
+    reason: Optional[str] = Field(default=None)
+
+
+# VirtualDesktopAdmin.SetSessionReaperExemption - Response
+class SetSessionReaperExemptionResponse(SocaPayload):
     session: Optional[VirtualDesktopSession] = Field(default=None)
 
 
@@ -597,6 +612,13 @@ OPEN_API_SPEC_ENTRIES_VIRTUAL_DESKTOP = [
         namespace='VirtualDesktopAdmin.UpdateSession',
         request=UpdateSessionRequest,
         result=UpdateSessionResponse,
+        is_listing=False,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='VirtualDesktopAdmin.SetSessionReaperExemption',
+        request=SetSessionReaperExemptionRequest,
+        result=SetSessionReaperExemptionResponse,
         is_listing=False,
         is_public=False,
     ),

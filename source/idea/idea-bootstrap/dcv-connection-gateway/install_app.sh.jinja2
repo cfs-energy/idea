@@ -49,10 +49,7 @@ DCV_CONNECTION_GATEWAY_SHA256_HASH=""
 
 if [[ $machine == "x86_64" ]]; then
   # x86_64 architecture
-  {% if context.base_os in ('amazonlinux2',) %}
-  DCV_CONNECTION_GATEWAY_URL="{{ context.config.get_string('global-settings.package_config.dcv.connection_gateway.x86_64.linux.al2.url', required=True) }}"
-  DCV_CONNECTION_GATEWAY_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.connection_gateway.x86_64.linux.al2.sha256sum', required=True) }}"
-  {% elif context.base_os in ('amazonlinux2023',) %}
+  {% if context.base_os in ('amazonlinux2023',) %}
   DCV_CONNECTION_GATEWAY_URL="{{ context.config.get_string('global-settings.package_config.dcv.connection_gateway.x86_64.linux.al2023.url', required=True) }}"
   DCV_CONNECTION_GATEWAY_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.connection_gateway.x86_64.linux.al2023.sha256sum', required=True) }}"
   {% elif context.base_os in ('rhel8', 'rocky8') %}
@@ -64,10 +61,7 @@ if [[ $machine == "x86_64" ]]; then
   {% endif %}
 else
   # aarch64 architecture
-  {% if context.base_os in ('amazonlinux2',) %}
-  DCV_CONNECTION_GATEWAY_URL="{{ context.config.get_string('global-settings.package_config.dcv.connection_gateway.aarch64.linux.al2.url', required=True) }}"
-  DCV_CONNECTION_GATEWAY_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.connection_gateway.aarch64.linux.al2.sha256sum', required=True) }}"
-  {% elif context.base_os in ('amazonlinux2023',) %}
+  {% if context.base_os in ('amazonlinux2023',) %}
   DCV_CONNECTION_GATEWAY_URL="{{ context.config.get_string('global-settings.package_config.dcv.connection_gateway.aarch64.linux.al2023.url', required=True) }}"
   DCV_CONNECTION_GATEWAY_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.connection_gateway.aarch64.linux.al2023.sha256sum', required=True) }}"
   {% elif context.base_os in ('rhel8', 'rocky8') %}
@@ -82,12 +76,7 @@ fi
 INTERNAL_ALB_ENDPOINT="{{ context.config.get_cluster_internal_endpoint() }}"
 GATEWAY_TO_BROKER_PORT="{{ context.config.get_string("virtual-desktop-controller.dcv_broker.gateway_communication_port", required=True) }}"
 
-{% if context.base_os in ('amazonlinux2',) %}
-DCV_SERVER_X86_64_URL="{{ context.config.get_string('global-settings.package_config.dcv.x86_64.linux.al2.url', required=True) }}"
-DCV_SERVER_X86_64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.x86_64.linux.al2.sha256sum', required=True) }}"
-DCV_SERVER_AARCH64_URL="{{ context.config.get_string('global-settings.package_config.dcv.aarch64.linux.al2.url', required=True) }}"
-DCV_SERVER_AARCH64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.aarch64.linux.al2.sha256sum', required=True) }}"
-{% elif context.base_os in ('amazonlinux2023',) %}
+{% if context.base_os in ('amazonlinux2023',) %}
 DCV_SERVER_X86_64_URL="{{ context.config.get_string('global-settings.package_config.dcv.x86_64.linux.al2023.url', required=True) }}"
 DCV_SERVER_X86_64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.x86_64.linux.al2023.sha256sum', required=True) }}"
 DCV_SERVER_AARCH64_URL="{{ context.config.get_string('global-settings.package_config.dcv.aarch64.linux.al2023.url', required=True) }}"
@@ -168,7 +157,7 @@ function install_dcv_web_viewer() {
   # Extract directory name from the archive
   DCV_EXTRACT_DIR=$(tar -tzf ${DCV_SERVER_TGZ} | head -1 | cut -f1 -d"/")
   pushd ${DCV_EXTRACT_DIR}
-  {% if context.base_os in ('amazonlinux2', 'amazonlinux2023') %}
+  {% if context.base_os in ('amazonlinux2023',) %}
     rpm -ivh nice-dcv-web-viewer-*.${machine}.rpm
   {% elif context.base_os in ('rhel8', 'rocky8') %}
     rpm -ivh nice-dcv-web-viewer-*.${machine}.rpm --nodeps

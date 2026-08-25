@@ -67,8 +67,8 @@ const EMAIL_TEMPLATES_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<Emai
 
 class EmailTemplates extends Component<EmailTemplatesProps, EmailTemplatesState> {
 
-    listing: RefObject<IdeaListView>
-    createForm: RefObject<IdeaForm>
+    listing: RefObject<IdeaListView | null>
+    createForm: RefObject<IdeaForm | null>
 
     constructor(props: EmailTemplatesProps) {
         super(props);

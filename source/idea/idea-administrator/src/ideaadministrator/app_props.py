@@ -18,6 +18,7 @@ import ideaadministrator_meta
 from typing import Dict, Optional, List
 from pathlib import Path
 import os
+import sys
 
 
 class AdministratorProps:
@@ -78,7 +79,10 @@ class AdministratorProps:
         virtual_env = EnvironmentUtils.get_environment_variable(
             'VIRTUAL_ENV', required=True
         )
-        return os.path.join(virtual_env, 'lib', 'python3.7', 'site-packages')
+        # derived from the running interpreter; the directory was hard-coded to
+        # python3.7 and no longer existed in the supported venvs.
+        python_version = f'python{sys.version_info.major}.{sys.version_info.minor}'
+        return os.path.join(virtual_env, 'lib', python_version, 'site-packages')
 
     @property
     def dev_mode_venv_bin_dir(self) -> str:

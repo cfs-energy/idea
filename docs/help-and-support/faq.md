@@ -220,6 +220,27 @@ Subtitle can be customized by running the below command:
 
 <details>
 
+<summary>How to embed an external dashboard in the Web Portal</summary>
+
+The Web Portal can render an external dashboard URL in a sandboxed iframe as an extra entry under **Home**. It is disabled by default.
+
+```bash
+./idea-admin.sh config \
+  set "Key=cluster-manager.web_portal.custom_dashboard.enabled,Type=bool,Value=true" \
+      "Key=cluster-manager.web_portal.custom_dashboard.title,Type=string,Value=Cluster Dashboard" \
+      "Key=cluster-manager.web_portal.custom_dashboard.url,Type=string,Value=https://dashboard.example.com/view" \
+  --cluster-name <CLUSTER_NAME> \
+  --aws-region <REGION>
+```
+
+The nav entry and page stay hidden unless `enabled` is `true` and `url` is an `http`/`https` URL. The iframe is sandboxed and sends no referrer, so the dashboard must permit framing by the Web Portal origin (`Content-Security-Policy: frame-ancestors`) and must not depend on the referrer header. A dashboard that refuses framing renders as an empty box with no error, so the page header always carries an **Open in a new tab** link.
+
+A dashboard served from the Web Portal origin itself is framed without `allow-same-origin`, so it cannot use cookies or browser storage; host it on its own origin if it needs them.
+
+</details>
+
+<details>
+
 <summary>How do I configure automatic mount for additional File-system (FSx Lustre/OnTAP/OpenZFS/Windows, EFS)</summary>
 
 See [storage](../modules/storage/ "mention") module

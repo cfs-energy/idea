@@ -17,6 +17,7 @@ from ideadatamodel import (
     errorcodes,
     SocaBaseModel,
     SocaJob,
+    SocaJobState,
     SocaScalingMode,
     HpcQueueProfile,
     ProvisioningStatus,
@@ -28,17 +29,38 @@ from ideadatamodel import (
     CheckServiceQuotaResult,
 )
 from ideasdk.utils import Utils
+from ideasdk.aws.ec2_instance_types_db import TRANSIENT_EC2_ERROR_CODES
+from ideasdk.utils.error_redaction import redact_aws_identifiers
 
 from ideascheduler.app.aws import EC2ServiceQuotaHelper, AwsBudgetsHelper
+from ideascheduler.app.bedrock_job_access import (
+    BedrockJobAccessResolver,
+    BedrockJobAccessState,
+    is_enabled_for_jobs,
+)
+from ideascheduler.app.provisioning.job_provisioner.cloudformation_stack_builder import (
+    build_efa_network_interface_shapes,
+)
 from ideascheduler.app.provisioning.job_provisioner.batch_capacity_helper import (
     BatchCapacityHelper,
 )
 from pydantic import Field
 from botocore.exceptions import ClientError
-from typing import Optional, List
+from typing import Dict, Optional, List
 import arrow
 import os
 import logging
+
+
+def _is_transient_ec2_error(exc: BaseException = None) -> bool:
+    """True when EC2 refused the call itself - a throttle, an outage, an auth failure."""
+    if not isinstance(exc, ClientError):
+        return False
+    return exc.response.get('Error', {}).get('Code') in TRANSIENT_EC2_ERROR_CODES
+
+
+# auto-scaling activity status codes that mean the group could not launch the node.
+ASG_FAILED_ACTIVITY_STATUS_CODES = ('Failed', 'Cancelled')
 
 
 class NotEnoughReservedInstances(SocaBaseModel):
@@ -118,6 +140,97 @@ class JobProvisioningUtil:
             'scheduler.job_provisioning.stack_provisioning_timeout_seconds',
             default=1800,
         )
+
+    @property
+    def max_provisioning_retries(self) -> int:
+        return self.config.get_int(
+            'scheduler.job_provisioning.max_provisioning_retries',
+            default=3,
+        )
+
+    def track_provisioning_failure(self, job: SocaJob, message: str) -> bool:
+        """
+        increment the job's persistent provisioning retry count.
+
+        when the count reaches scheduler.job_provisioning.max_provisioning_retries, the job
+        is held with the failure reason recorded and True is returned. a held job must not be
+        re-queued for provisioning; the owner can qdel and resubmit, or qrls to retry.
+        a cap of 0 or less disables the hold: the job is retried indefinitely.
+        """
+        retry_count = self.context.job_cache.increment_job_provisioning_retry(
+            job_id=job.job_id
+        )
+        max_retries = self.max_provisioning_retries
+        capped = max_retries is not None and max_retries > 0
+        if not capped or retry_count < max_retries:
+            budget = f' of {max_retries}' if capped else ''
+            self._logger.info(
+                f'{job.log_tag} provisioning failed '
+                f'(attempt {retry_count}{budget}): {message}'
+            )
+            return False
+
+        reason = (
+            f'Job held: provisioning failed {retry_count} times. '
+            f'Last error: {message} '
+            f'Use qdel to delete the job and resubmit with corrected parameters, '
+            f'or contact your administrator.'
+        )
+        # set_job_provisioning_error publishes the reason via the gated path; no direct qalter
+        # here (a raw message with commas breaks qalter's resource-list parsing).
+        self.context.job_cache.set_job_provisioning_error(
+            job_id=job.job_id,
+            error_code=errorcodes.JOB_PROVISIONING_RETRIES_EXHAUSTED,
+            message=reason,
+        )
+
+        lifecycle_events = self.context.lifecycle_events
+        if lifecycle_events is not None:
+            lifecycle_events.stack_failed(
+                job=job,
+                error_code=errorcodes.JOB_PROVISIONING_RETRIES_EXHAUSTED,
+                message=reason,
+                attempt_number=retry_count,
+            )
+
+        held = False
+        try:
+            self.context.scheduler.hold_job(job_id=job.job_id)
+            # update the cache immediately so housekeeping and provisioning cycles
+            # do not re-queue the job before the next scheduler refresh.
+            job.state = SocaJobState.HELD
+            self.context.job_cache.sync(jobs=[job])
+            held = True
+        except exceptions.SocaException as e:
+            self._logger.error(f'{job.log_tag} failed to hold job: {e.message}')
+
+        # emitted even when the hold failed: the job is excluded from re-queue either way, so
+        # a missing event would leave it invisible. hold_failed flags it wasn't actually held.
+        if lifecycle_events is not None:
+            lifecycle_events.job_held(
+                job=job,
+                attempt_number=retry_count,
+                error_code=errorcodes.JOB_PROVISIONING_RETRIES_EXHAUSTED,
+                message=reason,
+                hold_failed=not held,
+            )
+
+        # replace the stale 'provisioning (attempt N)' comment so qstat -s doesn't advertise
+        # progress on a job now held for good; sanitized and never aborts the flow (no commas).
+        try:
+            self.context.scheduler.set_job_comment(
+                job_id=job.job_id,
+                comment=f'IDEA: provisioning failed {retry_count} times - job held. '
+                f'See error_message in qstat -f or contact your administrator',
+            )
+        except Exception as e:
+            self._logger.warning(f'{job.log_tag} failed to set held-job comment: {e}')
+
+        self._logger.warning(
+            f'{job.log_tag} provisioning retries exhausted after {retry_count} attempts. '
+            f'job held and will not be re-queued. last error: {message}'
+        )
+        return True
 
     @property
     def aws_util(self):
@@ -257,7 +370,7 @@ class JobProvisioningUtil:
         if creation_time is None:
             return False
         delta = arrow.utcnow() - self.stack.creation_time
-        return delta.seconds > self.stack_provisioning_timeout_secs
+        return delta.total_seconds() > self.stack_provisioning_timeout_secs
 
     def is_stack_a_shared_resource(self):
         if self.stack.soca_keep_forever:
@@ -266,7 +379,44 @@ class JobProvisioningUtil:
             return True
         return False
 
-    def check_status(self) -> ProvisioningStatus:
+    def get_capacity_failure_reason(self) -> Optional[str]:
+        """
+        why the compute stack has no node yet, taken from the most recent failed
+        auto-scaling activity.
+
+        an insufficient-capacity rejection is reported only on the activity: the group
+        keeps retrying and cloudformation waits out its whole stabilization window
+        before failing, so this is the only source for a job that is still waiting.
+
+        enrichment only - returns None when the reason cannot be read.
+        """
+        try:
+            auto_scaling_group_name = self.stack_resources.get_auto_scaling_group_name()
+            if auto_scaling_group_name is None:
+                return None
+
+            activities = self.aws_util.autoscaling_describe_scaling_activities(
+                auto_scaling_group_name=auto_scaling_group_name
+            )
+            for activity in activities:
+                status_code = Utils.get_value_as_string('StatusCode', activity)
+                if status_code not in ASG_FAILED_ACTIVITY_STATUS_CODES:
+                    continue
+                reason = Utils.get_value_as_string('StatusMessage', activity)
+                if Utils.is_empty(reason):
+                    reason = Utils.get_value_as_string('Description', activity)
+                if Utils.is_empty(reason):
+                    continue
+                return reason
+            return None
+        except Exception as e:
+            self._logger.warning(
+                f'{self.job.log_tag} failed to read scaling activities for '
+                f'ComputeStack: {self.stack_name}: {e}'
+            )
+            return None
+
+    def check_status(self) -> Optional[ProvisioningStatus]:
         """
         check and return provisioning status
 
@@ -276,6 +426,9 @@ class JobProvisioningUtil:
         2: PROVISIONING_STATUS_IN_PROGRESS
         3: PROVISIONING_STATUS_FAILED
         4: PROVISIONING_STATUS_TIMEOUT
+
+        None is returned for a stack status this method does not map. callers must treat
+        it as unknown and leave the stack and the job alone.
         """
 
         try:
@@ -301,14 +454,19 @@ class JobProvisioningUtil:
             elif stack_status == 'CREATE_IN_PROGRESS':
                 return ProvisioningStatus.IN_PROGRESS
 
-            elif stack_status == 'DELETE_IN_PROGRESS':
+            elif stack_status in ['DELETE_IN_PROGRESS', 'ROLLBACK_IN_PROGRESS']:
+                # a rollback is the failed create tearing itself down. wait for it to
+                # settle on ROLLBACK_COMPLETE, which reports FAILED below.
                 return ProvisioningStatus.DELETE_IN_PROGRESS
 
             elif stack_status in [
                 'CREATE_FAILED',
                 'ROLLBACK_COMPLETE',
                 'ROLLBACK_FAILED',
+                'DELETE_FAILED',
             ]:
+                # terminal and unusable: these can only be deleted, never updated, so
+                # the job cannot provision again until the stack is gone.
                 return ProvisioningStatus.FAILED
 
         except ClientError as exc:
@@ -317,29 +475,59 @@ class JobProvisioningUtil:
             else:
                 raise exc
 
+    def ec2_dry_run_request(self, instance_type: str) -> Dict:
+        """
+        the RunInstances request used for the pre-provisioning dry run.
+
+        the network shape must mirror what CloudFormationStackBuilder.build_launch_template()
+        emits, otherwise the dry run validates a launch that is never attempted. with EFA the
+        launch template replaces SecurityGroupIds with InterfaceType='efa' network
+        interfaces built from the shared build_efa_network_interface_shapes(), so a
+        multi-rail launch (scheduler.efa.multi_rail_enabled) is dry-run with the same
+        interface list; RunInstances rejects a top level SubnetId/SecurityGroupIds alongside
+        NetworkInterfaces, so the subnet and groups move onto the interfaces.
+        """
+        request = {
+            'ImageId': self.job.params.instance_ami,
+            'InstanceType': instance_type,
+            'MaxCount': self.job.params.nodes,
+            'MinCount': self.job.params.nodes,
+            'BlockDeviceMappings': [
+                {
+                    'DeviceName': Utils.get_ec2_block_device_name(
+                        base_os=self.job.params.base_os
+                    ),
+                    'Ebs': {
+                        'Encrypted': constants.DEFAULT_VOLUME_ENCRYPTION_COMPUTE,
+                        'VolumeType': constants.DEFAULT_VOLUME_TYPE_COMPUTE,
+                        'DeleteOnTermination': constants.DEFAULT_KEEP_EBS_VOLUMES,
+                    },
+                }
+            ],
+            'DryRun': True,
+        }
+
+        if Utils.get_as_bool(self.job.params.enable_efa_support, False):
+            network_interfaces = build_efa_network_interface_shapes(
+                context=self.context,
+                instance_type_names=self.job.params.instance_types,
+                security_groups=self.job.params.security_groups,
+                log_tag=self.job.log_tag,
+            )
+            for network_interface in network_interfaces:
+                network_interface['SubnetId'] = self.job.params.subnet_ids[0]
+            request['NetworkInterfaces'] = network_interfaces
+        else:
+            request['SubnetId'] = self.job.params.subnet_ids[0]
+            request['SecurityGroupIds'] = self.job.params.security_groups
+
+        return request
+
     def ec2_dry_run(self):
         for instance_type in self.job.params.instance_types:
             try:
                 self.context.aws().ec2().run_instances(
-                    ImageId=self.job.params.instance_ami,
-                    InstanceType=instance_type,
-                    SubnetId=self.job.params.subnet_ids[0],
-                    SecurityGroupIds=self.job.params.security_groups,
-                    MaxCount=self.job.params.nodes,
-                    MinCount=self.job.params.nodes,
-                    BlockDeviceMappings=[
-                        {
-                            'DeviceName': Utils.get_ec2_block_device_name(
-                                base_os=self.job.params.base_os
-                            ),
-                            'Ebs': {
-                                'Encrypted': constants.DEFAULT_VOLUME_ENCRYPTION_COMPUTE,
-                                'VolumeType': constants.DEFAULT_VOLUME_TYPE_COMPUTE,
-                                'DeleteOnTermination': constants.DEFAULT_KEEP_EBS_VOLUMES,
-                            },
-                        }
-                    ],
-                    DryRun=True,
+                    **self.ec2_dry_run_request(instance_type=instance_type)
                 )
             except ClientError as e:
                 if e.response['Error'].get('Code') == 'DryRunOperation':
@@ -347,8 +535,55 @@ class JobProvisioningUtil:
                 else:
                     raise exceptions.SocaException(
                         error_code=errorcodes.EC2_DRY_RUN_FAILED,
-                        message=f'EC2 dry run failed for instance_type: {instance_type}, Err: {e}',
+                        message=f'EC2 dry run failed for instance_type: {instance_type}, '
+                        f'Err: {redact_aws_identifiers(e)}',
+                        ref=e,
                     )
+
+    def ec2_dry_run_cached(self):
+        """
+        ec2 dry run for job-shared/batch queues.
+        a live dry run is executed once per job group signature per TTL window and the
+        outcome is cached, so batches of submissions do not flood the EC2 API.
+        """
+        cache_ttl_seconds = self.config.get_int(
+            'scheduler.job_provisioning.dry_run_cache_ttl_seconds',
+            default=300,
+        )
+        if cache_ttl_seconds <= 0:
+            self.ec2_dry_run()
+            return
+
+        # key on capacity signature, not get_job_group(): a custom job_group can collide across
+        # jobs with different AMI/subnet/instance types and would share one cached verdict.
+        cache_key = f'scheduler.job_provisioning.ec2_dry_run.{self.job.get_capacity_signature()}'
+        cache = self.context.cache().short_term()
+        cached_result = cache.get(cache_key)
+        if cached_result is not None:
+            error_message = Utils.get_value_as_string('error_message', cached_result)
+            if error_message is None:
+                return
+            raise exceptions.SocaException(
+                error_code=errorcodes.EC2_DRY_RUN_FAILED,
+                message=error_message,
+            )
+
+        try:
+            self.ec2_dry_run()
+        except exceptions.SocaException as e:
+            # a throttle or an auth blip describes this call, not the capacity. the key
+            # carries no owner, so caching one would reject every other submitter too.
+            if (
+                e.error_code == errorcodes.EC2_DRY_RUN_FAILED
+                and not _is_transient_ec2_error(e.ref)
+            ):
+                cache.set(
+                    key=cache_key,
+                    value={'error_message': e.message},
+                    ttl=cache_ttl_seconds,
+                )
+            raise
+        cache.set(key=cache_key, value={}, ttl=cache_ttl_seconds)
 
     def check_service_quota(self) -> CheckServiceQuotaResult:
         result = CheckServiceQuotaResult(quotas=[])
@@ -553,14 +788,94 @@ class JobProvisioningUtil:
                 context=self.context, job=job
             ).check_budget_availability()
 
-    def check_licenses(self):
+    def check_bedrock(self, reject_when_check_fails: bool = True):
+        """
+        a job whose project has Bedrock enabled must run under that project's instance
+        profile. the profile is re-resolved here rather than trusted from the job, so a
+        change since submission is caught: without it the job would launch under the
+        standard compute node profile and fail its first model call, having already
+        consumed compute, while the portal lists the models as available.
+
+        :param reject_when_check_fails: what an unresolved project means. True
+        (provisioning) keeps the job queued for a retry. False (submission) accepts the
+        job, so a projects api blip or a reconcile still in flight cannot reject it -
+        the provisioning check runs again before any capacity is created.
+        :raises SocaException
+            error codes:
+            > BEDROCK_ACCESS_NOT_READY - expected to resolve on its own, job waits
+            > BEDROCK_ACCESS_NOT_AUTHORIZED - needs an administrator, job is not retried
+        """
+        if not is_enabled_for_jobs(self.context):
+            # checked before anything else is read, so a cluster that has not enabled
+            # this reaches none of it.
+            return
+
+        queue_management = self.queue_profile.queue_management_params
+        for job in self.jobs:
+            access = BedrockJobAccessResolver(
+                context=self.context,
+                project_name=job.project,
+                queue_management=queue_management,
+            ).resolve()
+
+            if access.state == BedrockJobAccessState.NOT_AUTHORIZED:
+                raise exceptions.SocaException(
+                    error_code=errorcodes.BEDROCK_ACCESS_NOT_AUTHORIZED,
+                    message=self.fail_message(
+                        key=constants.JOB_PARAM_INSTANCE_PROFILE, message=access.message
+                    ),
+                )
+
+            if access.state == BedrockJobAccessState.NOT_READY:
+                if not reject_when_check_fails:
+                    self._logger.warning(
+                        f'{job.log_tag} - Bedrock access is not resolved yet, skipping '
+                        f'the check: {access.message}'
+                    )
+                    continue
+                raise exceptions.SocaException(
+                    error_code=errorcodes.BEDROCK_ACCESS_NOT_READY,
+                    message=self.fail_message(
+                        key=constants.JOB_PARAM_INSTANCE_PROFILE, message=access.message
+                    ),
+                )
+
+            if (
+                access.is_available
+                and job.params.instance_profile != access.instance_profile_arn
+            ):
+                # the identity the job would launch with is not the project's, so its
+                # model access would be missing at runtime.
+                raise exceptions.SocaException(
+                    error_code=errorcodes.BEDROCK_ACCESS_NOT_READY,
+                    message=self.fail_message(
+                        key=constants.JOB_PARAM_INSTANCE_PROFILE,
+                        message=f'job is provisioned with instance profile '
+                        f'({job.params.instance_profile}), which does not carry the '
+                        f'Bedrock access of project ({job.project}).',
+                    ),
+                )
+
+    def check_licenses(self, reject_when_check_fails: bool = True):
+        """
+        :param reject_when_check_fails: what an unusable license server check means. True
+        (provisioning) counts zero available, so the job stays queued and is retried. False
+        (submission) skips the license check, so an unhealthy server cannot reject the job.
+        """
         for job in self.jobs:
             if job.params.licenses is None or len(job.params.licenses) == 0:
                 continue
             for license_ask in job.params.licenses:
-                available = self.context.license_service.get_available_licenses(
+                availability = self.context.license_service.get_license_availability(
                     license_resource_name=license_ask.name
                 )
+                if not availability.check_ok and not reject_when_check_fails:
+                    self._logger.warning(
+                        f'{job.log_tag} - {license_ask.name} - license availability is '
+                        f'unknown, skipping the license check: {availability.error}'
+                    )
+                    continue
+                available = availability.available_count
                 active_license_usage_count = (
                     self.context.job_cache.get_active_license_count(
                         license_name=license_ask.name

@@ -1,46 +1,55 @@
-# Getting Started with Create React App
+# Cluster Manager Web Portal
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+React + TypeScript single-page app for the IDEA web portal, built with [Vite](https://vitejs.dev/).
 
 ## Available Scripts
 
 In the project directory, you can run:
 
-### `yarn start`
+### `yarn serve` (or `yarn start`)
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
-
-The page will reload if you make edits.\
-You will also see any lint errors in the console.
+Runs the app in development mode on [http://localhost:3000](http://localhost:3000).
+The page reloads on edit. API endpoints for local development come from `.env`
+(`REACT_APP_IDEA_HTTP_ENDPOINT` / `REACT_APP_IDEA_ALB_ENDPOINT`).
 
 ### `yarn test`
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+Runs the [vitest](https://vitest.dev/) suite once. Use `yarn test:watch` for watch mode.
+
+### `yarn typecheck`
+
+Runs `tsc --noEmit`. Also runs as the first step of `yarn build`.
 
 ### `yarn build`
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+Type-checks, then builds the production bundle into `build/`:
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+- `build/index.html` remains a Jinja2 template; cluster-manager's `web_portal.py`
+  renders it and substitutes the `app_init_data` variable at request time. The
+  `idea:jinja-placeholder-guard` plugin (`build-support/`) fails the build if the
+  emitted file loses the `{{ app_init_data }}` placeholder or gains any other
+  Jinja sequence.
+- `build/service-worker.js` is the compiled `src/service-worker.ts` (auth token
+  handling; see `vite.config.ts`, built via vite-plugin-pwa injectManifest).
+- Assets follow the `static/{js,css,media}` layout consumed by
+  `tasks/tools/build_tool.py` packaging.
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+## Notes
 
-### `yarn eject`
-
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
-
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
-
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
-
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
-
-## Learn More
-
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
-
-To learn React, check out the [React documentation](https://reactjs.org/).
+- Environment variables keep the CRA-era `REACT_APP_` prefix: the build tooling
+  (`tasks/tools/build_tool.py`) writes `REACT_APP_IDEA_RELEASE_VERSION` into
+  `.env`, and `vite.config.ts` maps each `REACT_APP_*` var onto `process.env.*`
+  at build time.
+- Service workers cannot be exercised via the dev server; see the comments in
+  `src/index.tsx` for how to test the service worker flow locally.
+- `engines` in `package.json` requires node >= 22.12, which yarn enforces as a hard
+  error. Vite 7 itself also accepts `^20.19`, but node 20 is end-of-life and CI pins
+  the version in `software_versions.yml`.
+- Browser support floor: `build.target` in `vite.config.ts`. Vite does not read
+  `browserslist`, so that field was removed rather than left to mislead.
+- `workbox-build` and `workbox-window` are devDependencies that nothing in `src`
+  imports. They satisfy vite-plugin-pwa's declared peer dependencies; dropping
+  them re-introduces `yarn install` peer warnings.
+- ace loads syntax workers by URL, not through `esm-resolver`; the mappings live in
+  `src/common/ace-worker-urls.ts`. Every call site that configures ace registers
+  them. A new editor language with a worker needs an entry there.

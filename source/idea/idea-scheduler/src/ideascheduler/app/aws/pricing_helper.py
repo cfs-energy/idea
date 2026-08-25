@@ -59,8 +59,10 @@ class PricingHelper:
 
     @property
     def ec2_boot_penalty_seconds(self) -> int:
+        # default matches the shipped scheduler settings template; without one,
+        # a cluster missing the key returns None and every BOM computation raises.
         return self.config().get_int(
-            'scheduler.cost_estimation.ec2_boot_penalty_seconds'
+            'scheduler.cost_estimation.ec2_boot_penalty_seconds', default=300
         )
 
     @property

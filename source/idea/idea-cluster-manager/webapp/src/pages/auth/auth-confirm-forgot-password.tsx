@@ -24,7 +24,7 @@ import {NETWORK_ERROR, REQUEST_TIMEOUT} from "../../common/error-codes";
 
 class IdeaAuthConfirmForgotPassword extends Component<IdeaAuthProps, IdeaAuthState> {
     static contextType = IdeaAuthContext
-    form: RefObject<IdeaForm>
+    form: RefObject<IdeaForm | null>
 
     constructor(props: IdeaAuthProps) {
         super(props);

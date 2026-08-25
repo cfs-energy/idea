@@ -13,7 +13,7 @@
 ## [End: Commands to be added before the solver. This cannot be changed by the users]
 
 # Change path to current working directory
-cd $PBS_O_WORKDIR
+cd "$PBS_O_WORKDIR"
 
 %user_pre_exec%
 

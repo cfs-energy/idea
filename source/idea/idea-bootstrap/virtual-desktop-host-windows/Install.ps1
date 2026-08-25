@@ -43,6 +43,23 @@ function Write-ToLog {
     "$FormattedDate $LevelText $Message" | Out-File -FilePath $LogFile -Append
 }
 
+function Wait-ForService {
+    Param (
+        [ValidateNotNullOrEmpty()]
+        [Parameter(Mandatory=$true)]
+        [String] $Name,
+        [int] $TimeoutSeconds = 30
+    )
+
+    $Deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while (-not(Get-Service $Name -ErrorAction SilentlyContinue)) {
+        if ((Get-Date) -gt $Deadline) {
+            Write-ToLog -Message "Service $Name was not registered within $TimeoutSeconds seconds" -Level 'Error'
+            exit 1
+        }
+        Start-Sleep -Milliseconds 250
+    }
+}
 
   function Install-NiceDCV {
     Param(
@@ -63,21 +80,16 @@ function Write-ToLog {
 
     if(!$DCVInstalled -or $Update){
       # Information on NICE Virtual Display Driver: https://docs.aws.amazon.com/dcv/latest/adminguide/setting-up-installing-winprereq.html#setting-up-installing-general
-      if((($OSVersion -ne "2019") -and ($OSversion -ne "2022")) -and (($InstanceType[0] -ne 'g') -or ($InstanceType[0] -ne 'p'))){
-          $VirtualDisplayDriverRequired = $true
-      }
-      if($VirtualDisplayDriverRequired){
-          # Standard distribution links for NICE DCV Server and Virtual Display Driver
-          Start-Job -Name DCVWebReq -ScriptBlock { Invoke-WebRequest -uri https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-virtual-display-x64-Release.msi -OutFile C:\Windows\Temp\DCVDisplayDriver.msi ; Invoke-WebRequest -uri https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-server-x64-Release.msi -OutFile C:\Windows\Temp\DCVServer.msi }
-      }else{
-          Start-Job -Name DCVWebReq -ScriptBlock { Invoke-WebRequest -uri https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-server-x64-Release.msi -OutFile C:\Windows\Temp\DCVServer.msi }
-      }
+      # Every supported base_os (2019, 2022, 2025) ships the Indirect Display Driver with
+      # DCV 2023.1+, so the Virtual Display Driver is never installed: it conflicts with GPU drivers.
+      Start-Job -Name DCVWebReq -ScriptBlock { Invoke-WebRequest -uri https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-server-x64-Release.msi -OutFile C:\Windows\Temp\DCVServer.msi }
       Wait-Job -Name DCVWebReq
-      if($VirtualDisplayDriverRequired){
-          Invoke-Command -ScriptBlock {Start-Process "msiexec.exe" -ArgumentList "/I C:\Windows\Temp\DCVDisplayDriver.msi /quiet /norestart" -Wait}
+      $DCVServerInstall = Start-Process "msiexec.exe" -ArgumentList "/I C:\Windows\Temp\DCVServer.msi ADDLOCAL=ALL /quiet /norestart /l*v dcv_install_msi.log " -Wait -PassThru
+      if($DCVServerInstall.ExitCode -ne 0){
+        Write-ToLog -Message "DCV Server install failed with exit code $($DCVServerInstall.ExitCode), see dcv_install_msi.log" -Level 'Error'
+        exit 1
       }
-      Invoke-Command -ScriptBlock {Start-Process "msiexec.exe" -ArgumentList "/I C:\Windows\Temp\DCVServer.msi ADDLOCAL=ALL /quiet /norestart /l*v dcv_install_msi.log " -Wait}
-      while (-not(Get-Service dcvserver -ErrorAction SilentlyContinue)) { Start-Sleep -Milliseconds 250 }
+      Wait-ForService -Name dcvserver
     }
 
     Get-Service dcvserver -ErrorAction SilentlyContinue
@@ -102,8 +114,12 @@ function Write-ToLog {
       # Standard distribution link for NICE DCV Session Manager Agent
       Start-Job -Name SMWebReq -ScriptBlock { Invoke-WebRequest -uri https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent-x64-Release.msi -OutFile C:\Windows\Temp\DCVSMAgent.msi }
       Wait-Job -Name SMWebReq
-      Invoke-Command -ScriptBlock {Start-Process "msiexec.exe" -ArgumentList "/I C:\Windows\Temp\DCVSMAgent.msi /quiet /norestart " -Wait}
-      while (-not(Get-Service dcvserver -ErrorAction SilentlyContinue)) { Start-Sleep -Milliseconds 250 }
+      $SMAgentInstall = Start-Process "msiexec.exe" -ArgumentList "/I C:\Windows\Temp\DCVSMAgent.msi /quiet /norestart " -Wait -PassThru
+      if($SMAgentInstall.ExitCode -ne 0){
+        Write-ToLog -Message "DCV Session Manager Agent install failed with exit code $($SMAgentInstall.ExitCode)" -Level 'Error'
+        exit 1
+      }
+      Wait-ForService -Name DcvSessionManagerAgentService
     }
 
     Get-Service DcvSessionManagerAgentService -ErrorAction SilentlyContinue

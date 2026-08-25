@@ -30,7 +30,13 @@ METRIC_DENYLIST_KEYS = ['ServiceToken']
 
 def post_metrics(event):
     try:
-        request_timestamp = str(datetime.datetime.utcnow().isoformat())
+        # datetime.utcnow() is deprecated since python 3.12; tzinfo is dropped to keep the
+        # naive UTC string the metrics endpoint has always received.
+        request_timestamp = str(
+            datetime.datetime.now(datetime.timezone.utc)
+            .replace(tzinfo=None)
+            .isoformat()
+        )
         solution_id = 'SO0072'
         uuid = event['RequestId']
         data = {

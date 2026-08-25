@@ -79,7 +79,9 @@ class BatchCapacityHelper:
                 instance_type=instance.instance_type
             )
 
-            node = self._context.scheduler.get_node(host=instance.private_dns_name)
+            node = self._context.scheduler.find_node(
+                hosts=instance.node_host_candidates
+            )
             if node is None:
                 self.pending_capacity += instance_capacity
                 self.pending_instances += 1

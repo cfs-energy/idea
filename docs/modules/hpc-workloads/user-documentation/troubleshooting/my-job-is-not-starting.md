@@ -2,7 +2,49 @@
 
 Jobs can stay in the Q state for extended period of time because of license restrictions or other applicationS specific requirements. Follow this guide if you think all conditions are met but your job is still stuck in the Q state.
 
-## 1 - Verify if the capacity is being provisioned
+## 1 - Start with the job status in the web portal
+
+Open **Home > Active Jobs** and select the job. A job that has not started yet reports:
+
+* how long it has been waiting
+* which provisioning attempt it is on, out of `scheduler.job_provisioning.max_provisioning_retries`
+* the queue limit holding it, if one is
+
+If the attempt count is climbing, provisioning is being retried and the reason is in the
+job's error message. If a queue limit is named, the job is waiting for the queue to drop
+below that limit and no action is needed.
+
+If the status reads **held after N of N attempts**, the job has used all of
+`scheduler.job_provisioning.max_provisioning_retries`, 3 out of the box. Provisioning has
+stopped retrying and the job will not start on its own. Read the error message, fix what it
+names, then release the job with `qrls <job_id>` or delete it with `qdel <job_id>` and
+resubmit.
+
+IDEA does not report a queue position or an estimated start time. Compute capacity is
+created on demand rather than drawn from a fixed pool, so neither can be computed from
+what the scheduler knows.
+
+## 2 - Check whether the job is waiting on its project's AI model access
+
+A job whose project has Bedrock enabled is held back until that project's model access is
+usable, so it never runs without the access the portal lists for it. The job's error
+message names which:
+
+* **its instance profile has not been provisioned yet**, or **none of its models have been
+  provisioned yet** - the cluster is still reconciling the project. Nothing to do; the job
+  starts on the next provisioning cycle, usually within a minute of the project edit.
+* **the scheduler module is not permitted to launch compute nodes under a project role** -
+  the module was not deployed with Bedrock enabled for jobs. An administrator has to
+  redeploy it.
+* **not authorized for this queue** - the queue profile's `allowed_instance_profiles` does
+  not include the project's instance profile. An administrator has to add it.
+* **no model allowed on project ... could be provisioned** - every model the project allows
+  was rejected, and the reason per model is on the project in the web portal.
+
+The last three do not resolve on their own, and jobs submitted while they hold are rejected
+at submission rather than queued.
+
+## 3 - Verify if the capacity is being provisioned
 
 &#x20;Verify if the capacity associated to the job is being provisioned by running the following command:
 
@@ -17,7 +59,7 @@ qstat -f <job_id> | grep select
 You can login to AWS Console and navigate to the CloudFormation console to verify the CloudFormation stack associated to your job is in `CREATE_COMPLETE` state. If not, verify any potential errors via the `Events` tab.
 {% endhint %}
 
-## 2 - Verify the bootstrap logs for the compute node(s) being provisioned
+## 4 - Verify the bootstrap logs for the compute node(s) being provisioned
 
 If the capacity is being provisioned, the next thing to check is if there is no errors during the bootstrap sequence on the compute node(s) provisioned to run your job.&#x20;
 
@@ -32,7 +74,7 @@ You will find the bootstrap & compute\_node logs for all EC2 instances being pro
 </strong>/apps/&#x3C;CLUSTER>/scheduler/jobs/&#x3C;JOB_ID>/logs/&#x3C;INSTANCE_HOSTNAME>
 </code></pre>
 
-## 3 - Check if the compute node(s) is/are being registered on the scheduler
+## 5 - Check if the compute node(s) is/are being registered on the scheduler
 
 Verify if the compute node(s) are being registered correctly to the scheduler.&#x20;
 
@@ -48,7 +90,7 @@ p-10-110-6-141
      resources_available.anonymous_metrics = True
      resources_available.auto_scaling_group = idea-demo-compute-ondemand-103-AutoScalingComputeGroup-YXWJFA4XLGKQ
      resources_available.availability_zone = us-east-2c
-     resources_available.base_os = rhel7
+     resources_available.base_os = rocky9
      resources_available.cluster_name = idea-demo
      resources_available.compute_node = idea-demo-compute-ondemand-103
      resources_available.efa_support = True
@@ -101,7 +143,7 @@ ip-10-110-6-141
      resources_available.arch = linux
      resources_available.auto_scaling_group = idea-demo-compute-ondemand-103-AutoScalingComputeGroup-YXWJFA4XLGKQ
      resources_available.availability_zone = us-east-2c
-     resources_available.base_os = rhel7
+     resources_available.base_os = rocky9
      resources_available.cluster_name = idea-demo
      resources_available.compute_node = idea-demo-compute-ondemand-103
      resources_available.efa_support = True
@@ -146,7 +188,7 @@ ip-10-110-6-141
      last_state_change_time = Wed Dec 14 11:49:10 2022
 ```
 
-## 4 - Restart the Scheduler&#x20;
+## 6 - Restart the Scheduler&#x20;
 
 If needed, SSH to the scheduler machine and restart both OpenPBS and  `idea-scheduler` module.
 

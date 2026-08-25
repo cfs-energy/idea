@@ -28,7 +28,7 @@ interface PieOrDonutChartState {
 
 class PieOrDonutChart extends Component<PieOrDonutChartProps, PieOrDonutChartState> {
 
-    chartSelector: RefObject<SelectProps.Ref>
+    chartSelector: RefObject<SelectProps.Ref | null>
 
     constructor(props: PieOrDonutChartProps) {
         super(props);

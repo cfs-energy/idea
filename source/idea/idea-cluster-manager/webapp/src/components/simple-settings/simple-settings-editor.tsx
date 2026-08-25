@@ -18,7 +18,7 @@ export interface SimpleSettingsEditorState {
 
 class SimpleSettingsEditor extends Component<SimpleSettingsEditorProps, SimpleSettingsEditorState> {
 
-    form: RefObject<IdeaForm>;
+    form: RefObject<IdeaForm | null>;
 
     constructor(props: SimpleSettingsEditorProps) {
         super(props);

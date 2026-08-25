@@ -296,6 +296,7 @@ class CloudWatchAgentConfig:
             'aws_region': self.aws_region,
             'cluster_name': self.cluster_name,
             'module_id': self.module_id,
+            'base_os': self.options.base_os,
             # logs
             'enable_logs': self.enable_logs,
             'logs_endpoint_override': self.logs_endpoint_override,

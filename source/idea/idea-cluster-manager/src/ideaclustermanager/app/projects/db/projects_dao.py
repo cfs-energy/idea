@@ -13,6 +13,7 @@ from ideasdk.utils import Utils
 from ideadatamodel import (
     exceptions,
     Project,
+    ProjectBedrockConfig,
     AwsProjectBudget,
     ListProjectsRequest,
     ListProjectsResult,
@@ -75,6 +76,23 @@ class ProjectsDAO:
         budget = None
         if Utils.is_not_empty(budget_name):
             budget = AwsProjectBudget(budget_name=budget_name)
+        db_bedrock = Utils.get_value_as_dict('bedrock', project)
+        bedrock = None
+        if db_bedrock is not None:
+            bedrock = ProjectBedrockConfig(
+                enabled=Utils.get_value_as_bool('enabled', db_bedrock, False),
+                model_ids=Utils.get_value_as_list('model_ids', db_bedrock, []),
+                role_arn=Utils.get_value_as_string('role_arn', db_bedrock),
+                instance_profile_arn=Utils.get_value_as_string(
+                    'instance_profile_arn', db_bedrock
+                ),
+                inference_profile_arns=Utils.get_value_as_dict(
+                    'inference_profile_arns', db_bedrock
+                ),
+                model_errors=Utils.get_value_as_dict('model_errors', db_bedrock),
+                policy_errors=Utils.get_value_as_dict('policy_errors', db_bedrock),
+            )
+
         db_tags = Utils.get_value_as_dict('tags', project)
         tags = None
         if db_tags is not None:
@@ -95,6 +113,7 @@ class ProjectsDAO:
             enabled=enabled,
             enable_budgets=enable_budgets,
             budget=budget,
+            bedrock=bedrock,
             created_on=arrow.get(created_on).datetime,
             updated_on=arrow.get(updated_on).datetime,
         )
@@ -132,6 +151,28 @@ class ProjectsDAO:
 
         if project.budget is not None and project.budget.budget_name is not None:
             db_project['budget_name'] = project.budget.budget_name
+
+        if project.bedrock is not None:
+            db_bedrock = {
+                'enabled': Utils.get_as_bool(project.bedrock.enabled, False),
+                'model_ids': project.bedrock.get_model_ids(),
+            }
+            if project.bedrock.role_arn is not None:
+                db_bedrock['role_arn'] = project.bedrock.role_arn
+            if project.bedrock.instance_profile_arn is not None:
+                db_bedrock['instance_profile_arn'] = (
+                    project.bedrock.instance_profile_arn
+                )
+            if project.bedrock.inference_profile_arns is not None:
+                db_bedrock['inference_profile_arns'] = (
+                    project.bedrock.inference_profile_arns
+                )
+            # diagnostics are carried through so an update does not erase them
+            if project.bedrock.model_errors is not None:
+                db_bedrock['model_errors'] = project.bedrock.model_errors
+            if project.bedrock.policy_errors is not None:
+                db_bedrock['policy_errors'] = project.bedrock.policy_errors
+            db_project['bedrock'] = db_bedrock
 
         return db_project
 

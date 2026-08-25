@@ -92,8 +92,8 @@ const APPLICATIONS_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<HpcAppl
 
 class HpcApplications extends Component<HpcApplicationsProps, HpcApplicationsState> {
 
-    listing: RefObject<IdeaListView>
-    deleteApplicationConfirmModal: RefObject<IdeaConfirm>
+    listing: RefObject<IdeaListView | null>
+    deleteApplicationConfirmModal: RefObject<IdeaConfirm | null>
 
     constructor(props: HpcApplicationsProps) {
         super(props);

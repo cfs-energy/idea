@@ -34,3 +34,6 @@ from ideascheduler.app.provisioning.node_monitor.node_house_keeper import (
     NodeHouseKeeper,
 )
 from ideascheduler.app.provisioning.node_monitor.node_monitor import NodeMonitor
+from ideascheduler.app.provisioning.lifecycle_events import (
+    ProvisioningLifecycleEvents,
+)

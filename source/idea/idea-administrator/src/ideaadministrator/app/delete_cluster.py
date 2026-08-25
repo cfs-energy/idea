@@ -27,6 +27,141 @@ import time
 import botocore.exceptions
 
 
+def _is_not_found(error: botocore.exceptions.ClientError) -> bool:
+    return error.response.get('Error', {}).get('Code') in (
+        'NoSuchEntity',
+        'NoSuchEntityException',
+        'ResourceNotFoundException',
+    )
+
+
+def _attempt(log, description: Optional[str], call):
+    """run one deletion step. a resource that is already gone is logged, not raised."""
+    try:
+        result = call()
+    except botocore.exceptions.ClientError as e:
+        if not _is_not_found(e):
+            raise e
+        if description is not None:
+            log(f'{description}: not found, skipped')
+        return None
+    if description is not None:
+        log(description)
+    return result
+
+
+def delete_bedrock_project_resources(
+    iam, bedrock, cluster_name: str, projects: List[dict], log=print
+):
+    """
+    remove the per project iam roles, instance profiles, policies and application
+    inference profiles the cluster-manager provisions at runtime. cloudformation
+    does not own them, so a stack delete leaves them behind.
+    """
+    inference_profile_arns = []
+    for project in projects:
+        config = Utils.get_value_as_dict('bedrock', project, {})
+        role_arn = Utils.get_value_as_string('role_arn', config)
+        role_name = role_arn.split('/')[-1] if Utils.is_not_empty(role_arn) else None
+        instance_profile_arn = Utils.get_value_as_string('instance_profile_arn', config)
+        instance_profile_name = (
+            instance_profile_arn.split('/')[-1]
+            if Utils.is_not_empty(instance_profile_arn)
+            else None
+        )
+        inference_profile_arns += [
+            arn
+            for arn in Utils.get_value_as_dict(
+                'inference_profile_arns', config, {}
+            ).values()
+            if Utils.is_not_empty(arn)
+        ]
+
+        if role_name is not None:
+            attached = _attempt(
+                log, None, lambda: iam.list_attached_role_policies(RoleName=role_name)
+            )
+            for policy in Utils.get_value_as_list('AttachedPolicies', attached, []):
+                policy_arn = Utils.get_value_as_string('PolicyArn', policy)
+                _attempt(
+                    log,
+                    f'detached {policy_arn} from role {role_name}',
+                    lambda: iam.detach_role_policy(
+                        RoleName=role_name, PolicyArn=policy_arn
+                    ),
+                )
+
+        if instance_profile_name is not None:
+            profile = _attempt(
+                log,
+                None,
+                lambda: iam.get_instance_profile(
+                    InstanceProfileName=instance_profile_name
+                ),
+            )
+            for role in Utils.get_value_as_list(
+                'Roles', Utils.get_value_as_dict('InstanceProfile', profile, {}), []
+            ):
+                attached_role_name = Utils.get_value_as_string('RoleName', role)
+                _attempt(
+                    log,
+                    f'removed role {attached_role_name} from instance profile {instance_profile_name}',
+                    lambda: iam.remove_role_from_instance_profile(
+                        InstanceProfileName=instance_profile_name,
+                        RoleName=attached_role_name,
+                    ),
+                )
+            _attempt(
+                log,
+                f'deleted instance profile {instance_profile_name}',
+                lambda: iam.delete_instance_profile(
+                    InstanceProfileName=instance_profile_name
+                ),
+            )
+
+        if role_name is not None:
+            _attempt(
+                log,
+                f'deleted role {role_name}',
+                lambda: iam.delete_role(RoleName=role_name),
+            )
+
+    # every policy under the cluster path, including one whose role is already gone
+    for page in iam.get_paginator('list_policies').paginate(
+        PathPrefix=f'/idea/{cluster_name}/projects/', Scope='Local'
+    ):
+        for policy in Utils.get_value_as_list('Policies', page, []):
+            policy_arn = Utils.get_value_as_string('Arn', policy)
+            versions = _attempt(
+                log, None, lambda: iam.list_policy_versions(PolicyArn=policy_arn)
+            )
+            for version in Utils.get_value_as_list('Versions', versions, []):
+                if Utils.get_value_as_bool('IsDefaultVersion', version, False):
+                    continue
+                version_id = Utils.get_value_as_string('VersionId', version)
+                _attempt(
+                    log,
+                    f'deleted policy version {version_id} of {policy_arn}',
+                    lambda: iam.delete_policy_version(
+                        PolicyArn=policy_arn, VersionId=version_id
+                    ),
+                )
+            _attempt(
+                log,
+                f'deleted policy {policy_arn}',
+                lambda: iam.delete_policy(PolicyArn=policy_arn),
+            )
+
+    for profile_arn in inference_profile_arns:
+        _attempt(
+            log,
+            f'deleted inference profile {profile_arn}',
+            lambda: bedrock.delete_inference_profile(
+                inferenceProfileIdentifier=profile_arn.split('/')[-1]
+            ),
+        )
+
+
 class DeleteCluster:
     def __init__(
         self,
@@ -662,6 +797,58 @@ class DeleteCluster:
             self.context.error('failed to delete CloudFormation stacks. abort!')
             raise SystemExit
 
+    def find_bedrock_projects(self) -> List[dict]:
+        """projects whose bedrock block records provisioned iam or inference profile resources"""
+        table = (
+            self.context.aws().dynamodb_table().Table(f'{self.cluster_name}.projects')
+        )
+        projects = []
+        kwargs = {}
+        while True:
+            try:
+                result = table.scan(**kwargs)
+            except botocore.exceptions.ClientError as e:
+                if e.response['Error']['Code'] == 'ResourceNotFoundException':
+                    return []
+                raise e
+            for item in Utils.get_value_as_list('Items', result, []):
+                bedrock = Utils.get_value_as_dict('bedrock', item, {})
+                if (
+                    Utils.is_not_empty(Utils.get_value_as_string('role_arn', bedrock))
+                    or Utils.is_not_empty(
+                        Utils.get_value_as_string('instance_profile_arn', bedrock)
+                    )
+                    or Utils.is_not_empty(
+                        Utils.get_value_as_dict('inference_profile_arns', bedrock)
+                    )
+                ):
+                    projects.append(item)
+            last_evaluated_key = Utils.get_any_value('LastEvaluatedKey', result)
+            if last_evaluated_key is None:
+                return projects
+            kwargs['ExclusiveStartKey'] = last_evaluated_key
+
+    def delete_bedrock_project_resources(self):
+        """
+        best effort. a failure is reported and the stack delete proceeds: the
+        detach-boundaries custom resource still clears what blocks the policy delete.
+        """
+        try:
+            projects = self.find_bedrock_projects()
+            if len(projects) == 0:
+                return
+            print(
+                f'deleting bedrock project resources for {len(projects)} project(s) ...'
+            )
+            delete_bedrock_project_resources(
+                iam=self.context.aws().iam(),
+                bedrock=self.context.aws().bedrock(),
+                cluster_name=self.cluster_name,
+                projects=projects,
+            )
+        except Exception as e:
+            print(f'failed to delete bedrock project resources: {e}')
+
     def delete_cloud_formation_stacks(self):
         stack_names = []
         for stack in self.cloud_formation_stacks:
@@ -1023,6 +1210,7 @@ class DeleteCluster:
                     return
 
         self.delete_ec2_instances()
+        self.delete_bedrock_project_resources()
         self.delete_cloud_formation_stacks()
 
         # Delete identity-provider stack - removing UserPool protection

@@ -26,9 +26,6 @@ export interface IdeaSideNavigationProps extends IdeaAppNavigationProps {
     activePath?: string
 }
 
-const SIDE_NAV_ROOT_CLASS_NAME = 'awsui_root_l0dv0_1mtlo_93'
-const SIDE_NAV_LINK_CLASS_NAME = 'awsui_link_l0dv0_1mtlo_180'
-
 class IdeaSideNavigation extends Component<IdeaSideNavigationProps> {
 
     onFollowHandler(event: CustomEvent<SideNavigationProps.FollowDetail>) {
@@ -38,17 +35,23 @@ class IdeaSideNavigation extends Component<IdeaSideNavigationProps> {
         }
     }
 
-    componentDidMount() {
-        let sideNavRoot = document.getElementsByClassName(SIDE_NAV_ROOT_CLASS_NAME)
-        if(sideNavRoot.length > 0) {
-            let links = sideNavRoot[0].getElementsByClassName(SIDE_NAV_LINK_CLASS_NAME)
-            for(let i=0; i<links.length; i++){
-                let link = links[i]
-                if(link.textContent!.trim() === Constants.ADMIN_ZONE_LINK_TEXT){
-                    link.setAttribute('id', 'idea-admin-zone-link')
-                }
+    // The admin-zone entry is a link with href="#" acting as a section heading;
+    // tag it so side-navigation.scss can style it as one.
+    tagAdminZoneLink() {
+        document.querySelectorAll('.idea-side-nav a').forEach((link) => {
+            if (link.textContent!.trim() === Constants.ADMIN_ZONE_LINK_TEXT) {
+                link.setAttribute('id', 'idea-admin-zone-link')
             }
-        }
+        })
+    }
+
+    componentDidMount() {
+        this.tagAdminZoneLink()
+    }
+
+    // Items can arrive after mount, and the anchors they render are new nodes.
+    componentDidUpdate() {
+        this.tagAdminZoneLink()
     }
 
     getActivePath(): string {

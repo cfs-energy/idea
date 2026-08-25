@@ -10,19 +10,27 @@
 #  and limitations under the License.
 
 from ideadatamodel import constants
+from ideasdk.context import ArnBuilder
 from ideasdk.utils import Utils
 from ideasdk.bootstrap import BootstrapUserDataBuilder
 
 import ideaadministrator
 from ideaadministrator.app.cdk.stacks import IdeaBaseStack
+from ideaadministrator.app.cdk.idea_code_asset import (
+    IdeaCodeAsset,
+    SupportedLambdaPlatforms,
+)
 from ideaadministrator.app.cdk.constructs import (
+    CustomResource,
     ExistingSocaCluster,
     OAuthClientIdAndSecret,
     SQSQueue,
+    ManagedPolicy,
     Policy,
     Role,
     WebPortalSecurityGroup,
     IdeaNagSuppression,
+    LOG_RETENTION_DAYS,
 )
 from typing import Optional
 import aws_cdk as cdk
@@ -81,6 +89,9 @@ class ClusterManagerStack(IdeaBaseStack):
         self.cluster_tasks_sqs_queue: Optional[SQSQueue] = None
         self.notifications_sqs_queue: Optional[SQSQueue] = None
         self.cluster_manager_role: Optional[Role] = None
+        self.project_role_boundary: Optional[ManagedPolicy] = None
+        self.bedrock_invocation_log_group_name: Optional[str] = None
+        self.bedrock_invocation_log_role: Optional[Role] = None
         self.cluster_manager_security_group: Optional[WebPortalSecurityGroup] = None
         self.auto_scaling_group: Optional[asg.AutoScalingGroup] = None
         self.web_portal_endpoint: Optional[cdk.CustomResource] = None
@@ -94,6 +105,8 @@ class ClusterManagerStack(IdeaBaseStack):
         self.build_access_control_groups(user_pool=self.user_pool)
         self.build_sqs_queues()
         self.build_iam_roles()
+        self.build_project_role_boundary()
+        self.build_bedrock_invocation_logging()
         self.build_security_groups()
         self.build_auto_scaling_group()
         self.build_endpoints()
@@ -210,6 +223,112 @@ class ClusterManagerStack(IdeaBaseStack):
                 name='cluster-manager-policy',
                 scope=self.stack,
                 policy_template_name='cluster-manager.yml',
+                module_id=self.module_id,
+            )
+        )
+
+    def is_bedrock_enabled(self) -> bool:
+        return self.context.config().get_bool(
+            f'{self.module_id}.bedrock.enabled', False
+        )
+
+    def build_project_role_boundary(self):
+        # permissions ceiling for the per-project instance roles cluster-manager creates at runtime
+        if not self.is_bedrock_enabled():
+            return
+        self.project_role_boundary = ManagedPolicy(
+            context=self.context,
+            name='project-role-boundary',
+            scope=self.stack,
+            managed_policy_name=f'{self.cluster_name}-{self.aws_region}-{self.module_id}-project-boundary',
+            description='Permissions boundary for IDEA per-project instance roles',
+            policy_template_name='project-role-boundary.yml',
+            module_id=self.module_id,
+        )
+
+        # iam won't delete this policy while runtime-created roles still reference it, so this
+        # resource depends on it, forcing cloudformation to delete it first and clear those refs.
+        arns = ArnBuilder(self.context.config())
+        detach_boundaries = CustomResource(
+            context=self.context,
+            name='detach-project-boundaries',
+            scope=self.stack,
+            idea_code_asset=IdeaCodeAsset(
+                lambda_package_name='idea_custom_resource_detach_project_boundaries',
+                lambda_platform=SupportedLambdaPlatforms.PYTHON,
+            ),
+            lambda_timeout_seconds=300,
+            policy_template_name='custom-resource-detach-project-boundaries.yml',
+            resource_type='ProjectRoleBoundaries',
+        ).invoke(
+            name='project-role-boundaries',
+            properties={
+                'RolePath': arns.project_role_path,
+                'BoundaryPolicyArn': arns.get_project_permissions_boundary_arn(),
+            },
+        )
+        detach_boundaries.node.add_dependency(self.project_role_boundary)
+
+    def build_bedrock_invocation_logging(self):
+        # destination for bedrock invocation logs; the region's logging config is adopted at runtime
+        # since it's a singleton another owner may hold, and retained on delete since idea can't delete it.
+        if not self.is_bedrock_enabled():
+            return
+
+        retention_in_days = self.context.config().get_int(
+            f'{self.module_id}.bedrock.invocation_logging.log_retention_in_days', 30
+        )
+        if retention_in_days not in LOG_RETENTION_DAYS:
+            self.context.logger().warning(
+                f'invalid bedrock.invocation_logging.log_retention_in_days: '
+                f'{retention_in_days}. valid values: {list(LOG_RETENTION_DAYS.keys())}. '
+                f'leaving the retention of the log group unchanged.'
+            )
+        # a fixed-name log group can't be retained then recreated - redeploy fails since it already
+        # exists. create when absent, adopt when present, never delete.
+        self.bedrock_invocation_log_group_name = ArnBuilder(
+            self.context.config()
+        ).bedrock_invocation_log_group_name
+        ensure_properties = {
+            'LogGroupName': self.bedrock_invocation_log_group_name,
+        }
+        if retention_in_days in LOG_RETENTION_DAYS:
+            ensure_properties['RetentionInDays'] = str(retention_in_days)
+        CustomResource(
+            context=self.context,
+            name='ensure-bedrock-log-group',
+            scope=self.stack,
+            idea_code_asset=IdeaCodeAsset(
+                lambda_package_name='idea_custom_resource_ensure_log_group',
+                lambda_platform=SupportedLambdaPlatforms.PYTHON,
+            ),
+            lambda_timeout_seconds=60,
+            policy_template_name='custom-resource-ensure-log-group.yml',
+            resource_type='BedrockInvocationLogGroup',
+        ).invoke(
+            name='bedrock-invocation-log-group',
+            properties=ensure_properties,
+        )
+
+        self.bedrock_invocation_log_role = Role(
+            context=self.context,
+            name='bedrock-invocation-logging',
+            scope=self.stack,
+            description='IAM role assumed by Amazon Bedrock to deliver model invocation logs',
+            assumed_by=['bedrock'],
+        )
+        # confused deputy guard: only this account's bedrock may assume the role (single trust
+        # statement at index 0, since assumed_by holds one service principal).
+        self.bedrock_invocation_log_role.node.default_child.add_override(
+            'Properties.AssumeRolePolicyDocument.Statement.0.Condition',
+            {'StringEquals': {'aws:SourceAccount': {'Ref': 'AWS::AccountId'}}},
+        )
+        self.bedrock_invocation_log_role.attach_inline_policy(
+            Policy(
+                context=self.context,
+                name='bedrock-invocation-logging-policy',
+                scope=self.stack,
+                policy_template_name='bedrock-invocation-logging.yml',
                 module_id=self.module_id,
             )
         )
@@ -626,6 +745,14 @@ class ClusterManagerStack(IdeaBaseStack):
             'asg_name': self.auto_scaling_group.auto_scaling_group_name,
             'asg_arn': self.auto_scaling_group.auto_scaling_group_arn,
         }
+
+        if self.bedrock_invocation_log_group_name is not None:
+            cluster_settings['bedrock.invocation_log_group_name'] = (
+                self.bedrock_invocation_log_group_name
+            )
+            cluster_settings['bedrock.invocation_log_role_arn'] = (
+                self.bedrock_invocation_log_role.role_arn
+            )
 
         # Add JWT signing secret ARN if available
         if hasattr(self, 'jwt_signing_secret') and self.jwt_signing_secret is not None:

@@ -29,7 +29,8 @@ import {AppContext} from "../../common";
 import IdeaForm from "../../components/form";
 import {IdeaFormField} from '../../components/form-field'
 import Utils from "../../common/utils";
-import {DragDropContext, Droppable, Draggable} from 'react-beautiful-dnd'
+import {registerAceWorkerUrls} from "../../common/ace-worker-urls";
+import {DragDropContext, Draggable, DraggableProvided, Droppable, DroppableProvided, DropResult} from '@hello-pangea/dnd'
 import {faCheck, faCopy, faEdit, faTrash, faWindowClose} from "@fortawesome/free-solid-svg-icons";
 import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
 import {CodeEditorProps} from "@cloudscape-design/components/code-editor/interfaces";
@@ -37,10 +38,6 @@ import 'ace-builds/css/ace.css';
 import 'ace-builds/css/theme/dawn.css';
 import 'ace-builds/css/theme/github_light_default.css';
 import 'ace-builds/css/theme/github_dark.css';
-
-const DragDropContextAlt: any = DragDropContext;
-const DroppableAlt: any = Droppable;
-const DraggableAlt: any = Draggable;
 
 export interface IdeaFormBuilderProps {
     params: SocaUserInputParamMetadata[]
@@ -79,8 +76,8 @@ export interface IdeaFormBuilderFieldState {
 
 class IdeaFormBuilderField extends Component<IdeaFormBuilderFieldProps, IdeaFormBuilderFieldState> {
 
-    form: RefObject<IdeaForm>
-    preview: RefObject<IdeaFormField>
+    form: RefObject<IdeaForm | null>
+    preview: RefObject<IdeaFormField | null>
 
     constructor(props: IdeaFormBuilderFieldProps) {
         super(props);
@@ -539,7 +536,7 @@ class SocaFormBuilder extends Component<IdeaFormBuilderProps, IdeaFormBuilderSta
         [k: string]: IdeaFormBuilderField
     }
 
-    previewForm: RefObject<IdeaForm>
+    previewForm: RefObject<IdeaForm | null>
 
     constructor(props: IdeaFormBuilderProps) {
         super(props);
@@ -558,7 +555,9 @@ class SocaFormBuilder extends Component<IdeaFormBuilderProps, IdeaFormBuilderSta
 
     componentDidMount() {
         import('ace-builds').then(ace => {
-            import('ace-builds/webpack-resolver').then(() => {
+            import('ace-builds/esm-resolver').then(() => {
+                // esm-resolver does not register worker URLs; see ace-worker-urls.ts
+                registerAceWorkerUrls(ace)
                 ace.config.set('useStrictCSP', true)
                 ace.config.set('loadWorkerFromBlob', false)
 
@@ -668,26 +667,28 @@ class SocaFormBuilder extends Component<IdeaFormBuilderProps, IdeaFormBuilderSta
 
     buildFormBuilder() {
         return (
-            <DragDropContextAlt
-                onDragEnd={(event: any) => {
-                    if (event.reason === 'DROP') {
+            <DragDropContext
+                onDragEnd={(event: DropResult) => {
+                    if (event.reason === 'DROP' && event.destination != null) {
                         const sourceIndex = event.source.index
-                        const destIndex = event.destination!.index
+                        const destIndex = event.destination.index
                         if (sourceIndex === destIndex) {
                             return
                         }
                         this.moveField(event.draggableId, sourceIndex, destIndex)
                     }
                 }}>
-                <DroppableAlt droppableId="test">
-                    {(provided: any) => (
-                        <div ref={provided.innerRef}>
+                <Droppable droppableId="test">
+                    {(provided: DroppableProvided) => (
+                        // droppableProps carries the data-rfd-* attributes the library uses to
+                        // resolve the drop target; it must be spread onto the innerRef element.
+                        <div ref={provided.innerRef} {...provided.droppableProps}>
                             {
                                 this.state.metadata.map((entry, index) => {
                                     return (
-                                        <DraggableAlt key={entry.id} draggableId={entry.id} index={index}>
+                                        <Draggable key={entry.id} draggableId={entry.id} index={index}>
                                             {
-                                                (provided: any) => (
+                                                (provided: DraggableProvided) => (
                                                     <div ref={provided.innerRef} {...provided.draggableProps} {...provided.dragHandleProps}>
                                                         <IdeaFormBuilderField
                                                             key={entry.id}
@@ -743,15 +744,15 @@ class SocaFormBuilder extends Component<IdeaFormBuilderProps, IdeaFormBuilderSta
                                                     </div>
                                                 )
                                             }
-                                        </DraggableAlt>
+                                        </Draggable>
                                     )
                                 })
                             }
                             {provided.placeholder}
                         </div>
                     )}
-                </DroppableAlt>
-            </DragDropContextAlt>
+                </Droppable>
+            </DragDropContext>
         )
     }
 

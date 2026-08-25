@@ -18,16 +18,36 @@ import {VirtualDesktopSessionState} from "../../../client/data-model";
 export interface VirtualDesktopSessionStatusIndicatorProps {
     state: VirtualDesktopSessionState
     hibernation_enabled: boolean
+    // last time the session changed, used to show how long a desktop has been waiting
+    updated_on?: string
+}
+
+const WAITING_STATES: VirtualDesktopSessionState[] = ['PROVISIONING', 'INITIALIZING', 'CREATING', 'RESUMING']
+
+export function waitedFor(props: VirtualDesktopSessionStatusIndicatorProps): string {
+    if (!props.updated_on || WAITING_STATES.indexOf(props.state) < 0) {
+        return ''
+    }
+    const since = new Date(props.updated_on).getTime()
+    if (isNaN(since)) {
+        return ''
+    }
+    const minutes = Math.floor((Date.now() - since) / 60000)
+    if (minutes < 1) {
+        return ''
+    }
+    return ` - ${minutes} min so far`
 }
 
 function VirtualDesktopSessionStatusIndicator(props: VirtualDesktopSessionStatusIndicatorProps) {
+    const waiting = waitedFor(props)
     switch (props.state) {
         case 'PROVISIONING':
-            return <StatusIndicator type="in-progress" colorOverride="blue">Provisioning</StatusIndicator>
+            return <StatusIndicator type="in-progress" colorOverride="blue">Provisioning{waiting}</StatusIndicator>
         case 'INITIALIZING':
-            return <StatusIndicator type="in-progress" colorOverride="blue">Initializing</StatusIndicator>
+            return <StatusIndicator type="in-progress" colorOverride="blue">Initializing{waiting}</StatusIndicator>
         case 'CREATING':
-            return <StatusIndicator type="in-progress" colorOverride="blue">Creating</StatusIndicator>
+            return <StatusIndicator type="in-progress" colorOverride="blue">Creating{waiting}</StatusIndicator>
         case 'READY':
             return <StatusIndicator type="success">Ready</StatusIndicator>
         case 'STOPPING':
@@ -43,7 +63,7 @@ function VirtualDesktopSessionStatusIndicator(props: VirtualDesktopSessionStatus
                 return <StatusIndicator type="info" colorOverride="grey">Stopped</StatusIndicator>
             }
         case 'RESUMING':
-            return <StatusIndicator type="in-progress" colorOverride="blue">Resuming</StatusIndicator>
+            return <StatusIndicator type="in-progress" colorOverride="blue">Resuming{waiting}</StatusIndicator>
         case 'DELETING':
             return <StatusIndicator type="in-progress" colorOverride="blue">Deleting</StatusIndicator>
         case 'DELETED':

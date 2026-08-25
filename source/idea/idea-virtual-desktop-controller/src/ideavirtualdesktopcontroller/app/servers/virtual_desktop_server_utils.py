@@ -41,8 +41,7 @@ class VirtualDesktopServerUtils:
     ) -> Optional[VirtualDesktopServer]:
         self._logger.info(f'initiate_host_provisioning for {session.name}')
 
-        # TODO - need a way to get information from provision_dcv_host_for_session to the end-user/caller
-
+        # a launch that cannot succeed raises SocaException carrying the user facing reason.
         host_provisioning_response = (
             self._controller_utils.provision_dcv_host_for_session(session)
         )
@@ -136,7 +135,11 @@ class VirtualDesktopServerUtils:
         for server in servers:
             instance_ids.append(server.instance_id)
 
-        response = self.ec2_client.reboot_instances(InstanceIds=instance_ids)
+        try:
+            response = self.ec2_client.reboot_instances(InstanceIds=instance_ids)
+        except ClientError as e:
+            self._logger.error(e)
+            return {'ERROR': str(e)}
         return Utils.to_dict(response)
 
     def _terminate_dcv_hosts(

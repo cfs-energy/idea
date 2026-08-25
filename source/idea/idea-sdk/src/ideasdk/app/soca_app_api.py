@@ -13,6 +13,7 @@ from ideasdk.api import BaseAPI
 from ideasdk.protocols import SocaContextProtocol
 from ideasdk.api import ApiInvocationContext
 
+from ideadatamodel import exceptions
 from ideadatamodel.app import GetModuleInfoResult, ModuleInfo
 
 
@@ -32,5 +33,10 @@ class SocaAppAPI(BaseAPI):
         )
 
     def invoke(self, context: ApiInvocationContext):
+        # module name/version disclosure requires a valid token, matching the
+        # ClusterSettings posture. an unauthenticated caller is rejected here.
+        if not context.is_authenticated():
+            raise exceptions.unauthorized_access()
+
         if context.namespace == 'App.GetModuleInfo':
             self.get_module_info(context)

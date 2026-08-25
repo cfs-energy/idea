@@ -103,15 +103,16 @@ class BootstrapContext:
     @property
     def default_system_user(self) -> str:
         if self.base_os in (
-            'amazonlinux2',
             'amazonlinux2023',
             'rhel8',
             'rhel9',
+            'rhel10',
             'rocky8',
             'rocky9',
+            'rocky10',
         ):
             return 'ec2-user'
-        if self.base_os in ('ubuntu2204', 'ubuntu2404'):
+        if self.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604'):
             return 'ubuntu'
         raise exceptions.general_exception(
             f'unknown system user name for base_os: {self.base_os}'
@@ -214,12 +215,21 @@ class BootstrapContext:
     def is_nvidia_gpu(self) -> bool:
         instance_family = self.instance_type.split('.')[0]
         nvidia_public_driver_versions = self.config.get_config(
-            'global-settings.gpu_settings.nvidia_public_driver_versions'
+            'global-settings.gpu_settings.nvidia_public_driver_versions', default={}
         )
         return instance_family in nvidia_public_driver_versions
 
     def is_amd_gpu(self) -> bool:
         return self.is_gpu_instance_type() and not self.is_nvidia_gpu()
+
+    def fail_on_missing_gpu_driver(self) -> bool:
+        """
+        when enabled, a node that reports gpu hardware and has no usable driver after bootstrap
+        fails the bootstrap instead of joining the cluster driverless.
+        """
+        return self.config.get_bool(
+            'global-settings.gpu_settings.fail_on_missing_driver', default=True
+        )
 
     def get_nvidia_gpu_driver_version(self) -> str:
         instance_family = self.instance_type.split('.')[0]

@@ -73,15 +73,26 @@ SCALING_MODE_MULTIPLE_JOBS = 'batch'
 DEFAULT_SCALING_MODE = SCALING_MODE_SINGLE_JOB
 
 ALLOWED_BASEOS = [
-    'amazonlinux2',
     'amazonlinux2023',
     'rhel8',
     'rhel9',
+    'rhel10',
     'rocky8',
     'rocky9',
+    'rocky10',
     'ubuntu2204',
     'ubuntu2404',
 ]
+
+# job features with no working bootstrap support on a base_os.
+# consulted at job submission; add an entry when a base_os cannot run a feature.
+JOB_FEATURE_EFA = 'efa'
+# the pinned EFA installer 1.44.0 only detects EL8/EL9, Amazon Linux, SUSE, Debian and Ubuntu
+# 22.04/24.04, and exits 1 elsewhere - an EL10 node would get an EFA ENI and fall back to TCP.
+UNSUPPORTED_BASE_OS_JOB_FEATURES = {
+    'rhel10': (JOB_FEATURE_EFA,),
+    'rocky10': (JOB_FEATURE_EFA,),
+}
 
 TOPIC_BROADCAST = 'idea.app.broadcast'
 MESSAGE_RELOAD = 'app.reload'
@@ -118,6 +129,7 @@ IDEA_TAG_NAME = 'Name'
 
 IDEA_TAG_JOB_ID = IDEA_TAG_PREFIX + 'JobId'
 IDEA_TAG_JOB_GROUP = IDEA_TAG_PREFIX + 'JobGroup'
+IDEA_TAG_CAPACITY_SIGNATURE = IDEA_TAG_PREFIX + 'CapacitySignature'
 IDEA_TAG_JOB_NAME = IDEA_TAG_PREFIX + 'JobName'
 IDEA_TAG_JOB_OWNER = IDEA_TAG_PREFIX + 'JobOwner'
 IDEA_TAG_JOB_OWNER_EMAIL = IDEA_TAG_PREFIX + 'JobOwnerEmail'
@@ -156,7 +168,9 @@ SPOT_PRICE_AUTO = 'auto'
 EC2_SERVICE_QUOTA_ONDEMAND = 1
 EC2_SERVICE_QUOTA_SPOT = 2
 EC2_SERVICE_QUOTA_DEDICATED = 3
-EC2_SERVICE_CPU_OPTIONS_UNSUPPORTED_FAMILY = ('t2', 'hpc6a', 'hpc7a', 'a1')
+# matched with str.startswith(); 'hpc' covers the whole HPC family (hpc6a, hpc6id, hpc7a, ...),
+# which ships with SMT disabled and vCPUs == cores, so there's no CpuOptions value to request.
+EC2_SERVICE_CPU_OPTIONS_UNSUPPORTED_FAMILY = ('t2', 'hpc', 'a1')
 
 JOB_PARAM_NODES = 'nodes'
 JOB_PARAM_CPUS = 'cpus'
@@ -208,6 +222,7 @@ JOB_OPTION_TAGS = 'tags'
 MAX_SECURITY_GROUPS = 4
 
 DEFAULT_NODES = 1
+DEFAULT_MAX_NODES_PER_JOB = 100
 DEFAULT_CPUS = 1
 DEFAULT_FORCE_RESERVED_INSTANCES = False
 DEFAULT_KEEP_EBS_VOLUMES = False
@@ -239,6 +254,13 @@ DEFAULT_TERMINATE_WHEN_IDLE = 0
 DEFAULT_KEEP_FOREVER = False
 
 EC2_PLACEMENT_GROUP_STRATEGY_CLUSTER = 'cluster'
+EC2_PLACEMENT_GROUP_STRATEGY_PARTITION = 'partition'
+EC2_PLACEMENT_GROUP_STRATEGY_SPREAD = 'spread'
+EC2_PLACEMENT_GROUP_STRATEGIES = (
+    EC2_PLACEMENT_GROUP_STRATEGY_CLUSTER,
+    EC2_PLACEMENT_GROUP_STRATEGY_PARTITION,
+    EC2_PLACEMENT_GROUP_STRATEGY_SPREAD,
+)
 
 SECONDS_IN_MINUTE = 60
 SECONDS_IN_HOUR = 60 * SECONDS_IN_MINUTE
@@ -246,41 +268,65 @@ SECONDS_IN_HOUR = 60 * SECONDS_IN_MINUTE
 SELECT_CHOICE_OTHER = 'other'
 
 # Supported OS
+# OS_AMAZONLINUX2 is kept only for read-compatibility: base_os is the software-stacks partition
+# key, so old AL2 records must still deserialize; excluded from the os allowlists (EOL 2026-06-30).
 OS_AMAZONLINUX2 = 'amazonlinux2'
 OS_AMAZONLINUX2023 = 'amazonlinux2023'
 OS_RHEL8 = 'rhel8'
 OS_RHEL9 = 'rhel9'
+OS_RHEL10 = 'rhel10'
 OS_ROCKY8 = 'rocky8'
 OS_ROCKY9 = 'rocky9'
+OS_ROCKY10 = 'rocky10'
 OS_UBUNTU2204 = 'ubuntu2204'
 OS_UBUNTU2404 = 'ubuntu2404'
+# OS_UBUNTU2604 is deliberately absent from the os allowlists: DCV, the FSx Lustre client and
+# the pinned EFA installer publish nothing for it yet. enabling it means adding AMIs too.
+OS_UBUNTU2604 = 'ubuntu2604'
 OS_WINDOWS = 'windows'
 OS_WINDOWS2019 = 'windows2019'
 OS_WINDOWS2022 = 'windows2022'
 OS_WINDOWS2025 = 'windows2025'
 SUPPORTED_OS = (
-    OS_AMAZONLINUX2,
     OS_AMAZONLINUX2023,
     OS_RHEL8,
     OS_RHEL9,
+    OS_RHEL10,
     OS_WINDOWS,
     OS_WINDOWS2019,
     OS_WINDOWS2022,
     OS_WINDOWS2025,
     OS_ROCKY8,
     OS_ROCKY9,
+    OS_ROCKY10,
     OS_UBUNTU2204,
     OS_UBUNTU2404,
 )
 SUPPORTED_LINUX_OS = (
-    OS_AMAZONLINUX2,
     OS_AMAZONLINUX2023,
     OS_RHEL8,
     OS_RHEL9,
+    OS_RHEL10,
     OS_ROCKY8,
     OS_ROCKY9,
+    OS_ROCKY10,
     OS_UBUNTU2204,
     OS_UBUNTU2404,
+)
+
+# EOL base_os values mapped to their replacement. existing clusters may still reference these;
+# validation must fail loudly and name the replacement rather than silently accept or ignore it.
+EOL_BASEOS = {
+    OS_AMAZONLINUX2: OS_AMAZONLINUX2023,
+}
+
+# Processor architectures. these are the EC2 spellings, as reported by
+# DescribeImages.Architecture and DescribeInstanceTypes.ProcessorInfo.SupportedArchitectures.
+ARCHITECTURE_X86_64 = 'x86_64'
+ARCHITECTURE_ARM64 = 'arm64'
+SUPPORTED_ARCHITECTURES = (
+    ARCHITECTURE_X86_64,
+    ARCHITECTURE_ARM64,
 )
 
 # Platforms

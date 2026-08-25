@@ -9,7 +9,12 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
-__all__ = ('ProjectEnabledTask', 'ProjectDisabledTask', 'ProjectGroupsUpdatedTask')
+__all__ = (
+    'ProjectEnabledTask',
+    'ProjectDisabledTask',
+    'ProjectGroupsUpdatedTask',
+    'ProjectBedrockReconcileTask',
+)
 
 from ideasdk.utils import Utils
 
@@ -43,6 +48,22 @@ class ProjectDisabledTask(BaseTask):
     def invoke(self, payload: Dict):
         project_id = payload['project_id']
         self.context.projects.user_projects_dao.project_disabled(project_id=project_id)
+
+
+class ProjectBedrockReconcileTask(BaseTask):
+    def __init__(self, context: ideaclustermanager.AppContext):
+        self.context = context
+        self.logger = context.logger(self.get_name())
+
+    def get_name(self) -> str:
+        return 'projects.bedrock-reconcile'
+
+    def invoke(self, payload: Dict):
+        project_id = payload['project_id']
+        self.context.projects.bedrock_provisioner.reconcile_project(
+            project_id=project_id,
+            cluster_bedrock=Utils.get_value_as_dict('cluster_bedrock', payload),
+        )
 
 
 class ProjectGroupsUpdatedTask(BaseTask):

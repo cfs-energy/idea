@@ -9,5 +9,7 @@ Sur = "Sur"
 [default]
 extend-ignore-re = [
   "ami-[0-9a-f]+",
-  "fs-[0-9a-f]+"
+  "fs-[0-9a-f]+",
+  # Cloudscape class names are generated and carry a per-release build hash.
+  "awsui_[A-Za-z0-9_]+"
 ]

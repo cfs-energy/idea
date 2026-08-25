@@ -46,7 +46,7 @@ const OPENPBS_SCHED_CONFIG_FILE = '/var/spool/pbs/sched_priv/sched_config'
 
 class UpdateHpcLicense extends Component<UpdateHpcLicenseProps, UpdateHpcLicenseState> {
 
-    createForm: RefObject<IdeaForm>
+    createForm: RefObject<IdeaForm | null>
 
     constructor(props: UpdateHpcLicenseProps) {
         super(props);
@@ -74,7 +74,8 @@ class UpdateHpcLicense extends Component<UpdateHpcLicenseProps, UpdateHpcLicense
         return `${this.clusterSettings().getClusterHomeDir()}/${this.clusterSettings().getModuleId(Constants.MODULE_SCHEDULER)}/scripts/license_check.py`
     }
     getDefaultCheckAvailabilityScript = (): string => {
-        const script = `python ${this.getPythonScriptPath()}`
+        // python3: no supported base OS ships an unversioned `python` on PATH
+        const script = `python3 ${this.getPythonScriptPath()}`
         return `${script} --server SERVER --port PORT --feature FEATURE`
     }
 
@@ -156,7 +157,8 @@ class UpdateHpcLicense extends Component<UpdateHpcLicenseProps, UpdateHpcLicense
             return `${this.state.license.name} type=long`
         }
         const getOpenPBSServerDynResourceText = () => {
-            return `server_dyn_res: "${this.state.license.name} !python ${this.state.license.availability_check_cmd}"`
+            // availability_check_cmd already carries the interpreter, do not prefix another one
+            return `server_dyn_res: "${this.state.license.name} !${this.state.license.availability_check_cmd}"`
         }
 
         return (
@@ -274,7 +276,7 @@ class UpdateHpcLicense extends Component<UpdateHpcLicenseProps, UpdateHpcLicense
                                                 <li>Ensure you have updated <b>{this.getPythonScriptPath()}</b> as per your environment and requirements after first time deployment.</li>
                                                 <ExpandableSection header={"license_check.py Usage"}>
                                                     <code className="idea-code-block">
-                                                        python {this.getPythonScriptPath()} --help <br/>
+                                                        python3 {this.getPythonScriptPath()} --help <br/>
                                                         usage: license_check.py [-h] -s [SERVER] -p [PORT] -f [FEATURE] <br/>
                                                         <br/>
                                                         optional arguments:<br/>
