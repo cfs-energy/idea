@@ -207,9 +207,10 @@ us-east-2:
   rocky8: ami-034d21b6adbb8ddc8
   rocky9: ami-0e715cba2a797a1d3
 us-gov-west-1:
-  amazonlinux2023: ami-0acfcbd827c06446a
-  rhel8: ami-008177b99929ea0db
-  rhel9: ami-045a012096d84fb13
+  amazonlinux2023: ami-0c3509e6892c0042d
+  rhel10: ami-06a666c97bbe4ea66
+  rhel8: ami-0c1af1ea393b4bc82
+  rhel9: ami-07dda77c7f593b130
 us-west-1:
   amazonlinux2023: ami-0151cebd38515a41d
   rhel10: ami-016f249f5f60e8050

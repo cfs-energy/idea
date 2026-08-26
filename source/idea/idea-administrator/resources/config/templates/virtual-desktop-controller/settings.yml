@@ -160,7 +160,7 @@ dcv_session:
   provisioning_timeout_seconds: 1800
   # deletes desktops that have sat stopped past a cutoff, and session records whose instance is gone,
   # through the normal delete path. off by default; enable with dry_run on first and read the controller log.
-  stopped_session_reaper:
+  stopped_session_cleanup:
     enabled: false # run the sweep on the 30-minute schedule
     dry_run: true # log what would be deleted without deleting anything
     stopped_after_days: 30 # a desktop stopped longer than this, per the ec2 stop time, is deleted
@@ -223,9 +223,9 @@ dcv_session:
     deleted:
       enabled: true
       email_template: virtual-desktop-controller.session-deleted
-    reaper_warning:
+    cleanup_warning:
       enabled: true
-      email_template: virtual-desktop-controller.session-reaper-warning
+      email_template: virtual-desktop-controller.session-cleanup-warning
     session-shared:
       enabled: true
       email_template: virtual-desktop-controller.session-shared

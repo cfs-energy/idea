@@ -228,9 +228,9 @@ class VirtualDesktopSessionDetail extends Component<VirtualDesktopSessionDetailP
                                                 <KeyValue title="Description" value={this.state.session.description}/>
                                                 <KeyValue title="Session Type" value={this.state.session.type}/>
                                                 <KeyValue title="Hibernation Enabled" value={this.state.session.hibernation_enabled} type="boolean"/>
-                                                <KeyValue title="Reaper Exempt" value={this.state.session.reaper_exempt} type="boolean"/>
-                                                <KeyValue title="Reaper Exempt Reason" value={this.state.session.reaper_exempt_reason}/>
-                                                {this.state.session.reaper_warning_sent_on && <KeyValue title="Deletion Notice Sent On" value={this.state.session.reaper_warning_sent_on} type="date"/>}
+                                                <KeyValue title="Cleanup Exempt" value={this.state.session.cleanup_exempt} type="boolean"/>
+                                                <KeyValue title="Cleanup Exempt Reason" value={this.state.session.cleanup_exempt_reason}/>
+                                                {this.state.session.cleanup_warning_sent_on && <KeyValue title="Deletion Notice Sent On" value={this.state.session.cleanup_warning_sent_on} type="date"/>}
                                                 <KeyValue title="Created On" value={this.state.session.created_on} type="date"/>
                                                 <KeyValue title="Updated On" value={this.state.session.updated_on} type="date"/>
                                             </ColumnLayout>

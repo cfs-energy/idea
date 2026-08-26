@@ -186,10 +186,10 @@ export interface VirtualDesktopSession {
   is_launched_by_admin?: boolean;
   locked?: boolean;
   idle_autostop_delay?: number;
-  reaper_exempt?: boolean;
-  reaper_exempt_reason?: string;
-  reaper_warning_sent_on?: string;
-  reaper_warning_stop_time?: string;
+  cleanup_exempt?: boolean;
+  cleanup_exempt_reason?: string;
+  cleanup_warning_sent_on?: string;
+  cleanup_warning_stop_time?: string;
   failure_reason?: string;
 }
 export interface VirtualDesktopServer {
@@ -1888,13 +1888,13 @@ export interface SetParamResult {
   value?: unknown;
   refresh?: boolean;
 }
-export interface SetSessionReaperExemptionRequest {
+export interface SetSessionCleanupExemptionRequest {
   idea_session_id?: string;
   owner?: string;
   exempt?: boolean;
   reason?: string;
 }
-export interface SetSessionReaperExemptionResponse {
+export interface SetSessionCleanupExemptionResponse {
   session?: VirtualDesktopSession;
 }
 export interface SignOutRequest {

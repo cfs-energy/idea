@@ -20,7 +20,8 @@ CONFIG_FILE_PATH = os.environ.get(
     '../../source/idea/idea-administrator/resources/config/region_ami_config.yml',
 )
 
-# GovCloud rows are maintained separately with the 'gov' profile and are left alone here.
+# GovCloud rows need credentials in the aws-us-gov partition and are refreshed from there
+# (ami_update_stacks.py with the gov profile); this script leaves them alone.
 SKIPPED_REGION_PREFIXES = ('us-gov-',)
 
 # minor release is wildcarded so this keeps matching across point releases; anchoring on

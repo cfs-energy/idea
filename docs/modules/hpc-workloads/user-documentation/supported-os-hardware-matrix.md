@@ -50,13 +50,14 @@ The AMIs IDEA ships are entirely flat, so every published AMI is x86\_64. An arm
 
 ## Region AMI coverage
 
-`region_ami_config.yml` maps each region to one AMI per `base_os` (ids resolved 2026-08-18). A region without an entry cannot launch that `base_os` unless the job passes a custom `instance_ami`.
+`region_ami_config.yml` maps each region to one AMI per `base_os` (commercial ids resolved 2026-08-18, GovCloud 2026-08-26). A region without an entry cannot launch that `base_os` unless the job passes a custom `instance_ami`.
 
 * `amazonlinux2023`, `rhel8`, `rhel9`: all 29 cataloged regions.
 * `rocky8`, `rocky9`: all except `us-gov-west-1`.
-* `rhel10`, `rocky10`: 27 of 29. None in `me-south-1` or `us-gov-west-1`.
+* `rhel10`: 28 of 29. None in `me-south-1`.
+* `rocky10`: 27 of 29. None in `me-south-1` or `us-gov-west-1`.
 * `ubuntu2204`, `ubuntu2404`: **no AMIs in any region.** Both require a custom `instance_ami`.
-* The GovCloud row, `us-gov-west-1`, is maintained separately and carries only `amazonlinux2023`, `rhel8` and `rhel9`.
+* The GovCloud row, `us-gov-west-1`, is maintained separately and carries `amazonlinux2023`, `rhel8`, `rhel9` and `rhel10`. Rocky Linux has no first-party image in GovCloud (the Marketplace listings there are paid third-party builds), so no `rocky*` row exists for it.
 
 {% hint style="warning" %}
 Check `region_ami_config.yml` before depending on a `base_os` in a region. This page is a summary, not a live snapshot.

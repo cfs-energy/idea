@@ -39,14 +39,14 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 * **Job List Auto-Refresh**: Opt-in polling on your own Active Jobs, plus a last-updated time
 * **My Projects**: Account settings shows the user's project memberships
 * **Custom Dashboard**: Optional external dashboard in a sandboxed iframe (default off)
-* **Stopped Desktop Reaper**: Opt-in cleanup of desktops stopped longer than a cutoff and of session records whose instance is gone, through the normal delete path, with an optional owner notice before deletion and an admin per-session exemption (default off, dry run first)
+* **Stopped Desktop Cleanup**: Opt-in cleanup of desktops stopped longer than a cutoff and of session records whose instance is gone, through the normal delete path, with an optional owner notice before deletion and an admin per-session exemption (default off, dry run first)
 
 ### **🔧 Improvements**
 * **Web Portal**: Migrated to Vite, uplifted to React 19 and current Cloudscape
 * **File Browser**: Rebuilt on Cloudscape with sortable columns and an editable path bar, replacing chonky, which is no longer maintained
 * **File Browser Select All**: Select-all covers the visible page (100 rows), so a larger directory is acted on a page at a time
 * **Dependencies**: Updated AWS CDK, Python (3.13.15), Node (22.23.2), and all Python packages
-* **AMI Updates**: Refreshed base AMI IDs across all regions and fixed the lookup tooling
+* **AMI Updates**: Refreshed base AMI IDs and virtual desktop software stack images across all regions, GovCloud included (first-party Rocky Linux images, no Marketplace; the previous GovCloud Windows images had been withdrawn by AWS), and fixed the lookup tooling so GovCloud resolves Red Hat and Canonical images from their gov-partition publisher accounts
 * **HPC Instance Families**: Fixed quota accounting so new hpc* types work without code changes
 * **GPU Bootstrap**: Fails loudly when no driver mapping exists instead of booting driverless
 * **Submit-Time Validation**: Rejects known-broken job configurations at qsub with a clear reason

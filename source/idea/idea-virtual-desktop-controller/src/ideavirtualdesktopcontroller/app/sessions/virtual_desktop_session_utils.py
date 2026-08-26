@@ -76,35 +76,35 @@ PROVISIONING_TIMEOUT_TIME_BUDGET_MS = 10 * 1000
 
 # a stopped desktop is billed for its volume for as long as it sits there, and a record whose
 # instance is gone holds one of the owner's session slots for nothing. off unless enabled.
-STOPPED_SESSION_REAPER_CONFIG_PREFIX = (
-    'virtual-desktop-controller.dcv_session.stopped_session_reaper'
+STOPPED_SESSION_CLEANUP_CONFIG_PREFIX = (
+    'virtual-desktop-controller.dcv_session.stopped_session_cleanup'
 )
-STOPPED_SESSION_REAPER_KEEP_TAGS_DEFAULT = ['idea:keep', 'ideal:keep']
-STOPPED_SESSION_REAPER_STATES = {
+STOPPED_SESSION_CLEANUP_KEEP_TAGS_DEFAULT = ['idea:keep', 'ideal:keep']
+STOPPED_SESSION_CLEANUP_STATES = {
     VirtualDesktopSessionState.STOPPED,
     VirtualDesktopSessionState.ERROR,
 }
-STOPPED_SESSION_REAPER_COUNTERS = (
+STOPPED_SESSION_CLEANUP_COUNTERS = (
     'candidates',
     'kept',
     'no_stop_time',
     'not_due',
     'warned',
     'raced',
-    'reaped',
+    'deleted',
     'orphans_cleaned',
     'failed',
 )
 # the two sweeps above may already have used most of the 30s the queue allows this message.
-STOPPED_SESSION_REAPER_TIME_BUDGET_MS = 5 * 1000
+STOPPED_SESSION_CLEANUP_TIME_BUDGET_MS = 5 * 1000
 
-REAPER_WARNING_NOTIFICATION_PREFIX = (
-    'virtual-desktop-controller.dcv_session.notifications.reaper_warning'
+CLEANUP_WARNING_NOTIFICATION_PREFIX = (
+    'virtual-desktop-controller.dcv_session.notifications.cleanup_warning'
 )
 
 # the tag an admin exemption writes onto the instance, so it shows in ec2 and is honored by
-# tooling outside idea. the session flag is what the reaper itself reads.
-REAPER_EXEMPT_TAG = 'idea:keep'
+# tooling outside idea. the session flag is what the cleanup pass itself reads.
+CLEANUP_EXEMPT_TAG = 'idea:keep'
 
 # ec2 formats StateTransitionReason like 'User initiated (2026-07-30 14:02:11 GMT)'
 STATE_TRANSITION_TIME_PATTERN = re.compile(
@@ -137,7 +137,7 @@ class VirtualDesktopSessionUtils:
     # walked to the end across passes. None starts again at the first page.
     _instance_profile_repair_cursor: Optional[str] = None
     _provisioning_timeout_cursor: Optional[str] = None
-    _stopped_session_reaper_cursor: Optional[str] = None
+    _stopped_session_cleanup_cursor: Optional[str] = None
 
     def __init__(
         self,
@@ -416,7 +416,7 @@ class VirtualDesktopSessionUtils:
         self._provisioning_timeout_cursor = None
         return failed
 
-    def set_reaper_exemption(
+    def set_cleanup_exemption(
         self,
         session: VirtualDesktopSession,
         exempt: bool,
@@ -424,13 +424,13 @@ class VirtualDesktopSessionUtils:
         actor: str,
     ) -> VirtualDesktopSession:
         """
-        an admin override the stopped desktop reaper honors ahead of anything it reads from
+        an admin override the stopped desktop cleanup honors ahead of anything it reads from
         ec2. the flag on the session record is authoritative; the tag mirrors it onto the
         instance and a tag that cannot be written is logged rather than failing the request.
         """
         reason = Utils.get_as_string(reason, default='').strip() or actor
-        session.reaper_exempt = True if exempt else None
-        session.reaper_exempt_reason = reason if exempt else None
+        session.cleanup_exempt = True if exempt else None
+        session.cleanup_exempt_reason = reason if exempt else None
         session = self._session_db.update(session)
 
         instance_id = session.server.instance_id if session.server else None
@@ -439,13 +439,13 @@ class VirtualDesktopSessionUtils:
         try:
             if exempt:
                 self._controller_utils.create_tag(
-                    instance_id, REAPER_EXEMPT_TAG, reason[:256]
+                    instance_id, CLEANUP_EXEMPT_TAG, reason[:256]
                 )
             else:
-                self._controller_utils.delete_tag(instance_id, REAPER_EXEMPT_TAG)
+                self._controller_utils.delete_tag(instance_id, CLEANUP_EXEMPT_TAG)
         except Exception as e:
             self._logger.warning(
-                f'could not update the {REAPER_EXEMPT_TAG} tag on {instance_id} for '
+                f'could not update the {CLEANUP_EXEMPT_TAG} tag on {instance_id} for '
                 f'session {session.idea_session_id}: {e}'
             )
         return session
@@ -481,7 +481,7 @@ class VirtualDesktopSessionUtils:
             self._logger.info(f'[dry run] would warn {who}: {what}')
             return 'warned'
 
-        prefix = REAPER_WARNING_NOTIFICATION_PREFIX
+        prefix = CLEANUP_WARNING_NOTIFICATION_PREFIX
         if self.context.config().get_bool(f'{prefix}.enabled', default=True):
             self.context.notification_async_client.send_notification(
                 Notification(
@@ -503,13 +503,13 @@ class VirtualDesktopSessionUtils:
                 f'{who}: the deletion notice is not enabled, the warning window still applies'
             )
         # recorded after the send, so a send that raises is tried again on the next pass
-        session.reaper_warning_sent_on = datetime.now(timezone.utc)
-        session.reaper_warning_stop_time = stopped_at
+        session.cleanup_warning_sent_on = datetime.now(timezone.utc)
+        session.cleanup_warning_stop_time = stopped_at
         self._session_db.update(session)
         self._logger.info(f'warned {who}: {what}')
         return 'warned'
 
-    def reap_stopped_session(
+    def clean_up_stopped_session(
         self,
         session: VirtualDesktopSession,
         stopped_after_days: int,
@@ -518,7 +518,7 @@ class VirtualDesktopSessionUtils:
         dry_run: bool,
     ) -> Optional[str]:
         """
-        the counter this desktop lands in, or None when the reaper has no interest in it.
+        the counter this desktop lands in, or None when the cleanup has no interest in it.
         deleting someone's desktop is destructive, so anything that cannot be established
         leaves it alone: an ec2 answer that could not be read, a stop time that does not
         parse, and a desktop that is no longer stopped when it is read again before acting.
@@ -526,12 +526,12 @@ class VirtualDesktopSessionUtils:
         """
         if (
             Utils.is_empty(session)
-            or session.state not in STOPPED_SESSION_REAPER_STATES
+            or session.state not in STOPPED_SESSION_CLEANUP_STATES
         ):
             return None
         if Utils.is_empty(session.server) or Utils.is_empty(session.server.instance_id):
             return None
-        if session.reaper_exempt:
+        if session.cleanup_exempt:
             return 'kept'
 
         instance_id = session.server.instance_id
@@ -578,8 +578,8 @@ class VirtualDesktopSessionUtils:
             # a warning is for one stop episode: a stop time other than the one it was sent
             # for means the desktop ran in between, and the clock starts again
             warned_at = (
-                session.reaper_warning_sent_on
-                if Utils.to_milliseconds(session.reaper_warning_stop_time)
+                session.cleanup_warning_sent_on
+                if Utils.to_milliseconds(session.cleanup_warning_stop_time)
                 == Utils.to_milliseconds(stopped_at)
                 else None
             )
@@ -609,13 +609,13 @@ class VirtualDesktopSessionUtils:
 
         return self._tear_down_session(
             session,
-            'reaped',
+            'deleted',
             f'stopped for {stopped_for.days} days, cutoff {stopped_after_days}',
             dry_run,
         )
 
-    def reap_stopped_sessions(
-        self, time_budget_ms: int = STOPPED_SESSION_REAPER_TIME_BUDGET_MS
+    def clean_up_stopped_sessions(
+        self, time_budget_ms: int = STOPPED_SESSION_CLEANUP_TIME_BUDGET_MS
     ) -> Dict[str, int]:
         """
         the same check across every desktop, at most max_per_pass deletions per pass. one
@@ -623,7 +623,7 @@ class VirtualDesktopSessionUtils:
         of time or deletions resumes at the page it stopped on.
         """
         config = self.context.config()
-        prefix = STOPPED_SESSION_REAPER_CONFIG_PREFIX
+        prefix = STOPPED_SESSION_CLEANUP_CONFIG_PREFIX
         if not config.get_bool(f'{prefix}.enabled', default=False):
             return {}
         dry_run = config.get_bool(f'{prefix}.dry_run', default=True)
@@ -634,17 +634,17 @@ class VirtualDesktopSessionUtils:
             Utils.get_as_list(
                 config.get_list(
                     f'{prefix}.keep_tags',
-                    default=STOPPED_SESSION_REAPER_KEEP_TAGS_DEFAULT,
+                    default=STOPPED_SESSION_CLEANUP_KEEP_TAGS_DEFAULT,
                 ),
-                STOPPED_SESSION_REAPER_KEEP_TAGS_DEFAULT,
+                STOPPED_SESSION_CLEANUP_KEEP_TAGS_DEFAULT,
             )
         )
 
-        counters = {key: 0 for key in STOPPED_SESSION_REAPER_COUNTERS}
+        counters = {key: 0 for key in STOPPED_SESSION_CLEANUP_COUNTERS}
         # dry run takes no action, so the cap does not apply and the whole table is reported
         deletions = 0
         deadline = Utils.current_time_ms() + time_budget_ms
-        cursor: Optional[str] = self._stopped_session_reaper_cursor
+        cursor: Optional[str] = self._stopped_session_cleanup_cursor
         loop_break = False
         while not loop_break:
             result = self._session_db.list_all_from_db(
@@ -653,14 +653,14 @@ class VirtualDesktopSessionUtils:
             for session in Utils.get_as_list(result.listing, []):
                 if Utils.current_time_ms() >= deadline or deletions >= max_per_pass:
                     self._logger.info(
-                        'the stopped desktop reaper is out of time or deletions for this '
+                        'the stopped desktop cleanup is out of time or deletions for this '
                         'pass, the remaining desktops are checked on the next one'
                     )
-                    self._stopped_session_reaper_cursor = cursor
-                    self._log_reaper_pass(counters, dry_run)
+                    self._stopped_session_cleanup_cursor = cursor
+                    self._log_cleanup_pass(counters, dry_run)
                     return counters
                 try:
-                    outcome = self.reap_stopped_session(
+                    outcome = self.clean_up_stopped_session(
                         session,
                         stopped_after_days,
                         warn_days_before,
@@ -672,25 +672,25 @@ class VirtualDesktopSessionUtils:
                     self._logger.warning(
                         f'could not check session '
                         f'{session.idea_session_id if Utils.is_not_empty(session) else None} '
-                        f'for the stopped desktop reaper: {e}'
+                        f'for the stopped desktop cleanup: {e}'
                     )
                 if outcome is None:
                     continue
                 counters['candidates'] += 1
                 counters[outcome] += 1
-                if not dry_run and outcome in ('reaped', 'orphans_cleaned'):
+                if not dry_run and outcome in ('deleted', 'orphans_cleaned'):
                     deletions += 1
             cursor = result.cursor
             loop_break = Utils.is_empty(cursor)
 
-        self._stopped_session_reaper_cursor = None
-        self._log_reaper_pass(counters, dry_run)
+        self._stopped_session_cleanup_cursor = None
+        self._log_cleanup_pass(counters, dry_run)
         return counters
 
-    def _log_reaper_pass(self, counters: Dict[str, int], dry_run: bool):
+    def _log_cleanup_pass(self, counters: Dict[str, int], dry_run: bool):
         summary = ' '.join(f'{key}={value}' for key, value in counters.items())
         self._logger.info(
-            f'stopped desktop reaper pass{" (dry run)" if dry_run else ""}: {summary}'
+            f'stopped desktop cleanup pass{" (dry run)" if dry_run else ""}: {summary}'
         )
 
     def stop_sessions(
@@ -827,9 +827,9 @@ class VirtualDesktopSessionUtils:
                 # the recorded reason is persisted, so an earlier failure would be read as
                 # the reason this desktop resumed.
                 session_server_map[server.instance_id].failure_reason = None
-                # the reaper's deletion notice was for this stop; the next stop starts fresh
-                session_server_map[server.instance_id].reaper_warning_sent_on = None
-                session_server_map[server.instance_id].reaper_warning_stop_time = None
+                # the cleanup's deletion notice was for this stop; the next stop starts fresh
+                session_server_map[server.instance_id].cleanup_warning_sent_on = None
+                session_server_map[server.instance_id].cleanup_warning_stop_time = None
                 session = self._session_db.update(
                     session_server_map[server.instance_id]
                 )

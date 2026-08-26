@@ -24,8 +24,8 @@ from ideadatamodel import (
     GetSessionScreenshotResponse,
     UpdateSessionRequest,
     UpdateSessionResponse,
-    SetSessionReaperExemptionRequest,
-    SetSessionReaperExemptionResponse,
+    SetSessionCleanupExemptionRequest,
+    SetSessionCleanupExemptionResponse,
     GetSessionInfoRequest,
     GetSessionInfoResponse,
     DeleteSessionRequest,
@@ -75,7 +75,7 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
             'VirtualDesktopAdmin.CreateSession': self.create_session,
             'VirtualDesktopAdmin.BatchCreateSessions': self.batch_create_sessions,
             'VirtualDesktopAdmin.UpdateSession': self.update_session,
-            'VirtualDesktopAdmin.SetSessionReaperExemption': self.set_session_reaper_exemption,
+            'VirtualDesktopAdmin.SetSessionCleanupExemption': self.set_session_cleanup_exemption,
             'VirtualDesktopAdmin.DeleteSessions': self.delete_sessions,
             'VirtualDesktopAdmin.GetSessionInfo': self.get_session_info,
             'VirtualDesktopAdmin.ListSessions': self.list_sessions,
@@ -684,8 +684,8 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
         else:
             context.success(UpdateSessionResponse(session=session))
 
-    def set_session_reaper_exemption(self, context: ApiInvocationContext):
-        request = context.get_request_payload_as(SetSessionReaperExemptionRequest)
+    def set_session_cleanup_exemption(self, context: ApiInvocationContext):
+        request = context.get_request_payload_as(SetSessionCleanupExemptionRequest)
         session = self.session_db.get_from_db(
             idea_session_owner=request.owner, idea_session_id=request.idea_session_id
         )
@@ -693,17 +693,17 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
             context.fail(
                 error_code=errorcodes.INVALID_PARAMS,
                 message=f'invalid session {request.idea_session_id} for owner {request.owner}',
-                payload=SetSessionReaperExemptionResponse(),
+                payload=SetSessionCleanupExemptionResponse(),
             )
             return
 
-        session = self.session_utils.set_reaper_exemption(
+        session = self.session_utils.set_cleanup_exemption(
             session,
             exempt=Utils.get_as_bool(request.exempt, default=False),
             reason=request.reason,
             actor=context.get_username(),
         )
-        context.success(SetSessionReaperExemptionResponse(session=session))
+        context.success(SetSessionCleanupExemptionResponse(session=session))
 
     def update_session_permission(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(UpdateSessionPermissionRequest)

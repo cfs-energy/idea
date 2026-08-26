@@ -590,9 +590,9 @@ class VirtualDesktopAPI(BaseAPI):
     def validate_create_session_request(
         self, session: VirtualDesktopSession
     ) -> tuple[VirtualDesktopSession, bool]:
-        # admin-only, set through VirtualDesktopAdmin.SetSessionReaperExemption
-        session.reaper_exempt = None
-        session.reaper_exempt_reason = None
+        # admin-only, set through VirtualDesktopAdmin.SetSessionCleanupExemption
+        session.cleanup_exempt = None
+        session.cleanup_exempt_reason = None
         if Utils.is_empty(session.project) or Utils.is_empty(
             session.project.project_id
         ):

@@ -268,14 +268,14 @@ mappings:
       type: text
     is_launched_by_admin:
       type: boolean
-    reaper_exempt:
+    cleanup_exempt:
       type: boolean
-    reaper_exempt_reason:
+    cleanup_exempt_reason:
       type: text
-    reaper_warning_sent_on:
+    cleanup_warning_sent_on:
       type: date
       format: epoch_millis
-    reaper_warning_stop_time:
+    cleanup_warning_stop_time:
       type: date
       format: epoch_millis
     server:

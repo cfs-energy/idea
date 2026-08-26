@@ -45,7 +45,7 @@ export interface VirtualDesktopSessionsState {
     forceTerminate: boolean
     sessionHealth: any
     showCreateSessionForm: boolean
-    showReaperExemptionForm: boolean
+    showCleanupExemptionForm: boolean
 }
 
 const VIRTUAL_DESKTOP_SESSIONS_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<VirtualDesktopSession>[] = [
@@ -97,7 +97,7 @@ const VIRTUAL_DESKTOP_SESSIONS_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefini
         cell: e => {
             return <span>
                 <VirtualDesktopSessionStatusIndicator state={e.state!} hibernation_enabled={e.hibernation_enabled!}/>
-                {e.reaper_exempt && <span> <Badge color="grey">Reaper exempt</Badge></span>}
+                {e.cleanup_exempt && <span> <Badge color="grey">Cleanup exempt</Badge></span>}
             </span>
         },
         sortingField: "state"
@@ -161,8 +161,8 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
     sessionHealthModal: RefObject<IdeaView | null>
     createSoftwareStackForm: RefObject<IdeaForm | null>
     createSessionForm: RefObject<VirtualDesktopCreateSessionForm | null>
-    reaperExemptionForm: RefObject<IdeaForm | null>
-    clearReaperExemptionConfirmModal: RefObject<IdeaConfirm | null>
+    cleanupExemptionForm: RefObject<IdeaForm | null>
+    clearCleanupExemptionConfirmModal: RefObject<IdeaConfirm | null>
     virtualDesktopSettings: any
 
     constructor(props: VirtualDesktopSessionsProps) {
@@ -174,8 +174,8 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
         this.sessionHealthModal = React.createRef()
         this.createSoftwareStackForm = React.createRef()
         this.createSessionForm = React.createRef()
-        this.reaperExemptionForm = React.createRef()
-        this.clearReaperExemptionConfirmModal = React.createRef()
+        this.cleanupExemptionForm = React.createRef()
+        this.clearCleanupExemptionConfirmModal = React.createRef()
         this.virtualDesktopSettings = undefined
 
         this.state = {
@@ -187,7 +187,7 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
             forceTerminate: false,
             sessionHealth: {},
             showCreateSessionForm: false,
-            showReaperExemptionForm: false
+            showCleanupExemptionForm: false
         }
     }
 
@@ -490,9 +490,9 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
         )
     }
 
-    // sets or clears the admin reaper exemption on every selected session
-    setReaperExemption(exempt: boolean, reason?: string) {
-        const requests = this.getSelectedSessions().map(session => this.getVirtualDesktopAdminClient().setSessionReaperExemption({
+    // sets or clears the admin cleanup exemption on every selected session
+    setCleanupExemption(exempt: boolean, reason?: string) {
+        const requests = this.getSelectedSessions().map(session => this.getVirtualDesktopAdminClient().setSessionCleanupExemption({
             idea_session_id: session.idea_session_id,
             owner: session.owner,
             exempt: exempt,
@@ -501,32 +501,32 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
         return Promise.all(requests).then(() => {
             this.setState({
                 sessionSelected: false,
-                showReaperExemptionForm: false
+                showCleanupExemptionForm: false
             }, () => {
-                this.setFlashMessage(exempt ? 'Session(s) exempted from the stopped desktop reaper' : 'Reaper exemption cleared', 'success')
+                this.setFlashMessage(exempt ? 'Session(s) exempted from the stopped desktop cleanup' : 'Cleanup exemption cleared', 'success')
                 this.getListing().fetchRecords()
             })
         })
     }
 
-    buildReaperExemptionForm() {
+    buildCleanupExemptionForm() {
         return (
             <IdeaForm
-                ref={this.reaperExemptionForm}
-                name={"reaper-exemption"}
+                ref={this.cleanupExemptionForm}
+                name={"cleanup-exemption"}
                 modal={true}
-                title={"Exempt from Stopped Desktop Reaper"}
+                title={"Exempt from Stopped Desktop Cleanup"}
                 modalSize={"medium"}
                 onCancel={() => {
-                    this.setState({showReaperExemptionForm: false})
+                    this.setState({showCleanupExemptionForm: false})
                 }}
                 onSubmit={() => {
-                    const form = this.reaperExemptionForm.current!
+                    const form = this.cleanupExemptionForm.current!
                     form.clearError()
                     if (!form.validate()) {
                         return
                     }
-                    this.setReaperExemption(true, form.getValues().reason).catch(error => {
+                    this.setCleanupExemption(true, form.getValues().reason).catch(error => {
                         form.setError(error.errorCode, error.message)
                     })
                 }}
@@ -534,7 +534,7 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                     {
                         name: 'reason',
                         title: 'Reason',
-                        description: 'Shown on the session and written to the idea:keep tag on its instance. Defaults to your username.',
+                        description: 'Shown on the session. Defaults to your username.',
                         data_type: 'str',
                         param_type: 'text',
                         validate: {
@@ -546,18 +546,18 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
         )
     }
 
-    buildClearReaperExemptionConfirmModal() {
+    buildClearCleanupExemptionConfirmModal() {
         return (
             <IdeaConfirm
-                ref={this.clearReaperExemptionConfirmModal}
-                title="Clear Reaper Exemption"
+                ref={this.clearCleanupExemptionConfirmModal}
+                title="Clear Cleanup Exemption"
                 onConfirm={() => {
-                    this.setReaperExemption(false).catch(error => {
+                    this.setCleanupExemption(false).catch(error => {
                         this.setFlashMessage(error.message, 'error')
                     })
                 }}
             >
-                <p>The stopped desktop reaper may delete the below sessions again once they are stopped past the cutoff:</p>
+                <p>The stopped desktop cleanup may delete the below sessions again once they are stopped past the cutoff:</p>
                 {this.getSelectedSessions().map((session, index) => {
                     return <li key={index}>{session.name} (Owner: {session.owner})</li>
                 })}
@@ -857,23 +857,23 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                         }
                     },
                     {
-                        id: 'exempt-from-reaper',
-                        text: 'Exempt from Reaper',
+                        id: 'exempt-from-cleanup',
+                        text: 'Exempt from Cleanup',
                         disabled: !this.isSelected(),
                         onClick: () => {
                             this.setState({
-                                showReaperExemptionForm: true
+                                showCleanupExemptionForm: true
                             }, () => {
-                                this.reaperExemptionForm.current?.showModal()
+                                this.cleanupExemptionForm.current?.showModal()
                             })
                         }
                     },
                     {
-                        id: 'clear-reaper-exemption',
-                        text: 'Clear Reaper Exemption',
+                        id: 'clear-cleanup-exemption',
+                        text: 'Clear Cleanup Exemption',
                         disabled: !this.isSelected(),
                         onClick: () => {
-                            this.clearReaperExemptionConfirmModal.current?.show()
+                            this.clearCleanupExemptionConfirmModal.current?.show()
                         }
                     }
                 ]}
@@ -1074,8 +1074,8 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                         {this.buildSessionHealthModal()}
                         {this.state.showCreateSoftwareStackFromSessionForm && this.buildCreateSoftwareStackFromSessionForm()}
                         {this.state.showCreateSessionForm && this.buildCreateSessionForm()}
-                        {this.buildClearReaperExemptionConfirmModal()}
-                        {this.state.showReaperExemptionForm && this.buildReaperExemptionForm()}
+                        {this.buildClearCleanupExemptionConfirmModal()}
+                        {this.state.showCleanupExemptionForm && this.buildCleanupExemptionForm()}
                     </div>
                 }/>
         )

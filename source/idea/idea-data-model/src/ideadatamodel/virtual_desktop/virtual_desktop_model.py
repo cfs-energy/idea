@@ -276,14 +276,14 @@ class VirtualDesktopSession(SocaBaseModel):
     locked: Optional[bool] = Field(default=None)
     # Per-session override (in minutes) for virtual-desktop-controller.dcv_session.idle_autostop_delay.
     idle_autostop_delay: Optional[int] = Field(default=None)
-    # Set by an admin through VirtualDesktopAdmin.SetSessionReaperExemption; the stopped desktop
-    # reaper leaves an exempt session alone. Never copied from a user's create or update request.
-    reaper_exempt: Optional[bool] = Field(default=None)
-    reaper_exempt_reason: Optional[str] = Field(default=None)
-    # the reaper's deletion notice: when it was sent, and the EC2 stop time it was sent for.
+    # Set by an admin through VirtualDesktopAdmin.SetSessionCleanupExemption; the stopped desktop
+    # cleanup leaves an exempt session alone. Never copied from a user's create or update request.
+    cleanup_exempt: Optional[bool] = Field(default=None)
+    cleanup_exempt_reason: Optional[str] = Field(default=None)
+    # the cleanup's deletion notice: when it was sent, and the EC2 stop time it was sent for.
     # Cleared on resume, and stale once the desktop has been stopped again at another time.
-    reaper_warning_sent_on: Optional[datetime] = Field(default=None)
-    reaper_warning_stop_time: Optional[datetime] = Field(default=None)
+    cleanup_warning_sent_on: Optional[datetime] = Field(default=None)
+    cleanup_warning_stop_time: Optional[datetime] = Field(default=None)
     # Set on API responses, and persisted for a session that failed on its own: why a desktop
     # failed is only useful to whoever looks at it after the request that failed is gone.
     failure_reason: Optional[str] = Field(default=None)

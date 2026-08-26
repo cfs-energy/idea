@@ -29,6 +29,7 @@ from ideavirtualdesktopcontroller.app.software_stacks import (
 from ideasdk.aws.opensearch.aws_opensearch_client import AwsOpenSearchClient
 
 import click
+import re
 import yaml
 import os
 
@@ -713,6 +714,34 @@ AMI_OWNERS = {
     'ubuntu2604': ['099720109477'],
 }
 
+# The aws-us-gov partition has its own Red Hat and Canonical publisher accounts. Rocky is not
+# there only through the Marketplace listing, so the first-party lookup finds nothing in GovCloud.
+GOV_AMI_OWNERS = {
+    'rhel8': ['219670896067'],
+    'rhel9': ['219670896067'],
+    'rhel10': ['219670896067'],
+    'ubuntu2204': ['513442679011'],
+    'ubuntu2404': ['513442679011'],
+    'ubuntu2604': ['513442679011'],
+}
+
+# a vendor can republish an older minor, making it the newest by date (RHEL-9.6.0_HVM-20260811
+# vs RHEL-9.8.0_HVM-20260728), so rank on the minor in the name before the date.
+MINOR_VERSION_PATTERNS = (
+    r'RHEL-(\d+)\.(\d+)',
+    r'Rocky-\d+-EC2-Base-(\d+)\.(\d+)',
+    r'al2023-ami-2023\.(\d+)\.(\d+)',
+)
+
+
+def image_sort_key(image):
+    """(major, minor, CreationDate); names without a minor (Windows, Ubuntu) sort by date alone"""
+    for pattern in MINOR_VERSION_PATTERNS:
+        match = re.match(pattern, image.get('Name', ''))
+        if match:
+            return (int(match.group(1)), int(match.group(2)), image['CreationDate'])
+    return (0, 0, image['CreationDate'])
+
 
 def get_ami_pattern_for_stack(stack_id):
     """
@@ -760,6 +789,8 @@ def find_latest_ami(ec2_client, pattern, owners, logger, ami_type=None):
     """
     try:
         actual_owners = AMI_OWNERS.get(ami_type, owners)
+        if ec2_client.meta.region_name.startswith('us-gov-'):
+            actual_owners = GOV_AMI_OWNERS.get(ami_type, actual_owners)
 
         logger.debug(
             f'Searching for AMIs with pattern: {pattern}, owners: {actual_owners}'
@@ -779,8 +810,7 @@ def find_latest_ami(ec2_client, pattern, owners, logger, ami_type=None):
             logger.warning(f'No AMIs found matching pattern: {pattern}')
             return None
 
-        # Sort by creation date to get the latest
-        images.sort(key=lambda x: x['CreationDate'], reverse=True)
+        images.sort(key=image_sort_key, reverse=True)
         latest_ami = images[0]
 
         logger.info(

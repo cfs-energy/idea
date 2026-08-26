@@ -146,7 +146,7 @@ templates:
       <br>
       <hr>
       <i> This is an automated email, please do not respond.</i>
-  - name: "virtual-desktop-controller.session-reaper-warning"
+  - name: "virtual-desktop-controller.session-cleanup-warning"
     title: "Virtual Desktop Scheduled for Deletion"
     template_type: jinja2
     subject: "[{{cluster_name}}] Virtual Desktop {{session_name}} will be deleted on {{deletion_date}}"

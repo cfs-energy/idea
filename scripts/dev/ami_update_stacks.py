@@ -5,8 +5,25 @@ import shutil
 import datetime
 import concurrent.futures
 import argparse
-from typing import Optional, Tuple
-from botocore.exceptions import ClientError
+from typing import List, Optional, Tuple
+from botocore.config import Config
+from botocore.exceptions import ClientError, ProfileNotFound
+
+# a region the account cannot reach otherwise stalls the run for the default
+# 60s connect timeout times the retry count.
+EC2_CLIENT_CONFIG = Config(connect_timeout=5, retries={'max_attempts': 2})
+
+
+def get_session(profile: str) -> Optional[boto3.Session]:
+    """the named profile, the default credential chain when it is absent, or None for
+    a GovCloud lookup without the gov profile (those rows are left untouched)"""
+    try:
+        return boto3.Session(profile_name=profile)
+    except ProfileNotFound:
+        if profile == 'gov':
+            return None
+        return boto3.Session()
+
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(
@@ -108,12 +125,12 @@ AMI_PATTERNS = {
     'ubuntu2604/x86-64': 'ubuntu/images/hvm-ssd*/ubuntu-*-26.04-amd64-server-*',
     'amazonlinux2023/arm64': 'al2023-ami-2023.*-kernel-*-arm64',
     'amazonlinux2023/x86-64': 'al2023-ami-2023.*-kernel-*-x86_64',
-    'rocky8/arm64': 'Rocky-8-EC2-Base-8.*-*.aarch64-*',
-    'rocky8/x86-64': 'Rocky-8-EC2-Base-8.*-*.x86_64-*',
-    'rocky9/arm64': 'Rocky-9-EC2-Base-9.*-*.aarch64-*',
-    'rocky9/x86-64': 'Rocky-9-EC2-Base-9.*-*.x86_64-*',
-    'rocky10/arm64': 'Rocky-10-EC2-Base-10.*-*.aarch64-*',
-    'rocky10/x86-64': 'Rocky-10-EC2-Base-10.*-*.x86_64-*',
+    'rocky8/arm64': 'Rocky-8-EC2-Base-8.*-*.aarch64*',
+    'rocky8/x86-64': 'Rocky-8-EC2-Base-8.*-*.x86_64*',
+    'rocky9/arm64': 'Rocky-9-EC2-Base-9.*-*.aarch64*',
+    'rocky9/x86-64': 'Rocky-9-EC2-Base-9.*-*.x86_64*',
+    'rocky10/arm64': 'Rocky-10-EC2-Base-10.*-*.aarch64*',
+    'rocky10/x86-64': 'Rocky-10-EC2-Base-10.*-*.x86_64*',
 }
 
 # describe_images Owners per AMI type. Filtering on 'amazon' only returns
@@ -137,6 +154,24 @@ AMI_OWNERS = {
     'ubuntu2404': ['099720109477'],
     'ubuntu2604': ['099720109477'],
 }
+
+# The aws-us-gov partition has its own Red Hat and Canonical publisher accounts. Rocky is not
+# there only through the Marketplace listing, so the first-party lookup finds nothing in GovCloud.
+GOV_AMI_OWNERS = {
+    'rhel8': ['219670896067'],
+    'rhel9': ['219670896067'],
+    'rhel10': ['219670896067'],
+    'ubuntu2204': ['513442679011'],
+    'ubuntu2404': ['513442679011'],
+    'ubuntu2604': ['513442679011'],
+}
+
+
+def get_owners(ami_type: str, region: str) -> List[str]:
+    if region.startswith('us-gov-'):
+        return GOV_AMI_OWNERS.get(ami_type, AMI_OWNERS.get(ami_type, ['amazon']))
+    return AMI_OWNERS.get(ami_type, ['amazon'])
+
 
 # a vendor can republish an older minor, making it the newest by date (RHEL-9.6.0_HVM-20260811
 # vs RHEL-9.8.0_HVM-20260728), so rank on the minor in the name before the date.
@@ -202,10 +237,13 @@ def get_ami(
         ami_name = AMI_PATTERNS[pattern_key]
         print(f'AMI name filter: {ami_name}')
 
-        owners = AMI_OWNERS.get(ami_type, ['amazon'])
+        owners = get_owners(ami_type, region)
 
-        session = boto3.Session(profile_name=profile)
-        ec2 = session.client('ec2', region_name=region)
+        session = get_session(profile)
+        if session is None:
+            print(f'No {profile} profile; keeping the {region} {ami_type} row as is')
+            return None
+        ec2 = session.client('ec2', region_name=region, config=EC2_CLIENT_CONFIG)
         response = ec2.describe_images(
             Owners=owners,
             Filters=[

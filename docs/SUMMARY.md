@@ -39,7 +39,7 @@
     * [Virtual Desktop Images (Software Stacks)](modules/virtual-desktop-interfaces/admin-documentation/virtual-desktop-images-software-stacks.md)
     * [Permissions management](modules/virtual-desktop-interfaces/admin-documentation/permissions-management.md)
     * [AI models on virtual desktops](modules/virtual-desktop-interfaces/admin-documentation/ai-models.md)
-    * [Stopped desktop reaper](modules/virtual-desktop-interfaces/admin-documentation/stopped-desktop-reaper.md)
+    * [Stopped desktop cleanup](modules/virtual-desktop-interfaces/admin-documentation/stopped-desktop-cleanup.md)
   * [Technical](modules/virtual-desktop-interfaces/technical/README.md)
     * [APIs](modules/virtual-desktop-interfaces/technical/apis.md)
 * [HPC Workloads](modules/hpc-workloads/README.md)

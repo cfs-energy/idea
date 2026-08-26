@@ -220,21 +220,21 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
             is_launched_by_admin=Utils.get_value_as_bool(
                 sessions_constants.USER_SESSION_DB_IS_LAUNCHED_BY_ADMIN_KEY, db_entry
             ),
-            reaper_exempt=Utils.get_value_as_bool(
-                sessions_constants.USER_SESSION_DB_REAPER_EXEMPT_KEY, db_entry
+            cleanup_exempt=Utils.get_value_as_bool(
+                sessions_constants.USER_SESSION_DB_CLEANUP_EXEMPT_KEY, db_entry
             ),
-            reaper_exempt_reason=Utils.get_value_as_string(
-                sessions_constants.USER_SESSION_DB_REAPER_EXEMPT_REASON_KEY, db_entry
+            cleanup_exempt_reason=Utils.get_value_as_string(
+                sessions_constants.USER_SESSION_DB_CLEANUP_EXEMPT_REASON_KEY, db_entry
             ),
-            reaper_warning_sent_on=Utils.to_datetime(
+            cleanup_warning_sent_on=Utils.to_datetime(
                 Utils.get_value_as_int(
-                    sessions_constants.USER_SESSION_DB_REAPER_WARNING_SENT_ON_KEY,
+                    sessions_constants.USER_SESSION_DB_CLEANUP_WARNING_SENT_ON_KEY,
                     db_entry,
                 )
             ),
-            reaper_warning_stop_time=Utils.to_datetime(
+            cleanup_warning_stop_time=Utils.to_datetime(
                 Utils.get_value_as_int(
-                    sessions_constants.USER_SESSION_DB_REAPER_WARNING_STOP_TIME_KEY,
+                    sessions_constants.USER_SESSION_DB_CLEANUP_WARNING_STOP_TIME_KEY,
                     db_entry,
                 )
             ),
@@ -358,15 +358,15 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
             sessions_constants.USER_SESSION_DB_HIBERNATION_KEY: session.hibernation_enabled,
             sessions_constants.USER_SESSION_DB_IDLE_AUTOSTOP_DELAY_KEY: session.idle_autostop_delay,
             sessions_constants.USER_SESSION_DB_IS_LAUNCHED_BY_ADMIN_KEY: session.is_launched_by_admin,
-            sessions_constants.USER_SESSION_DB_REAPER_EXEMPT_KEY: session.reaper_exempt,
-            sessions_constants.USER_SESSION_DB_REAPER_EXEMPT_REASON_KEY: session.reaper_exempt_reason,
+            sessions_constants.USER_SESSION_DB_CLEANUP_EXEMPT_KEY: session.cleanup_exempt,
+            sessions_constants.USER_SESSION_DB_CLEANUP_EXEMPT_REASON_KEY: session.cleanup_exempt_reason,
             # None rather than 0: to_milliseconds(None) is 0, which would read back as 1970
-            sessions_constants.USER_SESSION_DB_REAPER_WARNING_SENT_ON_KEY: None
-            if session.reaper_warning_sent_on is None
-            else Utils.to_milliseconds(session.reaper_warning_sent_on),
-            sessions_constants.USER_SESSION_DB_REAPER_WARNING_STOP_TIME_KEY: None
-            if session.reaper_warning_stop_time is None
-            else Utils.to_milliseconds(session.reaper_warning_stop_time),
+            sessions_constants.USER_SESSION_DB_CLEANUP_WARNING_SENT_ON_KEY: None
+            if session.cleanup_warning_sent_on is None
+            else Utils.to_milliseconds(session.cleanup_warning_sent_on),
+            sessions_constants.USER_SESSION_DB_CLEANUP_WARNING_STOP_TIME_KEY: None
+            if session.cleanup_warning_stop_time is None
+            else Utils.to_milliseconds(session.cleanup_warning_stop_time),
             sessions_constants.USER_SESSION_DB_PROJECT_KEY: {
                 sessions_constants.USER_SESSION_DB_PROJECT_ID_KEY: session.project.project_id,
                 sessions_constants.USER_SESSION_DB_PROJECT_TITLE_KEY: session.project.title,

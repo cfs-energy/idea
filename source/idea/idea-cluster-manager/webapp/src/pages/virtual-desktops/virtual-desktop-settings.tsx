@@ -139,32 +139,32 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
                     validate: { required: true, min: 0, max: 1440 }
                 }
             },
-            'reaper_enabled': {
-                path: 'dcv_session.stopped_session_reaper.enabled',
+            'cleanup_enabled': {
+                path: 'dcv_session.stopped_session_cleanup.enabled',
                 config: {
-                    name: 'reaper_enabled',
-                    title: 'Stopped Desktop Reaper',
+                    name: 'cleanup_enabled',
+                    title: 'Stopped Desktop Cleanup',
                     description: 'Delete desktops stopped longer than the cutoff, and session records whose instance is gone',
                     param_type: 'confirm',
                     data_type: 'bool',
                     validate: { required: true }
                 }
             },
-            'reaper_dry_run': {
-                path: 'dcv_session.stopped_session_reaper.dry_run',
+            'cleanup_dry_run': {
+                path: 'dcv_session.stopped_session_cleanup.dry_run',
                 config: {
-                    name: 'reaper_dry_run',
+                    name: 'cleanup_dry_run',
                     title: 'Dry Run',
-                    description: 'Log what the reaper would delete without deleting anything',
+                    description: 'Log what the cleanup would delete without deleting anything',
                     param_type: 'confirm',
                     data_type: 'bool',
                     validate: { required: true }
                 }
             },
-            'reaper_stopped_after_days': {
-                path: 'dcv_session.stopped_session_reaper.stopped_after_days',
+            'cleanup_stopped_after_days': {
+                path: 'dcv_session.stopped_session_cleanup.stopped_after_days',
                 config: {
-                    name: 'reaper_stopped_after_days',
+                    name: 'cleanup_stopped_after_days',
                     title: 'Stopped After (days)',
                     description: 'A desktop stopped longer than this many days, per the EC2 stop time, is deleted',
                     param_type: 'text',
@@ -172,10 +172,10 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
                     validate: { required: true, min: 1, max: 365 }
                 }
             },
-            'reaper_warn_days_before': {
-                path: 'dcv_session.stopped_session_reaper.warn_days_before',
+            'cleanup_warn_days_before': {
+                path: 'dcv_session.stopped_session_cleanup.warn_days_before',
                 config: {
-                    name: 'reaper_warn_days_before',
+                    name: 'cleanup_warn_days_before',
                     title: 'Warn Owner (days before deletion)',
                     description: 'Email the owner this many days before deletion and wait that long before deleting. 0 sends no notice',
                     param_type: 'text',
@@ -183,10 +183,10 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
                     validate: { required: true, min: 0, max: 365 }
                 }
             },
-            'reaper_max_per_pass': {
-                path: 'dcv_session.stopped_session_reaper.max_per_pass',
+            'cleanup_max_per_pass': {
+                path: 'dcv_session.stopped_session_cleanup.max_per_pass',
                 config: {
-                    name: 'reaper_max_per_pass',
+                    name: 'cleanup_max_per_pass',
                     title: 'Max Deletions Per Pass',
                     description: 'Deletions per 30-minute pass; the rest are picked up on the next pass',
                     param_type: 'text',
@@ -832,14 +832,13 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
                                                     {this.createEditableSetting('denied_instance_types')}
                                                 </ColumnLayout>
                                             </Container>
-                                            <Container header={<Header variant={"h2"} description={"Deletes desktops stopped longer than the cutoff set below. Enable with dry run on first."}>Stopped Desktop Reaper</Header>}>
+                                            <Container header={<Header variant={"h2"} description={"Deletes desktops stopped longer than the cutoff set below. Enable with dry run on first."}>Stopped Desktop Cleanup</Header>}>
                                                 <ColumnLayout variant={"text-grid"} columns={2}>
-                                                    {this.createEditableToggle('reaper_enabled')}
-                                                    {this.createEditableToggle('reaper_dry_run')}
-                                                    {this.createEditableSetting('reaper_stopped_after_days')}
-                                                    {this.createEditableSetting('reaper_warn_days_before')}
-                                                    {this.createEditableSetting('reaper_max_per_pass')}
-                                                    <KeyValue title="Keep Tags (read-only)" value={dot.pick('dcv_session.stopped_session_reaper.keep_tags', this.state.vdcSettings)}/>
+                                                    {this.createEditableToggle('cleanup_enabled')}
+                                                    {this.createEditableToggle('cleanup_dry_run')}
+                                                    {this.createEditableSetting('cleanup_stopped_after_days')}
+                                                    {this.createEditableSetting('cleanup_warn_days_before')}
+                                                    {this.createEditableSetting('cleanup_max_per_pass')}
                                                 </ColumnLayout>
                                             </Container>
                                         </SpaceBetween>

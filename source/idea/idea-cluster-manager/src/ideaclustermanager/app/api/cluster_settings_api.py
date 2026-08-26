@@ -167,12 +167,12 @@ class ClusterSettingsAPI(BaseAPI):
                 'dcv_session.max_root_volume_memory',
                 'dcv_session.instance_types.allow',
                 'dcv_session.instance_types.deny',
-                # Stopped desktop reaper; keep_tags stays on idea-admin.sh
-                'dcv_session.stopped_session_reaper.enabled',
-                'dcv_session.stopped_session_reaper.dry_run',
-                'dcv_session.stopped_session_reaper.stopped_after_days',
-                'dcv_session.stopped_session_reaper.warn_days_before',
-                'dcv_session.stopped_session_reaper.max_per_pass',
+                # Stopped desktop cleanup; keep_tags stays on idea-admin.sh
+                'dcv_session.stopped_session_cleanup.enabled',
+                'dcv_session.stopped_session_cleanup.dry_run',
+                'dcv_session.stopped_session_cleanup.stopped_after_days',
+                'dcv_session.stopped_session_cleanup.warn_days_before',
+                'dcv_session.stopped_session_cleanup.max_per_pass',
                 # Network settings
                 'dcv_session.network.subnet_autoretry',
                 'dcv_session.network.randomize_subnets',

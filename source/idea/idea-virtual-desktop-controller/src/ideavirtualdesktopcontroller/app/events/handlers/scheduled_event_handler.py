@@ -117,15 +117,15 @@ class ScheduledEventHandler(BaseVirtualDesktopControllerEventHandler):
         except Exception as e:
             self.log_exception(message_id=message_id, exception=e)
 
-        # stopped desktops past the reaper cutoff, and records whose instance is gone. opt-in,
+        # stopped desktops past the cleanup cutoff, and records whose instance is gone. opt-in,
         # and on its own short budget so this handler stays inside the queue visibility timeout.
         try:
-            counters = self.session_utils.reap_stopped_sessions()
-            deleted = counters.get('reaped', 0) + counters.get('orphans_cleaned', 0)
+            counters = self.session_utils.clean_up_stopped_sessions()
+            deleted = counters.get('deleted', 0) + counters.get('orphans_cleaned', 0)
             if deleted > 0:
                 self.log_info(
                     message_id=message_id,
-                    message=f'The stopped desktop reaper deleted {deleted} desktop(s)',
+                    message=f'The stopped desktop cleanup deleted {deleted} desktop(s)',
                 )
         except Exception as e:
             self.log_exception(message_id=message_id, exception=e)

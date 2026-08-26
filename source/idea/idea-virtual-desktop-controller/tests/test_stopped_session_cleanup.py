@@ -38,10 +38,10 @@ from ideavirtualdesktopcontroller.app.api.virtual_desktop_admin_api import (
 )
 from ideavirtualdesktopcontroller.app.api.virtual_desktop_api import VirtualDesktopAPI
 from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_utils import (
-    REAPER_EXEMPT_TAG,
-    REAPER_WARNING_NOTIFICATION_PREFIX,
+    CLEANUP_EXEMPT_TAG,
+    CLEANUP_WARNING_NOTIFICATION_PREFIX,
     STATE_TRANSITION_TIME_FORMAT,
-    STOPPED_SESSION_REAPER_CONFIG_PREFIX,
+    STOPPED_SESSION_CLEANUP_CONFIG_PREFIX,
     VirtualDesktopSessionUtils,
     parse_stop_time,
 )
@@ -50,8 +50,8 @@ from ideavirtualdesktopcontroller.app.virtual_desktop_controller_utils import (
 )
 
 INSTANCE_ID = 'i-00000000000000001'
-PREFIX = STOPPED_SESSION_REAPER_CONFIG_PREFIX
-WARNING_TEMPLATE = 'virtual-desktop-controller.session-reaper-warning'
+PREFIX = STOPPED_SESSION_CLEANUP_CONFIG_PREFIX
+WARNING_TEMPLATE = 'virtual-desktop-controller.session-cleanup-warning'
 DAY = timedelta(days=1)
 
 
@@ -60,7 +60,7 @@ def now() -> datetime:
 
 
 def a_stop_time(days_ago: float) -> datetime:
-    # ec2 reports whole seconds, and the reaper compares the recorded stop time to it
+    # ec2 reports whole seconds, and the cleanup compares the recorded stop time to it
     return (now() - days_ago * DAY).replace(microsecond=0)
 
 
@@ -177,7 +177,7 @@ class FakeDeletePath:
 class FakeClusterConfig:
     def __init__(self, values: Optional[Dict[str, Any]] = None):
         self.values = {
-            f'{REAPER_WARNING_NOTIFICATION_PREFIX}.email_template': WARNING_TEMPLATE
+            f'{CLEANUP_WARNING_NOTIFICATION_PREFIX}.email_template': WARNING_TEMPLATE
         }
         self.values.update({} if values is None else values)
 
@@ -209,7 +209,7 @@ class FakeContext:
 
 def a_config(**values) -> FakeClusterConfig:
     """
-    the reaper on, not in dry run, a 5 day cutoff and no owner notice unless given; the
+    the cleanup on, not in dry run, a 5 day cutoff and no owner notice unless given; the
     shipped defaults (30 days, 7 day notice) have their own test.
     """
     settings = {
@@ -254,20 +254,20 @@ def a_session(
     state: VirtualDesktopSessionState = VirtualDesktopSessionState.STOPPED,
     idea_session_id: str = 'sess-1',
     instance_id: Optional[str] = INSTANCE_ID,
-    reaper_exempt: Optional[bool] = None,
+    cleanup_exempt: Optional[bool] = None,
 ) -> VirtualDesktopSession:
     return VirtualDesktopSession(
         idea_session_id=idea_session_id,
         name='my-desktop',
         owner='test-user',
         state=state,
-        reaper_exempt=reaper_exempt,
+        cleanup_exempt=cleanup_exempt,
         server=VirtualDesktopServer(instance_id=instance_id, instance_type='t3.large'),
     )
 
 
 def sweep(utils: VirtualDesktopSessionUtils, **kwargs) -> Dict[str, int]:
-    return utils.reap_stopped_sessions(**kwargs)
+    return utils.clean_up_stopped_sessions(**kwargs)
 
 
 # the stop time
@@ -294,7 +294,7 @@ def test_a_desktop_whose_stop_time_cannot_be_read_is_skipped_and_counted():
 
     counters = sweep(utils)
     assert counters['no_stop_time'] == 1
-    assert counters['reaped'] == 0
+    assert counters['deleted'] == 0
     assert delete_path.deleted == []
     assert utils._logger.warning.called
 
@@ -328,12 +328,12 @@ def test_a_desktop_stopped_past_the_cutoff_is_deleted():
     )
 
     counters = sweep(utils)
-    assert counters['reaped'] == 1
+    assert counters['deleted'] == 1
     assert delete_path.deleted == [session]
 
 
 def test_the_shipped_defaults_are_thirty_days_with_a_seven_day_notice():
-    """a cluster that only turned the reaper on warns at day 23 and deletes nothing yet"""
+    """a cluster that only turned the cleanup on warns at day 23 and deletes nothing yet"""
     delete_path = FakeDeletePath()
     only_enabled = FakeClusterConfig(
         {f'{PREFIX}.enabled': True, f'{PREFIX}.dry_run': False}
@@ -347,7 +347,7 @@ def test_the_shipped_defaults_are_thirty_days_with_a_seven_day_notice():
 
     counters = sweep(utils)
     assert counters['warned'] == 1
-    assert counters['reaped'] == 0
+    assert counters['deleted'] == 0
     assert delete_path.deleted == []
 
 
@@ -360,7 +360,7 @@ def test_the_cutoff_is_read_from_the_settings():
         delete_path=delete_path,
     )
 
-    assert sweep(utils)['reaped'] == 1
+    assert sweep(utils)['deleted'] == 1
     assert len(delete_path.deleted) == 1
 
 
@@ -390,14 +390,14 @@ def test_the_keep_tags_are_read_from_the_settings():
         delete_path=delete_path,
     )
 
-    assert sweep(utils)['reaped'] == 1
+    assert sweep(utils)['deleted'] == 1
 
 
 def test_an_admin_exemption_on_the_session_is_honored_without_any_tag():
     ec2_client = FakeEc2Client(an_instance())
     delete_path = FakeDeletePath()
     utils = build_utils(
-        FakeSessionDB(pages=[[a_session(reaper_exempt=True)]]),
+        FakeSessionDB(pages=[[a_session(cleanup_exempt=True)]]),
         ec2_client,
         delete_path=delete_path,
     )
@@ -469,7 +469,7 @@ def test_a_dry_run_reports_what_it_would_delete_without_deleting():
     )
 
     counters = sweep(utils)
-    assert counters['reaped'] == 1
+    assert counters['deleted'] == 1
     assert delete_path.deleted == []
     logged = ' '.join(str(call) for call in utils._logger.info.call_args_list)
     assert '[dry run] would delete session sess-1' in logged
@@ -477,7 +477,7 @@ def test_a_dry_run_reports_what_it_would_delete_without_deleting():
     assert 'stopped for 8 days' in logged
 
 
-def test_the_reaper_is_in_dry_run_unless_told_otherwise():
+def test_the_cleanup_is_in_dry_run_unless_told_otherwise():
     delete_path = FakeDeletePath()
     utils = build_utils(
         FakeSessionDB(pages=[[a_session()]]),
@@ -493,7 +493,7 @@ def test_the_reaper_is_in_dry_run_unless_told_otherwise():
         delete_path=delete_path,
     )
 
-    assert sweep(utils)['reaped'] == 1
+    assert sweep(utils)['deleted'] == 1
     assert delete_path.deleted == []
 
 
@@ -510,7 +510,7 @@ def test_a_live_run_takes_the_delete_path_once_per_desktop():
     )
 
     counters = sweep(utils)
-    assert counters['reaped'] == 2
+    assert counters['deleted'] == 2
     assert delete_path.deleted == [one, two]
 
 
@@ -524,7 +524,7 @@ def test_a_delete_the_path_refused_is_counted_as_failed():
 
     counters = sweep(utils)
     assert counters['failed'] == 1
-    assert counters['reaped'] == 0
+    assert counters['deleted'] == 0
     assert utils._logger.error.called
 
 
@@ -539,7 +539,7 @@ def test_deletions_per_pass_are_capped_and_the_rest_wait_for_the_next_pass():
     )
 
     counters = sweep(utils)
-    assert counters['reaped'] == 2
+    assert counters['deleted'] == 2
     assert delete_path.deleted == sessions[:2]
 
 
@@ -551,7 +551,7 @@ def test_a_dry_run_is_not_capped_since_it_deletes_nothing():
         config=a_config(max_per_pass=2, dry_run=True),
     )
 
-    assert sweep(utils)['reaped'] == 3
+    assert sweep(utils)['deleted'] == 3
 
 
 # orphans
@@ -625,17 +625,17 @@ def test_the_pass_gives_up_its_remaining_work_rather_than_run_past_its_budget():
         delete_path=delete_path,
     )
 
-    assert sweep(utils, time_budget_ms=0)['reaped'] == 0
+    assert sweep(utils, time_budget_ms=0)['deleted'] == 0
     assert delete_path.deleted == []
 
 
 def test_a_pass_that_runs_out_of_time_keeps_its_place():
     # a table larger than one time budget is never walked past its first pages otherwise
     utils = build_utils(FakeSessionDB(pages=[[a_session()], [a_session()]]))
-    utils._stopped_session_reaper_cursor = '1'
+    utils._stopped_session_cleanup_cursor = '1'
 
     sweep(utils, time_budget_ms=0)
-    assert utils._stopped_session_reaper_cursor == '1'
+    assert utils._stopped_session_cleanup_cursor == '1'
 
 
 def test_a_pass_resumes_from_the_page_the_last_one_stopped_on():
@@ -646,13 +646,13 @@ def test_a_pass_resumes_from_the_page_the_last_one_stopped_on():
     utils = build_utils(
         session_db, FakeEc2Client(an_instance()), delete_path=delete_path
     )
-    utils._stopped_session_reaper_cursor = '1'
+    utils._stopped_session_cleanup_cursor = '1'
 
-    assert sweep(utils)['reaped'] == 1
+    assert sweep(utils)['deleted'] == 1
     assert session_db.requested_cursors == ['1']
     assert [s.idea_session_id for s in delete_path.deleted] == ['two']
     # the end of the table was reached, so the next pass starts at the first page again
-    assert utils._stopped_session_reaper_cursor is None
+    assert utils._stopped_session_cleanup_cursor is None
 
 
 def test_one_desktop_that_cannot_be_checked_does_not_stop_the_rest():
@@ -674,7 +674,7 @@ def test_one_desktop_that_cannot_be_checked_does_not_stop_the_rest():
 
     counters = sweep(utils)
     assert counters['failed'] == 1
-    assert counters['reaped'] == 1
+    assert counters['deleted'] == 1
     assert [s.idea_session_id for s in delete_path.deleted] == ['two']
 
 
@@ -687,10 +687,10 @@ def test_the_counters_are_logged_once_per_pass():
     summaries = [
         str(call)
         for call in utils._logger.info.call_args_list
-        if 'stopped desktop reaper pass' in str(call)
+        if 'stopped desktop cleanup pass' in str(call)
     ]
     assert len(summaries) == 1
-    assert 'reaped=1' in summaries[0]
+    assert 'deleted=1' in summaries[0]
 
 
 # warning the owner
@@ -700,8 +700,8 @@ def warned_session(
     stopped_at: datetime, warned_days_ago: float
 ) -> VirtualDesktopSession:
     session = a_session()
-    session.reaper_warning_sent_on = now() - warned_days_ago * DAY
-    session.reaper_warning_stop_time = stopped_at
+    session.cleanup_warning_sent_on = now() - warned_days_ago * DAY
+    session.cleanup_warning_stop_time = stopped_at
     return session
 
 
@@ -720,8 +720,8 @@ def test_the_owner_is_warned_once_the_warning_window_opens_and_it_is_recorded():
     counters = sweep(utils)
     assert counters['warned'] == 1
     assert delete_path.deleted == []
-    assert session.reaper_warning_stop_time == stopped_at
-    assert now() - session.reaper_warning_sent_on < timedelta(minutes=1)
+    assert session.cleanup_warning_stop_time == stopped_at
+    assert now() - session.cleanup_warning_sent_on < timedelta(minutes=1)
     assert session_db.updated == [session]
 
     (notice,) = notices_sent(utils)
@@ -785,7 +785,7 @@ def test_deletion_proceeds_once_the_warning_window_has_elapsed():
         delete_path=delete_path,
     )
 
-    assert sweep(utils)['reaped'] == 1
+    assert sweep(utils)['deleted'] == 1
     assert delete_path.deleted == [session]
     assert notices_sent(utils) == []
 
@@ -821,7 +821,7 @@ def test_a_new_stop_episode_is_warned_again():
 
     assert sweep(utils)['warned'] == 1
     assert len(notices_sent(utils)) == 1
-    assert session.reaper_warning_stop_time == stopped_at
+    assert session.cleanup_warning_stop_time == stopped_at
     assert delete_path.deleted == []
 
 
@@ -834,7 +834,7 @@ def test_no_warning_window_keeps_the_plain_cutoff():
         delete_path=delete_path,
     )
 
-    assert sweep(utils)['reaped'] == 1
+    assert sweep(utils)['deleted'] == 1
     assert notices_sent(utils) == []
 
 
@@ -863,7 +863,7 @@ def test_a_dry_run_reports_the_warning_and_records_nothing():
     assert sweep(utils)['warned'] == 1
     assert notices_sent(utils) == []
     assert session_db.updated == []
-    assert session.reaper_warning_sent_on is None
+    assert session.cleanup_warning_sent_on is None
     logged = ' '.join(str(call) for call in utils._logger.info.call_args_list)
     assert '[dry run] would warn session sess-1' in logged
 
@@ -871,7 +871,7 @@ def test_a_dry_run_reports_the_warning_and_records_nothing():
 def test_a_disabled_notice_is_not_sent_but_the_window_still_applies():
     session_db = FakeSessionDB(pages=[[a_session()]])
     config = a_config(stopped_after_days=30, warn_days_before=7)
-    config.values[f'{REAPER_WARNING_NOTIFICATION_PREFIX}.enabled'] = False
+    config.values[f'{CLEANUP_WARNING_NOTIFICATION_PREFIX}.enabled'] = False
     utils = build_utils(
         session_db,
         FakeEc2Client(an_instance(stopped_at=a_stop_time(25))),
@@ -890,8 +890,8 @@ def test_resuming_a_desktop_clears_its_deletion_notice():
 
     resumed, failed = utils.resume_sessions([session])
     assert failed == []
-    assert resumed[0].reaper_warning_sent_on is None
-    assert resumed[0].reaper_warning_stop_time is None
+    assert resumed[0].cleanup_warning_sent_on is None
+    assert resumed[0].cleanup_warning_stop_time is None
     assert session_db.updated == [session]
 
 
@@ -904,16 +904,16 @@ def test_setting_the_exemption_records_the_flag_and_tags_the_instance():
     utils = build_utils(session_db, ec2_client)
     session = a_session()
 
-    session = utils.set_reaper_exemption(
+    session = utils.set_cleanup_exemption(
         session, exempt=True, reason='kept for an audit', actor='admin1'
     )
-    assert session.reaper_exempt is True
-    assert session.reaper_exempt_reason == 'kept for an audit'
+    assert session.cleanup_exempt is True
+    assert session.cleanup_exempt_reason == 'kept for an audit'
     assert session_db.updated == [session]
     assert ec2_client.created_tags == [
         {
             'Resources': [INSTANCE_ID],
-            'Tags': [{'Key': REAPER_EXEMPT_TAG, 'Value': 'kept for an audit'}],
+            'Tags': [{'Key': CLEANUP_EXEMPT_TAG, 'Value': 'kept for an audit'}],
         }
     ]
 
@@ -922,8 +922,8 @@ def test_an_empty_reason_falls_back_to_the_admin_username():
     ec2_client = FakeEc2Client()
     utils = build_utils(FakeSessionDB(), ec2_client)
 
-    session = utils.set_reaper_exemption(a_session(), True, reason='  ', actor='admin1')
-    assert session.reaper_exempt_reason == 'admin1'
+    session = utils.set_cleanup_exemption(a_session(), True, reason='  ', actor='admin1')
+    assert session.cleanup_exempt_reason == 'admin1'
     assert ec2_client.created_tags[0]['Tags'][0]['Value'] == 'admin1'
 
 
@@ -931,16 +931,16 @@ def test_clearing_the_exemption_removes_the_flag_and_only_its_own_tag():
     session_db = FakeSessionDB()
     ec2_client = FakeEc2Client()
     utils = build_utils(session_db, ec2_client)
-    session = a_session(reaper_exempt=True)
-    session.reaper_exempt_reason = 'old reason'
+    session = a_session(cleanup_exempt=True)
+    session.cleanup_exempt_reason = 'old reason'
 
-    session = utils.set_reaper_exemption(session, False, reason=None, actor='admin1')
-    assert session.reaper_exempt is None
-    assert session.reaper_exempt_reason is None
+    session = utils.set_cleanup_exemption(session, False, reason=None, actor='admin1')
+    assert session.cleanup_exempt is None
+    assert session.cleanup_exempt_reason is None
     assert session_db.updated == [session]
     assert ec2_client.created_tags == []
     assert ec2_client.deleted_tags == [
-        {'Resources': [INSTANCE_ID], 'Tags': [{'Key': REAPER_EXEMPT_TAG}]}
+        {'Resources': [INSTANCE_ID], 'Tags': [{'Key': CLEANUP_EXEMPT_TAG}]}
     ]
 
 
@@ -950,15 +950,15 @@ def test_a_tag_that_cannot_be_written_does_not_fail_the_exemption():
         session_db, FakeEc2Client(tag_error=client_error('UnauthorizedOperation'))
     )
 
-    session = utils.set_reaper_exemption(a_session(), True, 'why', 'admin1')
-    assert session.reaper_exempt is True
+    session = utils.set_cleanup_exemption(a_session(), True, 'why', 'admin1')
+    assert session.cleanup_exempt is True
     assert session_db.updated == [session]
     assert utils._logger.warning.called
 
 
 def test_a_non_admin_cannot_reach_the_exemption_namespace():
     class NonAdminContext:
-        namespace = 'VirtualDesktopAdmin.SetSessionReaperExemption'
+        namespace = 'VirtualDesktopAdmin.SetSessionCleanupExemption'
 
         @staticmethod
         def is_authorized(elevated_access: bool, scopes=None) -> bool:
@@ -972,13 +972,13 @@ def test_a_non_admin_cannot_reach_the_exemption_namespace():
 
 def test_a_create_request_cannot_carry_the_exemption_in():
     api = object.__new__(VirtualDesktopAPI)
-    session = VirtualDesktopSession(reaper_exempt=True, reaper_exempt_reason='mine')
+    session = VirtualDesktopSession(cleanup_exempt=True, cleanup_exempt_reason='mine')
 
     # a request with no project fails before anything else is looked at
     session, is_valid = api.validate_create_session_request(session)
     assert is_valid is False
-    assert session.reaper_exempt is None
-    assert session.reaper_exempt_reason is None
+    assert session.cleanup_exempt is None
+    assert session.cleanup_exempt_reason is None
 
 
 def test_an_update_request_cannot_carry_the_exemption_in():
@@ -990,8 +990,8 @@ def test_an_update_request_cannot_carry_the_exemption_in():
 
     api._update_session(
         VirtualDesktopSession(
-            idea_session_id='sess-1', owner='test-user', reaper_exempt=True
+            idea_session_id='sess-1', owner='test-user', cleanup_exempt=True
         )
     )
-    assert old_session.reaper_exempt is None
+    assert old_session.cleanup_exempt is None
     assert session_db.updated == []
