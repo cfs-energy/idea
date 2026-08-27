@@ -922,7 +922,9 @@ def test_an_empty_reason_falls_back_to_the_admin_username():
     ec2_client = FakeEc2Client()
     utils = build_utils(FakeSessionDB(), ec2_client)
 
-    session = utils.set_cleanup_exemption(a_session(), True, reason='  ', actor='admin1')
+    session = utils.set_cleanup_exemption(
+        a_session(), True, reason='  ', actor='admin1'
+    )
     assert session.cleanup_exempt_reason == 'admin1'
     assert ec2_client.created_tags[0]['Tags'][0]['Value'] == 'admin1'
 
