@@ -1,16 +1,3 @@
-/*
- * Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License"). You may not use this file except in compliance
- * with the License. A copy of the License is located at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * or in the 'license' file accompanying this file. This file is distributed on an 'AS IS' BASIS, WITHOUT WARRANTIES
- * OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
- * and limitations under the License.
- */
-
 /** Read and update an OpenPBS `#PBS -l select=` directive in a job script template. The portal owns the
  * chunk count and ncpus; mpiprocs, ompthreads, mem and place are the application owner's and must survive
  * the update. Stricter than parse_select() in calculate_ncpus_hook.py, which rebuilds the statement. */
