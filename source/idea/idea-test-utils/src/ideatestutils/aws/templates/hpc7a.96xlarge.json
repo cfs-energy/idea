@@ -1,0 +1,85 @@
+{
+  "InstanceType": "hpc7a.96xlarge",
+  "CurrentGeneration": true,
+  "FreeTierEligible": false,
+  "SupportedUsageClasses": [
+    "on-demand"
+  ],
+  "SupportedRootDeviceTypes": [
+    "ebs"
+  ],
+  "SupportedVirtualizationTypes": [
+    "hvm"
+  ],
+  "BareMetal": false,
+  "Hypervisor": "nitro",
+  "ProcessorInfo": {
+    "SupportedArchitectures": [
+      "x86_64"
+    ],
+    "SustainedClockSpeedInGhz": 2.6
+  },
+  "VCpuInfo": {
+    "DefaultVCpus": 192,
+    "DefaultCores": 192,
+    "DefaultThreadsPerCore": 1
+  },
+  "MemoryInfo": {
+    "SizeInMiB": 786432
+  },
+  "InstanceStorageSupported": false,
+  "EbsInfo": {
+    "EbsOptimizedSupport": "default",
+    "EncryptionSupport": "supported",
+    "EbsOptimizedInfo": {
+      "BaselineBandwidthInMbps": 87,
+      "BaselineThroughputInMBps": 10.88,
+      "BaselineIops": 500,
+      "MaximumBandwidthInMbps": 2085,
+      "MaximumThroughputInMBps": 260.62,
+      "MaximumIops": 11000
+    },
+    "NvmeSupport": "required"
+  },
+  "NetworkInfo": {
+    "NetworkPerformance": "300 Gigabit",
+    "MaximumNetworkInterfaces": 4,
+    "MaximumNetworkCards": 2,
+    "DefaultNetworkCardIndex": 0,
+    "NetworkCards": [
+      {
+        "NetworkCardIndex": 0,
+        "NetworkPerformance": "300 Gigabit",
+        "MaximumNetworkInterfaces": 2
+      },
+      {
+        "NetworkCardIndex": 1,
+        "NetworkPerformance": "300 Gigabit",
+        "MaximumNetworkInterfaces": 2
+      }
+    ],
+    "Ipv4AddressesPerInterface": 50,
+    "Ipv6AddressesPerInterface": 50,
+    "Ipv6Supported": true,
+    "EnaSupport": "required",
+    "EfaSupported": true,
+    "EfaInfo": {
+      "MaximumEfaInterfaces": 2
+    },
+    "EncryptionInTransitSupported": true,
+    "EnaSrdSupported": false
+  },
+  "PlacementGroupInfo": {
+    "SupportedStrategies": [
+      "cluster"
+    ]
+  },
+  "HibernationSupported": false,
+  "BurstablePerformanceSupported": false,
+  "DedicatedHostsSupported": false,
+  "AutoRecoverySupported": true,
+  "SupportedBootModes": [
+    "legacy-bios",
+    "uefi"
+  ]
+}

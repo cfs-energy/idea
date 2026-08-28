@@ -29,9 +29,14 @@ from ideadatamodel.scheduler import (
 )
 
 import ideascheduler
+from ideascheduler.app.bedrock_job_access import (
+    BedrockJobAccess,
+    BedrockJobAccessResolver,
+    BedrockJobAccessState,
+)
 
 from ast import literal_eval
-from typing import Optional, Dict, Any, List, Union, Tuple, TypeVar
+from typing import Optional, Dict, Any, List, Set, Union, Tuple, TypeVar
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 import random
@@ -335,6 +340,14 @@ class JobParamsBuilderContextProtocol(ABC):
     @abstractmethod
     def queue(self) -> Optional[HpcQueueProfile]: ...
 
+    @property
+    def project(self) -> Optional[str]:
+        """
+        the job's project name, when the caller knows it. params carry scheduler
+        resources only, and the project is not one of them.
+        """
+        return None
+
 
 class BaseParamBuilder(ParamBuilderProtocol, ABC):
     def __init__(self, context: JobParamsBuilderContextProtocol, job_param: str):
@@ -518,18 +531,48 @@ class NodesParamBuilder(BaseParamBuilder):
     def validate(self) -> bool:
         nodes = self.get()
 
-        if nodes is None:
+        if nodes is not None:
+            if self.is_restricted_parameter():
+                return False
+
+            if not self.eval_positive_nonzero_int(
+                param=constants.JOB_PARAM_NODES, value=nodes
+            ):
+                return False
+        else:
+            nodes = self.default()
+
+        return self._validate_max_nodes_per_job(nodes=nodes)
+
+    def max_nodes_per_job(self) -> int:
+        """
+        the max no. of nodes a single job can request. 0 (or negative) implies no limit.
+        a positive queue profile value takes precedence over the cluster setting.
+        """
+        if self.queue_management is not None:
+            queue_max_nodes = Utils.get_as_int(
+                self.queue_management.max_nodes_per_job, 0
+            )
+            if queue_max_nodes > 0:
+                return queue_max_nodes
+
+        return self.soca_context.config().get_int(
+            'scheduler.job_provisioning.max_nodes_per_job',
+            default=constants.DEFAULT_MAX_NODES_PER_JOB,
+        )
+
+    def _validate_max_nodes_per_job(self, nodes: int) -> bool:
+        max_nodes = self.max_nodes_per_job()
+        if max_nodes <= 0 or nodes <= max_nodes:
             return True
 
-        if self.is_restricted_parameter():
-            return False
-
-        if not self.eval_positive_nonzero_int(
-            param=constants.JOB_PARAM_NODES, value=nodes
-        ):
-            return False
-
-        return True
+        self.add_validation_entry(
+            param=constants.JOB_PARAM_NODES,
+            message=f'You have requested {nodes} nodes, but a single job can request at most '
+            f'{max_nodes} nodes. Reduce the no. of nodes (the web portal computes nodes from the '
+            f'requested cpus) or ask your cluster administrator to raise the limit.',
+        )
+        return False
 
     def get(self) -> Optional[int]:
         return Utils.get_value_as_int(key='nodes', obj=self.params, default=None)
@@ -585,14 +628,24 @@ class CpusParamBuilder(BaseParamBuilder):
 
         min_cpus = 9999999  # choose some arbitrary max value
         for instance_type in instance_types:
-            ec2_instance_type = self.soca_context.aws_util().get_ec2_instance_type(
-                instance_type=instance_type
-            )
+            try:
+                ec2_instance_type = self.soca_context.aws_util().get_ec2_instance_type(
+                    instance_type=instance_type
+                )
+            except exceptions.SocaException as e:
+                # unresolvable instance type: the instance_types check reports it
+                self.soca_context.logger().debug(
+                    f'cpu check skipped for instance type: {instance_type} - {e}'
+                )
+                continue
             if enable_ht_support:
                 instance_type_cpus = ec2_instance_type.vcpu_info_default_vcpus
             else:
                 instance_type_cpus = ec2_instance_type.vcpu_info_default_cores
             min_cpus = min(min_cpus, instance_type_cpus)
+
+        if min_cpus == 9999999:
+            return True
 
         if cpus > min_cpus:
             self.add_validation_entry(
@@ -656,13 +709,23 @@ class MemoryParamBuilder(BaseParamBuilder):
 
         memory_values = []
         for instance_type in instance_types:
-            ec2_instance_type = self.soca_context.aws_util().get_ec2_instance_type(
-                instance_type=instance_type
-            )
+            try:
+                ec2_instance_type = self.soca_context.aws_util().get_ec2_instance_type(
+                    instance_type=instance_type
+                )
+            except exceptions.SocaException as e:
+                # unresolvable instance type: the instance_types check reports it
+                self.soca_context.logger().debug(
+                    f'memory check skipped for instance type: {instance_type} - {e}'
+                )
+                continue
             instance_type_memory = SocaMemory(
                 value=ec2_instance_type.memory_info_size_in_mib, unit=SocaMemoryUnit.MiB
             )
             memory_values.append(instance_type_memory)
+
+        if Utils.is_empty(memory_values):
+            return True
 
         min_memory = min(memory_values)
         if memory > min_memory:
@@ -707,16 +770,78 @@ class GpusParamBuilder(BaseParamBuilder):
 
     def validate(self) -> bool:
         gpus = self.get()
+        from_queue_default = False
 
-        if gpus is None:
+        if gpus is not None:
+            if self.is_restricted_parameter():
+                return False
+
+            if not self.eval_positive_nonzero_int(
+                param=constants.JOB_PARAM_GPUS, value=gpus
+            ):
+                return False
+        else:
+            # the queue profile default is applied to every job submitted without gpus,
+            # so it must be checked against the instance family too
+            gpus = self.default()
+            from_queue_default = True
+
+        if gpus is None or gpus <= 0:
             return True
 
-        if self.is_restricted_parameter():
+        if self.context.is_failed(constants.JOB_PARAM_INSTANCE_TYPES):
             return False
 
-        if not self.eval_positive_nonzero_int(
-            param=constants.JOB_PARAM_GPUS, value=gpus
-        ):
+        instance_types_builder = self.context.get_builder(
+            constants.JOB_PARAM_INSTANCE_TYPES
+        )
+        instance_types = instance_types_builder.get()
+        if instance_types is None:
+            instance_types = instance_types_builder.default()
+        if Utils.is_empty(instance_types):
+            return True
+
+        invalid_instances = []
+        for instance_type in instance_types:
+            try:
+                ec2_instance_type = self.soca_context.aws_util().get_ec2_instance_type(
+                    instance_type=instance_type
+                )
+            except exceptions.SocaException as e:
+                # unresolvable instance type: reported by the instance_types checks for a
+                # requested list, and when job params are applied for a queue default list
+                self.soca_context.logger().debug(
+                    f'GPU count check skipped for instance type: {instance_type} - {e}'
+                )
+                return True
+
+            available_gpus = 0
+            gpu_entries = ec2_instance_type.gpu_info_gpus
+            if gpu_entries is not None:
+                for gpu_entry in gpu_entries:
+                    available_gpus += Utils.get_value_as_int('Count', gpu_entry, 0)
+            if available_gpus < gpus:
+                invalid_instances.append(f'{instance_type} ({available_gpus} GPUs)')
+
+        if len(invalid_instances) > 0:
+            if from_queue_default:
+                message = (
+                    f'The queue profile default requests gpus: ({gpus}) but given instance '
+                    f'types [{", ".join(invalid_instances)}] cannot satisfy the request. '
+                    f'Submit the job with a GPU instance type providing at least {gpus} '
+                    f'GPU(s), or ask your cluster administrator to correct the queue profile.'
+                )
+            else:
+                message = (
+                    f'You have requested gpus: ({gpus}) but given instance types '
+                    f'[{", ".join(invalid_instances)}] cannot satisfy the request. '
+                    f'Select a GPU instance type with at least {gpus} GPU(s) or remove '
+                    f'the gpus parameter.'
+                )
+            self.add_validation_entry(
+                param=constants.JOB_PARAM_GPUS,
+                message=message,
+            )
             return False
 
         return True
@@ -785,10 +910,19 @@ class BaseOsParamBuilder(BaseParamBuilder):
             return False
 
         if base_os not in constants.ALLOWED_BASEOS:
+            if base_os in constants.EOL_BASEOS:
+                message = (
+                    f'base_os: ({base_os}) has reached end-of-life and is no longer supported. '
+                    f'Use {constants.EOL_BASEOS[base_os]} instead.'
+                )
+            else:
+                message = (
+                    f'base_os: ({base_os}) must be one of '
+                    f'the following values: {", ".join(constants.ALLOWED_BASEOS)}'
+                )
             self.add_validation_entry(
                 param=constants.JOB_PARAM_BASE_OS,
-                message=f'base_os: ({base_os}) must be one of '
-                f'the following values: {", ".join(constants.ALLOWED_BASEOS)}',
+                message=message,
             )
 
         return True
@@ -820,7 +954,7 @@ class InstanceAmiParamBuilder(BaseParamBuilder):
         instance_ami = self.get()
 
         if instance_ami is None:
-            return True
+            return self._validate_base_os_default_ami()
 
         if self.is_restricted_parameter():
             return False
@@ -832,7 +966,104 @@ class InstanceAmiParamBuilder(BaseParamBuilder):
             )
             return False
 
-        return True
+        return self._validate_requested_ami_base_os(instance_ami=instance_ami)
+
+    def _known_ami_base_os(self) -> Dict[str, str]:
+        """
+        AMI id -> the base_os that AMI was registered for, limited to the AMIs this cluster
+        knows: the cluster compute node AMI and the queue profile default AMI. Any other
+        AMI is user supplied and its operating system is not knowable at submit time.
+        """
+        known = {}
+
+        config = self.context.soca_context.config()
+        cluster_ami = config.get_string('scheduler.compute_node_ami')
+        cluster_base_os = config.get_string('scheduler.compute_node_os')
+        if Utils.is_not_empty(cluster_ami) and Utils.is_not_empty(cluster_base_os):
+            known[cluster_ami] = cluster_base_os
+
+        if self.default_job_params is not None:
+            queue_ami = self.default_job_params.instance_ami
+            queue_base_os = self.default_job_params.base_os
+            if Utils.is_not_empty(queue_ami) and Utils.is_not_empty(queue_base_os):
+                known[queue_ami] = queue_base_os
+
+        return known
+
+    def _validate_requested_ami_base_os(self, instance_ami: str) -> bool:
+        """
+        reject a job that pairs an AMI registered for one base_os with a different base_os -
+        the node would bootstrap for an operating system the image does not carry. an AMI
+        absent from the known map is allowed: an unknown AMI is not evidence of a mismatch.
+        """
+        if self.context.is_failed(constants.JOB_PARAM_BASE_OS):
+            return False
+
+        ami_base_os = self._known_ami_base_os().get(instance_ami)
+        if ami_base_os is None:
+            return True
+
+        base_os_builder = self.context.get_builder(constants.JOB_PARAM_BASE_OS)
+        base_os = base_os_builder.get()
+        from_queue_default = base_os is None
+        if from_queue_default:
+            base_os = base_os_builder.default()
+
+        if base_os is None or base_os == ami_base_os:
+            return True
+
+        if from_queue_default:
+            # the user did not ask for this base_os, so point at the queue profile
+            message = (
+                f'The queue profile default requests base_os: ({base_os}) but '
+                f'instance_ami: ({instance_ami}) is registered for base_os: '
+                f'({ami_base_os}). Submit the job with base_os: ({ami_base_os}), or ask '
+                f'your cluster administrator to correct the queue profile.'
+            )
+        else:
+            message = (
+                f'instance_ami: ({instance_ami}) is registered for base_os: '
+                f'({ami_base_os}) and does not match the requested base_os: ({base_os}). '
+                f'Submit the job with base_os: ({ami_base_os}), or specify an '
+                f'instance_ami built for {base_os}.'
+            )
+
+        self.add_validation_entry(
+            param=constants.JOB_PARAM_INSTANCE_AMI,
+            message=message,
+        )
+        return False
+
+    def _validate_base_os_default_ami(self) -> bool:
+        """
+        when base_os is overridden without an instance_ami, the default AMI is used.
+        the default AMI is built for the default base_os - reject the mismatch instead
+        of provisioning nodes that bootstrap for the wrong operating system.
+        """
+        base_os_builder = self.context.get_builder(constants.JOB_PARAM_BASE_OS)
+        base_os = base_os_builder.get()
+        if base_os is None or base_os not in constants.ALLOWED_BASEOS:
+            return True
+
+        default_ami_os = None
+        if self.default_job_params and self.default_job_params.instance_ami is not None:
+            default_ami_os = self.default_job_params.base_os
+        if default_ami_os is None:
+            default_ami_os = self.context.soca_context.config().get_string(
+                'scheduler.compute_node_os'
+            )
+
+        if base_os == default_ami_os:
+            return True
+
+        self.add_validation_entry(
+            param=constants.JOB_PARAM_INSTANCE_AMI,
+            message=f'base_os: ({base_os}) does not match the operating system '
+            f'({default_ami_os}) of the default AMI: ({self.default()}). '
+            f'Specify instance_ami with an AMI built for {base_os} when '
+            f'overriding base_os.',
+        )
+        return False
 
     def get(self) -> Optional[str]:
         return Utils.get_value_as_string(
@@ -863,7 +1094,14 @@ class InstanceTypesParamBuilder(BaseParamBuilder):
         instance_types = self.get()
 
         if instance_types is None:
-            return True
+            default_instance_types = self.default()
+            gpu_valid = self._validate_gpu_driver_consistency(
+                instance_types=default_instance_types, from_queue_default=True
+            )
+            arch_valid = self._validate_architecture_consistency(
+                instance_types=default_instance_types, from_queue_default=True
+            )
+            return gpu_valid and arch_valid
 
         if self.is_restricted_parameter():
             return False
@@ -930,7 +1168,188 @@ class InstanceTypesParamBuilder(BaseParamBuilder):
             )
             success = False
 
+        if success:
+            gpu_valid = self._validate_gpu_driver_consistency(
+                instance_types=instance_types
+            )
+            arch_valid = self._validate_architecture_consistency(
+                instance_types=instance_types
+            )
+            success = gpu_valid and arch_valid
+
         return success
+
+    def _is_gpu_instance_type(
+        self, instance_type: str, gpu_instance_families: List[str]
+    ) -> bool:
+        """
+        True when the instance type needs GPU drivers: the family is listed in
+        gpu_settings.instance_families (the bootstrap render-time check in BootstrapContext), or
+        EC2 reports GPU hardware for the instance type.
+        """
+        instance_family = instance_type.split('.')[0]
+        if instance_family in gpu_instance_families:
+            return True
+
+        ec2_instance_type = self.soca_context.aws_util().get_ec2_instance_type(
+            instance_type=instance_type
+        )
+        return Utils.is_not_empty(ec2_instance_type.gpu_info_gpus)
+
+    def _validate_gpu_driver_consistency(
+        self, instance_types: Optional[List[str]], from_queue_default: bool = False
+    ) -> bool:
+        """
+        Reject instance type lists that mix GPU and non-GPU families.
+
+        GPU drivers are installed by the compute node bootstrap, which is rendered for
+        instance_types[0] only (cloudformation_stack_builder). Any other family in the list may be
+        launched by the ASG / spot fleet, so a mixed list can bring up a GPU node with no drivers.
+        """
+        if Utils.is_empty(instance_types):
+            return True
+
+        gpu_instance_families = self.soca_context.config().get_list(
+            'global-settings.gpu_settings.instance_families', []
+        )
+
+        gpu_instance_types = []
+        non_gpu_instance_types = []
+        for instance_type in instance_types:
+            try:
+                is_gpu = self._is_gpu_instance_type(
+                    instance_type=instance_type,
+                    gpu_instance_families=gpu_instance_families,
+                )
+            except exceptions.SocaException as e:
+                # unresolvable instance type: reported by the checks above for a requested list,
+                # and when job params are applied for a queue profile default list
+                self.soca_context.logger().debug(
+                    f'GPU driver consistency check skipped for instance type: '
+                    f'{instance_type} - {e}'
+                )
+                return True
+
+            if is_gpu:
+                gpu_instance_types.append(instance_type)
+            else:
+                non_gpu_instance_types.append(instance_type)
+
+        if len(gpu_instance_types) == 0 or len(non_gpu_instance_types) == 0:
+            return True
+
+        source = (
+            'The queue profile default instance types'
+            if from_queue_default
+            else 'The requested instance types'
+        )
+        self.add_validation_entry(
+            param=constants.JOB_PARAM_INSTANCE_TYPES,
+            message=f'{source} mix GPU and non-GPU instance families. '
+            f'GPU: [{", ".join(gpu_instance_types)}], '
+            f'non-GPU: [{", ".join(non_gpu_instance_types)}]. '
+            f'GPU drivers are installed based on the first instance type in the list '
+            f'({instance_types[0]}), so a compute node launched from any other family in the list '
+            f'can come up without the GPU drivers it needs. Submit GPU and non-GPU instance types '
+            f'as separate jobs.',
+        )
+        return False
+
+    def _get_supported_architectures(self, instance_type: str) -> Set[str]:
+        ec2_instance_type = self.soca_context.aws_util().get_ec2_instance_type(
+            instance_type=instance_type
+        )
+        architectures = ec2_instance_type.processor_info_supported_architectures
+        if Utils.is_empty(architectures):
+            return set()
+        return set(architectures)
+
+    def _get_effective_instance_ami(self) -> Optional[str]:
+        instance_ami_builder = self.context.get_builder(
+            constants.JOB_PARAM_INSTANCE_AMI
+        )
+        instance_ami = instance_ami_builder.get()
+        if instance_ami is None:
+            instance_ami = instance_ami_builder.default()
+        return instance_ami
+
+    def _validate_architecture_consistency(
+        self, instance_types: Optional[List[str]], from_queue_default: bool = False
+    ) -> bool:
+        """
+        Reject instance types that cannot run the AMI the job will be launched from.
+
+        One AMI serves every node of a job and an AMI is built for a single processor
+        architecture, so a list whose types share no architecture, or an arm64 type paired with
+        an x86_64 AMI, fails at RunInstances rather than at submit.
+        """
+        if Utils.is_empty(instance_types):
+            return True
+
+        architectures_by_instance_type = {}
+        for instance_type in instance_types:
+            try:
+                architectures = self._get_supported_architectures(
+                    instance_type=instance_type
+                )
+            except exceptions.SocaException as e:
+                # unresolvable instance type: reported by the checks above for a requested list,
+                # and when job params are applied for a queue profile default list
+                self.soca_context.logger().debug(
+                    f'architecture consistency check skipped for instance type: '
+                    f'{instance_type} - {e}'
+                )
+                return True
+            if len(architectures) == 0:
+                self.soca_context.logger().debug(
+                    f'architecture consistency check skipped: EC2 reports no supported '
+                    f'architectures for instance type: {instance_type}'
+                )
+                return True
+            architectures_by_instance_type[instance_type] = architectures
+
+        source = (
+            'The queue profile default instance types'
+            if from_queue_default
+            else 'The requested instance types'
+        )
+
+        common_architectures = set.intersection(
+            *architectures_by_instance_type.values()
+        )
+        if len(common_architectures) == 0:
+            described = ', '.join(
+                f'{instance_type} ({"/".join(sorted(architectures))})'
+                for instance_type, architectures in architectures_by_instance_type.items()
+            )
+            self.add_validation_entry(
+                param=constants.JOB_PARAM_INSTANCE_TYPES,
+                message=f'{source} do not share a processor architecture: {described}. '
+                f'All nodes of a job are launched from one AMI, which is built for a single '
+                f'architecture. Submit the architectures as separate jobs.',
+            )
+            return False
+
+        instance_ami = self._get_effective_instance_ami()
+        image_architecture = self.soca_context.aws_util().get_image_architecture(
+            image_id=instance_ami
+        )
+        if Utils.is_empty(image_architecture):
+            # the AMI could not be described - do not reject on an unknown
+            return True
+
+        if image_architecture in common_architectures:
+            return True
+
+        self.add_validation_entry(
+            param=constants.JOB_PARAM_INSTANCE_TYPES,
+            message=f'{source} [{", ".join(instance_types)}] run '
+            f'{"/".join(sorted(common_architectures))}, but instance_ami: ({instance_ami}) is '
+            f'{image_architecture}. Specify an instance_ami built for '
+            f'{"/".join(sorted(common_architectures))}, or request '
+            f'{image_architecture} instance types.',
+        )
+        return False
 
     def get(self) -> Optional[List[str]]:
         # backward compatibility
@@ -1086,10 +1505,43 @@ class SpotParamBuilder(BaseParamBuilder):
     def validate(self) -> bool:
         enable_spot = self.get()
 
-        if enable_spot is None:
+        if enable_spot is not None:
+            if self.is_restricted_parameter():
+                return False
+        else:
+            # spot can still be turned on by the queue profile default
+            enable_spot = self.default()
+
+        if not Utils.is_true(enable_spot):
             return True
 
-        if self.is_restricted_parameter():
+        if self.context.is_failed(constants.JOB_PARAM_INSTANCE_TYPES):
+            return False
+
+        instance_type_builder = self.context.get_builder(
+            constants.JOB_PARAM_INSTANCE_TYPES
+        )
+        instance_types = instance_type_builder.get()
+        if instance_types is None:
+            instance_types = instance_type_builder.default()
+        if Utils.is_empty(instance_types):
+            return True
+
+        # HPC families (hpc6a, hpc6id, hpc7a, hpc7g, hpc8a) are on-demand only; skipping this
+        # check means the job is accepted and fails at provisioning with a quota lookup error.
+        unsupported = []
+        for instance_type in instance_types:
+            if not self.soca_context.aws_util().is_instance_type_spot_supported(
+                instance_type=instance_type
+            ):
+                unsupported.append(instance_type)
+
+        if len(unsupported) > 0:
+            self.add_validation_entry(
+                param=constants.JOB_PARAM_SPOT,
+                message=f'You have requested spot capacity but given instance types '
+                f'[{", ".join(unsupported)}] are not available as spot instances.',
+            )
             return False
 
         return True
@@ -1571,11 +2023,49 @@ class SecurityGroupsParamBuilder(BaseParamBuilder):
 class InstanceProfileParamBuilder(BaseParamBuilder):
     def __init__(self, context: JobParamsBuilderContextProtocol, job_param: str):
         super().__init__(context, job_param)
+        self._bedrock_access: Optional[BedrockJobAccess] = None
+
+    @property
+    def bedrock_access(self) -> BedrockJobAccess:
+        # resolved once per builder: validate() and apply() must agree on it, and
+        # resolving reads the project record.
+        if self._bedrock_access is None:
+            self._bedrock_access = BedrockJobAccessResolver(
+                context=self.soca_context,
+                project_name=self.context.project,
+                queue_management=self.queue_management,
+            ).resolve()
+        return self._bedrock_access
 
     def validate(self) -> bool:
         instance_profile = self.get()
+        bedrock_access = self.bedrock_access
+
         if instance_profile is None:
+            if bedrock_access.state == BedrockJobAccessState.NOT_AUTHORIZED:
+                # nothing the job owner can change makes this job reach the models its
+                # project allows, so it is rejected here instead of queued forever.
+                self.add_validation_entry(
+                    param=constants.JOB_PARAM_INSTANCE_PROFILE,
+                    message=bedrock_access.message,
+                )
+                return False
             return True
+
+        if (
+            bedrock_access.is_available
+            and instance_profile != bedrock_access.instance_profile_arn
+        ):
+            # a compute node holds one instance profile, so a supplied one would
+            # replace the project role and void the project's model access.
+            self.add_validation_entry(
+                param=constants.JOB_PARAM_INSTANCE_PROFILE,
+                message=f'IAM instance profile: ({instance_profile}) cannot be used for '
+                f'a job in project: ({self.context.project}), because the project runs '
+                f'its compute nodes under its own instance profile for Bedrock access. '
+                f'Submit the job without {constants.JOB_PARAM_INSTANCE_PROFILE}.',
+            )
+            return False
 
         if self.is_restricted_parameter():
             return False
@@ -1637,6 +2127,11 @@ class InstanceProfileParamBuilder(BaseParamBuilder):
         self.result.instance_profile = instance_profile_arn
 
     def default(self) -> str:
+        # a project's bedrock instance profile outranks the queue default, since the job runs under
+        # the identity holding model access; other states fall back to the compute node profile, gated at provisioning.
+        bedrock_instance_profile_arn = self.bedrock_access.instance_profile_arn
+        if Utils.is_not_empty(bedrock_instance_profile_arn):
+            return bedrock_instance_profile_arn
         if (
             self.default_job_params
             and self.default_job_params.instance_profile is not None
@@ -2239,6 +2734,22 @@ class EnableEfaParamBuilder(BaseParamBuilder):
             )
             return False
 
+        base_os_builder = self.context.get_builder(constants.JOB_PARAM_BASE_OS)
+        base_os = base_os_builder.get()
+        if base_os is None:
+            base_os = base_os_builder.default()
+        unsupported_features = constants.UNSUPPORTED_BASE_OS_JOB_FEATURES.get(
+            base_os, ()
+        )
+        if constants.JOB_FEATURE_EFA in unsupported_features:
+            self.add_validation_entry(
+                param=constants.JOB_PARAM_ENABLE_EFA_SUPPORT,
+                message=f'You have requested EFA support but EFA is not supported '
+                f'on base_os: ({base_os}). Submit the job with a supported base_os '
+                f'or without EFA.',
+            )
+            return False
+
         return True
 
     def get(self) -> Optional[bool]:
@@ -2356,6 +2867,20 @@ class EnablePlacementGroupParamBuilder(BaseParamBuilder):
             )
             return True  # valid, as nothing needs to be checked.
 
+        # must be the same key and default CloudFormationStackBuilder.build_placement_group()
+        # uses, or validation passes on a strategy the stack will never request.
+        strategy = self.soca_context.config().get_string(
+            'scheduler.job_provisioning.placement_group.strategy',
+            default=constants.EC2_PLACEMENT_GROUP_STRATEGY_CLUSTER,
+        )
+        if strategy not in constants.EC2_PLACEMENT_GROUP_STRATEGIES:
+            self.add_validation_entry(
+                param=constants.JOB_PARAM_ENABLE_PLACEMENT_GROUP,
+                message=f'Configured placement group strategy is invalid: ({strategy}). '
+                f'Must be one of: [{", ".join(constants.EC2_PLACEMENT_GROUP_STRATEGIES)}].',
+            )
+            return False
+
         instance_types_builder = self.context.get_builder(
             constants.JOB_PARAM_INSTANCE_TYPES
         )
@@ -2364,46 +2889,31 @@ class EnablePlacementGroupParamBuilder(BaseParamBuilder):
             instance_types = instance_types_builder.default()
 
         self.soca_context.logger().debug(
-            f'Validating placement group support for instance types: {instance_types}'
+            f'Validating placement group strategy ({strategy}) for instance types: {instance_types}'
         )
 
         invalid_instance_types = []
         for instance_type in instance_types:
-            ec2_instance_type = self.soca_context.aws_util().get_ec2_instance_type(
+            placement_group_strategies = self.soca_context.aws_util().get_instance_type_placement_group_strategies(
                 instance_type=instance_type
             )
-            placement_group_strategies = (
-                ec2_instance_type.placement_group_info_supported_strategies
-            )
-            if (
-                placement_group_strategies is None
-                or len(placement_group_strategies) == 0
-            ):
+            if strategy not in placement_group_strategies:
                 self.soca_context.logger().debug(
-                    f'Instance type {instance_type} does not support any placement group strategies'
+                    f'Instance type {instance_type} does not support '
+                    f'placement group strategy: {strategy}'
                 )
                 invalid_instance_types.append(instance_type)
-                continue
-            if (
-                constants.EC2_PLACEMENT_GROUP_STRATEGY_CLUSTER
-                not in placement_group_strategies
-            ):
-                self.soca_context.logger().debug(
-                    f'Instance type {instance_type} does not support cluster placement group strategy'
-                )
-                invalid_instance_types.append(instance_type)
-                continue
 
         if len(invalid_instance_types) > 0:
             self.add_validation_entry(
                 param=constants.JOB_PARAM_ENABLE_PLACEMENT_GROUP,
                 message=f'Placement group is enabled, but given instance types: [{",".join(invalid_instance_types)}] '
-                f'do not support placement group strategy: {constants.EC2_PLACEMENT_GROUP_STRATEGY_CLUSTER}',
+                f'do not support placement group strategy: {strategy}',
             )
             return False
 
         self.soca_context.logger().debug(
-            'Placement group validation passed - all instance types support cluster placement group'
+            f'Placement group validation passed - all instance types support strategy: {strategy}'
         )
         return True
 
@@ -2955,8 +3465,10 @@ class JobParamsBuilderContext(JobParamsBuilderContextProtocol):
         params: Dict[str, Any],
         queue_profile: Optional[HpcQueueProfile] = None,
         stack_uuid: Optional[str] = None,
+        project: Optional[str] = None,
     ):
         self._params = params
+        self._project = project
 
         if Utils.is_empty(stack_uuid) and queue_profile is not None:
             stack_uuid = queue_profile.stack_uuid
@@ -3186,6 +3698,10 @@ class JobParamsBuilderContext(JobParamsBuilderContextProtocol):
     def queue(self) -> Optional[HpcQueueProfile]:
         return self._queue_profile
 
+    @property
+    def project(self) -> Optional[str]:
+        return self._project
+
     def is_failed(self, *params: str) -> bool:
         for param in params:
             if param in self._failed_params:
@@ -3208,12 +3724,14 @@ class SocaJobBuilder:
         params: Dict[str, Any],
         queue_profile: HpcQueueProfile = None,
         stack_uuid: Optional[str] = None,
+        project: Optional[str] = None,
     ):
         self._context = JobParamsBuilderContext(
             context=context,
             params=params,
             queue_profile=queue_profile,
             stack_uuid=stack_uuid,
+            project=project,
         )
 
     def validate(self) -> JobValidationResult:
@@ -3324,7 +3842,7 @@ class SocaJobBuilder:
             if info is None:
                 continue
 
-            if job_param is constants.JOB_PARAM_FSX_LUSTRE:
+            if job_param == constants.JOB_PARAM_FSX_LUSTRE:
                 fsx_lustre_entries = self._fsx_lustre_debug_entries(builder=builder)
                 result += fsx_lustre_entries
                 continue

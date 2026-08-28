@@ -4,7 +4,7 @@ description: How to change the schedule of your Windows or Linux desktop
 
 # Virtual desktop scheduling
 
-By default, your virtual desktop comes with the Stop On Idle schedule. This will stop/hibernate your virtual desktop only when the CPU use is below the cluster set utilization threshold. Default is 30%. AND when no one has logged in for at least the cluster AutoStop idle timeout. Default is 1 hour.
+By default, your virtual desktop comes with the Stop On Idle schedule. This will stop/hibernate your virtual desktop only when the CPU use is below the cluster set utilization threshold. Default is 30%. AND when no one has logged in for at least `virtual-desktop-controller.dcv_session.idle_autostop_delay`. Default is 60 minutes.
 
 {% hint style="info" %}
 Virtual Desktop will only be stopped if idle (e.g: no active session connected within the Idle Timeout period and CPU usage below 30%). This is meant to prevent accidental stop and ensure you won't have to worry if you have a simulation running on your desktop overnight but have configured auto-stop after 8PM
@@ -29,3 +29,5 @@ To create/edit a schedule, click "**Actions**" > "**Schedule**". This will open 
 {% hint style="info" %}
 Schedule is re-evaluated every 30 minutes
 {% endhint %}
+
+If your administrator allows it, the same modal also shows a **Stop On Idle after (minutes)** field above the weekly schedule. This overrides `virtual-desktop-controller.dcv_session.idle_autostop_delay` for this desktop only; set it to `0` to fall back to that cluster default. The value you can request is capped by `virtual-desktop-controller.dcv_session.idle_autostop_delay_max`, 240 minutes out of the box, and lowering that cap later also clamps any override you already saved. A cap of `0` turns per-session overrides off, and the field does not appear.

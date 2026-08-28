@@ -32,13 +32,8 @@ module_sets:
 package_config:
   amazon_cloudwatch_agent:
     download_link: ~
-    # since there are multiple variations and platforms, to avoid creating multiple configuration entries, below pattern is used.
-    # you can always override the downloading link by providing the download_link.
-    # if download_link is empty, download_link_pattern will be used to download cloudwatch agent
-    # refer to below files to perform additional customizations or implementation details:
-    #  * idea-bootstrap/_templates/linux/cloudwatch_agent.jinja2
-    #  * idea-bootstrap/_templates/windows/cloudwatch_agent.jinja2
-    # CN and GovCloud Partitions will need to change or adjust the download_url_pattern accordingly.
+    # if download_link is empty, download_link_pattern below is used instead.
+    # CN and GovCloud partitions need to adjust download_link_pattern accordingly.
     download_link_pattern: https://s3.%region%.amazonaws.com/amazoncloudwatch-agent-%region%/%os%/%architecture%/latest/amazon-cloudwatch-agent.%ext%
 
   aws_ssm:
@@ -133,31 +128,12 @@ package_config:
       - libical3
 
     application_7:
-      # Additional packages required for ALI2, rhel7, and rocky7
+      # Additional packages required for amazonlinux2023
       - dejavu-fonts-common
 
     application_8:
       # Additional packages required for rhel8, and rocky8
       - dejavu-fonts-common
-
-    dcv_amazonlinux:
-      # List of packages to install when using Mate Desktop
-      - gdm
-      - gnome-session
-      - gnome-classic-session
-      - gnome-session-xsession
-      - gnome-terminal
-      - gnu-free-fonts-common
-      - gnu-free-mono-fonts
-      - gnu-free-sans-fonts
-      - gnu-free-serif-fonts
-      - xorg-x11-server-Xorg
-      - xorg-x11-server-utils
-      - xorg-x11-utils
-      - xorg-x11-fonts-Type1
-      - xorg-x11-drivers
-      - gstreamer1-plugins-good
-      - pcsc-lite-libs
 
     openldap_client:
       - openldap-clients
@@ -176,9 +152,8 @@ package_config:
       - unixODBC
       - unixODBC-devel
 
-    openldap_server_7:
-      # Additional packages required for amazonlinux2, rhel7, and rocky7
-      - compat-openldap
+    # compat-openldap is EL7 only, kept empty for template compatibility
+    openldap_server_7: []
 
     openldap_server_8:
       # Additional packages required for rhel8, and rocky8
@@ -186,6 +161,10 @@ package_config:
 
     openldap_server_9:
       # Additional packages required for rhel9, and rocky9
+      - openldap-compat
+
+    openldap_server_10:
+      # Additional packages required for rhel10, and rocky10
       - openldap-compat
 
     sssd:
@@ -243,7 +222,7 @@ package_config:
       - sssd-krb5
 
     sssd_7:
-      # Additional packages required for rhel7, and amazonlinux2
+      # Additional packages required for amazonlinux2023
       - python-sssdconfig
 
     system:
@@ -375,14 +354,8 @@ package_config:
       - mesa-utils
       - cmake
 
-    system_7:
-      # Additional packages required for rhel7, and amazonlinux2
-      - libverto-tevent
-      - libselinux-python
-      - redhat-lsb
-      - system-lsb
-      - libquadmath
-      - libquadmath-devel
+    # EL7 era packages with no amazonlinux2023 equivalent, kept empty for template compatibility
+    system_7: []
 
     system_8:
       # Additional packages required for rhel8, and rocky8
@@ -396,14 +369,21 @@ package_config:
       - compat-openssl11
       - chkconfig
 
+    system_10:
+      # Additional packages required for rhel10, rocky10
+      # compat-openssl11 and ec2-hibinit-agent are not shipped for EL10
+      - chkconfig
+
     # used by cluster-manager to convert .pem files to .ppk files
     putty:
       - putty
 
+  # Keep version/nvm_version aligned with software_versions.yml, which pins the
+  # same toolchain for the installer container and CI.
   nodejs:
-    version: "22.14.0"
-    nvm_version: "0.40.2"
-    npm_version: "10.9.2"
+    version: "22.23.2"
+    nvm_version: "0.40.7"
+    npm_version: "10.9.8"
     url: "https://raw.githubusercontent.com/nvm-sh/nvm/"
   openmpi:
     version: "5.0.7"
@@ -411,37 +391,47 @@ package_config:
     checksum: "51be23bb79f9f978696689bbbc6bc65b7b0df67f0f5b502b83513c8e098a7e53cfa73d14aaae5fffc407e79eb9422a85"
     checksum_method: sha384
 
+  # url must pin the versioned directory, never /latest/: upstream redirects /latest/ to the current
+  # release, so a pinned filename under /latest/ 404s as soon as a new PuTTY ships.
   putty:
-    version: "0.83"
-    url: "https://the.earth.li/~sgtatham/putty/latest/putty-0.83.tar.gz"
-    checksum: "a2f83f1ae3c233c737acc34ffd54715effa4ab0f310aad33f01b9b97b73a814e24ba4aa11349399b950e5dd34eaef4fe"
+    version: "0.85"
+    url: "https://the.earth.li/~sgtatham/putty/0.85/putty-0.85.tar.gz"
+    checksum: "be24753dae138a870299ce3b63267c337cd14811efef667d0e2a5efe34645eaf67e7a1d51349a2272250d42332291d1f"
     checksum_method: sha384
 
+  # Keep aligned with software_versions.yml python_version.
   python:
-    version: "3.13.3"
-    url: "https://www.python.org/ftp/python/3.13.3/Python-3.13.3.tgz"
-    checksum: "c6d435d904daf04a8d4634a64878738ceed6970141ec1b62bc6e1aa15d8ee69dbf207970ec8e72c373b16412d1ed8cfb"
+    version: "3.13.15"
+    url: "https://www.python.org/ftp/python/3.13.15/Python-3.13.15.tgz"
+    checksum: "085f0529892b35064abbc73c53129e504cf5223a656674b8990dd3bd53017db945dbbcdb286c0a6da6c13eccc3dded66"
     checksum_method: sha384
 
   {% if metrics_provider and 'prometheus' in metrics_provider %}
+  # Held on the Prometheus 2.53 LTS line; 3.x is a breaking major (removed flags,
+  # changed remote-write defaults and UI) and is not part of this release.
   prometheus:
     installer:
       linux:
-        x86_64: https://github.com/prometheus/prometheus/releases/download/v2.53.4/prometheus-2.53.4.linux-amd64.tar.gz
-        aarch64: https://github.com/prometheus/prometheus/releases/download/v2.53.4/prometheus-2.53.4.linux-arm64.tar.gz
+        x86_64: https://github.com/prometheus/prometheus/releases/download/v2.53.5/prometheus-2.53.5.linux-amd64.tar.gz
+        aarch64: https://github.com/prometheus/prometheus/releases/download/v2.53.5/prometheus-2.53.5.linux-arm64.tar.gz
       windows:
-        x86_64: https://github.com/prometheus/prometheus/releases/download/v2.53.4/prometheus-2.53.4.windows-amd64.zip
-        aarch64: https://github.com/prometheus/prometheus/releases/download/v2.53.4/prometheus-2.53.4.windows-arm64.zip
+        x86_64: https://github.com/prometheus/prometheus/releases/download/v2.53.5/prometheus-2.53.5.windows-amd64.zip
+        aarch64: https://github.com/prometheus/prometheus/releases/download/v2.53.5/prometheus-2.53.5.windows-arm64.zip
     exporters:
       node_exporter:
         linux:
-          x86_64: https://github.com/prometheus/node_exporter/releases/download/v1.9.1/node_exporter-1.9.1.linux-amd64.tar.gz
-          aarch64: https://github.com/prometheus/node_exporter/releases/download/v1.9.1/node_exporter-1.9.1.linux-arm64.tar.gz
+          x86_64: https://github.com/prometheus/node_exporter/releases/download/v1.12.1/node_exporter-1.12.1.linux-amd64.tar.gz
+          aarch64: https://github.com/prometheus/node_exporter/releases/download/v1.12.1/node_exporter-1.12.1.linux-arm64.tar.gz
   {% endif %}
 
+  # git tag of https://github.com/aws/efs-utils built from source on RHEL, Rocky and Ubuntu hosts.
+  efs_utils:
+    version: v3.3.0
+
   {% if 'scheduler' in enabled_modules %}
+  # version is documentation only (efa.jinja2 reads url/checksum); keep all three aligned.
   efa:
-    version: "1.41.0"
+    version: "1.44.0"
     url: "https://efa-installer.amazonaws.com/aws-efa-installer-1.44.0.tar.gz"
     checksum: "6a7c41e815c8187bac7a0d9690bfa561bfecaa3e47fec0d9d53a0a383282edcf2e163c042d858cb5385c452cba89dc2d"
     checksum_method: sha384
@@ -451,10 +441,9 @@ package_config:
     checksum: "8a4d7f9c326fd1de5c103e700422bc4d49edc9d50f142c033e9e7de8d10d52f5c4f92e902e107b8e89d3e12c147ebef4"
     checksum_method: sha384
     repo_url: "https://github.com/openpbs/openpbs.git"
-    commit: "4c11ca4a13992802efb450a15be9e82ea501c965"
-    # For non-AL2 since openpbs is getting fairly regular updates in git but not tagged releases,
-    # we're using the latest commit on the main branch as the version.
-    # additional customizations can be implemented in idea-bootstrap/_templates/linux/openpbs.jinja2
+    commit: "cd7ab5edaf03dcac2f1cb9e2f42d75eb117d468a"
+    # commit pins gcc 14 fixes required to build on EL10; the tagged v23.06.06 tarball above will not compile there.
+    # openpbs ships regular commits but infrequent tags, hence tracking a commit rather than a release.
     type: development # set to release if you want to use tagged releases
     packages:
       - postgresql
@@ -473,9 +462,6 @@ package_config:
     gpg_key: https://d1uj6qtbmh3dt5.cloudfront.net/NICE-GPG-KEY
     x86_64:
       linux:
-        al2:
-          url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-el7-x86_64.tgz
-          sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-el7-x86_64.tgz.sha256sum
         al2023:
           url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-amzn2023-x86_64.tgz
           sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-amzn2023-x86_64.tgz.sha256sum
@@ -494,9 +480,6 @@ package_config:
           sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu2404-x86_64.tgz.sha256sum
     aarch64:
       linux:
-        al2:
-          url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-el7-aarch64.tgz
-          sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-el7-aarch64.tgz.sha256sum
         al2023:
           url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-amzn2023-aarch64.tgz
           sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-amzn2023-aarch64.tgz.sha256sum
@@ -515,9 +498,6 @@ package_config:
     agent:
       x86_64:
         linux:
-          al2:
-            url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent-el7.x86_64.rpm
-            sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent-el7.x86_64.rpm.sha256sum
           al2023:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent-amzn2023.x86_64.rpm
             sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent-amzn2023.x86_64.rpm.sha256sum
@@ -536,9 +516,6 @@ package_config:
             sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent_amd64.ubuntu2404.deb.sha256sum
       aarch64:
         linux:
-          al2:
-            url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent-el7.aarch64.rpm
-            sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent-el7.aarch64.rpm.sha256sum
           al2023:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent-amzn2023.aarch64.rpm
             sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent-amzn2023.aarch64.rpm.sha256sum
@@ -557,9 +534,6 @@ package_config:
     connection_gateway:
       x86_64:
         linux:
-          al2:
-            url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-connection-gateway-el7.x86_64.rpm
-            sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-connection-gateway-el7.x86_64.rpm.sha256sum
           al2023:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-connection-gateway-amzn2023.x86_64.rpm
             sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-connection-gateway-amzn2023.x86_64.rpm.sha256sum
@@ -571,9 +545,6 @@ package_config:
             sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-connection-gateway-el9.x86_64.rpm.sha256sum
       aarch64:
         linux:
-          al2:
-            url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-connection-gateway-el7.aarch64.rpm
-            sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-connection-gateway-el7.aarch64.rpm.sha256sum
           al2023:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-connection-gateway-amzn2023.aarch64.rpm
             sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-connection-gateway-amzn2023.aarch64.rpm.sha256sum
@@ -585,9 +556,6 @@ package_config:
             sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-connection-gateway-el9.aarch64.rpm.sha256sum
     broker:
       linux:
-        al2:
-          url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-broker-el7.noarch.rpm
-          sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-broker-el7.noarch.rpm.sha256sum
         al2023:
           url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-broker-amzn2023.noarch.rpm
           sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-broker-amzn2023.noarch.rpm.sha256sum
@@ -634,6 +602,9 @@ package_config:
   {% endif %}
 
 gpu_settings:
+  # fail bootstrap when a node reports GPU hardware and no usable driver was installed,
+  # instead of joining the cluster driverless. disable only to work around a false positive.
+  fail_on_missing_driver: true
   nvidia:
     linux:
       s3_bucket_url: "https://ec2-linux-nvidia-drivers.s3.amazonaws.com"
@@ -650,12 +621,18 @@ gpu_settings:
     windows:
       s3_bucket_url: "https://ec2-amd-windows-drivers.s3.amazonaws.com"
       s3_bucket_path: "s3://ec2-amd-windows-drivers/latest/"
+  # every family added here also needs a driver install arm in idea-bootstrap/_templates/linux/gpu_drivers.jinja2.
+  # non-AMD families also need an entry under nvidia_public_driver_versions below.
   instance_families:
   - p2
   - p3
   - p4d
   - p4de
   - p5
+  - p5e
+  - p5en
+  - p6-b200
+  - p6e-gb200
   - g2
   - g3
   - g3s
@@ -664,11 +641,12 @@ gpu_settings:
   - g6
   - g6e
   - g6f
+  - gr6
   - g4dn
   - g4ad
   nvidia_public_driver_versions:
     ltsb_version: &ltsb_version 470.256.02
-    production_version: &production_version 580.105.08
+    production_version: &production_version 580.178.04
     p2: *ltsb_version
     g2: *ltsb_version
     g3: *production_version
@@ -679,14 +657,15 @@ gpu_settings:
     g6: *production_version
     g6e: *production_version
     g6f: *production_version
+    gr6: *production_version
     p3: *production_version
     p4d: *production_version
     p4de: *production_version
     p5: *production_version
+    p5e: *production_version
+    p5en: *production_version
+    p6-b200: *production_version
+    p6e-gb200: *production_version
 
-# provide custom tags for all resources created by IDEA
-# for eg. to add custom tags, tags as below:
-# custom_tags:
-#   - Key=custom:MyTagName,Value=MyTagValue
-#   - Key=AnotherExampleName,Value=Another Example Value
+# custom tags applied to all resources IDEA creates; each entry is "Key=...,Value=...".
 custom_tags: []

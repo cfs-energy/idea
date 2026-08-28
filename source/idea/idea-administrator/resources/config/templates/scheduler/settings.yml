@@ -19,6 +19,12 @@ compute_node_ami: {{instance_ami}}
 # provide additional policy arns to be attached to the default compute node IAM Role created by IDEA
 compute_node_iam_policy_arns: []
 
+# when enabled, jobs in bedrock-enabled projects run under the project's iam role instead of the
+# compute node role, so compute_node_iam_policy_arns below does not apply to them - use
+# cluster.iam.ec2_managed_policy_arns instead. requires cluster-manager.bedrock.enabled and a redeploy.
+bedrock:
+  enabled: false
+
 endpoints:
   external:
     priority: 15
@@ -92,6 +98,10 @@ job_provisioning:
   # this is used to ensure provisioning capacity failures, if any are retried
   stack_provisioning_timeout_seconds: 1800
 
+  # maximum provisioning retries for a job; once exhausted the job is held (failure reason recorded)
+  # instead of re-queued - the owner can qdel and resubmit, or qrls to retry.
+  max_provisioning_retries: 3
+
   # the interval at which node housekeeping session is executed.
   # housekeeping cycles ensure new ec2 instances (nodes) join the cluster and old nodes are deleted.
   # additionally, custom metrics are published at below frequency for cluster monitoring
@@ -110,6 +120,10 @@ job_provisioning:
   # if more jobs are queued during this interval, provisioner will wait until all jobs in the batch have been queued and accepted
   # applicable only for job-shared/batch scaling mode queues.
   batch_provisioning_wait_interval_seconds: 3
+
+  # how long (seconds) the ec2 dry run outcome is cached per job group signature; applies only to
+  # job-shared/batch scaling mode queues. set to 0 to run a live dry run per job instead of caching.
+  dry_run_cache_ttl_seconds: 300
 
   # the interval at which idea scheduler checks and processes finished jobs
   finished_job_processing_interval_seconds: 30
@@ -131,6 +145,15 @@ job_provisioning:
   # How often (seconds) to run the job reconciler
   job_reconciler_interval_seconds: 60
 
+  # after a job submission event, rescan the queue at this interval (seconds) until the job becomes
+  # visible or the window expires - the queuejob hook fires before the job is committed and can miss it.
+  job_reconciler_queued_retry_interval_seconds: 2
+  job_reconciler_queued_window_seconds: 30
+
+  # maximum ec2 instances a single job can request; a queue profile's own max_nodes_per_job overrides
+  # this. jobs over the limit are rejected at submission. set to 0 for no limit.
+  max_nodes_per_job: 100
+
   # Placement Group config
   placement_group:
     # refer to: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-placementgroup.html for more details
@@ -138,6 +161,24 @@ job_provisioning:
 
     # The placement strategy
     strategy: cluster # can be one of [cluster, partition, spread]
+
+provisioning_lifecycle_events:
+  # emits provisioning lifecycle events as single-line json to
+  # <logs_directory>/events/provisioning_lifecycle_events.log - local file writes only, no other sink.
+  enabled: true
+  # number of daily rotated event log files to retain
+  retention_days: 90
+
+# Elastic Fabric Adapter (EFA) config
+# applies to jobs submitted with efa_support=true
+efa:
+  # false attaches one EFA interface; true attaches one per network card - hpc6id/hpc7a/hpc8a need
+  # multi-rail to reach full fabric bandwidth (capped otherwise). validate with `fi_info -p efa` first.
+  multi_rail_enabled: false
+
+  # only applies when multi_rail_enabled is true. capped at 2 because ASG launch templates reject
+  # duplicate device indexes past the first network card - p4d/p5 (more than 2 cards) aren't supported.
+  max_interfaces: 2
 
 fair_share:
   start_score: 100

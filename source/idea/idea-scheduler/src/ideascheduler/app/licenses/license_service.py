@@ -28,7 +28,7 @@ from ideadatamodel.scheduler import (
 )
 from ideasdk.utils import Utils
 from ideasdk.shell.shell_invoker import ShellInvocationResult
-from ideascheduler.app.app_protocols import LicenseServiceProtocol
+from ideascheduler.app.app_protocols import LicenseAvailability, LicenseServiceProtocol
 from ideascheduler.app.licenses.license_resources_dao import LicenseResourcesDAO
 from ideascheduler.app.scheduler.openpbs.openpbs_constants import (
     CONFIG_FILE_SCHED_CONFIG,
@@ -39,6 +39,9 @@ from typing import Tuple, Optional
 import re
 
 PATTERN_LICENSE_RESOURCE_NAME = re.compile('(^[a-z][a-z0-9]*)_lic_([a-z][a-z0-9]*)')
+# the availability check shells out to the license server on the job submission path,
+# so it must not be able to block a submission indefinitely.
+DEFAULT_AVAIL_CHECK_TIMEOUT_SECONDS = 10
 AVAIL_CHECK_DENIED_KEYWORDS = [
     'rm',
     'sudo',
@@ -288,6 +291,13 @@ class LicenseService(LicenseServiceProtocol):
             available_count=available_count
         )
 
+    @property
+    def avail_check_timeout_seconds(self) -> int:
+        return self.context.config().get_int(
+            'scheduler.job_provisioning.license_availability_check_timeout_seconds',
+            default=DEFAULT_AVAIL_CHECK_TIMEOUT_SECONDS,
+        )
+
     def _check_license_availability(
         self, cmd: str
     ) -> Tuple[int, Optional[ShellInvocationResult], Optional[Exception]]:
@@ -305,7 +315,9 @@ class LicenseService(LicenseServiceProtocol):
                 '--command',
                 f'cd /tmp && {cmd}',
             ]
-            result = self.context.shell.invoke(cmd_tokens)
+            result = self.context.shell.invoke(
+                cmd_tokens, timeout=self.avail_check_timeout_seconds
+            )
             if result.returncode == 0:
                 return int(result.stdout), result, None
             else:
@@ -313,14 +325,18 @@ class LicenseService(LicenseServiceProtocol):
         except Exception as e:
             return 0, None, e
 
-    def get_available_licenses(self, license_resource_name: str) -> int:
+    def get_license_availability(
+        self, license_resource_name: str
+    ) -> LicenseAvailability:
         """
         run the check license script to find available licenses
 
-        in case of error or any other exception, returns available licenses as zero
+        a count reported by the license server is returned with check_ok=True, including a
+        legitimate zero. any failure to query the license server - unreachable, timed out,
+        non-zero exit, unparsable output - is returned with check_ok=False instead.
 
         :param license_resource_name: the name of the license resource configured in the license_mapping.yml file
-        :return: int - available licenses as returned by the check_licences.py script
+        :return: LicenseAvailability - the count and whether the check could be performed
         """
         try:
             license_resource_result = self.get_license_resource(
@@ -331,29 +347,43 @@ class LicenseService(LicenseServiceProtocol):
 
             availability_check_cmd = license_resource.availability_check_cmd
             if Utils.is_empty(availability_check_cmd):
-                return 0
+                # no check command configured, so zero available is the configured answer.
+                return LicenseAvailability(available_count=0, check_ok=True)
 
             available_count, result, exc = self._check_license_availability(
                 availability_check_cmd
             )
             if exc is not None:
-                self.logger.error(
-                    f'failed to check available licences for {license_resource_name}: {exc}'
+                error = (
+                    f'license server check failed for {license_resource_name}: {exc}. '
+                    f'the license server may be unreachable, slow or misconfigured.'
                 )
-                return 0
+                self.logger.error(error)
+                return LicenseAvailability(
+                    available_count=0, check_ok=False, error=error
+                )
 
             if result.returncode != 0:
-                self.logger.error(
-                    f'failed to check available licences for {license_resource_name}: {result}'
+                error = (
+                    f'license server check failed for {license_resource_name}: {result}. '
+                    f'the license server may be unreachable, slow or misconfigured.'
                 )
-                return 0
+                self.logger.error(error)
+                return LicenseAvailability(
+                    available_count=0, check_ok=False, error=error
+                )
 
             reserved_count = Utils.get_as_int(license_resource.reserved_count, 0)
 
-            return max((available_count - reserved_count), 0)
+            return LicenseAvailability(
+                available_count=max((available_count - reserved_count), 0),
+                check_ok=True,
+            )
 
         except Exception as e:
-            self.logger.error(
-                f'exception while checking available licenses for: {license_resource_name} - {e}'
+            error = (
+                f'license server check failed for {license_resource_name}: {e}. '
+                f'the license server may be unreachable, slow or misconfigured.'
             )
-            return 0
+            self.logger.error(error)
+            return LicenseAvailability(available_count=0, check_ok=False, error=error)

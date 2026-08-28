@@ -123,13 +123,13 @@ export const USER_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<User>[] 
 
 class Users extends Component<UsersProps, UsersState> {
 
-    createUserForm: RefObject<IdeaForm>
-    addUserToGroupForm: RefObject<IdeaForm>
-    removeUserFromGroupForm: RefObject<IdeaForm>
-    toggleAdminUserConfirmModal: RefObject<IdeaConfirm>
-    toggleUserEnabledConfirmModal: RefObject<IdeaConfirm>
-    resetPasswordConfirmModal: RefObject<IdeaConfirm>
-    listing: RefObject<IdeaListView>
+    createUserForm: RefObject<IdeaForm | null>
+    addUserToGroupForm: RefObject<IdeaForm | null>
+    removeUserFromGroupForm: RefObject<IdeaForm | null>
+    toggleAdminUserConfirmModal: RefObject<IdeaConfirm | null>
+    toggleUserEnabledConfirmModal: RefObject<IdeaConfirm | null>
+    resetPasswordConfirmModal: RefObject<IdeaConfirm | null>
+    listing: RefObject<IdeaListView | null>
 
     constructor(props: UsersProps) {
         super(props);

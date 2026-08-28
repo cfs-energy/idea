@@ -108,6 +108,9 @@ class HpcQueueProfilesDAO:
         queue_management_params.max_provisioned_capacity = Utils.get_value_as_int(
             'max_provisioned_capacity', db_queue_profile
         )
+        queue_management_params.max_nodes_per_job = Utils.get_value_as_int(
+            'max_nodes_per_job', db_queue_profile
+        )
         queue_management_params.wait_on_any_job_with_license = Utils.get_value_as_bool(
             'wait_on_any_job_with_license', db_queue_profile
         )
@@ -322,6 +325,10 @@ class HpcQueueProfilesDAO:
             if queue_management_params.max_provisioned_capacity is not None:
                 db_queue_profile['max_provisioned_capacity'] = (
                     queue_management_params.max_provisioned_capacity
+                )
+            if queue_management_params.max_nodes_per_job is not None:
+                db_queue_profile['max_nodes_per_job'] = (
+                    queue_management_params.max_nodes_per_job
                 )
             if queue_management_params.wait_on_any_job_with_license is not None:
                 db_queue_profile['wait_on_any_job_with_license'] = (

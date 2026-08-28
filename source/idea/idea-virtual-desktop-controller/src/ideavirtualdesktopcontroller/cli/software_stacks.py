@@ -29,6 +29,7 @@ from ideavirtualdesktopcontroller.app.software_stacks import (
 from ideasdk.aws.opensearch.aws_opensearch_client import AwsOpenSearchClient
 
 import click
+import re
 import yaml
 import os
 
@@ -656,28 +657,90 @@ def get_software_stacks_index_name(context):
     return 'software_stacks'
 
 
-# AMI search patterns for different OS/architecture combinations
+# AMI search patterns for different OS/architecture combinations.
+# Minor releases are wildcarded so these keep resolving across point releases; the
+# newest match by CreationDate wins. '_HVM-' excludes the '_HVM_BETA-' images.
 AMI_PATTERNS = {
-    'windows2019/x86-64/base': 'Windows_Server-2019-English-Full-Base-2025.*',
-    'windows2022/x86-64/base': 'Windows_Server-2022-English-Full-Base-2025.*',
-    'windows2025/x86-64/base': 'Windows_Server-2025-English-Full-Base-2025.*',
-    'rhel8/arm64': 'RHEL-8.10.0_HVM-*-arm64-*',
-    'rhel8/x86-64': 'RHEL-8.10.0_HVM-*-x86_64-*',
-    'rhel9/arm64': 'RHEL-9.6.0_HVM-*-arm64-*',
-    'rhel9/x86-64': 'RHEL-9.6.0_HVM-*-x86_64-*',
-    'ubuntu2204/arm64': 'ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-arm64-server-*',
-    'ubuntu2204/x86-64': 'ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*',
-    'ubuntu2404/arm64': 'ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-arm64-server-*',
-    'ubuntu2404/x86-64': 'ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*',
-    'amazonlinux2/arm64': 'amzn2-ami-kernel-5.10-hvm-*-arm64-gp2',
-    'amazonlinux2/x86-64': 'amzn2-ami-kernel-5.10-hvm-*-x86_64-gp2',
-    'amazonlinux2023/arm64': 'al2023-ami-2023.9.*-kernel-6.12-arm64',
-    'amazonlinux2023/x86-64': 'al2023-ami-2023.9.*-kernel-6.12-x86_64',
-    'rocky8/arm64': 'Rocky-8-EC2-Base-8.9-*.aarch64-*',
-    'rocky8/x86-64': 'Rocky-8-EC2-Base-8.9-*.x86_64-*',
-    'rocky9/arm64': 'Rocky-9-EC2-Base-9.6-*.aarch64-*',
-    'rocky9/x86-64': 'Rocky-9-EC2-Base-9.6-*.x86_64-*',
+    # Windows base AMI names are suffixed with the build date (YYYY.MM.DD). Do not pin
+    # the year: AWS retains only the most recent releases, so a pinned year eventually
+    # matches nothing. find_latest_ami() already selects the newest by CreationDate.
+    'windows2019/x86-64/base': 'Windows_Server-2019-English-Full-Base-*',
+    'windows2022/x86-64/base': 'Windows_Server-2022-English-Full-Base-*',
+    'windows2025/x86-64/base': 'Windows_Server-2025-English-Full-Base-*',
+    'rhel8/arm64': 'RHEL-8.*_HVM-*-arm64-*',
+    'rhel8/x86-64': 'RHEL-8.*_HVM-*-x86_64-*',
+    'rhel9/arm64': 'RHEL-9.*_HVM-*-arm64-*',
+    'rhel9/x86-64': 'RHEL-9.*_HVM-*-x86_64-*',
+    'rhel10/arm64': 'RHEL-10.*_HVM-*-arm64-*',
+    'rhel10/x86-64': 'RHEL-10.*_HVM-*-x86_64-*',
+    # Lookup patterns only. get_ami_pattern_for_stack() resolves an existing stack id; it
+    # does not create stacks, so an entry here is not a support claim. VirtualDesktopBaseOS
+    # has no UBUNTU2604 member, so no ubuntu2604 software stack can exist.
+    'ubuntu2204/arm64': 'ubuntu/images/hvm-ssd*/ubuntu-*-22.04-arm64-server-*',
+    'ubuntu2204/x86-64': 'ubuntu/images/hvm-ssd*/ubuntu-*-22.04-amd64-server-*',
+    'ubuntu2404/arm64': 'ubuntu/images/hvm-ssd*/ubuntu-*-24.04-arm64-server-*',
+    'ubuntu2404/x86-64': 'ubuntu/images/hvm-ssd*/ubuntu-*-24.04-amd64-server-*',
+    'ubuntu2604/arm64': 'ubuntu/images/hvm-ssd*/ubuntu-*-26.04-arm64-server-*',
+    'ubuntu2604/x86-64': 'ubuntu/images/hvm-ssd*/ubuntu-*-26.04-amd64-server-*',
+    'amazonlinux2023/arm64': 'al2023-ami-2023.*-kernel-*-arm64',
+    'amazonlinux2023/x86-64': 'al2023-ami-2023.*-kernel-*-x86_64',
+    'rocky8/arm64': 'Rocky-8-EC2-Base-8.*-*.aarch64-*',
+    'rocky8/x86-64': 'Rocky-8-EC2-Base-8.*-*.x86_64-*',
+    'rocky9/arm64': 'Rocky-9-EC2-Base-9.*-*.aarch64-*',
+    'rocky9/x86-64': 'Rocky-9-EC2-Base-9.*-*.x86_64-*',
+    'rocky10/arm64': 'Rocky-10-EC2-Base-10.*-*.aarch64-*',
+    'rocky10/x86-64': 'Rocky-10-EC2-Base-10.*-*.x86_64-*',
 }
+
+# describe_images Owners per AMI type. Filtering on 'amazon' only returns
+# Amazon-published images, which excludes every Red Hat, Rocky and Canonical AMI.
+AMI_OWNERS = {
+    'amazonlinux2023': ['amazon'],
+    'windows2019': ['amazon'],
+    'windows2022': ['amazon'],
+    'windows2025': ['amazon'],
+    # Red Hat Inc. (commercial partitions)
+    'rhel8': ['309956199498'],
+    'rhel9': ['309956199498'],
+    'rhel10': ['309956199498'],
+    # RESF only - Marketplace excluded deliberately: a Marketplace-backed id in the shipped
+    # map means OptInRequired on the first rocky job in every fresh account.
+    'rocky8': ['792107900819'],
+    'rocky9': ['792107900819'],
+    'rocky10': ['792107900819'],
+    # Canonical
+    'ubuntu2204': ['099720109477'],
+    'ubuntu2404': ['099720109477'],
+    'ubuntu2604': ['099720109477'],
+}
+
+# The aws-us-gov partition has its own Red Hat and Canonical publisher accounts. Rocky is not
+# there only through the Marketplace listing, so the first-party lookup finds nothing in GovCloud.
+GOV_AMI_OWNERS = {
+    'rhel8': ['219670896067'],
+    'rhel9': ['219670896067'],
+    'rhel10': ['219670896067'],
+    'ubuntu2204': ['513442679011'],
+    'ubuntu2404': ['513442679011'],
+    'ubuntu2604': ['513442679011'],
+}
+
+# a vendor can republish an older minor, making it the newest by date (RHEL-9.6.0_HVM-20260811
+# vs RHEL-9.8.0_HVM-20260728), so rank on the minor in the name before the date.
+MINOR_VERSION_PATTERNS = (
+    r'RHEL-(\d+)\.(\d+)',
+    r'Rocky-\d+-EC2-Base-(\d+)\.(\d+)',
+    r'al2023-ami-2023\.(\d+)\.(\d+)',
+)
+
+
+def image_sort_key(image):
+    """(major, minor, CreationDate); names without a minor (Windows, Ubuntu) sort by date alone"""
+    for pattern in MINOR_VERSION_PATTERNS:
+        match = re.match(pattern, image.get('Name', ''))
+        if match:
+            return (int(match.group(1)), int(match.group(2)), image['CreationDate'])
+    return (0, 0, image['CreationDate'])
 
 
 def get_ami_pattern_for_stack(stack_id):
@@ -717,19 +780,17 @@ def find_latest_ami(ec2_client, pattern, owners, logger, ami_type=None):
     Args:
         ec2_client: Boto3 EC2 client
         pattern: AMI name pattern to search for
-        owners: List of AMI owner IDs (kept for backward compatibility, will be overridden for rocky8/9)
+        owners: Fallback list of AMI owner IDs, used when ami_type is unknown
         logger: Logger instance
-        ami_type: AMI type to determine the correct owner (optional)
+        ami_type: AMI type used to look up the publishing account (optional)
 
     Returns:
         AMI ID of the latest matching AMI, or None if not found
     """
     try:
-        # Use aws-marketplace only for rocky8 and rocky9
-        if ami_type in ['rocky8', 'rocky9']:
-            actual_owners = ['aws-marketplace']
-        else:
-            actual_owners = ['amazon']
+        actual_owners = AMI_OWNERS.get(ami_type, owners)
+        if ec2_client.meta.region_name.startswith('us-gov-'):
+            actual_owners = GOV_AMI_OWNERS.get(ami_type, actual_owners)
 
         logger.debug(
             f'Searching for AMIs with pattern: {pattern}, owners: {actual_owners}'
@@ -749,8 +810,7 @@ def find_latest_ami(ec2_client, pattern, owners, logger, ami_type=None):
             logger.warning(f'No AMIs found matching pattern: {pattern}')
             return None
 
-        # Sort by creation date to get the latest
-        images.sort(key=lambda x: x['CreationDate'], reverse=True)
+        images.sort(key=image_sort_key, reverse=True)
         latest_ami = images[0]
 
         logger.info(

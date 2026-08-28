@@ -45,8 +45,8 @@ const DEFAULT_ACTIVE_TAB_ID = 'general'
 
 class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, VirtualDesktopSettingsState> {
 
-    generalSettingsForm: RefObject<IdeaForm>
-    defaultScheduleModal: RefObject<DefaultScheduleModal>
+    generalSettingsForm: RefObject<IdeaForm | null>
+    defaultScheduleModal: RefObject<DefaultScheduleModal | null>
 
     constructor(props: VirtualDesktopSettingsProps) {
         super(props);
@@ -126,6 +126,72 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
                     param_type: 'text',
                     data_type: 'int',
                     validate: { required: true, min: 5, max: 1440 }
+                }
+            },
+            'idle_autostop_delay_max': {
+                path: 'dcv_session.idle_autostop_delay_max',
+                config: {
+                    name: 'idle_autostop_delay_max',
+                    title: 'Idle AutoStop Delay Cap (minutes)',
+                    description: 'Maximum idle autostop delay a user may set on their own session. 0 disables per-session overrides',
+                    param_type: 'text',
+                    data_type: 'int',
+                    validate: { required: true, min: 0, max: 1440 }
+                }
+            },
+            'cleanup_enabled': {
+                path: 'dcv_session.stopped_session_cleanup.enabled',
+                config: {
+                    name: 'cleanup_enabled',
+                    title: 'Stopped Desktop Cleanup',
+                    description: 'Delete desktops stopped longer than the cutoff, and session records whose instance is gone',
+                    param_type: 'confirm',
+                    data_type: 'bool',
+                    validate: { required: true }
+                }
+            },
+            'cleanup_dry_run': {
+                path: 'dcv_session.stopped_session_cleanup.dry_run',
+                config: {
+                    name: 'cleanup_dry_run',
+                    title: 'Dry Run',
+                    description: 'Log what the cleanup would delete without deleting anything',
+                    param_type: 'confirm',
+                    data_type: 'bool',
+                    validate: { required: true }
+                }
+            },
+            'cleanup_stopped_after_days': {
+                path: 'dcv_session.stopped_session_cleanup.stopped_after_days',
+                config: {
+                    name: 'cleanup_stopped_after_days',
+                    title: 'Stopped After (days)',
+                    description: 'A desktop stopped longer than this many days, per the EC2 stop time, is deleted',
+                    param_type: 'text',
+                    data_type: 'int',
+                    validate: { required: true, min: 1, max: 365 }
+                }
+            },
+            'cleanup_warn_days_before': {
+                path: 'dcv_session.stopped_session_cleanup.warn_days_before',
+                config: {
+                    name: 'cleanup_warn_days_before',
+                    title: 'Warn Owner (days before deletion)',
+                    description: 'Email the owner this many days before deletion and wait that long before deleting. 0 sends no notice',
+                    param_type: 'text',
+                    data_type: 'int',
+                    validate: { required: true, min: 0, max: 365 }
+                }
+            },
+            'cleanup_max_per_pass': {
+                path: 'dcv_session.stopped_session_cleanup.max_per_pass',
+                config: {
+                    name: 'cleanup_max_per_pass',
+                    title: 'Max Deletions Per Pass',
+                    description: 'Deletions per 30-minute pass; the rest are picked up on the next pass',
+                    param_type: 'text',
+                    data_type: 'int',
+                    validate: { required: true, min: 1, max: 1000 }
                 }
             },
             'additional_security_groups': {
@@ -318,6 +384,25 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
         return (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <KeyValue title={title} value={value} suffix={suffix}/>
+                <SimpleSettingsButton
+                    title={`Edit ${title}`}
+                    settingConfig={this.getSettingConfig(settingKey)}
+                    currentValue={this.getCurrentValue(settingKey)}
+                    onSave={this.handleSaveSetting(settingKey)}
+                />
+            </div>
+        );
+    };
+
+    // Helper method to create an editable on/off setting row
+    createEditableToggle = (settingKey: string) => {
+        const setting = this.getSettingsConfig()[settingKey];
+        const title = setting.config.title || settingKey;
+        return (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <KeyValue title={title}>
+                    <EnabledDisabledStatusIndicator enabled={Utils.asBoolean(dot.pick(setting.path, this.state.vdcSettings))}/>
+                </KeyValue>
                 <SimpleSettingsButton
                     title={`Edit ${title}`}
                     settingConfig={this.getSettingConfig(settingKey)}
@@ -736,6 +821,7 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
                                                     {this.createEditableSetting('idle_timeout_warning')}
                                                     {this.createEditableSetting('cpu_utilization_threshold')}
                                                     {this.createEditableSetting('idle_autostop_delay')}
+                                                    {this.createEditableSetting('idle_autostop_delay_max')}
                                                 </ColumnLayout>
                                             </Container>
                                             <Container header={<Header variant={"h2"}>DCV Host</Header>}>
@@ -744,6 +830,15 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
                                                     {this.createEditableSetting('max_root_volume_memory')}
                                                     {this.createEditableSetting('allowed_instance_types')}
                                                     {this.createEditableSetting('denied_instance_types')}
+                                                </ColumnLayout>
+                                            </Container>
+                                            <Container header={<Header variant={"h2"} description={"Deletes desktops stopped longer than the cutoff set below. Enable with dry run on first."}>Stopped Desktop Cleanup</Header>}>
+                                                <ColumnLayout variant={"text-grid"} columns={2}>
+                                                    {this.createEditableToggle('cleanup_enabled')}
+                                                    {this.createEditableToggle('cleanup_dry_run')}
+                                                    {this.createEditableSetting('cleanup_stopped_after_days')}
+                                                    {this.createEditableSetting('cleanup_warn_days_before')}
+                                                    {this.createEditableSetting('cleanup_max_per_pass')}
                                                 </ColumnLayout>
                                             </Container>
                                         </SpaceBetween>

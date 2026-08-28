@@ -131,6 +131,8 @@ solution:
 
 iam:
   # IAM policy ARNs provided below will be attached to all IAM roles for EC2 Instances launched by IDEA.
+  # A Bedrock project role carries a permissions boundary, so a policy it does not allow in full is not
+  # attached to that role: the reason is logged by cluster-manager and recorded against the project.
   ec2_managed_policy_arns: []
 
 load_balancers:

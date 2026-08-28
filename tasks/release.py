@@ -213,7 +213,7 @@ def build_s3_dist(c):
 
     # convert policy yaml files to json for each partition and copy to:
     # deployment/global-s3-assets/installer_policies/<partition>/<policy-name>.json
-    supported_aws_partitions = ['aws']
+    supported_aws_partitions = ['aws', 'aws-us-gov']
 
     policy_source_dir = os.path.join(
         idea.props.administrator_project_dir, 'resources', 'installer_policies'
@@ -232,7 +232,7 @@ def build_s3_dist(c):
 
             with open(yaml_file, 'r') as f:
                 content = f.read()
-                content.replace('arn:aws:', f'arn:{aws_partition}:')
+                content = content.replace('arn:aws:', f'arn:{aws_partition}:')
                 policy_dict = Utils.from_yaml(content)
 
             json_file = os.path.join(

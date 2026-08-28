@@ -1,10 +1,5 @@
 # Begin: Install EPEL Repo
-{% if context.base_os == 'amazonlinux2' %}
-if [[ ! -f "/etc/yum.repos.d/epel.repo" ]]; then
-  amazon-linux-extras install -y epel
-  yum update --security -y
-fi
-{% elif context.base_os in ('rocky8', 'rocky9') %}
+{% if context.base_os in ('rocky8', 'rocky9', 'rocky10') %}
 if [[ ! -f "/etc/yum.repos.d/epel.repo" ]]; then
   yum -y install epel-release
 fi
@@ -15,6 +10,10 @@ fi
 {% elif context.base_os == 'rhel9' %}
 if [[ ! -f "/etc/yum.repos.d/epel.repo" ]]; then
   yum -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
+fi
+{% elif context.base_os == 'rhel10' %}
+if [[ ! -f "/etc/yum.repos.d/epel.repo" ]]; then
+  yum -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm
 fi
 {% endif %}
 # End: Install EPEL Repo

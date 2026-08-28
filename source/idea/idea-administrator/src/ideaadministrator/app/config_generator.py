@@ -13,6 +13,7 @@ from ideasdk.utils import Utils, Jinja2Utils
 from ideadatamodel import exceptions, constants
 
 from ideaadministrator.app_props import AdministratorProps
+from ideaadministrator.app.region_ami_config import resolve_region_ami
 from ideaadministrator.app.vpc_endpoints_helper import VpcEndpointsHelper
 
 import os
@@ -192,7 +193,26 @@ class ConfigGenerator:
         return Utils.get_value_as_string('instance_type', self.user_values, 'm6i.large')
 
     def get_base_os(self) -> str:
-        return Utils.get_value_as_string('base_os', self.user_values, 'amazonlinux2023')
+        base_os = Utils.get_value_as_string(
+            'base_os', self.user_values, 'amazonlinux2023'
+        )
+        # Fail here rather than downstream with a confusing "instance_ami not found".
+        if base_os in constants.EOL_BASEOS:
+            raise exceptions.cluster_config_error(
+                f'base_os: {base_os} has reached end-of-life and is no longer supported by IDEA. '
+                f'Update base_os to {constants.EOL_BASEOS[base_os]} in values.yml and re-run.'
+            )
+        # EL10 has no Amazon DCV packages: an eVDI-enabled install on rhel10/rocky10
+        # would deploy broker/gateway/controller nodes with no DCV installed.
+        if base_os in ('rhel10', 'rocky10'):
+            enabled_modules = self.get_enabled_modules()
+            if 'virtual-desktop-controller' in enabled_modules:
+                raise exceptions.general_exception(
+                    f'base_os {base_os} is not supported with the '
+                    f'virtual-desktop-controller module: Amazon DCV publishes no EL10 '
+                    f'packages. Choose rhel9/rocky9, or install without eVDI.'
+                )
+        return base_os
 
     def get_dcv_connection_gateway_instance_type(self) -> str:
         return Utils.get_value_as_string(
@@ -204,6 +224,27 @@ class ConfigGenerator:
             'dcv_connection_gateway_volume_size', self.user_values, 200
         )
 
+    def get_instance_architecture(self) -> str:
+        """
+        processor architecture the cluster AMIs are selected for. set instance_architecture in
+        values.yml when the infrastructure instance types are arm64 - region_ami_config.yml must
+        then carry AMIs for that architecture.
+        """
+        return Utils.get_value_as_string(
+            'instance_architecture', self.user_values, constants.ARCHITECTURE_X86_64
+        )
+
+    def get_region_ami(self) -> str:
+        regions_config_file = self.props.region_ami_config_file()
+        with open(regions_config_file, 'r') as f:
+            regions_config = Utils.from_yaml(f.read())
+        return resolve_region_ami(
+            regions_config=regions_config,
+            aws_region=self.get_aws_region(),
+            base_os=self.get_base_os(),
+            architecture=self.get_instance_architecture(),
+        )
+
     def get_dcv_connection_gateway_instance_ami(self) -> str:
         dcv_connection_gateway_instance_ami = Utils.get_value_as_string(
             'dcv_connection_gateway_instance_ami', self.user_values
@@ -211,22 +252,7 @@ class ConfigGenerator:
         if Utils.is_not_empty(dcv_connection_gateway_instance_ami):
             return dcv_connection_gateway_instance_ami
 
-        aws_region = self.get_aws_region()
-        regions_config_file = self.props.region_ami_config_file()
-        with open(regions_config_file, 'r') as f:
-            regions_config = Utils.from_yaml(f.read())
-        ami_config = Utils.get_value_as_dict(aws_region, regions_config)
-        if ami_config is None:
-            raise exceptions.general_exception(
-                f'aws_region: {aws_region} not found in region_ami_config.yml'
-            )
-        base_os = self.get_base_os()
-        ami_id = Utils.get_value_as_string(base_os, ami_config)
-        if Utils.is_empty(ami_id):
-            raise exceptions.general_exception(
-                f'instance_ami not found for base_os: {base_os}, region: {aws_region}'
-            )
-        return ami_id
+        return self.get_region_ami()
 
     def get_dcv_broker_instance_type(self) -> str:
         return Utils.get_value_as_string(
@@ -242,43 +268,13 @@ class ConfigGenerator:
         )
         if Utils.is_not_empty(dcv_broker_instance_ami):
             return dcv_broker_instance_ami
-        aws_region = self.get_aws_region()
-        regions_config_file = self.props.region_ami_config_file()
-        with open(regions_config_file, 'r') as f:
-            regions_config = Utils.from_yaml(f.read())
-        ami_config = Utils.get_value_as_dict(aws_region, regions_config)
-        if ami_config is None:
-            raise exceptions.general_exception(
-                f'aws_region: {aws_region} not found in region_ami_config.yml'
-            )
-        base_os = self.get_base_os()
-        ami_id = Utils.get_value_as_string(base_os, ami_config)
-        if Utils.is_empty(ami_id):
-            raise exceptions.general_exception(
-                f'instance_ami not found for base_os: {base_os}, region: {aws_region}'
-            )
-        return ami_id
+        return self.get_region_ami()
 
     def get_instance_ami(self) -> str:
         instance_ami = Utils.get_value_as_string('instance_ami', self.user_values)
         if Utils.is_not_empty(instance_ami):
             return instance_ami
-        aws_region = self.get_aws_region()
-        regions_config_file = self.props.region_ami_config_file()
-        with open(regions_config_file, 'r') as f:
-            regions_config = Utils.from_yaml(f.read())
-        ami_config = Utils.get_value_as_dict(aws_region, regions_config)
-        if ami_config is None:
-            raise exceptions.general_exception(
-                f'aws_region: {aws_region} not found in region_ami_config.yml'
-            )
-        base_os = self.get_base_os()
-        ami_id = Utils.get_value_as_string(base_os, ami_config)
-        if Utils.is_empty(ami_id):
-            raise exceptions.general_exception(
-                f'instance_ami not found for base_os: {base_os}, region: {aws_region}'
-            )
-        return ami_id
+        return self.get_region_ami()
 
     def get_volume_size(self) -> int:
         return Utils.get_value_as_int('volume_size', self.user_values, default=200)

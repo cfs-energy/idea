@@ -1,0 +1,11 @@
+Version: '2012-10-17'
+Statement:
+  # assumed by amazon bedrock to deliver model invocation log records. write only,
+  # and only into the log group idea created for them.
+  - Action:
+      - logs:CreateLogStream
+      - logs:PutLogEvents
+    Resource:
+      - '{{ context.arns.bedrock_invocation_log_group_arn }}:log-stream:*'
+    Effect: Allow
+    Sid: BedrockInvocationLogDelivery

@@ -11,7 +11,7 @@
  * and limitations under the License.
  */
 
-import React, {Component} from "react";
+import {Component} from "react";
 import {IdeaAppLayoutProps} from "../../components/app-layout";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import {ColumnLayout, Container, Grid, Header, SpaceBetween, Tabs} from "@cloudscape-design/components";
@@ -228,6 +228,9 @@ class VirtualDesktopSessionDetail extends Component<VirtualDesktopSessionDetailP
                                                 <KeyValue title="Description" value={this.state.session.description}/>
                                                 <KeyValue title="Session Type" value={this.state.session.type}/>
                                                 <KeyValue title="Hibernation Enabled" value={this.state.session.hibernation_enabled} type="boolean"/>
+                                                <KeyValue title="Cleanup Exempt" value={this.state.session.cleanup_exempt} type="boolean"/>
+                                                <KeyValue title="Cleanup Exempt Reason" value={this.state.session.cleanup_exempt_reason}/>
+                                                {this.state.session.cleanup_warning_sent_on && <KeyValue title="Deletion Notice Sent On" value={this.state.session.cleanup_warning_sent_on} type="date"/>}
                                                 <KeyValue title="Created On" value={this.state.session.created_on} type="date"/>
                                                 <KeyValue title="Updated On" value={this.state.session.updated_on} type="date"/>
                                             </ColumnLayout>
@@ -410,13 +413,12 @@ class VirtualDesktopSessionDetail extends Component<VirtualDesktopSessionDetailP
                                                                         }
                                                                     });
 
-                                                                    return uniqueEndpoints.map((endpoint: any, index: number) => (
-                                                                        <React.Fragment key={index}>
-                                                                            <KeyValue title={`Endpoint ${index+1} Protocol`} value={endpoint.protocol}/>
-                                                                            <KeyValue title={`Endpoint ${index+1} Port`} value={endpoint.port}/>
-                                                                            <KeyValue title={`Endpoint ${index+1} Path`} value={endpoint.web_url_path || '(none)'}/>
-                                                                        </React.Fragment>
-                                                                    ));
+                                                                    // ColumnLayout does not flatten fragment children on React 19, so each cell is emitted as a flat array element.
+                                                                    return uniqueEndpoints.flatMap((endpoint: any, index: number) => ([
+                                                                        <KeyValue key={`endpoint-${index}-protocol`} title={`Endpoint ${index+1} Protocol`} value={endpoint.protocol}/>,
+                                                                        <KeyValue key={`endpoint-${index}-port`} title={`Endpoint ${index+1} Port`} value={endpoint.port}/>,
+                                                                        <KeyValue key={`endpoint-${index}-path`} title={`Endpoint ${index+1} Path`} value={endpoint.web_url_path || '(none)'}/>
+                                                                    ]));
                                                                 })()}
                                                             </ColumnLayout>
                                                         </Container>
@@ -426,9 +428,7 @@ class VirtualDesktopSessionDetail extends Component<VirtualDesktopSessionDetailP
                                                         <Container header={<Header variant="h3">Server Tags</Header>}>
                                                             <ColumnLayout columns={2} variant={"text-grid"}>
                                                                 {this.state.sessionHealth.server.tags.map((tag: any, index: number) => (
-                                                                    <React.Fragment key={index}>
-                                                                        <KeyValue title={tag.key} value={tag.value} clipboard={true}/>
-                                                                    </React.Fragment>
+                                                                    <KeyValue key={index} title={tag.key} value={tag.value} clipboard={true}/>
                                                                 ))}
                                                             </ColumnLayout>
                                                         </Container>

@@ -11,14 +11,8 @@ server:
   enable_metrics: false
   graceful_shutdown_timeout: 10
   api_context_path: /{{ module_id }}
-  # Additional USB Remotization AllowList defined in  list format
-  # Default is an empty list / no additional devices considered for USB remotization
-  # See docs:
-  # Admin Guide: https://docs.aws.amazon.com/dcv/latest/adminguide/manage-usb-remote.html
-  # User Guide:  https://docs.aws.amazon.com/dcv/latest/userguide/using-usb.html
+  # list of DCV USB filter strings to allow; empty (default) allows no additional devices. format: DCV USB admin/user guides.
   usb_remotization: []
-# Example DCV USB Filter string:
-#      - "Q-LightLampHIDDevice,3,0,0,1240,59196,0,0"
 
 
 controller:
@@ -46,11 +40,7 @@ controller:
       pause_time_minutes: 15
     # instance metadata access method
     metadata_http_tokens: "required"  # supported values are "required" for IMDSv2 or "optional" for IMDSv1
-  #
-  # Enable/Disable budget validation for eVDI sessions
-  # True (default) - Do not allow new eVDI sessions on projects that have exceeded their budget.
-  # False - Allow eVDI sessions on projects with exceeded budgets.
-  #
+  # if true (default), blocks new eVDI sessions on projects that have exceeded their budget.
   enforce_project_budgets: true  # True or False
   #
   request_handler_threads:
@@ -159,11 +149,24 @@ dcv_session:
   idle_timeout: 240 # in minutes. Default is 240-minutes / 4-hours
   idle_timeout_warning: 300 # in seconds
   idle_autostop_delay: 60 # Time (in minutes) a disconnected (but running) DCV session is eligible for autostop. Default is 60-minutes / 1-hour
+  idle_autostop_delay_max: 240 # Upper bound (in minutes) for the per-session idle_autostop_delay a user may set. Set to 0 to disable per-session overrides
   cpu_utilization_threshold: 30 # in percentage. If a given session has more than this much CPU activity - autostop will not take place
   max_root_volume_memory: 1000 # in GB
   additional_security_groups: []
   allowed_sessions_per_user: 5
   validation_timeout_minutes: 2 # Maximum time to wait for DCV broker validation before forcing EC2 stop/terminate to prevent indefinite running costs
+  # seconds a session may stay in PROVISIONING before it errors and releases its instance.
+  # must match scheduler.job_provisioning.stack_provisioning_timeout_seconds; set to 0 to disable the timeout.
+  provisioning_timeout_seconds: 1800
+  # deletes desktops that have sat stopped past a cutoff, and session records whose instance is gone,
+  # through the normal delete path. off by default; enable with dry_run on first and read the controller log.
+  stopped_session_cleanup:
+    enabled: false # run the sweep on the 30-minute schedule
+    dry_run: true # log what would be deleted without deleting anything
+    stopped_after_days: 30 # a desktop stopped longer than this, per the ec2 stop time, is deleted
+    warn_days_before: 7 # email the owner this many days before deletion and wait that long before deleting; 0 sends no notice
+    max_per_pass: 25 # deletions per pass; the rest are picked up on the next pass
+    keep_tags: ['idea:keep', 'ideal:keep'] # an instance carrying any of these tag keys is never deleted
   instance_types:
     allow: # Supports both instance families and types. E.g. specify t3 for family and t3.large for instance type
       - t3
@@ -175,22 +178,15 @@ dcv_session:
     deny: [] # Supports both instance families and types. E.g. specify t3 for family and t3.large for instance type
   quic_support: {{ dcv_session_quic_support | lower }}
 
-  #
-  # By default, the eVDI subnets match the cluster private subnets.
-  # Here you can specify eVDI-specific subnets as an alternative to using the cluster.network.private_subnets
-  #
+  # by default, eVDI subnets match cluster.network.private_subnets; override here if needed.
   network:
     private_subnets:
       {{ utils.to_yaml(private_subnet_ids) | indent(6) }}
 
-    # Supported eVDI randomize_subnets settings:
-    # True - Randomize the subnets (dcv_session.network.private_subnets or cluster.network.private_subnets) for deployment
-    # False - (default)  Use the subnets (dcv_session.network.private_subnets or cluster.network.private_subnets) in the order specified in the configuration.
+    # if true, randomizes subnet selection for deployment; default (false) uses the order given.
     randomize_subnets: False
 
-    # Retry methods when encountering an eVDI deployment error
-    # True - (default) Immediately retry the next subnet (ordered or random from subnet_deployment_method)
-    # False - error the request on first error. This may be desired to avoid cross-AZ charges.
+    # if true (default), retries the next subnet on a deployment error; set false to fail fast and avoid cross-AZ charges.
     subnet_autoretry: True
 
   # instance metadata access method
@@ -227,6 +223,9 @@ dcv_session:
     deleted:
       enabled: true
       email_template: virtual-desktop-controller.session-deleted
+    cleanup_warning:
+      enabled: true
+      email_template: virtual-desktop-controller.session-cleanup-warning
     session-shared:
       enabled: true
       email_template: virtual-desktop-controller.session-shared
@@ -241,11 +240,8 @@ dcv_session:
     start_up_time: '09:00'
     shut_down_time: '17:00'
 
-  # You can provide default schedules of every day of the week in this section.
-  # Every schedule entry looks as follows
-  #  type: NO_SCHEDULE, WORKING_HOURS (timings are defined in working_hours.start_up_time and working_hours.shut_down_time), STOP_ON_IDLE, START_ALL_DAY, CUSTOM_SCHEDULE
-  #  start_up_time: To be provided IF type is CUSTOM_SCHEDULE
-  #  shut_down_time: To be provided IF type is CUSTOM_SCHEDULE
+  # default per-day schedule; type is one of NO_SCHEDULE, WORKING_HOURS, STOP_ON_IDLE, START_ALL_DAY, CUSTOM_SCHEDULE.
+  # start_up_time/shut_down_time are required only when type is CUSTOM_SCHEDULE.
   schedule:
     monday:
       type: STOP_ON_IDLE
@@ -283,6 +279,13 @@ dcv_session:
 instance_storage:
   # Configure mount point for instance store devices (NVMe/SSD)
   mount_point: /scratch
+
+# claude code defaults seeded onto a desktop whose project has bedrock model access. seeded
+# as user settings, so the desktop owner can change them afterwards.
+bedrock:
+  claude_code:
+    # auto, default, acceptEdits or plan. none seeds no permissions block at all.
+    permission_mode: auto
 
 logging:
   logs_directory: /opt/idea/app/logs

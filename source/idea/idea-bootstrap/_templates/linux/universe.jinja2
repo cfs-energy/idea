@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Begin: Enable extra repo for Ubuntu https://help.ubuntu.com/community/Repositories/Ubuntu
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
   log_info "Ubuntu detected, enabling universe and multiverse repository"
 
   # Function to check if a component is enabled in any repository

@@ -200,3 +200,11 @@ yarn.lock
 
 region_ami_config_backup_*.yml
 base-software-stack-config_backup_*.yaml
+
+# DynamoDB Local scratch from the cluster-manager tests. Carries a per-machine
+# installationId, so it belongs to the developer and not to a public repo.
+source/idea/idea-cluster-manager/tests/dynamodb-local-metadata.json
+source/idea/idea-cluster-manager/tests/*.db
+
+# Claude Code worktrees
+.claude/

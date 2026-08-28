@@ -33,8 +33,13 @@ from ideascheduler.app.app_protocols import (
 from ideascheduler.app.metrics import JobProvisioningMetrics
 
 import os
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 from pathlib import Path
+
+if TYPE_CHECKING:
+    from ideascheduler.app.provisioning.lifecycle_events import (
+        ProvisioningLifecycleEvents,
+    )
 
 
 class SchedulerAppContext(SocaContext):
@@ -60,6 +65,7 @@ class SchedulerAppContext(SocaContext):
         self.applications: Optional[HpcApplicationsProtocol] = None
         self.license_service: Optional[LicenseServiceProtocol] = None
         self.metrics: Optional[JobProvisioningMetrics] = None
+        self.lifecycle_events: Optional['ProvisioningLifecycleEvents'] = None
 
         self.shell: Optional[ShellInvoker] = None
 

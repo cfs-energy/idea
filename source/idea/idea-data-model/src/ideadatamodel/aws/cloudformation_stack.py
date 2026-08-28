@@ -63,6 +63,10 @@ class CloudFormationStack:
         return self.get_tag(constants.IDEA_TAG_JOB_GROUP)
 
     @property
+    def soca_capacity_signature(self) -> Optional[str]:
+        return self.get_tag(constants.IDEA_TAG_CAPACITY_SIGNATURE)
+
+    @property
     def soca_job_queue(self) -> Optional[str]:
         return self.get_tag(constants.IDEA_TAG_JOB_QUEUE)
 

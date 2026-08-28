@@ -40,6 +40,16 @@ repos:
     hooks:
       - id: gitleaks
         args: [--config, .github/.gitleaks.toml]
+  # Upstream repo rather than a local hook, so pre-commit builds the binary itself
+  - repo: https://github.com/trufflesecurity/trufflehog
+    rev: v3.90.8
+    hooks:
+      - id: trufflehog
+        name: TruffleHog
+        description: Detect secrets in your data.
+        # jdbc excluded: it flags credential-less sample connection strings in bootstrap templates
+        entry: trufflehog filesystem --no-update --log-level=-1 --config=.github/trufflehog-config.yaml --exclude-paths=.github/trufflehog-exclude-paths.txt --exclude-detectors=jdbc --results=verified,unknown,unverified --filter-entropy=3.0 --fail .
+        pass_filenames: false
   # YAML-specific checks and formatting
   - repo: https://github.com/adrienverge/yamllint.git
     rev: v1.37.1
@@ -110,6 +120,16 @@ repos:
         files: ^\.github/workflows/
         entry: actionlint
         minimum_pre_commit_version: 3.0.0
+  # Web portal linting
+  - repo: local
+    hooks:
+      - id: lint-cloudscape-usage
+        name: Lint Cloudscape usage
+        description: Hardcoded per-release class names and React.Fragment children of layout components both break silently on upgrade
+        language: node
+        additional_dependencies: ['typescript@5.9.3']
+        entry: node source/idea/idea-cluster-manager/webapp/build-support/lint-cloudscape-usage.mjs
+        files: ^source/idea/idea-cluster-manager/webapp/src/.*\.(ts|tsx|js|jsx|css|scss)$
   # Typo checking (can run last as it's less critical)
   - repo: https://github.com/adhtruong/mirrors-typos
     rev: v1.33.1

@@ -12,10 +12,12 @@
 from ideadatamodel import (
     exceptions,
     errorcodes,
+    GetHpcLicenseResourceRequest,
     SocaMemory,
     JobValidationResult,
     JobValidationResultEntry,
     SocaJob,
+    SocaQueueMode,
     SocaSpotAllocationStrategy,
     SocaJobEstimatedBOMCost,
     SocaJobNotifications,
@@ -112,9 +114,20 @@ class OpenPBSAPIInvocationContext:
                     message=f'queue: {queue_name} has been disabled and cannot accept new job submissions.',
                 )
 
+            # the project is resolved before the builder is created: it decides the
+            # instance profile the job's compute nodes run under.
+            if Utils.is_empty(project_name):
+                project = self.app_context.projects_client.get_project_by_id(
+                    queue_profile.projects[0].project_id
+                )
+                project_name = project.name
+
             job_params = {**old_job_params, **job_params}
             self._job_builder = SocaJobBuilder(
-                context=self.app_context, params=job_params, queue_profile=queue_profile
+                context=self.app_context,
+                params=job_params,
+                queue_profile=queue_profile,
+                project=project_name,
             )
 
             self._job = self.event.as_soca_job(
@@ -123,13 +136,6 @@ class OpenPBSAPIInvocationContext:
                 job_builder=self.job_builder,
             )
             self._job.queue = queue_name
-
-            if Utils.is_empty(project_name):
-                project = self.app_context.projects_client.get_project_by_id(
-                    queue_profile.projects[0].project_id
-                )
-                project_name = project.name
-
             self._job.project = project_name
 
             dry_run = self.dry_run_option()
@@ -272,6 +278,18 @@ class OpenPBSAPIInvocationContext:
                     error_code=error_code, message=e.message
                 )
 
+            # bedrock access needing an administrator is rejected here; an unresolved
+            # check is accepted, and provisioning holds the job until it resolves.
+            try:
+                provisioning_util.check_bedrock(reject_when_check_fails=False)
+            except exceptions.SocaException as e:
+                if e.error_code == errorcodes.BEDROCK_ACCESS_NOT_AUTHORIZED:
+                    self.add_incidentals_validation_entry(
+                        error_code='Bedrock.NotAuthorized', message=e.message
+                    )
+                else:
+                    raise e
+
             # check reserved instance usage
             try:
                 provisioning_util.check_reserved_instance_usage()
@@ -314,17 +332,62 @@ class OpenPBSAPIInvocationContext:
                 self._service_quota_result = None
                 self._job_submission_result.service_quotas = None
 
-            # check ec2 instance dry run - only if ephemeral capacity.
-            # do not check dry run for batch/job-shared or always on nodes
-            # job-shared is skipped as ec2 dry run can cause significant performance impact when 100s of jobs are submitted in batch
+            # an unknown license resource can never provision, so it's checked at submission -
+            # except on license-optimized queues, which are expected to queue until available.
+            self.check_licenses(provisioning_util=provisioning_util)
+
+            # ephemeral capacity gets a live dry run per submission; batch/job-shared queues
+            # cache one per job group signature, since a dry run per job floods the EC2 API.
             try:
                 if self.job.is_ephemeral_capacity():
                     provisioning_util.ec2_dry_run()
+                else:
+                    provisioning_util.ec2_dry_run_cached()
             except exceptions.SocaException as e:
                 if e.error_code == errorcodes.EC2_DRY_RUN_FAILED:
                     self.add_incidentals_validation_entry(
                         error_code='EC2DryRunFailed', message=e.message
                     )
+
+    def check_licenses(self, provisioning_util: JobProvisioningUtil):
+        licenses = self.job.params.licenses
+        if licenses is None or len(licenses) == 0:
+            return
+
+        licenses_resolved = True
+        for license_ask in licenses:
+            try:
+                self.app_context.license_service.get_license_resource(
+                    GetHpcLicenseResourceRequest(name=license_ask.name)
+                )
+            except exceptions.SocaException as e:
+                licenses_resolved = False
+                self.add_incidentals_validation_entry(
+                    error_code='Licenses.NotFound',
+                    message=f'License resource: ({license_ask.name}) is not configured. '
+                    f'The job can never be provisioned. Err: {e.message}',
+                )
+
+        if not licenses_resolved:
+            return
+
+        queue_profile = self.app_context.queue_profiles.get_queue_profile(
+            queue_name=self.job.queue
+        )
+        if queue_profile.queue_mode == SocaQueueMode.LICENSE_OPTIMIZED:
+            return
+
+        try:
+            # only a reachable license server can reject a submission; an unreachable one
+            # accepts the job (provisioning re-checks), so it can't reject every job for the resource.
+            provisioning_util.check_licenses(reject_when_check_fails=False)
+        except exceptions.SocaException as e:
+            if e.error_code == errorcodes.NOT_ENOUGH_LICENSES:
+                self.add_incidentals_validation_entry(
+                    error_code='Licenses.NotAvailable', message=e.message
+                )
+            else:
+                raise e
 
     def get_job_time_seconds(self) -> int:
         if self.job.params.walltime:

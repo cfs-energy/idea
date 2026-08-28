@@ -16,6 +16,7 @@ Test Cases for AccountsService
 from ideaclustermanager import AppContext
 from ideadatamodel import exceptions, errorcodes, User, ListUsersRequest
 
+import botocore.exceptions
 import pytest
 from typing import Optional
 
@@ -215,3 +216,186 @@ def test_accounts_crud_list_users(context: AppContext):
             found = user
             break
     assert found is not None
+
+
+def _invalid_password_error(operation: str) -> botocore.exceptions.ClientError:
+    return botocore.exceptions.ClientError(
+        {
+            'Error': {
+                'Code': 'InvalidPasswordException',
+                'Message': 'Password did not conform with policy',
+            }
+        },
+        operation,
+    )
+
+
+def test_accounts_create_user_rejected_password_should_fail(
+    context: AppContext, monkeypatch
+):
+    """
+    the user pool rejects the password. the call must fail rather than report a
+    user that cannot sign in.
+    """
+    cognito = context.aws().cognito_idp()
+    deleted = []
+
+    def raise_invalid_password(**_):
+        raise _invalid_password_error('AdminSetUserPassword')
+
+    monkeypatch.setattr(
+        cognito, 'admin_set_user_password', raise_invalid_password, raising=False
+    )
+    monkeypatch.setattr(
+        cognito,
+        'admin_delete_user',
+        lambda **kwargs: deleted.append(kwargs.get('Username')) or {},
+        raising=False,
+    )
+
+    with pytest.raises(exceptions.SocaException) as exc_info:
+        context.accounts.create_user(
+            user=User(
+                username='rejectedpwuser',
+                email='rejectedpwuser@example.com',
+                password='MockPassword_123',
+            ),
+            email_verified=True,
+        )
+
+    assert exc_info.value.error_code == errorcodes.INVALID_PARAMS
+    assert 'rejectedpwuser' in deleted
+    assert context.accounts.user_dao.get_user('rejectedpwuser') is None
+
+
+def test_accounts_create_user_rejected_temporary_password_should_fail(
+    context: AppContext, monkeypatch
+):
+    """
+    an unverified-email create sends the generated password as a temporary password.
+    a rejection there must surface as an invalid params error, not a raw client error.
+    """
+    cognito = context.aws().cognito_idp()
+
+    def raise_invalid_password(**_):
+        raise _invalid_password_error('AdminCreateUser')
+
+    monkeypatch.setattr(
+        cognito, 'admin_create_user', raise_invalid_password, raising=False
+    )
+
+    with pytest.raises(exceptions.SocaException) as exc_info:
+        context.accounts.create_user(
+            user=User(
+                username='temppwuser',
+                email='temppwuser@example.com',
+            ),
+            email_verified=False,
+        )
+
+    assert exc_info.value.error_code == errorcodes.INVALID_PARAMS
+    assert context.accounts.user_dao.get_user('temppwuser') is None
+
+
+def test_accounts_create_user_failure_after_db_write_rolls_back(
+    context: AppContext, monkeypatch
+):
+    """
+    a step that fails after the user record is written must not leave the account,
+    its personal group or its group memberships behind.
+    """
+    cognito = context.aws().cognito_idp()
+    deleted = []
+    monkeypatch.setattr(
+        cognito,
+        'admin_delete_user',
+        lambda **kwargs: deleted.append(kwargs.get('Username')) or {},
+        raising=False,
+    )
+
+    def raise_password_sync(*_, **__):
+        raise exceptions.soca_exception(
+            error_code=errorcodes.GENERAL_ERROR,
+            message='directory service unavailable',
+        )
+
+    monkeypatch.setattr(context.accounts, 'change_ldap_password', raise_password_sync)
+
+    sent = []
+    monkeypatch.setattr(
+        context.task_manager,
+        'send',
+        lambda *args, **kwargs: sent.append(kwargs),
+    )
+
+    with pytest.raises(exceptions.SocaException) as exc_info:
+        context.accounts.create_user(
+            user=User(
+                username='rollbackuser',
+                email='rollbackuser@example.com',
+                password='MockPassword_123',
+            ),
+            email_verified=True,
+        )
+
+    assert exc_info.value.error_code == errorcodes.GENERAL_ERROR
+    assert context.accounts.user_dao.get_user('rollbackuser') is None
+    assert context.accounts.group_dao.get_group('rollbackuser-user-group') is None
+    assert 'rollbackuser' in deleted
+    # nothing that builds the account was queued: a queued task would run against
+    # a record the rollback has already deleted.
+    queued = [
+        task
+        for task in sent
+        if not (
+            task['task_name'] == 'accounts.group-membership-updated'
+            and task['payload']['operation'] == 'remove'
+        )
+    ]
+    assert queued == []
+    default_group = context.accounts.group_name_helper.get_default_project_group()
+    assert (
+        'rollbackuser'
+        not in context.accounts.group_members_dao.get_usernames_in_group(default_group)
+    )
+
+
+def test_accounts_create_user_pool_failure_after_create_deletes_pool_user(
+    context: AppContext, monkeypatch
+):
+    """
+    the pool entry exists once admin_create_user returns, and the password is set
+    in a second call. a failure there must delete the entry, not leave a user
+    that exists but cannot sign in.
+    """
+    cognito = context.aws().cognito_idp()
+    deleted = []
+
+    def raise_internal_error(**_):
+        raise botocore.exceptions.ClientError(
+            {'Error': {'Code': 'InternalErrorException', 'Message': 'try later'}},
+            'AdminSetUserPassword',
+        )
+
+    monkeypatch.setattr(
+        cognito, 'admin_set_user_password', raise_internal_error, raising=False
+    )
+    monkeypatch.setattr(
+        cognito,
+        'admin_delete_user',
+        lambda **kwargs: deleted.append(kwargs.get('Username')) or {},
+        raising=False,
+    )
+
+    with pytest.raises(botocore.exceptions.ClientError):
+        context.accounts.create_user(
+            user=User(
+                username='poolfailuser',
+                email='poolfailuser@example.com',
+                password='MockPassword_123',
+            ),
+            email_verified=True,
+        )
+
+    assert deleted == ['poolfailuser']
+    assert context.accounts.user_dao.get_user('poolfailuser') is None

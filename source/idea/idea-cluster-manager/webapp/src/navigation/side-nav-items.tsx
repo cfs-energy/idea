@@ -77,6 +77,13 @@ export const IdeaSideNavItems = (context: AppContext): SideNavigationProps.Item[
                 href: '#/home/ssh-access'
             })
         }
+        if (context.getClusterSettingsService().isCustomDashboardEnabled()) {
+            userNav.items.push({
+                type: 'link',
+                text: context.getClusterSettingsService().getCustomDashboardTitle(),
+                href: '#/home/custom-dashboard'
+            })
+        }
     }
 
     // start admin section

@@ -47,9 +47,9 @@ const POLLING_INTERVAL = parseInt(process.env.REACT_APP_TAIL_POLLING_INTERVAL ||
 
 class IdeaLogTail extends Component<IdeaLogTailProps, IdeaLogTailState> {
 
-    logEntries: RefObject<HTMLDivElement>
+    logEntries: RefObject<HTMLDivElement | null>
     interval: any
-    xterm: RefObject<HTMLDivElement>
+    xterm: RefObject<HTMLDivElement | null>
     terminal: Terminal
     xtermFitAddon: FitAddon
 

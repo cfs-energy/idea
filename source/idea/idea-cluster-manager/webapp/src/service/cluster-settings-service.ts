@@ -15,9 +15,42 @@
 import {ClusterSettingsClient} from "../client";
 import {Constants, ErrorCodes} from "../common/constants";
 import IdeaException from "../common/exceptions";
+import Utils from "../common/utils";
 
 export interface ClusterSettingsServiceProps {
     clusterSettings: ClusterSettingsClient
+}
+
+export interface CustomDashboardSettings {
+    enabled: boolean
+    title: string
+    url: string
+}
+
+const DEFAULT_CUSTOM_DASHBOARD_TITLE = 'Dashboard'
+
+const CUSTOM_DASHBOARD_DISABLED: CustomDashboardSettings = {
+    enabled: false,
+    title: DEFAULT_CUSTOM_DASHBOARD_TITLE,
+    url: ''
+}
+
+// only http(s) can be framed: a javascript:, data: or blob: URL would run in a document
+// that inherits the portal origin and can read its tokens.
+export function parseDashboardUrl(url?: string): URL | null {
+    if (Utils.isEmpty(url)) {
+        return null
+    }
+    let parsed: URL
+    try {
+        parsed = new URL(Utils.asString(url), window.location.href)
+    } catch (_) {
+        return null
+    }
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+        return null
+    }
+    return parsed
 }
 
 class ClusterSettingsService {
@@ -31,6 +64,7 @@ class ClusterSettingsService {
     clusterLocale: string
     clusterTimezone: string
     clusterHomeDir: string
+    customDashboard: CustomDashboardSettings
 
     constructor(props: ClusterSettingsServiceProps) {
         this.props = props
@@ -41,6 +75,7 @@ class ClusterSettingsService {
         this.clusterLocale = 'en-US'
         this.clusterTimezone = 'UTC'
         this.clusterHomeDir = ''
+        this.customDashboard = CUSTOM_DASHBOARD_DISABLED
     }
 
     initialize(): Promise<boolean> {
@@ -59,11 +94,42 @@ class ClusterSettingsService {
             return this.getModuleSettings(Constants.MODULE_SHARED_STORAGE)
         }).then(sharedStorageSettings => {
             this.clusterHomeDir = `${sharedStorageSettings.apps.mount_dir}/${this.clusterName}`
+            return this.initializeCustomDashboard()
+        }).then(_ => {
             return true
         }).catch(error => {
             console.error(error)
             return false
         })
+    }
+
+    private initializeCustomDashboard(): Promise<boolean> {
+        return this.getModuleSettings(Constants.MODULE_CLUSTER_MANAGER).then(settings => {
+            const customDashboard = settings?.web_portal?.custom_dashboard
+            this.customDashboard = {
+                enabled: Utils.asBoolean(customDashboard?.enabled),
+                title: Utils.asString(customDashboard?.title, DEFAULT_CUSTOM_DASHBOARD_TITLE),
+                url: Utils.asString(customDashboard?.url)
+            }
+            return true
+        }).catch(_ => {
+            // the embed is optional: leave it disabled rather than failing app initialization
+            this.customDashboard = CUSTOM_DASHBOARD_DISABLED
+            return false
+        })
+    }
+
+    getCustomDashboard(): CustomDashboardSettings {
+        return this.customDashboard
+    }
+
+    getCustomDashboardTitle(): string {
+        const title = this.customDashboard.title
+        return Utils.isNotEmpty(title) ? title : DEFAULT_CUSTOM_DASHBOARD_TITLE
+    }
+
+    isCustomDashboardEnabled(): boolean {
+        return this.customDashboard.enabled && parseDashboardUrl(this.customDashboard.url) != null
     }
 
     fetchInstanceTypes(): Promise<boolean> {

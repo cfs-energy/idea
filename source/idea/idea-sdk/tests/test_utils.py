@@ -337,12 +337,19 @@ def test_utils_get_ec2_block_device_name():
 def test_utils_get_platform():
     assert Utils.get_platform(constants.OS_WINDOWS) == constants.PLATFORM_WINDOWS
     assert Utils.get_platform(constants.OS_RHEL8) == constants.PLATFORM_LINUX
-    assert Utils.get_platform(constants.OS_AMAZONLINUX2) == constants.PLATFORM_LINUX
     assert Utils.get_platform(constants.OS_AMAZONLINUX2023) == constants.PLATFORM_LINUX
     with pytest.raises(exceptions.SocaException) as exc_info:
         Utils.get_platform('unknown')
     assert isinstance(exc_info.value, exceptions.SocaException)
     assert exc_info.value.error_code == errorcodes.INVALID_PARAMS
+
+
+def test_utils_get_platform_eol_base_os():
+    """
+    an end-of-life base_os still resolves, so records written before it was retired stay readable
+    """
+    for eol_base_os in constants.EOL_BASEOS:
+        assert Utils.get_platform(eol_base_os) == constants.PLATFORM_LINUX
 
 
 def test_utils_convert_tags_dict_to_aws_tags():

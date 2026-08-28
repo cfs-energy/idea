@@ -22,7 +22,7 @@ export interface KeyValueProps {
     title: string
     value?: any
     clipboard?: boolean
-    children?: JSX.Element
+    children?: React.JSX.Element
     type?: 'memory' | 'date' | 'amount' | 'boolean' | 'react-node' | 'link' | 'external-link' | 'ec2:instance-id' | 'ec2:security-group-id' | 'ec2:asg-arn' | 'ec2:asg-name' |
         'cognito:user-pool-id' | 's3:bucket-name'
     suffix?: string
@@ -43,6 +43,9 @@ export interface KeyValueGroupState {
 }
 
 export class KeyValue extends Component<KeyValueProps, KeyValueState> {
+    // a list value sits under its label: markers inside the box, no browser indent
+    static LIST_STYLE: React.CSSProperties = {margin: 0, paddingLeft: 0, listStylePosition: 'inside'}
+
 
     isMemoryType(): boolean {
         if (this.props.type == null) {
@@ -110,7 +113,7 @@ export class KeyValue extends Component<KeyValueProps, KeyValueState> {
         return Utils.isEmpty(this.props.value)
     }
 
-    getValue(): string | string[] | JSX.Element {
+    getValue(): string | string[] | React.JSX.Element {
         if (this.props.children != null) {
             return this.props.children
         }
@@ -206,26 +209,26 @@ export class KeyValue extends Component<KeyValueProps, KeyValueState> {
             if (this.isClipboardCopy() && !this.isValueEmpty()) {
                 if (Utils.isArray(this.props.value)) {
                     let values: string[] = this.props.value
-                    return (<div>
+                    return (<ul style={KeyValue.LIST_STYLE}>
                         {values.map((value, index) => {
                             return <li key={`${this.props.title}-${index}`}>
                                 <span><CopyToClipBoard text={Utils.asString(this.getValue())} feedback={`${this.props.title} (${(index + 1)}) copied`}/> {Utils.asString(value)}</span>
                             </li>
                         })}
-                    </div>)
+                    </ul>)
                 } else {
                     return <span><CopyToClipBoard text={Utils.asString(this.getValue())} feedback={`${this.props.title} copied`}/> {this.getFormattedValue()}</span>
                 }
             } else {
                 if (Utils.isArray(this.props.value)) {
                     let values: string[] = this.props.value
-                    return (<div>
+                    return (<ul style={KeyValue.LIST_STYLE}>
                         {values.map((value, index) => {
                             return <li key={`${this.props.title}-${index}`}>
                                 {Utils.asString(value)}
                             </li>
                         })}
-                    </div>)
+                    </ul>)
                 } else {
                     return this.getFormattedValue()
                 }

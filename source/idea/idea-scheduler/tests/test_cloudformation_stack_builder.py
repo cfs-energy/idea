@@ -24,8 +24,11 @@ from ideadatamodel import (
     SocaJobParams,
     SocaBaseModel,
 )
+from ideadatamodel.aws import EC2InstanceType
 from ideascheduler.app.scheduler import SocaJobBuilder
+from ideasdk.aws import AWSUtil
 from ideasdk.utils import Utils
+from ideatestutils import MockInstanceTypes
 
 from typing import Dict, Optional, List
 from pyhocon import ConfigTree, ConfigFactory
@@ -113,6 +116,65 @@ def get_tag_value(key: str, tags: List[Dict]) -> Optional[str]:
         if tag['Key'] == key:
             return tag['Value']
     return None
+
+
+class MultiCardInstanceTypes(MockInstanceTypes):
+    """
+    Mock instance types reporting multiple network cards, as hpc6id/hpc7a/hpc8a (2 cards) and the
+    p4d/p5 families (4+ cards) do. Avoids pinning AWS network card facts into a mock template.
+    """
+
+    def __init__(self, network_cards: int, efa_interfaces: int):
+        self.network_cards = network_cards
+        self.efa_interfaces = efa_interfaces
+
+    def get_instance_type(self, instance_type: str) -> EC2InstanceType:
+        ec2_instance_type = super().get_instance_type(instance_type)
+        # mock instance types are rendered from template on every call, mutation is not shared
+        network_info = ec2_instance_type.instance_type_data()['NetworkInfo']
+        network_info['MaximumNetworkCards'] = self.network_cards
+        network_info['EfaInfo'] = {'MaximumEfaInterfaces': self.efa_interfaces}
+        return ec2_instance_type
+
+
+def mock_network_cards(monkeypatch, network_cards: int, efa_interfaces: int = None):
+    if efa_interfaces is None:
+        efa_interfaces = network_cards
+    monkeypatch.setattr(
+        AWSUtil,
+        'get_ec2_instance_type',
+        MultiCardInstanceTypes(
+            network_cards=network_cards, efa_interfaces=efa_interfaces
+        ).get_instance_type,
+    )
+
+
+def build_efa_template(context: AppContext, job_name: str) -> BuildTemplateResult:
+    return build_template(
+        context=context,
+        job_name=job_name,
+        params={'nodes': 1, 'cpus': 1, 'efa_support': 'true'},
+        queue_profile=HpcQueueProfile(
+            name='compute',
+            queues=['normal'],
+            scaling_mode=SocaScalingMode.SINGLE_JOB,
+            default_job_params=SocaJobParams(instance_types=['c5n.18xlarge']),
+        ),
+    )
+
+
+def get_efa_network_interfaces(result: BuildTemplateResult) -> List[Dict]:
+    launch_template_data = result.template.get(
+        'Resources.NodeLaunchTemplate.Properties.LaunchTemplateData'
+    )
+    # security groups must be on the interface: EC2 rejects both on the same launch template
+    assert launch_template_data.get('SecurityGroupIds', None) is None
+    network_interfaces = launch_template_data.get('NetworkInterfaces')
+    for network_interface in network_interfaces:
+        assert network_interface['InterfaceType'] == 'efa'
+        assert network_interface['DeleteOnTermination'] is True
+        assert network_interface['Groups'] == ['sg-mock123123123']
+    return network_interfaces
 
 
 def test_cfn_stack_builder_ondemand_basic(context: AppContext):
@@ -400,7 +462,7 @@ def test_cfn_stack_builder_placement_group_dependency(context):
     assert depends_on is not None
     # DependsOn could be a string or a list, check both cases
     if isinstance(depends_on, str):
-        # This shouldn't happen with our fix, but test for regression
+        # a single dependency is accepted only if it is one of the two required
         assert depends_on in ['NodeLaunchTemplate', 'ComputeNodePlacementGroup']
     elif isinstance(depends_on, list):
         assert 'NodeLaunchTemplate' in depends_on
@@ -465,3 +527,101 @@ def test_cfn_stack_builder_no_placement_group_no_dependency(context):
     except Exception:
         # This is expected - no placement group reference should exist
         pass
+
+
+def test_cfn_stack_builder_efa_single_network_card(context):
+    """
+    EFA on a single network card instance type - one interface on NetworkCardIndex 0
+    """
+    result = build_efa_template(context=context, job_name='efa-single-card')
+
+    network_interfaces = get_efa_network_interfaces(result)
+    assert len(network_interfaces) == 1
+    assert network_interfaces[0]['DeviceIndex'] == 0
+    assert network_interfaces[0]['NetworkCardIndex'] == 0
+
+
+def test_cfn_stack_builder_efa_multi_rail_disabled(context, monkeypatch):
+    """
+    multi-rail disabled (default) - a multi network card instance type still gets one interface
+    """
+    mock_network_cards(monkeypatch, network_cards=2)
+
+    result = build_efa_template(context=context, job_name='efa-multi-rail-disabled')
+
+    network_interfaces = get_efa_network_interfaces(result)
+    assert len(network_interfaces) == 1
+    assert network_interfaces[0]['DeviceIndex'] == 0
+    assert network_interfaces[0]['NetworkCardIndex'] == 0
+
+
+def test_cfn_stack_builder_efa_multi_rail_enabled(context, monkeypatch):
+    """
+    multi-rail enabled - one EFA interface per network card, hpc6id/hpc7a/hpc8a shape
+    """
+    mock_network_cards(monkeypatch, network_cards=2)
+    context.config().put('scheduler.efa.multi_rail_enabled', True)
+
+    result = build_efa_template(context=context, job_name='efa-multi-rail-enabled')
+
+    network_interfaces = get_efa_network_interfaces(result)
+    assert len(network_interfaces) == 2
+    assert [
+        network_interface['NetworkCardIndex']
+        for network_interface in network_interfaces
+    ] == [0, 1]
+    # AWS shape: DeviceIndex 0 on the first network card, 1 on every additional card
+    assert [
+        network_interface['DeviceIndex'] for network_interface in network_interfaces
+    ] == [0, 1]
+
+
+def test_cfn_stack_builder_efa_multi_rail_enabled_single_network_card(context):
+    """
+    multi-rail enabled - instance types with a single network card are unaffected
+    """
+    context.config().put('scheduler.efa.multi_rail_enabled', True)
+
+    result = build_efa_template(context=context, job_name='efa-multi-rail-single-card')
+
+    network_interfaces = get_efa_network_interfaces(result)
+    assert len(network_interfaces) == 1
+    assert network_interfaces[0]['NetworkCardIndex'] == 0
+
+
+def test_cfn_stack_builder_efa_multi_rail_more_efa_than_network_cards(
+    context, monkeypatch
+):
+    """
+    multi-rail enabled - interface count cannot exceed the no. of network cards
+    """
+    mock_network_cards(monkeypatch, network_cards=2, efa_interfaces=4)
+    context.config().put('scheduler.efa.multi_rail_enabled', True)
+
+    result = build_efa_template(context=context, job_name='efa-multi-rail-efa-gt-cards')
+
+    assert len(get_efa_network_interfaces(result)) == 2
+
+
+def test_cfn_stack_builder_efa_multi_rail_max_interfaces(context, monkeypatch):
+    """
+    multi-rail enabled - interface count is capped by scheduler.efa.max_interfaces (default: 2)
+    """
+    mock_network_cards(monkeypatch, network_cards=8)
+    context.config().put('scheduler.efa.multi_rail_enabled', True)
+
+    result = build_efa_template(context=context, job_name='efa-multi-rail-default-max')
+    assert len(get_efa_network_interfaces(result)) == 2
+
+    context.config().put('scheduler.efa.max_interfaces', 4)
+    result = build_efa_template(context=context, job_name='efa-multi-rail-custom-max')
+
+    network_interfaces = get_efa_network_interfaces(result)
+    assert len(network_interfaces) == 4
+    assert [
+        network_interface['NetworkCardIndex']
+        for network_interface in network_interfaces
+    ] == [0, 1, 2, 3]
+    assert [
+        network_interface['DeviceIndex'] for network_interface in network_interfaces
+    ] == [0, 1, 1, 1]

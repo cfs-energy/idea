@@ -69,9 +69,9 @@ const VIRTUAL_DESKTOP_PERMISSION_PROFILE_TABLE_COLUMN_DEFINITIONS: TableProps.Co
 ]
 
 class VirtualDesktopPermissionProfiles extends Component<VirtualDesktopPermissionProfilesProps, VirtualDesktopPermissionProfilesState> {
-    listing: RefObject<IdeaListView>
-    createPermissionProfileForm: RefObject<VirtualDesktopPermissionProfileForm>
-    editPermissionProfileForm: RefObject<VirtualDesktopPermissionProfileForm>
+    listing: RefObject<IdeaListView | null>
+    createPermissionProfileForm: RefObject<VirtualDesktopPermissionProfileForm | null>
+    editPermissionProfileForm: RefObject<VirtualDesktopPermissionProfileForm | null>
 
     constructor(props: VirtualDesktopPermissionProfilesProps) {
         super(props);

@@ -101,6 +101,8 @@ class VirtualDesktopScheduleType(str, Enum):
 
 
 class VirtualDesktopBaseOS(str, Enum):
+    # AMAZON_LINUX2 is EOL, kept only for read-compatibility: base_os is the software-stacks
+    # partition key, so dropping it would break existing AL2 reads; new use is rejected via constants.EOL_BASEOS.
     AMAZON_LINUX2 = constants.OS_AMAZONLINUX2
     AMAZON_LINUX2023 = constants.OS_AMAZONLINUX2023
     RHEL8 = constants.OS_RHEL8
@@ -272,8 +274,33 @@ class VirtualDesktopSession(SocaBaseModel):
     hibernation_enabled: Optional[bool] = Field(default=None)
     is_launched_by_admin: Optional[bool] = Field(default=None)
     locked: Optional[bool] = Field(default=None)
-    # Transient field, to be used for API responses only.
+    # Per-session override (in minutes) for virtual-desktop-controller.dcv_session.idle_autostop_delay.
+    idle_autostop_delay: Optional[int] = Field(default=None)
+    # Set by an admin through VirtualDesktopAdmin.SetSessionCleanupExemption; the stopped desktop
+    # cleanup leaves an exempt session alone. Never copied from a user's create or update request.
+    cleanup_exempt: Optional[bool] = Field(default=None)
+    cleanup_exempt_reason: Optional[str] = Field(default=None)
+    # the cleanup's deletion notice: when it was sent, and the EC2 stop time it was sent for.
+    # Cleared on resume, and stale once the desktop has been stopped again at another time.
+    cleanup_warning_sent_on: Optional[datetime] = Field(default=None)
+    cleanup_warning_stop_time: Optional[datetime] = Field(default=None)
+    # Set on API responses, and persisted for a session that failed on its own: why a desktop
+    # failed is only useful to whoever looks at it after the request that failed is gone.
     failure_reason: Optional[str] = Field(default=None)
+
+    def get_effective_idle_autostop_delay(
+        self, cluster_default: int, max_user_delay: int
+    ) -> int:
+        """
+        idle autostop delay (in minutes) to apply to this session.
+        the per-session override is honoured only while the admin cap is positive, and is clamped to it, so that
+        lowering the cap immediately applies to overrides that were already saved.
+        """
+        if max_user_delay is None or max_user_delay <= 0:
+            return cluster_default
+        if self.idle_autostop_delay is None or self.idle_autostop_delay <= 0:
+            return cluster_default
+        return min(self.idle_autostop_delay, max_user_delay)
 
 
 class VirtualDesktopSessionBatchResponsePayload(SocaBatchResponsePayload):

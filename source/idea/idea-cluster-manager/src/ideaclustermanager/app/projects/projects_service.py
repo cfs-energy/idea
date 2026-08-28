@@ -10,7 +10,7 @@
 #  and limitations under the License.
 
 
-from ideadatamodel import exceptions, errorcodes, constants
+from ideadatamodel import exceptions, errorcodes, constants, SocaAmount
 from ideadatamodel.projects import (
     CreateProjectRequest,
     CreateProjectResult,
@@ -26,15 +26,33 @@ from ideadatamodel.projects import (
     DisableProjectResult,
     GetUserProjectsRequest,
     GetUserProjectsResult,
+    BedrockUserUsage,
     Project,
+    ProjectBedrockBudget,
+    ProjectBedrockUsage,
 )
 from ideasdk.utils import Utils, GroupNameHelper
 from ideasdk.context import SocaContext
 
+from ideaclustermanager.app.projects.bedrock_provisioner import (
+    BedrockProvisioner,
+    validate_no_global_profiles,
+)
+from ideaclustermanager.app.projects.bedrock_budget import (
+    BedrockBudget,
+    is_bedrock_service,
+)
+from ideaclustermanager.app.projects.bedrock_usage_service import (
+    get_project_usage_by_model,
+)
+from ideaclustermanager.app.projects.db.bedrock_usage_dao import BedrockUsageDAO
 from ideaclustermanager.app.projects.db.projects_dao import ProjectsDAO
 from ideaclustermanager.app.projects.db.user_projects_dao import UserProjectsDAO
 from ideaclustermanager.app.accounts.accounts_service import AccountsService
 from ideaclustermanager.app.tasks.task_manager import TaskManager
+
+import arrow
+from typing import Dict, List, Optional, Tuple
 
 
 class ProjectsService:
@@ -58,6 +76,269 @@ class ProjectsService:
             accounts_service=self.accounts_service,
         )
         self.user_projects_dao.initialize()
+
+        self.bedrock_provisioner = BedrockProvisioner(
+            context=context, projects_dao=self.projects_dao
+        )
+
+        self.bedrock_usage_dao = BedrockUsageDAO(context)
+        self.bedrock_budget = BedrockBudget(context=context)
+        if self.is_bedrock_usage_enabled():
+            # the table grants arrive via a cluster-manager redeploy, which can trail the setting;
+            # a failure here must not stop the module starting, since the read path handles an uninitialized table.
+            try:
+                self.bedrock_usage_dao.initialize()
+            except Exception as e:
+                self.logger.warning(
+                    f'bedrock usage table is unavailable: {e}. redeploy the '
+                    f'cluster-manager module with bedrock enabled.'
+                )
+
+    def is_bedrock_usage_enabled(self) -> bool:
+        if not self.bedrock_provisioner.is_enabled():
+            return False
+        return self.context.config().get_bool(
+            f'{self.context.module_id()}.bedrock.usage.enabled', True
+        )
+
+    def get_project_bedrock_usage(
+        self,
+        project_id: str,
+        period: str = None,
+        username: str = None,
+        project_name: str = None,
+    ) -> Optional[ProjectBedrockUsage]:
+        """
+        month to date usage for a project, or for one caller within it. read from
+        the rollups the usage service writes; returns None when nothing is recorded.
+        project_name is the cost allocation tag value the spend figure is read for.
+        """
+        if not self.bedrock_provisioner.is_enabled():
+            return None
+        if self.bedrock_usage_dao.table is None:
+            return None
+        if Utils.is_empty(period):
+            period = arrow.utcnow().format('YYYY-MM')
+
+        if Utils.is_not_empty(username):
+            item = self.bedrock_usage_dao.get_user_rollup(
+                project_id=project_id, period=period, username=username
+            )
+            if item is None:
+                return None
+            return self.build_bedrock_usage(item, period, username=username)
+
+        item = self.bedrock_usage_dao.get_project_rollup(
+            project_id=project_id, period=period
+        )
+        if item is None:
+            return None
+
+        usage = self.build_bedrock_usage(item, period)
+        max_users = self.context.config().get_int(
+            f'{self.context.module_id()}.bedrock.usage.max_users_per_project', 50
+        )
+        user_rows = self.bedrock_usage_dao.query_user_rollups(
+            project_id=project_id, period=period
+        )
+        user_rows.sort(
+            key=lambda row: Utils.get_value_as_int('total_tokens', row, 0), reverse=True
+        )
+        usage.by_user = [
+            BedrockUserUsage(
+                username=Utils.get_value_as_string('username', row),
+                invocations=Utils.get_value_as_int('invocations', row, 0),
+                input_tokens=Utils.get_value_as_int('input_tokens', row, 0),
+                output_tokens=Utils.get_value_as_int('output_tokens', row, 0),
+                total_tokens=Utils.get_value_as_int('total_tokens', row, 0),
+            )
+            for row in user_rows[:max_users]
+        ]
+        usage.by_model = get_project_usage_by_model(
+            self.bedrock_usage_dao, project_id, period
+        )
+        self.apply_bedrock_spend(usage, project_name)
+        return usage
+
+    def apply_bedrock_spend(self, usage: ProjectBedrockUsage, project_name: str):
+        """
+        month to date bedrock cost for the project cost allocation tag. no answer is
+        recorded as unavailable, never as zero: an empty result is priced nothing yet.
+        """
+        spend = None
+        if Utils.is_not_empty(project_name):
+            try:
+                spend = self.context.aws_util().cost_explorer_get_tagged_service_spend(
+                    constants.IDEA_TAG_PROJECT, project_name
+                )
+            except Exception as e:
+                self.logger.warning(
+                    f'failed to read bedrock spend for project {project_name}: {e}'
+                )
+        if spend is None:
+            usage.spend_is_unavailable = True
+            return
+        usage.spend = SocaAmount(
+            amount=round(
+                sum(
+                    amount
+                    for service, amount in spend.items()
+                    if is_bedrock_service(service)
+                ),
+                2,
+            )
+        )
+
+    def get_project_bedrock_budget(
+        self, project: Project
+    ) -> Optional[ProjectBedrockBudget]:
+        """
+        the verdict on the project budget. the caller passes a project whose budget
+        carries live actuals.
+        """
+        return self.bedrock_budget.evaluate(project)
+
+    @staticmethod
+    def build_bedrock_usage(
+        item: Dict, period: str, username: str = None
+    ) -> ProjectBedrockUsage:
+        updated_on = Utils.get_value_as_int('updated_on', item, 0)
+        return ProjectBedrockUsage(
+            period=period,
+            username=username,
+            invocations=Utils.get_value_as_int('invocations', item, 0),
+            input_tokens=Utils.get_value_as_int('input_tokens', item, 0),
+            output_tokens=Utils.get_value_as_int('output_tokens', item, 0),
+            total_tokens=Utils.get_value_as_int('total_tokens', item, 0),
+            updated_on=arrow.get(updated_on / 1000).datetime if updated_on else None,
+        )
+
+    @staticmethod
+    def has_bedrock_provisioner_fields(stored: Optional[Dict]) -> bool:
+        bedrock = Utils.get_value_as_dict('bedrock', stored, {}) if stored else {}
+        for key in ('role_arn', 'instance_profile_arn'):
+            if Utils.is_not_empty(Utils.get_value_as_string(key, bedrock)):
+                return True
+        return len(Utils.get_value_as_dict('inference_profile_arns', bedrock, {})) > 0
+
+    def send_bedrock_reconcile(
+        self,
+        project_id: str,
+        stored: Optional[Dict] = None,
+        cluster_bedrock: Optional[Dict] = None,
+    ):
+        """
+        also enqueued while the feature is off when the project still carries
+        provisioner fields, so turning the feature off removes what it provisioned.
+        a project that has never carried a bedrock block is skipped.
+
+        cluster_bedrock is the caller's intended cluster settings, used when they were
+        just written and the in-memory config has not caught up.
+        """
+        enabled = (
+            self.bedrock_provisioner.is_enabled()
+            if cluster_bedrock is None
+            else Utils.get_value_as_bool('enabled', cluster_bedrock, False)
+        )
+        if enabled:
+            if stored is not None and Utils.is_empty(
+                Utils.get_value_as_dict('bedrock', stored, {})
+            ):
+                return
+        elif not self.has_bedrock_provisioner_fields(stored):
+            return
+
+        payload = {'project_id': project_id}
+        if cluster_bedrock is not None:
+            payload['cluster_bedrock'] = cluster_bedrock
+        self.task_manager.send(
+            task_name='projects.bedrock-reconcile',
+            payload=payload,
+            message_group_id=project_id,
+            message_dedupe_id=Utils.short_uuid(),
+        )
+
+    def send_bedrock_reconcile_all(self, cluster_bedrock: Optional[Dict] = None):
+        """
+        every project that carries a bedrock block. used when a cluster wide
+        setting changes, since that changes what each project resolves to.
+        """
+        cursor = None
+        while True:
+            result = self.projects_dao.list_projects(ListProjectsRequest(cursor=cursor))
+            for project in Utils.get_as_list(result.listing, []):
+                if project.bedrock is None:
+                    continue
+                self.send_bedrock_reconcile(
+                    project.project_id,
+                    stored=self.projects_dao.convert_to_db(project),
+                    cluster_bedrock=cluster_bedrock,
+                )
+            cursor = result.paginator.cursor if result.paginator is not None else None
+            if Utils.is_empty(cursor):
+                return
+
+    def get_bedrock_routing(self) -> Tuple[str, str]:
+        """
+        the partition and region a model id has to be routable from, so a global
+        id can be rejected naming the geographic id to use instead.
+        """
+        config = self.context.config()
+        return (
+            config.get_string('cluster.aws.partition', ''),
+            config.get_string('cluster.aws.region', ''),
+        )
+
+    @staticmethod
+    def validate_bedrock_config(
+        project: Project, catalog: List[str], partition: str = '', region: str = ''
+    ):
+        """
+        a project may only reference model ids present in the cluster catalog, and
+        never a global inference profile.
+        """
+        if project.bedrock is None:
+            return
+
+        validate_no_global_profiles(project.bedrock.get_model_ids(), partition, region)
+
+        not_in_catalog = [
+            model_id
+            for model_id in project.bedrock.get_model_ids()
+            if model_id not in catalog
+        ]
+        if len(not_in_catalog) > 0:
+            approved = ', '.join(catalog) if len(catalog) > 0 else '(none)'
+            raise exceptions.invalid_params(
+                f'bedrock.model_ids contains model ids that are not approved for this '
+                f'cluster: {", ".join(not_in_catalog)}. approved model ids: {approved}'
+            )
+
+    @staticmethod
+    def apply_bedrock_provisioner_fields(
+        project: Project, existing: Optional[Dict] = None
+    ):
+        """
+        the provisioner owns role_arn, instance_profile_arn and
+        inference_profile_arns. caller supplied values are discarded and the
+        stored values are carried forward, since the block is written whole.
+        """
+        if project.bedrock is None:
+            return
+
+        existing_bedrock = {}
+        if existing is not None:
+            existing_bedrock = Utils.get_value_as_dict('bedrock', existing, {})
+
+        project.bedrock.role_arn = Utils.get_value_as_string(
+            'role_arn', existing_bedrock
+        )
+        project.bedrock.instance_profile_arn = Utils.get_value_as_string(
+            'instance_profile_arn', existing_bedrock
+        )
+        project.bedrock.inference_profile_arns = Utils.get_value_as_dict(
+            'inference_profile_arns', existing_bedrock
+        )
 
     def create_project(self, request: CreateProjectRequest) -> CreateProjectResult:
         """
@@ -109,6 +390,12 @@ class ProjectsService:
                 )
             budget_name = project.budget.budget_name
             self.context.aws_util().budgets_get_budget(budget_name)
+
+        partition, region = self.get_bedrock_routing()
+        self.validate_bedrock_config(
+            project, self.bedrock_provisioner.get_model_catalog(), partition, region
+        )
+        self.apply_bedrock_provisioner_fields(project)
 
         # ensure project is always disabled during creation
         project.enabled = False
@@ -208,6 +495,12 @@ class ProjectsService:
                     # For other exceptions, re-raise
                     raise e
 
+        partition, region = self.get_bedrock_routing()
+        self.validate_bedrock_config(
+            project, self.bedrock_provisioner.get_model_catalog(), partition, region
+        )
+        self.apply_bedrock_provisioner_fields(project, existing)
+
         groups_added = None
         groups_removed = None
         if Utils.is_not_empty(project.ldap_groups):
@@ -244,6 +537,8 @@ class ProjectsService:
                     message_group_id=updated_project.project_id,
                 )
 
+        self.send_bedrock_reconcile(updated_project.project_id, stored=db_updated)
+
         return UpdateProjectResult(project=updated_project)
 
     def enable_project(self, request: EnableProjectRequest) -> EnableProjectResult:
@@ -276,6 +571,8 @@ class ProjectsService:
             message_dedupe_id=Utils.short_uuid(),
         )
 
+        self.send_bedrock_reconcile(project['project_id'], stored=project)
+
         return EnableProjectResult()
 
     def disable_project(self, request: DisableProjectRequest) -> DisableProjectResult:
@@ -306,6 +603,8 @@ class ProjectsService:
             message_group_id=project['project_id'],
             message_dedupe_id=Utils.short_uuid(),
         )
+
+        self.send_bedrock_reconcile(project['project_id'], stored=project)
 
         return DisableProjectResult()
 
@@ -354,6 +653,16 @@ class ProjectsService:
         result.sort(key=lambda p: p.name)
 
         return GetUserProjectsResult(projects=result)
+
+    def is_project_member(self, username: str, project_id: str) -> bool:
+        """
+        check if the user is a member of the project, using the same membership
+        resolution as get_user_projects (user-projects table maintained from the
+        project's ldap groups).
+        """
+        if Utils.is_empty(username) or Utils.is_empty(project_id):
+            return False
+        return project_id in self.user_projects_dao.get_projects_by_username(username)
 
     def create_defaults(self):
         ds_provider = self.context.config().get_string(

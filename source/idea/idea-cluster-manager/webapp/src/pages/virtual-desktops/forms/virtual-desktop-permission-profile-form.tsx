@@ -33,7 +33,7 @@ export interface VirtualDesktopPermissionProfileFormState {
 }
 
 class VirtualDesktopPermissionProfileForm extends Component<VirtualDesktopPermissionProfileFormProps, VirtualDesktopPermissionProfileFormState> {
-    form: RefObject<IdeaForm>
+    form: RefObject<IdeaForm | null>
     permissionProfileInputHistory: { [key: string]: boolean }
 
     constructor(props: VirtualDesktopPermissionProfileFormProps) {

@@ -13,14 +13,14 @@
 
 import React, {Component, RefObject} from "react";
 import {TableProps} from "@cloudscape-design/components/table/interfaces";
-import {Link} from "@cloudscape-design/components";
+import {Badge, Link} from "@cloudscape-design/components";
 import {SocaUserInputChoice, VirtualDesktopSession, VirtualDesktopSessionBatchResponsePayload} from "../../client/data-model";
 import IdeaListView from "../../components/list-view";
 import {AppContext} from "../../common";
 import {ProjectsClient, VirtualDesktopAdminClient} from '../../client'
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import IdeaConfirm from "../../components/modals";
-import ReactJson from "react-json-view";
+import ReactJson from "@microlink/react-json-view";
 import IdeaView from "../../components/modals/view";
 import {IdeaAppLayoutProps} from "../../components/app-layout";
 import IdeaForm from "../../components/form";
@@ -45,6 +45,7 @@ export interface VirtualDesktopSessionsState {
     forceTerminate: boolean
     sessionHealth: any
     showCreateSessionForm: boolean
+    showCleanupExemptionForm: boolean
 }
 
 const VIRTUAL_DESKTOP_SESSIONS_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<VirtualDesktopSession>[] = [
@@ -94,7 +95,10 @@ const VIRTUAL_DESKTOP_SESSIONS_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefini
         id: 'state',
         header: 'State',
         cell: e => {
-            return <VirtualDesktopSessionStatusIndicator state={e.state!} hibernation_enabled={e.hibernation_enabled!}/>
+            return <span>
+                <VirtualDesktopSessionStatusIndicator state={e.state!} hibernation_enabled={e.hibernation_enabled!}/>
+                {e.cleanup_exempt && <span> <Badge color="grey">Cleanup exempt</Badge></span>}
+            </span>
         },
         sortingField: "state"
     },
@@ -150,13 +154,15 @@ const VIRTUAL_DESKTOP_SESSIONS_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefini
 
 class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, VirtualDesktopSessionsState> {
 
-    listing: RefObject<IdeaListView>
-    deleteSessionsConfirmModal: RefObject<IdeaConfirm>
-    stopSessionsConfirmModal: RefObject<IdeaConfirm>
-    resumeSessionsConfirmModal: RefObject<IdeaConfirm>
-    sessionHealthModal: RefObject<IdeaView>
-    createSoftwareStackForm: RefObject<IdeaForm>
-    createSessionForm: RefObject<VirtualDesktopCreateSessionForm>
+    listing: RefObject<IdeaListView | null>
+    deleteSessionsConfirmModal: RefObject<IdeaConfirm | null>
+    stopSessionsConfirmModal: RefObject<IdeaConfirm | null>
+    resumeSessionsConfirmModal: RefObject<IdeaConfirm | null>
+    sessionHealthModal: RefObject<IdeaView | null>
+    createSoftwareStackForm: RefObject<IdeaForm | null>
+    createSessionForm: RefObject<VirtualDesktopCreateSessionForm | null>
+    cleanupExemptionForm: RefObject<IdeaForm | null>
+    clearCleanupExemptionConfirmModal: RefObject<IdeaConfirm | null>
     virtualDesktopSettings: any
 
     constructor(props: VirtualDesktopSessionsProps) {
@@ -168,6 +174,8 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
         this.sessionHealthModal = React.createRef()
         this.createSoftwareStackForm = React.createRef()
         this.createSessionForm = React.createRef()
+        this.cleanupExemptionForm = React.createRef()
+        this.clearCleanupExemptionConfirmModal = React.createRef()
         this.virtualDesktopSettings = undefined
 
         this.state = {
@@ -178,7 +186,8 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
             projectChoices: [],
             forceTerminate: false,
             sessionHealth: {},
-            showCreateSessionForm: false
+            showCreateSessionForm: false,
+            showCleanupExemptionForm: false
         }
     }
 
@@ -481,6 +490,81 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
         )
     }
 
+    // sets or clears the admin cleanup exemption on every selected session
+    setCleanupExemption(exempt: boolean, reason?: string) {
+        const requests = this.getSelectedSessions().map(session => this.getVirtualDesktopAdminClient().setSessionCleanupExemption({
+            idea_session_id: session.idea_session_id,
+            owner: session.owner,
+            exempt: exempt,
+            reason: reason
+        }))
+        return Promise.all(requests).then(() => {
+            this.setState({
+                sessionSelected: false,
+                showCleanupExemptionForm: false
+            }, () => {
+                this.setFlashMessage(exempt ? 'Session(s) exempted from the stopped desktop cleanup' : 'Cleanup exemption cleared', 'success')
+                this.getListing().fetchRecords()
+            })
+        })
+    }
+
+    buildCleanupExemptionForm() {
+        return (
+            <IdeaForm
+                ref={this.cleanupExemptionForm}
+                name={"cleanup-exemption"}
+                modal={true}
+                title={"Exempt from Stopped Desktop Cleanup"}
+                modalSize={"medium"}
+                onCancel={() => {
+                    this.setState({showCleanupExemptionForm: false})
+                }}
+                onSubmit={() => {
+                    const form = this.cleanupExemptionForm.current!
+                    form.clearError()
+                    if (!form.validate()) {
+                        return
+                    }
+                    this.setCleanupExemption(true, form.getValues().reason).catch(error => {
+                        form.setError(error.errorCode, error.message)
+                    })
+                }}
+                params={[
+                    {
+                        name: 'reason',
+                        title: 'Reason',
+                        description: 'Shown on the session. Defaults to your username.',
+                        data_type: 'str',
+                        param_type: 'text',
+                        validate: {
+                            required: false
+                        }
+                    }
+                ]}
+            />
+        )
+    }
+
+    buildClearCleanupExemptionConfirmModal() {
+        return (
+            <IdeaConfirm
+                ref={this.clearCleanupExemptionConfirmModal}
+                title="Clear Cleanup Exemption"
+                onConfirm={() => {
+                    this.setCleanupExemption(false).catch(error => {
+                        this.setFlashMessage(error.message, 'error')
+                    })
+                }}
+            >
+                <p>The stopped desktop cleanup may delete the below sessions again once they are stopped past the cutoff:</p>
+                {this.getSelectedSessions().map((session, index) => {
+                    return <li key={index}>{session.name} (Owner: {session.owner})</li>
+                })}
+            </IdeaConfirm>
+        )
+    }
+
     getCreateSoftwareStackForm(): IdeaForm {
         return this.createSoftwareStackForm.current!
     }
@@ -771,6 +855,26 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                                 this.showCreateSoftwareStackForm(session)
                             })
                         }
+                    },
+                    {
+                        id: 'exempt-from-cleanup',
+                        text: 'Exempt from Cleanup',
+                        disabled: !this.isSelected(),
+                        onClick: () => {
+                            this.setState({
+                                showCleanupExemptionForm: true
+                            }, () => {
+                                this.cleanupExemptionForm.current?.showModal()
+                            })
+                        }
+                    },
+                    {
+                        id: 'clear-cleanup-exemption',
+                        text: 'Clear Cleanup Exemption',
+                        disabled: !this.isSelected(),
+                        onClick: () => {
+                            this.clearCleanupExemptionConfirmModal.current?.show()
+                        }
                     }
                 ]}
                 showPaginator={true}
@@ -970,6 +1074,8 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                         {this.buildSessionHealthModal()}
                         {this.state.showCreateSoftwareStackFromSessionForm && this.buildCreateSoftwareStackFromSessionForm()}
                         {this.state.showCreateSessionForm && this.buildCreateSessionForm()}
+                        {this.buildClearCleanupExemptionConfirmModal()}
+                        {this.state.showCleanupExemptionForm && this.buildCleanupExemptionForm()}
                     </div>
                 }/>
         )

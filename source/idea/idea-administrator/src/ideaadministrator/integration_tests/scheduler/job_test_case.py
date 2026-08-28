@@ -21,6 +21,7 @@ from ideadatamodel import (
 )
 
 import ideaadministrator
+from ideaadministrator.app.region_ami_config import resolve_region_ami
 from ideaadministrator.integration_tests.test_context import TestContext
 
 import os
@@ -197,14 +198,33 @@ mkdir -p {self.output_folder}
 
     def get_job_id(self) -> str:
         if self.job_submit_result and self.job_submit_result.job:
-            return self.job_submit_result.job.job_id
+            job_id = self.job_submit_result.job.job_id
+            if Utils.is_not_empty(job_id):
+                return job_id
         return 'UNKNOWN'
 
+    def get_job_uid(self) -> Optional[str]:
+        if self.job_submit_result and self.job_submit_result.job:
+            return self.job_submit_result.job.job_uid
+        return None
+
     def check_progress(self):
+        job_id = self.get_job_id()
+        if job_id == 'UNKNOWN':
+            # submission returned no job id, so this case can never leave IN_PROGRESS.
+            # fail it here rather than polling a job that was never queued.
+            self.status = 'FAIL'
+            self.context.error(
+                f'Job TestCaseId: {self.test_case_id}  submission returned no job id          [FAIL]'
+            )
+            return
+
         try:
+            # job_uid names the job this case submitted. a job id on its own is reused
+            # once the scheduler host is replaced, so it can complete against another job.
             self.context.get_scheduler_client().invoke_alt(
                 namespace='Scheduler.GetCompletedJob',
-                payload=GetJobRequest(job_id=self.job_submit_result.job.job_id),
+                payload=GetJobRequest(job_id=job_id, job_uid=self.get_job_uid()),
                 result_as=GetJobResult,
                 access_token=self.context.get_admin_access_token(),
             )
@@ -323,17 +343,11 @@ class JobSubmissionHelper:
         regions_config_file = ideaadministrator.props.region_ami_config_file()
         with open(regions_config_file, 'r') as f:
             regions_config = Utils.from_yaml(f.read())
-        ami_config = Utils.get_value_as_dict(self.context.aws_region, regions_config)
-        if ami_config is None:
-            raise exceptions.general_exception(
-                f'aws_region: {self.context.aws_region} not found in region_ami_config.yml'
-            )
-        ami_id = Utils.get_value_as_string(base_os, ami_config)
-        if Utils.is_empty(ami_id):
-            raise exceptions.general_exception(
-                f'instance_ami not found for base_os: {base_os}, region: {self.context.aws_region}'
-            )
-        return ami_id
+        return resolve_region_ami(
+            regions_config=regions_config,
+            aws_region=self.context.aws_region,
+            base_os=base_os,
+        )
 
     def get_test_case_config(self, name: str) -> Dict:
         all_test_case_configs = Utils.get_value_as_list(
@@ -426,6 +440,6 @@ class JobSubmissionHelper:
             test_case = self.job_test_cases[test_case_id]
             print(
                 '{:100s} {:10s} {:20s}'.format(
-                    test_case_id, test_case.get_job_id(), test_case.status
+                    test_case_id, test_case.get_job_id(), test_case.status or 'UNKNOWN'
                 )
             )

@@ -105,6 +105,15 @@ class AwsBudgetsHelper:
             else:
                 self._logger.exception(f'failed to get budget: {e}')
 
+    def get_bedrock_spend_percent(self) -> Optional[float]:
+        """
+        How much of the project's spend went on Amazon Bedrock, as published on the
+        project. None when it could not be established, and it never decides anything.
+        """
+        if self._project is None or self._project.bedrock_budget is None:
+            return None
+        return self._project.bedrock_budget.bedrock_spend_percent
+
     def check_budget_availability(self):
         """
         Checks if budget is available for the job to run.
@@ -115,10 +124,19 @@ class AwsBudgetsHelper:
             return
 
         if budget.actual_spend > budget.budget_limit:
+            message = (
+                f'Project: ({self._job.project}) has exceeded the allocated budget limit. '
+                f'Please update the limit on AWS Budgets Console or try again later.'
+            )
+            bedrock_spend_percent = self.get_bedrock_spend_percent()
+            if bedrock_spend_percent is not None:
+                message += (
+                    f' {bedrock_spend_percent}% of the spend recorded for this project '
+                    f'is Amazon Bedrock.'
+                )
             raise exceptions.SocaException(
                 error_code=errorcodes.BUDGETS_LIMIT_EXCEEDED,
-                message=f'Project: ({self._job.project}) has exceeded the allocated budget limit. '
-                f'Please update the limit on AWS Budgets Console or try again later.',
+                message=message,
                 ref=budget,
             )
 

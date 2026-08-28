@@ -1,0 +1,32 @@
+detectors:
+  - name: generic-password
+    keywords:
+      - password
+      - passwd
+      - secret
+      - credential
+      - api_key
+      - api-key
+      - apikey
+      - auth_token
+      - auth-token
+      - authtoken
+    regex:
+      secret: |-
+        (?i)(?:password|passwd|secret|credential|api[_-]?key|auth[_-]?token)[\s\t]*[=:]+[\s\t]*['"`]([^'"`<>\s]{8,})['"`]
+    entropy: 3.0
+    validations:
+      secret:
+        contains_digit: true
+    exclude_regexes_capture:
+      - <[^>]+>
+      - (?:\$\{?[\w.-]+\}?|%\([\w]+\)s|\{[\w.-]+\})
+      # unit-test fixture password, not a credential
+      - ^MockPassword
+    exclude_words:
+      - changeme
+      - placeholder
+      - replaceme
+      - example
+      - redacted
+      - MockPassword

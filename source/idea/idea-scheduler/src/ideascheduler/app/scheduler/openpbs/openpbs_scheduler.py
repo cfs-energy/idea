@@ -19,7 +19,7 @@ from ideadatamodel.scheduler import (
     SocaComputeNode,
     SocaJobState,
 )
-from ideasdk.shell import ShellInvoker
+from ideasdk.shell import ShellInvocationResult, ShellInvoker
 from ideasdk.utils import Utils
 from ideascheduler.app.scheduler.openpbs import OpenPBSConverter, OpenPBSQStat
 from ideascheduler.app.scheduler.openpbs import openpbs_constants
@@ -31,6 +31,19 @@ import re
 import os
 import arrow
 import orjson
+
+JOB_COMMENT_MAX_LENGTH = 128
+# qalter -W parses "name=value[,...]" splitting on '=' and ','; drop chars outside this
+# set so a comment can't break it. ';' is also excluded - it splits pbs accounting log records.
+PATTERN_UNSAFE_JOB_COMMENT_CHARS = re.compile(r'[^A-Za-z0-9 ._:/()\[\]#+-]')
+
+
+def sanitize_job_comment(comment: Optional[str]) -> str:
+    if Utils.is_empty(comment):
+        return ''
+    comment = PATTERN_UNSAFE_JOB_COMMENT_CHARS.sub(' ', str(comment))
+    comment = ' '.join(comment.split())
+    return comment[:JOB_COMMENT_MAX_LENGTH].strip()
 
 
 class OpenPBSScheduler(SocaSchedulerProtocol):
@@ -187,6 +200,19 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
             return None
         return nodes[0]
 
+    def find_node(self, hosts: List[str], **kwargs) -> Optional[SocaComputeNode]:
+        """
+        return the first name in hosts the scheduler knows about.
+        callers pass the current node name first and superseded names after it.
+        """
+        for host in hosts:
+            if Utils.is_empty(host):
+                continue
+            node = self.get_node(host=host, **kwargs)
+            if node is not None:
+                return node
+        return None
+
     def delete_node(self, host: str) -> bool:
         cmd = [openpbs_constants.QMGR, '-c', 'delete node ' + host]
         result = self._shell.invoke(cmd=cmd)
@@ -252,7 +278,7 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
                 )
             is_enabled = False
         else:
-            is_enabled = Utils.is_true(found.enabled, False) and Utils.is_false(
+            is_enabled = Utils.is_true(found.enabled, False) and Utils.is_true(
                 found.started, False
             )
 
@@ -329,6 +355,39 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
             )
             raise e
 
+    def _invoke_delete_queue(self, queue_name: str) -> ShellInvocationResult:
+        cmd = [openpbs_constants.QMGR, '-c', f'delete queue {queue_name}']
+        return self._shell.invoke(cmd=cmd)
+
+    def _restore_queue_state(
+        self, queue_name: str, enabled: bool, started: bool
+    ) -> bool:
+        try:
+            self.set_queue_attributes(
+                queue_name, attributes={'enabled': enabled, 'started': started}
+            )
+            return True
+        except exceptions.SocaException as e:
+            self._logger.error(
+                f'failed to restore state of queue: {queue_name} (enabled={enabled}, started={started}): {e}'
+            )
+            return False
+
+    def _queue_delete_exception(
+        self, queue_name: str, result: ShellInvocationResult, restored: bool = True
+    ) -> exceptions.SocaException:
+        if result.returncode == openpbs_constants.QMGR_ERROR_CODE_OBJECT_BUSY:
+            error_code = errorcodes.SCHEDULER_QUEUE_BUSY
+        else:
+            error_code = errorcodes.SCHEDULER_ERROR
+        message = f'{result}'
+        if not restored:
+            message = (
+                f'{message} - queue: {queue_name} could not be re-enabled and will '
+                f'reject job submissions until it is enabled manually'
+            )
+        return exceptions.SocaException(error_code=error_code, message=message)
+
     def delete_queue(self, queue_name: str):
         try:
             existing_queue = self.get_queue(queue_name)
@@ -338,24 +397,34 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
             else:
                 raise e
 
-        if Utils.is_true(existing_queue.enabled) or Utils.is_true(
-            existing_queue.started
-        ):
-            self.set_queue_attributes(
-                queue_name, attributes={'enabled': False, 'started': False}
-            )
+        if existing_queue is None:
+            return
 
-        cmd = [openpbs_constants.QMGR, '-c', f'delete queue {queue_name}']
-        result = self._shell.invoke(cmd=cmd)
-        if result.returncode != 0:
-            if result.returncode == openpbs_constants.QMGR_ERROR_CODE_OBJECT_BUSY:
-                raise exceptions.SocaException(
-                    error_code=errorcodes.SCHEDULER_QUEUE_BUSY, message=f'{result}'
-                )
-            else:
-                raise exceptions.SocaException(
-                    error_code=errorcodes.SCHEDULER_ERROR, message=f'{result}'
-                )
+        # delete first: disabling a queue that cannot be deleted (jobs still queued or running)
+        # leaves users with `qsub: Queue is not enabled` until an operator re-enables it.
+        result = self._invoke_delete_queue(queue_name)
+        if result.returncode == 0:
+            return
+
+        was_enabled = Utils.is_true(existing_queue.enabled)
+        was_started = Utils.is_true(existing_queue.started)
+        if result.returncode == openpbs_constants.QMGR_ERROR_CODE_OBJECT_BUSY or not (
+            was_enabled or was_started
+        ):
+            raise self._queue_delete_exception(queue_name, result)
+
+        # retry with the queue disabled, for schedulers that refuse to delete a queue accepting jobs.
+        self.set_queue_attributes(
+            queue_name, attributes={'enabled': False, 'started': False}
+        )
+        retry_result = self._invoke_delete_queue(queue_name)
+        if retry_result.returncode == 0:
+            return
+
+        restored = self._restore_queue_state(
+            queue_name, enabled=was_enabled, started=was_started
+        )
+        raise self._queue_delete_exception(queue_name, retry_result, restored=restored)
 
     def get_queue(self, queue: str) -> Optional[SocaQueue]:
         try:
@@ -502,6 +571,29 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
             )
         return True
 
+    def set_job_comment(self, job_id: str, comment: str) -> bool:
+        """
+        set the job's "comment" attribute - what qstat -f and qstat -s show the job owner.
+
+        the comment is a job attribute, not a resource, so it goes through qalter -W and not
+        the qalter -l used by set_job_attributes. openpbs allows only an operator or a manager
+        to write it (master_job_attr_def.xml: NO_USER_SET); the scheduler daemon runs as root
+        on the pbs server and qualifies.
+
+        the pbs scheduler also writes this attribute and will overwrite the value on a later
+        scheduling cycle, so this is advisory only: it returns False instead of raising and
+        callers must not treat a failure as fatal.
+        """
+        comment = sanitize_job_comment(comment)
+        if Utils.is_empty(comment):
+            return False
+        cmd = [openpbs_constants.QALTER, '-W', f'comment={comment}', job_id]
+        result = self._shell.invoke(cmd, skip_error_logging=True)
+        if result.returncode != 0:
+            self._logger.warning(f'failed to set comment on job: {job_id}: {result}')
+            return False
+        return True
+
     def provision_job(self, job: SocaJob, stack_id: str) -> int:
         try:
             select = job.params.custom_params['select'].split(':compute_node')[0]
@@ -521,6 +613,17 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
                 return -1
             else:
                 raise e
+
+    def hold_job(self, job_id: str) -> bool:
+        result = self._shell.invoke([openpbs_constants.QHOLD, job_id])
+        if result.returncode == 0:
+            return True
+        if result.returncode == openpbs_constants.QSTAT_ERROR_CODE_JOB_FINISHED:
+            return True
+        raise exceptions.SocaException(
+            error_code=errorcodes.SCHEDULER_ERROR,
+            message=f'Failed to hold job: {result}',
+        )
 
     def reset_job(self, job_id: str) -> bool:
         try:

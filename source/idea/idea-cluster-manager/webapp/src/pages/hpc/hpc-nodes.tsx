@@ -71,7 +71,7 @@ export const NODE_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<SocaComp
 
 class HpcNodes extends Component<HpcNodesProps, HpcNodesState> {
 
-    listing: RefObject<IdeaListView>
+    listing: RefObject<IdeaListView | null>
 
     constructor(props: HpcNodesProps) {
         super(props);

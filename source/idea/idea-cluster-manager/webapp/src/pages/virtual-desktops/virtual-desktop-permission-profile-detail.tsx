@@ -37,7 +37,7 @@ interface VirtualDesktopPermissionProfileDetailState {
 }
 
 class VirtualDesktopPermissionProfileDetail extends Component<VirtualDesktopPermissionProfileDetailProps, VirtualDesktopPermissionProfileDetailState> {
-    editPermissionProfileForm: RefObject<VirtualDesktopPermissionProfileForm>
+    editPermissionProfileForm: RefObject<VirtualDesktopPermissionProfileForm | null>
 
     constructor(props: VirtualDesktopPermissionProfileDetailProps) {
         super(props);

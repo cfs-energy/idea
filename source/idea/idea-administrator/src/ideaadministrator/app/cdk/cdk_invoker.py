@@ -339,7 +339,9 @@ class CdkInvoker:
         if context_params is not None:
             for key, value in context_params.items():
                 cmd.append(f'-c {key}={value}')
-        cmd.append(f'--change-set-name idea-{Utils.uuid()}')
+        # CDK CLI >= 2.1137 locks cdk.out during synth; scope it per module so parallel
+        # --optimize-deployment runs don't collide on the shared cdk.out in the cluster _cdk directory.
+        cmd.append(f'--output cdk.out.{self.module_id}')
         return ' '.join(cmd)
 
     def cdk_synth(self):

@@ -15,6 +15,7 @@ from ideadatamodel.scheduler import (
     SocaJobState,
     SocaJobExecutionHost,
     SocaJob,
+    LimitCheckResult,
     SocaComputeNodeState,
     SocaComputeNode,
     SocaQueue,
@@ -51,7 +52,7 @@ from ideadatamodel.scheduler import (
 )
 
 from abc import abstractmethod, ABC
-from typing import List, Optional, Dict, Any, TypeVar, Union, Generator
+from typing import List, Optional, Dict, Any, NamedTuple, TypeVar, Union, Generator
 import arrow
 import dataset
 
@@ -78,6 +79,9 @@ class JobCacheProtocol(SocaBaseProtocol):
 
     @abstractmethod
     def get_completed_job(self, job_id: str) -> Optional[SocaJob]: ...
+
+    @abstractmethod
+    def get_completed_job_by_uid(self, job_uid: str) -> Optional[SocaJob]: ...
 
     @abstractmethod
     def delete_jobs(self, job_ids: List[str]): ...
@@ -129,7 +133,9 @@ class JobCacheProtocol(SocaBaseProtocol):
     def add_active_licenses(self, jobs: List[SocaJob]): ...
 
     @abstractmethod
-    def convert_db_entry_to_job(self, entry: Dict) -> Optional[SocaJob]: ...
+    def convert_db_entry_to_job(
+        self, entry: Dict, fetch_errors: bool = False
+    ) -> Optional[SocaJob]: ...
 
     @abstractmethod
     def set_job_provisioning_error(
@@ -138,6 +144,15 @@ class JobCacheProtocol(SocaBaseProtocol):
 
     @abstractmethod
     def clear_job_provisioning_error(self, job_id: str): ...
+
+    @abstractmethod
+    def increment_job_provisioning_retry(self, job_id: str) -> int: ...
+
+    @abstractmethod
+    def get_job_provisioning_retry_count(self, job_id: str) -> int: ...
+
+    @abstractmethod
+    def clear_job_provisioning_retries(self, job_id: str): ...
 
 
 JobCacheType = TypeVar('JobCacheType', bound=JobCacheProtocol)
@@ -179,6 +194,12 @@ class JobProvisioningQueueProtocol(SocaBaseProtocol):
 
     @abstractmethod
     def get_queue_size(self, key: Optional[str] = None) -> int: ...
+
+    @abstractmethod
+    def is_queue_blocked_by_limits(self) -> bool: ...
+
+    @abstractmethod
+    def get_limit_info(self) -> Optional[LimitCheckResult]: ...
 
 
 JobProvisioningQueueType = TypeVar(
@@ -229,6 +250,9 @@ class SocaSchedulerProtocol(SocaBaseProtocol):
 
     @abstractmethod
     def get_node(self, host: str, **kwargs) -> Optional[SocaComputeNode]: ...
+
+    @abstractmethod
+    def find_node(self, hosts: List[str], **kwargs) -> Optional[SocaComputeNode]: ...
 
     @abstractmethod
     def delete_node(self, host: str) -> bool: ...
@@ -300,10 +324,16 @@ class SocaSchedulerProtocol(SocaBaseProtocol):
     def set_job_attributes(self, job_id: str, attributes: Dict[str, Any]) -> bool: ...
 
     @abstractmethod
+    def set_job_comment(self, job_id: str, comment: str) -> bool: ...
+
+    @abstractmethod
     def provision_job(self, job: SocaJob, stack_id: str) -> int: ...
 
     @abstractmethod
     def reset_job(self, job_id: str) -> bool: ...
+
+    @abstractmethod
+    def hold_job(self, job_id: str) -> bool: ...
 
 
 class DocumentStoreProtocol(SocaBaseProtocol):
@@ -321,6 +351,15 @@ class DocumentStoreProtocol(SocaBaseProtocol):
 
     @abstractmethod
     def search_jobs(self, options: ListJobsRequest, **kwargs) -> ListJobsResult: ...
+
+    @abstractmethod
+    def get_job(
+        self,
+        job_uid: Optional[str] = None,
+        job_id: Optional[str] = None,
+        owner: Optional[str] = None,
+        **kwargs,
+    ) -> Optional[SocaJob]: ...
 
     @abstractmethod
     def search_nodes(self, options: ListNodesRequest, **kwargs) -> ListNodesResult: ...
@@ -435,6 +474,18 @@ class HpcQueueProfilesServiceProtocol(SocaServiceProtocol):
     ): ...
 
 
+class LicenseAvailability(NamedTuple):
+    """
+    outcome of a license availability check.
+    check_ok is False when the license server could not be queried at all - unreachable,
+    timed out, non-zero exit or unparsable output - so available_count is not an answer.
+    """
+
+    available_count: int
+    check_ok: bool
+    error: Optional[str] = None
+
+
 class LicenseServiceProtocol(SocaBaseProtocol):
     def create_license_resource(
         self, request: CreateHpcLicenseResourceRequest
@@ -456,7 +507,9 @@ class LicenseServiceProtocol(SocaBaseProtocol):
         self, request: ListHpcLicenseResourcesRequest
     ) -> ListHpcLicenseResourcesResult: ...
 
-    def get_available_licenses(self, license_resource_name: str) -> int: ...
+    def get_license_availability(
+        self, license_resource_name: str
+    ) -> LicenseAvailability: ...
 
     def check_license_resource_availability(
         self, request: CheckHpcLicenseResourceAvailabilityRequest

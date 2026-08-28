@@ -3,9 +3,12 @@
 SYSTEM_PKGS=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.system', required=True)) }})
 SYSTEM_PKGS_DEB=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.system_deb', required=True)) }})
 
-SYSTEM_PKGS_7=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.system_7', required=True)) }})
+SYSTEM_PKGS_7=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.system_7', default=[])) }})
 SYSTEM_PKGS_8=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.system_8', required=True)) }})
 SYSTEM_PKGS_9=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.system_9', required=True)) }})
+{# default=[] not required=True: a stored config without system_10 must not fail
+   bootstrap on non-EL10 nodes #}
+SYSTEM_PKGS_10=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.system_10', default=[])) }})
 
 APPLICATION_PKGS=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.application', required=True)) }})
 APPLICATION_PKGS_DEB=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.application_deb', required=True)) }})
@@ -26,10 +29,10 @@ DEFAULT_PACKAGES_FOR_DEB=$(echo ${SYSTEM_PKGS_DEB[*]} ${APPLICATION_PKGS_DEB[*]}
 
 EXCLUDE=()
 
-{% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
-  {% if context.base_os in ('amazonlinux2', 'amazonlinux2023') %}
+{% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
+  {% if context.base_os in ('amazonlinux2023',) %}
     yum install --skip-broken -y $DEFAULT_PACKAGES_FOR_RPM $(echo ${SYSTEM_PKGS_7[*]} ${APPLICATION_PKGS_7[*]} ${SSSD_PKGS_7[*]})
-  {% elif context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+  {% elif context.base_os in ('rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
     dnf install -y dnf-plugins-core
 
     {% if context.base_os == 'rhel8' %}
@@ -52,6 +55,16 @@ EXCLUDE=()
       dnf config-manager --set-enabled crb
       ADDITIONAL_PKGS_TO_INSTALL=$(echo ${SYSTEM_PKGS_9[*]})
       EXCLUDE+=()
+
+    {% elif context.base_os == 'rhel10' %}
+      dnf config-manager --set-enabled codeready-builder-for-rhel-10-rhui-rpms
+      ADDITIONAL_PKGS_TO_INSTALL=$(echo ${SYSTEM_PKGS_10[*]})
+      EXCLUDE+=()
+
+    {% elif context.base_os == 'rocky10' %}
+      dnf config-manager --set-enabled crb
+      ADDITIONAL_PKGS_TO_INSTALL=$(echo ${SYSTEM_PKGS_10[*]})
+      EXCLUDE+=()
     {% endif %}
 
     {% if context.job_has_param('enable_efa_support') %}
@@ -60,7 +73,9 @@ EXCLUDE=()
     {% endif %}
 
     printf -v EXCLUDE_JOINED '%s,' "${EXCLUDE[@]}"
-    command="dnf --exclude=${EXCLUDE_JOINED%,} install -y --skip-broken $DEFAULT_PACKAGES_FOR_RPM $ADDITIONAL_PKGS_TO_INSTALL"
+    # strict=0: --skip-broken alone only covers broken deps, not missing package names, and
+    # EL10 dropped pcre/http-parser/ec2-hibinit-agent, which would otherwise fail the whole transaction
+    command="dnf --exclude=${EXCLUDE_JOINED%,} install -y --skip-broken --setopt=strict=0 $DEFAULT_PACKAGES_FOR_RPM $ADDITIONAL_PKGS_TO_INSTALL"
     MAX_ATTEMPT=10
     CURRENT_ATTEMPT=0
     SLEEP_INTERVAL=5
@@ -70,9 +85,16 @@ EXCLUDE=()
         echo "Error: unable to execute dnf install command: $command"
         break
       fi
+      # a failed attempt can leave a poisoned CDN cache (metadata vs package bytes mismatched,
+      # seen on RHUI during a Red Hat republish); never re-verify it, clean and re-fetch instead
+      dnf clean packages metadata >/dev/null 2>&1 || true
+      SLEEP_INTERVAL=30
       sleep $SLEEP_INTERVAL
     done
-    systemctl enable hibinit-agent
+    # ec2-hibinit-agent is not packaged for EL10, so the unit is absent there
+    if systemctl list-unit-files hibinit-agent.service --no-legend 2>/dev/null | grep -q .; then
+      systemctl enable hibinit-agent
+    fi
   {% endif %}
 
   if [[ $(rpm -qa kernel | wc -l) -gt "1" ]]; then
@@ -80,7 +102,10 @@ EXCLUDE=()
   fi
 {% endif %}
 
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
+  {# compute-node-ami-builder reaches this include with the index baked into the AMI, which can be
+     too old for the running kernel headers; the other deb node types run universe.jinja2 first #}
+  apt update || log_warning "apt update failed, installing system packages from the existing index"
   DEBIAN_FRONTEND=noninteractive apt install -yq $DEFAULT_PACKAGES_FOR_DEB
 {% endif %}
 # End: System Packages Install

@@ -135,6 +135,12 @@ class AwsClientProviderProtocol(SocaBaseProtocol):
     def iam(self): ...
 
     @abstractmethod
+    def bedrock(self): ...
+
+    @abstractmethod
+    def cost_explorer(self): ...
+
+    @abstractmethod
     def cloudformation(self): ...
 
     @abstractmethod
@@ -313,7 +319,18 @@ class AWSUtilProtocol(SocaBaseProtocol):
     def is_instance_type_valid(self, instance_type: str) -> bool: ...
 
     @abstractmethod
+    def get_image_architecture(self, image_id: str) -> Optional[str]: ...
+
+    @abstractmethod
     def is_instance_type_efa_supported(self, instance_type: str) -> bool: ...
+
+    @abstractmethod
+    def is_instance_type_spot_supported(self, instance_type: str) -> bool: ...
+
+    @abstractmethod
+    def get_instance_type_placement_group_strategies(
+        self, instance_type: str
+    ) -> List[str]: ...
 
     @abstractmethod
     def s3_bucket_has_access(self, bucket_name: str) -> Dict: ...
@@ -435,6 +452,11 @@ class AWSUtilProtocol(SocaBaseProtocol):
 
     @abstractmethod
     def budgets_get_budget(self, budget_name: str) -> Optional[AwsProjectBudget]: ...
+
+    @abstractmethod
+    def cost_explorer_get_tagged_service_spend(
+        self, tag_key: str, tag_value: str
+    ) -> Optional[Dict[str, float]]: ...
 
     @abstractmethod
     def get_soca_job_from_stack(self, stack_name: str) -> Optional[SocaJob]: ...

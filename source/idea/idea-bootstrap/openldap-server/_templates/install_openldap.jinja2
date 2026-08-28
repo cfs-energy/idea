@@ -14,16 +14,21 @@ DS_TLS_PRIVATE_KEY=$(get_secret "${LDAP_TLS_PRIVATE_KEY_SECRET_ARN}")
 
 log_info "Installing LDAP packages ..."
 OPENLDAP_SERVER_PKGS=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.openldap_server', required=True)) }})
-OPENLDAP_SERVER_PKGS_7=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.openldap_server_7', required=True)) }})
+OPENLDAP_SERVER_PKGS_7=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.openldap_server_7', default=[])) }})
 OPENLDAP_SERVER_PKGS_8=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.openldap_server_8', required=True)) }})
 OPENLDAP_SERVER_PKGS_9=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.openldap_server_9', required=True)) }})
+{# default=[] not required=True: a stored config without openldap_server_10 must not
+   fail the render for every base_os #}
+OPENLDAP_SERVER_PKGS_10=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.openldap_server_10', default=[])) }})
 
-{% if context.base_os in ('amazonlinux2', 'amazonlinux2023') %}
+{% if context.base_os in ('amazonlinux2023',) %}
   yum install -y --skip-broken $(echo ${OPENLDAP_SERVER_PKGS[*]} ${OPENLDAP_SERVER_PKGS_7[*]})
 {% elif context.base_os in ('rhel8', 'rocky8') %}
   dnf install -y $(echo ${OPENLDAP_SERVER_PKGS[*]} ${OPENLDAP_SERVER_PKGS_8[*]})
 {% elif context.base_os in ('rhel9', 'rocky9') %}
   dnf install -y $(echo ${OPENLDAP_SERVER_PKGS[*]} ${OPENLDAP_SERVER_PKGS_9[*]})
+{% elif context.base_os in ('rhel10', 'rocky10') %}
+  dnf install -y $(echo ${OPENLDAP_SERVER_PKGS[*]} ${OPENLDAP_SERVER_PKGS_10[*]})
 {% endif %}
 
 

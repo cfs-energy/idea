@@ -107,8 +107,7 @@ SocaInputParamSpec:
             - name: instance_type
             - name: volume_size
   #--------------------------------------------------------------------------------------------------
-  # deployment input parameters
-  # these parameters can be included or customized in the deployment options configured above
+  # deployment input parameters (customize which of these are included in the sections above)
   #--------------------------------------------------------------------------------------------------
   params:
     #--------------------------------------------------------------------------------------------------
@@ -135,10 +134,8 @@ SocaInputParamSpec:
       markdown: |
         A Partition is a group of AWS Region and Service objects.
         We use the Partition to determine the applicable AWS Regions in which you want to install IDEA.
-    # In some scenarios a secondary AWS Profile is required to bootstrap the installation.
-    # This is common when the selected partition/region lacks the SSM namespace to probe
-    # for service availability. This question is only asked if the 'when' clause is matched.
-    # Defaults to ask when the aws_partition is aws-us-gov (US GovCloud)
+    # asked only when aws_partition is aws-us-gov; some partitions lack the SSM namespace needed
+    # to probe service availability from the primary profile.
     - name: aws_profile2
       title: "AWS Profile2"
       description: "Select the AWS Commercial Profile you wish to use for IDEA Installation:"
@@ -163,10 +160,12 @@ SocaInputParamSpec:
         required: yes
       tag: default
       custom:
+        # us-gov-west-1 is the only GovCloud region with base AMIs in region_ami_config.yml
+        # and eVDI software stacks in base-software-stack-config.yaml
         defaults:
           aws: us-east-1
           aws-cn: cn-north-1
-          aws-us-gov: us-gov-east-1
+          aws-us-gov: us-gov-west-1
           aws-iso: us-iso-east-1
           aws-iso-b: us-isob-east-1
     #--------------------------------------------------------------------------------------------------
@@ -375,13 +374,20 @@ SocaInputParamSpec:
       data_type: str
       help_text: ~
       default: amazonlinux2023
+      # amazonlinux2 is deliberately not offered: it reached end-of-life on 2026-06-30.
+      # rhel10/rocky10 lack published DCV packages, hence "no eVDI support" below. they also have
+      # no AMIs in me-south-1 and us-gov-west-1, where resolve_region_ami names base_os and region.
       choices:
         - title: Amazon Linux 2023
           value: amazonlinux2023
+        - title: Red Hat Enterprise Linux 10 (no eVDI support)
+          value: rhel10
         - title: Red Hat Enterprise Linux 9
           value: rhel9
         - title: Red Hat Enterprise Linux 8
           value: rhel8
+        - title: Rocky Linux 10 (no eVDI support)
+          value: rocky10
         - title: Rocky Linux 9
           value: rocky9
         - title: Rocky Linux 8
@@ -617,8 +623,7 @@ SocaInputParamSpec:
             eq: aws_managed_activedirectory
   #--------------------------------------------------------------------------------------------------
   # tags: these indicate the icon or status of a parameter.
-  # developer note: currently these are not used, but do not ignore them, as they will be used
-  # in a future release.
+  # currently unused, but kept for a future release - do not remove.
   #--------------------------------------------------------------------------------------------------
   tags:
     - name: default

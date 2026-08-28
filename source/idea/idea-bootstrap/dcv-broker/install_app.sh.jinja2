@@ -11,16 +11,13 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
 # DCV Broker
 DCV_GPG_KEY="{{ context.config.get_string('global-settings.package_config.dcv.gpg_key', required=True) }}"
-{% if context.base_os in ('amazonlinux2') %}
-DCV_SESSION_MANAGER_BROKER_URL="{{ context.config.get_string('global-settings.package_config.dcv.broker.linux.al2.url', required=True) }}"
-DCV_SESSION_MANAGER_BROKER_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.broker.linux.al2.sha256sum', required=True) }}"
-{% elif context.base_os in ('rhel8', 'rocky8') %}
+{% if context.base_os in ('rhel8', 'rocky8') %}
 DCV_SESSION_MANAGER_BROKER_URL="{{ context.config.get_string('global-settings.package_config.dcv.broker.linux.rhel_centos_rocky8.url', required=True) }}"
 DCV_SESSION_MANAGER_BROKER_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.broker.linux.rhel_centos_rocky8.sha256sum', required=True) }}"
 {% elif context.base_os in ('rhel9', 'rocky9') %}
 DCV_SESSION_MANAGER_BROKER_URL="{{ context.config.get_string('global-settings.package_config.dcv.broker.linux.rhel_centos_rocky9.url', required=True) }}"
 DCV_SESSION_MANAGER_BROKER_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.broker.linux.rhel_centos_rocky9.sha256sum', required=True) }}"
-{% elif context.base_os in ('amazonlinux2023') %}
+{% elif context.base_os in ('amazonlinux2023',) %}
 DCV_SESSION_MANAGER_BROKER_URL="{{ context.config.get_string('global-settings.package_config.dcv.broker.linux.al2023.url', required=True) }}"
 DCV_SESSION_MANAGER_BROKER_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.broker.linux.al2023.sha256sum', required=True) }}"
 {% endif %}

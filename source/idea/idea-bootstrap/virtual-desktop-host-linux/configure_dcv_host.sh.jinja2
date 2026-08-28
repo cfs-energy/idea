@@ -41,13 +41,13 @@ IDEA_SESSION_ID="{{ context.vars.idea_session_id }}"
 IDEA_SESSION_OWNER="{{ context.vars.session_owner }}"
 
 function install_microphone_redirect() {
-  {% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+  {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
   if [[ -z "$(rpm -qa pulseaudio-utils)" ]]; then
   {% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
   if [[ -z "$(dpkg -l pulseaudio-utils | grep ^ii)" ]]; then
   {% endif %}
     echo "Installing microphone redirect..."
-    {% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+    {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
     yum install -y pulseaudio-utils
     {% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
     apt install -y pulseaudio-utils
@@ -184,7 +184,7 @@ function restart_x_server() {
 }
 
 function configure_gl() {
-  {% if context.base_os in ('amazonlinux2', 'amazonlinux2023') %}
+  {% if context.base_os == 'amazonlinux2023' %}
     echo "OS is {{ context.base_os }}, no need for this configuration. NO-OP..."
   {% elif context.is_gpu_instance_type() %}
     if [[ $machine == "x86_64" ]]; then
@@ -334,7 +334,7 @@ function verify_x_server_is_up() {
 
 {% include '_templates/linux/dcv_server.jinja2' %}
 {% include '_templates/linux/dcv_session_manager_agent.jinja2' %}
-{% if context.base_os in ('amazonlinux2', 'amazonlinux2023') %}
+{% if context.base_os == 'amazonlinux2023' %}
 {% include '_templates/linux/dcv_server_cert.jinja2' %}
 {% endif %}
 
@@ -401,7 +401,7 @@ systemctl restart NetworkManager
 {% endif %}
 
 
-{% if context.base_os in ('ubuntu2404') %}
+{% if context.base_os == 'ubuntu2404' %}
 systemctl disable systemd-networkd-wait-online.service
 {% endif %}
 

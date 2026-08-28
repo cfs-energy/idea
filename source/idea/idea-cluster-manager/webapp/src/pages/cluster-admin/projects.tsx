@@ -14,13 +14,15 @@
 import React, {Component, RefObject} from "react";
 
 import {TableProps} from "@cloudscape-design/components/table/interfaces";
-import {Project, SocaUserInputChoice} from '../../client/data-model'
+import {Project, SocaUserInputChoice, SocaUserInputParamMetadata} from '../../client/data-model'
 import IdeaListView from "../../components/list-view";
 import {AccountsClient, ProjectsClient} from "../../client";
 import {AppContext} from "../../common";
-import {Box, Button, Header, Modal, ProgressBar, SpaceBetween, StatusIndicator, TagEditor} from "@cloudscape-design/components";
+import {Box, Button, Header, Modal, Popover, ProgressBar, SpaceBetween, StatusIndicator, TagEditor} from "@cloudscape-design/components";
 import IdeaForm from "../../components/form";
 import Utils from "../../common/utils";
+import dot from "dot-object";
+import {Constants} from "../../common/constants";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import IdeaAppLayout, {IdeaAppLayoutProps} from "../../components/app-layout";
 import {withRouter} from "../../navigation/navigation-utils";
@@ -35,6 +37,10 @@ export interface ProjectsState {
     showCreateProjectForm: boolean
     showTagEditor: boolean
     tags: any[]
+    bedrockEnabled: boolean
+    bedrockCatalog: string[]
+    bedrockUsageLoggingManaged: boolean
+    settingsLoaded: boolean
 }
 
 const PROJECT_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<Project>[] = [
@@ -147,10 +153,80 @@ const PROJECT_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<Project>[] =
     }
 ]
 
+// us.anthropic.claude-opus-5 -> claude-opus-5, us.anthropic.claude-haiku-4-5-20251001-v1:0 -> claude-haiku-4-5-20251001
+const shortModelName = (modelId: string): string => modelId
+    .replace(/^(us|eu|apac|global)\./, '')
+    .replace(/^(anthropic|amazon|meta)\./, '')
+    .replace(/-v\d+:\d+$/, '')
+
+// shown only when bedrock.enabled. usageLoggingManaged (invocation_logging.manage_configuration
+// off) makes a zero mean "not collected", not "no usage".
+const buildBedrockUsageColumn = (usageLoggingManaged: boolean): TableProps.ColumnDefinition<Project> => ({
+    id: 'bedrock-usage',
+    header: (
+        <Popover
+            header="AI usage, month to date"
+            content="Tokens per model, recorded by Amazon Bedrock model invocation logging and attributed to the project. The cost beside them is month to date Bedrock spend from Cost Explorer for the project cost allocation tag, which trails the recorded tokens by about a day and is not backfilled for activity recorded before the tags were activated. Per user attribution is available through the usage API."
+            triggerType="text"
+            dismissButton={false}
+        >
+            AI Usage
+        </Popover>
+    ),
+    minWidth: 220,
+    cell: project => {
+        if (!project.bedrock?.enabled) {
+            return <span style={{color: 'grey'}}> -- </span>
+        }
+        const usage = project.bedrock_usage
+        if (usage?.is_unavailable) {
+            return <StatusIndicator type="warning">Usage unavailable</StatusIndicator>
+        }
+        const totalTokens = Utils.asNumber(usage?.total_tokens, 0)
+        if (!usage || totalTokens === 0) {
+            if (!usageLoggingManaged) {
+                return (
+                    <Popover
+                        header="Usage may not be collected"
+                        content="IDEA is not managing Amazon Bedrock model invocation logging for this account and region. Unless logging was configured outside IDEA to deliver to the cluster log group, no usage is recorded for any project, whether or not models were invoked."
+                        triggerType="text"
+                        dismissButton={false}
+                    >
+                        <span style={{color: 'grey'}}>Not collected</span>
+                    </Popover>
+                )
+            }
+            return <span style={{color: 'grey'}}>No usage recorded</span>
+        }
+        // no answer from cost explorer must never read as zero spend.
+        const spendLabel = (usage.spend_is_unavailable || !usage.spend) ? 'cost unavailable' : `${Utils.getFormattedAmount(usage.spend)} MTD`
+        const models = usage.by_model ?? []
+        return (
+            <SpaceBetween size="xxs" direction="vertical">
+                <Box variant="awsui-key-label">{totalTokens.toLocaleString()} tokens, {spendLabel}</Box>
+                <Box fontSize="body-s" color="text-body-secondary">
+                    {Utils.asNumber(usage.invocations, 0).toLocaleString()} {Utils.asNumber(usage.invocations, 0) === 1 ? 'request' : 'requests'} in {usage.period}
+                </Box>
+                {models.length > 0 &&
+                    <div>
+                        {models.map((entry, index) => {
+                            return <Box key={index} fontSize="body-s"
+                                        color="text-body-secondary">{shortModelName(entry.model_id ?? '')}: {Utils.asNumber(entry.total_tokens, 0).toLocaleString()}</Box>
+                        })}
+                    </div>
+                }
+            </SpaceBetween>
+        )
+    },
+    sortingComparator: (a, b) => {
+        return Utils.asNumber(a.bedrock_usage?.total_tokens, 0) - Utils.asNumber(b.bedrock_usage?.total_tokens, 0)
+    }
+})
+
 class Projects extends Component<ProjectsProps, ProjectsState> {
 
-    listing: RefObject<IdeaListView>
-    createProjectForm: RefObject<IdeaForm>
+    listing: RefObject<IdeaListView | null>
+    createProjectForm: RefObject<IdeaForm | null>
 
     constructor(props: ProjectsProps) {
         super(props);
@@ -161,8 +237,32 @@ class Projects extends Component<ProjectsProps, ProjectsState> {
             showCreateProjectForm: false,
             createProjectModalType: '',
             showTagEditor: false,
-            tags: []
+            tags: [],
+            bedrockEnabled: false,
+            bedrockCatalog: [],
+            bedrockUsageLoggingManaged: true,
+            settingsLoaded: false
         }
+    }
+
+    componentDidMount() {
+        // getModuleSettings can throw synchronously before any promise exists; starting from
+        // Promise.resolve() catches that too. bedrock defaults off, so a failure here should hide the column, not crash the page.
+        Promise.resolve()
+            .then(() => AppContext.get().getClusterSettingsService().getModuleSettings(Constants.MODULE_CLUSTER_MANAGER))
+            .then(settings => {
+                const catalog = dot.pick('bedrock.model_ids', settings)
+                this.setState({
+                    bedrockEnabled: Utils.asBoolean(dot.pick('bedrock.enabled', settings), false),
+                    bedrockCatalog: Array.isArray(catalog) ? catalog : [],
+                    bedrockUsageLoggingManaged: Utils.asBoolean(dot.pick('bedrock.invocation_logging.manage_configuration', settings), true),
+                    settingsLoaded: true
+                })
+            })
+            .catch(error => {
+                console.error(error)
+                this.setState({bedrockEnabled: false, bedrockCatalog: [], bedrockUsageLoggingManaged: true, settingsLoaded: true})
+            })
     }
 
     projects(): ProjectsClient {
@@ -222,15 +322,65 @@ class Projects extends Component<ProjectsProps, ProjectsState> {
         return this.getListing().getSelectedItem()
     }
 
+    // no params when the cluster feature flag is off: the project form then has no
+    // Bedrock section at all.
+    buildBedrockFormParams(): SocaUserInputParamMetadata[] {
+        if (!this.state.bedrockEnabled) {
+            return []
+        }
+        const choices: SocaUserInputChoice[] = this.state.bedrockCatalog.map((modelId) => {
+            return {
+                title: modelId,
+                value: modelId
+            }
+        })
+        return [
+            {
+                name: 'bedrock.enabled',
+                title: 'Do you want to enable Amazon Bedrock for this project?',
+                description: 'Project members can invoke the selected models from their virtual desktop sessions.',
+                data_type: 'bool',
+                param_type: 'confirm',
+                default: false,
+                validate: {
+                    required: true
+                }
+            },
+            {
+                name: 'bedrock.model_ids',
+                title: 'Bedrock Models',
+                description: 'Select the models this project can invoke',
+                help_text: 'Choices come from the cluster model catalog. Add models to the catalog under Cluster Management > Settings > Bedrock.',
+                param_type: 'select',
+                multiple: true,
+                data_type: 'str',
+                dynamic_choices: false,
+                choices: choices,
+                choices_empty_label: 'Model catalog is empty',
+                validate: {
+                    required: false
+                },
+                when: {
+                    param: 'bedrock.enabled',
+                    eq: true
+                }
+            }
+        ]
+    }
+
     buildCreateProjectForm() {
         let values = undefined
         const isUpdate = this.state.createProjectModalType === 'update'
         if (isUpdate) {
             const selected = this.getSelected()
             if (selected != null) {
+                // params are addressed by flat dotted name, so each nested field must be spread out
+                // explicitly - a missing entry defaults bedrock.enabled to false, silently disabling it on edit.
                 values = {
                     ...selected,
-                    'budget.budget_name': selected.budget?.budget_name
+                    'budget.budget_name': selected.budget?.budget_name,
+                    'bedrock.enabled': selected.bedrock?.enabled ?? false,
+                    'bedrock.model_ids': selected.bedrock?.model_ids ?? []
                 }
             }
         }
@@ -371,7 +521,8 @@ class Projects extends Component<ProjectsProps, ProjectsState> {
                                   param: 'enable_budgets',
                                   eq: true
                               }
-                          }
+                          },
+                          ...this.buildBedrockFormParams()
                       ]}
             />
         )
@@ -626,7 +777,9 @@ class Projects extends Component<ProjectsProps, ProjectsState> {
                         date_range: this.getListing().getDateRange()
                     })
                 }}
-                columnDefinitions={PROJECT_TABLE_COLUMN_DEFINITIONS}
+                // the table renders while the module settings are still in flight; the
+                // AI Usage column joins it once they say bedrock is enabled.
+                columnDefinitions={(this.state.settingsLoaded && this.state.bedrockEnabled) ? [...PROJECT_TABLE_COLUMN_DEFINITIONS, buildBedrockUsageColumn(this.state.bedrockUsageLoggingManaged)] : PROJECT_TABLE_COLUMN_DEFINITIONS}
             />
         )
     }

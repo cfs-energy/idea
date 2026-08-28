@@ -25,8 +25,8 @@ import {PasswordStrengthCheck} from "../../components/password-strength-check";
 
 class IdeaAuthChallenge extends Component<IdeaAuthProps, IdeaAuthState> {
     static contextType = IdeaAuthContext
-    form: RefObject<IdeaForm>
-    passwordStrengthCheck: RefObject<PasswordStrengthCheck>
+    form: RefObject<IdeaForm | null>
+    passwordStrengthCheck: RefObject<PasswordStrengthCheck | null>
 
     constructor(props: IdeaAuthProps) {
         super(props);

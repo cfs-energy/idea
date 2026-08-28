@@ -34,7 +34,8 @@ import {
     faStopCircle,
     faTrash,
     faPowerOff,
-    faShareFromSquare
+    faShareFromSquare,
+    faHourglassHalf
 } from "@fortawesome/free-solid-svg-icons";
 import VirtualDesktopSessionStatusIndicator from "./virtual-desktop-session-status-indicator";
 import {ButtonDropdownProps} from "@cloudscape-design/components/button-dropdown/interfaces";
@@ -45,8 +46,9 @@ interface VirtualDesktopSessionCardProps {
     isSharedSession?: boolean
     isActiveDirectory: boolean
     session: VirtualDesktopSession
+    projectAiAccessPending?: boolean
+    idleAutoStopDelayMax?: number
     screenshot?: string
-    onMounted: () => void
     onDeleteSession?: (session: VirtualDesktopSession) => Promise<boolean>
     onStartSession?: (session: VirtualDesktopSession) => Promise<boolean>
     onStopSession?: (session: VirtualDesktopSession) => Promise<boolean>
@@ -153,10 +155,6 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
         }
     }
 
-    componentDidMount() {
-        this.props.onMounted()
-    }
-
     getSession(): VirtualDesktopSession {
         return this.props.session
     }
@@ -185,6 +183,14 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
 
     canStart = () => this.getSession().state === 'STOPPED'
 
+    // the controller ignores the per-session override while the admin cap is not positive
+    getIdleAutoStopOverride = (): number => {
+        if (Utils.asNumber(this.props.idleAutoStopDelayMax, 0) <= 0) {
+            return 0
+        }
+        return Math.min(Utils.asNumber(this.props.session.idle_autostop_delay, 0), Utils.asNumber(this.props.idleAutoStopDelayMax, 0))
+    }
+
     hasSchedule = (): boolean => {
         const schedule = this.props.session.schedule
         return Utils.isNotEmpty(schedule?.monday)
@@ -210,13 +216,22 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
                 </Box>
             </div>
             <SpaceBetween size="s" direction={"horizontal"}>
-                <VirtualDesktopSessionStatusIndicator state={this.props.session.state!} hibernation_enabled={this.props.session.hibernation_enabled!}/>
+                <VirtualDesktopSessionStatusIndicator state={this.props.session.state!} hibernation_enabled={this.props.session.hibernation_enabled!} updated_on={this.props.session.updated_on}/>
                 <Badge color="blue">{this.props.session.project?.title}</Badge>
                 <Badge color="blue">{Utils.getOsTitle(this.props.session.software_stack?.base_os)}</Badge>
                 <Badge color="blue">{this.props.session.server?.instance_type}</Badge>
                 {this.hasSchedule() &&
                     <small style={{color: 'grey'}}><FontAwesomeIcon icon={faClock}/>&nbsp;{<VirtualDesktopScheduleDescription session={this.props.session}/>}</small>}
+                {this.getIdleAutoStopOverride() > 0 &&
+                    <small style={{color: 'grey'}}><FontAwesomeIcon icon={faHourglassHalf}/>&nbsp;Stops after {this.getIdleAutoStopOverride()} min idle</small>}
+                {this.props.projectAiAccessPending &&
+                    <StatusIndicator type="warning">This desktop cannot use the project's AI models yet. {this.canStart()
+                        ? 'Start it and it will come up with them.'
+                        : 'It is moved onto them automatically, usually within 30 minutes.'}</StatusIndicator>}
             </SpaceBetween>
+            {/* the state badge only says "Error", which is not enough to act on */}
+            {this.props.session.state === 'ERROR' && Utils.isNotEmpty(this.props.session.failure_reason) &&
+                <StatusIndicator type="error">{this.props.session.failure_reason}</StatusIndicator>}
         </SpaceBetween>
     }
 

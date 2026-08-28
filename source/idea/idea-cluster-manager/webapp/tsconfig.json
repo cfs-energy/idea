@@ -6,6 +6,11 @@
       "dom.iterable",
       "esnext"
     ],
+    "types": [
+      "node",
+      "vite/client",
+      "vitest/globals"
+    ],
     "allowJs": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
@@ -21,6 +26,7 @@
     "jsx": "react-jsx"
   },
   "include": [
-    "src"
+    "src",
+    "build-support"
   ]
 }

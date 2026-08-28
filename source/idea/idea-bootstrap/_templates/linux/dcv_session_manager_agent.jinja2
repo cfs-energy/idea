@@ -1,13 +1,7 @@
 # BEGIN: DCV Session Manager Agent
 
 DCV_GPG_KEY_DCV_AGENT="{{ context.config.get_string('global-settings.package_config.dcv.gpg_key', required=True) }}"
-{% if context.base_os in ('amazonlinux2',) %}
-DCV_SESSION_MANAGER_AGENT_X86_64_URL="{{ context.config.get_string('global-settings.package_config.dcv.agent.x86_64.linux.al2.url', required=True) }}"
-DCV_SESSION_MANAGER_AGENT_X86_64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.agent.x86_64.linux.al2.sha256sum', required=True) }}"
-DCV_SESSION_MANAGER_AGENT_AARCH64_URL="{{ context.config.get_string('global-settings.package_config.dcv.agent.aarch64.linux.al2.url', required=True) }}"
-DCV_SESSION_MANAGER_AGENT_AARCH64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.agent.aarch64.linux.al2.sha256sum', required=True) }}"
-
-{% elif context.base_os in ('amazonlinux2023',) %}
+{% if context.base_os in ('amazonlinux2023',) %}
 DCV_SESSION_MANAGER_AGENT_X86_64_URL="{{ context.config.get_string('global-settings.package_config.dcv.agent.x86_64.linux.al2023.url', required=True) }}"
 DCV_SESSION_MANAGER_AGENT_X86_64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.agent.x86_64.linux.al2023.sha256sum', required=True) }}"
 DCV_SESSION_MANAGER_AGENT_AARCH64_URL="{{ context.config.get_string('global-settings.package_config.dcv.agent.aarch64.linux.al2023.url', required=True) }}"
@@ -40,7 +34,7 @@ DCV_SESSION_MANAGER_AGENT_AARCH64_SHA256_HASH="{{ context.config.get_string('glo
 {% endif %}
 
 
-{% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+{% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
 rpm --import ${DCV_GPG_KEY_DCV_SERVER}
 {% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
 curl -fsSL "${DCV_GPG_KEY_DCV_SERVER}" | gpg --dearmor | sudo tee /usr/share/keyrings/dcv.gpg > /dev/null
@@ -59,7 +53,7 @@ else
   AGENT_SHA256_HASH=${DCV_SESSION_MANAGER_AGENT_AARCH64_SHA256_HASH}
 fi
 
-{% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+{% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
 if [[ -z "$(rpm -qa nice-dcv-session-manager-agent)" ]]; then
 {% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
 if [[ -z "$(dpkg -l nice-dcv-session-manager-agent | grep ^ii)" ]]; then
@@ -73,7 +67,7 @@ if [[ -z "$(dpkg -l nice-dcv-session-manager-agent | grep ^ii)" ]]; then
       echo -e "FATAL ERROR: Checksum for DCV Session Manager Agent failed. File may be compromised." > /etc/motd
       exit 1
   fi
-  {% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+  {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
   yum install -y ${PACKAGE_NAME}
   {% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
   dpkg -i ${PACKAGE_NAME}

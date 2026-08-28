@@ -135,4 +135,224 @@ Statement:
       - '{{ context.arns.get_kinesis_arn() }}'
     Effect: Allow
 
+    {% if context.config.get_bool(context.module_id + '.bedrock.enabled', False) %}
+  # role creation is conditioned on the project permissions boundary, so the role can never exceed it.
+  - Action:
+      - iam:CreateRole
+      - iam:PutRolePermissionsBoundary
+    Resource:
+      - '{{ context.arns.get_project_role_arn() }}'
+    Effect: Allow
+    Sid: BedrockProjectRoleCreate
+    Condition:
+      StringEquals:
+        iam:PermissionsBoundary: '{{ context.arns.get_project_permissions_boundary_arn() }}'
+
+  # only project owned policies, cluster owned managed policies, and the ec2 managed policies named here are attachable.
+  # any other aws managed policy is excluded: the boundary alone wouldn't stop something like AdministratorAccess.
+  - Action:
+      - iam:AttachRolePolicy
+      - iam:DetachRolePolicy
+    Resource:
+      - '{{ context.arns.get_project_role_arn() }}'
+    Effect: Allow
+    Sid: BedrockProjectRolePolicyAttach
+    Condition:
+      StringEquals:
+        iam:PermissionsBoundary: '{{ context.arns.get_project_permissions_boundary_arn() }}'
+      ArnLike:
+        iam:PolicyARN:
+          - '{{ context.arns.get_project_policy_arn() }}'
+          - '{{ context.arns.get_arn("iam", "policy/" + context.cluster_name + "-*", aws_region="") }}'
+        {%- for policy_arn in context.config.get_list("cluster.iam.ec2_managed_policy_arns", []) %}
+          - '{{ policy_arn }}'
+        {%- endfor %}
+        {%- for key in ["cluster.iam.policies.amazon_ssm_managed_instance_core_arn", "cluster.iam.policies.cloud_watch_agent_server_arn", "cluster.iam.policies.amazon_prometheus_remote_write_arn"] %}
+        {%- if context.config.get_string(key) %}
+          - '{{ context.config.get_string(key) }}'
+        {%- endif %}
+        {%- endfor %}
+
+  # iam:PermissionsBoundary is not a valid condition key for these actions, so they
+  # are scoped by the project role path only.
+  - Action:
+      - iam:GetRole
+      - iam:DeleteRole
+      - iam:TagRole
+      - iam:UntagRole
+      - iam:ListAttachedRolePolicies
+    Resource:
+      - '{{ context.arns.get_project_role_arn() }}'
+    Effect: Allow
+    Sid: BedrockProjectRoleRead
+
+  - Action:
+      - iam:CreateInstanceProfile
+      - iam:DeleteInstanceProfile
+      - iam:GetInstanceProfile
+      - iam:AddRoleToInstanceProfile
+      - iam:RemoveRoleFromInstanceProfile
+      - iam:TagInstanceProfile
+    Resource:
+      - '{{ context.arns.get_project_instance_profile_arn() }}'
+    Effect: Allow
+    Sid: BedrockProjectInstanceProfile
+
+  # PassRole is required since AddRoleToInstanceProfile implicitly passes the role to ec2; scoped to the project role path and ec2 only.
+  - Action:
+      - iam:PassRole
+    Resource:
+      - '{{ context.arns.get_project_role_arn() }}'
+    Effect: Allow
+    Sid: BedrockProjectPassRole
+    Condition:
+      StringEquals:
+        iam:PassedToService: 'ec2.{{ context.config.get_string("cluster.aws.dns_suffix", required=True) }}'
+
+  # The boundary policy is not under this path, so cluster-manager cannot rewrite
+  # the ceiling it is required to attach.
+  - Action:
+      - iam:CreatePolicy
+      - iam:CreatePolicyVersion
+      - iam:DeletePolicy
+      - iam:DeletePolicyVersion
+      - iam:GetPolicy
+      - iam:GetPolicyVersion
+      - iam:ListPolicyVersions
+      - iam:TagPolicy
+    Resource:
+      - '{{ context.arns.get_project_policy_arn() }}'
+    Effect: Allow
+    Sid: BedrockProjectPolicy
+
+  # The boundary document itself is read, not only its existence: the provisioner
+  # compares an administrator supplied policy against it before attaching it.
+  - Action:
+      - iam:GetPolicy
+      - iam:GetPolicyVersion
+      - iam:ListPolicyVersions
+    Resource:
+      - '{{ context.arns.get_project_permissions_boundary_arn() }}'
+    Effect: Allow
+    Sid: BedrockProjectBoundaryRead
+
+    {%- if context.config.get_list("cluster.iam.ec2_managed_policy_arns", []) %}
+  # Read only, and only the policies cluster.iam.ec2_managed_policy_arns names, so a
+  # grant the boundary would void is reported instead of attached and dead.
+  - Action:
+      - iam:GetPolicy
+      - iam:GetPolicyVersion
+      - iam:ListPolicyVersions
+    Resource:
+      {%- for policy_arn in context.config.get_list("cluster.iam.ec2_managed_policy_arns", []) %}
+      - '{{ policy_arn }}'
+      {%- endfor %}
+    Effect: Allow
+    Sid: BedrockAdministratorPolicyRead
+    {%- endif %}
+
+  - Action:
+      - bedrock:CreateInferenceProfile
+    Resource:
+      - '{{ context.arns.bedrock_application_inference_profile_arn }}'
+      - '{{ context.arns.bedrock_system_inference_profile_arn }}'
+      - '{{ context.arns.bedrock_foundation_model_arn }}'
+    Effect: Allow
+    Sid: BedrockCreateApplicationInferenceProfile
+
+  # Only the profiles this module creates are deletable or taggable. The system
+  # profile ARN is read only here, since it is the copyFrom source.
+  - Action:
+      - bedrock:DeleteInferenceProfile
+      - bedrock:GetInferenceProfile
+      - bedrock:TagResource
+      - bedrock:ListTagsForResource
+    Resource:
+      - '{{ context.arns.bedrock_application_inference_profile_arn }}'
+    Effect: Allow
+    Sid: BedrockManageApplicationInferenceProfiles
+
+  - Action:
+      - bedrock:GetInferenceProfile
+    Resource:
+      - '{{ context.arns.bedrock_system_inference_profile_arn }}'
+    Effect: Allow
+    Sid: BedrockReadSystemInferenceProfiles
+
+  # ListInferenceProfiles has no resource types, so this filters the account wide listing to the named profiles.
+  # GetFoundationModel below resolves whether a model id needs on demand throughput or a system profile.
+  - Action:
+      - bedrock:ListInferenceProfiles
+    Resource: '*'
+    Effect: Allow
+    Sid: BedrockListInferenceProfiles
+
+  - Action:
+      - bedrock:GetFoundationModel
+    Resource:
+      - '{{ context.arns.bedrock_foundation_model_arn }}'
+    Effect: Allow
+    Sid: BedrockReadFoundationModels
+
+  # invocation logging is one configuration per account and region; idea only sets it if unset.
+  # no delete action is granted, so it cannot be removed with these credentials.
+  - Action:
+      - bedrock:GetModelInvocationLoggingConfiguration
+      - bedrock:PutModelInvocationLoggingConfiguration
+    Resource: '*'
+    Effect: Allow
+    Sid: BedrockInvocationLoggingConfiguration
+
+  # scoped to the one delivery role name (trailing wildcard covers the region suffix the Role construct appends); can only be passed to bedrock.
+  - Action:
+      - iam:PassRole
+    Resource:
+      - '{{ context.arns.get_arn("iam", "role/" + context.cluster_name + "-bedrock-invocation-logging-*", aws_region="") }}'
+    Effect: Allow
+    Sid: BedrockPassInvocationLoggingRole
+    Condition:
+      StringEquals:
+        iam:PassedToService: 'bedrock.{{ context.config.get_string("cluster.aws.dns_suffix", required=True) }}'
+
+  - Action:
+      - logs:StartQuery
+    Resource:
+      - '{{ context.arns.bedrock_invocation_log_group_arn }}'
+      - '{{ context.arns.bedrock_invocation_log_group_arn }}:*'
+    Effect: Allow
+    Sid: BedrockUsageStartQuery
+
+  # GetQueryResults and StopQuery have no resource types.
+  - Action:
+      - logs:GetQueryResults
+      - logs:StopQuery
+    Resource: '*'
+    Effect: Allow
+    Sid: BedrockUsageQueryResults
+
+  - Action:
+      - dynamodb:GetItem
+      - dynamodb:Query
+      - dynamodb:PutItem
+      - dynamodb:DeleteItem
+      - dynamodb:BatchWriteItem
+      - dynamodb:DescribeTable
+      - dynamodb:CreateTable
+      - dynamodb:UpdateTimeToLive
+      - dynamodb:TagResource
+    Resource:
+      - '{{ context.arns.get_ddb_table_arn("bedrock.usage") }}'
+      - '{{ context.arns.get_ddb_table_arn("bedrock.instances") }}'
+    Effect: Allow
+    Sid: BedrockUsageTables
+
+  # Read only, and the one action needed to report how much of a project's spend was
+  # Bedrock. Cost Explorer has no resource types and no GovCloud endpoint.
+  - Action:
+      - ce:GetCostAndUsage
+    Resource: '*'
+    Effect: Allow
+    Sid: BedrockBudgetCostExplorer
+    {% endif %}
+
 {% include '_templates/custom-kms-key.yml' %}

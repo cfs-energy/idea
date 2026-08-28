@@ -16,6 +16,70 @@ import {
 } from "../../client/data-model";
 import Utils from "../../common/utils";
 
+export type JobElapsedState = 'not-started' | 'no-walltime' | 'within-limit' | 'near-limit' | 'over-limit'
+
+export interface JobElapsedSummary {
+    state: JobElapsedState
+    text: string
+}
+
+// a job is flagged as approaching its walltime at this fraction of the request.
+// elapsed uses the browser clock against server timestamps, so the threshold stays coarse.
+const NEAR_WALLTIME_RATIO = 0.9
+
+// states a job cannot leave. a job in one of these stopped accruing time, so a
+// missing end_time must never be substituted with the browser clock.
+const TERMINAL_JOB_STATES = ['finished', 'exit']
+
+/** Parses an HH:MM:SS walltime into seconds, matching the server's ModelUtils.walltime_to_seconds.
+ * Returns null for anything it cannot parse. */
+export function parseWalltimeSeconds(walltime?: string): number | null {
+    if (Utils.isEmpty(walltime)) {
+        return null
+    }
+    const parts = Utils.asString(walltime).trim().split(':')
+    if (parts.length !== 3) {
+        return null
+    }
+    const values = parts.map((part) => Number(part.trim()))
+    if (!values.every((value) => Number.isInteger(value) && value >= 0)) {
+        return null
+    }
+    return values[0] * 3600 + values[1] * 60 + values[2]
+}
+
+/** Formats a duration to the nearest minute. Durations are computed from the browser clock, so
+ * seconds would only ever render clock drift. */
+export function formatDurationMinutes(seconds?: number | null): string {
+    if (seconds == null || !Number.isFinite(seconds) || seconds < 0) {
+        return '-'
+    }
+    const totalMinutes = Math.floor(seconds / 60)
+    if (totalMinutes < 1) {
+        return 'less than 1 min'
+    }
+    const hours = Math.floor(totalMinutes / 60)
+    const minutes = totalMinutes % 60
+    if (hours === 0) {
+        return `${minutes} min`
+    }
+    if (minutes === 0) {
+        return `${hours} hr`
+    }
+    return `${hours} hr ${minutes} min`
+}
+
+function toEpochMillis(value?: string): number | null {
+    if (Utils.isEmpty(value)) {
+        return null
+    }
+    const epochMillis = new Date(Utils.asString(value)).getTime()
+    if (Number.isNaN(epochMillis)) {
+        return null
+    }
+    return epochMillis
+}
+
 export class JobParamUtils {
     params: SocaJobParams
 
@@ -303,4 +367,133 @@ export class JobUtils extends JobParamUtils {
         }
     }
 
+    getRequestedWalltimeSeconds(): number | null {
+        return parseWalltimeSeconds(this.params?.walltime)
+    }
+
+    isTerminal(): boolean {
+        return TERMINAL_JOB_STATES.indexOf(Utils.asString(this.job.state)) >= 0
+    }
+
+    /** Seconds the job has been running, ending at end_time once it is set. Null when the job has not
+     * started; never the requested walltime, which is what over-bills a job that never ran. */
+    getElapsedSeconds(now: Date = new Date()): number | null {
+        const startTime = toEpochMillis(this.job.start_time)
+        if (startTime == null) {
+            return null
+        }
+        const endTime = toEpochMillis(this.job.end_time)
+        if (endTime != null) {
+            return Math.max(0, Math.floor((endTime - startTime) / 1000))
+        }
+        if (this.isTerminal()) {
+            // a terminal job with no end_time reports the scheduler-recorded duration; measuring to
+            // now would grow every time the panel opens and eventually flag a job that finished within its walltime.
+            return this.getTotalTimeSeconds()
+        }
+        return Math.max(0, Math.floor((now.getTime() - startTime) / 1000))
+    }
+
+    /** Seconds the job has waited in the queue, ending when it starts. Measured wait, not a prediction
+     * of when the job will start. */
+    getQueuedSeconds(now: Date = new Date()): number | null {
+        const queueTime = toEpochMillis(this.job.queue_time)
+        if (queueTime == null) {
+            return null
+        }
+        // a job that never started stopped waiting when it ended
+        const startTime = toEpochMillis(this.job.start_time)
+        const until = (startTime != null) ? startTime : toEpochMillis(this.job.end_time)
+        if (until != null) {
+            return Math.max(0, Math.floor((until - queueTime) / 1000))
+        }
+        if (this.isTerminal()) {
+            return null
+        }
+        return Math.max(0, Math.floor((now.getTime() - queueTime) / 1000))
+    }
+
+    /** The run time the scheduler recorded. Only the persisted value, so a job that never ran reports
+     * nothing rather than its requested walltime. */
+    getTotalTimeSeconds(): number | null {
+        if (this.job.total_time_secs == null) {
+            return null
+        }
+        const totalTimeSecs = Number(this.job.total_time_secs)
+        if (!Number.isFinite(totalTimeSecs) || totalTimeSecs < 0) {
+            return null
+        }
+        return totalTimeSecs
+    }
+
+    /** Elapsed run time against the requested walltime, to the nearest minute. A job that has not
+     * started reports that, never a duration. */
+    getElapsedSummary(now: Date = new Date()): JobElapsedSummary {
+        const elapsedSeconds = this.getElapsedSeconds(now)
+        if (elapsedSeconds == null) {
+            return {state: 'not-started', text: 'Not started'}
+        }
+        const requestedSeconds = this.getRequestedWalltimeSeconds()
+        if (requestedSeconds == null || requestedSeconds <= 0) {
+            return {state: 'no-walltime', text: `${formatDurationMinutes(elapsedSeconds)} elapsed`}
+        }
+        const text = `${formatDurationMinutes(elapsedSeconds)} of ${formatDurationMinutes(requestedSeconds)} requested`
+        if (elapsedSeconds >= requestedSeconds) {
+            return {state: 'over-limit', text: text}
+        }
+        if (elapsedSeconds >= requestedSeconds * NEAR_WALLTIME_RATIO) {
+            return {state: 'near-limit', text: text}
+        }
+        return {state: 'within-limit', text: text}
+    }
+
+}
+
+/** The attempt the job is on, out of the configured cap. The scheduler's persistent per-job counter,
+ * not the attempt number in the PBS comment - only this one survives a scheduler restart. */
+export function formatProvisioningAttempt(attempt?: number | null, maxAttempts?: number | null, held: boolean = false): string | null {
+    if (attempt == null || !Number.isFinite(attempt) || attempt < 1) {
+        return null
+    }
+    // a held job is not on an attempt: provisioning stopped retrying it. saying
+    // "attempt 3 of 3" reads the same as a live third attempt.
+    if (maxAttempts == null || !Number.isFinite(maxAttempts) || maxAttempts < attempt) {
+        return (held) ? `held after ${attempt} attempts` : `attempt ${attempt}`
+    }
+    return (held) ? `held after ${attempt} of ${maxAttempts} attempts` : `attempt ${attempt} of ${maxAttempts}`
+}
+
+/** The queue limit holding the job. The type only: the threshold and the current usage describe the
+ * whole queue, not this owner. */
+export function formatBlockingLimit(limitType?: string | null): string | null {
+    if (Utils.isEmpty(limitType)) {
+        return null
+    }
+    return `queue limit: ${limitType}`
+}
+
+/** What is true about a job that has not started: how long it has waited, which provisioning attempt
+ * it is on, and which queue limit is holding it. Never a queue position or a predicted start. */
+export function getJobWaitingSignals(job: SocaJob, now: Date = new Date()): string[] {
+    const signals: string[] = []
+    const held = job.state === 'held'
+
+    if (Utils.isEmpty(job.start_time)) {
+        const queuedSeconds = new JobUtils(job).getQueuedSeconds(now)
+        if (queuedSeconds != null) {
+            signals.push(`waiting ${formatDurationMinutes(queuedSeconds)}`)
+        }
+    }
+
+    const attempt = formatProvisioningAttempt(job.provisioning_attempt, job.max_provisioning_attempts, held)
+    if (attempt != null) {
+        signals.push(attempt)
+    }
+
+    const limit = formatBlockingLimit(job.blocking_limit_type)
+    if (limit != null) {
+        signals.push(limit)
+    }
+
+    return signals
 }

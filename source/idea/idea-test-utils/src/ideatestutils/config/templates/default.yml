@@ -96,13 +96,22 @@ scheduler:
       mount_point: /fsx
     instance_store:
       mount_point: /scratch
+  cost_estimation:
+    ec2_boot_penalty_seconds: 300
+    default_fsx_lustre_size: 1200
+    ebs_gp3_storage: 0.08
+    ebs_io1_storage: 0.125
+    provisioned_iops: 0.065
+    fsx_lustre: 0.000194
   job_provisioning:
     batch_provisioning_wait_interval_seconds: 3
+    dry_run_cache_ttl_seconds: 300
     finished_job_processing_interval_seconds: 30
     job_provisioning_interval_seconds: 1
     job_submission_queue_interval_seconds: 1
     mixed_instances_policy:
       on_demand_allocation_strategy: prioritized
+    max_provisioning_retries: 3
     node_housekeeping_interval_seconds: 60
     placement_group:
       strategy: cluster
@@ -176,13 +185,8 @@ global-settings:
   package_config:
     amazon_cloudwatch_agent:
       download_link: ~
-      # since there are multiple variations and platforms, to avoid creating multiple configuration entries, below pattern is used.
-      # you can always override the downloading link by providing the download_link.
-      # if download_link is empty, download_link_pattern will be used to download cloudwatch agent
-      # refer to below files to perform additional customizations or implementation details:
-      #  * idea-bootstrap/_templates/linux/cloudwatch_agent.jinja2
-      #  * idea-bootstrap/_templates/windows/cloudwatch_agent.jinja2
-      # CN and GovCloud Partitions will need to change or adjust the download_url_pattern accordingly.
+      # if download_link is empty, download_link_pattern below is used instead.
+      # CN and GovCloud partitions need to adjust download_link_pattern accordingly.
       download_link_pattern: https://s3.amazonaws.com/amazoncloudwatch-agent/%os%/%architecture%/latest/amazon-cloudwatch-agent.%ext%
 
     aws_ssm:
@@ -277,31 +281,12 @@ global-settings:
         - libical3
 
       application_7:
-        # Additional packages required for ALI2, rhel7, and rocky7
+        # Additional packages required for amazonlinux2023
         - dejavu-fonts-common
 
       application_8:
         # Additional packages required for rhel8, and rocky8
         - dejavu-fonts-common
-
-      dcv_amazonlinux:
-        # List of packages to install when using Mate Desktop
-        - gdm
-        - gnome-session
-        - gnome-classic-session
-        - gnome-session-xsession
-        - gnome-terminal
-        - gnu-free-fonts-common
-        - gnu-free-mono-fonts
-        - gnu-free-sans-fonts
-        - gnu-free-serif-fonts
-        - xorg-x11-server-Xorg
-        - xorg-x11-server-utils
-        - xorg-x11-utils
-        - xorg-x11-fonts-Type1
-        - xorg-x11-drivers
-        - gstreamer1-plugins-good
-        - pcsc-lite-libs
 
       openldap_client:
         - openldap-clients
@@ -320,6 +305,19 @@ global-settings:
         - openldap-servers
         - unixODBC
         - unixODBC-devel
+
+      # version-specific additions, mirroring global-settings/settings.yml
+      openldap_server_7:
+        - compat-openldap
+
+      openldap_server_8:
+        - compat-openldap
+
+      openldap_server_9:
+        - openldap-compat
+
+      openldap_server_10:
+        - openldap-compat
 
       sssd:
         # SSSD and dependencies
@@ -377,7 +375,7 @@ global-settings:
         - sssd-krb5
 
       sssd_7:
-        # Additional packages required for rhel7, and amazonlinux2
+        # Additional packages required for amazonlinux2023
         - python-sssdconfig
 
       system:
@@ -511,7 +509,7 @@ global-settings:
         - zlib1g-dev
 
       system_7:
-        # Additional packages required for amazonlinux2, rhel7, and rocky7
+        # Additional packages required for amazonlinux2023
         - dejavu-fonts-common
 
       system_8:
@@ -520,6 +518,10 @@ global-settings:
 
       system_9:
         # Additional packages required for rhel9, and rocky9
+        - dejavu-fonts-common
+
+      system_10:
+        # Additional packages required for rhel10, and rocky10
         - dejavu-fonts-common
 
     nodejs:
@@ -548,7 +550,7 @@ global-settings:
       checksum: "8a4d7f9c326fd1de5c103e700422bc4d49edc9d50f142c033e9e7de8d10d52f5c4f92e902e107b8e89d3e12c147ebef4"
       checksum_method: sha384
       repo_url: "https://github.com/openpbs/openpbs.git"
-      commit: "3f2aa2f98184f73164f148d4cf9468c9469a13fe"
+      commit: "cd7ab5edaf03dcac2f1cb9e2f42d75eb117d468a"
       # can be release or dev. if dev, sources will be cloned from github and installed for the configured release version.
       # additional customizations can be implemented in idea-bootstrap/_templates/linux/openpbs.jinja2
       type: release
@@ -562,9 +564,6 @@ global-settings:
       gpg_key: https://d1uj6qtbmh3dt5.cloudfront.net/NICE-GPG-KEY
       x86_64:
         linux:
-          al2:
-            url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-el7-x86_64.tgz
-            sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-el7-x86_64.tgz.sha256sum
           al2023:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-amzn2023-x86_64.tgz
             sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-amzn2023-x86_64.tgz.sha256sum
@@ -583,9 +582,6 @@ global-settings:
             sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu2404-x86_64.tgz.sha256sum
       aarch64:
         linux:
-          al2:
-            url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-el7-aarch64.tgz
-            sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-el7-aarch64.tgz.sha256sum
           al2023:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-amzn2023-aarch64.tgz
             sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-amzn2023-aarch64.tgz.sha256sum
@@ -598,9 +594,6 @@ global-settings:
       agent:
         x86_64:
           linux:
-            al2:
-              url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent-el7.x86_64.rpm
-              sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent-el7.x86_64.rpm.sha256sum
             al2023:
               url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent-amzn2023.x86_64.rpm
               sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent-amzn2023.x86_64.rpm.sha256sum
@@ -619,9 +612,6 @@ global-settings:
               sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent_amd64.ubuntu2404.deb.sha256sum
         aarch64:
           linux:
-            al2:
-              url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent-el7.aarch64.rpm
-              sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent-el7.aarch64.rpm.sha256sum
             al2023:
               url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent-amzn2023.aarch64.rpm
               sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent-amzn2023.aarch64.rpm.sha256sum
@@ -634,9 +624,6 @@ global-settings:
       connection_gateway:
         x86_64:
           linux:
-            al2:
-              url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-connection-gateway-el7.x86_64.rpm
-              sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-connection-gateway-el7.x86_64.rpm.sha256sum
             rhel_centos_rocky8:
               url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-connection-gateway-el8.x86_64.rpm
               sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-connection-gateway-el8.x86_64.rpm.sha256sum
@@ -645,9 +632,6 @@ global-settings:
               sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-connection-gateway-el9.x86_64.rpm.sha256sum
         aarch64:
           linux:
-            al2:
-              url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-connection-gateway-el7.aarch64.rpm
-              sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-connection-gateway-el7.aarch64.rpm.sha256sum
             rhel_centos_rocky8:
               url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-connection-gateway-el8.aarch64.rpm
               sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-connection-gateway-el8.aarch64.rpm.sha256sum
@@ -656,9 +640,6 @@ global-settings:
               sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-connection-gateway-el8.aarch64.rpm.sha256sum
       broker:
         linux:
-          al2:
-            url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-broker-el7.noarch.rpm
-            sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-broker-el7.noarch.rpm.sha256sum
           al2023:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-broker-amzn2023.noarch.rpm
             sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-broker-amzn2023.noarch.rpm.sha256sum
@@ -669,6 +650,8 @@ global-settings:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-broker-el9.noarch.rpm
             sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-broker-el9.noarch.rpm.sha256sum
 
+  # mirrors global-settings/settings.yml gpu_settings; test_gpu_drivers_bootstrap.py checks family/driver-map parity against it, so keep in sync.
+  # fail_on_missing_driver is deliberately omitted here: a test pins its own default.
   gpu_settings:
     nvidia:
       linux:
@@ -678,25 +661,38 @@ global-settings:
         s3_bucket_url: "https://ec2-windows-nvidia-drivers.s3.amazonaws.com"
         s3_bucket_path: "s3://ec2-windows-nvidia-drivers/latest/"
     amd:
-      s3_bucket_url: "https://ec2-amd-linux-drivers.s3.amazonaws.com"
-      s3_bucket_path: "s3://ec2-amd-linux-drivers/latest/"
-      rhel_rocky8_installer_url: "https://repo.radeon.com/amdgpu-install/6.4/rhel/8.9/amdgpu-install-6.4.60400-1.el8.noarch.rpm"
-      rhel_rocky9_installer_url: "https://repo.radeon.com/amdgpu-install/6.4/rhel/9.6/amdgpu-install-6.4.60400-1.el9.noarch.rpm"
+      linux:
+        s3_bucket_url: "https://ec2-amd-linux-drivers.s3.amazonaws.com"
+        s3_bucket_path: "s3://ec2-amd-linux-drivers/latest/"
+        rhel_rocky8_installer_url: "https://repo.radeon.com/amdgpu-install/6.4.1/rhel/8.10/amdgpu-install-6.4.60401-1.el8.noarch.rpm"
+        rhel_rocky9_installer_url: "https://repo.radeon.com/amdgpu-install/6.4.1/rhel/9.6/amdgpu-install-6.4.60401-1.el9.noarch.rpm"
+      windows:
+        s3_bucket_url: "https://ec2-amd-windows-drivers.s3.amazonaws.com"
+        s3_bucket_path: "s3://ec2-amd-windows-drivers/latest/"
     instance_families:
       - p2
       - p3
       - p4d
       - p4de
+      - p5
+      - p5e
+      - p5en
+      - p6-b200
+      - p6e-gb200
       - g2
       - g3
       - g3s
       - g5
       - g5g
+      - g6
+      - g6e
+      - g6f
+      - gr6
       - g4dn
       - g4ad
     nvidia_public_driver_versions:
-      ltsb_version: &ltsb_version 470.239.06
-      production_version: &production_version 550.54.15
+      ltsb_version: &ltsb_version 470.256.02
+      production_version: &production_version 580.105.08
       p2: *ltsb_version
       g2: *ltsb_version
       g3: *production_version
@@ -704,15 +700,20 @@ global-settings:
       g4dn: *production_version
       g5: *production_version
       g5g: *production_version
+      g6: *production_version
+      g6e: *production_version
+      g6f: *production_version
+      gr6: *production_version
       p3: *production_version
       p4d: *production_version
       p4de: *production_version
+      p5: *production_version
+      p5e: *production_version
+      p5en: *production_version
+      p6-b200: *production_version
+      p6e-gb200: *production_version
 
-  # provide custom tags for all resources created by IDEA
-  # for eg. to add custom tags, tags as below:
-  # custom_tags:
-  #   - Key=custom:MyTagName,Value=MyTagValue
-  #   - Key=AnotherExampleName,Value=Another Example Value
+  # custom tags applied to all resources IDEA creates; each entry is "Key=...,Value=...".
   custom_tags:
     - Key=custom:MyTagName,Value=MyTagValue
 

@@ -248,6 +248,9 @@ class SubmitJobRequest(SocaPayload):
     job_script: Optional[str] = Field(
         default=None
     )  # base64 encoded job data shell script
+    # idempotency key: the client must send the same value for every delivery of the same
+    # submission (double click, retry after a timeout) and a new value for a new submission.
+    client_submission_id: Optional[str] = Field(default=None)
 
 
 class SubmitJobResult(SocaPayload):
@@ -281,6 +284,9 @@ class DeleteJobResult(SocaPayload):
 # Scheduler.GetActiveJob, Scheduler.GetCompletedJob
 class GetJobRequest(SocaPayload):
     job_id: Optional[str] = Field(default=None)
+    # a job id is a scheduler sequence number and is reused once the scheduler host is
+    # replaced. job_uid identifies a completed job for the life of the cluster.
+    job_uid: Optional[str] = Field(default=None)
 
 
 class GetJobResult(SocaPayload):

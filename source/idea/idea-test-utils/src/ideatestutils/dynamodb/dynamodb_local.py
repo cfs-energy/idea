@@ -172,7 +172,12 @@ class DynamoDBLocal:
         if self.process is not None:
             self.process.send_stop_signal()
 
-        self.loop.join()
+        # DynamoDB Local ignores SIGINT when run headless, which would block the session
+        # fixture forever, so escalate to SIGKILL once the stop signal has had its chance.
+        self.loop.join(timeout=15)
+        if self.loop.is_alive() and self.process is not None:
+            self.process.send_kill_signal()
+            self.loop.join(timeout=15)
 
         if self.cleanup and Utils.is_dir(self.db_dir):
             print(f'clean-up db dir: {self.db_dir}')

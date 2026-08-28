@@ -26,8 +26,17 @@ function Install-AMDGpuDrivers {
         }
         else {
             Write-ToLog -Message "About to install AMD drivers"
-            $bucketUrl = "{{ context.config.get_string('global-settings.gpu_settings.amd.windows.s3_bucket_url', required=True) }}"
-            $bucketRegion = (Invoke-WebRequest -Method Head -Uri $bucketUrl -UseBasicParsing).Headers["x-amz-bucket-region"]
+            $awsRegion = "{{ context.config.get_string('cluster.aws.region', required=True) }}"
+            if ($awsRegion -like "us-gov-*") {
+                # the bucket_url points at the commercial partition and is not reachable from GovCloud.
+                # the driver bucket is in the cluster region instead.
+                Write-ToLog -Message "Detected GovCloud region: ${awsRegion}"
+                $bucketRegion = $awsRegion
+            }
+            else {
+                $bucketUrl = "{{ context.config.get_string('global-settings.gpu_settings.amd.windows.s3_bucket_url', required=True) }}"
+                $bucketRegion = (Invoke-WebRequest -Method Head -Uri $bucketUrl -UseBasicParsing).Headers["x-amz-bucket-region"]
+            }
             $installerFolderPrefix = "amd_driver"
             Write-ToLog -Message "Downloading AMD Drivers"
             $env:Path += ";C:\Program Files\Amazon\AWSCLIV2\"

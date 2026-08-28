@@ -113,18 +113,22 @@ log_info "enable and restart pbs"
 systemctl enable pbs
 
 systemctl restart pbs
+# Read the status into a variable straight away: any assignment in between would replace $?
+# with its own status, and after the loop $? is the loop's status, not the restart's.
+PBS_STATUS=$?
 MAX_RETRIES=5
 RETRY_COUNT=0
-while [[ $? -ne 0 ]] && [[ ${RETRY_COUNT} -lt ${MAX_RETRIES} ]]
+while [[ ${PBS_STATUS} -ne 0 ]] && [[ ${RETRY_COUNT} -lt ${MAX_RETRIES} ]]
 do
   SLEEP_TIME=$(( RANDOM % 33 + 8 ))  # Sleep for 8-40 seconds
   log_info "(${RETRY_COUNT}/${MAX_RETRIES}) failed to start pbs, retrying in ${SLEEP_TIME} seconds ..."
   sleep ${SLEEP_TIME}
   ((RETRY_COUNT++))
   systemctl restart pbs
+  PBS_STATUS=$?
 done
 
-if [[ $? -ne 0 ]]; then
+if [[ ${PBS_STATUS} -ne 0 ]]; then
   log_error "failed to start pbs server. scheduler pbs configuration failed !!"
   exit 1
 fi

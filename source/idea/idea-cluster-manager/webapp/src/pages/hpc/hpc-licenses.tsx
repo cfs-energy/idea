@@ -157,8 +157,8 @@ class CheckLicenseAvailability extends Component<CheckLicenseAvailabilityProps, 
 
 class HpcLicenses extends Component<HpcLicensesProps, HpcLicensesState> {
 
-    listing: RefObject<IdeaListView>
-    createForm: RefObject<IdeaForm>
+    listing: RefObject<IdeaListView | null>
+    createForm: RefObject<IdeaForm | null>
 
     constructor(props: HpcLicensesProps) {
         super(props);

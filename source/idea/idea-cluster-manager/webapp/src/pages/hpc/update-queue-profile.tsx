@@ -37,7 +37,7 @@ export interface HpcUpdateQueueProfileState {
 
 class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpdateQueueProfileState> {
 
-    wizard: RefObject<IdeaWizard>
+    wizard: RefObject<IdeaWizard | null>
 
     constructor(props: HpcUpdateQueueProfileProps) {
         super(props);
@@ -346,6 +346,19 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                                                         required: true,
                                                         min: 0
                                                     }
+                                                },
+                                                {
+                                                    name: 'queue_management_params.max_nodes_per_job',
+                                                    title: 'Max Nodes Per Job',
+                                                    description: 'The maximum no. of nodes a single job submitted to this Queue Profile can request',
+                                                    help_text: '0 implies the cluster-wide scheduler.job_provisioning.max_nodes_per_job limit applies',
+                                                    param_type: 'text',
+                                                    data_type: 'int',
+                                                    default: 0,
+                                                    validate: {
+                                                        required: true,
+                                                        min: 0
+                                                    }
                                                 }
                                             ]
                                         },
@@ -424,10 +437,6 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                                                             value: 'amazonlinux2023'
                                                         },
                                                         {
-                                                            title: 'Amazon Linux 2',
-                                                            value: 'amazonlinux2'
-                                                        },
-                                                        {
                                                             title: 'Red Hat Enterprise Linux 8',
                                                             value: 'rhel8'
                                                         },
@@ -436,12 +445,20 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                                                             value: 'rhel9'
                                                         },
                                                         {
+                                                            title: 'Red Hat Enterprise Linux 10',
+                                                            value: 'rhel10'
+                                                        },
+                                                        {
                                                             title: 'Rocky Linux 8',
                                                             value: 'rocky8'
                                                         },
                                                         {
                                                             title: 'Rocky Linux 9',
                                                             value: 'rocky9'
+                                                        },
+                                                        {
+                                                            title: 'Rocky Linux 10',
+                                                            value: 'rocky10'
                                                         },
                                                         {
                                                             title: 'Ubuntu 22.04',

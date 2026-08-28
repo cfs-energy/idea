@@ -24,6 +24,24 @@ from ideasdk.auth import TokenService, TokenServiceOptions
 from ideatestutils import MockInstanceTypes, MockConfig, MockProjects
 from ideatestutils import IdeaTestProps
 
+# AMIs the tests describe. anything not listed is x86_64, including the cluster default
+# ami-mockclustersettings from the mock scheduler config.
+MOCK_IMAGE_ARCHITECTURES = {
+    'ami-arm64mockimage00': 'arm64',
+}
+
+
+def mock_describe_images(**kwargs):
+    return {
+        'Images': [
+            {
+                'ImageId': image_id,
+                'Architecture': MOCK_IMAGE_ARCHITECTURES.get(image_id, 'x86_64'),
+            }
+            for image_id in kwargs.get('ImageIds', [])
+        ]
+    }
+
 
 @pytest.fixture()
 def context(monkeypatch):
@@ -42,6 +60,7 @@ def context(monkeypatch):
 
     mock_ec2_client = SocaAnyPayload()
     mock_ec2_client.describe_security_groups = lambda **_: {}
+    mock_ec2_client.describe_images = mock_describe_images
     mock_ec2_client.get_paginator = lambda operation_name: mock_paginator
 
     mock_s3_client = SocaAnyPayload()

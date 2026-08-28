@@ -1,5 +1,5 @@
 # Begin: Install Fail2Ban
-{% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+{% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
 if [[ ! -f "/etc/fail2ban/jail.local" ]]; then
     cat > /etc/fail2ban/jail.local << 'EOF'
 [sshd]

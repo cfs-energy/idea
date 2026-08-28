@@ -24,6 +24,8 @@ from ideadatamodel import (
     GetSessionScreenshotResponse,
     UpdateSessionRequest,
     UpdateSessionResponse,
+    SetSessionCleanupExemptionRequest,
+    SetSessionCleanupExemptionResponse,
     GetSessionInfoRequest,
     GetSessionInfoResponse,
     DeleteSessionRequest,
@@ -73,6 +75,7 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
             'VirtualDesktopAdmin.CreateSession': self.create_session,
             'VirtualDesktopAdmin.BatchCreateSessions': self.batch_create_sessions,
             'VirtualDesktopAdmin.UpdateSession': self.update_session,
+            'VirtualDesktopAdmin.SetSessionCleanupExemption': self.set_session_cleanup_exemption,
             'VirtualDesktopAdmin.DeleteSessions': self.delete_sessions,
             'VirtualDesktopAdmin.GetSessionInfo': self.get_session_info,
             'VirtualDesktopAdmin.ListSessions': self.list_sessions,
@@ -371,6 +374,18 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
                 )
                 return
 
+            # a custom instance type is the only check this branch skips: an end-of-life
+            # base os is refused here the same as anywhere else.
+            failure_reason = self.validate_base_os(session.software_stack.base_os)
+            if Utils.is_not_empty(failure_reason):
+                session.failure_reason = failure_reason
+                context.fail(
+                    message=session.failure_reason,
+                    payload=CreateSessionResponse(session=session),
+                    error_code=errorcodes.INVALID_PARAMS,
+                )
+                return
+
             software_stack = self.software_stack_db.get(
                 stack_id=session.software_stack.stack_id,
                 base_os=session.software_stack.base_os,
@@ -432,6 +447,22 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
             # Validate hibernation
             if Utils.is_empty(session.hibernation_enabled):
                 session.hibernation_enabled = False
+
+            # the admin cap on the per-session idle autostop delay applies here too
+            if Utils.is_not_empty(session.idle_autostop_delay):
+                failure_reason = self.validate_idle_autostop_delay(
+                    session.idle_autostop_delay
+                )
+                if Utils.is_not_empty(failure_reason):
+                    session.failure_reason = failure_reason
+                    context.fail(
+                        message=session.failure_reason,
+                        payload=CreateSessionResponse(session=session),
+                        error_code=errorcodes.INVALID_PARAMS,
+                    )
+                    return
+                if session.idle_autostop_delay <= 0:
+                    session.idle_autostop_delay = None
 
             # Complete the request and create the session
             session = self.complete_create_session_request(session, context)
@@ -652,6 +683,27 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
             )
         else:
             context.success(UpdateSessionResponse(session=session))
+
+    def set_session_cleanup_exemption(self, context: ApiInvocationContext):
+        request = context.get_request_payload_as(SetSessionCleanupExemptionRequest)
+        session = self.session_db.get_from_db(
+            idea_session_owner=request.owner, idea_session_id=request.idea_session_id
+        )
+        if Utils.is_empty(session):
+            context.fail(
+                error_code=errorcodes.INVALID_PARAMS,
+                message=f'invalid session {request.idea_session_id} for owner {request.owner}',
+                payload=SetSessionCleanupExemptionResponse(),
+            )
+            return
+
+        session = self.session_utils.set_cleanup_exemption(
+            session,
+            exempt=Utils.get_as_bool(request.exempt, default=False),
+            reason=request.reason,
+            actor=context.get_username(),
+        )
+        context.success(SetSessionCleanupExemptionResponse(session=session))
 
     def update_session_permission(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(UpdateSessionPermissionRequest)

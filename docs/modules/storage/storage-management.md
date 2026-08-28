@@ -409,16 +409,21 @@ demo:
 
 ### Amazon FSx for Lustre
 
-IDEA now supports FSx for Lustre as backend storage for high performance computing. IDEA supports the automation of the FSx for Lustre client installation on all supported operating systems:
+IDEA supports FSx for Lustre as backend storage for high performance computing, and automates the FSx for Lustre client installation on these operating systems:
 
-* Amazon Linux 2
 * Amazon Linux 2023
 * RHEL 8
 * RHEL 9
+* RHEL 10, on an EL 10.1 or 10.2 AMI
 * Rocky Linux 8
 * Rocky Linux 9
+* Rocky Linux 10, on an EL 10.1 or 10.2 AMI
 * Ubuntu 22.04
 * Ubuntu 24.04
+
+{% hint style="warning" %}
+EL 10.0 has no FSx for Lustre client build. On an EL 10.0 AMI the bootstrap logs an error, the node joins the scheduler anyway, and Lustre is not mounted. An EL 10 client also cannot mount a Lustre 2.10 or 2.12 filesystem. See [Supported OS & hardware matrix](../hpc-workloads/user-documentation/supported-os-hardware-matrix.md#fsx-lustre-client-support).
+{% endhint %}
 
 {% hint style="info" %}
 FSx Lustre provides high-performance storage suitable for data-intensive applications, offering throughput of hundreds of GB/s and sub-millisecond latencies.

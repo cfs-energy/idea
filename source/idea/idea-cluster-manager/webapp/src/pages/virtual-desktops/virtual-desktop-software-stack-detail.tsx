@@ -35,7 +35,7 @@ interface VirtualDesktopSoftwareStackDetailState {
 
 class VirtualDesktopSoftwareStackDetail extends Component<VirtualDesktopSoftwareStackDetailProps, VirtualDesktopSoftwareStackDetailState> {
 
-    editStackForm: RefObject<VirtualDesktopSoftwareStackEditForm>
+    editStackForm: RefObject<VirtualDesktopSoftwareStackEditForm | null>
 
     constructor(props: VirtualDesktopSoftwareStackDetailProps) {
         super(props);

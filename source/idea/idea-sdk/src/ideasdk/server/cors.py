@@ -16,10 +16,11 @@ def _add_cors_headers(response, methods: Iterable[str]) -> None:
     allow_methods = list(set(methods))
     if 'OPTIONS' not in allow_methods:
         allow_methods.append('OPTIONS')
+    # API auth is a Bearer token supplied per-request; no cookies are set or read.
+    # Allow-Credentials is therefore not sent - browsers reject it alongside a wildcard origin.
     headers = {
         'Access-Control-Allow-Methods': ','.join(allow_methods),
         'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Credentials': '*',
         'Access-Control-Allow-Headers': (
             'origin, content-type, accept, authorization, x-xsrf-token, x-request-id'
         ),

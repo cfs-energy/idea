@@ -86,6 +86,7 @@ from ideavirtualdesktopcontroller.app.ssm_commands.virtual_desktop_ssm_commands_
 )
 from ideavirtualdesktopcontroller.app.virtual_desktop_controller_utils import (
     VirtualDesktopControllerUtils,
+    resolve_project_instance_profile_arn,
 )
 
 
@@ -554,9 +555,44 @@ class VirtualDesktopAPI(BaseAPI):
             exceptions.invalid_params('missing session.idea_session_id')
         return True
 
+    def validate_idle_autostop_delay(self, idle_autostop_delay: int) -> Optional[str]:
+        """
+        Check a user supplied idle autostop delay (in minutes) against the admin cap.
+        Returns the failure reason, or None when the value is acceptable.
+        """
+        if idle_autostop_delay <= 0:
+            # clears the override, the session falls back to the cluster default
+            return None
+
+        max_user_delay = self.context.config().get_int(
+            'virtual-desktop-controller.dcv_session.idle_autostop_delay_max', default=0
+        )
+        if max_user_delay <= 0:
+            return 'per-session idle autostop delay overrides are not enabled for this cluster'
+        if idle_autostop_delay > max_user_delay:
+            return f'session.idle_autostop_delay: {idle_autostop_delay} must be between 1 and {max_user_delay} minutes'
+        return None
+
+    @staticmethod
+    def validate_base_os(base_os) -> Optional[str]:
+        """
+        Check a requested base os against the end-of-life list.
+        Returns the failure reason, or None when the value is acceptable.
+        """
+        requested_base_os = Utils.get_as_string(base_os)
+        if requested_base_os in constants.EOL_BASEOS:
+            return (
+                f'session.software_stack.base_os: {requested_base_os} has reached end-of-life and is '
+                f'no longer supported. Select a {constants.EOL_BASEOS[requested_base_os]} software stack instead.'
+            )
+        return None
+
     def validate_create_session_request(
         self, session: VirtualDesktopSession
     ) -> tuple[VirtualDesktopSession, bool]:
+        # admin-only, set through VirtualDesktopAdmin.SetSessionCleanupExemption
+        session.cleanup_exempt = None
+        session.cleanup_exempt_reason = None
         if Utils.is_empty(session.project) or Utils.is_empty(
             session.project.project_id
         ):
@@ -636,6 +672,11 @@ class VirtualDesktopAPI(BaseAPI):
             session.failure_reason = 'missing session.software_stack.stack_id and/or session.software_stack.base_os'
             return session, False
 
+        failure_reason = self.validate_base_os(session.software_stack.base_os)
+        if Utils.is_not_empty(failure_reason):
+            session.failure_reason = failure_reason
+            return session, False
+
         software_stack = self.software_stack_db.get(
             stack_id=session.software_stack.stack_id,
             base_os=session.software_stack.base_os,
@@ -682,7 +723,15 @@ class VirtualDesktopAPI(BaseAPI):
                 break
 
         if not is_instance_type_valid:
-            session.failure_reason = f'Invalid session.server.instance_type: {session.server.instance_type}. Not allowed for current configuration'
+            # tell the user which rule the requested size failed, not just that it failed.
+            session.failure_reason = (
+                self.controller_utils.get_instance_type_rejection_reason(
+                    instance_type_name=session.server.instance_type,
+                    hibernation_support=session.hibernation_enabled,
+                    software_stack=session.software_stack,
+                )
+                or f'{session.server.instance_type} is not available for virtual desktops in this cluster.'
+            )
             return session, False
 
         # Technical Validation for Hibernation.
@@ -697,7 +746,7 @@ class VirtualDesktopAPI(BaseAPI):
                 session.failure_reason = f'OS {session.software_stack.base_os} does not support Instance Hibernation for instances with RAM greater than 16GiB.'
                 return session, False
         else:
-            # amazonlinux2, amazonlinux2023, ubuntu2204, ubuntu2404, rhel8, rocky8 support hibernation
+            # amazonlinux2023, ubuntu2204, ubuntu2404, rhel8, rocky8 support hibernation
             pass
 
         # Technical Validations for Session Type
@@ -755,6 +804,17 @@ class VirtualDesktopAPI(BaseAPI):
         if session.server.root_volume_size < min_root_volume:
             session.failure_reason = f'root volume size: {session.server.root_volume_size} is less than the minimum required root volume size: {min_root_volume} when hibernation is {"enabled" if session.hibernation_enabled else "disabled"}.'
             return session, False
+
+        # Business Validation for the per-session idle autostop delay override
+        if Utils.is_not_empty(session.idle_autostop_delay):
+            failure_reason = self.validate_idle_autostop_delay(
+                session.idle_autostop_delay
+            )
+            if Utils.is_not_empty(failure_reason):
+                session.failure_reason = failure_reason
+                return session, False
+            if session.idle_autostop_delay <= 0:
+                session.idle_autostop_delay = None
 
         return session, True
 
@@ -835,6 +895,14 @@ class VirtualDesktopAPI(BaseAPI):
             software_stack.failure_reason = 'missing software_stack.projects'
             return software_stack, False
 
+        base_os = Utils.get_as_string(software_stack.base_os)
+        if base_os in constants.EOL_BASEOS:
+            software_stack.failure_reason = (
+                f'software_stack.base_os: {base_os} has reached end-of-life and is no longer '
+                f'supported. Create the software stack using {constants.EOL_BASEOS[base_os]} instead.'
+            )
+            return software_stack, False
+
         return software_stack, True
 
     @staticmethod
@@ -913,6 +981,25 @@ class VirtualDesktopAPI(BaseAPI):
         if Utils.is_empty(session.owner):
             session.owner = context.get_username()
 
+    def _resolve_instance_profile_arn(self, session: VirtualDesktopSession) -> str:
+        """
+        the shared dcv host profile, unless the session's project carries a bedrock
+        project profile. the project is re-read here, so nothing in the request
+        payload can select the profile.
+        """
+        shared_instance_profile_arn = self.context.config().get_string(
+            'virtual-desktop-controller.dcv_host_instance_profile_arn',
+            required=True,
+        )
+
+        project_instance_profile_arn = resolve_project_instance_profile_arn(
+            self.context, self._logger, session
+        )
+        if project_instance_profile_arn is None:
+            return shared_instance_profile_arn
+
+        return project_instance_profile_arn
+
     def complete_create_session_request(
         self, session: VirtualDesktopSession, context: ApiInvocationContext
     ) -> VirtualDesktopSession:
@@ -940,14 +1027,19 @@ class VirtualDesktopAPI(BaseAPI):
         if Utils.is_empty(session.server.root_volume_iops):
             session.server.root_volume_iops = self.DEFAULT_ROOT_VOL_IOPS
 
-        if Utils.is_empty(session.server.instance_profile_arn):
-            session.server.instance_profile_arn = self.context.config().get_string(
-                'virtual-desktop-controller.dcv_host_instance_profile_arn',
-                required=True,
+        # the instance profile is selected by the controller from cluster configuration
+        # and the session's project. a value supplied by the caller is discarded.
+        requested_instance_profile_arn = session.server.instance_profile_arn
+        session.server.instance_profile_arn = self._resolve_instance_profile_arn(
+            session
+        )
+        if (
+            Utils.is_not_empty(requested_instance_profile_arn)
+            and requested_instance_profile_arn != session.server.instance_profile_arn
+        ):
+            self._logger.warning(
+                f'ignoring instance_profile_arn supplied in create session request: {requested_instance_profile_arn}'
             )
-
-            # self.default_instance_profile_arn = self.context.app_config.virtual_desktop_dcv_host_profile_arn
-            # self.default_security_group = self.context.app_config.virtual_desktop_dcv_host_security_group_id
 
         if Utils.is_empty(session.server.key_pair_name):
             session.server.key_pair_name = self.context.config().get_string(
@@ -1073,6 +1165,22 @@ class VirtualDesktopAPI(BaseAPI):
                     is_server_updated = True
                     is_session_updated = True
 
+        if not operation_failed and Utils.is_not_empty(new_session.idle_autostop_delay):
+            failure_reason = self.validate_idle_autostop_delay(
+                new_session.idle_autostop_delay
+            )
+            if Utils.is_not_empty(failure_reason):
+                new_session.failure_reason = failure_reason
+                self._logger.error(failure_reason)
+                operation_failed = True
+            else:
+                old_session.idle_autostop_delay = (
+                    new_session.idle_autostop_delay
+                    if new_session.idle_autostop_delay > 0
+                    else None
+                )
+                is_session_updated = True
+
         if not operation_failed and Utils.is_not_empty(new_session.schedule):
             old_session = self.schedule_utils.update_schedule_for_session(
                 new_session.schedule, old_session
@@ -1142,6 +1250,17 @@ class VirtualDesktopAPI(BaseAPI):
         if Utils.is_empty(session):
             new_software_stack = VirtualDesktopSoftwareStack(
                 failure_reason=f'Failed to create Software Stack because of invalid IDEA Session {session.idea_session_id}:{session.name} for owner: {session.owner}'
+            )
+            self._logger.error(new_software_stack.failure_reason)
+            return new_software_stack
+
+        # base_os is inherited from the session, so it is only known after the session is loaded.
+        session_base_os = Utils.get_as_string(session.base_os)
+        if session_base_os in constants.EOL_BASEOS:
+            new_software_stack = VirtualDesktopSoftwareStack(
+                failure_reason=f'Failed to create Software Stack because session base_os: {session_base_os} '
+                f'has reached end-of-life and is no longer supported. '
+                f'Migrate the session to {constants.EOL_BASEOS[session_base_os]} first.'
             )
             self._logger.error(new_software_stack.failure_reason)
             return new_software_stack

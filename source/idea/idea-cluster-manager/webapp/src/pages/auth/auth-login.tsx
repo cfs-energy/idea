@@ -25,7 +25,7 @@ import {withRouter} from "../../navigation/navigation-utils";
 
 class IdeaAuthLogin extends Component<IdeaAuthProps, IdeaAuthState> {
     static contextType = IdeaAuthContext
-    form: RefObject<IdeaForm>
+    form: RefObject<IdeaForm | null>
 
     constructor(props: IdeaAuthProps) {
         super(props);
@@ -94,9 +94,8 @@ class IdeaAuthLogin extends Component<IdeaAuthProps, IdeaAuthState> {
                 <ColumnLayout columns={1} className="auth-content">
                     <h3 className="title">{AppContext.get().getTitle()}</h3>
                     {hasSubtitle() && <p className="subtitle">{getSubtitle()}</p>}
-                    {!isSsoEnabled && (
-                    <React.Fragment>
-                        <IdeaForm name="login-form"
+                    {!isSsoEnabled && ([
+                        <IdeaForm key="login-form" name="login-form"
                                   ref={this.form}
                                   modalSize={"max"}
                                   showHeader={false}
@@ -104,8 +103,8 @@ class IdeaAuthLogin extends Component<IdeaAuthProps, IdeaAuthState> {
                                   onSubmit={(_) => { this.onSubmit(); }}
                                   stretch={true}
                                   params={[AUTH_PARAM_USERNAME, AUTH_PARAM_PASSWORD]}
-                        />
-                        <SpaceBetween size={"xs"} direction={"vertical"} className="actions">
+                        />,
+                        <SpaceBetween key="actions" size={"xs"} direction={"vertical"} className="actions">
                             {!this.state.loading && (
                                 <div>
                                     <Button variant="primary"
@@ -121,8 +120,7 @@ class IdeaAuthLogin extends Component<IdeaAuthProps, IdeaAuthState> {
                                 <StatusIndicator type="loading"/>
                             </Box>}
                         </SpaceBetween>
-                    </React.Fragment>
-                )}
+                    ])}
                 {isSsoEnabled && (
 
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%' }}>

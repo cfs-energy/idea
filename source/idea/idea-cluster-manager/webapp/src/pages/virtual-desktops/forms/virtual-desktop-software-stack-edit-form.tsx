@@ -46,7 +46,7 @@ export interface VirtualDesktopSoftwareStackEditFormState {
 }
 
 class VirtualDesktopSoftwareStackEditForm extends Component<VirtualDesktopSoftwareStackEditFormProps, VirtualDesktopSoftwareStackEditFormState> {
-    form: RefObject<IdeaForm>
+    form: RefObject<IdeaForm | null>
 
     constructor(props: VirtualDesktopSoftwareStackEditFormProps) {
         super(props);

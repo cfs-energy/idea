@@ -35,6 +35,7 @@ from ideadatamodel import (
 from ideasdk.aws import EC2InstanceTypesDB
 
 from typing import Dict, List, Optional, Tuple, Set, Callable, TypeVar
+import arrow
 import botocore.exceptions
 from threading import RLock
 from ast import literal_eval
@@ -47,6 +48,12 @@ INVALID_SG_CACHE_TTL_SECS = 60
 INVALID_INSTANCE_PROFILE_CACHE_TTL_SECS = 60
 INVALID_S3_BUCKET_HAS_ACCESS_TTL_SECS = 60
 CLOUD_FORMATION_STACK_TTL_SECS = 60
+UNKNOWN_IMAGE_ARCHITECTURE_TTL_SECS = 60
+COST_EXPLORER_CACHE_TTL_SECS = 6 * 60 * 60
+# cached in place of an answer, so a cost explorer that cannot be read is not asked
+# again on every project read. any request to it is billed.
+COST_EXPLORER_UNAVAILABLE = 'cost-explorer-unavailable'
+AWS_PARTITION_COMMERCIAL = 'aws'
 
 
 class AWSUtil(AWSUtilProtocol):
@@ -145,7 +152,9 @@ class AWSUtil(AWSUtilProtocol):
             return 'ls4gen', True
         elif family.startswith(('d2', 'd3', 'd3en', 'd')):  # standard
             return 'D', True
-        elif family.startswith(('hpc7g', 'hpc6id', 'hpc6a', 'hpc')):
+        elif family.startswith('hpc'):
+            # covers every HPC family, current and future (hpc6a, hpc6id, hpc7a,
+            # hpc7g, hpc8a, ...). checked before (H) so hpc* cannot fall into h1.
             return 'HPC', False
         elif family.startswith(('h1', 'h')):  # standard
             return 'H', False
@@ -222,15 +231,23 @@ class AWSUtil(AWSUtilProtocol):
         return self._ec2_instance_types_db.all_instance_type_names()
 
     def get_instance_types_for_class(self, instance_class: str) -> List[str]:
-        if instance_class == 'HighMem':
-            _token = 'u-'
-        else:
-            _token = instance_class.lower()
+        """
+        instance types belonging to the given instance class.
 
+        classification is delegated to get_instance_type_class() rather than matching on
+        the lower-cased class name as a prefix. a prefix match assigns instance types to
+        the wrong quota whenever a class name is a prefix of a family in another class:
+        (H) would claim hpc*, (I) inf*, (D) dl*, (T) trn* and (M) mac*, each of which has
+        its own service quota.
+        """
         result = []
-        all_instance_types = self.get_all_instance_types()
-        for instance_type in all_instance_types:
-            if instance_type.startswith(_token):
+        for instance_type in self.get_all_instance_types():
+            instance_class_result = self.get_instance_type_class(
+                instance_type=instance_type
+            )
+            if instance_class_result is None:
+                continue
+            if instance_class_result[0] == instance_class:
                 result.append(instance_type)
 
         return result
@@ -248,6 +265,40 @@ class AWSUtil(AWSUtilProtocol):
             else:
                 raise e
 
+    def get_image_architecture(self, image_id: str) -> Optional[str]:
+        """
+        the Architecture reported by EC2 for an AMI, eg. x86_64 or arm64.
+        returns None when the AMI cannot be described - callers treat that as "unknown"
+        rather than as a mismatch, so a describe failure never rejects valid input.
+        """
+        if Utils.is_empty(image_id):
+            return None
+
+        cache_key = f'aws.ec2.image.{image_id}.architecture'
+        architecture = self._context.cache().long_term().get(key=cache_key)
+        if architecture is not None:
+            return architecture if architecture != '' else None
+
+        try:
+            describe_result = self.aws().ec2().describe_images(ImageIds=[image_id])
+            images = Utils.get_value_as_list('Images', describe_result, [])
+            if len(images) > 0:
+                architecture = Utils.get_value_as_string('Architecture', images[0])
+        except botocore.exceptions.ClientError as e:
+            self._logger.debug(
+                f'could not describe image: {image_id} to resolve architecture - {e}'
+            )
+            architecture = None
+
+        if Utils.is_empty(architecture):
+            self._context.cache().long_term().set(
+                key=cache_key, value='', ttl=UNKNOWN_IMAGE_ARCHITECTURE_TTL_SECS
+            )
+            return None
+
+        self._context.cache().long_term().set(key=cache_key, value=architecture)
+        return architecture
+
     def get_instance_efa_max_interfaces_supported(self, instance_type: str) -> int:
         ec2_instance_type = self.get_ec2_instance_type(instance_type=instance_type)
         return ec2_instance_type.network_info_efa_info_max_efa_interfaces
@@ -255,6 +306,24 @@ class AWSUtil(AWSUtilProtocol):
     def is_instance_type_efa_supported(self, instance_type: str) -> bool:
         ec2_instance_type = self.get_ec2_instance_type(instance_type=instance_type)
         return ec2_instance_type.network_info_efa_supported
+
+    def is_instance_type_spot_supported(self, instance_type: str) -> bool:
+        ec2_instance_type = self.get_ec2_instance_type(instance_type=instance_type)
+        usage_classes = ec2_instance_type.supported_usage_classes
+        if Utils.is_empty(usage_classes):
+            # SupportedUsageClasses is optional in the EC2 API response. absent means
+            # unknown, not unsupported - do not reject capacity on missing data.
+            return True
+        return 'spot' in usage_classes
+
+    def get_instance_type_placement_group_strategies(
+        self, instance_type: str
+    ) -> List[str]:
+        ec2_instance_type = self.get_ec2_instance_type(instance_type=instance_type)
+        strategies = ec2_instance_type.placement_group_info_supported_strategies
+        if Utils.is_empty(strategies):
+            return []
+        return strategies
 
     def is_instance_type_ena_express_supported(self, instance_type: str) -> bool:
         ec2_instance_type = self.get_ec2_instance_type(instance_type=instance_type)
@@ -705,6 +774,25 @@ class AWSUtil(AWSUtilProtocol):
             return None
         return AutoScalingGroup(entry=groups[0])
 
+    def autoscaling_describe_scaling_activities(
+        self, auto_scaling_group_name: str, max_records: int = 10
+    ) -> List[Dict]:
+        """
+        scaling activities for the auto-scaling group, most recent first.
+
+        a launch rejected by EC2 (insufficient capacity, no free addresses, unsupported
+        instance type) is reported only here: the group keeps retrying and neither the
+        group nor the instance list carries the reason.
+        """
+        result = (
+            self.aws()
+            .autoscaling()
+            .describe_scaling_activities(
+                AutoScalingGroupName=auto_scaling_group_name, MaxRecords=max_records
+            )
+        )
+        return Utils.get_value_as_list('Activities', result, [])
+
     def autoscaling_detach_instances(
         self,
         auto_scaling_group_name: str,
@@ -987,6 +1075,74 @@ class AWSUtil(AWSUtilProtocol):
         self._context.cache().short_term().set(key=cache_key, value=budget)
 
         return budget
+
+    def cost_explorer_get_tagged_service_spend(
+        self, tag_key: str, tag_value: str
+    ) -> Optional[Dict[str, float]]:
+        """
+        month to date unblended cost per AWS service for everything carrying one cost
+        allocation tag value. an empty result is a tag nothing has been priced against
+        yet; None is no answer, and the caller must not read it as no spend.
+
+        every request is billed and the figures move a few times a day at most, so the
+        answer and the failure are both cached.
+        :param tag_key: cost allocation tag key, which must be activated in Billing
+        :param tag_value: the one tag value to report on
+        """
+        if self.aws().aws_partition() != AWS_PARTITION_COMMERCIAL:
+            # cost explorer has no endpoint outside the commercial partition.
+            return None
+
+        cache_key = f'aws_cost_explorer.{tag_key}.{tag_value}'
+        cached = self._context.cache().long_term().get(key=cache_key)
+        if cached is not None:
+            return None if cached == COST_EXPLORER_UNAVAILABLE else cached
+
+        def remember(value):
+            self._context.cache().long_term().set(
+                key=cache_key, value=value, ttl=COST_EXPLORER_CACHE_TTL_SECS
+            )
+
+        today = arrow.utcnow()
+        try:
+            response = (
+                self.aws()
+                .cost_explorer()
+                .get_cost_and_usage(
+                    TimePeriod={
+                        # End is exclusive, so today is only included by asking for
+                        # tomorrow.
+                        'Start': today.floor('month').format('YYYY-MM-DD'),
+                        'End': today.shift(days=1).format('YYYY-MM-DD'),
+                    },
+                    Granularity='MONTHLY',
+                    Metrics=['UnblendedCost'],
+                    Filter={'Tags': {'Key': tag_key, 'Values': [tag_value]}},
+                    GroupBy=[{'Type': 'DIMENSION', 'Key': 'SERVICE'}],
+                )
+            )
+        except Exception as e:
+            self._logger.warning(
+                f'failed to read cost explorer spend for {tag_key}={tag_value}: {e}'
+            )
+            remember(COST_EXPLORER_UNAVAILABLE)
+            return None
+
+        spend: Dict[str, float] = {}
+        for result in Utils.get_value_as_list('ResultsByTime', response, []):
+            for group in Utils.get_value_as_list('Groups', result, []):
+                keys = Utils.get_value_as_list('Keys', group, [])
+                if len(keys) == 0:
+                    continue
+                metrics = Utils.get_value_as_dict('Metrics', group, {})
+                amount = Utils.get_value_as_float(
+                    'Amount', Utils.get_value_as_dict('UnblendedCost', metrics, {}), 0.0
+                )
+                service = Utils.get_as_string(keys[0], '')
+                spend[service] = spend.get(service, 0.0) + amount
+
+        remember(spend)
+        return spend
 
     def get_soca_job_from_stack(self, stack_name: str) -> Optional[SocaJob]:
         template = self.cloudformation_get_template(stack_name=stack_name)

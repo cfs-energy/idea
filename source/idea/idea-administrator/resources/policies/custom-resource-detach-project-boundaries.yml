@@ -1,0 +1,24 @@
+Version: '2012-10-17'
+Statement:
+  - Action:
+      - logs:CreateLogGroup
+      - logs:CreateLogStream
+      - logs:DeleteLogStream
+      - logs:PutLogEvents
+    Resource: '{{ context.arns.get_lambda_log_group_arn() }}'
+    Effect: Allow
+    Sid: CloudWatchLogsPermissions
+
+  # ListRoles takes no resource constraint; the handler filters by PathPrefix.
+  - Action:
+      - iam:ListRoles
+    Resource: '*'
+    Effect: Allow
+    Sid: ListProjectRoles
+
+  - Action:
+      - iam:GetRole
+      - iam:DeleteRolePermissionsBoundary
+    Resource: '{{ context.arns.get_project_role_arn() }}'
+    Effect: Allow
+    Sid: ClearProjectRoleBoundaries

@@ -57,7 +57,94 @@ from troposphere.fsx import FileSystem, LustreConfiguration
 import troposphere.ec2 as ec2
 import os
 import logging
-from typing import Optional
+from typing import Dict, List, Optional
+
+
+def compute_efa_interface_count(
+    context: 'ideascheduler.AppContext',
+    instance_type_names: List[str],
+    log_tag: str = '',
+) -> int:
+    """
+    No. of EFA interfaces (one per network card) to attach to each compute node.
+
+    Multi-rail is opt-in via scheduler.efa.multi_rail_enabled. hpc6id, hpc7a and hpc8a need
+    an EFA on each of their 2 network cards to reach their rated fabric bandwidth.
+    One launch shape serves every instance type in the job, so the count is the
+    minimum supported across all of them. Shared by the launch template builder and
+    the EC2 dry run so both model the same launch.
+    """
+    logger = context.logger()
+    aws_util = context.aws_util()
+
+    supported_interfaces = []
+    for instance_type in instance_type_names:
+        max_efa_interfaces = Utils.get_as_int(
+            aws_util.get_instance_efa_max_interfaces_supported(
+                instance_type=instance_type
+            ),
+            default=0,
+        )
+        max_network_cards = Utils.get_as_int(
+            aws_util.get_ec2_instance_type(
+                instance_type=instance_type
+            ).network_info_maximum_network_cards,
+            default=0,
+        )
+        # one EFA per network card: MaximumEfaInterfaces is not capped by MaximumNetworkCards
+        supported_interfaces.append(min(max_efa_interfaces, max_network_cards))
+
+    supported = min(supported_interfaces) if supported_interfaces else 0
+
+    multi_rail_enabled = context.config().get_bool(
+        'scheduler.efa.multi_rail_enabled', default=False
+    )
+    if not multi_rail_enabled:
+        logger.info(
+            f'{log_tag} EFA requested - attaching 1 interface. '
+            f'max EFA interfaces supported: {supported}, '
+            f'multi-rail disabled (scheduler.efa.multi_rail_enabled)'
+        )
+        return 1
+
+    # ASG launch templates cannot carry duplicate device indexes across network interfaces
+    max_interfaces = context.config().get_int('scheduler.efa.max_interfaces', default=2)
+    interface_count = max(1, min(supported, max_interfaces))
+    logger.info(
+        f'{log_tag} EFA requested - attaching {interface_count} interface(s). '
+        f'max EFA interfaces supported: {supported}, configured limit: {max_interfaces}'
+    )
+    return interface_count
+
+
+def build_efa_network_interface_shapes(
+    context: 'ideascheduler.AppContext',
+    instance_type_names: List[str],
+    security_groups: List[str],
+    log_tag: str = '',
+) -> List[Dict]:
+    """
+    EFA network interfaces as plain dicts.
+
+    AWS multi-card shape: the first interface is NetworkCardIndex 0 / DeviceIndex 0 and each
+    additional network card is DeviceIndex 1. Security groups belong on the interface -
+    EC2 rejects SecurityGroupIds alongside NetworkInterfaces.
+    """
+    interface_count = compute_efa_interface_count(
+        context=context,
+        instance_type_names=instance_type_names,
+        log_tag=log_tag,
+    )
+    return [
+        {
+            'InterfaceType': 'efa',
+            'DeleteOnTermination': True,
+            'DeviceIndex': 1 if interface_index > 0 else 0,
+            'NetworkCardIndex': interface_index,
+            'Groups': security_groups,
+        }
+        for interface_index in range(0, interface_count)
+    ]
 
 
 class CloudFormationStackBuilder:
@@ -100,6 +187,7 @@ class CloudFormationStackBuilder:
             constants.IDEA_TAG_KEEP_FOREVER: keep_forever,
             constants.IDEA_TAG_SCALING_MODE: scaling_mode,
             constants.IDEA_TAG_JOB_GROUP: self.job.get_job_group(),
+            constants.IDEA_TAG_CAPACITY_SIGNATURE: self.job.get_capacity_signature(),
             constants.IDEA_TAG_CAPACITY_TYPE: capacity_type,
             constants.IDEA_TAG_CLUSTER_NAME: self.job.cluster_name,
             constants.IDEA_TAG_STACK_TYPE: constants.STACK_TYPE_JOB,
@@ -369,6 +457,24 @@ class CloudFormationStackBuilder:
         )
         return pg
 
+    def build_efa_network_interfaces(self) -> List[NetworkInterfaces]:
+        """
+        EFA network interfaces for the launch template, from the shared shape so the
+        EC2 dry run (JobProvisioningUtil.ec2_dry_run_request) models the same launch.
+        """
+        return [
+            NetworkInterfaces(**shape)
+            for shape in build_efa_network_interface_shapes(
+                context=self.context,
+                instance_type_names=[
+                    option.name
+                    for option in self.job.provisioning_options.instance_types
+                ],
+                security_groups=self.job.params.security_groups,
+                log_tag=self.job.log_tag,
+            )
+        ]
+
     def build_auto_scaling_group(
         self, launch_template: LaunchTemplate
     ) -> AutoScalingGroup:
@@ -495,32 +601,7 @@ class CloudFormationStackBuilder:
             )
 
         if self.job.params.enable_efa_support:
-            _max_efa_interfaces: int = Utils.get_as_int(
-                self.context.aws_util().get_instance_efa_max_interfaces_supported(
-                    instance_type=launch_template_data.InstanceType
-                ),
-                default=0,
-            )
-            self.logger.info(
-                f'EFA requested - determined Max EFA interfaces for instance {launch_template_data.InstanceType}: {_max_efa_interfaces}'
-            )
-
-            launch_template_data.NetworkInterfaces = []
-            _max_efa_interfaces: int = 1  # regressed in 3.1.7
-            # _nci: int = 0  # NetworkCardIndex
-            for _i in range(0, _max_efa_interfaces):
-                self.logger.info(f'Adding EFA interface #{_i} - NetworkCardIndex: 0')
-                launch_template_data.NetworkInterfaces.append(
-                    NetworkInterfaces(
-                        InterfaceType='efa',
-                        DeleteOnTermination=True,
-                        # DeviceIndex=1 if (_i > 0) else 0,
-                        DeviceIndex=0,
-                        NetworkCardIndex=_i,
-                        Groups=self.job.params.security_groups,
-                    )
-                )
-                # _nci += 1
+            launch_template_data.NetworkInterfaces = self.build_efa_network_interfaces()
         else:
             launch_template_data.SecurityGroupIds = self.job.params.security_groups
 

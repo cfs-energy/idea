@@ -21,11 +21,22 @@ import {SchedulerAdminClient, SchedulerClient} from "../../client"
 import IdeaSplitPanel from "../../components/split-panel";
 import {Box, ColumnLayout, Popover, StatusIndicator, Table, Tabs} from "@cloudscape-design/components";
 import {KeyValue, KeyValueGroup} from "../../components/key-value";
+import IdeaConfirm from "../../components/modals";
 import Utils from "../../common/utils";
-import {JobUtils} from "./hpc-utils";
+import {formatDurationMinutes, formatProvisioningAttempt, getJobWaitingSignals, JobElapsedState, JobUtils} from "./hpc-utils";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import IdeaAppLayout, {IdeaAppLayoutProps} from "../../components/app-layout";
 import {withRouter} from "../../navigation/navigation-utils";
+
+/** Second line under the status of a job that has not started, e.g. "waiting 42 min - attempt 2 of 3 -
+ * queue limit: max_provisioned_instances". Renders nothing once the job is running. */
+export function JobWaitingSignals(props: { job: SocaJob, now?: Date }) {
+    const signals = getJobWaitingSignals(props.job, (props.now) ? props.now : new Date())
+    if (signals.length === 0) {
+        return null
+    }
+    return <Box variant="small" color="text-body-secondary">{signals.join(' \u00b7 ')}</Box>
+}
 
 export const JOB_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<SocaJob>[] = [
     {
@@ -62,31 +73,60 @@ export const JOB_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<SocaJob>[
         id: 'status',
         header: 'Status',
         cell: job => {
+            if (job.state === 'finished' && Utils.isEmpty(job.start_time)) {
+                // terminal but never executed: "Finished" reads the same as a clean exit 0, so with
+                // no recorded reason it is reported as stopped by its owner rather than as an error.
+                if (Utils.isEmpty(job.error_message)) {
+                    return <StatusIndicator type="stopped">Did not run</StatusIndicator>
+                }
+                return <Popover
+                    dismissAriaLabel="Close"
+                    header="Job did not run"
+                    content={job.error_message}
+                >
+                    <StatusIndicator type="error" colorOverride="red">Did not run</StatusIndicator>
+                </Popover>
+            }
+            if (job.state === 'held') {
+                // checked before compute_stack: a job held before any capacity existed
+                // still reports 'tbd' and would otherwise render as Queued.
+                return <>
+                    <StatusIndicator type="error" colorOverride="red">({job.comment})</StatusIndicator>
+                    <JobWaitingSignals job={job}/>
+                </>
+            }
             if (job.params?.compute_stack === 'tbd') {
                 if (Utils.isEmpty(job.error_message)) {
-                    return <StatusIndicator type="pending">Queued</StatusIndicator>
+                    return <>
+                        <StatusIndicator type="pending">Queued</StatusIndicator>
+                        <JobWaitingSignals job={job}/>
+                    </>
                 } else {
-                    return <Box color="text-status-error">
-                        <Popover
-                            dismissAriaLabel="Close"
-                            header="Job cannot be provisioned currently ..."
-                            content={job.error_message}
-                        >
-                            <StatusIndicator type="info">
-                                Queued
-                            </StatusIndicator>
-                        </Popover>
-                    </Box>
+                    return <>
+                        <Box color="text-status-error">
+                            <Popover
+                                dismissAriaLabel="Close"
+                                header="Job cannot be provisioned currently ..."
+                                content={job.error_message}
+                            >
+                                <StatusIndicator type="info">
+                                    Queued
+                                </StatusIndicator>
+                            </Popover>
+                        </Box>
+                        <JobWaitingSignals job={job}/>
+                    </>
                 }
             } else if (job.params?.compute_stack !== 'tbd') {
                 if (job.state === 'queued') {
-                    return <StatusIndicator type="in-progress" colorOverride="blue">Provisioning</StatusIndicator>
+                    return <>
+                        <StatusIndicator type="in-progress" colorOverride="blue">Provisioning</StatusIndicator>
+                        <JobWaitingSignals job={job}/>
+                    </>
                 } else if (job.state === 'running') {
                     return <StatusIndicator type="success">Running</StatusIndicator>
                 } else if (job.state === 'exit') {
                     return <StatusIndicator type="error" colorOverride="red">Exit ({job.exit_status})</StatusIndicator>
-                } else if (job.state === 'held') {
-                    return <StatusIndicator type="error" colorOverride="red">({job.comment})</StatusIndicator>
                 } else {
                     return <StatusIndicator type="success" colorOverride="grey">Finished</StatusIndicator>
                 }
@@ -106,6 +146,64 @@ export const JOB_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<SocaJob>[
     }
 ]
 
+const ELAPSED_STATUS_INDICATOR: { [k in JobElapsedState]: 'pending' | 'info' | 'warning' | 'error' } = {
+    'not-started': 'pending',
+    'no-walltime': 'info',
+    'within-limit': 'info',
+    'near-limit': 'warning',
+    'over-limit': 'error'
+}
+
+export interface JobInfoProps {
+    job: SocaJob
+    now?: Date  // fixed clock for tests; defaults to the browser clock
+}
+
+/** Job Info tab of the job split panel. Every value is already on the client in the job listing
+ * response; nothing is fetched and nothing is predicted. */
+export function JobInfo(props: JobInfoProps) {
+    const job = props.job
+    const now = (props.now) ? props.now : new Date()
+    const jobUtil = new JobUtils(job)
+    const elapsed = jobUtil.getElapsedSummary(now)
+    return (
+        <ColumnLayout columns={3} variant="text-grid">
+            <KeyValue title="State" value={job.state}/>
+            <KeyValue title="Job Id" value={job.job_id}/>
+            <KeyValue title="Job Group" value={job.job_group} clipboard={true}/>
+            <KeyValue title="Queue" value={job.queue}/>
+            <KeyValue title="Queue Type" value={job.queue_type}/>
+            <KeyValue title="Scaling Mode" value={job.scaling_mode}/>
+            <KeyValue title="Name" value={job.name}/>
+            <KeyValue title="Project" value={job.project}/>
+            <KeyValue title="Owner" value={job.owner}/>
+            <KeyValue title="Queue Time" value={job.queue_time} type="date"/>
+            <KeyValue title="Provisioning Time" value={job.provisioning_time} type="date"/>
+            <KeyValue title="Start Time" value={job.start_time} type="date"/>
+            <KeyValue title="End Time" value={job.end_time} type="date"/>
+            <KeyValue title="Exit Status" value={job.exit_status}/>
+            <KeyValue title="Queued For" value={formatDurationMinutes(jobUtil.getQueuedSeconds(now))}/>
+            {job.provisioning_attempt != null &&
+                <KeyValue title="Provisioning Attempt"
+                          value={formatProvisioningAttempt(job.provisioning_attempt, job.max_provisioning_attempts, job.state === 'held')}/>}
+            {Utils.isNotEmpty(job.blocking_limit_type) &&
+                <KeyValue title="Blocking Queue Limit" value={job.blocking_limit_type}/>}
+            <KeyValue title="Requested Walltime" value={job.params?.walltime}/>
+            <KeyValue title="Elapsed vs Requested" type="react-node" value={
+                <StatusIndicator type={ELAPSED_STATUS_INDICATOR[elapsed.state]}>{elapsed.text}</StatusIndicator>
+            }/>
+            {/* a job that never started has no run time; 0 seconds would read as "less than 1 min" */}
+            <KeyValue title="Total Time"
+                      value={Utils.isEmpty(job.start_time) ? '-' : formatDurationMinutes(jobUtil.getTotalTimeSeconds())}/>
+            <KeyValue title="Comment" value={job.comment} clipboard={true}/>
+            {Utils.isNotEmpty(job.error_message) &&
+                <KeyValue title="Error Message" type="react-node" value={
+                    <StatusIndicator type="error">{job.error_message}</StatusIndicator>
+                }/>}
+        </ColumnLayout>
+    )
+}
+
 export interface JobsProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
     type: string  // active, completed
     scope: string // user, admin
@@ -118,15 +216,24 @@ export interface JobsState {
 
 class Jobs extends Component<JobsProps, JobsState> {
 
-    listing: RefObject<IdeaListView>
+    listing: RefObject<IdeaListView | null>
+    deleteJobConfirmModal: RefObject<IdeaConfirm | null>
+    // the listing clears its selection on every fetch, so the selected job id is
+    // tracked here and re-applied against the refreshed listing
+    selectedJobId: string | null = null
 
     constructor(props: JobsProps) {
         super(props);
         this.listing = React.createRef()
+        this.deleteJobConfirmModal = React.createRef()
         this.state = {
             splitPanelOpen: false,
             jobSelected: false
         }
+    }
+
+    getDeleteJobConfirmModal(): IdeaConfirm {
+        return this.deleteJobConfirmModal.current!
     }
 
     schedulerAdmin(): SchedulerAdminClient {
@@ -158,6 +265,60 @@ class Jobs extends Component<JobsProps, JobsState> {
 
     isCompletedJobs(): boolean {
         return this.props.type === 'completed'
+    }
+
+    deleteSelectedJob() {
+        // Scheduler.DeleteJob runs qdel as the job owner, which stops the job if
+        // it is already running. Capture the id before the listing clears it.
+        const jobId = this.getSelected()?.job_id
+        if (Utils.isEmpty(jobId)) {
+            return
+        }
+        const deleteJob = (request: DeleteJobRequest): Promise<DeleteJobResult> => {
+            if (this.props.scope === 'admin') {
+                return this.schedulerAdmin().deleteJob(request)
+            } else {
+                return this.scheduler().deleteJob(request)
+            }
+        }
+        deleteJob({
+            job_id: jobId
+        }).then(() => {
+            this.props.onFlashbarChange({
+                items: [
+                    {
+                        type: 'info',
+                        content: `Job Id: ${jobId} will be deleted shortly. If it was running, it is being stopped.`,
+                        dismissible: true
+                    }
+                ]
+            })
+            this.getListing().fetchRecords()
+        }).catch((error) => {
+            this.props.onFlashbarChange({
+                items: [
+                    {
+                        type: 'error',
+                        content: error.message,
+                        dismissible: true
+                    }
+                ]
+            })
+        })
+    }
+
+    buildDeleteJobConfirmModal() {
+        return (
+            <IdeaConfirm ref={this.deleteJobConfirmModal}
+                         title="Delete job"
+                         confirmLabel="Delete job"
+                         onConfirm={() => {
+                             this.deleteSelectedJob()
+                         }}>
+                Job Id: <b>{this.getSelected()?.job_id}</b> will be removed from the queue. If the job is running, deleting
+                it stops the job and anything it has not already written to storage is lost. This cannot be undone.
+            </IdeaConfirm>
+        )
     }
 
     buildListing() {
@@ -251,46 +412,18 @@ class Jobs extends Component<JobsProps, JobsState> {
                 secondaryActions={[
                     {
                         id: 'delete-job',
-                        text: 'Delete Job',
+                        text: 'Delete Job (stops it if running)',
                         disabled: !this.isSelected(),
                         onClick: () => {
-
-                            const deleteJob = (request: DeleteJobRequest): Promise<DeleteJobResult> => {
-                                if(this.props.scope === 'admin') {
-                                    return this.schedulerAdmin().deleteJob(request)
-                                } else {
-                                    return this.scheduler().deleteJob(request)
-                                }
-                            }
-
-                            deleteJob({
-                                job_id: this.getSelected()?.job_id
-                            }).then(() => {
-                                this.props.onFlashbarChange({
-                                    items: [
-                                        {
-                                            type: 'info',
-                                            content: `Job Id: ${this.getSelected()?.job_id} will be deleted shortly.`,
-                                            dismissible: true
-                                        }
-                                    ]
-                                })
-                                this.getListing().fetchRecords()
-                            }).catch((error) => {
-                                this.props.onFlashbarChange({
-                                    items: [
-                                        {
-                                            type: 'error',
-                                            content: error.message,
-                                            dismissible: true
-                                        }
-                                    ]
-                                })
-                            })
+                            this.getDeleteJobConfirmModal().show()
                         }
                     }
                 ]}
                 showPaginator={true}
+                showLastRefreshed={true}
+                // the active-jobs read shares a lock with the scheduler's provisioning
+                // threads, so polling is opt-in and never offered on the all-jobs views
+                enableAutoRefresh={this.props.scope === 'user' && this.isActiveJobs()}
                 showFilters={true}
                 showDateRange={(this.props.type === 'completed')}
                 dateRange={{
@@ -339,6 +472,7 @@ class Jobs extends Component<JobsProps, JobsState> {
                     }
                 }}
                 onRefresh={() => {
+                    this.selectedJobId = null
                     this.setState({
                         jobSelected: false
                     }, () => {
@@ -346,11 +480,27 @@ class Jobs extends Component<JobsProps, JobsState> {
                     })
                 }}
                 onSelectionChange={() => {
+                    this.selectedJobId = this.getSelected()?.job_id ?? null
                     this.setState({
                         splitPanelOpen: true,
                         jobSelected: true
                     }, () => {
                     })
+                }}
+                onRecordsFetched={(listing: SocaJob[]) => {
+                    if (!this.state.jobSelected) {
+                        return
+                    }
+                    const job = listing.find((job) => job.job_id === this.selectedJobId)
+                    if (job) {
+                        this.getListing().setSelectedItems([job])
+                    } else {
+                        this.selectedJobId = null
+                        this.setState({
+                            jobSelected: false,
+                            splitPanelOpen: false
+                        })
+                    }
                 }}
                 onFetchRecords={() => {
                     if (this.props.scope === 'user') {
@@ -398,7 +548,7 @@ class Jobs extends Component<JobsProps, JobsState> {
         const selected = () => this.getSelected()!
         const jobUtil = () => new JobUtils(selected())
         const jobParams = () => selected().params!
-        return (this.isSelected() &&
+        return (this.isSelected() && this.getSelected() != null &&
             <IdeaSplitPanel
                 title={`JobId: ${this.getSelected()?.job_id}`}
             >
@@ -408,21 +558,7 @@ class Jobs extends Component<JobsProps, JobsState> {
                             label: 'Job Info',
                             id: 'job-info',
                             content: (
-                                <ColumnLayout columns={3} variant="text-grid">
-                                    <KeyValue title="State" value={selected().state}/>
-                                    <KeyValue title="Job Id" value={selected().job_id}/>
-                                    <KeyValue title="Job Group" value={selected().job_group} clipboard={true}/>
-                                    <KeyValue title="Queue" value={selected().queue}/>
-                                    <KeyValue title="Queue Type" value={selected().queue_type}/>
-                                    <KeyValue title="Scaling Mode" value={selected().scaling_mode}/>
-                                    <KeyValue title="Name" value={selected().name}/>
-                                    <KeyValue title="Project" value={selected().project}/>
-                                    <KeyValue title="Owner" value={selected().owner}/>
-                                    <KeyValue title="Queue Time" value={selected().queue_time} type="date"/>
-                                    <KeyValue title="Start Time" value={selected().start_time} type="date"/>
-                                    <KeyValue title="End Time" value={selected().end_time} type="date"/>
-                                    <KeyValue title="Comment" value={selected().comment} clipboard={true}/>
-                                </ColumnLayout>
+                                <JobInfo job={selected()}/>
                             )
                         },
                         {
@@ -667,6 +803,7 @@ class Jobs extends Component<JobsProps, JobsState> {
                 breadcrumbItems={breadcrumbs()}
                 content={
                     <div>
+                        {this.buildDeleteJobConfirmModal()}
                         {this.buildListing()}
                     </div>
                 }

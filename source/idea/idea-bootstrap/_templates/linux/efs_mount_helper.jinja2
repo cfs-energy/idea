@@ -2,20 +2,27 @@
 
 {% include '_templates/linux/stunnel.jinja2' %}
 
-{% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+{% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
 
 function install_efs_mount_helper () {
     which amazon-efs-mount-watchdog > /dev/null 2>&1
     if [[ "$?" != "0" ]]; then
       log_info "Installing Amazon EFS Mount Helper for {{ context.base_os }}"
-      {% if context.base_os in ('amazonlinux2', 'amazonlinux2023') %}
+      {% if context.base_os in ('amazonlinux2023',) %}
         yum install -y amazon-efs-utils
-      {% elif context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+      {% elif context.base_os in ('rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
         log_info "Installing Amazon EFS Mount Helper from Github"
-        {% if context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
-        yum -y install git make rpm-build cargo openssl-devel
+        {% if context.base_os in ('rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
+        # cmake, a C++ compiler and Go are what the efs-proxy FIPS crypto build needs; the distro
+        # cargo and rust only satisfy the spec's BuildRequires, the rustup toolchain below does the build
+        yum -y install git make rpm-build cargo rust openssl-devel cmake gcc gcc-c++ golang
         {% endif %}
-        git clone https://github.com/aws/efs-utils
+        # the distro rust lags the MSRV of the AWS SDK crates efs-utils pins (RHEL 10.2 ships
+        # 1.92, the crates need 1.94), and the spec sources ~/.cargo/env itself, so build with
+        # a current stable toolchain instead of downgrading the crate set.
+        curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --no-modify-path > /dev/null
+        source "$HOME/.cargo/env"
+        git clone --branch "{{ context.config.get_string('global-settings.package_config.efs_utils.version', default='v3.3.0') }}" --depth 1 https://github.com/aws/efs-utils
         cd efs-utils
         make rpm
         yum -y install build/amazon-efs-utils*rpm
@@ -27,11 +34,13 @@ function install_efs_mount_helper () {
 install_efs_mount_helper
 {% endif %}
 
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
 
 if [[ -z "$(dpkg -l amazon-efs-utils | grep ^ii)" ]]; then
-  apt install -y build-essential pkg-config cargo libssl-dev
-  git clone https://github.com/aws/efs-utils
+  apt install -y build-essential pkg-config libssl-dev cmake golang-go
+  curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --no-modify-path > /dev/null
+  source "$HOME/.cargo/env"
+  git clone --branch "{{ context.config.get_string('global-settings.package_config.efs_utils.version', default='v3.3.0') }}" --depth 1 https://github.com/aws/efs-utils
   cd efs-utils || exit
   ./build-deb.sh
   apt -y install ./build/amazon-efs-utils*.deb

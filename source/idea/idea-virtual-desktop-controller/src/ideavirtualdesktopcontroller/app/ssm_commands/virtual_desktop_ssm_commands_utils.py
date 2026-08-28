@@ -239,8 +239,15 @@ class VirtualDesktopSSMCommandsUtils:
                 "DCV_Session_ID=$(dcv list-sessions -j | jq -r '.[].id')",
                 'DCV_Describe_Session=$(dcv describe-session $DCV_Session_ID -j)',
                 "CPUAveragePerformanceLast10Secs=$(top -d 5 -b -n2 | grep 'Cpu(s)' | tail -n 1 | awk '{print $2 + $4}')",
-                "SSH_Connection_Count=$(last -Fi | grep 'still logged in' | grep -v 0.0.0.0 | wc -l)",
-                "SSH_Last_Disconnect_Time=$(last -Fi | awk '!/0.0.0.0|still logged in|wtmp|^\\s*$/ {print $11, $12, $13, $14}' | sort -k3M -k4n -k5 -k6n | tail -n 1)",
+                # sshd sessions without a tty (remote editors, sftp, ssh <command>) never reach
+                # wtmp, so live ssh connections are counted alongside the wtmp login records
+                "SSH_Login_Count=$(last -Fi | grep 'still logged in' | grep -v 0.0.0.0 | wc -l)",
+                "SSH_Established_Count=$(ss -Hnt state established '( sport = :22 )' 2>/dev/null | wc -l)",
+                'SSH_Connection_Count=$SSH_Login_Count',
+                'if [ "$SSH_Established_Count" -gt "$SSH_Connection_Count" ]; then SSH_Connection_Count=$SSH_Established_Count; fi',
+                # the logout columns are month name, day, time, year, so sorting them as text
+                # lets an old record win; sort on year, then month name, day and time
+                "SSH_Last_Disconnect_Time=$(LC_ALL=C last -Fi | LC_ALL=C awk '!/0\\.0\\.0\\.0|still logged in|wtmp|^[[:space:]]*$/ && $14 ~ /^[0-9][0-9][0-9][0-9]$/ {print $11, $12, $13, $14}' | LC_ALL=C sort -k4,4n -k1,1M -k2,2n -k3,3 | tail -n 1)",
                 '[ -n "$SSH_Last_Disconnect_Time" ] && SSH_Last_Disconnect_ISO=$(date -u -d "$SSH_Last_Disconnect_Time" +"%Y-%m-%dT%H:%M:%S.%6NZ") || SSH_Last_Disconnect_ISO=""',
                 'Final_JSON=$(jq -c -n --argjson dcv "$DCV_Describe_Session" --argjson cpuAvg "$CPUAveragePerformanceLast10Secs" --arg sshTime "$SSH_Last_Disconnect_ISO" --argjson sshCount "$SSH_Connection_Count" \'{"DCV": ($dcv | .["num-of-connections"] = ($sshCount | if . > $dcv["num-of-connections"] then . else $dcv["num-of-connections"] end) | .["last-disconnection-time"] = (if $dcv["last-disconnection-time"] == "" and $sshTime > $dcv["creation-time"] then $sshTime elif $dcv["last-disconnection-time"] != "" and $sshTime > $dcv["last-disconnection-time"] then $sshTime else $dcv["last-disconnection-time"] end)), "CPUAveragePerformanceLast10Secs": $cpuAvg, "SSH_Connection_Count": $sshCount, "SSH_Last_Disconnect_ISO": $sshTime}\')',
                 'echo "$Final_JSON"',

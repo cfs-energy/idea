@@ -17,6 +17,7 @@ import {HpcApplication, SocaUserInputParamMetadata} from "../../client/data-mode
 import {SchedulerAdminClient} from "../../client";
 import {AppContext} from "../../common";
 import Utils from "../../common/utils";
+import {registerAceWorkerUrls} from "../../common/ace-worker-urls";
 import IdeaForm from "../../components/form";
 import {Box, Button, CodeEditor, ColumnLayout, Container, FormField, Link, SpaceBetween, Wizard} from "@cloudscape-design/components";
 import IdeaFormBuilder from "../../components/form-builder";
@@ -33,9 +34,9 @@ import {withRouter} from "../../navigation/navigation-utils";
 import 'ace-builds/css/theme/github_dark.css';
 import 'ace-builds/css/theme/github_light_default.css';
 
-const SampleJobScriptSimple = require('./sample-job-script-simple.txt')
-const SampleJobScriptJinja2 = require('./sample-job-script-jinja2.txt')
-const SampleJobParams = require('./sample-job-params.json')
+import SampleJobScriptSimple from "./sample-job-script-simple.txt?url"
+import SampleJobScriptJinja2 from "./sample-job-script-jinja2.txt?url"
+import SampleJobParams from "./sample-job-params.json"
 
 
 export interface UpdateHpcApplicationProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
@@ -115,10 +116,10 @@ function AvailableVariable(props: AvailableVariableProps) {
 
 class UpdateHpcApplication extends Component<UpdateHpcApplicationProps, UpdateHpcApplicationState> {
 
-    formBuilder: RefObject<IdeaFormBuilder>
-    titleFormField: RefObject<IdeaFormField>
-    projectsFormField: RefObject<IdeaFormField>
-    jobScriptForm: RefObject<IdeaForm>
+    formBuilder: RefObject<IdeaFormBuilder | null>
+    titleFormField: RefObject<IdeaFormField | null>
+    projectsFormField: RefObject<IdeaFormField | null>
+    jobScriptForm: RefObject<IdeaForm | null>
 
     constructor(props: UpdateHpcApplicationProps) {
         super(props);
@@ -172,7 +173,9 @@ class UpdateHpcApplication extends Component<UpdateHpcApplicationProps, UpdateHp
         }
 
         import('ace-builds').then(ace => {
-            import('ace-builds/webpack-resolver').then(() => {
+            import('ace-builds/esm-resolver').then(() => {
+                // esm-resolver does not register worker URLs; see ace-worker-urls.ts
+                registerAceWorkerUrls(ace)
                 ace.config.set('useStrictCSP', true)
                 ace.config.set('loadWorkerFromBlob', false)
 

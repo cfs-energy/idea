@@ -10,6 +10,7 @@
 #  and limitations under the License.
 
 import ideascheduler
+from ideadatamodel import exceptions, errorcodes
 from ideadatamodel.scheduler import SocaJobState
 from ideasdk.shell import ShellInvocationResult, ShellInvoker
 from ideasdk.utils import Utils
@@ -94,7 +95,13 @@ class OpenPBSQSelect:
     def max_jobs(self) -> int:
         return Utils.get_value_as_int('max_jobs', self._kwargs, -1)
 
-    def list_jobs_ids(self) -> List[str]:
+    def list_jobs_ids(self, raise_on_error: bool = False) -> List[str]:
+        """
+        list matching job ids. by default a failed qselect returns an empty list;
+        pass raise_on_error=True where "no jobs" and "qselect failed" must not be
+        conflated (e.g. the finished-job sweep, which finishes every cached job
+        that is absent from the result).
+        """
         cmd = [self.qselect_bin]
 
         if self.is_owner_query():
@@ -115,6 +122,12 @@ class OpenPBSQSelect:
             cmd += ['-l', f'stack_id.eq.{self.stack_id}']
 
         result = self._shell.invoke(cmd, skip_error_logging=True)
+
+        if raise_on_error and result.returncode != 0:
+            raise exceptions.SocaException(
+                error_code=errorcodes.SCHEDULER_ERROR,
+                message=f'qselect failed (rc={result.returncode}): {result}',
+            )
 
         job_ids = []
         if result.returncode == 0:

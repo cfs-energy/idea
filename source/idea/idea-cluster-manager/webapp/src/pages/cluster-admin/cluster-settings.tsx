@@ -11,10 +11,10 @@
  * and limitations under the License.
  */
 
-import React, {Component} from "react";
+import React, {Component, RefObject} from "react";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import IdeaAppLayout, {IdeaAppLayoutProps} from "../../components/app-layout";
-import {Box, Button, ColumnLayout, Container, Header, Link, SpaceBetween, Table, Tabs} from "@cloudscape-design/components";
+import {Alert, Box, Button, ColumnLayout, Container, FormField, Header, Input, Link, SpaceBetween, Table, Tabs} from "@cloudscape-design/components";
 import {KeyValue, KeyValueGroup} from "../../components/key-value";
 import {AppContext} from "../../common";
 import dot from "dot-object";
@@ -24,6 +24,9 @@ import {Constants} from "../../common/constants";
 import {SharedStorageFileSystem} from "../../common/shared-storage-utils";
 import {withRouter} from "../../navigation/navigation-utils";
 import ConfigUtils from "../../common/config-utils";
+import {SimpleSettingsButton} from "../../components/simple-settings";
+import IdeaConfirm from "../../components/modals";
+import {SocaUserInputParamMetadata} from "../../client/data-model";
 
 export interface ClusterSettingsProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
 
@@ -36,18 +39,43 @@ export interface ClusterSettingsState {
     sharedStorage: any
     analytics: any
     metrics: any
+    clusterManager: any
     activeTabId: string
 
     sharedStorageTableItems: any
     selectedFileSystem: SharedStorageFileSystem[]
+
+    bedrockEnabled: boolean
+    bedrockModelIds: string[]
+    bedrockModelIdInput: string
+    bedrockError: string | null
+    bedrockUpdating: boolean
+    bedrockProvisionerReady: boolean
+    bedrockPassRoleReady: boolean
+    bedrockUsageLoggingManaged: boolean
+    bedrockModelIdPendingRemoval: string | null
 }
 
 const DEFAULT_ACTIVE_TAB_ID = 'general'
 
+const BEDROCK_ENABLED_SETTING: SocaUserInputParamMetadata = {
+    name: 'enabled',
+    title: 'Enable Amazon Bedrock',
+    description: 'When disabled, no project can be granted model access and nothing is provisioned. Enabling also requires a redeploy of the cluster-manager and virtual-desktop-controller modules, which create the IAM permissions boundary, the invocation log group and its delivery role.',
+    param_type: 'confirm',
+    data_type: 'bool',
+    validate: {
+        required: true
+    }
+}
+
 class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsState> {
+
+    removeBedrockModelConfirm: RefObject<IdeaConfirm | null>
 
     constructor(props: ClusterSettingsProps) {
         super(props);
+        this.removeBedrockModelConfirm = React.createRef()
         this.state = {
             cluster: {},
             identityProvider: {},
@@ -55,10 +83,23 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
             sharedStorage: {},
             analytics: {},
             metrics: {},
+            clusterManager: {},
             activeTabId: DEFAULT_ACTIVE_TAB_ID,
 
             sharedStorageTableItems: [],
-            selectedFileSystem: []
+            selectedFileSystem: [],
+
+            bedrockEnabled: false,
+            bedrockModelIds: [],
+            bedrockModelIdInput: '',
+            bedrockError: null,
+            bedrockUpdating: false,
+            // assumed ready until the settings load, so the notice cannot flash
+            // on a page that has not read the module settings yet.
+            bedrockProvisionerReady: true,
+            bedrockPassRoleReady: true,
+            bedrockUsageLoggingManaged: true,
+            bedrockModelIdPendingRemoval: null
         }
     }
 
@@ -76,23 +117,54 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
         // 4
         promises.push(clusterSettingsService.getAnalyticsSettings())
         // 5
+        promises.push(clusterSettingsService.getModuleSettings(Constants.MODULE_CLUSTER_MANAGER))
+        // 6
+        // read for the bedrock notice only: a failed read must not blank the page
+        promises.push(clusterSettingsService.getVirtualDesktopSettings().catch(() => ({})))
+        // 7
         if (clusterSettingsService.isMetricsEnabled()) {
             promises.push(clusterSettingsService.getMetricsSettings())
         }
         const queryParams = new URLSearchParams(this.props.location.search)
         const activeTabId = Utils.asString(queryParams.get('tab'), DEFAULT_ACTIVE_TAB_ID)
-        Promise.all(promises).then(result => {
-            const sharedStorageTableItems = this.getSharedStorageTableItems(result[3])
+        // one read that fails must not blank every tab: what did load is rendered and
+        // the rest reads as unset.
+        Promise.allSettled(promises).then(results => {
+            const result = (index: number): any => {
+                const settled: any = results[index]
+                if (settled == null || settled.status !== 'fulfilled') {
+                    return {}
+                }
+                return (settled.value != null) ? settled.value : {}
+            }
+            results.forEach((settled) => {
+                if (settled.status === 'rejected') {
+                    console.error('Failed to read cluster settings:', settled.reason)
+                }
+            })
+            const sharedStorageTableItems = this.getSharedStorageTableItems(result(3))
+            const clusterManager = result(5)
+            const modelIds = dot.pick('bedrock.model_ids', clusterManager)
             this.setState({
-                cluster: result[0],
-                identityProvider: result[1],
-                directoryservice: result[2],
-                sharedStorage: result[3],
-                analytics: result[4],
-                metrics: (clusterSettingsService.isMetricsEnabled()) ? result[5] : {},
+                cluster: result(0),
+                identityProvider: result(1),
+                directoryservice: result(2),
+                sharedStorage: result(3),
+                analytics: result(4),
+                clusterManager: clusterManager,
+                metrics: (clusterSettingsService.isMetricsEnabled()) ? result(7) : {},
                 activeTabId: activeTabId,
                 sharedStorageTableItems: sharedStorageTableItems,
-                selectedFileSystem: [sharedStorageTableItems[0]]
+                selectedFileSystem: sharedStorageTableItems.slice(0, 1),
+                bedrockEnabled: Utils.asBoolean(dot.pick('bedrock.enabled', clusterManager), false),
+                bedrockModelIds: Array.isArray(modelIds) ? modelIds : [],
+                // the stack writes this key only when the module is deployed with
+                // bedrock on, the same gate that grants the provisioner permissions.
+                bedrockProvisionerReady: !Utils.isEmpty(dot.pick('bedrock.invocation_log_role_arn', clusterManager)),
+                // the desktop controller gets iam:PassRole for project roles at deploy time, so the setting
+                // alone does not let a desktop launch under its project role; the vdc stack writes this key under the same gate.
+                bedrockPassRoleReady: !clusterSettingsService.isVirtualDesktopDeployed() || !Utils.isEmpty(dot.pick('bedrock.project_pass_role_arn', result(6))),
+                bedrockUsageLoggingManaged: Utils.asBoolean(dot.pick('bedrock.invocation_logging.manage_configuration', clusterManager), true)
             })
         })
     }
@@ -108,6 +180,202 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
             result.push(new SharedStorageFileSystem(key, storage))
         })
         return result
+    }
+
+    // the module settings write is a full replacement of the addressed path, so
+    // the catalog is always sent as the complete model id list.
+    updateBedrockSetting = (settingPath: string, value: any, onSuccess: () => void): Promise<boolean> => {
+        const clusterSettingsService = AppContext.get().getClusterSettingsService()
+        const moduleId = Utils.asString(clusterSettingsService.getModuleId(Constants.MODULE_CLUSTER_MANAGER), Constants.MODULE_CLUSTER_MANAGER)
+        const settings: any = {}
+        dot.str(settingPath, value, settings)
+        this.setState({
+            bedrockUpdating: true,
+            bedrockError: null
+        })
+        return AppContext.get().client().clusterSettings().updateModuleSettings({
+            module_id: moduleId,
+            settings: settings
+        }).then(result => {
+            if (!Utils.asBoolean(result.success, false)) {
+                this.setState({
+                    bedrockUpdating: false,
+                    bedrockError: `Failed to update: ${settingPath}`
+                })
+                return false
+            }
+            this.setState({
+                bedrockUpdating: false
+            }, onSuccess)
+            this.props.onFlashbarChange({
+                items: [
+                    {
+                        type: 'success',
+                        content: 'Bedrock settings updated. Changes will appear on refresh after a few seconds.',
+                        dismissible: true
+                    }
+                ]
+            })
+            return true
+        }).catch(error => {
+            this.setState({
+                bedrockUpdating: false,
+                bedrockError: error?.message ?? `${error}`
+            })
+            return false
+        })
+    }
+
+    addBedrockModel = () => {
+        const modelId = this.state.bedrockModelIdInput.trim()
+        if (Utils.isEmpty(modelId)) {
+            this.setState({
+                bedrockError: 'Enter a model id.'
+            })
+            return
+        }
+        if (/\s/.test(modelId)) {
+            this.setState({
+                bedrockError: 'Model id cannot contain white spaces.'
+            })
+            return
+        }
+        if (this.state.bedrockModelIds.includes(modelId)) {
+            this.setState({
+                bedrockError: `Model id is already in the catalog: ${modelId}`
+            })
+            return
+        }
+        const modelIds = [...this.state.bedrockModelIds, modelId]
+        this.updateBedrockSetting('bedrock.model_ids', modelIds, () => {
+            this.setState({
+                bedrockModelIds: modelIds,
+                bedrockModelIdInput: ''
+            })
+        })
+    }
+
+    removeBedrockModel = (modelId: string) => {
+        const modelIds = this.state.bedrockModelIds.filter((value) => value !== modelId)
+        this.updateBedrockSetting('bedrock.model_ids', modelIds, () => {
+            this.setState({
+                bedrockModelIds: modelIds
+            })
+        })
+    }
+
+    buildRemoveBedrockModelConfirm() {
+        const modelId = this.state.bedrockModelIdPendingRemoval
+        return (
+            <IdeaConfirm ref={this.removeBedrockModelConfirm}
+                         title="Remove model from catalog"
+                         confirmLabel="Remove model"
+                         onConfirm={() => {
+                             if (modelId != null) {
+                                 this.removeBedrockModel(modelId)
+                             }
+                         }}>
+                Every project that lists <b>{modelId}</b> is reconciled as soon as this is saved: access to the model is revoked and its members
+                can no longer invoke it. Those projects keep it in their model list, flagged as not in the cluster catalog.
+            </IdeaConfirm>
+        )
+    }
+
+    buildBedrockSettings() {
+        return (
+            <SpaceBetween size={"l"}>
+                {this.buildRemoveBedrockModelConfirm()}
+                {this.state.bedrockEnabled && !this.state.bedrockProvisionerReady &&
+                    <Alert type="warning" header="Bedrock is enabled, but the cluster-manager module has not been redeployed">
+                        The module is granted the permissions to create project roles and inference profiles when it is deployed, so turning this setting on does not
+                        provision anything on its own. Projects with Bedrock enabled stay unprovisioned until the cluster-manager module is redeployed. Redeploy it,
+                        then update one of those projects to retry.
+                    </Alert>}
+                {this.state.bedrockEnabled && !this.state.bedrockPassRoleReady &&
+                    <Alert type="warning" header="Bedrock is enabled, but the virtual-desktop-controller module has not been redeployed">
+                        A desktop in a Bedrock project runs under that project's own IAM role, and the controller is allowed to pass that role only when this module is
+                        deployed with Bedrock enabled. Until it is redeployed, every virtual desktop launch in a project with Bedrock enabled is refused.
+                    </Alert>}
+                {this.state.bedrockEnabled && this.state.bedrockProvisionerReady && !this.state.bedrockUsageLoggingManaged &&
+                    <Alert type="info" header="IDEA is not managing Bedrock model invocation logging">
+                        Usage is aggregated from Amazon Bedrock model invocation logging, which is one configuration per AWS account and region.
+                        <b> invocation_logging.manage_configuration</b> is false, so IDEA does not set it. Until logging for this account and region delivers
+                        to <b>{dot.pick('bedrock.invocation_log_group_name', this.state.clusterManager)}</b>, every project reports no usage whether or not
+                        models were invoked. Either configure model invocation logging with that log group as its destination, or set
+                        manage_configuration to true and let IDEA adopt it when no other configuration exists.
+                    </Alert>}
+                <Container header={<Header variant={"h2"} description={"Model access for projects. Models approved here can be granted to individual projects on the Projects page."}>Amazon Bedrock</Header>}>
+                    <ColumnLayout variant={"text-grid"} columns={2}>
+                        <KeyValue title="Status" value={
+                            <SpaceBetween size={"xs"} direction={"horizontal"}>
+                                <EnabledDisabledStatusIndicator enabled={this.state.bedrockEnabled}/>
+                                <SimpleSettingsButton
+                                    title="Enable Amazon Bedrock"
+                                    settingConfig={BEDROCK_ENABLED_SETTING}
+                                    currentValue={this.state.bedrockEnabled}
+                                    disabled={this.state.bedrockUpdating}
+                                    onSave={(newValue) => {
+                                        const enabled = Utils.asBoolean(newValue, false)
+                                        return this.updateBedrockSetting('bedrock.enabled', enabled, () => {
+                                            this.setState({
+                                                bedrockEnabled: enabled
+                                            })
+                                        })
+                                    }}/>
+                            </SpaceBetween>
+                        } type={"react-node"}/>
+                        <KeyValue title="Approved Models" value={`${this.state.bedrockModelIds.length}`}/>
+                    </ColumnLayout>
+                </Container>
+                <Container header={<Header variant={"h2"}
+                                           counter={`(${this.state.bedrockModelIds.length})`}
+                                           description={"Removing a model here revokes it from every project that lists it, as soon as the change is saved. Those projects keep the model in their list, flagged as not in the cluster catalog."}>Model Catalog</Header>}>
+                    <SpaceBetween size={"m"}>
+                        <Alert type="warning" header="Approving a model commits this AWS account">
+                            In commercial regions model access is on by default: the first invocation of a marketplace-listed model subscribes this account to that
+                            model automatically, and denying the Marketplace subscribe permission does not prevent it. Add a model only when the account owner accepts
+                            its terms and pricing. In AWS GovCloud, model access is a manual per-account step and pricing runs about 1.2x the commercial rate.
+                        </Alert>
+                        {this.state.bedrockError && <Alert type="error" dismissible={true} onDismiss={() => this.setState({bedrockError: null})}>{this.state.bedrockError}</Alert>}
+                        <FormField label="Model Id"
+                                   description="Enter a foundation model id or an inference profile id. Ids are not validated against the account."
+                                   secondaryControl={<Button iconName="add-plus" disabled={this.state.bedrockUpdating} onClick={this.addBedrockModel}>Add Model</Button>}>
+                            <Input value={this.state.bedrockModelIdInput}
+                                   placeholder="vendor.model-name"
+                                   disabled={this.state.bedrockUpdating}
+                                   onChange={(event) => this.setState({bedrockModelIdInput: event.detail.value})}/>
+                        </FormField>
+                        <Table items={this.state.bedrockModelIds}
+                               columnDefinitions={[
+                                   {
+                                       id: 'model_id',
+                                       header: 'Model Id',
+                                       cell: (modelId) => <span><CopyToClipBoard text={modelId} feedback={`${modelId} copied`}/> {modelId}</span>
+                                   },
+                                   {
+                                       id: 'actions',
+                                       header: '',
+                                       cell: (modelId) => <Button variant={"inline-icon"}
+                                                                  iconName="remove"
+                                                                  ariaLabel={`Remove ${modelId}`}
+                                                                  disabled={this.state.bedrockUpdating}
+                                                                  onClick={() => this.setState({
+                                                                      bedrockModelIdPendingRemoval: modelId
+                                                                  }, () => {
+                                                                      this.removeBedrockModelConfirm.current?.show()
+                                                                  })}/>
+                                   }
+                               ]}
+                               empty={
+                                   <Box textAlign="center" color="inherit">
+                                       <b>No models</b>
+                                       <Box variant="p" color="inherit">No models are approved for this cluster.</Box>
+                                   </Box>
+                               }/>
+                    </SpaceBetween>
+                </Container>
+            </SpaceBetween>
+        )
     }
 
     render() {
@@ -206,7 +474,7 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                 ]}
                 header={(
                     <Header variant={"h1"}
-                            description={"View and manage cluster settings. (Read-Only, use idea-admin.sh to update cluster settings.)"}
+                            description={"View cluster settings. Every setting on this page is read-only except the Bedrock tab; use idea-admin.sh to update the rest."}
                             actions={(<SpaceBetween size={"s"}>
                                 <Button variant={"primary"} onClick={() => this.props.navigate('/cluster/status')}>View Cluster Status</Button>
                             </SpaceBetween>)}>
@@ -582,6 +850,11 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                                             </Container>}
                                         </SpaceBetween>
                                     )
+                                },
+                                {
+                                    label: 'Bedrock',
+                                    id: 'bedrock',
+                                    content: this.buildBedrockSettings()
                                 },
                                 {
                                     label: 'CloudWatch Logs',

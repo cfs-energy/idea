@@ -28,8 +28,9 @@
 # * IDEA_DEV_MODE - Set to "true" if you are working with IDEA sources
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-IDEA_REVISION=${IDEA_REVISION:-"v25.12.0"}
-IDEA_DOCKER_REPO=${IDEA_DOCKER_REPO:-"public.ecr.aws/s5o2b4m0/idea-administrator"}
+IDEA_REVISION=${IDEA_REVISION:-"v26.08.0"}
+IDEA_DOCKER_REPO_DEFAULT="public.ecr.aws/s5o2b4m0/idea-administrator"
+IDEA_DOCKER_REPO=${IDEA_DOCKER_REPO:-"${IDEA_DOCKER_REPO_DEFAULT}"}
 IDEA_ECR_CREDS_RESET=${IDEA_ECR_CREDS_RESET:-"true"}
 IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER=${IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER:=""}
 IDEA_ADMIN_ENABLE_CDK_NAG_SCAN=${IDEA_ADMIN_ENABLE_CDK_NAG_SCAN:-"false"}
@@ -104,8 +105,15 @@ ${DOCKER_BIN} info >> /dev/null 2>&1
 verify_command "Docker is installed on the system but it does not seems to be running. Start Docker first."
 echo -e "${GREEN}✓ Docker is running${NC}"
 
+# `invoke docker.build` tags the image with no registry prefix, so the published-image check
+# below can't see it and would pull the released image over your build; prefer the local one.
+if [[ "${IDEA_DOCKER_REPO}" == "${IDEA_DOCKER_REPO_DEFAULT}" ]] && \
+   ${DOCKER_BIN} image inspect "idea-administrator:${IDEA_REVISION}" >> /dev/null 2>&1; then
+  IDEA_DOCKER_REPO="idea-administrator"
+fi
+
 # Reset ECR credentials
-if [[ "${IDEA_ECR_CREDS_RESET}" == "true" ]]; then
+if [[ "${IDEA_ECR_CREDS_RESET}" == "true" && "${IDEA_DOCKER_REPO}" == *"/"* ]]; then
   echo -e "${YELLOW}[INFO] Resetting ECR credentials...${NC}"
   # Check if user is connected to internet an can ping ECR repo
   DIG_BIN=$(command -v dig)
@@ -130,6 +138,8 @@ else
   echo -e "${GREEN}✓ Docker image already available${NC}"
 fi
 
+IDEA_IMAGE_CREATED=$(${DOCKER_BIN} image inspect --format "{{.Created}}" "${IDEA_DOCKER_REPO}:${IDEA_REVISION}" 2>/dev/null)
+echo -e "${YELLOW}[INFO] Administrator image: ${IDEA_DOCKER_REPO}:${IDEA_REVISION} (created ${IDEA_IMAGE_CREATED:-unknown})${NC}"
 echo -e "${YELLOW}[INFO] Launching IDEA administrator...${NC}"
 # Launch installer
 ${DOCKER_BIN} run --rm -it -v "${HOME}/.idea/clusters:/root/.idea/clusters" \

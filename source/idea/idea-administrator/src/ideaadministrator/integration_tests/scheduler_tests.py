@@ -115,6 +115,10 @@ def _verify_all_jobs(helper: JobSubmissionHelper):
             time.sleep(iteration_interval)
     except KeyboardInterrupt:
         helper.context.error('Job test case verification aborted!')
+    except Exception as e:
+        # abort here means the caller skips the final summary, leaving the verdict standing next
+        # to counters never filled in; record it and let the summary/assert report what was observed.
+        helper.context.error(f'Job test case verification aborted: {e}')
 
 
 def test_jobs(context: TestContext):

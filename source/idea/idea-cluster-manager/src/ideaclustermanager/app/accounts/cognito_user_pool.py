@@ -197,9 +197,20 @@ class CognitoUserPool:
             if Utils.is_not_empty(password):
                 create_user_params['TemporaryPassword'] = password
 
-        create_result = (
-            self._context.aws().cognito_idp().admin_create_user(**create_user_params)
-        )
+        try:
+            create_result = (
+                self._context.aws()
+                .cognito_idp()
+                .admin_create_user(**create_user_params)
+            )
+        except botocore.exceptions.ClientError as e:
+            # a rejected temporary password is a caller error, not a server fault.
+            # nothing was created, so there is no user to clean up here.
+            if e.response['Error']['Code'] == 'InvalidPasswordException':
+                raise exceptions.invalid_params(
+                    'Password does not confirm to Cognito user pool policy'
+                )
+            raise
 
         created_user = Utils.get_value_as_dict('User', create_result)
         status = Utils.get_value_as_string('UserStatus', created_user)

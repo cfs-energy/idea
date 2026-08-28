@@ -60,9 +60,10 @@ class DateTimeUtils:
         :return:
         """
         delta = d1 - d2
+        total_seconds = int(delta.total_seconds())
         if to_minutes:
-            return DateTimeUtils.to_minutes(seconds=delta.seconds)
-        return delta.seconds
+            return DateTimeUtils.to_minutes(seconds=total_seconds)
+        return total_seconds
 
     @staticmethod
     def current_datetime():

@@ -1,9 +1,9 @@
-{% if context.base_os in ('amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+{% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
   # RHEL, CentOS, Rocky Linux, and Amazon Linux (firewalld-based distros)
   systemctl stop firewalld
   systemctl disable firewalld
   systemctl mask firewalld
-{% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% elif context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
   # Ubuntu
   systemctl stop ufw
   systemctl disable ufw

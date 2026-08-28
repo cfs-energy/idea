@@ -133,7 +133,7 @@ export interface QueuesState {
 }
 
 class Queues extends Component<QueuesProps, QueuesState> {
-    listing: RefObject<IdeaListView>
+    listing: RefObject<IdeaListView | null>
 
     constructor(props: QueuesProps) {
         super(props);
@@ -344,6 +344,7 @@ class Queues extends Component<QueuesProps, QueuesState> {
                                     <KeyValue title="Max Running Jobs" value={queueParams().max_running_jobs}/>
                                     <KeyValue title="Max Provisioned Instances" value={queueParams().max_provisioned_instances}/>
                                     <KeyValue title="Max Provisioned Capacity" value={queueParams().max_provisioned_capacity}/>
+                                    <KeyValue title="Max Nodes Per Job" value={queueParams().max_nodes_per_job}/>
                                     <KeyValue title="Block on any job with Licenses" value={queueParams().wait_on_any_job_with_license}
                                               type="boolean"/>
 

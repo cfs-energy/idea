@@ -70,8 +70,9 @@ class IamPermissionUtil(IamPermissionUtilProtocol):
         security_credentials = (
             self._context.ec2_metadata_util().get_iam_security_credentials()
         )
+        aws_partition = self._context.aws().aws_partition()
         instance_profile_role_arn = (
-            f'arn:aws:iam::{document.accountId}:role/{security_credentials}'
+            f'arn:{aws_partition}:iam::{document.accountId}:role/{security_credentials}'
         )
 
         if resource_arns is None:

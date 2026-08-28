@@ -21,7 +21,7 @@ from ideascheduler.app.provisioning.job_monitor.finished_job_processor import (
 from ideascheduler.app.scheduler.openpbs.openpbs_qselect import OpenPBSQSelect
 from ideascheduler.app.scheduler.openpbs import OpenPBSEvent
 
-from typing import Optional, Set, List
+from typing import Optional, Set, List, Dict
 from threading import Thread, Condition, Event, RLock
 import arrow
 
@@ -46,8 +46,6 @@ class JobMonitorState:
         self.queued_jobs: Set[JobUpdate] = set()
         self.modified_jobs: Set[JobUpdate] = set()
         self.running_jobs: Set[JobUpdate] = set()
-
-        self._last_periodic_run = None
 
         self._job_updates_available = Event()
 
@@ -164,6 +162,10 @@ class JobMonitor(SocaService, JobMonitorProtocol):
         self._state: Optional[JobMonitorState] = None
         self._finished_job_processor: Optional[FinishedJobProcessor] = None
         self._queued_after: Optional[arrow.Arrow] = None
+        self._last_reconciler_run: Optional[arrow.Arrow] = None
+        # queues with a recent queuejob event, watched with short rescans
+        self._queued_sweep_expiry: Dict[str, arrow.Arrow] = {}
+        self._queued_sweep_last_attempt: Dict[str, arrow.Arrow] = {}
 
     def _initialize(self):
         self._job_submission_monitor = Thread(
@@ -181,6 +183,23 @@ class JobMonitor(SocaService, JobMonitorProtocol):
         self._sync_all_jobs()
         self._context.job_cache.set_ready()
 
+    def _provisioning_retries_exhausted(self, job: SocaJob) -> bool:
+        """
+        a job held after exhausting its provisioning retry budget must not be re-queued.
+        the budget is the same per-job counter the provisioner and node housekeeper apply
+        (scheduler.job_provisioning.max_provisioning_retries); the reconciler adopts HELD
+        jobs too, so without this check it would re-queue a job the cap already stopped.
+        """
+        max_retries = self._context.config().get_int(
+            'scheduler.job_provisioning.max_provisioning_retries', default=3
+        )
+        if max_retries is None or max_retries <= 0:
+            return False
+        retry_count = self._context.job_cache.get_job_provisioning_retry_count(
+            job_id=job.job_id
+        )
+        return retry_count >= max_retries
+
     def _submit_to_provisioning_queue(self, jobs: List[SocaJob]):
         for job in jobs:
             if self._exit.is_set():
@@ -195,6 +214,11 @@ class JobMonitor(SocaService, JobMonitorProtocol):
             if job.state == SocaJobState.RUNNING:
                 # if job execution has started running, ensure the job is deleted from provisioning queue.
                 provisioning_queue.delete(job_id=job.job_id)
+                continue
+
+            if self._provisioning_retries_exhausted(job):
+                # held at the provisioning retry cap: never re-queue. the owner can qdel
+                # and resubmit, or qrls to reset the budget and retry.
                 continue
 
             if job.is_provisioned():
@@ -228,6 +252,9 @@ class JobMonitor(SocaService, JobMonitorProtocol):
                     self._context.job_cache.sync(jobs=jobs)
 
                     for job in jobs:
+                        if self._provisioning_retries_exhausted(job):
+                            # held at the provisioning retry cap: never re-queue.
+                            continue
                         # if job is provisioned, add to provisioning queue only if scaling mode is single job.
                         # for batch scaling mode, once the job is provisioned, retry logic is not applicable
                         if job.is_provisioned():
@@ -266,64 +293,7 @@ class JobMonitor(SocaService, JobMonitorProtocol):
                         break
 
                     if job_type == 'queued':
-                        processed_jobs = {}
-
-                        queued_job_ids = OpenPBSQSelect(
-                            context=self._context,
-                            logger=self._logger,
-                            log_tag='queued-jobs',
-                            stack_id='tbd',
-                            queue=queue,
-                            job_state=[SocaJobState.QUEUED, SocaJobState.HELD],
-                        ).list_jobs_ids()
-
-                        has_more = len(queued_job_ids) > 0
-
-                        self._logger.info(
-                            f'jobs queued: {len(queued_job_ids)}, fetching ...'
-                        )
-
-                        while has_more:
-                            job_ids_to_fetch = []
-                            existing_jobs = []
-                            for queued_job_id in queued_job_ids:
-                                if queued_job_id in processed_jobs:
-                                    continue
-                                processed_jobs[queued_job_id] = True
-                                job = self._context.job_cache.get_job(queued_job_id)
-                                if job is not None:
-                                    existing_jobs.append(job)
-                                    continue
-                                job_ids_to_fetch.append(queued_job_id)
-
-                            if len(job_ids_to_fetch) == 0:
-                                break
-
-                            queued_jobs = self._context.scheduler.list_jobs(
-                                job_ids=job_ids_to_fetch
-                            )
-
-                            self._context.job_cache.sync(jobs=queued_jobs)
-
-                            self._submit_to_provisioning_queue(
-                                jobs=queued_jobs + existing_jobs
-                            )
-
-                            queued_job_ids = OpenPBSQSelect(
-                                context=self._context,
-                                logger=self._logger,
-                                stack_id='tbd',
-                                queue=queue,
-                                job_state=[SocaJobState.QUEUED, SocaJobState.HELD],
-                            ).list_jobs_ids()
-
-                            has_more = len(processed_jobs) < len(queued_job_ids)
-
-                            if has_more:
-                                self._logger.info(
-                                    f'jobs queued: {len(queued_job_ids)}, '
-                                    f'fetching additional {len(queued_job_ids) - len(processed_jobs)} job(s) ...'
-                                )
+                        self._reconcile_queue(queue=queue, log_tag='queued-jobs')
 
                     else:
                         # otherwise, query for all job_ids
@@ -339,6 +309,14 @@ class JobMonitor(SocaService, JobMonitorProtocol):
                         if job_type == 'modified':
                             self._submit_to_provisioning_queue(jobs=jobs)
 
+                        if job_type == 'running':
+                            # a wait recorded while queued (capacity, queue limits) is history once the
+                            # job runs; left in place it gets re-attached to the finished record as a failure.
+                            for job in jobs:
+                                self._context.job_cache.clear_job_provisioning_error(
+                                    job_id=job.job_id
+                                )
+
                         self._logger.info(
                             f'job update: {job_type}, num jobs: {len(jobs)}'
                         )
@@ -349,10 +327,104 @@ class JobMonitor(SocaService, JobMonitorProtocol):
         except Exception as e:
             self._logger.exception(f'failed to process {job_type} jobs', exc_info=e)
 
+    def _reconcile_queue(self, queue: str, log_tag: str) -> int:
+        """
+        adopt queued/held jobs in the scheduler that are still pending capacity (stack_id=tbd).
+        jobs missing from the job cache are fetched and cached; all applicable jobs are
+        re-submitted to the provisioning queue (put is idempotent per job_id).
+        :return: number of jobs that were missing from the job cache
+        """
+        adopted = 0
+        processed_jobs = {}
+        has_more = True
+        while has_more and not self._exit.is_set():
+            queued_job_ids = OpenPBSQSelect(
+                context=self._context,
+                logger=self._logger,
+                log_tag=log_tag,
+                stack_id='tbd',
+                queue=queue,
+                job_state=[SocaJobState.QUEUED, SocaJobState.HELD],
+                # raise_on_error: a failed qselect must not read as "no pending
+                # jobs", which silently turns every reconcile pass into a no-op.
+            ).list_jobs_ids(raise_on_error=True)
+
+            job_ids_to_fetch = []
+            existing_jobs = []
+            for queued_job_id in queued_job_ids:
+                if queued_job_id in processed_jobs:
+                    continue
+                processed_jobs[queued_job_id] = True
+                job = self._context.job_cache.get_job(queued_job_id)
+                if job is not None:
+                    existing_jobs.append(job)
+                    continue
+                job_ids_to_fetch.append(queued_job_id)
+
+            queued_jobs = []
+            if len(job_ids_to_fetch) > 0:
+                queued_jobs = self._context.scheduler.list_jobs(
+                    job_ids=job_ids_to_fetch
+                )
+                self._context.job_cache.sync(jobs=queued_jobs)
+                adopted += len(queued_jobs)
+                self._logger.info(
+                    f'({log_tag}) queue: {queue}, adopted {len(queued_jobs)} job(s): {job_ids_to_fetch}'
+                )
+
+            if len(queued_jobs) + len(existing_jobs) > 0:
+                self._submit_to_provisioning_queue(jobs=queued_jobs + existing_jobs)
+
+            # re-list until no unseen job ids remain, to catch jobs queued while fetching
+            has_more = len(job_ids_to_fetch) > 0
+
+        return adopted
+
+    def _arm_queued_sweep(self, queue: str):
+        """
+        a queuejob hook fires before the scheduler commits the job, so the immediate
+        queue scan can run too early and miss it. watch the queue with short rescans
+        until the window expires; the job is adopted on the first rescan that sees it.
+        """
+        window_secs = self._context.config().get_int(
+            'scheduler.job_provisioning.job_reconciler_queued_window_seconds',
+            default=30,
+        )
+        self._queued_sweep_expiry[queue] = arrow.utcnow().shift(seconds=window_secs)
+
+    def _run_queued_sweeps(self):
+        if len(self._queued_sweep_expiry) == 0:
+            return
+
+        now = arrow.utcnow()
+        retry_interval = self._context.config().get_int(
+            'scheduler.job_provisioning.job_reconciler_queued_retry_interval_seconds',
+            default=2,
+        )
+
+        for queue in list(self._queued_sweep_expiry.keys()):
+            if now > self._queued_sweep_expiry[queue]:
+                del self._queued_sweep_expiry[queue]
+                self._queued_sweep_last_attempt.pop(queue, None)
+                continue
+
+            last_attempt = self._queued_sweep_last_attempt.get(queue)
+            if (
+                last_attempt is not None
+                and (now - last_attempt).total_seconds() < retry_interval
+            ):
+                continue
+
+            self._queued_sweep_last_attempt[queue] = now
+            try:
+                self._reconcile_queue(queue=queue, log_tag='queued-sweep')
+            except Exception as e:
+                self._logger.exception(f'queued sweep failed for queue {queue}: {e}')
+
     def _job_reconciler(self):
         """
-        Job reconciliation fallback to catch jobs missed by hooks.
-        This handles cases where PBS hooks don't fire immediately or fail.
+        Job reconciliation fallback to catch jobs whose hook events were lost entirely,
+        eg. scheduler restarts, hook delivery failures or transient qstat errors.
         """
         try:
             queue_profiles = self._context.queue_profiles.list_queue_profiles()
@@ -363,26 +435,18 @@ class JobMonitor(SocaService, JobMonitorProtocol):
                 for queue in queue_profile.queues:
                     if self._exit.is_set():
                         break
-
-                    # Query PBS directly for queued/held jobs with stack_id=tbd
-                    queued_job_ids = OpenPBSQSelect(
-                        context=self._context,
-                        logger=self._logger,
-                        log_tag='job-reconciler',
-                        stack_id='tbd',
-                        queue=queue,
-                        job_state=[SocaJobState.QUEUED, SocaJobState.HELD],
-                    ).list_jobs_ids()
-
-                    if len(queued_job_ids) > 0:
-                        self._logger.info(
-                            f'job reconciler found {len(queued_job_ids)} queued job(s) in queue {queue}: {queued_job_ids}'
+                    try:
+                        adopted = self._reconcile_queue(
+                            queue=queue, log_tag='job-reconciler'
                         )
-                        queued_jobs = self._context.scheduler.list_jobs(
-                            job_ids=queued_job_ids
+                        if adopted > 0:
+                            self._logger.info(
+                                f'job reconciler adopted {adopted} orphaned job(s) in queue: {queue}'
+                            )
+                    except Exception as e:
+                        self._logger.exception(
+                            f'job reconciler failed for queue {queue}: {e}'
                         )
-                        self._context.job_cache.sync(jobs=queued_jobs)
-                        self._submit_to_provisioning_queue(jobs=queued_jobs)
 
         except Exception as e:
             self._logger.exception(f'job reconciler failed: {e}')
@@ -395,26 +459,36 @@ class JobMonitor(SocaService, JobMonitorProtocol):
                     # get a copy of current state
                     job_updates = self._state.get_updates()
 
+                    # arm rescans for the affected queues before scanning: the scan below
+                    # races with the scheduler committing the job that raised the event.
+                    for job_update in job_updates.queued:
+                        if Utils.is_not_empty(job_update.queue):
+                            self._arm_queued_sweep(queue=job_update.queue)
+
                     self._sync_jobs(job_updates=job_updates.queued, job_type='queued')
                     self._sync_jobs(
                         job_updates=job_updates.modified, job_type='modified'
                     )
                     self._sync_jobs(job_updates=job_updates.running, job_type='running')
 
+                # short rescans of queues with recent submissions, to adopt jobs that
+                # became visible after the initial scan
+                self._run_queued_sweeps()
+
                 # Job reconciler fallback - check PBS directly every N seconds
-                # This catches jobs when hooks fail to fire immediately
+                # This catches jobs when hook events are lost entirely
                 now = arrow.utcnow()
                 reconciler_interval = self._context.config().get_int(
                     'scheduler.job_provisioning.job_reconciler_interval_seconds',
                     default=60,
                 )
                 if (
-                    self._state._last_periodic_run is None
-                    or (now - self._state._last_periodic_run).total_seconds()
+                    self._last_reconciler_run is None
+                    or (now - self._last_reconciler_run).total_seconds()
                     >= reconciler_interval
                 ):
                     self._job_reconciler()
-                    self._state._last_periodic_run = now
+                    self._last_reconciler_run = now
 
             except Exception as e:
                 self._logger.exception(f'job monitor iteration failed: {e}')
@@ -422,10 +496,8 @@ class JobMonitor(SocaService, JobMonitorProtocol):
                 try:
                     self._monitor.acquire()
 
-                    # need to better handle scenario when wait_for timeout occurs exactly at the same time as
-                    # as job is queued from the hook. the scheduler might not return the queued job as the job
-                    # is not yet queued (race condition).
-                    # worst case scenario is job will be caught in the job reconciler after a short delay (default 60 seconds).
+                    # the event-time scan can run too early (the hook fires before the job
+                    # commits); the queued sweep and the job reconciler are the backstops.
 
                     # delta job updates if any, will be processed at an interval of 1 second
                     self._monitor.wait_for(

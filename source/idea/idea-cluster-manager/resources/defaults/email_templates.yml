@@ -146,6 +146,23 @@ templates:
       <br>
       <hr>
       <i> This is an automated email, please do not respond.</i>
+  - name: "virtual-desktop-controller.session-cleanup-warning"
+    title: "Virtual Desktop Scheduled for Deletion"
+    template_type: jinja2
+    subject: "[{{cluster_name}}] Virtual Desktop {{session_name}} will be deleted on {{deletion_date}}"
+    body: |
+      Hello <b>{{session.owner}}</b>, <br><br>
+      Your Virtual Desktop Session <b> {{session_name}} </b> has been stopped for {{stopped_days}} days and will be deleted on <b>{{deletion_date}}</b>.
+      <br><br>
+      <b>To keep it:</b> sign in to the web portal, open <b>Virtual Desktops</b>, and start <b>{{session_name}}</b> before that date. Starting it resets the clock, and using it keeps it out of the cleanup.
+      <br>
+      <b>If you no longer need it:</b> nothing to do. It is deleted on that date and stops costing storage.
+      <br>
+      <b>If it must stay stopped:</b> ask an administrator to exempt it from the stopped desktop cleanup.
+      <br>
+      <br>
+      <hr>
+      <i> This is an automated email, please do not respond.</i>
   - name: "virtual-desktop-controller.session-shared"
     title: "Virtual Desktop Shared"
     template_type: jinja2

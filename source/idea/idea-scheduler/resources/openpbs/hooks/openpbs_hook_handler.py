@@ -203,6 +203,16 @@ def get_instance_type() -> str:
     return get_imds_url(url=EC2_INSTANCE_METADATA_URL_INSTANCE_TYPE)
 
 
+def get_local_node_name() -> str:
+    # the name this node is registered under, which is not the resolved hostname
+    # when the two differ. empty if the pbs build does not expose it.
+    try:
+        return str(pbs.get_local_nodename())
+    except Exception as e:
+        log_debug('failed to read local node name: %s' % e)
+        return ''
+
+
 # refer to PBSHooks2020.1.pdf (5.2.4.15 Table: Reading & Setting Job Attributes in Hooks)
 # procedure to generate this file:
 #   1. copy and paste the table in section 5.2.4.15 in a text file
@@ -1313,6 +1323,7 @@ class OpenPBSEvent:
         if self.type.startswith('execjob_'):
             pbs_event['instance_id'] = get_instance_id()
             pbs_event['instance_type'] = get_instance_type()
+            pbs_event['node_name'] = get_local_node_name()
         pbs_event['type'] = self.type
         pbs_event['hook_name'] = self.hook_name
         pbs_event['requestor'] = self.requestor

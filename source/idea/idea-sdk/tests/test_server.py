@@ -26,6 +26,7 @@ from ideatestutils import MockConfig
 from pydantic import Field
 from typing import Optional, List
 
+import http.client
 import pytest
 
 SERVER_PORT = 34567
@@ -272,3 +273,30 @@ def test_server(monkeypatch, http_client, unix_client, logger):
     assert divide_by_zero.value.error_code == errorcodes.INVALID_PARAMS
 
     assert Utils.is_socket(UNIX_SOCKET_FILE) is True
+
+
+def test_cors_preflight(logger):
+    # OPTIONS routes are added after the app is finalized; this asserts they go through the
+    # same registration path as ordinary routes, so request handling finds the middleware it expects.
+    logger.info('cors preflight')
+    connection = http.client.HTTPConnection('localhost', SERVER_PORT, timeout=10)
+    try:
+        connection.request(
+            'OPTIONS',
+            '/test-server/api/v1',
+            headers={
+                'Origin': 'https://example.invalid',
+                'Access-Control-Request-Method': 'POST',
+                'Access-Control-Request-Headers': 'authorization,content-type',
+            },
+        )
+        response = connection.getresponse()
+        response.read()
+    finally:
+        connection.close()
+
+    assert response.status == 204
+    assert response.getheader('Access-Control-Allow-Origin') == '*'
+    allow_methods = response.getheader('Access-Control-Allow-Methods')
+    assert allow_methods is not None
+    assert 'OPTIONS' in allow_methods

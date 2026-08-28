@@ -108,7 +108,7 @@ class MySharedVirtualDesktopSessions extends Component<MySharedVirtualDesktopPro
             }
         }
     ]
-    listing: RefObject<IdeaListView>
+    listing: RefObject<IdeaListView | null>
 
     constructor(props: MySharedVirtualDesktopProps) {
         super(props);

@@ -34,7 +34,7 @@ class EC2Instance:
         return self._instance
 
     def __str__(self):
-        s = f'Host: {self.private_dns_name}, InstanceId: {self.instance_id}'
+        s = f'Host: {self.node_host}, InstanceId: {self.instance_id}'
         if self.is_idea_compute_node():
             s += f', ComputeStack: {self.soca_compute_stack}'
         return s
@@ -165,6 +165,37 @@ class EC2Instance:
     @property
     def private_ip_address(self) -> Optional[str]:
         return ModelUtils.get_value_as_string('PrivateIpAddress', self.instance_data())
+
+    @property
+    def node_host(self) -> Optional[str]:
+        """
+        name under which the instance is registered with the scheduler.
+        compute nodes get no /etc/hosts entry, so the private dns name is unresolvable
+        when the vpc dhcp option set does not point at the route53 resolver.
+        """
+        return self.private_ip_address
+
+    @property
+    def legacy_node_host(self) -> Optional[str]:
+        """
+        node name used before the switch to private ipv4. looked up, never registered.
+        """
+        return self.private_dns_name
+
+    @property
+    def node_host_candidates(self) -> List[str]:
+        """
+        names to look this instance up by, current name first.
+        an upgraded cluster still carries nodes registered under the legacy name.
+        """
+        candidates = []
+        for host in (self.node_host, self.legacy_node_host):
+            if ModelUtils.is_empty(host):
+                continue
+            if host in candidates:
+                continue
+            candidates.append(host)
+        return candidates
 
     @property
     def product_codes(self) -> Optional[List[Dict]]:

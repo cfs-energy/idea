@@ -19,6 +19,7 @@ import {IdeaFormField} from "../../../components/form-field";
 import moment from "moment";
 import {Alert, Box, Button, ColumnLayout, Form, Header, Modal, SpaceBetween} from "@cloudscape-design/components";
 import {AppContext} from "../../../common";
+import Utils from "../../../common/utils";
 
 // Day Of Week Schedule Component
 
@@ -35,7 +36,7 @@ interface VirtualDesktopDayOfWeekScheduleState {
 
 class VirtualDesktopDayOfWeekSchedule extends Component<VirtualDesktopDayOfWeekScheduleProps, VirtualDesktopDayOfWeekScheduleState> {
 
-    timeRangeSlider: RefObject<IdeaTimeRangeSlider>
+    timeRangeSlider: RefObject<IdeaTimeRangeSlider | null>
 
     constructor(props: VirtualDesktopDayOfWeekScheduleProps) {
         super(props);
@@ -134,17 +135,20 @@ interface VirtualDesktopScheduleModalState {
     currentTime: any
     working_hours_start: string
     working_hours_end: string
+    idle_autostop_delay?: number
+    idle_autostop_delay_default: number
+    idle_autostop_delay_max: number
 }
 
 class VirtualDesktopScheduleModal extends Component<VirtualDesktopScheduleModalProps, VirtualDesktopScheduleModalState> {
 
-    mondaySchedule: RefObject<VirtualDesktopDayOfWeekSchedule>
-    tuesdaySchedule: RefObject<VirtualDesktopDayOfWeekSchedule>
-    wednesdaySchedule: RefObject<VirtualDesktopDayOfWeekSchedule>
-    thursdaySchedule: RefObject<VirtualDesktopDayOfWeekSchedule>
-    fridaySchedule: RefObject<VirtualDesktopDayOfWeekSchedule>
-    saturdaySchedule: RefObject<VirtualDesktopDayOfWeekSchedule>
-    sundaySchedule: RefObject<VirtualDesktopDayOfWeekSchedule>
+    mondaySchedule: RefObject<VirtualDesktopDayOfWeekSchedule | null>
+    tuesdaySchedule: RefObject<VirtualDesktopDayOfWeekSchedule | null>
+    wednesdaySchedule: RefObject<VirtualDesktopDayOfWeekSchedule | null>
+    thursdaySchedule: RefObject<VirtualDesktopDayOfWeekSchedule | null>
+    fridaySchedule: RefObject<VirtualDesktopDayOfWeekSchedule | null>
+    saturdaySchedule: RefObject<VirtualDesktopDayOfWeekSchedule | null>
+    sundaySchedule: RefObject<VirtualDesktopDayOfWeekSchedule | null>
 
     clockInterval: any
 
@@ -166,7 +170,10 @@ class VirtualDesktopScheduleModal extends Component<VirtualDesktopScheduleModalP
             saveLoading: false,
             currentTime: null,
             working_hours_start: '',
-            working_hours_end: ''
+            working_hours_end: '',
+            idle_autostop_delay: undefined,
+            idle_autostop_delay_default: 0,
+            idle_autostop_delay_max: 0
         }
     }
 
@@ -174,7 +181,9 @@ class VirtualDesktopScheduleModal extends Component<VirtualDesktopScheduleModalP
         AppContext.get().getClusterSettingsService().getVirtualDesktopSettings().then(settings => {
             this.setState({
                 working_hours_start: settings.dcv_session.working_hours.start_up_time,
-                working_hours_end: settings.dcv_session.working_hours.shut_down_time
+                working_hours_end: settings.dcv_session.working_hours.shut_down_time,
+                idle_autostop_delay_default: Utils.asNumber(settings.dcv_session.idle_autostop_delay, 0),
+                idle_autostop_delay_max: Utils.asNumber(settings.dcv_session.idle_autostop_delay_max, 0)
             })
         })
         this.clockInterval = setInterval(() => {
@@ -191,7 +200,8 @@ class VirtualDesktopScheduleModal extends Component<VirtualDesktopScheduleModalP
     showSchedule(session: VirtualDesktopSession) {
         this.setState({
             visible: true,
-            session: session
+            session: session,
+            idle_autostop_delay: session.idle_autostop_delay
         })
     }
 
@@ -200,8 +210,17 @@ class VirtualDesktopScheduleModal extends Component<VirtualDesktopScheduleModalP
             visible: false,
             session: null,
             errorMessage: null,
-            saveLoading: false
+            saveLoading: false,
+            idle_autostop_delay: undefined
         })
+    }
+
+    // 0 clears the override, so that the session falls back to the cluster default
+    getIdleAutoStopDelay(): number | undefined {
+        if (this.state.idle_autostop_delay_max <= 0) {
+            return undefined
+        }
+        return Utils.asNumber(this.state.idle_autostop_delay, 0)
     }
 
     save() {
@@ -219,7 +238,8 @@ class VirtualDesktopScheduleModal extends Component<VirtualDesktopScheduleModalP
                 errorMessage: null,
                 session: {
                     ...this.state.session,
-                    schedule: weekSchedule
+                    schedule: weekSchedule,
+                    idle_autostop_delay: this.getIdleAutoStopDelay()
                 },
                 saveLoading: true
             }, () => {
@@ -279,6 +299,30 @@ class VirtualDesktopScheduleModal extends Component<VirtualDesktopScheduleModalP
 
                     <Form errorText={this.state.errorMessage}>
                         <ColumnLayout columns={1}>
+                            {this.state.idle_autostop_delay_max > 0 &&
+                                <IdeaFormField
+                                    key={`idle-autostop-delay-${this.state.session?.idea_session_id}`}
+                                    module={"idleAutoStop"}
+                                    param={{
+                                        name: 'idle_autostop_delay',
+                                        title: 'Stop On Idle after (minutes)',
+                                        description: `How long your virtual desktop stays idle before it is stopped. Set to 0 to use the cluster default of ${this.state.idle_autostop_delay_default} minutes. Your administrator allows up to ${this.state.idle_autostop_delay_max} minutes.`,
+                                        param_type: 'text',
+                                        data_type: 'int',
+                                        default: this.state.idle_autostop_delay,
+                                        validate: {
+                                            required: false,
+                                            min: 0,
+                                            max: this.state.idle_autostop_delay_max
+                                        }
+                                    }}
+                                    onStateChange={(event) => {
+                                        this.setState({
+                                            idle_autostop_delay: event.value
+                                        })
+                                    }}
+                                />
+                            }
                             <VirtualDesktopDayOfWeekSchedule
                                 ref={this.mondaySchedule}
                                 dayOfWeek="Monday"

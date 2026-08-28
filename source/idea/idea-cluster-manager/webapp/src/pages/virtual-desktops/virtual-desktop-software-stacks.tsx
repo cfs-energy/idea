@@ -140,10 +140,10 @@ const VIRTUAL_DESKTOP_SOFTWARE_STACKS_TABLE_COLUMN_DEFINITIONS: TableProps.Colum
 
 class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStacksProps, VirtualDesktopSoftwareStacksState> {
 
-    listing: RefObject<IdeaListView>
-    createSoftwareStackForm: RefObject<IdeaForm>
-    editSoftwareStackForm: RefObject<VirtualDesktopSoftwareStackEditForm>
-    softwareStackActionConfirmModal: RefObject<IdeaConfirm>
+    listing: RefObject<IdeaListView | null>
+    createSoftwareStackForm: RefObject<IdeaForm | null>
+    editSoftwareStackForm: RefObject<VirtualDesktopSoftwareStackEditForm | null>
+    softwareStackActionConfirmModal: RefObject<IdeaConfirm | null>
 
     constructor(props: VirtualDesktopSoftwareStacksProps) {
         super(props);

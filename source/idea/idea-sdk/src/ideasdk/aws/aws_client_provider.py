@@ -53,6 +53,8 @@ AWS_RESOURCE_DYNAMODB_TABLE = 'dynamodb.table'
 AWS_RESOURCE_S3_BUCKET = 's3.bucket'
 AWS_CLIENT_RESOURCE_GROUPS_TAGGING_API = 'resourcegroupstaggingapi'
 AWS_CLIENT_BACKUP = 'backup'
+AWS_CLIENT_BEDROCK = 'bedrock'
+AWS_CLIENT_COST_EXPLORER = 'ce'
 
 SUPPORTED_CLIENTS = {
     AWS_CLIENT_S3,
@@ -87,9 +89,17 @@ SUPPORTED_CLIENTS = {
     AWS_CLIENT_KINESIS_STREAM,
     AWS_CLIENT_RESOURCE_GROUPS_TAGGING_API,
     AWS_CLIENT_BACKUP,
+    AWS_CLIENT_BEDROCK,
+    AWS_CLIENT_COST_EXPLORER,
 }
 
 DEFAULT_PRICING_API_REGION = 'us-east-1'
+
+# cost explorer is a single global endpoint, and it has none outside the aws partition.
+COST_EXPLORER_REGION = 'us-east-1'
+COST_EXPLORER_CLIENT_CONFIG = Config(
+    connect_timeout=5, read_timeout=10, retries={'max_attempts': 2, 'mode': 'standard'}
+)
 
 
 class AwsServiceEndpoint(SocaBaseModel):
@@ -193,6 +203,10 @@ class AwsClientProvider(AwsClientProviderProtocol):
                 config = None
                 if service_name == AWS_CLIENT_S3:
                     config = Config(signature_version='s3v4')
+                elif service_name == AWS_CLIENT_COST_EXPLORER:
+                    # reporting only, and it is reached over the internet: an api read
+                    # waiting on it must fail quickly rather than hold up its caller.
+                    config = COST_EXPLORER_CLIENT_CONFIG
 
                 aws_endpoint = self.get_service_endpoint_url(service_name)
                 client = self._session.client(
@@ -285,6 +299,14 @@ class AwsClientProvider(AwsClientProviderProtocol):
 
     def iam(self):
         return self.get_client(service_name=AWS_CLIENT_IAM)
+
+    def bedrock(self):
+        return self.get_client(service_name=AWS_CLIENT_BEDROCK)
+
+    def cost_explorer(self):
+        return self.get_client(
+            service_name=AWS_CLIENT_COST_EXPLORER, region_name=COST_EXPLORER_REGION
+        )
 
     def cloudformation(self):
         return self.get_client(service_name=AWS_CLIENT_CLOUDFORMATION)

@@ -41,7 +41,7 @@ PATH={{ path }}
 
 source /etc/environment
 
-{% if context.base_os in ('amazonlinux2023') %}
+{% if context.base_os == 'amazonlinux2023' %}
 dnf -y install cronie
 systemctl enable crond
 systemctl start crond
@@ -102,16 +102,23 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
 {% include '_templates/linux/disable_se_linux.jinja2' %}
 
+{% set rpm_based = context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
+{# openldap_server carries rpm package names; the deb equivalents are in openldap_client_deb, which
+   system_packages.jinja2 installs above #}
+{% if rpm_based %}
 log_info "Installing LDAP packages ..."
 OPENLDAP_SERVER_PKGS=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.openldap_server', required=True)) }})
 yum install --skip-broken -y ${OPENLDAP_SERVER_PKGS[*]}
+{% endif %}
 
 {% if context.base_os == 'amazonlinux2023' %}
   {% include '_templates/linux/putty.jinja2' %}
-{% else %}
+{% elif rpm_based %}
 log_info "Installing Putty packages ..."
 PUTTY_PKGS=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.putty', required=True)) }})
 yum install --skip-broken -y ${PUTTY_PKGS[*]}
+{% else %}
+log_warning "No puttygen package configured for {{ context.base_os }}: .pem to .ppk conversion is unavailable"
 {% endif %}
 
 {% with alias_prefix = 'idea', install_dir = '/opt/idea/python' %}

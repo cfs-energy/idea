@@ -1,4 +1,4 @@
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
 tee /etc/apt/apt.conf.d/20auto-upgrades > /dev/null << EOF
 APT::Periodic::Update-Package-Lists "0";
 APT::Periodic::Download-Upgradeable-Packages "0";

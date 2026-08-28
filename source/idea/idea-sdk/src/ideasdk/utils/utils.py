@@ -740,11 +740,13 @@ class Utils:
         """
         returns the name of the platform given a supported base os
         raises INVALID_PARAMS for an unsupported OS
+        EOL values still resolve, so existing records stay readable. rejecting an EOL base_os
+        belongs at the entry points that validate it, not here.
         """
         # Simplified Windows detection to match all Windows variations
         if 'windows' in str(base_os).lower():
             return constants.PLATFORM_WINDOWS
-        elif base_os in constants.SUPPORTED_LINUX_OS:
+        elif base_os in constants.SUPPORTED_LINUX_OS or base_os in constants.EOL_BASEOS:
             return constants.PLATFORM_LINUX
         raise exceptions.invalid_params(
             f'unable to determine platform for base_os: {base_os}'

@@ -150,6 +150,8 @@ List of additional IAM instance profile(s) users can override via [#instance\_pr
 You must ensure your IAM role(s) have been created with the correct policies. Failure to do so may prevent your jobs to start
 {% endhint %}
 
+When this list is set and Bedrock is enabled for jobs, it must also include the instance profile of every Bedrock enabled project whose jobs use this queue. Those jobs run under the project's instance profile, and a list that omits it rejects them at submission. Leaving the list empty authorizes any instance profile, as before.
+
 ### Instance Info
 
 #### Compute Node OS
@@ -180,7 +182,7 @@ Associated Job Resource: [#keep\_ebs](../user-documentation/supported-ec2-parame
 
 #### Enable EFA Support ?
 
-Choose whether or not you want to enable EFA support. You must be using a supported instance type ([https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/efa.html#efa-instance-types](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/efa.html#efa-instance-types))
+Choose whether or not you want to enable EFA support. You must be using a supported instance type ([https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/efa.html#efa-instance-types](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/efa.html#efa-instance-types)) and a `base_os` with EFA bootstrap support. See [Supported OS & hardware matrix](../user-documentation/supported-os-hardware-matrix.md#efa-support).
 
 Associated Job Resource: [#efa\_support](../user-documentation/supported-ec2-parameters.md#efa\_support "mention")
 

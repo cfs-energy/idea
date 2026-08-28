@@ -40,8 +40,8 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
     For each queue provided in the queue profile, a scheduler queue is automatically created if the queue
     does not already exist in the scheduler.
 
-    If a queue profile is deleted, scheduler queues are also deleted. Queue deletion errors are logged and no further
-    action is taken.
+    If a queue profile is deleted, scheduler queues are also deleted. A queue that cannot be deleted (eg. jobs are
+    still queued or running) is left enabled and accepting jobs, and the failure is raised to the caller.
     """
 
     def __init__(self, context: ideascheduler.AppContext):
@@ -344,29 +344,52 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
 
         db_updates = self.queue_profile_dao.convert_to_db(queue_profile)
 
+        existing_queues = Utils.get_as_list(existing_queue_profile.queues, [])
+        # an update that carries no queues means no queue changes, never delete them all
+        new_queues = Utils.get_as_list(queue_profile.queues, existing_queues)
+        queues_to_delete = list(set(existing_queues) - set(new_queues))
+        queues_to_create = list(set(new_queues) - set(existing_queues))
+
+        # scheduler queues are reconciled before the profile is persisted, so it never lists
+        # a queue the scheduler lacks. create runs first so a failed create can't have deleted one.
+        if Utils.is_not_empty(queues_to_create):
+            self._create_queues(queue_names=queues_to_create)
+
+        queue_deletion_failures = {}
+        if Utils.is_not_empty(queues_to_delete):
+            queue_deletion_failures = self._delete_queues(queue_names=queues_to_delete)
+
+        # a queue that could not be deleted is still live in the scheduler: keep it on the
+        # profile so its queued jobs keep a servicing provisioner.
+        retained_queues = [
+            queue_name
+            for queue_name in existing_queues
+            if queue_name in queue_deletion_failures
+        ]
+
         # perform db update
         db_updated_queue_profile = self.queue_profile_dao.update(
-            {**db_updates, 'queue_profile_id': existing_queue_profile.queue_profile_id}
+            {
+                **db_updates,
+                'queue_profile_id': existing_queue_profile.queue_profile_id,
+                'queues': new_queues + retained_queues,
+            }
         )
 
         updated_queue_profile = self.queue_profile_dao.convert_from_db(
             db_updated_queue_profile
         )
 
-        existing_queues = Utils.get_as_list(existing_queue_profile.queues, [])
-        new_queues = Utils.get_as_list(updated_queue_profile.queues, [])
-        queues_to_delete = list(set(existing_queues) - set(new_queues))
-        queues_to_create = list(set(new_queues) - set(existing_queues))
-
-        if Utils.is_not_empty(queues_to_delete):
-            self._delete_queues(queue_names=queues_to_delete)
-        if Utils.is_not_empty(queues_to_create):
-            self._create_queues(queue_names=queues_to_create)
-
         self.cache_set(updated_queue_profile)
 
         # reinitialize job provisioner (if applicable)
         self.initialize_job_provisioner(updated_queue_profile)
+
+        if queue_deletion_failures:
+            raise self._queue_deletion_failed_exception(
+                failures=queue_deletion_failures,
+                message=f'queue profile: {updated_queue_profile.name} updated',
+            )
 
         return updated_queue_profile
 
@@ -378,11 +401,20 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
     ):
         queue_profile = self.get_queue_profile(queue_profile_id, queue_profile_name)
 
-        self.stop_job_provisioner(queue_profile)
-
+        # scheduler queues go first: a queue that cannot be deleted (busy) keeps the
+        # profile, its cache entry and its provisioner as they are.
         delete_queues = Utils.get_as_bool(delete_queues, True)
         if delete_queues and Utils.is_not_empty(queue_profile.queues):
-            self._delete_queues(queue_names=queue_profile.queues)
+            queue_deletion_failures = self._delete_queues(
+                queue_names=queue_profile.queues
+            )
+            if queue_deletion_failures:
+                raise self._queue_deletion_failed_exception(
+                    failures=queue_deletion_failures,
+                    message=f'queue profile: {queue_profile.name} not deleted',
+                )
+
+        self.stop_job_provisioner(queue_profile)
 
         self.cache_clear(queue_profile)
 
@@ -435,11 +467,17 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
         created_count = self._create_queues(queue_names)
         reinitialize_provisioner = created_count > 0
 
+        # dao.update() replaces the queues attribute, so the profile's existing queues
+        # must be carried over. order is preserved and duplicates are dropped.
+        existing_queues = Utils.get_as_list(queue_profile.queues, [])
+        updated_queues = list(existing_queues)
+        for queue_name in queue_names:
+            if queue_name not in updated_queues:
+                updated_queues.append(queue_name)
+
         if not reinitialize_provisioner:
             # find delta between existing queue names and new queue names
-            existing_queues = set(queue_profile.queues)
-            new_queues = set(queue_names)
-            reinitialize_provisioner = len(new_queues - existing_queues) > 0
+            reinitialize_provisioner = len(updated_queues) > len(existing_queues)
 
         # no change, nothing to do
         if not reinitialize_provisioner:
@@ -448,7 +486,7 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
         if update_db:
             db_queue_profile = {
                 'queue_profile_id': queue_profile_id,
-                'queues': queue_names,
+                'queues': updated_queues,
             }
             db_updated_queue_profile = self.queue_profile_dao.update(db_queue_profile)
             queue_profile = self.queue_profile_dao.convert_from_db(
@@ -458,20 +496,46 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
 
         self.initialize_job_provisioner(queue_profile)
 
-    def _delete_queues(self, queue_names: List[str]) -> int:
+    def _delete_queues(
+        self, queue_names: List[str]
+    ) -> Dict[str, exceptions.SocaException]:
         """
         Calls scheduler delete queues for all queues provided in queue_names
         :param queue_names:
-        :return: count of queues deleted successfully
+        :return: queue names that could not be deleted, mapped to the scheduler failure
         """
-        deleted_queues = 0
+        failures: Dict[str, exceptions.SocaException] = {}
         for queue_name in queue_names:
             try:
                 self.context.scheduler.delete_queue(queue_name=queue_name)
-                deleted_queues += 1
             except exceptions.SocaException as e:
-                self.logger.error(f'failed to delete scheduler queue: {e}')
-        return deleted_queues
+                self.logger.error(
+                    f'failed to delete scheduler queue: {queue_name}: {e}'
+                )
+                failures[queue_name] = e
+        return failures
+
+    @staticmethod
+    def _queue_deletion_failed_exception(
+        failures: Dict[str, exceptions.SocaException], message: str
+    ) -> exceptions.SocaException:
+        """
+        builds the exception to be raised when scheduler queues could not be deleted.
+        the queues are left enabled and accepting jobs - an operator must drain and delete them.
+        """
+        error_codes = set(failure.error_code for failure in failures.values())
+        if len(error_codes) == 1:
+            error_code = error_codes.pop()
+        else:
+            error_code = errorcodes.SCHEDULER_ERROR
+        entries = ', '.join(
+            f'{queue_name}: {failure.message}'
+            for queue_name, failure in sorted(failures.items())
+        )
+        return exceptions.soca_exception(
+            error_code=error_code,
+            message=f'{message}, but below scheduler queues could not be deleted and are still active: {entries}',
+        )
 
     def delete_queues(
         self,
@@ -486,20 +550,23 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
 
         queue_profile = self.get_queue_profile(queue_profile_id, queue_profile_name)
 
-        updated_queues = queue_profile.queues
+        # copy: a validation failure below must not leave the cached profile mutated
+        updated_queues = list(Utils.get_as_list(queue_profile.queues, []))
         for queue_name in queue_names:
-            if queue_name not in queue_profile.queues:
+            if queue_name not in updated_queues:
                 raise exceptions.invalid_params(
                     f'queue name: {queue_name} is not associated with queue profile: {queue_profile.name}'
                 )
             updated_queues.remove(queue_name)
 
-        self._delete_queues(queue_names)
+        queue_deletion_failures = self._delete_queues(queue_names)
 
         if update_db:
+            # dao.update() replaces the queues attribute: write the remaining queues,
+            # not the deleted ones.
             db_queue_profile = {
                 'queue_profile_id': queue_profile_id,
-                'queues': queue_names,
+                'queues': updated_queues,
             }
             db_updated_queue_profile = self.queue_profile_dao.update(db_queue_profile)
             queue_profile = self.queue_profile_dao.convert_from_db(
@@ -509,6 +576,12 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
 
         if initialize_job_provisioner:
             self.initialize_job_provisioner(queue_profile)
+
+        if queue_deletion_failures:
+            raise self._queue_deletion_failed_exception(
+                failures=queue_deletion_failures,
+                message=f'queues removed from queue profile: {queue_profile.name}',
+            )
 
     def start(self):
         if self._is_running:

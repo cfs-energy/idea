@@ -262,8 +262,22 @@ mappings:
           type: text
     hibernation_enabled:
       type: boolean
+    idle_autostop_delay:
+      type: integer
+    failure_reason:
+      type: text
     is_launched_by_admin:
       type: boolean
+    cleanup_exempt:
+      type: boolean
+    cleanup_exempt_reason:
+      type: text
+    cleanup_warning_sent_on:
+      type: date
+      format: epoch_millis
+    cleanup_warning_stop_time:
+      type: date
+      format: epoch_millis
     server:
       properties:
         instance_id:

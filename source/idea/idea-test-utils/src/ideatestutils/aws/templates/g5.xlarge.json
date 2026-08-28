@@ -1,0 +1,110 @@
+{
+  "InstanceType": "g5.xlarge",
+  "CurrentGeneration": true,
+  "FreeTierEligible": false,
+  "SupportedUsageClasses": [
+    "on-demand",
+    "spot"
+  ],
+  "SupportedRootDeviceTypes": [
+    "ebs"
+  ],
+  "SupportedVirtualizationTypes": [
+    "hvm"
+  ],
+  "BareMetal": false,
+  "Hypervisor": "nitro",
+  "ProcessorInfo": {
+    "SupportedArchitectures": [
+      "x86_64"
+    ],
+    "SustainedClockSpeedInGhz": 3.3
+  },
+  "VCpuInfo": {
+    "DefaultVCpus": 4,
+    "DefaultCores": 2,
+    "DefaultThreadsPerCore": 2,
+    "ValidCores": [
+      2
+    ],
+    "ValidThreadsPerCore": [
+      1,
+      2
+    ]
+  },
+  "MemoryInfo": {
+    "SizeInMiB": 16384
+  },
+  "InstanceStorageSupported": true,
+  "InstanceStorageInfo": {
+    "TotalSizeInGB": 250,
+    "Disks": [
+      {
+        "SizeInGB": 250,
+        "Count": 1,
+        "Type": "ssd"
+      }
+    ],
+    "NvmeSupport": "required"
+  },
+  "EbsInfo": {
+    "EbsOptimizedSupport": "default",
+    "EncryptionSupport": "supported",
+    "EbsOptimizedInfo": {
+      "BaselineBandwidthInMbps": 700,
+      "BaselineThroughputInMBps": 87.5,
+      "BaselineIops": 3000,
+      "MaximumBandwidthInMbps": 3500,
+      "MaximumThroughputInMBps": 437.5,
+      "MaximumIops": 15000
+    },
+    "NvmeSupport": "required"
+  },
+  "GpuInfo": {
+    "Gpus": [
+      {
+        "Name": "A10G",
+        "Manufacturer": "NVIDIA",
+        "Count": 1,
+        "MemoryInfo": {
+          "SizeInMiB": 23028
+        }
+      }
+    ],
+    "TotalGpuMemoryInMiB": 23028
+  },
+  "NetworkInfo": {
+    "NetworkPerformance": "Up to 10 Gigabit",
+    "MaximumNetworkInterfaces": 4,
+    "MaximumNetworkCards": 1,
+    "DefaultNetworkCardIndex": 0,
+    "NetworkCards": [
+      {
+        "NetworkCardIndex": 0,
+        "NetworkPerformance": "Up to 10 Gigabit",
+        "MaximumNetworkInterfaces": 4
+      }
+    ],
+    "Ipv4AddressesPerInterface": 15,
+    "Ipv6AddressesPerInterface": 15,
+    "Ipv6Supported": true,
+    "EnaSupport": "required",
+    "EfaSupported": false,
+    "EncryptionInTransitSupported": true
+  },
+  "PlacementGroupInfo": {
+    "SupportedStrategies": [
+      "cluster",
+      "partition",
+      "spread"
+    ]
+  },
+  "HibernationSupported": false,
+  "BurstablePerformanceSupported": false,
+  "DedicatedHostsSupported": true,
+  "AutoRecoverySupported": false,
+  "SupportedBootModes": [
+    "legacy-bios",
+    "uefi"
+  ]
+}

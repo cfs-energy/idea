@@ -1,0 +1,14 @@
+# actions/checkout stores the runner token in .git/config
+^\.git/
+^venv/
+^node_modules/
+/node_modules/
+^build/
+^dist/
+__pycache__/
+\.ruff_cache/
+\.pytest_cache/
+^source/idea/idea-cluster-manager/webapp/build/
+# lockfiles carry git commit hashes that the GitHub token detector flags
+yarn\.lock$
+package-lock\.json$

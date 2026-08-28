@@ -45,10 +45,11 @@ async def options_handler(_, methods) -> response.HTTPResponse:
 
 
 def setup_options(app: Sanic, _):
-    app.router.reset()
     needs_options = _compile_routes_needing_options(app.router.routes_all)
-    for uri, methods in needs_options.items():
-        app.add_route(
-            _options_wrapper(options_handler, methods), uri, methods=['OPTIONS']
-        )
-    app.router.finalize()
+    # amend() re-runs the app-level finalization that attaches per-route middleware; calling
+    # app.router.reset()/finalize() directly skips it, leaving these routes without it.
+    with app.amend():
+        for uri, methods in needs_options.items():
+            app.add_route(
+                _options_wrapper(options_handler, methods), uri, methods=['OPTIONS']
+            )

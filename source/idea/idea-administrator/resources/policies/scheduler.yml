@@ -208,6 +208,20 @@ Statement:
       - '{{ context.vars.spot_fleet_request_role_arn }}'
     Effect: Allow
 
+  {% if context.config.get_bool(context.config.get_module_id('cluster-manager') + '.bedrock.enabled', False) and context.config.get_bool(context.module_id + '.bedrock.enabled', False) %}
+  # scoped to roles under the per-project IAM path, passed only to ec2; enabling bedrock for jobs requires redeploying this module along with cluster-manager.
+  - Condition:
+      StringEquals:
+        iam:PassedToService:
+          - ec2.{{ context.aws_dns_suffix }}
+    Action:
+      - iam:PassRole
+    Resource:
+      - '{{ context.arns.get_project_role_arn() }}'
+    Effect: Allow
+    Sid: PassProjectRoles
+  {% endif %}
+
   - Action:
       - cloudwatch:PutMetricData
     Resource: '*'

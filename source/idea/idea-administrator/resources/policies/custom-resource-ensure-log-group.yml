@@ -1,0 +1,17 @@
+Version: '2012-10-17'
+Statement:
+  - Action:
+      - logs:CreateLogGroup
+      - logs:CreateLogStream
+      - logs:DeleteLogStream
+      - logs:PutLogEvents
+    Resource: '{{ context.arns.get_lambda_log_group_arn() }}'
+    Effect: Allow
+    Sid: CloudWatchLogsPermissions
+
+  - Action:
+      - logs:CreateLogGroup
+      - logs:PutRetentionPolicy
+    Resource: '{{ context.arns.bedrock_invocation_log_group_arn }}'
+    Effect: Allow
+    Sid: EnsureBedrockInvocationLogGroup

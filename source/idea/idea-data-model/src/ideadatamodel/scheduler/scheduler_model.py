@@ -692,6 +692,11 @@ class SocaJob(SocaBaseModel):
     exit_status: Optional[int] = Field(default=None, strict=False)
     provisioned: Optional[bool] = Field(default=None)
     error_message: Optional[str] = Field(default=None)
+    # waiting signals: computed per request on the active-jobs read path, never persisted
+    # with the job. elapsed queue time isn't here - the client derives it from queue_time/start_time.
+    provisioning_attempt: Optional[int] = Field(default=None)
+    max_provisioning_attempts: Optional[int] = Field(default=None)
+    blocking_limit_type: Optional[str] = Field(default=None)
     queue_time: Optional[datetime] = Field(default=None)
     provisioning_time: Optional[datetime] = Field(default=None)
     start_time: Optional[datetime] = Field(default=None)
@@ -713,7 +718,7 @@ class SocaJob(SocaBaseModel):
 
         if self.start_time is not None and self.end_time is not None:
             delta = self.end_time - self.start_time
-            return delta.seconds
+            return int(delta.total_seconds())
 
         if self.params is None:
             return None
@@ -859,6 +864,19 @@ class SocaJob(SocaBaseModel):
         if self.params.job_group is not None:
             return self.params.job_group
 
+        tokens = self.get_capacity_signature_tokens()
+        digest = hashlib.shake_256(':'.join(tokens).encode('utf-8')).hexdigest(4)
+        return f'g{digest}'
+
+    def get_capacity_signature_tokens(self) -> List[str]:
+        """
+        parameters that define the identity of provisioned capacity.
+        changing this list re-keys every computed job group: existing shared stacks
+        stop matching new jobs and age out via terminate_when_idle.
+        """
+        if self.params is None:
+            raise exceptions.invalid_job('params not found')
+
         cluster_name = self.cluster_name
         if cluster_name is None:
             raise exceptions.invalid_job('cluster_name not found')
@@ -879,6 +897,10 @@ class SocaJob(SocaBaseModel):
         if instance_ami is None or ModelUtils.is_empty(instance_ami):
             raise exceptions.invalid_job('params.instance_ami not found')
 
+        base_os = self.params.base_os
+        if base_os is None or ModelUtils.is_empty(base_os):
+            raise exceptions.invalid_job('params.base_os not found')
+
         enable_ht_support = self.params.enable_ht_support
         if enable_ht_support is None:
             raise exceptions.invalid_job('params.enable_ht_support not found')
@@ -886,7 +908,36 @@ class SocaJob(SocaBaseModel):
 
         capacity_type = str(self.capacity_type())
 
-        tokens = [
+        def opt(value) -> str:
+            return '' if value is None else str(value)
+
+        def flag(value) -> str:
+            return str(ModelUtils.get_as_bool(value, False)).lower()
+
+        fsx_lustre = self.params.fsx_lustre
+        if fsx_lustre is not None and ModelUtils.is_true(fsx_lustre.enabled):
+            fsx_lustre_token = ','.join(
+                [
+                    'true',
+                    opt(fsx_lustre.existing_fsx),
+                    opt(fsx_lustre.s3_backend),
+                    opt(fsx_lustre.import_path),
+                    opt(fsx_lustre.export_path),
+                    opt(fsx_lustre.deployment_type),
+                    opt(fsx_lustre.per_unit_throughput),
+                    opt(fsx_lustre.size),
+                ]
+            )
+        else:
+            fsx_lustre_token = 'false'
+
+        spot_price = self.params.spot_price
+        spot_price_token = opt(spot_price.amount if spot_price is not None else None)
+
+        security_groups = self.params.security_groups
+        subnet_ids = self.params.subnet_ids
+
+        return [
             cluster_name,
             queue_type,
             queue,
@@ -894,10 +945,35 @@ class SocaJob(SocaBaseModel):
             instance_ami,
             enable_ht_support,
             capacity_type,
+            base_os,
+            flag(self.params.enable_efa_support),
+            flag(self.params.enable_instance_store),
+            flag(self.params.enable_placement_group),
+            flag(self.params.enable_system_metrics),
+            flag(self.params.enable_anonymous_metrics),
+            flag(self.params.enable_scratch),
+            opt(self.params.scratch_provider),
+            opt(self.params.scratch_storage_size),
+            opt(self.params.scratch_storage_iops),
+            fsx_lustre_token,
+            opt(self.params.root_storage_size),
+            flag(self.params.keep_ebs_volumes),
+            opt(self.params.instance_profile),
+            ','.join(security_groups) if security_groups else '',
+            ','.join(subnet_ids) if subnet_ids else '',
+            spot_price_token,
+            opt(self.params.spot_allocation_count),
+            opt(self.params.spot_allocation_strategy),
         ]
 
-        digest = hashlib.shake_256(':'.join(tokens).encode('utf-8')).hexdigest(4)
-        return f'g{digest}'
+    def get_capacity_signature(self) -> str:
+        """
+        digest of the complete capacity signature. unlike get_job_group, this is
+        always computed from job params and is never overridden by a custom job_group.
+        """
+        tokens = self.get_capacity_signature_tokens()
+        digest = hashlib.shake_256(':'.join(tokens).encode('utf-8')).hexdigest(8)
+        return f's{digest}'
 
     def capacity_type(self) -> SocaCapacityType:
         if self.params is None:
@@ -1261,7 +1337,7 @@ class SocaComputeNode(SocaBaseModel):
 
     def seconds_since_launch(self) -> int:
         delta = arrow.utcnow() - self.launch_time
-        return delta.seconds
+        return int(delta.total_seconds())
 
     def has_state(self, *state: SocaComputeNodeState) -> bool:
         if self.states is None:
@@ -1332,7 +1408,7 @@ class SocaComputeNode(SocaBaseModel):
             auto_scaling_group = instance.aws_autoscaling_group_name
 
         return SocaComputeNode(
-            host=instance.private_dns_name,
+            host=instance.node_host,
             cluster_name=instance.soca_cluster_name,
             queue=instance.soca_job_queue,
             queue_type=instance.soca_queue_type,
@@ -1363,6 +1439,7 @@ class SocaQueueManagementParams(SocaBaseModel):
     max_running_jobs: Optional[int] = Field(default=None)
     max_provisioned_instances: Optional[int] = Field(default=None)
     max_provisioned_capacity: Optional[int] = Field(default=None)
+    max_nodes_per_job: Optional[int] = Field(default=None)
     wait_on_any_job_with_license: Optional[bool] = Field(default=None)
     allowed_instance_types: Optional[List[str]] = Field(default=None)
     excluded_instance_types: Optional[List[str]] = Field(default=None)
@@ -1692,7 +1769,7 @@ class JobUpdate(SocaBaseModel):
 
     def is_applicable(self, now: arrow.Arrow, delay_secs: float = 4) -> bool:
         delta = now - self.timestamp
-        return delta.seconds >= delay_secs
+        return delta.total_seconds() >= delay_secs
 
 
 class JobUpdates(SocaBaseModel):

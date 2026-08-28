@@ -11,9 +11,10 @@
  * and limitations under the License.
  */
 
-import {Button, Popover, StatusIndicator} from "@cloudscape-design/components";
+import {Box, Button, Popover, SpaceBetween, StatusIndicator} from "@cloudscape-design/components";
 import Utils from "../../common/utils";
 import React from "react";
+import {Project} from "../../client/data-model";
 
 export interface EnabledDisabledStatusIndicatorProps {
     enabled: boolean
@@ -41,4 +42,46 @@ export function CopyToClipBoard(props: CopyToClipBoardProps) {
     >
         <Button variant={"inline-icon"} onClick={() => Utils.copyToClipBoard(props.text)} iconName={"copy"}/>
     </Popover>)
+}
+
+export interface ProjectBedrockModelsProps {
+    project?: Project
+}
+
+// the profile arn is what the project policy allows a client to pass, so say so rather than leaving
+// the user to guess between the two strings.
+export function ProjectBedrockModels(props: ProjectBedrockModelsProps) {
+    const bedrock = props.project?.bedrock
+    if (!bedrock?.enabled) {
+        return <span style={{color: 'grey'}}> -- </span>
+    }
+    const modelIds = bedrock.model_ids
+    if (!modelIds || modelIds.length === 0) {
+        return <span style={{color: 'grey'}}>None</span>
+    }
+    const profileArns = bedrock.inference_profile_arns ?? {}
+    return (
+        <SpaceBetween size="xxs" direction="vertical">
+            <Box fontSize="body-s" color="text-body-secondary">
+                Pass the profile below as the model id. The model name on its own is refused.
+            </Box>
+            {
+                modelIds.map((modelId, index) => {
+                    const profileArn = profileArns[modelId]
+                    return (
+                        <div key={index}>
+                            <Box variant="awsui-key-label">{modelId}</Box>
+                            {profileArn
+                                ? <Box fontSize="body-s" color="text-body-secondary">
+                                    {profileArn}
+                                    <CopyToClipBoard text={profileArn} feedback="Copied"/>
+                                </Box>
+                                : <Box fontSize="body-s" color="text-status-inactive">Not provisioned yet</Box>
+                            }
+                        </div>
+                    )
+                })
+            }
+        </SpaceBetween>
+    )
 }

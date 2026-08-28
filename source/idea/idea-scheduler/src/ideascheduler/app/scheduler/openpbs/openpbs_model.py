@@ -277,9 +277,8 @@ class OpenPBSJob(SocaBaseModel):
         resources = self.Resource_List
         if resources is None:
             return None
-        if 'error_message' in resources:
-            return resources['error_message']
-        return None
+        # error_message is unset by writing an empty value
+        return Utils.get_value_as_string('error_message', resources)
 
     def get_notifications(self) -> Optional[SocaJobNotifications]:
         flags = Utils.get_as_string(self.Mail_Points)
@@ -339,7 +338,11 @@ class OpenPBSJob(SocaBaseModel):
             for host in execution_hosts:
                 soca_execution_hosts.append(SocaJobExecutionHost(host=host))
         elif event.type.startswith('execjob_'):
-            host = event.requestor_host.split('.')[0]
+            # the name the mom is registered under. requestor_host is its resolved
+            # hostname, which is a different string once nodes register by ipv4.
+            host = event.node_name
+            if Utils.is_empty(host):
+                host = event.requestor_host.split('.')[0]
             execution_host = SocaJobExecutionHost(
                 host=host,
                 instance_id=event.instance_id,
@@ -499,16 +502,27 @@ class OpenPBSJob(SocaBaseModel):
         start_time = self.parse_pbs_datetime(self.stime)
 
         # end time computation using wall time from resources used.
+        # a job terminated before its execution host reported resources_used has no walltime.
+        # mtime is the time such a job entered the finished state.
         end_time = None
-        if state == SocaJobState.FINISHED:
+        if state == SocaJobState.FINISHED and start_time is not None:
             resources_used_walltime = self.get_resources_used_wall_time()
             if Utils.is_not_empty(resources_used_walltime):
                 total_seconds = Utils.walltime_to_seconds(resources_used_walltime)
                 end_time = arrow.get(start_time).shift(seconds=total_seconds).datetime
+            else:
+                modified_time = self.parse_pbs_datetime(self.mtime)
+                if modified_time is not None and modified_time >= start_time:
+                    end_time = modified_time
 
         if job_builder is None:
+            # the project is passed so params are rebuilt against the project's current
+            # bedrock state on every read, rather than a value pinned at submission.
             job_builder = SocaJobBuilder(
-                context=context, params=params, queue_profile=queue_profile
+                context=context,
+                params=params,
+                queue_profile=queue_profile,
+                project=project,
             )
 
         job_params, provisioning_options = job_builder.build()
@@ -584,6 +598,7 @@ class OpenPBSEvent(SocaBaseModel):
     hook_name: Optional[str] = Field(default=None)
     requestor: Optional[str] = Field(default=None)
     requestor_host: Optional[str] = Field(default=None)
+    node_name: Optional[str] = Field(default=None)
     hook_type: Optional[str] = Field(default=None)
     user: Optional[str] = Field(default=None)
     vnode_list: Optional[dict] = Field(default=None)

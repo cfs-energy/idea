@@ -25,7 +25,7 @@ test_cases:
     command: *instance_type_command
     expected_output: t4g.large
     queue: normal
-    skip_regions: ['all'] # todo: uncomment when we have graviton support on region_ami_config
+    skip_regions: ['all'] # needs arm64 AMIs in region_ami_config.yml; the lookup is architecture-aware already
     #skip_regions: ['af-south-1', 'ap-northeast-3', 'me-south-1']
   - name: instance_type_m5
     resource: instance_type=m5.large
@@ -68,7 +68,7 @@ test_cases:
     command: *instance_type_command
     expected_output: m6g.large
     queue: normal
-    skip_regions: ['all'] # todo: uncomment when we have graviton support on region_ami_config
+    skip_regions: ['all'] # needs arm64 AMIs in region_ami_config.yml; the lookup is architecture-aware already
     #skip_regions: ['af-south-1', 'ap-northeast-3']
   - name: instance_type_c5
     resource: instance_type=c5.2xlarge
@@ -105,21 +105,21 @@ test_cases:
     command: *instance_type_command
     expected_output: c6gn.medium
     queue: normal
-    skip_regions: ['all'] # todo: uncomment when we have graviton support on region_ami_config
+    skip_regions: ['all'] # needs arm64 AMIs in region_ami_config.yml; the lookup is architecture-aware already
     #skip_regions: ['af-south-1', 'me-central-1']
   - name: instance_type_c6g
     resource: instance_type=c6g.medium
     command: *instance_type_command
     expected_output: c6g.medium
     queue: normal
-    skip_regions: ['all'] # todo: uncomment when we have graviton support on region_ami_config
+    skip_regions: ['all'] # needs arm64 AMIs in region_ami_config.yml; the lookup is architecture-aware already
     #skip_regions: ['af-south-1']
   - name: instance_type_c7g
     resource: instance_type=c7g.medium
     command: *instance_type_command
     expected_output: c7g.medium
     queue: normal
-    skip_regions: ['all'] # todo: uncomment when we have graviton support on region_ami_config
+    skip_regions: ['all'] # needs arm64 AMIs in region_ami_config.yml; the lookup is architecture-aware already
     #skip_regions: ['af-south-1', 'eu-north-1', 'ap-south-1', 'eu-west-3', 'eu-west-2', 'eu-south-1', 'ap-northeast-3', 'ap-northeast-2', 'me-south-1', 'ap-northeast-1', 'me-central-1', 'sa-east-1', 'ca-central-1', 'ap-east-1', 'ap-southeast-1', 'ap-southeast-2', 'eu-central-1', 'us-west-1']
   - name: instance_type_hpc6a
     resource: instance_type=hpc6a.48xlarge
@@ -169,7 +169,7 @@ test_cases:
     command: *instance_type_command
     expected_output: r6g.large
     queue: normal
-    skip_regions: ['all'] # todo: uncomment when we have graviton support on region_ami_config
+    skip_regions: ['all'] # needs arm64 AMIs in region_ami_config.yml; the lookup is architecture-aware already
     #skip_regions: ['af-south-1', 'ap-northeast-3', 'me-south-1']
   - name: instance_type_r6i
     resource: instance_type=r6i.large
@@ -182,7 +182,7 @@ test_cases:
     command: *instance_type_command
     expected_output: x2gd.large
     queue: normal
-    skip_regions: ['all'] # todo: uncomment when we have graviton support on region_ami_config
+    skip_regions: ['all'] # needs arm64 AMIs in region_ami_config.yml; the lookup is architecture-aware already
     #skip_regions: ['af-south-1', 'eu-north-1', 'ap-south-1', 'eu-west-3', 'eu-west-2', 'eu-south-1', 'ap-northeast-3', 'ap-northeast-2', 'me-south-1', 'ap-northeast-1', 'me-central-1', 'sa-east-1', 'ca-central-1', 'ap-east-1', 'ap-southeast-1', 'ap-southeast-2', 'eu-central-1', 'us-west-1']
   - name: instance_type_x2iedn
     resource: instance_type=x2iedn.xlarge
@@ -314,10 +314,12 @@ test_cases:
     expected_output: spot
     queue: normal
     skip_regions: ['us-gov-east-1', 'us-gov-west-1']
+  # compute nodes are registered with the scheduler under their private ipv4, so
+  # the node is looked up by that address and not by hostname.
   - name: spotfleet
     resource: instance_type=t3.large+t3.xlarge,spot_price=auto
     command: >-
-      TOKEN=$(curl --silent -X PUT 'http://169.254.169.254/latest/api/token' -H 'X-aws-ec2-metadata-token-ttl-seconds: 300') && curl --silent -H "X-aws-ec2-metadata-token: ${TOKEN}" 'http://169.254.169.254/latest/meta-data/instance-life-cycle' ; echo -n "-"; pbsnodes -v `hostname -s` | grep spot_fleet_request | awk '{print $3}' | cut -f1 -d- ;
+      TOKEN=$(curl --silent -X PUT 'http://169.254.169.254/latest/api/token' -H 'X-aws-ec2-metadata-token-ttl-seconds: 300') && curl --silent -H "X-aws-ec2-metadata-token: ${TOKEN}" 'http://169.254.169.254/latest/meta-data/instance-life-cycle' ; echo -n "-"; pbsnodes -v $(curl --silent -H "X-aws-ec2-metadata-token: ${TOKEN}" 'http://169.254.169.254/latest/meta-data/local-ipv4') | grep spot_fleet_request | awk '{print $3}' | cut -f1 -d- ;
     expected_output: spot-sfr
     queue: normal
     skip_regions: ['us-gov-east-1', 'us-gov-west-1']
@@ -374,7 +376,7 @@ test_cases:
     error_code: JOB_SUBMISSION_FAILED
     skip_regions: []
   - name: service_quota_not_available
-    resource: instance_type=c5.24xlarge,nodes=5000
+    resource: instance_type=c5.24xlarge,nodes=100
     command: /bin/echo Test
     expected_output: "Following AWS Service Quota needs to be requested from AWS"
     queue: normal

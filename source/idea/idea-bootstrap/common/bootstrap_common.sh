@@ -131,22 +131,16 @@ function get_secret() {
 }
 
 function get_server_ip() {
-  # Get server IP - based on CR-69639334 - @jasackle
-  # This may return multiple IP addresses
-  # So we store an array (SERVER_IP_ARRAY) for them and set the SERVER_IP to the first encountered IPv4 address
-  # for any future needs in the script for the canonical IPv4 host IP
+  # hostname -I prints every local address on one whitespace-separated line, so the split
+  # has to be on words. SERVER_IP is the first IPv4; PBS does not accept IPv6 here.
   local SERVER_IP_ARRAY
-  mapfile -t SERVER_IP_ARRAY < <(hostname -I)
+  read -r -a SERVER_IP_ARRAY <<< "$(hostname -I)"
   local SERVER_IP=""
-  for ip in "${!SERVER_IP_ARRAY[@]}"; do
-      # Only consider IPv4 as SERVER_IP for now due to PBS interactions with IPv6 addresses.
-      # We don't have to worry about the regex false matching on an IPv6 address
-      # with an embedded IPv4 address since this is not user input validation.
-      # This is just validation from the hostname command outputs.
-      # Example 2001:db8::10.0.0.1 becomes 2001:db::a00:1 in-kernel and from hostname command output
-      IPV4_COUNT=$(echo "${SERVER_IP_ARRAY[$ip]}" | grep -Ec "(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)")
-      if [[ -z "${SERVER_IP}" && "${IPV4_COUNT}" -eq '1' ]]; then
-          SERVER_IP=${SERVER_IP_ARRAY[$ip]}
+  local IPV4_REGEX="^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+  for ip in "${SERVER_IP_ARRAY[@]}"; do
+      # anchored, so an IPv6 address carrying an embedded IPv4 is not accepted
+      if [[ -z "${SERVER_IP}" ]] && echo "${ip}" | grep -Eq "${IPV4_REGEX}"; then
+          SERVER_IP="${ip}"
       fi
   done
   echo "${SERVER_IP}"

@@ -11,6 +11,7 @@ The Cluster Manager module is a central component of the IDEA platform. It serve
 * [Managing user accounts](users-management.md)
 * [Managing group membership and permissions](groups-management.md)
 * [Project creation and configuration](projects-management.md)
+* [AI usage tracking](ai-usage-tracking.md)
 * [Monitoring cluster status](cluster-status.md)
 * [Customizing email templates](email-templates.md)
 * [Accessing API endpoints](apis.md)

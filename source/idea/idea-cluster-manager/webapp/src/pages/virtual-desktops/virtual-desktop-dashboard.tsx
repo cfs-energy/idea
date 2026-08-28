@@ -39,13 +39,13 @@ export interface VirtualDesktopDashboardState {
 
 class VirtualDesktopDashboard extends Component<VirtualDesktopDashboardProps, VirtualDesktopDashboardState> {
 
-    allCharts: RefObject<VirtualDesktopBaseChart>[]
-    instanceTypesChart: RefObject<VirtualDesktopInstanceTypesChart>
-    stateChart: RefObject<VirtualDesktopInstanceTypesChart>
-    baseOsChart: RefObject<VirtualDesktopBaseOSChart>
-    projectChart: RefObject<VirtualDesktopProjectChart>
-    azDistributionChart: RefObject<VirtualDesktopBaseOSChart>
-    softwareStackChart: RefObject<VirtualDesktopSoftwareStackChart>
+    allCharts: RefObject<VirtualDesktopBaseChart | null>[]
+    instanceTypesChart: RefObject<VirtualDesktopInstanceTypesChart | null>
+    stateChart: RefObject<VirtualDesktopInstanceTypesChart | null>
+    baseOsChart: RefObject<VirtualDesktopBaseOSChart | null>
+    projectChart: RefObject<VirtualDesktopProjectChart | null>
+    azDistributionChart: RefObject<VirtualDesktopBaseOSChart | null>
+    softwareStackChart: RefObject<VirtualDesktopSoftwareStackChart | null>
 
     constructor(props: VirtualDesktopDashboardProps) {
         super(props)

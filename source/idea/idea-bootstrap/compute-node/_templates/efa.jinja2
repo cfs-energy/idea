@@ -1,4 +1,5 @@
 # Begin: Amazon EFA (Elastic Fabric Adapter)
+{% set is_deb_based = context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
 function install_efa() {
   local EFA_URL="{{ context.config.get_string('global-settings.package_config.efa.url', required=True) }}"
   local EFA_HASH="{{ context.config.get_string('global-settings.package_config.efa.checksum', required=True).lower().strip() }}"
@@ -18,7 +19,15 @@ function install_efa() {
   tar -xf ${EFA_TGZ}
   pushd ${EFA_BOOTSTRAP_DIR}/aws-efa-installer
 
-  {% if context.base_os not in ('ubuntu2204', 'ubuntu2404') %}
+  {% if is_deb_based %}
+  # the EFA debs conflict with and replace the distro rdma packages, apt resolves that during install. dkms and the
+  # running kernel headers build the efa kernel module and may be absent when the node boots from a pre-baked AMI.
+  export DEBIAN_FRONTEND=noninteractive
+  apt update
+  if ! apt install -y dkms linux-headers-$(uname -r); then
+    log_warning "Failed to install EFA kernel module prerequisites (dkms, linux-headers-$(uname -r))"
+  fi
+  {% else %}
   yum remove -y infiniband-diags libibumad libibverbs libibverbs-core librdmacm rdma-core-devel
   {% endif %}
 
@@ -27,6 +36,8 @@ function install_efa() {
     set_reboot_required "EFA Driver Installed"
   else
     log_error "Failed to install EFA Driver"
+    popd
+    popd
     return 1
   fi
   popd
@@ -34,13 +45,20 @@ function install_efa() {
 }
 
 # Check if EFA is already installed
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
-if ! dpkg -l | grep -q "^ii.*efa "; then
-  install_efa
+function is_efa_installed() {
+  if command -v rpm > /dev/null 2>&1 && rpm -q efa > /dev/null 2>&1; then
+    return 0
+  fi
+  if command -v dpkg > /dev/null 2>&1 && dpkg -l efa 2>/dev/null | grep -q "^ii"; then
+    return 0
+  fi
+  # the installer places libfabric under /opt/amazon/efa on both rpm and deb systems
+  [[ -x /opt/amazon/efa/bin/fi_info ]]
+}
+
+if ! is_efa_installed; then
+  # the job asked for EFA and got an EFA ENI; without the driver it silently falls back to TCP
+  # on a node that looks healthy, so fail bootstrap instead of letting it join the scheduler.
+  install_efa || exit_fail "EFA Driver installation failed. Aborting bootstrap, this node will not join the cluster."
 fi
-{% else %}
-if [[ -z "$(rpm -qa efa)" ]]; then
-  install_efa
-fi
-{% endif %}
 # End: Amazon EFA (Elastic Fabric Adapter)

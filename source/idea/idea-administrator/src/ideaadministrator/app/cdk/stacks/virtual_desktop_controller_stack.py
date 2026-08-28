@@ -25,6 +25,7 @@ from ideaadministrator.app.cdk.constructs import (
     SQSQueue,
     SNSTopic,
     Policy,
+    ManagedPolicy,
     LambdaFunction,
     SecurityGroup,
     IdeaNagSuppression,
@@ -136,6 +137,7 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
         self.dcv_broker_role: Optional[Role] = None
         self.scheduled_event_transformer_lambda_role: Optional[Role] = None
         self.dcv_host_instance_profile: Optional[InstanceProfile] = None
+        self.dcv_host_policy: Optional[ManagedPolicy] = None
 
         self.dcv_host_security_group: Optional[
             VirtualDesktopBastionAccessSecurityGroup
@@ -487,11 +489,21 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
         )
 
     def build_dcv_host_infra(self):
+        # dcv host permissions are a customer managed policy so that the same base policy can be
+        # attached to additional host roles, alongside policies specific to those roles.
+        self.dcv_host_policy = ManagedPolicy(
+            context=self.context,
+            name=f'{self.module_id}-{self.COMPONENT_DCV_HOST}-policy',
+            scope=self.stack,
+            managed_policy_name=f'{self.cluster_name}-{self.aws_region}-{self.module_id}-{self.COMPONENT_DCV_HOST}',
+            description=f'Permissions assigned to virtual-desktop-{self.COMPONENT_DCV_HOST}',
+            policy_template_name='virtual-desktop-dcv-host.yml',
+        )
         self.dcv_host_role = self._build_iam_role(
             role_description=f'IAM role assigned to virtual-desktop-{self.COMPONENT_DCV_HOST}',
             component_name=self.COMPONENT_DCV_HOST,
-            component_jinja='virtual-desktop-dcv-host.yml',
         )
+        self.dcv_host_role.add_managed_policy(self.dcv_host_policy)
         self.dcv_host_role.grant_pass_role(self.controller_role)
 
         self.dcv_host_instance_profile = InstanceProfile(
@@ -715,7 +727,10 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
         ]
 
     def _build_iam_role(
-        self, role_description: str, component_name: str, component_jinja: str
+        self,
+        role_description: str,
+        component_name: str,
+        component_jinja: Optional[str] = None,
     ) -> Role:
         ec2_managed_policies = self.get_ec2_instance_managed_policies()
 
@@ -727,6 +742,8 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
             assumed_by=['ssm', 'ec2'],
             managed_policies=ec2_managed_policies,
         )
+        if component_jinja is None:
+            return role
         variables = SocaAnyPayload()
         variables.role_arn = role.role_arn
         role.attach_inline_policy(
@@ -1386,6 +1403,7 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
             'dcv_host_role_arn': self.dcv_host_role.role_arn,
             'dcv_host_role_name': self.dcv_host_role.role_name,
             'dcv_host_role_id': self.dcv_host_role.role_id,
+            'dcv_host_policy_arn': self.dcv_host_policy.managed_policy_arn,
             'dcv_broker_role_arn': self.dcv_broker_role.role_arn,
             'dcv_broker_role_name': self.dcv_broker_role.role_name,
             'dcv_broker_role_id': self.dcv_broker_role.role_id,
@@ -1459,6 +1477,18 @@ class VirtualDesktopControllerStack(IdeaBaseStack):
         if self.backup_plan is not None:
             cluster_settings['vdi_host_backup.backup_plan.arn'] = (
                 self.backup_plan.get_backup_plan_arn()
+            )
+
+        # controller iam:PassRole for project roles is granted only at deploy time when bedrock is
+        # enabled, not by toggling it at runtime; written under the same gate so the web portal can tell a redeploy is owed.
+        cluster_manager_module_id = self.context.config().get_module_id(
+            constants.MODULE_CLUSTER_MANAGER
+        )
+        if self.context.config().get_bool(
+            f'{cluster_manager_module_id}.bedrock.enabled', False
+        ):
+            cluster_settings['bedrock.project_pass_role_arn'] = (
+                self.arn_builder.get_project_role_arn()
             )
 
         self.update_cluster_settings(cluster_settings)

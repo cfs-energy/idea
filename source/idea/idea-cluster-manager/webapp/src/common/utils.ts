@@ -661,20 +661,28 @@ class Utils {
         switch (name) {
             case 'amazonlinux2023':
                 return 'Amazon Linux 2023'
+            // end-of-life, but existing stacks and sessions still report it
             case 'amazonlinux2':
                 return 'Amazon Linux 2'
             case 'rhel8':
                 return 'Red Hat Enterprise Linux 8'
             case 'rhel9':
                 return 'Red Hat Enterprise Linux 9'
+            case 'rhel10':
+                return 'Red Hat Enterprise Linux 10'
             case 'rocky8':
                 return 'Rocky Linux 8'
             case 'rocky9':
                 return 'Rocky Linux 9'
+            case 'rocky10':
+                return 'Rocky Linux 10'
             case "ubuntu2204":
                 return "Ubuntu 22.04";
             case "ubuntu2404":
                 return "Ubuntu 24.04";
+            // not a selectable base_os: only a custom AMI or a hand-set value reports it
+            case "ubuntu2604":
+                return "Ubuntu 26.04";
             case 'windows':
                 return 'Windows'
             case 'windows2019':
