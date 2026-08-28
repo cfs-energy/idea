@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
-## [26.08.0] - TBD
+## [26.08.0] - 2026-08-28
 
 **Upgrade Instructions:**
 * Amazon Linux 2 is removed as a base OS (EOL 2026-06-30). Move AL2 settings and queue profiles to `amazonlinux2023` before upgrading
