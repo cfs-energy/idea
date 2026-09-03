@@ -18,4 +18,4 @@ The Cluster Manager module is a central component of the IDEA platform. It serve
 
 ## Related Topics
 
-Refer to the [Budget section](../best-practices/budget/ "mention") to learn more about configuring budgets for projects and users.
+Refer to the [Budget section](../../best-practices/budget/ "mention") to learn more about configuring budgets for projects and users.

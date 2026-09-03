@@ -21,6 +21,7 @@ import {AUTH_TOKEN_EXPIRED, REQUEST_TIMEOUT} from "../common/error-codes";
 
 // the service worker owns the network timeout, so this only bounds the case where it never
 // replies at all. it stays above that timeout so it cannot pre-empt a real answer.
+// Used as the default when the invoker is constructed without an explicit timeout.
 const SERVICE_WORKER_REPLY_TIMEOUT = 660000
 
 export interface IdeaHeader {
@@ -86,7 +87,7 @@ export class IdeaApiInvoker {
                         message: 'Request timed-out'
                     }
                 })
-            }, SERVICE_WORKER_REPLY_TIMEOUT)
+            }, this.props.timeout ?? SERVICE_WORKER_REPLY_TIMEOUT)
             messageChannel.port1.onmessage = (event) => {
                 clearTimeout(timeout)
                 if(event.data.error) {

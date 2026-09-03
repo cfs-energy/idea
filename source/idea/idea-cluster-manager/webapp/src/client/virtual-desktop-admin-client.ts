@@ -20,6 +20,8 @@ import {
     UpdateSessionResponse,
     SetSessionCleanupExemptionRequest,
     SetSessionCleanupExemptionResponse,
+    RefreshBaseSoftwareStackAmisRequest,
+    RefreshBaseSoftwareStackAmisResponse,
     DeleteSessionRequest,
     DeleteSessionResponse,
     ListSessionsRequest,
@@ -57,7 +59,15 @@ import {
     UpdatePermissionProfileResponse,
     UpdatePermissionProfileRequest,
     UpdateSessionPermissionRequest,
-    UpdateSessionPermissionResponse
+    UpdateSessionPermissionResponse,
+    ListDesktopImagesRequest,
+    ListDesktopImagesResponse,
+    BuildDesktopImageRequest,
+    BuildDesktopImageResponse,
+    BuildAllDesktopImagesRequest,
+    BuildAllDesktopImagesResponse,
+    UseBuiltDesktopImagesRequest,
+    UseBuiltDesktopImagesResponse
 } from './data-model'
 import IdeaBaseClient, {IdeaBaseClientProps} from "./base-client";
 
@@ -153,6 +163,13 @@ class VirtualDesktopAdminClient extends IdeaBaseClient<VirtualDesktopAdminClient
     getSessionConnectionInfo(req: GetSessionConnectionInfoRequest): Promise<GetSessionConnectionInfoRequest> {
         return this.apiInvoker.invoke_alt<GetSessionConnectionInfoRequest, GetSessionConnectionInfoRequest>(
             'VirtualDesktopAdmin.GetSessionConnectionInfo',
+            req
+        )
+    }
+
+    refreshBaseSoftwareStackAmis(req: RefreshBaseSoftwareStackAmisRequest): Promise<RefreshBaseSoftwareStackAmisResponse> {
+        return this.apiInvoker.invoke_alt<RefreshBaseSoftwareStackAmisRequest, RefreshBaseSoftwareStackAmisResponse>(
+            'VirtualDesktopAdmin.RefreshBaseSoftwareStackAmis',
             req
         )
     }
@@ -259,6 +276,34 @@ class VirtualDesktopAdminClient extends IdeaBaseClient<VirtualDesktopAdminClient
         })
     }
 
+
+    listDesktopImages(req: ListDesktopImagesRequest): Promise<ListDesktopImagesResponse> {
+        return this.apiInvoker.invoke_alt<ListDesktopImagesRequest, ListDesktopImagesResponse>(
+            'VirtualDesktopAdmin.ListDesktopImages',
+            req
+        )
+    }
+
+    buildDesktopImage(req: BuildDesktopImageRequest): Promise<BuildDesktopImageResponse> {
+        return this.apiInvoker.invoke_alt<BuildDesktopImageRequest, BuildDesktopImageResponse>(
+            'VirtualDesktopAdmin.BuildDesktopImage',
+            req
+        )
+    }
+
+    buildAllDesktopImages(req: BuildAllDesktopImagesRequest): Promise<BuildAllDesktopImagesResponse> {
+        return this.apiInvoker.invoke_alt<BuildAllDesktopImagesRequest, BuildAllDesktopImagesResponse>(
+            'VirtualDesktopAdmin.BuildAllDesktopImages',
+            req
+        )
+    }
+
+    useBuiltDesktopImages(req: UseBuiltDesktopImagesRequest): Promise<UseBuiltDesktopImagesResponse> {
+        return this.apiInvoker.invoke_alt<UseBuiltDesktopImagesRequest, UseBuiltDesktopImagesResponse>(
+            'VirtualDesktopAdmin.UseBuiltDesktopImages',
+            req
+        )
+    }
 }
 
 export default VirtualDesktopAdminClient

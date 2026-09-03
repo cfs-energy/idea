@@ -1285,6 +1285,10 @@ class NodeHouseKeepingSession:
                         job=job,
                         message=f'CloudFormation stack {job.get_compute_stack()} provisioning '
                         f'failed or timed out (status: {provisioning_status}).',
+                        # the next provisioning cycle sees this same failure while
+                        # cloudformation deletes the stack; naming it costs one retry
+                        # rather than one per sighting.
+                        stack_id=job.params.stack_id,
                     )
                     if retries_exhausted:
                         continue

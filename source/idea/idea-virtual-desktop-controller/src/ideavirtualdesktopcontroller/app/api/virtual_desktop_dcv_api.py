@@ -40,7 +40,11 @@ class VirtualDesktopDCVAPI(VirtualDesktopAPI):
         context.success(DescribeSessionsResponse(response=response))
 
     def invoke(self, context: ApiInvocationContext):
-        if not context.is_authorized(elevated_access=True):
+        # both namespaces are read-only broker introspection, so an app token holding
+        # the module read scope is admitted alongside elevated users.
+        if not context.is_authorized(
+            elevated_access=True, scopes=[f'{self.context.module_id()}/read']
+        ):
             raise exceptions.unauthorized_access()
 
         namespace = context.namespace

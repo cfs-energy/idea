@@ -148,7 +148,9 @@ class JobProvisioningUtil:
             default=3,
         )
 
-    def track_provisioning_failure(self, job: SocaJob, message: str) -> bool:
+    def track_provisioning_failure(
+        self, job: SocaJob, message: str, stack_id: Optional[str] = None
+    ) -> bool:
         """
         increment the job's persistent provisioning retry count.
 
@@ -156,9 +158,16 @@ class JobProvisioningUtil:
         is held with the failure reason recorded and True is returned. a held job must not be
         re-queued for provisioning; the owner can qdel and resubmit, or qrls to retry.
         a cap of 0 or less disables the hold: the job is retried indefinitely.
+
+        stack_id names the compute stack that failed, so one failed stack costs one retry
+        however many times it is seen. a failure with no stack always counts, which is how
+        a stack that cannot be deleted is charged for every cycle it blocks the job.
         """
+        if stack_id == 'tbd':
+            # the scheduler's placeholder for a job holding no stack: not an identity.
+            stack_id = None
         retry_count = self.context.job_cache.increment_job_provisioning_retry(
-            job_id=job.job_id
+            job_id=job.job_id, stack_id=stack_id
         )
         max_retries = self.max_provisioning_retries
         capped = max_retries is not None and max_retries > 0

@@ -448,14 +448,14 @@ class AWSUtilProtocol(SocaBaseProtocol):
     @abstractmethod
     def get_ec2_instance_type_unit_price(
         self, instance_type: str
-    ) -> EC2InstanceUnitPrice: ...
+    ) -> Optional[EC2InstanceUnitPrice]: ...
 
     @abstractmethod
     def budgets_get_budget(self, budget_name: str) -> Optional[AwsProjectBudget]: ...
 
     @abstractmethod
     def cost_explorer_get_tagged_service_spend(
-        self, tag_key: str, tag_value: str
+        self, tag_key: str, tag_value: str, days: Optional[int] = None
     ) -> Optional[Dict[str, float]]: ...
 
     @abstractmethod

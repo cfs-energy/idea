@@ -22,6 +22,8 @@ import {
     UpdateProjectResult,
     ListProjectsRequest,
     ListProjectsResult,
+    ListBedrockUsageRequest,
+    ListBedrockUsageResult,
     EnableProjectRequest,
     EnableProjectResult,
     DisableProjectRequest,
@@ -67,6 +69,13 @@ class ProjectsClient extends IdeaBaseClient<ProjectsClientProps> {
     listProjects(req: ListProjectsRequest): Promise<ListProjectsResult> {
         return this.apiInvoker.invoke_alt<ListProjectsRequest, ListProjectsResult>(
             'Projects.ListProjects',
+            req
+        )
+    }
+
+    listBedrockUsage(req: ListBedrockUsageRequest): Promise<ListBedrockUsageResult> {
+        return this.apiInvoker.invoke_alt<ListBedrockUsageRequest, ListBedrockUsageResult>(
+            'Projects.ListBedrockUsage',
             req
         )
     }

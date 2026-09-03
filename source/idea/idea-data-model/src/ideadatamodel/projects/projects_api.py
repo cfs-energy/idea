@@ -20,6 +20,8 @@ __all__ = (
     'DeleteProjectResult',
     'ListProjectsRequest',
     'ListProjectsResult',
+    'ListBedrockUsageRequest',
+    'ListBedrockUsageResult',
     'EnableProjectRequest',
     'EnableProjectResult',
     'DisableProjectRequest',
@@ -82,6 +84,18 @@ class ListProjectsResult(SocaListingPayload):
     listing: Optional[List[Project]] = Field(default=None)
 
 
+# Projects.ListBedrockUsage
+class ListBedrockUsageRequest(SocaListingPayload):
+    pass
+
+
+class ListBedrockUsageResult(SocaListingPayload):
+    # every project with a bedrock configuration, each carrying its window usage.
+    listing: Optional[List[Project]] = Field(default=None)
+    # the window every entry covers, e.g. last_30_days.
+    window: Optional[str] = Field(default=None)
+
+
 # Projects.EnableProject
 class EnableProjectRequest(SocaPayload):
     project_name: Optional[str] = Field(default=None)
@@ -137,6 +151,13 @@ OPEN_API_SPEC_ENTRIES_PROJECTS = [
         namespace='Projects.ListProjects',
         request=ListProjectsRequest,
         result=ListProjectsResult,
+        is_listing=True,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='Projects.ListBedrockUsage',
+        request=ListBedrockUsageRequest,
+        result=ListBedrockUsageResult,
         is_listing=True,
         is_public=False,
     ),

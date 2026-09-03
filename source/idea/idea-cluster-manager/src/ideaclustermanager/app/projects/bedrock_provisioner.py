@@ -421,21 +421,37 @@ class BedrockProvisioner:
             else:
                 self._teardown(project)
         except botocore.exceptions.ClientError as e:
-            if not self._is_access_denied(e):
-                raise e
+            code = e.response.get('Error', {}).get('Code', 'ClientError')
+            denied = self._is_access_denied(e)
+            # one line per pass, not one per model: the per model reasons are
+            # already recorded on the project.
+            self.logger.error(
+                f'bedrock reconcile failed for project {project.project_id}: '
+                f'{code} on {e.operation_name}: {e}'
+            )
             reason = (
                 f'denied: {e}. redeploy the cluster-manager module so its role '
                 f'carries the bedrock provisioner permissions.'
             )
-            self.logger.error(
-                f'bedrock reconcile for project {project.name} was {reason}'
+            self._record_reconcile_failure(
+                project,
+                # the code and the failing call are what an administrator acts
+                # on; the full message stays in the log.
+                error=f'{code} on {e.operation_name}',
+                policy_errors={e.operation_name: reason} if denied else None,
             )
-            self._record_access_denied(project, e.operation_name, reason)
+            # a denial clears with a module redeploy, so raising would only fail the
+            # task on every retry. anything else may be transient and has to keep
+            # failing it so the queue redelivers.
+            if not denied:
+                raise e
 
-    def _record_access_denied(self, project: Project, operation: str, reason: str):
+    def _record_reconcile_failure(
+        self, project: Project, error: str, policy_errors: Optional[Dict[str, str]]
+    ):
         """
-        recorded against the project like a refused policy, so the administrator sees
-        it in the project view. the provisioned fields are carried over unchanged.
+        recorded against the project like a refused policy, so a broken integration is
+        visible in the project view. the provisioned fields are carried over unchanged.
         """
         bedrock = project.bedrock
         self._save_provisioner_fields(
@@ -448,7 +464,8 @@ class BedrockProvisioner:
                 bedrock.inference_profile_arns if bedrock is not None else None, {}
             ),
             model_errors=bedrock.model_errors if bedrock is not None else None,
-            policy_errors={operation: reason},
+            policy_errors=policy_errors,
+            reconcile_error=error,
         )
 
     @staticmethod
@@ -1281,6 +1298,7 @@ class BedrockProvisioner:
         inference_profile_arns: Dict[str, str],
         model_errors: Optional[Dict[str, str]] = None,
         policy_errors: Optional[Dict[str, str]] = None,
+        reconcile_error: Optional[str] = None,
     ):
         # enabled and model_ids are re-read from storage: an administrator edit
         # that landed during this reconcile must not be reverted by the write back.
@@ -1309,6 +1327,9 @@ class BedrockProvisioner:
             bedrock['model_errors'] = model_errors
         if policy_errors:
             bedrock['policy_errors'] = policy_errors
+        if reconcile_error:
+            bedrock['reconcile_error'] = reconcile_error
+            bedrock['reconcile_error_on'] = Utils.current_time_ms()
 
         self.projects_dao.update_project(
             {'project_id': project.project_id, 'bedrock': bedrock}

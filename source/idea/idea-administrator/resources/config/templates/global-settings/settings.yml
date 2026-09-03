@@ -221,6 +221,10 @@ package_config:
       - krb5-user
       - sssd-krb5
 
+    # kept non-empty for the upgrade window. an upgrade overwrites global-settings
+    # before the modules themselves redeploy, and a module still running the previous
+    # SDK reads an empty list as NULL and fails bootstrap on ' '.join(None). safe to
+    # empty once no cluster runs a module older than this release.
     sssd_7:
       # Additional packages required for amazonlinux2023
       - python-sssdconfig

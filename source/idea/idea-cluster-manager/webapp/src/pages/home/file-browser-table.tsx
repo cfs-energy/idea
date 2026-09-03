@@ -221,7 +221,9 @@ function FileBrowserTable(props: FileBrowserTableProps) {
         [visibleEntries, sorting]
     )
 
-    const {items, collectionProps, filterProps, paginationProps, filteredItemsCount, actions} = useCollection(sortedEntries, {
+    // allPageItems is every entry that passes the current filter, across all pages. items is only
+    // the page slice Cloudscape renders as rows.
+    const {items, allPageItems, collectionProps, filterProps, paginationProps, filteredItemsCount, actions} = useCollection(sortedEntries, {
         filtering: {
             filteringFunction: (entry, filteringText) =>
                 entry.name.toLowerCase().includes(filteringText.trim().toLowerCase()),
@@ -291,8 +293,54 @@ function FileBrowserTable(props: FileBrowserTableProps) {
     }
 
     const summary = () => {
-        const total = `${visibleEntries.length} item${visibleEntries.length === 1 ? '' : 's'}`
-        return props.selectedEntries.length > 0 ? `${total} (${props.selectedEntries.length} selected)` : total
+        // Counts the whole filtered directory, matching what the header checkbox and Ctrl+A
+        // select, rather than only what is on screen.
+        const total = filteredItemsCount ?? visibleEntries.length
+        if (props.selectedEntries.length === 0) {
+            return `${total} item${total === 1 ? '' : 's'}`
+        }
+        return `${props.selectedEntries.length} of ${total} selected`
+    }
+
+    /** Widens a header checkbox event to the whole filtered directory. The header checkbox and a row
+     * checkbox arrive through the same event and Cloudscape does not distinguish them: a row checkbox
+     * flips one item, while the header checkbox flips every item it rendered (`items`, the current
+     * page) at once. An event that completes or empties an already fully selected page is therefore
+     * treated as the header control. A single click that happens to complete or empty a full page
+     * reads the same way, which is rare at a page size of 100 rows; telling the two apart would need
+     * an explicit click-source flag. */
+    const onCheckboxSelectionChange = (nextSelection: FileBrowserEntry[]) => {
+        if (items.length === 0) {
+            props.onSelectionChange(nextSelection)
+            return
+        }
+        const previousKeys = new Set(props.selectedEntries.map(entryKey))
+        const nextKeys = new Set(nextSelection.map(entryKey))
+        const wasPageFullySelected = items.every((entry) => previousKeys.has(entryKey(entry)))
+        const isPageFullySelectedNow = items.every((entry) => nextKeys.has(entryKey(entry)))
+        const isPageFullyClearedNow = items.every((entry) => !nextKeys.has(entryKey(entry)))
+        if (!wasPageFullySelected && isPageFullySelectedNow) {
+            props.onSelectionChange([...allPageItems])
+        } else if (wasPageFullySelected && isPageFullyClearedNow) {
+            props.onSelectionChange([])
+        } else {
+            props.onSelectionChange(nextSelection)
+        }
+    }
+
+    // Ctrl/Cmd+A selects the whole filtered directory and Escape clears the selection, the keyboard
+    // equivalents of the header checkbox. Both apply only while focus is inside the table, so typing
+    // in the search box or using the toolbar is unaffected.
+    const onTableKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+        if ((event.target as HTMLElement).closest('table') == null) {
+            return
+        }
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a') {
+            event.preventDefault()
+            props.onSelectionChange([...allPageItems])
+        } else if (event.key === 'Escape' && menuPosition == null) {
+            props.onSelectionChange([])
+        }
     }
 
     return (
@@ -301,6 +349,7 @@ function FileBrowserTable(props: FileBrowserTableProps) {
             onClickCapture={(event) => {
                 modifiers.current = {range: event.shiftKey, toggle: event.ctrlKey || event.metaKey}
             }}
+            onKeyDown={onTableKeyDown}
         >
             {props.path}
             <Table
@@ -322,7 +371,7 @@ function FileBrowserTable(props: FileBrowserTableProps) {
                 }}
                 selectionType="multi"
                 selectedItems={props.selectedEntries}
-                onSelectionChange={(event) => props.onSelectionChange([...event.detail.selectedItems])}
+                onSelectionChange={(event) => onCheckboxSelectionChange([...event.detail.selectedItems])}
                 onRowClick={(event) => onRowClick(event.detail.item, event.detail.rowIndex)}
                 onRowContextMenu={(event) => {
                     event.preventDefault()

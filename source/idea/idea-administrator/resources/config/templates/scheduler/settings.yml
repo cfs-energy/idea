@@ -100,6 +100,10 @@ job_provisioning:
 
   # maximum provisioning retries for a job; once exhausted the job is held (failure reason recorded)
   # instead of re-queued - the owner can qdel and resubmit, or qrls to retry.
+  # one failed compute stack costs one retry, however many times it is seen while
+  # cloudformation deletes it. a stack that cannot be deleted costs a retry every cycle it
+  # blocks the job, so the cap still holds the job.
+  # 0 or any negative value disables the cap: the job is retried indefinitely, never held.
   max_provisioning_retries: 3
 
   # the interval at which node housekeeping session is executed.

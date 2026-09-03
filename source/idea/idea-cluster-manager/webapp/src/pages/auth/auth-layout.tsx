@@ -12,11 +12,12 @@
  */
 
 import React, {Component} from "react";
-import {AppLayout, Grid} from "@cloudscape-design/components";
+import {AppLayout, Flashbar, Grid} from "@cloudscape-design/components";
 import {AppContext} from "../../common";
 import './auth.scss'
 import Utils from "../../common/utils";
 import AppLogger from "../../common/app-logger";
+import {maintenanceFlashbarItems} from "../../service/cluster-settings-service";
 
 export interface AuthLayoutProps {
     loading?: boolean
@@ -72,11 +73,19 @@ class AuthLayout extends Component<AuthLayoutProps, AuthLayoutState> {
         return this.props.loading;
     }
 
+    // Before sign in there is no token for the settings API, so the banner can only come from the
+    // value served with the page.
+    buildMaintenanceNotifications() {
+        const items = maintenanceFlashbarItems(AppContext.get().getClusterSettingsService().getMaintenance())
+        return (items.length > 0) ? <Flashbar items={items}/> : undefined
+    }
+
     render() {
         this.logger.debug(`Rendering AuthLayout component. Ready state: ${this.state.ready}`);
         return <AppLayout
             navigationHide={true}
             toolsHide={true}
+            notifications={this.buildMaintenanceNotifications()}
             content={
                 this.state.ready && <main className="soca-app-content auth">
                     <Grid gridDefinition={[

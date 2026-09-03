@@ -356,6 +356,10 @@ class SocaJobEstimatedBOMCost(SocaBaseModel):
     savings: Optional[List[SocaJobEstimatedBOMCostLineItem]] = Field(default=None)
     savings_total: Optional[SocaAmount] = Field(default=None)
     total: Optional[SocaAmount] = Field(default=None)
+    # no hourly rate for the instance type, so the compute line is priced at zero and the
+    # total is short. the amount stays a number, so a reader showing money must say the
+    # cost is unavailable rather than present this total as the spend.
+    price_unavailable: Optional[bool] = Field(default=None)
 
     def _compute_total(self):
         # line items

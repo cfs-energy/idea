@@ -6,8 +6,8 @@ write the resulting queue list to the queue profile - not just the queues named 
 the request, and never a queue list the scheduler does not hold.
 """
 
-from ideadatamodel import exceptions, errorcodes
-from ideadatamodel.scheduler import HpcQueueProfile
+from ideadatamodel import exceptions, errorcodes, Project, SocaJobParams
+from ideadatamodel.scheduler import HpcQueueProfile, SocaQueueMode
 from ideascheduler.app.provisioning.job_provisioning_queue.hpc_queue_profiles_dao import (
     HpcQueueProfilesDAO,
 )
@@ -366,3 +366,35 @@ def test_update_queue_profile_create_failure_deletes_nothing(
     assert exc_info.value.error_code == errorcodes.SCHEDULER_ERROR
     assert service.db_updates == []
     assert service.context.scheduler.deleted == []
+
+
+def test_create_queue_profile_rejects_ami_architecture_mismatch(queue_profiles_service):
+    """
+    the queue profile default job params are validated with the same job param builder a
+    submit uses, so an instance_ami paired with instance_types of the other architecture is
+    rejected at save rather than at RunInstances.
+    """
+    service = queue_profiles_service
+
+    queue_profile = HpcQueueProfile(
+        name='test-queue-profile',
+        queues=['normal'],
+        keep_forever=True,
+        queue_mode=SocaQueueMode.FIFO,
+        projects=[Project(project_id='mock-project')],
+        default_job_params=SocaJobParams(
+            instance_ami='ami-arm64mockimage00',
+            instance_types=['c5.large'],
+        ),
+    )
+
+    with pytest.raises(exceptions.SocaException) as exc_info:
+        service.create_queue_profile(queue_profile)
+
+    assert exc_info.value.error_code == errorcodes.VALIDATION_FAILED
+    messages = [
+        entry.message
+        for entry in exc_info.value.ref.results
+        if entry.message is not None
+    ]
+    assert any('ami-arm64mockimage00) is arm64' in message for message in messages)

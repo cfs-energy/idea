@@ -20,6 +20,7 @@ import VirtualDesktopClient from "./virtual-desktop-client";
 import VirtualDesktopAdminClient from "./virtual-desktop-admin-client";
 import ClusterSettingsClient from "./cluster-settings-client";
 import AnalyticsClient from "./analytics-client";
+import MyCostsClient from "./my-costs-client";
 import ProjectsClient from "./projects-client";
 import EmailTemplatesClient from "./email-templates-client";
 import Utils from "../common/utils";
@@ -49,6 +50,7 @@ class IdeaClients {
     private readonly virtualDesktopDCVClient: VirtualDesktopDCVClient
     private readonly clusterSettingsClient: ClusterSettingsClient
     private readonly analyticsClient: AnalyticsClient
+    private readonly myCostsClient: MyCostsClient
     private readonly projectsClient: ProjectsClient
     private readonly emailTemplatesClient: EmailTemplatesClient
 
@@ -156,6 +158,15 @@ class IdeaClients {
         })
         this.clients.push(this.analyticsClient)
 
+        this.myCostsClient = new MyCostsClient({
+            name: 'my-costs-client',
+            baseUrl: props.baseUrl,
+            authContext: props.authContext,
+            apiContextPath: Utils.getApiContextPath(Constants.MODULE_CLUSTER_MANAGER),
+            serviceWorkerRegistration: props.serviceWorkerRegistration
+        })
+        this.clients.push(this.myCostsClient)
+
         this.projectsClient = new ProjectsClient({
             name: 'projects-client',
             baseUrl: props.baseUrl,
@@ -221,6 +232,10 @@ class IdeaClients {
 
     analytics(): AnalyticsClient {
         return this.analyticsClient
+    }
+
+    myCosts(): MyCostsClient {
+        return this.myCostsClient
     }
 
     projects(): ProjectsClient {

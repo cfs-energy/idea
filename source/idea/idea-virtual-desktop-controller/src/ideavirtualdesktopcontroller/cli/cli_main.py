@@ -30,6 +30,7 @@ from ideavirtualdesktopcontroller.cli.software_stacks import (
     update_base_stacks,
 )
 from ideavirtualdesktopcontroller.cli.module import app_module_clean_up
+from ideavirtualdesktopcontroller.cli.build_desktop_image import build_desktop_image
 
 
 @click.group(CLICK_SETTINGS)
@@ -50,6 +51,7 @@ main.add_command(reindex_software_stacks)
 main.add_command(merge_software_stacks)
 main.add_command(update_base_stacks)
 main.add_command(app_module_clean_up)
+main.add_command(build_desktop_image)
 
 # used only for local testing
 if __name__ == '__main__':

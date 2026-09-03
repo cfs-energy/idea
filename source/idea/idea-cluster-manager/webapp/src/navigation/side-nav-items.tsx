@@ -77,6 +77,13 @@ export const IdeaSideNavItems = (context: AppContext): SideNavigationProps.Item[
                 href: '#/home/ssh-access'
             })
         }
+
+        // Every user with cluster-manager access has costs to read, so this link is not gated further.
+        userNav.items.push({
+            type: 'link',
+            text: 'My Costs',
+            href: '#/home/my-costs'
+        })
         if (context.getClusterSettingsService().isCustomDashboardEnabled()) {
             userNav.items.push({
                 type: 'link',
@@ -161,6 +168,11 @@ export const IdeaSideNavItems = (context: AppContext): SideNavigationProps.Item[
                 },
                 {
                     type: 'link',
+                    text: 'Custom AMIs',
+                    href: '#/soca/custom-amis'
+                },
+                {
+                    type: 'link',
                     text: 'Active Jobs',
                     href: '#/soca/active-jobs'
                 },
@@ -189,6 +201,16 @@ export const IdeaSideNavItems = (context: AppContext): SideNavigationProps.Item[
                     type: 'link',
                     text: 'Projects',
                     href: '#/cluster/projects'
+                },
+                {
+                    type: 'link',
+                    text: 'AI Usage',
+                    href: '#/cluster/ai-usage'
+                },
+                {
+                    type: 'link',
+                    text: 'User Costs',
+                    href: '#/cluster/user-costs'
                 },
                 {
                     type: 'link',

@@ -14,7 +14,8 @@
 import React, {Component, RefObject} from "react";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import IdeaAppLayout, {IdeaAppLayoutProps} from "../../components/app-layout";
-import {Alert, Box, Button, ColumnLayout, Container, FormField, Header, Input, Link, SpaceBetween, Table, Tabs} from "@cloudscape-design/components";
+import {Alert, Box, Button, ColumnLayout, Container, FormField, Header, Input, Link, SpaceBetween, Table, Tabs, Textarea, Toggle} from "@cloudscape-design/components";
+import moment from "moment";
 import {KeyValue, KeyValueGroup} from "../../components/key-value";
 import {AppContext} from "../../common";
 import dot from "dot-object";
@@ -54,6 +55,13 @@ export interface ClusterSettingsState {
     bedrockPassRoleReady: boolean
     bedrockUsageLoggingManaged: boolean
     bedrockModelIdPendingRemoval: string | null
+
+    maintenanceEnabled: boolean
+    maintenanceMessage: string
+    maintenanceEndsAt: string
+    maintenanceUpdating: boolean
+    maintenanceError: string | null
+    maintenanceSaved: boolean
 }
 
 const DEFAULT_ACTIVE_TAB_ID = 'general'
@@ -99,7 +107,14 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
             bedrockProvisionerReady: true,
             bedrockPassRoleReady: true,
             bedrockUsageLoggingManaged: true,
-            bedrockModelIdPendingRemoval: null
+            bedrockModelIdPendingRemoval: null,
+
+            maintenanceEnabled: false,
+            maintenanceMessage: '',
+            maintenanceEndsAt: '',
+            maintenanceUpdating: false,
+            maintenanceError: null,
+            maintenanceSaved: false
         }
     }
 
@@ -164,7 +179,10 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                 // the desktop controller gets iam:PassRole for project roles at deploy time, so the setting
                 // alone does not let a desktop launch under its project role; the vdc stack writes this key under the same gate.
                 bedrockPassRoleReady: !clusterSettingsService.isVirtualDesktopDeployed() || !Utils.isEmpty(dot.pick('bedrock.project_pass_role_arn', result(6))),
-                bedrockUsageLoggingManaged: Utils.asBoolean(dot.pick('bedrock.invocation_logging.manage_configuration', clusterManager), true)
+                bedrockUsageLoggingManaged: Utils.asBoolean(dot.pick('bedrock.invocation_logging.manage_configuration', clusterManager), true),
+                maintenanceEnabled: Utils.asBoolean(dot.pick('maintenance.enabled', clusterManager), false),
+                maintenanceMessage: Utils.asString(dot.pick('maintenance.message', clusterManager)),
+                maintenanceEndsAt: Utils.asString(dot.pick('maintenance.ends_at', clusterManager))
             })
         })
     }
@@ -278,6 +296,102 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                 Every project that lists <b>{modelId}</b> is reconciled as soon as this is saved: access to the model is revoked and its members
                 can no longer invoke it. Those projects keep it in their model list, flagged as not in the cluster catalog.
             </IdeaConfirm>
+        )
+    }
+
+    // All three keys are written together, so the banner can never appear carrying the previous
+    // window's message and end time.
+    saveMaintenance = () => {
+        const message = this.state.maintenanceMessage.trim()
+        const endsAt = this.state.maintenanceEndsAt.trim()
+
+        if (Utils.isNotEmpty(endsAt) && !moment(endsAt, moment.ISO_8601, true).isValid()) {
+            this.setState({
+                maintenanceError: 'End time must be an ISO 8601 timestamp, for example 2026-09-15T18:00:00Z. Leave it empty for no end time.'
+            })
+            return
+        }
+
+        const clusterSettingsService = AppContext.get().getClusterSettingsService()
+        const moduleId = Utils.asString(clusterSettingsService.getModuleId(Constants.MODULE_CLUSTER_MANAGER), Constants.MODULE_CLUSTER_MANAGER)
+        this.setState({
+            maintenanceUpdating: true,
+            maintenanceError: null,
+            maintenanceSaved: false
+        })
+        AppContext.get().client().clusterSettings().updateModuleSettings({
+            module_id: moduleId,
+            settings: {
+                maintenance: {
+                    enabled: this.state.maintenanceEnabled,
+                    message: message,
+                    ends_at: endsAt
+                }
+            }
+        }).then(result => {
+            if (!Utils.asBoolean(result.success, false)) {
+                this.setState({
+                    maintenanceUpdating: false,
+                    maintenanceError: 'Failed to update the maintenance settings.'
+                })
+                return
+            }
+            this.setState({
+                maintenanceUpdating: false,
+                maintenanceMessage: message,
+                maintenanceEndsAt: endsAt,
+                maintenanceSaved: true
+            })
+        }).catch(error => {
+            this.setState({
+                maintenanceUpdating: false,
+                maintenanceError: error?.message ?? `${error}`
+            })
+        })
+    }
+
+    buildMaintenanceSettings() {
+        return (
+            <SpaceBetween size={"l"}>
+                <Container header={<Header variant={"h2"}
+                                           description={"A warning banner on every portal page, including the sign-in page. While it is on, the scheduler also refuses new job submissions with the same message."}>Maintenance Window</Header>}>
+                    <SpaceBetween size={"m"}>
+                        {this.state.maintenanceError && <Alert type="error" dismissible={true} onDismiss={() => this.setState({maintenanceError: null})}>{this.state.maintenanceError}</Alert>}
+                        {this.state.maintenanceSaved && <Alert type="success" dismissible={true} onDismiss={() => this.setState({maintenanceSaved: false})}>
+                            Saved. Open portal pages pick the change up within a minute, and the scheduler within about half a minute.
+                        </Alert>}
+                        <Toggle checked={this.state.maintenanceEnabled}
+                                disabled={this.state.maintenanceUpdating}
+                                onChange={(event) => this.setState({maintenanceEnabled: event.detail.checked})}>
+                            Show the maintenance banner and refuse job submissions
+                        </Toggle>
+                        <FormField label="Message"
+                                   description="Plain text, shown to every user. Say what is happening and what they should do.">
+                            <Textarea value={this.state.maintenanceMessage}
+                                      rows={3}
+                                      disabled={this.state.maintenanceUpdating}
+                                      placeholder="The HPC scheduler is closed for a cluster upgrade. Running desktops are unaffected."
+                                      onChange={(event) => this.setState({maintenanceMessage: event.detail.value})}/>
+                        </FormField>
+                        <FormField label="End time - optional"
+                                   description="ISO 8601, for example 2026-09-15T18:00:00Z. A value with no offset is read as UTC, and each user sees it in their own timezone. Leave empty to show no end time.">
+                            <Input value={this.state.maintenanceEndsAt}
+                                   disabled={this.state.maintenanceUpdating}
+                                   placeholder="2026-09-15T18:00:00Z"
+                                   onChange={(event) => this.setState({maintenanceEndsAt: event.detail.value})}/>
+                        </FormField>
+                        <Box>
+                            <Button variant={"primary"}
+                                    loading={this.state.maintenanceUpdating}
+                                    onClick={this.saveMaintenance}>Save</Button>
+                        </Box>
+                        <Alert type="info">
+                            The banner does not cover the few minutes while the cluster-manager module is being replaced,
+                            when the portal is down and serves nothing. Announce that separately.
+                        </Alert>
+                    </SpaceBetween>
+                </Container>
+            </SpaceBetween>
         )
     }
 
@@ -474,7 +588,7 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                 ]}
                 header={(
                     <Header variant={"h1"}
-                            description={"View cluster settings. Every setting on this page is read-only except the Bedrock tab; use idea-admin.sh to update the rest."}
+                            description={"View cluster settings. Every setting on this page is read-only except the Maintenance and Bedrock tabs; use idea-admin.sh to update the rest."}
                             actions={(<SpaceBetween size={"s"}>
                                 <Button variant={"primary"} onClick={() => this.props.navigate('/cluster/status')}>View Cluster Status</Button>
                             </SpaceBetween>)}>
@@ -850,6 +964,11 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                                             </Container>}
                                         </SpaceBetween>
                                     )
+                                },
+                                {
+                                    label: 'Maintenance',
+                                    id: 'maintenance',
+                                    content: this.buildMaintenanceSettings()
                                 },
                                 {
                                     label: 'Bedrock',

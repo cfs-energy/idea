@@ -1,6 +1,6 @@
 {
   "name": "web-portal", 
-  "version": "26.08.0", 
+  "version": "26.09.0", 
   "private": true,
   "dependencies": {
     "@cloudscape-design/collection-hooks": "^1.0.0",

@@ -340,6 +340,9 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
             ami_id=Utils.get_value_as_string(
                 software_stacks_constants.SOFTWARE_STACK_DB_AMI_ID_KEY, db_entry
             ),
+            base_ami_id=Utils.get_value_as_string(
+                software_stacks_constants.SOFTWARE_STACK_DB_BASE_AMI_ID_KEY, db_entry
+            ),
             enabled=Utils.get_value_as_bool(
                 software_stacks_constants.SOFTWARE_STACK_DB_ENABLED_KEY, db_entry
             ),
@@ -503,6 +506,7 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
                 software_stack.updated_on
             ),
             software_stacks_constants.SOFTWARE_STACK_DB_AMI_ID_KEY: software_stack.ami_id,
+            software_stacks_constants.SOFTWARE_STACK_DB_BASE_AMI_ID_KEY: software_stack.base_ami_id,
             software_stacks_constants.SOFTWARE_STACK_DB_ENABLED_KEY: software_stack.enabled,
             software_stacks_constants.SOFTWARE_STACK_DB_MIN_STORAGE_VALUE_KEY: str(
                 software_stack.min_storage.value

@@ -153,20 +153,14 @@ const PROJECT_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<Project>[] =
     }
 ]
 
-// us.anthropic.claude-opus-5 -> claude-opus-5, us.anthropic.claude-haiku-4-5-20251001-v1:0 -> claude-haiku-4-5-20251001
-const shortModelName = (modelId: string): string => modelId
-    .replace(/^(us|eu|apac|global)\./, '')
-    .replace(/^(anthropic|amazon|meta)\./, '')
-    .replace(/-v\d+:\d+$/, '')
-
 // shown only when bedrock.enabled. usageLoggingManaged (invocation_logging.manage_configuration
 // off) makes a zero mean "not collected", not "no usage".
 const buildBedrockUsageColumn = (usageLoggingManaged: boolean): TableProps.ColumnDefinition<Project> => ({
     id: 'bedrock-usage',
     header: (
         <Popover
-            header="AI usage, month to date"
-            content="Tokens per model, recorded by Amazon Bedrock model invocation logging and attributed to the project. The cost beside them is month to date Bedrock spend from Cost Explorer for the project cost allocation tag, which trails the recorded tokens by about a day and is not backfilled for activity recorded before the tags were activated. Per user attribution is available through the usage API."
+            header="AI usage, last 30 days"
+            content="Tokens over the last 30 days, recorded by Amazon Bedrock model invocation logging and attributed to the project. The cost beside them is Bedrock spend from AWS Cost Explorer for the same 30 days and the project cost allocation tag, so it trails the tokens by about a day and is not backfilled for activity recorded before the tags were activated. Project budgets are still enforced per calendar month by AWS Budgets, and the breakdown per model and per user is on the AI Usage page."
             triggerType="text"
             dismissButton={false}
         >
@@ -199,22 +193,13 @@ const buildBedrockUsageColumn = (usageLoggingManaged: boolean): TableProps.Colum
             return <span style={{color: 'grey'}}>No usage recorded</span>
         }
         // no answer from cost explorer must never read as zero spend.
-        const spendLabel = (usage.spend_is_unavailable || !usage.spend) ? 'cost unavailable' : `${Utils.getFormattedAmount(usage.spend)} MTD`
-        const models = usage.by_model ?? []
+        const spendLabel = (usage.spend_is_unavailable || !usage.spend) ? 'cost unavailable' : `${Utils.getFormattedAmount(usage.spend)} (30d)`
         return (
             <SpaceBetween size="xxs" direction="vertical">
                 <Box variant="awsui-key-label">{totalTokens.toLocaleString()} tokens, {spendLabel}</Box>
                 <Box fontSize="body-s" color="text-body-secondary">
-                    {Utils.asNumber(usage.invocations, 0).toLocaleString()} {Utils.asNumber(usage.invocations, 0) === 1 ? 'request' : 'requests'} in {usage.period}
+                    {Utils.asNumber(usage.invocations, 0).toLocaleString()} {Utils.asNumber(usage.invocations, 0) === 1 ? 'request' : 'requests'} in the last 30 days
                 </Box>
-                {models.length > 0 &&
-                    <div>
-                        {models.map((entry, index) => {
-                            return <Box key={index} fontSize="body-s"
-                                        color="text-body-secondary">{shortModelName(entry.model_id ?? '')}: {Utils.asNumber(entry.total_tokens, 0).toLocaleString()}</Box>
-                        })}
-                    </div>
-                }
             </SpaceBetween>
         )
     },

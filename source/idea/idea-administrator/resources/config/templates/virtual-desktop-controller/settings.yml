@@ -54,6 +54,11 @@ controller:
       priority: 13
       path_patterns: [ '/{{ module_id }}/*' ]
 
+events:
+  # how many times an event whose handler keeps failing is redelivered before the
+  # controller deletes it, so one bad event cannot block the queue indefinitely
+  max_receive_count: 3
+
 dcv_broker:
   autoscaling:
     public: false
@@ -147,6 +152,8 @@ opensearch:
 
 dcv_session:
   idle_timeout: 240 # in minutes. Default is 240-minutes / 4-hours
+  # run dnf -y update on the first boot of rhel/rocky/al2023 desktops; ubuntu always updates
+  first_boot_dnf_update: false
   idle_timeout_warning: 300 # in seconds
   idle_autostop_delay: 60 # Time (in minutes) a disconnected (but running) DCV session is eligible for autostop. Default is 60-minutes / 1-hour
   idle_autostop_delay_max: 240 # Upper bound (in minutes) for the per-session idle_autostop_delay a user may set. Set to 0 to disable per-session overrides

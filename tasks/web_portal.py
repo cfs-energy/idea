@@ -63,6 +63,7 @@ def typings(c):
     add_model('app')
     add_model('email_templates')
     add_model('notifications')
+    add_model('my_costs')
 
     # prefix with project root and make platform-agnostic for linux, mac, windows support
     modules = []

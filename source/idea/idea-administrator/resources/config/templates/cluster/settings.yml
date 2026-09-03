@@ -37,6 +37,16 @@ network:
     {{ utils.to_yaml(client_ip) | indent(4) }}
   ssh_key_pair: "{{ssh_key_pair_name}}"
 
+  # subnet in the availability zone of a single-AZ shared filesystem, for example an FSx
+  # for NetApp ONTAP single-AZ file system. jobs and desktops submitted without an explicit
+  # subnet try it first and fall back to the other private subnets. leave empty to keep the
+  # default placement.
+  # desktops fall back only while
+  # virtual-desktop-controller.dcv_session.network.subnet_autoretry is true, the default;
+  # with autoretry off this is a hard pin. a job that needs a single subnet takes the
+  # preferred one on its first attempt and draws from the others on each retry.
+  preferred_subnet_id: ""
+
   {% if use_existing_vpc %}
   use_existing_vpc: true
   vpc_id: "{{vpc_id}}"

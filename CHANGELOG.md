@@ -4,6 +4,57 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
+## [26.09.0] - 2026-08-03
+
+**Upgrade Instructions:**
+* Configuration and code release on top of 26.08.0. Redeploy all modules; there are no base OS, AMI map or schema changes
+* New optional settings, all default off or empty: `cluster.network.preferred_subnet_id`, `virtual-desktop-controller.dcv_session.first_boot_dnf_update`, `cluster-manager.maintenance.{enabled,message,ends_at}`
+* The cluster-manager role gains `pricing:GetProducts`, so redeploy cluster-manager for desktop hours to price
+* `upgrade-cluster` gains `--disable-eol-stacks-in-use`, and `idea-admin.sh` gains `IDEA_ADMIN_NO_TTY` for unattended runs
+```bash
+./idea-admin.sh upgrade-cluster --aws-region $IDEA_AWS_REGION --cluster-name $IDEA_CLUSTER_NAME
+```
+([Upgrade Documentation](https://docs.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/upgrade-cluster))
+
+### **✨ New Features**
+* **My Costs**: Home > My Costs shows each user their own trailing 30 day AI, job and desktop costs, with every figure marked as an estimate
+* **User Costs**: Cluster Management > User Costs lists every user with a measured cost in the window and drills into any one of them
+* **AI Usage Page**: Cluster Management > AI Usage lists every Bedrock project over the trailing 30 days, and breaks the selected project down per model and per user
+* **Custom AMIs**: Scale-Out Computing > Custom AMIs lists the compute and desktop images the cluster launches from with the last build per base OS, and builds new ones from the portal
+* **Desktop Image Build**: `ideactl build-desktop-image` builds a DCV host image per base OS, so desktops provision in minutes rather than about 15
+* **Refresh Base Stack AMIs**: Administrators can refresh the base software stack AMIs from the portal, all base stacks or a selection, with per-stack results
+* **Maintenance Banner**: `cluster-manager.maintenance.enabled`, `.message` and `.ends_at` put a warning banner on every portal page and make the scheduler refuse job submissions with the same message, with no redeploy
+* **AZ Preference**: Jobs and desktops without an explicit subnet prefer `cluster.network.preferred_subnet_id` and keep the other subnets as capacity fallback
+* **Desktop Updates**: Opt-in first-boot `dnf update` for RHEL, Rocky Linux and Amazon Linux 2023 desktops
+* **Non-Interactive Admin**: `IDEA_ADMIN_NO_TTY=true ./idea-admin.sh <cmd> --force` runs fully unattended
+* **End-of-Life Stacks**: `upgrade-cluster --disable-eol-stacks-in-use` disables the blocking end-of-life software stacks and continues instead of aborting the upgrade
+* **Bedrock**: A failed reconcile records an error state on the project instead of passing unnoticed
+
+### **🔧 Improvements**
+* **AI Usage**: The Projects page column reports the trailing 30 days rather than the calendar month, so a project used late in the previous month no longer reads as unused on the first; aggregation runs every 15 minutes and project budgets stay on the calendar month through AWS Budgets
+* **Upgrades**: `upgrade-cluster` restores a missing `values.yml` from the cluster bucket and saves it back after a successful upgrade
+* **Config**: Empty list values are stored as empty lists instead of DynamoDB NULL
+* **Admin Image**: Ships `awscrt` so `aws login` credential profiles work, and pins `greenlet` in the lock file
+* **Tests**: Added the missing coverage for architecture-mismatch validation, for EC2 lookup failure tolerance and queue profile save rejection
+* **CI**: The build fails when the admin wrapper revision does not match `IDEA_VERSION.txt`
+* **Release Publishing**: The workflow runs again, with the AWS CLI installer unpacked outside the checkout so the secret scan no longer walks the 25,000 files it left in the workspace; the published repository is named by a new `image_name` input that a dispatch from a branch other than `main` has to set
+* **Docs**: New administrator guide for enabling Amazon Bedrock, plus link and package list fixes
+
+### **🐛 Bug Fixes**
+* **AI Usage**: Usage aggregation no longer deletes stored rows when the model invocation log query returns nothing, so a missing or recreated log group cannot wipe every project's recorded usage in the lookback window
+* **Upgrades**: `upgrade-cluster` without `--base-os` keeps the base OS the cluster already runs instead of defaulting to Amazon Linux 2023, which with `--force` redeployed every module onto a different OS without a prompt; the upgrade refuses to start when the current value cannot be read
+* **Compute Images**: `upgrade-cluster` keeps the compute image the cluster runs when it was built from the Custom AMIs page and is newer than the release image, instead of resetting `scheduler.compute_node_ami` to the stock AMI on every upgrade; an older built image is still replaced and the run says so
+* **Credentials**: SSO profiles no longer send the admin CLI into infinite recursion, and an initialization failure reports the underlying error
+* **Software Stacks**: The controller reconciles the search index against DynamoDB at startup, so a deletion made outside the portal cannot leave a stack listed; `update-base-stacks` Rocky Linux patterns now match RESF image names
+* **Provisioning**: A failed compute stack costs one retry rather than two, a stack that cannot be deleted still counts each cycle so the retry cap holds the job with a visible reason, and controller sweeps resume where they stopped instead of rescanning the same page
+* **Desktops**: The Ubuntu first-boot upgrade runs noninteractively, so a debconf prompt cannot hang provisioning
+* **Desktop Events**: One failing event no longer blocks the controller queue: a message whose handler keeps failing is dropped after `virtual-desktop-controller.events.max_receive_count` receives, 3 by default, with its id, event type and session logged. A scheduled stop no longer fails for a host that never registered with SSM
+* **Web Portal**: The API invoker honors its timeout option instead of a fixed 11 minutes
+* **API**: Application tokens carrying the right module scope are accepted by the virtual desktop admin and DCV broker APIs; session material and username-coupled namespaces stay admin-user only
+* **File Browser**: The header checkbox and Ctrl+A select every entry in the directory listing rather than the current page, the header count reads "N of M selected", and Escape clears the selection
+* **Costs outside the commercial partition**: Instance hours are priced from the public AWS price list files when the Pricing API is unreachable, so desktop and job costs are no longer blank or zero in GovCloud and China regions. The cluster needs outbound HTTPS to `pricing.us-east-1.amazonaws.com`, the price map is built in the background and refreshed daily, and costs read "Not available" until the first load completes
+* **Job Costs**: A job the scheduler could not price records that on its estimate, so My Costs and User Costs read "Not available" instead of $0.00, while a job that genuinely cost nothing still reads $0.00
+
 ## [26.08.0] - 2026-08-28
 
 **Upgrade Instructions:**

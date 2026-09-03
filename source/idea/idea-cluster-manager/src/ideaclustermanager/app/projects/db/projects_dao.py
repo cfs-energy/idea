@@ -79,6 +79,9 @@ class ProjectsDAO:
         db_bedrock = Utils.get_value_as_dict('bedrock', project)
         bedrock = None
         if db_bedrock is not None:
+            reconcile_error_on = Utils.get_value_as_int(
+                'reconcile_error_on', db_bedrock
+            )
             bedrock = ProjectBedrockConfig(
                 enabled=Utils.get_value_as_bool('enabled', db_bedrock, False),
                 model_ids=Utils.get_value_as_list('model_ids', db_bedrock, []),
@@ -91,6 +94,12 @@ class ProjectsDAO:
                 ),
                 model_errors=Utils.get_value_as_dict('model_errors', db_bedrock),
                 policy_errors=Utils.get_value_as_dict('policy_errors', db_bedrock),
+                reconcile_error=Utils.get_value_as_string(
+                    'reconcile_error', db_bedrock
+                ),
+                reconcile_error_on=arrow.get(reconcile_error_on).datetime
+                if reconcile_error_on is not None
+                else None,
             )
 
         db_tags = Utils.get_value_as_dict('tags', project)
@@ -172,6 +181,12 @@ class ProjectsDAO:
                 db_bedrock['model_errors'] = project.bedrock.model_errors
             if project.bedrock.policy_errors is not None:
                 db_bedrock['policy_errors'] = project.bedrock.policy_errors
+            if project.bedrock.reconcile_error is not None:
+                db_bedrock['reconcile_error'] = project.bedrock.reconcile_error
+            if project.bedrock.reconcile_error_on is not None:
+                db_bedrock['reconcile_error_on'] = Utils.to_milliseconds(
+                    project.bedrock.reconcile_error_on
+                )
             db_project['bedrock'] = db_bedrock
 
         return db_project

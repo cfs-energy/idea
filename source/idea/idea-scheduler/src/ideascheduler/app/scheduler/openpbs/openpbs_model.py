@@ -517,12 +517,14 @@ class OpenPBSJob(SocaBaseModel):
 
         if job_builder is None:
             # the project is passed so params are rebuilt against the project's current
-            # bedrock state on every read, rather than a value pinned at submission.
+            # bedrock state on every read, rather than a value pinned at submission. the
+            # job id goes with it so a subnet choice can tell a retry from a first attempt.
             job_builder = SocaJobBuilder(
                 context=context,
                 params=params,
                 queue_profile=queue_profile,
                 project=project,
+                job_id=job_id,
             )
 
         job_params, provisioning_options = job_builder.build()

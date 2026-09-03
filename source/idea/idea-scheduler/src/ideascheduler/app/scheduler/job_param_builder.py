@@ -348,6 +348,14 @@ class JobParamsBuilderContextProtocol(ABC):
         """
         return None
 
+    @property
+    def job_id(self) -> Optional[str]:
+        """
+        the job's id, when the caller knows it. the validation and estimate paths build
+        params for a job that does not exist yet and leave it unset.
+        """
+        return None
+
 
 class BaseParamBuilder(ParamBuilderProtocol, ABC):
     def __init__(self, context: JobParamsBuilderContextProtocol, job_param: str):
@@ -1870,6 +1878,47 @@ class SubnetIdsParamBuilder(BaseParamBuilder):
             subnet_ids = self.default()
         self.result.subnet_ids = subnet_ids
 
+    def _preferred_subnet_id(self, subnet_ids: List[str]) -> Optional[str]:
+        """
+        cluster.network.preferred_subnet_id when it is set and is one of subnet_ids. it
+        names the subnet holding a single-AZ shared filesystem, so jobs submitted without
+        an explicit subnet_id keep their I/O in that zone. empty is the default.
+        """
+        preferred = self.context.soca_context.config().get_string(
+            'cluster.network.preferred_subnet_id', default=None
+        )
+        if Utils.is_empty(preferred) or preferred not in subnet_ids:
+            return None
+        return preferred
+
+    def _provisioning_retry_count(self) -> int:
+        """
+        how many times this job's provisioning has already failed. 0 for a job that has
+        never been provisioned, and for the validation paths that build params without one.
+        """
+        job_id = self.context.job_id
+        if Utils.is_empty(job_id):
+            return 0
+        return self.context.soca_context.job_cache.get_job_provisioning_retry_count(
+            job_id
+        )
+
+    def _single_subnet(self, subnet_ids: List[str]) -> str:
+        """
+        one subnet for a job that cannot spread across several: multi node on-demand, EFA
+        or a placement group. the preferred subnet takes the first attempt and every retry
+        draws from the others, so one zone out of capacity cannot burn the whole retry
+        budget. the pick is random when no preferred subnet is set.
+        """
+        preferred = self._preferred_subnet_id(subnet_ids)
+        if preferred is None:
+            return random.choice(subnet_ids)
+        if self._provisioning_retry_count() == 0:
+            return preferred
+        others = [subnet_id for subnet_id in subnet_ids if subnet_id != preferred]
+        # nothing to fall back to when the preferred subnet is the only candidate
+        return random.choice(others) if others else preferred
+
     def default(self) -> List[str]:
         default_subnet_ids = None
         if self.default_job_params:
@@ -1885,15 +1934,26 @@ class SubnetIdsParamBuilder(BaseParamBuilder):
             nodes = nodes_builder.default()
 
         if default_subnet_ids is None or len(default_subnet_ids) == 0:
+            private_subnets = self.context.soca_context.config().get_list(
+                'cluster.network.private_subnets', required=True
+            )
+            preferred = self._preferred_subnet_id(private_subnets)
             if self.is_spot_capacity() or self.is_mixed_capacity() or nodes == 1:
-                default_subnet_ids = self.context.soca_context.config().get_list(
-                    'cluster.network.private_subnets', required=True
-                )
+                # preferred subnet first, the rest behind it. the provisioner hands the
+                # whole list to the ASG or SpotFleet, so a capacity failure in the
+                # preferred zone falls back to the others. the order is a preference,
+                # not a guarantee: EC2 distributes across the list.
+                if preferred is not None:
+                    default_subnet_ids = [preferred] + [
+                        subnet_id
+                        for subnet_id in private_subnets
+                        if subnet_id != preferred
+                    ]
+                else:
+                    default_subnet_ids = private_subnets
             else:
-                private_subnets = self.context.soca_context.config().get_list(
-                    'cluster.network.private_subnets', required=True
-                )
-                default_subnet_ids = [random.choice(private_subnets)]
+                # multi-node on-demand keeps all nodes in a single subnet.
+                default_subnet_ids = [self._single_subnet(private_subnets)]
 
         if len(default_subnet_ids) == 1:
             return default_subnet_ids
@@ -1912,7 +1972,7 @@ class SubnetIdsParamBuilder(BaseParamBuilder):
         )
         enable_efa_support = enable_efa_support_builder.get()
         if enable_efa_support and len(default_subnet_ids) > 1 and nodes > 1:
-            return [random.choice(default_subnet_ids)]
+            return [self._single_subnet(default_subnet_ids)]
 
         # if PlacementGroup is enabled, multiple subnets cannot be supported.
         enable_placement_group_builder = self.context.get_builder(
@@ -1920,7 +1980,7 @@ class SubnetIdsParamBuilder(BaseParamBuilder):
         )
         enable_placement_group = enable_placement_group_builder.get()
         if enable_placement_group and len(default_subnet_ids) > 1:
-            return [random.choice(default_subnet_ids)]
+            return [self._single_subnet(default_subnet_ids)]
 
         return default_subnet_ids
 
@@ -3466,9 +3526,11 @@ class JobParamsBuilderContext(JobParamsBuilderContextProtocol):
         queue_profile: Optional[HpcQueueProfile] = None,
         stack_uuid: Optional[str] = None,
         project: Optional[str] = None,
+        job_id: Optional[str] = None,
     ):
         self._params = params
         self._project = project
+        self._job_id = job_id
 
         if Utils.is_empty(stack_uuid) and queue_profile is not None:
             stack_uuid = queue_profile.stack_uuid
@@ -3702,6 +3764,10 @@ class JobParamsBuilderContext(JobParamsBuilderContextProtocol):
     def project(self) -> Optional[str]:
         return self._project
 
+    @property
+    def job_id(self) -> Optional[str]:
+        return self._job_id
+
     def is_failed(self, *params: str) -> bool:
         for param in params:
             if param in self._failed_params:
@@ -3725,6 +3791,7 @@ class SocaJobBuilder:
         queue_profile: HpcQueueProfile = None,
         stack_uuid: Optional[str] = None,
         project: Optional[str] = None,
+        job_id: Optional[str] = None,
     ):
         self._context = JobParamsBuilderContext(
             context=context,
@@ -3732,6 +3799,7 @@ class SocaJobBuilder:
             queue_profile=queue_profile,
             stack_uuid=stack_uuid,
             project=project,
+            job_id=job_id,
         )
 
     def validate(self) -> JobValidationResult:

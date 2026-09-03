@@ -148,6 +148,15 @@ Some instance types are On-Demand only, the HPC families among them. A spot requ
 If you specify more than 1 subnet and have `placement_group` set to True, IDEA will automatically provision capacity and placement group on the first subnet from the list
 {% endhint %}
 
+Administrators can set `cluster.network.preferred_subnet_id` in the cluster configuration. Jobs that
+do not pass `subnet_id` themselves then try the preferred subnet first, and the remaining private
+subnets stay available, so a capacity shortfall in the preferred zone still provisions elsewhere.
+Point it at the subnet holding a single availability zone shared filesystem to keep job I/O out of a
+cross zone path.
+
+The same setting places virtual desktops, so one value covers both. Leaving it empty preserves the
+random selection described above, and a job that passes `subnet_id` explicitly is never affected.
+
 ## Storage <a href="#storage" id="storage"></a>
 
 {% hint style="info" %}

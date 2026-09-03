@@ -66,6 +66,11 @@ CLUSTER_MANAGER_SETTINGS = {
             'url': 'https://dashboard.example.com/view',
         },
     },
+    'maintenance': {
+        'enabled': True,
+        'message': 'Scheduler closed for the 26.09 upgrade.',
+        'ends_at': '2026-09-15T18:00:00Z',
+    },
 }
 
 GLOBAL_SETTINGS = {
@@ -208,7 +213,7 @@ class TestClusterSettingsScoping(unittest.TestCase):
                 )
 
     def test_user_sees_exact_cluster_manager_projection(self):
-        """cluster-manager projects only the optional dashboard embed keys"""
+        """cluster-manager projects the optional dashboard embed and the maintenance banner"""
         settings = self.invoke_get_module_settings(
             'cluster-manager', CLUSTER_MANAGER_SETTINGS, elevated=False
         )
@@ -225,8 +230,17 @@ class TestClusterSettingsScoping(unittest.TestCase):
                         'url': 'https://dashboard.example.com/view',
                     }
                 },
+                # every user has to read these three: the banner is shown to all of them
+                'maintenance': {
+                    'enabled': True,
+                    'message': 'Scheduler closed for the 26.09 upgrade.',
+                    'ends_at': '2026-09-15T18:00:00Z',
+                },
             },
         )
+        # the client id and secret sit beside them in the same module and must not ride along
+        self.assertNotIn('client_id', settings)
+        self.assertNotIn('client_secret', settings)
 
     def test_unknown_module_projects_to_empty(self):
         """Modules with no allowlist entry serialize as an empty dict for users"""
@@ -251,11 +265,15 @@ class TestClusterSettingsScoping(unittest.TestCase):
         settings = self.invoke_get_module_settings(
             'cluster-manager', CLUSTER_MANAGER_BEDROCK_SETTINGS, elevated=False
         )
-        # the custom-dashboard paths are allowlisted for this module as well, so
-        # their empty parent scaffold rides along.
+        # the custom-dashboard and maintenance paths are allowlisted for this module as
+        # well, so their empty parent scaffolds ride along.
         self.assertEqual(
             settings,
-            {'bedrock': {'enabled': True}, 'web_portal': {'custom_dashboard': {}}},
+            {
+                'bedrock': {'enabled': True},
+                'web_portal': {'custom_dashboard': {}},
+                'maintenance': {},
+            },
         )
 
     def test_admin_sees_the_bedrock_catalog(self):

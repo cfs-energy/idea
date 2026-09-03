@@ -182,6 +182,27 @@ class TestClusterSettingsValidation(unittest.TestCase):
 
         self.assertIn('invalid_nested', str(context.exception))
 
+    def test_the_scheduler_default_image_is_allowed(self):
+        """the custom amis page writes this flat key when a build is adopted"""
+
+        self.api.validate_settings_allowed(
+            'scheduler', {'compute_node_ami': 'ami-0123'}
+        )
+
+    def test_another_scheduler_setting_is_still_rejected(self):
+        """the allowance is one key wide, not the whole scheduler module"""
+
+        with self.assertRaises(exceptions.SocaException) as context:
+            self.api.validate_settings_allowed(
+                'scheduler',
+                {'compute_node_ami': 'ami-0123', 'compute_node_os': 'rocky9'},
+            )
+
+        self.assertIn(
+            'not allowed to be updated via web UI: compute_node_os.',
+            str(context.exception),
+        )
+
 
 if __name__ == '__main__':
     print('Testing cluster settings validation...')

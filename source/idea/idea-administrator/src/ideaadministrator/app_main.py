@@ -21,6 +21,7 @@ from ideadatamodel import (
 )
 from ideadatamodel.constants import CLICK_SETTINGS
 from ideasdk.utils import Utils, ModuleMetadataHelper
+from ideasdk.aws.image_builds import COMPUTE_IMAGE_PREFIX, image_state
 from ideasdk.user_input.framework import SocaUserInputParamRegistry, SocaUserInputArgs
 from ideasdk.config.cluster_config_db import ClusterConfigDB
 from ideasdk.config.cluster_config import ClusterConfig
@@ -52,8 +53,9 @@ from ideaadministrator.app.directory_service_helper import DirectoryServiceHelpe
 from ideaadministrator.app.shared_storage_helper import SharedStorageHelper
 
 from prettytable import PrettyTable
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 import os
+import re
 import sys
 import click
 import requests
@@ -308,6 +310,118 @@ def config_generate(
     return values
 
 
+def _values_file_s3_location(
+    cluster_name: str, aws_region: str, aws_profile: str, context: SocaCliContext
+) -> Tuple[str, str]:
+    """(bucket name, s3 key) of the cluster's saved values.yml"""
+    cluster_config_db = ClusterConfigDB(
+        cluster_name=cluster_name, aws_region=aws_region, aws_profile=aws_profile
+    )
+    return (
+        get_bucket_name(cluster_name, aws_region, cluster_config_db, context),
+        ValuesDiff(cluster_name, aws_region).get_values_file_s3_key(),
+    )
+
+
+def download_values_file(
+    cluster_name: str,
+    aws_region: str,
+    aws_profile: str,
+    context: SocaCliContext,
+    values_file: str = None,
+) -> str:
+    """
+    download values.yml from the cluster's s3 bucket to values_file, defaulting to the local
+    cluster region directory. exits naming both locations when the bucket has no copy.
+    """
+    if Utils.is_empty(values_file):
+        values_file = ValuesDiff(cluster_name, aws_region).get_values_file_path()
+
+    bucket_name, s3_key = _values_file_s3_location(
+        cluster_name, aws_region, aws_profile, context
+    )
+
+    try:
+        response = context.aws().s3().get_object(Bucket=bucket_name, Key=s3_key)
+    except Exception as e:
+        context.error(
+            f'Values file not found at {values_file} and could not be downloaded from '
+            f's3://{bucket_name}/{s3_key}: {e}. Restore values.yml to {values_file} from '
+            f'a backup, then upload it with: idea-admin.sh config save-values'
+        )
+        raise SystemExit(1)
+
+    with open(values_file, 'w') as f:
+        f.write(Utils.to_yaml(Utils.from_yaml(response['Body'])))
+
+    context.info(f'downloaded s3://{bucket_name}/{s3_key} to {values_file}')
+    return values_file
+
+
+def _warn_values_file_drift(
+    context: SocaCliContext,
+    cluster_name: str,
+    aws_region: str,
+    aws_profile: str,
+    values_file: str,
+) -> None:
+    """
+    The local values.yml is the one the upgrade uses, so say so when the cluster's bucket holds a
+    different one. Best effort: a bucket that cannot be read is not a reason to stop an upgrade.
+    """
+    try:
+        bucket_name, s3_key = _values_file_s3_location(
+            cluster_name, aws_region, aws_profile, context
+        )
+        response = context.aws().s3().get_object(Bucket=bucket_name, Key=s3_key)
+        saved = Utils.get_as_dict(Utils.from_yaml(response['Body']), {})
+        with open(values_file, 'r') as f:
+            local = Utils.get_as_dict(Utils.from_yaml(f.read()), {})
+    except Exception:
+        return
+
+    differing = sorted(
+        key for key in set(saved) | set(local) if saved.get(key) != local.get(key)
+    )
+    if not differing:
+        return
+
+    shown = ', '.join(differing[:10])
+    if len(differing) > 10:
+        shown += f', and {len(differing) - 10} more'
+    context.warning(
+        f'the local {values_file} and s3://{bucket_name}/{s3_key} differ in '
+        f'{len(differing)} key(s): {shown}. The upgrade uses the local copy.'
+    )
+
+
+def upload_values_file(
+    cluster_name: str,
+    aws_region: str,
+    aws_profile: str,
+    context: SocaCliContext,
+    values_file: str = None,
+) -> str:
+    """
+    upload values.yml to the cluster's s3 bucket, defaulting to the local cluster region
+    directory. returns the s3 uri written.
+    """
+    values_diff = ValuesDiff(cluster_name, aws_region)
+    if Utils.is_empty(values_file):
+        values_file = values_diff.get_values_file_path()
+
+    cluster_config_db = ClusterConfigDB(
+        cluster_name=cluster_name, aws_region=aws_region, aws_profile=aws_profile
+    )
+    bucket_name = get_bucket_name(cluster_name, aws_region, cluster_config_db, context)
+    s3_key = values_diff.get_values_file_s3_key()
+
+    context.aws().s3().upload_file(Bucket=bucket_name, Filename=values_file, Key=s3_key)
+
+    context.info(f'saved {values_file} to s3://{bucket_name}/{s3_key}')
+    return f's3://{bucket_name}/{s3_key}'
+
+
 @config.command('save-values', context_settings=CLICK_SETTINGS)
 @click.option('--cluster-name', required=True, help='Cluster Name')
 @click.option('--aws-profile', help='AWS Profile')
@@ -322,22 +436,11 @@ def save_values(cluster_name: str, aws_profile: str, aws_region: str, values_fil
         options=SocaContextOptions(enable_aws_client_provider=True)
     )
 
-    cluster_config_db = ClusterConfigDB(
-        cluster_name=cluster_name, aws_region=aws_region, aws_profile=aws_profile
-    )
-
-    bucket_name = get_bucket_name(cluster_name, aws_region, cluster_config_db, context)
-
-    values_diff = ValuesDiff(cluster_name, aws_region)
-
     if Utils.is_empty(values_file):
-        values_file = values_diff.get_values_file_path()
+        values_file = ValuesDiff(cluster_name, aws_region).get_values_file_path()
         print_using_default_warning('Values file', values_file, context)
 
-    context.info(f'Saving in bucket: {bucket_name} at location: values/value.yml')
-    context.aws().s3().upload_file(
-        Bucket=bucket_name, Filename=values_file, Key='values/values.yml'
-    )
+    upload_values_file(cluster_name, aws_region, aws_profile, context, values_file)
 
 
 @config.command('update', context_settings=CLICK_SETTINGS)
@@ -711,33 +814,18 @@ def download_values(
         options=SocaContextOptions(enable_aws_client_provider=True)
     )
 
-    cluster_config_db = ClusterConfigDB(
-        cluster_name=cluster_name, aws_region=aws_region, aws_profile=aws_profile
-    )
-
-    values_diff = ValuesDiff(cluster_name, aws_region)
+    values_file = None
     if Utils.is_empty(values_dir):
-        values_file = values_diff.get_values_file_path()
         print_using_default_warning(
-            'Values file directory', values_diff.get_cluster_region_dir(), context
+            'Values file directory',
+            ValuesDiff(cluster_name, aws_region).get_cluster_region_dir(),
+            context,
         )
     else:
         os.makedirs(values_dir, exist_ok=True)
         values_file = os.path.join(values_dir, 'values.yml')
 
-    bucket_name = get_bucket_name(cluster_name, aws_region, cluster_config_db, context)
-
-    response = (
-        context.aws()
-        .s3()
-        .get_object(Bucket=bucket_name, Key=values_diff.get_values_file_s3_key())
-    )
-
-    values = Utils.from_yaml(response['Body'])
-
-    print(f'saving values to: {values_file}')
-    with open(values_file, 'w') as f:
-        f.write(Utils.to_yaml(values))
+    download_values_file(cluster_name, aws_region, aws_profile, context, values_file)
 
 
 @config.command('diff', context_settings=CLICK_SETTINGS)
@@ -2354,12 +2442,22 @@ def _find_eol_base_os_references(db: ClusterConfigDB) -> List[str]:
     return findings
 
 
-def _delete_eol_software_stacks(context, db: ClusterConfigDB):
+def _describe_stack(stack: Dict) -> str:
+    return (
+        f'{Utils.get_value_as_string("stack_id", stack)} '
+        f'({Utils.get_value_as_string("name", stack, "<unnamed>")}, '
+        f'{Utils.get_value_as_string("architecture", stack, "<unknown>")})'
+    )
+
+
+def _plan_eol_software_stacks(db: ClusterConfigDB) -> List[Dict]:
     """
-    Delete eVDI software stacks on an end-of-life base_os: they can no longer launch, and the
-    admin cannot edit a stack's base_os. A stack a live session still references aborts the
-    upgrade instead, with nothing deleted, because that desktop must be deleted by hand first.
+    Read-only: what the upgrade would do to eVDI software stacks on an end-of-life base_os.
+    They can no longer launch and their base_os cannot be edited, so they are deleted; a stack
+    a live session still references is disabled instead, leaving running desktops untouched.
+    One entry per eVDI module.
     """
+    plans = []
     for module in db.get_cluster_modules():
         module_id = Utils.get_value_as_string('module_id', module)
         module_name = Utils.get_value_as_string('name', module)
@@ -2381,7 +2479,7 @@ def _delete_eol_software_stacks(context, db: ClusterConfigDB):
         eol_stack_ids = {
             Utils.get_value_as_string('stack_id', stack) for stack in eol_stacks
         }
-        sessions = []
+        sessions: List[Dict] = []
         for session in _scan_module_table(
             db, f'{db.cluster_name}.{module_id}.controller.user-sessions'
         ):
@@ -2389,56 +2487,138 @@ def _delete_eol_software_stacks(context, db: ClusterConfigDB):
                 continue
             software_stack = Utils.get_value_as_dict('software_stack', session, {})
             stack_id = Utils.get_value_as_string('stack_id', software_stack)
-            stack_base_os = Utils.get_value_as_string('base_os', software_stack)
-            session_base_os = Utils.get_value_as_string('base_os', session)
-            if (
-                stack_id in eol_stack_ids
-                or stack_base_os in constants.EOL_BASEOS
-                or session_base_os in constants.EOL_BASEOS
-            ):
-                owner = Utils.get_value_as_string('owner', session, '<unknown>')
-                idea_session_id = Utils.get_value_as_string(
-                    'idea_session_id', session, '<unknown>'
-                )
+            base_os = Utils.get_value_as_string(
+                'base_os', software_stack
+            ) or Utils.get_value_as_string('base_os', session)
+            if stack_id in eol_stack_ids or base_os in constants.EOL_BASEOS:
                 sessions.append(
-                    f'session {idea_session_id} owned by {owner} on software stack '
-                    f'{stack_id or stack_base_os or session_base_os}'
+                    {
+                        'stack_id': stack_id,
+                        'base_os': base_os,
+                        'session_id': Utils.get_value_as_string(
+                            'idea_session_id', session, '<unknown>'
+                        ),
+                        'owner': Utils.get_value_as_string(
+                            'owner', session, '<unknown>'
+                        ),
+                        'name': Utils.get_value_as_string('name', session, '<unnamed>'),
+                    }
                 )
 
-        if Utils.is_not_empty(sessions):
-            context.error(
-                f'{len(sessions)} virtual desktop session(s) still use a Base OS that has '
-                f'reached end-of-life. Nothing has been deleted.'
-            )
-            for session in sessions:
-                context.error(f'  - {session}')
-            context.error('Delete these virtual desktops, then re-run upgrade-cluster.')
-            raise SystemExit(1)
+        # a session that carries no stack_id can only be matched to a stack by base_os; keying on
+        # the stack reference alone deletes a stack a running desktop is still on.
+        stack_ids_in_use = {
+            session['stack_id'] for session in sessions if session['stack_id']
+        }
+        base_os_in_use = {
+            session['base_os'] for session in sessions if not session['stack_id']
+        }
 
-        table = db.aws.dynamodb_table().Table(stacks_table)
+        to_delete, to_disable = [], []
         for stack in eol_stacks:
-            stack_id = Utils.get_value_as_string('stack_id', stack)
+            in_use = (
+                Utils.get_value_as_string('stack_id', stack) in stack_ids_in_use
+                or Utils.get_value_as_string('base_os', stack) in base_os_in_use
+            )
+            (to_disable if in_use else to_delete).append(stack)
+
+        plans.append(
+            {
+                'stacks_table': stacks_table,
+                'sessions': sessions,
+                'to_delete': to_delete,
+                'to_disable': to_disable,
+            }
+        )
+    return plans
+
+
+def _stack_sessions(plan: Dict, stack: Dict) -> List[Dict]:
+    stack_id = Utils.get_value_as_string('stack_id', stack)
+    stack_base_os = Utils.get_value_as_string('base_os', stack)
+    return [
+        session
+        for session in plan['sessions']
+        if session['stack_id'] == stack_id
+        or (not session['stack_id'] and session['base_os'] == stack_base_os)
+    ]
+
+
+def _apply_eol_software_stacks(
+    context, cluster_name: str, aws_region: str, aws_profile: str, plans: List[Dict]
+) -> None:
+    """
+    Delete or disable the software stacks _plan_eol_software_stacks found. Called only once the
+    upgrade is confirmed: this is the first change the upgrade makes to the cluster.
+    """
+    if not plans:
+        return
+    db = ClusterConfigDB(
+        cluster_name=cluster_name, aws_region=aws_region, aws_profile=aws_profile
+    )
+    disabled = 0
+    for plan in plans:
+        table = db.aws.dynamodb_table().Table(plan['stacks_table'])
+        for stack in plan['to_disable']:
+            # enabled is a DynamoDB reserved word, hence the expression attribute name
+            table.update_item(
+                Key={
+                    'base_os': Utils.get_value_as_string('base_os', stack),
+                    'stack_id': Utils.get_value_as_string('stack_id', stack),
+                },
+                UpdateExpression='SET #enabled = :enabled',
+                ExpressionAttributeNames={'#enabled': 'enabled'},
+                ExpressionAttributeValues={':enabled': False},
+            )
+            disabled += 1
+            still_in_use = ', '.join(
+                f'{session["owner"]} ({session["name"]})'
+                for session in _stack_sessions(plan, stack)
+            )
+            context.info(
+                f'disabled end-of-life eVDI software stack {_describe_stack(stack)}, '
+                f'still in use by {still_in_use}'
+            )
+        for stack in plan['to_delete']:
             table.delete_item(
                 Key={
                     'base_os': Utils.get_value_as_string('base_os', stack),
-                    'stack_id': stack_id,
+                    'stack_id': Utils.get_value_as_string('stack_id', stack),
                 }
             )
-            name = Utils.get_value_as_string('name', stack, '<unnamed>')
-            architecture = Utils.get_value_as_string('architecture', stack, '<unknown>')
             context.info(
-                f'deleted end-of-life eVDI software stack {stack_id} ({name}, {architecture})'
+                f'deleted end-of-life eVDI software stack {_describe_stack(stack)}'
             )
-        context.info(
-            f'deleted {len(eol_stacks)} end-of-life eVDI software stack(s) from {stacks_table}'
+        if plan['to_delete']:
+            context.info(
+                f'deleted {len(plan["to_delete"])} end-of-life eVDI software stack(s) from '
+                f'{plan["stacks_table"]}'
+            )
+
+    if disabled:
+        # the DynamoDB row is the source of truth, but the portal lists stacks from the search
+        # index, so a disabled stack keeps showing as enabled until the index catches up.
+        context.warning(
+            f'{disabled} software stack(s) are disabled in DynamoDB but still read as enabled '
+            f'in the eVDI search index until it is reindexed. The virtual-desktop-controller '
+            f'redeploy later in this upgrade reconciles the index against DynamoDB at startup. '
+            f'To reindex sooner, run "ideactl reindex-software-stacks --reset" on the '
+            f'virtual-desktop-controller host.'
         )
 
 
-def _check_eol_base_os(context, cluster_name: str, aws_region: str, aws_profile: str):
+def _check_eol_base_os(
+    context,
+    cluster_name: str,
+    aws_region: str,
+    aws_profile: str,
+    disable_stacks_in_use: bool = False,
+) -> List[Dict]:
     """
-    Clear every end-of-life base_os reference before the upgrade. Cluster settings and queue
-    profiles are migrated by the admin, eVDI software stacks are deleted here once no session
-    references them.
+    Report every end-of-life base_os reference before the upgrade, changing nothing. Cluster
+    settings and queue profiles are migrated by the admin and stay a hard stop, as does a live
+    session on an end-of-life software stack unless disable_stacks_in_use is set. Returns the
+    software stack plan for _apply_eol_software_stacks to run once the upgrade is confirmed.
     """
     db = ClusterConfigDB(
         cluster_name=cluster_name, aws_region=aws_region, aws_profile=aws_profile
@@ -2462,33 +2642,234 @@ def _check_eol_base_os(context, cluster_name: str, aws_region: str, aws_profile:
         )
         raise SystemExit(1)
 
-    _delete_eol_software_stacks(context, db)
+    plans = _plan_eol_software_stacks(db)
+    sessions = [session for plan in plans for session in plan['sessions']]
+    if sessions and not disable_stacks_in_use:
+        context.error(
+            f'{len(sessions)} virtual desktop session(s) still use a Base OS that has '
+            f'reached end-of-life. Nothing has been changed.'
+        )
+        for session in sessions:
+            context.error(
+                f'  - session {session["session_id"]} owned by {session["owner"]} on software '
+                f'stack {session["stack_id"] or session["base_os"]}'
+            )
+        context.error('Delete these virtual desktops, then re-run upgrade-cluster.')
+        context.error(
+            'Alternatively, re-run upgrade-cluster with --disable-eol-stacks-in-use to '
+            'disable these software stacks and continue.'
+        )
+        raise SystemExit(1)
+
+    for plan in plans:
+        for stack in plan['to_disable']:
+            context.info(
+                f'will disable end-of-life eVDI software stack {_describe_stack(stack)}'
+            )
+        for stack in plan['to_delete']:
+            context.info(
+                f'will delete end-of-life eVDI software stack {_describe_stack(stack)}'
+            )
+    return plans
 
 
-def build_ami_update_entries(ami_id: str, base_os: str) -> List[str]:
+# module name -> the (base_os key, ami key) pairs that module templates, relative to its module
+# id. Every module that templates base_os / instance_ami must appear here, or the module keeps its
+# pre-upgrade OS while the rest of the cluster moves.
+AMI_UPDATE_KEYS = {
+    constants.MODULE_BASTION_HOST: [('base_os', 'instance_ami')],
+    constants.MODULE_CLUSTER_MANAGER: [
+        ('ec2.autoscaling.base_os', 'ec2.autoscaling.instance_ami')
+    ],
+    constants.MODULE_DIRECTORYSERVICE: [('base_os', 'instance_ami')],
+    constants.MODULE_SCHEDULER: [
+        ('base_os', 'instance_ami'),
+        ('compute_node_os', 'compute_node_ami'),
+    ],
+    constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER: [
+        ('controller.autoscaling.base_os', 'controller.autoscaling.instance_ami'),
+        ('dcv_broker.autoscaling.base_os', 'dcv_broker.autoscaling.instance_ami'),
+        (
+            'dcv_connection_gateway.autoscaling.base_os',
+            'dcv_connection_gateway.autoscaling.instance_ami',
+        ),
+    ],
+}
+
+
+def build_ami_update_entries(
+    ami_id: str, base_os: str, modules: List[Dict], keep_keys: Optional[Set[str]] = None
+) -> List[str]:
     """
-    Build the `config set` entries applied by upgrade_cluster Phase 3.
-    Every module that templates base_os / instance_ami must appear here, or the
-    module keeps its pre-upgrade OS while the rest of the cluster moves.
+    The `config set` entries applied by upgrade_cluster Phase 3, for the modules this cluster
+    actually deploys. Module ids come from the cluster config: config keys are prefixed with
+    the module id, so a hardcoded id writes nothing on a cluster that renamed its modules.
+
+    A key named in keep_keys keeps its current value, and so does the other half of its pair:
+    writing one without the other leaves the module's base OS and AMI disagreeing.
     """
-    return [
-        f'Key=bastion-host.base_os,Type=string,Value={base_os}',
-        f'Key=bastion-host.instance_ami,Type=string,Value={ami_id}',
-        f'Key=cluster-manager.ec2.autoscaling.base_os,Type=string,Value={base_os}',
-        f'Key=cluster-manager.ec2.autoscaling.instance_ami,Type=string,Value={ami_id}',
-        f'Key=directoryservice.base_os,Type=string,Value={base_os}',
-        f'Key=directoryservice.instance_ami,Type=string,Value={ami_id}',
-        f'Key=scheduler.base_os,Type=string,Value={base_os}',
-        f'Key=scheduler.instance_ami,Type=string,Value={ami_id}',
-        f'Key=scheduler.compute_node_os,Type=string,Value={base_os}',
-        f'Key=scheduler.compute_node_ami,Type=string,Value={ami_id}',
-        f'Key=vdc.controller.autoscaling.base_os,Type=string,Value={base_os}',
-        f'Key=vdc.controller.autoscaling.instance_ami,Type=string,Value={ami_id}',
-        f'Key=vdc.dcv_broker.autoscaling.base_os,Type=string,Value={base_os}',
-        f'Key=vdc.dcv_broker.autoscaling.instance_ami,Type=string,Value={ami_id}',
-        f'Key=vdc.dcv_connection_gateway.autoscaling.base_os,Type=string,Value={base_os}',
-        f'Key=vdc.dcv_connection_gateway.autoscaling.instance_ami,Type=string,Value={ami_id}',
-    ]
+    keep_keys = keep_keys or set()
+    entries = []
+    for module in modules:
+        module_id = Utils.get_value_as_string('module_id', module)
+        key_pairs = AMI_UPDATE_KEYS.get(Utils.get_value_as_string('name', module))
+        if Utils.is_empty(module_id) or not key_pairs:
+            continue
+        for base_os_key, ami_key in key_pairs:
+            keys = (f'{module_id}.{base_os_key}', f'{module_id}.{ami_key}')
+            if keep_keys.intersection(keys):
+                continue
+            entries.append(f'Key={keys[0]},Type=string,Value={base_os}')
+            entries.append(f'Key={keys[1]},Type=string,Value={ami_id}')
+    return entries
+
+
+def keep_built_compute_image(current: Optional[Dict], stock: Optional[Dict]) -> bool:
+    """
+    Whether an upgrade must leave the scheduler's compute image alone. True only for an image IDEA
+    built that is newer than the release's stock image: an operator who adopted a build from the
+    Custom AMIs page should not lose it, but a build older than the release is stale. Creation dates
+    are the ISO 8601 UTC strings EC2 returns, so they order as strings, and equal is not newer.
+    """
+    if not current or not stock:
+        return False
+    name = Utils.get_value_as_string('Name', current)
+    if image_state(name, COMPUTE_IMAGE_PREFIX) != 'built':
+        return False
+    created = Utils.get_value_as_string('CreationDate', current, '')
+    release_created = Utils.get_value_as_string('CreationDate', stock, '')
+    if Utils.is_empty(created) or Utils.is_empty(release_created):
+        return False
+    return created > release_created
+
+
+def resolve_compute_ami_keep_keys(
+    context, db: ClusterConfigDB, modules: List[Dict], ami_id: str, ec2
+) -> Set[str]:
+    """
+    The scheduler compute keys Phase 3 must not write. Compute moves onto the release image like
+    every other module, unless the cluster already runs a newer image built from the Custom AMIs
+    page, which an unconditional rewrite would silently discard. Anything it cannot determine
+    leaves the keys writable, so an unreadable image never blocks an upgrade.
+    """
+    keep: Set[str] = set()
+    for module in modules:
+        if Utils.get_value_as_string('name', module) != constants.MODULE_SCHEDULER:
+            continue
+        module_id = Utils.get_value_as_string('module_id', module)
+        if Utils.is_empty(module_id):
+            continue
+        entry = db.get_config_entry(f'{module_id}.compute_node_ami')
+        current_ami = Utils.get_value_as_string('value', entry) if entry else None
+        if Utils.is_empty(current_ami) or current_ami == ami_id:
+            continue
+
+        try:
+            described = ec2.describe_images(ImageIds=[current_ami, ami_id])
+        except Exception as e:
+            context.warning(
+                f'could not describe compute image {current_ami} or release image {ami_id}: {e}. '
+                f'Compute moves to {ami_id}.'
+            )
+            continue
+
+        images = {
+            image['ImageId']: image
+            for image in Utils.get_value_as_list('Images', described, [])
+        }
+        current = images.get(current_ami)
+        stock = images.get(ami_id)
+        if keep_built_compute_image(current, stock):
+            keep.update(
+                {f'{module_id}.compute_node_os', f'{module_id}.compute_node_ami'}
+            )
+            context.info(
+                f'keeping built compute image {current_ami} '
+                f'({Utils.get_value_as_string("Name", current)}, created '
+                f'{Utils.get_value_as_string("CreationDate", current)}), newer than the release '
+                f'image {ami_id} (created {Utils.get_value_as_string("CreationDate", stock)})'
+            )
+        elif (
+            current
+            and image_state(
+                Utils.get_value_as_string('Name', current), COMPUTE_IMAGE_PREFIX
+            )
+            == 'built'
+        ):
+            context.info(
+                f'built compute image {current_ami} is older than the release image {ami_id} and '
+                f'was replaced; rebuild it from the Custom AMIs page to run a built image again'
+            )
+    return keep
+
+
+def boto3_session(aws_profile: str):
+    """a boto3 session for the profile the command was given, or the ambient credentials"""
+    import boto3
+
+    if Utils.is_not_empty(aws_profile):
+        return boto3.Session(profile_name=aws_profile)
+    return boto3.Session()
+
+
+def get_cluster_base_os(db: ClusterConfigDB) -> List[str]:
+    """
+    The distinct Base OS values the cluster settings already carry, read from the same keys the
+    upgrade writes. More than one means the cluster is part-migrated and the upgrade cannot pick
+    for the admin.
+    """
+    values = {
+        Utils.get_value_as_string('value', entry)
+        for entry in db.get_config_entries()
+        if Utils.get_value_as_string('key', entry, '').endswith('.base_os')
+    }
+    return sorted(value for value in values if Utils.is_not_empty(value))
+
+
+def resolve_upgrade_base_os(
+    context, cluster_name: str, aws_region: str, aws_profile: str, base_os: str
+) -> str:
+    """
+    The Base OS this upgrade applies. Without an explicit --base-os the cluster keeps the Base OS
+    its settings already carry, so an unattended --force run cannot silently move every module
+    onto a different OS. Refuses rather than guessing when that value cannot be read.
+    """
+    try:
+        current = get_cluster_base_os(
+            ClusterConfigDB(
+                cluster_name=cluster_name,
+                aws_region=aws_region,
+                aws_profile=aws_profile,
+            )
+        )
+    except Exception as e:
+        if Utils.is_empty(base_os):
+            context.error(
+                f'Could not read the cluster settings to determine the current Base OS: {e}. '
+                f'Re-run with an explicit --base-os.'
+            )
+            raise SystemExit(1)
+        current = []
+
+    if Utils.is_empty(base_os):
+        if len(current) != 1:
+            found = ', '.join(current) if current else 'no base_os setting found'
+            context.error(
+                f'Could not determine the Base OS this cluster runs from its settings ({found}). '
+                f'Re-run with an explicit --base-os to say which Base OS every module should use.'
+            )
+            raise SystemExit(1)
+        context.info(
+            f'No --base-os given: keeping the Base OS this cluster runs: {current[0]}'
+        )
+        return current[0]
+
+    if current and base_os not in current:
+        context.warning(
+            f'--base-os {base_os} changes this cluster from {", ".join(current)}: every module '
+            f'is redeployed onto {base_os}.'
+        )
+    return base_os
 
 
 def get_module_instance_ids(
@@ -2625,8 +3006,8 @@ def _warn_termination_protection_cleared(context, cleared: List[Tuple[str, str]]
 @click.option('--deployment-id', help='A UUID to identify the deployment.')
 @click.option(
     '--base-os',
-    default='amazonlinux2023',
-    help='New base OS to upgrade to (e.g., amazonlinux2023, rhel8, rhel9, rhel10, rocky8, rocky9, rocky10). Default: amazonlinux2023',
+    help='Base OS to upgrade to (e.g., amazonlinux2023, rhel8, rhel9, rhel10, rocky8, rocky9, '
+    'rocky10). Defaults to the Base OS the cluster already runs; pass this only to change it.',
 )
 @click.option(
     '--force-build-bootstrap',
@@ -2651,6 +3032,13 @@ def _warn_termination_protection_cleared(context, cleared: List[Tuple[str, str]]
     is_flag=True,
     help='Skip updating global settings. Use if you have already updated global settings.',
 )
+@click.option(
+    '--disable-eol-stacks-in-use',
+    is_flag=True,
+    help='Disable end-of-life eVDI software stacks that a live virtual desktop session still '
+    'uses, instead of aborting the upgrade. Running desktops are left untouched, but no new '
+    'session can launch from a disabled stack.',
+)
 @click.argument('MODULES', required=False, nargs=-1)
 def upgrade_cluster(
     cluster_name: str,
@@ -2665,6 +3053,7 @@ def upgrade_cluster(
     module_set: str,
     force: bool,
     skip_global_settings_update: bool,
+    disable_eol_stacks_in_use: bool,
     modules=None,
 ):
     """
@@ -2682,7 +3071,22 @@ def upgrade_cluster(
     ./idea-admin.sh upgrade-cluster cluster metrics scheduler --base-os amazonlinux2023 --aws-region us-east-2 --cluster-name idea-test1
     """
 
-    context = SocaCliContext()
+    context = SocaCliContext(
+        options=SocaContextOptions(
+            enable_aws_client_provider=True,
+            aws_region=aws_region,
+            aws_profile=aws_profile,
+        )
+    )
+
+    # An unattended --force run must not move every module onto a different Base OS by default.
+    base_os = resolve_upgrade_base_os(
+        context=context,
+        cluster_name=cluster_name,
+        aws_region=aws_region,
+        aws_profile=aws_profile,
+        base_os=base_os,
+    )
 
     # If no modules are specified, use 'all'
     if not modules:
@@ -2745,12 +3149,14 @@ def upgrade_cluster(
                 )
                 raise SystemExit(1)
 
-    # Fail before any change is made if the cluster still points at an end-of-life Base OS.
-    _check_eol_base_os(
+    # Report end-of-life Base OS references before the upgrade is confirmed. This changes nothing:
+    # the software stack plan it returns is applied further down, once the admin has said yes.
+    eol_stack_plans = _check_eol_base_os(
         context=context,
         cluster_name=cluster_name,
         aws_region=aws_region,
         aws_profile=aws_profile,
+        disable_stacks_in_use=disable_eol_stacks_in_use,
     )
 
     # Display upgrade context information
@@ -2779,6 +3185,14 @@ def upgrade_cluster(
             context.info('Upgrade aborted by user')
             raise SystemExit(0)
 
+    _apply_eol_software_stacks(
+        context=context,
+        cluster_name=cluster_name,
+        aws_region=aws_region,
+        aws_profile=aws_profile,
+        plans=eol_stack_plans,
+    )
+
     # bound before the try so the failure path can always report what the sweep cleared
     cleared_protection: List[Tuple[str, str]] = []
 
@@ -2805,31 +3219,13 @@ def upgrade_cluster(
             raise SystemExit(1)
 
         # Update base_os in the cluster values file first
-        props = AdministratorProps()
-        cluster_dir = props.cluster_dir(cluster_name)
-        cluster_region_dir = props.cluster_region_dir(cluster_dir, aws_region)
-        values_file_path = os.path.join(cluster_region_dir, 'values.yml')
-
-        if os.path.exists(values_file_path):
-            with open(values_file_path, 'r') as f:
-                values = f.read()
-
-            # Replace base_os value using standard regex module
-            import re
-
-            updated_values = re.sub(
-                r'^base_os:.*$', f'base_os: {base_os}', values, flags=re.MULTILINE
-            )
-
-            with open(values_file_path, 'w') as f:
-                f.write(updated_values)
-
-            context.success(
-                f'✅ Successfully updated base_os to {base_os} in values.yml'
-            )
-        else:
-            context.error(f'Values file not found at {values_file_path}')
-            raise SystemExit(1)
+        _update_values_base_os(
+            context=context,
+            cluster_name=cluster_name,
+            aws_region=aws_region,
+            aws_profile=aws_profile,
+            base_os=base_os,
+        )
 
         # PHASE 2: Perform pre-upgrade configuration if not skipped
         config_generator = None
@@ -2925,7 +3321,21 @@ def upgrade_cluster(
             )
 
             context.info('🔄 Updating AMI IDs and base_os values in DynamoDB...')
-            ami_updates = build_ami_update_entries(ami_id=ami_id, base_os=base_os)
+            cluster_modules = db.get_cluster_modules()
+            ami_updates = build_ami_update_entries(
+                ami_id=ami_id,
+                base_os=base_os,
+                modules=cluster_modules,
+                keep_keys=resolve_compute_ami_keep_keys(
+                    context=context,
+                    db=db,
+                    modules=cluster_modules,
+                    ami_id=ami_id,
+                    ec2=boto3_session(aws_profile).client(
+                        'ec2', region_name=aws_region
+                    ),
+                ),
+            )
 
             for entry in ami_updates:
                 tokens = entry.split(',', 2)
@@ -2984,13 +3394,7 @@ def upgrade_cluster(
         # cfn's delete of the original fail silently, leaving a running host no stack references.
         ec2 = None
         try:
-            import boto3
-
-            session = (
-                boto3.Session(profile_name=aws_profile)
-                if Utils.is_not_empty(aws_profile)
-                else boto3.Session()
-            )
+            session = boto3_session(aws_profile)
             ec2 = session.client('ec2', region_name=aws_region)
             cleared_protection = clear_termination_protection(
                 get_module_instance_ids(
@@ -3031,6 +3435,13 @@ def upgrade_cluster(
                 f'could not restore termination protection: {e}. Re-enable it by hand.'
             )
 
+        _save_values_file_to_bucket(
+            context=context,
+            cluster_name=cluster_name,
+            aws_region=aws_region,
+            aws_profile=aws_profile,
+        )
+
         fancy_title(context, 'Cluster Upgrade Completed', '🎉')
         context.success('✅ All upgrade phases completed successfully')
         context.info(
@@ -3045,6 +3456,71 @@ def upgrade_cluster(
         # report has to run before the interpreter goes away.
         _warn_termination_protection_cleared(context, cleared_protection)
         raise
+
+
+def _update_values_base_os(
+    context: SocaCliContext,
+    cluster_name: str,
+    aws_region: str,
+    aws_profile: str,
+    base_os: str,
+) -> str:
+    """
+    set base_os in the cluster's values.yml, restoring the file from the cluster's s3 bucket
+    first when the local copy is missing. returns the values file path.
+    """
+    values_file_path = ValuesDiff(cluster_name, aws_region).get_values_file_path()
+
+    if os.path.exists(values_file_path):
+        _warn_values_file_drift(
+            context, cluster_name, aws_region, aws_profile, values_file_path
+        )
+    else:
+        context.warning(
+            f'values.yml not found at {values_file_path}, '
+            f'restoring it from the cluster s3 bucket ...'
+        )
+        download_values_file(cluster_name, aws_region, aws_profile, context)
+
+    with open(values_file_path, 'r') as f:
+        values = f.read()
+
+    # a values.yml old enough to predate the key would otherwise be reported as updated.
+    updated_values, replaced = re.subn(
+        r'^base_os:.*$', f'base_os: {base_os}', values, flags=re.MULTILINE
+    )
+    if not replaced:
+        context.error(
+            f'{values_file_path} has no base_os key, so the upgrade cannot set it to {base_os}. '
+            f'Add "base_os: {base_os}" to the file and re-run upgrade-cluster.'
+        )
+        raise SystemExit(1)
+
+    with open(values_file_path, 'w') as f:
+        f.write(updated_values)
+
+    context.success(f'✅ Successfully updated base_os to {base_os} in values.yml')
+    return values_file_path
+
+
+def _save_values_file_to_bucket(
+    context: SocaCliContext, cluster_name: str, aws_region: str, aws_profile: str
+) -> None:
+    """
+    save values.yml back to the cluster's s3 bucket after a successful upgrade, so the next
+    upgrade can restore it. a failed upload warns rather than failing the upgrade.
+    """
+    try:
+        upload_values_file(cluster_name, aws_region, aws_profile, context)
+    except Exception as e:
+        profile = (
+            f' --aws-profile {aws_profile}' if Utils.is_not_empty(aws_profile) else ''
+        )
+        context.warning(
+            f'could not save values.yml to the cluster s3 bucket: {e}. The upgrade itself '
+            f'succeeded; save the file with: idea-admin.sh config save-values '
+            f'--cluster-name {cluster_name} --aws-region {aws_region}{profile}'
+        )
 
 
 # Helper function to sync full configuration without overwrite

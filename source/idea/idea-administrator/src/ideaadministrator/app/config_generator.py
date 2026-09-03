@@ -10,6 +10,7 @@
 #  and limitations under the License.
 
 from ideasdk.utils import Utils, Jinja2Utils
+from ideasdk.config.soca_config import is_null_value
 from ideadatamodel import exceptions, constants
 
 from ideaadministrator.app_props import AdministratorProps
@@ -701,7 +702,11 @@ class ConfigGenerator:
                     f'Config key name: {key} under: {prefix} cannot contain a dot(.), colon(:) or comma(,)'
                 )
 
-            value = Utils.get_any_value(key, config)
+            # Utils.get_any_value() flattens every empty value to None, which would store
+            # `key: []` in the cluster settings table as NULL and read it back as None.
+            value = config[key]
+            if is_null_value(value):
+                value = None
 
             if Utils.is_not_empty(prefix):
                 path_prefix = f'{prefix}.{key}'

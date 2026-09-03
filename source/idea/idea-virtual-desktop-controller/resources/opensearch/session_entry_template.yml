@@ -26,6 +26,9 @@ mappings:
     updated_on:
       type: date
       format: epoch_millis
+    stopped_on:
+      type: date
+      format: epoch_millis
     name:
       type: text
     description:

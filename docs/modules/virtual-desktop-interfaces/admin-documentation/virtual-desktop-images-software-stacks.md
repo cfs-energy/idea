@@ -120,3 +120,24 @@ This setting will override the global instance type restrictions and only show t
 ### Use your new Virtual Desktop Software Stack
 
 Once created, the Software Stack will be visible to all users who belong to the associated project(s). Refer to [create-a-virtual-desktop-linux-windows.md](../user-documentation/create-a-virtual-desktop-linux-windows.md "mention") to learn how to launch your desktop with the new image
+
+## Two images on a base stack
+
+A base software stack (`ss-base-<os>-<arch>-base`) records `ami_id`, the image desktops launch from, and `base_ami_id`, the stock image the next build starts from. Refresh Base Stack AMIs (the portal action and `ideactl update-base-stacks`) always advances `base_ami_id` and changes `ami_id` only while it is still a stock image; once a build has repointed the stack, the built image stays until a rebuild or an explicit change. Custom AMIs shows both and offers Use built image to return to the last completed build.
+
+## Build a desktop image
+
+A desktop launched from a stock vendor AMI spends 13 to 18 minutes installing packages, DCV and drivers on its first boot. `ideactl build-desktop-image` moves that work into a reusable image: it launches a temporary instance from a stock base AMI, runs the instance-independent half of the desktop bootstrap (system packages, system updates, DCV server, session manager agent, and GPU drivers on a GPU instance type), and snapshots it as `idea-dcv-host-<baseos>-v<version>`. Desktops launched from the built image run only per-session configuration and typically reach READY in a few minutes.
+
+Run it as root on the virtual desktop controller host:
+
+```bash
+ideactl build-desktop-image \
+  --base-os amazonlinux2023 \
+  --base-ami <current stock AMI for your region> \
+  --update-stack --force
+```
+
+The build takes 20 to 30 minutes. With `--update-stack`, the matching `ss-base-<os>-<arch>-base` software stack is pointed at the new image and the search index is rebuilt, so the next desktop from that stack uses it immediately; without the flag, update the stack's Instance AMI yourself.
+
+The instance profile, security groups, subnet and key pair default to the cluster's DCV host settings and can be overridden with the corresponding options. Built images carry no session or user state. Rebuild after changing DCV versions or GPU driver settings, or when the stock base AMI moves.

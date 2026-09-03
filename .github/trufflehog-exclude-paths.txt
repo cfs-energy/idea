@@ -4,6 +4,10 @@
 ^node_modules/
 /node_modules/
 ^build/
+# The AWS CLI installer archive and the directory it expands to, in case either is
+# ever downloaded inside a checkout again.
+^awscliv2\.zip$
+^aws/
 ^dist/
 __pycache__/
 \.ruff_cache/

@@ -17,6 +17,7 @@ from ideadatamodel.projects import (
     GetProjectRequest,
     UpdateProjectRequest,
     ListProjectsRequest,
+    ListBedrockUsageRequest,
     EnableProjectRequest,
     DisableProjectRequest,
     GetUserProjectsRequest,
@@ -55,6 +56,10 @@ class ProjectsAPI(BaseAPI):
             'Projects.ListProjects': {
                 'scope': self.SCOPE_READ,
                 'method': self.list_projects,
+            },
+            'Projects.ListBedrockUsage': {
+                'scope': self.SCOPE_READ,
+                'method': self.list_bedrock_usage,
             },
             'Projects.GetUserProjects': {
                 'scope': self.SCOPE_READ,
@@ -107,8 +112,9 @@ class ProjectsAPI(BaseAPI):
 
     def apply_bedrock_usage(self, project: Project, username: str = None):
         """
-        attach month to date bedrock usage, and the spend cost explorer reports for
-        the project tag, which trails the recorded usage by about a day.
+        attach trailing window bedrock usage, and the spend cost explorer reports for
+        the project tag over the same window, which trails the recorded usage by about
+        a day.
         """
         if not project.is_bedrock_enabled():
             return
@@ -152,14 +158,17 @@ class ProjectsAPI(BaseAPI):
     def strip_bedrock_provisioner_fields(project: Project):
         """
         the iam role and instance profile are server side selection inputs with no
-        client use, and policy errors name administrator policies. the inference
-        profile arns stay: they are the identifier a user passes to invoke a model.
+        client use, and policy and reconcile errors name administrator policies and
+        iam calls. the inference profile arns stay: they are the identifier a user
+        passes to invoke a model.
         """
         if project is None or project.bedrock is None:
             return
         project.bedrock.role_arn = None
         project.bedrock.instance_profile_arn = None
         project.bedrock.policy_errors = None
+        project.bedrock.reconcile_error = None
+        project.bedrock.reconcile_error_on = None
 
     def get_project(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(GetProjectRequest)
@@ -171,6 +180,9 @@ class ProjectsAPI(BaseAPI):
 
     def get_member_project(self, context: ApiInvocationContext):
         """
+        the project's budget figures reach its members here: a member held back by
+        an exhausted budget has to be able to see why.
+
         non-elevated variant of get_project: serves the project only when the
         caller is a member, using the same membership resolution as
         Projects.GetUserProjects. non-membership and non-existence are reported
@@ -212,6 +224,15 @@ class ProjectsAPI(BaseAPI):
             self.apply_bedrock_usage(project)
             self.apply_bedrock_budget(project)
         context.success(result)
+
+    def list_bedrock_usage(self, context: ApiInvocationContext):
+        """
+        every bedrock project with its window usage. elevated callers only: invoke()
+        has no non-elevated route to this namespace, so the per user breakdown never
+        reaches a member.
+        """
+        request = context.get_request_payload_as(ListBedrockUsageRequest)
+        context.success(self.context.projects.list_bedrock_usage(request))
 
     def get_user_projects(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(GetUserProjectsRequest)

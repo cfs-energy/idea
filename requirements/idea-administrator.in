@@ -7,3 +7,5 @@ aws-cdk-lib
 # via ~43 add_nag_suppression call sites; migrating is its own ticket.
 cdk-nag<3
 prettytable
+# needed by botocore's login credential provider (aws login profiles), the optional [crt] extra
+awscrt

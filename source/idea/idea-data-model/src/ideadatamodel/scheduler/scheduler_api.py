@@ -20,6 +20,10 @@ __all__ = (
     'SubmitJobResult',
     'DeleteJobRequest',
     'DeleteJobResult',
+    'ListComputeImagesRequest',
+    'ListComputeImagesResult',
+    'BuildComputeImageRequest',
+    'BuildComputeImageResult',
     'GetInstanceTypeOptionsRequest',
     'GetInstanceTypeOptionsResult',
     'CreateQueueProfileRequest',
@@ -70,7 +74,7 @@ __all__ = (
 )
 
 from ideadatamodel import SocaPayload, SocaListingPayload, IdeaOpenAPISpecEntry
-from ideadatamodel.aws import ServiceQuota
+from ideadatamodel.aws import ServiceQuota, ImageBuildRecord, ImageInventoryRow
 from ideadatamodel.scheduler.scheduler_model import (
     SocaComputeNodeState,
     SocaComputeNode,
@@ -432,6 +436,37 @@ class CheckHpcLicenseResourceAvailabilityResult(SocaPayload):
     available_count: Optional[int] = Field(default=None)
 
 
+# SchedulerAdmin.ListComputeImages - Request
+class ListComputeImagesRequest(SocaPayload):
+    pass
+
+
+# SchedulerAdmin.ListComputeImages - Result
+class ListComputeImagesResult(SocaPayload):
+    listing: Optional[List[ImageInventoryRow]] = Field(default=None)
+    # every base OS the cluster can build, for the Add image picker
+    supported_base_os: Optional[List[str]] = Field(default=None)
+    # scheduler.compute_node_os: only rows of this OS may become the scheduler default
+    compute_node_os: Optional[str] = Field(default=None)
+
+
+# SchedulerAdmin.BuildComputeImage - Request
+class BuildComputeImageRequest(SocaPayload):
+    base_os: Optional[str] = Field(default=None)
+    # x86_64 or arm64; derived from instance_type when absent, must agree with it when present
+    architecture: Optional[str] = Field(default=None)
+    # defaults to the newest stock image for base_os
+    base_ami: Optional[str] = Field(default=None)
+    instance_type: Optional[str] = Field(default=None)
+    # efa, fsx_lustre
+    enable_drivers: Optional[List[str]] = Field(default=None)
+
+
+# SchedulerAdmin.BuildComputeImage - Result
+class BuildComputeImageResult(SocaPayload):
+    record: Optional[ImageBuildRecord] = Field(default=None)
+
+
 OPEN_API_SPEC_ENTRIES_SCHEDULER = [
     IdeaOpenAPISpecEntry(
         namespace='Scheduler.ListActiveJobs',
@@ -641,6 +676,20 @@ OPEN_API_SPEC_ENTRIES_SCHEDULER = [
         request=ListHpcLicenseResourcesRequest,
         result=ListHpcLicenseResourcesResult,
         is_listing=True,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='SchedulerAdmin.ListComputeImages',
+        request=ListComputeImagesRequest,
+        result=ListComputeImagesResult,
+        is_listing=True,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='SchedulerAdmin.BuildComputeImage',
+        request=BuildComputeImageRequest,
+        result=BuildComputeImageResult,
+        is_listing=False,
         is_public=False,
     ),
     IdeaOpenAPISpecEntry(

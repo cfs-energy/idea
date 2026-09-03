@@ -10,6 +10,7 @@
 #  and limitations under the License.
 import re
 from datetime import datetime, timedelta, timezone
+from threading import RLock
 from typing import List, Dict, Optional
 
 import ideavirtualdesktopcontroller
@@ -132,9 +133,19 @@ def instance_state(instance: Optional[Dict]) -> str:
     )
 
 
+# guards the sweep resume cursors below, which every queue handler thread shares
+SWEEP_CURSOR_LOCK = RLock()
+
+
 class VirtualDesktopSessionUtils:
     # where the last sweep stopped, so a table larger than one pass's time budget is still
     # walked to the end across passes. None starts again at the first page.
+    #
+    # held on the class, never on the instance: every queue handler thread builds its own
+    # VirtualDesktopSessionUtils, and threads come and go as the queue depth moves. Read
+    # and written under SWEEP_CURSOR_LOCK, and assigned through the class so an assignment
+    # cannot shadow the shared value with an instance attribute. Overlapping passes and a
+    # controller restart only cost time, because every sweep is idempotent.
     _instance_profile_repair_cursor: Optional[str] = None
     _provisioning_timeout_cursor: Optional[str] = None
     _stopped_session_cleanup_cursor: Optional[str] = None
@@ -255,7 +266,11 @@ class VirtualDesktopSessionUtils:
 
         repaired = 0
         deadline = Utils.current_time_ms() + time_budget_ms
-        cursor: Optional[str] = self._instance_profile_repair_cursor
+        with SWEEP_CURSOR_LOCK:
+            cursor: Optional[str] = (
+                VirtualDesktopSessionUtils._instance_profile_repair_cursor
+            )
+        resume_cursor = cursor
         loop_break = False
         while not loop_break:
             result = self._session_db.list_all_from_db(
@@ -267,7 +282,10 @@ class VirtualDesktopSessionUtils:
                         'instance profile repair is out of time for this pass, the '
                         'remaining desktops are checked on the next one'
                     )
-                    self._instance_profile_repair_cursor = cursor
+                    with SWEEP_CURSOR_LOCK:
+                        VirtualDesktopSessionUtils._instance_profile_repair_cursor = (
+                            resume_cursor
+                        )
                     return repaired
                 try:
                     if self.repair_project_instance_profile(session):
@@ -277,10 +295,13 @@ class VirtualDesktopSessionUtils:
                         f'could not check the instance profile of session '
                         f'{session.idea_session_id}: {e}'
                     )
+                resume_cursor = self._session_db.cursor_for(session) or resume_cursor
             cursor = result.cursor
+            resume_cursor = cursor
             loop_break = Utils.is_empty(cursor)
 
-        self._instance_profile_repair_cursor = None
+        with SWEEP_CURSOR_LOCK:
+            VirtualDesktopSessionUtils._instance_profile_repair_cursor = None
         return repaired
 
     def _is_bedrock_enabled(self) -> bool:
@@ -387,7 +408,11 @@ class VirtualDesktopSessionUtils:
 
         failed = 0
         deadline = Utils.current_time_ms() + time_budget_ms
-        cursor: Optional[str] = self._provisioning_timeout_cursor
+        with SWEEP_CURSOR_LOCK:
+            cursor: Optional[str] = (
+                VirtualDesktopSessionUtils._provisioning_timeout_cursor
+            )
+        resume_cursor = cursor
         loop_break = False
         while not loop_break:
             result = self._session_db.list_all_from_db(
@@ -399,7 +424,10 @@ class VirtualDesktopSessionUtils:
                         'the provisioning timeout sweep is out of time for this pass, '
                         'the remaining desktops are checked on the next one'
                     )
-                    self._provisioning_timeout_cursor = cursor
+                    with SWEEP_CURSOR_LOCK:
+                        VirtualDesktopSessionUtils._provisioning_timeout_cursor = (
+                            resume_cursor
+                        )
                     return failed
                 try:
                     if self.fail_stuck_provisioning_session(session, timeout_seconds):
@@ -410,10 +438,13 @@ class VirtualDesktopSessionUtils:
                         f'{session.idea_session_id if Utils.is_not_empty(session) else None} '
                         f'has been provisioning: {e}'
                     )
+                resume_cursor = self._session_db.cursor_for(session) or resume_cursor
             cursor = result.cursor
+            resume_cursor = cursor
             loop_break = Utils.is_empty(cursor)
 
-        self._provisioning_timeout_cursor = None
+        with SWEEP_CURSOR_LOCK:
+            VirtualDesktopSessionUtils._provisioning_timeout_cursor = None
         return failed
 
     def set_cleanup_exemption(
@@ -644,7 +675,11 @@ class VirtualDesktopSessionUtils:
         # dry run takes no action, so the cap does not apply and the whole table is reported
         deletions = 0
         deadline = Utils.current_time_ms() + time_budget_ms
-        cursor: Optional[str] = self._stopped_session_cleanup_cursor
+        with SWEEP_CURSOR_LOCK:
+            cursor: Optional[str] = (
+                VirtualDesktopSessionUtils._stopped_session_cleanup_cursor
+            )
+        resume_cursor = cursor
         loop_break = False
         while not loop_break:
             result = self._session_db.list_all_from_db(
@@ -656,7 +691,10 @@ class VirtualDesktopSessionUtils:
                         'the stopped desktop cleanup is out of time or deletions for this '
                         'pass, the remaining desktops are checked on the next one'
                     )
-                    self._stopped_session_cleanup_cursor = cursor
+                    with SWEEP_CURSOR_LOCK:
+                        VirtualDesktopSessionUtils._stopped_session_cleanup_cursor = (
+                            resume_cursor
+                        )
                     self._log_cleanup_pass(counters, dry_run)
                     return counters
                 try:
@@ -674,6 +712,9 @@ class VirtualDesktopSessionUtils:
                         f'{session.idea_session_id if Utils.is_not_empty(session) else None} '
                         f'for the stopped desktop cleanup: {e}'
                     )
+                # a desktop that could not be checked is still behind us; resuming
+                # before it would pin the sweep to this page
+                resume_cursor = self._session_db.cursor_for(session) or resume_cursor
                 if outcome is None:
                     continue
                 counters['candidates'] += 1
@@ -681,9 +722,11 @@ class VirtualDesktopSessionUtils:
                 if not dry_run and outcome in ('deleted', 'orphans_cleaned'):
                     deletions += 1
             cursor = result.cursor
+            resume_cursor = cursor
             loop_break = Utils.is_empty(cursor)
 
-        self._stopped_session_cleanup_cursor = None
+        with SWEEP_CURSOR_LOCK:
+            VirtualDesktopSessionUtils._stopped_session_cleanup_cursor = None
         self._log_cleanup_pass(counters, dry_run)
         return counters
 

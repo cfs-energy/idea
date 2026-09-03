@@ -1,25 +1,29 @@
 # Begin: System Packages Install
+{# the optional, version-suffixed lists below read with default=[] rather than
+   required=True. required=True does not guard a NULL row: SocaConfig.get_list()
+   returns None for one and only raises for a genuinely absent key, so ' '.join(None)
+   would kill bootstrap at instance boot. the base lists keep required=True, where a
+   missing key means a broken config that should fail loudly instead of silently
+   installing nothing. #}
 
 SYSTEM_PKGS=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.system', required=True)) }})
 SYSTEM_PKGS_DEB=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.system_deb', required=True)) }})
 
 SYSTEM_PKGS_7=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.system_7', default=[])) }})
-SYSTEM_PKGS_8=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.system_8', required=True)) }})
-SYSTEM_PKGS_9=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.system_9', required=True)) }})
-{# default=[] not required=True: a stored config without system_10 must not fail
-   bootstrap on non-EL10 nodes #}
+SYSTEM_PKGS_8=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.system_8', default=[])) }})
+SYSTEM_PKGS_9=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.system_9', default=[])) }})
 SYSTEM_PKGS_10=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.system_10', default=[])) }})
 
 APPLICATION_PKGS=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.application', required=True)) }})
 APPLICATION_PKGS_DEB=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.application_deb', required=True)) }})
 
-APPLICATION_PKGS_7=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.application_7', required=True)) }})
-APPLICATION_PKGS_8=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.application_8', required=True)) }})
+APPLICATION_PKGS_7=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.application_7', default=[])) }})
+APPLICATION_PKGS_8=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.application_8', default=[])) }})
 
 SSSD_PKGS=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.sssd', required=True)) }})
 SSSD_PKGS_DEB=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.sssd_deb', required=True)) }})
 
-SSSD_PKGS_7=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.sssd_7', required=True)) }})
+SSSD_PKGS_7=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.sssd_7', default=[])) }})
 
 OPENLDAP_CLIENT_PKGS=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.openldap_client', required=True)) }})
 OPENLDAP_CLIENT_PKGS_DEB=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.openldap_client_deb', required=True)) }})

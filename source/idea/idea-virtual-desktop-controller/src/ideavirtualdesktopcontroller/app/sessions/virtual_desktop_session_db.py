@@ -48,6 +48,31 @@ from ideavirtualdesktopcontroller.app.virtual_desktop_notifiable_db import (
     VirtualDesktopNotifiableDB,
 )
 from ideavirtualdesktopcontroller.app.sessions import constants as sessions_constants
+from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_history_db import (
+    VirtualDesktopSessionHistoryDB,
+)
+
+
+# states in which the desktop has stopped costing. deletion is one of them: a desktop
+# terminated from a running state never passes through STOPPED.
+STOP_TIME_STATES = frozenset(
+    {
+        VirtualDesktopSessionState.STOPPED,
+        VirtualDesktopSessionState.DELETING,
+        VirtualDesktopSessionState.DELETED,
+    }
+)
+
+# states in which the instance is up and billing
+RUNNING_STATES = frozenset(
+    {
+        VirtualDesktopSessionState.PROVISIONING,
+        VirtualDesktopSessionState.CREATING,
+        VirtualDesktopSessionState.INITIALIZING,
+        VirtualDesktopSessionState.READY,
+        VirtualDesktopSessionState.RESUMING,
+    }
+)
 
 
 class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
@@ -70,6 +95,7 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
         self._ec2_client = self.context.aws().ec2()
         self._controller_utils = VirtualDesktopControllerUtils(self.context)
         self._ddb_client = self.context.aws().dynamodb_table()
+        self._history_db = VirtualDesktopSessionHistoryDB(context, logger=self._logger)
         VirtualDesktopNotifiableDB.__init__(
             self, context=context, table_name=self.table_name, logger=self._logger
         )
@@ -232,6 +258,11 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
                     db_entry,
                 )
             ),
+            stopped_on=Utils.to_datetime(
+                Utils.get_value_as_int(
+                    sessions_constants.USER_SESSION_DB_STOPPED_ON_KEY, db_entry, None
+                )
+            ),
             cleanup_warning_stop_time=Utils.to_datetime(
                 Utils.get_value_as_int(
                     sessions_constants.USER_SESSION_DB_CLEANUP_WARNING_STOP_TIME_KEY,
@@ -367,6 +398,10 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
             sessions_constants.USER_SESSION_DB_CLEANUP_WARNING_STOP_TIME_KEY: None
             if session.cleanup_warning_stop_time is None
             else Utils.to_milliseconds(session.cleanup_warning_stop_time),
+            # None rather than 0: to_milliseconds(None) is 0, which would read back as 1970
+            sessions_constants.USER_SESSION_DB_STOPPED_ON_KEY: None
+            if session.stopped_on is None
+            else Utils.to_milliseconds(session.stopped_on),
             sessions_constants.USER_SESSION_DB_PROJECT_KEY: {
                 sessions_constants.USER_SESSION_DB_PROJECT_ID_KEY: session.project.project_id,
                 sessions_constants.USER_SESSION_DB_PROJECT_TITLE_KEY: session.project.title,
@@ -532,7 +567,26 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
         )
         return self.convert_db_dict_to_session_object(db_entry)
 
+    @staticmethod
+    def _stamp_stopped_on(session: VirtualDesktopSession):
+        """
+        record when the desktop stopped costing, once. every state change is persisted
+        through update(), so one rule here covers every path into a stopped or deleted
+        state. deletion counts as stopping: a desktop terminated straight from running
+        never passes through STOPPED, and an already stopped one keeps its earlier time.
+        STOPPING is absent because the instance is still winding down and still costing.
+        """
+        if session.state in STOP_TIME_STATES:
+            if session.stopped_on is None:
+                # a datetime, not an epoch int: the converter calls to_milliseconds
+                # on it and an int raises on the very next write
+                session.stopped_on = DateTimeUtils.current_datetime()
+        elif session.state in RUNNING_STATES:
+            # running again: the next stop records its own time
+            session.stopped_on = None
+
     def update(self, session: VirtualDesktopSession) -> VirtualDesktopSession:
+        self._stamp_stopped_on(session)
         db_entry = self.convert_session_object_to_db_dict(session)
         db_entry[sessions_constants.USER_SESSION_DB_UPDATED_ON_KEY] = (
             Utils.current_time_ms()
@@ -576,9 +630,23 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
         )
         return self.convert_db_dict_to_session_object(db_entry)
 
+    @property
+    def history_db(self) -> VirtualDesktopSessionHistoryDB:
+        return self._history_db
+
     def delete(self, session: VirtualDesktopSession):
         if Utils.is_empty(session.idea_session_id) or Utils.is_empty(session.owner):
             raise exceptions.invalid_params('idea_session_id and owner is required')
+
+        # every deletion reaches here. this row is all that will remain of the desktop
+        # once the session row and its search document are gone, so it is written first
+        # and is never allowed to block the deletion.
+        try:
+            self._history_db.record_termination(session)
+        except Exception as e:
+            self._logger.warning(
+                f'failed to record session history for {session.idea_session_id}: {e}'
+            )
 
         result = self._table.delete_item(
             Key={
@@ -693,6 +761,27 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
 
         response = self._table.query(**count_request)
         return Utils.get_value_as_int('Count', response)
+
+    def cursor_for(self, session: VirtualDesktopSession) -> Optional[str]:
+        """
+        the cursor a scan would have returned had its page ended at this session, so a
+        sweep out of time resumes after the last desktop it looked at rather than
+        re-reading the page from the top.
+        """
+        if (
+            Utils.is_empty(session)
+            or Utils.is_empty(session.owner)
+            or Utils.is_empty(session.idea_session_id)
+        ):
+            return None
+        return Utils.base64_encode(
+            Utils.to_json(
+                {
+                    sessions_constants.USER_SESSION_DB_HASH_KEY: session.owner,
+                    sessions_constants.USER_SESSION_DB_RANGE_KEY: session.idea_session_id,
+                }
+            )
+        )
 
     def list_all_from_db(self, request: ListSessionsRequest) -> SocaListingPayload:
         list_request = {}

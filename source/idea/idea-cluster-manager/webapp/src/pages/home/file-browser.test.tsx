@@ -9,6 +9,7 @@ import { vi } from 'vitest';
 import { ToastContainer } from 'react-toastify';
 import Uppy from '@uppy/core';
 import FileBrowser from './file-browser';
+import { FILE_BROWSER_PAGE_SIZE } from './file-browser-table';
 import { initTestAppContext } from '../../test-support';
 
 // ---------------------------------------------------------------------------
@@ -284,6 +285,21 @@ function searchBox(): HTMLElement {
         throw new Error('no search box in the file browser');
     }
     return input;
+}
+
+/** The "select all" checkbox in the table header. */
+function headerSelectAllCheckbox(): HTMLElement {
+    return within(browserRoot()).getByRole('checkbox', { name: /select all/i });
+}
+
+/** The selection checkbox on a named entry's own row. Clicking it, unlike clicking the row body,
+ * gives that row DOM focus, which is what "the table has focus" means for the keyboard tests. */
+function rowCheckbox(name: string): HTMLElement {
+    const tr = requireRow(name).closest('tr');
+    if (tr == null) {
+        throw new Error(`no row element for "${name}"`);
+    }
+    return within(tr as HTMLElement).getByRole('checkbox');
 }
 
 /** True when the element, or an ancestor, is visually hidden. Menus for closed dropdowns stay
@@ -1226,8 +1242,80 @@ describe('file browser', () => {
             );
         }, 120000);
     });
+
+    describe('select all', () => {
+        function manyEntries(count: number) {
+            return Array.from({ length: count }, (_, index) => entry(`file-${String(index).padStart(4, '0')}.txt`));
+        }
+
+        it('covers the whole directory from the header checkbox, not just the page on screen', async () => {
+            const count = FILE_BROWSER_PAGE_SIZE + 20;
+            const { api, user } = renderFileBrowser({ listing: manyEntries(count) });
+
+            await waitForRow('file-0000.txt');
+            await user.click(headerSelectAllCheckbox());
+
+            // The count reads against the whole directory rather than the page on screen.
+            expect(browserText()).toMatch(new RegExp(`${count} of ${count} selected`));
+
+            await chooseFromContextMenu(user, 'file-0000.txt', 'Delete files');
+            const dialog = await findDialogContaining('Are you sure you want to delete');
+            await user.click(within(dialog).getByRole('button', { name: 'Yes' }));
+
+            const expectedFiles = manyEntries(count).map((file) => `${HOME}/${file.name}`);
+            await waitFor(() => expect(api.deleteFiles).toHaveBeenCalledWith({ files: expectedFiles }));
+        });
+
+        it('clears the whole selection from the header checkbox once everything is checked', async () => {
+            const count = FILE_BROWSER_PAGE_SIZE + 20;
+            const { user } = renderFileBrowser({ listing: manyEntries(count) });
+
+            await waitForRow('file-0000.txt');
+            await user.click(headerSelectAllCheckbox());
+            await waitFor(() => expect(browserText()).toMatch(new RegExp(`${count} of ${count} selected`)));
+
+            await user.click(headerSelectAllCheckbox());
+
+            await waitFor(() => expect(browserText()).not.toMatch(/selected/));
+            expect(reportedItemCount()).toBe(count);
+        });
+
+        it('selects the whole directory with Ctrl+A while the table has focus', async () => {
+            const count = FILE_BROWSER_PAGE_SIZE + 20;
+            const { user } = renderFileBrowser({ listing: manyEntries(count) });
+
+            await waitForRow('file-0000.txt');
+            await user.click(rowCheckbox('file-0000.txt'));
+
+            await user.keyboard('{Control>}a{/Control}');
+
+            await waitFor(() => expect(browserText()).toMatch(new RegExp(`${count} of ${count} selected`)));
+        });
+
+        it('leaves Ctrl+A alone outside the table, such as while typing in the search box', async () => {
+            const { user } = renderFileBrowser({ listing: [entry('apple.txt'), entry('banana.txt')] });
+
+            await waitForRow('apple.txt');
+            await user.click(searchBox());
+            await user.keyboard('{Control>}a{/Control}');
+
+            expect(browserText()).not.toMatch(/selected/);
+        });
+
+        it('clears the selection with Escape while the table has focus', async () => {
+            const { user } = renderFileBrowser({ listing: [entry('apple.txt'), entry('banana.txt')] });
+
+            await waitForRow('apple.txt');
+            await user.click(rowCheckbox('apple.txt'));
+            await waitFor(() => expect(browserText()).toMatch(/1 of 2 selected/));
+
+            await user.keyboard('{Escape}');
+
+            await waitFor(() => expect(browserText()).not.toMatch(/selected/));
+        });
+    });
 });
 
 /* Not covered: grid view, sort and search as features in their own right (asserting row order is the
- * coupling this file avoids), keyboard selection, Uppy transferring bytes, the File Transfer tab, dark
- * mode, icons, drag and drop (off today), and deleting at the filesystem root. Check those by hand. */
+ * coupling this file avoids), Uppy transferring bytes, the File Transfer tab, dark mode, icons, drag
+ * and drop (off today), and deleting at the filesystem root. Check those by hand. */

@@ -51,6 +51,12 @@ JOB_SUBMISSION_DEDUPE_MAX_ENTRIES = 512
 # same shape as the api envelope's request_id: the value is used as a cache key and is logged.
 PATTERN_CLIENT_SUBMISSION_ID = r'^[0-9a-zA-Z-_]{1,64}$'
 
+# cross-module read: the maintenance window is owned by cluster-manager. read on every
+# submission, never cached, so closing the window takes effect straight away.
+MAINTENANCE_ENABLED_CONFIG_KEY = 'cluster-manager.maintenance.enabled'
+MAINTENANCE_MESSAGE_CONFIG_KEY = 'cluster-manager.maintenance.message'
+DEFAULT_MAINTENANCE_MESSAGE = 'This cluster is undergoing maintenance.'
+
 # the job name is taken from the user-supplied '#PBS -N' line and is only used as a
 # cosmetic filename prefix. it must never influence the path a root process writes to.
 JOB_NAME_PREFIX_MAX_LENGTH = 64
@@ -295,7 +301,30 @@ class SchedulerAPI(BaseAPI):
         result = self.context.applications.get_user_applications(request)
         return context.success(result)
 
+    def check_maintenance(self):
+        """
+        Refuse new work while a maintenance window is open. Checked here rather than in the
+        OpenPBS submit hook: the hook runs inside the PBS server, so once the scheduler is
+        stopped nothing runs it and qsub fails with a generic connection error instead.
+        """
+        config = self.context.config()
+        if not config.get_bool(MAINTENANCE_ENABLED_CONFIG_KEY, default=False):
+            return
+        message = Utils.get_as_string(
+            config.get_string(MAINTENANCE_MESSAGE_CONFIG_KEY, default=''), ''
+        ).strip()
+        if Utils.is_empty(message):
+            message = DEFAULT_MAINTENANCE_MESSAGE
+        raise exceptions.soca_exception(
+            error_code=errorcodes.JOB_SUBMISSION_FAILED,
+            message=f'Cluster is in maintenance: {message}',
+        )
+
     def submit_job(self, context: ApiInvocationContext):
+        # before any other validation, so a closed cluster is reported as closed rather
+        # than as a malformed request
+        self.check_maintenance()
+
         request = context.get_request_payload_as(SubmitJobRequest)
         job_owner = request.job_owner
         context_user = context.get_username()

@@ -49,3 +49,19 @@ This administrative override allows flexibility for special use cases while main
 {% hint style="info" %}
 Sessions created by administrators on behalf of users will be owned by the selected user and will count against that user's session limit.
 {% endhint %}
+
+## Desktop Placement
+
+By default a desktop is launched into the first available subnet from the desktop subnet list, or from the cluster private subnets when no desktop list is configured. Setting `cluster.network.preferred_subnet_id` to one of those subnets moves it to the front of that order, so every session launched without an explicit subnet tries it first. Point it at the subnet holding a shared filesystem that lives in a single availability zone, such as an FSx for NetApp ONTAP single-AZ file system, to keep desktop I/O out of a cross zone path.
+
+If the preferred zone has no capacity for the requested instance type, the launch falls through to the next subnet within the same request, so the preference never costs a user a desktop. That fallback depends on `virtual-desktop-controller.dcv_session.network.subnet_autoretry`, which is true by default. If you turn it off, the preferred subnet becomes a hard pin and every desktop fails while its availability zone is out of capacity; the controller logs a warning at startup when it finds that combination.
+
+The same setting places scheduler jobs, so one value covers both. Leaving it empty keeps the existing behavior, and a session launched with an explicit subnet ID under Advanced Options is never affected.
+
+## Desktop Event Queue
+
+Every session action reaches the controller as a message on the `<cluster>-<module>-events.fifo` SQS queue. A message whose handler fails is left on the queue so it is retried, but a message that fails every time would be redelivered forever and hold up the events behind it.
+
+`virtual-desktop-controller.events.max_receive_count`, default `3`, bounds that. Below the bound the message is redelivered as before, so a transient failure still recovers on its own. On the bounding receive the controller logs the message ID, the event type and the session ID at error level, then deletes the message. Raise the setting to give slow-to-recover failures more attempts; it takes effect on the next controller restart and needs no redeploy.
+
+The queue also has a dead letter queue, `<cluster>-<module>-events-dlq.fifo`, with a redrive policy of 16 receives, which catches messages the controller never processes at all, such as a restart between handling and deleting. The controller-side bound fires first, so anything reaching the dead letter queue was not dropped by the controller. Search the virtual desktop controller log for `Deleting the message instead of blocking the queue` to find the events that were dropped.

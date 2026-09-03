@@ -22,6 +22,18 @@ __all__ = (
     'UpdateSessionResponse',
     'SetSessionCleanupExemptionRequest',
     'SetSessionCleanupExemptionResponse',
+    'BaseSoftwareStackAmiRefreshResult',
+    'RefreshBaseSoftwareStackAmisRequest',
+    'RefreshBaseSoftwareStackAmisResponse',
+    'ListDesktopImagesRequest',
+    'ListDesktopImagesResponse',
+    'BuildDesktopImageRequest',
+    'BuildDesktopImageResponse',
+    'DesktopImageBuildStartResult',
+    'BuildAllDesktopImagesRequest',
+    'BuildAllDesktopImagesResponse',
+    'UseBuiltDesktopImagesRequest',
+    'UseBuiltDesktopImagesResponse',
     'GetSessionInfoRequest',
     'GetSessionInfoResponse',
     'DeleteSessionRequest',
@@ -95,6 +107,7 @@ from ideadatamodel.virtual_desktop.virtual_desktop_model import (
     VirtualDesktopSessionPermission,
 )
 from pydantic import Field
+from ideadatamodel.aws import ImageBuildRecord, ImageInventoryRow
 
 # VirtualDesktopAdmin.CreateSession - Request
 # VirtualDesktop.CreateSession - Request
@@ -168,6 +181,87 @@ class SetSessionCleanupExemptionRequest(SocaPayload):
 # VirtualDesktopAdmin.SetSessionCleanupExemption - Response
 class SetSessionCleanupExemptionResponse(SocaPayload):
     session: Optional[VirtualDesktopSession] = Field(default=None)
+
+
+# VirtualDesktopAdmin.RefreshBaseSoftwareStackAmis - per-stack result
+class BaseSoftwareStackAmiRefreshResult(SocaPayload):
+    stack_id: Optional[str] = Field(default=None)
+    # updated (ami_id moved to the newest stock image) | base_updated (only the base
+    # advanced; the stack keeps launching from a built image) | up_to_date | error
+    status: Optional[str] = Field(default=None)
+    old_ami: Optional[str] = Field(default=None)
+    new_ami: Optional[str] = Field(default=None)
+    new_base_ami: Optional[str] = Field(default=None)
+    message: Optional[str] = Field(default=None)
+
+
+# VirtualDesktopAdmin.RefreshBaseSoftwareStackAmis - Request
+class RefreshBaseSoftwareStackAmisRequest(SocaPayload):
+    # when set, refresh exactly these stacks; otherwise every ss-base-* stack
+    stack_ids: Optional[List[str]] = Field(default=None)
+
+
+# VirtualDesktopAdmin.RefreshBaseSoftwareStackAmis - Response
+class RefreshBaseSoftwareStackAmisResponse(SocaPayload):
+    results: Optional[List[BaseSoftwareStackAmiRefreshResult]] = Field(default=None)
+
+
+# VirtualDesktopAdmin.ListDesktopImages - Request
+class ListDesktopImagesRequest(SocaPayload):
+    pass
+
+
+# VirtualDesktopAdmin.ListDesktopImages - Response
+class ListDesktopImagesResponse(SocaPayload):
+    listing: Optional[List[ImageInventoryRow]] = Field(default=None)
+
+
+# VirtualDesktopAdmin.BuildDesktopImage - Request
+class BuildDesktopImageRequest(SocaPayload):
+    base_os: Optional[str] = Field(default=None)
+    # x86_64 (default) or arm64; selects the ss-base-<os>-<arch>-base stack
+    architecture: Optional[str] = Field(default=None)
+    # defaults to the newest stock image for base_os and architecture
+    base_ami: Optional[str] = Field(default=None)
+    instance_type: Optional[str] = Field(default=None)
+    # point the base stack at the new image and reindex it when the build finishes (default true)
+    update_stack: Optional[bool] = Field(default=None)
+
+
+# VirtualDesktopAdmin.BuildDesktopImage - Response
+class BuildDesktopImageResponse(SocaPayload):
+    record: Optional[ImageBuildRecord] = Field(default=None)
+
+
+# VirtualDesktopAdmin.BuildAllDesktopImages - per-stack outcome
+class DesktopImageBuildStartResult(SocaPayload):
+    stack_id: Optional[str] = Field(default=None)
+    base_os: Optional[str] = Field(default=None)
+    architecture: Optional[str] = Field(default=None)
+    # started | skipped | error
+    status: Optional[str] = Field(default=None)
+    message: Optional[str] = Field(default=None)
+
+
+# VirtualDesktopAdmin.BuildAllDesktopImages - Request
+class BuildAllDesktopImagesRequest(SocaPayload):
+    pass
+
+
+# VirtualDesktopAdmin.BuildAllDesktopImages - Response
+class BuildAllDesktopImagesResponse(SocaPayload):
+    results: Optional[List[DesktopImageBuildStartResult]] = Field(default=None)
+
+
+# VirtualDesktopAdmin.UseBuiltDesktopImages - Request
+class UseBuiltDesktopImagesRequest(SocaPayload):
+    # base stacks to repoint at their last completed build; every base stack when absent
+    stack_ids: Optional[List[str]] = Field(default=None)
+
+
+# VirtualDesktopAdmin.UseBuiltDesktopImages - Response (status updated | skipped | error)
+class UseBuiltDesktopImagesResponse(SocaPayload):
+    results: Optional[List[DesktopImageBuildStartResult]] = Field(default=None)
 
 
 # VirtualDesktopAdmin.GetSessionInfo - Request
@@ -619,6 +713,41 @@ OPEN_API_SPEC_ENTRIES_VIRTUAL_DESKTOP = [
         namespace='VirtualDesktopAdmin.SetSessionCleanupExemption',
         request=SetSessionCleanupExemptionRequest,
         result=SetSessionCleanupExemptionResponse,
+        is_listing=False,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='VirtualDesktopAdmin.ListDesktopImages',
+        request=ListDesktopImagesRequest,
+        result=ListDesktopImagesResponse,
+        is_listing=True,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='VirtualDesktopAdmin.BuildDesktopImage',
+        request=BuildDesktopImageRequest,
+        result=BuildDesktopImageResponse,
+        is_listing=False,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='VirtualDesktopAdmin.BuildAllDesktopImages',
+        request=BuildAllDesktopImagesRequest,
+        result=BuildAllDesktopImagesResponse,
+        is_listing=False,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='VirtualDesktopAdmin.UseBuiltDesktopImages',
+        request=UseBuiltDesktopImagesRequest,
+        result=UseBuiltDesktopImagesResponse,
+        is_listing=False,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='VirtualDesktopAdmin.RefreshBaseSoftwareStackAmis',
+        request=RefreshBaseSoftwareStackAmisRequest,
+        result=RefreshBaseSoftwareStackAmisResponse,
         is_listing=False,
         is_public=False,
     ),

@@ -33,6 +33,7 @@ from ideadatamodel import (
     SocaJob,
 )
 from ideasdk.aws import EC2InstanceTypesDB
+from ideasdk.aws.ec2_price_list import get_ec2_price_list
 
 from typing import Dict, List, Optional, Tuple, Set, Callable, TypeVar
 import arrow
@@ -53,6 +54,10 @@ COST_EXPLORER_CACHE_TTL_SECS = 6 * 60 * 60
 # cached in place of an answer, so a cost explorer that cannot be read is not asked
 # again on every project read. any request to it is billed.
 COST_EXPLORER_UNAVAILABLE = 'cost-explorer-unavailable'
+PRICING_CACHE_TTL_SECS = 6 * 60 * 60
+# cached in place of an answer, so a pricing api that cannot be read is not asked
+# again for every instance type on every page load.
+PRICING_UNAVAILABLE = 'pricing-unavailable'
 AWS_PARTITION_COMMERCIAL = 'aws'
 
 
@@ -896,13 +901,43 @@ class AWSUtil(AWSUtilProtocol):
         self._context.cache().short_term().set(key=cache_key, value=result)
         return result[instance_type]
 
+    def _price_list_unit_price(
+        self, instance_type: str
+    ) -> Optional[EC2InstanceUnitPrice]:
+        """
+        the rate from the region's public price list offer file. the map is built on a
+        background thread, so the first caller gets None rather than waiting on it.
+        """
+        try:
+            price_list = get_ec2_price_list(
+                region=self.aws().aws_region(), logger=self._logger
+            )
+            return price_list.get(instance_type)
+        except Exception as e:
+            self._logger.warning(
+                f'failed to read the public price list for {instance_type}: {e}'
+            )
+            return None
+
     def get_ec2_instance_type_unit_price(
         self, instance_type: str
-    ) -> EC2InstanceUnitPrice:
+    ) -> Optional[EC2InstanceUnitPrice]:
+        """
+        public on-demand and reserved hourly rates for one instance type, or None when
+        there is no answer. None is not a price of zero: a caller showing money must say
+        the price is unavailable rather than show free.
+        """
+        if self.aws().aws_partition() != AWS_PARTITION_COMMERCIAL:
+            # the pricing api is a single commercial endpoint; the published price list
+            # files are the only rates reachable from any other partition.
+            return self._price_list_unit_price(instance_type)
+
         cache_key = f'aws.pricing.instance-type.{instance_type}'
 
         pricing = self._context.cache().long_term().get(key=cache_key)
         if pricing is not None:
+            if pricing == PRICING_UNAVAILABLE:
+                return self._price_list_unit_price(instance_type)
             return pricing
 
         # todo - move external / autodiscovery
@@ -955,15 +990,15 @@ class AWSUtil(AWSUtilProtocol):
             #   error_code=errorcodes.GETPRODUCTS_FAILURE,
             #    message=f'GetProducts failure: {region}/{instance_type}: {err}'
             # )
-            # todo - should this be a param to determine blocking behavior?
-            # If we fail here - newly submitted jobs would fail for something like a pricing API failure.
-            # todo - this also takes place in GovCloud as there is no pricing API endpoint _in_ GovCloud and we may not have commercial region credentials
             self._logger.warning(
                 f'Failure trying to determine pricing for {region}/{instance_type}: {err}'
             )
-            pricing = EC2InstanceUnitPrice(ondemand=0.0, reserved=0.0)
-            self._context.cache().long_term().set(key=cache_key, value=pricing)
-            return pricing
+            # cached as unavailable rather than as a price of 0.00, which would read as
+            # a free instance for the life of the process.
+            self._context.cache().long_term().set(
+                key=cache_key, value=PRICING_UNAVAILABLE, ttl=PRICING_CACHE_TTL_SECS
+            )
+            return self._price_list_unit_price(instance_type)
 
         ondemand = 0.0
         reserved = 0.0
@@ -1077,23 +1112,27 @@ class AWSUtil(AWSUtilProtocol):
         return budget
 
     def cost_explorer_get_tagged_service_spend(
-        self, tag_key: str, tag_value: str
+        self, tag_key: str, tag_value: str, days: Optional[int] = None
     ) -> Optional[Dict[str, float]]:
         """
-        month to date unblended cost per AWS service for everything carrying one cost
-        allocation tag value. an empty result is a tag nothing has been priced against
-        yet; None is no answer, and the caller must not read it as no spend.
+        unblended cost per AWS service for everything carrying one cost allocation tag
+        value, month to date by default. an empty result is a tag nothing has been
+        priced against yet; None is no answer, and the caller must not read it as no
+        spend.
 
         every request is billed and the figures move a few times a day at most, so the
         answer and the failure are both cached.
         :param tag_key: cost allocation tag key, which must be activated in Billing
         :param tag_value: the one tag value to report on
+        :param days: trailing window of this many days ending today, instead of the
+            calendar month to date. cached separately from the month to date answer.
         """
         if self.aws().aws_partition() != AWS_PARTITION_COMMERCIAL:
             # cost explorer has no endpoint outside the commercial partition.
             return None
 
-        cache_key = f'aws_cost_explorer.{tag_key}.{tag_value}'
+        window = 'mtd' if days is None else f'{days}d'
+        cache_key = f'aws_cost_explorer.{tag_key}.{tag_value}.{window}'
         cached = self._context.cache().long_term().get(key=cache_key)
         if cached is not None:
             return None if cached == COST_EXPLORER_UNAVAILABLE else cached
@@ -1104,6 +1143,14 @@ class AWSUtil(AWSUtilProtocol):
             )
 
         today = arrow.utcnow()
+        if days is None:
+            start = today.floor('month')
+            granularity = 'MONTHLY'
+        else:
+            # a trailing window does not sit on month boundaries, so it is read daily
+            # and summed; the parsing below already adds up every returned period.
+            start = today.shift(days=-(days - 1))
+            granularity = 'DAILY'
         try:
             response = (
                 self.aws()
@@ -1112,10 +1159,10 @@ class AWSUtil(AWSUtilProtocol):
                     TimePeriod={
                         # End is exclusive, so today is only included by asking for
                         # tomorrow.
-                        'Start': today.floor('month').format('YYYY-MM-DD'),
+                        'Start': start.format('YYYY-MM-DD'),
                         'End': today.shift(days=1).format('YYYY-MM-DD'),
                     },
-                    Granularity='MONTHLY',
+                    Granularity=granularity,
                     Metrics=['UnblendedCost'],
                     Filter={'Tags': {'Key': tag_key, 'Values': [tag_value]}},
                     GroupBy=[{'Type': 'DIMENSION', 'Key': 'SERVICE'}],

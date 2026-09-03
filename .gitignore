@@ -208,3 +208,6 @@ source/idea/idea-cluster-manager/tests/*.db
 
 # Claude Code worktrees
 .claude/
+
+# DynamoDB Local metadata written by the test suites
+**/dynamodb-local-metadata.json

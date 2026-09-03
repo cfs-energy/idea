@@ -9,6 +9,8 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
+from botocore.exceptions import ClientError
+
 import ideavirtualdesktopcontroller
 from ideadatamodel import VirtualDesktopSessionState
 from ideasdk.utils import Utils
@@ -65,12 +67,22 @@ class IDEASessionScheduledStopEventHandler(BaseVirtualDesktopControllerEventHand
 
         if not force:
             # submit request to validate CPU Utilization
-            self.ssm_commands_utils.submit_ssm_command_to_get_cpu_utilization(
-                instance_id=session.server.instance_id,
-                idea_session_id=session.idea_session_id,
-                idea_session_owner=session.owner,
-                base_os=session.base_os,
-            )
+            try:
+                self.ssm_commands_utils.submit_ssm_command_to_get_cpu_utilization(
+                    instance_id=session.server.instance_id,
+                    idea_session_id=session.idea_session_id,
+                    idea_session_owner=session.owner,
+                    base_os=session.base_os,
+                )
+            except ClientError as e:
+                if e.response['Error']['Code'] != 'InvalidInstanceId':
+                    raise
+                # a host that never registered with SSM will not have a CPU reading
+                # on the next redelivery either, so skip the check for this cycle
+                self.log_warning(
+                    message_id=message_id,
+                    message=f'instance {session.server.instance_id} for idea_session_id: {idea_session_id} is not registered with SSM. Skipping the CPU utilization check.',
+                )
             return
 
         session.force = force

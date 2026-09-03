@@ -126,6 +126,50 @@ def test_spend_is_reported_per_service_for_the_tag_asked_for():
     assert request['TimePeriod']['End'] > arrow.utcnow().format('YYYY-MM-DD')
 
 
+def test_a_trailing_window_is_read_daily_and_summed():
+    cost_explorer = StubCostExplorer(
+        {
+            'ResultsByTime': [
+                {'Groups': [group(BEDROCK_SERVICE, '1.5')]},
+                {'Groups': [group(BEDROCK_SERVICE, '2.0')]},
+            ]
+        }
+    )
+    aws_util = StubAWSUtil(cost_explorer)
+
+    spend = aws_util.cost_explorer_get_tagged_service_spend(
+        tag_key=TAG_KEY, tag_value=TAG_VALUE, days=30
+    )
+    assert spend == {BEDROCK_SERVICE: pytest.approx(3.5)}
+
+    request = cost_explorer.requests[0]
+    assert request['Granularity'] == 'DAILY'
+    # inclusive of today, so the window is 30 days counting back from today
+    assert request['TimePeriod']['Start'] == arrow.utcnow().shift(days=-29).format(
+        'YYYY-MM-DD'
+    )
+    assert request['TimePeriod']['End'] > arrow.utcnow().format('YYYY-MM-DD')
+
+
+def test_a_windowed_answer_is_not_served_from_the_month_to_date_cache():
+    cost_explorer = StubCostExplorer(
+        {'ResultsByTime': [{'Groups': [group(BEDROCK_SERVICE, '1.0')]}]}
+    )
+    aws_util = StubAWSUtil(cost_explorer)
+
+    aws_util.cost_explorer_get_tagged_service_spend(
+        tag_key=TAG_KEY, tag_value=TAG_VALUE
+    )
+    aws_util.cost_explorer_get_tagged_service_spend(
+        tag_key=TAG_KEY, tag_value=TAG_VALUE, days=30
+    )
+
+    assert [request['Granularity'] for request in cost_explorer.requests] == [
+        'MONTHLY',
+        'DAILY',
+    ]
+
+
 def test_a_tag_nothing_was_priced_against_reads_as_no_spend():
     aws_util = StubAWSUtil(StubCostExplorer({'ResultsByTime': [{'Groups': []}]}))
     assert (

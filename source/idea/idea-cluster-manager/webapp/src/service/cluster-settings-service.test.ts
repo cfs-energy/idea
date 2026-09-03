@@ -1,4 +1,4 @@
-import ClusterSettingsService, {parseDashboardUrl} from './cluster-settings-service'
+import ClusterSettingsService, {maintenanceBannerText, parseDashboardUrl} from './cluster-settings-service'
 import {ClusterSettingsClient} from '../client'
 import {initTestAppData} from '../test-support'
 
@@ -123,5 +123,50 @@ describe('custom dashboard settings', () => {
         expect(await service.initialize()).toBe(true)
         expect(service.isCustomDashboardEnabled()).toBe(false)
         expect(service.getCustomDashboardTitle()).toBe('Dashboard')
+    })
+})
+
+describe('maintenanceBannerText', () => {
+    it('reads an end time with no offset as UTC, as the setting is documented', () => {
+        // Both spellings name the same instant, so both must render identically.
+        expect(maintenanceBannerText({enabled: true, message: 'Closed.', ends_at: '2026-09-15T18:00:00'}))
+            .toBe(maintenanceBannerText({enabled: true, message: 'Closed.', ends_at: '2026-09-15T18:00:00Z'}))
+    })
+
+    it('honors an explicit offset', () => {
+        expect(maintenanceBannerText({enabled: true, message: 'Closed.', ends_at: '2026-09-15T14:00:00-04:00'}))
+            .toBe(maintenanceBannerText({enabled: true, message: 'Closed.', ends_at: '2026-09-15T18:00:00Z'}))
+    })
+
+    it('keeps the message when the end time cannot be parsed', () => {
+        expect(maintenanceBannerText({enabled: true, message: 'Closed.', ends_at: 'next tuesday'})).toBe('Closed.')
+    })
+
+    it('falls back to a generic message when none is set', () => {
+        expect(maintenanceBannerText({enabled: true, message: '', ends_at: ''}))
+            .toBe('This cluster is undergoing maintenance.')
+    })
+})
+
+describe('fetchMaintenance', () => {
+    it('reads the three keys from the api', async () => {
+        const service = buildService({maintenance: {enabled: true, message: 'Closed.', ends_at: '2026-09-15T18:00:00Z'}})
+        expect(await service.initialize()).toBe(true)
+        expect(await service.fetchMaintenance())
+            .toEqual({enabled: true, message: 'Closed.', ends_at: '2026-09-15T18:00:00Z'})
+    })
+
+    it('leaves the banner as it was when the read fails', async () => {
+        const service = buildService(new Error('access denied'))
+        service.maintenance = {enabled: true, message: 'Closed.', ends_at: ''}
+        // initialize() resolves the module set, which fetchMaintenance needs to find the module id.
+        await service.initialize()
+        expect(await service.fetchMaintenance()).toEqual({enabled: true, message: 'Closed.', ends_at: ''})
+    })
+
+    it('reports no window when the settings block is absent', async () => {
+        const service = buildService({})
+        expect(await service.initialize()).toBe(true)
+        expect(await service.fetchMaintenance()).toEqual({enabled: false, message: '', ends_at: ''})
     })
 })

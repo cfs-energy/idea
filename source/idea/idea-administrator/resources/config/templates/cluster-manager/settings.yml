@@ -52,6 +52,17 @@ web_portal:
     title: 'Dashboard'
     url: ~
 
+# maintenance window notice, read live from the config store, so turning it on or off needs
+# no redeploy. every portal page shows the banner while enabled is true, and the scheduler
+# rejects new job submissions with the same message.
+maintenance:
+  enabled: false
+  # plain text shown to users. no markup, no links.
+  message: ''
+  # optional ISO 8601 timestamp, e.g. '2026-09-15T18:00:00Z'. when set, the banner adds
+  # "until <local time>". an offset-less value is read as UTC. left empty, no time is shown.
+  ends_at: ''
+
 oauth2_client:
   # cluster manager OAuth 2.0 client is used for managing authentication for web-portal (when single sign-on is disabled)
   # set the below to an appropriate value based on your requirements and security posture.
@@ -120,11 +131,11 @@ bedrock:
     include_request_response_data: false  # true also delivers prompts and completions to the log group
   usage:
     enabled: true
-    interval_minutes: 60               # how often invocation records are aggregated
+    interval_minutes: 15               # how often invocation records are aggregated
     lookback_days: 2                   # trailing days recomputed on every run (must be <= log_retention_in_days)
     max_query_results: 10000
     query_timeout_seconds: 300
-    retention_days: 400                # time to live on the usage rows
+    retention_days: 400                # time to live on the usage rows (must exceed the 30 day reporting window)
     max_users_per_project: 50          # per-user rows returned with a project
   # off by default. spend is the project's actual bedrock cost from cost explorer, about a
   # day behind and never estimated; an exhausted budget blocks new desktops/jobs but does

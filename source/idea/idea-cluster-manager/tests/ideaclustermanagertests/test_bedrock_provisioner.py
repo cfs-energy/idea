@@ -1737,3 +1737,122 @@ def test_discovery_actions_stay_inside_the_project_role_boundary():
     }
 
     assert get_actions_outside_boundary(document, boundary) == []
+
+
+# a reconcile that could not finish
+
+
+OTHER_PROJECT_ID = 'a1b2c3d4-0000-4000-8000-000000000002'
+
+
+class TwoProjectDAO(FakeProjectsDAO):
+    """serves more than one project, so a pass over several can be driven."""
+
+    def __init__(self, projects):
+        self.projects = {project['project_id']: project for project in projects}
+        self.updates = []
+        self.log = []
+
+    def get_project_by_id(self, project_id):
+        stored = self.projects.get(project_id)
+        return None if stored is None else dict(stored)
+
+    def update_project(self, project):
+        self.updates.append(project)
+        project_id = project['project_id']
+        self.projects[project_id] = {**self.projects[project_id], **project}
+        return self.projects[project_id]
+
+
+def denied_for(project_id):
+    """an iam whose grant does not reach one project's resources."""
+
+    class DeniedIam(FakeIam):
+        def get_policy(self, PolicyArn):
+            if project_id in PolicyArn:
+                raise access_denied('GetPolicy')
+            return super().get_policy(PolicyArn)
+
+    return DeniedIam()
+
+
+def test_a_reconcile_denial_is_recorded_on_the_project():
+    # without this a broken integration reads exactly like a project nobody enabled
+    provisioner, _iam, _bedrock, dao = build_provisioner(iam=denied_for(PROJECT_ID))
+    logger = RecordingLogger()
+    provisioner.logger = logger
+    provisioner.reconcile_project(PROJECT_ID)
+
+    saved = dao.updates[-1]['bedrock']
+    assert saved['reconcile_error'] == 'AccessDenied on GetPolicy'
+    assert saved['reconcile_error_on'] > 0
+    # one line for the pass, naming the project, not one per model
+    assert len(logger.errors) == 1
+    assert PROJECT_ID in logger.errors[0]
+
+
+def test_a_denied_project_does_not_cost_the_pass_its_other_projects():
+    other = {**db_project(), 'project_id': OTHER_PROJECT_ID}
+    provisioner, _iam, _bedrock, _dao = build_provisioner(iam=denied_for(PROJECT_ID))
+    dao = TwoProjectDAO([db_project(), other])
+    provisioner.projects_dao = dao
+
+    for project_id in (PROJECT_ID, OTHER_PROJECT_ID):
+        provisioner.reconcile_project(project_id)
+
+    saved = {update['project_id']: update['bedrock'] for update in dao.updates}
+    assert saved[PROJECT_ID]['reconcile_error'] == 'AccessDenied on GetPolicy'
+    assert 'reconcile_error' not in saved[OTHER_PROJECT_ID]
+    assert saved[OTHER_PROJECT_ID]['role_arn']
+
+
+def test_the_reconcile_error_clears_on_the_next_pass_that_completes():
+    provisioner, _iam, _bedrock, dao = build_provisioner(iam=denied_for(PROJECT_ID))
+    provisioner.reconcile_project(PROJECT_ID)
+    assert 'reconcile_error' in dao.updates[-1]['bedrock']
+
+    # same project, a cluster-manager role that now carries the grant
+    provisioner, _iam2, _bedrock2, dao2 = build_provisioner(project=dao.db_project)
+    provisioner.reconcile_project(PROJECT_ID)
+
+    saved = dao2.updates[-1]['bedrock']
+    assert 'reconcile_error' not in saved
+    assert 'reconcile_error_on' not in saved
+    assert saved['role_arn']
+
+
+def test_a_non_denial_client_error_is_recorded_and_still_raised():
+    # throttling has to keep failing the task so the queue redelivers it, but the
+    # project still carries why the last pass did not finish.
+    class ThrottledIam(FakeIam):
+        def get_policy(self, PolicyArn):
+            raise botocore.exceptions.ClientError(
+                {'Error': {'Code': 'ThrottlingException', 'Message': 'slow down'}},
+                'GetPolicy',
+            )
+
+    provisioner, _iam, _bedrock, dao = build_provisioner(iam=ThrottledIam())
+    with pytest.raises(botocore.exceptions.ClientError):
+        provisioner.reconcile_project(PROJECT_ID)
+
+    saved = dao.updates[-1]['bedrock']
+    assert saved['reconcile_error'] == 'ThrottlingException on GetPolicy'
+    assert 'policy_errors' not in saved
+
+
+def test_a_recorded_reconcile_error_survives_a_project_update():
+    stored = db_project(
+        bedrock={
+            'enabled': True,
+            'model_ids': CATALOG,
+            'reconcile_error': 'AccessDenied on CreateRole',
+            'reconcile_error_on': 1756000000000,
+        }
+    )
+    project = ProjectsDAO.convert_from_db(stored)
+
+    assert project.bedrock.reconcile_error == 'AccessDenied on CreateRole'
+    assert project.bedrock.reconcile_error_on is not None
+    round_tripped = ProjectsDAO.convert_to_db(project)['bedrock']
+    assert round_tripped['reconcile_error'] == 'AccessDenied on CreateRole'
+    assert round_tripped['reconcile_error_on'] == 1756000000000

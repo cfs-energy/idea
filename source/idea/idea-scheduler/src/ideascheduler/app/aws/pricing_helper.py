@@ -10,7 +10,13 @@
 #  and limitations under the License.
 
 from ideasdk.protocols import SocaContextProtocol
-from ideadatamodel import SocaJob, SocaJobEstimatedBOMCost, SocaMemory, SocaMemoryUnit
+from ideadatamodel import (
+    EC2InstanceUnitPrice,
+    SocaJob,
+    SocaJobEstimatedBOMCost,
+    SocaMemory,
+    SocaMemoryUnit,
+)
 
 TOTAL_SECONDS_IN_MONTH = 60 * 60 * 24 * 30
 
@@ -41,6 +47,9 @@ class PricingHelper:
         self._context = context
         self.job = job
         self.total_time_secs = total_time_secs
+        # set when an instance hour could not be priced, so the estimate says so rather
+        # than reading as a job that cost nothing
+        self.price_unavailable = False
 
     def config(self):
         return self._context.config()
@@ -137,16 +146,29 @@ class PricingHelper:
             return 0
         return fsx_lustre_size.int_val() * self.total_time_hours
 
-    def get_instance_type_unit_price(self):
-        return self._context.aws_util().get_ec2_instance_type_unit_price(
+    def get_instance_type_unit_price(self) -> EC2InstanceUnitPrice:
+        """
+        the hourly rates for this job's instance type, never None. an unknown price
+        contributes zero so the estimate is still built, and price_unavailable is set on
+        the estimate so nothing reads it as a job that was free.
+        """
+        unit_price = self._context.aws_util().get_ec2_instance_type_unit_price(
             instance_type=self.job.default_instance_type
         )
+        if unit_price is not None:
+            return unit_price
+
+        self.price_unavailable = True
+        self._context.logger('pricing-helper').warning(
+            f'no ec2 price available for instance type '
+            f"{self.job.default_instance_type}: pricing this job's compute at zero "
+            f'and marking the estimate unavailable'
+        )
+        return EC2InstanceUnitPrice(ondemand=0.0, reserved=0.0)
 
     @property
     def ec2_ondemand_price(self):
         unit_price = self.get_instance_type_unit_price()
-        if unit_price is None:
-            return 0
         price = self.total_time_hours * unit_price.ondemand
         return round(price * self.job.ondemand_nodes(), 2)
 
@@ -276,5 +298,8 @@ class PricingHelper:
                     quantity=scratch_storage_quantity,
                     unit_price=scratch_storage_unit_price,
                 )
+
+        if self.price_unavailable:
+            estimated_bom_cost.price_unavailable = True
 
         return estimated_bom_cost

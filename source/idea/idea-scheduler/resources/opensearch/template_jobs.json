@@ -463,6 +463,9 @@
       },
       "estimated_bom_cost": {
         "properties": {
+          "price_unavailable": {
+            "type": "boolean"
+          },
           "line_items": {
             "type": "nested",
             "properties": {

@@ -33,10 +33,12 @@ runs:
         node-version: '${{ steps.versions.outputs.node_version }}'
     - name: Install AWS CLI
       shell: bash
+      # Unpack outside the checkout: the installer expands to an aws/ directory of about
+      # 25,000 files, which every tool that walks the working tree would read as project files.
       run: |
-        curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-        unzip -q awscliv2.zip
-        sudo ./aws/install --update
+        curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "${RUNNER_TEMP}/awscliv2.zip"
+        unzip -q "${RUNNER_TEMP}/awscliv2.zip" -d "${RUNNER_TEMP}"
+        sudo "${RUNNER_TEMP}/aws/install" --update
     - name: Install system dependencies
       shell: bash
       run: |
