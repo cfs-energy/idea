@@ -16,7 +16,7 @@ jobs:
       - name: Check version consistency
         run: |
           SH_REV=$(grep -m1 '^IDEA_REVISION=' idea-admin.sh | sed -E 's/.*:-"([^"]+)"\}.*/\1/')
-          PS1_REV=$(grep -m1 '\$IDEARevision = if' idea-admin-windows.ps1 | sed -E 's/.*else \{"([^"]+)"\}.*/\1/')
+          PS1_REV=$(grep -m1 '[$]IDEARevision = if' idea-admin-windows.ps1 | sed -E 's/.*else \{"([^"]+)"\}.*/\1/')
           VERSION=$(tr -d '[:space:]' < IDEA_VERSION.txt)
           EXPECTED="v${VERSION}"
           echo "idea-admin.sh revision:          ${SH_REV}"
