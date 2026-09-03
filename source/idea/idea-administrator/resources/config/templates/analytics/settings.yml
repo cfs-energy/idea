@@ -4,7 +4,7 @@ opensearch:
   {% if use_existing_opensearch_cluster %}
   domain_vpc_endpoint_url: "{{opensearch_domain_endpoint}}"
   {% else %}
-  data_node_instance_type: "m5.large.search" # instance type for opensearch data nodes
+  data_node_instance_type: "m7g.large.search" # instance type for opensearch data nodes
   data_nodes: 2  # number of data nodes for elasticsearch
   ebs_volume_size: 100  # ebs volume size attached to data nodes
   removal_policy: "DESTROY"  # RETAIN will preserve the cluster even if you delete the stack.

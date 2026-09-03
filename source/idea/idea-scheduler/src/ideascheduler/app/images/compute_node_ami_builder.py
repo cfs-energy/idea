@@ -33,7 +33,7 @@ import os.path
 from pathlib import Path
 import os
 
-DEFAULT_INSTANCE_TYPE = 'c5.large'
+DEFAULT_INSTANCE_TYPE = 'c7i.large'
 DEFAULT_EBS_VOLUME_SIZE_GB = 10
 
 

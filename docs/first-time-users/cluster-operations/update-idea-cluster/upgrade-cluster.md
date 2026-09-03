@@ -33,6 +33,54 @@ The upgrade moves compute nodes onto the release's AMI for the cluster's Base OS
 release image, which is kept and reported. An older built image is replaced, and can be rebuilt
 from Custom AMIs after the upgrade.
 
+### Module Host Instance Type
+
+New clusters run the module hosts on `m7i.large`, which replaces the `m6i.large` default. It is
+offered in all 28 of the 29 regions in `region_ami_config.yml` that can be checked, which is why it
+is preferred over the newer `m8i.large`; the twenty-ninth, me-south-1, is an opt-in region that
+could not be queried. An upgrade moves a host whose stored instance type is still `m6i.large` onto
+the new type, after one check that the region offers it, and leaves any other stored value alone
+because it is a type you chose. The setting is what the launch template renders, so a moved host
+runs the new type when its instance is next replaced rather than during the upgrade.
+
+If you install into a region that does not offer `m7i.large`, pick an instance type that region does
+offer, such as `m6i.large`, and the upgrade leaves that cluster on the type you chose.
+
+### Analytics Data Node Instance Type
+
+New clusters run the analytics OpenSearch data nodes on `m7g.large.search`, which has the same 2
+vCPU and 8 GiB as the `m5.large.search` it replaces. An upgrade moves a cluster whose
+`analytics.opensearch.data_node_instance_type` is still `m5.large.search` onto the new type, after
+checking that the region offers it for the engine version the domain runs. When the region does not
+offer it, the setting is left alone and the upgrade prints why. Any other stored value is a type you
+chose and is kept, so an upgrade never resizes a domain you tuned yourself.
+
+The instance type is part of the domain cluster configuration, so changing it updates the domain in
+place rather than replacing it. OpenSearch Service applies the change as a blue/green deployment:
+it brings up the new nodes, migrates the shards and retires the old nodes. This typically takes tens
+of minutes and the domain stays available throughout, with no downtime and no data loss.
+
+### DCV Broker Table Billing Mode
+
+The DCV broker creates its own DynamoDB tables at boot with a fixed provisioned capacity of five
+read and five write units per table. Those tables hold broker state such as key pairs, health
+checks and pending session requests, and their measured traffic is a small fraction of one unit.
+After the upgrade the virtual-desktop-controller moves each of them to on demand billing when it
+starts, and again whenever a broker instance reports that its boot completed, so the cluster pays
+per request rather than for idle capacity. Both paths run because a rolling update can hand the
+broker boot event to a controller task that is still draining on the previous release, which leaves
+the tables provisioned. The read and write capacity autoscaling policies are not applied while on
+demand billing is in use.
+
+This is a billing mode change only. Table contents, keys, indexes and encryption are untouched, and
+a table moved to on demand serves at least 4,000 write and 12,000 read units per second
+immediately, far above what the broker uses. DynamoDB limits how often a table may change billing
+mode; when that limit is reached the controller logs a warning and tries again at its next start or
+the next broker boot instead of failing the upgrade.
+
+Set `virtual-desktop-controller.dcv_broker.dynamodb_table.on_demand` to false to keep provisioned
+capacity and the autoscaling policies.
+
 ### Before You Start
 
 Turn the maintenance banner on before you close the scheduler, and off after you have verified the

@@ -335,6 +335,69 @@ def preferred_subnet_pin_warning(
     )
 
 
+def switch_ddb_table_to_on_demand(
+    dynamodb_client, table_name: str, logger, log_prefix: str = ''
+) -> None:
+    """
+    move a broker table to on demand billing if it is still provisioned.
+
+    the broker creates its tables with a fixed provisioned capacity that stays idle. on demand
+    billing charges per request instead and changes nothing else about the table.
+    """
+    try:
+        table = Utils.get_value_as_dict(
+            'Table', dynamodb_client.describe_table(TableName=table_name), {}
+        )
+        billing_mode = Utils.get_value_as_string(
+            'BillingMode',
+            Utils.get_value_as_dict('BillingModeSummary', table, {}),
+            'PROVISIONED',
+        )
+        if billing_mode == 'PAY_PER_REQUEST':
+            return
+        dynamodb_client.update_table(
+            TableName=table_name, BillingMode='PAY_PER_REQUEST'
+        )
+        logger.info(f'{log_prefix}{table_name} switched to on demand billing')
+    except botocore.exceptions.ClientError as e:
+        # dynamodb limits how often the billing mode of a table may change. leave the table as it
+        # is; the next controller start or broker boot tries again.
+        logger.warning(
+            f'{log_prefix}could not switch {table_name} to on demand billing: {e}'
+        )
+
+
+def switch_dcv_broker_tables_to_on_demand(
+    context: 'ideavirtualdesktopcontroller.AppContext',
+) -> None:
+    """
+    move every dcv broker table to on demand billing at controller start.
+
+    a rolling update can hand the broker boot event to a controller task that is still draining on
+    the previous release, so that event on its own does not settle the billing mode. the sweep is
+    idempotent and never fails startup.
+    """
+    logger = context.logger('dcv-broker-table-billing')
+    try:
+        if not context.config().get_bool(
+            'virtual-desktop-controller.dcv_broker.dynamodb_table.on_demand',
+            default=True,
+        ):
+            return
+        table_name_prefix = (
+            f'{context.cluster_name()}.{context.module_id()}.dcv-broker.'
+        )
+        dynamodb_client = context.aws().dynamodb()
+        for page in dynamodb_client.get_paginator('list_tables').paginate():
+            for table_name in Utils.get_value_as_list('TableNames', page, []):
+                if table_name.startswith(table_name_prefix):
+                    switch_ddb_table_to_on_demand(dynamodb_client, table_name, logger)
+    except Exception as e:
+        logger.error(
+            f'dcv broker table billing mode could not be checked at startup: {e}'
+        )
+
+
 class VirtualDesktopControllerUtils:
     def __init__(self, context: ideavirtualdesktopcontroller.AppContext):
         self.context = context

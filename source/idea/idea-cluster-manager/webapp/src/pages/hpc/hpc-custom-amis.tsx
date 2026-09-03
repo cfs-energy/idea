@@ -87,11 +87,11 @@ const adoptableImage = (row: ImageInventoryRow): string | undefined => {
     return undefined
 }
 const DEFAULT_INSTANCE_TYPE: Record<ImageKind, string> = {
-    compute: 'c5.large',
-    desktop: 'm6i.large'
+    compute: 'c7i.large',
+    desktop: 'm7i.large'
 }
 /** Both modules default an arm64 build to the same builder size, whatever the kind. */
-const DEFAULT_ARM64_INSTANCE_TYPE = 'm6g.large'
+const DEFAULT_ARM64_INSTANCE_TYPE = 'm8g.large'
 const DEFAULT_ARCHITECTURE = 'x86_64'
 const COMPUTE_ARCHITECTURES = ['x86_64', 'arm64']
 

@@ -92,6 +92,10 @@ dcv_broker:
   ssl_policy: ELBSecurityPolicy-FS-1-2-Res-2020-10
   session_token_validity: 1440 # in minutes
   dynamodb_table:
+    # the broker creates its tables with provisioned capacity that stays idle. on demand billing
+    # charges per request instead. set to false to keep provisioned capacity and the autoscaling
+    # policies below, which are only applied when on_demand is false.
+    on_demand: true
     autoscaling:
       enabled: true
     read_capacity:
@@ -182,6 +186,8 @@ dcv_session:
       - g5
       - m6a
       - m6g
+      - m7i
+      - m8g
     deny: [] # Supports both instance families and types. E.g. specify t3 for family and t3.large for instance type
   quic_support: {{ dcv_session_quic_support | lower }}
 

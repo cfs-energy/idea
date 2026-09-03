@@ -466,9 +466,9 @@ def test_the_architecture_follows_the_instance_type(monkeypatch):
 
 
 def test_the_compute_builder_type_follows_the_image_architecture():
-    assert build_with_base_ami('ami-rocky9stock00001').instance_type == 'c5.large'
+    assert build_with_base_ami('ami-rocky9stock00001').instance_type == 'c7i.large'
     arm = build_with_base_ami('ami-rocky9armstock01')
-    assert arm.instance_type == 'm6g.large'
+    assert arm.instance_type == 'm8g.large'
     assert arm.architecture == 'arm64'
 
 
@@ -489,7 +489,7 @@ def test_an_arm64_request_with_no_instance_type_uses_the_arm64_builder(monkeypat
 
     assert builder.base_ami == 'ami-rocky9armstock01'
     assert builder.architecture == 'arm64'
-    assert builder.instance_type == 'm6g.large'
+    assert builder.instance_type == 'm8g.large'
 
 
 def test_an_x86_64_builder_type_is_refused_for_an_arm64_compute_image():

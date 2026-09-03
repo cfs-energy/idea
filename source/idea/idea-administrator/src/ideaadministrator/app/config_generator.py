@@ -191,7 +191,7 @@ class ConfigGenerator:
         return Utils.get_value_as_string('kms_key_id', self.user_values, None)
 
     def get_instance_type(self) -> str:
-        return Utils.get_value_as_string('instance_type', self.user_values, 'm6i.large')
+        return Utils.get_value_as_string('instance_type', self.user_values, 'm7i.large')
 
     def get_base_os(self) -> str:
         base_os = Utils.get_value_as_string(
@@ -214,11 +214,6 @@ class ConfigGenerator:
                     f'packages. Choose rhel9/rocky9, or install without eVDI.'
                 )
         return base_os
-
-    def get_dcv_connection_gateway_instance_type(self) -> str:
-        return Utils.get_value_as_string(
-            'dcv_connection_gateway_instance_type', self.user_values, 'm6i.large'
-        )
 
     def get_dcv_connection_gateway_volume_size(self) -> int:
         return Utils.get_value_as_int(
@@ -254,11 +249,6 @@ class ConfigGenerator:
             return dcv_connection_gateway_instance_ami
 
         return self.get_region_ami()
-
-    def get_dcv_broker_instance_type(self) -> str:
-        return Utils.get_value_as_string(
-            'dcv_broker_instance_type', self.user_values, 'm5.xlarge'
-        )
 
     def get_dcv_broker_volume_size(self) -> int:
         return Utils.get_value_as_int('dcv_broker_volume_size', self.user_values, 200)
@@ -595,10 +585,8 @@ class ConfigGenerator:
             'dcv_connection_gateway_custom_certificate_certificate_secret_arn': self.get_dcv_connection_gateway_custom_certificate_certificate_secret_arn(),
             'dcv_connection_gateway_custom_certificate_private_key_secret_arn': self.get_dcv_connection_gateway_custom_certificate_private_key_secret_arn(),
             'dcv_connection_gateway_instance_ami': self.get_dcv_connection_gateway_instance_ami(),
-            'dcv_connection_gateway_instance_type': self.get_dcv_connection_gateway_instance_type(),
             'dcv_connection_gateway_volume_size': self.get_dcv_connection_gateway_volume_size(),
             'dcv_broker_instance_ami': self.get_dcv_broker_instance_ami(),
-            'dcv_broker_instance_type': self.get_dcv_broker_instance_type(),
             'dcv_broker_volume_size': self.get_dcv_broker_volume_size(),
         }
 

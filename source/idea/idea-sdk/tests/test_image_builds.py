@@ -427,13 +427,13 @@ def test_the_sweep_fails_this_hosts_orphans_and_terminates_old_stopped_builders(
 
 
 def test_builder_type_defaults_follow_the_architecture():
-    assert default_builder_instance_type('x86_64', 'm6i.large') == 'm6i.large'
-    assert default_builder_instance_type(None, 'c5.large') == 'c5.large'
-    assert default_builder_instance_type('arm64', 'm6i.large') == 'm6g.large'
+    assert default_builder_instance_type('x86_64', 'm7i.large') == 'm7i.large'
+    assert default_builder_instance_type(None, 'c7i.large') == 'c7i.large'
+    assert default_builder_instance_type('arm64', 'm7i.large') == 'm8g.large'
 
 
 def test_a_builder_type_of_the_other_architecture_is_refused_by_name():
-    check_builder_type_architecture('m6g.large', 'arm64')
+    check_builder_type_architecture('m8g.large', 'arm64')
     check_builder_type_architecture('unknown.type', 'arm64')
     with pytest.raises(exceptions.SocaException) as exc_info:
         check_builder_type_architecture('m6i.large', 'arm64')

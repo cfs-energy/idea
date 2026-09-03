@@ -109,7 +109,7 @@ def build_records_table(context) -> str:
 )
 @click.option(
     '--instance-type',
-    help='Instance Type. Specify a GPU instance type to install GPU drivers. Default: m6i.large',
+    help='Instance Type. Specify a GPU instance type to install GPU drivers. Default: m7i.large',
 )
 @click.option('--instance-profile-arn', help='IAM Instance Profile ARN')
 @click.option(

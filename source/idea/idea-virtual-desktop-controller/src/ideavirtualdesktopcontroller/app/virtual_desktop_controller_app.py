@@ -25,6 +25,7 @@ import ideavirtualdesktopcontroller
 from ideavirtualdesktopcontroller.app.api import VirtualDesktopApiInvoker
 from ideavirtualdesktopcontroller.app.virtual_desktop_controller_utils import (
     preferred_subnet_pin_warning,
+    switch_dcv_broker_tables_to_on_demand,
 )
 from ideavirtualdesktopcontroller.app.clients.dcv_broker_client.dcv_broker_client import (
     DCVBrokerClient,
@@ -112,6 +113,7 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
         self._initialize_clients()
         self._initialize_dbs()
         self._initialize_services()
+        switch_dcv_broker_tables_to_on_demand(self.context)
         self._reindex_software_stacks()
 
     def _initialize_dbs(self):

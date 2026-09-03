@@ -56,7 +56,7 @@ def ami_builder():
 )
 @click.option(
     '--instance-type',
-    help='Instance Type. Specify a GPU instance type to install GPU Drivers. Default: c5.large',
+    help='Instance Type. Specify a GPU instance type to install GPU Drivers. Default: c7i.large',
 )
 @click.option('--instance-profile-arn', help='IAM Instance Profile ARN')
 @click.option(
@@ -170,7 +170,7 @@ def build(no_stop: bool, no_terminate: bool, security_group_ids: str, **kwargs):
 )
 @click.option(
     '--instance-type',
-    help='Instance Type. Specify a GPU instance type to install GPU Drivers. Default: c5.large',
+    help='Instance Type. Specify a GPU instance type to install GPU Drivers. Default: c7i.large',
 )
 @click.option('--block-device-name', help='EBS block device name.')
 @click.option('--ebs-volume-size', type=int, help='EBS volume size in GB')

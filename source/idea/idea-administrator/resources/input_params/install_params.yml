@@ -400,13 +400,15 @@ SocaInputParamSpec:
       param_type: select
       data_type: str
       help_text: ~
-      default: m6i.large
+      default: m7i.large
       tag: default
       choices:
         - value: t3.medium
         - value: t3.large
         - value: m6i.large
         - value: m6i.xlarge
+        - value: m7i.large
+        - value: m7i.xlarge
         - value: c6i.large
       validate:
         required: yes

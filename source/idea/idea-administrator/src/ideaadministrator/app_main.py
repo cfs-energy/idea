@@ -2803,6 +2803,213 @@ def resolve_compute_ami_keep_keys(
     return keep
 
 
+# the module host instance type new clusters get, and the default it replaces. every module host
+# renders its instance type from the same values.yml entry, so a cluster installed on the old
+# default carries it on all of them.
+MODULE_HOST_INSTANCE_TYPE = 'm7i.large'
+MODULE_HOST_INSTANCE_TYPE_OLD = 'm6i.large'
+
+# module name -> the instance type keys that module templates, relative to its module id. The
+# directoryservice key exists only for the openldap provider; the other providers store none.
+HOST_INSTANCE_TYPE_KEYS = {
+    constants.MODULE_BASTION_HOST: ['instance_type'],
+    constants.MODULE_CLUSTER_MANAGER: ['ec2.autoscaling.instance_type'],
+    constants.MODULE_DIRECTORYSERVICE: ['instance_type'],
+    constants.MODULE_SCHEDULER: ['instance_type'],
+    constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER: [
+        'controller.autoscaling.instance_type',
+        'dcv_broker.autoscaling.instance_type',
+        'dcv_connection_gateway.autoscaling.instance_type',
+    ],
+}
+
+
+def move_module_host_instance_type(
+    current: Optional[str], offered: Optional[List[str]]
+) -> bool:
+    """
+    Whether an upgrade moves a module host onto the new default instance type. True only for a host
+    that still stores the old default in a region that offers the new type. A type the operator
+    chose is theirs to keep, and offered is None when the offering listing could not be read, which
+    also keeps the stored value.
+    """
+    if current != MODULE_HOST_INSTANCE_TYPE_OLD:
+        return False
+    if offered is None:
+        return False
+    return MODULE_HOST_INSTANCE_TYPE in offered
+
+
+def update_module_host_instance_types(
+    context, db: ClusterConfigDB, modules: List[Dict], ec2
+) -> None:
+    """
+    Move module hosts off the instance type default this release replaces. Settings sync on upgrade
+    is add-only, so a host left on the old default would keep it for the life of the cluster. The
+    stored value is what the launch template renders, so a moved host runs the new type when its
+    instance is next replaced.
+    """
+    stored: Dict[str, str] = {}
+    for module in modules:
+        module_id = Utils.get_value_as_string('module_id', module)
+        keys = HOST_INSTANCE_TYPE_KEYS.get(Utils.get_value_as_string('name', module))
+        if Utils.is_empty(module_id) or not keys:
+            continue
+        for key in keys:
+            full_key = f'{module_id}.{key}'
+            entry = db.get_config_entry(full_key)
+            value = Utils.get_value_as_string('value', entry) if entry else None
+            # a module or directory provider that templates no host stores no key
+            if Utils.is_not_empty(value):
+                stored[full_key] = value
+
+    on_old_default = sorted(
+        key for key, value in stored.items() if value == MODULE_HOST_INSTANCE_TYPE_OLD
+    )
+    for key in sorted(set(stored) - set(on_old_default)):
+        context.info(
+            f'keeping {key} {stored[key]}, which is not the '
+            f'{MODULE_HOST_INSTANCE_TYPE_OLD} default this release replaces'
+        )
+    if not on_old_default:
+        return
+
+    offered = None
+    failure = None
+    try:
+        listed = ec2.describe_instance_type_offerings(
+            LocationType='region',
+            Filters=[{'Name': 'instance-type', 'Values': [MODULE_HOST_INSTANCE_TYPE]}],
+        )
+        offered = [
+            Utils.get_value_as_string('InstanceType', offering)
+            for offering in Utils.get_value_as_list('InstanceTypeOfferings', listed, [])
+        ]
+    except Exception as e:
+        failure = e
+
+    if not move_module_host_instance_type(MODULE_HOST_INSTANCE_TYPE_OLD, offered):
+        kept = (
+            f'Keeping {MODULE_HOST_INSTANCE_TYPE_OLD} on '
+            f'{len(on_old_default)} module host settings.'
+        )
+        if failure is not None:
+            context.warning(
+                f'could not read whether this region offers '
+                f'{MODULE_HOST_INSTANCE_TYPE}: {failure}. {kept}'
+            )
+        else:
+            context.info(
+                f'{MODULE_HOST_INSTANCE_TYPE} is not offered in this region. {kept}'
+            )
+        return
+
+    for key in on_old_default:
+        db.set_config_entry(key, MODULE_HOST_INSTANCE_TYPE)
+        context.info(
+            f'{key} moves from {MODULE_HOST_INSTANCE_TYPE_OLD} to '
+            f'{MODULE_HOST_INSTANCE_TYPE}; the host runs it when the instance is next '
+            'replaced'
+        )
+
+
+# the analytics OpenSearch data node instance type new clusters get, and the default it replaces
+OPENSEARCH_DATA_NODE_INSTANCE_TYPE = 'm7g.large.search'
+OPENSEARCH_DATA_NODE_INSTANCE_TYPE_OLD = 'm5.large.search'
+
+
+def move_opensearch_data_node_instance_type(
+    current: Optional[str], offered: Optional[List[str]]
+) -> bool:
+    """
+    Whether an upgrade moves the analytics data nodes onto the new default instance type. True only
+    for a cluster that still stores the old default in a region that offers the new type for the
+    domain's engine version. A type the operator chose is theirs to keep, and offered is None when
+    the listing could not be read, which also keeps the stored value.
+    """
+    if current != OPENSEARCH_DATA_NODE_INSTANCE_TYPE_OLD:
+        return False
+    if offered is None:
+        return False
+    return OPENSEARCH_DATA_NODE_INSTANCE_TYPE in offered
+
+
+def update_opensearch_data_node_instance_type(
+    context, db: ClusterConfigDB, modules: List[Dict], opensearch_client
+) -> None:
+    """
+    Move the analytics data nodes off the instance type default this release replaces. The type is
+    part of the domain's cluster configuration, so the change is applied in place rather than by
+    replacing the domain: OpenSearch Service runs a blue/green deployment for it.
+    """
+    module_id = next(
+        (
+            Utils.get_value_as_string('module_id', module)
+            for module in modules
+            if Utils.get_value_as_string('name', module) == constants.MODULE_ANALYTICS
+        ),
+        None,
+    )
+    if Utils.is_empty(module_id):
+        return
+
+    key = f'{module_id}.opensearch.data_node_instance_type'
+    entry = db.get_config_entry(key)
+    current = Utils.get_value_as_string('value', entry) if entry else None
+    if Utils.is_empty(current):
+        # a cluster using an existing OpenSearch domain does not store a data node instance type
+        return
+
+    if current != OPENSEARCH_DATA_NODE_INSTANCE_TYPE_OLD:
+        context.info(
+            f'keeping analytics data node instance type {current}, which is not the '
+            f'{OPENSEARCH_DATA_NODE_INSTANCE_TYPE_OLD} default this release replaces'
+        )
+        return
+
+    domain_entry = db.get_config_entry(f'{module_id}.opensearch.domain_name')
+    domain_name = (
+        Utils.get_value_as_string('value', domain_entry) if domain_entry else None
+    )
+    engine_version = None
+    offered = None
+    failure = None
+    try:
+        domain_status = Utils.get_value_as_dict(
+            'DomainStatus',
+            opensearch_client.describe_domain(DomainName=domain_name),
+            {},
+        )
+        engine_version = Utils.get_value_as_string('EngineVersion', domain_status)
+        listed = opensearch_client.list_instance_type_details(
+            EngineVersion=engine_version
+        )
+        offered = [
+            Utils.get_value_as_string('InstanceType', detail)
+            for detail in Utils.get_value_as_list('InstanceTypeDetails', listed, [])
+        ]
+    except Exception as e:
+        failure = e
+
+    if move_opensearch_data_node_instance_type(current, offered):
+        db.set_config_entry(key, OPENSEARCH_DATA_NODE_INSTANCE_TYPE)
+        context.info(
+            f'analytics data nodes move from {current} to '
+            f'{OPENSEARCH_DATA_NODE_INSTANCE_TYPE}. OpenSearch Service applies this as a '
+            f'blue/green deployment, so the domain stays available while it runs.'
+        )
+    elif failure is not None:
+        context.warning(
+            f'could not read the instance types offered for the analytics domain: {failure}. '
+            f'Keeping analytics data node instance type {current}.'
+        )
+    else:
+        context.info(
+            f'{OPENSEARCH_DATA_NODE_INSTANCE_TYPE} is not offered for {engine_version} in this '
+            f'region. Keeping analytics data node instance type {current}.'
+        )
+
+
 def boto3_session(aws_profile: str):
     """a boto3 session for the profile the command was given, or the ambient credentials"""
     import boto3
@@ -3322,6 +3529,9 @@ def upgrade_cluster(
 
             context.info('🔄 Updating AMI IDs and base_os values in DynamoDB...')
             cluster_modules = db.get_cluster_modules()
+            ec2_client = boto3_session(aws_profile).client(
+                'ec2', region_name=aws_region
+            )
             ami_updates = build_ami_update_entries(
                 ami_id=ami_id,
                 base_os=base_os,
@@ -3331,9 +3541,7 @@ def upgrade_cluster(
                     db=db,
                     modules=cluster_modules,
                     ami_id=ami_id,
-                    ec2=boto3_session(aws_profile).client(
-                        'ec2', region_name=aws_region
-                    ),
+                    ec2=ec2_client,
                 ),
             )
 
@@ -3347,6 +3555,19 @@ def upgrade_cluster(
                     db.set_config_entry(key, value)
 
             context.success('✅ AMI and base_os settings updated successfully')
+
+            update_module_host_instance_types(
+                context=context, db=db, modules=cluster_modules, ec2=ec2_client
+            )
+
+            update_opensearch_data_node_instance_type(
+                context=context,
+                db=db,
+                modules=cluster_modules,
+                opensearch_client=boto3_session(aws_profile).client(
+                    'opensearch', region_name=aws_region
+                ),
+            )
 
         # PHASE 4: Begin module deployment
         fancy_title(context, 'Phase 4: Module Deployment', '🏗️')

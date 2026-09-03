@@ -71,7 +71,7 @@ def test_defaults_come_from_cluster_config():
     )
     assert builder.ami_name == 'idea-dcv-host-amazonlinux2023'
     assert builder.get_ami_full_name().startswith('idea-dcv-host-amazonlinux2023-v')
-    assert builder.instance_type == 'm6i.large'
+    assert builder.instance_type == 'm7i.large'
     assert (
         builder.instance_profile_arn
         == 'arn:aws:iam::123456789012:instance-profile/dcv-host'
@@ -206,11 +206,11 @@ def test_the_builder_type_follows_the_image_architecture():
     x86 = DcvHostImageBuilder(
         context=fake_context(), base_ami='ami-base', base_os='rocky9'
     )
-    assert x86.instance_type == 'm6i.large'
+    assert x86.instance_type == 'm7i.large'
     arm = DcvHostImageBuilder(
         context=arm64_context(), base_ami='ami-arm', base_os='rocky9'
     )
-    assert arm.instance_type == 'm6g.large'
+    assert arm.instance_type == 'm8g.large'
     assert arm.architecture == 'arm64'
 
 

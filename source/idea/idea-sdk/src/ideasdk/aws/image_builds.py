@@ -63,18 +63,30 @@ MAX_CONCURRENT_BUILDS = 16
 # one GPU size per architecture
 BUILDER_INSTANCE_TYPES = {
     'x86_64': (
-        'c5.large',
-        'c5.xlarge',
         'c6i.large',
         'c6i.xlarge',
+        'c7i.large',
+        'c7i.xlarge',
         'm6i.large',
         'm6i.xlarge',
+        'm7i.large',
+        'm7i.xlarge',
         'g4dn.xlarge',
         'g5.xlarge',
     ),
-    'arm64': ('c6g.large', 'c6g.xlarge', 'm6g.large', 'm6g.xlarge', 'g5g.xlarge'),
+    'arm64': (
+        'c6g.large',
+        'c6g.xlarge',
+        'c8g.large',
+        'c8g.xlarge',
+        'm6g.large',
+        'm6g.xlarge',
+        'm8g.large',
+        'm8g.xlarge',
+        'g5g.xlarge',
+    ),
 }
-DEFAULT_ARM64_BUILDER_INSTANCE_TYPE = 'm6g.large'
+DEFAULT_ARM64_BUILDER_INSTANCE_TYPE = 'm8g.large'
 
 _RECORD_TIMESTAMPS = ('started_on', 'finished_on')
 
@@ -159,7 +171,7 @@ def builder_type_architecture(instance_type: Optional[str]) -> Optional[str]:
 
 
 def default_builder_instance_type(architecture: Optional[str], x86_default: str) -> str:
-    """the builder size for an image's architecture: the module's own x86_64 default, m6g.large for arm64"""
+    """the builder size for an image's architecture: the module's own x86_64 default, m8g.large for arm64"""
     if (architecture or 'x86_64') == 'arm64':
         return DEFAULT_ARM64_BUILDER_INSTANCE_TYPE
     return x86_default

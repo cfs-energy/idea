@@ -13,9 +13,14 @@ import pytest
 
 from ideadatamodel import constants
 from ideaadministrator.app_main import (
+    HOST_INSTANCE_TYPE_KEYS,
+    MODULE_HOST_INSTANCE_TYPE,
+    MODULE_HOST_INSTANCE_TYPE_OLD,
     build_ami_update_entries,
     keep_built_compute_image,
+    move_module_host_instance_type,
     resolve_compute_ami_keep_keys,
+    update_module_host_instance_types,
 )
 
 
@@ -320,3 +325,139 @@ def test_keep_built_compute_image_compares_creation_dates():
     undated = dict(NEWER_BUILT_IMAGE)
     undated.pop('CreationDate')
     assert not keep_built_compute_image(undated, STOCK_IMAGE)
+
+
+# an upgrade moves a module host still on the instance type default this release replaces
+
+HOST_MODULES = [
+    {'module_id': 'bastion-host', 'name': constants.MODULE_BASTION_HOST},
+    {'module_id': 'vdc', 'name': constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER},
+    # a module that templates no host contributes no key
+    {'module_id': 'cluster', 'name': constants.MODULE_CLUSTER},
+]
+OFFERED = [{'InstanceType': MODULE_HOST_INSTANCE_TYPE}]
+CHOSEN_TYPE = 'c6i.4xlarge'
+
+
+class FakeHostConfigDB:
+    """the module host instance type settings update_module_host_instance_types reads"""
+
+    def __init__(self, values):
+        self.values = values
+        self.written = {}
+
+    def get_config_entry(self, key):
+        value = self.values.get(key)
+        return {'key': key, 'value': value} if value is not None else None
+
+    def set_config_entry(self, key, value):
+        self.written[key] = value
+
+
+class FakeOfferingsEC2:
+    def __init__(self, offerings, error=None):
+        self.offerings = offerings
+        self.error = error
+        self.calls = []
+
+    def describe_instance_type_offerings(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        return {'InstanceTypeOfferings': self.offerings}
+
+
+def move_hosts(values, offerings, error=None):
+    context = RecordingContext()
+    db = FakeHostConfigDB(values)
+    ec2 = FakeOfferingsEC2(offerings, error)
+    update_module_host_instance_types(
+        context=context, db=db, modules=HOST_MODULES, ec2=ec2
+    )
+    return db.written, context.messages, ec2
+
+
+def test_the_host_move_decision_needs_the_old_default_and_a_region_that_offers_it():
+    assert move_module_host_instance_type(
+        MODULE_HOST_INSTANCE_TYPE_OLD, [MODULE_HOST_INSTANCE_TYPE]
+    )
+    # the region does not offer the new type
+    assert not move_module_host_instance_type(MODULE_HOST_INSTANCE_TYPE_OLD, [])
+    # a type the operator chose is theirs to keep
+    assert not move_module_host_instance_type(CHOSEN_TYPE, [MODULE_HOST_INSTANCE_TYPE])
+    # the offerings call failed
+    assert not move_module_host_instance_type(MODULE_HOST_INSTANCE_TYPE_OLD, None)
+
+
+def test_hosts_on_the_old_default_move_and_a_chosen_type_is_kept():
+    written, messages, ec2 = move_hosts(
+        {
+            'bastion-host.instance_type': MODULE_HOST_INSTANCE_TYPE_OLD,
+            'vdc.controller.autoscaling.instance_type': MODULE_HOST_INSTANCE_TYPE_OLD,
+            'vdc.dcv_broker.autoscaling.instance_type': CHOSEN_TYPE,
+        },
+        OFFERED,
+    )
+
+    assert written == {
+        'bastion-host.instance_type': MODULE_HOST_INSTANCE_TYPE,
+        'vdc.controller.autoscaling.instance_type': MODULE_HOST_INSTANCE_TYPE,
+    }
+    assert len(ec2.calls) == 1, 'one offerings call for the whole cluster'
+    assert ec2.calls[0]['LocationType'] == 'region'
+    assert any('keeping vdc.dcv_broker' in message for message in messages)
+    assert any('next replaced' in message for message in messages)
+
+
+def test_no_host_moves_when_the_region_does_not_offer_the_new_type():
+    written, messages, _ = move_hosts(
+        {'bastion-host.instance_type': MODULE_HOST_INSTANCE_TYPE_OLD}, []
+    )
+
+    assert written == {}
+    assert any('is not offered in this region' in message for message in messages)
+
+
+def test_a_failed_offerings_call_leaves_every_host_alone():
+    written, messages, _ = move_hosts(
+        {'bastion-host.instance_type': MODULE_HOST_INSTANCE_TYPE_OLD},
+        OFFERED,
+        error=RuntimeError('AuthFailure'),
+    )
+
+    assert written == {}
+    assert any('AuthFailure' in message for message in messages)
+
+
+def test_a_cluster_with_no_host_on_the_old_default_makes_no_api_call():
+    written, _, ec2 = move_hosts({'bastion-host.instance_type': CHOSEN_TYPE}, OFFERED)
+
+    assert written == {}
+    assert ec2.calls == []
+
+
+def test_host_instance_type_keys_cover_every_templated_host():
+    """
+    guards against a module adding or renaming a host instance type key
+    """
+    templates_dir = (
+        pathlib.Path(__file__).parents[1] / 'resources' / 'config' / 'templates'
+    )
+    if not templates_dir.is_dir():
+        pytest.skip('config templates not available in this checkout')
+
+    templated = sum(
+        len(
+            re.findall(
+                r'^\s*instance_type:\s*\{\{\s*instance_type\s*\}\}',
+                template.read_text(),
+                flags=re.MULTILINE,
+            )
+        )
+        for template in templates_dir.rglob('*.yml')
+    )
+    covered = sum(len(keys) for keys in HOST_INSTANCE_TYPE_KEYS.values())
+    assert templated == covered, (
+        f'config templates rendering instance_type changed: {templated} found against '
+        f'{covered} covered; update HOST_INSTANCE_TYPE_KEYS'
+    )
