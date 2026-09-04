@@ -1,0 +1,42 @@
+name: Sync docs branch
+# The GitBook space syncs with the gitbook branch, because main only accepts pull requests.
+# On every merge to main, and once a day, fast-forward gitbook to main so docs edited in the
+# repository reach GitBook. When gitbook is ahead because edits were merged in the GitBook
+# editor, open the pull request that carries them to main. The built-in token is enough:
+# a pull request it creates triggers no Actions workflows, and the test workflows skip
+# docs-only pull requests anyway, while the GitBook preview comes from the GitBook app.
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fast-forward gitbook to main
+        id: fast_forward
+        continue-on-error: true
+        run: git push origin main:gitbook
+      - name: Open the docs pull request when gitbook is ahead
+        if: steps.fast_forward.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          existing=$(gh pr list --head gitbook --base main --state open --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            echo "docs pull request #$existing is already open"
+            exit 0
+          fi
+          gh pr create --base main --head gitbook \
+            --title "docs: changes from GitBook" \
+            --body "Edits merged in the GitBook editor, synced from the gitbook branch."
