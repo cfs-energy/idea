@@ -12,13 +12,13 @@ IDEA includes a web-interface designed to simplify user-experience for your end-
 
 <mark style="color:orange;">**Orange**</mark>: Admin Zone. This section is only visible to users with admin privileges
 
-<mark style="color:green;">**Green**</mark>:  [Broken link](broken-reference "mention") section displaying installed/available modules such as:
+<mark style="color:green;">**Green**</mark>:  [Modules](https://app.gitbook.com/s/f38qThSa0Aa40txosxbS/modules "mention") section displaying installed/available modules such as:
 
 * [hpc-workloads](../../modules/hpc-workloads/ "mention")
 * [virtual-desktop-interfaces](../../modules/virtual-desktop-interfaces/ "mention")
 * [cluster-manager](../../modules/cluster-manager/ "mention")
 
-Refer to the [Broken link](broken-reference "mention") for an up-to-date list of modules supported by IDEA
+Refer to the [Modules](https://app.gitbook.com/s/f38qThSa0Aa40txosxbS/modules "mention") for an up-to-date list of modules supported by IDEA
 
 <mark style="color:yellow;">**Yellow**</mark>: User settings and notifications. View account info, change IDEA preferences, reset your password and more.
 
