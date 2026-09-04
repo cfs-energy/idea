@@ -32,3 +32,6 @@ runs:
         key: pre-commit-3|${{ env.PYTHON_PATH }}|${{ runner.arch }}|${{ hashFiles('.pre-commit-config.yaml') }}
     - run: pre-commit run --show-diff-on-failure --color=always ${{ inputs.extra_args }}
       shell: bash
+      env:
+        # the hook guards local commits on protected branches; a workflow running on main is not one
+        SKIP: no-commit-to-branch
