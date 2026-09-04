@@ -4,13 +4,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
-## [26.09.0] - 2026-08-03
+## [26.09.0] - 2026-09-04
 
 **Upgrade Instructions:**
 * Configuration and code release on top of 26.08.0. Redeploy all modules; there are no base OS, AMI map or schema changes
 * New optional settings, all default off or empty: `cluster.network.preferred_subnet_id`, `virtual-desktop-controller.dcv_session.first_boot_dnf_update`, `cluster-manager.maintenance.{enabled,message,ends_at}`
 * The cluster-manager role gains `pricing:GetProducts`, so redeploy cluster-manager for desktop hours to price
 * `upgrade-cluster` gains `--disable-eol-stacks-in-use`, and `idea-admin.sh` gains `IDEA_ADMIN_NO_TTY` for unattended runs
+* `upgrade-cluster` moves module hosts still on the `m6i.large` default to `m7i.large` at their next instance replacement, and the analytics data nodes from `m5.large.search` to `m7g.large.search` as an OpenSearch blue/green deployment of about 30 minutes with no downtime; any other stored value is kept
 * The DCV broker DynamoDB tables move to on demand billing when the virtual-desktop-controller starts and when a broker boots; set `virtual-desktop-controller.dcv_broker.dynamodb_table.on_demand` to false to keep provisioned capacity
 ```bash
 ./idea-admin.sh upgrade-cluster --aws-region $IDEA_AWS_REGION --cluster-name $IDEA_CLUSTER_NAME
