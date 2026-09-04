@@ -9,6 +9,7 @@ Statement:
       - ec2:DescribeNetworkInterfaces
       - ec2:DescribeInstances
       - ec2:DescribeInstanceTypes
+      - pricing:GetProducts
       - budgets:ViewBudget
     Resource: '*'
     Effect: Allow
@@ -329,6 +330,16 @@ Statement:
     Resource: '*'
     Effect: Allow
     Sid: BedrockUsageQueryResults
+
+  # the cost pages read desktops that no longer exist from the record the virtual
+  # desktop controller writes when it terminates one. read only: the controller owns it.
+  - Action:
+      - dynamodb:Query
+      - dynamodb:Scan
+      - dynamodb:DescribeTable
+    Resource:
+      - '{{ context.arns.get_ddb_table_arn(context.config.get_module_id("virtual-desktop-controller") + ".controller.session-history") }}'
+    Effect: Allow
 
   - Action:
       - dynamodb:GetItem

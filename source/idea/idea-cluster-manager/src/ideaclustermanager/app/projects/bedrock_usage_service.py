@@ -3,17 +3,25 @@ __all__ = (
     'INVOCATION_QUERY',
     'CALLER_ARN_RE',
     'INSTANCE_ID_RE',
+    'USAGE_WINDOW',
+    'USAGE_WINDOW_DAYS',
     'parse_caller_arn',
     'row_to_dict',
-    'get_project_usage_by_model',
+    'usage_window_dates',
+    'get_project_window_usage',
+    'list_bedrock_projects',
+    'apportion_spend',
 )
 
 from ideadatamodel import (
     constants,
     exceptions,
     BedrockModelUsage,
+    BedrockUserUsage,
     ListProjectsRequest,
     Project,
+    ProjectBedrockUsage,
+    SocaAmount,
 )
 from ideasdk.context import SocaContext
 from ideasdk.service import SocaService
@@ -53,6 +61,11 @@ INVOCATION_QUERY = """fields identity.arn as caller_arn, modelId as model_id, in
 | sort invocations desc
 | limit {limit}"""
 
+# a trailing window rather than the calendar month, so a project last used a few weeks
+# ago still reads as used on the first of a month.
+USAGE_WINDOW_DAYS = 30
+USAGE_WINDOW = 'last_30_days'
+
 QUERY_POLL_INTERVAL_SECONDS = 2
 DESCRIBE_INSTANCES_CHUNK_SIZE = 200
 INSTANCE_CACHE_MAX_ENTRIES = 20000
@@ -91,35 +104,140 @@ def _row_counters(row: Dict) -> Dict[str, int]:
     }
 
 
-def get_project_usage_by_model(
-    usage_dao, project_id: str, period: str
-) -> List[BedrockModelUsage]:
-    """
-    per model totals for one period, summed across users. the stored rollups are per
-    user and per job, so the model dimension is aggregated on read from the day rows.
-    takes the dao because the read path holds one but not the usage service itself.
-    """
-    by_model: Dict[str, Dict[str, int]] = {}
-    for row in usage_dao.query_day_rows(project_id, f'{period}-01', f'{period}-31'):
-        model_id = Utils.get_value_as_string('model_id', row)
-        if Utils.is_empty(model_id):
-            continue
-        _add_counters(
-            by_model.setdefault(model_id, _new_counters()), _row_counters(row)
-        )
+def usage_window_dates(days: int = USAGE_WINDOW_DAYS) -> Tuple[str, str]:
+    """the inclusive [today - (days - 1), today] utc dates the day rows are keyed by."""
+    today = arrow.utcnow()
+    return (
+        today.shift(days=-(days - 1)).format('YYYY-MM-DD'),
+        today.format('YYYY-MM-DD'),
+    )
 
-    entries = [
-        BedrockModelUsage(
-            model_id=model_id,
-            invocations=counters['invocations'],
-            input_tokens=counters['input_tokens'],
-            output_tokens=counters['output_tokens'],
-            total_tokens=counters['input_tokens'] + counters['output_tokens'],
-        )
+
+def _usage_entry(counters: Dict[str, int]) -> Dict[str, int]:
+    return {
+        'invocations': counters['invocations'],
+        'input_tokens': counters['input_tokens'],
+        'output_tokens': counters['output_tokens'],
+        'total_tokens': counters['input_tokens'] + counters['output_tokens'],
+    }
+
+
+def get_project_window_usage(
+    usage_dao,
+    project_id: str,
+    start_date: str,
+    end_date: str,
+    username: str = None,
+    max_users: int = 50,
+    rows: Optional[List[Dict]] = None,
+) -> Optional[ProjectBedrockUsage]:
+    """
+    project usage over a trailing window, summed from the stored day rows. the month
+    rollups are left as they are, so budgets and anything else keyed on project#YYYY-MM
+    are unaffected. rows may be passed in by a caller that already holds the window, so
+    one page can be aggregated more than one way without being read twice.
+    """
+    if rows is None:
+        rows = usage_dao.query_day_rows(project_id, start_date, end_date)
+    if Utils.is_not_empty(username):
+        rows = [
+            row
+            for row in rows
+            if Utils.get_value_as_string('username', row) == username
+        ]
+    if len(rows) == 0:
+        return None
+
+    totals = _new_counters()
+    by_user: Dict[str, Dict[str, int]] = {}
+    by_model: Dict[str, Dict[str, int]] = {}
+    user_model_tokens: Dict[Tuple[str, str], int] = {}
+    updated_on = 0
+    for row in rows:
+        counters = _row_counters(row)
+        _add_counters(totals, counters)
+        row_user = Utils.get_value_as_string('username', row, UNATTRIBUTED_USER)
+        _add_counters(by_user.setdefault(row_user, _new_counters()), counters)
+        model_id = Utils.get_value_as_string('model_id', row)
+        if Utils.is_not_empty(model_id):
+            _add_counters(by_model.setdefault(model_id, _new_counters()), counters)
+            key = (row_user, model_id)
+            user_model_tokens[key] = user_model_tokens.get(key, 0) + (
+                counters['input_tokens'] + counters['output_tokens']
+            )
+        updated_on = max(updated_on, Utils.get_value_as_int('updated_on', row, 0))
+
+    models = [
+        BedrockModelUsage(model_id=model_id, **_usage_entry(counters))
         for model_id, counters in by_model.items()
     ]
-    entries.sort(key=lambda entry: entry.total_tokens, reverse=True)
-    return entries
+    models.sort(key=lambda entry: entry.total_tokens, reverse=True)
+
+    usage = ProjectBedrockUsage(
+        window=USAGE_WINDOW,
+        username=username,
+        updated_on=arrow.get(updated_on / 1000).datetime if updated_on else None,
+        by_model=models,
+        **_usage_entry(totals),
+    )
+    if Utils.is_empty(username):
+        users = [
+            BedrockUserUsage(
+                username=name,
+                top_model_id=_top_model(user_model_tokens, name),
+                **_usage_entry(counters),
+            )
+            for name, counters in by_user.items()
+        ]
+        users.sort(key=lambda entry: entry.total_tokens, reverse=True)
+        usage.by_user = users[:max_users]
+    return usage
+
+
+def _top_model(user_model_tokens: Dict[Tuple[str, str], int], username: str):
+    models = [
+        (tokens, model_id)
+        for (name, model_id), tokens in user_model_tokens.items()
+        if name == username
+    ]
+    if len(models) == 0:
+        return None
+    return max(models)[1]
+
+
+def apportion_spend(usage: ProjectBedrockUsage):
+    """
+    split the project's window spend across its models and users by token share, marked
+    estimated. cost explorer prices a cost allocation tag, never a model or a caller, so
+    a share is the only breakdown there is. nothing is written when the project spend is
+    unknown: an estimate of an unknown is not zero.
+
+    Known limitation: token share, not per model pricing. if cost explorer ever reports
+    bedrock spend per model for a tag, price from that and drop the estimated flag.
+    """
+    total_tokens = Utils.get_as_int(usage.total_tokens, 0)
+    if usage.spend is None or total_tokens <= 0:
+        return
+    amount = Utils.get_as_float(usage.spend.amount, 0.0)
+    for entry in list(usage.by_model or []) + list(usage.by_user or []):
+        share = Utils.get_as_int(entry.total_tokens, 0) / total_tokens
+        entry.spend = SocaAmount(amount=round(amount * share, 2))
+        entry.spend_is_estimated = True
+
+
+def list_bedrock_projects(projects_dao) -> List[Project]:
+    """every project carrying a bedrock configuration, paged out of the projects table."""
+    projects = []
+    cursor = None
+    for _ in range(MAX_PROJECT_PAGES):
+        result = projects_dao.list_projects(ListProjectsRequest(cursor=cursor))
+        for project in Utils.get_as_list(result.listing, []):
+            if project.bedrock is not None:
+                projects.append(project)
+        cursor = result.paginator.cursor if result.paginator is not None else None
+        if Utils.is_empty(cursor):
+            break
+    return projects
 
 
 class BedrockUsageService(SocaService):
@@ -155,7 +273,7 @@ class BedrockUsageService(SocaService):
 
     def get_interval_seconds(self) -> int:
         minutes = self.context.config().get_int(
-            self._config_key('usage.interval_minutes'), 60
+            self._config_key('usage.interval_minutes'), 15
         )
         return max(5, minutes) * 60
 
@@ -169,14 +287,23 @@ class BedrockUsageService(SocaService):
             self._config_key('usage.max_query_results'), 10000
         )
 
+    def is_truncated(self, records: List) -> bool:
+        """whether the query hit its row limit, so what came back is a partial window."""
+        return len(records) >= self.get_max_query_results()
+
     def get_query_timeout_seconds(self) -> int:
         return self.context.config().get_int(
             self._config_key('usage.query_timeout_seconds'), 300
         )
 
     def get_retention_days(self) -> int:
-        return self.context.config().get_int(
-            self._config_key('usage.retention_days'), 400
+        # the ttl on every usage row must outlive USAGE_WINDOW_DAYS, or the reported
+        # window would read days dynamodb has already expired.
+        return max(
+            USAGE_WINDOW_DAYS + 15,
+            self.context.config().get_int(
+                self._config_key('usage.retention_days'), 400
+            ),
         )
 
     def get_row_ttl(self) -> int:
@@ -255,22 +382,33 @@ class BedrockUsageService(SocaService):
                 f'project. account and region invocation logging captures every '
                 f'bedrock caller, not only idea hosts.'
             )
-        self.store(projects, aggregates, days, job_aggregates=job_aggregates)
+
+        # a query that answered with nothing, or was cut off, cannot say what is stale:
+        # a missing log group reads exactly like a quiet window. stored usage is updated
+        # and left in place rather than reconciled away, because nothing would restore it.
+        truncated = self.is_truncated(records)
+        if len(records) == 0:
+            self.logger.info(
+                'the model invocation log query returned no records for this window. '
+                'usage rows are left unchanged: an empty answer is not evidence that '
+                'recorded usage is gone.'
+            )
+        elif truncated:
+            self.logger.info(
+                'the model invocation log query was truncated, so usage rows are '
+                'updated but not reconciled: a partial answer cannot establish that a '
+                'stored row is stale.'
+            )
+        self.store(
+            projects,
+            aggregates,
+            days,
+            job_aggregates=job_aggregates,
+            reconcile=not truncated,
+        )
 
     def list_bedrock_projects(self) -> List[Project]:
-        projects = []
-        cursor = None
-        for _ in range(MAX_PROJECT_PAGES):
-            result = self.projects_service.projects_dao.list_projects(
-                ListProjectsRequest(cursor=cursor)
-            )
-            for project in Utils.get_as_list(result.listing, []):
-                if project.bedrock is not None:
-                    projects.append(project)
-            cursor = result.paginator.cursor if result.paginator is not None else None
-            if Utils.is_empty(cursor):
-                break
-        return projects
+        return list_bedrock_projects(self.projects_service.projects_dao)
 
     @staticmethod
     def build_indexes(projects: List[Project]):
@@ -323,7 +461,7 @@ class BedrockUsageService(SocaService):
             status = Utils.get_value_as_string('status', result)
             if status == 'Complete':
                 results = Utils.get_value_as_list('results', result, [])
-                if len(results) >= self.get_max_query_results():
+                if self.is_truncated(results):
                     self.logger.warning(
                         f'model invocation log query returned the maximum of '
                         f'{self.get_max_query_results()} rows. usage for this window is '
@@ -512,10 +650,20 @@ class BedrockUsageService(SocaService):
         aggregates: Dict[str, Dict[Tuple[str, str, str], Dict[str, int]]],
         days: List[str],
         job_aggregates: Dict[str, Dict[Tuple[str, str, str], Dict[str, int]]] = None,
+        reconcile: bool = True,
     ):
         periods = sorted({day[:7] for day in days})
         ttl = self.get_row_ttl()
         updated_on = Utils.current_time_ms()
+
+        # the days the query actually returned usage for. a day it said nothing about is
+        # left alone rather than emptied, because logging can have been off for part of
+        # a window and not the rest.
+        days_with_data = {
+            usage_date
+            for project_rows in aggregates.values()
+            for usage_date, _, _ in project_rows
+        }
 
         for project in projects:
             project_id = project.project_id
@@ -568,14 +716,18 @@ class BedrockUsageService(SocaService):
                     }
                 )
 
-            existing = self.usage_dao.query_day_rows(
-                project_id, days[0], days[-1]
-            ) + self.usage_dao.query_day_job_rows(project_id, days[0], days[-1])
-            existing_keys = {
-                Utils.get_value_as_string('usage_id', row) for row in existing
-            }
             self.usage_dao.put_rows(rows)
-            self.usage_dao.delete_rows(project_id, existing_keys - desired_keys)
+
+            if reconcile and len(days_with_data) > 0:
+                existing = self.usage_dao.query_day_rows(
+                    project_id, days[0], days[-1]
+                ) + self.usage_dao.query_day_job_rows(project_id, days[0], days[-1])
+                stale = {
+                    Utils.get_value_as_string('usage_id', row)
+                    for row in existing
+                    if Utils.get_value_as_string('usage_date', row) in days_with_data
+                } - desired_keys
+                self.usage_dao.delete_rows(project_id, stale)
 
             for period in periods:
                 self.rebuild_rollups(project_id, period, ttl, updated_on)

@@ -99,12 +99,28 @@ class FakeSessionDB:
 
     def list_all_from_db(self, request) -> SocaListingPayload:
         self.requested_cursors.append(request.cursor)
-        index = 0 if request.cursor is None else int(request.cursor)
+        index, offset = self._at(request.cursor)
         next_cursor = str(index + 1) if index + 1 < len(self.pages) else None
         return SocaListingPayload(
-            listing=self.pages[index],
+            listing=self.pages[index][offset:],
             paginator=SocaPaginator(cursor=next_cursor),
         )
+
+    @staticmethod
+    def _at(cursor: Optional[str]):
+        # 'page', or 'page:offset' for a cursor naming a position part way through a page
+        if cursor is None:
+            return 0, 0
+        page, _, offset = cursor.partition(':')
+        return int(page), int(offset or 0)
+
+    def cursor_for(self, session) -> Optional[str]:
+        """the real db names the position by primary key, here it is page and offset"""
+        for page_index, page in enumerate(self.pages):
+            for offset, candidate in enumerate(page):
+                if candidate is session:
+                    return f'{page_index}:{offset + 1}'
+        return None
 
     def update(self, session: VirtualDesktopSession) -> VirtualDesktopSession:
         self.updated.append(session)
@@ -551,7 +567,7 @@ def test_a_pass_resumes_from_the_page_the_last_one_stopped_on():
         ec2_client,
         FakeProjectsClient(bedrock_project(PROJECT_INSTANCE_PROFILE_ARN)),
     )
-    utils._instance_profile_repair_cursor = '1'
+    VirtualDesktopSessionUtils._instance_profile_repair_cursor = '1'
 
     assert utils.repair_project_instance_profiles() == 1
     assert session_db.requested_cursors == ['1']
@@ -567,7 +583,7 @@ def test_a_pass_that_runs_out_of_time_keeps_its_place():
         FakeEc2Client(),
         FakeProjectsClient(bedrock_project(PROJECT_INSTANCE_PROFILE_ARN)),
     )
-    utils._instance_profile_repair_cursor = '1'
+    VirtualDesktopSessionUtils._instance_profile_repair_cursor = '1'
 
     assert utils.repair_project_instance_profiles(time_budget_ms=0) == 0
     assert utils._instance_profile_repair_cursor == '1'

@@ -35,14 +35,18 @@ import UpdateHpcApplication from "./pages/hpc/update-hpc-application";
 import SubmitJob from "./pages/hpc/submit-job";
 import AccountSettings from "./pages/account/account-settings";
 import SSHAccess from "./pages/home/ssh-access";
+import MyCosts from "./pages/home/my-costs";
 import CustomDashboard from "./pages/home/custom-dashboard";
 import ClusterSettings from "./pages/cluster-admin/cluster-settings";
 import ClusterStatus from "./pages/cluster-admin/cluster-status";
 import Projects from "./pages/cluster-admin/projects";
+import AiUsage from "./pages/cluster-admin/ai-usage";
+import UserCostsPage from "./pages/cluster-admin/user-costs";
 import {Box, HelpPanel, SideNavigationProps, StatusIndicator} from "@cloudscape-design/components";
 import {NonCancelableCustomEvent} from "@cloudscape-design/components/internal/events";
 import {FlashbarProps} from "@cloudscape-design/components/flashbar/interfaces";
 import HpcLicenses from "./pages/hpc/hpc-licenses";
+import HpcCustomAmis from "./pages/hpc/hpc-custom-amis";
 import EmailTemplates from "./pages/cluster-admin/email-templates";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -446,6 +450,22 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
                         />
                     </IdeaAuthenticatedRoute>
                 }/>
+                <Route path="/home/my-costs" element={
+                    <IdeaAuthenticatedRoute isLoggedIn={this.state.isLoggedIn}>
+                        <MyCosts
+                            ideaPageId="my-costs"
+                            toolsOpen={this.state.toolsOpen}
+                            tools={this.state.tools}
+                            onToolsChange={this.onToolsChange}
+                            onPageChange={this.onPageChange}
+                            sideNavItems={this.state.sideNavItems}
+                            sideNavHeader={this.state.sideNavHeader}
+                            onSideNavChange={this.onSideNavChange}
+                            onFlashbarChange={this.onFlashbarChange}
+                            flashbarItems={this.state.flashbarItems}
+                        />
+                    </IdeaAuthenticatedRoute>
+                }/>
                 <Route path="/home/ssh-access" element={
                     <IdeaAuthenticatedRoute isLoggedIn={this.state.isLoggedIn}>
                         <SSHAccess
@@ -673,6 +693,22 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
                         />
                     </IdeaAuthenticatedRoute>
                 }/>
+                <Route path="/soca/custom-amis" element={
+                    <IdeaAuthenticatedRoute isLoggedIn={this.state.isLoggedIn}>
+                        <HpcCustomAmis
+                            ideaPageId="hpc-custom-amis"
+                            toolsOpen={this.state.toolsOpen}
+                            tools={this.state.tools}
+                            onToolsChange={this.onToolsChange}
+                            onPageChange={this.onPageChange}
+                            sideNavItems={this.state.sideNavItems}
+                            sideNavHeader={this.state.sideNavHeader}
+                            onSideNavChange={this.onSideNavChange}
+                            onFlashbarChange={this.onFlashbarChange}
+                            flashbarItems={this.state.flashbarItems}
+                        />
+                    </IdeaAuthenticatedRoute>
+                }/>
                 <Route path="/soca/settings" element={
                     <IdeaAuthenticatedRoute isLoggedIn={this.state.isLoggedIn}>
                         <HpcSchedulerSettings
@@ -840,6 +876,38 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
                     <IdeaAuthenticatedRoute isLoggedIn={this.state.isLoggedIn}>
                         <Projects
                             ideaPageId="projects"
+                            toolsOpen={this.state.toolsOpen}
+                            tools={this.state.tools}
+                            onToolsChange={this.onToolsChange}
+                            onPageChange={this.onPageChange}
+                            sideNavItems={this.state.sideNavItems}
+                            sideNavHeader={this.state.sideNavHeader}
+                            onSideNavChange={this.onSideNavChange}
+                            onFlashbarChange={this.onFlashbarChange}
+                            flashbarItems={this.state.flashbarItems}
+                        />
+                    </IdeaAuthenticatedRoute>
+                }/>
+                <Route path="/cluster/user-costs" element={
+                    <IdeaAuthenticatedRoute isLoggedIn={this.state.isLoggedIn}>
+                        <UserCostsPage
+                            ideaPageId="user-costs"
+                            toolsOpen={this.state.toolsOpen}
+                            tools={this.state.tools}
+                            onToolsChange={this.onToolsChange}
+                            onPageChange={this.onPageChange}
+                            sideNavItems={this.state.sideNavItems}
+                            sideNavHeader={this.state.sideNavHeader}
+                            onSideNavChange={this.onSideNavChange}
+                            onFlashbarChange={this.onFlashbarChange}
+                            flashbarItems={this.state.flashbarItems}
+                        />
+                    </IdeaAuthenticatedRoute>
+                }/>
+                <Route path="/cluster/ai-usage" element={
+                    <IdeaAuthenticatedRoute isLoggedIn={this.state.isLoggedIn}>
+                        <AiUsage
+                            ideaPageId="ai-usage"
                             toolsOpen={this.state.toolsOpen}
                             tools={this.state.tools}
                             onToolsChange={this.onToolsChange}

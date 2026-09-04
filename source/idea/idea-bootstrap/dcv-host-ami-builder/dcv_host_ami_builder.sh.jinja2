@@ -1,0 +1,94 @@
+#!/bin/bash
+set -x
+
+source /etc/environment
+if [[ -f /etc/profile.d/proxy.sh ]]; then
+    source /etc/profile.d/proxy.sh
+fi
+
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
+
+{% set TAGS = [
+  {'Key':'idea:ClusterName', 'Value': context.cluster_name },
+  {'Key':'idea:ModuleName', 'Value': context.module_name },
+  {'Key':'idea:ModuleId', 'Value': context.module_id },
+  {'Key':'Name', 'Value': context.vars.ami_name }
+] %}
+
+{% with  ebs_volume_tags = TAGS %}
+  {% include '_templates/linux/tag_ebs_volumes.jinja2' %}
+{% endwith %}
+
+{% with  network_interface_tags = TAGS %}
+  {% include '_templates/linux/tag_network_interface.jinja2' %}
+{% endwith %}
+
+{% include '_templates/linux/disable_auto_upgrades.jinja2' %}
+
+{% include '_templates/linux/disable_firewall.jinja2' %}
+
+{% include '_templates/linux/systemd_resolved.jinja2' %}
+
+{% include '_templates/linux/set_kernel.jinja2' %}
+
+if [[ ! -f ${BOOTSTRAP_DIR}/idea_preinstalled_packages.log ]]; then
+  {% if context.base_os in ('rhel8', 'rocky8') %}
+  #drpm isn't available in rhel9 or rocky9
+  yum install -y drpm
+  {% endif %}
+  {% include '_templates/linux/universe.jinja2' %}
+  {% include '_templates/linux/system_packages.jinja2' %}
+  {% include '_templates/linux/jq.jinja2' %}
+  {% include '_templates/linux/disable_se_linux.jinja2' %}
+  echo "Package installation completed at $(date)" >> ${BOOTSTRAP_DIR}/idea_preinstalled_packages.log
+else
+   log_info "Found ${BOOTSTRAP_DIR}/idea_preinstalled_packages.log... skipping package installation..."
+fi
+
+{% include '_templates/linux/cloudwatch_agent.jinja2' %}
+
+{% include '_templates/linux/chronyd.jinja2' %}
+
+{% include '_templates/linux/snapd.jinja2' %}
+
+{% include '_templates/linux/disable_ulimit.jinja2' %}
+
+{% include '_templates/linux/disable_strict_host_check.jinja2' %}
+
+{% include '_templates/linux/disable_motd_update.jinja2' %}
+
+{% with secure_path = '/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin' %}
+  {% include '_templates/linux/sudoer_secure_path.jinja2' %}
+{% endwith %}
+
+{% with messages = [
+  'DCV Host AMI, AMI Name: ' + context.vars.ami_name + ', ModuleId: ' + context.module_id + ', Cluster: ' + context.cluster_name
+] %}
+  {% include '_templates/linux/motd.jinja2' %}
+{% endwith %}
+
+{% if context.is_gpu_instance_type() %}
+  {% include '_templates/linux/disable_nouveau_drivers.jinja2' %}
+{% else %}
+  log_info "GPU InstanceType not detected. Skipping disabling of Nouveau Drivers..."
+{% endif %}
+
+if [[ ! -f ${BOOTSTRAP_DIR}/idea_system_upgraded.log ]]; then
+  {% include '_templates/linux/system_upgrade.jinja2' %}
+  echo "System upgrade completed at $(date)" >> ${BOOTSTRAP_DIR}/idea_system_upgraded.log
+else
+  log_info "Found ${BOOTSTRAP_DIR}/idea_system_upgraded.log... skipping system upgrade..."
+fi
+
+REBOOT_REQUIRED=$(cat /root/bootstrap/reboot_required.txt)
+if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
+  log_info "reboot required. dcv_host_ami_builder_post_reboot.sh will be executed after reboot ..."
+  (crontab -l; echo "@reboot /bin/bash ${SCRIPT_DIR}/dcv_host_ami_builder_post_reboot.sh >> ${IDEA_DCV_HOST_AMI_BUILDER_LOGS_DIR}/dcv_host_ami_builder_bootstrap.log 2>&1") | crontab -
+  reboot
+  exit 0
+else
+  mount -a
+  log_info "reboot not required. executing dcv_host_ami_builder_post_reboot.sh ..."
+  /bin/bash ${SCRIPT_DIR}/dcv_host_ami_builder_post_reboot.sh >> "${IDEA_DCV_HOST_AMI_BUILDER_LOGS_DIR}/dcv_host_ami_builder_bootstrap.log" 2>&1
+fi

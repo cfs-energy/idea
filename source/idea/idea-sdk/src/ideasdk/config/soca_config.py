@@ -16,6 +16,14 @@ from pyhocon import ConfigTree, tool, ConfigException, ConfigFactory
 from typing import Optional, List, Dict, Any
 
 
+def is_null_value(value: Any) -> bool:
+    """
+    an empty list is a real config value: `key: []` is not `key: ~`, and must round-trip
+    through the cluster settings table as a list. every other empty value counts as null.
+    """
+    return Utils.is_empty(value) and not isinstance(value, list)
+
+
 class SocaConfig:
     def __init__(self, config: Dict):
         self._config = ConfigFactory.from_dict(config)
@@ -27,7 +35,7 @@ class SocaConfig:
             self._config.pop(key, default=default)
 
     def put(self, key, value):
-        if Utils.is_empty(value):
+        if is_null_value(value):
             value = None
         self._config.put(key, value)
 
@@ -52,7 +60,7 @@ class SocaConfig:
             else:
                 value = self._config.get(key, default=default)
 
-            if Utils.is_empty(value):
+            if is_null_value(value):
                 return default
             return value
 
@@ -121,7 +129,7 @@ class SocaConfig:
             else:
                 value = self._config.get_list(key, default=default)
 
-            if Utils.is_empty(value):
+            if is_null_value(value):
                 return default
             return value
 

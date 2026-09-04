@@ -192,6 +192,7 @@ class SchedulerApp(ideasdk.app.SocaApp):
 
         # create default scheduler settings
         SchedulerDefaultSettings(self.context).initialize()
+        self._initialize_image_builds()
 
     def app_stop(self):
         if self.instance_monitor is not None:
@@ -206,3 +207,17 @@ class SchedulerApp(ideasdk.app.SocaApp):
             self.context.accounts_client.destroy()
         if self.context.projects_client is not None:
             self.context.projects_client.destroy()
+
+    def _initialize_image_builds(self):
+        """the records table plus the sweep of builds a restart orphaned; startup never fails over it"""
+        from ideasdk.aws.image_builds import ImageBuildRecordsDB
+        from ideascheduler.app.images.compute_images import image_builds_table_name
+
+        try:
+            ImageBuildRecordsDB(
+                self.context, image_builds_table_name(self.context)
+            ).initialize()
+        except Exception as e:
+            self.context.logger('scheduler-app').error(
+                f'image build records could not be initialized at startup: {e}'
+            )

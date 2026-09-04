@@ -14,6 +14,7 @@ from unittest.mock import Mock
 import pytest
 from botocore.exceptions import ClientError
 
+from ideasdk.utils import Utils
 from ideadatamodel import (
     SocaListingPayload,
     SocaPaginator,
@@ -81,15 +82,23 @@ def an_instance(
 class FakeEc2Client:
     """answers describe_instances from a queue of answers, the last one repeating"""
 
-    def __init__(self, *answers: Any, tag_error: Optional[Exception] = None):
+    def __init__(
+        self,
+        *answers: Any,
+        tag_error: Optional[Exception] = None,
+        on_describe: Optional[Any] = None,
+    ):
         self.answers = list(answers) if answers else [an_instance()]
         self.tag_error = tag_error
+        self.on_describe = on_describe
         self.describe_calls: List[Dict] = []
         self.created_tags: List[Dict] = []
         self.deleted_tags: List[Dict] = []
 
     def describe_instances(self, **kwargs) -> Dict[str, Any]:
         self.describe_calls.append(kwargs)
+        if self.on_describe is not None:
+            self.on_describe()
         answer = self.answers.pop(0) if len(self.answers) > 1 else self.answers[0]
         if isinstance(answer, Exception):
             raise answer
@@ -119,12 +128,28 @@ class FakeSessionDB:
 
     def list_all_from_db(self, request) -> SocaListingPayload:
         self.requested_cursors.append(request.cursor)
-        index = 0 if request.cursor is None else int(request.cursor)
+        index, offset = self._at(request.cursor)
         next_cursor = str(index + 1) if index + 1 < len(self.pages) else None
         return SocaListingPayload(
-            listing=self.pages[index],
+            listing=self.pages[index][offset:],
             paginator=SocaPaginator(cursor=next_cursor),
         )
+
+    @staticmethod
+    def _at(cursor: Optional[str]):
+        # 'page', or 'page:offset' for a cursor naming a position part way through a page
+        if cursor is None:
+            return 0, 0
+        page, _, offset = cursor.partition(':')
+        return int(page), int(offset or 0)
+
+    def cursor_for(self, session) -> Optional[str]:
+        """the real db names the position by primary key, here it is page and offset"""
+        for page_index, page in enumerate(self.pages):
+            for offset, candidate in enumerate(page):
+                if candidate is session:
+                    return f'{page_index}:{offset + 1}'
+        return None
 
     def update(self, session: VirtualDesktopSession) -> VirtualDesktopSession:
         self.updated.append(session)
@@ -132,6 +157,23 @@ class FakeSessionDB:
 
     def get_from_db(self, idea_session_owner: str, idea_session_id: str):
         return self.existing
+
+
+class FakeClock:
+    """
+    a clock that only moves when the sweep reaches ec2, so a pass can be cut off after an
+    exact number of desktops rather than at a page boundary
+    """
+
+    def __init__(self, step_ms: int):
+        self.now = 0
+        self.step = step_ms
+
+    def __call__(self) -> int:
+        return self.now
+
+    def tick(self):
+        self.now += self.step
 
 
 class FakeServerUtils:
@@ -621,7 +663,7 @@ def test_the_pass_gives_up_its_remaining_work_rather_than_run_past_its_budget():
 def test_a_pass_that_runs_out_of_time_keeps_its_place():
     # a table larger than one time budget is never walked past its first pages otherwise
     utils = build_utils(FakeSessionDB(pages=[[a_session()], [a_session()]]))
-    utils._stopped_session_cleanup_cursor = '1'
+    VirtualDesktopSessionUtils._stopped_session_cleanup_cursor = '1'
 
     sweep(utils, time_budget_ms=0)
     assert utils._stopped_session_cleanup_cursor == '1'
@@ -635,12 +677,42 @@ def test_a_pass_resumes_from_the_page_the_last_one_stopped_on():
     utils = build_utils(
         session_db, FakeEc2Client(an_instance()), delete_path=delete_path
     )
-    utils._stopped_session_cleanup_cursor = '1'
+    VirtualDesktopSessionUtils._stopped_session_cleanup_cursor = '1'
 
     assert sweep(utils)['deleted'] == 1
     assert session_db.requested_cursors == ['1']
     assert [s.idea_session_id for s in delete_path.deleted] == ['two']
     # the end of the table was reached, so the next pass starts at the first page again
+    assert utils._stopped_session_cleanup_cursor is None
+
+
+def test_a_pass_cut_off_inside_a_page_resumes_after_the_last_desktop_it_looked_at(
+    monkeypatch,
+):
+    """
+    a page is a whole dynamodb scan page, far more desktops than one budget can reach ec2
+    for. keeping the page's own start key would restart that page every pass, leaving a
+    table larger than one budget never walked past its first page.
+    """
+    page = [a_session(idea_session_id=name) for name in ('one', 'two', 'three')]
+    session_db = FakeSessionDB(pages=[page])
+    clock = FakeClock(step_ms=10)
+    utils = build_utils(
+        session_db,
+        FakeEc2Client(an_instance(stopped_hours_ago=1), on_describe=clock.tick),
+    )
+    monkeypatch.setattr(Utils, 'current_time_ms', clock)
+
+    # the budget runs out on the third desktop, part way through the only page
+    assert sweep(utils, time_budget_ms=15)['not_due'] == 2
+    assert utils._stopped_session_cleanup_cursor == session_db.cursor_for(page[1])
+
+    clock.now = 0
+    session_db.requested_cursors.clear()
+
+    assert sweep(utils, time_budget_ms=15)['not_due'] == 1
+    assert session_db.requested_cursors == [session_db.cursor_for(page[1])]
+    # the last page was finished, so the next pass starts at the first page again
     assert utils._stopped_session_cleanup_cursor is None
 
 

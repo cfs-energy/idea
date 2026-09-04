@@ -208,14 +208,19 @@ class EventsHandlerThread(IdeaThread):
 
         delete_message_info = []
         do_not_process_message_group_ids = set()
+        max_receive_count = self.context.config().get_int(
+            'virtual-desktop-controller.events.max_receive_count', default=3
+        )
         for message in Utils.get_value_as_list('Messages', response, []):
             message_id = Utils.get_value_as_string('MessageId', message, None)
             self._logger.debug(f'[msg-id: {message_id}] processing message')
+            attributes = Utils.get_value_as_dict('Attributes', message, {})
             message_group_id = Utils.get_value_as_string(
-                'MessageGroupId', Utils.get_value_as_dict('Attributes', message, {}), ''
+                'MessageGroupId', attributes, ''
             )
-            sender_id = Utils.get_value_as_string(
-                'SenderId', Utils.get_value_as_dict('Attributes', message, {}), ''
+            sender_id = Utils.get_value_as_string('SenderId', attributes, '')
+            receive_count = Utils.get_value_as_int(
+                'ApproximateReceiveCount', attributes, 1
             )
             md5checksum = Utils.get_value_as_string('MD5OfBody', message, None)
 
@@ -288,10 +293,15 @@ class EventsHandlerThread(IdeaThread):
                             self.EVENT_HANDLER_MAP[event.event_type].log_exception(
                                 message_id=message_id, exception=e
                             )
+                            should_delete_message = self._is_poison_message(
+                                message_id, event, receive_count, max_receive_count
+                            )
                     except Exception as e:
-                        should_delete_message = False
                         self._logger.exception(
                             f'[msg-id: {message_id}] Error handling message. Error: {e}'
+                        )
+                        should_delete_message = self._is_poison_message(
+                            message_id, event, receive_count, max_receive_count
                         )
                 elif message_group_id in do_not_process_message_group_ids:
                     self._logger.debug(
@@ -328,6 +338,25 @@ class EventsHandlerThread(IdeaThread):
                 )
             )
             # self._logger.info(f'Delete message response {response}')
+
+    def _is_poison_message(
+        self,
+        message_id: str,
+        event: VirtualDesktopEvent,
+        receive_count: int,
+        max_receive_count: int,
+    ) -> bool:
+        # a handler that fails every time must not hold its message group forever: after
+        # max_receive_count redeliveries the message is dropped rather than blocking it
+        if receive_count < max_receive_count:
+            return False
+        idea_session_id = Utils.get_value_as_string(
+            'idea_session_id', event.detail, None
+        )
+        self._logger.error(
+            f'[msg-id: {message_id}] handling failed {receive_count} times for event_type: {event.event_type}, idea_session_id: {idea_session_id}. Deleting the message instead of blocking the queue.'
+        )
+        return True
 
     @staticmethod
     def _is_checksum_valid(md5checksum: str, body: str) -> bool:

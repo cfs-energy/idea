@@ -52,15 +52,12 @@ prometheus_remote_write_url: ~
 enable_aws_backup: true
 # Virtual Desktop Controller - DCV Broker
 dcv_broker_instance_ami: ~
-dcv_broker_instance_type: ~
 dcv_broker_volume_size: 200
 # Virtual Desktop Controller - DCV Connection Gateway
 dcv_connection_gateway_instance_ami: ~
-dcv_connection_gateway_instance_type: ~
 dcv_connection_gateway_volume_size: 200
 # Virtual Desktop Controller - DCV Gateway/Reverse Proxy Server
 reverse_proxy_server_instance_ami: ~
-reverse_proxy_server_instance_type: ~
 reverse_proxy_server_volume_size: 200
 # dcv_session_quic_support is the flag to control for QUIC support.
 # if dcv_session_quic_support: true, then we can not use internal certificates, set NLB certificates using dcv_connection_gateway_custom_certificate_provided: true and additional required settings

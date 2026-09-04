@@ -82,7 +82,7 @@ class SchedulerDefaultSettings:
                     terminate_when_idle=0,
                     keep_forever=False,
                     default_job_params=SocaJobParams(
-                        instance_types=['c5.large'],
+                        instance_types=['c7i.large'],
                         base_os=compute_node_os,
                         instance_ami=compute_node_ami,
                         enable_placement_group=True,
@@ -205,19 +205,19 @@ class SchedulerDefaultSettings:
                                             'param_type': 'select',
                                             'data_type': 'str',
                                             'validate': {'required': True},
-                                            'default': 'm5.large',
+                                            'default': 'm7i.large',
                                             'choices': [
                                                 {
                                                     'title': 'Small (1 CPUs, 8GB RAM)',
-                                                    'value': 'm5.large',
+                                                    'value': 'm7i.large',
                                                 },
                                                 {
                                                     'title': 'Medium (2 CPUs, 16GB RAM)',
-                                                    'value': 'm5.xlarge',
+                                                    'value': 'm7i.xlarge',
                                                 },
                                                 {
                                                     'title': 'Large (4 CPUs, 32GB RAM)',
-                                                    'value': 'm5.2xlarge',
+                                                    'value': 'm7i.2xlarge',
                                                 },
                                             ],
                                         }

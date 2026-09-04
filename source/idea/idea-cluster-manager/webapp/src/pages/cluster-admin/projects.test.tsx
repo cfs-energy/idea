@@ -94,7 +94,7 @@ describe('projects page bedrock usage column', () => {
         vi.spyOn(context.client().projects(), 'listProjects').mockResolvedValue({listing: listing});
     };
 
-    it('shows month to date tokens, cost, requests and the tokens per model', async () => {
+    it('shows last 30 days tokens, cost and requests, and no per model breakdown', async () => {
         const context = initTestAppContext();
         withProjects(context, [{
             project_id: 'p-1',
@@ -103,7 +103,7 @@ describe('projects page bedrock usage column', () => {
             enabled: true,
             bedrock: {enabled: true, model_ids: ['vendor.model-a']},
             bedrock_usage: {
-                period: '2026-08',
+                window: 'last_30_days',
                 invocations: 12,
                 total_tokens: 34567,
                 spend: {amount: 1.32, unit: 'USD'},
@@ -118,11 +118,11 @@ describe('projects page bedrock usage column', () => {
             }
         }]);
         renderProjectsPage();
-        expect(await screen.findByText('34,567 tokens, $1.32 MTD')).toBeInTheDocument();
-        expect(await screen.findByText('12 requests in 2026-08')).toBeInTheDocument();
-        expect(await screen.findByText('claude-opus-5: 20,000')).toBeInTheDocument();
-        expect(await screen.findByText('claude-haiku-4-5-20251001: 14,567')).toBeInTheDocument();
-        // per user attribution belongs to the usage api, not this table
+        expect(await screen.findByText('34,567 tokens, $1.32 (30d)')).toBeInTheDocument();
+        expect(await screen.findByText('12 requests in the last 30 days')).toBeInTheDocument();
+        // The per model and per user breakdown belongs to the AI Usage page, not this column.
+        expect(screen.queryByText(/20,000/)).toBeNull();
+        expect(screen.queryByText(/14,567/)).toBeNull();
         expect(screen.queryByText('bob: 20,000')).toBeNull();
     });
 
@@ -134,17 +134,17 @@ describe('projects page bedrock usage column', () => {
             title: 'Priced',
             enabled: true,
             bedrock: {enabled: true, model_ids: ['vendor.model-a']},
-            bedrock_usage: {period: '2026-08', invocations: 1, total_tokens: 10, spend: {amount: 0, unit: 'USD'}}
+            bedrock_usage: {window: 'last_30_days', invocations: 1, total_tokens: 10, spend: {amount: 0, unit: 'USD'}}
         }, {
             project_id: 'p-9',
             name: 'unpriced',
             title: 'Unpriced',
             enabled: true,
             bedrock: {enabled: true, model_ids: ['vendor.model-a']},
-            bedrock_usage: {period: '2026-08', invocations: 1, total_tokens: 20, spend_is_unavailable: true}
+            bedrock_usage: {window: 'last_30_days', invocations: 1, total_tokens: 20, spend_is_unavailable: true}
         }]);
         renderProjectsPage();
-        expect(await screen.findByText('10 tokens, $0.00 MTD')).toBeInTheDocument();
+        expect(await screen.findByText('10 tokens, $0.00 (30d)')).toBeInTheDocument();
         expect(await screen.findByText('20 tokens, cost unavailable')).toBeInTheDocument();
     });
 
@@ -220,10 +220,33 @@ describe('projects page bedrock usage column', () => {
             title: 'Once',
             enabled: true,
             bedrock: {enabled: true, model_ids: ['vendor.model-a']},
-            bedrock_usage: {period: '2026-08', invocations: 1, total_tokens: 42}
+            bedrock_usage: {window: 'last_30_days', invocations: 1, total_tokens: 42}
         }]);
         renderProjectsPage();
-        expect(await screen.findByText('1 request in 2026-08')).toBeInTheDocument();
+        expect(await screen.findByText('1 request in the last 30 days')).toBeInTheDocument();
+    });
+
+    it('reports usage recorded in the previous month while it is inside the window', async () => {
+        // On the first of a month, a project last used 11 days earlier read as unused while the
+        // column asked for the calendar month.
+        const context = initTestAppContext();
+        withProjects(context, [{
+            project_id: 'p-10',
+            name: 'lastmonth',
+            title: 'Last Month',
+            enabled: true,
+            bedrock: {enabled: true, model_ids: ['vendor.model-a']},
+            bedrock_usage: {
+                window: 'last_30_days',
+                invocations: 2,
+                total_tokens: 2153,
+                spend: {amount: 0.41, unit: 'USD'},
+                by_model: [{model_id: 'us.amazon.nova-pro-v1:0', total_tokens: 2153}]
+            }
+        }]);
+        renderProjectsPage();
+        expect(await screen.findByText('2,153 tokens, $0.41 (30d)')).toBeInTheDocument();
+        expect(screen.queryByText('No usage recorded')).toBeNull();
     });
 
     it('does not render the column at all when the cluster feature flag is off', async () => {
@@ -240,7 +263,7 @@ describe('projects page bedrock usage column', () => {
                 title: 'Plain',
                 enabled: true,
                 bedrock: {enabled: true, model_ids: ['vendor.model-a']},
-                bedrock_usage: {period: '2026-08', invocations: 3, total_tokens: 99}
+                bedrock_usage: {window: 'last_30_days', invocations: 3, total_tokens: 99}
             }]
         });
         renderProjectsPage();

@@ -221,3 +221,51 @@ Export IDEA_DEV_MODE=true on your terminal, before executing idea-admin.sh on fr
 </strong><strong>To verify, if Developer Mode is enabled, run below command. This should print (Developer Mode) at the end of the banner.
 </strong>| ./idea-admin.sh about'####:'########::'########::::'###::::. ##:: ##.... ##: ##.....::::'## ##:::: ##:: ##:::: ##: ######:::'##:::. ##:: ##:: ##:::: ##: ##...:::: #########:'####: ########:: ########: ##:::: ##:Integrated Digital Engineering on AWSVersion 3.0.0-beta.1(Developer Mode)
 </code></pre>
+
+## Publishing the administrator image
+
+The administrator container image is published by the Build and Push workflow in
+`.github/workflows/build_push.yaml`.
+
+### Normal path
+
+Merging to `main` runs the workflow. It lints, runs the unit tests, builds every
+module, assumes the OIDC role held in the `ECR_ROLE` repository secret, and pushes
+one multi-architecture manifest to `public.ecr.aws/s5o2b4m0/idea-administrator`
+under three tags: the contents of `IDEA_VERSION.txt`, the same value prefixed with
+`v`, and `latest`.
+
+### Rerun path
+
+If that run fails after the merge, dispatch the same workflow again rather than
+publishing by hand:
+
+```bash
+gh workflow run build_push.yaml --ref main
+```
+
+Two inputs change the target. `ecr_repository` selects the registry and
+`image_name` selects the repository within it. From a ref other than `main` the
+workflow stops immediately unless `image_name` is set, so a branch dispatch cannot
+overwrite the released image:
+
+```bash
+gh workflow run build_push.yaml --ref release-26.09.0 \
+  -f image_name=idea-administrator-ci-test
+```
+
+The named repository has to exist already, because ECR Public does not create one
+on push. Delete a throwaway repository once the check is finished.
+
+### Emergency path
+
+`invoke docker.build-push-multi <registry> <version>` produces the same three tags
+from a workstation, but it skips the lint, test and build gates the workflow
+applies. Use it only when the workflow itself cannot run.
+
+### The publishing role
+
+The role named by `ECR_ROLE` trusts any ref of this repository, so the `image_name`
+guard above is the only control that stops a branch dispatch from replacing the
+released image. Narrowing the role trust condition to `main` would remove the need
+for that guard.

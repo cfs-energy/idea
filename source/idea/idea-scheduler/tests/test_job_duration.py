@@ -9,6 +9,7 @@ from typing import List, Optional
 import arrow
 from ideadatamodel import (
     CloudFormationStack,
+    EC2InstanceUnitPrice,
     HpcQueueProfile,
     SocaAnyPayload,
     SocaFSxLustreConfig,
@@ -18,6 +19,7 @@ from ideadatamodel import (
     SocaMemory,
     SocaMemoryUnit,
 )
+from ideascheduler.app.aws.pricing_helper import PricingHelper
 from ideascheduler.app.provisioning import JobProvisioningUtil
 from ideascheduler.app.provisioning.job_monitor.finished_job_processor import (
     ProcessFinishedJob,
@@ -310,6 +312,16 @@ def test_finished_job_bom_cost_end_to_end(context):
     assert job.estimated_bom_cost is not None
     assert job.estimated_bom_cost.total is not None
 
+    # the fake client cannot answer the pricing api, so compute prices at zero and the
+    # estimate is still built.
+    compute = [
+        item
+        for item in job.estimated_bom_cost.line_items
+        if item.title.startswith('Compute On-Demand')
+    ]
+    assert compute
+    assert compute[0].unit_price.amount == 0.0
+
 
 def test_provisioning_timeout_after_24_hours():
     """
@@ -329,3 +341,152 @@ def test_provisioning_timeout_after_24_hours():
 
     assert provisioning_util.stack_provisioning_timeout_secs == 1800
     assert provisioning_util.is_provisioning_timeout() is True
+
+
+class RecordingLogger:
+    def __init__(self):
+        self.warnings = []
+
+    def warning(self, message, *args, **kwargs):
+        self.warnings.append(str(message))
+
+
+class NoPriceAwsUtil:
+    """the pricing api with no answer: no endpoint in this partition, or it failed"""
+
+    @staticmethod
+    def get_ec2_instance_type_unit_price(instance_type):
+        return None
+
+
+class NoPriceContext:
+    def __init__(self):
+        self.recorded = RecordingLogger()
+        self._aws_util = NoPriceAwsUtil()
+
+    def aws_util(self):
+        return self._aws_util
+
+    def logger(self, name=None):
+        return self.recorded
+
+    def config(self):
+        return SocaConfig({})
+
+
+def price_helper_without_pricing():
+    context = NoPriceContext()
+    job = SocaJob(
+        job_id='14906',
+        params=SocaJobParams(nodes=1, cpus=1, instance_types=['c5.large']),
+    )
+    return context, PricingHelper(context=context, job=job, total_time_secs=3600)
+
+
+def test_unavailable_ec2_price_is_priced_at_zero_not_returned_as_none():
+    """
+    a None here would propagate to every .ondemand read and take the whole estimate away
+    from the jobs page.
+    """
+    _, helper = price_helper_without_pricing()
+
+    unit_price = helper.get_instance_type_unit_price()
+    assert unit_price is not None
+    assert unit_price.ondemand == 0.0
+    assert unit_price.reserved == 0.0
+
+
+def test_unavailable_ec2_price_is_warned_with_the_instance_type():
+    """priced at zero silently would read as a free instance to whoever sees the total"""
+    context, helper = price_helper_without_pricing()
+
+    helper.get_instance_type_unit_price()
+
+    warnings = ' '.join(context.recorded.warnings)
+    assert 'c5.large' in warnings
+    assert 'zero' in warnings
+
+
+COST_ESTIMATION_CONFIG = {
+    'scheduler': {
+        'cost_estimation': {
+            'ec2_boot_penalty_seconds': 300,
+            'ebs_gp3_storage': 0.08,
+            'ebs_io1_storage': 0.125,
+            'provisioned_iops': 0.065,
+            'fsx_lustre': 0.000194,
+            'default_fsx_lustre_size': 1200,
+        }
+    }
+}
+
+
+class PricedAwsUtil:
+    """the pricing api, or the published price list, with an answer"""
+
+    @staticmethod
+    def get_ec2_instance_type_unit_price(instance_type):
+        return EC2InstanceUnitPrice(ondemand=0.085, reserved=0.054)
+
+
+class BomContext(NoPriceContext):
+    """
+    the storage rates a bill of materials needs, so the only thing that can be missing
+    from the estimate is the instance hour.
+    """
+
+    def __init__(self, aws_util=None):
+        super().__init__()
+        if aws_util is not None:
+            self._aws_util = aws_util
+
+    def config(self):
+        return SocaConfig(COST_ESTIMATION_CONFIG)
+
+
+def bom_helper(aws_util=None):
+    job = SocaJob(
+        job_id='14906',
+        params=SocaJobParams(
+            nodes=1,
+            cpus=1,
+            instance_types=['c5.large'],
+            root_storage_size=SocaMemory(value=10, unit=SocaMemoryUnit.GB),
+            scratch_storage_size=SocaMemory.zero(SocaMemoryUnit.GB),
+            fsx_lustre=SocaFSxLustreConfig(enabled=False),
+        ),
+    )
+    return PricingHelper(
+        context=BomContext(aws_util=aws_util), job=job, total_time_secs=3600
+    )
+
+
+def test_an_estimate_built_without_a_price_says_so():
+    """
+    the amount stays a number so anything summing amounts keeps working, and the flag
+    is the only thing that separates it from a job that really cost nothing.
+    """
+    bom = bom_helper().compute_estimated_bom_cost()
+
+    assert bom.price_unavailable is True
+    assert bom.total.amount is not None
+
+
+def test_an_estimate_built_from_a_real_price_is_not_flagged():
+    """a priced job that came to nothing must keep reading as a priced job"""
+    bom = bom_helper(aws_util=PricedAwsUtil()).compute_estimated_bom_cost()
+
+    assert bom.price_unavailable is None
+    assert bom.total.amount > 0
+
+
+def test_every_price_property_survives_an_unavailable_price():
+    """
+    get_instance_type_unit_price is the one call the rest of this file reads .ondemand
+    and .reserved off, so the guard has to hold for all of them.
+    """
+    _, helper = price_helper_without_pricing()
+
+    assert helper.ec2_ondemand_price == 0
+    assert helper.ec2_reserved_price == 0
+    assert helper.ec2_spot_unit_price == 0.0

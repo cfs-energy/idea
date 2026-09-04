@@ -162,6 +162,14 @@ export interface SocaAmount {
   amount: number;
   unit?: string;
 }
+export interface BaseSoftwareStackAmiRefreshResult {
+  stack_id?: string;
+  status?: string;
+  old_ami?: string;
+  new_ami?: string;
+  new_base_ami?: string;
+  message?: string;
+}
 export interface BatchCreateSessionRequest {
   sessions?: VirtualDesktopSession[];
 }
@@ -175,6 +183,7 @@ export interface VirtualDesktopSession {
   server?: VirtualDesktopServer;
   created_on?: string;
   updated_on?: string;
+  stopped_on?: string;
   state?: VirtualDesktopSessionState;
   description?: string;
   software_stack?: VirtualDesktopSoftwareStack;
@@ -229,6 +238,7 @@ export interface VirtualDesktopSoftwareStack {
   created_on?: string;
   updated_on?: string;
   ami_id?: string;
+  base_ami_id?: string;
   failure_reason?: string;
   enabled?: boolean;
   min_storage?: SocaMemory;
@@ -271,8 +281,11 @@ export interface ProjectBedrockConfig {
   policy_errors?: {
     [k: string]: string;
   };
+  reconcile_error?: string;
+  reconcile_error_on?: string;
 }
 export interface ProjectBedrockUsage {
+  window?: string;
   period?: string;
   username?: string;
   invocations?: number;
@@ -292,6 +305,9 @@ export interface BedrockUserUsage {
   input_tokens?: number;
   output_tokens?: number;
   total_tokens?: number;
+  top_model_id?: string;
+  spend?: SocaAmount;
+  spend_is_estimated?: boolean;
 }
 export interface BedrockModelUsage {
   model_id?: string;
@@ -299,6 +315,8 @@ export interface BedrockModelUsage {
   input_tokens?: number;
   output_tokens?: number;
   total_tokens?: number;
+  spend?: SocaAmount;
+  spend_is_estimated?: boolean;
 }
 export interface ProjectBedrockBudget {
   action?: string;
@@ -335,6 +353,55 @@ export interface VirtualDesktopSchedule {
 export interface BatchCreateSessionResponse {
   failed?: VirtualDesktopSession[];
   success?: VirtualDesktopSession[];
+}
+export interface BuildAllDesktopImagesRequest {}
+export interface BuildAllDesktopImagesResponse {
+  results?: DesktopImageBuildStartResult[];
+}
+export interface DesktopImageBuildStartResult {
+  stack_id?: string;
+  base_os?: string;
+  architecture?: string;
+  status?: string;
+  message?: string;
+}
+export interface BuildComputeImageRequest {
+  base_os?: string;
+  architecture?: string;
+  base_ami?: string;
+  instance_type?: string;
+  enable_drivers?: string[];
+}
+export interface BuildComputeImageResult {
+  record?: ImageBuildRecord;
+}
+/**
+ * the last build for one base OS and architecture, as kept in the module's image-builds table
+ */
+export interface ImageBuildRecord {
+  base_os?: string;
+  architecture?: string;
+  status?: string;
+  ami_name?: string;
+  base_ami?: string;
+  image_id?: string;
+  instance_id?: string;
+  requested_by?: string;
+  host?: string;
+  update_target?: boolean;
+  error?: string;
+  started_on?: string;
+  finished_on?: string;
+}
+export interface BuildDesktopImageRequest {
+  base_os?: string;
+  architecture?: string;
+  base_ami?: string;
+  instance_type?: string;
+  update_stack?: boolean;
+}
+export interface BuildDesktopImageResponse {
+  record?: ImageBuildRecord;
 }
 export interface ChangePasswordRequest {
   username?: string;
@@ -1052,6 +1119,7 @@ export interface SocaJobEstimatedBOMCost {
   savings?: SocaJobEstimatedBOMCostLineItem[];
   savings_total?: SocaAmount;
   total?: SocaAmount;
+  price_unavailable?: boolean;
 }
 export interface SocaJobEstimatedBOMCostLineItem {
   title?: string;
@@ -1118,6 +1186,95 @@ export interface GetModuleSettingsRequest {
 }
 export interface GetModuleSettingsResult {
   settings?: unknown;
+}
+export interface GetMyCostsSummaryRequest {}
+export interface GetMyCostsSummaryResult {
+  username?: string;
+  window?: string;
+  start_date?: string;
+  end_date?: string;
+  currency?: string;
+  ai?: MyCostsAi;
+  jobs?: MyCostsJobs;
+  desktops?: MyCostsDesktops;
+}
+export interface MyCostsAi {
+  invocations?: number;
+  total_tokens?: number;
+  cost?: number;
+  estimated?: boolean;
+  projects?: MyCostsAiProject[];
+  is_unavailable?: boolean;
+}
+export interface MyCostsAiProject {
+  project_id?: string;
+  project_name?: string;
+  project_title?: string;
+  invocations?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+  cost?: number;
+  estimated?: boolean;
+  cost_unavailable?: boolean;
+  by_model?: MyCostsAiModel[];
+}
+export interface MyCostsAiModel {
+  model_id?: string;
+  invocations?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+  cost?: number;
+  estimated?: boolean;
+}
+export interface MyCostsJobs {
+  job_count?: number;
+  cost?: number;
+  unpriced_jobs?: number;
+  cost_unavailable?: boolean;
+  estimated?: boolean;
+  by_project?: MyCostsJobGroup[];
+  by_queue?: MyCostsJobGroup[];
+  recent_jobs?: MyCostsJob[];
+  is_unavailable?: boolean;
+}
+export interface MyCostsJobGroup {
+  name?: string;
+  job_count?: number;
+  cost?: number;
+}
+export interface MyCostsJob {
+  job_id?: string;
+  name?: string;
+  queue?: string;
+  project?: string;
+  end_time?: string;
+  cost?: number;
+  cost_unavailable?: boolean;
+}
+export interface MyCostsDesktops {
+  session_count?: number;
+  hours?: number;
+  cost?: number;
+  unpriced_sessions?: number;
+  estimated?: boolean;
+  sessions?: MyCostsDesktopSession[];
+  is_unavailable?: boolean;
+}
+export interface MyCostsDesktopSession {
+  idea_session_id?: string;
+  name?: string;
+  instance_type?: string;
+  base_os?: string;
+  state?: string;
+  started_on?: string;
+  ended_on?: string;
+  hours?: number;
+  cost?: number;
+  estimated?: boolean;
+  stop_time_estimated?: boolean;
+  price_unavailable?: boolean;
 }
 export interface GetParamChoicesRequest {
   paginator?: SocaPaginator;
@@ -1257,6 +1414,9 @@ export interface GetUserApplicationsRequest {
 export interface GetUserApplicationsResult {
   applications: HpcApplication[];
 }
+export interface GetUserCostsSummaryRequest {
+  username?: string;
+}
 export interface GetUserPrivateKeyRequest {
   key_format?: string;
   platform?: string;
@@ -1281,6 +1441,22 @@ export interface GlobalSignOutRequest {
   username?: string;
 }
 export interface GlobalSignOutResult {}
+/**
+ * one line of the Custom AMIs page: what an OS runs on today and what the last build did
+ */
+export interface ImageInventoryRow {
+  base_os?: string;
+  architecture?: string;
+  stack_id?: string;
+  image_id?: string;
+  image_name?: string;
+  base_ami_id?: string;
+  state?: string;
+  build_date?: string;
+  referenced_by?: string[];
+  notes?: string;
+  last_build?: ImageBuildRecord;
+}
 export interface InitiateAuthRequest {
   client_id?: string;
   auth_flow?: string;
@@ -1356,6 +1532,21 @@ export interface ListAllowedInstanceTypesResponse {
   listing: (SocaBaseModel | unknown)[];
   filters?: SocaFilter[];
 }
+export interface ListBedrockUsageRequest {
+  paginator?: SocaPaginator;
+  sort_by?: SocaSortBy;
+  date_range?: SocaDateRange;
+  listing?: (SocaBaseModel | unknown)[];
+  filters?: SocaFilter[];
+}
+export interface ListBedrockUsageResult {
+  paginator?: SocaPaginator;
+  sort_by?: SocaSortBy;
+  date_range?: SocaDateRange;
+  listing?: Project[];
+  filters?: SocaFilter[];
+  window?: string;
+}
 export interface ListClusterHostsRequest {
   paginator?: SocaPaginator;
   sort_by?: SocaSortBy;
@@ -1384,6 +1575,16 @@ export interface ListClusterModulesResult {
   date_range?: SocaDateRange;
   listing?: (SocaBaseModel | unknown)[];
   filters?: SocaFilter[];
+}
+export interface ListComputeImagesRequest {}
+export interface ListComputeImagesResult {
+  listing?: ImageInventoryRow[];
+  supported_base_os?: string[];
+  compute_node_os?: string;
+}
+export interface ListDesktopImagesRequest {}
+export interface ListDesktopImagesResponse {
+  listing?: ImageInventoryRow[];
 }
 export interface ListEmailTemplatesRequest {
   paginator?: SocaPaginator;
@@ -1688,6 +1889,36 @@ export interface ListSupportedOSResponse {
   listing?: string[];
   filters?: SocaFilter[];
 }
+export interface ListUserCostsRequest {}
+export interface ListUserCostsResult {
+  window?: string;
+  start_date?: string;
+  end_date?: string;
+  currency?: string;
+  listing?: UserCosts[];
+  ai_unavailable?: boolean;
+  jobs_unavailable?: boolean;
+  desktops_unavailable?: boolean;
+}
+/**
+ * one user's totals across the three sections, for the admin listing.
+ */
+export interface UserCosts {
+  username?: string;
+  ai_requests?: number;
+  ai_tokens?: number;
+  ai_cost?: number;
+  ai_cost_unavailable?: boolean;
+  desktop_session_count?: number;
+  desktop_hours?: number;
+  desktop_cost?: number;
+  desktop_unpriced_sessions?: number;
+  job_count?: number;
+  job_cost?: number;
+  job_unpriced_jobs?: number;
+  job_cost_unavailable?: boolean;
+  total_cost?: number;
+}
 export interface ListUsersInGroupRequest {
   paginator?: SocaPaginator;
   sort_by?: SocaSortBy;
@@ -1816,6 +2047,12 @@ export interface RebootSessionRequest {
 export interface RebootSessionResponse {
   failed?: VirtualDesktopSession[];
   success?: VirtualDesktopSession[];
+}
+export interface RefreshBaseSoftwareStackAmisRequest {
+  stack_ids?: string[];
+}
+export interface RefreshBaseSoftwareStackAmisResponse {
+  results?: BaseSoftwareStackAmiRefreshResult[];
 }
 export interface RemoveSudoUserRequest {
   username?: string;
@@ -2093,6 +2330,12 @@ export interface UpdateSoftwareStackRequest {
 }
 export interface UpdateSoftwareStackResponse {
   software_stack?: VirtualDesktopSoftwareStack;
+}
+export interface UseBuiltDesktopImagesRequest {
+  stack_ids?: string[];
+}
+export interface UseBuiltDesktopImagesResponse {
+  results?: DesktopImageBuildStartResult[];
 }
 export interface VirtualDesktopApplicationProfile {}
 export interface VirtualDesktopSessionBatchResponsePayload {

@@ -4,9 +4,30 @@ description: Read the Amazon Bedrock invocation logging that AI usage reporting 
 
 # AI Usage Tracking
 
-The **AI Usage** column on the **Projects** page reports month to date tokens and requests per project, broken down per model, alongside the project's month to date Bedrock spend. Tokens are aggregated from Amazon Bedrock **model invocation logging**, not from billing data, so they are visible within the hour rather than a day later. If invocation logging is not delivering to the cluster log group, nothing is collected and every project reads as unused.
+The **AI Usage** column on the **Projects** page reports the last 30 days of tokens and requests per project, alongside the project's Bedrock spend over the same 30 days. The breakdown per model and per user is on the **AI Usage** page under **Cluster Management**.
 
-The spend figure comes from Cost Explorer, filtered to the project's `idea:Project` cost allocation tag and summed over the Bedrock services, so it trails the recorded tokens by about a day. It is available in the commercial partition only; where Cost Explorer cannot answer the column reads "cost unavailable" rather than zero. Per user attribution is not in the column: read it through the usage API and the downstream tooling built on it.
+The window is a trailing one ending today, not the calendar month, so a project last used a few weeks ago still reads as used on the first of a month. Tokens are aggregated from Amazon Bedrock **model invocation logging**, not from billing data, and the aggregation runs every 15 minutes by default. If invocation logging is not delivering to the cluster log group, nothing is collected and every project reads as unused.
+
+Project budgets are unaffected by this window. They are enforced per calendar month by AWS Budgets against the project's own actual spend, which is where model charges land through the cost allocation tag.
+
+The spend figure comes from AWS Cost Explorer, filtered to the project's `idea:Project` cost allocation tag and summed over the Bedrock services for the same 30 days, so it trails the recorded tokens by about a day. It is available in the commercial partition only; where Cost Explorer cannot answer the column reads "cost unavailable" rather than zero.
+
+## The AI Usage page
+
+**Cluster Management** > **AI Usage** lists every project with a Bedrock configuration over the same trailing 30 days: tokens, requests, cost and the model the project spent the most tokens on. A project that has not been used is still listed, reading as no usage, so an idle project is distinguishable from a missing one.
+
+Selecting a project opens a breakdown in the split panel:
+
+| Table | Columns |
+| --- | --- |
+| Per model | Input tokens, output tokens, total tokens, requests, cost |
+| Per user | Tokens, requests, cost, the user's top model |
+
+The input and output token split is recorded per day, per user and per model, so both figures are counted rather than inferred.
+
+The cost in both tables is **estimated** and labeled as such in the portal. AWS Cost Explorer prices a cost allocation tag, not a model or a caller, so the project's 30 day spend is shared out in proportion to tokens. Only the project level figure is a priced total. Where Cost Explorer has no answer for the project, the breakdown carries no cost at all rather than an estimate of zero.
+
+The page is administrator only: `Projects.ListBedrockUsage` has no non-elevated route, so a project member never reads another user's attribution.
 
 ## Model invocation logging
 
@@ -27,7 +48,7 @@ Setting `manage_configuration` to false leaves the account and region configurat
   --aws-region <REGION>
 ```
 
-The setting is read on the next aggregation cycle, which runs hourly by default.
+The setting is read on the next aggregation cycle, which runs every 15 minutes by default (`bedrock.usage.interval_minutes`).
 
 To configure logging yourself, in the Bedrock console under **Settings** > **Model invocation logging**, enable logging to CloudWatch Logs with the log group named in `cluster-manager.bedrock.invocation_log_group_name` and the role in `cluster-manager.bedrock.invocation_log_role_arn`. Usage is attributed only for records delivered to that log group.
 
@@ -36,8 +57,8 @@ To configure logging yourself, in the Bedrock console under **Settings** > **Mod
 | Cell | Meaning |
 | --- | --- |
 | `--` | Bedrock is not enabled for the project. |
-| Tokens and requests | Usage recorded for the current month. |
-| `No usage recorded` | Logging is being managed and no invocation was recorded for the project this month. |
+| Tokens and requests | Usage recorded over the last 30 days. |
+| `No usage recorded` | Logging is being managed and no invocation was recorded for the project in the last 30 days. |
 | `Not collected` | `manage_configuration` is false, so IDEA is not setting the account configuration. Unless logging was configured outside IDEA, no usage is collected for any project. |
 | `Usage unavailable` | The usage read failed. Check the cluster-manager logs. |
 
@@ -72,5 +93,6 @@ Enforcement is only as current as the budget it reads. The AWS Budgets figure is
 
 * Prompts and completions are not delivered unless `bedrock.invocation_logging.include_request_response_data` is set to true. Leaving it false keeps the log group to metadata and token counts.
 * An invocation is attributed to the user who owns the instance that made the call. Calls from hosts that are not IDEA sessions or jobs are counted against no project, and calls from a project role with no owning instance land in an unattributed bucket.
-* `bedrock.usage.lookback_days` is the trailing window recomputed on every run. Keep it at or below `bedrock.invocation_logging.log_retention_in_days`: nothing enforces the relationship, and a window longer than retention simply reads days the log group no longer holds. Usage from before logging was enabled is not backfilled.
+* `bedrock.usage.lookback_days` is the trailing window of invocation logs recomputed on every run, and is unrelated to the 30 days the column reports: the column is served from the stored per day rows, not by re-reading the logs. Keep `lookback_days` at or below `bedrock.invocation_logging.log_retention_in_days`: nothing enforces the relationship, and a window longer than retention simply reads days the log group no longer holds. Usage from before logging was enabled is not backfilled.
+* `bedrock.usage.retention_days` is the time to live on the stored usage rows, 400 days by default. It must stay comfortably above the 30 days the column reports; the cluster-manager holds it to a floor of 45 days whatever it is set to.
 * Usage is not spend. The priced equivalent reaches Cost Explorer and the project budget about a day later, and is not backfilled for activity recorded before cost allocation tags were activated. Recorded tokens are never valued as money and feed no limit.

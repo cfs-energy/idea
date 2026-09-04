@@ -19,3 +19,4 @@ from ideadatamodel.aws.cloudformation_stack_resources import (
     CloudFormationStackResources,
 )
 from ideadatamodel.aws.model import *
+from .image_build_model import *

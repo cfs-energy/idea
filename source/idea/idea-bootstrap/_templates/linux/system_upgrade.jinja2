@@ -1,7 +1,7 @@
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
 # System upgrade with error handling to prevent infinite loops
-if apt update; then
-  if apt upgrade -y; then
+if DEBIAN_FRONTEND=noninteractive apt update; then
+  if DEBIAN_FRONTEND=noninteractive apt upgrade -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold; then
     log_info "System packages upgraded successfully"
     # Only set reboot required if upgrade actually succeeded
     set_reboot_required "Packages Upgraded"
@@ -10,5 +10,17 @@ if apt update; then
   fi
 else
   log_error "apt update failed, but continuing bootstrap process"
+fi
+{# first_boot_dnf_update is a desktop-only flag. this template also renders for
+   compute nodes, where no vdc key is in scope, so the read carries an explicit
+   default=False rather than depending on a vdc key being present. #}
+{% elif context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') and context.config.get_bool('virtual-desktop-controller.dcv_session.first_boot_dnf_update', default=False) %}
+# System upgrade with error handling to prevent infinite loops
+if dnf -y update; then
+  log_info "System packages upgraded successfully"
+  # Only set reboot required if upgrade actually succeeded
+  set_reboot_required "Packages Upgraded"
+else
+  log_error "dnf update failed, but continuing bootstrap process"
 fi
 {% endif %}

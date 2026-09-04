@@ -16,6 +16,8 @@ import {ClusterSettingsClient} from "../client";
 import {Constants, ErrorCodes} from "../common/constants";
 import IdeaException from "../common/exceptions";
 import Utils from "../common/utils";
+import moment from "moment";
+import {FlashbarProps} from "@cloudscape-design/components/flashbar/interfaces";
 
 export interface ClusterSettingsServiceProps {
     clusterSettings: ClusterSettingsClient
@@ -25,6 +27,66 @@ export interface CustomDashboardSettings {
     enabled: boolean
     title: string
     url: string
+}
+
+export interface MaintenanceSettings {
+    enabled: boolean
+    message: string
+    ends_at: string
+}
+
+/**
+ * Reads the maintenance window injected into the page by the cluster-manager web portal. This is
+ * the only copy available before sign in, where there is no token for the settings API; the poll
+ * replaces it afterwards.
+ */
+export function readBootstrapMaintenance(): MaintenanceSettings {
+    const maintenance = (window as any).idea?.app?.maintenance
+    return {
+        enabled: Utils.asBoolean(maintenance?.enabled),
+        message: Utils.asString(maintenance?.message),
+        ends_at: Utils.asString(maintenance?.ends_at)
+    }
+}
+
+// Shown when the window is enabled with no message set.
+export const DEFAULT_MAINTENANCE_MESSAGE = 'This cluster is undergoing maintenance.'
+
+/**
+ * Builds the banner text: the administrator's message, plus the end of the window in the reader's
+ * timezone when `ends_at` is set. A timestamp without an offset is read as UTC, and one that
+ * cannot be parsed is dropped so the message still shows.
+ */
+export function maintenanceBannerText(maintenance: MaintenanceSettings): string {
+    const message = Utils.asString(maintenance?.message).trim()
+    const text = Utils.isNotEmpty(message) ? message : DEFAULT_MAINTENANCE_MESSAGE
+    const endsAt = Utils.asString(maintenance?.ends_at).trim()
+    if (Utils.isEmpty(endsAt)) {
+        return text
+    }
+    const parsed = moment.utc(endsAt, moment.ISO_8601)
+    if (!parsed.isValid()) {
+        return text
+    }
+    return `${text} until ${parsed.local().format('lll')}`
+}
+
+/**
+ * Returns the banner as flashbar items, or nothing when no window is open. Shared by the app
+ * layout and the sign-in page so the notice reads the same either side of sign in.
+ */
+export function maintenanceFlashbarItems(maintenance?: MaintenanceSettings | null): FlashbarProps.MessageDefinition[] {
+    if (maintenance == null || !maintenance.enabled) {
+        return []
+    }
+    return [{
+        type: 'warning',
+        header: 'Cluster maintenance',
+        content: maintenanceBannerText(maintenance),
+        // The banner stays up for as long as the window is open.
+        dismissible: false,
+        id: 'maintenance'
+    }]
 }
 
 const DEFAULT_CUSTOM_DASHBOARD_TITLE = 'Dashboard'
@@ -65,6 +127,7 @@ class ClusterSettingsService {
     clusterTimezone: string
     clusterHomeDir: string
     customDashboard: CustomDashboardSettings
+    maintenance: MaintenanceSettings
 
     constructor(props: ClusterSettingsServiceProps) {
         this.props = props
@@ -76,6 +139,43 @@ class ClusterSettingsService {
         this.clusterTimezone = 'UTC'
         this.clusterHomeDir = ''
         this.customDashboard = CUSTOM_DASHBOARD_DISABLED
+        this.maintenance = readBootstrapMaintenance()
+    }
+
+    /**
+     * Reads the maintenance settings from the API on every call, bypassing the module settings
+     * cache, so a window an administrator opens or closes is picked up without a reload. These
+     * three keys are readable by any signed-in user; the rest of the module settings are not.
+     */
+    fetchMaintenance(): Promise<MaintenanceSettings> {
+        let moduleId: string | null
+        try {
+            moduleId = this.getModuleId(Constants.MODULE_CLUSTER_MANAGER)
+        } catch (_) {
+            moduleId = null
+        }
+        if (moduleId == null) {
+            return Promise.resolve(this.maintenance)
+        }
+        return this.props.clusterSettings.getModuleSettings({
+            module_id: moduleId
+        }).then(result => {
+            const maintenance = (result.settings as any)?.maintenance
+            this.maintenance = {
+                enabled: Utils.asBoolean(maintenance?.enabled),
+                message: Utils.asString(maintenance?.message),
+                ends_at: Utils.asString(maintenance?.ends_at)
+            }
+            return this.maintenance
+        }).catch(_ => {
+            // A failed read leaves the banner as it was: the API is the thing most likely to be
+            // unreliable during a maintenance window.
+            return this.maintenance
+        })
+    }
+
+    getMaintenance(): MaintenanceSettings {
+        return this.maintenance
     }
 
     initialize(): Promise<boolean> {

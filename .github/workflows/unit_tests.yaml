@@ -3,6 +3,10 @@ on:
   pull_request:
     paths-ignore:
       - 'docs/**'
+  push:
+    branches:
+      - main
+      - 'release-*'
   workflow_dispatch:
 jobs:
   test:
@@ -14,6 +18,9 @@ jobs:
       - name: SDK Tests
         run: |
           invoke tests.sdk
+      - name: Administrator Tests
+        run: |
+          invoke tests.administrator
       - name: Cluster Manager Tests
         run: |
           invoke tests.cluster-manager

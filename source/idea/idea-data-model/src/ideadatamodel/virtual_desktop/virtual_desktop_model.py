@@ -151,6 +151,10 @@ class VirtualDesktopSoftwareStack(SocaBaseModel):
     created_on: Optional[datetime] = Field(default=None)
     updated_on: Optional[datetime] = Field(default=None)
     ami_id: Optional[str] = Field(default=None)
+    # base stacks: the stock image builds start from. ami_id is what desktops launch
+    # from and may be a built image; the refresh advances base_ami_id and touches
+    # ami_id only while it is still a stock image
+    base_ami_id: Optional[str] = Field(default=None)
     failure_reason: Optional[str] = Field(default=None)
     enabled: Optional[bool] = Field(default=None)
     min_storage: Optional[SocaMemory] = Field(default=None)
@@ -264,6 +268,10 @@ class VirtualDesktopSession(SocaBaseModel):
     server: Optional[VirtualDesktopServer] = Field(default=None)
     created_on: Optional[datetime] = Field(default=None)
     updated_on: Optional[datetime] = Field(default=None)
+    # when the desktop actually stopped. updated_on moves on any mutation (a rename, a
+    # schedule edit, the cleanup sweep), so anything measuring how long a desktop ran
+    # reads this instead. set when the session enters STOPPED, cleared when it runs again.
+    stopped_on: Optional[datetime] = Field(default=None)
     state: Optional[VirtualDesktopSessionState] = Field(default=None)
     description: Optional[str] = Field(default=None)
     software_stack: Optional[VirtualDesktopSoftwareStack] = Field(default=None)

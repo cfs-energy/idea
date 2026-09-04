@@ -20,13 +20,14 @@ from ideadatamodel.projects import (
     UpdateProjectResult,
     ListProjectsRequest,
     ListProjectsResult,
+    ListBedrockUsageRequest,
+    ListBedrockUsageResult,
     EnableProjectRequest,
     EnableProjectResult,
     DisableProjectRequest,
     DisableProjectResult,
     GetUserProjectsRequest,
     GetUserProjectsResult,
-    BedrockUserUsage,
     Project,
     ProjectBedrockBudget,
     ProjectBedrockUsage,
@@ -43,7 +44,12 @@ from ideaclustermanager.app.projects.bedrock_budget import (
     is_bedrock_service,
 )
 from ideaclustermanager.app.projects.bedrock_usage_service import (
-    get_project_usage_by_model,
+    USAGE_WINDOW,
+    USAGE_WINDOW_DAYS,
+    apportion_spend,
+    get_project_window_usage,
+    list_bedrock_projects,
+    usage_window_dates,
 )
 from ideaclustermanager.app.projects.db.bedrock_usage_dao import BedrockUsageDAO
 from ideaclustermanager.app.projects.db.projects_dao import ProjectsDAO
@@ -51,7 +57,6 @@ from ideaclustermanager.app.projects.db.user_projects_dao import UserProjectsDAO
 from ideaclustermanager.app.accounts.accounts_service import AccountsService
 from ideaclustermanager.app.tasks.task_manager import TaskManager
 
-import arrow
 from typing import Dict, List, Optional, Tuple
 
 
@@ -104,72 +109,49 @@ class ProjectsService:
     def get_project_bedrock_usage(
         self,
         project_id: str,
-        period: str = None,
         username: str = None,
         project_name: str = None,
     ) -> Optional[ProjectBedrockUsage]:
         """
-        month to date usage for a project, or for one caller within it. read from
-        the rollups the usage service writes; returns None when nothing is recorded.
-        project_name is the cost allocation tag value the spend figure is read for.
+        trailing window usage for a project, or for one caller within it, summed from
+        the day rows; None when nothing is recorded in the window. the calendar month
+        rollups are left alone, so budgets are unaffected. project_name is the cost
+        allocation tag value the spend figure is read for.
         """
         if not self.bedrock_provisioner.is_enabled():
             return None
         if self.bedrock_usage_dao.table is None:
             return None
-        if Utils.is_empty(period):
-            period = arrow.utcnow().format('YYYY-MM')
 
-        if Utils.is_not_empty(username):
-            item = self.bedrock_usage_dao.get_user_rollup(
-                project_id=project_id, period=period, username=username
-            )
-            if item is None:
-                return None
-            return self.build_bedrock_usage(item, period, username=username)
-
-        item = self.bedrock_usage_dao.get_project_rollup(
-            project_id=project_id, period=period
+        start_date, end_date = usage_window_dates()
+        usage = get_project_window_usage(
+            self.bedrock_usage_dao,
+            project_id,
+            start_date,
+            end_date,
+            username=username,
+            max_users=self.context.config().get_int(
+                f'{self.context.module_id()}.bedrock.usage.max_users_per_project', 50
+            ),
         )
-        if item is None:
-            return None
-
-        usage = self.build_bedrock_usage(item, period)
-        max_users = self.context.config().get_int(
-            f'{self.context.module_id()}.bedrock.usage.max_users_per_project', 50
-        )
-        user_rows = self.bedrock_usage_dao.query_user_rollups(
-            project_id=project_id, period=period
-        )
-        user_rows.sort(
-            key=lambda row: Utils.get_value_as_int('total_tokens', row, 0), reverse=True
-        )
-        usage.by_user = [
-            BedrockUserUsage(
-                username=Utils.get_value_as_string('username', row),
-                invocations=Utils.get_value_as_int('invocations', row, 0),
-                input_tokens=Utils.get_value_as_int('input_tokens', row, 0),
-                output_tokens=Utils.get_value_as_int('output_tokens', row, 0),
-                total_tokens=Utils.get_value_as_int('total_tokens', row, 0),
-            )
-            for row in user_rows[:max_users]
-        ]
-        usage.by_model = get_project_usage_by_model(
-            self.bedrock_usage_dao, project_id, period
-        )
+        if usage is None or Utils.is_not_empty(username):
+            return usage
         self.apply_bedrock_spend(usage, project_name)
         return usage
 
     def apply_bedrock_spend(self, usage: ProjectBedrockUsage, project_name: str):
         """
-        month to date bedrock cost for the project cost allocation tag. no answer is
+        bedrock cost for the project cost allocation tag over the same window the tokens
+        cover, so the two figures beside each other mean the same thing. no answer is
         recorded as unavailable, never as zero: an empty result is priced nothing yet.
         """
         spend = None
         if Utils.is_not_empty(project_name):
             try:
                 spend = self.context.aws_util().cost_explorer_get_tagged_service_spend(
-                    constants.IDEA_TAG_PROJECT, project_name
+                    constants.IDEA_TAG_PROJECT,
+                    project_name,
+                    days=USAGE_WINDOW_DAYS,
                 )
             except Exception as e:
                 self.logger.warning(
@@ -188,6 +170,23 @@ class ProjectsService:
                 2,
             )
         )
+        apportion_spend(usage)
+
+    def list_bedrock_usage(
+        self, request: ListBedrockUsageRequest
+    ) -> ListBedrockUsageResult:
+        """
+        window usage for every bedrock project in one call, so the AI usage page does
+        not fan out a request per project. budgets are not evaluated: nothing on that
+        page reads them and each evaluation is a billed read.
+        """
+        listing = []
+        for project in list_bedrock_projects(self.projects_dao):
+            project.bedrock_usage = self.get_project_bedrock_usage(
+                project_id=project.project_id, project_name=project.name
+            )
+            listing.append(project)
+        return ListBedrockUsageResult(listing=listing, window=USAGE_WINDOW)
 
     def get_project_bedrock_budget(
         self, project: Project
@@ -197,21 +196,6 @@ class ProjectsService:
         carries live actuals.
         """
         return self.bedrock_budget.evaluate(project)
-
-    @staticmethod
-    def build_bedrock_usage(
-        item: Dict, period: str, username: str = None
-    ) -> ProjectBedrockUsage:
-        updated_on = Utils.get_value_as_int('updated_on', item, 0)
-        return ProjectBedrockUsage(
-            period=period,
-            username=username,
-            invocations=Utils.get_value_as_int('invocations', item, 0),
-            input_tokens=Utils.get_value_as_int('input_tokens', item, 0),
-            output_tokens=Utils.get_value_as_int('output_tokens', item, 0),
-            total_tokens=Utils.get_value_as_int('total_tokens', item, 0),
-            updated_on=arrow.get(updated_on / 1000).datetime if updated_on else None,
-        )
 
     @staticmethod
     def has_bedrock_provisioner_fields(stored: Optional[Dict]) -> bool:

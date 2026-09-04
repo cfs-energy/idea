@@ -42,6 +42,10 @@ class ProjectBedrockConfig(SocaBaseModel):
     # policy arn -> why an admin-supplied policy isn't on the project role, or couldn't be
     # checked against the permissions boundary; absent when every one of them is attached.
     policy_errors: Optional[Dict[str, str]] = Field(default=None)
+    # the last reconcile failure: the error code and the call that raised it. cleared by
+    # the next reconcile that completes, so broken provisioning does not read as disabled.
+    reconcile_error: Optional[str] = Field(default=None)
+    reconcile_error_on: Optional[datetime] = Field(default=None)
 
     def is_enabled(self) -> bool:
         return ModelUtils.get_as_bool(self.enabled, False)
@@ -63,6 +67,12 @@ class BedrockUserUsage(SocaBaseModel):
     input_tokens: Optional[int] = Field(default=None)
     output_tokens: Optional[int] = Field(default=None)
     total_tokens: Optional[int] = Field(default=None)
+    # the model this user spent the most tokens on in the window.
+    top_model_id: Optional[str] = Field(default=None)
+    # this user's share of the project's window spend, apportioned by token share: cost
+    # explorer prices a project tag, never a caller, so spend_is_estimated is always set.
+    spend: Optional[SocaAmount] = Field(default=None)
+    spend_is_estimated: Optional[bool] = Field(default=None)
 
 
 class BedrockModelUsage(SocaBaseModel):
@@ -71,11 +81,17 @@ class BedrockModelUsage(SocaBaseModel):
     input_tokens: Optional[int] = Field(default=None)
     output_tokens: Optional[int] = Field(default=None)
     total_tokens: Optional[int] = Field(default=None)
+    # apportioned by token share the same way, and estimated for the same reason.
+    spend: Optional[SocaAmount] = Field(default=None)
+    spend_is_estimated: Optional[bool] = Field(default=None)
 
 
 class ProjectBedrockUsage(SocaBaseModel):
     # aggregated from bedrock invocation logs, not billing data, so it's recorded as it
     # happens; the priced equivalent reaches cost allocation about a day later.
+    # exactly one of window and period is set: window names a trailing window, e.g.
+    # last_30_days, period a calendar month. the reader is never left to guess which.
+    window: Optional[str] = Field(default=None)
     period: Optional[str] = Field(default=None)
     username: Optional[str] = Field(default=None)
     invocations: Optional[int] = Field(default=None)
@@ -87,8 +103,8 @@ class ProjectBedrockUsage(SocaBaseModel):
     updated_on: Optional[datetime] = Field(default=None)
     # set when the usage read failed, so a read error is not rendered as zero usage.
     is_unavailable: Optional[bool] = Field(default=None)
-    # month to date bedrock cost from cost explorer, which trails the token counts
-    # above by about a day. spend_is_unavailable means no answer, not no spend.
+    # bedrock cost from cost explorer over the same window as the token counts above,
+    # which it trails by about a day. spend_is_unavailable means no answer, not no spend.
     spend: Optional[SocaAmount] = Field(default=None)
     spend_is_unavailable: Optional[bool] = Field(default=None)
 

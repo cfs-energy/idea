@@ -118,4 +118,4 @@ Approval is a commitment by the account owner rather than a UI toggle. In commer
 
 ## Cost attribution
 
-Usage is tagged with the project and shows up in that project's AWS budget. Cost allocation data arrives with the usual Cost Explorer delay of about a day and is not backfilled, so the first day of a new model reads low.
+Usage is tagged with the project and shows up in that project's AWS budget. Cost allocation data arrives with the usual AWS Cost Explorer delay of about a day and is not backfilled, so the first day of a new model reads low.

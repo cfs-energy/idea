@@ -26,7 +26,7 @@ Billing console." A member account has no Cost allocation tags page, so somebody
 management account has to activate the `idea:` tag keys.
 
 IDEA cannot do this for you, and nothing fails loudly when it has not been done. Until the tag keys
-are active, `idea:` tags do not appear in Cost Explorer and a budget filtered on them reads as no
+are active, `idea:` tags do not appear in AWS Cost Explorer and a budget filtered on them reads as no
 spend, which looks the same as a project that has not spent anything.
 
 Tag keys can take up to 24 hours to appear on the cost allocation tags page, and up to another 24

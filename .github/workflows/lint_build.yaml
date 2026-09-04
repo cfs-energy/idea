@@ -3,12 +3,30 @@ on:
   pull_request:
     paths-ignore:
       - 'docs/**'
+  push:
+    branches:
+      - main
+      - 'release-*'
   workflow_dispatch:
 jobs:
   lint_and_build:
     runs-on: ubuntu-large
     steps:
       - uses: actions/checkout@v4
+      - name: Check version consistency
+        run: |
+          SH_REV=$(grep -m1 '^IDEA_REVISION=' idea-admin.sh | sed -E 's/.*:-"([^"]+)"\}.*/\1/')
+          PS1_REV=$(grep -m1 '[$]IDEARevision = if' idea-admin-windows.ps1 | sed -E 's/.*else \{"([^"]+)"\}.*/\1/')
+          VERSION=$(tr -d '[:space:]' < IDEA_VERSION.txt)
+          EXPECTED="v${VERSION}"
+          echo "idea-admin.sh revision:          ${SH_REV}"
+          echo "idea-admin-windows.ps1 revision: ${PS1_REV}"
+          echo "IDEA_VERSION.txt:                ${VERSION} (expected revision ${EXPECTED})"
+          if [ "${SH_REV}" != "${EXPECTED}" ] || [ "${PS1_REV}" != "${EXPECTED}" ]; then
+            echo "::error::Version mismatch: IDEA_VERSION.txt=${VERSION} (expected revision ${EXPECTED}), idea-admin.sh default=${SH_REV}, idea-admin-windows.ps1 default=${PS1_REV}"
+            exit 1
+          fi
+          echo "Version consistency check passed (${EXPECTED})"
       - name: Pre-commit Linting
         uses: ./.github/actions/pre-commit
       - name: Setup Development Environment

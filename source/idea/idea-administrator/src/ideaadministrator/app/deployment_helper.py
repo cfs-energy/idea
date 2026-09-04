@@ -14,7 +14,7 @@ from ideasdk.config.cluster_config_db import ClusterConfigDB
 from ideaadministrator.app.cdk.cdk_invoker import CdkInvoker
 from ideasdk.utils import Utils, ModuleMetadataHelper
 
-from typing import List
+from typing import Dict, List
 from collections import OrderedDict
 import threading
 import botocore.exceptions
@@ -159,6 +159,18 @@ class DeploymentHelper:
                     f'[{module_s}] are already deployed. use the --upgrade flag to re-deploy these modules.'
                 )
 
+    def deploy_module_capturing(
+        self, module_id: str, failures: Dict[str, BaseException]
+    ):
+        """
+        deploy_module in a thread, recording the exception for invoke() to fail on. CdkInvoker
+        signals a failed cdk run with SystemExit, which would otherwise pass silently.
+        """
+        try:
+            self.deploy_module(module_id=module_id)
+        except BaseException as e:
+            failures[module_id] = e
+
     def invoke(self):
         if self.optimize_deployment and len(self.module_ids) > 1:
             optimized_deployment_order = self.get_optimized_deployment_order()
@@ -168,12 +180,13 @@ class DeploymentHelper:
 
             print(f'optimized deployment order: {optimized_deployment_order}')
             for modules in optimized_deployment_order:
+                failures: Dict[str, BaseException] = {}
                 threads = []
                 for module_id in modules:
                     thread = threading.Thread(
                         name=f'Thread: {module_id}',
-                        target=self.deploy_module,
-                        kwargs={'module_id': module_id},
+                        target=self.deploy_module_capturing,
+                        kwargs={'module_id': module_id, 'failures': failures},
                     )
                     threads.append(thread)
                     thread.start()
@@ -182,6 +195,17 @@ class DeploymentHelper:
 
                 for thread in threads:
                     thread.join()
+
+                # the status check below cannot see this: a module already deployed by the
+                # previous release still reads 'deployed' after a failed re-deploy.
+                if failures:
+                    raise exceptions.general_exception(
+                        'deployment failed. could not deploy module(s): '
+                        + ', '.join(
+                            f'{module_id} ({error})'
+                            for module_id, error in failures.items()
+                        )
+                    )
 
                 # check for deployment status of previous modules
                 # if any of them are not deployed, skip deployment of the next module set

@@ -12,6 +12,9 @@
 import ideavirtualdesktopcontroller
 from ideasdk.context import ArnBuilder
 from ideasdk.utils import Utils
+from ideavirtualdesktopcontroller.app.virtual_desktop_controller_utils import (
+    switch_ddb_table_to_on_demand,
+)
 from ideavirtualdesktopcontroller.app.clients.events_client.events_client import (
     VirtualDesktopEvent,
 )
@@ -208,12 +211,23 @@ class DCVBrokerUserdataExecutionCompleteEventHandler(
             )
 
         table_names = self.dcv_broker_client_utils.get_broker_dynamodb_table_names()
+        on_demand = self.context.config().get_bool(
+            'virtual-desktop-controller.dcv_broker.dynamodb_table.on_demand',
+            default=True,
+        )
         autoscaling_enabled = self.context.config().get_bool(
             'virtual-desktop-controller.dcv_broker.dynamodb_table.autoscaling.enabled',
             default=True,
         )
         for table_name in table_names:
-            if autoscaling_enabled:
+            if on_demand:
+                switch_ddb_table_to_on_demand(
+                    self.dynamodb_client,
+                    table_name,
+                    self._logger,
+                    log_prefix=f'[msg-id: {message_id}] ',
+                )
+            elif autoscaling_enabled:
                 self._create_scaling_policies_for_ddb_table_if_required(
                     message_id, table_name
                 )

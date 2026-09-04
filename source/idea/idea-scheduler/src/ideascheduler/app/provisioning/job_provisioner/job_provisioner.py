@@ -69,6 +69,9 @@ class ProvisionJobsResult(SocaBaseModel):
     # a failed compute stack was deleted during this cycle, so the cycle is a real
     # provisioning failure and must be counted against the job's retry budget.
     stack_deleted: Optional[bool] = Field(default=None)
+    # the StackId of that stack. the failure it represents counts once, however many
+    # times the stack is seen before cloudformation finishes deleting it.
+    deleted_stack_id: Optional[str] = Field(default=None)
 
     def get_error_code(self) -> str:
         if Utils.is_not_empty(self.error_code):
@@ -444,6 +447,7 @@ class ProvisionJobs:
                         cycle_attempt=self._cycle_attempt,
                     )
                 stack_deleted = False
+                deleted_stack_id = None
                 if (
                     provisioning_status == ProvisioningStatus.FAILED
                     and not self.job.is_provisioned()
@@ -451,6 +455,15 @@ class ProvisionJobs:
                     # the job holds no stack, so the housekeeper will never look at this one:
                     # delete it here or the job waits forever on an unreusable stack name.
                     stack_deleted = self.delete_failed_stack()
+                    if (
+                        stack_deleted
+                        and self.provisioning_util.stack.stack_status != 'DELETE_FAILED'
+                    ):
+                        # a stack stuck in DELETE_FAILED keeps its id for good, so naming
+                        # it here would count every future sighting as the one already
+                        # counted and the job would retry forever. left unnamed, each
+                        # sighting counts and the cap eventually holds the job.
+                        deleted_stack_id = self.provisioning_util.stack.stack_id
                 # for a stack the job still holds, cleanup and the job reset belong to
                 # the node housekeeper rather than another provisioning attempt.
                 return ProvisionJobsResult(
@@ -458,6 +471,7 @@ class ProvisionJobs:
                     error_code=errorcodes.CLOUDFORMATION_STACK_BUILDER_FAILED,
                     message=f'compute node provisioning {provisioning_status.value}',
                     stack_deleted=stack_deleted,
+                    deleted_stack_id=deleted_stack_id,
                 )
 
             else:
@@ -605,7 +619,9 @@ class JobProvisioner(SocaService):
         requeue_jobs = []
         for job in jobs:
             retries_exhausted = provisioning_util.track_provisioning_failure(
-                job=job, message=result.get_error_message()
+                job=job,
+                message=result.get_error_message(),
+                stack_id=result.deleted_stack_id,
             )
             if not retries_exhausted:
                 requeue_jobs.append(job)

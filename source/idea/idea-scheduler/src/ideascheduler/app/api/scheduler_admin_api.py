@@ -44,6 +44,10 @@ from ideadatamodel.scheduler import (
     CheckHpcLicenseResourceAvailabilityRequest,
     DeleteJobRequest,
     DeleteJobResult,
+    ListComputeImagesRequest,
+    ListComputeImagesResult,
+    BuildComputeImageRequest,
+    BuildComputeImageResult,
     HpcQueueProfile,
     SocaJob,
     SocaScalingMode,
@@ -172,7 +176,18 @@ class SchedulerAdminAPI(BaseAPI):
                 'scope': self.SCOPE_WRITE,
                 'method': self.delete_job,
             },
+            # no scope: the image inventory and builds are for elevated users only, never
+            # for application tokens. same rule as the virtual desktop controller.
+            'SchedulerAdmin.ListComputeImages': {
+                'scope': None,
+                'method': self.list_compute_images,
+            },
+            'SchedulerAdmin.BuildComputeImage': {
+                'scope': None,
+                'method': self.build_compute_image,
+            },
         }
+        self._compute_images = None
 
     def list_active_jobs(self, context: ApiInvocationContext):
         payload = context.get_request_payload_as(ListJobsRequest)
@@ -516,6 +531,36 @@ class SchedulerAdminAPI(BaseAPI):
 
         context.success(DeleteJobResult())
 
+    # compute images (Custom AMIs page)
+
+    @property
+    def compute_images(self):
+        # created on first use: it opens the image-builds table
+        if self._compute_images is None:
+            from ideascheduler.app.images.compute_images import ComputeImageService
+
+            self._compute_images = ComputeImageService(self.context)
+        return self._compute_images
+
+    def list_compute_images(self, context: ApiInvocationContext):
+        from ideascheduler.app.images.compute_images import COMPUTE_BASE_OS
+
+        context.get_request_payload_as(ListComputeImagesRequest)
+        context.success(
+            ListComputeImagesResult(
+                listing=self.compute_images.list_images(),
+                supported_base_os=list(COMPUTE_BASE_OS),
+                compute_node_os=self.context.config().get_string(
+                    'scheduler.compute_node_os', default=None
+                ),
+            )
+        )
+
+    def build_compute_image(self, context: ApiInvocationContext):
+        request = context.get_request_payload_as(BuildComputeImageRequest)
+        record = self.compute_images.build(request, requested_by=context.get_username())
+        context.success(BuildComputeImageResult(record=record))
+
     def invoke(self, context: ApiInvocationContext):
         namespace = context.namespace
 
@@ -524,8 +569,10 @@ class SchedulerAdminAPI(BaseAPI):
             raise exceptions.unauthorized_access()
 
         acl_entry_scope = Utils.get_value_as_string('scope', acl_entry)
+        # scopes=None is the app-token deny: only an elevated user passes
         is_authorized = context.is_authorized(
-            elevated_access=True, scopes=[acl_entry_scope]
+            elevated_access=True,
+            scopes=[acl_entry_scope] if Utils.is_not_empty(acl_entry_scope) else None,
         )
 
         if is_authorized:

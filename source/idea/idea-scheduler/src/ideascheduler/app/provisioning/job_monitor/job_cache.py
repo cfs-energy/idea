@@ -570,19 +570,30 @@ class JobsDB:
             with self.db as tx:
                 return tx[JOB_PROVISIONING_ERRORS].delete(job_id=job_id)
 
-    def increment_job_provisioning_retry(self, job_id: str) -> int:
+    def increment_job_provisioning_retry(
+        self, job_id: str, stack_id: Optional[str] = None
+    ) -> int:
+        """
+        count one provisioning failure against the job's budget. the same failed stack is
+        seen more than once while cloudformation deletes it, so a repeat of the stack
+        already counted returns the count unchanged. a failure with no stack always
+        counts, which is how a stack that cannot be deleted is charged every cycle.
+        """
         with self._db_lock:
             with self.db as tx:
                 entry = tx[JOB_PROVISIONING_RETRIES].find_one(job_id=job_id)
-                retry_count = Utils.get_value_as_int('retry_count', entry, 0) + 1
-                tx[JOB_PROVISIONING_RETRIES].upsert(
-                    row={
-                        'job_id': job_id,
-                        'retry_count': retry_count,
-                    },
-                    keys=['job_id'],
-                )
-                return retry_count
+                retry_count = Utils.get_value_as_int('retry_count', entry, 0)
+                counted_stack_id = Utils.get_value_as_string('stack_id', entry)
+                if Utils.is_not_empty(stack_id) and stack_id == counted_stack_id:
+                    return retry_count
+
+                row = {'job_id': job_id, 'retry_count': retry_count + 1}
+                if Utils.is_not_empty(stack_id):
+                    # a failure with no stack leaves this as it is, so the next sighting
+                    # of the same stack is still recognized as one already counted.
+                    row['stack_id'] = stack_id
+                tx[JOB_PROVISIONING_RETRIES].upsert(row=row, keys=['job_id'])
+                return retry_count + 1
 
     def get_job_provisioning_retry_count(self, job_id: str) -> int:
         with self._db_lock:
@@ -765,8 +776,10 @@ class JobCache(JobCacheProtocol):
         if self._jobs_db.clear_job_provisioning_error(job_id):
             self._publish_error_message(job_id=job_id, error_message=None)
 
-    def increment_job_provisioning_retry(self, job_id: str) -> int:
-        return self._jobs_db.increment_job_provisioning_retry(job_id)
+    def increment_job_provisioning_retry(
+        self, job_id: str, stack_id: Optional[str] = None
+    ) -> int:
+        return self._jobs_db.increment_job_provisioning_retry(job_id, stack_id=stack_id)
 
     def get_job_provisioning_retry_count(self, job_id: str) -> int:
         return self._jobs_db.get_job_provisioning_retry_count(job_id)

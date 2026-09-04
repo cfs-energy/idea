@@ -37,6 +37,8 @@ from ideaclustermanager.app.api.projects_api import ProjectsAPI
 from ideaclustermanager.app.api.accounts_api import AccountsAPI
 from ideaclustermanager.app.api.auth_api import AuthAPI
 from ideaclustermanager.app.api.email_templates_api import EmailTemplatesAPI
+from ideaclustermanager.app.api.my_costs_api import MyCostsAPI
+from ideaclustermanager.app.api.costs_api import CostsAPI
 
 from typing import Optional, Dict
 
@@ -52,6 +54,8 @@ class ClusterManagerApiInvoker(ApiInvokerProtocol):
         self.auth_api = AuthAPI(context)
         self.accounts_api = AccountsAPI(context)
         self.email_templates_api = EmailTemplatesAPI(context)
+        self.my_costs_api = MyCostsAPI(context)
+        self.costs_api = CostsAPI(context)
         self.max_listings_for_logging = 10
         self.auto_truncate_responses = {
             'Accounts.ListUsers': ListUsersResult,
@@ -203,3 +207,7 @@ class ClusterManagerApiInvoker(ApiInvokerProtocol):
             self.accounts_api.invoke(context)
         elif namespace.startswith('EmailTemplates.'):
             self.email_templates_api.invoke(context)
+        elif namespace.startswith('MyCosts.'):
+            self.my_costs_api.invoke(context)
+        elif namespace.startswith('Costs.'):
+            self.costs_api.invoke(context)

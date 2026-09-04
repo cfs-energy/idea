@@ -82,10 +82,20 @@ def build(c, no_cache=False, gha_cache=False):
 
 
 @task
-def build_push_multi(c, ecr_registry, ecr_tag, no_cache=False, gha_cache=False):
-    # type: (Context, str, str, bool, bool) -> None # type: ignore
+def build_push_multi(
+    c,
+    ecr_registry,
+    ecr_tag,
+    image_name='idea-administrator',
+    no_cache=False,
+    gha_cache=False,
+):
+    # type: (Context, str, str, str, bool, bool) -> None # type: ignore
     """
     Build and publish docker image to an ECR repository using buildx and IAM instance profile
+
+    ecr_registry is the registry prefix, for example public.ecr.aws/<alias>. image_name is
+    the repository within it; pass a throwaway name for a verification build.
     """
 
     prepare_artifacts(c)
@@ -101,9 +111,9 @@ def build_push_multi(c, ecr_registry, ecr_tag, no_cache=False, gha_cache=False):
         f'docker buildx build --push --platform linux/amd64,linux/arm64 '
         f'--build-arg PUBLIC_ECR_TAG=v{release_version} '
         f'{version_args}'
-        f'-t {ecr_registry}/idea-administrator:v{release_version} '
-        f'-t {ecr_registry}/idea-administrator:{ecr_tag} '
-        f'-t {ecr_registry}/idea-administrator:latest '
+        f'-t {ecr_registry}/{image_name}:v{release_version} '
+        f'-t {ecr_registry}/{image_name}:{ecr_tag} '
+        f'-t {ecr_registry}/{image_name}:latest '
         f'"{idea.props.deployment_administrator_dir}" '
     )
 

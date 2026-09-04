@@ -29,7 +29,6 @@ from ideavirtualdesktopcontroller.app.software_stacks import (
 from ideasdk.aws.opensearch.aws_opensearch_client import AwsOpenSearchClient
 
 import click
-import re
 import yaml
 import os
 
@@ -657,212 +656,84 @@ def get_software_stacks_index_name(context):
     return 'software_stacks'
 
 
-# AMI search patterns for different OS/architecture combinations.
-# Minor releases are wildcarded so these keep resolving across point releases; the
-# newest match by CreationDate wins. '_HVM-' excludes the '_HVM_BETA-' images.
-AMI_PATTERNS = {
-    # Windows base AMI names are suffixed with the build date (YYYY.MM.DD). Do not pin
-    # the year: AWS retains only the most recent releases, so a pinned year eventually
-    # matches nothing. find_latest_ami() already selects the newest by CreationDate.
-    'windows2019/x86-64/base': 'Windows_Server-2019-English-Full-Base-*',
-    'windows2022/x86-64/base': 'Windows_Server-2022-English-Full-Base-*',
-    'windows2025/x86-64/base': 'Windows_Server-2025-English-Full-Base-*',
-    'rhel8/arm64': 'RHEL-8.*_HVM-*-arm64-*',
-    'rhel8/x86-64': 'RHEL-8.*_HVM-*-x86_64-*',
-    'rhel9/arm64': 'RHEL-9.*_HVM-*-arm64-*',
-    'rhel9/x86-64': 'RHEL-9.*_HVM-*-x86_64-*',
-    'rhel10/arm64': 'RHEL-10.*_HVM-*-arm64-*',
-    'rhel10/x86-64': 'RHEL-10.*_HVM-*-x86_64-*',
-    # Lookup patterns only. get_ami_pattern_for_stack() resolves an existing stack id; it
-    # does not create stacks, so an entry here is not a support claim. VirtualDesktopBaseOS
-    # has no UBUNTU2604 member, so no ubuntu2604 software stack can exist.
-    'ubuntu2204/arm64': 'ubuntu/images/hvm-ssd*/ubuntu-*-22.04-arm64-server-*',
-    'ubuntu2204/x86-64': 'ubuntu/images/hvm-ssd*/ubuntu-*-22.04-amd64-server-*',
-    'ubuntu2404/arm64': 'ubuntu/images/hvm-ssd*/ubuntu-*-24.04-arm64-server-*',
-    'ubuntu2404/x86-64': 'ubuntu/images/hvm-ssd*/ubuntu-*-24.04-amd64-server-*',
-    'ubuntu2604/arm64': 'ubuntu/images/hvm-ssd*/ubuntu-*-26.04-arm64-server-*',
-    'ubuntu2604/x86-64': 'ubuntu/images/hvm-ssd*/ubuntu-*-26.04-amd64-server-*',
-    'amazonlinux2023/arm64': 'al2023-ami-2023.*-kernel-*-arm64',
-    'amazonlinux2023/x86-64': 'al2023-ami-2023.*-kernel-*-x86_64',
-    'rocky8/arm64': 'Rocky-8-EC2-Base-8.*-*.aarch64-*',
-    'rocky8/x86-64': 'Rocky-8-EC2-Base-8.*-*.x86_64-*',
-    'rocky9/arm64': 'Rocky-9-EC2-Base-9.*-*.aarch64-*',
-    'rocky9/x86-64': 'Rocky-9-EC2-Base-9.*-*.x86_64-*',
-    'rocky10/arm64': 'Rocky-10-EC2-Base-10.*-*.aarch64-*',
-    'rocky10/x86-64': 'Rocky-10-EC2-Base-10.*-*.x86_64-*',
-}
-
-# describe_images Owners per AMI type. Filtering on 'amazon' only returns
-# Amazon-published images, which excludes every Red Hat, Rocky and Canonical AMI.
-AMI_OWNERS = {
-    'amazonlinux2023': ['amazon'],
-    'windows2019': ['amazon'],
-    'windows2022': ['amazon'],
-    'windows2025': ['amazon'],
-    # Red Hat Inc. (commercial partitions)
-    'rhel8': ['309956199498'],
-    'rhel9': ['309956199498'],
-    'rhel10': ['309956199498'],
-    # RESF only - Marketplace excluded deliberately: a Marketplace-backed id in the shipped
-    # map means OptInRequired on the first rocky job in every fresh account.
-    'rocky8': ['792107900819'],
-    'rocky9': ['792107900819'],
-    'rocky10': ['792107900819'],
-    # Canonical
-    'ubuntu2204': ['099720109477'],
-    'ubuntu2404': ['099720109477'],
-    'ubuntu2604': ['099720109477'],
-}
-
-# The aws-us-gov partition has its own Red Hat and Canonical publisher accounts. Rocky is not
-# there only through the Marketplace listing, so the first-party lookup finds nothing in GovCloud.
-GOV_AMI_OWNERS = {
-    'rhel8': ['219670896067'],
-    'rhel9': ['219670896067'],
-    'rhel10': ['219670896067'],
-    'ubuntu2204': ['513442679011'],
-    'ubuntu2404': ['513442679011'],
-    'ubuntu2604': ['513442679011'],
-}
-
-# a vendor can republish an older minor, making it the newest by date (RHEL-9.6.0_HVM-20260811
-# vs RHEL-9.8.0_HVM-20260728), so rank on the minor in the name before the date.
-MINOR_VERSION_PATTERNS = (
-    r'RHEL-(\d+)\.(\d+)',
-    r'Rocky-\d+-EC2-Base-(\d+)\.(\d+)',
-    r'al2023-ami-2023\.(\d+)\.(\d+)',
+# the pattern and publisher tables live in the sdk so the scheduler's compute image
+# builds resolve stock AMIs the same way; re-exported here for ideactl update-base-stacks
+from ideasdk.aws.stock_amis import (  # noqa: E402,F401
+    AMI_OWNERS,
+    AMI_PATTERNS,
+    GOV_AMI_OWNERS,
+    MINOR_VERSION_PATTERNS,
+    find_latest_ami,
+    get_ami_pattern_for_stack,
+    get_owners,
+    image_sort_key,
 )
 
 
-def image_sort_key(image):
-    """(major, minor, CreationDate); names without a minor (Windows, Ubuntu) sort by date alone"""
-    for pattern in MINOR_VERSION_PATTERNS:
-        match = re.match(pattern, image.get('Name', ''))
-        if match:
-            return (int(match.group(1)), int(match.group(2)), image['CreationDate'])
-    return (0, 0, image['CreationDate'])
-
-
-def get_ami_pattern_for_stack(stack_id):
+def update_software_stack_ami(
+    table,
+    stack_id,
+    base_os,
+    new_ami_id,
+    logger,
+    base_ami_id=None,
+    ec2_client=None,
+    keep_built=False,
+):
     """
-    Extract the OS/architecture pattern from a software stack ID.
+    Update the AMI a software stack row launches from.
 
-    Args:
-        stack_id: Software stack ID like 'ss-base-amazonlinux2023-x86-64-dcv'
-
-    Returns:
-        Tuple of (pattern_key, ami_pattern, owners) or (None, None, None) if not found
+    A build passes base_ami_id, the stock image it started from, and both fields move.
+    A stock refresh passes keep_built with an ec2 client: a row that launches from a
+    built image keeps ami_id and only base_ami_id moves, so a refresh cannot undo a
+    build. Returns True when the row was written.
     """
-    # Remove the 'ss-base-' prefix
-    if not stack_id.startswith('ss-base-'):
-        return None, None, None
-
-    # Extract the part after 'ss-base-'
-    stack_suffix = stack_id[8:]  # Remove 'ss-base-'
-
-    # Try to match patterns in order of specificity
-    for pattern_key, ami_pattern in AMI_PATTERNS.items():
-        os_arch = pattern_key.replace('/base', '').replace('/', '-')
-
-        # Check if the stack suffix starts with this OS/arch pattern
-        if stack_suffix.startswith(os_arch):
-            # Use simplified owners list that covers most cases
-            owners = ['amazon', 'aws-marketplace']
-            return pattern_key, ami_pattern, owners
-
-    return None, None, None
-
-
-def find_latest_ami(ec2_client, pattern, owners, logger, ami_type=None):
-    """
-    Find the latest AMI matching the given pattern.
-
-    Args:
-        ec2_client: Boto3 EC2 client
-        pattern: AMI name pattern to search for
-        owners: Fallback list of AMI owner IDs, used when ami_type is unknown
-        logger: Logger instance
-        ami_type: AMI type used to look up the publishing account (optional)
-
-    Returns:
-        AMI ID of the latest matching AMI, or None if not found
-    """
+    key = {
+        software_stacks_constants.SOFTWARE_STACK_DB_HASH_KEY: base_os,
+        software_stacks_constants.SOFTWARE_STACK_DB_RANGE_KEY: stack_id,
+    }
+    names = {
+        '#updated_on': software_stacks_constants.SOFTWARE_STACK_DB_UPDATED_ON_KEY,
+        '#base_ami_id': software_stacks_constants.SOFTWARE_STACK_DB_BASE_AMI_ID_KEY,
+    }
+    values = {':updated_on': Utils.current_time_ms()}
     try:
-        actual_owners = AMI_OWNERS.get(ami_type, owners)
-        if ec2_client.meta.region_name.startswith('us-gov-'):
-            actual_owners = GOV_AMI_OWNERS.get(ami_type, actual_owners)
+        if keep_built and ec2_client is not None:
+            from ideasdk.aws.image_builds import is_built_image
 
-        logger.debug(
-            f'Searching for AMIs with pattern: {pattern}, owners: {actual_owners}'
-        )
-
-        response = ec2_client.describe_images(
-            Filters=[
-                {'Name': 'name', 'Values': [pattern]},
-                {'Name': 'state', 'Values': ['available']},
-                {'Name': 'architecture', 'Values': ['x86_64', 'arm64']},
-            ],
-            Owners=actual_owners,
-        )
-
-        images = response.get('Images', [])
-        if not images:
-            logger.warning(f'No AMIs found matching pattern: {pattern}')
-            return None
-
-        images.sort(key=image_sort_key, reverse=True)
-        latest_ami = images[0]
-
-        logger.info(
-            f'Found latest AMI: {latest_ami["ImageId"]} ({latest_ami["Name"]}) created on {latest_ami["CreationDate"]}'
-        )
-        return latest_ami['ImageId']
-
-    except Exception as e:
-        logger.error(f'Error searching for AMI with pattern {pattern}: {str(e)}')
-        return None
-
-
-def update_software_stack_ami(table, stack_id, base_os, new_ami_id, logger):
-    """
-    Update the AMI ID for a software stack in DynamoDB.
-
-    Args:
-        table: DynamoDB table resource
-        stack_id: Software stack ID
-        base_os: Base OS value
-        new_ami_id: New AMI ID to set
-        logger: Logger instance
-
-    Returns:
-        True if successful, False otherwise
-    """
-    try:
-        logger.debug(f'Updating software stack {stack_id} with new AMI: {new_ami_id}')
-
+            current = table.get_item(Key=key).get('Item', {})
+            if is_built_image(ec2_client, current.get('ami_id')):
+                logger.info(
+                    f'{stack_id}: base image updated to {new_ami_id}; stack still launches '
+                    f'from built image {current.get("ami_id")}; rebuild to pick up the new base'
+                )
+                values[':base_ami_id'] = new_ami_id
+                table.update_item(
+                    Key=key,
+                    UpdateExpression='SET #base_ami_id = :base_ami_id, #updated_on = :updated_on',
+                    ExpressionAttributeNames=names,
+                    ExpressionAttributeValues=values,
+                )
+                return True
+            base_ami_id = new_ami_id
+        expression = 'SET #ami_id = :new_ami_id, #updated_on = :updated_on'
+        names['#ami_id'] = software_stacks_constants.SOFTWARE_STACK_DB_AMI_ID_KEY
+        values[':new_ami_id'] = new_ami_id
+        if base_ami_id:
+            expression += ', #base_ami_id = :base_ami_id'
+            values[':base_ami_id'] = base_ami_id
+        else:
+            names.pop('#base_ami_id')
         table.update_item(
-            Key={
-                software_stacks_constants.SOFTWARE_STACK_DB_HASH_KEY: base_os,
-                software_stacks_constants.SOFTWARE_STACK_DB_RANGE_KEY: stack_id,
-            },
-            UpdateExpression='SET #ami_id = :new_ami_id, #updated_on = :updated_on',
-            ExpressionAttributeNames={
-                '#ami_id': software_stacks_constants.SOFTWARE_STACK_DB_AMI_ID_KEY,
-                '#updated_on': software_stacks_constants.SOFTWARE_STACK_DB_UPDATED_ON_KEY,
-            },
-            ExpressionAttributeValues={
-                ':new_ami_id': new_ami_id,
-                ':updated_on': Utils.current_time_ms(),
-            },
+            Key=key,
+            UpdateExpression=expression,
+            ExpressionAttributeNames=names,
+            ExpressionAttributeValues=values,
         )
-
-        logger.info(
-            f'Successfully updated software stack {stack_id} with AMI {new_ami_id}'
-        )
+        logger.info(f'{stack_id}: ami_id set to {new_ami_id}')
         return True
-
     except Exception as e:
-        logger.error(f'Failed to update software stack {stack_id}: {str(e)}')
+        logger.error(f'{stack_id}: failed to update the AMI: {e}')
         return False
 
 
@@ -1133,7 +1004,13 @@ def update_base_stacks(dry_run, stack_id, force, **kwargs):
             else:
                 # Perform the update
                 success = update_software_stack_ami(
-                    table, current_stack_id, current_base_os, latest_ami_id, logger
+                    table,
+                    current_stack_id,
+                    current_base_os,
+                    latest_ami_id,
+                    logger,
+                    ec2_client=ec2_client,
+                    keep_built=True,
                 )
 
                 if success:

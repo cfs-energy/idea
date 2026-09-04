@@ -18,13 +18,18 @@ from ideaclustermanager.app.projects.bedrock_invocation_logging import (
 from ideaclustermanager.app.projects.bedrock_usage_service import (
     BedrockUsageService,
     INVOCATION_QUERY,
-    get_project_usage_by_model,
+    USAGE_WINDOW,
+    USAGE_WINDOW_DAYS,
+    get_project_window_usage,
     parse_caller_arn,
+    usage_window_dates,
 )
 from ideaclustermanager.app.projects.db.bedrock_usage_dao import (
     BedrockInstanceOwnerDAO,
     BedrockUsageDAO,
     UNATTRIBUTED_USER,
+    build_day_key,
+    build_project_key,
 )
 from ideaclustermanager.app.api.projects_api import ProjectsAPI
 from ideaclustermanager.app.projects.db.projects_dao import ProjectsDAO
@@ -34,6 +39,7 @@ from ideadatamodel import (
     constants,
     exceptions,
     locale,
+    ListBedrockUsageRequest,
     ListProjectsResult,
     Project,
     ProjectBedrockConfig,
@@ -42,6 +48,7 @@ from ideadatamodel import (
 )
 
 import arrow
+import botocore.exceptions
 import pytest
 
 
@@ -158,10 +165,13 @@ class FakeBedrock:
 
 
 class FakeLogs:
-    def __init__(self, results=None, status='Complete'):
+    def __init__(self, results=None, status='Complete', start_query_error=None):
         self.calls = []
         self.results = results if results is not None else []
         self.status = status
+        # an error code start_query raises, e.g. the ResourceNotFoundException a log
+        # group that does not exist yet answers with.
+        self.start_query_error = start_query_error
 
     def start_query(self, logGroupName, startTime, endTime, queryString):
         self.calls.append(
@@ -175,6 +185,11 @@ class FakeLogs:
                 },
             )
         )
+        if self.start_query_error is not None:
+            raise botocore.exceptions.ClientError(
+                {'Error': {'Code': self.start_query_error, 'Message': 'not found'}},
+                'StartQuery',
+            )
         return {'queryId': 'q-1'}
 
     def get_query_results(self, queryId):
@@ -331,8 +346,8 @@ class FakeAwsUtil:
         self.raises = False
         self.calls = []
 
-    def cost_explorer_get_tagged_service_spend(self, tag_key, tag_value):
-        self.calls.append((tag_key, tag_value))
+    def cost_explorer_get_tagged_service_spend(self, tag_key, tag_value, days=None):
+        self.calls.append((tag_key, tag_value, days))
         if self.raises:
             raise RuntimeError('cost explorer is not reachable')
         return self.spend
@@ -750,8 +765,13 @@ def test_recompute_removes_rows_that_left_the_window():
     assert rows[f'project#{PERIOD}']['total_tokens'] == 15
 
 
-def test_usage_dropping_to_zero_removes_the_project_rollup():
-    service, _, logs, _, usage_dao = build_service(
+def test_an_empty_query_leaves_stored_usage_alone():
+    """
+    an empty answer cannot be told apart from a missing log group, or from logging
+    enabled after the fact, so the rows stay and expire on their own ttl rather than
+    being deleted on no evidence.
+    """
+    service, context, logs, _, usage_dao = build_service(
         results=[insights_row(caller_arn(), MODEL_B, TODAY, 10, 10, 1)]
     )
     service.aggregate()
@@ -759,7 +779,16 @@ def test_usage_dropping_to_zero_removes_the_project_rollup():
 
     logs.results = []
     service.aggregate()
-    assert rows_by_usage_id(usage_dao) == {}
+    rows = rows_by_usage_id(usage_dao)
+
+    assert rows[f'day#{TODAY}#alice#{MODEL_B}']['total_tokens'] == 20
+    assert rows[f'user#{PERIOD}#alice']['total_tokens'] == 20
+    assert rows[f'project#{PERIOD}']['total_tokens'] == 20
+    assert any(
+        'empty answer is not evidence' in message
+        for level, message in context.logger().messages
+        if level == 'info'
+    )
 
 
 def test_instance_owner_is_resolved_once_and_cached_in_dynamodb():
@@ -850,15 +879,16 @@ def test_run_once_takes_the_distributed_lock():
 
 
 class StubProjectsService:
-    def __init__(self, context, usage_dao, enabled=True):
+    def __init__(self, context, usage_dao, enabled=True, projects=None):
         self.context = context
         self.logger = context.logger()
         self.bedrock_usage_dao = usage_dao
+        self.projects_dao = FakeProjectsDAO(projects if projects is not None else [])
         self.bedrock_provisioner = type('P', (), {'is_enabled': lambda self: enabled})()
 
-    build_bedrock_usage = staticmethod(ProjectsService.build_bedrock_usage)
     get_project_bedrock_usage = ProjectsService.get_project_bedrock_usage
     apply_bedrock_spend = ProjectsService.apply_bedrock_spend
+    list_bedrock_usage = ProjectsService.list_bedrock_usage
 
 
 def test_get_project_bedrock_usage_returns_totals_and_users():
@@ -873,7 +903,8 @@ def test_get_project_bedrock_usage_returns_totals_and_users():
 
     stub = StubProjectsService(context, usage_dao)
     usage = ProjectsService.get_project_bedrock_usage(stub, project_id=PROJECT_ID)
-    assert usage.period == PERIOD
+    assert usage.window == USAGE_WINDOW
+    assert usage.period is None
     assert usage.username is None
     assert usage.total_tokens == 40
     assert [entry.username for entry in usage.by_user] == ['bob', 'alice']
@@ -927,12 +958,199 @@ def test_project_usage_by_model_sums_across_users():
     )
     service.aggregate()
 
-    by_model = get_project_usage_by_model(usage_dao, PROJECT_ID, PERIOD)
+    start_date, end_date = usage_window_dates()
+    by_model = get_project_window_usage(
+        usage_dao, PROJECT_ID, start_date, end_date
+    ).by_model
 
     assert [entry.model_id for entry in by_model] == [MODEL_A, MODEL_B]
     assert by_model[0].total_tokens == 40
     assert by_model[0].invocations == 3
     assert by_model[1].total_tokens == 2
+
+
+# ------------------------------------------------------------------ usage window
+
+# on the first of a month a project used 11 days earlier read as unused, because the
+# column asked for the calendar month rollup.
+FROZEN_NOW = arrow.get('2026-09-01T12:00:00+00:00')
+IN_WINDOW_DAY = '2026-08-21'
+OUT_OF_WINDOW_DAY = '2026-08-02'
+WINDOW_MONTH = '2026-08'
+
+
+def freeze_today(monkeypatch):
+    monkeypatch.setattr(arrow, 'utcnow', lambda: FROZEN_NOW)
+
+
+def seed_day_row(
+    usage_dao,
+    usage_date,
+    username,
+    model_id,
+    tokens,
+    invocations=1,
+    project_id=PROJECT_ID,
+):
+    usage_dao.table.put_item(
+        Item={
+            'project_id': project_id,
+            'usage_id': build_day_key(usage_date, username, model_id),
+            'usage_date': usage_date,
+            'period': usage_date[:7],
+            'username': username,
+            'model_id': model_id,
+            'invocations': invocations,
+            'input_tokens': tokens,
+            'output_tokens': 0,
+            'total_tokens': tokens,
+            'updated_on': 0,
+        }
+    )
+
+
+# ------------------------------------------------- ai usage page read (list + detail)
+
+
+def build_two_project_usage(monkeypatch, spend=None):
+    """two bedrock projects, two users and two models inside the window"""
+    projects = [
+        build_project(),
+        build_project(project_id=PROJECT_ID_2, name='physics', profiles={}),
+    ]
+    service, context, _, _, usage_dao = build_service(results=[], projects=projects)
+    seed_day_row(usage_dao, IN_WINDOW_DAY, 'alice', MODEL_A, 1000, invocations=4)
+    seed_day_row(usage_dao, IN_WINDOW_DAY, 'bob', MODEL_B, 500, invocations=1)
+    seed_day_row(usage_dao, OUT_OF_WINDOW_DAY, 'alice', MODEL_A, 9999)
+    seed_day_row(
+        usage_dao, IN_WINDOW_DAY, 'alice', MODEL_A, 200, project_id=PROJECT_ID_2
+    )
+    context.aws_util().spend = spend
+    freeze_today(monkeypatch)
+    stub = StubProjectsService(context, usage_dao, projects=projects)
+    return ProjectsService.list_bedrock_usage(stub, ListBedrockUsageRequest()), context
+
+
+def test_list_bedrock_usage_reports_every_bedrock_project_in_one_call(monkeypatch):
+    result, _ = build_two_project_usage(monkeypatch)
+
+    assert result.window == USAGE_WINDOW
+    assert [project.project_id for project in result.listing] == [
+        PROJECT_ID,
+        PROJECT_ID_2,
+    ]
+    first = result.listing[0].bedrock_usage
+    # the out of window day is excluded from the project as it is from the column
+    assert first.total_tokens == 1500
+    assert first.invocations == 5
+    assert result.listing[1].bedrock_usage.total_tokens == 200
+
+
+def test_list_bedrock_usage_breaks_a_project_down_per_model_and_per_user(monkeypatch):
+    result, _ = build_two_project_usage(monkeypatch)
+    usage = result.listing[0].bedrock_usage
+
+    assert [(entry.model_id, entry.total_tokens) for entry in usage.by_model] == [
+        (MODEL_A, 1000),
+        (MODEL_B, 500),
+    ]
+    assert [(entry.username, entry.total_tokens) for entry in usage.by_user] == [
+        ('alice', 1000),
+        ('bob', 500),
+    ]
+    assert [entry.top_model_id for entry in usage.by_user] == [MODEL_A, MODEL_B]
+    assert usage.by_model[0].input_tokens == 1000
+    assert usage.by_model[0].output_tokens == 0
+    assert usage.by_model[0].invocations == 4
+
+
+def test_model_and_user_cost_is_apportioned_by_token_share_and_marked_estimated(
+    monkeypatch,
+):
+    result, _ = build_two_project_usage(monkeypatch, spend={'Amazon Bedrock': 3.0})
+    usage = result.listing[0].bedrock_usage
+
+    assert usage.spend.amount == 3.0
+    # 1000 and 500 of 1500 tokens
+    assert [entry.spend.amount for entry in usage.by_model] == [2.0, 1.0]
+    assert [entry.spend.amount for entry in usage.by_user] == [2.0, 1.0]
+    assert all(entry.spend_is_estimated for entry in usage.by_model)
+    assert all(entry.spend_is_estimated for entry in usage.by_user)
+    # the project figure is priced by cost explorer, not apportioned, so it carries no
+    # estimated flag at all: the field only exists on the breakdown entries
+    assert usage.spend_is_unavailable is None
+
+
+def test_an_unpriced_project_gets_no_estimated_breakdown(monkeypatch):
+    """no answer from cost explorer must not become an estimate of zero"""
+    result, _ = build_two_project_usage(monkeypatch, spend=None)
+    usage = result.listing[0].bedrock_usage
+
+    assert usage.spend_is_unavailable is True
+    assert all(entry.spend is None for entry in usage.by_model)
+    assert all(entry.spend_is_estimated is None for entry in usage.by_user)
+
+
+def test_the_usage_window_is_thirty_days_inclusive_of_today(monkeypatch):
+    freeze_today(monkeypatch)
+    assert usage_window_dates() == ('2026-08-03', '2026-09-01')
+    assert USAGE_WINDOW_DAYS == 30
+
+
+def test_usage_reports_the_trailing_window_not_the_calendar_month(monkeypatch):
+    service, context, _, _, usage_dao = build_service(results=[])
+    seed_day_row(usage_dao, IN_WINDOW_DAY, 'clusteradmin', MODEL_A, 1359)
+    seed_day_row(usage_dao, OUT_OF_WINDOW_DAY, 'clusteradmin', MODEL_B, 794)
+    usage_dao.table.put_item(
+        Item={
+            'project_id': PROJECT_ID,
+            'usage_id': build_project_key(WINDOW_MONTH),
+            'period': WINDOW_MONTH,
+            'invocations': 2,
+            'input_tokens': 2153,
+            'output_tokens': 0,
+            'total_tokens': 2153,
+        }
+    )
+    freeze_today(monkeypatch)
+
+    stub = StubProjectsService(context, usage_dao)
+    usage = ProjectsService.get_project_bedrock_usage(stub, project_id=PROJECT_ID)
+
+    assert usage.window == USAGE_WINDOW
+    assert usage.total_tokens == 1359
+    assert usage.invocations == 1
+    assert [entry.model_id for entry in usage.by_model] == [MODEL_A]
+    assert [entry.username for entry in usage.by_user] == ['clusteradmin']
+    assert usage.by_user[0].total_tokens == 1359
+
+
+def test_the_month_rollup_is_untouched_by_the_window_read(monkeypatch):
+    """budgets and anything else keyed on project#YYYY-MM keep reading what they read"""
+    service, context, _, _, usage_dao = build_service(results=[])
+    seed_day_row(usage_dao, IN_WINDOW_DAY, 'clusteradmin', MODEL_A, 1359)
+    seed_day_row(usage_dao, OUT_OF_WINDOW_DAY, 'clusteradmin', MODEL_B, 794)
+    usage_dao.table.put_item(
+        Item={
+            'project_id': PROJECT_ID,
+            'usage_id': build_project_key(WINDOW_MONTH),
+            'period': WINDOW_MONTH,
+            'total_tokens': 2153,
+        }
+    )
+    freeze_today(monkeypatch)
+
+    stub = StubProjectsService(context, usage_dao)
+    ProjectsService.get_project_bedrock_usage(stub, project_id=PROJECT_ID)
+
+    rollup = usage_dao.get_project_rollup(PROJECT_ID, WINDOW_MONTH)
+    assert rollup['total_tokens'] == 2153
+    assert (
+        rows_by_usage_id(usage_dao)[
+            build_day_key(OUT_OF_WINDOW_DAY, 'clusteradmin', MODEL_B)
+        ]['total_tokens']
+        == 794
+    )
 
 
 # ------------------------------------------------------------------ spend
@@ -957,7 +1175,10 @@ def test_bedrock_spend_is_unavailable_when_cost_explorer_has_no_answer():
 
     assert usage.spend_is_unavailable is True
     assert usage.spend is None
-    assert context.aws_util().calls == [(constants.IDEA_TAG_PROJECT, 'research')]
+    # priced over the same window the tokens cover, not the calendar month to date
+    assert context.aws_util().calls == [
+        (constants.IDEA_TAG_PROJECT, 'research', USAGE_WINDOW_DAYS)
+    ]
 
 
 def test_bedrock_spend_is_zero_when_nothing_is_priced_yet():
@@ -1021,7 +1242,7 @@ def test_api_hydration_survives_a_usage_read_failure():
     class Exploding:
         table = usage_dao.table
 
-        def get_project_rollup(self, **kwargs):
+        def query_day_rows(self, *args, **kwargs):
             raise RuntimeError('table unavailable')
 
     stub_projects = StubProjectsService(context, Exploding())
@@ -1112,6 +1333,54 @@ def test_a_job_spanning_days_keeps_every_day_in_its_month_rollup():
     assert f'dayjob#{OTHER_DAY}#4242#{MODEL_A}' in rows
     assert rows[f'job#{PERIOD}#4242']['total_tokens'] == 40
     assert rows[f'job#{PERIOD}#4242']['invocations'] == 3
+
+
+def test_a_missing_log_group_leaves_stored_usage_alone():
+    """the same path start_query takes when the log group does not exist yet"""
+    service, _, logs, _, usage_dao = build_service(
+        results=[insights_row(caller_arn(), MODEL_A, TODAY, 10, 5, 1)],
+        owners={INSTANCE_ONE: 'alice'},
+    )
+    service.aggregate()
+
+    logs.start_query_error = 'ResourceNotFoundException'
+    service.aggregate()
+
+    assert (
+        rows_by_usage_id(usage_dao)[f'day#{TODAY}#alice#{MODEL_A}']['total_tokens']
+        == 15
+    )
+
+
+def test_a_truncated_query_upserts_without_deleting():
+    """
+    a truncated answer is a partial view of every day it covers, so it can say what is
+    new but never that a stored row is stale.
+    """
+    service, context, logs, _, usage_dao = build_service(
+        results=[
+            insights_row(caller_arn(), MODEL_A, TODAY, 10, 5, 1),
+            insights_row(caller_arn(), MODEL_B, TODAY, 20, 5, 2),
+        ],
+        owners={INSTANCE_ONE: 'alice'},
+    )
+    service.aggregate()
+
+    # the next run only sees one of the two models, and hits the row limit doing it
+    logs.results = [insights_row(caller_arn(), MODEL_A, TODAY, 30, 5, 3)]
+    service.context.config().values[f'{MODULE_ID}.bedrock.usage.max_query_results'] = 1
+    service.aggregate()
+    rows = rows_by_usage_id(usage_dao)
+
+    # upserted
+    assert rows[f'day#{TODAY}#alice#{MODEL_A}']['total_tokens'] == 35
+    # not deleted, even though the truncated answer never mentioned it
+    assert rows[f'day#{TODAY}#alice#{MODEL_B}']['total_tokens'] == 25
+    assert any(
+        'cannot establish that a stored row is stale' in message
+        for level, message in context.logger().messages
+        if level == 'info'
+    )
 
 
 def test_a_reattributed_job_loses_its_stale_day_rows_and_rollup():

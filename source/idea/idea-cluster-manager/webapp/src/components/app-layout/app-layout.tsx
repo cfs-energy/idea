@@ -24,6 +24,11 @@ import {withRouter} from "../../navigation/navigation-utils";
 import IdeaSideNavigation, {IdeaSideNavigationProps} from "../side-navigation";
 import IdeaNavbar from "../navbar";
 import Utils from "../../common/utils";
+import {MaintenanceSettings, maintenanceFlashbarItems} from "../../service/cluster-settings-service";
+
+// How often the banner is re-read while a page is open. Every page mounts this component, so a
+// navigation picks up a change as well.
+const MAINTENANCE_POLL_INTERVAL_MS = 60000
 
 export interface IdeaAppLayoutProps extends IdeaSideNavigationProps {
     ideaPageId: string
@@ -50,16 +55,49 @@ export interface IdeaAppLayoutProps extends IdeaSideNavigationProps {
 }
 
 export interface IdeaAppLayoutState {
+    maintenance: MaintenanceSettings
 }
 
 class IdeaAppLayout extends Component<IdeaAppLayoutProps, IdeaAppLayoutState> {
 
+    private maintenancePoll?: ReturnType<typeof setInterval>
+    private mounted: boolean = false
+
+    constructor(props: IdeaAppLayoutProps) {
+        super(props)
+        // The page is served with the window as it stood, so the banner is on the first render
+        // rather than appearing when the first poll comes back.
+        this.state = {
+            maintenance: AppContext.get().getClusterSettingsService().getMaintenance()
+        }
+    }
+
     componentDidMount() {
+
+        this.mounted = true
 
         Utils.hideLoadingAnimation()
 
         this.props.onPageChange({
             pageId: this.props.ideaPageId
+        })
+
+        this.refreshMaintenance()
+        this.maintenancePoll = setInterval(this.refreshMaintenance, MAINTENANCE_POLL_INTERVAL_MS)
+    }
+
+    componentWillUnmount() {
+        this.mounted = false
+        if (this.maintenancePoll) {
+            clearInterval(this.maintenancePoll)
+        }
+    }
+
+    refreshMaintenance = () => {
+        AppContext.get().getClusterSettingsService().fetchMaintenance().then(maintenance => {
+            if (this.mounted) {
+                this.setState({maintenance: maintenance})
+            }
         })
     }
 
@@ -74,8 +112,9 @@ class IdeaAppLayout extends Component<IdeaAppLayoutProps, IdeaAppLayoutState> {
         />
     }
 
+    // The maintenance notice is prepended to whatever the page is already showing.
     buildNotifications() {
-        return <Flashbar items={this.props.flashbarItems}/>
+        return <Flashbar items={[...maintenanceFlashbarItems(this.state.maintenance), ...this.props.flashbarItems]}/>
     }
 
     buildFooter() {

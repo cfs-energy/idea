@@ -61,7 +61,11 @@ import {
     CheckHpcLicenseResourceAvailabilityRequest,
     CheckHpcLicenseResourceAvailabilityResult,
     DeleteJobRequest,
-    DeleteJobResult
+    DeleteJobResult,
+    ListComputeImagesRequest,
+    ListComputeImagesResult,
+    BuildComputeImageRequest,
+    BuildComputeImageResult
 } from './data-model'
 import IdeaBaseClient, {IdeaBaseClientProps} from "./base-client";
 
@@ -253,6 +257,20 @@ class SchedulerAdminClient extends IdeaBaseClient<SchedulerAdminClientProps> {
     }
 
 
+
+    listComputeImages(req: ListComputeImagesRequest): Promise<ListComputeImagesResult> {
+        return this.apiInvoker.invoke_alt<ListComputeImagesRequest, ListComputeImagesResult>(
+            'SchedulerAdmin.ListComputeImages',
+            req
+        )
+    }
+
+    buildComputeImage(req: BuildComputeImageRequest): Promise<BuildComputeImageResult> {
+        return this.apiInvoker.invoke_alt<BuildComputeImageRequest, BuildComputeImageResult>(
+            'SchedulerAdmin.BuildComputeImage',
+            req
+        )
+    }
 }
 
 export default SchedulerAdminClient

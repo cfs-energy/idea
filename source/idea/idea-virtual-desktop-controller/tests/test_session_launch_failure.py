@@ -23,6 +23,7 @@ from ideavirtualdesktopcontroller.app.virtual_desktop_controller_utils import (
     PASS_PROJECT_ROLE_FAILURE_MESSAGE,
     VirtualDesktopControllerUtils,
     build_launch_failure_message,
+    preferred_subnet_pin_warning,
 )
 
 CONFIG_ALLOW_KEY = 'virtual-desktop-controller.dcv_session.instance_types.allow'
@@ -609,3 +610,179 @@ def test_a_resolved_project_still_reaches_the_launch():
         t['Key']: t['Value'] for t in ec2.requests[0]['TagSpecifications'][0]['Tags']
     }
     assert tags['idea:Project'] == 'test-project'
+
+
+PREFERRED_SUBNET_KEY = 'cluster.network.preferred_subnet_id'
+
+
+class SubnetAwareEC2Client:
+    """run_instances that only succeeds in one subnet and fails everywhere else"""
+
+    def __init__(
+        self,
+        succeed_in: Optional[str] = None,
+        error_code: str = 'InsufficientInstanceCapacity',
+        error_message: str = 'from the test',
+    ):
+        self._succeed_in = succeed_in
+        self._error_code = error_code
+        self._error_message = error_message
+        self.calls: List[str] = []
+
+    def run_instances(self, **kwargs) -> Dict[str, Any]:
+        subnet = kwargs['NetworkInterfaces'][0]['SubnetId']
+        self.calls.append(subnet)
+        if subnet == self._succeed_in:
+            return {'Instances': [{'InstanceId': 'i-test', 'SubnetId': subnet}]}
+        raise ClientError(
+            {'Error': {'Code': self._error_code, 'Message': self._error_message}},
+            'RunInstances',
+        )
+
+
+def launch_in(values: Dict[str, Any], ec2: Any, session: VirtualDesktopSession):
+    utils = build_controller_utils(values)
+    utils.ec2_client = ec2
+    utils._build_userdata = lambda _session: 'userdata'
+    return utils.provision_dcv_host_for_session(session)
+
+
+def test_preferred_subnet_is_attempted_first():
+    values = launch_config(['subnet-1', 'subnet-2', 'subnet-3'])
+    values[PREFERRED_SUBNET_KEY] = 'subnet-3'
+    ec2 = SubnetAwareEC2Client(succeed_in='subnet-3')
+
+    launch_in(values, ec2, build_session('m6a.48xlarge'))
+
+    assert ec2.calls == ['subnet-3']
+
+
+def test_preferred_subnet_without_capacity_falls_through_to_the_next_subnet():
+    values = launch_config(['subnet-1', 'subnet-2', 'subnet-3'])
+    values[PREFERRED_SUBNET_KEY] = 'subnet-3'
+    # the preferred zone is out of capacity, the rest of the cluster is not
+    ec2 = SubnetAwareEC2Client(succeed_in='subnet-1')
+    session = build_session('m6a.48xlarge')
+
+    response = launch_in(values, ec2, session)
+
+    assert ec2.calls == ['subnet-3', 'subnet-1']
+    # the session carries the subnet that actually launched, not the preferred one
+    assert session.server.subnet_id == 'subnet-1'
+    assert response['Instances'][0]['SubnetId'] == 'subnet-1'
+
+
+def test_preferred_subnet_does_not_swallow_a_non_capacity_failure():
+    values = launch_config(['subnet-1', 'subnet-2'])
+    values[PREFERRED_SUBNET_KEY] = 'subnet-2'
+    ec2 = SubnetAwareEC2Client(error_code='OptInRequired')
+
+    with pytest.raises(exceptions.SocaException) as raised:
+        launch_in(values, ec2, build_session('m6a.48xlarge'))
+
+    assert 'AWS Marketplace' in raised.value.message
+    # a reason that is not about the zone is not retried in another zone
+    assert ec2.calls == ['subnet-2']
+
+
+def test_no_preferred_subnet_keeps_the_configured_order():
+    values = launch_config(['subnet-1', 'subnet-2', 'subnet-3'])
+    ec2 = SubnetAwareEC2Client(succeed_in='subnet-1')
+
+    launch_in(values, ec2, build_session('m6a.48xlarge'))
+
+    assert ec2.calls == ['subnet-1']
+
+
+def test_a_preferred_subnet_this_cluster_does_not_use_is_ignored():
+    values = launch_config(['subnet-1', 'subnet-2'])
+    values[PREFERRED_SUBNET_KEY] = 'subnet-somewhere-else'
+    ec2 = SubnetAwareEC2Client(succeed_in='subnet-1')
+
+    launch_in(values, ec2, build_session('m6a.48xlarge'))
+
+    assert ec2.calls == ['subnet-1']
+
+
+def test_an_explicitly_requested_subnet_beats_the_preferred_subnet():
+    values = launch_config(['subnet-1', 'subnet-2', 'subnet-3'])
+    values[PREFERRED_SUBNET_KEY] = 'subnet-3'
+    ec2 = SubnetAwareEC2Client(succeed_in='subnet-2')
+    session = build_session('m6a.48xlarge')
+    session.server.subnet_id = 'subnet-2'
+
+    launch_in(values, ec2, session)
+
+    assert ec2.calls == ['subnet-2']
+
+
+def test_a_zone_scoped_invalid_parameter_value_moves_to_the_next_subnet():
+    values = launch_config(['subnet-1', 'subnet-2'])
+    values[PREFERRED_SUBNET_KEY] = 'subnet-1'
+    ec2 = SubnetAwareEC2Client(
+        succeed_in='subnet-2',
+        error_code='InvalidParameterValue',
+        error_message=(
+            'Your requested instance type (m6a.48xlarge) is not supported in your '
+            'requested Availability Zone (us-east-1e).'
+        ),
+    )
+
+    launch_in(values, ec2, build_session('m6a.48xlarge'))
+
+    assert ec2.calls == ['subnet-1', 'subnet-2']
+
+
+def test_an_invalid_parameter_value_that_is_not_about_the_zone_stops():
+    values = launch_config(['subnet-1', 'subnet-2'])
+    ec2 = SubnetAwareEC2Client(
+        error_code='InvalidParameterValue',
+        error_message='Invalid value for volume size',
+    )
+
+    with pytest.raises(exceptions.SocaException):
+        launch_in(values, ec2, build_session('m6a.48xlarge'))
+
+    assert ec2.calls == ['subnet-1']
+
+
+def test_insufficient_host_capacity_moves_to_the_next_subnet():
+    values = launch_config(['subnet-1', 'subnet-2'])
+    ec2 = SubnetAwareEC2Client(
+        succeed_in='subnet-2', error_code='InsufficientHostCapacity'
+    )
+
+    launch_in(values, ec2, build_session('m6a.48xlarge'))
+
+    assert ec2.calls == ['subnet-1', 'subnet-2']
+
+
+AUTORETRY_KEY = 'vdc.dcv_session.network.subnet_autoretry'
+
+
+def test_a_preferred_subnet_without_autoretry_is_reported_at_startup():
+    """
+    the two settings together are a hard pin: the admin gets told, since nothing else in
+    the launch path can distinguish it from a zone that is simply full.
+    """
+    values = launch_config(['subnet-1', 'subnet-2'])
+    values[PREFERRED_SUBNET_KEY] = 'subnet-2'
+    values[AUTORETRY_KEY] = False
+
+    warning = preferred_subnet_pin_warning(MockContext(values))
+
+    assert warning is not None
+    assert 'subnet-2' in warning
+    assert 'subnet_autoretry' in warning
+
+
+def test_no_startup_warning_for_a_working_configuration():
+    # a preferred subnet with autoretry left on is the supported setup
+    values = launch_config(['subnet-1', 'subnet-2'])
+    values[PREFERRED_SUBNET_KEY] = 'subnet-2'
+    assert preferred_subnet_pin_warning(MockContext(values)) is None
+
+    # autoretry off with no preferred subnet is not a pin
+    values[PREFERRED_SUBNET_KEY] = ''
+    values[AUTORETRY_KEY] = False
+    assert preferred_subnet_pin_warning(MockContext(values)) is None

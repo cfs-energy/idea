@@ -23,6 +23,10 @@ from ideasdk.server import SocaServerOptions
 
 import ideavirtualdesktopcontroller
 from ideavirtualdesktopcontroller.app.api import VirtualDesktopApiInvoker
+from ideavirtualdesktopcontroller.app.virtual_desktop_controller_utils import (
+    preferred_subnet_pin_warning,
+    switch_dcv_broker_tables_to_on_demand,
+)
 from ideavirtualdesktopcontroller.app.clients.dcv_broker_client.dcv_broker_client import (
     DCVBrokerClient,
 )
@@ -55,6 +59,11 @@ from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_db import
 )
 from ideavirtualdesktopcontroller.app.software_stacks.virtual_desktop_software_stack_db import (
     VirtualDesktopSoftwareStackDB,
+)
+import threading
+
+from ideavirtualdesktopcontroller.app.software_stacks.virtual_desktop_software_stack_utils import (
+    VirtualDesktopSoftwareStackUtils,
 )
 from ideavirtualdesktopcontroller.app.ssm_commands.virtual_desktop_ssm_commands_db import (
     VirtualDesktopSSMCommandsDB,
@@ -95,12 +104,17 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
             **kwargs,
         )
         self.context = context
+        self._software_stacks_reindexed = False
+        # leadership may not be settled when the app initializes; one deferred retry
+        self._reindex_retries = 1
 
     def app_initialize(self):
         self._initialize_templates()
         self._initialize_clients()
         self._initialize_dbs()
         self._initialize_services()
+        switch_dcv_broker_tables_to_on_demand(self.context)
+        self._reindex_software_stacks()
 
     def _initialize_dbs(self):
         self._session_counter_db = VirtualDesktopSessionCounterDB(
@@ -124,6 +138,60 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
         self._session_permissions_db = VirtualDesktopSessionPermissionDB(
             self.context
         ).initialize()
+        self._initialize_image_builds()
+
+    def _initialize_image_builds(self):
+        """the records table plus the sweep of builds a restart orphaned; startup never fails over it"""
+        from ideasdk.aws.image_builds import ImageBuildRecordsDB
+        from ideavirtualdesktopcontroller.app.software_stacks.desktop_images import (
+            image_builds_table_name,
+        )
+
+        try:
+            ImageBuildRecordsDB(
+                self.context, image_builds_table_name(self.context)
+            ).initialize()
+        except Exception as e:
+            self.context.logger('virtual-desktop-controller-app').error(
+                f'image build records could not be initialized at startup: {e}'
+            )
+
+    def _reindex_software_stacks(self):
+        """
+        Rows deleted from DynamoDB out of band leave entries in the search index that
+        the portal lists but cannot act on. Rebuild the index from the table once per
+        app, and never fail startup over it.
+        """
+        if self._software_stacks_reindexed:
+            return
+        logger = self.context.logger('virtual-desktop-controller-app')
+        # only the leader rebuilds, or every controller task would replay the whole
+        # table through the analytics sink
+        try:
+            leader = self.context.is_leader()
+        except Exception as e:
+            logger.warning(f'leader status unknown ({e})')
+            leader = None
+        if not leader:
+            if self._reindex_retries > 0:
+                self._reindex_retries -= 1
+                logger.info(
+                    'not the leader yet; the software stack index rebuild is checked again in 60 seconds'
+                )
+                threading.Timer(60, self._reindex_software_stacks).start()
+            else:
+                self._software_stacks_reindexed = True
+                logger.info(
+                    'not the leader; the software stack index rebuild runs on the leader task'
+                )
+            return
+        self._software_stacks_reindexed = True
+        try:
+            VirtualDesktopSoftwareStackUtils(
+                context=self.context, db=self._software_stack_db
+            ).reindex_from_db()
+        except Exception as e:
+            logger.error(f'failed to rebuild the software stack index at startup: {e}')
 
     def _initialize_session_template(self):
         session_template_file = os.path.join(
@@ -269,6 +337,11 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
         )
 
     def app_start(self):
+        subnet_pin_warning = preferred_subnet_pin_warning(self.context)
+        if subnet_pin_warning is not None:
+            self.context.logger('virtual-desktop-controller-app').warning(
+                subnet_pin_warning
+            )
         self.context.event_queue_monitor_service.start()
         self.context.controller_queue_monitor_service.start()
 

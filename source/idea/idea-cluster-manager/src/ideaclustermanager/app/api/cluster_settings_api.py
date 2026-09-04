@@ -53,6 +53,10 @@ USER_VISIBLE_MODULE_SETTINGS: Dict[str, List[str]] = {
         'web_portal.custom_dashboard.enabled',
         'web_portal.custom_dashboard.title',
         'web_portal.custom_dashboard.url',
+        # maintenance banner. every user sees it, so every user has to be able to read it.
+        'maintenance.enabled',
+        'maintenance.message',
+        'maintenance.ends_at',
     ],
     constants.MODULE_DIRECTORYSERVICE: [
         'provider',
@@ -204,13 +208,20 @@ class ClusterSettingsAPI(BaseAPI):
                 'dcv_session.schedule.sunday.shut_down_time',
             ],
             'scheduler': [
-                # Add scheduler settings that should be editable here
+                # the default image compute nodes launch from, written from the
+                # custom AMIs page. a flat key, so no dotted path here.
+                'compute_node_ami',
             ],
             'cluster-manager': [
                 # feature flag and the org-approved model catalog. edited from the
                 # bedrock tab on the cluster settings page.
                 'bedrock.enabled',
                 'bedrock.model_ids',
+                # maintenance banner, edited from the maintenance tab so a window
+                # can be opened and closed without a redeploy.
+                'maintenance.enabled',
+                'maintenance.message',
+                'maintenance.ends_at',
             ],
         }
 

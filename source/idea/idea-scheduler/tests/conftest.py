@@ -53,6 +53,7 @@ def context(monkeypatch):
     mock_boto_session = SocaAnyPayload()
     mock_boto_session.region_name = 'us-east-1'
     mock_boto_session.client = lambda **_: {}
+    mock_boto_session.get_partition_for_region = lambda region: 'aws'
 
     # Create a mock paginator for EC2 describe_instance_types
     mock_paginator = SocaAnyPayload()

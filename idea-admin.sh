@@ -26,9 +26,12 @@
 #                         using Instance Profile credentials from EC2 Instance Metadata.
 # * IDEA_ADMIN_ENABLE_CDK_NAG_SCAN - Set to "false", if you want to disable cdk-nag scan. Default: true
 # * IDEA_DEV_MODE - Set to "true" if you are working with IDEA sources
+# * IDEA_ADMIN_NO_TTY - Set to "true" to drop docker's -t flag even when stdin is a
+#                         terminal. Non-interactive stdin (ssm, cron, CI) is detected
+#                         automatically. Combine with --force for an unattended run.
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-IDEA_REVISION=${IDEA_REVISION:-"v26.08.0"}
+IDEA_REVISION=${IDEA_REVISION:-"v26.09.0"}
 IDEA_DOCKER_REPO_DEFAULT="public.ecr.aws/s5o2b4m0/idea-administrator"
 IDEA_DOCKER_REPO=${IDEA_DOCKER_REPO:-"${IDEA_DOCKER_REPO_DEFAULT}"}
 IDEA_ECR_CREDS_RESET=${IDEA_ECR_CREDS_RESET:-"true"}
@@ -118,12 +121,18 @@ if [[ "${IDEA_ECR_CREDS_RESET}" == "true" && "${IDEA_DOCKER_REPO}" == *"/"* ]]; 
   # Check if user is connected to internet an can ping ECR repo
   DIG_BIN=$(command -v dig)
   IDEA_DOCKER_REPO_HOSTNAME=$(echo "${IDEA_DOCKER_REPO}" | cut -d '/' -f 1)
-  ${DIG_BIN} +tries=1 +time=3 "${IDEA_DOCKER_REPO_HOSTNAME}" >> /dev/null 2>&1
-  verify_command "Unable to query ECR host ${IDEA_DOCKER_REPO_HOSTNAME} . Are you connected to internet?"
+  if [[ -z "${DIG_BIN}" ]]; then
+    # dig ships in bind-utils, which a stock Amazon Linux 2023 host does not have. The
+    # reset is a convenience, so skip it rather than fail the command that was asked for.
+    echo -e "${YELLOW}[INFO] dig not found: skipping ECR credentials reset. Install bind-utils, or set IDEA_ECR_CREDS_RESET=false to skip this step without the warning.${NC}"
+  else
+    ${DIG_BIN} +tries=1 +time=3 "${IDEA_DOCKER_REPO_HOSTNAME}" >> /dev/null 2>&1
+    verify_command "Unable to query ECR host ${IDEA_DOCKER_REPO_HOSTNAME} . Are you connected to internet?"
 
-  ${DOCKER_BIN} logout public.ecr.aws >> /dev/null 2>&1
-  verify_command "Failed to refresh ECR credentials. docker logout public.ecr.aws failed"
-  echo -e "${GREEN}✓ ECR credentials reset${NC}"
+    ${DOCKER_BIN} logout public.ecr.aws >> /dev/null 2>&1
+    verify_command "Failed to refresh ECR credentials. docker logout public.ecr.aws failed"
+    echo -e "${GREEN}✓ ECR credentials reset${NC}"
+  fi
 else
   echo -e "${YELLOW}[INFO] Skipping ECR credentials reset (IDEA_ECR_CREDS_RESET=false)${NC}"
 fi
@@ -141,9 +150,17 @@ fi
 IDEA_IMAGE_CREATED=$(${DOCKER_BIN} image inspect --format "{{.Created}}" "${IDEA_DOCKER_REPO}:${IDEA_REVISION}" 2>/dev/null)
 echo -e "${YELLOW}[INFO] Administrator image: ${IDEA_DOCKER_REPO}:${IDEA_REVISION} (created ${IDEA_IMAGE_CREATED:-unknown})${NC}"
 echo -e "${YELLOW}[INFO] Launching IDEA administrator...${NC}"
+# Keep -it when stdin is an interactive terminal; otherwise drop -t so docker does not
+# try to attach a TTY to non-interactive stdin.
+if [[ -t 0 && "${IDEA_ADMIN_NO_TTY}" != "true" ]]; then
+  DOCKER_TTY_FLAGS="-it"
+else
+  DOCKER_TTY_FLAGS="-i"
+fi
 # Launch installer
-${DOCKER_BIN} run --rm -it -v "${HOME}/.idea/clusters:/root/.idea/clusters" \
+${DOCKER_BIN} run --rm ${DOCKER_TTY_FLAGS} -v "${HOME}/.idea/clusters:/root/.idea/clusters" \
               -e AWS_SESSION_TOKEN -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_PROFILE \
+              -e AWS_REGION -e AWS_DEFAULT_REGION \
               -e AWS_SDK_LOAD_CONFIG=1 \
               -e IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER="${IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER}" \
               -e IDEA_ADMIN_ENABLE_CDK_NAG_SCAN="${IDEA_ADMIN_ENABLE_CDK_NAG_SCAN}" \

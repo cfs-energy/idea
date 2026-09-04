@@ -97,7 +97,9 @@ DEFAULT_PRICING_API_REGION = 'us-east-1'
 
 # cost explorer is a single global endpoint, and it has none outside the aws partition.
 COST_EXPLORER_REGION = 'us-east-1'
-COST_EXPLORER_CLIENT_CONFIG = Config(
+# cost explorer and pricing are reporting-only reads over the internet, so they fail
+# fast rather than hold up the caller.
+REPORTING_CLIENT_CONFIG = Config(
     connect_timeout=5, read_timeout=10, retries={'max_attempts': 2, 'mode': 'standard'}
 )
 
@@ -203,10 +205,10 @@ class AwsClientProvider(AwsClientProviderProtocol):
                 config = None
                 if service_name == AWS_CLIENT_S3:
                     config = Config(signature_version='s3v4')
-                elif service_name == AWS_CLIENT_COST_EXPLORER:
+                elif service_name in (AWS_CLIENT_COST_EXPLORER, AWS_CLIENT_PRICING):
                     # reporting only, and it is reached over the internet: an api read
                     # waiting on it must fail quickly rather than hold up its caller.
-                    config = COST_EXPLORER_CLIENT_CONFIG
+                    config = REPORTING_CLIENT_CONFIG
 
                 aws_endpoint = self.get_service_endpoint_url(service_name)
                 client = self._session.client(
@@ -251,6 +253,8 @@ class AwsClientProvider(AwsClientProviderProtocol):
 
     def are_credentials_expired(self) -> bool:
         credentials = self._session.get_credentials()
+        if credentials is None:
+            return True
         if (
             credentials.method == 'shared-credentials-file'
             or credentials.method == 'env'
@@ -264,6 +268,13 @@ class AwsClientProvider(AwsClientProviderProtocol):
                 else:
                     raise e
         else:
+            if not hasattr(credentials, 'refresh_needed'):
+                # static credentials (eg. a config file profile) never expire
+                return False
+            if hasattr(credentials, 'get_frozen_credentials'):
+                # deferred credentials (eg. sso-session profiles) report refresh_needed()
+                # as True until they are materialized, which reads as expired forever.
+                credentials.get_frozen_credentials()
             return credentials.refresh_needed(refresh_in=30)
 
     def supported_clients(self) -> Set[str]:

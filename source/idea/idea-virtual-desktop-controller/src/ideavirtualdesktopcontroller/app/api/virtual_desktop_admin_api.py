@@ -26,6 +26,16 @@ from ideadatamodel import (
     UpdateSessionResponse,
     SetSessionCleanupExemptionRequest,
     SetSessionCleanupExemptionResponse,
+    RefreshBaseSoftwareStackAmisRequest,
+    RefreshBaseSoftwareStackAmisResponse,
+    ListDesktopImagesRequest,
+    ListDesktopImagesResponse,
+    BuildDesktopImageRequest,
+    BuildDesktopImageResponse,
+    BuildAllDesktopImagesRequest,
+    BuildAllDesktopImagesResponse,
+    UseBuiltDesktopImagesRequest,
+    UseBuiltDesktopImagesResponse,
     GetSessionInfoRequest,
     GetSessionInfoResponse,
     DeleteSessionRequest,
@@ -66,6 +76,34 @@ from ideasdk.utils import Utils
 from ideavirtualdesktopcontroller.app.api.virtual_desktop_api import VirtualDesktopAPI
 
 
+# app (client-credentials) tokens are authorized by module scope, users by elevation:
+# reads take <module>/read, mutations <module>/write. a namespace absent from this map
+# stays elevated-user-only, because it either resolves the caller's own username, which
+# an app token does not carry, or is maintenance with no machine-to-machine caller.
+APP_TOKEN_NAMESPACE_ACCESS: Dict[str, str] = {
+    'VirtualDesktopAdmin.GetSessionInfo': 'read',
+    'VirtualDesktopAdmin.ListSessions': 'read',
+    'VirtualDesktopAdmin.ListSoftwareStacks': 'read',
+    'VirtualDesktopAdmin.GetSoftwareStackInfo': 'read',
+    'VirtualDesktopAdmin.ListSessionPermissions': 'read',
+    'VirtualDesktopAdmin.ListSharedPermissions': 'read',
+    'VirtualDesktopAdmin.CreateSession': 'write',
+    'VirtualDesktopAdmin.BatchCreateSessions': 'write',
+    'VirtualDesktopAdmin.UpdateSession': 'write',
+    'VirtualDesktopAdmin.DeleteSessions': 'write',
+    'VirtualDesktopAdmin.StopSessions': 'write',
+    'VirtualDesktopAdmin.RebootSessions': 'write',
+    'VirtualDesktopAdmin.ResumeSessions': 'write',
+    'VirtualDesktopAdmin.CreateSoftwareStack': 'write',
+    'VirtualDesktopAdmin.UpdateSoftwareStack': 'write',
+    'VirtualDesktopAdmin.DeleteSoftwareStack': 'write',
+    'VirtualDesktopAdmin.CreateSoftwareStackFromSession': 'write',
+    'VirtualDesktopAdmin.CreatePermissionProfile': 'write',
+    'VirtualDesktopAdmin.UpdatePermissionProfile': 'write',
+    'VirtualDesktopAdmin.UpdateSessionPermissions': 'write',
+}
+
+
 class VirtualDesktopAdminAPI(VirtualDesktopAPI):
     def __init__(self, context: ideavirtualdesktopcontroller.AppContext):
         super().__init__(context)
@@ -97,7 +135,13 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
             'VirtualDesktopAdmin.UpdateSessionPermissions': self.update_session_permission,
             'VirtualDesktopAdmin.ReIndexUserSessions': self.re_index_user_sessions,
             'VirtualDesktopAdmin.ReIndexSoftwareStacks': self.re_index_software_stacks,
+            'VirtualDesktopAdmin.RefreshBaseSoftwareStackAmis': self.refresh_base_software_stack_amis,
+            'VirtualDesktopAdmin.ListDesktopImages': self.list_desktop_images,
+            'VirtualDesktopAdmin.BuildDesktopImage': self.build_desktop_image,
+            'VirtualDesktopAdmin.BuildAllDesktopImages': self.build_all_desktop_images,
+            'VirtualDesktopAdmin.UseBuiltDesktopImages': self.use_built_desktop_images,
         }
+        self._desktop_images = None
 
     def _validate_resume_session_request(
         self, session: VirtualDesktopSession
@@ -975,6 +1019,52 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
         permission_profile = self.permission_profile_db.create(permission_profile)
         context.success(CreatePermissionProfileResponse(profile=permission_profile))
 
+    def refresh_base_software_stack_amis(self, context: ApiInvocationContext):
+        # elevated access is enforced for every namespace in invoke()
+        request = context.get_request_payload_as(RefreshBaseSoftwareStackAmisRequest)
+        results = self.software_stack_utils.refresh_base_software_stack_amis(
+            stack_ids=request.stack_ids
+        )
+        context.success(RefreshBaseSoftwareStackAmisResponse(results=results))
+
+    # desktop images (Custom AMIs page)
+
+    @property
+    def desktop_images(self):
+        # created on first use: it opens the image-builds table
+        if self._desktop_images is None:
+            from ideavirtualdesktopcontroller.app.software_stacks.desktop_images import (
+                DesktopImageService,
+            )
+
+            self._desktop_images = DesktopImageService(
+                self.context, self.software_stack_db, self.software_stack_utils
+            )
+        return self._desktop_images
+
+    def list_desktop_images(self, context: ApiInvocationContext):
+        context.get_request_payload_as(ListDesktopImagesRequest)
+        context.success(
+            ListDesktopImagesResponse(listing=self.desktop_images.list_images())
+        )
+
+    def build_desktop_image(self, context: ApiInvocationContext):
+        request = context.get_request_payload_as(BuildDesktopImageRequest)
+        record = self.desktop_images.build(request, requested_by=context.get_username())
+        context.success(BuildDesktopImageResponse(record=record))
+
+    def build_all_desktop_images(self, context: ApiInvocationContext):
+        context.get_request_payload_as(BuildAllDesktopImagesRequest)
+        results = self.desktop_images.build_all(requested_by=context.get_username())
+        context.success(BuildAllDesktopImagesResponse(results=results))
+
+    def use_built_desktop_images(self, context: ApiInvocationContext):
+        request = context.get_request_payload_as(UseBuiltDesktopImagesRequest)
+        results = self.desktop_images.use_built_images(
+            request.stack_ids, requested_by=context.get_username()
+        )
+        context.success(UseBuiltDesktopImagesResponse(results=results))
+
     def re_index_software_stacks(self, context: ApiInvocationContext):
         # got a request to reindex everything again.
         request = ListSoftwareStackRequest()
@@ -1207,9 +1297,15 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
         context.success(payload=response)
 
     def invoke(self, context: ApiInvocationContext):
-        if not context.is_authorized(elevated_access=True):
+        namespace = context.namespace
+
+        # an unmapped namespace passes no scopes, leaving elevated users as the only
+        # callers.
+        access = APP_TOKEN_NAMESPACE_ACCESS.get(namespace)
+        scopes = [f'{self.context.module_id()}/{access}'] if access else None
+
+        if not context.is_authorized(elevated_access=True, scopes=scopes):
             raise exceptions.unauthorized_access()
 
-        namespace = context.namespace
         if namespace in self.namespace_handler_map:
             self.namespace_handler_map[namespace](context)

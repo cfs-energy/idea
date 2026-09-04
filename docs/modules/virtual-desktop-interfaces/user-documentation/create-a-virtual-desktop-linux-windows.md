@@ -39,6 +39,8 @@ The Create Session form has been improved to dynamically show only the options y
 
 Click "**Submit**" button to launch your virtual desktop creation. You will instantly see a new card with your desktop information. Your virtual desktop will be ready within 10-15 minutes. Startup time is based on the image selected, the operating system as well as the instance type.
 
+Red Hat Enterprise Linux, Rocky Linux and Amazon Linux 2023 desktops skip the first-boot package update by default, while Ubuntu desktops always run one. An administrator can turn it on for the other three with `virtual-desktop-controller.dcv_session.first_boot_dnf_update`, which runs `dnf -y update` before the desktop is marked ready. It is off by default because it adds to the time a desktop takes to become available on its first launch.
+
 <figure><img src="../../../.gitbook/assets/mods_vdi_user_create_starting.webp" alt=""><figcaption><p>Desktop being started</p></figcaption></figure>
 
 Wait a couple of minutes until your desktop is ready.

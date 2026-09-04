@@ -7,9 +7,13 @@ aws-us-gov partition Red Hat and Canonical publish from different accounts, so t
 owner ids matched nothing there.
 """
 
+from fnmatch import fnmatch
 from unittest.mock import Mock
 
+import pytest
+
 from ideavirtualdesktopcontroller.cli.software_stacks import (
+    AMI_PATTERNS,
     find_latest_ami,
     image_sort_key,
 )
@@ -53,6 +57,20 @@ def test_names_without_a_minor_sort_by_date():
         'CreationDate': '2026-08-12T00:00:00.000Z',
     }
     assert image_sort_key(newer) > image_sort_key(older)
+
+
+@pytest.mark.parametrize(
+    ('pattern_key', 'sample_name'),
+    [
+        ('rocky8/x86-64', 'Rocky-8-EC2-Base-8.10-20250612.0.x86_64'),
+        ('rocky9/x86-64', 'Rocky-9-EC2-Base-9.6-20250531.0.x86_64'),
+        ('rocky10/x86-64', 'Rocky-10-EC2-Base-10.0-20250612.0.x86_64'),
+    ],
+)
+def test_rocky_patterns_match_resf_image_names(pattern_key, sample_name):
+    pattern = AMI_PATTERNS[pattern_key]
+    assert fnmatch(sample_name, pattern)
+    assert not pattern.endswith('-*')
 
 
 def test_govcloud_uses_the_gov_partition_publishers():

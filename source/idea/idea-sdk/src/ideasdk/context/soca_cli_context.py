@@ -329,6 +329,10 @@ class SocaCliContext(SocaContext):
             )
 
         except Exception as e:
+            if self._aws_util is None:
+                # aws_util is not built yet, so raise the real error instead of
+                # masking it with an AttributeError on None
+                raise
             self.aws_util().handle_aws_exception(e)
 
     def refresh_aws_credentials(self):

@@ -16,6 +16,7 @@ Test Cases for SocaJobBuilder
 from typing import Dict, Optional
 
 import pytest
+from botocore.exceptions import ClientError
 
 from ideadatamodel import (
     constants,
@@ -47,6 +48,7 @@ def build_and_validate(
     params: Dict,
     queue_profile: Optional[HpcQueueProfile] = None,
     stack_uuid: str = None,
+    job_id: Optional[str] = None,
 ) -> BuildAndValidateResult:
     print()
 
@@ -55,6 +57,7 @@ def build_and_validate(
         params=params,
         queue_profile=queue_profile,
         stack_uuid=stack_uuid,
+        job_id=job_id,
     )
 
     validation_result = builder.validate()
@@ -2265,6 +2268,35 @@ def test_job_builder_instance_types_arm64_with_arm64_ami_valid(context):
     assert result.job_params.instance_types == ['hpc7g.16xlarge']
 
 
+def test_job_builder_instance_types_architecture_check_skipped_when_ami_not_described(
+    context, monkeypatch
+):
+    """
+    a transient DescribeImages failure leaves the AMI architecture unknown. the check is
+    skipped rather than read as a mismatch, so submission is never blocked on an EC2 error.
+    """
+
+    def raise_describe_failure(**_):
+        raise ClientError(
+            {'Error': {'Code': 'RequestLimitExceeded', 'Message': 'boom'}},
+            'DescribeImages',
+        )
+
+    monkeypatch.setattr(context.aws().ec2(), 'describe_images', raise_describe_failure)
+
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': 1,
+            'cpus': 1,
+            'instance_type': 'hpc7g.16xlarge',
+            'instance_ami': 'ami-describefails000',
+        },
+    )
+    assert result.success is True
+    assert result.job_params.instance_types == ['hpc7g.16xlarge']
+
+
 def test_job_builder_instance_types_mixed_architecture_queue_default_invalid(context):
     """
     a queue profile default list that mixes architectures is rejected for jobs that do not
@@ -2291,3 +2323,286 @@ def test_job_builder_instance_types_mixed_architecture_queue_default_invalid(con
         in message
         for message in messages
     )
+
+
+PREFERRED_SUBNET_KEY = 'cluster.network.preferred_subnet_id'
+
+
+def test_job_builder_preferred_subnet_id_not_set_uses_all_private_subnets(context):
+    """
+    preferred_subnet_id is not set: a single node job gets every private subnet.
+    """
+    private_subnets = context.config().get_list('cluster.network.private_subnets', [])
+    result = build_and_validate(
+        context=context, params={'nodes': 1, 'cpus': 1, 'instance_type': 'c5.large'}
+    )
+    assert result.success is True
+    assert result.job_params.subnet_ids == private_subnets
+
+
+def test_job_builder_preferred_subnet_id_not_set_multi_node_picks_one(context):
+    """
+    preferred_subnet_id is not set: a multi node on-demand job still gets a single subnet
+    chosen from the cluster private subnets.
+    """
+    private_subnets = context.config().get_list('cluster.network.private_subnets', [])
+    result = build_and_validate(
+        context=context, params={'nodes': 2, 'cpus': 1, 'instance_type': 'c5.large'}
+    )
+    assert result.success is True
+    assert len(result.job_params.subnet_ids) == 1
+    assert result.job_params.subnet_ids[0] in private_subnets
+
+
+def test_job_builder_preferred_subnet_id_first_with_fallback(context):
+    """
+    preferred_subnet_id set: it leads the list and the remaining private subnets stay
+    behind it, so a capacity failure in the preferred zone can still fall back.
+    """
+    private_subnets = context.config().get_list('cluster.network.private_subnets', [])
+    preferred = private_subnets[-1]
+    context.config().put(PREFERRED_SUBNET_KEY, preferred)
+    try:
+        result = build_and_validate(
+            context=context, params={'nodes': 1, 'cpus': 1, 'instance_type': 'c5.large'}
+        )
+    finally:
+        context.config().put(PREFERRED_SUBNET_KEY, '')
+    assert result.success is True
+    assert result.job_params.subnet_ids[0] == preferred
+    assert sorted(result.job_params.subnet_ids) == sorted(private_subnets)
+
+
+def test_job_builder_preferred_subnet_id_multi_node_pins_preferred(context):
+    """
+    a multi node on-demand job keeps all its nodes in one subnet: the preferred one.
+    """
+    private_subnets = context.config().get_list('cluster.network.private_subnets', [])
+    preferred = private_subnets[-1]
+    context.config().put(PREFERRED_SUBNET_KEY, preferred)
+    try:
+        result = build_and_validate(
+            context=context, params={'nodes': 2, 'cpus': 1, 'instance_type': 'c5.large'}
+        )
+    finally:
+        context.config().put(PREFERRED_SUBNET_KEY, '')
+    assert result.success is True
+    assert result.job_params.subnet_ids == [preferred]
+
+
+def test_job_builder_preferred_subnet_id_explicit_subnet_id_wins(context):
+    """
+    a job that passes subnet_id explicitly is not affected by preferred_subnet_id.
+    """
+    private_subnets = context.config().get_list('cluster.network.private_subnets', [])
+    context.config().put(PREFERRED_SUBNET_KEY, private_subnets[-1])
+    try:
+        result = build_and_validate(
+            context=context,
+            params={
+                'nodes': 1,
+                'cpus': 1,
+                'instance_type': 'c5.large',
+                'subnet_id': 'subnet-custom1',
+            },
+        )
+    finally:
+        context.config().put(PREFERRED_SUBNET_KEY, '')
+    assert result.success is True
+    assert result.job_params.subnet_ids == ['subnet-custom1']
+
+
+def test_job_builder_preferred_subnet_id_unknown_subnet_ignored(context):
+    """
+    a preferred subnet that is not one of the cluster private subnets is ignored.
+    """
+    private_subnets = context.config().get_list('cluster.network.private_subnets', [])
+    context.config().put(PREFERRED_SUBNET_KEY, 'subnet-not-in-this-cluster')
+    try:
+        result = build_and_validate(
+            context=context, params={'nodes': 1, 'cpus': 1, 'instance_type': 'c5.large'}
+        )
+    finally:
+        context.config().put(PREFERRED_SUBNET_KEY, '')
+    assert result.success is True
+    assert result.job_params.subnet_ids == private_subnets
+
+
+def test_job_builder_preferred_subnet_id_placement_group_single_subnet(context):
+    """
+    placement group still collapses to a single subnet, and it is the preferred one.
+    """
+    private_subnets = context.config().get_list('cluster.network.private_subnets', [])
+    preferred = private_subnets[-1]
+    context.config().put(PREFERRED_SUBNET_KEY, preferred)
+    try:
+        result = build_and_validate(
+            context=context,
+            params={
+                'nodes': 1,
+                'cpus': 1,
+                'instance_type': 'c5.large',
+                'placement_group': 'true',
+            },
+        )
+    finally:
+        context.config().put(PREFERRED_SUBNET_KEY, '')
+    assert result.success is True
+    assert result.job_params.enable_placement_group is True
+    assert result.job_params.subnet_ids == [preferred]
+
+
+def test_job_builder_preferred_subnet_id_efa_single_subnet(context):
+    """
+    EFA on a multi node job still collapses to a single subnet, and it is the preferred one.
+    """
+    private_subnets = context.config().get_list('cluster.network.private_subnets', [])
+    preferred = private_subnets[-1]
+    context.config().put(PREFERRED_SUBNET_KEY, preferred)
+    try:
+        result = build_and_validate(
+            context=context,
+            params={
+                'nodes': 2,
+                'cpus': 18,
+                'instance_type': 'c5n.18xlarge',
+                'spot': 'true',
+                'efa_support': 'true',
+            },
+        )
+    finally:
+        context.config().put(PREFERRED_SUBNET_KEY, '')
+    assert result.success is True
+    assert result.job_params.enable_efa_support is True
+    assert result.job_params.subnet_ids == [preferred]
+
+
+class FakeJobCacheRetries:
+    """job_cache stand-in reporting a fixed provisioning retry count"""
+
+    def __init__(self, retry_count: int):
+        self._retry_count = retry_count
+
+    def get_job_provisioning_retry_count(self, _job_id: str) -> int:
+        return self._retry_count
+
+
+def build_with_retries(context, monkeypatch, params, retry_count: int):
+    """build a job that has already failed provisioning retry_count times"""
+    private_subnets = context.config().get_list('cluster.network.private_subnets', [])
+    assert len(private_subnets) > 1, (
+        'this test needs more than one subnet to choose from'
+    )
+    preferred = private_subnets[-1]
+    context.config().put(PREFERRED_SUBNET_KEY, preferred)
+    monkeypatch.setattr(
+        context, 'job_cache', FakeJobCacheRetries(retry_count), raising=False
+    )
+    try:
+        result = build_and_validate(context=context, params=params, job_id='101')
+    finally:
+        context.config().put(PREFERRED_SUBNET_KEY, '')
+    assert result.success is True
+    return result, preferred, private_subnets
+
+
+MULTI_NODE_JOB = {'nodes': 2, 'cpus': 1, 'instance_type': 'c5.large'}
+EFA_JOB = {
+    'nodes': 2,
+    'cpus': 18,
+    'instance_type': 'c5n.18xlarge',
+    'spot': 'true',
+    'efa_support': 'true',
+}
+PLACEMENT_GROUP_JOB = {
+    'nodes': 1,
+    'cpus': 1,
+    'instance_type': 'c5.large',
+    'placement_group': 'true',
+}
+
+
+def test_job_builder_preferred_subnet_id_first_attempt_pins_preferred(
+    context, monkeypatch
+):
+    """
+    a job that has not failed yet gets the preferred subnet, so it lands beside the shared
+    filesystem.
+    """
+    for params in (MULTI_NODE_JOB, EFA_JOB, PLACEMENT_GROUP_JOB):
+        result, preferred, _ = build_with_retries(
+            context, monkeypatch, params, retry_count=0
+        )
+        assert result.job_params.subnet_ids == [preferred], params
+
+
+def test_job_builder_preferred_subnet_id_retry_leaves_the_preferred_zone(
+    context, monkeypatch
+):
+    """
+    once provisioning has failed, the retry draws from the other subnets instead. an
+    exhausted availability zone would otherwise consume the job's whole retry budget
+    without ever trying another one.
+    """
+    for params in (MULTI_NODE_JOB, EFA_JOB, PLACEMENT_GROUP_JOB):
+        # the pick is random, so a single build could miss the preferred subnet by luck
+        for _ in range(10):
+            result, preferred, private_subnets = build_with_retries(
+                context, monkeypatch, params, retry_count=1
+            )
+            assert len(result.job_params.subnet_ids) == 1, params
+            assert result.job_params.subnet_ids != [preferred], params
+            assert result.job_params.subnet_ids[0] in private_subnets, params
+
+
+def test_job_builder_preferred_subnet_id_list_branch_unchanged_on_retry(
+    context, monkeypatch
+):
+    """
+    a job that gets the whole subnet list is untouched by the retry count: the list already
+    carries its own fallback, so the preferred subnet stays in front on every attempt.
+    """
+    result, preferred, private_subnets = build_with_retries(
+        context, monkeypatch, {'nodes': 1, 'cpus': 1, 'instance_type': 'c5.large'}, 3
+    )
+    assert result.job_params.subnet_ids[0] == preferred
+    assert sorted(result.job_params.subnet_ids) == sorted(private_subnets)
+
+
+def test_job_builder_without_a_job_id_never_reads_the_job_cache(context, monkeypatch):
+    """
+    the validation and estimate paths build params for a job that does not exist yet. they
+    must not look up a retry count, and they keep the preferred subnet.
+    """
+
+    class ExplodingJobCache:
+        @staticmethod
+        def get_job_provisioning_retry_count(_job_id: str) -> int:
+            raise AssertionError('the job cache must not be read without a job id')
+
+    private_subnets = context.config().get_list('cluster.network.private_subnets', [])
+    preferred = private_subnets[-1]
+    context.config().put(PREFERRED_SUBNET_KEY, preferred)
+    monkeypatch.setattr(context, 'job_cache', ExplodingJobCache(), raising=False)
+    try:
+        result = build_and_validate(context=context, params=MULTI_NODE_JOB)
+    finally:
+        context.config().put(PREFERRED_SUBNET_KEY, '')
+
+    assert result.success is True
+    assert result.job_params.subnet_ids == [preferred]
+
+
+def test_job_builder_no_preferred_subnet_still_random_on_every_attempt(
+    context, monkeypatch
+):
+    """
+    with no preferred subnet configured the retry count changes nothing: the pick stays
+    random.
+    """
+    private_subnets = context.config().get_list('cluster.network.private_subnets', [])
+    monkeypatch.setattr(context, 'job_cache', FakeJobCacheRetries(2), raising=False)
+    result = build_and_validate(context=context, params=MULTI_NODE_JOB, job_id='101')
+    assert result.success is True
+    assert len(result.job_params.subnet_ids) == 1
+    assert result.job_params.subnet_ids[0] in private_subnets

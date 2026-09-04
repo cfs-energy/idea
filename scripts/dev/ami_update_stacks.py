@@ -168,8 +168,8 @@ GOV_AMI_OWNERS = {
 
 
 def get_owners(ami_type: str, region: str) -> List[str]:
-    if region.startswith('us-gov-'):
-        return GOV_AMI_OWNERS.get(ami_type, AMI_OWNERS.get(ami_type, ['amazon']))
+    if region.startswith('us-gov-') and ami_type in GOV_AMI_OWNERS:
+        return GOV_AMI_OWNERS[ami_type]
     return AMI_OWNERS.get(ami_type, ['amazon'])
 
 

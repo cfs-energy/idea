@@ -8,9 +8,14 @@ on:
   workflow_dispatch:
     inputs:
       ecr_repository:
-        description: 'ECR Repository URI (e.g., public.ecr.aws/your-registry or 123456789012.dkr.ecr.us-east-1.amazonaws.com/your-repo)'
+        description: 'Public ECR registry to publish to, as public.ecr.aws/<alias>'
         required: true
         default: 'public.ecr.aws/s5o2b4m0'
+        type: string
+      image_name:
+        description: 'Repository name within that registry. Leave empty for the released image. A dispatch from a branch other than main must set it, for example idea-administrator-ci-test.'
+        required: false
+        default: ''
         type: string
 jobs:
   build_push:
@@ -19,6 +24,14 @@ jobs:
       id-token: write
       contents: read
     steps:
+      - name: Validate the image name
+        env:
+          IMAGE_NAME: ${{ github.event.inputs.image_name }}
+        run: |
+          if [ -z "$IMAGE_NAME" ] && [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$GITHUB_REF_NAME" != "main" ]; then
+            echo "::error::A dispatch from $GITHUB_REF_NAME must set image_name, or it would overwrite the released image from an unmerged ref. Use a throwaway repository name such as idea-administrator-ci-test."
+            exit 1
+          fi
       - uses: actions/checkout@v4
       - name: Setup Development Environment
         uses: ./.github/actions/setup_dev_environment
@@ -38,7 +51,9 @@ jobs:
           aws-region: us-east-1
           role-to-assume: ${{ secrets.ECR_ROLE }}
       - name: Build and Push Docker Image
+        env:
+          ECR_REGISTRY: ${{ github.event.inputs.ecr_repository || 'public.ecr.aws/s5o2b4m0' }}
+          IMAGE_NAME: ${{ github.event.inputs.image_name || 'idea-administrator' }}
         run: |
           VERSION=$(cat IDEA_VERSION.txt)
-          ECR_REPO="${{ github.event.inputs.ecr_repository || 'public.ecr.aws/s5o2b4m0' }}"
-          invoke docker.build-push-multi "$ECR_REPO" "$VERSION" --gha-cache
+          invoke docker.build-push-multi "$ECR_REGISTRY" "$VERSION" --image-name "$IMAGE_NAME" --gha-cache

@@ -142,6 +142,21 @@ class WebPortal:
             'session_management': self.context.config().get_string(
                 'cluster-manager.web_portal.session_management', 'in-memory'
             ),
+            # the maintenance notice travels with the page so it renders on the sign-in
+            # screen, where there is no token to call the settings api with. once signed in
+            # the portal re-reads it from the api every minute; this value is only as fresh
+            # as the page load.
+            'maintenance': {
+                'enabled': self.context.config().get_bool(
+                    'cluster-manager.maintenance.enabled', False
+                ),
+                'message': self.context.config().get_string(
+                    'cluster-manager.maintenance.message', ''
+                ),
+                'ends_at': self.context.config().get_string(
+                    'cluster-manager.maintenance.ends_at', ''
+                ),
+            },
         }
 
         if sso_enabled:

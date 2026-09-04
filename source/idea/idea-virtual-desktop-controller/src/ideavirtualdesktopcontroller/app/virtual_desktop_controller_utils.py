@@ -42,7 +42,15 @@ from ideavirtualdesktopcontroller.app.clients.events_client.events_client import
 from ideavirtualdesktopcontroller.app.events.events_utils import EventsUtils
 
 # launch errors worth trying in another subnet/AZ before giving up on the request.
-RETRYABLE_LAUNCH_ERROR_CODES = {'InsufficientInstanceCapacity', 'Unsupported'}
+RETRYABLE_LAUNCH_ERROR_CODES = {
+    'InsufficientInstanceCapacity',
+    'InsufficientHostCapacity',
+    'Unsupported',
+}
+
+# InvalidParameterValue covers everything from a bad volume size to an unusable AMI, and only
+# the zone scoped uses of it are worth another subnet. the message is what distinguishes them.
+AZ_SCOPED_LAUNCH_ERROR = re.compile(r'availability zone|subnet', re.IGNORECASE)
 
 # what the requesting user is told when a desktop cannot be launched. the AWS error code and
 # message stay in the controller log; the user gets a sentence they can act on.
@@ -295,6 +303,99 @@ def resolve_project_bedrock_env(
     if project is None:
         return {}
     return build_bedrock_env(project.bedrock.inference_profile_arns)
+
+
+def preferred_subnet_pin_warning(
+    context: 'ideavirtualdesktopcontroller.AppContext',
+) -> Optional[str]:
+    """
+    a preferred subnet with autoretry turned off is a hard pin: every desktop lands in
+    one availability zone and fails while that zone is out of capacity. returns the
+    warning to log, or None when the combination is not present.
+    """
+    preferred_subnet = context.config().get_string(
+        'cluster.network.preferred_subnet_id', default=None
+    )
+    if Utils.is_empty(preferred_subnet):
+        return None
+
+    subnet_autoretry = context.config().get_bool(
+        'vdc.dcv_session.network.subnet_autoretry',
+        default=Utils.get_as_bool(constants.DEFAULT_VDI_SUBNET_AUTORETRY, default=True),
+    )
+    if subnet_autoretry:
+        return None
+
+    return (
+        f'cluster.network.preferred_subnet_id is set to {preferred_subnet} while '
+        f'virtual-desktop-controller.dcv_session.network.subnet_autoretry is false. '
+        f'Desktops are pinned to that subnet with no fallback, so every desktop will fail '
+        f'while its availability zone is out of capacity. Enable subnet_autoretry, or '
+        f'clear the preferred subnet.'
+    )
+
+
+def switch_ddb_table_to_on_demand(
+    dynamodb_client, table_name: str, logger, log_prefix: str = ''
+) -> None:
+    """
+    move a broker table to on demand billing if it is still provisioned.
+
+    the broker creates its tables with a fixed provisioned capacity that stays idle. on demand
+    billing charges per request instead and changes nothing else about the table.
+    """
+    try:
+        table = Utils.get_value_as_dict(
+            'Table', dynamodb_client.describe_table(TableName=table_name), {}
+        )
+        billing_mode = Utils.get_value_as_string(
+            'BillingMode',
+            Utils.get_value_as_dict('BillingModeSummary', table, {}),
+            'PROVISIONED',
+        )
+        if billing_mode == 'PAY_PER_REQUEST':
+            return
+        dynamodb_client.update_table(
+            TableName=table_name, BillingMode='PAY_PER_REQUEST'
+        )
+        logger.info(f'{log_prefix}{table_name} switched to on demand billing')
+    except botocore.exceptions.ClientError as e:
+        # dynamodb limits how often the billing mode of a table may change. leave the table as it
+        # is; the next controller start or broker boot tries again.
+        logger.warning(
+            f'{log_prefix}could not switch {table_name} to on demand billing: {e}'
+        )
+
+
+def switch_dcv_broker_tables_to_on_demand(
+    context: 'ideavirtualdesktopcontroller.AppContext',
+) -> None:
+    """
+    move every dcv broker table to on demand billing at controller start.
+
+    a rolling update can hand the broker boot event to a controller task that is still draining on
+    the previous release, so that event on its own does not settle the billing mode. the sweep is
+    idempotent and never fails startup.
+    """
+    logger = context.logger('dcv-broker-table-billing')
+    try:
+        if not context.config().get_bool(
+            'virtual-desktop-controller.dcv_broker.dynamodb_table.on_demand',
+            default=True,
+        ):
+            return
+        table_name_prefix = (
+            f'{context.cluster_name()}.{context.module_id()}.dcv-broker.'
+        )
+        dynamodb_client = context.aws().dynamodb()
+        for page in dynamodb_client.get_paginator('list_tables').paginate():
+            for table_name in Utils.get_value_as_list('TableNames', page, []):
+                if table_name.startswith(table_name_prefix):
+                    switch_ddb_table_to_on_demand(dynamodb_client, table_name, logger)
+    except Exception as e:
+        logger.error(
+            f'dcv broker table billing mode could not be checked at startup: {e}'
+        )
 
 
 class VirtualDesktopControllerUtils:
@@ -840,6 +941,24 @@ class VirtualDesktopControllerUtils:
             )
             random.shuffle(_attempt_subnets)
 
+        # the preferred subnet leads the attempt list when it is one of the candidates, so
+        # a desktop lands in the shared filesystem's zone first with the rest behind it as
+        # capacity fallback. a session naming its own subnet is left alone.
+        if Utils.is_empty(session.server.subnet_id):
+            preferred_subnet = self.context.config().get_string(
+                'cluster.network.preferred_subnet_id', default=None
+            )
+            if (
+                Utils.is_not_empty(preferred_subnet)
+                and preferred_subnet in _attempt_subnets
+            ):
+                self._logger.debug(
+                    f'Preferring subnet {preferred_subnet} ahead of the other candidates.'
+                )
+                _attempt_subnets = [preferred_subnet] + [
+                    subnet for subnet in _attempt_subnets if subnet != preferred_subnet
+                ]
+
         # At this stage _attempt_subnets contains the subnets
         # we want to attempt in the order that we prefer
         # (ordered or pre-shuffled)
@@ -962,7 +1081,13 @@ class VirtualDesktopControllerUtils:
                 )
 
                 if (
-                    _error_code in RETRYABLE_LAUNCH_ERROR_CODES
+                    (
+                        _error_code in RETRYABLE_LAUNCH_ERROR_CODES
+                        or (
+                            _error_code == 'InvalidParameterValue'
+                            and AZ_SCOPED_LAUNCH_ERROR.search(_error_message)
+                        )
+                    )
                     and subnet_autoretry_method
                     and _attempt_provision
                 ):
@@ -989,6 +1114,12 @@ class VirtualDesktopControllerUtils:
                     message=LAUNCH_FAILURE_DEFAULT_MESSAGE,
                 )
 
+            # the subnet that won, which is not necessarily the one the request started on
+            session.server.subnet_id = _subnet_to_try
+            self._logger.info(
+                f'Launched dcv host for {session.name} in subnet {_subnet_to_try} '
+                f'on attempt #{_deployment_loop}'
+            )
             if response:
                 self._logger.debug(f'Returning response: {response}')
             return Utils.to_dict(response)

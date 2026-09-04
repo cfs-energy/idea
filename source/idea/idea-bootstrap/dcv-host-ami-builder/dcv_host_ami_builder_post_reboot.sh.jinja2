@@ -1,0 +1,101 @@
+#!/bin/bash
+set -x
+
+source /etc/environment
+if [[ -f /etc/profile.d/proxy.sh ]]; then
+    source /etc/profile.d/proxy.sh
+fi
+
+# reset reboot_required.txt
+echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
+
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
+
+## -- DCV SERVER AND AGENT INSTALLATION -- ##
+
+{% include '_templates/linux/dcv_server.jinja2' %}
+
+{% include '_templates/linux/dcv_session_manager_agent.jinja2' %}
+
+{% if context.base_os == 'amazonlinux2023' %}
+{% include '_templates/linux/dcv_server_cert.jinja2' %}
+{% endif %}
+
+# usb support: same guarded install the session bootstrap performs
+if [[ -z "$(lsmod | grep eveusb)" ]]; then
+  echo "Installing usb support..."
+  DCV_USB_DRIVER_INSTALLER=$(which dcvusbdriverinstaller)
+  $DCV_USB_DRIVER_INSTALLER --quiet
+else
+  log_info "Found eveusb kernel module pre-installed... skipping installation..."
+fi
+
+# microphone redirect: same guarded install the session bootstrap performs
+{% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+if [[ -z "$(rpm -qa pulseaudio-utils)" ]]; then
+  yum install -y pulseaudio-utils
+{% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+if [[ -z "$(dpkg -l pulseaudio-utils | grep ^ii)" ]]; then
+  apt install -y pulseaudio-utils
+{% endif %}
+else
+  log_info "Found pulseaudio-utils pre-installed... skipping installation..."
+fi
+
+# a reboot may be required if GPU drivers were installed
+REBOOT_REQUIRED=$(cat /root/bootstrap/reboot_required.txt)
+if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
+  reboot
+  exit 0
+else
+  # user data customizations
+  if [[ -f ${IDEA_CLUSTER_HOME}/${IDEA_MODULE_ID}/ami_builder/userdata_customizations.sh ]]; then
+    /bin/bash ${IDEA_CLUSTER_HOME}/${IDEA_MODULE_ID}/ami_builder/userdata_customizations.sh >> ${IDEA_DCV_HOST_AMI_BUILDER_LOGS_DIR}/userdata_customizations.log 2>&1
+  fi
+
+  # services are installed but must not start before the session bootstrap configures them
+  systemctl disable dcvserver 2>/dev/null || true
+  systemctl disable dcv-session-manager-agent 2>/dev/null || true
+  rm -f /etc/dcv-session-manager-agent/tags/*.toml
+
+  # clean-up: shared storage mounts
+  {% for name, storage in context.config.get_config('shared-storage').items() %}
+  {% if context.eval_shared_storage_scope(shared_storage=storage) %}
+  remove_from_fstab "{{ storage.mount_dir }}"
+  {% endif %}
+  {% endfor %}
+
+  # clean-up: instance-unique state. the idea_preinstalled_packages.log and
+  # idea_system_upgraded.log markers are kept on purpose: the session bootstrap
+  # skips the steps they record.
+  rm -rf /var/tmp/* /tmp/* /var/crash/*
+  rm -rf /etc/ssh/ssh_host_*
+  rm -f /etc/udev/rules.d/70-persistent-net.rules
+  grep -l "Created by cloud-init on instance boot automatically" /etc/sysconfig/network-scripts/ifcfg-* 2>/dev/null | xargs -r rm -f
+  rm -rf /root/bootstrap/logs
+  rm -f /root/bootstrap/reboot_required.txt /root/bootstrap/reboot_history.log
+
+  # clean-up: identity that must be unique per desktop. the ssm agent registration, the
+  # machine ids, cloud-init's per-instance state and the dcv server key are regenerated
+  # on first boot; left in place, every desktop cloned from this image would answer to
+  # the builder's ssm identity and send-command would land on the wrong host
+  rm -rf /var/lib/amazon/ssm/*
+  : > /etc/machine-id
+  rm -f /var/lib/dbus/machine-id
+  rm -rf /var/lib/cloud/instances/* /var/lib/cloud/instance /var/lib/cloud/data/*
+  find /var/log -type f -exec truncate -s 0 {} + 2>/dev/null || true
+  rm -f /etc/dcv/dcv.key /etc/dcv/dcv.pem
+
+  # clear crontab to ensure new image starts from clean slate
+  crontab -l | grep -v 'dcv_host_ami_builder_post_reboot.sh' | crontab -
+
+  # flush filesystem buffers before signaling ami creation
+  /bin/sync
+
+  # create tag indicating ec2 instance is ready for creating AMI
+  aws ec2 create-tags \
+  --resources "${AWS_INSTANCE_ID}" \
+  --region "${AWS_REGION}" \
+  --tags Key=idea:AmiBuilderStatus,Value=complete
+fi

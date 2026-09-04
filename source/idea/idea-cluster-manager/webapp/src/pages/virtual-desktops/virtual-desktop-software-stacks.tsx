@@ -18,11 +18,11 @@ import {ProjectsClient, VirtualDesktopAdminClient} from '../../client'
 import {AppContext} from "../../common";
 import {TableProps} from "@cloudscape-design/components/table/interfaces";
 import IdeaForm from "../../components/form";
-import {Project, SocaUserInputChoice, VirtualDesktopBaseOS, VirtualDesktopSoftwareStack, VirtualDesktopTenancy} from '../../client/data-model'
+import {Project, SocaUserInputChoice, VirtualDesktopBaseOS, VirtualDesktopSoftwareStack, BaseSoftwareStackAmiRefreshResult, VirtualDesktopTenancy} from '../../client/data-model'
 import Utils from "../../common/utils";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import IdeaAppLayout, {IdeaAppLayoutProps} from "../../components/app-layout";
-import {Link, StatusIndicator} from "@cloudscape-design/components";
+import {Box, Button, Link, Modal, StatusIndicator, Table} from "@cloudscape-design/components";
 import VirtualDesktopSoftwareStackEditForm from "./forms/virtual-desktop-software-stack-edit-form";
 import {withRouter} from "../../navigation/navigation-utils";
 import VirtualDesktopUtilsClient from "../../client/virtual-desktop-utils-client";
@@ -51,6 +51,8 @@ export interface VirtualDesktopSoftwareStacksState {
     confirmAction: SoftwareStackConfirmModalActionProps
     selectedSoftwareStack: VirtualDesktopSoftwareStack | undefined
     clonedSoftwareStack: VirtualDesktopSoftwareStack | undefined
+    refreshResults: BaseSoftwareStackAmiRefreshResult[] | undefined
+    showRefreshResultsModal: boolean
 }
 
 const VIRTUAL_DESKTOP_SOFTWARE_STACKS_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<VirtualDesktopSoftwareStack>[] = [
@@ -152,6 +154,8 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
         this.editSoftwareStackForm = React.createRef()
         this.softwareStackActionConfirmModal = React.createRef()
         this.state = {
+            refreshResults: undefined,
+            showRefreshResultsModal: false,
             softwareStackSelected: false,
             supportedOsChoices: [],
             supportedGPUChoices: [],
@@ -525,6 +529,87 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
         return selectedStacks.length > 0 ? selectedStacks[0] : undefined
     }
 
+    refreshBaseStackAmis = () => {
+        const selected = this.getSelectedSoftwareStacks();
+        const stackIds = selected.map(stack => stack.stack_id).filter((id): id is string => !!id);
+        const scopeText = stackIds.length > 0
+            ? (<span>the <strong>{stackIds.length}</strong> selected stack{stackIds.length > 1 ? 's' : ''}</span>)
+            : (<span>every <strong>ss-base-*</strong> software stack</span>);
+        this.setState({
+            confirmAction: {
+                actionTitle: 'Refresh Base Stack AMIs',
+                actionText: (
+                    <div>
+                        This finds the newest stock AMI for {scopeText}. A stack still launching from a stock image moves to it; a stack launching from a built image keeps that image, and only the base for its next build is updated.
+                        Custom stacks are not touched, running desktops are unaffected, and new desktops from an updated stack use the new AMI.
+                    </div>
+                ),
+                onConfirm: () => {
+                    this.getVirtualDesktopAdminClient().refreshBaseSoftwareStackAmis({
+                        stack_ids: stackIds.length > 0 ? stackIds : undefined
+                    }).then(result => {
+                        this.setState({
+                            refreshResults: result.results ?? [],
+                            showRefreshResultsModal: true
+                        });
+                    }).catch(error => {
+                        this.setFlashMessage(`Base stack AMI refresh failed: ${error.message}`, 'error');
+                    });
+                },
+                onCancel: () => {
+                }
+            }
+        }, () => {
+            this.getActionConfirmModal().show();
+        });
+    }
+
+    closeRefreshResultsModal = () => {
+        const rows = this.state.refreshResults ?? [];
+        const updated = rows.filter(r => r.status === 'updated').length;
+        const baseUpdated = rows.filter(r => r.status === 'base_updated').length;
+        const upToDate = rows.filter(r => r.status === 'up_to_date').length;
+        const errors = rows.filter(r => r.status === 'error').length;
+        this.setState({
+            showRefreshResultsModal: false,
+            refreshResults: undefined
+        }, () => {
+            this.setFlashMessage(`Base stack AMI refresh: ${updated} updated, ${baseUpdated} base updated, ${upToDate} up to date, ${errors} errors`, errors > 0 ? 'warning' : 'success');
+            this.getListing().fetchRecords();
+        });
+    }
+
+    buildRefreshResultsModal() {
+        const rows = this.state.refreshResults ?? [];
+        const statusType = (status?: string) => status === 'updated' ? 'success' : status === 'base_updated' ? 'info' : status === 'up_to_date' ? 'stopped' : 'error';
+        const statusText = (status?: string) => status === 'updated' ? 'Updated' : status === 'base_updated' ? 'Base updated' : status === 'up_to_date' ? 'Up to date' : 'Error';
+        return (
+            <Modal
+                visible={this.state.showRefreshResultsModal}
+                onDismiss={this.closeRefreshResultsModal}
+                header="Base Stack AMI Refresh Results"
+                size="large"
+                footer={
+                    <Box float="right">
+                        <Button variant="primary" onClick={this.closeRefreshResultsModal}>Close</Button>
+                    </Box>
+                }
+            >
+                <Table
+                    items={rows}
+                    columnDefinitions={[
+                        {id: 'stack_id', header: 'Stack', cell: row => row.stack_id},
+                        {id: 'old_ami', header: 'Old AMI', cell: row => row.old_ami ?? '-'},
+                        {id: 'new_ami', header: 'New AMI', cell: row => row.new_ami ?? '-'},
+                        {id: 'new_base_ami', header: 'New base', cell: row => row.new_base_ami ?? '-'},
+                        {id: 'status', header: 'Status', cell: row => <StatusIndicator type={statusType(row.status)}>{statusText(row.status)}</StatusIndicator>},
+                        {id: 'message', header: 'Message', cell: row => row.message ?? '-'}
+                    ]}
+                />
+            </Modal>
+        )
+    }
+
     deleteSoftwareStack = () => {
         const selectedSoftwareStacks = this.getSelectedSoftwareStacks();
         if (selectedSoftwareStacks.length === 0) {
@@ -760,8 +845,13 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                         this.showCreateSoftwareStackForm()
                     }
                 }}
-                secondaryActionsDisabled={!this.isSelected()}
+                secondaryActionsDisabled={false}
                 secondaryActions={[
+                    {
+                        id: 'refresh-base-stack-amis',
+                        text: 'Refresh Base Stack AMIs',
+                        onClick: this.refreshBaseStackAmis
+                    },
                     {
                         id: 'edit-software-stack',
                         text: 'Edit Stack',
@@ -1030,6 +1120,7 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                         {this.state.showCreateSoftwareStackForm && this.buildCreateSoftwareStackForm()}
                         {this.state.showEditSoftwareStackForm && this.buildEditSoftwareStackForm()}
                         {this.buildActionConfirmModal()}
+                        {this.buildRefreshResultsModal()}
                         {this.buildListing()}
                     </div>
                 }/>
