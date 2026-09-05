@@ -1,7 +1,7 @@
 # APIs
 
 {% hint style="info" %}
-To see all APIs available, refer to APIs section for each [Broken link](broken-reference "mention").
+To see all APIs available, refer to APIs section for each [https://github.com/cfs-energy/idea/blob/main/docs/first-time-users/access-your-idea-cluster/broken-reference/README.md](https://github.com/cfs-energy/idea/blob/main/docs/first-time-users/access-your-idea-cluster/broken-reference/README.md "mention").
 {% endhint %}
 
 All actions performed by IDEA web interface can also be triggered via HTTP APIs. APIs cover all modules such as creating IDEA users, submit a job or control virtual desktops.
