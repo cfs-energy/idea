@@ -1,0 +1,49 @@
+{
+  "windows": {
+    "baseOs": "windows2019",
+    "awsRegion": "us-west-2",
+    "bootstrapPackageUri": "s3://example-bucket/bootstrap/bootstrap-example.tar.gz",
+    "installCommands": [
+      "cd $BootstrapDir\\example\\",
+      ".\\setup.ps1"
+    ],
+    "proxyConfig": {
+      "http_proxy": "http://proxy.example:3128"
+    }
+  },
+  "linux-substitution": {
+    "baseOs": "amazonlinux2023",
+    "awsRegion": "us-west-2",
+    "bootstrapPackageUri": "s3://example-bucket/bootstrap/bootstrap-example.tar.gz",
+    "installCommands": [
+      "/bin/bash example/setup.sh"
+    ],
+    "infraConfig": {
+      "ALPHA": "${__ALPHA__}",
+      "BETA": "beta-value"
+    },
+    "proxyConfig": {
+      "http_proxy": "http://proxy.example:3128",
+      "https_proxy": "http://proxy.example:3128",
+      "no_proxy": "127.0.0.1,localhost"
+    }
+  },
+  "linux-non-substitution": {
+    "baseOs": "ubuntu2204",
+    "awsRegion": "us-west-2",
+    "bootstrapPackageUri": "/opt/idea/bootstrap-example.tar.gz",
+    "installCommands": [
+      "/bin/bash example/setup.sh"
+    ],
+    "proxyConfig": {
+      "http_proxy": "http://proxy.example:3128"
+    },
+    "substitutionSupport": false
+  },
+  "linux-minimal": {
+    "baseOs": "amazonlinux2023",
+    "awsRegion": "us-east-1",
+    "bootstrapPackageUri": "s3://example-bucket/b.tar.gz",
+    "installCommands": []
+  }
+}

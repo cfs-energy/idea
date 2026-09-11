@@ -12,6 +12,7 @@
 from ideadatamodel import constants, errorcodes, exceptions
 from ideasdk.metrics.cloudwatch.cloudwatch_metrics import CloudWatchMetrics
 from ideasdk.metrics.prometheus.prometheus_metrics import PrometheusMetrics
+from ideasdk.metrics.dogstatsd.dogstatsd_metrics import DogStatsdMetrics
 from ideasdk.metrics.null_metrics_provider import NullMetrics
 from ideasdk.protocols import (
     MetricsProviderFactoryProtocol,
@@ -50,6 +51,10 @@ class MetricsProviderFactory(MetricsProviderFactoryProtocol):
             constants.METRICS_PROVIDER_PROMETHEUS,
         ):
             metrics_provider = PrometheusMetrics(
+                context=self.context, namespace=namespace
+            )
+        elif provider_name == constants.METRICS_PROVIDER_DOGSTATSD:
+            metrics_provider = DogStatsdMetrics(
                 context=self.context, namespace=namespace
             )
 

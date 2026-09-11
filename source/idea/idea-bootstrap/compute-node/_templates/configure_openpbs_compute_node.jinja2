@@ -16,13 +16,31 @@ fi
 # pbs_mom exits at startup if it can't resolve its own hostname or the scheduler's, and neither
 # is in DNS; keyed on hostname so an ami-baked line for a recycled ip can't suppress this one.
 grep -qE "(^|[[:space:]])${INSTANCE_HOSTNAME}([[:space:]]|$)" /etc/hosts || echo "${INSTANCE_NODE_NAME} ${INSTANCE_HOSTNAME} ${INSTANCE_SHORT_HOSTNAME}" >> /etc/hosts
-{% set scheduler_private_ip = context.config.get_string('scheduler.private_ip') %}
-{% if scheduler_private_ip %}
+{% set stable_server_name = context.config.get_bool('scheduler.use_stable_server_name', default=False) %}
 {% set scheduler_dns_name = context.config.get_string('scheduler.private_dns_name', required=True) %}
+{# With a stable server name the record is in DNS and follows the server wherever it runs, so
+   the address is never pinned here; a pinned address would outlive a server replacement. The
+   short name is not in the resolver search path, so the daemon is given the full name. #}
+{% set pbs_server_name = scheduler_dns_name if stable_server_name else scheduler_dns_name.split('.')[0] %}
+{% set scheduler_private_ip = context.config.get_string('scheduler.private_ip') %}
+{% if scheduler_private_ip and not stable_server_name %}
 grep -q "^{{ scheduler_private_ip }} " /etc/hosts || echo "{{ scheduler_private_ip }} {{ scheduler_dns_name }} {{ scheduler_dns_name.split('.')[0] }}" >> /etc/hosts
 {% endif %}
 
-echo -e "PBS_SERVER={{ context.config.get_string('scheduler.private_dns_name', required=True).split('.')[0] }}
+{% if stable_server_name %}
+{# pbs_init.d checks the server name after cutting it at the first dot, so the short name
+   has to resolve on this host. Put the cluster's private zone in the resolver search path;
+   the default search path carries only the EC2 domain. #}
+{% set private_zone = context.config.get_string('cluster.route53.private_hosted_zone_name', required=True) %}
+RESOLVER_IF=$(ip -o -4 route show default | awk '{print $5}' | head -1)
+if command -v resolvectl >/dev/null 2>&1 && systemctl is-active systemd-resolved >/dev/null 2>&1; then
+  resolvectl domain "${RESOLVER_IF}" {{ private_zone }} $(resolvectl domain "${RESOLVER_IF}" | sed 's/^[^:]*: *//')
+else
+  grep -q "^search .*{{ private_zone }}" /etc/resolv.conf || sed -i 's/^search /search {{ private_zone }} /' /etc/resolv.conf
+fi
+{% endif %}
+
+echo -e "PBS_SERVER={{ pbs_server_name }}
 PBS_START_SERVER=0
 PBS_START_SCHED=0
 PBS_START_COMM=0
@@ -36,7 +54,7 @@ PBS_SCP=/usr/bin/scp
 " > /etc/pbs.conf
 
 echo -e "
-\$clienthost {{ context.config.get_string('scheduler.private_dns_name').split('.')[0] }}
+\$clienthost {{ pbs_server_name }}
 \$usecp *:/dev/null /dev/null
 \$usecp *:{{ context.config.get_string('shared-storage.data.mount_dir') }} {{ context.config.get_string('shared-storage.data.mount_dir') }}
 " > /var/spool/pbs/mom_priv/config

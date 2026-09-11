@@ -1,0 +1,2 @@
+# Private ALB. WAF, bot control, and bastion-host.public follow alb_public.
+alb_public: false

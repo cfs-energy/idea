@@ -1,0 +1,10 @@
+# self-managed activedirectory pointed at an existing directory.
+directory_service_provider: activedirectory
+use_existing_vpc: true
+vpc_id: vpc-000000000000000a1
+private_subnet_ids: [subnet-000000000000000b1]
+public_subnet_ids: [subnet-000000000000000c1]
+use_existing_directory_service: true
+directory_id: d-0000000001
+directory_service_root_username_secret_arn: arn:aws:secretsmanager:us-east-2:123456789012:secret:idea-test1-ds-username
+directory_service_root_password_secret_arn: arn:aws:secretsmanager:us-east-2:123456789012:secret:idea-test1-ds-password

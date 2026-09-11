@@ -1,0 +1,2 @@
+# the shipped region_ami_config.yml is flat (x86_64 only), so arm64 cannot be resolved.
+instance_architecture: arm64

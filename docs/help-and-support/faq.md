@@ -47,15 +47,15 @@ Alternatively, you can run the following `idea-admin.sh` command:
 Use `ideactl` If you cannot receive email from Cognito due to IT restriction. Login to the Cluster Manager EC2 instance and run `ideactl accounts create-user`
 
 <pre><code><strong># Make sure to run this command as root on the CLUSTER Manager
-</strong><strong># ideactl accounts create-user --email "mcrozes@myemail.com" --password "Password123@" --username "mcrozes2" --sudo --email-verified
+</strong><strong># ideactl accounts create-user --email "sampleuser@example.com" --password "Password123@" --username "sampleuser2" --sudo --email-verified
 </strong>{
-  "username": "mcrozes2",
-  "email": "mcrozes@myemail.com",
+  "username": "sampleuser2",
+  "email": "sampleuser@example.com",
   "uid": 5068,
   "gid": 5077,
-  "group_name": "mcrozes2-user-group",
+  "group_name": "sampleuser2-user-group",
   "login_shell": "/bin/bash",
-  "home_dir": "/data/home/mcrozes2",
+  "home_dir": "/data/home/sampleuser2",
   "sudo": true,
   "status": "CONFIRMED",
   "enabled": true,

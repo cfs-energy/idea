@@ -209,6 +209,20 @@ Statement:
       - '{{ context.vars.spot_fleet_request_role_arn }}'
     Effect: Allow
 
+{% if context.config.get_bool('ecs.enabled', default=False) %}
+  # A container scheduler resolves cluster users from the account tables the cluster manager owns,
+  # because it has no directory client of its own. The sync runs once before the module starts and
+  # scans these three tables, so without this the task exits before it binds its port.
+  - Action:
+      - dynamodb:Scan
+    Resource:
+      - '{{ context.arns.get_ddb_table_arn("accounts.users") }}'
+      - '{{ context.arns.get_ddb_table_arn("accounts.groups") }}'
+      - '{{ context.arns.get_ddb_table_arn("accounts.group-members") }}'
+    Effect: Allow
+    Sid: ClusterUserSync
+{% endif %}
+
   {% if context.config.get_bool(context.config.get_module_id('cluster-manager') + '.bedrock.enabled', False) and context.config.get_bool(context.module_id + '.bedrock.enabled', False) %}
   # scoped to roles under the per-project IAM path, passed only to ec2; enabling bedrock for jobs requires redeploying this module along with cluster-manager.
   - Condition:
@@ -294,6 +308,16 @@ Statement:
     Resource:
       - '*'
     Sid: ComputeNodeAmiBuilderPermissions2
+
+{% if context.config.get_bool('scheduler.use_stable_server_name', default=False) or context.config.get_bool('ecs.enabled', default=False) %}
+  # With a stable server name the scheduler owns its own DNS record and points it at
+  # whichever host or task is running the server. The container path always has the stable name,
+  # and the stack writes the row itself, so the flag alone is enough to grant the permission.
+  - Effect: Allow
+    Action: route53:ChangeResourceRecordSets
+    Resource: '{{ context.arns.get_route53_hostedzone_arn() }}'
+    Sid: SchedulerDnsRecord
+{% endif %}
 
 {% include '_templates/aws-managed-ad.yml' %}
 

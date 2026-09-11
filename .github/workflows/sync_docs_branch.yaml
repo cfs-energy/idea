@@ -1,10 +1,8 @@
 name: Sync docs branch
-# The GitBook space syncs with the gitbook branch, because main only accepts pull requests.
-# On every merge to main, and once a day, fast-forward gitbook to main so docs edited in the
-# repository reach GitBook. When gitbook is ahead because edits were merged in the GitBook
-# editor, open the pull request that carries them to main. The built-in token is enough:
-# a pull request it creates triggers no Actions workflows, and the test workflows skip
-# docs-only pull requests anyway, while the GitBook preview comes from the GitBook app.
+# The GitBook space syncs with the gitbook branch, because main accepts pull requests only.
+# Fast-forward gitbook to main so repository edits reach GitBook, and when gitbook is ahead
+# because edits were merged in the GitBook editor, open the pull request that carries them
+# back. The built-in token is enough: a pull request it creates triggers no workflows.
 on:
   push:
     branches:

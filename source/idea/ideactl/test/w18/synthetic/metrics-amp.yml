@@ -1,0 +1,2 @@
+# amazon managed prometheus: workspace block plus the prometheus package config.
+metrics_provider: amazon_managed_prometheus

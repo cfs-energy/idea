@@ -1,0 +1,2 @@
+# rhel9 hosts. AMI comes from region_ami_config.yml for us-east-2.
+base_os: rhel9

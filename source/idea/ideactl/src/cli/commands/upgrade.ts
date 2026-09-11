@@ -1,0 +1,1297 @@
+/**
+ * Upgrade an existing cluster by applying the administrator's ordered upgrade
+ * sequence. Each external operation is injected so callers can replay it.
+ */
+
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import type { Command } from "commander";
+
+import { ClusterConfigError, GeneralException, type ModuleInfo } from "../../config/cluster-config.ts";
+import {
+  convertConfigToKeyValuePairs,
+  generateConfigFromTemplates,
+  readModulesFromFiles,
+  type ConfigEntry,
+} from "../../config/generator.ts";
+import { loadRegionAmiConfig, resolveRegionAmi, type RegionsConfig } from "../../config/region-ami.ts";
+import {
+  compareUpgradeDrift,
+  renderUpgradeDrift,
+  type CurrentConfigRow,
+  type StackSettingsPlan,
+  type UpgradeDriftInput,
+  type UpgradeDriftReport,
+} from "../../config/upgrade-drift.ts";
+import { loadValuesFile } from "../../config/values.ts";
+import {
+  buildTree,
+  toYaml,
+  type ConfigDriftPreviewDeps,
+  type ConfigUpgradePreviewOptions,
+} from "./config.ts";
+import { asBoolFlag } from "./deploy.ts";
+import { awsClientOptions, type AwsClientOptions } from "../aws-client-options.ts";
+import { DeploymentHelper } from "../deployment-helper.ts";
+import { ExitWithCode, VALUES_FILE_S3_KEY, valuesFilePath, type Deps } from "../cdk-invoker.ts";
+
+export const EOL_BASE_OS: Readonly<Record<string, string>> = {
+  amazonlinux2: "amazonlinux2023",
+};
+
+export const UPGRADE_BASE_OS: readonly string[] = [
+  "amazonlinux2023",
+  "rhel8",
+  "rhel9",
+  "rhel10",
+  "rocky8",
+  "rocky9",
+  "rocky10",
+];
+
+const ECS_MODULE = "ecs";
+
+/** One effective ECS account setting returned by the pre-flight reader. */
+export interface EcsAccountSetting {
+  name: string;
+  value: string;
+}
+
+/** Read-only ECS account settings required before an ECS deployment. */
+export interface EcsAccountSettingsApi {
+  listAccountSettings(input: {
+    awsProfile?: string;
+    awsRegion: string;
+    effectiveSettings: true;
+    name: "awsvpcTrunking";
+  }): Promise<EcsAccountSetting[]>;
+}
+
+/** The injected dependencies used by the ECS trunking pre-flight. */
+export interface EcsTrunkingPreflightDeps {
+  accountId(): Promise<string>;
+  ecsAccountSettings?: EcsAccountSettingsApi;
+  err(line: string): void;
+}
+
+/** The operator-selected values needed to print the remediation command. */
+export interface EcsTrunkingPreflightOptions {
+  awsProfile?: string;
+  awsRegion: string;
+}
+
+/**
+ * Builds the one-time operator command for the account-wide ECS prerequisite.
+ */
+export function awsvpcTrunkingCommand(options: EcsTrunkingPreflightOptions): string {
+  return [
+    "aws",
+    "ecs",
+    "put-account-setting-default",
+    "--name",
+    "awsvpcTrunking",
+    "--value",
+    "enabled",
+    "--region",
+    options.awsRegion,
+    ...(options.awsProfile === undefined ? [] : ["--profile", options.awsProfile]),
+  ].join(" ");
+}
+
+/** Client options for the live upgrade readers, with the operator's profile bound. */
+export async function upgradeLiveClientOptions(
+  awsRegion: string,
+  awsProfile?: string,
+): Promise<AwsClientOptions> {
+  return awsClientOptions(awsRegion, awsProfile);
+}
+
+/**
+ * Refuses an ECS deployment until the account's effective task ENI trunking
+ * setting is enabled. This check reads account state only.
+ */
+export async function checkAwsvpcTrunking(
+  deps: EcsTrunkingPreflightDeps,
+  options: EcsTrunkingPreflightOptions,
+): Promise<void> {
+  if (deps.ecsAccountSettings === undefined) {
+    throw new GeneralException("ECS account-settings reader is required for the awsvpcTrunking pre-flight");
+  }
+  const [account, settings] = await Promise.all([
+    deps.accountId(),
+    deps.ecsAccountSettings.listAccountSettings({
+      // Read the account the rest of the run will deploy into, which a named profile selects.
+      ...(options.awsProfile === undefined ? {} : { awsProfile: options.awsProfile }),
+      awsRegion: options.awsRegion,
+      effectiveSettings: true,
+      name: "awsvpcTrunking",
+    }),
+  ]);
+  const enabled = settings.some((setting) => setting.name === "awsvpcTrunking" && setting.value === "enabled");
+  if (enabled) return;
+
+  deps.err(
+    `ECS awsvpcTrunking is not enabled for account ${account} in ${options.awsRegion}. Without it, an m7g.large host of the planned size fits only two tasks, so placement silently starves.`,
+  );
+  deps.err("Run this once for the account, then repeat the deploy:");
+  deps.err(awsvpcTrunkingCommand(options));
+  throw new ExitWithCode(1);
+}
+
+const MODULE_HOST_INSTANCE_TYPE = "m7i.large";
+const MODULE_HOST_INSTANCE_TYPE_OLD = "m6i.large";
+const OPENSEARCH_DATA_NODE_INSTANCE_TYPE = "m7g.large.search";
+const OPENSEARCH_DATA_NODE_INSTANCE_TYPE_OLD = "m5.large.search";
+const COMPUTE_IMAGE_PREFIX = ["idea", "compute", "node", ""].join("-");
+
+const AMI_UPDATE_KEYS: Readonly<Record<string, ReadonlyArray<readonly [string, string]>>> = {
+  "bastion-host": [["base_os", "instance_ami"]],
+  "cluster-manager": [["ec2.autoscaling.base_os", "ec2.autoscaling.instance_ami"]],
+  directoryservice: [["base_os", "instance_ami"]],
+  scheduler: [
+    ["base_os", "instance_ami"],
+    ["compute_node_os", "compute_node_ami"],
+  ],
+  "virtual-desktop-controller": [
+    ["controller.autoscaling.base_os", "controller.autoscaling.instance_ami"],
+    ["dcv_broker.autoscaling.base_os", "dcv_broker.autoscaling.instance_ami"],
+    ["dcv_connection_gateway.autoscaling.base_os", "dcv_connection_gateway.autoscaling.instance_ami"],
+  ],
+};
+
+const HOST_INSTANCE_TYPE_KEYS: Readonly<Record<string, readonly string[]>> = {
+  "bastion-host": ["instance_type"],
+  "cluster-manager": ["ec2.autoscaling.instance_type"],
+  directoryservice: ["instance_type"],
+  scheduler: ["instance_type"],
+  "virtual-desktop-controller": [
+    "controller.autoscaling.instance_type",
+    "dcv_broker.autoscaling.instance_type",
+    "dcv_connection_gateway.autoscaling.instance_type",
+  ],
+};
+
+export interface InstanceImage {
+  ImageId?: string;
+  Name?: string;
+  CreationDate?: string;
+}
+
+export interface UpgradeEc2Api {
+  describeImages(input: { awsRegion: string; imageIds: string[] }): Promise<InstanceImage[]>;
+  describeInstanceTypeOfferings(input: { awsRegion: string; instanceType: string }): Promise<string[]>;
+  describeInstanceAttribute(input: { awsRegion: string; instanceId: string }): Promise<boolean>;
+  modifyInstanceAttribute(input: { awsRegion: string; instanceId: string; protected: boolean }): Promise<void>;
+  describeLiveInstances(input: { awsRegion: string; instanceIds: string[] }): Promise<string[]>;
+}
+
+export interface UpgradeCloudFormationApi {
+  listStackResources(input: {
+    awsRegion: string;
+    stackName: string;
+    nextToken?: string;
+  }): Promise<{ instanceIds: string[]; nextToken?: string }>;
+}
+
+export interface UpgradeOpenSearchApi {
+  describeDomain(input: { awsRegion: string; domainName?: string }): Promise<{ engineVersion?: string }>;
+  listInstanceTypeDetails(input: { awsRegion: string; engineVersion?: string }): Promise<string[]>;
+}
+
+export interface EolSoftwareStackApi {
+  setEnabled(input: { awsRegion: string; tableName: string; baseOs: string; stackId: string; enabled: boolean }): Promise<void>;
+  delete(input: { awsRegion: string; tableName: string; baseOs: string; stackId: string }): Promise<void>;
+}
+
+export interface UpgradeDeploymentOptions {
+  clusterName: string;
+  awsRegion: string;
+  awsProfile?: string;
+  terminationProtection: boolean;
+  deploymentId?: string;
+  forceBuildBootstrap: boolean;
+  rollback: boolean;
+  optimizeDeployment: boolean;
+  moduleSet: string;
+  allModules: boolean;
+  moduleIds?: readonly string[];
+}
+
+export interface UpgradeDeps extends ConfigDriftPreviewDeps {
+  ec2: UpgradeEc2Api;
+  ecsAccountSettings?: EcsAccountSettingsApi;
+  cloudFormation: UpgradeCloudFormationApi;
+  openSearch: UpgradeOpenSearchApi;
+  eolSoftwareStacks: EolSoftwareStackApi;
+  deploy(options: UpgradeDeploymentOptions): Promise<void>;
+  regionAmiConfig?: () => RegionsConfig;
+}
+
+export interface UpgradeCommandOptions {
+  clusterName: string;
+  awsRegion: string;
+  awsProfile?: string;
+  terminationProtection?: string | boolean;
+  deploymentId?: string;
+  baseOs?: string;
+  forceBuildBootstrap?: boolean;
+  rollback?: boolean;
+  optimizeDeployment?: boolean;
+  moduleSet: string;
+  force?: boolean;
+  acceptConfigDrift?: boolean;
+  skipGlobalSettingsUpdate?: boolean;
+  disableEolStacksInUse?: boolean;
+  modules?: readonly string[];
+}
+
+interface EolStack {
+  stackId: string;
+  baseOs: string;
+  name: string;
+  architecture: string;
+}
+
+interface EolSession {
+  stackId: string;
+  baseOs: string;
+  sessionId: string;
+  owner: string;
+  name: string;
+}
+
+interface EolPlan {
+  tableName: string;
+  sessions: EolSession[];
+  toDelete: EolStack[];
+  toDisable: EolStack[];
+}
+
+interface ClearedInstance {
+  stackName: string;
+  instanceId: string;
+}
+
+function valueAsString(value: unknown, defaultValue = ""): string {
+  return typeof value === "string" && value !== "" ? value : defaultValue;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function toModuleInfo(row: Record<string, unknown>): ModuleInfo | undefined {
+  const moduleId = valueAsString(row["module_id"]);
+  const name = valueAsString(row["name"]);
+  const type = valueAsString(row["type"]);
+  return moduleId === "" || name === "" || type === "" ? undefined : { ...row, module_id: moduleId, name, type };
+}
+
+async function scanAll(deps: Deps, tableName: string): Promise<Array<Record<string, unknown>>> {
+  const rows: Array<Record<string, unknown>> = [];
+  let startKey: Record<string, unknown> | undefined;
+  do {
+    const page = await deps.scan({ TableName: tableName, ExclusiveStartKey: startKey });
+    rows.push(...(page.Items ?? []));
+    startKey = page.LastEvaluatedKey;
+  } while (startKey !== undefined);
+  return rows;
+}
+
+async function scanModuleTable(deps: Deps, tableName: string): Promise<Array<Record<string, unknown>>> {
+  try {
+    return await scanAll(deps, tableName);
+  } catch (error) {
+    if ((error as { name?: string }).name === "ResourceNotFoundException") return [];
+    throw error;
+  }
+}
+
+async function clusterModules(deps: Deps, clusterName: string): Promise<ModuleInfo[]> {
+  const result: ModuleInfo[] = [];
+  for (const row of await scanAll(deps, `${clusterName}.modules`)) {
+    const module = toModuleInfo(row);
+    if (module !== undefined) result.push(module);
+  }
+  return result;
+}
+
+function describeStack(stack: EolStack): string {
+  return `${stack.stackId} (${stack.name}, ${stack.architecture})`;
+}
+
+async function findEolReferences(deps: UpgradeDeps, clusterName: string): Promise<string[]> {
+  const findings: string[] = [];
+  for (const entry of await scanAll(deps, `${clusterName}.cluster-settings`)) {
+    const key = valueAsString(entry["key"]);
+    const value = valueAsString(entry["value"]);
+    if ((key.endsWith("base_os") || key.endsWith("compute_node_os")) && EOL_BASE_OS[value] !== undefined) {
+      findings.push(`cluster setting ${key} = ${value}`);
+    }
+  }
+  for (const module of await clusterModules(deps, clusterName)) {
+    if (module.name !== "scheduler") continue;
+    for (const row of await scanModuleTable(deps, `${clusterName}.${module.module_id}.queue-profiles`)) {
+      const baseOs = valueAsString(row["param_base_os"]);
+      if (EOL_BASE_OS[baseOs] !== undefined) {
+        findings.push(`HPC queue profile ${valueAsString(row["queue_profile_name"], "<unnamed>")} = ${baseOs}`);
+      }
+    }
+  }
+  return findings;
+}
+
+async function planEolSoftwareStacks(deps: UpgradeDeps, clusterName: string): Promise<EolPlan[]> {
+  const plans: EolPlan[] = [];
+  for (const module of await clusterModules(deps, clusterName)) {
+    if (module.name !== "virtual-desktop-controller") continue;
+    const tableName = `${clusterName}.${module.module_id}.controller.software-stacks`;
+    const eolStacks = (await scanModuleTable(deps, tableName))
+      .filter((row) => EOL_BASE_OS[valueAsString(row["base_os"])] !== undefined)
+      .map((row) => ({
+        stackId: valueAsString(row["stack_id"]),
+        baseOs: valueAsString(row["base_os"]),
+        name: valueAsString(row["name"], "<unnamed>"),
+        architecture: valueAsString(row["architecture"], "<unknown>"),
+      }));
+    if (eolStacks.length === 0) continue;
+
+    const ids = new Set(eolStacks.map((stack) => stack.stackId));
+    const sessions: EolSession[] = [];
+    for (const row of await scanModuleTable(deps, `${clusterName}.${module.module_id}.controller.user-sessions`)) {
+      if (valueAsString(row["state"]).toUpperCase() === "DELETED") continue;
+      const softwareStack = asRecord(row["software_stack"]);
+      const stackId = valueAsString(softwareStack["stack_id"]);
+      const baseOs = valueAsString(softwareStack["base_os"]) || valueAsString(row["base_os"]);
+      if (ids.has(stackId) || EOL_BASE_OS[baseOs] !== undefined) {
+        sessions.push({
+          stackId,
+          baseOs,
+          sessionId: valueAsString(row["idea_session_id"], "<unknown>"),
+          owner: valueAsString(row["owner"], "<unknown>"),
+          name: valueAsString(row["name"], "<unnamed>"),
+        });
+      }
+    }
+
+    const idsInUse = new Set(sessions.filter((session) => session.stackId !== "").map((session) => session.stackId));
+    const baseOsInUse = new Set(sessions.filter((session) => session.stackId === "").map((session) => session.baseOs));
+    plans.push({
+      tableName,
+      sessions,
+      toDelete: eolStacks.filter((stack) => !idsInUse.has(stack.stackId) && !baseOsInUse.has(stack.baseOs)),
+      toDisable: eolStacks.filter((stack) => idsInUse.has(stack.stackId) || baseOsInUse.has(stack.baseOs)),
+    });
+  }
+  return plans;
+}
+
+async function checkEolBaseOs(
+  deps: UpgradeDeps,
+  options: UpgradeCommandOptions,
+): Promise<EolPlan[]> {
+  const findings = await findEolReferences(deps, options.clusterName);
+  if (findings.length > 0) {
+    deps.err("This cluster still references a Base OS that has reached end-of-life and is no longer supported by IDEA.");
+    for (const finding of findings) deps.err(`  - ${finding}`);
+    throw new ExitWithCode(1);
+  }
+
+  const plans = await planEolSoftwareStacks(deps, options.clusterName);
+  const sessions = plans.flatMap((plan) => plan.sessions);
+  if (sessions.length > 0 && options.disableEolStacksInUse !== true) {
+    deps.err(`${sessions.length} virtual desktop session(s) still use a Base OS that has reached end-of-life. Nothing has been changed.`);
+    for (const session of sessions) {
+      deps.err(`  - session ${session.sessionId} owned by ${session.owner} on software stack ${session.stackId || session.baseOs}`);
+    }
+    deps.err("Delete these virtual desktops, then re-run upgrade-cluster.");
+    throw new ExitWithCode(1);
+  }
+
+  for (const plan of plans) {
+    for (const stack of plan.toDisable) deps.out(`will disable end-of-life eVDI software stack ${describeStack(stack)}`);
+    for (const stack of plan.toDelete) deps.out(`will delete end-of-life eVDI software stack ${describeStack(stack)}`);
+  }
+  return plans;
+}
+
+async function applyEolSoftwareStacks(deps: UpgradeDeps, awsRegion: string, plans: EolPlan[]): Promise<void> {
+  let disabled = 0;
+  for (const plan of plans) {
+    for (const stack of plan.toDisable) {
+      await deps.eolSoftwareStacks.setEnabled({
+        awsRegion,
+        tableName: plan.tableName,
+        baseOs: stack.baseOs,
+        stackId: stack.stackId,
+        enabled: false,
+      });
+      disabled += 1;
+      const inUse = plan.sessions
+        .filter((session) => session.stackId === stack.stackId || (session.stackId === "" && session.baseOs === stack.baseOs))
+        .map((session) => `${session.owner} (${session.name})`)
+        .join(", ");
+      deps.out(`disabled end-of-life eVDI software stack ${describeStack(stack)}, still in use by ${inUse}`);
+    }
+    for (const stack of plan.toDelete) {
+      await deps.eolSoftwareStacks.delete({
+        awsRegion,
+        tableName: plan.tableName,
+        baseOs: stack.baseOs,
+        stackId: stack.stackId,
+      });
+      deps.out(`deleted end-of-life eVDI software stack ${describeStack(stack)}`);
+    }
+  }
+  if (disabled > 0) {
+    deps.out(`${disabled} software stack(s) are disabled in DynamoDB but still read as enabled in the eVDI search index until it is reindexed.`);
+  }
+}
+
+async function resolveUpgradeBaseOs(
+  deps: UpgradeDeps,
+  options: Pick<UpgradeCommandOptions, "clusterName" | "baseOs">,
+): Promise<string> {
+  let current: string[] = [];
+  try {
+    current = [...new Set(
+      (await scanAll(deps, `${options.clusterName}.cluster-settings`))
+        .filter((entry) => valueAsString(entry["key"]).endsWith(".base_os"))
+        .map((entry) => valueAsString(entry["value"]))
+        .filter((value) => value !== ""),
+    )].sort();
+  } catch (error) {
+    if (options.baseOs === undefined || options.baseOs === "") {
+      deps.err(`Could not read the cluster settings to determine the current Base OS: ${(error as Error).message}. Re-run with an explicit --base-os.`);
+      throw new ExitWithCode(1);
+    }
+  }
+
+  if (options.baseOs === undefined || options.baseOs === "") {
+    if (current.length !== 1) {
+      const found = current.length === 0 ? "no base_os setting found" : current.join(", ");
+      deps.err(`Could not determine the Base OS this cluster runs from its settings (${found}). Re-run with an explicit --base-os to say which Base OS every module should use.`);
+      throw new ExitWithCode(1);
+    }
+    const [baseOs] = current;
+    deps.out(`No --base-os given: keeping the Base OS this cluster runs: ${baseOs}`);
+    return baseOs;
+  }
+
+  if (current.length > 0 && !current.includes(options.baseOs)) {
+    deps.out(`--base-os ${options.baseOs} changes this cluster from ${current.join(", ")}: every module is redeployed onto ${options.baseOs}.`);
+  }
+  return options.baseOs;
+}
+
+async function validateBaseOs(deps: UpgradeDeps, options: UpgradeCommandOptions, baseOs: string): Promise<void> {
+  const replacement = EOL_BASE_OS[baseOs];
+  if (replacement !== undefined) {
+    deps.err(`Base OS ${baseOs} has reached end-of-life and is no longer supported by IDEA. Upgrade to ${replacement} instead.`);
+    throw new ExitWithCode(1);
+  }
+  if (!UPGRADE_BASE_OS.includes(baseOs)) {
+    deps.err(`Invalid base_os: ${baseOs}. Must be one of: ${UPGRADE_BASE_OS.join(", ")}`);
+    throw new ExitWithCode(1);
+  }
+  if (baseOs !== "rhel10" && baseOs !== "rocky10") return;
+  let modules: ModuleInfo[];
+  try {
+    modules = await clusterModules(deps, options.clusterName);
+  } catch (error) {
+    deps.err(`Could not read the cluster modules table to validate ${baseOs} eVDI compatibility: ${(error as Error).message}`);
+    throw new ExitWithCode(1);
+  }
+  if (modules.some((module) => module.name === "virtual-desktop-controller" && module.status === "deployed")) {
+    deps.err(`base_os ${baseOs} is not supported on clusters with the virtual-desktop-controller module deployed: Amazon DCV publishes no EL10 packages.`);
+    throw new ExitWithCode(1);
+  }
+}
+
+function backupDir(configDir: string, now: number): string {
+  const date = new Date(now);
+  const pad = (value: number): string => String(value).padStart(2, "0");
+  return `${configDir}.golden.${pad(date.getMonth() + 1)}${pad(date.getDate())}${date.getFullYear()}_${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+}
+
+async function updateValuesBaseOs(deps: UpgradeDeps, options: UpgradeCommandOptions, baseOs: string): Promise<string> {
+  const path = valuesFilePath(options.clusterName, options.awsRegion);
+  if (existsSync(path)) {
+    try {
+      const bucket = (await scanAll(deps, `${options.clusterName}.cluster-settings`))
+        .find((entry) => entry["key"] === "cluster.cluster_s3_bucket")?.["value"];
+      if (typeof bucket === "string") {
+        const remote = await deps.s3.getObject({ Bucket: bucket, Key: VALUES_FILE_S3_KEY });
+        if (remote !== readFileSync(path, "utf8")) deps.out("warning: local values.yml differs from the copy in the cluster bucket.");
+      }
+    } catch (error) {
+      deps.out(`warning: could not compare local values.yml with the cluster bucket: ${(error as Error).message}`);
+    }
+  } else {
+    const bucket = (await scanAll(deps, `${options.clusterName}.cluster-settings`))
+      .find((entry) => entry["key"] === "cluster.cluster_s3_bucket")?.["value"];
+    if (typeof bucket !== "string" || bucket === "") throw new ClusterConfigError("cluster.cluster_s3_bucket is required to restore values.yml");
+    deps.out(`values.yml not found at ${path}, restoring it from the cluster bucket ...`);
+    mkdirSync(join(path, ".."), { recursive: true });
+    writeFileSync(path, await deps.s3.getObject({ Bucket: bucket, Key: VALUES_FILE_S3_KEY }));
+  }
+
+  const values = readFileSync(path, "utf8");
+  const updated = values.replace(/^base_os:.*$/m, `base_os: ${baseOs}`);
+  if (updated === values && !/^base_os:.*$/m.test(values)) {
+    deps.err(`${path} has no base_os key, so the upgrade cannot set it to ${baseOs}.`);
+    throw new ExitWithCode(1);
+  }
+  writeFileSync(path, updated);
+  deps.out(`Successfully updated base_os to ${baseOs} in values.yml`);
+  return path;
+}
+
+async function exportConfiguration(deps: UpgradeDeps, options: UpgradeCommandOptions, configDir: string): Promise<void> {
+  const entries = await scanAll(deps, `${options.clusterName}.cluster-settings`);
+  const modules = await clusterModules(deps, options.clusterName);
+  const tree = buildTree(entries.map((entry) => ({ key: valueAsString(entry["key"]), value: entry["value"] })));
+  mkdirSync(configDir, { recursive: true });
+  const idea: { modules: Array<{ name: string; id: string; type: string; config_files: string[] }> } = { modules: [] };
+  for (const module of modules) {
+    const moduleDir = join(configDir, module.module_id);
+    mkdirSync(moduleDir, { recursive: true });
+    writeFileSync(join(moduleDir, "settings.yml"), toYaml(tree[module.module_id] ?? {}));
+    idea.modules.push({ name: module.name, id: module.module_id, type: module.type, config_files: ["settings.yml"] });
+  }
+  writeFileSync(join(configDir, "idea.yml"), toYaml(idea));
+}
+
+async function backupAndUpdateGlobalSettings(deps: UpgradeDeps, options: UpgradeCommandOptions): Promise<string> {
+  const regionDir = join(valuesFilePath(options.clusterName, options.awsRegion), "..");
+  const configDir = join(regionDir, "config");
+  await exportConfiguration(deps, options, configDir);
+  const golden = backupDir(configDir, deps.now());
+  if (existsSync(golden)) rmSync(golden, { recursive: true });
+  cpSync(configDir, golden, { recursive: true });
+  deps.out(`Backup created successfully at ${golden}`);
+
+  generateConfigFromTemplates(loadValuesFile(join(regionDir, "values.yml")), configDir);
+  const writer = await deps.configWriter({
+    clusterName: options.clusterName,
+    awsRegion: options.awsRegion,
+    awsProfile: options.awsProfile,
+  });
+  await writer.deleteConfigEntries("global-settings.");
+  await writer.syncClusterSettingsInDb(convertConfigToKeyValuePairs(configDir, "global-settings"), true);
+  return configDir;
+}
+
+async function syncFullConfiguration(deps: UpgradeDeps, options: UpgradeCommandOptions, configDir: string): Promise<void> {
+  const writer = await deps.configWriter({
+    clusterName: options.clusterName,
+    awsRegion: options.awsRegion,
+    awsProfile: options.awsProfile,
+  });
+  // A regenerated configuration can describe a module the table has no row for. The deployment
+  // order reads the table, so an unregistered module is skipped while every other stack deploys.
+  // Add-only: an existing row keeps its type, status, stack name and version.
+  await writer.syncModulesInDb(
+    readModulesFromFiles(configDir).map((module) => ({ id: module.id, name: module.name, type: module.type })),
+  );
+  await writer.syncClusterSettingsInDb(convertConfigToKeyValuePairs(configDir), false);
+}
+
+export function buildAmiUpdateEntries(
+  amiId: string,
+  baseOs: string,
+  modules: ModuleInfo[],
+  keepKeys: ReadonlySet<string> = new Set(),
+): Array<{ key: string; value: string }> {
+  const entries: Array<{ key: string; value: string }> = [];
+  for (const module of modules) {
+    for (const [baseOsKey, amiKey] of AMI_UPDATE_KEYS[module.name] ?? []) {
+      const keys = [`${module.module_id}.${baseOsKey}`, `${module.module_id}.${amiKey}`];
+      if (keys.some((key) => keepKeys.has(key))) continue;
+      entries.push({ key: keys[0] as string, value: baseOs }, { key: keys[1] as string, value: amiId });
+    }
+  }
+  return entries;
+}
+
+export function keepBuiltComputeImage(current: InstanceImage | undefined, stock: InstanceImage | undefined): boolean {
+  return (
+    current?.Name?.startsWith(COMPUTE_IMAGE_PREFIX) === true &&
+    typeof current.CreationDate === "string" &&
+    current.CreationDate !== "" &&
+    typeof stock?.CreationDate === "string" &&
+    stock.CreationDate !== "" &&
+    current.CreationDate > stock.CreationDate
+  );
+}
+
+async function computeAmiKeepKeys(
+  deps: UpgradeDeps,
+  options: Pick<UpgradeCommandOptions, "awsRegion">,
+  modules: ModuleInfo[],
+  amiId: string,
+  settings: readonly CurrentConfigRow[],
+): Promise<Set<string>> {
+  const scheduler = modules.find((module) => module.name === "scheduler");
+  if (scheduler === undefined) return new Set();
+  const current = settings.find((entry) => entry.key === `${scheduler.module_id}.compute_node_ami`)?.value;
+  if (typeof current !== "string" || current === "" || current === amiId) return new Set();
+  try {
+    const images = await deps.ec2.describeImages({ awsRegion: options.awsRegion, imageIds: [current, amiId] });
+    const currentImage = images.find((image) => image.ImageId === current);
+    const stockImage = images.find((image) => image.ImageId === amiId);
+    if (!keepBuiltComputeImage(currentImage, stockImage)) return new Set();
+    deps.out(`keeping built compute image ${current}, newer than the release image ${amiId}`);
+    return new Set([`${scheduler.module_id}.compute_node_os`, `${scheduler.module_id}.compute_node_ami`]);
+  } catch (error) {
+    deps.out(`warning: could not describe compute image ${current} or release image ${amiId}: ${(error as Error).message}. Compute moves to ${amiId}.`);
+    return new Set();
+  }
+}
+
+async function planModuleHostInstanceTypes(
+  deps: UpgradeDeps,
+  options: Pick<UpgradeCommandOptions, "awsRegion">,
+  modules: ModuleInfo[],
+  settings: readonly CurrentConfigRow[],
+): Promise<ConfigEntry[]> {
+  const values = new Map(settings.map((entry) => [entry.key, valueAsString(entry.value)]));
+  const keys = modules.flatMap((module) => (HOST_INSTANCE_TYPE_KEYS[module.name] ?? []).map((key) => `${module.module_id}.${key}`))
+    .filter((key) => values.get(key) !== "");
+  const oldKeys = keys.filter((key) => values.get(key) === MODULE_HOST_INSTANCE_TYPE_OLD);
+  if (oldKeys.length === 0) return [];
+  let offered: string[];
+  try {
+    offered = await deps.ec2.describeInstanceTypeOfferings({ awsRegion: options.awsRegion, instanceType: MODULE_HOST_INSTANCE_TYPE });
+  } catch (error) {
+    deps.out(`warning: could not read whether this region offers ${MODULE_HOST_INSTANCE_TYPE}: ${(error as Error).message}. Keeping ${MODULE_HOST_INSTANCE_TYPE_OLD}.`);
+    return [];
+  }
+  if (!offered.includes(MODULE_HOST_INSTANCE_TYPE)) {
+    deps.out(`${MODULE_HOST_INSTANCE_TYPE} is not offered in this region. Keeping ${MODULE_HOST_INSTANCE_TYPE_OLD}.`);
+    return [];
+  }
+  return oldKeys.sort().map((key) => ({ key, value: MODULE_HOST_INSTANCE_TYPE }));
+}
+
+async function planOpenSearchDataNodeInstanceType(
+  deps: UpgradeDeps,
+  options: Pick<UpgradeCommandOptions, "awsRegion">,
+  modules: ModuleInfo[],
+  settings: readonly CurrentConfigRow[],
+): Promise<ConfigEntry[]> {
+  const analytics = modules.find((module) => module.name === "analytics");
+  if (analytics === undefined) return [];
+  const current = settings.find((entry) => entry.key === `${analytics.module_id}.opensearch.data_node_instance_type`)?.value;
+  if (typeof current !== "string" || current === "" || current !== OPENSEARCH_DATA_NODE_INSTANCE_TYPE_OLD) return [];
+  const domainName = settings.find((entry) => entry.key === `${analytics.module_id}.opensearch.domain_name`)?.value;
+  try {
+    const domain = await deps.openSearch.describeDomain({
+      awsRegion: options.awsRegion,
+      domainName: typeof domainName === "string" ? domainName : undefined,
+    });
+    const offered = await deps.openSearch.listInstanceTypeDetails({ awsRegion: options.awsRegion, engineVersion: domain.engineVersion });
+    if (!offered.includes(OPENSEARCH_DATA_NODE_INSTANCE_TYPE)) {
+      deps.out(`${OPENSEARCH_DATA_NODE_INSTANCE_TYPE} is not offered for ${domain.engineVersion ?? ""} in this region. Keeping analytics data node instance type ${current}.`);
+      return [];
+    }
+    return [{
+      key: `${analytics.module_id}.opensearch.data_node_instance_type`,
+      value: OPENSEARCH_DATA_NODE_INSTANCE_TYPE,
+    }];
+  } catch (error) {
+    deps.out(`warning: could not read the instance types offered for the analytics domain: ${(error as Error).message}. Keeping analytics data node instance type ${current}.`);
+    return [];
+  }
+}
+
+/** Resolve every Phase 3 write before the upgrade asks for approval. */
+export async function planUpgradePhase3Entries(
+  deps: UpgradeDeps,
+  options: Pick<UpgradeCommandOptions, "awsRegion">,
+  modules: ModuleInfo[],
+  settings: readonly CurrentConfigRow[],
+  amiId: string,
+  baseOs: string,
+): Promise<ConfigEntry[]> {
+  const keepKeys = await computeAmiKeepKeys(deps, options, modules, amiId, settings);
+  return [
+    ...buildAmiUpdateEntries(amiId, baseOs, modules, keepKeys),
+    ...await planModuleHostInstanceTypes(deps, options, modules, settings),
+    ...await planOpenSearchDataNodeInstanceType(deps, options, modules, settings),
+  ];
+}
+
+/** Apply the already previewed Phase 3 plan without recalculating it after approval. */
+async function applyPhase3Entries(
+  writer: Awaited<ReturnType<UpgradeDeps["configWriter"]>>,
+  entries: readonly ConfigEntry[],
+  current: readonly CurrentConfigRow[],
+  out: (line: string) => void,
+): Promise<void> {
+  const previous = new Map(current.map((entry) => [entry.key, entry.value]));
+  for (const entry of entries) {
+    await writer.setConfigEntry(entry.key, entry.value);
+    if (entry.value === MODULE_HOST_INSTANCE_TYPE && previous.get(entry.key) === MODULE_HOST_INSTANCE_TYPE_OLD) {
+      out(`${entry.key} moves from ${MODULE_HOST_INSTANCE_TYPE_OLD} to ${MODULE_HOST_INSTANCE_TYPE}; the host runs it when the instance is next replaced`);
+    } else if (
+      entry.value === OPENSEARCH_DATA_NODE_INSTANCE_TYPE &&
+      previous.get(entry.key) === OPENSEARCH_DATA_NODE_INSTANCE_TYPE_OLD
+    ) {
+      out(`analytics data nodes move from ${OPENSEARCH_DATA_NODE_INSTANCE_TYPE_OLD} to ${OPENSEARCH_DATA_NODE_INSTANCE_TYPE}. OpenSearch Service applies this as a blue/green deployment.`);
+    }
+  }
+}
+
+/** Keep only table fields used by the value-free comparison report. */
+function currentConfigRows(rows: readonly Record<string, unknown>[]): CurrentConfigRow[] {
+  return rows.flatMap((row) => {
+    const key = row["key"];
+    if (typeof key !== "string" || key === "") return [];
+    return [{
+      key,
+      value: row["value"],
+      source: typeof row["source"] === "string" ? row["source"] : undefined,
+      version: typeof row["version"] === "number" ? row["version"] : undefined,
+    }];
+  });
+}
+
+/**
+ * Generate the upgrade target in a temporary directory. The cluster's local
+ * values and generated configuration remain unchanged until approval.
+ */
+async function generatedPreviewEntries(
+  deps: UpgradeDeps,
+  options: ConfigUpgradePreviewOptions,
+  baseOs: string,
+  current: readonly CurrentConfigRow[],
+): Promise<ConfigEntry[]> {
+  const root = mkdtempSync(join(tmpdir(), "ideactl-drift-preview-"));
+  try {
+    const configuredValuesPath = options.valuesFile ?? valuesFilePath(options.clusterName, options.awsRegion);
+    let sourceValuesPath = configuredValuesPath;
+    if (!existsSync(configuredValuesPath)) {
+      if (options.valuesFile !== undefined) {
+        throw new ClusterConfigError(`file not found: ${configuredValuesPath}`);
+      }
+      const bucket = current.find((entry) => entry.key === "cluster.cluster_s3_bucket")?.value;
+      if (typeof bucket !== "string" || bucket === "") {
+        throw new ClusterConfigError("cluster.cluster_s3_bucket is required to preview a missing values.yml");
+      }
+      sourceValuesPath = join(root, "values.yml");
+      writeFileSync(sourceValuesPath, await deps.s3.getObject({ Bucket: bucket, Key: VALUES_FILE_S3_KEY }));
+    }
+
+    const values = { ...loadValuesFile(sourceValuesPath), base_os: baseOs };
+    const configDir = join(root, "config");
+    generateConfigFromTemplates(values, configDir);
+    return convertConfigToKeyValuePairs(configDir);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Build a conservative stack ownership plan from current source markers.
+ *
+ * The marker identifies rows a stack owns, not who last edited them. Without a
+ * resolved target settings map the preview reports the unconditional rewrite
+ * but does not guess future values or deletions.
+ */
+function inferredStackPlans(
+  current: readonly CurrentConfigRow[],
+  modules: readonly ModuleInfo[],
+  selectedModuleIds: readonly string[] | undefined,
+): StackSettingsPlan[] {
+  const settings = new Map<string, Array<[string, unknown]>>();
+  for (const row of current) {
+    if (row.source !== "stack") continue;
+    const module = modules.find((candidate) => row.key.startsWith(`${candidate.module_id}.`));
+    if (module === undefined) continue;
+    const relativeKey = row.key.slice(module.module_id.length + 1);
+    const rows = settings.get(module.module_id) ?? [];
+    rows.push([relativeKey, row.value]);
+    settings.set(module.module_id, rows);
+  }
+
+  const selected = new Set(selectedModuleIds ?? []);
+  const allModules = selected.size === 0;
+  return modules.flatMap((module) => {
+    const rows = settings.get(module.module_id);
+    if (rows === undefined) return [];
+    return [{
+      moduleId: module.module_id,
+      selected: allModules || selected.has(module.module_id),
+      previous: Object.fromEntries(rows),
+    }];
+  });
+}
+
+/**
+ * Read and generate every input needed by both preview entry points.
+ *
+ * Replay callers may inject a complete input. The normal path reads the table,
+ * resolves Phase 3 conditions, and generates configuration only in a temporary
+ * directory.
+ */
+export async function prepareUpgradeDriftInput(
+  deps: UpgradeDeps,
+  options: ConfigUpgradePreviewOptions,
+): Promise<UpgradeDriftInput> {
+  if (deps.loadUpgradeDriftInput !== undefined) return deps.loadUpgradeDriftInput(options);
+
+  const baseOs = options.baseOs ?? await resolveUpgradeBaseOs(deps, options);
+  const current = currentConfigRows(await scanAll(deps, `${options.clusterName}.cluster-settings`));
+  const modules = await clusterModules(deps, options.clusterName);
+  const amiId = resolveRegionAmi(
+    (deps.regionAmiConfig ?? loadRegionAmiConfig)(),
+    options.awsRegion,
+    baseOs,
+  );
+  const generated = await generatedPreviewEntries(deps, options, baseOs, current);
+  const phase3 = await planUpgradePhase3Entries(deps, options, modules, current, amiId, baseOs);
+
+  return {
+    current,
+    generated,
+    phase3,
+    stacks: inferredStackPlans(current, modules, options.modules),
+    replaceGlobalSettings: options.skipGlobalSettingsUpdate !== true,
+    syncFullConfiguration: true,
+  };
+}
+
+async function moduleInstances(deps: UpgradeDeps, options: UpgradeCommandOptions): Promise<ClearedInstance[]> {
+  const instances: ClearedInstance[] = [];
+  for (const module of await clusterModules(deps, options.clusterName)) {
+    const stackName = valueAsString(module.stack_name) || `${options.clusterName}-${module.module_id}`;
+    let nextToken: string | undefined;
+    try {
+      do {
+        const page = await deps.cloudFormation.listStackResources({ awsRegion: options.awsRegion, stackName, nextToken });
+        instances.push(...page.instanceIds.map((instanceId) => ({ stackName, instanceId })));
+        nextToken = page.nextToken;
+      } while (nextToken !== undefined);
+    } catch (error) {
+      const errorShape = error as { name?: string; message?: string };
+      if (errorShape.name === "ValidationError" && errorShape.message?.includes("does not exist") === true) continue;
+      throw error;
+    }
+  }
+  return instances;
+}
+
+async function clearTerminationProtection(
+  deps: UpgradeDeps,
+  awsRegion: string,
+  instances: ClearedInstance[],
+): Promise<ClearedInstance[]> {
+  const cleared: ClearedInstance[] = [];
+  for (const instance of instances) {
+    try {
+      if (!await deps.ec2.describeInstanceAttribute({ awsRegion, instanceId: instance.instanceId })) continue;
+      await deps.ec2.modifyInstanceAttribute({ awsRegion, instanceId: instance.instanceId, protected: false });
+      cleared.push(instance);
+      deps.out(`cleared instance termination protection on ${instance.instanceId} (${instance.stackName})`);
+    } catch (error) {
+      deps.out(`warning: could not clear termination protection on ${instance.instanceId} (${instance.stackName}): ${(error as Error).message}.`);
+    }
+  }
+  return cleared;
+}
+
+async function restoreTerminationProtection(deps: UpgradeDeps, awsRegion: string, cleared: ClearedInstance[]): Promise<void> {
+  if (cleared.length === 0) return;
+  const alive = new Set(await deps.ec2.describeLiveInstances({ awsRegion, instanceIds: cleared.map((instance) => instance.instanceId) }));
+  for (const instance of cleared) {
+    if (!alive.has(instance.instanceId)) {
+      deps.out(`${instance.instanceId} (${instance.stackName}) was replaced by the upgrade, so it has no termination protection to restore`);
+      continue;
+    }
+    try {
+      await deps.ec2.modifyInstanceAttribute({ awsRegion, instanceId: instance.instanceId, protected: true });
+      deps.out(`restored instance termination protection on ${instance.instanceId} (${instance.stackName})`);
+    } catch (error) {
+      deps.out(`warning: could not restore termination protection on ${instance.instanceId} (${instance.stackName}): ${(error as Error).message}. Re-enable it by hand.`);
+    }
+  }
+}
+
+function warnClearedProtection(deps: UpgradeDeps, cleared: ClearedInstance[]): void {
+  if (cleared.length > 0) {
+    deps.out(`warning: termination protection is still cleared on ${cleared.map((instance) => instance.instanceId).join(", ")}. Re-enable it by hand once the cluster is stable.`);
+  }
+}
+
+async function saveValuesFile(deps: UpgradeDeps, options: UpgradeCommandOptions): Promise<void> {
+  let bucket: string | undefined;
+  try {
+    const found = (await scanAll(deps, `${options.clusterName}.cluster-settings`))
+      .find((entry) => entry["key"] === "cluster.cluster_s3_bucket")?.["value"];
+    bucket = typeof found === "string" ? found : undefined;
+    if (typeof bucket !== "string" || bucket === "") throw new ClusterConfigError("cluster.cluster_s3_bucket is required");
+    await deps.s3.putObject({
+      Bucket: bucket,
+      Key: VALUES_FILE_S3_KEY,
+      Body: readFileSync(valuesFilePath(options.clusterName, options.awsRegion)),
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const location =
+      typeof bucket === "string" && bucket !== ""
+        ? `s3://${bucket}/${VALUES_FILE_S3_KEY}`
+        : "the cluster bucket";
+    throw new ClusterConfigError(
+      `Upgrade of ${options.clusterName} finished its stack steps, but values.yml was not saved to ${location} (${detail}). The cluster bucket still has the previous file. Retry ideactl config save-values --cluster-name ${options.clusterName} --aws-region ${options.awsRegion}. Until that works, a run on another machine can restore the old values.yml.`,
+    );
+  }
+}
+
+async function defaultDeployment(deps: Deps, options: UpgradeDeploymentOptions): Promise<void> {
+  const helper = await DeploymentHelper.open({
+    clusterName: options.clusterName,
+    awsRegion: options.awsRegion,
+    awsProfile: options.awsProfile,
+    terminationProtection: options.terminationProtection,
+    deploymentId: options.deploymentId,
+    upgrade: true,
+    moduleSet: options.moduleSet,
+    allModules: options.allModules,
+    forceBuildBootstrap: options.forceBuildBootstrap,
+    optimizeDeployment: options.optimizeDeployment,
+    moduleIds: options.moduleIds,
+    rollback: options.rollback,
+    deps,
+  });
+  await helper.invoke();
+}
+
+/**
+ * Stop where a value the upgrade overwrites differs from what the generator would produce, and
+ * nowhere else. An upgrade whose rows all match proceeds without asking: a question asked on every
+ * run is a question nobody reads. `--force` skips confirmations; it does not accept losing an edit,
+ * so accepting these rows in an unattended run needs the flag that says only that.
+ */
+async function confirmConfigDrift(
+  deps: UpgradeDeps,
+  options: UpgradeCommandOptions,
+  report: UpgradeDriftReport,
+): Promise<void> {
+  const atRisk = report.changedRowsDifferingFromGenerated;
+  if (atRisk.length === 0) return;
+
+  deps.err(
+    `${atRisk.length} configuration row(s) hold a value this upgrade overwrites, and the value differs from generated configuration: ${atRisk.join(", ")}`,
+  );
+  if (options.acceptConfigDrift === true) {
+    deps.out("--accept-config-drift: overwriting the rows above");
+    return;
+  }
+  if (options.force === true) {
+    deps.err(
+      "Reconcile those rows, or re-run with --accept-config-drift. --force skips confirmations and does not cover them.",
+    );
+    throw new ExitWithCode(1);
+  }
+  const confirm = await deps.prompt({
+    message: `Overwrite the ${atRisk.length} row(s) above and continue with the cluster upgrade?`,
+    default: false,
+  });
+  if (confirm !== true && confirm !== "Yes") throw new ExitWithCode(0);
+}
+
+/**
+ * Whether the run will deploy the container module. An upgrade with no module list deploys every
+ * module the cluster has, so the operator's arguments are not the question: what the deployment
+ * reaches is, the same way `runDeploy` asks `helper.getDeploymentModuleNames()`.
+ */
+async function upgradeReachesEcs(deps: UpgradeDeps, options: UpgradeCommandOptions): Promise<boolean> {
+  const requested = options.modules ?? [];
+  if (requested.length > 0) return requested.includes(ECS_MODULE);
+  const modules = await clusterModules(deps, options.clusterName);
+  return modules.some((module) => module.module_id === ECS_MODULE || module.name === ECS_MODULE);
+}
+
+/** Execute Phases 1 through 4 after every pre-flight refusal has passed. */
+export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandOptions): Promise<void> {
+  if (await upgradeReachesEcs(deps, options)) {
+    await checkAwsvpcTrunking(deps, options);
+  }
+  const baseOs = await resolveUpgradeBaseOs(deps, options);
+  await validateBaseOs(deps, options, baseOs);
+  const eolPlans = await checkEolBaseOs(deps, options);
+  const allModules = options.modules === undefined || options.modules.length === 0;
+  deps.out(allModules ? "No modules specified, upgrading all modules" : `Upgrade scope: Specific modules - ${options.modules?.join(", ")}`);
+  const driftInput = await prepareUpgradeDriftInput(deps, { ...options, baseOs });
+  const driftReport = compareUpgradeDrift(driftInput);
+  deps.out(renderUpgradeDrift(driftReport));
+  await confirmConfigDrift(deps, options, driftReport);
+  await applyEolSoftwareStacks(deps, options.awsRegion, eolPlans);
+
+  let cleared: ClearedInstance[] = [];
+  try {
+    deps.out("Phase 1: Update Base OS in values.yml");
+    resolveRegionAmi((deps.regionAmiConfig ?? loadRegionAmiConfig)(), options.awsRegion, baseOs);
+    await updateValuesBaseOs(deps, options, baseOs);
+
+    let configDir = join(valuesFilePath(options.clusterName, options.awsRegion), "..", "config");
+    if (options.skipGlobalSettingsUpdate !== true) {
+      if (options.force !== true) {
+        const confirm = await deps.prompt({ message: "Continue with global settings backup and update?", default: true });
+        if (confirm !== true && confirm !== "Yes") throw new ExitWithCode(0);
+      }
+      deps.out("Phase 2: Global Settings Backup and Update");
+      configDir = await backupAndUpdateGlobalSettings(deps, options);
+    }
+
+    let syncFullConfig = options.force === true;
+    if (options.force !== true) {
+      const confirm = await deps.prompt({ message: "Sync full configuration to add new values?", default: true });
+      syncFullConfig = confirm === true || confirm === "Yes";
+    }
+    if (syncFullConfig) {
+      if (options.skipGlobalSettingsUpdate === true) {
+        generateConfigFromTemplates(loadValuesFile(valuesFilePath(options.clusterName, options.awsRegion)), configDir);
+      }
+      deps.out("Phase 2b: Sync full configuration without overwrite");
+      await syncFullConfiguration(deps, options, configDir);
+    }
+
+    deps.out("Phase 3: Update AMI IDs and Settings");
+    let updateAmis = options.force === true;
+    if (options.force !== true) {
+      const confirm = await deps.prompt({ message: "Continue with AMI and settings updates?", default: true });
+      updateAmis = confirm === true || confirm === "Yes";
+    }
+    if (updateAmis) {
+      const writer = await deps.configWriter({ clusterName: options.clusterName, awsRegion: options.awsRegion, awsProfile: options.awsProfile });
+      await applyPhase3Entries(writer, driftInput.phase3 ?? [], driftInput.current, deps.out);
+    }
+
+    deps.out("Phase 4: Module Deployment");
+    if (!options.force && allModules) {
+      const confirm = await deps.prompt({ message: "Proceed with deploying all modules?", default: true });
+      if (confirm !== true && confirm !== "Yes") throw new ExitWithCode(0);
+    }
+    try {
+      cleared = await clearTerminationProtection(deps, options.awsRegion, await moduleInstances(deps, options));
+    } catch (error) {
+      deps.out(`warning: pre-upgrade termination-protection sweep failed: ${(error as Error).message}. Verify replaced instances are terminated after the upgrade.`);
+    }
+    const deployment: UpgradeDeploymentOptions = {
+      clusterName: options.clusterName,
+      awsRegion: options.awsRegion,
+      awsProfile: options.awsProfile,
+      terminationProtection: asBoolFlag(options.terminationProtection, true),
+      deploymentId: options.deploymentId,
+      forceBuildBootstrap: options.forceBuildBootstrap === true,
+      rollback: options.rollback !== false,
+      optimizeDeployment: options.optimizeDeployment === true,
+      moduleSet: options.moduleSet,
+      allModules,
+      moduleIds: allModules ? undefined : options.modules,
+    };
+    await deps.deploy(deployment);
+    await restoreTerminationProtection(deps, options.awsRegion, cleared);
+    await saveValuesFile(deps, options);
+    deps.out("All upgrade phases completed successfully");
+  } catch (error) {
+    warnClearedProtection(deps, cleared);
+    throw error;
+  }
+}
+
+/** Register the command group. The caller supplies all replayable external effects. */
+export function registerUpgradeCommands(program: Command, deps: UpgradeDeps): void {
+  program
+    .command("upgrade-cluster")
+    .description("upgrade an existing cluster")
+    .requiredOption("--cluster-name <cluster-name>", "Cluster Name")
+    .requiredOption("--aws-region <aws-region>", "AWS Region")
+    .option("--aws-profile <aws-profile>", "AWS Profile Name")
+    .option("--termination-protection <termination-protection>", "Set termination protection to true or false. Default: true", "true")
+    .option("--deployment-id <deployment-id>", "A UUID to identify the deployment.")
+    .option("--base-os <base-os>", "Base OS to upgrade to.")
+    .option("--force-build-bootstrap", "Render bootstrap packages again.")
+    .option("--rollback", "Rollback stack to stable state on failure. Default.", true)
+    .option("--no-rollback", "Do not roll back on failure.")
+    .option("--optimize-deployment", "Deploy applicable stacks in parallel.")
+    .option("--module-set <module-set>", "Name of the ModuleSet. Default: default", "default")
+    .option("--force", "Skip all confirmation prompts.")
+    .option(
+      "--accept-config-drift",
+      "Overwrite configuration rows whose value differs from generated configuration. Not covered by --force.",
+    )
+    .option("--skip-global-settings-update", "Skip updating global settings.")
+    .option("--disable-eol-stacks-in-use", "Disable end-of-life eVDI software stacks that are in use.")
+    .argument("[modules...]", "module ids")
+    .action(async (modules: string[], commandOptions: UpgradeCommandOptions) => {
+      await upgradeCluster(deps, { ...commandOptions, modules });
+    });
+}
+
+/**
+ * Attach live SDK implementations to the command-core dependencies. Imports
+ * occur only when an upgrade operation reaches the corresponding phase.
+ */
+/**
+ * The live account-settings reader behind the container pre-flight. Deploy, quick-setup and
+ * upgrade all run that pre-flight, so they all need it: without it the check cannot read the
+ * account and refuses every container deployment.
+ */
+export function liveEcsAccountSettings(): EcsAccountSettingsApi {
+  return {
+    async listAccountSettings(input) {
+      const { ECSClient, ListAccountSettingsCommand } = await import("@aws-sdk/client-ecs");
+      const client = new ECSClient(await upgradeLiveClientOptions(input.awsRegion, input.awsProfile));
+      const result = await client.send(
+        new ListAccountSettingsCommand({ effectiveSettings: input.effectiveSettings, name: input.name }),
+      );
+      return (result.settings ?? []).flatMap((setting) =>
+        setting.name === undefined || setting.value === undefined
+          ? []
+          : [{ name: setting.name.toString(), value: setting.value }],
+      );
+    },
+  };
+}
+
+export function createLiveUpgradeDeps(deps: Deps): UpgradeDeps {
+  const ecsAccountSettings = liveEcsAccountSettings();
+  const ec2: UpgradeEc2Api = {
+    async describeImages(input) {
+      const { DescribeImagesCommand, EC2Client } = await import("@aws-sdk/client-ec2");
+      const result = await new EC2Client(await awsClientOptions(input.awsRegion)).send(
+        new DescribeImagesCommand({ ImageIds: input.imageIds }),
+      );
+      return (result.Images ?? []).map((image) => ({
+        ImageId: image.ImageId,
+        Name: image.Name,
+        CreationDate: image.CreationDate,
+      }));
+    },
+    async describeInstanceTypeOfferings(input) {
+      const { DescribeInstanceTypeOfferingsCommand, EC2Client } = await import("@aws-sdk/client-ec2");
+      const result = await new EC2Client(await awsClientOptions(input.awsRegion)).send(
+        new DescribeInstanceTypeOfferingsCommand({
+          LocationType: "region",
+          Filters: [{ Name: "instance-type", Values: [input.instanceType] }],
+        }),
+      );
+      return (result.InstanceTypeOfferings ?? []).flatMap((offering) =>
+        offering.InstanceType === undefined ? [] : [offering.InstanceType.toString()],
+      );
+    },
+    async describeInstanceAttribute(input) {
+      const { DescribeInstanceAttributeCommand, EC2Client } = await import("@aws-sdk/client-ec2");
+      const result = await new EC2Client(await awsClientOptions(input.awsRegion)).send(
+        new DescribeInstanceAttributeCommand({ InstanceId: input.instanceId, Attribute: "disableApiTermination" }),
+      );
+      return result.DisableApiTermination?.Value === true;
+    },
+    async modifyInstanceAttribute(input) {
+      const { EC2Client, ModifyInstanceAttributeCommand } = await import("@aws-sdk/client-ec2");
+      await new EC2Client(await awsClientOptions(input.awsRegion)).send(
+        new ModifyInstanceAttributeCommand({
+          InstanceId: input.instanceId,
+          DisableApiTermination: { Value: input.protected },
+        }),
+      );
+    },
+    async describeLiveInstances(input) {
+      const { DescribeInstancesCommand, EC2Client } = await import("@aws-sdk/client-ec2");
+      const result = await new EC2Client(await awsClientOptions(input.awsRegion)).send(
+        new DescribeInstancesCommand({
+          Filters: [
+            { Name: "instance-id", Values: input.instanceIds },
+            { Name: "instance-state-name", Values: ["pending", "running", "stopping", "stopped"] },
+          ],
+        }),
+      );
+      return (result.Reservations ?? []).flatMap((reservation) => reservation.Instances ?? [])
+        .flatMap((instance) => instance.InstanceId === undefined ? [] : [instance.InstanceId]);
+    },
+  };
+
+  return {
+    ...deps,
+    ec2,
+    ecsAccountSettings,
+    cloudFormation: {
+      async listStackResources(input) {
+        const { CloudFormationClient, ListStackResourcesCommand } = await import("@aws-sdk/client-cloudformation");
+        const result = await new CloudFormationClient(await awsClientOptions(input.awsRegion)).send(
+          new ListStackResourcesCommand({ StackName: input.stackName, NextToken: input.nextToken }),
+        );
+        return {
+          instanceIds: (result.StackResourceSummaries ?? [])
+            .filter((resource) => resource.ResourceType === "AWS::EC2::Instance")
+            .map((resource) => resource.PhysicalResourceId)
+            .filter((instanceId): instanceId is string => instanceId !== undefined),
+          nextToken: result.NextToken,
+        };
+      },
+    },
+    openSearch: {
+      async describeDomain(input) {
+        const { DescribeDomainCommand, OpenSearchClient } = await import("@aws-sdk/client-opensearch");
+        const result = await new OpenSearchClient(await awsClientOptions(input.awsRegion)).send(
+          new DescribeDomainCommand({ DomainName: input.domainName }),
+        );
+        return { engineVersion: result.DomainStatus?.EngineVersion };
+      },
+      async listInstanceTypeDetails(input) {
+        const { ListInstanceTypeDetailsCommand, OpenSearchClient } = await import("@aws-sdk/client-opensearch");
+        const result = await new OpenSearchClient(await awsClientOptions(input.awsRegion)).send(
+          new ListInstanceTypeDetailsCommand({ EngineVersion: input.engineVersion }),
+        );
+        return (result.InstanceTypeDetails ?? []).flatMap((detail) =>
+          detail.InstanceType === undefined ? [] : [detail.InstanceType.toString()],
+        );
+      },
+    },
+    eolSoftwareStacks: {
+      async setEnabled(input) {
+        const { DynamoDBClient } = await import("@aws-sdk/client-dynamodb");
+        const { DynamoDBDocumentClient, UpdateCommand } = await import("@aws-sdk/lib-dynamodb");
+        const client = DynamoDBDocumentClient.from(new DynamoDBClient(await awsClientOptions(input.awsRegion)));
+        await client.send(
+          new UpdateCommand({
+            TableName: input.tableName,
+            Key: { base_os: input.baseOs, stack_id: input.stackId },
+            UpdateExpression: "SET #enabled = :enabled",
+            ExpressionAttributeNames: { "#enabled": "enabled" },
+            ExpressionAttributeValues: { ":enabled": input.enabled },
+          }),
+        );
+      },
+      async delete(input) {
+        const { DynamoDBClient } = await import("@aws-sdk/client-dynamodb");
+        const { DeleteCommand, DynamoDBDocumentClient } = await import("@aws-sdk/lib-dynamodb");
+        const client = DynamoDBDocumentClient.from(new DynamoDBClient(await awsClientOptions(input.awsRegion)));
+        await client.send(
+          new DeleteCommand({
+            TableName: input.tableName,
+            Key: { base_os: input.baseOs, stack_id: input.stackId },
+          }),
+        );
+      },
+    },
+    deploy: (options) => defaultDeployment(deps, options),
+  };
+}
+
+/** Build the standard deployment adapter for callers that have no special deployment hook. */
+export function withDefaultUpgradeDeployment(deps: Omit<UpgradeDeps, "deploy">): UpgradeDeps {
+  // Layered rather than copied: a copy drops the prototype methods of a class based deps object
+  // and hides anything the caller replaces after this returns.
+  return new Proxy(deps, {
+    get: (target, property, receiver) =>
+      property === "deploy"
+        ? (options: UpgradeDeploymentOptions) => defaultDeployment(deps, options)
+        : Reflect.get(target, property, receiver),
+  }) as UpgradeDeps;
+}

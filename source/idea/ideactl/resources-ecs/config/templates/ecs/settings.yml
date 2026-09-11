@@ -1,0 +1,48 @@
+# ECS Settings
+
+# The ECS stack writes service and target group settings after deployment.
+enabled: {{ enable_ecs | default(false) | lower }}
+# The release image for this partition, at the release version tag. It must stay equal to the
+# matching image_repositories entry below. The stack reads a plain registry reference, so a deploy
+# may replace this with a digest-qualified reference to the same manifest. A partition with no
+# repository leaves this null, and the stack then refuses rather than pulling nothing.
+image: {% if aws_partition == 'aws' %}public.ecr.aws/s5o2b4m0/idea-control-plane:{{ idea_release_version }}{% else %}~{% endif %}
+
+# Deploy selects this repository using cluster.aws.partition, then stores the
+# tagged or digest-qualified result in ecs.image.
+image_repositories:
+  aws: public.ecr.aws/s5o2b4m0/idea-control-plane
+  aws-us-gov: ~
+
+hosts:
+  instance_type: m7g.large
+  min: 3
+  max: 4
+  volume_size: 60
+
+tasks:
+  cluster-manager:
+    cpu: 256
+    memory: 1024
+    desired: 2
+  vdc:
+    cpu: 256
+    memory: 1024
+    desired: 2
+  scheduler:
+    cpu: 512
+    memory: 2048
+    desired: 1
+  dcv-broker:
+    cpu: 512
+    memory: 4096
+    desired: 2
+  dcv-gateway:
+    cpu: 256
+    memory: 512
+    desired: 2
+
+datadog:
+  enabled: false
+  api_key_secret_arn: ~
+  image: public.ecr.aws/datadog/agent:7.83.1

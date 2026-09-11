@@ -1,0 +1,25 @@
+# Synthetic values used to prove offline configuration rendering.
+cluster_name: idea-test1
+administrator_email: admin@example.invalid
+aws_account_id: "123456789012"
+aws_dns_suffix: amazonaws.com
+aws_partition: aws
+aws_region: us-east-2
+ssh_key_pair_name: idea-test1-key
+vpc_cidr_block: 203.0.113.0/24
+base_os: amazonlinux2023
+instance_type: m7i.large
+volume_size: 200
+volume_type: gp3
+storage_apps_provider: efs
+storage_data_provider: efs
+directory_service_provider: aws_managed_activedirectory
+metrics_provider: cloudwatch
+alb_public: true
+enable_aws_backup: false
+enabled_modules:
+  - metrics
+  - scheduler
+# Every new cluster runs its control plane as container tasks. The installer writes this
+# key, and `config generate` refuses a new cluster whose values file does not say.
+enable_ecs: true

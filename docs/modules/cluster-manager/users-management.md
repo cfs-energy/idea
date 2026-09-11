@@ -99,15 +99,15 @@ Commands:
 For example, here is how to create a new user, setting a temp password and giving this user admin permission
 
 ```bash
-# ideactl accounts create-user --email "mcrozes@myemail.com" --password "Password123@" --username "mcrozes2" --sudo --email-verified
+# ideactl accounts create-user --email "sampleuser@example.com" --password "Password123@" --username "sampleuser2" --sudo --email-verified
 {
-  "username": "mcrozes2",
-  "email": "mcrozes@myemail.com",
+  "username": "sampleuser2",
+  "email": "sampleuser@example.com",
   "uid": 5068,
   "gid": 5077,
-  "group_name": "mcrozes2-user-group",
+  "group_name": "sampleuser2-user-group",
   "login_shell": "/bin/bash",
-  "home_dir": "/data/home/mcrozes2",
+  "home_dir": "/data/home/sampleuser2",
   "sudo": true,
   "status": "CONFIRMED",
   "enabled": true,

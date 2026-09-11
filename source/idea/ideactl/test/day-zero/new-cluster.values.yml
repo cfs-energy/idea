@@ -1,0 +1,23 @@
+cluster_name: idea-test1
+administrator_email: admin@example.invalid
+aws_account_id: "123456789012"
+aws_dns_suffix: amazonaws.com
+aws_partition: aws
+aws_region: us-east-2
+ssh_key_pair_name: idea-test1-key
+vpc_cidr_block: 192.0.2.0/16
+base_os: amazonlinux2023
+instance_type: m7i.large
+volume_size: 200
+volume_type: gp3
+storage_apps_provider: efs
+storage_data_provider: efs
+directory_service_provider: aws_managed_activedirectory
+metrics_provider: cloudwatch
+enable_aws_backup: false
+enable_ecs: true
+enabled_modules:
+  - metrics
+  - scheduler
+  - virtual-desktop-controller
+  - bastion-host

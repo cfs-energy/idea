@@ -111,9 +111,9 @@ stack: idea-beta-cluster-manager, status: DELETE_IN_PROGRESS
 stack: idea-beta-cluster, status: DELETE_COMPLETE
 disabling termination protection for stack: idea-beta-bootstrap
 terminating cloud formation stack: idea-beta-bootstrap
-found cluster s3 bucket: idea-beta-cluster-us-east-2-549172027899
-deleting s3 bucket: idea-beta-cluster-us-east-2-549172027899 for cluster ...
-bucket idea-beta-cluster-us-east-2-549172027899 deleted successfully
+found cluster s3 bucket: idea-beta-cluster-us-east-2-123456789012
+deleting s3 bucket: idea-beta-cluster-us-east-2-123456789012 for cluster ...
+bucket idea-beta-cluster-us-east-2-123456789012 deleted successfully
 +--------------------------------------------------------------------------+
 | Table Name                                                               |
 +--------------------------------------------------------------------------+

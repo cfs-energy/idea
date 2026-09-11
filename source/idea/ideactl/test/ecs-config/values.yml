@@ -1,0 +1,11 @@
+# Synthetic values for the ECS template render.
+cluster_name: idea-test1
+administrator_email: admin@example.invalid
+aws_account_id: "123456789012"
+aws_dns_suffix: amazonaws.com
+aws_partition: aws
+aws_region: us-east-2
+ssh_key_pair_name: idea-test1-key
+vpc_cidr_block: 203.0.113.0/24
+base_os: amazonlinux2023
+enable_ecs: true

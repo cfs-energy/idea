@@ -1,0 +1,11 @@
+# working artifacts that carry account ids / cluster names; never commit
+docs/port/
+tools/parity/live/
+tools/parity/fixtures/
+node_modules/
+cdk.out*/
+dist/
+tools/e2e/reference/
+
+# written by the local database emulator the cluster-config tests start
+dynamodb-local-metadata.json

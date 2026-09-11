@@ -635,10 +635,26 @@ class SchedulerStack(IdeaBaseStack):
         )
 
     def build_cluster_settings(self):
+        # The scheduler and the execution hosts both derive the PBS server name from
+        # private_dns_name. Pointing it at the cluster DNS record rather than the
+        # instance lets a replaced scheduler keep its name, so execution hosts do not
+        # need reconfiguring and running jobs survive. Off by default: turning it on for
+        # an existing cluster renames its PBS server, and execution hosts already running
+        # jobs would not follow the change.
+        use_stable_server_name = self.context.config().get_bool(
+            'scheduler.use_stable_server_name', default=False
+        )
+        if use_stable_server_name:
+            private_dns_name = self.context.config().get_string(
+                'scheduler.hostname', required=True
+            )
+        else:
+            private_dns_name = self.ec2_instance.attr_private_dns_name
+
         cluster_settings = {
             'deployment_id': self.deployment_id,
             'private_ip': self.ec2_instance.attr_private_ip,
-            'private_dns_name': self.ec2_instance.attr_private_dns_name,
+            'private_dns_name': private_dns_name,
         }
 
         is_public = self.context.config().get_bool('scheduler.public', default=False)

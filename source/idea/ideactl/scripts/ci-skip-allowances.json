@@ -1,0 +1,12 @@
+{
+  "test/M-BINARY2/smoke.test.ts": "The release executables and archives are build outputs, absent until the distribution build has run.",
+  "test/cutover-killers/cutover-killers.test.ts": "A Java runtime is optional only in a checkout that declares it has no prerequisites.",
+  "test/g-backup/backup-continuity.test.ts": "Captured deployed templates are private and optional.",
+  "test/g-shapes/alternate-shapes.test.ts": "Private alternate-shape references are optional.",
+  "test/installer/installer-params.test.ts": "Captured installer values are private and optional.",
+  "test/jinja-branches/python-parity.test.ts": "The Python rendering oracle is optional only in a checkout that declares it has no prerequisites.",
+  "test/retain-stateful/retain-stateful.test.ts": "Captured deployed templates are private and optional; with none present there is nothing to itemise.",
+  "test/shapes/shape-matrix.test.ts": "Private alternate-shape references are optional.",
+  "test/upgrade-rehearsal/rehearse.test.ts": "The captured development fixture is private and optional.",
+  "test/w19/cluster-config-db.test.ts": "The captured synchronization oracle and local database service are optional."
+}

@@ -44,17 +44,6 @@ def update_version(c, version):
         with open(idea_admin_sh, 'w') as f:
             f.write(content)
 
-        print(f'updating idea-admin-windows.ps1 with version: {version}')
-        idea_admin_ps1 = os.path.join(
-            idea.props.project_root_dir, 'idea-admin-windows.ps1'
-        )
-        with open(idea_admin_ps1, 'r') as f:
-            content = f.read()
-            replace_old = f'$IDEARevision = if ($Env:IDEA_REVISION) {{$Env:IDEA_REVISION}} else {{"v{old_version}"}}'
-            replace_new = f'$IDEARevision = if ($Env:IDEA_REVISION) {{$Env:IDEA_REVISION}} else {{"v{version}"}}'
-            content = content.replace(replace_old, replace_new)
-        with open(idea_admin_ps1, 'w') as f:
-            f.write(content)
 
         # print(f'updating integrated-digital-engineering-on-aws.template with version: {version}')
         # cfn_template = os.path.join(idea.props.project_deployment_dir, 'integrated-digital-engineering-on-aws.template')
@@ -137,7 +126,6 @@ def build_opensource_dist(c):
         'IDEA_VERSION.txt',
         'software_versions.yml',
         'idea-admin.sh',
-        'idea-admin-windows.ps1',
     ]
     for target in targets:
         if os.path.isdir(os.path.join(idea.props.project_root_dir, target)):

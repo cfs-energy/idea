@@ -1,0 +1,3 @@
+# Customer managed CMK. Every templated kms_key_id carries this key id.
+kms_key_type: customer-managed
+kms_key_id: aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee

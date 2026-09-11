@@ -58,7 +58,10 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
         self._converter = OpenPBSConverter(context=self._context, logger=self._logger)
 
     def is_ready(self) -> bool:
-        result = self._shell.invoke('systemctl status pbs', shell=True)
+        # Ask the server rather than the init system. systemd reports the pbs unit active
+        # while pbs_comm and pbs_sched are up even after pbs_server has exited, and a
+        # container has no systemd at all. qstat -B answers only when the server does.
+        result = self._shell.invoke('/opt/pbs/bin/qstat -B', shell=True)
         return result.returncode == 0
 
     def list_nodes(self, host: Optional[str] = None, **kwargs) -> List[SocaComputeNode]:
@@ -336,7 +339,9 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
 
             json_response = Utils.from_json(result.stdout)
             queues = Utils.get_value_as_dict('Queue', json_response)
-            if len(queues.keys()) == 0:
+            # A server with no queues yet, which is every first start, comes back as None
+            # rather than an empty mapping.
+            if queues is None or len(queues.keys()) == 0:
                 return []
 
             response = []

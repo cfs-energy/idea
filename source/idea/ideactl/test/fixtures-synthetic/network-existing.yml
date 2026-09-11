@@ -1,0 +1,8 @@
+# Existing VPC. Merged over network-new.yml.
+use_existing_vpc: true
+vpc_id: vpc-000000000000000a1
+private_subnet_ids:
+  - subnet-000000000000000b1
+  - subnet-000000000000000b2
+public_subnet_ids:
+  - subnet-000000000000000c1

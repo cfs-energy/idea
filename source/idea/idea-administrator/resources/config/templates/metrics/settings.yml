@@ -6,7 +6,7 @@
 # graphana, visualizations and dashboards is out of IDEA scope.
 # you need to manually configure the applicable dashboards based on the metrics provider you've configured for the cluster.
 
-# provider can be one of [cloudwatch, amazon_managed_prometheus, prometheus]
+# provider can be one of [cloudwatch, amazon_managed_prometheus, prometheus, dogstatsd]
 provider: "{{metrics_provider}}"
 
 {% if metrics_provider == 'cloudwatch' %}
@@ -21,6 +21,15 @@ cloudwatch:
   # Specifies in seconds the maximum amount of time that metrics remain in the memory buffer before being sent to the server.
   # No matter the setting for this, if the size of the metrics in the buffer reaches 40 KB or 20 different metrics, the metrics are immediately sent to the server.
   force_flush_interval: 60
+{% endif %}
+
+{% if metrics_provider == 'dogstatsd' %}
+dogstatsd:
+  # Where the modules send metrics. A Datadog agent next to the module (a sidecar, or
+  # an agent on the host) receives them; nothing is provisioned in AWS for this provider.
+  # udp://host:port, or unix:///path/to/dsd.socket for an agent sharing a volume.
+  # DD_DOGSTATSD_URL in the module environment overrides this.
+  url: udp://127.0.0.1:8125
 {% endif %}
 
 {% if metrics_provider == 'amazon_managed_prometheus' %}

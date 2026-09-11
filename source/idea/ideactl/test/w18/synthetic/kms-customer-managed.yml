@@ -1,0 +1,3 @@
+# customer managed CMK: every *.kms_key_id in the templates carries the key id.
+kms_key_type: customer-managed
+kms_key_id: 00000000-1111-2222-3333-444444444444

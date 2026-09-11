@@ -17,7 +17,188 @@ on:
         required: false
         default: ''
         type: string
+      control_plane_image_name:
+        description: 'Repository name for the control-plane image. Leave empty for the released image. A non-main dispatch must set this and scheduler_image_name.'
+        required: false
+        default: ''
+        type: string
+      scheduler_image_name:
+        description: 'Repository name for the scheduler image. Leave empty for the released image. A non-main dispatch must set this and control_plane_image_name.'
+        required: false
+        default: ''
+        type: string
 jobs:
+  build_ideactl_artifacts:
+    name: Build ideactl macOS arm64
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: source/idea/ideactl
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up release runtime
+        uses: actions/setup-node@v4
+        with:
+          node-version: '26.7.0'
+          cache: npm
+          cache-dependency-path: source/idea/ideactl/package-lock.json
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Check package version
+        run: |
+          PACKAGE_VERSION=$(node --input-type=module -e 'import packageJson from "./package.json" with { type: "json" }; process.stdout.write(packageJson.version)')
+          RELEASE_VERSION=$(tr -d '[:space:]' < ../../../IDEA_VERSION.txt)
+          if [ "$PACKAGE_VERSION" != "$RELEASE_VERSION" ]; then
+            echo "::error::ideactl package version ${PACKAGE_VERSION} does not match IDEA_VERSION.txt ${RELEASE_VERSION}."
+            exit 1
+          fi
+      - name: Install dependencies
+        run: npm ci
+      - name: Build the macOS release file
+        run: npm run build:dist -- --target darwin-arm64
+      - name: Test the macOS release file from an empty directory
+        run: |
+          set -euo pipefail
+          ARTIFACT="${PWD}/dist/release/darwin-arm64/ideactl"
+          SMOKE_ROOT=$(mktemp -d)
+          trap 'rm -rf "$SMOKE_ROOT"' EXIT
+          mkdir -p "$SMOKE_ROOT/config" "$SMOKE_ROOT/home" "$SMOKE_ROOT/tmp" "$SMOKE_ROOT/empty-path" "$SMOKE_ROOT/work"
+          cp test/shell-path/values.yml "$SMOKE_ROOT/values.yml"
+          (
+            cd "$SMOKE_ROOT/work"
+            env -i \
+              HOME="$SMOKE_ROOT/home" \
+              IDEA_USER_HOME="$SMOKE_ROOT/home/.idea" \
+              LANG=en_US.UTF-8 \
+              NODE_PATH= \
+              PATH="$SMOKE_ROOT/empty-path" \
+              TMPDIR="$SMOKE_ROOT/tmp" \
+              "$ARTIFACT" about
+            env -i \
+              HOME="$SMOKE_ROOT/home" \
+              IDEA_USER_HOME="$SMOKE_ROOT/home/.idea" \
+              LANG=en_US.UTF-8 \
+              NODE_PATH= \
+              PATH="$SMOKE_ROOT/empty-path" \
+              TMPDIR="$SMOKE_ROOT/tmp" \
+              "$ARTIFACT" config generate \
+                --values-file "$SMOKE_ROOT/values.yml" \
+                --config-dir "$SMOKE_ROOT/config" \
+                --force
+          )
+          test -s "$SMOKE_ROOT/config/config/idea.yml"
+      - name: Upload the macOS release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ideactl-darwin-arm64
+          path: |
+            source/idea/ideactl/dist/release/darwin-arm64/ideactl
+            source/idea/ideactl/dist/release/ideactl-v*-darwin-arm64.tar.gz
+            source/idea/ideactl/dist/release/ideactl-v*-darwin-arm64.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 7
+  build_ideactl_linux_artifact:
+    name: Build ideactl Linux arm64
+    runs-on: ubuntu-24.04-arm
+    defaults:
+      run:
+        working-directory: source/idea/ideactl
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up release runtime
+        uses: actions/setup-node@v4
+        with:
+          node-version: '26.7.0'
+          cache: npm
+          cache-dependency-path: source/idea/ideactl/package-lock.json
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Check package version
+        run: |
+          PACKAGE_VERSION=$(node --input-type=module -e 'import packageJson from "./package.json" with { type: "json" }; process.stdout.write(packageJson.version)')
+          RELEASE_VERSION=$(tr -d '[:space:]' < ../../../IDEA_VERSION.txt)
+          if [ "$PACKAGE_VERSION" != "$RELEASE_VERSION" ]; then
+            echo "::error::ideactl package version ${PACKAGE_VERSION} does not match IDEA_VERSION.txt ${RELEASE_VERSION}."
+            exit 1
+          fi
+      - name: Install dependencies
+        run: npm ci
+      - name: Build the Linux release file
+        run: npm run build:dist -- --target linux-arm64
+      - name: Test the Linux release file from an empty directory
+        run: |
+          set -euo pipefail
+          ARTIFACT="${PWD}/dist/release/linux-arm64/ideactl"
+          chmod +x "$ARTIFACT"
+          SMOKE_ROOT=$(mktemp -d)
+          trap 'rm -rf "$SMOKE_ROOT"' EXIT
+          mkdir -p "$SMOKE_ROOT/config" "$SMOKE_ROOT/home" "$SMOKE_ROOT/tmp" "$SMOKE_ROOT/empty-path" "$SMOKE_ROOT/work"
+          cp test/shell-path/values.yml "$SMOKE_ROOT/values.yml"
+          (
+            cd "$SMOKE_ROOT/work"
+            env -i \
+              HOME="$SMOKE_ROOT/home" \
+              IDEA_USER_HOME="$SMOKE_ROOT/home/.idea" \
+              LANG=en_US.UTF-8 \
+              NODE_PATH= \
+              PATH="$SMOKE_ROOT/empty-path" \
+              TMPDIR="$SMOKE_ROOT/tmp" \
+              "$ARTIFACT" about
+            env -i \
+              HOME="$SMOKE_ROOT/home" \
+              IDEA_USER_HOME="$SMOKE_ROOT/home/.idea" \
+              LANG=en_US.UTF-8 \
+              NODE_PATH= \
+              PATH="$SMOKE_ROOT/empty-path" \
+              TMPDIR="$SMOKE_ROOT/tmp" \
+              "$ARTIFACT" config generate \
+                --values-file "$SMOKE_ROOT/values.yml" \
+                --config-dir "$SMOKE_ROOT/config" \
+                --force
+          )
+          test -s "$SMOKE_ROOT/config/config/idea.yml"
+      - name: Test the Linux release file in a container image
+        run: |
+          set -euo pipefail
+          IMAGE=ideactl-linux-smoke
+          SMOKE_ROOT=$(mktemp -d)
+          trap 'rm -rf "$SMOKE_ROOT"' EXIT
+          mkdir -p "$SMOKE_ROOT/config"
+          cp test/shell-path/values.yml "$SMOKE_ROOT/values.yml"
+          docker build \
+            --tag "$IMAGE" \
+            --file scripts/ideactl-linux.Dockerfile \
+            dist/release/linux-arm64
+          docker run --rm \
+            --env PATH=/tmp/empty \
+            --workdir /tmp/work \
+            "$IMAGE" \
+            about
+          docker run --rm \
+            --env PATH=/tmp/empty \
+            --workdir /tmp/work \
+            --volume "$SMOKE_ROOT/values.yml:/tmp/values.yml:ro" \
+            --volume "$SMOKE_ROOT/config:/tmp/config" \
+            "$IMAGE" \
+            config generate \
+              --values-file /tmp/values.yml \
+              --config-dir /tmp/config \
+              --force
+          test -s "$SMOKE_ROOT/config/config/idea.yml"
+      - name: Upload the Linux release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ideactl-linux-arm64
+          path: |
+            source/idea/ideactl/dist/release/linux-arm64/ideactl
+            source/idea/ideactl/dist/release/ideactl-v*-linux-arm64.tar.gz
+            source/idea/ideactl/dist/release/ideactl-v*-linux-arm64.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 7
   build_push:
     runs-on: ubuntu-large
     permissions:
@@ -57,3 +238,158 @@ jobs:
         run: |
           VERSION=$(cat IDEA_VERSION.txt)
           invoke docker.build-push-multi "$ECR_REGISTRY" "$VERSION" --image-name "$IMAGE_NAME" --gha-cache
+  build_push_ideactl:
+    runs-on: ubuntu-large
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Validate the image names
+        env:
+          CONTROL_PLANE_IMAGE_NAME: ${{ github.event.inputs.control_plane_image_name }}
+          SCHEDULER_IMAGE_NAME: ${{ github.event.inputs.scheduler_image_name }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$GITHUB_REF_NAME" != "main" ] && { [ -z "$CONTROL_PLANE_IMAGE_NAME" ] || [ -z "$SCHEDULER_IMAGE_NAME" ]; }; then
+            echo "::error::A dispatch from $GITHUB_REF_NAME must set both control_plane_image_name and scheduler_image_name, or it would overwrite released images from an unmerged ref."
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+      - name: Check version consistency
+        run: |
+          SH_REV=$(grep -m1 '^IDEA_REVISION=' idea-admin.sh | sed -E 's/.*:-"([^"]+)"\}.*/\1/')
+          VERSION=$(tr -d '[:space:]' < IDEA_VERSION.txt)
+          EXPECTED="v${VERSION}"
+          echo "idea-admin.sh revision:          ${SH_REV}"
+          echo "IDEA_VERSION.txt:                ${VERSION} (expected revision ${EXPECTED})"
+          if [ "${SH_REV}" != "${EXPECTED}" ]; then
+            echo "::error::Version mismatch: IDEA_VERSION.txt=${VERSION} (expected revision ${EXPECTED}), idea-admin.sh default=${SH_REV}"
+            exit 1
+          fi
+          echo "Version consistency check passed (${EXPECTED})"
+      - name: Setup Development Environment
+        uses: ./.github/actions/setup_dev_environment
+      - name: Build Modules
+        uses: ./.github/actions/build_modules
+      - name: Configure AWS Credentials for ECR Push
+        uses: aws-actions/configure-aws-credentials@v4.2.1
+        with:
+          audience: sts.amazonaws.com
+          aws-region: us-east-1
+          role-to-assume: ${{ secrets.ECR_ROLE }}
+      - name: Stage DCV packages
+        run: |
+          set -euo pipefail
+          PACKAGE_DIR=/tmp/dcv-packages
+          DOWNLOAD_HOST=https://d1uj6qtbmh3dt5.cloudfront.net
+          mkdir -p "$PACKAGE_DIR"
+          curl --fail --location --silent --show-error -o "$PACKAGE_DIR/NICE-GPG-KEY" "$DOWNLOAD_HOST/NICE-GPG-KEY"
+          curl --fail --location --silent --show-error -o "$PACKAGE_DIR/nice-dcv-session-manager-broker-amzn2023.noarch.rpm" "$DOWNLOAD_HOST/nice-dcv-session-manager-broker-amzn2023.noarch.rpm"
+          curl --fail --location --silent --show-error -o "$PACKAGE_DIR/nice-dcv-connection-gateway-amzn2023.x86_64.rpm" "$DOWNLOAD_HOST/nice-dcv-connection-gateway-amzn2023.x86_64.rpm"
+          curl --fail --location --silent --show-error -o "$PACKAGE_DIR/nice-dcv-connection-gateway-amzn2023.aarch64.rpm" "$DOWNLOAD_HOST/nice-dcv-connection-gateway-amzn2023.aarch64.rpm"
+          curl --fail --location --silent --show-error -o "$PACKAGE_DIR/nice-dcv-amzn2023-x86_64.tgz" "$DOWNLOAD_HOST/nice-dcv-amzn2023-x86_64.tgz"
+          curl --fail --location --silent --show-error -o "$PACKAGE_DIR/nice-dcv-amzn2023-aarch64.tgz" "$DOWNLOAD_HOST/nice-dcv-amzn2023-aarch64.tgz"
+          (
+            cd "$PACKAGE_DIR"
+            sha256sum \
+              nice-dcv-session-manager-broker-amzn2023.noarch.rpm \
+              nice-dcv-connection-gateway-amzn2023.x86_64.rpm \
+              nice-dcv-connection-gateway-amzn2023.aarch64.rpm \
+              nice-dcv-amzn2023-x86_64.tgz \
+              nice-dcv-amzn2023-aarch64.tgz \
+              > checksums.txt
+          )
+      - name: Build and Push Scheduler and Control-Plane Images
+        env:
+          ECR_REGISTRY: ${{ github.event.inputs.ecr_repository }}
+          CONTROL_PLANE_IMAGE_NAME: ${{ github.event.inputs.control_plane_image_name || 'idea-control-plane' }}
+          SCHEDULER_IMAGE_NAME: ${{ github.event.inputs.scheduler_image_name || 'idea-scheduler-pbs' }}
+        run: |
+          set -euo pipefail
+          VERSION=$(tr -d '[:space:]' < IDEA_VERSION.txt)
+          ECR_REGISTRY="${ECR_REGISTRY:-$(sed -nE 's|^IDEA_DOCKER_REPO_DEFAULT="([^/]+/[^/]+)/.*"$|\1|p' idea-admin.sh)}"
+          if [ -z "${ECR_REGISTRY}" ]; then
+            echo "::error::Could not determine the public registry from idea-admin.sh."
+            exit 1
+          fi
+          cp "dist/all-${VERSION}.tar.gz" "deployment/ecr/idea-scheduler-pbs/all-${VERSION}.tar.gz"
+          cp "dist/all-${VERSION}.tar.gz" "deployment/ecr/idea-control-plane/all-${VERSION}.tar.gz"
+          cp "dist/idea-dcv-connection-gateway-${VERSION}.tar.gz" "deployment/ecr/idea-control-plane/idea-dcv-connection-gateway-${VERSION}.tar.gz"
+          aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin "${ECR_REGISTRY}"
+          docker buildx create --use --platform linux/amd64,linux/arm64 --name idea-images-builder
+          docker buildx inspect --bootstrap
+          docker buildx build --push --platform linux/amd64,linux/arm64 \
+            --build-arg IDEA_VERSION="${VERSION}" \
+            --cache-from type=gha,scope=idea-scheduler-pbs \
+            --cache-to type=gha,mode=max,scope=idea-scheduler-pbs \
+            -t "${ECR_REGISTRY}/${SCHEDULER_IMAGE_NAME}:v${VERSION}" \
+            deployment/ecr/idea-scheduler-pbs
+          docker buildx build --push --platform linux/amd64,linux/arm64 \
+            --build-arg IDEA_VERSION="${VERSION}" \
+            --build-arg PBS_IMAGE="${ECR_REGISTRY}/${SCHEDULER_IMAGE_NAME}:v${VERSION}" \
+            --build-context dcv-packages=/tmp/dcv-packages \
+            --cache-from type=gha,scope=idea-control-plane \
+            --cache-to type=gha,mode=max,scope=idea-control-plane \
+            -t "${ECR_REGISTRY}/${CONTROL_PLANE_IMAGE_NAME}:v${VERSION}" \
+            -t "${ECR_REGISTRY}/${CONTROL_PLANE_IMAGE_NAME}:${VERSION}" \
+            -t "${ECR_REGISTRY}/${CONTROL_PLANE_IMAGE_NAME}:latest" \
+            -f deployment/ecr/idea-control-plane/Dockerfile .
+          SMOKE_ROOT=$(mktemp -d)
+          trap 'rm -rf "$SMOKE_ROOT"' EXIT
+          mkdir -p "$SMOKE_ROOT/config"
+          cp source/idea/ideactl/test/shell-path/values.yml "$SMOKE_ROOT/values.yml"
+          IMAGE="${ECR_REGISTRY}/${CONTROL_PLANE_IMAGE_NAME}:v${VERSION}"
+          docker run --rm --workdir /tmp/work "$IMAGE" ideactl about
+          docker run --rm \
+            --workdir /tmp/work \
+            --volume "$SMOKE_ROOT/values.yml:/tmp/values.yml:ro" \
+            --volume "$SMOKE_ROOT/config:/tmp/config" \
+            "$IMAGE" \
+            ideactl config generate \
+              --values-file /tmp/values.yml \
+              --config-dir /tmp/config \
+              --force
+          test -s "$SMOKE_ROOT/config/config/idea.yml"
+  publish_ideactl_artifacts:
+    if: github.event_name == 'push' && github.ref_name == 'main'
+    needs:
+      - build_ideactl_artifacts
+      - build_ideactl_linux_artifact
+      - build_push_ideactl
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ideactl-*
+          path: release
+          merge-multiple: true
+      - name: Verify and combine checksums
+        working-directory: release
+        run: |
+          set -euo pipefail
+          cat ./*.tar.gz.sha256 | LC_ALL=C sort > SHA256SUMS
+          sha256sum --check SHA256SUMS
+      - name: Publish source release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION=$(tr -d '[:space:]' < IDEA_VERSION.txt)
+          TAG="v${VERSION}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" --clobber \
+              release/*.tar.gz \
+              release/*.tar.gz.sha256 \
+              release/SHA256SUMS
+          else
+            gh release create "$TAG" \
+              release/*.tar.gz \
+              release/*.tar.gz.sha256 \
+              release/SHA256SUMS \
+              --target "$GITHUB_SHA" \
+              --title "IDEA ${VERSION}" \
+              --notes "Self-contained ideactl executables and checksums for this release."
+          fi

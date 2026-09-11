@@ -1,0 +1,61 @@
+name: ideactl gates
+on:
+  pull_request:
+    paths-ignore:
+      - 'docs/**'
+  push:
+    branches:
+      - main
+      - 'release-*'
+    paths-ignore:
+      - 'docs/**'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  gates:
+    runs-on: ubuntu-large
+    defaults:
+      run:
+        working-directory: source/idea/ideactl
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "26.7.0"
+          cache: npm
+          cache-dependency-path: source/idea/ideactl/package-lock.json
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Check package version
+        run: |
+          PACKAGE_VERSION=$(node --input-type=module -e 'import packageJson from "./package.json" with { type: "json" }; process.stdout.write(packageJson.version)')
+          RELEASE_VERSION=$(tr -d '[:space:]' < ../../../IDEA_VERSION.txt)
+          if [ "$PACKAGE_VERSION" != "$RELEASE_VERSION" ]; then
+            echo "::error::ideactl package version ${PACKAGE_VERSION} does not match IDEA_VERSION.txt ${RELEASE_VERSION}."
+            exit 1
+          fi
+      - name: Install dependencies
+        run: npm ci
+      - name: Build without changing tracked files
+        run: |
+          npm run build
+          git diff --exit-code -- .
+      - name: Run credential-free gates
+        id: automated
+        # A runner has no captured cluster inputs: tools/parity/live, tools/parity/fixtures and
+        # docs/port are untracked by design, because they hold real cluster data and this
+        # repository is public. The fixture helper is fail-closed, so without this variable the
+        # dependent files throw at setup and the suite cannot pass here at all. Declaring the
+        # checkout public makes them skip instead, and the skip-policy gate records each one with
+        # its reason so the skips stay visible. This job therefore proves the credential-free half
+        # only; it is not evidence about anything that needs a captured cluster.
+        env:
+          IDEACTL_PUBLIC_CHECKOUT: '1'
+        run: node scripts/ci-gates.mjs all
+      - name: Print credential-backed gates after an earlier failure
+        if: always() && steps.automated.outcome == 'skipped'
+        run: node scripts/ci-gates.mjs human

@@ -1,0 +1,12 @@
+{
+  "app": "node dist/src/cdk/app.js",
+  "context": {
+    "cli-telemetry": false,
+    "aws-cdk:enableDiffNoFail": "true",
+    "@aws-cdk/core:stackRelativeExports": "true",
+    "@aws-cdk/aws-ecr-assets:dockerIgnoreSupport": true,
+    "@aws-cdk/aws-kms:defaultKeyPolicies": true,
+    "@aws-cdk/aws-ecs-patterns:removeDefaultDesiredCount": true,
+    "@aws-cdk/customresources:installLatestAwsSdkDefault": false
+  }
+}

@@ -71,7 +71,7 @@ searching for applicable ec2 instances ...
 | i-0f45cb&#x3C;REDACTED> | idea-prerc-cluster-manager | ip-10-0-211-98.us-east-2.compute.internal | 10.0.211.98 | running |
 +---------------------+----------------------------+-------------------------------------------+-------------+---------+
 ? Are you sure you want to patch the above running ec2 instances for module: cluster-manager? Yes
-uploading package: /Users/mcrozes/Solution-for-scale-out-computing-on-aws/dist/idea-cluster-manager-3.0.0.tar.gz to
+uploading package: /Users/sampleuser/Solution-for-scale-out-computing-on-aws/dist/idea-cluster-manager-3.0.0.tar.gz to
 s3://idea-prerc-cluster-us-east-2-&#x3C;REDACTED>/idea/patches/idea-cluster-manager-3.0.0.tar.gz ...
 patch command: sudo /bin/bash /root/bootstrap/latest/cluster-manager/install_app.sh s3://idea-prerc-cluster-us-east-2-&#x3C;REDACTED>/idea/patches/idea-cluster-manager-3.0.0.tar.gz >>
 /root/bootstrap/logs/patch.log

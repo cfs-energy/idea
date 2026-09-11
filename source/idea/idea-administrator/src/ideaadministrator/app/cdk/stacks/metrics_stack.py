@@ -62,6 +62,9 @@ class MetricsStack(IdeaBaseStack):
             self.build_amazon_managed_prometheus()
         elif self.is_prometheus():
             self.build_prometheus()
+        elif self.is_dogstatsd():
+            # the agent the metrics go to is deployed with the modules, not by this stack
+            pass
         else:
             raise exceptions.general_exception(
                 f'metrics provider: {self.get_metrics_provider()} not supported'
@@ -83,6 +86,9 @@ class MetricsStack(IdeaBaseStack):
 
     def is_prometheus(self) -> bool:
         return self.get_metrics_provider() == constants.METRICS_PROVIDER_PROMETHEUS
+
+    def is_dogstatsd(self) -> bool:
+        return self.get_metrics_provider() == constants.METRICS_PROVIDER_DOGSTATSD
 
     def build_cloudwatch(self):
         dashboard_name = self.context.config().get_string(

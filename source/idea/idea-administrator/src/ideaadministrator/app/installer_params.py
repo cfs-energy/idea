@@ -999,6 +999,10 @@ class MetricsProviderPrompt(DefaultPrompt[str]):
                 disabled='aps' not in available_services,
             ),
             SocaUserInputChoice(
+                title='Datadog agent (DogStatsD)',
+                value=constants.METRICS_PROVIDER_DOGSTATSD,
+            ),
+            SocaUserInputChoice(
                 title='Custom Prometheus Server',
                 value=constants.METRICS_PROVIDER_PROMETHEUS,
             ),

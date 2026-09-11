@@ -1,0 +1,9 @@
+# Existing OpenSearch domain. analytics renders domain_vpc_endpoint_url and skips data_nodes.
+use_existing_vpc: true
+vpc_id: vpc-000000000000000a1
+private_subnet_ids:
+  - subnet-000000000000000b1
+public_subnet_ids:
+  - subnet-000000000000000c1
+use_existing_opensearch_cluster: true
+opensearch_domain_endpoint: opensearch.example.invalid

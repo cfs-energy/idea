@@ -1,0 +1,2 @@
+# dogstatsd metrics: no prometheus package config, dogstatsd url only.
+metrics_provider: dogstatsd

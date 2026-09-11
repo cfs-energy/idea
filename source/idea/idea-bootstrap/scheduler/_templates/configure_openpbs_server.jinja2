@@ -2,9 +2,13 @@
 
 {% include '_templates/linux/openpbs.jinja2' %}
 
+{% set scheduler_dns_name = context.config.get_string('scheduler.private_dns_name', required=True) %}
 SCHEDULER_PRIVATE_IP=$(get_server_ip)
-SCHEDULER_HOSTNAME=$(hostname)
-SCHEDULER_HOSTNAME_ALT=$(hostname -s)
+# The server takes its name from the same setting the execution hosts read, so the two
+# cannot drift. A host that comes back under a different name is then only a DNS change,
+# not a rebuild.
+SCHEDULER_HOSTNAME={{ scheduler_dns_name }}
+SCHEDULER_HOSTNAME_ALT={{ scheduler_dns_name.split('.')[0] }}
 
 log_info "configure: /etc/hosts"
 echo ${SCHEDULER_PRIVATE_IP} ${SCHEDULER_HOSTNAME} ${SCHEDULER_HOSTNAME_ALT} >> /etc/hosts

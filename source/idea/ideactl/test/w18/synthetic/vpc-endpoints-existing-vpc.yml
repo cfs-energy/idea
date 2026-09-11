@@ -1,0 +1,6 @@
+# use_vpc_endpoints on an existing VPC: the endpoint lists come back [] / {} with no EC2 call.
+use_vpc_endpoints: true
+use_existing_vpc: true
+vpc_id: vpc-000000000000000a1
+private_subnet_ids: [subnet-000000000000000b1, subnet-000000000000000b2]
+public_subnet_ids: [subnet-000000000000000c1]

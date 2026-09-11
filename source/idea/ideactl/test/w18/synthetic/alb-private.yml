@@ -1,0 +1,2 @@
+# private ALB: cluster waf/bot_control and bastion-host.public all follow alb_public.
+alb_public: false

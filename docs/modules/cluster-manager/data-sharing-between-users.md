@@ -22,7 +22,7 @@ description: How to share your result files on IDEA
 
 <figure><img src="../../.gitbook/assets/6509b2be-19e1-423f-9a16-150c43dcdc83.png" alt=""><figcaption></figcaption></figure>
 
-* Open SSH client > connect to HPC IDEA Cluster. Note: If you haven't set this up yet, follow the tutorial here: [https://cidea.cfsenergy.com/#/home/ssh-access](https://cidea.cfsenergy.com/#/home/ssh-access)
+* Open SSH client > connect to HPC IDEA Cluster. Note: If you haven't set this up yet, follow the SSH access tutorial in your IDEA cluster's web console (Home > SSH Access).
 
 <figure><img src="../../.gitbook/assets/00fe6a60-2b44-4820-a641-4b642408f40f.png" alt=""><figcaption></figcaption></figure>
 

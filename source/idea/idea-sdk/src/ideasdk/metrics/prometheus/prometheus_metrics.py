@@ -15,6 +15,7 @@ from ideasdk.utils import Utils
 from typing import List, Dict
 from prometheus_client import Counter, Summary
 from threading import RLock
+import re
 
 
 class PrometheusMetrics(MetricsProviderProtocol):
@@ -85,7 +86,9 @@ class PrometheusMetrics(MetricsProviderProtocol):
         if unit == 'count':
             unit = 'total'
 
-        prometheus_metric_name = f'{metric_name}_{unit}'
+        prometheus_metric_name = re.sub(r'[^a-zA-Z0-9_:]', '_', metric_name)
+        if unit not in ('', 'none'):
+            prometheus_metric_name = f'{prometheus_metric_name}_{unit}'
 
         if metric_type == 'Counter':
             metric = Counter(

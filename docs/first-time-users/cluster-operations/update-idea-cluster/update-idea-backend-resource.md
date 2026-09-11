@@ -60,38 +60,38 @@ re-use code assets for lambda: idea_solution_metrics ...
 
 <CLUSTER_NAME>-cluster: building assets...
 
-[0%] start: Building 0a9c7e320d724b92457f9df9325d6f0014ba434d71d23d0c20c6afb1ca20dc79:549172027899-us-east-2
-[0%] start: Building e8af6af9ddccbfe39cb70b54a772900ec28e77a49433a8f480db9779ec2a71f1:549172027899-us-east-2
-[0%] start: Building 402db69e73fdd83283c5df7754892d7a47e9a026ad3d019a8e42e1dffd79946b:549172027899-us-east-2
-[0%] start: Building fcdcab8ae7b888ac267e0822f4bfc89d5b97c54892fe6e3359036b79ddefe031:549172027899-us-east-2
-[0%] start: Building 821317b1ea7eb21bcb9aafec5de6c305c1a076d6bea89231bef1e43f9ddc8b93:549172027899-us-east-2
-[0%] start: Building b25e3a038f6877199484a5531e47bfd984d7850dd69ff0d0e72cfc5c4f90c2ab:549172027899-us-east-2
-[0%] start: Building 7169cf61baf93fd8b0b1ab7a7b21bfb3097e58e1516fd70e1e4efb52873b58e9:549172027899-us-east-2
-[14%] success: Built 0a9c7e320d724b92457f9df9325d6f0014ba434d71d23d0c20c6afb1ca20dc79:549172027899-us-east-2
-[28%] success: Built e8af6af9ddccbfe39cb70b54a772900ec28e77a49433a8f480db9779ec2a71f1:549172027899-us-east-2
-[42%] success: Built 402db69e73fdd83283c5df7754892d7a47e9a026ad3d019a8e42e1dffd79946b:549172027899-us-east-2
-[57%] success: Built fcdcab8ae7b888ac267e0822f4bfc89d5b97c54892fe6e3359036b79ddefe031:549172027899-us-east-2
-[71%] success: Built 821317b1ea7eb21bcb9aafec5de6c305c1a076d6bea89231bef1e43f9ddc8b93:549172027899-us-east-2
-[85%] success: Built b25e3a038f6877199484a5531e47bfd984d7850dd69ff0d0e72cfc5c4f90c2ab:549172027899-us-east-2
-[100%] success: Built 7169cf61baf93fd8b0b1ab7a7b21bfb3097e58e1516fd70e1e4efb52873b58e9:549172027899-us-east-2
+[0%] start: Building 0a9c7e320d724b92457f9df9325d6f0014ba434d71d23d0c20c6afb1ca20dc79:123456789012-us-east-2
+[0%] start: Building e8af6af9ddccbfe39cb70b54a772900ec28e77a49433a8f480db9779ec2a71f1:123456789012-us-east-2
+[0%] start: Building 402db69e73fdd83283c5df7754892d7a47e9a026ad3d019a8e42e1dffd79946b:123456789012-us-east-2
+[0%] start: Building fcdcab8ae7b888ac267e0822f4bfc89d5b97c54892fe6e3359036b79ddefe031:123456789012-us-east-2
+[0%] start: Building 821317b1ea7eb21bcb9aafec5de6c305c1a076d6bea89231bef1e43f9ddc8b93:123456789012-us-east-2
+[0%] start: Building b25e3a038f6877199484a5531e47bfd984d7850dd69ff0d0e72cfc5c4f90c2ab:123456789012-us-east-2
+[0%] start: Building 7169cf61baf93fd8b0b1ab7a7b21bfb3097e58e1516fd70e1e4efb52873b58e9:123456789012-us-east-2
+[14%] success: Built 0a9c7e320d724b92457f9df9325d6f0014ba434d71d23d0c20c6afb1ca20dc79:123456789012-us-east-2
+[28%] success: Built e8af6af9ddccbfe39cb70b54a772900ec28e77a49433a8f480db9779ec2a71f1:123456789012-us-east-2
+[42%] success: Built 402db69e73fdd83283c5df7754892d7a47e9a026ad3d019a8e42e1dffd79946b:123456789012-us-east-2
+[57%] success: Built fcdcab8ae7b888ac267e0822f4bfc89d5b97c54892fe6e3359036b79ddefe031:123456789012-us-east-2
+[71%] success: Built 821317b1ea7eb21bcb9aafec5de6c305c1a076d6bea89231bef1e43f9ddc8b93:123456789012-us-east-2
+[85%] success: Built b25e3a038f6877199484a5531e47bfd984d7850dd69ff0d0e72cfc5c4f90c2ab:123456789012-us-east-2
+[100%] success: Built 7169cf61baf93fd8b0b1ab7a7b21bfb3097e58e1516fd70e1e4efb52873b58e9:123456789012-us-east-2
 
 <CLUSTER_NAME>-cluster: assets built
 
 <CLUSTER_NAME>-cluster: deploying...
-[0%] start: Publishing 0a9c7e320d724b92457f9df9325d6f0014ba434d71d23d0c20c6afb1ca20dc79:549172027899-us-east-2
-[0%] start: Publishing e8af6af9ddccbfe39cb70b54a772900ec28e77a49433a8f480db9779ec2a71f1:549172027899-us-east-2
-[0%] start: Publishing 402db69e73fdd83283c5df7754892d7a47e9a026ad3d019a8e42e1dffd79946b:549172027899-us-east-2
-[0%] start: Publishing fcdcab8ae7b888ac267e0822f4bfc89d5b97c54892fe6e3359036b79ddefe031:549172027899-us-east-2
-[0%] start: Publishing 821317b1ea7eb21bcb9aafec5de6c305c1a076d6bea89231bef1e43f9ddc8b93:549172027899-us-east-2
-[0%] start: Publishing b25e3a038f6877199484a5531e47bfd984d7850dd69ff0d0e72cfc5c4f90c2ab:549172027899-us-east-2
-[0%] start: Publishing 7169cf61baf93fd8b0b1ab7a7b21bfb3097e58e1516fd70e1e4efb52873b58e9:549172027899-us-east-2
-[14%] success: Published 402db69e73fdd83283c5df7754892d7a47e9a026ad3d019a8e42e1dffd79946b:549172027899-us-east-2
-[28%] success: Published fcdcab8ae7b888ac267e0822f4bfc89d5b97c54892fe6e3359036b79ddefe031:549172027899-us-east-2
-[42%] success: Published 0a9c7e320d724b92457f9df9325d6f0014ba434d71d23d0c20c6afb1ca20dc79:549172027899-us-east-2
-[57%] success: Published 821317b1ea7eb21bcb9aafec5de6c305c1a076d6bea89231bef1e43f9ddc8b93:549172027899-us-east-2
-[71%] success: Published e8af6af9ddccbfe39cb70b54a772900ec28e77a49433a8f480db9779ec2a71f1:549172027899-us-east-2
-[85%] success: Published b25e3a038f6877199484a5531e47bfd984d7850dd69ff0d0e72cfc5c4f90c2ab:549172027899-us-east-2
-[100%] success: Published 7169cf61baf93fd8b0b1ab7a7b21bfb3097e58e1516fd70e1e4efb52873b58e9:549172027899-us-east-2
+[0%] start: Publishing 0a9c7e320d724b92457f9df9325d6f0014ba434d71d23d0c20c6afb1ca20dc79:123456789012-us-east-2
+[0%] start: Publishing e8af6af9ddccbfe39cb70b54a772900ec28e77a49433a8f480db9779ec2a71f1:123456789012-us-east-2
+[0%] start: Publishing 402db69e73fdd83283c5df7754892d7a47e9a026ad3d019a8e42e1dffd79946b:123456789012-us-east-2
+[0%] start: Publishing fcdcab8ae7b888ac267e0822f4bfc89d5b97c54892fe6e3359036b79ddefe031:123456789012-us-east-2
+[0%] start: Publishing 821317b1ea7eb21bcb9aafec5de6c305c1a076d6bea89231bef1e43f9ddc8b93:123456789012-us-east-2
+[0%] start: Publishing b25e3a038f6877199484a5531e47bfd984d7850dd69ff0d0e72cfc5c4f90c2ab:123456789012-us-east-2
+[0%] start: Publishing 7169cf61baf93fd8b0b1ab7a7b21bfb3097e58e1516fd70e1e4efb52873b58e9:123456789012-us-east-2
+[14%] success: Published 402db69e73fdd83283c5df7754892d7a47e9a026ad3d019a8e42e1dffd79946b:123456789012-us-east-2
+[28%] success: Published fcdcab8ae7b888ac267e0822f4bfc89d5b97c54892fe6e3359036b79ddefe031:123456789012-us-east-2
+[42%] success: Published 0a9c7e320d724b92457f9df9325d6f0014ba434d71d23d0c20c6afb1ca20dc79:123456789012-us-east-2
+[57%] success: Published 821317b1ea7eb21bcb9aafec5de6c305c1a076d6bea89231bef1e43f9ddc8b93:123456789012-us-east-2
+[71%] success: Published e8af6af9ddccbfe39cb70b54a772900ec28e77a49433a8f480db9779ec2a71f1:123456789012-us-east-2
+[85%] success: Published b25e3a038f6877199484a5531e47bfd984d7850dd69ff0d0e72cfc5c4f90c2ab:123456789012-us-east-2
+[100%] success: Published 7169cf61baf93fd8b0b1ab7a7b21bfb3097e58e1516fd70e1e4efb52873b58e9:123456789012-us-east-2
 <CLUSTER_NAME>-cluster: creating CloudFormation changeset...
 <CLUSTER_NAME>-cluster | 0/3 | 3:16:48 PM | UPDATE_IN_PROGRESS   | AWS::CloudFormation::Stack                | <CLUSTER_NAME>-cluster User Initiated
 <CLUSTER_NAME>-cluster | 0/3 | 3:16:55 PM | UPDATE_IN_PROGRESS   | AWS::Lambda::Function                     | solution-metrics (solutionmetricsAE489078)

@@ -1,0 +1,2 @@
+# rhel9 hosts: a different AMI out of region_ami_config.yml for every host block.
+base_os: rhel9
