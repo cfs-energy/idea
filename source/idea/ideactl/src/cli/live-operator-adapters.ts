@@ -8,7 +8,7 @@
 import { spawn } from "node:child_process";
 import { basename, dirname, join } from "node:path";
 
-import yaml from "js-yaml";
+import * as yaml from "js-yaml";
 
 import { ClusterConfig, ClusterConfigError, GeneralException } from "../config/cluster-config.ts";
 import { awsClientOptions } from "./aws-client-options.ts";
@@ -22,6 +22,7 @@ import {
   type DeleteClusterDepsFactory,
   type DeleteClusterInstance,
 } from "./commands/delete-cluster.ts";
+import type { HostedZoneRecordSet } from "./commands/delete-cluster.ts";
 import type { RemainingOperatorCommandDeps } from "./commands/utils.ts";
 
 interface AwsActionOptions {
@@ -121,6 +122,10 @@ async function deleteClusterDeps(
   const lazyS3 = async () => {
     const sdk = await import("@aws-sdk/client-s3");
     return { sdk, client: new sdk.S3Client(await clientOptions(options)) };
+  };
+  const lazyRoute53 = async () => {
+    const sdk = await import("@aws-sdk/client-route-53");
+    return { sdk, client: new sdk.Route53Client(await clientOptions(options)) };
   };
   const lazyIam = async () => {
     const sdk = await import("@aws-sdk/client-iam");
@@ -556,6 +561,38 @@ async function deleteClusterDeps(
       if (alarmNames.length === 0) return;
       const { sdk, client } = await lazyCloudWatch();
       await client.send(new sdk.DeleteAlarmsCommand({ AlarmNames: alarmNames }));
+    },
+    async listHostedZoneRecords(hostedZoneId) {
+      const { sdk, client } = await lazyRoute53();
+      const records: HostedZoneRecordSet[] = [];
+      let startRecordName: string | undefined;
+      let startRecordType: import("@aws-sdk/client-route-53").ListResourceRecordSetsCommandInput["StartRecordType"];
+      do {
+        const result = await client.send(
+          new sdk.ListResourceRecordSetsCommand({ HostedZoneId: hostedZoneId, StartRecordName: startRecordName, StartRecordType: startRecordType }),
+        );
+        for (const record of result.ResourceRecordSets ?? []) {
+          if (record.Name === undefined || record.Type === undefined) continue;
+          records.push(record as HostedZoneRecordSet);
+        }
+        startRecordName = result.IsTruncated === true ? result.NextRecordName : undefined;
+        startRecordType = result.IsTruncated === true ? result.NextRecordType : undefined;
+      } while (startRecordName !== undefined);
+      return records;
+    },
+    async deleteHostedZoneRecords(hostedZoneId, records) {
+      const { sdk, client } = await lazyRoute53();
+      for (let index = 0; index < records.length; index += 100) {
+        await client.send(
+          new sdk.ChangeResourceRecordSetsCommand({
+            HostedZoneId: hostedZoneId,
+            ChangeBatch: {
+              Comment: "delete-cluster: record sets the container services left behind",
+              Changes: records.slice(index, index + 100).map((record) => ({ Action: "DELETE", ResourceRecordSet: record as never })),
+            },
+          }),
+        );
+      }
     },
     async listLogGroups(prefix) {
       const { sdk, client } = await lazyLogs();

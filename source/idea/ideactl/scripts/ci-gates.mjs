@@ -270,6 +270,14 @@ function checkHygieneFile(errors, root, file) {
   const text = bytes.toString("utf8");
   const relativePath = relative(root, file).split("\\").join("/");
   const inTest = relativePath.startsWith("test/");
+  // The resources tree is carried from upstream: its files keep their publisher's licence headers
+  // and licence links, its templates name the products they configure, its samples use the
+  // documentation domain, and the load balancer account ids in it are the published service
+  // accounts. Secrets, real account ids and real addresses are still refused there.
+  const upstream = relativePath.startsWith("resources/");
+  // The one upstream file whose twelve-digit numbers are real: the published per-region load
+  // balancer service accounts that an access-log bucket policy has to name.
+  const publishedServiceAccounts = relativePath === "resources/config/region_elb_account_id.yml";
   const uuidRanges = [
     ...text.matchAll(
       /\b[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\b/gu,
@@ -292,7 +300,7 @@ function checkHygieneFile(errors, root, file) {
     const value = match[0];
     const synthetic =
       value === ["123456", "789012"].join("") || /^(\d)\1{11}$/u.test(value);
-    if (!inTest || !synthetic) {
+    if (!publishedServiceAccounts && (!(inTest || upstream) || !synthetic)) {
       addHygieneError(
         errors,
         root,
@@ -304,7 +312,7 @@ function checkHygieneFile(errors, root, file) {
     }
   }
 
-  for (const prohibited of PROHIBITED_NAMES) {
+  for (const prohibited of upstream ? [] : PROHIBITED_NAMES) {
     // A trailing letter or digit means a longer word, not the forbidden name: a compute-node
     // resource name starts with the same letters as one of the cluster names. A trailing
     // hyphen is still the name, because every resource derived from it carries one.
@@ -335,7 +343,7 @@ function checkHygieneFile(errors, root, file) {
 
   for (const match of text.matchAll(/\b([A-Z]{2,10})-\d+\b/gu)) {
     const prefix = match[1];
-    if (prefix !== undefined && !ALLOWED_TICKET_LIKE_PREFIXES.has(prefix)) {
+    if (!upstream && prefix !== undefined && !ALLOWED_TICKET_LIKE_PREFIXES.has(prefix)) {
       addHygieneError(
         errors,
         root,
@@ -377,6 +385,7 @@ function checkHygieneFile(errors, root, file) {
   )) {
     const host = match[1] ?? "";
     if (documentationHost.test(host)) continue;
+    if (upstream && host.toLowerCase() === "example.com") continue;
     if (host.toLowerCase() !== "example.invalid") {
       addHygieneError(
         errors,
@@ -397,7 +406,7 @@ function checkHygieneFile(errors, root, file) {
     ].join(""),
     "iu",
   );
-  const copyright = copyrightPattern.exec(text);
+  const copyright = upstream ? null : copyrightPattern.exec(text);
   if (copyright !== null) {
     addHygieneError(
       errors,
@@ -591,7 +600,7 @@ export function runSyntheticParity(packageRoot, testFile) {
   runChecked(
     "synthetic template parity",
     process.execPath,
-    ["--test", testFile ?? "test/ci/synthetic-parity.test.ts"],
+    ["--test", testFile ?? "test/parity/synthetic-parity.test.ts"],
     packageRoot,
   );
 }

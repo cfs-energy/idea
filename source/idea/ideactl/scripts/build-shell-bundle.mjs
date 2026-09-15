@@ -28,7 +28,7 @@ import { fileURLToPath } from "node:url";
 
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(PACKAGE_ROOT, "package.json"), "utf8"));
-const BUNDLER_VERSION = "0.25.9";
+const BUNDLER = join(PACKAGE_ROOT, "node_modules", ".bin", "esbuild");
 const DEFAULT_OUTPUT = join(PACKAGE_ROOT, "dist", "ideactl-shell");
 const DEFAULT_ARCHIVE = join(PACKAGE_ROOT, "dist", `ideactl-shell-${PACKAGE_JSON.version}.tar.gz`);
 
@@ -251,14 +251,8 @@ function externalRuntimeImports(metadata) {
  * @returns {Record<string, number>} exact source bytes by resource group
  */
 function copyRuntimeResources(destination, lambdaAssets) {
-  const resourceRoot = firstExisting(
-    [
-      join(PACKAGE_ROOT, "resources"),
-      join(PACKAGE_ROOT, "..", "idea-administrator", "resources"),
-    ],
-    "administrator resources",
-  );
-  const groups = ["cdk", "config", "input_params", "integration_tests", "lambda_functions", "policies"];
+  const resourceRoot = firstExisting([join(PACKAGE_ROOT, "resources")], "package resources");
+  const groups = ["cdk", "config", "input_params", "integration_tests", "policies"];
   const measurements = {};
   mkdirSync(destination, { recursive: true });
   for (const group of groups) {
@@ -266,17 +260,6 @@ function copyRuntimeResources(destination, lambdaAssets) {
     cpSync(source, join(destination, group), { recursive: true });
     measurements[group] = measureTree(source).bytes;
   }
-
-  // The container module's config templates live in this package until resource ownership moves
-  // here, so they are overlaid the way the dist build overlays them. Without this the released
-  // artifact cannot render the configuration of a new cluster at all, because every new cluster
-  // runs its control plane as container tasks and `ecs/settings.yml` is not in the copied tree.
-  const containerTemplates = firstExisting(
-    [join(PACKAGE_ROOT, "resources-ecs", "config")],
-    "container module config templates",
-  );
-  cpSync(containerTemplates, join(destination, "config"), { recursive: true });
-  measurements.config += measureTree(containerTemplates).bytes;
 
   const bootstrap = firstExisting(
     [
@@ -350,13 +333,8 @@ module.exports = {
     );
 
     run(
-      "npm",
+      BUNDLER,
       [
-        "exec",
-        "--yes",
-        `--package=esbuild@${BUNDLER_VERSION}`,
-        "--",
-        "esbuild",
         join(copiedSource, "cli", "main.ts"),
         "--bundle",
         "--platform=node",
@@ -372,17 +350,7 @@ module.exports = {
     );
     chmodSync(bundleFile, 0o755);
 
-    const resourceRoot = firstExisting(
-      [
-        join(PACKAGE_ROOT, "resources"),
-        join(PACKAGE_ROOT, "..", "idea-administrator", "resources"),
-      ],
-      "administrator resources",
-    );
-    run(join(PACKAGE_ROOT, "scripts", "build-lambda-zips.sh"), [
-      join(resourceRoot, "lambda_functions"),
-      lambdaAssets,
-    ]);
+    run(process.execPath, [join(PACKAGE_ROOT, "scripts", "build-lambda-bundles.mjs"), lambdaAssets]);
     const resources = copyRuntimeResources(
       join(output, "dist", "resources"),
       lambdaAssets,
@@ -456,7 +424,7 @@ module.exports = {
         "resources/config",
         "resources/input_params",
         "resources/integration_tests",
-        "resources/lambda_assets when prebuilt, otherwise resources/lambda_functions",
+        "resources/lambda_assets when prebuilt, otherwise bundled on demand",
         "resources/policies",
       ],
     };

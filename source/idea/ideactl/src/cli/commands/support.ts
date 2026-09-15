@@ -3,7 +3,7 @@
 import { cpSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import yaml from "js-yaml";
+import * as yaml from "js-yaml";
 import { Command } from "commander";
 
 import { clusterCdkDir, clusterDeploymentsDir, clusterRegionDir } from "../cdk-invoker.ts";

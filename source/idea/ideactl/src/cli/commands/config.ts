@@ -9,7 +9,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 import { Command, Option } from 'commander';
 
 import {

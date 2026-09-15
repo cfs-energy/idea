@@ -8,7 +8,7 @@
 
 import { readFileSync } from "node:fs";
 
-import yaml from "js-yaml";
+import * as yaml from "js-yaml";
 
 import { resourcePath } from "../config/values.ts";
 import type { InstallerChoice, InstallerPromptType, InstallerQuestion, PromptDriver } from "./prompts.ts";

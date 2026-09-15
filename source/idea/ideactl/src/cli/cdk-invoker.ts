@@ -25,6 +25,8 @@ import { fileURLToPath } from 'node:url';
 import { STATEFUL_TYPE_PREFIXES, isStatefulType } from '../cdk/stateful.ts';
 import { ClusterConfig, GeneralException, type ModuleInfo, type TableScanner } from '../config/cluster-config.ts';
 import type { ConfigEntry, ModuleSpec } from '../config/cluster-config-db.ts';
+import type { CertificateDeps } from './certificates.ts';
+import type { PrefixListApi } from './commands/utils.ts';
 import {
   bootstrapPackagePlans,
   bootstrapPackageUri,
@@ -138,6 +140,13 @@ export const liveSpawn: Spawn = (argv, options) =>
     child.on('close', (code) => resolve(code ?? 1));
   });
 
+/** One property-level detail of a change, as `DescribeChangeSet` reports it. */
+export interface ResourceChangeDetail {
+  Target?: { Attribute?: string; Name?: string; RequiresRecreation?: string };
+  ChangeSource?: string;
+  CausingEntity?: string;
+}
+
 /** One change in a `DescribeChangeSet` response, narrowed to the fields the guard reads. */
 export interface ResourceChange {
   Action?: string;
@@ -145,6 +154,7 @@ export interface ResourceChange {
   PhysicalResourceId?: string;
   ResourceType?: string;
   Replacement?: string;
+  Details?: ResourceChangeDetail[];
 }
 
 export interface ChangeSetDescription {
@@ -167,6 +177,10 @@ export interface StackDescription {
  */
 export interface CloudFormationApi {
   describeChangeSet(input: { StackName: string; ChangeSetName: string; NextToken?: string }): Promise<ChangeSetDescription>;
+  /** The deployed template body, so the guard can read each removed resource's DeletionPolicy. */
+  getTemplate?(stackName: string): Promise<string | undefined>;
+  /** Update a stack from a template body the caller edited, keeping every parameter's previous value. */
+  updateStack?(input: { StackName: string; TemplateBody: string; ParameterKeys: readonly string[] }): Promise<void>;
   executeChangeSet(input: {
     StackName: string;
     ChangeSetName: string;
@@ -231,6 +245,16 @@ export interface Deps {
       name: string;
     }): Promise<Array<{ name: string; value: string }>>;
   };
+  /**
+   * Instance termination protection. A change set that replaces a protected instance creates the
+   * new one and then fails to delete the old one, and CloudFormation still reports the update as
+   * a success, so the old instance runs on unreferenced. The protection is cleared before the
+   * change set executes; a deploy without this hook says so instead.
+   */
+  instanceProtection?: {
+    isProtected(input: { awsRegion: string; instanceId: string }): Promise<boolean>;
+    setProtected(input: { awsRegion: string; instanceId: string; protected: boolean }): Promise<void>;
+  };
   /** HTTPS GET returning the status code, or 0 when the request failed. */
   httpStatus(url: string): Promise<number>;
   sleep(ms: number): Promise<void>;
@@ -246,6 +270,16 @@ export interface Deps {
   bootstrapContext?(input: BootstrapContextInput): object;
   /** Root of the `idea-bootstrap` source tree; defaults to the packaged copy. */
   bootstrapSourceDir?: string;
+  /**
+   * Managed prefix-list reads and writes. The cluster stack creates the prefix list and the
+   * deploy merges the configured client addresses into it once the list id is readable.
+   */
+  prefixList?: PrefixListApi;
+  /**
+   * Secrets Manager, ACM and `openssl`, for the self-signed certificates the deploy generates
+   * before the stacks that read their ARNs synthesize.
+   */
+  certificates?: CertificateDeps;
 }
 
 export interface BootstrapContextInput {
@@ -317,9 +351,72 @@ export interface ChangeSetVerdict {
  * It is scoped to that one logical ID, that one resource type, and it is printed like any other
  * override.
  */
+/**
+ * Custom resource types this release retires from every stack. Removing one sends Delete to the
+ * Python handler still deployed on the cluster, and each of these answers SUCCESS without acting
+ * (`update_cluster_prefix_list` "will not remove IP addresses from the cluster prefix list";
+ * `get_user_pool_client_secret` returns at once on Delete), so the removal is safe on every
+ * cluster and no operator is asked to override it. Empty this set once every cluster has
+ * deployed this release.
+ */
+export const RETIRED_CUSTOM_RESOURCE_TYPES: ReadonlySet<string> = new Set([
+  'Custom::ClusterPrefixList',
+  'Custom::GetOAuthCredentials',
+]);
+
+/**
+ * Resource types CloudFormation "replaces" on every routine change because they are immutable
+ * revisions: a new task definition is a new revision, the service rolls to it, and the previous
+ * revision stays ACTIVE under its Retain policy for a rollback. Nothing is lost, and refusing it
+ * would refuse every image upgrade.
+ */
+export const REVISIONED_TYPES: ReadonlySet<string> = new Set(['AWS::ECS::TaskDefinition']);
+
 export function builtInAllowedReplacements(clusterName: string): Map<string, string> {
   const dashboardTargetGroup = `${clusterName.replace(/-/g, '')}dashboardtargetgroup`;
   return new Map([[dashboardTargetGroup, 'AWS::ElasticLoadBalancingV2::TargetGroup']]);
+}
+
+/**
+ * CloudFormation reports Replacement=Conditional when a recreation-capable property takes its value
+ * from another resource's attribute (`Endpoint: !GetAtt queue.Arn`), because at plan time it cannot
+ * know whether that attribute changes. The change set does know whether that resource is replaced.
+ * When every recreation-capable detail is such an attribute of a resource this change set leaves in
+ * place (absent from the set, or modified without replacement), the value cannot change and neither
+ * can the resource. Anything else, a direct edit of a recreating property, a causing resource that is
+ * added or itself replaced, or no property detail at all, stays a refusal.
+ */
+export function conditionalOnUnreplacedAttributes(change: ResourceChange, changes: readonly ResourceChange[]): boolean {
+  const recreating = (change.Details ?? []).filter(
+    (detail) => detail.Target?.RequiresRecreation !== undefined && detail.Target.RequiresRecreation !== 'Never',
+  );
+  if (recreating.length === 0) return false;
+  const byId = new Map(changes.map((entry) => [entry.LogicalResourceId, entry]));
+  return recreating.every((detail) => {
+    if (detail.ChangeSource !== 'ResourceAttribute' || detail.CausingEntity === undefined) return false;
+    const cause = byId.get(detail.CausingEntity.split('.')[0] ?? '');
+    return cause === undefined || (cause.Action === 'Modify' && cause.Replacement === 'False');
+  });
+}
+
+/**
+ * Logical IDs whose deployed definition carries `DeletionPolicy: Retain`. CDK templates are JSON;
+ * anything unparsable yields the empty set, which is the conservative reading.
+ */
+export function retainedResources(templateBody: string | undefined): Set<string> {
+  const retained = new Set<string>();
+  if (templateBody === undefined) return retained;
+  let template: unknown;
+  try {
+    template = JSON.parse(templateBody);
+  } catch {
+    return retained;
+  }
+  const resources = (template as { Resources?: Record<string, { DeletionPolicy?: unknown }> } | null)?.Resources ?? {};
+  for (const [logicalId, resource] of Object.entries(resources)) {
+    if (resource?.DeletionPolicy === 'Retain') retained.add(logicalId);
+  }
+  return retained;
 }
 
 /** True when CloudFormation created the change set but found nothing to do. */
@@ -342,9 +439,11 @@ export function evaluateChangeSet(
   allowReplacement: readonly string[] = [],
   builtIn: ReadonlyMap<string, string> = new Map(),
   allowReplacementOfType: ReadonlyMap<string, string> = new Map(),
+  retainedByPolicy: ReadonlySet<string> = new Set(),
 ): ChangeSetVerdict {
   const verdict: ChangeSetVerdict = { refusals: [], allowed: [], empty: isEmptyChangeSet(description) };
   const explicit = new Set(allowReplacement);
+  const allChanges = (description.Changes ?? []).flatMap((change) => (change.ResourceChange === undefined ? [] : [change.ResourceChange]));
 
   for (const change of description.Changes ?? []) {
     const resourceChange = change.ResourceChange;
@@ -365,14 +464,27 @@ export function evaluateChangeSet(
     } else if (resourceChange.Replacement === 'Conditional' && isStatefulType(resourceType)) {
       // CloudFormation says Conditional when whether it replaces depends on values it will only
       // know at execution time. On anything stateless that is noise. On a stateful resource it is
-      // a coin toss with the data on one side of it, so it is refused like a certain replacement.
-      findings.push({
-        logicalId,
-        resourceType,
-        action,
-        refusal: 'replacement',
-        reason: `${action} of ${logicalId} (${resourceType}) may replace the resource; CloudFormation reports Replacement=Conditional`,
-      });
+      // a coin toss with the data on one side of it, so it is refused like a certain replacement,
+      // unless the change set itself shows the coin has only one side (see
+      // `conditionalOnUnreplacedAttributes`).
+      if (conditionalOnUnreplacedAttributes(resourceChange, allChanges)) {
+        verdict.allowed.push({
+          logicalId,
+          resourceType,
+          action,
+          refusal: 'replacement',
+          reason: `${action} of ${logicalId} (${resourceType}) is Replacement=Conditional only through attributes of resources this change set does not replace`,
+          allowedBy: 'attribute of an unreplaced resource',
+        });
+      } else {
+        findings.push({
+          logicalId,
+          resourceType,
+          action,
+          refusal: 'replacement',
+          reason: `${action} of ${logicalId} (${resourceType}) may replace the resource; CloudFormation reports Replacement=Conditional`,
+        });
+      }
     }
     if (action === 'Remove' && isCustomResourceType(resourceType)) {
       findings.push({
@@ -399,6 +511,17 @@ export function evaluateChangeSet(
         verdict.allowed.push({ ...finding, allowedBy: '--allow-replacement' });
       } else if (builtIn.get(logicalId) === resourceType) {
         verdict.allowed.push({ ...finding, allowedBy: 'built-in allow list' });
+      } else if (finding.refusal === 'replacement' && REVISIONED_TYPES.has(resourceType)) {
+        verdict.allowed.push({ ...finding, allowedBy: 'a new revision; the previous one is retained' });
+      } else if (
+        (finding.refusal === 'stateful-remove' || finding.refusal === 'custom-resource-remove') &&
+        retainedByPolicy.has(logicalId)
+      ) {
+        // CloudFormation neither deletes the resource nor sends a custom resource Delete when the
+        // deployed definition carries DeletionPolicy Retain; the stack merely stops managing it.
+        verdict.allowed.push({ ...finding, allowedBy: 'DeletionPolicy Retain on the deployed resource' });
+      } else if (finding.refusal === 'custom-resource-remove' && RETIRED_CUSTOM_RESOURCE_TYPES.has(resourceType)) {
+        verdict.allowed.push({ ...finding, allowedBy: 'retired custom resource; its Delete handler is a no-op' });
       } else if (namedComponent !== undefined && finding.refusal === 'replacement') {
         // Only the replacement class, and only the one resource type the operator named. A remove
         // is a different intent and the replace verb never permits it.
@@ -637,11 +760,17 @@ export class CdkInvoker {
     await this.execCdk(this.getDeployArgv(contextParams));
 
     const description = await this.describeChangeSetFully();
+    const removes = (description.Changes ?? []).some((change) => change.ResourceChange?.Action === 'Remove');
+    const retained =
+      removes && this.deps.cfn.getTemplate !== undefined
+        ? retainedResources(await this.deps.cfn.getTemplate(this.stackName))
+        : new Set<string>();
     const verdict = evaluateChangeSet(
       description,
       this.allowReplacement,
       builtInAllowedReplacements(this.clusterName),
       this.allowReplacementOfType,
+      retained,
     );
 
     for (const allowed of verdict.allowed) {
@@ -670,6 +799,7 @@ export class CdkInvoker {
     }
 
     this.deps.out(`change-set guard: ${(description.Changes ?? []).length} change(s) accepted, executing`);
+    await this.clearProtectionOnReplacedInstances(description);
     await this.deps.cfn.executeChangeSet({
       StackName: this.stackName,
       ChangeSetName: CDK_DEPLOY_CHANGE_SET_NAME,
@@ -678,6 +808,28 @@ export class CdkInvoker {
     const stack = await this.waitForStack();
     this.writeOutputsFile(stack);
     return verdict;
+  }
+
+  /** The old instance of an accepted replacement is deleted by the update; protection would fail that delete. */
+  private async clearProtectionOnReplacedInstances(description: ChangeSetDescription): Promise<void> {
+    for (const change of description.Changes ?? []) {
+      const resource = change.ResourceChange;
+      if (resource?.ResourceType !== 'AWS::EC2::Instance' || resource.Replacement !== 'True') continue;
+      const instanceId = resource.PhysicalResourceId;
+      if (instanceId === undefined) continue;
+      const name = `${instanceId} (${resource.LogicalResourceId ?? '?'})`;
+      if (this.deps.instanceProtection === undefined) {
+        this.deps.out(`warning: ${name} is being replaced; if it is termination-protected, CloudFormation will fail to delete it and leave it running.`);
+        continue;
+      }
+      try {
+        if (!await this.deps.instanceProtection.isProtected({ awsRegion: this.awsRegion, instanceId })) continue;
+        await this.deps.instanceProtection.setProtected({ awsRegion: this.awsRegion, instanceId, protected: false });
+        this.deps.out(`cleared instance termination protection on ${name}, which this change set replaces`);
+      } catch (error) {
+        this.deps.out(`warning: could not clear termination protection on ${name}: ${(error as Error).message}. CloudFormation will leave it running after the replacement.`);
+      }
+    }
   }
 
   private async waitForStack(): Promise<StackDescription> {
@@ -817,6 +969,9 @@ export class CdkInvoker {
       context,
       tmpDir: this.deploymentDir,
       forceBuild,
+      // The plan's basename ends in this deployment's id; the archive takes the rendered tree's
+      // content id in its place, so a host whose bootstrap did not change keeps its user data.
+      nameByContent: (contentId) => plan.basename.slice(0, -this.deploymentId.length) + contentId,
       baseOs,
       client: { send: (command) => this.deps.s3.putObject(command.input as { Bucket: string; Key: string; Body: Uint8Array }) },
       clusterS3Bucket,
@@ -881,4 +1036,3 @@ export function bootstrapSourceDir(): string {
   if (found === undefined) throw new GeneralException(`bootstrap source tree not found: ${candidates.join(', ')}`);
   return found;
 }
-

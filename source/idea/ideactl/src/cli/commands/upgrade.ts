@@ -35,6 +35,7 @@ import {
 import { asBoolFlag } from "./deploy.ts";
 import { awsClientOptions, type AwsClientOptions } from "../aws-client-options.ts";
 import { DeploymentHelper } from "../deployment-helper.ts";
+import { upgradeFloorRefusal } from "../upgrade-floor.ts";
 import { ExitWithCode, VALUES_FILE_S3_KEY, valuesFilePath, type Deps } from "../cdk-invoker.ts";
 
 export const EOL_BASE_OS: Readonly<Record<string, string>> = {
@@ -71,6 +72,7 @@ export interface EcsAccountSettingsApi {
 
 /** The injected dependencies used by the ECS trunking pre-flight. */
 export interface EcsTrunkingPreflightDeps {
+  out?: (line: string) => void;
   accountId(): Promise<string>;
   ecsAccountSettings?: EcsAccountSettingsApi;
   err(line: string): void;
@@ -130,7 +132,10 @@ export async function checkAwsvpcTrunking(
     }),
   ]);
   const enabled = settings.some((setting) => setting.name === "awsvpcTrunking" && setting.value === "enabled");
-  if (enabled) return;
+  if (enabled) {
+    deps.out?.(`ECS awsvpcTrunking is enabled for account ${account} in ${options.awsRegion}.`);
+    return;
+  }
 
   deps.err(
     `ECS awsvpcTrunking is not enabled for account ${account} in ${options.awsRegion}. Without it, an m7g.large host of the planned size fits only two tasks, so placement silently starves.`,
@@ -219,12 +224,25 @@ export interface UpgradeDeploymentOptions {
   moduleIds?: readonly string[];
 }
 
+/** Jobs the batch server on a scheduler host still holds, by state. */
+export interface SchedulerJobInventory {
+  queued: number;
+  running: number;
+  other: number;
+}
+
+/** Reads the host scheduler's job inventory, over SSM in the live tool. */
+export interface SchedulerJobsApi {
+  activeJobs(input: { awsRegion: string; instanceId: string }): Promise<SchedulerJobInventory>;
+}
+
 export interface UpgradeDeps extends ConfigDriftPreviewDeps {
   ec2: UpgradeEc2Api;
   ecsAccountSettings?: EcsAccountSettingsApi;
   cloudFormation: UpgradeCloudFormationApi;
   openSearch: UpgradeOpenSearchApi;
   eolSoftwareStacks: EolSoftwareStackApi;
+  schedulerJobs?: SchedulerJobsApi;
   deploy(options: UpgradeDeploymentOptions): Promise<void>;
   regionAmiConfig?: () => RegionsConfig;
 }
@@ -244,6 +262,11 @@ export interface UpgradeCommandOptions {
   acceptConfigDrift?: boolean;
   skipGlobalSettingsUpdate?: boolean;
   disableEolStacksInUse?: boolean;
+  /** Close job submission and wait for the host scheduler to empty before the container cutover. */
+  drain?: boolean;
+  drainTimeoutMinutes?: number;
+  /** Skip the job inventory check before the container cutover; the operator has drained by hand. */
+  skipDrainCheck?: boolean;
   modules?: readonly string[];
 }
 
@@ -564,7 +587,60 @@ async function exportConfiguration(deps: UpgradeDeps, options: UpgradeCommandOpt
   writeFileSync(join(configDir, "idea.yml"), toYaml(idea));
 }
 
-async function backupAndUpdateGlobalSettings(deps: UpgradeDeps, options: UpgradeCommandOptions): Promise<string> {
+/**
+ * Modules this release added to the applications' fixed module table (`module_metadata.py`). A
+ * cluster-manager built before it cannot resolve the name, and its portal resolves every module
+ * named in the module set on each page load (`web_portal.py`), so every page fails from the moment
+ * the row lands until that module stack cuts over. Empty this set once every cluster has deployed
+ * a release that knows the name.
+ */
+const MODULES_UNKNOWN_TO_DEPLOYED_APPLICATIONS: ReadonlySet<string> = new Set([ECS_MODULE]);
+
+/**
+ * Split the module-set rows that must wait for the last stack: those naming a module in
+ * `MODULES_UNKNOWN_TO_DEPLOYED_APPLICATIONS` that the cluster has not deployed yet. Rows for every
+ * other module are written as before, because other stacks resolve those ids at synth. The
+ * modules-table row still lands first, because deployment order reads that table.
+ */
+export function heldModuleSetEntries(
+  entries: ConfigEntry[],
+  modules: ModuleInfo[],
+): { kept: ConfigEntry[]; held: ConfigEntry[] } {
+  const deployed = new Set(modules.filter((module) => module.status === "deployed").map((module) => module.name));
+  const kept: ConfigEntry[] = [];
+  const held: ConfigEntry[] = [];
+  for (const entry of entries) {
+    const name = moduleSetEntryModule(entry.key);
+    const wait = name !== undefined && MODULES_UNKNOWN_TO_DEPLOYED_APPLICATIONS.has(name) && !deployed.has(name);
+    (wait ? held : kept).push(entry);
+  }
+  return { kept, held };
+}
+
+/** `global-settings.module_sets.<set>.<module>.<field>` names a module; anything else does not. */
+function moduleSetEntryModule(key: string): string | undefined {
+  const parts = key.split(".");
+  return parts[0] === "global-settings" && parts[1] === "module_sets" && parts.length >= 5 ? parts[3] : undefined;
+}
+
+async function announceHeldModuleSets(
+  deps: UpgradeDeps,
+  options: UpgradeCommandOptions,
+  configDir: string,
+  modules: ModuleInfo[],
+): Promise<void> {
+  if (!existsSync(join(configDir, "idea.yml"))) return;
+  const { held } = heldModuleSetEntries(convertConfigToKeyValuePairs(configDir, "global-settings"), modules);
+  if (held.length === 0) return;
+  const writer = await deps.configWriter({
+    clusterName: options.clusterName,
+    awsRegion: options.awsRegion,
+    awsProfile: options.awsProfile,
+  });
+  await writer.syncClusterSettingsInDb(held, false);
+}
+
+async function backupAndUpdateGlobalSettings(deps: UpgradeDeps, options: UpgradeCommandOptions, modules: ModuleInfo[]): Promise<string> {
   const regionDir = join(valuesFilePath(options.clusterName, options.awsRegion), "..");
   const configDir = join(regionDir, "config");
   await exportConfiguration(deps, options, configDir);
@@ -580,11 +656,19 @@ async function backupAndUpdateGlobalSettings(deps: UpgradeDeps, options: Upgrade
     awsProfile: options.awsProfile,
   });
   await writer.deleteConfigEntries("global-settings.");
-  await writer.syncClusterSettingsInDb(convertConfigToKeyValuePairs(configDir, "global-settings"), true);
+  await writer.syncClusterSettingsInDb(
+    heldModuleSetEntries(convertConfigToKeyValuePairs(configDir, "global-settings"), modules).kept,
+    true,
+  );
   return configDir;
 }
 
-async function syncFullConfiguration(deps: UpgradeDeps, options: UpgradeCommandOptions, configDir: string): Promise<void> {
+async function syncFullConfiguration(
+  deps: UpgradeDeps,
+  options: UpgradeCommandOptions,
+  configDir: string,
+  modules: ModuleInfo[],
+): Promise<void> {
   const writer = await deps.configWriter({
     clusterName: options.clusterName,
     awsRegion: options.awsRegion,
@@ -596,7 +680,7 @@ async function syncFullConfiguration(deps: UpgradeDeps, options: UpgradeCommandO
   await writer.syncModulesInDb(
     readModulesFromFiles(configDir).map((module) => ({ id: module.id, name: module.name, type: module.type })),
   );
-  await writer.syncClusterSettingsInDb(convertConfigToKeyValuePairs(configDir), false);
+  await writer.syncClusterSettingsInDb(heldModuleSetEntries(convertConfigToKeyValuePairs(configDir), modules).kept, false);
 }
 
 export function buildAmiUpdateEntries(
@@ -1008,17 +1092,194 @@ async function confirmConfigDrift(
  * module the cluster has, so the operator's arguments are not the question: what the deployment
  * reaches is, the same way `runDeploy` asks `helper.getDeploymentModuleNames()`.
  */
+const MAINTENANCE_ENABLED_KEY = "cluster-manager.maintenance.enabled";
+const MAINTENANCE_MESSAGE_KEY = "cluster-manager.maintenance.message";
+const DRAIN_MESSAGE = "Scheduler upgrade in progress; job submission reopens when it completes.";
+const DRAIN_POLL_MS = 60_000;
+const DEFAULT_DRAIN_TIMEOUT_MINUTES = 240;
+
+/**
+ * The shell command the live inventory reader runs on the scheduler host: PBS's own view of its
+ * jobs, reduced to a count per state so the answer fits in an SSM invocation's output.
+ */
+export const PBS_STATE_COUNT_COMMAND =
+  "/opt/pbs/bin/qstat -f -F json | python3 -c 'import json,sys,collections; d=json.load(sys.stdin); "
+  + "print(json.dumps(collections.Counter(j.get(\"job_state\",\"?\") for j in d.get(\"Jobs\",{}).values())))'";
+
+/** PBS job states to the inventory: Q queued, R and E running, F finished and ignored, anything else other. */
+export function countPbsStates(states: Record<string, unknown>): SchedulerJobInventory {
+  const inventory: SchedulerJobInventory = { queued: 0, running: 0, other: 0 };
+  for (const [state, count] of Object.entries(states)) {
+    const value = typeof count === "number" ? count : Number(count);
+    if (!Number.isFinite(value)) continue;
+    if (state === "Q") inventory.queued += value;
+    else if (state === "R" || state === "E") inventory.running += value;
+    else if (state !== "F") inventory.other += value;
+  }
+  return inventory;
+}
+
+function inventoryTotal(inventory: SchedulerJobInventory): number {
+  return inventory.queued + inventory.running + inventory.other;
+}
+
+function describeInventory(inventory: SchedulerJobInventory): string {
+  return `${inventory.queued} queued, ${inventory.running} running, ${inventory.other} other`;
+}
+
+/**
+ * The host-to-container cutover starts the scheduler on an empty job database, so a job the host
+ * still holds is lost. When the scheduler stack still has a host, the gate reads PBS's inventory
+ * and refuses a non-empty one unless `--drain` closes submission (the cluster-manager maintenance
+ * flag, which the scheduler API honours for the portal and for qsub) and waits for it to empty.
+ * Returns the step that reopens submission once the upgrade has completed.
+ */
+async function schedulerCutoverGate(
+  deps: UpgradeDeps,
+  options: UpgradeCommandOptions,
+  modules: ModuleInfo[],
+): Promise<() => Promise<void>> {
+  const nothing = async (): Promise<void> => {};
+  const scheduler = modules.find((module) => module.name === "scheduler" && module.status === "deployed");
+  if (scheduler === undefined) return nothing;
+  const stackName = scheduler.stack_name ?? `${options.clusterName}-${scheduler.module_id}`;
+  const host = (await deps.cloudFormation.listStackResources({ awsRegion: options.awsRegion, stackName })).instanceIds[0];
+  if (host === undefined) return nothing;
+  if (options.skipDrainCheck === true) {
+    deps.out(`scheduler cutover gate: skipped on request; jobs the host scheduler ${host} still holds will be lost`);
+    return nothing;
+  }
+  if (deps.schedulerJobs === undefined) {
+    throw new GeneralException("scheduler cutover gate: this build cannot read the host scheduler's job inventory; drain by hand and re-run with --skip-drain-check");
+  }
+  const read = async (): Promise<SchedulerJobInventory> => {
+    try {
+      return await deps.schedulerJobs!.activeJobs({ awsRegion: options.awsRegion, instanceId: host });
+    } catch (error) {
+      throw new GeneralException(`scheduler cutover gate: could not read the job inventory on ${host}: ${(error as Error).message}. An unknown inventory is not an empty one; drain by hand and re-run with --skip-drain-check.`);
+    }
+  };
+  let inventory = await read();
+  if (inventoryTotal(inventory) === 0) {
+    deps.out(`scheduler cutover gate: the host scheduler ${host} holds no jobs`);
+    return nothing;
+  }
+  if (options.drain !== true) {
+    throw new ClusterConfigError(
+      `scheduler cutover gate: the host scheduler ${host} holds ${describeInventory(inventory)} job(s). The container cutover starts the scheduler on an empty job database, so they would be lost. Re-run with --drain to close submission and wait for them to finish, or drain by hand and re-run with --skip-drain-check.`,
+    );
+  }
+
+  const current = await scanAll(deps, `${options.clusterName}.cluster-settings`);
+  const prior = (key: string): unknown => current.find((entry) => entry["key"] === key)?.["value"];
+  const priorEnabled = prior(MAINTENANCE_ENABLED_KEY);
+  const priorMessage = prior(MAINTENANCE_MESSAGE_KEY);
+  const writer = await deps.configWriter({ clusterName: options.clusterName, awsRegion: options.awsRegion, awsProfile: options.awsProfile });
+  await writer.setConfigEntry(MAINTENANCE_ENABLED_KEY, true);
+  await writer.setConfigEntry(MAINTENANCE_MESSAGE_KEY, DRAIN_MESSAGE);
+  deps.out(`scheduler cutover gate: job submission closed on ${options.clusterName}; waiting for ${describeInventory(inventory)} job(s) on ${host} to finish`);
+
+  const timeoutMs = (options.drainTimeoutMinutes ?? DEFAULT_DRAIN_TIMEOUT_MINUTES) * 60_000;
+  const startedAt = deps.now();
+  while (inventoryTotal(inventory) > 0) {
+    if (deps.now() - startedAt > timeoutMs) {
+      throw new GeneralException(
+        `scheduler cutover gate: ${describeInventory(inventory)} job(s) still on ${host} after ${Math.round(timeoutMs / 60_000)} minutes. Submission stays closed; re-run with --drain to keep waiting, or --drain-timeout-minutes to wait longer.`,
+      );
+    }
+    await deps.sleep(DRAIN_POLL_MS);
+    inventory = await read();
+    deps.out(`scheduler cutover gate: ${describeInventory(inventory)}`);
+  }
+  deps.out(`scheduler cutover gate: the host scheduler ${host} is empty; continuing`);
+
+  return async () => {
+    const reopened = await deps.configWriter({ clusterName: options.clusterName, awsRegion: options.awsRegion, awsProfile: options.awsProfile });
+    await reopened.setConfigEntry(MAINTENANCE_ENABLED_KEY, priorEnabled === true);
+    await reopened.setConfigEntry(MAINTENANCE_MESSAGE_KEY, typeof priorMessage === "string" ? priorMessage : "");
+    deps.out(`scheduler cutover gate: job submission reopened on ${options.clusterName}`);
+  };
+}
+
 async function upgradeReachesEcs(deps: UpgradeDeps, options: UpgradeCommandOptions): Promise<boolean> {
   const requested = options.modules ?? [];
   if (requested.length > 0) return requested.includes(ECS_MODULE);
+  // The migration that introduces the module has no table row for it yet: the values file is
+  // what Phase 2b will register from, so it is read here too.
+  const valuesPath = valuesFilePath(options.clusterName, options.awsRegion);
+  if (existsSync(valuesPath) && (loadValuesFile(valuesPath) as Record<string, unknown>)["enable_ecs"] === true) return true;
   const modules = await clusterModules(deps, options.clusterName);
   return modules.some((module) => module.module_id === ECS_MODULE || module.name === ECS_MODULE);
 }
 
+/**
+ * The deployed template with `DeletionPolicy: Retain` (and `UpdateReplacePolicy`) on every Route 53
+ * record set that lacks it. Nothing else changes, so CloudFormation applies it as a policy-only
+ * update: no resource is touched, no instance replaced. CDK templates are JSON; anything else is
+ * left alone and reported as nothing to retain.
+ */
+export function retainRecordSets(templateBody: string | undefined): { body: string; parameterKeys: string[]; retained: string[] } {
+  const none = { body: "", parameterKeys: [], retained: [] };
+  if (templateBody === undefined) return none;
+  let template: { Parameters?: Record<string, unknown>; Resources?: Record<string, { Type?: unknown; DeletionPolicy?: unknown; UpdateReplacePolicy?: unknown }> };
+  try {
+    template = JSON.parse(templateBody);
+  } catch {
+    return none;
+  }
+  const retained: string[] = [];
+  for (const [logicalId, resource] of Object.entries(template.Resources ?? {})) {
+    if (resource?.Type !== "AWS::Route53::RecordSet" || resource.DeletionPolicy === "Retain") continue;
+    resource.DeletionPolicy = "Retain";
+    resource.UpdateReplacePolicy = "Retain";
+    retained.push(logicalId);
+  }
+  return { body: JSON.stringify(template), parameterKeys: Object.keys(template.Parameters ?? {}), retained };
+}
+
+/**
+ * The scheduler's host DNS record is the name execution hosts and clients resolve, and the container
+ * scheduler upserts that same name itself when it starts. The container cutover removes the
+ * CloudFormation-managed record; with the deployed DeletionPolicy of Delete, CloudFormation would
+ * delete the name, and fail doing so once the task has re-pointed it. So when this upgrade turns
+ * containers on for a cluster whose scheduler still runs on a host, the deployed template is updated
+ * first with Retain on that record and nothing else. A host-shape deploy from this release would do
+ * the same and also replace the scheduler instance one last time; a policy-only update replaces nothing.
+ */
+async function retainSchedulerDnsRecord(deps: UpgradeDeps, options: UpgradeCommandOptions, modules: ModuleInfo[]): Promise<void> {
+  if (deps.cfn.getTemplate === undefined || deps.cfn.updateStack === undefined) return;
+  if (!(await upgradeReachesEcs(deps, options))) return;
+  const scheduler = modules.find((module) => module.name === "scheduler" && module.status === "deployed");
+  if (scheduler === undefined) return;
+  const stackName = scheduler.stack_name ?? `${options.clusterName}-${scheduler.module_id}`;
+  const { body, parameterKeys, retained } = retainRecordSets(await deps.cfn.getTemplate(stackName));
+  if (retained.length === 0) return;
+  deps.out(`Phase 0: retain the scheduler's DNS record (${retained.join(", ")}) with a policy-only update of ${stackName} before the container cutover`);
+  await deps.cfn.updateStack({ StackName: stackName, TemplateBody: body, ParameterKeys: parameterKeys });
+  for (;;) {
+    const stack = await deps.cfn.describeStack(stackName);
+    const status = stack.StackStatus ?? "";
+    if (status.endsWith("_IN_PROGRESS")) {
+      await deps.sleep(10_000);
+      continue;
+    }
+    if (status !== "UPDATE_COMPLETE") {
+      throw new GeneralException(`Phase 0 did not complete: ${stackName} is ${status}. ${stack.StackStatusReason ?? ""}`.trim());
+    }
+    return;
+  }
+}
+
 /** Execute Phases 1 through 4 after every pre-flight refusal has passed. */
 export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandOptions): Promise<void> {
+  // Read before anything is touched: a cluster more than one release behind is refused whole.
+  const modulesBefore = await clusterModules(deps, options.clusterName);
+  const floorRefusal = upgradeFloorRefusal(options.clusterName, modulesBefore);
+  if (floorRefusal !== undefined) throw new ClusterConfigError(floorRefusal);
+  let reopenSubmission: (() => Promise<void>) | undefined;
   if (await upgradeReachesEcs(deps, options)) {
     await checkAwsvpcTrunking(deps, options);
+    reopenSubmission = await schedulerCutoverGate(deps, options, modulesBefore);
   }
   const baseOs = await resolveUpgradeBaseOs(deps, options);
   await validateBaseOs(deps, options, baseOs);
@@ -1030,6 +1291,7 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
   deps.out(renderUpgradeDrift(driftReport));
   await confirmConfigDrift(deps, options, driftReport);
   await applyEolSoftwareStacks(deps, options.awsRegion, eolPlans);
+  await retainSchedulerDnsRecord(deps, options, modulesBefore);
 
   let cleared: ClearedInstance[] = [];
   try {
@@ -1044,7 +1306,7 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
         if (confirm !== true && confirm !== "Yes") throw new ExitWithCode(0);
       }
       deps.out("Phase 2: Global Settings Backup and Update");
-      configDir = await backupAndUpdateGlobalSettings(deps, options);
+      configDir = await backupAndUpdateGlobalSettings(deps, options, modulesBefore);
     }
 
     let syncFullConfig = options.force === true;
@@ -1057,7 +1319,7 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
         generateConfigFromTemplates(loadValuesFile(valuesFilePath(options.clusterName, options.awsRegion)), configDir);
       }
       deps.out("Phase 2b: Sync full configuration without overwrite");
-      await syncFullConfiguration(deps, options, configDir);
+      await syncFullConfiguration(deps, options, configDir, modulesBefore);
     }
 
     deps.out("Phase 3: Update AMI IDs and Settings");
@@ -1095,11 +1357,16 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
       moduleIds: allModules ? undefined : options.modules,
     };
     await deps.deploy(deployment);
+    await announceHeldModuleSets(deps, options, configDir, modulesBefore);
     await restoreTerminationProtection(deps, options.awsRegion, cleared);
     await saveValuesFile(deps, options);
     deps.out("All upgrade phases completed successfully");
+    await reopenSubmission?.();
   } catch (error) {
     warnClearedProtection(deps, cleared);
+    if (reopenSubmission !== undefined) {
+      deps.out(`warning: job submission is still closed on ${options.clusterName} (${MAINTENANCE_ENABLED_KEY}); a completed re-run reopens it.`);
+    }
     throw error;
   }
 }
@@ -1127,6 +1394,9 @@ export function registerUpgradeCommands(program: Command, deps: UpgradeDeps): vo
     )
     .option("--skip-global-settings-update", "Skip updating global settings.")
     .option("--disable-eol-stacks-in-use", "Disable end-of-life eVDI software stacks that are in use.")
+    .option("--drain", "Before the host-to-container scheduler cutover, close job submission and wait for the host scheduler to empty.")
+    .option("--drain-timeout-minutes <minutes>", `Give up waiting for the drain after this long. Default: ${DEFAULT_DRAIN_TIMEOUT_MINUTES}`, (value: string) => Number(value))
+    .option("--skip-drain-check", "Do not read the host scheduler's job inventory before the cutover; jobs it still holds are lost.")
     .argument("[modules...]", "module ids")
     .action(async (modules: string[], commandOptions: UpgradeCommandOptions) => {
       await upgradeCluster(deps, { ...commandOptions, modules });
@@ -1155,6 +1425,43 @@ export function liveEcsAccountSettings(): EcsAccountSettingsApi {
           ? []
           : [{ name: setting.name.toString(), value: setting.value }],
       );
+    },
+  };
+}
+
+/** The live inventory reader: one SSM shell command on the scheduler host, polled to completion. */
+export function liveSchedulerJobs(sleep: (ms: number) => Promise<void>): SchedulerJobsApi {
+  return {
+    async activeJobs(input) {
+      const { GetCommandInvocationCommand, SSMClient, SendCommandCommand } = await import("@aws-sdk/client-ssm");
+      const client = new SSMClient(await awsClientOptions(input.awsRegion));
+      const sent = await client.send(
+        new SendCommandCommand({
+          InstanceIds: [input.instanceId],
+          DocumentName: "AWS-RunShellScript",
+          Parameters: { commands: [PBS_STATE_COUNT_COMMAND] },
+        }),
+      );
+      const commandId = sent.Command?.CommandId;
+      if (commandId === undefined) throw new GeneralException("ssm:SendCommand returned no command id");
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        await sleep(2_000);
+        let result;
+        try {
+          result = await client.send(new GetCommandInvocationCommand({ CommandId: commandId, InstanceId: input.instanceId }));
+        } catch (error) {
+          // The invocation record trails the send by a moment.
+          if ((error as { name?: string }).name === "InvocationDoesNotExist") continue;
+          throw error;
+        }
+        const status = result.Status ?? "";
+        if (status === "Pending" || status === "InProgress" || status === "Delayed") continue;
+        if (status !== "Success") {
+          throw new GeneralException(`qstat on ${input.instanceId} ended ${status}: ${(result.StandardErrorContent ?? "").trim().slice(0, 300)}`);
+        }
+        return countPbsStates(JSON.parse((result.StandardOutputContent ?? "{}").trim() || "{}") as Record<string, unknown>);
+      }
+      throw new GeneralException(`qstat on ${input.instanceId} did not finish within 60 s`);
     },
   };
 }
@@ -1220,6 +1527,7 @@ export function createLiveUpgradeDeps(deps: Deps): UpgradeDeps {
     ...deps,
     ec2,
     ecsAccountSettings,
+    schedulerJobs: liveSchedulerJobs(deps.sleep),
     cloudFormation: {
       async listStackResources(input) {
         const { CloudFormationClient, ListStackResourcesCommand } = await import("@aws-sdk/client-cloudformation");

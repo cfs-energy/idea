@@ -7,6 +7,7 @@
  * the live `Deps` (the only place in the CLI that constructs an AWS client).
  */
 
+import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
@@ -154,6 +155,24 @@ export function liveDeps(): Deps {
         const client = new CloudFormationClient(await awsClientOptions(region()));
         await client.send(new ExecuteChangeSetCommand(input));
       },
+      async updateStack(input) {
+        const { CloudFormationClient, UpdateStackCommand } = await import('@aws-sdk/client-cloudformation');
+        const client = new CloudFormationClient(await awsClientOptions(region()));
+        await client.send(
+          new UpdateStackCommand({
+            StackName: input.StackName,
+            TemplateBody: input.TemplateBody,
+            Parameters: input.ParameterKeys.map((key) => ({ ParameterKey: key, UsePreviousValue: true })),
+            Capabilities: ['CAPABILITY_IAM', 'CAPABILITY_NAMED_IAM', 'CAPABILITY_AUTO_EXPAND'],
+          }),
+        );
+      },
+      async getTemplate(stackName) {
+        const { CloudFormationClient, GetTemplateCommand } = await import('@aws-sdk/client-cloudformation');
+        const client = new CloudFormationClient(await awsClientOptions(region()));
+        const result = await client.send(new GetTemplateCommand({ StackName: stackName, TemplateStage: 'Original' }));
+        return result.TemplateBody;
+      },
       async describeStack(stackName) {
         const { CloudFormationClient, DescribeStacksCommand } = await import('@aws-sdk/client-cloudformation');
         const client = new CloudFormationClient(await awsClientOptions(region()));
@@ -186,9 +205,109 @@ export function liveDeps(): Deps {
         logger: (message) => console.log(message),
       });
     },
+    prefixList: {
+      async getManagedPrefixListEntries(input) {
+        const { EC2Client, GetManagedPrefixListEntriesCommand } = await import('@aws-sdk/client-ec2');
+        const result = await new EC2Client(await awsClientOptions(region())).send(
+          new GetManagedPrefixListEntriesCommand(input),
+        );
+        return {
+          Entries: result.Entries?.map((entry) => ({ Cidr: entry.Cidr, Description: entry.Description })),
+          NextToken: result.NextToken,
+        };
+      },
+      async describeManagedPrefixLists(input) {
+        const { DescribeManagedPrefixListsCommand, EC2Client } = await import('@aws-sdk/client-ec2');
+        const result = await new EC2Client(await awsClientOptions(region())).send(
+          new DescribeManagedPrefixListsCommand(input),
+        );
+        return { PrefixLists: result.PrefixLists?.map((list) => ({ Version: list.Version })) };
+      },
+      async modifyManagedPrefixList(input) {
+        const { EC2Client, ModifyManagedPrefixListCommand } = await import('@aws-sdk/client-ec2');
+        await new EC2Client(await awsClientOptions(region())).send(new ModifyManagedPrefixListCommand(input));
+      },
+    },
+    certificates: {
+      secrets: {
+        async listSecretsByTagValue(tagKey, tagValues) {
+          const { SecretsManagerClient, ListSecretsCommand } = await import('@aws-sdk/client-secrets-manager');
+          const result = await new SecretsManagerClient(await awsClientOptions(region())).send(
+            new ListSecretsCommand({
+              Filters: [
+                { Key: 'tag-key', Values: [tagKey] },
+                { Key: 'tag-value', Values: tagValues },
+              ],
+            }),
+          );
+          return (result.SecretList ?? []).map((secret) => ({ Name: secret.Name, ARN: secret.ARN }));
+        },
+        async createSecret(input) {
+          const { SecretsManagerClient, CreateSecretCommand } = await import('@aws-sdk/client-secrets-manager');
+          const result = await new SecretsManagerClient(await awsClientOptions(region())).send(
+            new CreateSecretCommand(input),
+          );
+          if (result.ARN === undefined) throw new GeneralException(`secretsmanager:CreateSecret returned no ARN for ${input.Name}`);
+          return result.ARN;
+        },
+      },
+      acm: {
+        async listIssuedCertificates() {
+          const { ACMClient, ListCertificatesCommand } = await import('@aws-sdk/client-acm');
+          const client = new ACMClient(await awsClientOptions(region()));
+          const summaries: Array<{ DomainName?: string; CertificateArn?: string }> = [];
+          let nextToken: string | undefined;
+          do {
+            const page = await client.send(new ListCertificatesCommand({ CertificateStatuses: ['ISSUED'], NextToken: nextToken }));
+            for (const summary of page.CertificateSummaryList ?? []) {
+              summaries.push({ DomainName: summary.DomainName, CertificateArn: summary.CertificateArn });
+            }
+            nextToken = page.NextToken;
+          } while (nextToken !== undefined && nextToken !== '');
+          return summaries;
+        },
+        async importCertificate(input) {
+          const { ACMClient, ImportCertificateCommand } = await import('@aws-sdk/client-acm');
+          // ACM takes the two PEMs as blobs; everything else in this path handles them as text.
+          const pem = (value: string): Uint8Array => new TextEncoder().encode(value);
+          const result = await new ACMClient(await awsClientOptions(region())).send(
+            new ImportCertificateCommand({
+              Certificate: pem(input.Certificate),
+              PrivateKey: pem(input.PrivateKey),
+              Tags: input.Tags,
+            }),
+          );
+          if (result.CertificateArn === undefined) throw new GeneralException('acm:ImportCertificate returned no ARN');
+          return result.CertificateArn;
+        },
+      },
+      openssl: (args, cwd) => {
+        const result = spawnSync('openssl', [...args], { cwd, encoding: 'utf-8' });
+        return {
+          status: result.status,
+          stderr: result.stderr ?? '',
+          missing: (result.error as { code?: string } | undefined)?.code === 'ENOENT',
+        };
+      },
+    },
     callerIdentity,
     async accountId() {
       return (await callerIdentity({ awsRegion: region(), awsProfile: actionProfile })).account;
+    },
+    instanceProtection: {
+      async isProtected(input) {
+        const { DescribeInstanceAttributeCommand, EC2Client } = await import('@aws-sdk/client-ec2');
+        const result = await new EC2Client(await awsClientOptions(input.awsRegion)).send(
+          new DescribeInstanceAttributeCommand({ InstanceId: input.instanceId, Attribute: 'disableApiTermination' }),
+        );
+        return result.DisableApiTermination?.Value === true;
+      },
+      async setProtected(input) {
+        const { EC2Client, ModifyInstanceAttributeCommand } = await import('@aws-sdk/client-ec2');
+        await new EC2Client(await awsClientOptions(input.awsRegion)).send(
+          new ModifyInstanceAttributeCommand({ InstanceId: input.instanceId, DisableApiTermination: { Value: input.protected } }),
+        );
+      },
     },
     httpStatus: liveHttpStatus,
     sleep,

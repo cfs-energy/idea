@@ -4,6 +4,7 @@
  */
 
 import { PutObjectCommand } from "@aws-sdk/client-s3";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
@@ -39,7 +40,29 @@ export interface BootstrapPackageBuildOptions {
   forceBuild?: boolean;
   /** Skips implicit `common` inclusion for Windows. */
   baseOs?: string;
+  /**
+   * Names the archive from the rendered tree's content id instead of `targetPackageBasename`, so
+   * an unchanged package keeps its location and the hosts that embed it are left alone.
+   */
+  nameByContent?: (contentId: string) => string;
   logger?: (message: string) => void;
+}
+
+/**
+ * The content id of a rendered tree: the same paths, modes and bytes give the same id. It is
+ * formatted like the deployment id it stands in for, so archive names keep their shape.
+ */
+export function renderedTreeId(root: string): string {
+  const hash = createHash("sha256");
+  for (const entry of tarEntries(root)) {
+    if (entry.archiveName === ".") continue;
+    const mode = entry.isDirectory ? "d" : (statSync(entry.path).mode & 0o777).toString(8);
+    hash.update(`${entry.archiveName}\0${mode}\0`);
+    if (!entry.isDirectory) hash.update(readFileSync(entry.path));
+    hash.update("\0");
+  }
+  const hex = hash.digest("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
 
 export interface BootstrapPackageUploadClient {
@@ -365,7 +388,6 @@ export class BootstrapPackageBuilder {
     const tmpDirectory = this.options.tmpDir ?? mkdtempSync(join(tmpdir(), "tmp"));
     mkdirSync(tmpDirectory, { recursive: true });
     const targetDirectory = join(tmpDirectory, this.options.targetPackageBasename);
-    const archiveFile = `${targetDirectory}.tar.gz`;
 
     if (existsSync(targetDirectory)) {
       if (this.options.forceBuild === true) {
@@ -375,9 +397,7 @@ export class BootstrapPackageBuilder {
         this.log(
           `found existing bootstrap directory: ${targetDirectory}. use force_build=True to rebuild the bootstrap package.`,
         );
-        if (existsSync(archiveFile)) rmSync(archiveFile);
-        createTarGz(targetDirectory, archiveFile);
-        return archiveFile;
+        return this.archive(targetDirectory);
       }
     }
 
@@ -413,6 +433,17 @@ export class BootstrapPackageBuilder {
       }
     }
 
+    return this.archive(targetDirectory);
+  }
+
+  /** Archives the rendered directory next to it, named by content when asked. */
+  private archive(targetDirectory: string): string {
+    const archiveBasename =
+      this.options.nameByContent === undefined
+        ? this.options.targetPackageBasename
+        : this.options.nameByContent(renderedTreeId(targetDirectory));
+    const archiveFile = join(targetDirectory, "..", `${archiveBasename}.tar.gz`);
+    if (existsSync(archiveFile)) rmSync(archiveFile);
     createTarGz(targetDirectory, archiveFile);
     return archiveFile;
   }

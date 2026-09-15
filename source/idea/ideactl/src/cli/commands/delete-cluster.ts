@@ -74,6 +74,13 @@ export interface DeletionInstanceFilter {
  * All deletion effects. The live CLI supplies adapters, while unit tests inject a recording
  * implementation. Discovery inputs deliberately use the native filter shapes.
  */
+/** A Route 53 record set as listed, complete enough to be deleted as-is. */
+export interface HostedZoneRecordSet {
+  Name: string;
+  Type: string;
+  [property: string]: unknown;
+}
+
 export interface DeleteClusterDeps {
   loadConfig(input: { clusterName: string; awsRegion: string; awsProfile?: string }): Promise<ClusterConfig | undefined>;
   findInstances(input: { filters: DeletionInstanceFilter[] }): Promise<DeleteClusterInstance[]>;
@@ -111,6 +118,13 @@ export interface DeleteClusterDeps {
   listDynamoDbAlarms(clusterName: string): Promise<Array<{ name: string; namespace: string; tableName?: string }>>;
   deleteAlarms(alarmNames: string[]): Promise<void>;
   listLogGroups(prefix: string): Promise<Array<{ name: string; size: number }>>;
+  /**
+   * Record sets in the cluster's private hosted zone, raw as Route 53 reports them. The container
+   * scheduler upserts its own record and its stack retains it, so the zone is not empty once the
+   * stacks are gone and the cluster stack cannot delete it. Optional for a replay implementation.
+   */
+  listHostedZoneRecords?(hostedZoneId: string): Promise<HostedZoneRecordSet[]>;
+  deleteHostedZoneRecords?(hostedZoneId: string, records: HostedZoneRecordSet[]): Promise<void>;
   deleteLogGroup(name: string): Promise<void>;
   accountId(): Promise<string>;
   bucketExists(name: string): Promise<boolean>;
@@ -264,6 +278,22 @@ async function waitForStackDeletion(
     }
   }
   return failed === 0;
+}
+
+/**
+ * Empties the cluster's private hosted zone of everything but its NS and SOA before the cluster
+ * stack goes. The container scheduler upserts `scheduler.<cluster>.<region>.local` itself and its
+ * stack retains the record, so the zone is left non-empty and Route 53 refuses to delete it.
+ */
+async function clearPrivateHostedZone(deps: DeleteClusterDeps, config: ClusterConfig | undefined, modules: ModuleInfo[]): Promise<void> {
+  if (config === undefined || deps.listHostedZoneRecords === undefined || deps.deleteHostedZoneRecords === undefined) return;
+  const clusterModuleId = modules.find((module) => module.name === "cluster")?.module_id ?? "cluster";
+  const zoneId = config.getString(`${clusterModuleId}.route53.private_hosted_zone_id`, undefined);
+  if (typeof zoneId !== "string" || zoneId === "") return;
+  const records = (await deps.listHostedZoneRecords(zoneId)).filter((record) => record.Type !== "NS" && record.Type !== "SOA");
+  if (records.length === 0) return;
+  deps.out(`deleting ${records.length} record set(s) left in private hosted zone ${zoneId}: ${records.map((record) => `${record.Name} ${record.Type}`).join(", ")}`);
+  await deps.deleteHostedZoneRecords(zoneId, records);
 }
 
 /** Logical ids CloudFormation reports as `DELETE_FAILED`, empty when the read is unavailable. */
@@ -524,6 +554,9 @@ export async function deleteCluster(deps: DeleteClusterDeps, options: DeleteClus
 
   deps.out(`searching for CloudFormation stacks tagged ${CLUSTER_NAME_TAG}=${options.clusterName} ...`);
   const regularStacks: DeleteClusterStack[] = [];
+  // The container capacity stack owns the ECS cluster and the service discovery namespace that the
+  // module stacks' services live on; neither deletes while a service exists, so it goes after them.
+  const ecsStacks: DeleteClusterStack[] = [];
   const clusterStacks: DeleteClusterStack[] = [];
   const identityStacks: DeleteClusterStack[] = [];
   let paginationToken: string | undefined;
@@ -542,6 +575,8 @@ export async function deleteCluster(deps: DeleteClusterDeps, options: DeleteClus
           clusterStacks.push(stack);
         } else if (stackNameMatches("identity-provider", stack, options.clusterName, modules)) {
           identityStacks.push(stack);
+        } else if (stackNameMatches("ecs", stack, options.clusterName, modules)) {
+          ecsStacks.push(stack);
         } else {
           regularStacks.push(stack);
         }
@@ -551,13 +586,13 @@ export async function deleteCluster(deps: DeleteClusterDeps, options: DeleteClus
       }
     }
   } while (paginationToken !== undefined && paginationToken !== "");
-  for (const stack of [...regularStacks, ...identityStacks, ...clusterStacks]) {
+  for (const stack of [...regularStacks, ...ecsStacks, ...identityStacks, ...clusterStacks]) {
     deps.out(
       `stack to delete: ${stack.stackName}, status: ${stack.stackStatus ?? "unknown"}, ` +
         `termination protection: ${stack.terminationProtection === true}`,
     );
   }
-  deps.out(`${regularStacks.length + identityStacks.length + clusterStacks.length} stack(s) will be terminated.`);
+  deps.out(`${regularStacks.length + ecsStacks.length + identityStacks.length + clusterStacks.length} stack(s) will be terminated.`);
 
   if (options.force !== true) {
     const confirmed = await deps.prompt(`Are you sure you want to delete cluster: ${options.clusterName}, region: ${options.awsRegion} ?`);
@@ -597,6 +632,11 @@ export async function deleteCluster(deps: DeleteClusterDeps, options: DeleteClus
   deps.out(`deleting ${regularStacks.length} module stack(s) ...`);
   await deleteStackGroup(deps, options, regularStacks, retryState);
 
+  if (ecsStacks.length > 0) {
+    deps.out(`deleting ${ecsStacks.length} container capacity stack(s) ...`);
+    await deleteStackGroup(deps, options, ecsStacks, retryState);
+  }
+
   deps.out(`deleting ${identityStacks.length} identity-provider stack(s) ...`);
   await deleteIdentityProviderStacks(deps, options, identityStacks, retryState);
 
@@ -606,6 +646,7 @@ export async function deleteCluster(deps: DeleteClusterDeps, options: DeleteClus
     }
   }
 
+  await clearPrivateHostedZone(deps, config, modules);
   deps.out(`deleting ${clusterStacks.length} cluster stack(s) ...`);
   await deleteStackGroup(deps, options, clusterStacks, retryState);
 

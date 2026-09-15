@@ -70,7 +70,7 @@ export const MIGRATION_STEPS = [
   {
     id: "ECS_STAGED",
     precondition: "Container configuration is active and the scheduler desired and running counts are zero",
-    action: "Deploy and prove container services while production routes remain on legacy targets",
+    action: "Deploy and prove the shared container capacity while production routes remain on legacy targets",
   },
   {
     id: "PBS_STATE_SEEDED",

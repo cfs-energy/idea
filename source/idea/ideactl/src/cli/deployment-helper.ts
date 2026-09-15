@@ -7,14 +7,33 @@
  * module metadata table in `config/cluster-config.ts`, so there is one copy of them.
  */
 
-import { ClusterConfig, GeneralException, MODULE_METADATA, type ModuleInfo } from '../config/cluster-config.ts';
+import { ClusterConfig, GeneralException, MODULE_METADATA, isEmpty, type ModuleInfo } from '../config/cluster-config.ts';
 import { buildBootstrapContext } from './bootstrap-context.ts';
-import { CdkInvoker, type Deps } from './cdk-invoker.ts';
+import { CdkInvoker, type ConfigWriter, type Deps } from './cdk-invoker.ts';
+import { ensureSelfSignedCertificate, type CertificateRequest } from './certificates.ts';
+import { mergeClientIpEntries } from './commands/utils.ts';
 
 /** `deployment_helper.py:194`: the stagger between two modules of the same priority group. */
 export const OPTIMIZED_DEPLOYMENT_STAGGER_MS = 10_000;
 
 const MODULE_TYPE_CONFIG = 'config';
+const MODULE_NAME_CLUSTER = 'cluster';
+const MODULE_NAME_DIRECTORYSERVICE = 'directoryservice';
+const MODULE_NAME_VIRTUAL_DESKTOP_CONTROLLER = 'virtual-desktop-controller';
+const DIRECTORYSERVICE_OPENLDAP = 'openldap';
+
+/**
+ * One certificate the tool makes sure exists before a stack that reads it synthesizes, with the
+ * configuration keys its ARNs are published under. The keys are the ones the stacks already read,
+ * so a cluster deployed before this change already carries the rows and nothing regenerates.
+ */
+export interface CertificateHook {
+  request: CertificateRequest;
+  certificateKey: string;
+  privateKeyKey: string;
+  /** Only the load-balancer certificates have one. */
+  acmKey?: string;
+}
 
 const PRIORITY_BY_MODULE_NAME = new Map(MODULE_METADATA.map((entry) => [entry.name, entry.deployment_priority]));
 
@@ -87,6 +106,103 @@ export function optimizedDeploymentOrder(
     else group.push(moduleId);
   }
   return [...groups.values()];
+}
+
+/**
+ * The certificates one module's stack reads, with the names, domains and tags the stack's custom
+ * resource passed. A `provided` certificate is the operator's, so nothing is generated for it.
+ *
+ * A pure function over the configuration, so the deploy and the day-zero rehearsal read one
+ * declaration rather than two that can drift apart.
+ */
+export function certificateHooks(
+  config: ClusterConfig,
+  cluster: string,
+  moduleInfo: ModuleInfo,
+): CertificateHook[] {
+  const moduleId = moduleInfo.module_id;
+  const rawKmsKeyId = config.getString('cluster.secretsmanager.kms_key_id');
+  const kmsKeyId = isEmpty(rawKmsKeyId) ? undefined : rawKmsKeyId;
+
+  if (moduleInfo.name === MODULE_NAME_CLUSTER) {
+    const hooks: CertificateHook[] = [];
+    if (!config.getBool('cluster.load_balancers.external_alb.certificates.provided', false)) {
+      hooks.push({
+        request: {
+          certificateName: `${cluster}-external`,
+          domainName: `${cluster}.idea.default`,
+          tags: { Name: `${cluster} external alb certs`, 'idea:ClusterName': cluster },
+          kmsKeyId,
+          importToAcm: true,
+        },
+        certificateKey: 'cluster.load_balancers.external_alb.certificates.certificate_secret_arn',
+        privateKeyKey: 'cluster.load_balancers.external_alb.certificates.private_key_secret_arn',
+        acmKey: 'cluster.load_balancers.external_alb.certificates.acm_certificate_arn',
+      });
+    }
+    const privateHostedZoneName = config.getString('cluster.route53.private_hosted_zone_name', undefined, {
+      required: true,
+    }) as string;
+    hooks.push({
+      request: {
+        certificateName: `${cluster}-internal`,
+        domainName: `*.${privateHostedZoneName}`,
+        tags: { Name: `${cluster} internal alb certs`, 'idea:ClusterName': cluster },
+        kmsKeyId,
+        importToAcm: true,
+      },
+      certificateKey: 'cluster.load_balancers.internal_alb.certificates.certificate_secret_arn',
+      privateKeyKey: 'cluster.load_balancers.internal_alb.certificates.private_key_secret_arn',
+      acmKey: 'cluster.load_balancers.internal_alb.certificates.acm_certificate_arn',
+    });
+    return hooks;
+  }
+
+  if (moduleInfo.name === MODULE_NAME_DIRECTORYSERVICE) {
+    if (config.getString('directoryservice.provider') !== DIRECTORYSERVICE_OPENLDAP) return [];
+    const hostname = config.getString('directoryservice.hostname', undefined, { required: true }) as string;
+    return [
+      {
+        request: {
+          certificateName: `${cluster}-${moduleId}`,
+          domainName: hostname,
+          tags: {
+            Name: `${cluster}-${moduleId}`,
+            'idea:ClusterName': cluster,
+            'idea:ModuleName': MODULE_NAME_DIRECTORYSERVICE,
+          },
+          kmsKeyId,
+          importToAcm: false,
+        },
+        certificateKey: 'directoryservice.tls_certificate_secret_arn',
+        privateKeyKey: 'directoryservice.tls_private_key_secret_arn',
+      },
+    ];
+  }
+
+  if (moduleInfo.name === MODULE_NAME_VIRTUAL_DESKTOP_CONTROLLER) {
+    const prefix = 'virtual-desktop-controller.dcv_connection_gateway.certificate';
+    if (config.getBool(`${prefix}.provided`, false)) return [];
+    return [
+      {
+        request: {
+          certificateName: `${cluster}-${moduleId}-gateway-certificate`,
+          domainName: `${moduleId}.${cluster}.idea.default`,
+          tags: {
+            Name: `${cluster}-${moduleId}-gateway Self Signed Certificate`,
+            'idea:ClusterName': cluster,
+            'idea:ModuleName': MODULE_NAME_VIRTUAL_DESKTOP_CONTROLLER,
+          },
+          kmsKeyId,
+          importToAcm: false,
+        },
+        certificateKey: `${prefix}.certificate_secret_arn`,
+        privateKeyKey: `${prefix}.private_key_secret_arn`,
+      },
+    ];
+  }
+
+  return [];
 }
 
 export class DeploymentHelper {
@@ -180,6 +296,7 @@ export class DeploymentHelper {
     const moduleInfo = this.config.moduleInfoById(moduleId);
     if (moduleInfo === undefined) throw new GeneralException(`module not found for module_id: ${moduleId}`);
     this.deps.out(`deploying module: ${moduleInfo.name}, module id: ${moduleId}`);
+    await this.ensureCertificates(moduleInfo);
     const invoker = await CdkInvoker.open({
       clusterName: this.clusterName,
       awsRegion: this.awsRegion,
@@ -194,6 +311,65 @@ export class DeploymentHelper {
       deps: this.deps,
     });
     await invoker.invoke({ forceBuildBootstrap: this.options.forceBuildBootstrap });
+    if (moduleInfo.name === MODULE_NAME_CLUSTER) await this.mergeClientIps();
+  }
+
+  /**
+   * The certificates this module's stack reads, with the names, domains and tags the stack's
+   * custom resource passed.
+   */
+  certificateHooks(moduleInfo: ModuleInfo): CertificateHook[] {
+    return certificateHooks(this.config, this.clusterName, moduleInfo);
+  }
+
+  /**
+   * Generates or adopts this module's certificates and publishes their ARNs, before the stack that
+   * reads them synthesizes. The rows go to the settings table and to the configuration this
+   * process holds, so the synthesis reads the same values whether it re-reads the table or not.
+   */
+  private async ensureCertificates(moduleInfo: ModuleInfo): Promise<void> {
+    const certificates = this.deps.certificates;
+    if (certificates === undefined) return;
+    const hooks = this.certificateHooks(moduleInfo);
+    if (hooks.length === 0) return;
+
+    const writer = await this.deps.configWriter({
+      clusterName: this.clusterName,
+      awsRegion: this.awsRegion,
+      awsProfile: this.options.awsProfile,
+    });
+    for (const hook of hooks) {
+      const result = await ensureSelfSignedCertificate(hook.request, certificates);
+      this.deps.out(`certificate ${hook.request.certificateName}: ${result.certificateSecretArn}`);
+      await this.publishSetting(writer, hook.certificateKey, result.certificateSecretArn);
+      await this.publishSetting(writer, hook.privateKeyKey, result.privateKeySecretArn);
+      if (hook.acmKey !== undefined && result.acmCertificateArn !== undefined) {
+        await this.publishSetting(writer, hook.acmKey, result.acmCertificateArn);
+      }
+    }
+  }
+
+  /** Writes one row under the key the module's settings are scoped by, table and memory both. */
+  private async publishSetting(writer: ConfigWriter, key: string, value: string): Promise<void> {
+    const realKey = this.config.getRealKey(key);
+    await writer.setConfigEntry(realKey, value);
+    this.config.setEntry(realKey, value);
+  }
+
+  /**
+   * Add the configured client addresses to the cluster prefix list. The cluster stack creates the
+   * list and nothing else writes to it, so this runs once the stack has published the list id and
+   * reads the settings again to get it: on a first deploy the id does not exist until then. It is
+   * add-only, which is why it can run on every cluster deploy.
+   */
+  private async mergeClientIps(): Promise<void> {
+    const api = this.deps.prefixList;
+    if (api === undefined) return;
+    const config = await ClusterConfig.fromDynamoDb(this.clusterName, this.awsRegion, {
+      moduleSet: this.moduleSet,
+      scan: this.deps.scan,
+    });
+    await mergeClientIpEntries({ api, config, out: this.deps.out });
   }
 
   /**

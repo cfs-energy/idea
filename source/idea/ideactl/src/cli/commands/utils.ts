@@ -57,6 +57,19 @@ export interface UtilsApi {
   modifyManagedPrefixList(input: { PrefixListId: string; CurrentVersion: number; AddEntries?: Array<{ Cidr: string; Description?: string }>; RemoveEntries?: Array<{ Cidr: string }> }): Promise<void>;
 }
 
+/** The managed prefix-list subset, which the deploy tool also uses. */
+export type PrefixListApi = Pick<
+  UtilsApi,
+  "getManagedPrefixListEntries" | "describeManagedPrefixLists" | "modifyManagedPrefixList"
+>;
+
+/** What the prefix-list helpers below need; `UtilsDeps` satisfies it. */
+export interface PrefixListDeps {
+  api: PrefixListApi;
+  config: ClusterConfig;
+  out(line: string): void;
+}
+
 export interface UtilsDeps {
   api: UtilsApi;
   config: ClusterConfig;
@@ -139,7 +152,7 @@ async function prefixListId(config: ClusterConfig): Promise<string> {
 }
 
 /** Scan all prefix-list entry pages. */
-export async function prefixListEntries(deps: UtilsDeps): Promise<Array<{ cidr: string; description?: string }>> {
+export async function prefixListEntries(deps: PrefixListDeps): Promise<Array<{ cidr: string; description?: string }>> {
   const id = await prefixListId(deps.config);
   const entries: Array<{ cidr: string; description?: string }> = [];
   let token: string | undefined;
@@ -151,13 +164,13 @@ export async function prefixListEntries(deps: UtilsDeps): Promise<Array<{ cidr: 
   return entries;
 }
 
-async function currentVersion(deps: UtilsDeps, id: string): Promise<number> {
+async function currentVersion(deps: PrefixListDeps, id: string): Promise<number> {
   const version = (await deps.api.describeManagedPrefixLists({ PrefixListIds: [id] })).PrefixLists?.[0]?.Version;
   if (version === undefined) throw new ClusterConfigError(`cluster prefix list not found: ${id}`);
   return Math.trunc(version);
 }
 
-export async function addPrefixListEntry(deps: UtilsDeps, cidr: string, description: string): Promise<void> {
+export async function addPrefixListEntry(deps: PrefixListDeps, cidr: string, description: string): Promise<void> {
   if (isEmpty(cidr)) throw new ClusterConfigError("cidr is required");
   const id = await prefixListId(deps.config);
   if ((await prefixListEntries(deps)).some((entry) => entry.cidr === cidr)) throw new ClusterConfigError(`CIDR: ${cidr} already exists in cluster prefix list: ${id}`);
@@ -165,7 +178,34 @@ export async function addPrefixListEntry(deps: UtilsDeps, cidr: string, descript
   deps.out(`CIDR: ${cidr} added to cluster prefix list: ${id}.`);
 }
 
-export async function removePrefixListEntry(deps: UtilsDeps, cidr: string): Promise<void> {
+/** The description the cluster stack used to put on the configured client addresses. */
+export const CLIENT_IP_ENTRY_DESCRIPTION = "Allow access to cluster from Client IP";
+
+/**
+ * Add the configured client addresses to the cluster prefix list, skipping the ones already
+ * there. Add-only: an entry an operator added by hand, or one whose description has since been
+ * edited, is left exactly as it is.
+ */
+export async function mergeClientIpEntries(deps: PrefixListDeps): Promise<void> {
+  const clientIps = deps.config.getList<string>("cluster.network.client_ip", []);
+  if (clientIps.length === 0) return;
+  const wanted = clientIps.map((clientIp) => (clientIp.includes("/") ? clientIp : `${clientIp}/32`));
+  const present = new Set((await prefixListEntries(deps)).map((entry) => entry.cidr));
+  const missing = [...new Set(wanted)].filter((cidr) => !present.has(cidr));
+  const id = await prefixListId(deps.config);
+  if (missing.length === 0) {
+    deps.out(`cluster prefix list ${id} already holds every configured client IP.`);
+    return;
+  }
+  await deps.api.modifyManagedPrefixList({
+    PrefixListId: id,
+    CurrentVersion: await currentVersion(deps, id),
+    AddEntries: missing.map((cidr) => ({ Cidr: cidr, Description: CLIENT_IP_ENTRY_DESCRIPTION })),
+  });
+  deps.out(`added ${missing.join(", ")} to cluster prefix list: ${id}.`);
+}
+
+export async function removePrefixListEntry(deps: PrefixListDeps, cidr: string): Promise<void> {
   if (isEmpty(cidr)) throw new ClusterConfigError("cidr is required");
   const id = await prefixListId(deps.config);
   if (!(await prefixListEntries(deps)).some((entry) => entry.cidr === cidr)) throw new ClusterConfigError(`CIDR: ${cidr} not found in cluster prefix list: ${id}`);

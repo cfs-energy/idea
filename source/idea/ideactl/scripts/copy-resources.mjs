@@ -5,13 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = resolve(packageRoot, "..", "..", "..");
-const administratorResources = join(
-  repositoryRoot,
-  "source",
-  "idea",
-  "idea-administrator",
-  "resources",
-);
+const packageResources = join(packageRoot, "resources");
 const outputResources = resolve(
   process.env.IDEACTL_RESOURCE_OUTPUT_DIR ?? join(packageRoot, "dist", "resources"),
 );
@@ -24,7 +18,6 @@ const runtimeResourceDirectories = [
   "config",
   "input_params",
   "integration_tests",
-  "lambda_functions",
   "policies",
 ];
 
@@ -32,16 +25,11 @@ rmSync(outputResources, { recursive: true, force: true });
 mkdirSync(outputResources, { recursive: true });
 for (const directory of runtimeResourceDirectories) {
   cpSync(
-    join(administratorResources, directory),
+    join(packageResources, directory),
     join(outputResources, directory),
     { recursive: true },
   );
 }
-// The container module's config templates live in this package until resource ownership moves
-// here. They are overlaid onto the copied tree so a released layout has one templates directory.
-cpSync(join(packageRoot, "resources-ecs", "config"), join(outputResources, "config"), {
-  recursive: true,
-});
 cpSync(bootstrapSource, join(outputResources, "bootstrap"), { recursive: true });
 copyFileSync(
   join(repositoryRoot, "IDEA_VERSION.txt"),
