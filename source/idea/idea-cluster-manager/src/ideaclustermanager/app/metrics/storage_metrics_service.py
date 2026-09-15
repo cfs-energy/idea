@@ -60,7 +60,14 @@ def tag_value(value) -> str:
 
 
 class OntapClient:
-    def __init__(self, endpoint: str, username: str, password: str, verify_tls: bool = False, timeout: int = 60):
+    def __init__(
+        self,
+        endpoint: str,
+        username: str,
+        password: str,
+        verify_tls: bool = False,
+        timeout: int = 60,
+    ):
         host = endpoint.replace('https://', '').replace('http://', '').rstrip('/')
         self.base = f'https://{host}'
         self.fs_id = fs_id_from_host(host)
@@ -74,13 +81,23 @@ class OntapClient:
         while Utils.is_not_empty(path):
             if not self.verify_tls:
                 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-            response = requests.get(self.base + path, auth=self.auth, verify=self.verify_tls, timeout=self.timeout)
+            response = requests.get(
+                self.base + path,
+                auth=self.auth,
+                verify=self.verify_tls,
+                timeout=self.timeout,
+            )
             if response.status_code != 200:
-                raise RuntimeError(f'GET {path}: {response.status_code}: {response.text[:200]}')
+                raise RuntimeError(
+                    f'GET {path}: {response.status_code}: {response.text[:200]}'
+                )
             page = response.json()
             records.extend(Utils.get_value_as_list('records', page, []))
             path = Utils.get_value_as_string(
-                'href', Utils.get_value_as_dict('next', Utils.get_value_as_dict('_links', page, {}), {})
+                'href',
+                Utils.get_value_as_dict(
+                    'next', Utils.get_value_as_dict('_links', page, {}), {}
+                ),
             )
         return records
 
@@ -100,17 +117,38 @@ def user_usage(reports: List[Dict]) -> Dict[Tuple[str, str, str, str], Tuple[int
         users = Utils.get_value_as_list('users', record, [])
         if len(users) == 0:
             continue
-        user = normalize_user(Utils.get_value_as_string('name', users[0]), Utils.get_value_as_string('id', users[0]))
+        user = normalize_user(
+            Utils.get_value_as_string('name', users[0]),
+            Utils.get_value_as_string('id', users[0]),
+        )
         if Utils.is_empty(user):
             continue  # the default rule's row tracks nothing attributable
         key = (
-            Utils.get_value_as_string('name', Utils.get_value_as_dict('svm', record, {}), ''),
-            Utils.get_value_as_string('name', Utils.get_value_as_dict('volume', record, {}), ''),
-            Utils.get_value_as_string('name', Utils.get_value_as_dict('qtree', record, {}), ''),
+            Utils.get_value_as_string(
+                'name', Utils.get_value_as_dict('svm', record, {}), ''
+            ),
+            Utils.get_value_as_string(
+                'name', Utils.get_value_as_dict('volume', record, {}), ''
+            ),
+            Utils.get_value_as_string(
+                'name', Utils.get_value_as_dict('qtree', record, {}), ''
+            ),
             user,
         )
-        used_bytes = Utils.get_value_as_int('total', Utils.get_value_as_dict('used', Utils.get_value_as_dict('space', record, {}), {}), 0)
-        used_files = Utils.get_value_as_int('total', Utils.get_value_as_dict('used', Utils.get_value_as_dict('files', record, {}), {}), 0)
+        used_bytes = Utils.get_value_as_int(
+            'total',
+            Utils.get_value_as_dict(
+                'used', Utils.get_value_as_dict('space', record, {}), {}
+            ),
+            0,
+        )
+        used_files = Utils.get_value_as_int(
+            'total',
+            Utils.get_value_as_dict(
+                'used', Utils.get_value_as_dict('files', record, {}), {}
+            ),
+            0,
+        )
         found = usage.get(key, (0, 0))
         usage[key] = (found[0] + used_bytes, found[1] + used_files)
     return usage
@@ -125,17 +163,30 @@ class StorageMetrics(BaseMetrics):
         try:
             for key in sorted(dimensions):
                 self.with_dimension(key, dimensions[key])
-            self.gauge(MetricName=name, Value=value, Unit='Bytes' if name.endswith('_bytes') else 'Count')
+            self.gauge(
+                MetricName=name,
+                Value=value,
+                Unit='Bytes' if name.endswith('_bytes') else 'Count',
+            )
         finally:
             self.pop_dimensions()
 
 
-def publish_storage(metrics: StorageMetrics, fs_id: str, volumes: List[Dict], reports: List[Dict]) -> int:
+def publish_storage(
+    metrics: StorageMetrics, fs_id: str, volumes: List[Dict], reports: List[Dict]
+) -> int:
     """gauges from one read: per-user usage, per-volume capacity and tier split. Returns the count."""
     published = 0
     filesystem = tag_value(fs_id)
-    for (svm, volume, qtree, user), (used_bytes, used_files) in sorted(user_usage(reports).items()):
-        dimensions = {'user': tag_value(user), 'volume': tag_value(volume), 'svm': tag_value(svm), 'filesystem': filesystem}
+    for (svm, volume, qtree, user), (used_bytes, used_files) in sorted(
+        user_usage(reports).items()
+    ):
+        dimensions = {
+            'user': tag_value(user),
+            'volume': tag_value(volume),
+            'svm': tag_value(svm),
+            'filesystem': filesystem,
+        }
         if Utils.is_not_empty(qtree):
             dimensions['qtree'] = tag_value(qtree)
         metrics.publish_gauge('storage.used_bytes', used_bytes, dimensions)
@@ -145,19 +196,37 @@ def publish_storage(metrics: StorageMetrics, fs_id: str, volumes: List[Dict], re
         space = Utils.get_value_as_dict('space', volume, {})
         dimensions = {
             'volume': tag_value(Utils.get_value_as_string('name', volume)),
-            'svm': tag_value(Utils.get_value_as_string('name', Utils.get_value_as_dict('svm', volume, {}))),
+            'svm': tag_value(
+                Utils.get_value_as_string(
+                    'name', Utils.get_value_as_dict('svm', volume, {})
+                )
+            ),
             'filesystem': filesystem,
         }
-        metrics.publish_gauge('storage.volume_size_bytes', Utils.get_value_as_int('size', space, 0), dimensions)
-        metrics.publish_gauge('storage.volume_used_bytes', Utils.get_value_as_int('used', space, 0), dimensions)
+        metrics.publish_gauge(
+            'storage.volume_size_bytes',
+            Utils.get_value_as_int('size', space, 0),
+            dimensions,
+        )
+        metrics.publish_gauge(
+            'storage.volume_used_bytes',
+            Utils.get_value_as_int('used', space, 0),
+            dimensions,
+        )
         published += 2
         # Tier footprints are release-dependent fields; a used volume reporting zero for both
         # is a file system that does not serve them, so nothing is published rather than zero.
         ssd = Utils.get_value_as_int('performance_tier_footprint', space, 0)
         pool = Utils.get_value_as_int('capacity_tier_footprint', space, 0)
         if ssd > 0 or pool > 0:
-            metrics.publish_gauge('storage.volume_tier_bytes', ssd, {**dimensions, 'tier': 'ssd'})
-            metrics.publish_gauge('storage.volume_tier_bytes', pool, {**dimensions, 'tier': 'capacity_pool'})
+            metrics.publish_gauge(
+                'storage.volume_tier_bytes', ssd, {**dimensions, 'tier': 'ssd'}
+            )
+            metrics.publish_gauge(
+                'storage.volume_tier_bytes',
+                pool,
+                {**dimensions, 'tier': 'capacity_pool'},
+            )
             published += 2
     return published
 
@@ -176,7 +245,9 @@ class StorageMetricsService(SocaService):
         self.context = context
         self.logger = context.logger('storage-metrics')
         self._exit = threading.Event()
-        self._thread = threading.Thread(target=self._loop, name='storage-metrics', daemon=True)
+        self._thread = threading.Thread(
+            target=self._loop, name='storage-metrics', daemon=True
+        )
 
     def service_id(self) -> str:
         return 'storage-metrics'
@@ -190,7 +261,13 @@ class StorageMetricsService(SocaService):
         return Utils.is_not_empty(self.context.config().get_string('metrics.provider'))
 
     def get_interval_seconds(self) -> int:
-        return max(1, self.context.config().get_int(self._config_key('interval_minutes'), 60)) * 60
+        return (
+            max(
+                1,
+                self.context.config().get_int(self._config_key('interval_minutes'), 60),
+            )
+            * 60
+        )
 
     def targets(self) -> List[StorageTarget]:
         """every shared-storage entry on ONTAP that carries metrics credentials."""
@@ -208,7 +285,11 @@ class StorageMetricsService(SocaService):
             endpoint = config.get_string(f'{prefix}.svm.management_dns')
             if Utils.is_empty(username) or Utils.is_empty(endpoint):
                 continue
-            found.append(StorageTarget(name, endpoint, username, f'{prefix}.metrics.password_secret_arn'))
+            found.append(
+                StorageTarget(
+                    name, endpoint, username, f'{prefix}.metrics.password_secret_arn'
+                )
+            )
         return found
 
     def start(self):
@@ -239,15 +320,24 @@ class StorageMetricsService(SocaService):
             self.logger.info(f'storage metrics are running elsewhere: {e}')
             return
         try:
-            verify_tls = self.context.config().get_bool(self._config_key('verify_tls'), False)
+            verify_tls = self.context.config().get_bool(
+                self._config_key('verify_tls'), False
+            )
             metrics = StorageMetrics(self.context)
             for target in self.targets():
                 try:
                     password = self.context.config().get_secret(target.password_key)
                     if Utils.is_empty(password):
-                        self.logger.warning(f'{target.name}: no password at {target.password_key}. skip.')
+                        self.logger.warning(
+                            f'{target.name}: no password at {target.password_key}. skip.'
+                        )
                         continue
-                    client = OntapClient(target.endpoint, target.username, password, verify_tls=verify_tls)
+                    client = OntapClient(
+                        target.endpoint,
+                        target.username,
+                        password,
+                        verify_tls=verify_tls,
+                    )
                     volumes = client.volumes()
                     reports = client.quota_reports()
                     published = publish_storage(metrics, client.fs_id, volumes, reports)

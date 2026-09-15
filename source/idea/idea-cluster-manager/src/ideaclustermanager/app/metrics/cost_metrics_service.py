@@ -60,7 +60,14 @@ def amount(metrics: Dict, key: str) -> float:
 class CostRow:
     __slots__ = ('family', 'day', 'dimensions', 'amortized', 'unblended')
 
-    def __init__(self, family: str, day: str, dimensions: Dict[str, str], amortized: float, unblended: float):
+    def __init__(
+        self,
+        family: str,
+        day: str,
+        dimensions: Dict[str, str],
+        amortized: float,
+        unblended: float,
+    ):
         self.family = family
         self.day = day
         self.dimensions = dimensions
@@ -72,13 +79,24 @@ class CostMetrics(BaseMetrics):
     def __init__(self, context: SocaContext):
         super().__init__(context, split_dimensions=False)
 
-    def publish(self, family: str, day_epoch: int, dimensions: Dict[str, str], amortized: float, unblended: float):
+    def publish(
+        self,
+        family: str,
+        day_epoch: int,
+        dimensions: Dict[str, str],
+        amortized: float,
+        unblended: float,
+    ):
         self.push_dimensions()
         try:
             for name in sorted(dimensions):
                 self.with_dimension(name, dimensions[name])
-            self.count(MetricName=f'{family}.amortized', Value=amortized, Timestamp=day_epoch)
-            self.count(MetricName=f'{family}.unblended', Value=unblended, Timestamp=day_epoch)
+            self.count(
+                MetricName=f'{family}.amortized', Value=amortized, Timestamp=day_epoch
+            )
+            self.count(
+                MetricName=f'{family}.unblended', Value=unblended, Timestamp=day_epoch
+            )
         finally:
             self.pop_dimensions()
 
@@ -90,7 +108,9 @@ def aggregate(rows: Iterable[CostRow]) -> List[CostRow]:
         key = (row.family, row.day, tuple(sorted(row.dimensions.items())))
         found = totals.get(key)
         if found is None:
-            totals[key] = CostRow(row.family, row.day, dict(row.dimensions), row.amortized, row.unblended)
+            totals[key] = CostRow(
+                row.family, row.day, dict(row.dimensions), row.amortized, row.unblended
+            )
         else:
             found.amortized += row.amortized
             found.unblended += row.unblended
@@ -116,7 +136,10 @@ class CostExplorerReader:
         values: List[str] = []
         token: Optional[str] = None
         while True:
-            request = {'TimePeriod': self._period(start, end), 'TagKey': self.module_tag}
+            request = {
+                'TimePeriod': self._period(start, end),
+                'TagKey': self.module_tag,
+            }
             if token:
                 request['NextPageToken'] = token
             response = self.client.get_tags(**request)
@@ -152,7 +175,9 @@ class CostExplorerReader:
                 request['NextPageToken'] = token
             response = self.client.get_cost_and_usage(**request)
             for result in Utils.get_value_as_list('ResultsByTime', response, []):
-                day = Utils.get_value_as_string('Start', Utils.get_value_as_dict('TimePeriod', result, {}))
+                day = Utils.get_value_as_string(
+                    'Start', Utils.get_value_as_dict('TimePeriod', result, {})
+                )
                 if Utils.is_empty(day):
                     continue
                 for group in Utils.get_value_as_list('Groups', result, []):
@@ -165,42 +190,76 @@ class CostExplorerReader:
                     group_keys = Utils.get_value_as_list('Keys', group, [])
                     for index, name in enumerate(keys):
                         raw = group_keys[index] if index < len(group_keys) else ''
-                        dimensions[name] = tag_value(strip_tag_key(Utils.get_as_string(raw, '')))
+                        dimensions[name] = tag_value(
+                            strip_tag_key(Utils.get_as_string(raw, ''))
+                        )
                     rows.append(CostRow(family, day, dimensions, amortized, unblended))
             token = Utils.get_value_as_string('NextPageToken', response)
             if Utils.is_empty(token):
                 return rows
 
-    def fetch_all(self, start: arrow.Arrow, end: arrow.Arrow, by_account: bool) -> List[CostRow]:
+    def fetch_all(
+        self, start: arrow.Arrow, end: arrow.Arrow, by_account: bool
+    ) -> List[CostRow]:
         tag = lambda key: {'Type': 'TAG', 'Key': key}  # noqa: E731
         dimension = lambda key: {'Type': 'DIMENSION', 'Key': key}  # noqa: E731
         project_owner = [tag(self.project_tag), tag(self.owner_tag)]
 
         rows: List[CostRow] = []
         for module in self.modules(start, end):
-            rows.extend(self.query(
-                FAMILY, start, end, project_owner, ['project', 'owner'],
-                {'Tags': {'Key': self.module_tag, 'Values': [module]}},
-                {'module': tag_value(module)},
-            ))
+            rows.extend(
+                self.query(
+                    FAMILY,
+                    start,
+                    end,
+                    project_owner,
+                    ['project', 'owner'],
+                    {'Tags': {'Key': self.module_tag, 'Values': [module]}},
+                    {'module': tag_value(module)},
+                )
+            )
         # Spend with no module tag at all. Without it the family stops being a partition of
         # the bill and every total quietly under-reports.
-        rows.extend(self.query(
-            FAMILY, start, end, project_owner, ['project', 'owner'],
-            {'Tags': {'Key': self.module_tag, 'MatchOptions': ['ABSENT']}},
-            {'module': UNKNOWN},
-        ))
-        rows.extend(self.query(
-            FAMILY_BY_SERVICE, start, end, [tag(self.module_tag), dimension('SERVICE')], ['module', 'service'],
-        ))
-        rows.extend(self.query(
-            FAMILY_STORAGE, start, end, [dimension('SERVICE'), dimension('USAGE_TYPE')], ['service', 'usage_type'],
-            {'Dimensions': {'Key': 'SERVICE', 'Values': STORAGE_SERVICES}},
-        ))
+        rows.extend(
+            self.query(
+                FAMILY,
+                start,
+                end,
+                project_owner,
+                ['project', 'owner'],
+                {'Tags': {'Key': self.module_tag, 'MatchOptions': ['ABSENT']}},
+                {'module': UNKNOWN},
+            )
+        )
+        rows.extend(
+            self.query(
+                FAMILY_BY_SERVICE,
+                start,
+                end,
+                [tag(self.module_tag), dimension('SERVICE')],
+                ['module', 'service'],
+            )
+        )
+        rows.extend(
+            self.query(
+                FAMILY_STORAGE,
+                start,
+                end,
+                [dimension('SERVICE'), dimension('USAGE_TYPE')],
+                ['service', 'usage_type'],
+                {'Dimensions': {'Key': 'SERVICE', 'Values': STORAGE_SERVICES}},
+            )
+        )
         if by_account:
-            rows.extend(self.query(
-                FAMILY_BY_ACCOUNT, start, end, [tag(self.module_tag), dimension('LINKED_ACCOUNT')], ['module', 'account_id'],
-            ))
+            rows.extend(
+                self.query(
+                    FAMILY_BY_ACCOUNT,
+                    start,
+                    end,
+                    [tag(self.module_tag), dimension('LINKED_ACCOUNT')],
+                    ['module', 'account_id'],
+                )
+            )
         return rows
 
 
@@ -210,7 +269,9 @@ class CostMetricsService(SocaService):
         self.context = context
         self.logger = context.logger('cost-metrics')
         self._exit = threading.Event()
-        self._thread = threading.Thread(target=self._loop, name='cost-metrics', daemon=True)
+        self._thread = threading.Thread(
+            target=self._loop, name='cost-metrics', daemon=True
+        )
 
     def service_id(self) -> str:
         return 'cost-metrics'
@@ -227,10 +288,15 @@ class CostMetricsService(SocaService):
         return self.context.aws().aws_partition() == AWS_PARTITION_COMMERCIAL
 
     def get_interval_seconds(self) -> int:
-        return max(1, self.context.config().get_int(self._config_key('interval_hours'), 6)) * 3600
+        return (
+            max(1, self.context.config().get_int(self._config_key('interval_hours'), 6))
+            * 3600
+        )
 
     def get_lookback_days(self) -> int:
-        return max(1, self.context.config().get_int(self._config_key('lookback_days'), 3))
+        return max(
+            1, self.context.config().get_int(self._config_key('lookback_days'), 3)
+        )
 
     def reader(self) -> CostExplorerReader:
         config = self.context.config()
@@ -261,7 +327,9 @@ class CostMetricsService(SocaService):
             finally:
                 self._exit.wait(self.get_interval_seconds())
 
-    def window(self, now: Optional[arrow.Arrow] = None) -> Tuple[arrow.Arrow, arrow.Arrow]:
+    def window(
+        self, now: Optional[arrow.Arrow] = None
+    ) -> Tuple[arrow.Arrow, arrow.Arrow]:
         """the trailing full days: End is exclusive, so today, still being billed, is left out."""
         today = (now or arrow.utcnow()).floor('day')
         return today.shift(days=-self.get_lookback_days()), today
@@ -275,12 +343,16 @@ class CostMetricsService(SocaService):
             return
         try:
             start, end = self.window()
-            by_account = self.context.config().get_bool(self._config_key('by_account'), False)
+            by_account = self.context.config().get_bool(
+                self._config_key('by_account'), False
+            )
             rows = aggregate(self.reader().fetch_all(start, end, by_account))
             metrics = CostMetrics(self.context)
             for row in rows:
                 day_epoch = int(arrow.get(row.day).timestamp())
-                metrics.publish(row.family, day_epoch, row.dimensions, row.amortized, row.unblended)
+                metrics.publish(
+                    row.family, day_epoch, row.dimensions, row.amortized, row.unblended
+                )
             self.logger.info(
                 f'cost metrics published: {len(rows)} rows for {start.format("YYYY-MM-DD")}..{end.format("YYYY-MM-DD")}'
             )
