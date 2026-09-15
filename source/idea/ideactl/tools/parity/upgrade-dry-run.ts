@@ -155,6 +155,8 @@ const deps: UpgradeDeps = {
     async describeInstanceTypeOfferings(input) { return [input.instanceType]; },
     async describeInstanceAttribute() { return false; },
     async modifyInstanceAttribute(input) { record(`EC2 termination protection ${input.protected ? "restored" : "cleared"} on ${input.instanceId}`); },
+    async createTags(input) { record(`EC2 protection marker created on ${input.instanceId}`); },
+    async deleteTags(input) { record(`EC2 protection marker removed on ${input.instanceId}`); },
     async describeLiveInstances(input) { return input.instanceIds; },
   },
   cloudFormation: { async listStackResources() { return { instanceIds: [] }; } },

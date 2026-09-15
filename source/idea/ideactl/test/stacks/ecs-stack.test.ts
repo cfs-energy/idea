@@ -77,9 +77,8 @@ function vpcContext(): Json {
   };
 }
 
-function settings(datadogEnabled = false, extra: Record<string, unknown> = {}): ClusterConfig {
+function settings(datadogEnabled = false, overrides: Json = {}): ClusterConfig {
   const values: Record<string, unknown> = {
-    ...extra,
     "cluster.aws.account_id": ACCOUNT,
     "cluster.aws.dns_suffix": "amazonaws.com",
     "cluster.aws.partition": "aws",
@@ -138,7 +137,7 @@ function settings(datadogEnabled = false, extra: Record<string, unknown> = {}): 
     "vdc.dcv_connection_gateway.security_group_id": "sg-0123456789abcdef6",
     "vdc.dcv_connection_gateway_iam_role_arn": syntheticArn("iam", "role/synthetic-gateway-role"),
   };
-  return new ClusterConfig(Object.entries(values).map(([key, value]) => ({ key, value })));
+  return new ClusterConfig(Object.entries({ ...values, ...overrides }).map(([key, value]) => ({ key, value })));
 }
 
 function isJson(value: unknown): value is Json {
@@ -170,11 +169,11 @@ function text(value: unknown): string {
   return value;
 }
 
-function synth(datadogEnabled = false, extra: Record<string, unknown> = {}): Json {
+function synth(datadogEnabled = false, overrides: Json = {}): Json {
   const outdir = mkdtempSync(join(tmpdir(), "ideactl-ecs-"));
   workdirs.push(outdir);
   const app = new App({ context: { "aws:cdk:enable-path-metadata": true, ...vpcContext() }, outdir });
-  const config = settings(datadogEnabled, extra);
+  const config = settings(datadogEnabled, overrides);
   new EcsStack({
     app,
     ctx: makeContext({
@@ -506,3 +505,24 @@ test("refuses to synthesize a host mount whose endpoint or path is missing", () 
     /shared-storage\.home: fsx_netapp_ontap needs its endpoint and path/,
   );
 });
+for (const [label, overrides, expected] of [
+  ["customer-managed", { "cluster.kms.key_type": "customer-managed", "cluster.secretsmanager.kms_key_id": "test-key" }, true],
+  ["default", {}, false],
+  ["AWS-managed", { "cluster.kms.key_type": "aws-managed", "cluster.secretsmanager.kms_key_id": "test-key" }, false],
+  ["missing key", { "cluster.kms.key_type": "customer-managed" }, false],
+] as const) {
+  test(`Datadog execution role grants scoped decryption for ${label} secrets`, () => {
+    const resources = resourcesOf(synth(true, overrides));
+    const task = record(byType(resources, "AWS::ECS::TaskDefinition")[0]![1]["Properties"], "task");
+    const role = (record(task["ExecutionRoleArn"], "execution role")["Fn::GetAtt"] as string[])[0];
+    const statements = byType(resources, "AWS::IAM::Policy").flatMap(([, resource]) => {
+      const props = record(resource["Properties"], "policy");
+      if (!(props["Roles"] as Json[]).some((ref) => ref["Ref"] === role)) return [];
+      return record(props["PolicyDocument"], "document")["Statement"] as Json[];
+    }).filter((statement) => JSON.stringify(statement["Action"]).includes("kms:Decrypt"));
+    assert.equal(statements.length, expected ? 1 : 0);
+    if (expected) {
+      assert.deepEqual(statements[0], { Action: "kms:Decrypt", Effect: "Allow", Resource: `arn:aws:kms:${REGION}:${ACCOUNT}:key/test-key` });
+    }
+  });
+}

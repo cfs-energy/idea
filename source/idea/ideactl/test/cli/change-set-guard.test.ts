@@ -187,17 +187,26 @@ describe('evaluateChangeSet', () => {
     assert.equal(bare.refusals.length, 1, 'no property detail means no evidence');
   });
 
-  it('allows removing a stateful or custom resource whose deployed definition is retained', () => {
-    // The scheduler cutover stops managing the host DNS record after a prior deploy gave it
-    // DeletionPolicy Retain; CloudFormation then neither deletes the name nor sends a Delete.
-    const retained = new Set(['schedulerdnsrecord', 'somecustom']);
-    const changes = [change('Remove', 'schedulerdnsrecord', 'AWS::Route53::RecordSet'), change('Remove', 'somecustom', 'Custom::Something')];
-    const verdict = evaluateChangeSet({ Changes: changes }, [], new Map(), new Map(), retained);
+  it('allows retained record set removal for the scheduler handover', () => {
+    const changes = [change('Remove', 'schedulerdnsrecord', 'AWS::Route53::RecordSet')];
+    const verdict = evaluateChangeSet({ Changes: changes }, [], new Map(), new Map(), new Set(['schedulerdnsrecord']));
     assert.equal(verdict.refusals.length, 0);
-    assert.ok(verdict.allowed.every((entry) => entry.allowedBy === 'DeletionPolicy Retain on the deployed resource'));
-    const unretained = evaluateChangeSet({ Changes: changes });
-    assert.equal(unretained.refusals.length, 2);
+    assert.equal(verdict.allowed.length, 1);
+    assert.equal(evaluateChangeSet({ Changes: changes }).refusals.length, 1);
   });
+
+  for (const type of ['AWS::EFS::FileSystem', 'Custom::Something']) {
+    it(`refuses retained ${type} removal without an explicit override`, () => {
+      const changes = [change('Remove', 'old', type), change('Add', 'renamed', type)];
+      const retained = new Set(['old']);
+      const verdict = evaluateChangeSet({ Changes: changes }, [], new Map(), new Map(), retained);
+      assert.equal(verdict.refusals.length, 1);
+      assert.equal(verdict.refusals[0]?.logicalId, 'old');
+      const override = evaluateChangeSet({ Changes: changes }, ['old'], new Map(), new Map(), retained);
+      assert.equal(override.refusals.length, 0);
+      assert.equal(override.allowed[0]?.allowedBy, '--allow-replacement');
+    });
+  }
 
   it('reads retained logical IDs from a deployed template and nothing from an unparsable one', () => {
     const template = JSON.stringify({ Resources: { a: { Type: 'X', DeletionPolicy: 'Retain' }, b: { Type: 'X', DeletionPolicy: 'Delete' }, c: { Type: 'X' } } });

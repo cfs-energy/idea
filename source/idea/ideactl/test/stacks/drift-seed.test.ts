@@ -274,6 +274,8 @@ function phase3Deps(): UpgradeDeps {
       async modifyInstanceAttribute() {
         unexpected("modifyInstanceAttribute");
       },
+      async createTags() { throw new Error("unexpected tag write"); },
+      async deleteTags() { throw new Error("unexpected tag write"); },
       async describeLiveInstances() {
         unexpected("describeLiveInstances");
       },

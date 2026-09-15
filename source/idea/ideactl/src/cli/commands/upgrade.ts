@@ -189,7 +189,9 @@ export interface UpgradeEc2Api {
   describeInstanceTypeOfferings(input: { awsRegion: string; instanceType: string }): Promise<string[]>;
   describeInstanceAttribute(input: { awsRegion: string; instanceId: string }): Promise<boolean>;
   modifyInstanceAttribute(input: { awsRegion: string; instanceId: string; protected: boolean }): Promise<void>;
-  describeLiveInstances(input: { awsRegion: string; instanceIds: string[] }): Promise<string[]>;
+  createTags(input: { awsRegion: string; instanceId: string; value: string }): Promise<void>;
+  deleteTags(input: { awsRegion: string; instanceId: string }): Promise<void>;
+  describeLiveInstances(input: { awsRegion: string; instanceIds: string[]; tagKey?: string }): Promise<string[]>;
 }
 
 export interface UpgradeCloudFormationApi {
@@ -968,6 +970,8 @@ async function moduleInstances(deps: UpgradeDeps, options: UpgradeCommandOptions
   return instances;
 }
 
+const TERMINATION_PROTECTION_TAG = "idea:TerminationProtectionCleared";
+
 async function clearTerminationProtection(
   deps: UpgradeDeps,
   awsRegion: string,
@@ -977,6 +981,9 @@ async function clearTerminationProtection(
   for (const instance of instances) {
     try {
       if (!await deps.ec2.describeInstanceAttribute({ awsRegion, instanceId: instance.instanceId })) continue;
+      // Persist the baseline first so an interrupted run can recover it on a later upgrade.
+      // If tagging fails, leaving protection enabled avoids losing that baseline.
+      await deps.ec2.createTags({ awsRegion, instanceId: instance.instanceId, value: new Date(deps.now()).toISOString() });
       await deps.ec2.modifyInstanceAttribute({ awsRegion, instanceId: instance.instanceId, protected: false });
       cleared.push(instance);
       deps.out(`cleared instance termination protection on ${instance.instanceId} (${instance.stackName})`);
@@ -987,16 +994,16 @@ async function clearTerminationProtection(
   return cleared;
 }
 
-async function restoreTerminationProtection(deps: UpgradeDeps, awsRegion: string, cleared: ClearedInstance[]): Promise<void> {
-  if (cleared.length === 0) return;
-  const alive = new Set(await deps.ec2.describeLiveInstances({ awsRegion, instanceIds: cleared.map((instance) => instance.instanceId) }));
-  for (const instance of cleared) {
+async function restoreTerminationProtection(deps: UpgradeDeps, awsRegion: string, instances: ClearedInstance[]): Promise<void> {
+  if (instances.length === 0) return;
+  const alive = new Set(await deps.ec2.describeLiveInstances({ awsRegion, instanceIds: instances.map((instance) => instance.instanceId), tagKey: TERMINATION_PROTECTION_TAG }));
+  for (const instance of instances) {
     if (!alive.has(instance.instanceId)) {
-      deps.out(`${instance.instanceId} (${instance.stackName}) was replaced by the upgrade, so it has no termination protection to restore`);
       continue;
     }
     try {
       await deps.ec2.modifyInstanceAttribute({ awsRegion, instanceId: instance.instanceId, protected: true });
+      await deps.ec2.deleteTags({ awsRegion, instanceId: instance.instanceId });
       deps.out(`restored instance termination protection on ${instance.instanceId} (${instance.stackName})`);
     } catch (error) {
       deps.out(`warning: could not restore termination protection on ${instance.instanceId} (${instance.stackName}): ${(error as Error).message}. Re-enable it by hand.`);
@@ -1358,7 +1365,7 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
     };
     await deps.deploy(deployment);
     await announceHeldModuleSets(deps, options, configDir, modulesBefore);
-    await restoreTerminationProtection(deps, options.awsRegion, cleared);
+    await restoreTerminationProtection(deps, options.awsRegion, await moduleInstances(deps, options));
     await saveValuesFile(deps, options);
     deps.out("All upgrade phases completed successfully");
     await reopenSubmission?.();
@@ -1508,18 +1515,37 @@ export function createLiveUpgradeDeps(deps: Deps): UpgradeDeps {
         }),
       );
     },
+    async createTags(input) {
+      const { CreateTagsCommand, EC2Client } = await import("@aws-sdk/client-ec2");
+      await new EC2Client(await awsClientOptions(input.awsRegion)).send(
+        new CreateTagsCommand({ Resources: [input.instanceId], Tags: [{ Key: TERMINATION_PROTECTION_TAG, Value: input.value }] }),
+      );
+    },
+    async deleteTags(input) {
+      const { DeleteTagsCommand, EC2Client } = await import("@aws-sdk/client-ec2");
+      await new EC2Client(await awsClientOptions(input.awsRegion)).send(
+        new DeleteTagsCommand({ Resources: [input.instanceId], Tags: [{ Key: TERMINATION_PROTECTION_TAG }] }),
+      );
+    },
     async describeLiveInstances(input) {
       const { DescribeInstancesCommand, EC2Client } = await import("@aws-sdk/client-ec2");
-      const result = await new EC2Client(await awsClientOptions(input.awsRegion)).send(
-        new DescribeInstancesCommand({
+      const client = new EC2Client(await awsClientOptions(input.awsRegion));
+      const ids: string[] = [];
+      let nextToken: string | undefined;
+      do {
+        const result = await client.send(new DescribeInstancesCommand({
           Filters: [
             { Name: "instance-id", Values: input.instanceIds },
             { Name: "instance-state-name", Values: ["pending", "running", "stopping", "stopped"] },
+            ...(input.tagKey === undefined ? [] : [{ Name: "tag-key", Values: [input.tagKey] }]),
           ],
-        }),
-      );
-      return (result.Reservations ?? []).flatMap((reservation) => reservation.Instances ?? [])
-        .flatMap((instance) => instance.InstanceId === undefined ? [] : [instance.InstanceId]);
+          NextToken: nextToken,
+        }));
+        ids.push(...(result.Reservations ?? []).flatMap((reservation) => reservation.Instances ?? [])
+          .flatMap((instance) => instance.InstanceId === undefined ? [] : [instance.InstanceId]));
+        nextToken = result.NextToken;
+      } while (nextToken);
+      return ids;
     },
   };
 

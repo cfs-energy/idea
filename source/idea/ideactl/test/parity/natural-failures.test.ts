@@ -460,11 +460,13 @@ interface UpgradeReplay {
 
 function upgradeReplay(input: {
   protectedInstances: Set<string>;
+  protectionTags?: Set<string>;
   settings: Array<Record<string, unknown>>;
   deployFails?: boolean;
 }): UpgradeReplay {
   const events: string[] = [];
   const modifies: Array<{ instanceId: string; protected: boolean }> = [];
+  const protectionTags = input.protectionTags ?? new Set<string>();
   const writer: ConfigWriter = {
     async syncModulesInDb() {},
     async syncClusterSettingsInDb() {},
@@ -545,8 +547,10 @@ function upgradeReplay(input: {
         if (modifyInput.protected) input.protectedInstances.add(modifyInput.instanceId);
         else input.protectedInstances.delete(modifyInput.instanceId);
       },
+      async createTags(tagInput) { protectionTags.add(tagInput.instanceId); },
+      async deleteTags(tagInput) { protectionTags.delete(tagInput.instanceId); },
       async describeLiveInstances(liveInput) {
-        return [...liveInput.instanceIds];
+        return liveInput.instanceIds.filter((id) => protectionTags.has(id));
       },
     },
     cloudFormation: {
@@ -597,14 +601,13 @@ const AL2023_SETTINGS = [
   { key: "scheduler.base_os", value: "amazonlinux2023" },
 ];
 
-test("GAP: a second run cannot restore termination protection the first run cleared", async () => {
-  // The sweep keeps the instances it cleared in process memory only. After a failure they stay
-  // false, and the next run reads them as already false, so it never adds them to its own restore
-  // list. The second run then reports success with protection still off, and says nothing about
-  // it.
+test("a second run restores termination protection from the first run's marker", async () => {
+  // Separate dependency objects model a restart, so recovery must rely on shared EC2 state.
+  // The marker outlives the first run even though its in-memory restore list does not.
   const protectedInstances = new Set(["i-0sample"]);
+  const protectionTags = new Set<string>();
 
-  const first = upgradeReplay({ protectedInstances, settings: AL2023_SETTINGS, deployFails: true });
+  const first = upgradeReplay({ protectedInstances, protectionTags, settings: AL2023_SETTINGS, deployFails: true });
   await assert.rejects(
     () => upgradeCluster(first.deps, {
       clusterName: CLUSTER,
@@ -623,7 +626,7 @@ test("GAP: a second run cannot restore termination protection the first run clea
   );
   assert.equal(protectedInstances.has("i-0sample"), false);
 
-  const second = upgradeReplay({ protectedInstances, settings: AL2023_SETTINGS });
+  const second = upgradeReplay({ protectedInstances, protectionTags, settings: AL2023_SETTINGS });
   await upgradeCluster(second.deps, {
     clusterName: CLUSTER,
     awsRegion: REGION,
@@ -633,14 +636,10 @@ test("GAP: a second run cannot restore termination protection the first run clea
     modules: ["scheduler"],
   });
 
-  // No restore was attempted, the instance is still unprotected, and the run reported success.
-  assert.deepEqual(second.modifies, []);
-  assert.equal(protectedInstances.has("i-0sample"), false);
+  assert.deepEqual(second.modifies, [{ instanceId: "i-0sample", protected: true }]);
+  assert.equal(protectedInstances.has("i-0sample"), true);
+  assert.equal(protectionTags.size, 0);
   assert.ok(second.events.includes("All upgrade phases completed successfully"));
-  assert.ok(
-    !second.events.some((line) => line.includes("termination protection")),
-    "the successful second run is silent about the protection it did not restore",
-  );
 });
 
 test("a re-run after a partial base-OS rewrite refuses with an actionable message", async () => {

@@ -1,9 +1,5 @@
-/**
- * Phase-boundary tests for `upgrade-cluster`.
- *
- * The real values fixture is intentionally read at runtime. It is not part of
- * the public tree, and every external operation below is an in-memory replay.
- */
+// Synthetic values keep failure recovery reproducible without a private cluster capture.
+// External state lives in the replay so separate upgrade invocations can share it.
 
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -12,6 +8,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { Command } from "commander";
+import { CreateTagsCommand, DeleteTagsCommand, DescribeInstancesCommand, EC2Client } from "@aws-sdk/client-ec2";
 import type { ConfigWriter, Deps } from "../../src/cli/cdk-invoker.ts";
 import {
   countPbsStates,
@@ -21,20 +18,19 @@ import {
   type UpgradeDeps,
   upgradeCluster,
 } from "../../src/cli/commands/upgrade.ts";
-import { requireCapture } from "../support/fixtures.ts";
 
-const fixture = join(process.cwd(), "tools", "parity", "fixtures", "idea-dev27", "values.yml");
-requireCapture(
-  [fixture],
-  "node tools/parity/capture.ts --from-raw tools/parity/fixtures/idea-dev27/raw --out tools/parity/fixtures/idea-dev27",
-);
-const clusterName = "idea-dev27";
+const fixture = join(import.meta.dirname, "../stacks/ecs-values.yml");
+const fixtureValues = readFileSync(fixture, "utf8").replace(/^enable_ecs:.*\n/m, "")
+  + "enabled_modules: [scheduler, virtual-desktop-controller]\n";
+const clusterName = "idea-test1";
 const awsRegion = "us-east-2";
 
 interface Replay {
   deps: UpgradeDeps;
   events: string[];
   rows: Record<string, Array<Record<string, unknown>>>;
+  protection: Set<string>;
+  protectionTags: Map<string, string>;
 }
 
 function moduleRow(moduleId: string, name: string, status = "deployed"): Record<string, unknown> {
@@ -106,7 +102,7 @@ function replay(): Replay {
       },
       async getObject() {
         events.push("read-values");
-        return readFileSync(fixture, "utf8");
+        return fixtureValues;
       },
     },
     async scan(input) {
@@ -140,6 +136,8 @@ function replay(): Replay {
     },
   };
 
+  const protection = new Set(["i-sample"]);
+  const protectionTags = new Map<string, string>();
   const deps: UpgradeDeps = {
     ...base,
     ec2: {
@@ -152,14 +150,25 @@ function replay(): Replay {
       async describeInstanceTypeOfferings() {
         return ["m7i.large"];
       },
-      async describeInstanceAttribute() {
-        return true;
+      async describeInstanceAttribute(input) {
+        return protection.has(input.instanceId);
       },
       async modifyInstanceAttribute(input) {
         events.push(`${input.protected ? "restore" : "clear"}:${input.instanceId}`);
+        if (input.protected) protection.add(input.instanceId);
+        else protection.delete(input.instanceId);
       },
-      async describeLiveInstances() {
-        return ["i-sample"];
+      async createTags(input) {
+        protectionTags.set(input.instanceId, input.value);
+        events.push(`tag:${input.instanceId}`);
+      },
+      async deleteTags(input) {
+        assert.ok(protection.has(input.instanceId));
+        protectionTags.delete(input.instanceId);
+      },
+      async describeLiveInstances(input) {
+        assert.equal(input.tagKey, "idea:TerminationProtectionCleared");
+        return input.instanceIds.filter((id) => protectionTags.has(id));
       },
     },
     cloudFormation: {
@@ -197,7 +206,7 @@ function replay(): Replay {
       return { "us-east-2": { amazonlinux2023: "ami-release" } };
     },
   };
-  return { deps, events, rows };
+  return { deps, events, rows, protection, protectionTags };
 }
 
 async function withFixture(action: (replayValue: Replay) => Promise<void>): Promise<void> {
@@ -208,7 +217,7 @@ async function withFixture(action: (replayValue: Replay) => Promise<void>): Prom
     const valuesPath = join(home, "clusters", clusterName, awsRegion, "values.yml");
     const directory = join(valuesPath, "..");
     mkdirSync(directory, { recursive: true });
-    writeFileSync(valuesPath, readFileSync(fixture, "utf8"), { flag: "w" });
+    writeFileSync(valuesPath, fixtureValues, { flag: "w" });
     assert.ok(existsSync(directory));
     await action(replay());
   } finally {
@@ -548,6 +557,33 @@ test("a deployment failure deliberately does not restore cleared termination pro
   });
 });
 
+test("a successful rerun restores the durable baseline from a failed deployment", async () => {
+  await withFixture(async ({ deps, events, protection, protectionTags }) => {
+    const options = { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true };
+    deps.deploy = async () => { throw new Error("deployment failed"); };
+    await assert.rejects(upgradeCluster(deps, options), /deployment failed/);
+    assert.equal(protection.has("i-sample"), false);
+    assert.equal(protectionTags.get("i-sample"), new Date(deps.now()).toISOString());
+    assert.ok(events.indexOf("tag:i-sample") < events.indexOf("clear:i-sample"));
+    protectionTags.set("i-other-cluster", "earlier");
+    deps.deploy = async () => {};
+    await upgradeCluster(deps, options);
+    assert.ok(protection.has("i-sample"));
+    assert.equal(protectionTags.has("i-sample"), false);
+    assert.equal(protectionTags.has("i-other-cluster"), true);
+    assert.equal(events.filter((event) => event === "clear:i-sample").length, 1);
+  });
+});
+
+test("a failed marker write leaves protection enabled", async () => {
+  await withFixture(async ({ deps, events, protection }) => {
+    deps.ec2.createTags = async () => { throw new Error("tagging failed"); };
+    await upgradeCluster(deps, { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true });
+    assert.ok(protection.has("i-sample"));
+    assert.ok(!events.includes("clear:i-sample"));
+  });
+});
+
 test("all-modules upgrade refuses when ecs is in the table and trunking is disabled", async () => {
   await withFixture(async ({ deps, events, rows }) => {
     rows[`${clusterName}.modules`]?.push({
@@ -808,13 +844,14 @@ test("refuses an in-use end-of-life software stack without --disable-eol-stacks-
   });
 });
 
-test("a failed protection restore warns and still names the instance", async () => {
-  await withFixture(async ({ deps, events }) => {
+test("a failed protection restore preserves its marker and names the instance", async () => {
+  await withFixture(async ({ deps, events, protectionTags }) => {
     deps.ec2.modifyInstanceAttribute = async (input) => {
       if (input.protected === true) throw new Error("simulated restore failure");
       events.push(`clear:${input.instanceId}`);
     };
     await upgradeCluster(deps, { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true });
+    assert.ok(protectionTags.has("i-sample"));
     assert.ok(events.some((event) => event.includes("could not restore termination protection") && event.includes("i-sample")));
   });
 });
@@ -906,5 +943,49 @@ test("a drain that outlives its timeout stops with submission still closed", asy
     assert.ok(events.includes("set:cluster-manager.maintenance.enabled=true"));
     assert.ok(!events.includes("set:cluster-manager.maintenance.enabled=false"));
     assert.ok(!events.includes("deploy"));
+  });
+});
+
+test("live protection markers use EC2 tags and paginate the scoped survivor query", async (t) => {
+  const calls: unknown[] = [];
+  t.mock.method(EC2Client.prototype, "send", async (command: CreateTagsCommand | DeleteTagsCommand | DescribeInstancesCommand) => {
+    calls.push(command.input);
+    if (command instanceof DescribeInstancesCommand) {
+      return command.input.NextToken === undefined
+        ? { Reservations: [{ Instances: [{ InstanceId: "i-first" }] }], NextToken: "next" }
+        : { Reservations: [{ Instances: [{ InstanceId: "i-second" }] }] };
+    }
+    return {};
+  });
+  const ec2 = createLiveUpgradeDeps(replay().deps).ec2;
+  const key = "idea:TerminationProtectionCleared";
+  await ec2.createTags({ awsRegion, instanceId: "i-first", value: "2026-09-15T00:00:00.000Z" });
+  assert.deepEqual(await ec2.describeLiveInstances({ awsRegion, instanceIds: ["i-first", "i-second"], tagKey: key }), ["i-first", "i-second"]);
+  await ec2.deleteTags({ awsRegion, instanceId: "i-first" });
+  const Filters = [
+    { Name: "instance-id", Values: ["i-first", "i-second"] },
+    { Name: "instance-state-name", Values: ["pending", "running", "stopping", "stopped"] },
+    { Name: "tag-key", Values: [key] },
+  ];
+  assert.deepEqual(calls, [
+    { Resources: ["i-first"], Tags: [{ Key: key, Value: "2026-09-15T00:00:00.000Z" }] },
+    { Filters, NextToken: undefined },
+    { Filters, NextToken: "next" },
+    { Resources: ["i-first"], Tags: [{ Key: key }] },
+  ]);
+});
+
+test("a failed marker deletion can be retried after protection is restored", async () => {
+  await withFixture(async ({ deps, protection, protectionTags }) => {
+    const deleteTags = deps.ec2.deleteTags;
+    deps.ec2.deleteTags = async () => { throw new Error("tag deletion failed"); };
+    const options = { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true };
+    await upgradeCluster(deps, options);
+    assert.ok(protection.has("i-sample"));
+    assert.ok(protectionTags.has("i-sample"));
+    deps.ec2.deleteTags = deleteTags;
+    await upgradeCluster(deps, options);
+    assert.ok(protection.has("i-sample"));
+    assert.equal(protectionTags.has("i-sample"), false);
   });
 });

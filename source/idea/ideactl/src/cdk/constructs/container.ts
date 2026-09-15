@@ -21,7 +21,7 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import * as logs from "aws-cdk-lib/aws-logs";
 
 import type { IdeaContext } from "./base.ts";
-import { addCommonTags, addNagSuppression } from "./base.ts";
+import { addCommonTags, addNagSuppression, kmsKeyArn } from "./base.ts";
 import { Policy } from "./common.ts";
 import { buildResourceName, buildTrimmedResourceName } from "../../util/names.ts";
 
@@ -121,13 +121,21 @@ export function ecsTasksPrincipal(scope: ContainerScope): iam.ServicePrincipal {
   });
 }
 
-/** Builds a secret-free execution role with an account-scoped trust policy. */
+// Secret injection happens before the application starts and uses the execution identity.
+// Imported secrets do not carry their encryption key, so their grants cannot include decryption.
 export function buildExecutionRole(scope: ContainerScope, constructId: string, name = constructId): iam.Role {
   const role = new iam.Role(scope.stack, constructId, {
     assumedBy: ecsTasksPrincipal(scope),
     roleName: taskRoleName(scope, name),
   });
   role.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName("service-role/AmazonECSTaskExecutionRolePolicy"));
+  const keyId = scope.ctx.config.getString("cluster.secretsmanager.kms_key_id");
+  if (keyId && scope.ctx.config.getString("cluster.kms.key_type") === "customer-managed") {
+    role.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: ["kms:Decrypt"],
+      resources: [kmsKeyArn(scope.ctx, keyId)],
+    }));
+  }
   addNagSuppression(
     role,
     [

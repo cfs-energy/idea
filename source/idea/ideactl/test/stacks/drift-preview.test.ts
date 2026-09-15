@@ -244,6 +244,8 @@ function upgradeHarness(answer: boolean): UpgradeHarness {
       async modifyInstanceAttribute() {
         events.push("instance-write");
       },
+      async createTags() { throw new Error("unexpected tag write"); },
+      async deleteTags() { throw new Error("unexpected tag write"); },
       async describeLiveInstances() {
         throw new Error("unexpected instance read");
       },

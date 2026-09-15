@@ -514,11 +514,12 @@ export function evaluateChangeSet(
       } else if (finding.refusal === 'replacement' && REVISIONED_TYPES.has(resourceType)) {
         verdict.allowed.push({ ...finding, allowedBy: 'a new revision; the previous one is retained' });
       } else if (
-        (finding.refusal === 'stateful-remove' || finding.refusal === 'custom-resource-remove') &&
+        finding.refusal === 'stateful-remove' &&
+        resourceType === 'AWS::Route53::RecordSet' &&
         retainedByPolicy.has(logicalId)
       ) {
-        // CloudFormation neither deletes the resource nor sends a custom resource Delete when the
-        // deployed definition carries DeletionPolicy Retain; the stack merely stops managing it.
+        // The scheduler hands its existing DNS record to runtime management during cutover.
+        // Retaining storage instead can leave applications attached to an empty replacement.
         verdict.allowed.push({ ...finding, allowedBy: 'DeletionPolicy Retain on the deployed resource' });
       } else if (finding.refusal === 'custom-resource-remove' && RETIRED_CUSTOM_RESOURCE_TYPES.has(resourceType)) {
         verdict.allowed.push({ ...finding, allowedBy: 'retired custom resource; its Delete handler is a no-op' });
