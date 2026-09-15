@@ -18,8 +18,6 @@ Click "**Actions**" button to get a list of all available options
 Force option will be executed even if there is an active connection on the desktop. Use regular option If you want to be on the safe side and avoid disconnecting users.
 {% endhint %}
 
-<figure><img src="../../../.gitbook/assets/mods_vdi_admin_sessions_view.webp" alt=""><figcaption><p>View all virtual desktop sessions for your entire organization</p></figcaption></figure>
-
 Administrators can view and manage all desktop sessions across users and projects from this view. To manage sessions, select one or multiple sessions and click "**Actions**" to see all available operations:
 
 * **Launch DCV Session**: Open the selected session in DCV viewer
