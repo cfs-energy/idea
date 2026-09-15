@@ -10,6 +10,7 @@ import {
   mkdtempSync,
   rmSync,
   writeFileSync,
+  readFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -140,6 +141,25 @@ test("dependency gate rejects a version range", () => {
     "dependencies",
     runGate("dependencies", "--root", root),
     /must be an exact version/u,
+  );
+});
+
+// The workflow refuses a manifest whose version differs from IDEA_VERSION.txt; a release bump on
+// 2026-09-15 reached the pull request before that was caught locally.
+test("dependency gate rejects a package version that differs from the release file", () => {
+  // The release file sits three levels above the package, as in the repository.
+  const repository = temporaryRoot("dependencies-release");
+  const root = join(repository, "source", "idea", "ideactl");
+  mkdirSync(root, { recursive: true });
+  writeDependencyFixture(root, "1.2.3");
+  const manifestFile = join(root, "package.json");
+  const manifest = JSON.parse(readFileSync(manifestFile, "utf8")) as Record<string, unknown>;
+  writeJson(manifestFile, { ...manifest, version: "26.09.0" });
+  writeFileSync(join(repository, "IDEA_VERSION.txt"), "26.10.0\n");
+  assertDeliberateFailure(
+    "dependencies",
+    runGate("dependencies", "--root", root),
+    /package\.json version 26\.09\.0 must equal IDEA_VERSION\.txt 26\.10\.0/u,
   );
 });
 

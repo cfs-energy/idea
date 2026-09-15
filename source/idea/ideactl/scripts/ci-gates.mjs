@@ -170,7 +170,19 @@ export function checkDependencyPins(packageRoot) {
   if (checked === 0) {
     throw new Error("package.json must declare at least one dependency");
   }
-  console.log(`PASS dependency pins (${checked} direct packages)`);
+  // The workflow refuses a package whose version differs from the release file; catch it here
+  // first, since a release bump is easy to make everywhere but the manifest.
+  const releaseFile = join(packageRoot, "..", "..", "..", "IDEA_VERSION.txt");
+  if (existsSync(releaseFile)) {
+    const release = readFileSync(releaseFile, "utf8").trim();
+    if (manifest.version !== release) {
+      throw new Error(`package.json version ${String(manifest.version)} must equal IDEA_VERSION.txt ${release}`);
+    }
+    if (lockRoot.version !== release) {
+      throw new Error(`package-lock.json version ${String(lockRoot.version)} must equal IDEA_VERSION.txt ${release}`);
+    }
+  }
+  console.log(`PASS dependency pins (${checked} direct packages, release ${String(manifest.version)})`);
 }
 
 /**
