@@ -28,15 +28,11 @@ export interface PolicyVars {
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-/** Finds the package resources directory. */
+/** The package `resources/` directory: beside `src/` in a checkout, beside `dist/src/` in a build. */
 export function resourcesDir(): string {
-  const candidates = [
-    join(HERE, '..', '..', 'resources'),
-    join(HERE, '..', '..', '..', 'idea-administrator', 'resources'),
-  ];
-  const found = candidates.find((candidate) => existsSync(candidate));
-  if (found === undefined) throw new Error(`resources directory not found; looked in ${candidates.join(', ')}`);
-  return found;
+  const resources = join(HERE, '..', '..', 'resources');
+  if (!existsSync(resources)) throw new Error(`resources directory not found: ${resources}`);
+  return resources;
 }
 
 /** Binds trailing keyword arguments collected by the renderer. */

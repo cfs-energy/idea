@@ -3,6 +3,11 @@
  * load balancer the gateway sits behind, the DCV host (VDI) identity used by session instances,
  * the SQS/SNS plumbing the controller listens on, and the scheduled-event transformer Lambda.
  *
+ * Under the container flag this stack also runs the controller, the broker and the gateway as
+ * tasks on the container stack's capacity. They are built here because each one reads this
+ * module's own settings rows at boot, so it must not start before this stack has written them,
+ * and because the gateway's target group needs the load balancer this stack owns.
+ *
  * Build order is load-bearing: it fixes the statement order in
  * the controller role's CDK-generated `DefaultPolicy` and the order of the security-group rules.
  *
@@ -21,13 +26,18 @@
  *   part of the deployed template.
  */
 
-import { CustomResource, Duration, Fn, Tags } from 'aws-cdk-lib';
+import { Aws, CustomResource, Duration, Fn, RemovalPolicy, Tags } from 'aws-cdk-lib';
 import * as autoscaling from 'aws-cdk-lib/aws-autoscaling';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as eventsTargets from 'aws-cdk-lib/aws-events-targets';
+import * as iam from 'aws-cdk-lib/aws-iam';
+import * as logs from 'aws-cdk-lib/aws-logs';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import * as servicediscovery from 'aws-cdk-lib/aws-servicediscovery';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as snsSubscriptions from 'aws-cdk-lib/aws-sns-subscriptions';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
@@ -69,6 +79,28 @@ import {
   VirtualDesktopPublicLoadBalancerAccessSecurityGroup,
   type SecurityGroup,
 } from '../constructs/network.ts';
+import {
+  STREAM_PREFIX_APPLICATION,
+  STREAM_PREFIX_BROKER,
+  STREAM_PREFIX_GATEWAY,
+  addLogTailContainer,
+  addStorageMounts,
+  adoptedLogDriver,
+  applicationTargetGroup,
+  attachApplicationFileLogs,
+  buildEc2Service,
+  buildExecutionRole,
+  buildTaskDefinition,
+  buildTaskRole,
+  commonEnvironment,
+  containerImage,
+  dockerLabels,
+  healthCheckGrace,
+  requiredInt as requiredEcsInt,
+  roleSizing,
+  serviceArn,
+  type ContainerScope,
+} from '../constructs/container.ts';
 
 /** `constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER`. */
 const MODULE_VIRTUAL_DESKTOP_CONTROLLER = 'virtual-desktop-controller';
@@ -91,6 +123,11 @@ const COMPONENT_CONTROLLER = 'controller';
 const COMPONENT_DCV_BROKER = 'broker';
 const COMPONENT_DCV_CONNECTION_GATEWAY = 'gateway';
 const COMPONENT_DCV_HOST = 'host';
+
+/** The gateway writes its log files here; a sidecar tails them into the agent-created group. */
+const GATEWAY_LOG_DIRECTORY = '/var/log/dcv-connection-gateway';
+/** The broker writes its log files here; a sidecar tails them into the agent-created group. */
+const BROKER_LOG_DIRECTORY = '/var/log/dcv-session-manager-broker';
 
 /** Component id -> the name the config keys use. */
 const CONFIG_MAPPING: Record<string, string> = {
@@ -147,6 +184,9 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
   dcvHostRole!: Role;
   controllerRole!: Role;
   dcvBrokerRole!: Role;
+  /** The task roles, when the components run as tasks; the settings below name whichever runs. */
+  private controllerTaskRole?: Role;
+  private dcvBrokerTaskRole?: Role;
   dcvConnectionGatewayRole!: Role;
   scheduledEventTransformerLambdaRole!: Role;
   dcvHostInstanceProfile!: InstanceProfile;
@@ -159,6 +199,16 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
 
   dcvConnectionGatewaySelfSignedCert: CustomResource | undefined;
   externalNlb!: elbv2.NetworkLoadBalancer;
+  /** Present under the container flag: the three task services on the container stack's capacity. */
+  controllerService: ecs.Ec2Service | undefined;
+  dcvBrokerService: ecs.Ec2Service | undefined;
+  dcvConnectionGatewayService: ecs.Ec2Service | undefined;
+  private controllerTargetGroups: elbv2.ApplicationTargetGroup[] = [];
+  private brokerTargetGroups: elbv2.ApplicationTargetGroup[] = [];
+  /** The broker port each entry of `brokerTargetGroups` fronts, in the same order. */
+  private brokerTargetGroupPorts: number[] = [];
+  private controllerEndpoints: CustomResource[] = [];
+  private brokerEndpoints: CustomResource[] = [];
 
   eventSqsQueue!: SQSQueue;
   eventSqsQueueDlq!: SQSQueue;
@@ -222,6 +272,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
     this.buildVirtualDesktopController();
     this.buildDcvBroker();
     this.buildDcvConnectionGateway();
+    this.buildContainerServices();
     this.buildDcvHostInfra();
 
     this.buildControllerSsmCommandsNotificationInfra();
@@ -298,26 +349,233 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
     securityGroup.node.tryRemoveChild(ingressRule.node.id);
   }
 
-  private ecsTargetGroupArn(role: string, index: number): string {
-    const targetGroupArns = this.context.config.getList<string>(
-      `ecs.${role}.target_group_arns`,
-      [],
-      { required: true },
-    );
-    const targetGroupArn = targetGroupArns[index];
-    if (targetGroupArn === undefined || targetGroupArn === "") {
-      throw new Error(`ecs.${role}.target_group_arns[${index}] is required when ecs.enabled is true`);
-    }
-    return targetGroupArn;
+  /** The input the shared container helpers take. */
+  private get containerScope(): ContainerScope {
+    return {
+      ctx: this.context,
+      stack: this.stack,
+      vpc: this.cluster.vpc,
+      privateSubnets: this.cluster.privateSubnets,
+    };
   }
 
-  private ecsServiceName(role: string): string {
-    const serviceArn = this.requiredString(`ecs.${role}.service_arn`);
-    const serviceName = serviceArn.split("/").at(-1);
-    if (serviceName === undefined || serviceName === "") {
-      throw new Error(`ecs.${role}.service_arn does not contain a service name`);
+  /**
+   * Service names, fixed so the settings resource can publish them without a reference. This stack
+   * runs three services, so each carries its component.
+   */
+  private componentServiceName(component: string): string {
+    return `${this.clusterName}-${this.moduleId}-${component}`;
+  }
+
+  /** The controller's two IP target groups, created beside the endpoints that route to them. */
+  private buildControllerTargetGroups(): void {
+    if (!this.ecsEnabled) return;
+    const scope = this.containerScope;
+    this.controllerTargetGroups = (['e', 'i'] as const).map((suffix) =>
+      applicationTargetGroup(scope, {
+        constructId: `vdc-ecs-${suffix}-target-group`,
+        targetGroupName: this.getTargetGroupName(`vdc-ecs-${suffix}`),
+        port: 8443,
+        healthCheckPath: '/healthcheck',
+      }),
+    );
+  }
+
+  /** The broker's three IP target groups, one per broker listener on the internal load balancer. */
+  private buildBrokerTargetGroups(): void {
+    if (!this.ecsEnabled) return;
+    const scope = this.containerScope;
+    const ports: Array<[string, number]> = [
+      ['c', this.brokerClientCommunicationPort],
+      ['a', this.brokerAgentCommunicationPort],
+      ['g', this.brokerGatewayCommunicationPort],
+    ];
+    this.brokerTargetGroupPorts = ports.map(([, port]) => port);
+    this.brokerTargetGroups = ports.map(([suffix, port]) =>
+      applicationTargetGroup(scope, {
+        constructId: `brk-ecs-${suffix}-target-group`,
+        targetGroupName: this.getTargetGroupName(`brk-ecs-${suffix}`),
+        port,
+        healthCheckPath: '/health',
+      }),
+    );
+  }
+
+  /**
+   * The controller and broker tasks on the container stack's capacity.
+   *
+   * Both start after the endpoints that give their target groups a load balancer, and after this
+   * stack's settings resource, because each application reads its own module's rows at boot. Each
+   * runs in the host security group of the component it replaces, so the task holds the network
+   * position the host holds.
+   */
+  private buildContainerServices(): void {
+    if (!this.ecsEnabled) return;
+    this.controllerService = this.buildControllerService();
+    this.dcvBrokerService = this.buildDcvBrokerService();
+  }
+
+  private buildControllerService(): ecs.Ec2Service {
+    const scope = this.containerScope;
+    const sizing = roleSizing(scope, 'vdc');
+    const { role: taskRole, policy: taskPolicy } = buildTaskRole(scope, {
+      constructId: 'controller-task-role',
+      name: `${this.moduleId}-${COMPONENT_CONTROLLER}-task-role`,
+      description: `IAM role assigned to the virtual-desktop-${COMPONENT_CONTROLLER} task`,
+      managedPolicyArns: this.getEc2InstanceManagedPolicies(),
+      policyConstructId: `${this.clusterName}-${this.moduleId}-${COMPONENT_CONTROLLER}-task-policy`,
+      policyTemplateName: 'virtual-desktop-controller.yml',
+    });
+    this.controllerTaskRole = taskRole;
+    const executionRole = buildExecutionRole(
+      scope,
+      'controller-task-execution-role',
+      `${this.moduleId}-${COMPONENT_CONTROLLER}-task-execution-role`,
+    );
+    const taskDefinition = buildTaskDefinition(scope, 'controller-task-definition', {
+      executionRole,
+      taskRole,
+    });
+    const logGroupName = `/${this.clusterName}/${this.moduleId}/controller`;
+    const container = taskDefinition.addContainer('controller-container', {
+      cpu: sizing.cpu,
+      dockerLabels: dockerLabels(scope, 'vdc'),
+      environment: commonEnvironment(scope, {
+        role: 'vdc',
+        moduleId: this.moduleId,
+        moduleName: MODULE_VIRTUAL_DESKTOP_CONTROLLER,
+      }),
+      image: containerImage(scope),
+      logging: adoptedLogDriver(scope, 'controller-log-group', logGroupName, STREAM_PREFIX_APPLICATION),
+      memoryLimitMiB: sizing.memory,
+    });
+    container.addPortMappings({ containerPort: 8443, protocol: ecs.Protocol.TCP });
+    addStorageMounts(scope, taskDefinition, container);
+    attachApplicationFileLogs(scope, { idPrefix: 'controller', logGroupName, taskDefinition, container });
+
+    const service = buildEc2Service(scope, {
+      constructId: 'controller-service',
+      serviceName: this.componentServiceName(COMPONENT_CONTROLLER),
+      taskDefinition,
+      desiredCount: sizing.desired,
+      securityGroups: [this.controllerSecurityGroup],
+      minHealthyPercent: 50,
+      maxHealthyPercent: 200,
+      healthCheckGracePeriod: healthCheckGrace('vdc'),
+      dependencies: [taskRole, taskPolicy, executionRole, ...this.controllerEndpoints],
+    });
+    for (const targetGroup of this.controllerTargetGroups) service.attachToApplicationTargetGroup(targetGroup);
+    return service;
+  }
+
+  private buildDcvBrokerService(): ecs.Ec2Service {
+    const scope = this.containerScope;
+    const sizing = roleSizing(scope, 'dcv-broker');
+    const { role: taskRole, policy: taskPolicy } = buildTaskRole(scope, {
+      constructId: 'dcv-broker-task-role',
+      name: `${this.moduleId}-${COMPONENT_DCV_BROKER}-task-role`,
+      description: `IAM role assigned to the virtual-desktop-${COMPONENT_DCV_BROKER} task`,
+      managedPolicyArns: this.getEc2InstanceManagedPolicies(),
+      policyConstructId: `${this.clusterName}-${this.moduleId}-${COMPONENT_DCV_BROKER}-task-policy`,
+      policyTemplateName: 'virtual-desktop-dcv-broker.yml',
+    });
+    this.dcvBrokerTaskRole = taskRole;
+    const executionRole = buildExecutionRole(
+      scope,
+      'dcv-broker-task-execution-role',
+      `${this.moduleId}-${COMPONENT_DCV_BROKER}-task-execution-role`,
+    );
+    const taskDefinition = buildTaskDefinition(scope, 'dcv-broker-task-definition', {
+      executionRole,
+      taskRole,
+    });
+    const logGroupName = `/${this.clusterName}/${this.moduleId}/dcv-broker`;
+    const namespaceName = this.requiredString('ecs.namespace_name');
+    const container = taskDefinition.addContainer('dcv-broker-container', {
+      cpu: sizing.cpu,
+      dockerLabels: dockerLabels(scope, 'dcv-broker'),
+      environment: {
+        ...commonEnvironment(scope, {
+          role: 'dcv-broker',
+          moduleId: this.moduleId,
+          moduleName: MODULE_VIRTUAL_DESKTOP_CONTROLLER,
+        }),
+        IDEA_COGNITO_PROVIDER_URL: this.requiredString('identity-provider.cognito.provider_url'),
+        IDEA_SERVICE_DISCOVERY_NAME: `vdc-broker.${namespaceName}`,
+        // The task network namespace has no second address family, so a dual-stack JVM fails to
+        // create its sockets. The virtual machine reads this variable itself at startup, which is
+        // why it is this name and not one the vendor launcher would have to pass on.
+        JAVA_TOOL_OPTIONS: '-Djava.net.preferIPv4Stack=true',
+      },
+      image: containerImage(scope),
+      logging: adoptedLogDriver(scope, 'dcv-broker-log-group', logGroupName, STREAM_PREFIX_BROKER),
+      memoryLimitMiB: sizing.memory,
+    });
+    for (const port of [
+      this.brokerClientCommunicationPort,
+      this.brokerAgentCommunicationPort,
+      this.brokerGatewayCommunicationPort,
+    ]) {
+      container.addPortMappings({ containerPort: port, protocol: ecs.Protocol.TCP });
     }
-    return serviceName;
+    taskDefinition.addVolume({ name: 'broker-logs' });
+    container.addMountPoints({
+      containerPath: BROKER_LOG_DIRECTORY,
+      readOnly: false,
+      sourceVolume: 'broker-logs',
+    });
+    addStorageMounts(scope, taskDefinition, container);
+    addLogTailContainer(scope, taskDefinition, {
+      containerId: 'dcv-broker-file-logs',
+      directories: [BROKER_LOG_DIRECTORY],
+      logGroupName,
+      logGroupConstructId: 'dcv-broker-file-log-group',
+      streamPrefix: STREAM_PREFIX_BROKER,
+      sourceVolume: 'broker-logs',
+      containerPath: BROKER_LOG_DIRECTORY,
+      readOnly: true,
+    });
+
+    const namespace = servicediscovery.PrivateDnsNamespace.fromPrivateDnsNamespaceAttributes(
+      this.stack,
+      'ecs-service-discovery-namespace',
+      {
+        namespaceArn: `arn:${Aws.PARTITION}:servicediscovery:${Aws.REGION}:${Aws.ACCOUNT_ID}:namespace/${this.requiredString('ecs.namespace_id')}`,
+        namespaceId: this.requiredString('ecs.namespace_id'),
+        namespaceName,
+      },
+    );
+    const service = buildEc2Service(scope, {
+      constructId: 'dcv-broker-service',
+      serviceName: this.componentServiceName(COMPONENT_DCV_BROKER),
+      taskDefinition,
+      desiredCount: sizing.desired,
+      securityGroups: [this.dcvBrokerSecurityGroup],
+      minHealthyPercent: 50,
+      maxHealthyPercent: 200,
+      healthCheckGracePeriod: healthCheckGrace('dcv-broker'),
+      cloudMapOptions: {
+        cloudMapNamespace: namespace,
+        dnsRecordType: servicediscovery.DnsRecordType.A,
+        dnsTtl: Duration.seconds(10),
+        failureThreshold: 1,
+        name: 'vdc-broker',
+      },
+      dependencies: [taskRole, taskPolicy, executionRole, ...this.brokerEndpoints],
+    });
+    // Each target group fronts one broker port. `attachToApplicationTargetGroup` registers every
+    // group on the container's first mapping, the client port, and the session-manager agent and
+    // the gateway are then answered on the wrong port: the agent logs "JSON Error: EOF" and no
+    // desktop ever reaches READY.
+    this.brokerTargetGroups.forEach((targetGroup, index) => {
+      targetGroup.addTarget(
+        service.loadBalancerTarget({
+          containerName: 'dcv-broker-container',
+          containerPort: this.brokerTargetGroupPorts[index] as number,
+        }),
+      );
+    });
+    return service;
   }
 
   // --- QUIC -------------------------------------------------------------------------------------
@@ -488,10 +746,6 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       ideaCodeAsset: new IdeaCodeAsset('idea_controller_scheduled_event_transformer'),
     });
 
-    this.addNagSuppression(
-      [{ rule_id: 'AwsSolutions-L1', reason: 'Python Runtime is selected for stability.' }],
-      scheduledEventTransformerLambda,
-    );
 
     const scheduleTriggerRule = new events.Rule(
       this.stack,
@@ -551,17 +805,8 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
     client.node.addDependency(sessionManagerResourceServer);
     client.node.addDependency(resourceServer);
 
-    const oauthCredentialsLambdaArn = this.requiredString(
-      'identity-provider.cognito.oauth_credentials_lambda_arn',
-    );
-    const clientSecret = new CustomResource(this.stack, `${this.moduleId}-creds`, {
-      serviceToken: oauthCredentialsLambdaArn,
-      properties: {
-        UserPoolId: this.userPool.userPoolId,
-        ClientId: client.userPoolClientId,
-      },
-      resourceType: 'Custom::GetOAuthCredentials',
-    });
+    // the client returns its own generated secret, so nothing has to read it back
+    const clientSecret = (client.node.defaultChild as cognito.CfnUserPoolClient).attrClientSecret;
 
     this.oauth2ClientSecret = new OAuthClientIdAndSecret(
       this.context,
@@ -569,7 +814,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       MODULE_VIRTUAL_DESKTOP_CONTROLLER,
       this.stack,
       client.userPoolClientId,
-      clientSecret.getAttString('ClientSecret'),
+      clientSecret,
     );
   }
 
@@ -618,8 +863,9 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
   // --- DCV broker -------------------------------------------------------------------------------
 
   buildDcvBroker(): void {
+    this.buildBrokerTargetGroups();
     const clientTargetGroupArn = this.ecsEnabled
-      ? this.ecsTargetGroupArn("dcv-broker", 0)
+      ? (this.brokerTargetGroups[0] as elbv2.ApplicationTargetGroup).targetGroupArn
       : (() => {
           const targetGroup = new elbv2.ApplicationTargetGroup(
             this.stack,
@@ -636,7 +882,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
           return targetGroup.targetGroupArn;
         })();
 
-    new CustomResource(this.stack, 'dcv-broker-client-endpoint', {
+    this.brokerEndpoints.push(new CustomResource(this.stack, 'dcv-broker-client-endpoint', {
       serviceToken: this.clusterEndpointsLambdaArn,
       properties: {
         endpoint_name: 'broker-client-endpoint',
@@ -648,10 +894,10 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
         actions: [{ Type: 'forward', TargetGroupArn: clientTargetGroupArn }],
       },
       resourceType: 'Custom::DcvBrokerClientEndpointInternal',
-    });
+    }));
 
     const agentTargetGroupArn = this.ecsEnabled
-      ? this.ecsTargetGroupArn("dcv-broker", 1)
+      ? (this.brokerTargetGroups[1] as elbv2.ApplicationTargetGroup).targetGroupArn
       : (() => {
           const targetGroup = new elbv2.ApplicationTargetGroup(
             this.stack,
@@ -668,7 +914,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
           return targetGroup.targetGroupArn;
         })();
 
-    new CustomResource(this.stack, 'dcv-broker-agent-endpoint', {
+    this.brokerEndpoints.push(new CustomResource(this.stack, 'dcv-broker-agent-endpoint', {
       serviceToken: this.clusterEndpointsLambdaArn,
       properties: {
         // The agent endpoint registers under the client endpoint's name; the name is the custom
@@ -682,10 +928,10 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
         actions: [{ Type: 'forward', TargetGroupArn: agentTargetGroupArn }],
       },
       resourceType: 'Custom::DcvBrokerAgentEndpointInternal',
-    });
+    }));
 
     const gatewayTargetGroupArn = this.ecsEnabled
-      ? this.ecsTargetGroupArn("dcv-broker", 2)
+      ? (this.brokerTargetGroups[2] as elbv2.ApplicationTargetGroup).targetGroupArn
       : (() => {
           const targetGroup = new elbv2.ApplicationTargetGroup(
             this.stack,
@@ -702,7 +948,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
           return targetGroup.targetGroupArn;
         })();
 
-    new CustomResource(this.stack, 'dcv-broker-gateway-endpoint', {
+    this.brokerEndpoints.push(new CustomResource(this.stack, 'dcv-broker-gateway-endpoint', {
       serviceToken: this.clusterEndpointsLambdaArn,
       properties: {
         endpoint_name: 'broker-gateway-endpoint',
@@ -714,7 +960,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
         actions: [{ Type: 'forward', TargetGroupArn: gatewayTargetGroupArn }],
       },
       resourceType: 'Custom::DcvBrokerGatewayEndpointInternal',
-    });
+    }));
 
     this.dcvBrokerSecurityGroup = new VirtualDesktopBrokerSecurityGroup(
       this.context,
@@ -861,8 +1107,9 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       this.controllerAutoScalingGroup.node.addDependency(this.controllerSqsQueue);
     }
 
+    this.buildControllerTargetGroups();
     const externalTargetGroupArn = this.ecsEnabled
-      ? this.ecsTargetGroupArn("vdc", 0)
+      ? (this.controllerTargetGroups[0] as elbv2.ApplicationTargetGroup).targetGroupArn
       : (() => {
           const targetGroup = new elbv2.ApplicationTargetGroup(
             this.stack,
@@ -880,7 +1127,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
           return targetGroup.targetGroupArn;
         })();
 
-    new CustomResource(this.stack, 'controller-endpoint-ext', {
+    this.controllerEndpoints.push(new CustomResource(this.stack, 'controller-endpoint-ext', {
       serviceToken: this.clusterEndpointsLambdaArn,
       properties: {
         endpoint_name: `${this.moduleId}-controller-endpoint-ext`,
@@ -898,10 +1145,10 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
         actions: [{ Type: 'forward', TargetGroupArn: externalTargetGroupArn }],
       },
       resourceType: 'Custom::ControllerEndpointExternal',
-    });
+    }));
 
     const internalTargetGroupArn = this.ecsEnabled
-      ? this.ecsTargetGroupArn("vdc", 1)
+      ? (this.controllerTargetGroups[1] as elbv2.ApplicationTargetGroup).targetGroupArn
       : (() => {
           const targetGroup = new elbv2.ApplicationTargetGroup(
             this.stack,
@@ -919,7 +1166,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
           return targetGroup.targetGroupArn;
         })();
 
-    new CustomResource(this.stack, 'controller-endpoint-int', {
+    this.controllerEndpoints.push(new CustomResource(this.stack, 'controller-endpoint-int', {
       serviceToken: this.clusterEndpointsLambdaArn,
       properties: {
         endpoint_name: `${this.moduleId}-controller-endpoint-int`,
@@ -937,7 +1184,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
         actions: [{ Type: 'forward', TargetGroupArn: internalTargetGroupArn }],
       },
       resourceType: 'Custom::ControllerEndpointInternal',
-    });
+    }));
 
     // Under the container flag these ARNs are the container target groups, which take IP targets,
     // so a retained group registers with nothing and stands idle until a rollback recreates its own.
@@ -1152,28 +1399,11 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       ),
     });
 
-    const externalCertificateProvided = requiredBool(
-      this.context.config,
-      'virtual-desktop-controller.dcv_connection_gateway.certificate.provided',
-    );
-    const selfSignedCert = this.dcvConnectionGatewaySelfSignedCert;
-    const substitutedUserdata = !externalCertificateProvided
-      ? Fn.sub(connectionGatewayUserdata, {
-          __CERTIFICATE_SECRET_ARN__: (selfSignedCert as CustomResource).getAttString(
-            'certificate_secret_arn',
-          ),
-          __PRIVATE_KEY_SECRET_ARN__: (selfSignedCert as CustomResource).getAttString(
-            'private_key_secret_arn',
-          ),
-        })
-      : Fn.sub(connectionGatewayUserdata, {
-          __CERTIFICATE_SECRET_ARN__: this.requiredString(
-            'virtual-desktop-controller.dcv_connection_gateway.certificate.certificate_secret_arn',
-          ),
-          __PRIVATE_KEY_SECRET_ARN__: this.requiredString(
-            'virtual-desktop-controller.dcv_connection_gateway.certificate.private_key_secret_arn',
-          ),
-        });
+    const certificateSecrets = this.dcvConnectionGatewayCertificateSecretArns();
+    const substitutedUserdata = Fn.sub(connectionGatewayUserdata, {
+      __CERTIFICATE_SECRET_ARN__: certificateSecrets.certificate,
+      __PRIVATE_KEY_SECRET_ARN__: certificateSecrets.privateKey,
+    });
 
     this.dcvConnectionGatewayRole = this.buildIamRole(
       `IAM role assigned to virtual-desktop-${COMPONENT_DCV_CONNECTION_GATEWAY}`,
@@ -1218,17 +1448,26 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
     // TN: TCP network. TUN: TCP + UDP network.
     const tgSuffix = quicSupported ? 'TUN' : 'TN';
 
-    let dcvConnectionGatewayTargetGroup: elbv2.INetworkTargetGroup;
+    let dcvConnectionGatewayTargetGroup: elbv2.NetworkTargetGroup;
     if (this.ecsEnabled) {
-      dcvConnectionGatewayTargetGroup = elbv2.NetworkTargetGroup.fromTargetGroupAttributes(
+      // The task is an IP target, so it cannot share the host group's target group, whose target
+      // type is fixed at creation. The name differs as well: the two groups exist together for the
+      // moment the change set creates one before it deletes the other.
+      dcvConnectionGatewayTargetGroup = new elbv2.NetworkTargetGroup(
         this.stack,
-        'ecs-dcv-connection-gateway-target-group-nlb',
+        'dcv-connection-gateway-ecs-target-group-nlb',
         {
-          // The container stack publishes the one gateway target group that matches this
-          // setting, so there is a single entry whichever protocol is in use.
-          targetGroupArn: this.ecsTargetGroupArn("dcv-gateway", 0),
+          port: 8443,
+          protocol,
+          targetType: elbv2.TargetType.IP,
+          vpc: this.cluster.vpc,
+          targetGroupName: this.getTargetGroupName(`gw-ecs-${tgSuffix}`),
+          healthCheck: { port: '8989', protocol: elbv2.Protocol.TCP },
+          connectionTermination: true,
         },
       );
+      dcvConnectionGatewayTargetGroup.setAttribute('stickiness.enabled', 'true');
+      dcvConnectionGatewayTargetGroup.setAttribute('stickiness.type', 'source_ip');
     } else {
       const targetGroup = new elbv2.NetworkTargetGroup(
         this.stack,
@@ -1279,8 +1518,139 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
         'Allow all traffic access from Prefix List to DCV Connection Gateway',
       );
     }
+
+    if (this.ecsEnabled) {
+      this.buildDcvConnectionGatewayService(dcvConnectionGatewayTargetGroup);
+    }
   }
 
+  /**
+   * The certificate pair the gateway serves. The rows hold the operator's certificate when one is
+   * provided and the pair the deploy tool generated or adopted when not, so both cases read the
+   * same two keys.
+   */
+  private dcvConnectionGatewayCertificateSecretArns(): { certificate: string; privateKey: string } {
+    const prefix = 'virtual-desktop-controller.dcv_connection_gateway.certificate';
+    return {
+      certificate: this.requiredString(`${prefix}.certificate_secret_arn`),
+      privateKey: this.requiredString(`${prefix}.private_key_secret_arn`),
+    };
+  }
+
+  /**
+   * The gateway container service.
+   *
+   * A service may not name a target group that has no load balancer, and the load balancer is
+   * created here, so the service is too. What it needs from the container stack it reads from the
+   * settings that stack published: the cluster, the capacity provider, the image and the processor
+   * architecture. It runs in the gateway host security group, so it holds the network position the
+   * host holds, and it reads the certificate pair the host reads at boot.
+   *
+   * The gateway is a proxy. It mounts no shared storage and reads no application settings, so the
+   * task carries only what its role script consumes.
+   */
+  private buildDcvConnectionGatewayService(targetGroup: elbv2.NetworkTargetGroup): void {
+    const scope = this.containerScope;
+    const { role: taskRole, policy: taskPolicy } = buildTaskRole(scope, {
+      constructId: 'dcv-connection-gateway-task-role',
+      name: `${this.moduleId}-${COMPONENT_DCV_CONNECTION_GATEWAY}-task-role`,
+      description: `IAM role assigned to the virtual-desktop-${COMPONENT_DCV_CONNECTION_GATEWAY} task`,
+      managedPolicyArns: this.getEc2InstanceManagedPolicies(),
+      policyConstructId: `${this.clusterName}-${this.moduleId}-${COMPONENT_DCV_CONNECTION_GATEWAY}-task-policy`,
+      policyTemplateName: 'virtual-desktop-dcv-connection-gateway.yml',
+    });
+    const executionRole = buildExecutionRole(
+      scope,
+      'dcv-connection-gateway-task-execution-role',
+      `${this.moduleId}-${COMPONENT_DCV_CONNECTION_GATEWAY}-task-execution-role`,
+    );
+    const taskDefinition = buildTaskDefinition(scope, 'dcv-connection-gateway-task-definition', {
+      executionRole,
+      taskRole,
+    });
+
+    // Agent-created on every cluster with hosts, and adopted by the container stack before this
+    // stack deploys, so it is written to by name.
+    const logGroupName = `/${this.clusterName}/${this.moduleId}/dcv-connection-gateway`;
+    const certificateSecrets = this.dcvConnectionGatewayCertificateSecretArns();
+    const container = taskDefinition.addContainer('dcv-connection-gateway-container', {
+      cpu: requiredEcsInt(scope, 'ecs.tasks.dcv-gateway.cpu'),
+      dockerLabels: dockerLabels(scope, 'dcv-gateway'),
+      environment: {
+        AWS_DEFAULT_REGION: this.awsRegion,
+        IDEA_CLUSTER_NAME: this.clusterName,
+        IDEA_CONTAINER_ROLE: 'dcv-gateway',
+        IDEA_INTERNAL_ALB_ENDPOINT: `https://${this.requiredString(
+          'cluster.load_balancers.internal_alb.load_balancer_dns_name',
+        )}`,
+      },
+      image: containerImage(scope),
+      logging: adoptedLogDriver(scope, 'dcv-connection-gateway-log-group', logGroupName, STREAM_PREFIX_GATEWAY),
+      memoryLimitMiB: requiredEcsInt(scope, 'ecs.tasks.dcv-gateway.memory'),
+      secrets: {
+        DCV_GATEWAY_CERT_PEM: ecs.Secret.fromSecretsManager(
+          secretsmanager.Secret.fromSecretCompleteArn(
+            this.stack,
+            'dcv-connection-gateway-certificate-secret',
+            certificateSecrets.certificate,
+          ),
+        ),
+        DCV_GATEWAY_KEY_PEM: ecs.Secret.fromSecretsManager(
+          secretsmanager.Secret.fromSecretCompleteArn(
+            this.stack,
+            'dcv-connection-gateway-private-key-secret',
+            certificateSecrets.privateKey,
+          ),
+        ),
+      },
+    });
+    // The gateway serves both stream protocols on 8443, but a container port may appear in only
+    // one mapping. Under `awsvpc` the task owns its network interface and the mapping does not
+    // filter traffic, so one mapping publishes the port and the security group admits each
+    // protocol. The health port 8989 is separate and unaffected.
+    container.addPortMappings({ containerPort: 8443, protocol: ecs.Protocol.TCP });
+    taskDefinition.addVolume({ name: 'gateway-logs' });
+    container.addMountPoints({
+      containerPath: GATEWAY_LOG_DIRECTORY,
+      readOnly: false,
+      sourceVolume: 'gateway-logs',
+    });
+    // The awslogs driver carries stdout only; the sidecar follows the gateway's files.
+    addLogTailContainer(scope, taskDefinition, {
+      containerId: 'dcv-connection-gateway-file-logs',
+      directories: [GATEWAY_LOG_DIRECTORY],
+      logGroupName,
+      logGroupConstructId: 'dcv-connection-gateway-file-log-group',
+      streamPrefix: STREAM_PREFIX_GATEWAY,
+      sourceVolume: 'gateway-logs',
+      containerPath: GATEWAY_LOG_DIRECTORY,
+      readOnly: true,
+    });
+
+    const service = buildEc2Service(scope, {
+      constructId: 'dcv-connection-gateway-service',
+      serviceName: this.componentServiceName(COMPONENT_DCV_CONNECTION_GATEWAY),
+      taskDefinition,
+      desiredCount: requiredEcsInt(scope, 'ecs.tasks.dcv-gateway.desired'),
+      securityGroups: [this.dcvConnectionGatewaySecurityGroup],
+      minHealthyPercent: 50,
+      maxHealthyPercent: 200,
+      healthCheckGracePeriod: healthCheckGrace('dcv-gateway'),
+      dependencies: [taskRole, taskPolicy, executionRole],
+    });
+    // Attaching also makes the service depend on the listener, which is what gives the target
+    // group its load balancer: a service may not name a target group that has none.
+    service.attachToNetworkTargetGroup(targetGroup);
+    this.dcvConnectionGatewayService = service;
+  }
+
+  /**
+   * The deploy tool generates this pair now (`src/cli/certificates.ts`) and publishes the two ARNs
+   * as settings rows. The resource stays for one release so a cluster that has it can update it in
+   * place to the Node handler, and it carries `Retain` so nothing here can destroy the pair the
+   * running gateway is serving. Remove it in the release after this one, once every cluster has
+   * deployed this one.
+   */
   private buildSelfSignedCertForDcvConnectionGateway(): void {
     const selfSignedCertificateLambdaArn = this.requiredString(
       'cluster.self_signed_certificate_lambda_arn',
@@ -1301,6 +1671,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
             'idea:ModuleName': MODULE_VIRTUAL_DESKTOP_CONTROLLER,
           },
         },
+        removalPolicy: RemovalPolicy.RETAIN,
         resourceType: 'Custom::SelfSignedCertificateConnectionGateway',
       },
     );
@@ -1362,7 +1733,9 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       dcv_host_policy_arn: this.dcvHostPolicy.managedPolicyArn,
       dcv_broker_role_arn: this.dcvBrokerRole.roleArn,
       dcv_broker_role_name: this.dcvBrokerRole.roleName,
-      dcv_broker_role_id: this.dcvBrokerRole.roleId,
+      // The controller authenticates queue messages by the sender's role id, including its own
+      // and the broker's. Under containers those senders are the task roles.
+      dcv_broker_role_id: (this.dcvBrokerTaskRole ?? this.dcvBrokerRole).roleId,
       scheduled_event_transformer_lambda_role_arn: this.scheduledEventTransformerLambdaRole.roleArn,
       scheduled_event_transformer_lambda_role_name: this.scheduledEventTransformerLambdaRole.roleName,
       scheduled_event_transformer_lambda_role_id: this.scheduledEventTransformerLambdaRole.roleId,
@@ -1374,40 +1747,40 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       ssm_commands_pass_role_name: this.ssmCommandPassRole.roleName,
       controller_iam_role_arn: this.controllerRole.roleArn,
       controller_iam_role_name: this.controllerRole.roleName,
-      controller_iam_role_id: this.controllerRole.roleId,
+      controller_iam_role_id: (this.controllerTaskRole ?? this.controllerRole).roleId,
       events_sqs_queue_url: this.eventSqsQueue.queueUrl,
       events_sqs_queue_arn: this.eventSqsQueue.queueArn,
       controller_sqs_queue_url: this.controllerSqsQueue.queueUrl,
       controller_sqs_queue_arn: this.controllerSqsQueue.queueArn,
       'external_nlb.load_balancer_dns_name': this.externalNlb.loadBalancerDnsName,
+      // Literals under the container flag: each service has to start after this resource, because
+      // its application reads its own rows from it, so this resource must not reference a service.
       'controller.asg_name': this.ecsEnabled
-        ? this.ecsServiceName("vdc")
+        ? this.componentServiceName(COMPONENT_CONTROLLER)
         : this.controllerAutoScalingGroup.autoScalingGroupName,
       'controller.asg_arn': this.ecsEnabled
-        ? this.requiredString("ecs.vdc.service_arn")
+        ? serviceArn(this.containerScope, this.componentServiceName(COMPONENT_CONTROLLER))
         : this.controllerAutoScalingGroup.autoScalingGroupArn,
       'dcv_broker.asg_name': this.ecsEnabled
-        ? this.ecsServiceName("dcv-broker")
+        ? this.componentServiceName(COMPONENT_DCV_BROKER)
         : this.dcvBrokerAutoScalingGroup.autoScalingGroupName,
       'dcv_broker.asg_arn': this.ecsEnabled
-        ? this.requiredString("ecs.dcv-broker.service_arn")
+        ? serviceArn(this.containerScope, this.componentServiceName(COMPONENT_DCV_BROKER))
         : this.dcvBrokerAutoScalingGroup.autoScalingGroupArn,
       'dcv_connection_gateway.asg_name': this.ecsEnabled
-        ? this.ecsServiceName("dcv-gateway")
+        ? this.componentServiceName(COMPONENT_DCV_CONNECTION_GATEWAY)
         : this.dcvConnectionGatewayAutoScalingGroup.autoScalingGroupName,
       'dcv_connection_gateway.asg_arn': this.ecsEnabled
-        ? this.requiredString("ecs.dcv-gateway.service_arn")
+        ? serviceArn(this.containerScope, this.componentServiceName(COMPONENT_DCV_CONNECTION_GATEWAY))
         : this.dcvConnectionGatewayAutoScalingGroup.autoScalingGroupArn,
     };
 
     if (
       !config.getBool('virtual-desktop-controller.dcv_connection_gateway.certificate.provided', false)
     ) {
-      const selfSignedCert = this.dcvConnectionGatewaySelfSignedCert as CustomResource;
-      clusterSettings['dcv_connection_gateway.certificate.certificate_secret_arn'] =
-        selfSignedCert.getAttString('certificate_secret_arn');
-      clusterSettings['dcv_connection_gateway.certificate.private_key_secret_arn'] =
-        selfSignedCert.getAttString('private_key_secret_arn');
+      const certificateSecrets = this.dcvConnectionGatewayCertificateSecretArns();
+      clusterSettings['dcv_connection_gateway.certificate.certificate_secret_arn'] = certificateSecrets.certificate;
+      clusterSettings['dcv_connection_gateway.certificate.private_key_secret_arn'] = certificateSecrets.privateKey;
     } else {
       clusterSettings['dcv_connection_gateway.certificate.provided'] = this.requiredString(
         'virtual-desktop-controller.dcv_connection_gateway.certificate.provided',
@@ -1437,7 +1810,12 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       clusterSettings['bedrock.project_pass_role_arn'] = this.arnBuilder.getProjectRoleArn();
     }
 
-    this.updateClusterSettings(clusterSettings);
+    const settings = this.updateClusterSettings(clusterSettings);
+    // Each task reads `client_id`, `client_secret` and the rest of this module's rows at boot, so
+    // none of them may start before they are written.
+    for (const service of [this.controllerService, this.dcvBrokerService, this.dcvConnectionGatewayService]) {
+      service?.node.addDependency(settings);
+    }
   }
 }
 

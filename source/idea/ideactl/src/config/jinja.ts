@@ -42,7 +42,7 @@
  */
 
 import nunjucks from 'nunjucks';
-import { dump } from 'js-yaml';
+import { CORE_SCHEMA, dump } from 'js-yaml';
 
 /** `Utils.to_yaml`: `yaml.dump(json_round_trip(payload), sort_keys=False, width=140)`. */
 export function toYaml(value: unknown): string {
@@ -50,7 +50,8 @@ export function toYaml(value: unknown): string {
     noRefs: true,
     lineWidth: 140,
     sortKeys: false,
-    noCompatMode: true,
+    // YAML 1.2 quoting only, which is what the reference emits for a json round trip.
+    schema: CORE_SCHEMA,
   });
 }
 

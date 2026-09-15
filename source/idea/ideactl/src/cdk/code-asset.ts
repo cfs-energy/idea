@@ -1,38 +1,101 @@
 /**
  * Locates Lambda code assets.
  *
- * A Lambda asset root is a directory whose top level holds the handler package and the shared
- * commons package, plus any third-party dependencies the handler imports:
+ * Every handler is a Node handler: `src/lambda/<package>/index.ts` in the source tree, or
+ * `dist/src/lambda/<package>/index.js` in a build. A package with neither is an error.
  *
- *   <asset root>/<package>/handler.py
- *   <asset root>/idea_lambda_commons/...
- *   <asset root>/<installed dependencies>
+ * An asset root holds one bundled `index.mjs`, so the handler string is `index.handler`. Two are
+ * supported:
  *
- * The handler string is `<package>.handler.handler`, so the package has to be a directory inside
- * the asset root. `dist/resources/lambda_functions/<package>` is the source of one package only,
- * which is why it cannot be handed to `lambda.Code.fromAsset` as it stands.
- *
- * Two asset roots are supported:
- *
- *   1. `dist/resources/lambda_assets/<package>`, built once by `scripts/build-lambda-zips.sh`;
- *   2. an on-demand build under `~/.idea/build/lambda/<package>/pkg`, assembled from
- *      `dist/resources/lambda_functions`.
+ *   1. `dist/resources/lambda_assets/<package>`, built once at image build time by
+ *      `scripts/build-lambda-bundles.mjs`;
+ *   2. an on-demand build under `~/.idea/build/lambda/<package>/pkg`.
  */
 
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+
+import * as lambda from 'aws-cdk-lib/aws-lambda';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-const COMMONS_PACKAGE = 'idea_lambda_commons';
 const CHECKSUM_FILE = 'source.checksum.sha';
 const BUILD_DIR = 'pkg';
 
-/** Finds `dist/resources` for source and built execution. */
+/** The handler sources ported to Node, beside the running code: `src/lambda` or `dist/src/lambda`. */
+export const NODE_LAMBDA_DIR = join(HERE, '..', 'lambda');
+/** The package under `src/lambda` that every handler imports and that is not a handler itself. */
+export const NODE_COMMONS_PACKAGE = 'commons';
+/** The file name a Node asset root holds, which is what makes `index.handler` resolve. */
+const NODE_BUNDLE_FILE = 'index.mjs';
+
+/** Bundled handlers are ESM; this lets a transitive CommonJS dependency still call `require`. */
+const NODE_BUNDLE_BANNER =
+  'import { createRequire as __ideaCreateRequire } from "node:module"; const require = __ideaCreateRequire(import.meta.url);';
+
+/** The entry point of a Node handler package, source tree or build tree, when it has one. */
+export function nodeLambdaEntryPoint(lambdaPackageName: string): string | undefined {
+  return [join(NODE_LAMBDA_DIR, lambdaPackageName, 'index.ts'), join(NODE_LAMBDA_DIR, lambdaPackageName, 'index.js')].find(
+    (candidate) => existsSync(candidate),
+  );
+}
+
+/** Every handler package under `src/lambda`, the shared commons package aside. */
+export function nodeLambdaPackages(): string[] {
+  return readdirSync(NODE_LAMBDA_DIR, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && entry.name !== NODE_COMMONS_PACKAGE)
+    .map((entry) => entry.name)
+    .filter((name) => nodeLambdaEntryPoint(name) !== undefined)
+    .sort();
+}
+
+interface EsbuildApi {
+  buildSync(options: Record<string, unknown>): unknown;
+}
+
+/**
+ * esbuild, required at the moment it is needed. It is a build dependency: the image builds the
+ * assets and then prunes it, so a synth there reads the prebuilt bundle and never gets here.
+ */
+function esbuild(lambdaPackageName: string): EsbuildApi {
+  try {
+    return createRequire(import.meta.url)('esbuild') as EsbuildApi;
+  } catch {
+    throw new Error(
+      `lambda package ${lambdaPackageName} has no prebuilt bundle and esbuild is not installed to build one. ` +
+        'Run npm run build, which writes dist/resources/lambda_assets.',
+    );
+  }
+}
+
+/** Bundles one Node handler into `<outDir>/index.mjs`, dependencies included. */
+export function bundleNodeLambda(lambdaPackageName: string, outDir: string): void {
+  const entryPoint = nodeLambdaEntryPoint(lambdaPackageName);
+  if (entryPoint === undefined) {
+    throw new Error(`lambda package ${lambdaPackageName} has no index.ts or index.js under ${NODE_LAMBDA_DIR}`);
+  }
+  mkdirSync(outDir, { recursive: true });
+  esbuild(lambdaPackageName).buildSync({
+    entryPoints: [entryPoint],
+    outfile: join(outDir, NODE_BUNDLE_FILE),
+    // esbuild's worker keeps the working directory of the first build. Synth runs in a scratch
+    // directory that is deleted afterwards, so the bundler is given one that outlives it.
+    absWorkingDir: NODE_LAMBDA_DIR,
+    bundle: true,
+    platform: 'node',
+    target: 'node22',
+    format: 'esm',
+    minify: false,
+    sourcemap: false,
+    banner: { js: NODE_BUNDLE_BANNER },
+  });
+}
+
+/** The resource tree beside the running code: `<package>/resources`, or `dist/resources` in a build. */
 export function distResourcesDir(): string {
   const candidates = [join(HERE, '..', '..', 'resources'), join(HERE, '..', '..', 'dist', 'resources')];
   const found = candidates.find((candidate) => existsSync(candidate));
@@ -70,110 +133,55 @@ function checksumForDirs(dirs: string[]): string {
   return hash.digest('hex');
 }
 
-/** The interpreter used to install a handler's third-party dependencies. */
-function pythonBin(): string | undefined {
-  const candidates = [process.env.PYTHON, 'python3.13', 'python3'].filter(
-    (candidate): candidate is string => candidate !== undefined && candidate !== '',
-  );
-  for (const candidate of candidates) {
-    const probe = spawnSync(candidate, ['--version'], { stdio: 'ignore' });
-    if (probe.status === 0) return candidate;
-  }
-  return undefined;
-}
-
 export class IdeaCodeAsset {
   readonly lambdaPackageName: string;
 
   constructor(lambdaPackageName: string) {
     this.lambdaPackageName = lambdaPackageName;
+    if (nodeLambdaEntryPoint(lambdaPackageName) === undefined) {
+      throw new Error(
+        `lambda package not found: ${lambdaPackageName}; looked for ` +
+          `${join(NODE_LAMBDA_DIR, lambdaPackageName, 'index.ts')} and ` +
+          `${join(NODE_LAMBDA_DIR, lambdaPackageName, 'index.js')}`,
+      );
+    }
+  }
+
+  get runtime(): lambda.Runtime {
+    return lambda.Runtime.NODEJS_22_X;
   }
 
   /** `IdeaCodeAsset.lambda_handler`. */
   get lambdaHandler(): string {
-    return `${this.lambdaPackageName}.handler.handler`;
+    return 'index.handler';
   }
 
   /** The directory handed to `lambda.Code.fromAsset`. */
   assetPath(): string {
-    const resources = distResourcesDir();
-    const prebuilt = join(resources, 'lambda_assets', this.lambdaPackageName);
+    const prebuilt = join(distResourcesDir(), 'lambda_assets', this.lambdaPackageName);
     if (existsSync(prebuilt)) return prebuilt;
-
-    const functions = join(resources, 'lambda_functions');
-    const source = join(functions, this.lambdaPackageName);
-    if (!existsSync(source)) {
-      throw new Error(
-        `lambda package not found: ${this.lambdaPackageName}; looked in ${prebuilt}, ${source}`,
-      );
-    }
-    return this.buildLambda(functions, source);
+    return this.buildNodeLambda();
   }
 
   /**
-   * Assembles the asset root the handler string needs, reusing the previous build while the
-   * sources are unchanged. A handler with a `requirements.txt` needs a Python interpreter with
-   * pip; without one the build refuses instead of producing an asset that cannot import.
+   * Bundles the handler on demand, reusing the previous bundle while the sources are unchanged.
+   * The commons package is in the checksum because every handler imports it.
    */
-  private buildLambda(functionsDir: string, sourceDir: string): string {
-    const commonsDir = join(functionsDir, COMMONS_PACKAGE);
-    if (!existsSync(commonsDir)) {
-      throw new Error(`lambda commons package not found: ${commonsDir}`);
-    }
+  private buildNodeLambda(): string {
     const buildRoot = join(lambdaBuildDir(), this.lambdaPackageName);
     const pkg = join(buildRoot, BUILD_DIR);
     const checksumPath = join(buildRoot, CHECKSUM_FILE);
-    const checksum = checksumForDirs([sourceDir, commonsDir]);
+    const checksum = checksumForDirs([
+      join(NODE_LAMBDA_DIR, this.lambdaPackageName),
+      join(NODE_LAMBDA_DIR, NODE_COMMONS_PACKAGE),
+    ]);
 
     if (existsSync(pkg) && existsSync(checksumPath) && readFileSync(checksumPath, 'utf-8').trim() === checksum) {
       return pkg;
     }
 
     rmSync(buildRoot, { recursive: true, force: true });
-    mkdirSync(pkg, { recursive: true });
-    cpSync(commonsDir, join(pkg, COMMONS_PACKAGE), { recursive: true });
-    cpSync(sourceDir, join(pkg, this.lambdaPackageName), { recursive: true });
-
-    const requirements = join(pkg, this.lambdaPackageName, 'requirements.txt');
-    if (existsSync(requirements)) {
-      const moved = join(pkg, 'requirements.txt');
-      renameSync(requirements, moved);
-      const python = pythonBin();
-      if (python === undefined) {
-        rmSync(buildRoot, { recursive: true, force: true });
-        throw new Error(
-          `lambda package ${this.lambdaPackageName} has dependencies in requirements.txt and no ` +
-            'python interpreter was found to install them. Build the assets once with ' +
-            'scripts/build-lambda-zips.sh, or set PYTHON to an interpreter with pip.',
-        );
-      }
-      const install = spawnSync(
-        python,
-        [
-          '-m',
-          'pip',
-          'install',
-          '-r',
-          'requirements.txt',
-          '--platform',
-          'manylinux2014_x86_64',
-          '--only-binary=:all:',
-          '--target',
-          '.',
-          '--upgrade',
-        ],
-        { cwd: pkg, stdio: 'inherit' },
-      );
-      if (install.status !== 0) {
-        rmSync(buildRoot, { recursive: true, force: true });
-        throw new Error(
-          `failed to install dependencies for lambda package ${this.lambdaPackageName} ` +
-            `(${python} -m pip exited ${String(install.status)}). Build the assets once with ` +
-            'scripts/build-lambda-zips.sh.',
-        );
-      }
-    }
-
+    bundleNodeLambda(this.lambdaPackageName, pkg);
     writeFileSync(checksumPath, `${checksum}\n`);
     return pkg;
   }

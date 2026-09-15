@@ -89,9 +89,9 @@ function isDirectoryServiceSdkModule(
 
 /** Load the service client lazily. */
 async function createDirectoryService(): Promise<GetAdSecurityGroupDirectoryService> {
-    const sdkModule: object = await import(
-        DIRECTORY_SERVICE_CLIENT_PACKAGE
-    );
+    // A literal specifier, so the bundler inlines the pinned client instead of leaving the
+    // resolution to whatever the managed runtime ships.
+    const sdkModule: object = await import("@aws-sdk/client-directory-service");
     if (!isDirectoryServiceSdkModule(sdkModule)) {
         throw new Error(
             `${DIRECTORY_SERVICE_CLIENT_PACKAGE} has an unexpected export shape`,

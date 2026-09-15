@@ -28,7 +28,7 @@ import {
   isDsActivedirectory,
   resourceName,
 } from './base.ts';
-import { LOG_RETENTION_DAYS, type CreateTagsCustomResource } from './common.ts';
+import { LOG_RETENTION_DAYS } from './common.ts';
 
 /** `RemovalPolicy` lookup uses member names, not enum values. */
 function removalPolicyByName(name: string): RemovalPolicy {
@@ -674,16 +674,26 @@ export class InternalLoadBalancerSecurityGroup extends SecurityGroup {
 // --- VPC endpoints ----------------------------------------------------------------------------
 
 /**
- * `vpc/<service>-gateway-endpoint` plus a `Custom::EC2CreateTags` of the same name at the stack
- * scope, because tags set through the endpoint L2 never reached the endpoint.
+ * The two tags an endpoint carries, on the endpoint resource itself.
+ *
+ * Applied at the endpoint rather than through `CfnVPCEndpointProps.tags`: an endpoint is a child
+ * of the VPC construct, so the VPC's own `Name` tag reaches it, and a tag set through the property
+ * loses to an inherited one. The endpoint is the deeper scope, so this is the value that renders,
+ * which is the value the handler used to write after the deploy.
  */
+function tagEndpoint(ctx: IdeaContext, endpoint: Construct, name: string): void {
+  Tags.of(endpoint).add(IDEA_TAG_NAME, name);
+  Tags.of(endpoint).add(IDEA_TAG_CLUSTER_NAME, ctx.clusterName);
+}
+
+/** `vpc/<service>-gateway-endpoint`. */
 export class VpcGatewayEndpoint {
   readonly ctx: IdeaContext;
   readonly scope: Construct;
   readonly name: string;
   readonly endpoint: ec2.GatewayVpcEndpoint;
 
-  constructor(ctx: IdeaContext, scope: Construct, service: string, vpc: ec2.IVpc, createTags: CreateTagsCustomResource) {
+  constructor(ctx: IdeaContext, scope: Construct, service: string, vpc: ec2.IVpc) {
     this.ctx = ctx;
     this.scope = scope;
     this.name = `${service}-gateway-endpoint`;
@@ -692,10 +702,7 @@ export class VpcGatewayEndpoint {
       service: new ec2.GatewayVpcEndpointAwsService(service),
     });
 
-    createTags.apply(this.name, this.endpoint.vpcEndpointId, {
-      [IDEA_TAG_NAME]: this.name,
-      [IDEA_TAG_CLUSTER_NAME]: ctx.clusterName,
-    });
+    tagEndpoint(ctx, this.endpoint, this.name);
   }
 }
 
@@ -711,7 +718,6 @@ export class VpcInterfaceEndpoint {
     service: string,
     vpc: ec2.IVpc,
     vpcEndpointSecurityGroup: ec2.ISecurityGroup,
-    createTags: CreateTagsCustomResource,
   ) {
     this.ctx = ctx;
     this.scope = scope;
@@ -728,10 +734,7 @@ export class VpcInterfaceEndpoint {
       securityGroups: [vpcEndpointSecurityGroup],
     });
 
-    createTags.apply(this.name, this.endpoint.vpcEndpointId, {
-      [IDEA_TAG_NAME]: this.name,
-      [IDEA_TAG_CLUSTER_NAME]: ctx.clusterName,
-    });
+    tagEndpoint(ctx, this.endpoint, this.name);
   }
 
   /** `https://` + the DNS name of the first DNS entry (`<hosted zone id>:<dns name>`). */
@@ -752,16 +755,14 @@ export class WebAcl {
   readonly ctx: IdeaContext;
   readonly name: string;
   readonly scope: Construct;
-  readonly createTags: CreateTagsCustomResource | undefined;
   readonly webAcl: wafv2.CfnWebACL;
   logGroup: logs.LogGroup | undefined;
   loggingConfiguration: wafv2.CfnLoggingConfiguration | undefined;
 
-  constructor(ctx: IdeaContext, name: string, scope: Construct, createTags?: CreateTagsCustomResource) {
+  constructor(ctx: IdeaContext, name: string, scope: Construct) {
     this.ctx = ctx;
     this.name = name;
     this.scope = scope;
-    this.createTags = createTags;
 
     const clusterName = ctx.clusterName;
     this.webAcl = new wafv2.CfnWebACL(scope, `${clusterName}-${name}-web-acl`, {

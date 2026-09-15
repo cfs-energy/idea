@@ -14,8 +14,8 @@ import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { pathToFileURL } from 'node:url';
 
-import { App, Aspects, CfnDeletionPolicy, CfnResource, type Environment, type IAspect } from 'aws-cdk-lib';
-import { AwsSolutionsChecks } from 'cdk-nag';
+import { App, Aspects, CfnDeletionPolicy, CfnResource, type Environment, type IAspect, Validations } from 'aws-cdk-lib';
+import { AwsSolutionsChecks, type IApplyRule } from 'cdk-nag';
 import type { IConstruct } from 'constructs';
 
 import { ClusterConfig } from '../config/cluster-config.ts';
@@ -184,6 +184,32 @@ async function loadConfig(options: CdkAppOptions): Promise<ClusterConfig> {
 }
 
 /** Builds the app and the one stack. Returns the app so a caller can synth it itself. */
+/**
+ * cdk-nag 3 acknowledges one finding at a time: a bare rule id no longer covers a rule's findings,
+ * so `AwsSolutions-IAM5` acknowledged on a role would still report `AwsSolutions-IAM5[Resource::*]`.
+ * The suppressions this tool carries are the reference's, bare by design, and are written into the
+ * template as such for parity. So a bare acknowledgment on the resource or any ancestor covers every
+ * finding of that rule here, which is what cdk-nag 2 did.
+ */
+export class IdeaSolutionsChecks extends AwsSolutionsChecks {
+  protected override applyRule(params: IApplyRule): void {
+    const ruleId = `${this.packName}-${params.ruleSuffixOverride ?? params.rule.name}`;
+    if (bareRuleAcknowledged(params.node, ruleId)) return;
+    super.applyRule(params);
+  }
+}
+
+function bareRuleAcknowledged(node: IConstruct, ruleId: string): boolean {
+  for (let current: IConstruct | undefined = node; current !== undefined; current = current.node.scope) {
+    for (const entry of current.node.metadata) {
+      if (entry.type !== Validations.ACKNOWLEDGED_RULES_METADATA_KEY) continue;
+      const ids = Object.keys((entry.data ?? {}) as Record<string, unknown>).map((key) => key.replace(/^annotation::/i, ''));
+      if (ids.includes(ruleId)) return true;
+    }
+  }
+  return false;
+}
+
 export async function buildApp(
   options: CdkAppOptions,
   registry: StackRegistry = DEFAULT_STACK_REGISTRY,
@@ -214,7 +240,12 @@ export async function buildApp(
   const app = new App({ context: { 'aws:cdk:enable-path-metadata': true, ...readLocalContext() } });
 
   if (asBool(process.env.IDEA_ADMIN_ENABLE_CDK_NAG_SCAN, true)) {
-    Aspects.of(app).add(new AwsSolutionsChecks());
+    // cdk-nag 3 is a CDK policy validation plugin. Suppressions are written by `addNagSuppression`
+    // in the cdk-nag 2 template shape the parity gate compares, so the plugin's own writer stays off.
+    Validations.of(app).addPlugins(new IdeaSolutionsChecks(app));
+    // Plugins have no accessor; the marker lets a test see the scan is on without synthesizing a
+    // violation. App-node metadata never reaches a template.
+    app.node.addMetadata('idea:cdk-nag', 'AwsSolutions');
   }
 
   // An upgrade must never be able to delete state. Applied to the app so every stack is covered,

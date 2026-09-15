@@ -11,13 +11,13 @@
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 
 import { GeneralException, isNullValue } from './cluster-config.ts';
 import { jinjaEnv, renderTemplate, toYaml } from './jinja.ts';
 import {
   buildContext,
-  configTemplatesDirs,
+  configTemplatesDir,
   loadValuesFile,
   SUPPORTED_OS,
   type BuildContextOptions,
@@ -42,7 +42,9 @@ export interface ConfigEntry {
  * sexagesimal-looking scalars as strings, which is what the templates' quoted values need.
  */
 export function loadYaml(text: string): unknown {
-  return yaml.load(text, { schema: yaml.CORE_SCHEMA });
+  // `loadAll` rather than `load`: js-yaml 5's `load` rejects an empty source, and an empty or
+  // comment-only file must reach the caller as no document, which is what the readers report on.
+  return yaml.loadAll(text, { schema: yaml.CORE_SCHEMA })[0];
 }
 
 export interface GenerateOptions extends BuildContextOptions {
@@ -103,7 +105,7 @@ export function generateConfigFromTemplates(
   options: GenerateOptions = {},
 ): ModuleEntry[] {
   const context = buildContext(values, options);
-  const env = jinjaEnv(options.templatesDir ?? configTemplatesDirs());
+  const env = jinjaEnv(options.templatesDir ?? configTemplatesDir());
   const renderContext = { ...context, utils: { to_yaml: toYaml } };
   const containers = context.enable_ecs === true;
 

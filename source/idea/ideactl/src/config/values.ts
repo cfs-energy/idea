@@ -10,7 +10,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 
 import { ClusterConfigError, GeneralException, isEmpty } from './cluster-config.ts';
 import { loadRegionAmiConfig, regionAmiConfigPath, resolveRegionAmi } from './region-ami.ts';
@@ -68,33 +68,43 @@ const PY_FALSE_SCALARS = new Set(
   ['no', 'No', 'NO', 'false', 'False', 'FALSE', 'off', 'Off', 'OFF'],
 );
 
-/** js-yaml exports its built-in scalar types; `@types/js-yaml` does not declare them. */
-type ScalarType = yaml.Type & { resolve(data: string): boolean; construct(data: string): unknown };
-const yamlTypes = (yaml as unknown as { types: Record<string, ScalarType> }).types;
+/** A core-schema scalar tag, reused inside the PyYAML-shaped schema below. */
+function coreScalarTag(tagName: string): yaml.ScalarTagDefinition {
+  const tag = yaml.CORE_SCHEMA.lookupScalarTag(tagName);
+  if (tag === undefined) throw new Error(`js-yaml core schema has no ${tagName}`);
+  return tag;
+}
+const coreFloat = coreScalarTag('tag:yaml.org,2002:float');
 
-const pyBoolType = new yaml.Type('tag:yaml.org,2002:bool', {
-  kind: 'scalar',
-  resolve: (data: string) => PY_TRUE_SCALARS.has(data) || PY_FALSE_SCALARS.has(data),
-  construct: (data: string) => PY_TRUE_SCALARS.has(data),
-  predicate: (value: unknown) => typeof value === 'boolean',
-  represent: (value: unknown) => (value === true ? 'true' : 'false'),
+const pyBoolTag = yaml.defineScalarTag<boolean>('tag:yaml.org,2002:bool', {
+  implicit: true,
+  resolve: (source) => (PY_TRUE_SCALARS.has(source) ? true : PY_FALSE_SCALARS.has(source) ? false : yaml.NOT_RESOLVED),
+  identify: (value: unknown) => typeof value === 'boolean',
+  represent: (value: boolean) => (value ? 'true' : 'false'),
+  implicitFirstChars: ['y', 'Y', 'n', 'N', 't', 'T', 'f', 'F', 'o', 'O'],
 });
 
-const pyFloatType = new yaml.Type('tag:yaml.org,2002:float', {
-  kind: 'scalar',
-  resolve: (data: string) => yamlTypes.float.resolve(data),
-  construct: (data: string) => new PyFloat(yamlTypes.float.construct(data) as number),
-  predicate: (value: unknown) => value instanceof PyFloat,
-  represent: (value: unknown) => pyFloatRepr((value as PyFloat).value),
+const pyFloatTag = yaml.defineScalarTag<PyFloat>('tag:yaml.org,2002:float', {
+  implicit: true,
+  resolve: (source, isExplicit, tagName) => {
+    const value = coreFloat.resolve(source, isExplicit, tagName);
+    return value === yaml.NOT_RESOLVED ? yaml.NOT_RESOLVED : new PyFloat(value as number);
+  },
+  identify: (value: unknown) => value instanceof PyFloat,
+  represent: (value: PyFloat) => pyFloatRepr(value.value),
+  implicitFirstChars: coreFloat.implicitFirstChars,
 });
 
 /**
  * `yaml.safe_load`: the core schema's scalar set with PyYAML's boolean list and a float type that
- * stays distinguishable from an int.
+ * stays distinguishable from an int. A plain scalar tries these tags in this order.
  */
-const PY_SAFE_SCHEMA = yaml.FAILSAFE_SCHEMA.extend({
-  implicit: [yamlTypes.null, pyBoolType, yamlTypes.int, pyFloatType],
-});
+const PY_SAFE_SCHEMA = yaml.FAILSAFE_SCHEMA.withTags(
+  coreScalarTag('tag:yaml.org,2002:null'),
+  pyBoolTag,
+  coreScalarTag('tag:yaml.org,2002:int'),
+  pyFloatTag,
+);
 
 /** `repr(float)`: Python always prints a decimal point or an exponent, `String()` does not. */
 function pyFloatRepr(value: number): string {
@@ -256,39 +266,15 @@ function getList(key: string, obj: UserValues, def: unknown[] | null = null): un
 // resource files
 // ---------------------------------------------------------------------------------------------
 
-/**
- * A file under the administrator's `resources/`. The port reads the same files the Python
- * administrator ships until `resources/` moves into this package (`region_ami_config.yml` and
- * the config templates are release-pinned inputs, not code).
- */
+/** A file under the package's `resources/`: release-pinned inputs, not code. */
 export function resourcePath(relative: string): string {
-  const candidates = [
-    new URL(`../../resources/${relative}`, import.meta.url),
-    new URL(`../../../idea-administrator/resources/${relative}`, import.meta.url),
-  ].map((url) => fileURLToPath(url));
-  const found = candidates.find((candidate) => existsSync(candidate));
-  if (found === undefined) throw new GeneralException(`resource not found: ${relative}`);
-  return found;
+  const file = fileURLToPath(new URL(`../../resources/${relative}`, import.meta.url));
+  if (!existsSync(file)) throw new GeneralException(`resource not found: ${relative}`);
+  return file;
 }
 
 export function configTemplatesDir(): string {
   return resourcePath('config/templates');
-}
-
-/**
- * Every directory the config templates are searched in, nearest first. The container module's
- * template lives in this package's own `resources-ecs/` until resource ownership moves here; the
- * build copies it into `resources/config/templates`, so a released tree has one directory and a
- * source tree has two.
- */
-export function configTemplatesDirs(): string[] {
-  const overlay = [
-    new URL('../../resources-ecs/config/templates', import.meta.url),
-    new URL('../../../resources-ecs/config/templates', import.meta.url),
-  ]
-    .map((url) => fileURLToPath(url))
-    .find((candidate) => existsSync(candidate));
-  return overlay === undefined ? [configTemplatesDir()] : [configTemplatesDir(), overlay];
 }
 
 export function regionTimezoneConfigPath(): string {
@@ -296,7 +282,7 @@ export function regionTimezoneConfigPath(): string {
 }
 
 function loadYamlFile(file: string): Record<string, unknown> {
-  return (yaml.load(readFileSync(file, 'utf-8'), { schema: PY_SAFE_SCHEMA }) ?? {}) as Record<
+  return (yaml.loadAll(readFileSync(file, 'utf-8'), { schema: PY_SAFE_SCHEMA })[0] ?? {}) as Record<
     string,
     unknown
   >;

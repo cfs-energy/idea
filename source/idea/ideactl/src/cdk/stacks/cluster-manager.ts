@@ -7,12 +7,17 @@
  *
  * The bedrock block (managed policy, two custom resources with their lambdas, the delivery role)
  * is gated on `cluster-manager.bedrock.enabled`.
+ *
+ * Under the container flag the stack also runs the cluster-manager as a task on the container
+ * stack's capacity. The task is built here because the application reads this module's own
+ * settings rows at boot, so it must not start before this stack has written them.
  */
 
 import { CustomResource, Duration, Fn, Tags } from 'aws-cdk-lib';
 import * as asg from 'aws-cdk-lib/aws-autoscaling';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
@@ -21,7 +26,7 @@ import { ArnBuilder } from '../../config/arn-builder.ts';
 import type { StackBuildProps } from '../app.ts';
 import { IdeaBaseStack } from '../base-stack.ts';
 import { IdeaCodeAsset } from '../code-asset.ts';
-import { IDEA_TAG_NAME, IDEA_TAG_NODE_TYPE, kmsKeyArn } from '../constructs/base.ts';
+import { IDEA_TAG_NAME, IDEA_TAG_NODE_TYPE, kmsKeyArn, acknowledgeForScan } from '../constructs/base.ts';
 import {
   CustomResourceProvider,
   LOG_RETENTION_DAYS,
@@ -30,6 +35,24 @@ import {
   Role,
   SQSQueue,
 } from '../constructs/common.ts';
+import {
+  STREAM_PREFIX_APPLICATION,
+  addStorageMounts,
+  adoptedLogDriver,
+  applicationTargetGroup,
+  attachApplicationFileLogs,
+  buildEc2Service,
+  buildExecutionRole,
+  buildTaskDefinition,
+  buildTaskRole,
+  commonEnvironment,
+  containerImage,
+  dockerLabels,
+  healthCheckGrace,
+  roleSizing,
+  serviceArn,
+  type ContainerScope,
+} from '../constructs/container.ts';
 import { OAuthClientIdAndSecret } from '../constructs/directory-service.ts';
 import {
   ExistingSocaCluster,
@@ -75,6 +98,9 @@ export class ClusterManagerStack extends IdeaBaseStack {
   webPortalEndpoint!: CustomResource;
   externalEndpoint!: CustomResource;
   internalEndpoint!: CustomResource;
+  /** Present under the container flag: the cluster-manager task service and its target groups. */
+  containerService: ecs.Ec2Service | undefined;
+  private containerTargetGroups: elbv2.ApplicationTargetGroup[] = [];
 
   constructor(props: StackBuildProps) {
     super({
@@ -109,8 +135,25 @@ export class ClusterManagerStack extends IdeaBaseStack {
     this.buildBedrockInvocationLogging();
     this.buildSecurityGroups();
     if (this.hostsPresent) this.buildAutoScalingGroup();
+    this.buildContainerTargetGroups();
     this.buildEndpoints();
+    this.buildContainerService();
     this.buildClusterSettings();
+  }
+
+  /** The input the shared container helpers take. */
+  private get containerScope(): ContainerScope {
+    return {
+      ctx: this.context,
+      stack: this.stack,
+      vpc: this.cluster.vpc,
+      privateSubnets: this.cluster.privateSubnets,
+    };
+  }
+
+  /** The service name, fixed so the settings resource can publish it without a reference. */
+  private get containerServiceName(): string {
+    return `${this.clusterName}-${this.moduleId}`;
   }
 
   /**
@@ -157,20 +200,8 @@ export class ClusterManagerStack extends IdeaBaseStack {
     });
     client.node.addDependency(resourceServer);
 
-    // the lambda that reads the generated secret back lives in the identity-provider stack
-    const oauthCredentialsLambdaArn = this.context.config.getString(
-      'identity-provider.cognito.oauth_credentials_lambda_arn',
-      undefined,
-      { required: true },
-    ) as string;
-    const clientSecret = new CustomResource(this.stack, `${this.moduleId}-creds`, {
-      serviceToken: oauthCredentialsLambdaArn,
-      properties: {
-        UserPoolId: this.userPool.userPoolId,
-        ClientId: client.userPoolClientId,
-      },
-      resourceType: 'Custom::GetOAuthCredentials',
-    });
+    // the client returns its own generated secret, so nothing has to read it back
+    const clientSecret = (client.node.defaultChild as cognito.CfnUserPoolClient).attrClientSecret;
 
     this.oauth2ClientSecret = new OAuthClientIdAndSecret(
       this.context,
@@ -178,7 +209,7 @@ export class ClusterManagerStack extends IdeaBaseStack {
       MODULE_CLUSTER_MANAGER,
       this.stack,
       client.userPoolClientId,
-      clientSecret.getAttString('ClientSecret'),
+      clientSecret,
     );
   }
 
@@ -211,6 +242,11 @@ export class ClusterManagerStack extends IdeaBaseStack {
         ],
       },
     );
+    // cdk-nag raises AwsSolutions-SMG4 here (no rotation schedule). No deployed template carries a
+    // suppression for it and parity keeps it that way, so the scan alone is told why.
+    acknowledgeForScan(this.jwtSigningSecret, [
+      { rule_id: 'AwsSolutions-SMG4', reason: 'The signing key is rotated by redeploying the module; Secrets Manager rotation would invalidate live tokens.' },
+    ]);
   }
 
   buildSqsQueues(): void {
@@ -380,30 +416,102 @@ export class ClusterManagerStack extends IdeaBaseStack {
     securityGroup.node.tryRemoveChild(ingressRule.node.id);
   }
 
-  private ecsTargetGroupArn(index: number): string {
-    const targetGroupArns = this.context.config.getList<string>(
-      "ecs.cluster-manager.target_group_arns",
-      [],
-      { required: true },
+  /**
+   * The three IP target groups the container service registers with, created here because this is
+   * the stack that owns the endpoints routing to them.
+   */
+  private buildContainerTargetGroups(): void {
+    if (!this.ecsEnabled) return;
+    const scope = this.containerScope;
+    this.containerTargetGroups = (["e", "i", "w"] as const).map((suffix) =>
+      applicationTargetGroup(scope, {
+        constructId: `cm-ecs-${suffix}-target-group`,
+        targetGroupName: this.getTargetGroupName(`cm-ecs-${suffix}`),
+        port: 8443,
+        healthCheckPath: '/healthcheck',
+      }),
     );
-    const targetGroupArn = targetGroupArns[index];
-    if (targetGroupArn === undefined || targetGroupArn === "") {
-      throw new Error(`ecs.cluster-manager.target_group_arns[${index}] is required when ecs.enabled is true`);
-    }
-    return targetGroupArn;
   }
 
-  private ecsServiceName(): string {
-    const serviceArn = this.context.config.getString(
-      "ecs.cluster-manager.service_arn",
-      undefined,
-      { required: true },
-    ) as string;
-    const serviceName = serviceArn.split("/").at(-1);
-    if (serviceName === undefined || serviceName === "") {
-      throw new Error("ecs.cluster-manager.service_arn does not contain a service name");
-    }
-    return serviceName;
+  /** The target group one endpoint forwards to: 0 external, 1 internal, 2 web portal. */
+  private containerTargetGroupArn(index: number): string {
+    const targetGroup = this.containerTargetGroups[index];
+    if (targetGroup === undefined) throw new Error(`cluster-manager target group ${index} was not created`);
+    return targetGroup.targetGroupArn;
+  }
+
+  /**
+   * The cluster-manager task on the container stack's capacity.
+   *
+   * It starts after the three endpoints, because a service may not name a target group that has no
+   * load balancer, and after this stack's settings resource, because the application reads
+   * `client_id` and the rest of its own module's rows at boot. It runs in the cluster-manager host
+   * security group, so the task holds the network position the host holds.
+   */
+  private buildContainerService(): void {
+    if (!this.ecsEnabled) return;
+    const scope = this.containerScope;
+    const sizing = roleSizing(scope, 'cluster-manager');
+    const { role: taskRole, policy: taskPolicy } = buildTaskRole(scope, {
+      constructId: 'cluster-manager-task-role',
+      name: `${this.moduleId}-task-role`,
+      description: 'IAM role assigned to the cluster-manager ECS task',
+      managedPolicyArns: this.getEc2InstanceManagedPolicies(),
+      policyConstructId: 'cluster-manager-task-policy',
+      policyTemplateName: 'cluster-manager.yml',
+      policyModuleId: this.moduleId,
+    });
+    const executionRole = buildExecutionRole(
+      scope,
+      'cluster-manager-task-execution-role',
+      `${this.moduleId}-task-execution-role`,
+    );
+    const taskDefinition = buildTaskDefinition(scope, 'cluster-manager-task-definition', {
+      executionRole,
+      taskRole,
+    });
+    const logGroupName = `/${this.clusterName}/${this.moduleId}`;
+    const container = taskDefinition.addContainer('cluster-manager-container', {
+      cpu: sizing.cpu,
+      dockerLabels: dockerLabels(scope, 'cluster-manager'),
+      environment: commonEnvironment(scope, {
+        role: 'cluster-manager',
+        moduleId: this.moduleId,
+        moduleName: MODULE_CLUSTER_MANAGER,
+      }),
+      image: containerImage(scope),
+      logging: adoptedLogDriver(scope, 'cluster-manager-log-group', logGroupName, STREAM_PREFIX_APPLICATION),
+      memoryLimitMiB: sizing.memory,
+    });
+    container.addPortMappings({ containerPort: 8443, protocol: ecs.Protocol.TCP });
+    addStorageMounts(scope, taskDefinition, container);
+    attachApplicationFileLogs(scope, {
+      idPrefix: 'cluster-manager',
+      logGroupName,
+      taskDefinition,
+      container,
+    });
+
+    const service = buildEc2Service(scope, {
+      constructId: 'cluster-manager-service',
+      serviceName: this.containerServiceName,
+      taskDefinition,
+      desiredCount: sizing.desired,
+      securityGroups: [this.clusterManagerSecurityGroup],
+      minHealthyPercent: 50,
+      maxHealthyPercent: 200,
+      healthCheckGracePeriod: healthCheckGrace('cluster-manager'),
+      dependencies: [
+        taskRole,
+        taskPolicy,
+        executionRole,
+        this.externalEndpoint,
+        this.internalEndpoint,
+        this.webPortalEndpoint,
+      ],
+    });
+    for (const targetGroup of this.containerTargetGroups) service.attachToApplicationTargetGroup(targetGroup);
+    this.containerService = service;
   }
 
   buildAutoScalingGroup(): void {
@@ -577,7 +685,7 @@ export class ClusterManagerStack extends IdeaBaseStack {
 
     // web portal endpoint: no conditions, it rewrites the external listener's default action
     const defaultTargetGroupArn = this.ecsEnabled
-      ? this.ecsTargetGroupArn(2)
+      ? this.containerTargetGroupArn(2)
       : new elbv2.CfnTargetGroup(this.stack, 'web-portal-target-group', {
           port: 8443,
           protocol: 'HTTPS',
@@ -610,7 +718,7 @@ export class ClusterManagerStack extends IdeaBaseStack {
       { required: true },
     );
     const externalTargetGroupArn = this.ecsEnabled
-      ? this.ecsTargetGroupArn(0)
+      ? this.containerTargetGroupArn(0)
       : new elbv2.CfnTargetGroup(
           this.stack,
           `${this.moduleId}-external-target-group`,
@@ -651,7 +759,7 @@ export class ClusterManagerStack extends IdeaBaseStack {
       { required: true },
     );
     const internalTargetGroupArn = this.ecsEnabled
-      ? this.ecsTargetGroupArn(1)
+      ? this.containerTargetGroupArn(1)
       : new elbv2.CfnTargetGroup(
           this.stack,
           `${this.moduleId}-internal-target-group`,
@@ -699,11 +807,11 @@ export class ClusterManagerStack extends IdeaBaseStack {
       task_queue_arn: this.clusterTasksSqsQueue.queueArn,
       notifications_queue_url: this.notificationsSqsQueue.queueUrl,
       notifications_queue_arn: this.notificationsSqsQueue.queueArn,
-      asg_name: this.ecsEnabled ? this.ecsServiceName() : this.autoScalingGroup.autoScalingGroupName,
+      // Literals under the container flag: the service has to start after this resource, because
+      // the application reads its own rows from it, so this resource must not reference the service.
+      asg_name: this.ecsEnabled ? this.containerServiceName : this.autoScalingGroup.autoScalingGroupName,
       asg_arn: this.ecsEnabled
-        ? (this.context.config.getString("ecs.cluster-manager.service_arn", undefined, {
-            required: true,
-          }) as string)
+        ? serviceArn(this.containerScope, this.containerServiceName)
         : this.autoScalingGroup.autoScalingGroupArn,
     };
 
@@ -714,7 +822,10 @@ export class ClusterManagerStack extends IdeaBaseStack {
 
     clusterSettings['jwt_signing_secret_arn'] = this.jwtSigningSecret.ref;
 
-    this.updateClusterSettings(clusterSettings);
+    const settings = this.updateClusterSettings(clusterSettings);
+    // The task reads `client_id`, `client_secret` and the rest of this module's rows at boot, so
+    // it must not start before they are written.
+    this.containerService?.node.addDependency(settings);
   }
 }
 

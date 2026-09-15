@@ -57,7 +57,9 @@ function isSqsSdkModule(value: unknown): value is SqsSdkModule {
 
 /** Load the v3 SQS client dynamically. */
 async function createSqs(): Promise<ScheduledEventSqs> {
-    const importedModule: unknown = await import(SQS_CLIENT_MODULE);
+    // A literal specifier, so the bundler inlines the pinned client instead of leaving the
+    // resolution to whatever the managed runtime ships.
+    const importedModule: unknown = await import("@aws-sdk/client-sqs");
     if (!isSqsSdkModule(importedModule)) {
         throw new Error(`${SQS_CLIENT_MODULE} does not export the SQS v3 client`);
     }

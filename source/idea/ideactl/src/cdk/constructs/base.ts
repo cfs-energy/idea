@@ -3,9 +3,8 @@
  */
 
 import type { IConstruct } from 'constructs';
-import { Aws, Stack, Tags } from 'aws-cdk-lib';
+import { Aws, CfnResource, Stack, Tags, Validations } from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
-import { NagSuppressions } from 'cdk-nag';
 
 import type { ClusterConfig } from '../../config/cluster-config.ts';
 import type { SynthReads } from '../synth-reads.ts';
@@ -149,16 +148,57 @@ export function isDsActivedirectory(ctx: IdeaContext): boolean {
   return provider === DIRECTORYSERVICE_AWS_MANAGED_ACTIVE_DIRECTORY || provider === DIRECTORYSERVICE_ACTIVE_DIRECTORY;
 }
 
-/** `SocaBaseConstruct.add_nag_suppression`. */
+interface NagRule {
+  reason: string;
+  id: string;
+}
+
+/** cdk-nag 2 `NagSuppressionHelper.addRulesToMetadata`: append, deduplicated by serialised rule. */
+function mergeNagRules(existing: unknown, rules: readonly NagRule[]): { rules_to_suppress: NagRule[] } {
+  const current = (existing as { rules_to_suppress?: NagRule[] } | undefined)?.rules_to_suppress ?? [];
+  const serialised = [...current, ...rules].map((rule) => JSON.stringify(rule));
+  return { rules_to_suppress: [...new Set(serialised)].map((rule) => JSON.parse(rule) as NagRule) };
+}
+
+/**
+ * Records a rule for the scan only, with no `cdk_nag` metadata in the template. For a finding the
+ * deployed template carries no suppression for, so parity keeps it that way, while the reason
+ * still lives in code and the scan stops reporting it.
+ */
+export function acknowledgeForScan(construct: IConstruct, suppressions: IdeaNagSuppression[]): void {
+  Validations.of(construct).acknowledge(...suppressions.map((suppression) => ({ id: suppression.rule_id, reason: suppression.reason })));
+}
+
+/**
+ * `SocaBaseConstruct.add_nag_suppression`.
+ *
+ * cdk-nag 3 is a validation plugin that reads CDK acknowledgments and, if asked, writes them into
+ * every descendant resource's metadata. The parity gate compares `Metadata.cdk_nag` with the
+ * deployed templates, which cdk-nag 2 wrote onto exactly the construct's own L1 (or every
+ * descendant's, or the template when given a stack). So this records the acknowledgment for the
+ * plugin and writes the metadata itself, where cdk-nag 2 put it.
+ */
 export function addNagSuppression(
   construct: IConstruct,
   suppressions: IdeaNagSuppression[],
   applyToChildren = false,
 ): void {
-  const rules = suppressions.map((suppression) => ({ id: suppression.rule_id, reason: suppression.reason }));
+  // `reason` before `id`: cdk-nag 2 wrote the rule that way and the parity gate compares strings.
+  const rules: NagRule[] = suppressions.map((suppression) => ({ reason: suppression.reason, id: suppression.rule_id }));
+  Validations.of(construct).acknowledge(...rules);
   if (Stack.isStack(construct)) {
-    NagSuppressions.addStackSuppressions(construct, rules, applyToChildren);
-  } else {
-    NagSuppressions.addResourceSuppressions(construct, rules, applyToChildren);
+    // `addStackSuppressions`: template-level metadata; the flag meant nested stacks there.
+    const stacks = applyToChildren ? construct.node.findAll().filter((node): node is Stack => Stack.isStack(node)) : [construct];
+    for (const stack of stacks) {
+      const metadata = stack.templateOptions.metadata ?? {};
+      metadata['cdk_nag'] = mergeNagRules(metadata['cdk_nag'], rules);
+      stack.templateOptions.metadata = metadata;
+    }
+    return;
+  }
+  // `addResourceSuppressions`: the construct's L1, or every descendant's.
+  for (const child of applyToChildren ? construct.node.findAll() : [construct]) {
+    const l1 = child.node.defaultChild ?? child;
+    if (CfnResource.isCfnResource(l1)) l1.addMetadata('cdk_nag', mergeNagRules(l1.getMetadata('cdk_nag'), rules));
   }
 }

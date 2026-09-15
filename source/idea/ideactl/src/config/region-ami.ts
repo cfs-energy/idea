@@ -18,7 +18,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 
 import { ClusterConfigError, GeneralException } from './cluster-config.ts';
 
@@ -31,24 +31,11 @@ export type RegionsConfig = Record<string, Record<string, unknown>>;
 // one class per ported python exception, so `instanceof` means the same thing everywhere
 export { ClusterConfigError, GeneralException };
 
-/**
- * The shipped region_ami_config.yml. The AMI ids in it are release-pinned inputs, so the same
- * file has to be read here and by the Python administrator until `resources/` moves into this
- * package.
- */
+/** The shipped `resources/config/region_ami_config.yml`; its AMI ids are release-pinned inputs. */
 export function regionAmiConfigPath(): string {
-  const here = fileURLToPath(new URL('.', import.meta.url));
-  const candidates = [
-    // Package-local resource path.
-    new URL('../../resources/config/region_ami_config.yml', import.meta.url),
-    // Administrator resource path.
-    new URL('../../../idea-administrator/resources/config/region_ami_config.yml', import.meta.url),
-  ].map((url) => fileURLToPath(url));
-  const found = candidates.find((candidate) => existsSync(candidate));
-  if (found === undefined) {
-    throw new GeneralException(`region_ami_config.yml not found (looked next to ${here})`);
-  }
-  return found;
+  const file = fileURLToPath(new URL('../../resources/config/region_ami_config.yml', import.meta.url));
+  if (!existsSync(file)) throw new GeneralException(`region_ami_config.yml not found: ${file}`);
+  return file;
 }
 
 export function loadRegionAmiConfig(file: string = regionAmiConfigPath()): RegionsConfig {

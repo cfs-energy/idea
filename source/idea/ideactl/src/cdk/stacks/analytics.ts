@@ -349,10 +349,6 @@ export class AnalyticsStack extends IdeaBaseStack {
       vpc: this.cluster.vpc,
       vpcSubnets: { subnets: this.cluster.privateSubnets },
     });
-    this.addNagSuppression(
-      [{ rule_id: 'AwsSolutions-L1', reason: 'Python Runtime is selected for stability.' }],
-      streamProcessingLambda,
-    );
 
     if (this.awsRegion.startsWith('us-gov-')) {
       // GovCloud rejects the tags the L2 event source puts on the mapping, so it is built by hand.

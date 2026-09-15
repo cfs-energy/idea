@@ -78,7 +78,9 @@ function isCloudWatchLogsSdkModule(
 
 /** Load the service client lazily. */
 async function createLogs(): Promise<EnsureLogGroupLogs> {
-    const sdkModule: object = await import(CLOUDWATCH_LOGS_CLIENT_PACKAGE);
+    // A literal specifier, so the bundler inlines the pinned client instead of leaving the
+    // resolution to whatever the managed runtime ships.
+    const sdkModule: object = await import("@aws-sdk/client-cloudwatch-logs");
     if (!isCloudWatchLogsSdkModule(sdkModule)) {
         throw new Error(
             `${CLOUDWATCH_LOGS_CLIENT_PACKAGE} has an unexpected export shape`,

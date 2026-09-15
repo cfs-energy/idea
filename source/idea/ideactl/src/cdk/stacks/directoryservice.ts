@@ -13,7 +13,7 @@
  * An unrecognised provider builds nothing and writes no cluster settings.
  */
 
-import { CustomResource, Duration, Fn, Tags } from 'aws-cdk-lib';
+import { CustomResource, Duration, Fn, RemovalPolicy, Tags } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as route53 from 'aws-cdk-lib/aws-route53';
 import type * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
@@ -174,6 +174,12 @@ export class DirectoryServiceStack extends IdeaBaseStack {
   /**
    * OpenLDAP TLS certificates, saved to Secrets Manager. Only the server can read the private key;
    * every cluster node reads the certificate so it can join the directory.
+   *
+   * The deploy tool generates the pair now (`src/cli/certificates.ts`) and publishes the two ARNs
+   * as settings rows; this resource stays for one release so a cluster that has it can update it
+   * in place to the Node handler, and it carries `Retain` so nothing here can destroy the pair the
+   * running server is serving. Remove it in the release after this one, once every cluster has
+   * deployed this one.
    */
   buildOpenldapCerts(): void {
     const hostname = this.context.config.getString('directoryservice.hostname', undefined, {
@@ -195,8 +201,22 @@ export class DirectoryServiceStack extends IdeaBaseStack {
           'idea:ModuleName': MODULE_DIRECTORYSERVICE,
         },
       },
+      removalPolicy: RemovalPolicy.RETAIN,
       resourceType: 'Custom::SelfSignedCertificateOpenLDAPServer',
     });
+  }
+
+  /** The certificate the deploy tool generated or adopted, by the row it published. */
+  private tlsCertificateSecretArn(): string {
+    return this.context.config.getString('directoryservice.tls_certificate_secret_arn', undefined, {
+      required: true,
+    }) as string;
+  }
+
+  private tlsPrivateKeySecretArn(): string {
+    return this.context.config.getString('directoryservice.tls_private_key_secret_arn', undefined, {
+      required: true,
+    }) as string;
   }
 
   buildEc2Instance(): void {
@@ -245,12 +265,11 @@ export class DirectoryServiceStack extends IdeaBaseStack {
     });
 
     const credentials = this.openldapCredentials as DirectoryServiceCredentials;
-    const certs = this.openldapCerts as CustomResource;
     const substitutedUserdata = Fn.sub(userData, {
       __LDAP_ROOT_USERNAME_SECRET_ARN__: credentials.getUsernameSecretArn(),
       __LDAP_ROOT_PASSWORD_SECRET_ARN__: credentials.getPasswordSecretArn(),
-      __LDAP_TLS_CERTIFICATE_SECRET_ARN__: certs.getAttString('certificate_secret_arn'),
-      __LDAP_TLS_PRIVATE_KEY_SECRET_ARN__: certs.getAttString('private_key_secret_arn'),
+      __LDAP_TLS_CERTIFICATE_SECRET_ARN__: this.tlsCertificateSecretArn(),
+      __LDAP_TLS_PRIVATE_KEY_SECRET_ARN__: this.tlsPrivateKeySecretArn(),
     });
 
     const launchTemplate = new ec2.LaunchTemplate(this.stack, `${this.moduleId}-lt`, {
@@ -376,7 +395,6 @@ export class DirectoryServiceStack extends IdeaBaseStack {
   buildOpenldapClusterSettings(): void {
     const instance = this.openldapEc2Instance as ec2.CfnInstance;
     const credentials = this.openldapCredentials as DirectoryServiceCredentials;
-    const certs = this.openldapCerts as CustomResource;
     const clusterSettings: Record<string, unknown> = {
       deployment_id: this.deploymentId,
       private_ip: instance.attrPrivateIp,
@@ -389,8 +407,8 @@ export class DirectoryServiceStack extends IdeaBaseStack {
       // absent, so the dereference fails.
       root_username_secret_arn: (credentials.adminUsername as secretsmanager.CfnSecret).ref,
       root_password_secret_arn: (credentials.adminPassword as secretsmanager.CfnSecret).ref,
-      tls_certificate_secret_arn: certs.getAttString('certificate_secret_arn'),
-      tls_private_key_secret_arn: certs.getAttString('private_key_secret_arn'),
+      tls_certificate_secret_arn: this.tlsCertificateSecretArn(),
+      tls_private_key_secret_arn: this.tlsPrivateKeySecretArn(),
     };
 
     if (this.context.config.getBool('directoryservice.public', false)) {

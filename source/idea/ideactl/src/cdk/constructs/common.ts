@@ -51,6 +51,15 @@ export const LOG_RETENTION_DAYS: Record<number, logs.RetentionDays> = {
 
 const MAX_NAME_LENGTH = 64;
 
+/**
+ * The `AwsSolutions-L1` reason each runtime carries. cdk-nag's rule wants the newest runtime; the
+ * suppression is part of the deployed template, so the strings are compared, not just their
+ * presence.
+ */
+const RUNTIME_NAG_REASON = new Map<lambda.Runtime, string>([
+  [lambda.Runtime.NODEJS_22_X, 'Node 22 is the runtime the deploy tool is built and tested with.'],
+]);
+
 // --- Lambda -----------------------------------------------------------------------------------
 
 export interface LambdaFunctionProps {
@@ -85,12 +94,14 @@ export class LambdaFunction extends lambda.Function {
     } else if (code === undefined || handler === undefined) {
       throw new Error('Provide either idea_code_asset or (code and handler)');
     }
+    // The asset knows which handler tree the package is in, so the two never disagree.
+    const runtime = props.runtime ?? props.ideaCodeAsset?.runtime ?? lambda.Runtime.NODEJS_22_X;
 
     super(scope, constructId(name), {
       functionName: lambdaFunctionName(ctx, name),
       description: props.description,
       memorySize: props.memorySize ?? 128,
-      runtime: props.runtime ?? lambda.Runtime.PYTHON_3_13,
+      runtime,
       timeout: Duration.seconds(props.timeoutSeconds ?? 60),
       logRetention: props.logRetention,
       handler,
@@ -105,7 +116,7 @@ export class LambdaFunction extends lambda.Function {
 
     addCommonTags(ctx, this, name);
     addNagSuppression(this, [
-      { rule_id: 'AwsSolutions-L1', reason: 'Lambda runtime uses Python 3.13 by default.' },
+      { rule_id: 'AwsSolutions-L1', reason: RUNTIME_NAG_REASON.get(runtime) ?? `Lambda runtime is ${runtime.name}.` },
     ]);
   }
 }
@@ -280,11 +291,8 @@ export class CustomResourceProvider {
       timeoutSeconds: props.lambdaTimeoutSeconds ?? 60,
       role: this.lambdaRole,
       logRetentionRole: props.lambdaLogRetentionRole,
-      runtime: props.runtime ?? lambda.Runtime.PYTHON_3_13,
+      runtime: props.runtime,
     });
-    addNagSuppression(this.lambdaFunction, [
-      { rule_id: 'AwsSolutions-L1', reason: 'Python Runtime is selected for stability.' },
-    ]);
 
     for (const statement of props.policyStatements ?? []) {
       this.lambdaFunction.addToRolePolicy(statement);
@@ -305,22 +313,6 @@ export class CustomResourceProvider {
     });
     customResource.node.addDependency(this.lambdaFunction);
     return customResource;
-  }
-}
-
-export class CreateTagsCustomResource extends CustomResourceProvider {
-  constructor(ctx: IdeaContext, scope: Construct, lambdaLogRetentionRole?: iam.IRole) {
-    super(ctx, 'ec2-create-tags', scope, {
-      ideaCodeAsset: new IdeaCodeAsset('idea_custom_resource_create_tags'),
-      policyTemplateName: 'custom-resource-ec2-create-tags.yml',
-      resourceType: 'EC2CreateTags',
-      lambdaLogRetentionRole,
-    });
-  }
-
-  apply(name: string, resourceId: string, tags: Record<string, unknown>): CdkCustomResource {
-    const awsTags = Object.entries(tags).map(([key, value]) => ({ Key: key, Value: String(value) }));
-    return this.invoke(name, { ResourceId: resourceId, Tags: awsTags });
   }
 }
 

@@ -314,6 +314,14 @@ export class ClusterConfig {
     return this.moduleList.find((module) => module.module_id === moduleId);
   }
 
+  /**
+   * Puts one already-resolved row into the tree. A deploy writes settings to the table and then
+   * reads them back in the same process, so a row written mid-run is readable without a re-scan.
+   */
+  setEntry(key: string, value: unknown): void {
+    putKey(this.tree, key, value);
+  }
+
   setModuleId(moduleId: string): void {
     const info = this.moduleInfoById(moduleId);
     if (info === undefined) throw new GeneralException(`module not found for module_id: ${moduleId}`);

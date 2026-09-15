@@ -61,7 +61,6 @@ export class IdentityProviderStack extends IdeaBaseStack {
   readonly cluster: ExistingSocaCluster;
   idTokenClaimLambda: LambdaFunction | undefined;
   userPool: UserPool | undefined;
-  oauthCredentialsLambda: LambdaFunction | undefined;
   /** `cognito-idp:DescribeUserPool` of the deployed pool, read by `buildStack`. */
   private readonly describedUserPool: UserPoolDescription | undefined;
 
@@ -152,10 +151,6 @@ export class IdentityProviderStack extends IdeaBaseStack {
       role: idTokenClaimLambdaRole,
       logRetentionRole: this.cluster.getRole(LOG_RETENTION_ROLE_NAME),
     });
-    this.addNagSuppression(
-      [{ rule_id: 'AwsSolutions-L1', reason: 'Python Runtime is selected for stability.' }],
-      this.idTokenClaimLambda,
-    );
     this.idTokenClaimLambda.node.addDependency(idTokenClaimLambdaRole);
 
     this.userPool = new UserPool(this.context, `${this.clusterName}-user-pool`, this.stack, {
@@ -163,31 +158,6 @@ export class IdentityProviderStack extends IdeaBaseStack {
       userInvitation,
       lambdaTriggers: { preTokenGeneration: this.idTokenClaimLambda },
     });
-
-    // One lambda for the whole cluster: every module stack invokes it as a custom resource to
-    // fetch its own OAuth2 client id and secret, through the arn in the cluster settings below.
-    const lambdaName = 'oauth-credentials';
-    const oauthCredentialsLambdaRole = new Role(this.context, `${lambdaName}-role`, this.stack, {
-      description: `Role for auth credentials Lambda function for Cluster: ${this.clusterName}`,
-      assumedBy: ['lambda'],
-    });
-    oauthCredentialsLambdaRole.attachInlinePolicy(
-      new Policy(this.context, `${lambdaName}-policy`, this.stack, {
-        policyTemplateName: 'custom-resource-get-user-pool-client-secret.yml',
-      }),
-    );
-    this.oauthCredentialsLambda = new LambdaFunction(this.context, lambdaName, this.stack, {
-      ideaCodeAsset: new IdeaCodeAsset('idea_custom_resource_get_user_pool_client_secret'),
-      description: 'Get OAuth Credentials for a ClientId in UserPool',
-      timeoutSeconds: 180,
-      role: oauthCredentialsLambdaRole,
-      logRetentionRole: this.cluster.getRole(LOG_RETENTION_ROLE_NAME),
-    });
-    this.addNagSuppression(
-      [{ rule_id: 'AwsSolutions-L1', reason: 'Python Runtime is selected for stability.' }],
-      this.oauthCredentialsLambda,
-    );
-    this.oauthCredentialsLambda.node.addDependency(oauthCredentialsLambdaRole);
   }
 
   buildCognitoClusterSettings(): void {
@@ -199,7 +169,6 @@ export class IdentityProviderStack extends IdeaBaseStack {
       'cognito.domain_url': userPool.domain.baseUrl({
         fips: COGNITO_REQUIRE_FIPS_ENDPOINT_REGION_LIST.includes(this.awsRegion),
       }),
-      'cognito.oauth_credentials_lambda_arn': (this.oauthCredentialsLambda as LambdaFunction).functionArn,
     });
   }
 }

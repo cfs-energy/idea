@@ -3,11 +3,18 @@
  * config at synth time: there are no exports, no `Fn::ImportValue` and no outputs. The three
  * IAM policies take CDK's default `PolicyName`, which is the logical id, so the construct ids
  * here are load bearing twice over.
+ *
+ * Under the container flag the stack also runs the scheduler as a task on the container stack's
+ * capacity, with its PBS state on an elastic file system this stack owns. The task is built here
+ * because the application reads this module's own settings rows at boot, so it must not start
+ * before this stack has written them.
  */
 
-import { CustomResource, Duration, Fn, RemovalPolicy, Tags } from 'aws-cdk-lib';
+import { Aws, CustomResource, Duration, Fn, RemovalPolicy, Tags } from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as ecs from 'aws-cdk-lib/aws-ecs';
+import * as efs from 'aws-cdk-lib/aws-efs';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as route53 from 'aws-cdk-lib/aws-route53';
@@ -19,6 +26,26 @@ import type { StackBuildProps } from '../app.ts';
 import { IdeaBaseStack } from '../base-stack.ts';
 import { IDEA_TAG_CLUSTER_NAME, IDEA_TAG_MODULE_ID, IDEA_TAG_MODULE_NAME, IDEA_TAG_NODE_TYPE } from '../constructs/base.ts';
 import { InstanceProfile, Policy, Role, SQSQueue } from '../constructs/common.ts';
+import {
+  STREAM_PREFIX_APPLICATION,
+  STREAM_PREFIX_OPENPBS,
+  addStorageMounts,
+  adoptedLogDriver,
+  addLogTailContainer,
+  applicationTargetGroup,
+  attachApplicationFileLogs,
+  buildEc2Service,
+  buildExecutionRole,
+  buildTaskDefinition,
+  buildTaskRole,
+  commonEnvironment,
+  containerImage,
+  dockerLabels,
+  healthCheckGrace,
+  roleSizing,
+  taskStartAllowance,
+  type ContainerScope,
+} from '../constructs/container.ts';
 import { OAuthClientIdAndSecret } from '../constructs/directory-service.ts';
 import {
   ExistingSocaCluster,
@@ -31,6 +58,8 @@ import { buildBootstrapUserData } from '../userdata.ts';
 
 const MODULE_SCHEDULER = 'scheduler';
 const MODULE_CLUSTER_MANAGER = 'cluster-manager';
+/** PBS state and logs live on the scheduler task volume. */
+const SCHEDULER_PBS_HOME = '/var/spool/pbs';
 const NODE_TYPE_APP = 'app';
 const OS_AMAZONLINUX2 = 'amazonlinux2';
 const OS_AMAZONLINUX2023 = 'amazonlinux2023';
@@ -77,6 +106,9 @@ export class SchedulerStack extends IdeaBaseStack {
   clusterDnsRecordSet!: route53.RecordSet;
   externalEndpoint!: CustomResource;
   internalEndpoint!: CustomResource;
+  /** Present under the container flag: the scheduler task service and its target groups. */
+  containerService: ecs.Ec2Service | undefined;
+  private containerTargetGroups: elbv2.ApplicationTargetGroup[] = [];
 
   constructor(props: StackBuildProps) {
     super({
@@ -111,8 +143,25 @@ export class SchedulerStack extends IdeaBaseStack {
     // The container scheduler upserts this record itself, so the stack stops managing it as soon as
     // routing moves. An earlier retain-only deploy is what keeps the name alive across that handover.
     if (!this.ecsEnabled) this.buildRoute53RecordSet();
+    this.buildContainerTargetGroups();
     this.buildEndpoints();
+    this.buildContainerService();
     this.buildClusterSettings();
+  }
+
+  /** The input the shared container helpers take. */
+  private get containerScope(): ContainerScope {
+    return {
+      ctx: this.context,
+      stack: this.stack,
+      vpc: this.cluster.vpc,
+      privateSubnets: this.cluster.privateSubnets,
+    };
+  }
+
+  /** The service name, fixed so the settings resource can publish it without a reference. */
+  private get containerServiceName(): string {
+    return `${this.clusterName}-${this.moduleId}`;
   }
 
   /**
@@ -157,19 +206,8 @@ export class SchedulerStack extends IdeaBaseStack {
     });
     client.node.addDependency(resourceServer);
 
-    const oauthCredentialsLambdaArn = this.context.config.getString(
-      'identity-provider.cognito.oauth_credentials_lambda_arn',
-      undefined,
-      { required: true },
-    ) as string;
-    const clientSecret = new CustomResource(this.stack, `${this.moduleId}-creds`, {
-      serviceToken: oauthCredentialsLambdaArn,
-      properties: {
-        UserPoolId: this.userPool.userPoolId,
-        ClientId: client.userPoolClientId,
-      },
-      resourceType: 'Custom::GetOAuthCredentials',
-    });
+    // the client returns its own generated secret, so nothing has to read it back
+    const clientSecret = (client.node.defaultChild as cognito.CfnUserPoolClient).attrClientSecret;
 
     this.oauth2ClientSecret = new OAuthClientIdAndSecret(
       this.context,
@@ -177,7 +215,7 @@ export class SchedulerStack extends IdeaBaseStack {
       MODULE_SCHEDULER,
       this.stack,
       client.userPoolClientId,
-      clientSecret.getAttString('ClientSecret'),
+      clientSecret,
     );
   }
 
@@ -347,17 +385,255 @@ export class SchedulerStack extends IdeaBaseStack {
     securityGroup.node.tryRemoveChild(ingressRule.node.id);
   }
 
-  private ecsTargetGroupArn(index: number): string {
-    const targetGroupArns = this.context.config.getList<string>(
-      "ecs.scheduler.target_group_arns",
-      [],
-      { required: true },
+  /**
+   * The two IP target groups the container service registers with, created here because this is
+   * the stack that owns the endpoints routing to them.
+   *
+   * The fifteen-second deregistration delay is the scheduler's alone: its replacement stops the
+   * running task before the new one starts, so the wait before the old target is removed is time
+   * the batch server is down rather than time a draining connection gets to finish.
+   */
+  private buildContainerTargetGroups(): void {
+    if (!this.ecsEnabled) return;
+    const scope = this.containerScope;
+    this.containerTargetGroups = (['e', 'i'] as const).map((suffix) =>
+      applicationTargetGroup(scope, {
+        constructId: `sched-ecs-${suffix}-target-group`,
+        targetGroupName: this.getTargetGroupName(`sched-ecs-${suffix}`),
+        port: 8443,
+        healthCheckPath: '/healthcheck',
+        deregistrationDelaySeconds: 15,
+      }),
     );
-    const targetGroupArn = targetGroupArns[index];
-    if (targetGroupArn === undefined || targetGroupArn === "") {
-      throw new Error(`ecs.scheduler.target_group_arns[${index}] is required when ecs.enabled is true`);
-    }
-    return targetGroupArn;
+  }
+
+  /** The target group one endpoint forwards to: 0 external, 1 internal. */
+  private containerTargetGroupArn(index: number): string {
+    const targetGroup = this.containerTargetGroups[index];
+    if (targetGroup === undefined) throw new Error(`scheduler target group ${index} was not created`);
+    return targetGroup.targetGroupArn;
+  }
+
+  /**
+   * The scheduler task on the container stack's capacity.
+   *
+   * The batch server holds a single-writer lock on its state directory, so two scheduler tasks
+   * cannot run at once: the second to start fails to take the lock. A maximum of one hundred
+   * leaves no room for a replacement to start before the running task stops, which is why this one
+   * service differs from the other four, and it is also why the task carries no distinct-instance
+   * placement. The cost is that a replacement is a short batch server outage rather than a
+   * handover: running jobs survive, submissions fail while it is down.
+   */
+  private buildContainerService(): void {
+    if (!this.ecsEnabled) return;
+    const scope = this.containerScope;
+    const sizing = roleSizing(scope, 'scheduler');
+    const { role: taskRole, policy: taskPolicy } = buildTaskRole(scope, {
+      constructId: 'scheduler-task-role',
+      name: `${this.moduleId}-task-role`,
+      description: 'IAM role assigned to the scheduler ECS task',
+      managedPolicyArns: this.getEc2InstanceManagedPolicies(),
+      policyConstructId: 'scheduler-task-policy',
+      policyTemplateName: 'scheduler.yml',
+      policyModuleId: this.moduleId,
+      // The template names the roles the task may pass to a compute node or a spot fleet request.
+      // Both belong to this stack, so they are references rather than names rebuilt by rule.
+      policyVars: (role) => ({
+        compute_node_role_arn: this.computeNodeRole.roleArn,
+        scheduler_role_arn: role.roleArn,
+        spot_fleet_request_role_arn: this.spotFleetRequestRole.roleArn,
+      }),
+    });
+    const executionRole = buildExecutionRole(
+      scope,
+      'scheduler-task-execution-role',
+      `${this.moduleId}-task-execution-role`,
+    );
+    const taskDefinition = buildTaskDefinition(scope, 'scheduler-task-definition', {
+      executionRole,
+      taskRole,
+    });
+    const logGroupName = `/${this.clusterName}/${this.moduleId}`;
+    const container = taskDefinition.addContainer('scheduler-container', {
+      cpu: sizing.cpu,
+      dockerLabels: dockerLabels(scope, 'scheduler'),
+      environment: {
+        ...commonEnvironment(scope, {
+          role: 'scheduler',
+          moduleId: this.moduleId,
+          moduleName: MODULE_SCHEDULER,
+        }),
+        IDEA_ROUTE53_ZONE_ID: this.context.config.getString(
+          'cluster.route53.private_hosted_zone_id',
+          undefined,
+          { required: true },
+        ) as string,
+        IDEA_SCHEDULER_DNS_NAME: `scheduler.${this.clusterName}.${this.awsRegion}.local`,
+        PBS_HOME: SCHEDULER_PBS_HOME,
+        PBS_NODE_FAIL_REQUEUE: '600',
+      },
+      healthCheck: {
+        command: [
+          'CMD-SHELL',
+          'qstat -B && curl --fail --silent --show-error --unix-socket /run/idea.sock --max-time 4 --header \'Content-Type: application/json\' --data \'{"header":{"namespace":"Scheduler.ListActiveJobs"}}\' http://localhost/scheduler/api/v1',
+        ],
+        interval: Duration.seconds(30),
+        retries: 3,
+        // The container check has no allowance but this one, on a first start and on every
+        // replacement, so it matches the load balancer grace. A shorter period would let the
+        // platform kill the container while `roles/scheduler.sh` is still inside its own wait for
+        // the batch server.
+        startPeriod: taskStartAllowance('scheduler'),
+      },
+      image: containerImage(scope),
+      logging: adoptedLogDriver(scope, 'scheduler-log-group', logGroupName, STREAM_PREFIX_APPLICATION),
+      memoryLimitMiB: sizing.memory,
+    });
+    container.addPortMappings({ containerPort: 8443, protocol: ecs.Protocol.TCP });
+    this.addSchedulerStorage(taskDefinition, container, taskRole);
+    addStorageMounts(scope, taskDefinition, container);
+    attachApplicationFileLogs(scope, { idPrefix: 'scheduler', logGroupName, taskDefinition, container });
+    addLogTailContainer(scope, taskDefinition, {
+      containerId: 'scheduler-openpbs-logs',
+      directories: [
+        `${SCHEDULER_PBS_HOME}/server_logs`,
+        `${SCHEDULER_PBS_HOME}/sched_logs`,
+        `${SCHEDULER_PBS_HOME}/server_priv/accounting`,
+      ],
+      logGroupName: `${logGroupName}/openpbs`,
+      logGroupConstructId: 'scheduler-openpbs-log-group',
+      streamPrefix: STREAM_PREFIX_OPENPBS,
+      sourceVolume: 'scheduler-pbs',
+      containerPath: SCHEDULER_PBS_HOME,
+      readOnly: true,
+    });
+
+    const service = buildEc2Service(scope, {
+      constructId: 'scheduler-service',
+      serviceName: this.containerServiceName,
+      taskDefinition,
+      desiredCount: sizing.desired,
+      securityGroups: [this.schedulerSecurityGroup],
+      minHealthyPercent: 0,
+      maxHealthyPercent: 100,
+      distinctInstances: false,
+      healthCheckGracePeriod: healthCheckGrace('scheduler'),
+      dependencies: [taskRole, taskPolicy, executionRole, this.externalEndpoint, this.internalEndpoint],
+    });
+    for (const targetGroup of this.containerTargetGroups) service.attachToApplicationTargetGroup(targetGroup);
+    this.containerService = service;
+  }
+
+  /** Adds the scheduler-only EFS file system that keeps PBS state across a task replacement. */
+  private addSchedulerStorage(
+    taskDefinition: ecs.Ec2TaskDefinition,
+    container: ecs.ContainerDefinition,
+    taskRole: iam.IRole,
+  ): void {
+    const fileSystemSecurityGroup = new ec2.SecurityGroup(
+      this.stack,
+      'scheduler-pbs-file-system-security-group',
+      {
+        allowAllOutbound: false,
+        description: 'Allows NFS only from the scheduler task and its host',
+        vpc: this.cluster.vpc,
+      },
+    );
+    fileSystemSecurityGroup.addIngressRule(
+      this.schedulerSecurityGroup,
+      ec2.Port.tcp(2049),
+      'Allow NFS from the scheduler task',
+    );
+    // Which interface carries the mount, the task's or the container host's, is a property of the
+    // container agent rather than of this template, and the mount fails silently from the wrong one.
+    // The host group belongs to the container stack, which publishes its id, and the file system
+    // policy below is what actually limits access: only the scheduler task role, and only through
+    // its access point.
+    fileSystemSecurityGroup.addIngressRule(
+      ec2.SecurityGroup.fromSecurityGroupId(
+        this.stack,
+        'ecs-host-security-group',
+        this.context.config.getString('ecs.host_security_group_id', undefined, {
+          required: true,
+        }) as string,
+      ),
+      ec2.Port.tcp(2049),
+      'Allow NFS from the container host that mounts for the scheduler task',
+    );
+
+    const fileSystem = new efs.FileSystem(this.stack, 'scheduler-pbs-file-system', {
+      encrypted: true,
+      securityGroup: fileSystemSecurityGroup,
+      vpc: this.cluster.vpc,
+      vpcSubnets: { subnets: this.cluster.privateSubnets },
+    });
+    fileSystem.applyRemovalPolicy(RemovalPolicy.RETAIN);
+    const accessPoint = fileSystem.addAccessPoint('scheduler-pbs-access-point', {
+      createAcl: { ownerGid: '0', ownerUid: '0', permissions: '0700' },
+      path: '/pbs',
+      posixUser: { gid: '0', uid: '0' },
+    });
+    accessPoint.applyRemovalPolicy(RemovalPolicy.RETAIN);
+
+    const clientActions = [
+      'elasticfilesystem:ClientMount',
+      'elasticfilesystem:ClientWrite',
+      'elasticfilesystem:ClientRootAccess',
+    ];
+    // The policy is a property of the file system, so naming the file system in it resolves an
+    // attribute of the resource the policy belongs to. CloudFormation counts that self reference as
+    // a circular dependency and refuses the template. A file system policy applies only to the file
+    // system carrying it, so the resource element does not have to name it. The same rule rules out
+    // naming the access point, so the condition below requires the shape of one instead, which is
+    // the same restriction while this file system has the single access point created above.
+    const OWN_FILE_SYSTEM = '*';
+    const accessPointOfThisFileSystem =
+      `arn:${Aws.PARTITION}:elasticfilesystem:${Aws.REGION}:${Aws.ACCOUNT_ID}:access-point/*`;
+    fileSystem.addToResourcePolicy(
+      new iam.PolicyStatement({
+        actions: clientActions,
+        conditions: { Bool: { 'elasticfilesystem:AccessedViaMountTarget': 'true' } },
+        principals: [new iam.ArnPrincipal(taskRole.roleArn)],
+        resources: [OWN_FILE_SYSTEM],
+      }),
+    );
+    fileSystem.addToResourcePolicy(
+      new iam.PolicyStatement({
+        actions: clientActions,
+        conditions: { ArnNotEquals: { 'aws:PrincipalArn': taskRole.roleArn } },
+        effect: iam.Effect.DENY,
+        principals: [new iam.AnyPrincipal()],
+        resources: [OWN_FILE_SYSTEM],
+      }),
+    );
+    fileSystem.addToResourcePolicy(
+      new iam.PolicyStatement({
+        actions: clientActions,
+        // A negated string condition is true when the key is absent, so a mount that presents no
+        // access point at all is denied by this statement as well.
+        conditions: {
+          StringNotLike: { 'elasticfilesystem:AccessPointArn': accessPointOfThisFileSystem },
+        },
+        effect: iam.Effect.DENY,
+        principals: [new iam.AnyPrincipal()],
+        resources: [OWN_FILE_SYSTEM],
+      }),
+    );
+
+    taskDefinition.addVolume({
+      efsVolumeConfiguration: {
+        authorizationConfig: { accessPointId: accessPoint.accessPointId, iam: 'ENABLED' },
+        fileSystemId: fileSystem.fileSystemId,
+        rootDirectory: '/',
+        transitEncryption: 'ENABLED',
+      },
+      name: 'scheduler-pbs',
+    });
+    container.addMountPoints({
+      containerPath: SCHEDULER_PBS_HOME,
+      readOnly: false,
+      sourceVolume: 'scheduler-pbs',
+    });
   }
 
   buildEc2Instance(): void {
@@ -508,7 +784,7 @@ export class SchedulerStack extends IdeaBaseStack {
   buildEndpoints(): void {
     const config = this.context.config;
     const externalTargetGroupArn = this.ecsEnabled
-      ? this.ecsTargetGroupArn(0)
+      ? this.containerTargetGroupArn(0)
       : new elbv2.CfnTargetGroup(
           this.stack,
           `${this.moduleId}-external-target-group`,
@@ -560,7 +836,7 @@ export class SchedulerStack extends IdeaBaseStack {
     const internalEndpointPathPatterns = requiredList(config, 'scheduler.endpoints.internal.path_patterns');
 
     const internalTargetGroupArn = this.ecsEnabled
-      ? this.ecsTargetGroupArn(1)
+      ? this.containerTargetGroupArn(1)
       : new elbv2.CfnTargetGroup(
           this.stack,
           `${this.moduleId}-internal-target-group`,
@@ -640,7 +916,10 @@ export class SchedulerStack extends IdeaBaseStack {
       clusterSettings['bedrock.project_pass_role_arn'] = this.arnBuilder.getProjectRoleArn();
     }
 
-    this.updateClusterSettings(clusterSettings);
+    const settings = this.updateClusterSettings(clusterSettings);
+    // The task reads `client_id`, `private_dns_name` and the rest of this module's rows at boot,
+    // so it must not start before they are written.
+    this.containerService?.node.addDependency(settings);
   }
 }
 

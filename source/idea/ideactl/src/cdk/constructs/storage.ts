@@ -123,16 +123,12 @@ export interface AmazonEFSProps {
  * per subnet, **scoped to the file system**, so the logical ID repeats the file-system segment.
  *
  * `DeletionPolicy` comes from `<efs>.removal_policy` and no `UpdateReplacePolicy` is set.
- *
- * CloudWatch monitoring is always undefined, so it creates no resources.
  */
 export class AmazonEFS {
   readonly ctx: IdeaContext;
   readonly name: string;
   readonly fileSystem: efs.CfnFileSystem;
   readonly mountTargets: efs.CfnMountTarget[];
-  /** Present in configuration but unused. */
-  readonly cloudWatchMonitoring: undefined;
 
   constructor(ctx: IdeaContext, name: string, scope: Construct, props: AmazonEFSProps) {
     this.ctx = ctx;
