@@ -13,6 +13,8 @@ from ideadatamodel.scheduler.scheduler_model import (
     SocaCapacityType,
 )
 from ideascheduler.app.metrics.job_completion_metrics import JobCompletionMetrics
+from ideadatamodel import SocaAmount
+from ideadatamodel.scheduler.scheduler_model import SocaJobEstimatedBOMCost
 
 import arrow
 
@@ -108,3 +110,51 @@ def test_dimensions_are_the_cost_dashboard_slices(context):
         'job_outcome': 'success',
         'gpu': 'false',
     }
+
+
+class _Recorder:
+    def __init__(self):
+        self.entries = []
+
+    def publish(self, metric_data):
+        self.entries.extend(metric_data)
+
+
+def _published(context, monkeypatch, provider, job):
+    recorder = _Recorder()
+    monkeypatch.setattr(
+        context.service_registry(),
+        'get_service',
+        lambda name: recorder if name == 'metrics-service' else None,
+    )
+    monkeypatch.setattr(
+        JobCompletionMetrics, 'metrics_provider', property(lambda self: provider)
+    )
+    JobCompletionMetrics(context=context, job=job).publish()
+    return recorder.entries
+
+
+def test_detail_cost_carries_the_job_identity_and_only_off_cloudwatch(
+    context, monkeypatch
+):
+    job = _job(
+        exit_status=0,
+        job_uid='42-r1',
+        estimated_bom_cost=SocaJobEstimatedBOMCost(total=SocaAmount(amount=1.25)),
+    )
+    entries = _published(context, monkeypatch, 'dogstatsd', job)
+    by_name = {e['MetricName']: e for e in entries}
+    detail = {d['Name']: d['Value'] for d in by_name['job.detail.cost']['Dimensions']}
+    assert detail['job_id'] == '42'
+    assert detail['job_uid'] == '42-r1'
+    assert detail['instance_type'] == 'c7g.2xlarge'
+    assert detail['project'] == 'fusion', 'the aggregate slices ride along'
+    assert by_name['job.detail.cost']['Value'] == 1.25
+    # the aggregate families stay bounded: no job identity on them
+    aggregate = {d['Name'] for d in by_name['job.cost']['Dimensions']}
+    assert 'job_id' not in aggregate and 'job_uid' not in aggregate
+
+    cloudwatch = {
+        e['MetricName'] for e in _published(context, monkeypatch, 'cloudwatch', job)
+    }
+    assert 'job.cost' in cloudwatch and 'job.detail.cost' not in cloudwatch

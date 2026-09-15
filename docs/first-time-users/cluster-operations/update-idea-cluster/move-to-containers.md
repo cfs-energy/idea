@@ -37,7 +37,7 @@ From this release the cluster manager, the scheduler and the virtual desktop con
 
 ## Metrics to Datadog
 
-With `metrics_provider: dogstatsd` the modules send their own metrics to a Datadog agent over DogStatsD. Names are prefixed `idea.` and tagged `idea_cluster`, `idea_module` and `component`; the scheduler publishes `idea.job.count`, `idea.job.duration_seconds`, `idea.job.cost`, `idea.job.cost_ondemand`, `idea.job.savings` and `idea.job.cpu_efficiency` as each job completes. On a container cluster the host pool runs the agent as a daemon on every host, every task shares its socket, and the agent adds its own container and host metrics tagged `idea_cluster:<cluster>` with the module in `service`. None of this uses the Datadog AWS integration; that stays a per-account setting on the Datadog side.
+With `metrics_provider: dogstatsd` the modules send their own metrics to a Datadog agent over DogStatsD. Names are prefixed `idea.` and tagged `idea_cluster`, `idea_module` and `component`; the scheduler publishes `idea.job.count`, `idea.job.duration_seconds`, `idea.job.cost`, `idea.job.cost_ondemand`, `idea.job.savings` and `idea.job.cpu_efficiency` as each job completes, sliced by project, owner, queue, instance family and outcome, plus `idea.job.detail.cost` per job, tagged `job_id`, `job_uid` and `instance_type`, for drill-down (not on CloudWatch, which prices every dimension set as its own metric). On a container cluster the host pool runs the agent as a daemon on every host, every task shares its socket, and the agent adds its own container and host metrics tagged `idea_cluster:<cluster>` with the module in `service`. None of this uses the Datadog AWS integration; that stays a per-account setting on the Datadog side.
 
 ### Once per cluster
 

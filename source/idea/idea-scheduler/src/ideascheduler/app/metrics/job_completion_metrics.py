@@ -1,4 +1,4 @@
-from ideadatamodel import SocaJob
+from ideadatamodel import SocaJob, constants
 from ideasdk.context import SocaContext
 from ideasdk.metrics import BaseMetrics
 from ideasdk.utils import Utils
@@ -143,3 +143,23 @@ class JobCompletionMetrics(BaseMetrics):
                 MetricType='Summary',
                 Unit='None',
             )
+
+        # One series per job, the drill-down the dashboards used to take from logs. The
+        # job_uid is the unique key: a requeued job shares its job_id and can share an end
+        # second, and a store keeps one value per (metric, tags, time). CloudWatch prices
+        # every dimension set as a metric of its own, so this stays off there.
+        if (
+            cost is not None
+            and cost.total is not None
+            and cost.total.amount is not None
+            and self.metrics_provider != constants.METRICS_PROVIDER_CLOUDWATCH
+        ):
+            detail = ('job_id', 'job_uid', 'instance_type')
+            self.with_dimension('job_id', self.tag(job.job_id))
+            self.with_dimension('job_uid', self.tag(job.job_uid))
+            self.with_dimension('instance_type', self.tag(self.instance_type(job)))
+            try:
+                self.count(MetricName='job.detail.cost', Value=cost.total.amount)
+            finally:
+                for name in detail:
+                    self.without_dimension(name)
