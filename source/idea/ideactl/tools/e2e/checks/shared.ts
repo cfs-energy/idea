@@ -20,13 +20,21 @@ export async function waitUntil(
   predicate: () => Promise<boolean>,
 ): Promise<boolean> {
   const deadline = context.now() + timeoutSeconds * 1_000;
+  let lastError: unknown;
   while (context.now() <= deadline) {
-    if (await predicate()) {
-      return true;
+    try {
+      if (await predicate()) {
+        return true;
+      }
+    } catch (error) {
+      // A transport blip mid-poll (an unstable link, a listener re-pointing) is not the fact
+      // under test. Keep polling until the deadline; the last error is reported if it never clears.
+      lastError = error;
+      context.output(`observed transient error while waiting for ${description}: ${(error as Error).message}`);
     }
     await context.sleep((context.options.pollSeconds ?? 10) * 1_000);
   }
-  context.output(`observed timeout while waiting for ${description}`);
+  context.output(`observed timeout while waiting for ${description}${lastError === undefined ? "" : ` (last error: ${(lastError as Error).message})`}`);
   return false;
 }
 
@@ -162,6 +170,7 @@ export async function waitForServiceRecovery(
   targetGroup: string,
 ): Promise<CheckResult> {
   const cluster = requiredOption(context.options, "cluster");
+  const startedAt = context.now();
   let observed = "not checked";
   const recovered = await waitUntil(
     context,
@@ -174,7 +183,31 @@ export async function waitForServiceRecovery(
       return serviceCounts.desired > 0 && serviceCounts.running >= serviceCounts.desired && healthy >= serviceCounts.desired;
     },
   );
-  return recovered ? passed(observed) : failed(observed);
+  return recovered ? passed(observed, `recovered in ${context.now() - startedAt}ms`) : failed(observed);
+}
+
+/**
+ * After a task replacement the connection opened before it either stayed open, or must be replaceable.
+ * A flow through the network load balancer is pinned to one task, and an idle flow is closed by the
+ * gateway while a slow service recovers, so a closed connection is what a DCV client sees before it
+ * reconnects; the guarantee under test is that the reconnection succeeds.
+ */
+export async function connectionAfterReplacement(
+  context: CheckContext,
+  connection: GatewayConnection,
+  replaced: string,
+): Promise<{ connection: GatewayConnection; observed: string; passed: boolean }> {
+  if (connection.isOpen()) {
+    return { connection, observed: "connection remained open", passed: true };
+  }
+  context.output(`ACTION the connection closed during ${replaced} replacement; open a new gateway TLS connection`);
+  const startedAt = context.now();
+  try {
+    const next = await openGatewayConnection(context);
+    return { connection: next, observed: `connection closed during ${replaced} replacement; a new connection opened in ${context.now() - startedAt}ms`, passed: true };
+  } catch (error) {
+    return { connection, observed: `connection closed during ${replaced} replacement and a new one failed: ${(error as Error).message}`, passed: false };
+  }
 }
 
 /** Waits for an ECS service to restore its desired running task count. */

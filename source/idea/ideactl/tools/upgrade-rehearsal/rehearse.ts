@@ -810,7 +810,7 @@ function buildStages(input: {
     stage(9, "MODELED", "container flag, stable scheduler name, target image, and scheduler desired count boundaries modeled"),
     stage(10, "TEMPLATE_ONLY", "container stack template synthesized, runtime health requires a real cluster"),
     stage(11, "REAL_CLUSTER_ONLY", "fixture has no scheduler archive or target shared-directory state"),
-    stage(12, "TEMPLATE_ONLY", "scheduler service target template exists, task and PBS health require a real cluster"),
+    stage(12, "TEMPLATE_ONLY", "scheduler stack target template carries the scheduler service, task and PBS health require a real cluster"),
     stage(13, "TEMPLATE_ONLY", "cluster-manager routed template compared against the deployed and the hostless targets"),
     stage(14, "TEMPLATE_ONLY", "cluster-manager final hostless target template synthesized"),
     stage(15, "TEMPLATE_ONLY", "desktop routed template compared against the deployed and the hostless targets"),
@@ -937,10 +937,12 @@ export async function rehearseUpgrade(options: RehearseOptions = {}): Promise<Up
       });
     }
 
+    // One shared-capacity row per consumer, each published by the container stack and each
+    // required by that stack when it builds its own service.
     const earlyReads = [
-      ["cluster-manager", "ecs.cluster-manager.target_group_arns"],
-      ["scheduler", "ecs.scheduler.target_group_arns"],
-      ["vdc", "ecs.vdc.target_group_arns"],
+      ["cluster-manager", "ecs.cluster_name"],
+      ["scheduler", "ecs.host_security_group_id"],
+      ["vdc", "ecs.namespace_id"],
     ] as const;
     for (const [consumer, key] of earlyReads) {
       if (settings.get("ecs.enabled") === true && !settings.has(key)) {
@@ -1166,15 +1168,18 @@ export async function rehearseUpgrade(options: RehearseOptions = {}): Promise<Up
         }
       }
 
-      if (ecsStagedTemplate !== undefined) {
+      // The scheduler task belongs to the scheduler stack, so the scheduler-ready shape is that
+      // stack re-synthesized once the desired count has been raised off zero.
+      const schedulerModule = targetById.get("scheduler");
+      if (ecsStagedTemplate !== undefined && schedulerModule !== undefined) {
         writeFileSync(configFile, scanJson(settings));
         process.env.CDK_OUTDIR = join(root, "cdk.out.ecs-scheduler-ready");
         try {
           const app = await buildApp({
             clusterName,
             awsRegion: region,
-            moduleId: "ecs",
-            moduleName: "ecs",
+            moduleId: schedulerModule.id,
+            moduleName: "scheduler",
             deploymentId: DEPLOYMENT_ID,
             terminationProtection: true,
             configFile,
@@ -1182,7 +1187,7 @@ export async function rehearseUpgrade(options: RehearseOptions = {}): Promise<Up
           });
           ecsReadyTemplate = app
             .synth()
-            .getStackArtifact(`${clusterName}-ecs`).template as Template;
+            .getStackArtifact(`${clusterName}-${schedulerModule.id}`).template as Template;
         } catch (error) {
           ecsReadyProblem = errorMessage(error);
         }
@@ -1200,9 +1205,10 @@ export async function rehearseUpgrade(options: RehearseOptions = {}): Promise<Up
     }
 
     for (const dependency of findLaterWriterReads(rehearsalOrder, syntheses)) {
-      // A container-stack read of a later writer is the deploy-order cycle: the stack it reads from
-      // reads the target groups the container stack publishes, so neither can go first. The stack
-      // is being changed to own those resources instead, which removes the read.
+      // A container-stack read of a later writer was the deploy-order cycle: the stack it read
+      // from read the target groups the container stack published, so neither could go first. The
+      // module stacks own their own services and target groups now, so the container stack reads
+      // nothing an application stack writes and this should no longer fire for it.
       const cycle = dependency.consumer === "ecs";
       findings.push({
         stage: 10,
@@ -1224,8 +1230,19 @@ export async function rehearseUpgrade(options: RehearseOptions = {}): Promise<Up
         stage: 12,
         code: "SCHEDULER_READY_SYNTHESIS_BLOCKED",
         severity: "BLOCKING",
-        summary: "the scheduler-ready container template did not synthesize",
+        summary: "the scheduler-ready scheduler template did not synthesize",
         evidence: [ecsReadyProblem],
+      });
+    } else if (ecsReadyTemplate !== undefined && resourceIds(ecsReadyTemplate, "AWS::ECS::Service").length !== 1) {
+      findings.push({
+        stage: 12,
+        code: "SCHEDULER_READY_SERVICE_MISSING",
+        severity: "BLOCKING",
+        summary: "the scheduler-ready template carries no container scheduler service",
+        evidence: [
+          `${SCHEDULER_DESIRED_KEY} is ${String(settings.get(SCHEDULER_DESIRED_KEY))} at this stage`,
+          "the scheduler stack owns the scheduler task, so its target template must contain one service",
+        ],
       });
     }
 
@@ -1234,7 +1251,6 @@ export async function rehearseUpgrade(options: RehearseOptions = {}): Promise<Up
         stack.template === undefined ? [] : [[stack.moduleId, stack.template] as const],
       ),
     );
-    if (ecsReadyTemplate !== undefined) templatesByModule.set("ecs", ecsReadyTemplate);
     const oldTemplates = new Map<string, Template>();
     for (const module of currentModuleRows.filter((entry) => entry.type !== "config")) {
       const file = join(liveDir, `${clusterName}-${module.module_id}.json`);
@@ -1262,29 +1278,18 @@ export async function rehearseUpgrade(options: RehearseOptions = {}): Promise<Up
       }
     }
 
+    // Each of these rows changes from an autoscaling-group identity to a container-service
+    // identity. The service is created by the stack that publishes the row, so the row is the
+    // service name spelled out rather than a reference, and the container cluster it names is the
+    // one row the target synthesis reads to build it.
     const semanticContracts = [
-      {
-        moduleId: "cluster-manager",
-        setting: "asg_arn",
-        targetRead: "ecs.cluster-manager.service_arn",
-        stage: 14,
-      },
-      {
-        moduleId: "vdc",
-        setting: "controller.asg_arn",
-        targetRead: "ecs.vdc.service_arn",
-        stage: 16,
-      },
-      {
-        moduleId: "vdc",
-        setting: "dcv_broker.asg_arn",
-        targetRead: "ecs.dcv-broker.service_arn",
-        stage: 16,
-      },
+      { moduleId: "cluster-manager", setting: "asg_arn", targetRead: "ecs.cluster_name", stage: 14 },
+      { moduleId: "vdc", setting: "controller.asg_arn", targetRead: "ecs.cluster_name", stage: 16 },
+      { moduleId: "vdc", setting: "dcv_broker.asg_arn", targetRead: "ecs.cluster_name", stage: 16 },
       {
         moduleId: "vdc",
         setting: "dcv_connection_gateway.asg_arn",
-        targetRead: "ecs.dcv-gateway.service_arn",
+        targetRead: "ecs.cluster_name",
         stage: 16,
       },
     ] as const;

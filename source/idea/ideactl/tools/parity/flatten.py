@@ -3,7 +3,7 @@
 
 The layer-A oracle for the config generator port. A line-for-line copy of
 `ConfigGenerator.read_config_from_files` + `traverse_config`
-(idea-administrator/src/ideaadministrator/app/config_generator.py:646-714) and
+(the deleted Python administrator's app/config_generator.py:646-714) and
 `is_null_value` (idea-sdk/src/ideasdk/config/soca_config.py:19-24), deliberately
 NOT importing ideaadministrator so the oracle does not depend on the code under
 test or on its venv. PyYAML only, for the same YAML 1.1 parse Python does.
@@ -67,14 +67,18 @@ def traverse_config(config_entries, prefix, config, filter_key_prefix=None):
         if isinstance(value, dict):
             traverse_config(config_entries, path_prefix, value, filter_key_prefix)
         else:
-            if not is_empty(filter_key_prefix) and not path_prefix.startswith(filter_key_prefix):
+            if not is_empty(filter_key_prefix) and not path_prefix.startswith(
+                filter_key_prefix
+            ):
                 continue
             config_entries.append({'key': path_prefix, 'value': value})
 
 
 def flatten(config_dir, key_prefix=None):
     entries = []
-    traverse_config(entries, '', read_config_from_files(config_dir), filter_key_prefix=key_prefix)
+    traverse_config(
+        entries, '', read_config_from_files(config_dir), filter_key_prefix=key_prefix
+    )
     flat = {}
     for entry in entries:
         if entry['key'] in flat and flat[entry['key']] != entry['value']:

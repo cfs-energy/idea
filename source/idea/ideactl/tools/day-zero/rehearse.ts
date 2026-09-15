@@ -14,13 +14,15 @@ import { fileURLToPath } from "node:url";
 
 import { IdeaCodeAsset } from "../../src/cdk/code-asset.ts";
 import { buildApp } from "../../src/cdk/app.ts";
-import { deploymentOrder } from "../../src/cli/deployment-helper.ts";
+import { certificateHooks, deploymentOrder } from "../../src/cli/deployment-helper.ts";
 import { ConfigKeyNotFound, ClusterConfig, type ModuleInfo } from "../../src/config/cluster-config.ts";
 import { convertConfigToKeyValuePairs, generateConfig, type ConfigEntry, type ModuleEntry } from "../../src/config/generator.ts";
 import { loadValuesFile, type UserValues } from "../../src/config/values.ts";
 import { CALLER_IDENTITY_KEY } from "../../src/cdk/synth-reads.ts";
 
 const DEPLOYMENT_ID = "00000000-0000-4000-8000-000000000000";
+/** Rows the deploy tool writes before a module's stack runs, so no stack produces them. */
+const DEPLOY_TOOL_ORIGIN = "deploy-tool";
 
 type Settings = Map<string, unknown>;
 type SettingOrigins = Map<string, string>;
@@ -98,8 +100,7 @@ function settingValue(key: string, accountId: string): string {
   // segment. Both `..._vault_arn` and `..._vault.arn` spellings occur in the settings.
   if (key.includes("backup_vault")) return `arn:aws:backup:us-east-2:${accountId}:backup-vault:${name}`;
   // Plural spellings carry a list of ARNs, and a consumer that parses one element rejects a bare
-  // placeholder. `target_group_arns` is the case that matters: the construct reading it pulls the
-  // region and account out of each element, so the singular branch below has to cover the plural too.
+  // placeholder, so the plural branch emits an element of the right shape rather than a bare name.
   if (key.endsWith("_arns") || key.endsWith(".arns")) {
     return `arn:aws:elasticloadbalancing:us-east-2:${accountId}:targetgroup/${name}/0123456789abcdef`;
   }
@@ -222,7 +223,49 @@ function appendPublishedSettings(
 }
 
 function dependencies(reads: Set<string>, origins: SettingOrigins): string[] {
-  return [...new Set([...reads].map((key) => origins.get(key)).filter((source): source is string => source !== undefined && source !== "values"))].sort();
+  // `values` and `deploy-tool` are not stacks, so neither is a module that has to deploy first.
+  const notAStack = new Set(["values", DEPLOY_TOOL_ORIGIN]);
+  return [...new Set([...reads].map((key) => origins.get(key)).filter((source): source is string => source !== undefined && !notAStack.has(source)))].sort();
+}
+
+/**
+ * The certificate ARNs the deploy tool publishes before this module's stack synthesizes. The hooks
+ * come from the deploy path itself, so a certificate added there is rehearsed without a second
+ * declaration; only the placeholder ARNs are local, and they carry the shape their consumers parse.
+ */
+function appendCertificateSettings(
+  module: ModuleEntry,
+  modules: ModuleEntry[],
+  settings: Settings,
+  origins: SettingOrigins,
+  clusterName: string,
+  awsRegion: string,
+  accountId: string,
+): string[] {
+  const config = new ClusterConfig(
+    [...settings].map(([key, value]) => ({ key, value })),
+    modules.map(toModuleInfo),
+  );
+  const published: string[] = [];
+  for (const hook of certificateHooks(config, clusterName, toModuleInfo(module))) {
+    const name = hook.request.certificateName;
+    const rows: Array<[string, string]> = [
+      // A complete secret ARN: the gateway task definition parses one, and a placeholder without
+      // the six-character suffix is rejected at synthesis.
+      [hook.certificateKey, `arn:aws:secretsmanager:${awsRegion}:${accountId}:secret:${name}-certificate-DayZer`],
+      [hook.privateKeyKey, `arn:aws:secretsmanager:${awsRegion}:${accountId}:secret:${name}-private-key-DayZer`],
+    ];
+    if (hook.acmKey !== undefined) {
+      rows.push([hook.acmKey, `arn:aws:acm:${awsRegion}:${accountId}:certificate/00000000-0000-4000-8000-000000000000`]);
+    }
+    for (const [key, value] of rows) {
+      const fullKey = config.getRealKey(key);
+      settings.set(fullKey, value);
+      origins.set(fullKey, DEPLOY_TOOL_ORIGIN);
+      published.push(fullKey);
+    }
+  }
+  return published;
 }
 
 /**
@@ -389,6 +432,7 @@ export async function rehearseDayZero(options: RehearseOptions): Promise<DayZero
           continue;
         }
 
+        appendCertificateSettings(module, modules, settings, origins, clusterName, awsRegion, accountId);
         writeFileSync(configFile, scanJson(settings));
         process.env.CDK_OUTDIR = join(root, `cdk.out.${module.id}`);
         const trace = traceReads();

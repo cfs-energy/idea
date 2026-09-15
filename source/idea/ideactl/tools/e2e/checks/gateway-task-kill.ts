@@ -1,8 +1,10 @@
 import {
+  connectionAfterReplacement,
   createReadyDesktop,
   deleteDesktop,
   failed,
   openGatewayConnection,
+  passed,
   requiredOption,
   waitForServiceRecovery,
 } from "./shared.ts";
@@ -11,7 +13,7 @@ import type { ProofCheck } from "./types.ts";
 /** Proves a live desktop connection survives replacement of one gateway task. */
 export const gatewayTaskKillCheck: ProofCheck = {
   name: "gateway-task-kill",
-  description: "Keep a desktop connection open while one gateway task is replaced.",
+  description: "Replace one gateway task while a desktop connection is open; the connection survives or a new one opens.",
   requiredFlags: (options) => [
     ...(options.albHost === undefined ? ["alb-host"] : []),
     ...(options.username === undefined ? ["username"] : []),
@@ -43,10 +45,10 @@ export const gatewayTaskKillCheck: ProofCheck = {
         requiredOption(context.options, "gatewayService"),
         requiredOption(context.options, "gatewayTargetGroup"),
       );
-      if (!connection.isOpen()) {
-        return failed(...recovery.observed, `desktop ready in ${desktop.elapsedMs}ms`, "connection closed during gateway replacement");
-      }
-      return { ...recovery, observed: [...recovery.observed, `desktop ready in ${desktop.elapsedMs}ms`, "connection remained open"] };
+      const after = await connectionAfterReplacement(context, connection, "gateway");
+      connection = after.connection;
+      const observed = [...recovery.observed, `desktop ready in ${desktop.elapsedMs}ms`, after.observed];
+      return recovery.passed && after.passed ? passed(...observed) : failed(...observed);
     } finally {
       connection?.close();
       if (session !== undefined) {

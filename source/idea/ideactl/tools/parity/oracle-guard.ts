@@ -13,6 +13,8 @@ import { setTimeout as wait } from "node:timers/promises";
 export type OracleDirectoryGuard = Readonly<{
   verifyAndClose: () => Promise<void>;
   close: () => void;
+  /** How many watcher events have arrived so far; a test waits on it before a transient write. */
+  observedEvents: () => number;
 }>;
 
 /**
@@ -77,13 +79,31 @@ export function guardOracleDirectory(directory: string): OracleDirectoryGuard {
     watcher.close();
   };
 
+  /** Resolves once no event has arrived for 200 milliseconds, or after two seconds. */
+  const quiet = async (): Promise<void> => {
+    const deadline = Date.now() + 2000;
+    let seen = events.length;
+    let quietSince = Date.now();
+    while (Date.now() < deadline) {
+      await wait(20);
+      if (events.length !== seen) {
+        seen = events.length;
+        quietSince = Date.now();
+      } else if (Date.now() - quietSince >= 200) {
+        return;
+      }
+    }
+  };
+
   const verifyAndClose = async (): Promise<void> => {
     let final: Map<string, string>;
     try {
-      // Filesystem notifications can arrive after the write has already been removed.
-      await wait(100);
+      // Filesystem notifications can arrive after the write has already been removed, and under
+      // load they arrive late, so wait until the watcher has been quiet for a while rather than
+      // for a fixed interval.
+      await quiet();
       final = snapshot(directory);
-      await wait(100);
+      await quiet();
     } finally {
       close();
     }
@@ -98,5 +118,5 @@ export function guardOracleDirectory(directory: string): OracleDirectoryGuard {
     }
   };
 
-  return { verifyAndClose, close };
+  return { verifyAndClose, close, observedEvents: () => events.length };
 }

@@ -6,11 +6,15 @@ import { IdeaApiClient } from "./api.ts";
 import { apiLoadCheck } from "./checks/api-load.ts";
 import { brokerTaskKillCheck } from "./checks/broker-task-kill.ts";
 import { desktopEndToEndCheck } from "./checks/desktop-end-to-end.ts";
+import { desktopSshCheck } from "./checks/desktop-ssh.ts";
+import { desktopStreamCheck } from "./checks/desktop-stream.ts";
 import { gatewayLoadCheck } from "./checks/gateway-load.ts";
 import { gatewayTaskKillCheck } from "./checks/gateway-task-kill.ts";
 import { jobBurstCheck } from "./checks/job-burst.ts";
+import { schedulerImageUpgradeCheck } from "./checks/scheduler-image-upgrade.ts";
 import { schedulerReplacementCheck } from "./checks/scheduler-replacement.ts";
 import type {
+  DcvSessionOutcome,
   ApiClient,
   CheckContext,
   CheckName,
@@ -27,9 +31,12 @@ import { CHECK_NAMES } from "./checks/types.ts";
 
 const CHECKS: ProofCheck[] = [
   desktopEndToEndCheck,
+  desktopSshCheck,
+  desktopStreamCheck,
   gatewayTaskKillCheck,
   brokerTaskKillCheck,
   schedulerReplacementCheck,
+  schedulerImageUpgradeCheck,
   jobBurstCheck,
   apiLoadCheck,
   gatewayLoadCheck,
@@ -84,6 +91,7 @@ export function parseProofMatrixOptions(argv: string[], environment: NodeJS.Proc
     "expected-exit-status",
     "gateway-connections",
     "gateway-hold-seconds",
+    "bastion-host",
     "gateway-host",
     "gateway-max-failures",
     "gateway-max-p95-ms",
@@ -102,6 +110,7 @@ export function parseProofMatrixOptions(argv: string[], environment: NodeJS.Proc
     "scheduler-service",
     "scheduler-task",
     "token-dir",
+    "upgrade-command",
     "username",
   ]);
 
@@ -158,6 +167,7 @@ export function parseProofMatrixOptions(argv: string[], environment: NodeJS.Proc
     apiRps: optionalPositiveNumber(read("api-rps"), "api-rps"),
     apiSeconds: optionalPositiveNumber(read("api-seconds"), "api-seconds"),
     apiWorkers: optionalPositiveInteger(read("api-workers"), "api-workers"),
+    bastionHost: read("bastion-host"),
     brokerService: read("broker-service"),
     brokerTargetGroup: read("broker-target-group"),
     brokerTask: read("broker-task"),
@@ -185,6 +195,7 @@ export function parseProofMatrixOptions(argv: string[], environment: NodeJS.Proc
     replacementTimeoutSeconds: optionalPositiveNumber(read("replacement-timeout-seconds"), "replacement-timeout-seconds"),
     schedulerService: read("scheduler-service"),
     schedulerTask: read("scheduler-task"),
+    upgradeCommand: read("upgrade-command"),
     tokenDirectory: read("token-dir"),
     username: read("username"),
   };
@@ -266,6 +277,7 @@ export function usage(): string {
     "  --gateway-host <host>                IDEA_E2E_GATEWAY_HOST",
     "  --gateway-port <number>              IDEA_E2E_GATEWAY_PORT, default 443",
     "  --desktop-request <json>             IDEA_E2E_DESKTOP_REQUEST",
+    "  --bastion-host <host>                IDEA_E2E_BASTION_HOST",
     "",
     "ECS replacement flags:",
     "  --cluster <name>                     IDEA_E2E_CLUSTER",
@@ -278,6 +290,7 @@ export function usage(): string {
     "  --broker-target-group <id>           IDEA_E2E_BROKER_TARGET_GROUP",
     "  --scheduler-service <name>           IDEA_E2E_SCHEDULER_SERVICE",
     "  --scheduler-task <id>                IDEA_E2E_SCHEDULER_TASK",
+    "  --upgrade-command <shell>            IDEA_E2E_UPGRADE_COMMAND, run with sh -c by scheduler-image-upgrade",
     "",
     "Timing and job flags:",
     "  --poll-seconds <number>              IDEA_E2E_POLL_SECONDS, default 10",
@@ -378,6 +391,43 @@ class TlsGatewayConnector implements GatewayConnector {
       socket.once("error", (error) => finish(error));
     });
   }
+
+  public openSession(input: { url: string; sessionId: string; authenticationToken: string; timeoutMs: number }): Promise<DcvSessionOutcome> {
+    return openDcvSession(input);
+  }
+}
+
+/** The DCV web client's opening exchange over Node's WebSocket, framed as dcv.js frames it. */
+async function openDcvSession(input: { url: string; sessionId: string; authenticationToken: string; timeoutMs: number }): Promise<DcvSessionOutcome> {
+  const { connectionRequestFrame, decodeServerReply } = await import("./dcv-setup.ts");
+  return new Promise((resolve, reject) => {
+    const startedAt = Date.now();
+    const socket = new WebSocket(input.url, "dcv");
+    socket.binaryType = "arraybuffer";
+    let settled = false;
+    const finish = (outcome: DcvSessionOutcome | Error): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { socket.close(1000); } catch { /* already closed */ }
+      if (outcome instanceof Error) reject(outcome); else resolve(outcome);
+    };
+    const timer = setTimeout(() => finish(new Error(`no reply within ${input.timeoutMs}ms`)), input.timeoutMs);
+    socket.addEventListener("open", () => {
+      socket.send(connectionRequestFrame(input.sessionId, input.authenticationToken, "idea proof matrix"));
+    });
+    socket.addEventListener("message", (event) => {
+      const data = event.data as ArrayBuffer | Blob | string;
+      if (typeof data === "string" || data instanceof Blob) { finish(new Error("unexpected text frame")); return; }
+      try {
+        finish({ elapsedMs: Date.now() - startedAt, reply: decodeServerReply(new Uint8Array(data)) });
+      } catch (error) {
+        finish(error as Error);
+      }
+    });
+    socket.addEventListener("close", (event) => finish(new Error(`closed with code ${event.code}${event.reason ? `: ${event.reason}` : ""}`)));
+    socket.addEventListener("error", () => finish(new Error("socket error")));
+  });
 }
 
 /** Runs existing E2E tools without a shell and captures their final output. */

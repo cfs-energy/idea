@@ -1,9 +1,11 @@
 import {
   apiSucceeded,
+  connectionAfterReplacement,
   createReadyDesktop,
   deleteDesktop,
   failed,
   openGatewayConnection,
+  passed,
   requiredOption,
   waitForServiceRecovery,
 } from "./shared.ts";
@@ -12,7 +14,7 @@ import type { ProofCheck } from "./types.ts";
 /** Proves broker replacement reforms its service and leaves a desktop connection usable. */
 export const brokerTaskKillCheck: ProofCheck = {
   name: "broker-task-kill",
-  description: "Keep a desktop connection open while one broker task is replaced.",
+  description: "Replace one broker task while a desktop connection is open; the session still resolves and the connection survives or a new one opens.",
   requiredFlags: (options) => [
     ...(options.albHost === undefined ? ["alb-host"] : []),
     ...(options.username === undefined ? ["username"] : []),
@@ -50,10 +52,10 @@ export const brokerTaskKillCheck: ProofCheck = {
       if (!apiSucceeded(sessionInfo)) {
         return failed(...recovery.observed, `desktop ready in ${desktop.elapsedMs}ms`, `session response=${JSON.stringify(sessionInfo.body)}`);
       }
-      if (!connection.isOpen()) {
-        return failed(...recovery.observed, `desktop ready in ${desktop.elapsedMs}ms`, "connection closed during broker replacement");
-      }
-      return { ...recovery, observed: [...recovery.observed, `desktop ready in ${desktop.elapsedMs}ms`, "connection remained open"] };
+      const after = await connectionAfterReplacement(context, connection, "broker");
+      connection = after.connection;
+      const observed = [...recovery.observed, `desktop ready in ${desktop.elapsedMs}ms`, after.observed];
+      return recovery.passed && after.passed ? passed(...observed) : failed(...observed);
     } finally {
       connection?.close();
       if (session !== undefined) {

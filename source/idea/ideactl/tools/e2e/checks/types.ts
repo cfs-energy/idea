@@ -2,9 +2,12 @@ import type { JsonObject, JsonValue } from "../api.ts";
 
 export const CHECK_NAMES = [
   "desktop-end-to-end",
+  "desktop-ssh",
+  "desktop-stream",
   "gateway-task-kill",
   "broker-task-kill",
   "scheduler-replacement",
+  "scheduler-image-upgrade",
   "job-burst",
   "api-load",
   "gateway-load",
@@ -27,8 +30,20 @@ export interface GatewayConnection {
   isOpen(): boolean;
 }
 
+/** What the gateway answered a DCV connection request with, and how long it took. */
+export interface DcvSessionOutcome {
+  elapsedMs: number;
+  reply: import("../dcv-setup.ts").DcvServerReply;
+}
+
 export interface GatewayConnector {
   connect(host: string, port: number, insecureTls: boolean): Promise<GatewayConnection>;
+  /**
+   * Opens a DCV web session the way the web client does: the `/ws` WebSocket with the `dcv`
+   * subprotocol, then the connection request. Resolves with the server's first reply; rejects
+   * when the socket closes or nothing arrives in time.
+   */
+  openSession?(input: { url: string; sessionId: string; authenticationToken: string; timeoutMs: number }): Promise<DcvSessionOutcome>;
 }
 
 export interface ProcessResult {
@@ -48,6 +63,7 @@ export interface ProofMatrixOptions {
   apiRps?: number;
   apiSeconds?: number;
   apiWorkers?: number;
+  bastionHost?: string;
   brokerService?: string;
   brokerTargetGroup?: string;
   brokerTask?: string;
@@ -76,6 +92,7 @@ export interface ProofMatrixOptions {
   schedulerService?: string;
   schedulerTask?: string;
   tokenDirectory?: string;
+  upgradeCommand?: string;
   username?: string;
 }
 

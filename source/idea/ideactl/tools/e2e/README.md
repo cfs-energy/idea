@@ -77,13 +77,29 @@ node tools/e2e/proof-matrix.ts \
 The available checks are:
 
 - `desktop-end-to-end`, create a desktop, wait for `READY`, verify a gateway connection, and delete it.
-- `gateway-task-kill`, preserve a desktop connection while a gateway task is replaced.
-- `broker-task-kill`, preserve a desktop connection while a broker task is replaced.
+- `desktop-stream`, create a desktop and open a DCV session to it through the gateway exactly as the
+  web client does (the `/ws` WebSocket with the `dcv` subprotocol and the connection request); the
+  desktop's DCV server must answer with a confirm. An abort names the gateway's reason, such as
+  `SERVER_UNREACHABLE`. This is the only check that exercises the gateway-to-desktop leg.
+- `desktop-ssh`, create a desktop and SSH into it the way a user does: the key the portal issues
+  (`Auth.GetUserPrivateKey`), through the bastion (`--bastion-host`), to the desktop's private
+  address. The key lives only in a temporary directory for the check's duration.
+- `gateway-task-kill`, replace one gateway task while a desktop connection is open. A flow through
+  the network load balancer is pinned to one task, so the connection either survives (it was on the
+  other task) or closes and a new one must open once the service has recovered; both pass, and the
+  observation says which.
+- `broker-task-kill`, replace one broker task while a desktop connection is open; the session's
+  connection info must still resolve afterwards, and the connection is judged as above (the check's
+  idle flow was closed within the minute the broker took to recover, so it usually reopens).
 - `scheduler-replacement`, replace a scheduler task while a witnessed job runs, and prove the run
   was carried across rather than requeued. The job script exits 17 on its own second execution, so
   a requeued job cannot reach the expected exit status, and the run's start time is compared across
   the replacement wherever the job API reports it. It needs the job to outlive the replacement, so
   `--job-sleep-seconds` defaults to 1800 for this check.
+- `scheduler-image-upgrade`, run the operator's own upgrade command (`--upgrade-command`, through
+  `sh -c`) while a witnessed job runs, then apply the scheduler-replacement proof to it. This is
+  the check for the routine upgrade path: a new image tag rolled through `upgrade-cluster` must not
+  requeue a running job.
 - `job-burst`, submit concurrent short jobs and verify their exit statuses.
 - `api-load`, run `load-api.ts` and enforce its p95 and error thresholds.
 - `gateway-load`, run `load-gateway.ts` and enforce its handshake and failure thresholds.

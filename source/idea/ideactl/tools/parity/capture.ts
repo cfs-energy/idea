@@ -17,6 +17,10 @@
 // The two table dumps keep the DynamoDB attribute-value shape `ClusterConfig.fromFile`
 // expects; synth-reads.json is keyed the way `replaySynthReads` looks reads up.
 //
+// A release bump does not recapture: the reference is the last Python-deployed shape and the
+// administrator that produced it is gone. Run `node tools/parity/retag-release.ts <from> <to>` to
+// move the reference's release string with the tree.
+//
 // --live is the only path that touches AWS and is untested here (no credentials in the
 // port tree); --from-local is the credential-free half of it. Exit 0 written, 2 usage or
 // unreadable input.

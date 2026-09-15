@@ -101,7 +101,7 @@ export const schedulerReplacementCheck: ProofCheck = {
 };
 
 /** Polls the active job until the batch server reports it running. */
-async function waitForRunningIdentity(context: CheckContext, job: SubmittedJob): Promise<RunIdentity | undefined> {
+export async function waitForRunningIdentity(context: CheckContext, job: SubmittedJob): Promise<RunIdentity | undefined> {
   let identity: RunIdentity | undefined;
   const running = await waitUntil(context, context.options.readyTimeoutSeconds ?? 1_800, `job ${job.jobId} to start`, async () => {
     identity = await activeRunIdentity(context.api, job);
@@ -115,7 +115,7 @@ async function waitForRunningIdentity(context: CheckContext, job: SubmittedJob):
  * rerun status is reported as a requeue rather than as an unexpected exit code, because
  * that is what it means.
  */
-async function waitForWitnessedFinish(
+export async function waitForWitnessedFinish(
   context: CheckContext,
   job: SubmittedJob,
 ): Promise<{ observed: string[]; passed: boolean }> {
