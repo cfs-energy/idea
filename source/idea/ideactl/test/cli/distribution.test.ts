@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 
 import * as yaml from "js-yaml";
 import { ideaVersion } from "../../src/version.ts";
+import { optionalService } from "../support/fixtures.ts";
 
 interface DistributionMetadata {
   selfContained: boolean;
@@ -115,7 +116,12 @@ function requireMetadata(value: object): asserts value is DistributionMetadata {
   }
 }
 
+// The two-target release build runs only on macOS. A public checkout on another platform skips
+// this file; anywhere else the missing build host is a loud failure.
+const canBuild = optionalService(process.platform === "darwin", "macOS build host for the two-target release build", "run this file on macOS");
+
 before(() => {
+  if (!canBuild) return;
   mkdirSync(BUILD_ROOT, { recursive: true });
   mkdirSync(CLEAN_ROOT, { recursive: true });
   mkdirSync(CLEAN_HOME, { recursive: true });
@@ -190,7 +196,7 @@ after(() => {
   rmSync(TEST_ROOT, { recursive: true, force: true });
 });
 
-test("release archive contains one self-contained executable with a valid checksum", () => {
+test("release archive contains one self-contained executable with a valid checksum", { skip: !canBuild }, () => {
   assert.equal(metadata.selfContained, true);
   assert.deepEqual(metadata.runTimeRequirements, []);
   assert.ok(metadata.sizes.executableBytes > metadata.sizes.embeddedSupportArchiveBytes);
@@ -205,7 +211,7 @@ test("release archive contains one self-contained executable with a valid checks
   assert.deepEqual(listing.stdout.trim().split("\n"), ["ideactl"]);
 });
 
-test("the copied executable runs and renders config without a runtime or package manager", () => {
+test("the copied executable runs and renders config without a runtime or package manager", { skip: !canBuild }, () => {
   assertExtractedExecutable(EXECUTABLE, metadata.sizes.executableBytes);
   assert.deepEqual(readdirSync(CLEAN_ROOT).sort(), ["ideactl", "values.yml"]);
 
@@ -250,7 +256,7 @@ test("the copied executable runs and renders config without a runtime or package
   );
 });
 
-test("release automation builds exactly the two agreed targets and parses", () => {
+test("release automation builds exactly the two agreed targets and parses", { skip: !canBuild }, () => {
   const workflowDirectory = join(REPOSITORY_ROOT, ".github", "workflows");
   const workflowNames = [
     "build_push.yaml",

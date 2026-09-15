@@ -95,4 +95,3 @@ test("a required capture ends the file quietly in a public checkout and loudly e
     rmSync(root, { force: true, recursive: true });
   }
 });
-

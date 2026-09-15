@@ -8,5 +8,6 @@
   "test/stacks/retain-stateful.test.ts": "Captured deployed templates are private and optional; with none present there is nothing to itemise.",
   "test/parity/shape-matrix.test.ts": "Private alternate-shape references are optional.",
   "test/cli/upgrade-rehearsal.test.ts": "The captured development fixture is private and optional.",
-  "test/stacks/cluster-config-db.test.ts": "The captured synchronization oracle and local database service are optional."
+  "test/stacks/cluster-config-db.test.ts": "The captured synchronization oracle and local database service are optional.",
+  "test/cli/distribution.test.ts": "The two-target release build runs only on macOS; a public checkout on another platform cannot build it."
 }
