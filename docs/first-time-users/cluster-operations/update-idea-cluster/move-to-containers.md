@@ -97,6 +97,18 @@ Spend comes from Cost Explorer, commercial partition only: every trailing full d
 
 The deploy grants the cluster-manager role `ce:GetCostAndUsage`, `ce:GetTags` and `ce:GetDimensionValues`; the tag keys default to `idea:ModuleId`, `idea:Project` and `idea:JobOwner` and follow `cluster-manager.metrics.cost.*`.
 
+For GovCloud billing, or a commercial billing account with no cluster, use cost-only mode in the commercial account that can read the bill. It runs the same collector and a Datadog sidecar in one Fargate task, with no cluster settings table. Enable historical ingestion for `idea.cost` as above, activate the cost allocation tags in that billing account, and deploy:
+
+```bash
+ideactl cost-collector deploy --aws-region us-east-1 --stack-name gov-spend \
+  --cluster-name <GOVCLOUD_CLUSTER_NAME> \
+  --control-plane-image <CONTROL_PLANE_IMAGE> \
+  --agent-image <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/datadog-agent@sha256:<DIGEST> \
+  --datadog-api-key-secret-arn <SECRET_ARN> --subnet-ids <SUBNET_ID> <SUBNET_ID>
+```
+
+Use images supporting Linux x86_64 and an API key secret in the deployment region. Subnets must be in one VPC and all public or all private. Public subnets receive a public IP; private subnets need outbound access through NAT. The default interval is six hours with a three-day lookback and the same tag keys as the cluster collector; `--by-account` adds linked account spend. `--cluster-name` labels the account's bill; it does not filter it to that cluster. Remove it with `ideactl cost-collector destroy --aws-region us-east-1 --stack-name gov-spend`.
+
 Storage levels come from each FSx for NetApp ONTAP file system in `shared-storage` that carries metrics credentials: an ONTAP user that can read `/api/storage/quota/reports` and `/api/storage/volumes` on the SVM management endpoint, its password in a Secrets Manager secret tagged `idea:ClusterName=<CLUSTER_NAME>` and `idea:ModuleName=cluster-manager`, which the cluster-manager role can already read. `idea.storage.used_bytes` and `idea.storage.files_used` are per `user`, `volume` and `qtree`; `idea.storage.volume_size_bytes`, `idea.storage.volume_used_bytes` and `idea.storage.volume_tier_bytes` (`tier:ssd`, `tier:capacity_pool`) per volume; every point carries `svm` and `filesystem`.
 
 ```bash

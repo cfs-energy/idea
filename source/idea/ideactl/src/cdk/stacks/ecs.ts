@@ -17,6 +17,7 @@ import { IdeaBaseStack } from "../base-stack.ts";
 import { CustomResourceProvider, LOG_RETENTION_DAYS } from "../constructs/common.ts";
 import {
   DOGSTATSD_SOCKET,
+  requirePrivateEcrDigest,
   buildExecutionRole,
   ecsTasksPrincipal,
   storageMounts,
@@ -444,13 +445,7 @@ export class EcsStack extends IdeaBaseStack {
 
   /** Returns a digest-pinned image hosted in a private ECR repository. */
   private datadogImage(): string {
-    const image = this.requiredString("ecs.datadog.image");
-    const privateEcrDigest =
-      /^[0-9]{12}\.dkr\.ecr(?:-fips)?\.[a-z0-9-]+\.amazonaws\.com(?:\.cn)?\/[^@]+@sha256:[0-9a-f]{64}$/;
-    if (!privateEcrDigest.test(image)) {
-      throw new Error("ecs.datadog.image must be a digest-pinned private ECR image");
-    }
-    return image;
+    return requirePrivateEcrDigest(this.requiredString("ecs.datadog.image"), "ecs.datadog.image");
   }
 
   /** Creates the optional host-network observability daemon. */

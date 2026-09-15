@@ -5,8 +5,8 @@ set -euo pipefail
 
 # A role passed as the first argument overrides IDEA_CONTAINER_ROLE.
 case "${1:-}" in
-  ideactl|cluster-manager|vdc|scheduler|dcv-broker|dcv-gateway) ROLE="$1"; shift ;;
-  *) ROLE="${IDEA_CONTAINER_ROLE:?IDEA_CONTAINER_ROLE is required: ideactl|cluster-manager|vdc|scheduler|dcv-broker|dcv-gateway}" ;;
+  ideactl|cost-metrics|cluster-manager|vdc|scheduler|dcv-broker|dcv-gateway) ROLE="$1"; shift ;;
+  *) ROLE="${IDEA_CONTAINER_ROLE:?IDEA_CONTAINER_ROLE is required: ideactl|cost-metrics|cluster-manager|vdc|scheduler|dcv-broker|dcv-gateway}" ;;
 esac
 
 # Module packages share an ideaserver command, so run each module's main directly.
@@ -67,6 +67,7 @@ esac
 
 case "${ROLE}" in
   ideactl)         exec node /opt/idea/ideactl/dist/src/cli/main.js "$@" ;;
+  cost-metrics)    exec python3.13 -m ideaclustermanager.app.metrics.standalone ;;
   cluster-manager) run_module ideaclustermanager ;;
   vdc)             run_module ideavirtualdesktopcontroller ;;
   scheduler)       exec /opt/idea/roles/scheduler.sh ;;

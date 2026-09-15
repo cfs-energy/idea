@@ -19,6 +19,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 ([Move the control plane to containers](https://docs.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/move-to-containers))
 
 ### **✨ New Features**
+* **Cost-only deployment**: `ideactl cost-collector deploy|destroy` runs account spend collection and a Datadog sidecar in one Fargate task in a commercial billing account, including bills for GovCloud clusters
 * **Container Control Plane**: The control plane modules run as ECS services on a small Graviton host pool instead of one host each, from a single `idea-control-plane` image, on clusters with `enable_ecs: true`
 * **Rolling Upgrades**: Point `ecs.image` at a new release and run `upgrade-cluster`; each service rolls to a new task definition revision behind its load balancer, a job running through the scheduler roll finishes normally, and desktop connections reconnect through the gateway
 * **ideactl**: The administrator is a TypeScript tool with the same commands as before; it synthesizes the same CloudFormation templates as the Python administrator, checked by a parity gate against the deployed templates of real clusters

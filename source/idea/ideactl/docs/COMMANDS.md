@@ -887,3 +887,55 @@ Commander built-in. Prints help for the program or for a named command.
 **Usage:** `ideactl help [command]`
 
 **Example:** `ideactl help deploy`
+
+## `cost-collector deploy`
+
+Deploy standalone account spend collection in a commercial billing account, without cluster settings tables.
+
+**Usage:** `ideactl cost-collector deploy [options]`
+
+| Flag | Value | Default | Required |
+| --- | --- | --- | --- |
+| `--aws-region <region>` | yes | none | yes |
+| `--aws-profile <profile>` | yes | none | no |
+| `--stack-name <name>` | yes | none | yes |
+| `--cluster-name <name>` | yes | none | yes |
+| `--control-plane-image <image>` | yes | none | yes |
+| `--agent-image <image>` | yes | none | yes |
+| `--datadog-api-key-secret-arn <arn>` | yes | none | yes |
+| `--subnet-ids <ids...>` | yes | none | yes |
+| `--interval-hours <hours>` | yes | `6` | no |
+| `--lookback-days <days>` | yes | `3` | no |
+| `--module-tag <key>` | yes | `idea:ModuleId` | no |
+| `--project-tag <key>` | yes | `idea:Project` | no |
+| `--owner-tag <key>` | yes | `idea:JobOwner` | no |
+| `--by-account` | no | `false` | no |
+| `--allow-replacement <logical-id>` | yes, repeatable | none | no |
+
+**Reads:** caller identity, subnet route tables and CloudFormation change sets. **Changes:** one stack containing a log group, ECS cluster, Fargate service, two-container task, security group and IAM roles. Deploy prepares a change set and applies the existing guard before execution; task definition revisions are allowed. It waits for stack completion.
+
+The agent image must be a digest-pinned private ECR reference. Both images must support Linux x86_64. The secret must contain the raw Datadog API key, reside in the deployment region, and permit the execution role to decrypt it if a custom KMS key policy restricts access. Subnets must share a VPC and be all public or all private. Public IPs are assigned when the effective route tables have an internet gateway route; private subnets need NAT access. The service stops its old task before starting a replacement to prevent duplicate collection. The cluster name is only the `idea_cluster` metric tag, not a spend filter. Historical ingestion for `idea.cost` must be enabled in Datadog.
+
+**Example:**
+
+```bash
+ideactl cost-collector deploy --aws-region us-east-1 --stack-name gov-spend \
+  --cluster-name gov-cluster --control-plane-image <CONTROL_PLANE_IMAGE> \
+  --agent-image <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/datadog-agent@sha256:<DIGEST> \
+  --datadog-api-key-secret-arn <SECRET_ARN> --subnet-ids <SUBNET_ID>
+```
+
+## `cost-collector destroy`
+
+Remove only the named collector stack. No image, secret or subnet flags are needed.
+
+**Usage:** `ideactl cost-collector destroy [options]`
+
+| Flag | Value | Default | Required |
+| --- | --- | --- | --- |
+| `--aws-region <region>` | yes | none | yes |
+| `--aws-profile <profile>` | yes | none | no |
+| `--stack-name <name>` | yes | none | yes |
+| `--force` | no | `false` | no |
+
+**Reads:** caller identity and the named stack. **Changes:** deletes the collector stack and its logs after confirmation; `--force` skips the prompt. The supplied secret and image repositories remain. **Example:** `ideactl cost-collector destroy --aws-region us-east-1 --stack-name gov-spend`

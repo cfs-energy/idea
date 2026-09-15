@@ -26,6 +26,7 @@ import {
   type Deps,
   type PromptChoice,
 } from './cdk-invoker.ts';
+import { registerCostCollectorCommands } from './commands/cost-collector.ts';
 import { registerCdkCommands } from './commands/cdk.ts';
 import {
   configGenerate,
@@ -553,6 +554,7 @@ const program = new Command('ideactl')
   registerConfigCommands(program, deps);
   registerCdkCommands(program, deps);
   registerDeployCommands(program, deps);
+  registerCostCollectorCommands(program, deps);
   registerReplaceCommands(program, deps);
   registerStatusCommands(program, deps);
   registerUpgradeCommands(program, createLiveUpgradeDeps(deps));

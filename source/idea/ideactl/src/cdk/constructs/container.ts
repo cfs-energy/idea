@@ -220,6 +220,15 @@ export function buildTaskDefinition(
 /** Where the metrics agent daemon listens and every task sends: a socket on a host path both mount. */
 export const DOGSTATSD_SOCKET = "/var/run/datadog/dsd.socket";
 
+export function requirePrivateEcrDigest(image: string, setting: string): string {
+  const privateEcrDigest =
+    /^[0-9]{12}\.dkr\.ecr(?:-fips)?\.[a-z0-9-]+\.amazonaws\.com(?:\.cn)?\/[^@]+@sha256:[0-9a-f]{64}$/;
+  if (!privateEcrDigest.test(image)) {
+    throw new Error(`${setting} must be a digest-pinned private ECR image`);
+  }
+  return image;
+}
+
 /** Common task environment values. */
 export function commonEnvironment(
   scope: ContainerScope,
