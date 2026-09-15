@@ -35,6 +35,23 @@ From this release the cluster manager, the scheduler and the virtual desktop con
 * The bastion has a new public address. Anything that pinned the old one needs the new one.
 * `./idea-admin.sh check-cluster-status --cluster-name <CLUSTER_NAME> --aws-region <REGION>` should report every module healthy.
 
+## Metrics to Datadog
+
+The modules can send their metrics to a Datadog agent over DogStatsD, and the host pool can run that agent as a daemon on every host. Both are off by default.
+
+1. Copy the agent image into a private ECR repository in the cluster's account and note its digest. The agent runs with the host's Docker socket and process namespace, so the stack accepts only a digest-pinned image from a private repository.
+2. Store the Datadog API key in Secrets Manager.
+3. Set the cluster settings and run `upgrade-cluster`:
+
+```yaml
+ecs.datadog.enabled: true
+ecs.datadog.image: <account>.dkr.ecr.<region>.amazonaws.com/datadog/agent@sha256:<digest>
+ecs.datadog.api_key_secret_arn: arn:aws:secretsmanager:<region>:<account>:secret:<name>
+metrics.provider: dogstatsd
+```
+
+Every task then mounts the agent's socket at `/var/run/datadog/dsd.socket` and the modules send to it. Metric names are prefixed `idea.` and tagged `idea_cluster`, `idea_module` and `component`; the scheduler publishes `idea.job.count`, `idea.job.duration_seconds`, `idea.job.cost`, `idea.job.cost_ondemand`, `idea.job.savings` and `idea.job.cpu_efficiency` as each job completes. The agent's own container and host metrics arrive tagged `idea_cluster:<cluster>`, with the service name in `service`. Without the daemon, `metrics.dogstatsd.url` points the modules at an agent you run elsewhere.
+
 ## Routine upgrades from here
 
 Point `ecs.image` at the new release's image and run `upgrade-cluster` without `--drain`. Each service rolls to a new task definition revision behind its load balancer; a job running through the scheduler roll finishes normally. The upgrade refuses any change that would replace or remove a stateful resource and names it, and accepts a task definition revision by name, since the previous revision is kept.

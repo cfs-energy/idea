@@ -26,6 +26,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 * **Scheduler Cutover Gate**: `upgrade-cluster` reads the host scheduler's PBS job inventory over Systems Manager before the container cutover and refuses a non-empty one; `--drain` closes submission through the maintenance flag, waits, upgrades and reopens; `--drain-timeout-minutes` and `--skip-drain-check`
 * **Proof Matrix**: `tools/e2e/proof-matrix.ts` proves a running cluster with nine checks: desktop end to end, desktop SSH through the bastion, gateway and broker task replacement, scheduler replacement and image upgrade with a witnessed job, job burst, API load and gateway load
 * **Offline Upgrade Rehearsal**: `tools/parity/upgrade-dry-run.ts` replays `upgrade-cluster` against a captured cluster and lists every write it would make, without touching an account
+* **Datadog Metrics**: `metrics.provider: dogstatsd` sends the modules' metrics, including per-job cost, duration and CPU efficiency from the scheduler, to a Datadog agent over DogStatsD; on a container cluster `ecs.datadog.enabled` runs the agent as a daemon on every host from a digest-pinned image in the account's ECR
 
 ### **🔧 Improvements**
 * **Upgrades**: The scheduler's DNS record is retained with a policy-only stack update before the container cutover, so the container scheduler takes the name over without CloudFormation deleting it; the container module's module-set registration is held until the last stack deploys, so the running portal keeps working through the upgrade
