@@ -17,14 +17,18 @@ from ideascheduler.app.metrics.job_completion_metrics import JobCompletionMetric
 import arrow
 
 
-def _job(exit_status=0, cpus=4, wall_secs=3600, cpu_time_secs=None, started=True, **kwargs):
+def _job(
+    exit_status=0, cpus=4, wall_secs=3600, cpu_time_secs=None, started=True, **kwargs
+):
     start = arrow.get('2026-09-09T10:00:00+00:00').datetime
     runs = []
     if cpu_time_secs is not None:
         runs.append(
             SocaJobExecutionRun(
                 run_id='1',
-                resources_used=SocaJobExecutionResourcesUsed(cpu_time_secs=cpu_time_secs),
+                resources_used=SocaJobExecutionResourcesUsed(
+                    cpu_time_secs=cpu_time_secs
+                ),
             )
         )
     return SocaJob(
@@ -35,8 +39,12 @@ def _job(exit_status=0, cpus=4, wall_secs=3600, cpu_time_secs=None, started=True
         queue_type='compute',
         exit_status=exit_status,
         start_time=start if started else None,
-        end_time=arrow.get(start).shift(seconds=wall_secs).datetime if started else None,
-        params=SocaJobParams(cpus=cpus, gpus=0, base_os='rhel9', instance_types=['c7g.2xlarge']),
+        end_time=arrow.get(start).shift(seconds=wall_secs).datetime
+        if started
+        else None,
+        params=SocaJobParams(
+            cpus=cpus, gpus=0, base_os='rhel9', instance_types=['c7g.2xlarge']
+        ),
         execution_hosts=[
             SocaJobExecutionHost(
                 instance_type='c7g.2xlarge',
@@ -64,11 +72,26 @@ def test_duration_is_wall_clock_from_the_job_stamps():
 
 def test_cpu_efficiency_is_used_over_allocated_and_drops_nonsense():
     # 4 cpus for an hour, 3 cpu-hours used
-    assert JobCompletionMetrics.cpu_efficiency(_job(cpus=4, wall_secs=3600, cpu_time_secs=10800)) == 0.75
+    assert (
+        JobCompletionMetrics.cpu_efficiency(
+            _job(cpus=4, wall_secs=3600, cpu_time_secs=10800)
+        )
+        == 0.75
+    )
     # hyperthread accounting can read a little over; capped, not dropped
-    assert JobCompletionMetrics.cpu_efficiency(_job(cpus=4, wall_secs=3600, cpu_time_secs=14500)) == 1.0
+    assert (
+        JobCompletionMetrics.cpu_efficiency(
+            _job(cpus=4, wall_secs=3600, cpu_time_secs=14500)
+        )
+        == 1.0
+    )
     # ratios in the hundreds are an accounting error, so they are not reported at all
-    assert JobCompletionMetrics.cpu_efficiency(_job(cpus=4, wall_secs=3600, cpu_time_secs=5_000_000)) is None
+    assert (
+        JobCompletionMetrics.cpu_efficiency(
+            _job(cpus=4, wall_secs=3600, cpu_time_secs=5_000_000)
+        )
+        is None
+    )
     assert JobCompletionMetrics.cpu_efficiency(_job(cpus=4, wall_secs=3600)) is None
 
 

@@ -126,7 +126,10 @@ class DogStatsdMetrics(MetricsProviderProtocol):
         datagram = b''
         for line in lines:
             encoded = line.encode('utf-8')
-            if len(datagram) + len(encoded) + 1 > MAX_DATAGRAM_BYTES and len(datagram) > 0:
+            if (
+                len(datagram) + len(encoded) + 1 > MAX_DATAGRAM_BYTES
+                and len(datagram) > 0
+            ):
                 self._send(datagram)
                 datagram = b''
             datagram = encoded if len(datagram) == 0 else datagram + b'\n' + encoded

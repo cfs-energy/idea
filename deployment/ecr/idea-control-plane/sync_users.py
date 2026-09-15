@@ -54,8 +54,16 @@ def system_lines(path, id_field):
 
 
 def sync_once():
-    users = [u for u in scan('accounts.users') if u.get('enabled', True) and u.get('uid') is not None]
-    groups = [g for g in scan('accounts.groups') if g.get('enabled', True) and g.get('gid') is not None]
+    users = [
+        u
+        for u in scan('accounts.users')
+        if u.get('enabled', True) and u.get('uid') is not None
+    ]
+    groups = [
+        g
+        for g in scan('accounts.groups')
+        if g.get('enabled', True) and g.get('gid') is not None
+    ]
     members = {}
     for m in scan('accounts.group-members'):
         members.setdefault(m['group_name'], set()).add(m['username'])
@@ -64,18 +72,28 @@ def sync_once():
             members.setdefault(g, set()).add(u['username'])
 
     passwd = system_lines('/etc/passwd', 2) + [
-        f"{u['username']}:x:{int(u['uid'])}:{int(u['gid'])}:{u['username']}:{u.get('home_dir') or '/'}:{u.get('login_shell') or '/bin/bash'}"
+        f'{u["username"]}:x:{int(u["uid"])}:{int(u["gid"])}:{u["username"]}:{u.get("home_dir") or "/"}:{u.get("login_shell") or "/bin/bash"}'
         for u in sorted(users, key=lambda u: int(u['uid']))
         if int(u['uid']) >= SYSTEM_ID_LIMIT
     ]
     group = system_lines('/etc/group', 2) + [
-        f"{g['group_name']}:x:{int(g['gid'])}:{','.join(sorted(members.get(g['group_name'], ())))}"
+        f'{g["group_name"]}:x:{int(g["gid"])}:{",".join(sorted(members.get(g["group_name"], ())))}'
         for g in sorted(groups, key=lambda g: int(g['gid']))
         if int(g['gid']) >= SYSTEM_ID_LIMIT
     ]
     write_atomic('/etc/passwd', passwd)
     write_atomic('/etc/group', group)
     return len(users), len(groups)
+
+
+def tables_not_created_yet(error):
+    # On a fresh cluster the account tables appear when the cluster manager first starts, which
+    # can be after this task does. That is deferred to the background pass; anything else, a
+    # denial above all, stays fatal on the first pass so a misconfigured role fails loudly.
+    return (
+        getattr(error, 'response', {}).get('Error', {}).get('Code')
+        == 'ResourceNotFoundException'
+    )
 
 
 def main():
@@ -87,6 +105,12 @@ def main():
         except Exception as e:  # Retry on the next sync interval.
             print(f'[sync_users] failed: {e}', file=sys.stderr, flush=True)
             if once:
+                if tables_not_created_yet(e):
+                    print(
+                        '[sync_users] account tables not created yet; the background sync retries',
+                        flush=True,
+                    )
+                    return
                 sys.exit(1)
         if once:
             return

@@ -61,8 +61,16 @@ def system_lines(path, id_field):
 
 
 def sync_once():
-    users = [u for u in scan('accounts.users') if u.get('enabled', True) and u.get('uid') is not None]
-    groups = [g for g in scan('accounts.groups') if g.get('enabled', True) and g.get('gid') is not None]
+    users = [
+        u
+        for u in scan('accounts.users')
+        if u.get('enabled', True) and u.get('uid') is not None
+    ]
+    groups = [
+        g
+        for g in scan('accounts.groups')
+        if g.get('enabled', True) and g.get('gid') is not None
+    ]
     members = {}
     for m in scan('accounts.group-members'):
         members.setdefault(m['group_name'], set()).add(m['username'])
@@ -71,12 +79,12 @@ def sync_once():
             members.setdefault(g, set()).add(u['username'])
 
     passwd = system_lines('/etc/passwd', 2) + [
-        f"{u['username']}:x:{int(u['uid'])}:{int(u['gid'])}:{u['username']}:{u.get('home_dir') or '/'}:{u.get('login_shell') or '/bin/bash'}"
+        f'{u["username"]}:x:{int(u["uid"])}:{int(u["gid"])}:{u["username"]}:{u.get("home_dir") or "/"}:{u.get("login_shell") or "/bin/bash"}'
         for u in sorted(users, key=lambda u: int(u['uid']))
         if int(u['uid']) >= SYSTEM_ID_LIMIT
     ]
     group = system_lines('/etc/group', 2) + [
-        f"{g['group_name']}:x:{int(g['gid'])}:{','.join(sorted(members.get(g['group_name'], ())))}"
+        f'{g["group_name"]}:x:{int(g["gid"])}:{",".join(sorted(members.get(g["group_name"], ())))}'
         for g in sorted(groups, key=lambda g: int(g['gid']))
         if int(g['gid']) >= SYSTEM_ID_LIMIT
     ]

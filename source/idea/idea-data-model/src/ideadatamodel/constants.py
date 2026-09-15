@@ -352,6 +352,7 @@ MODULE_SCHEDULER = 'scheduler'
 MODULE_CLUSTER_MANAGER = 'cluster-manager'
 MODULE_VIRTUAL_DESKTOP_CONTROLLER = 'virtual-desktop-controller'
 MODULE_BASTION_HOST = 'bastion-host'
+MODULE_ECS = 'ecs'
 MODULE_METRICS = 'metrics'
 ALL_MODULES = [
     MODULE_BOOTSTRAP,

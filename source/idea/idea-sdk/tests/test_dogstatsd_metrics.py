@@ -46,9 +46,9 @@ def test_summary_is_a_distribution_and_tags_are_sanitized(context):
 
 def test_values_are_plain_decimals(context):
     provider = DogStatsdMetrics(context=context, namespace='idea-mock/mock')
-    assert provider.format_entry(_entry('job.duration_seconds', 86514.0, [])).startswith(
-        'idea.job.duration_seconds:86514|'
-    )
+    assert provider.format_entry(
+        _entry('job.duration_seconds', 86514.0, [])
+    ).startswith('idea.job.duration_seconds:86514|')
     assert provider.format_entry(_entry('job.cost', 0.000123, [])).startswith(
         'idea.job.cost:0.000123|'
     )
@@ -58,12 +58,17 @@ def test_send_reaches_a_udp_listener(context, monkeypatch):
     listener = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     listener.bind(('127.0.0.1', 0))
     listener.settimeout(2)
-    monkeypatch.setenv('DD_DOGSTATSD_URL', f'udp://127.0.0.1:{listener.getsockname()[1]}')
+    monkeypatch.setenv(
+        'DD_DOGSTATSD_URL', f'udp://127.0.0.1:{listener.getsockname()[1]}'
+    )
 
     provider = DogStatsdMetrics(context=context, namespace='idea-mock/mock')
     provider.log([_entry('job.count', 1, [])])
 
-    assert listener.recv(8192) == b'idea.job.count:1|c|#idea_cluster:idea-mock,idea_module:mock'
+    assert (
+        listener.recv(8192)
+        == b'idea.job.count:1|c|#idea_cluster:idea-mock,idea_module:mock'
+    )
     listener.close()
 
 

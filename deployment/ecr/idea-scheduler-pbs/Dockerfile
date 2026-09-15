@@ -31,6 +31,8 @@ RUN dnf install -y --setopt=install_weak_deps=False \
     && dnf clean all
 
 WORKDIR /build
+# A checksum failure inside the pipe has to fail the step.
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN set -eux; \
     curl -fsSL -o openpbs.tar.gz "${OPENPBS_URL}"; \
     echo "${OPENPBS_SHA384}  openpbs.tar.gz" | sha384sum -c -; \

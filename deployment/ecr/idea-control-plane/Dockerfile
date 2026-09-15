@@ -3,7 +3,7 @@
 # Use the repository root as the build context:
 #   docker buildx build --platform linux/amd64,linux/arm64 \
 #     --build-context dcv-packages=/path/to/dcv-packages \
-#     -f deployment/ecr/idea-control-plane/Dockerfile --build-arg IDEA_VERSION=26.09.0 .
+#     -f deployment/ecr/idea-control-plane/Dockerfile --build-arg IDEA_VERSION=26.10.0 .
 # Copy the release tarballs into this directory before the build.
 # The dcv-packages context contains NICE-GPG-KEY, checksums.txt, the broker RPM,
 # both gateway RPMs, and both DCV archives. checksums.txt covers each package
@@ -115,20 +115,16 @@ ENV PATH="/usr/local/node/bin:/opt/idea/ideactl/node_modules/.bin:${PATH}"
 ENV CDK_DISABLE_CLI_TELEMETRY=true
 
 COPY IDEA_VERSION.txt /idea-build/IDEA_VERSION.txt
-COPY source/idea/idea-administrator/resources /idea-build/source/idea/idea-administrator/resources
+COPY source/idea/ideactl/resources /idea-build/source/idea/ideactl/resources
 # scripts/copy-resources.mjs stages this tree into dist/resources/bootstrap.
 COPY source/idea/idea-bootstrap /idea-build/source/idea/idea-bootstrap
 COPY source/idea/ideactl/package.json source/idea/ideactl/package-lock.json source/idea/ideactl/tsconfig.json source/idea/ideactl/cdk.json /idea-build/source/idea/ideactl/
 COPY source/idea/ideactl/src /idea-build/source/idea/ideactl/src
 COPY source/idea/ideactl/scripts /idea-build/source/idea/ideactl/scripts
-# The container module's config templates live here until resource ownership moves into the
-# package. copy-resources.mjs overlays them onto dist/resources/config.
-COPY source/idea/ideactl/resources-ecs /idea-build/source/idea/ideactl/resources-ecs
 RUN set -eux; \
     cd /idea-build/source/idea/ideactl; \
     npm ci; \
     npm run build; \
-    scripts/build-lambda-zips.sh; \
     npm prune --omit=dev; \
     npm cache clean --force; \
     find node_modules -type f -name '*.d.ts' -delete; \

@@ -235,7 +235,8 @@ shutdown() {
 }
 trap shutdown SIGTERM SIGINT
 
-# Synchronize cluster users before starting the scheduler module.
+# Synchronize cluster users before starting the scheduler module. The sync itself defers a fresh
+# cluster's not-yet-created tables to its background pass and fails on anything else.
 log "syncing cluster users and groups into the resolver"
 python3.13 /opt/idea/sync_users.py --once
 python3.13 /opt/idea/sync_users.py &

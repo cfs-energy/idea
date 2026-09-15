@@ -29,11 +29,15 @@ class JobCompletionMetrics(BaseMetrics):
         self.with_dimension('owner', self.tag(job.owner))
         self.with_dimension('queue', self.tag(job.queue))
         self.with_dimension('queue_type', self.tag(job.queue_type))
-        self.with_dimension('instance_family', self.tag(self.instance_family(instance_type)))
+        self.with_dimension(
+            'instance_family', self.tag(self.instance_family(instance_type))
+        )
         self.with_dimension('capacity_type', self.capacity_type(job))
         self.with_dimension('base_os', self.tag(params.base_os if params else None))
         self.with_dimension('job_outcome', self.outcome(job))
-        self.with_dimension('gpu', 'true' if params and (params.gpus or 0) > 0 else 'false')
+        self.with_dimension(
+            'gpu', 'true' if params and (params.gpus or 0) > 0 else 'false'
+        )
 
     @staticmethod
     def tag(value) -> str:
@@ -121,8 +125,13 @@ class JobCompletionMetrics(BaseMetrics):
         if cost is not None:
             if cost.total is not None and cost.total.amount is not None:
                 self.count(MetricName='job.cost', Value=cost.total.amount)
-            if cost.line_items_total is not None and cost.line_items_total.amount is not None:
-                self.count(MetricName='job.cost_ondemand', Value=cost.line_items_total.amount)
+            if (
+                cost.line_items_total is not None
+                and cost.line_items_total.amount is not None
+            ):
+                self.count(
+                    MetricName='job.cost_ondemand', Value=cost.line_items_total.amount
+                )
             if cost.savings_total is not None and cost.savings_total.amount is not None:
                 self.count(MetricName='job.savings', Value=cost.savings_total.amount)
 

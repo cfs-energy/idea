@@ -3125,9 +3125,9 @@ class EnableAnonymousMetricsParamBuilder(BaseParamBuilder):
             and self.default_job_params.enable_anonymous_metrics is not None
         ):
             return self.default_job_params.enable_anonymous_metrics
-        return self.soca_context.config().get_bool(
-            'cluster.solution.enable_solution_metrics', True
-        )
+        # job stacks no longer carry the anonymous metrics resource, so the parameter records an
+        # operator's choice and nothing reads it back
+        return False
 
 
 class LicensesParamBuilder(BaseParamBuilder):
