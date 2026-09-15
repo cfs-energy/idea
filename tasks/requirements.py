@@ -64,7 +64,6 @@ def update(c, name=None, upgrade=False, package_name=None):
         'doc',
         'tests',
         'idea-dev-lambda',
-        'idea-administrator',
         'idea-scheduler',
         'idea-cluster-manager',
         'idea-virtual-desktop-controller',

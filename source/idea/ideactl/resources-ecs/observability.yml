@@ -1,9 +1,7 @@
 # Observability continuity for the container cutover.
 # Placeholders: {cluster}, {cm-id}, {scheduler-id}, {vdc-id}.
 # Retention for adopted agent groups is cluster.cloudwatch_logs.retention_in_days (default 90).
-
 retention_in_days: 90
-
 preserved_log_groups:
   - name: "/{cluster}/{cm-id}"
     stream_prefix: application
@@ -29,7 +27,6 @@ preserved_log_groups:
     stream_prefix: dcv-connection-gateway
     verdict: fix
     fix: adopt the agent group, awslogs on stdout, sidecar tails /var/log/dcv-connection-gateway
-
 preserved_metric_namespaces:
   - name: "{cluster}/{cm-id}"
     verdict: fix
@@ -44,7 +41,6 @@ preserved_metric_namespaces:
     metric: DCV broker fleet dimension metrics-fleet-name-dimension
     verdict: fix
     fix: broker properties keep metrics-fleet-name-dimension equal to the cluster name
-
 preserved_application_metric_names:
   - api_invocations_count
   - api_invocations_duration
@@ -68,7 +64,6 @@ preserved_application_metric_names:
   - job.cost_ondemand
   - job.savings
   - job.cpu_efficiency
-
 planned_target_group_identifiers:
   - cm-ecs-e
   - cm-ecs-i
@@ -82,7 +77,6 @@ planned_target_group_identifiers:
   - brk-ecs-g
   - gw-ecs-TN
   - gw-ecs-TUN
-
 new_surfaces:
   - name: "/{cluster}/ecs/datadog"
     stream_prefix: datadog
@@ -95,7 +89,6 @@ new_surfaces:
     verdict: new
   - name: AWS/ECS
     verdict: new
-
 dropped:
   - id: host-metrics-per-module
     surface: CloudWatch agent cpu, disk, diskio, mem, net, netstat, processes, swap in {cluster}/{module}
@@ -141,7 +134,6 @@ dropped:
     surface: /aws/lambda/{cluster}-* retention
     verdict: drop
     reason: already unset, unrelated to ECS.
-
 regressions:
   - id: log-group-create-collision
     verdict: fix

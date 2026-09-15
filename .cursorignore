@@ -82,7 +82,6 @@ Thumbs.db
 node_modules/
 
 # Deployment artifacts
-deployment/ecr/idea-administrator/*.tar.gz
 deployment/global-s3-assets/
 deployment/regional-s3-assets/
 

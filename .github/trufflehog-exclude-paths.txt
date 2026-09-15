@@ -9,6 +9,7 @@
 ^awscliv2\.zip$
 ^aws/
 ^dist/
+^source/idea/ideactl/dist/
 __pycache__/
 \.ruff_cache/
 \.pytest_cache/

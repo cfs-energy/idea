@@ -12,13 +12,14 @@
 # * IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER - Set to "Ec2InstanceMetadata", if you want install IDEA from an EC2 Instance
 #                         using Instance Profile credentials from EC2 Instance Metadata.
 # * IDEA_ADMIN_ENABLE_CDK_NAG_SCAN - Set to "false", if you want to disable cdk-nag scan. Default: true
-# * IDEA_DEV_MODE - Set to "true" if you are working with IDEA sources
+# * IDEA_DEV_MODE - Set to "true" to build and run the deploy tool from source instead of the
+#                         control-plane container. Requires Node.js and a checkout.
 # * IDEA_ADMIN_NO_TTY - Set to "true" to drop docker's -t flag even when stdin is a
 #                         terminal. Non-interactive stdin (ssm, cron, CI) is detected
 #                         automatically. Combine with --force for an unattended run.
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-IDEA_REVISION=${IDEA_REVISION:-"v26.09.0"}
+IDEA_REVISION=${IDEA_REVISION:-"v26.10.0"}
 IDEA_DOCKER_REPO_DEFAULT="public.ecr.aws/s5o2b4m0/idea-control-plane"
 IDEA_DOCKER_REPO=${IDEA_DOCKER_REPO:-"${IDEA_DOCKER_REPO_DEFAULT}"}
 IDEA_ECR_CREDS_RESET=${IDEA_ECR_CREDS_RESET:-"true"}
@@ -44,32 +45,25 @@ if [[ "${IDEA_DEV_MODE}" == "true" ]]; then
     echo -e "${RED}idea-admin.sh must be executed from IDEA project root directory when using developer mode."
     exit 1
   fi
-  if [[ -z "${VIRTUAL_ENV}" ]]; then
-    if [[ -d ${SCRIPT_DIR}/venv ]]; then
-      # shellcheck disable=SC1091
-      source "${SCRIPT_DIR}"/venv/bin/activate
-    else
-      echo -e "${RED}Python Virtual Environment not detected. Install virtual environment to execute idea-admin.sh in developer mode."
-      exit 1
-    fi
+  IDEACTL_DIR="${SCRIPT_DIR}/source/idea/ideactl"
+  command -v node > /dev/null
+  verify_command "Node.js not detected. Install the version in software_versions.yml to run idea-admin.sh in developer mode."
+  if [[ ! -d "${IDEACTL_DIR}/node_modules" ]]; then
+    echo -e "${RED}Dependencies not installed. Run 'npm ci' in ${IDEACTL_DIR} first.${NC}"
+    exit 1
   fi
-  IDEA_SKIP_WEB_BUILD=${IDEA_SKIP_WEB_BUILD:-'0'}
-  TOKENS=$(printf ",\"%s\"" "${@}")
-  TOKENS=${TOKENS:1}
-  if [[ $(uname -s) == "Linux" ]]; then
-    ARGS=$(echo "[${TOKENS}]" | base64 -w0)
-  else
-    ARGS=$(echo "[${TOKENS}]" | base64)
+  # Build quietly so the tool's own output is the only thing on stdout.
+  if ! BUILD_LOG=$(cd "${IDEACTL_DIR}" && npm run --silent build 2>&1); then
+    echo -e "${RED}Build failed in ${IDEACTL_DIR}:${NC}"
+    echo "${BUILD_LOG}"
+    exit 1
   fi
-  CMD="invoke cli.admin --args=${ARGS}"
 
-  IDEA_SKIP_WEB_BUILD=${IDEA_SKIP_WEB_BUILD} \
-  IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER=${IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER} \
-  IDEA_ADMIN_ENABLE_CDK_NAG_SCAN=${IDEA_ADMIN_ENABLE_CDK_NAG_SCAN} \
-  AWS_SDK_LOAD_CONFIG=1 \
-  eval "$CMD"
-
-  exit $?
+  export IDEA_SKIP_WEB_BUILD=${IDEA_SKIP_WEB_BUILD:-'0'}
+  export IDEA_ADMIN_AWS_CREDENTIAL_PROVIDER
+  export IDEA_ADMIN_ENABLE_CDK_NAG_SCAN
+  export AWS_SDK_LOAD_CONFIG=1
+  exec node "${IDEACTL_DIR}/dist/src/cli/main.js" "${@}"
 fi
 
 cd "${SCRIPT_DIR}" || exit

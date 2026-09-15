@@ -319,21 +319,6 @@ class BuildTool:
             idea.console.print(f'deleting {self.output_archive_file} ...')
             os.remove(self.output_archive_file)
 
-        if self.app_name == 'idea-administrator':
-            files = os.listdir(idea.props.deployment_administrator_dir)
-            for file in files:
-                if file == 'Dockerfile':
-                    continue
-                file_path = os.path.join(idea.props.deployment_administrator_dir, file)
-                if os.path.isfile(file_path):
-                    idea.console.print(f'deleting {file_path} ...')
-                    os.remove(
-                        os.path.join(idea.props.deployment_administrator_dir, file)
-                    )
-                elif os.path.isdir(file_path):
-                    idea.console.print(f'deleting {file_path} ...')
-                    shutil.rmtree(file_path)
-
     def pre_build_src(self):
         if not self.has_src():
             return

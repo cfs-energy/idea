@@ -18,7 +18,7 @@ IDEA is NOT AWS RES (Research and Engineering Studio). RES is a fork of IDEA, an
   - **idea-scheduler/**: OpenPBS-based job scheduling system for HPC workloads
   - **idea-data-model/**: Shared data models and schemas using Pydantic (imported as `ideadatamodel`)
   - **idea-sdk/**: Developer tools and utilities for the platform (imported as `ideasdk`)
-  - **idea-administrator/**: Administration tools and infrastructure deployment
+  - **ideactl/**: Administration and infrastructure deployment tool (TypeScript); its `resources/` holds the configuration templates, policies and CDK inputs
   - **idea-bootstrap/**: Initial setup and bootstrapping
   - **idea-dcv-connection-gateway/**: DCV connection gateway for virtual desktops
 

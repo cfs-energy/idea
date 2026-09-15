@@ -3,3 +3,9 @@ ignored:
   - DL3013
   - DL3016
   - DL3059
+  # Amazon Linux 2023 packages are not pinned by version in any image here; the base image tag pins the release.
+  - DL3041
+  # A cd inside one RUN with set -e is deliberate where a WORKDIR would leak into later stages.
+  - DL3003
+  # COPY --from of a named build context, which the linter reads as an undefined stage.
+  - DL3022

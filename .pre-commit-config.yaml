@@ -63,8 +63,8 @@ repos:
             source/idea/idea-test-utils/src/ideatestutils/config/templates/.*\.ya?ml$|
             source/idea/idea-sdk/src/ideasdk/metrics/.*/templates/.*\.ya?ml$|
             source/idea/idea-cluster-manager/resources/defaults/email_templates\.yml$|
-            source/idea/idea-administrator/resources/policies/.*\.yml$|
-            source/idea/idea-administrator/resources/cdk/.*\.yml$
+            source/idea/ideactl/resources/policies/.*\.yml$|
+            source/idea/ideactl/resources/cdk/.*\.yml$
           )$
   - repo: https://github.com/google/yamlfmt
     rev: v0.17.0
@@ -77,8 +77,8 @@ repos:
             source/idea/idea-test-utils/src/ideatestutils/config/templates/.*\.ya?ml$|
             source/idea/idea-sdk/src/ideasdk/metrics/.*/templates/.*\.ya?ml$|
             source/idea/idea-cluster-manager/resources/defaults/email_templates\.yml$|
-            source/idea/idea-administrator/resources/policies/.*\.yml$|
-            source/idea/idea-administrator/resources/cdk/.*\.yml$
+            source/idea/ideactl/resources/policies/.*\.yml$|
+            source/idea/ideactl/resources/cdk/.*\.yml$
           )$
   # Python linting and formatting
   - repo: https://github.com/astral-sh/ruff-pre-commit

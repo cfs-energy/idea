@@ -12,11 +12,6 @@ on:
         required: true
         default: 'public.ecr.aws/s5o2b4m0'
         type: string
-      image_name:
-        description: 'Repository name within that registry. Leave empty for the released image. A dispatch from a branch other than main must set it, for example idea-administrator-ci-test.'
-        required: false
-        default: ''
-        type: string
       control_plane_image_name:
         description: 'Repository name for the control-plane image. Leave empty for the released image. A non-main dispatch must set this and scheduler_image_name.'
         required: false
@@ -199,45 +194,6 @@ jobs:
             source/idea/ideactl/dist/release/ideactl-v*-linux-arm64.tar.gz.sha256
           if-no-files-found: error
           retention-days: 7
-  build_push:
-    runs-on: ubuntu-large
-    permissions:
-      id-token: write
-      contents: read
-    steps:
-      - name: Validate the image name
-        env:
-          IMAGE_NAME: ${{ github.event.inputs.image_name }}
-        run: |
-          if [ -z "$IMAGE_NAME" ] && [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$GITHUB_REF_NAME" != "main" ]; then
-            echo "::error::A dispatch from $GITHUB_REF_NAME must set image_name, or it would overwrite the released image from an unmerged ref. Use a throwaway repository name such as idea-administrator-ci-test."
-            exit 1
-          fi
-      - uses: actions/checkout@v4
-      - name: Setup Development Environment
-        uses: ./.github/actions/setup_dev_environment
-      - name: Pre-commit Linting
-        uses: ./.github/actions/pre-commit
-        env:
-          SKIP: no-commit-to-branch
-      - name: Run Unit Tests
-        run: |
-          invoke tests.all
-      - name: Build Modules
-        uses: ./.github/actions/build_modules
-      - name: Configure AWS Credentials for ECR Push
-        uses: aws-actions/configure-aws-credentials@v4.2.1
-        with:
-          audience: sts.amazonaws.com
-          aws-region: us-east-1
-          role-to-assume: ${{ secrets.ECR_ROLE }}
-      - name: Build and Push Docker Image
-        env:
-          ECR_REGISTRY: ${{ github.event.inputs.ecr_repository || 'public.ecr.aws/s5o2b4m0' }}
-          IMAGE_NAME: ${{ github.event.inputs.image_name || 'idea-administrator' }}
-        run: |
-          VERSION=$(cat IDEA_VERSION.txt)
-          invoke docker.build-push-multi "$ECR_REGISTRY" "$VERSION" --image-name "$IMAGE_NAME" --gha-cache
   build_push_ideactl:
     runs-on: ubuntu-large
     permissions:
