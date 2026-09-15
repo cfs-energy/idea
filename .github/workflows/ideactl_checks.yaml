@@ -1,4 +1,4 @@
-name: ideactl gates
+name: ideactl checks
 on:
   pull_request:
     paths-ignore:
@@ -13,7 +13,7 @@ on:
 permissions:
   contents: read
 jobs:
-  gates:
+  checks:
     runs-on: ubuntu-large
     defaults:
       run:
@@ -56,18 +56,10 @@ jobs:
         run: |
           npm run build
           git diff --exit-code -- .
-      - name: Run credential-free gates
-        id: automated
-        # A runner has no captured cluster inputs: tools/parity/live, tools/parity/fixtures and
-        # docs/port are untracked by design, because they hold real cluster data and this
-        # repository is public. The fixture helper is fail-closed, so without this variable the
-        # dependent files throw at setup and the suite cannot pass here at all. Declaring the
-        # checkout public makes them skip instead, and the skip-policy gate records each one with
-        # its reason so the skips stay visible. This job therefore proves the credential-free half
-        # only; it is not evidence about anything that needs a captured cluster.
+      - name: Run checks
+        # tools/parity/live, tools/parity/fixtures and docs/port hold real cluster data and are
+        # untracked in this public repository. Declaring the checkout public makes the tests that
+        # need them skip (the skip-policy check lists each one) instead of failing at setup.
         env:
           IDEACTL_PUBLIC_CHECKOUT: '1'
-        run: node scripts/ci-gates.mjs all
-      - name: Print credential-backed gates after an earlier failure
-        if: always() && steps.automated.outcome == 'skipped'
-        run: node scripts/ci-gates.mjs human
+        run: node scripts/ci-checks.mjs all

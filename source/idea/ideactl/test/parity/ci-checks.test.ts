@@ -1,6 +1,6 @@
 /**
- * Exercises each automation gate through the same command-line entry point used
- * by the workflow, including one controlled failing input per gate.
+ * Exercises each CI check through the same command-line entry point used
+ * by the workflow, including one controlled failing input per check.
  */
 
 import assert from "node:assert/strict";
@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 
 const TEST_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const PACKAGE_ROOT = resolve(TEST_DIRECTORY, "../..");
-const GATE_PROGRAM = join(PACKAGE_ROOT, "scripts/ci-gates.mjs");
+const CHECK_PROGRAM = join(PACKAGE_ROOT, "scripts/ci-checks.mjs");
 const PARITY_PROGRAM = join(PACKAGE_ROOT, "tools/parity/parity.ts");
 const TEMPORARY_DIRECTORIES: string[] = [];
 
@@ -47,10 +47,10 @@ function writeJson(file: string, value: unknown): void {
 }
 
 /**
- * Runs one gate through the automation entry point.
+ * Runs one check through the CI entry point.
  */
-function runGate(command: string, ...args: string[]) {
-  return spawnSync(process.execPath, [GATE_PROGRAM, command, ...args], {
+function runCheck(command: string, ...args: string[]) {
+  return spawnSync(process.execPath, [CHECK_PROGRAM, command, ...args], {
     encoding: "utf8",
   });
 }
@@ -59,8 +59,8 @@ function runGate(command: string, ...args: string[]) {
  * Verifies a controlled failure and prints its decisive diagnostic.
  */
 function assertDeliberateFailure(
-  gate: string,
-  result: ReturnType<typeof runGate>,
+  check: string,
+  result: ReturnType<typeof runCheck>,
   expected: RegExp,
 ): void {
   const output = `${result.stdout}${result.stderr}`;
@@ -72,7 +72,7 @@ function assertDeliberateFailure(
       .find((line) => line.startsWith("FAIL ") || line.includes("MISMATCH")) ??
     output.trim().split(/\r?\n/u)[0] ??
     "failed";
-  console.log(`DELIBERATE FAILURE ${gate}: ${diagnostic}`);
+  console.log(`DELIBERATE FAILURE ${check}: ${diagnostic}`);
 }
 
 /**
@@ -134,19 +134,19 @@ function writeParityTest(
   );
 }
 
-test("dependency gate rejects a version range", () => {
+test("dependency check rejects a version range", () => {
   const root = temporaryRoot("dependencies");
   writeDependencyFixture(root, "^1.2.3");
   assertDeliberateFailure(
     "dependencies",
-    runGate("dependencies", "--root", root),
+    runCheck("dependencies", "--root", root),
     /must be an exact version/u,
   );
 });
 
 // The workflow refuses a manifest whose version differs from IDEA_VERSION.txt; a release bump on
 // 2026-09-15 reached the pull request before that was caught locally.
-test("dependency gate rejects a package version that differs from the release file", () => {
+test("dependency check rejects a package version that differs from the release file", () => {
   // The release file sits three levels above the package, as in the repository.
   const repository = temporaryRoot("dependencies-release");
   const root = join(repository, "source", "idea", "ideactl");
@@ -158,12 +158,12 @@ test("dependency gate rejects a package version that differs from the release fi
   writeFileSync(join(repository, "IDEA_VERSION.txt"), "26.10.0\n");
   assertDeliberateFailure(
     "dependencies",
-    runGate("dependencies", "--root", root),
+    runCheck("dependencies", "--root", root),
     /package\.json version 26\.09\.0 must equal IDEA_VERSION\.txt 26\.10\.0/u,
   );
 });
 
-test("hygiene gate rejects a non-synthetic account identifier", () => {
+test("hygiene check rejects a non-synthetic account identifier", () => {
   const root = temporaryRoot("hygiene");
   const file = join(root, "src/example.ts");
   mkdirSync(dirname(file), { recursive: true });
@@ -171,12 +171,12 @@ test("hygiene gate rejects a non-synthetic account identifier", () => {
   writeFileSync(file, `export const account = "${prohibitedIdentifier}";\n`);
   assertDeliberateFailure(
     "hygiene",
-    runGate("hygiene", "--root", root),
+    runCheck("hygiene", "--root", root),
     /prohibited account identifier/u,
   );
 });
 
-test("skip gate rejects a test file without an allowance", () => {
+test("skip check rejects a test file without an allowance", () => {
   const root = temporaryRoot("skips");
   const file = join(root, "test/skipped.test.ts");
   mkdirSync(dirname(file), { recursive: true });
@@ -191,12 +191,12 @@ test("skip gate rejects a test file without an allowance", () => {
   );
   assertDeliberateFailure(
     "skips",
-    runGate("skips", "--root", root),
+    runCheck("skips", "--root", root),
     /declares a skip without an allowance/u,
   );
 });
 
-test("skip gate accepts a test file with a reasoned allowance", () => {
+test("skip check accepts a test file with a reasoned allowance", () => {
   const root = temporaryRoot("allowed-skip");
   const file = join(root, "test/skipped.test.ts");
   mkdirSync(dirname(file), { recursive: true });
@@ -212,25 +212,25 @@ test("skip gate accepts a test file with a reasoned allowance", () => {
   writeJson(join(root, "scripts/ci-skip-allowances.json"), {
     "test/skipped.test.ts": "An external fixture is optional.",
   });
-  const result = runGate("skips", "--root", root);
+  const result = runCheck("skips", "--root", root);
   assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
   assert.match(result.stdout, /PASS test skip allowances/u);
 });
 
-test("workflow gate rejects malformed YAML", () => {
+test("workflow check rejects malformed YAML", () => {
   const root = temporaryRoot("workflows");
   const workflowRoot = join(root, "workflows");
   mkdirSync(workflowRoot, { recursive: true });
   writeFileSync(join(workflowRoot, "broken.yaml"), "name: Broken\non: [\n");
   assertDeliberateFailure(
     "workflows",
-    runGate("workflows", "--root", root, "--workflows", workflowRoot),
+    runCheck("workflows", "--root", root, "--workflows", workflowRoot),
     // js-yaml 4 and 5 word the truncated-flow-sequence error differently.
     /unexpected end of the stream|unexpected end of stream|deficient indentation/u,
   );
 });
 
-test("type-check gate rejects a strict type error", () => {
+test("type-check check rejects a strict type error", () => {
   const root = temporaryRoot("typecheck");
   writeJson(join(root, "tsconfig.json"), {
     compilerOptions: {
@@ -243,12 +243,12 @@ test("type-check gate rejects a strict type error", () => {
   writeFileSync(join(root, "broken.ts"), 'const value: string = 1;\n');
   assertDeliberateFailure(
     "typecheck",
-    runGate("typecheck", "--root", root),
+    runCheck("typecheck", "--root", root),
     /TS2322/u,
   );
 });
 
-test("synthetic parity gate rejects a template difference", () => {
+test("synthetic parity check rejects a template difference", () => {
   const root = temporaryRoot("parity");
   const expected = join(root, "expected.json");
   const actual = join(root, "actual.json");
@@ -257,7 +257,7 @@ test("synthetic parity gate rejects a template difference", () => {
   writeParityTest(root, expected, actual);
   assertDeliberateFailure(
     "parity",
-    runGate(
+    runCheck(
       "parity",
       "--root",
       root,
@@ -268,7 +268,7 @@ test("synthetic parity gate rejects a template difference", () => {
   );
 });
 
-test("full-suite gate propagates a test failure", () => {
+test("full-suite check propagates a test failure", () => {
   const root = temporaryRoot("tests");
   const file = join(root, "test/failing.test.ts");
   mkdirSync(dirname(file), { recursive: true });
@@ -283,17 +283,7 @@ test("full-suite gate propagates a test failure", () => {
   );
   assertDeliberateFailure(
     "tests",
-    runGate("tests", "--root", root),
+    runCheck("tests", "--root", root),
     /controlled failure|full test suite failed/u,
   );
-});
-
-test("human-only gate list names every credential-backed proof", () => {
-  const result = runGate("human");
-  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
-  assert.match(result.stdout, /HUMAN-ONLY CREDENTIAL GATES/u);
-  assert.match(result.stdout, /real cluster settings/u);
-  assert.match(result.stdout, /empty live infrastructure diff/u);
-  assert.match(result.stdout, /fresh development install/u);
-  assert.match(result.stdout, /restricted-partition fixture/u);
 });

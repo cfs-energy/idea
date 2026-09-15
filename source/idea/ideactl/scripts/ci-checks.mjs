@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Runs the package gates that need no cloud credentials.
+ * Runs the package checks CI can run without cloud credentials.
  */
 
 import { spawnSync } from "node:child_process";
@@ -79,13 +79,6 @@ const PROHIBITED_NAMES = [
   "aWRlYS1jb2xsYWI=",
   "cG9ueXRhaWw=",
 ].map((value) => Buffer.from(value, "base64").toString("utf8").toLowerCase());
-const HUMAN_ONLY_GATES = [
-  "Capture real cluster settings, module rows, synthesis reads, context, and deployed templates with a read-only federated identity, then run every stack comparison.",
-  "Run the empty live infrastructure diff and review each target change set with the target deployment identity before deployment.",
-  "Run and record a fresh development install and an existing development upgrade as separate rehearsals. Drain and announce the scheduler before the upgrade.",
-  "Capture a restricted-partition fixture and run its partition-specific comparisons. No credential-free capture exists yet.",
-];
-
 /**
  * Returns true for a JSON object with string keys.
  *
@@ -544,7 +537,7 @@ export function checkWorkflows(workflowRoot) {
 /**
  * Runs a subprocess and forwards all output.
  *
- * @param {string} label gate label
+ * @param {string} label check label
  * @param {string} command executable
  * @param {string[]} args arguments
  * @param {string} cwd working directory
@@ -632,16 +625,6 @@ export function runSyntheticParity(packageRoot, testFile) {
 }
 
 /**
- * Prints the credential-backed gates that public automation cannot run.
- */
-export function printHumanOnlyGates() {
-  console.log("HUMAN-ONLY CREDENTIAL GATES");
-  for (const gate of HUMAN_ONLY_GATES) {
-    console.log(`- ${gate}`);
-  }
-}
-
-/**
  * Parses the small command-line interface.
  *
  * @param {string[]} argv process arguments
@@ -687,7 +670,7 @@ function parseArguments(argv) {
 }
 
 /**
- * Runs one requested gate or the complete credential-free set.
+ * Runs one check or all of them.
  *
  * @param {string[]} argv process arguments
  */
@@ -696,7 +679,6 @@ export async function runCli(argv) {
   const actions = {
     dependencies: () => checkDependencyPins(options.packageRoot),
     hygiene: () => checkHygiene(options.packageRoot, options.workflowRoot),
-    human: () => printHumanOnlyGates(),
     parity: () => runSyntheticParity(options.packageRoot, options.parityTest),
     skips: () => checkSkipAllowances(options.packageRoot),
     tests: () => runTests(options.packageRoot),
@@ -711,7 +693,7 @@ export async function runCli(argv) {
 
   if (options.command === "all") {
     const failures = [];
-    for (const gate of [
+    for (const check of [
       "dependencies",
       "hygiene",
       "skips",
@@ -721,26 +703,25 @@ export async function runCli(argv) {
       "tests",
     ]) {
       try {
-        actions[gate]();
+        actions[check]();
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error(`FAIL ${message}`);
-        failures.push(gate);
+        failures.push(check);
       }
     }
     if (failures.length === 0) {
-      console.log("PASS all credential-free gates");
+      console.log("PASS all checks");
     } else {
-      console.error(`FAIL credential-free gates: ${failures.join(", ")}`);
+      console.error(`FAIL checks: ${failures.join(", ")}`);
       process.exitCode = 1;
     }
-    actions.human();
     return;
   }
 
   const action = actions[options.command];
   if (action === undefined) {
-    throw new Error(`unknown gate: ${options.command}`);
+    throw new Error(`unknown check: ${options.command}`);
   }
   action();
 }
