@@ -21,7 +21,7 @@ import { bootstrapPackageBasenames, bootstrapPackageUri } from '../../src/cli/bo
 import { buildStack } from '../../src/cdk/stacks/bastion-host.ts';
 import { ec2BlockDeviceName } from '../../src/cdk/stacks/bastion-host.ts';
 import { buildApp } from '../../src/cdk/app.ts';
-import { requireFixtures } from '../support/fixtures.ts';
+import { requireCapture } from '../support/fixtures.ts';
 import { withRetainedStateful } from '../support/retain-stateful.ts';
 import { cacheSetup } from '../support/setup-cache.ts';
 
@@ -38,7 +38,7 @@ const MODULE = 'bastion-host';
 const REGION = 'us-east-2';
 const DEPLOYMENT_ID = '97999f4c-daaa-4813-b8ac-bd7abaedc26b';
 
-requireFixtures(
+requireCapture(
   [CONFIG_FILE, SYNTH_READS, CONTEXT_FILE, LIVE_TEMPLATE, PYTHON_MANIFEST],
   "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
 );

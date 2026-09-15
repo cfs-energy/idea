@@ -5,13 +5,13 @@ import { describe, it } from 'node:test';
 
 import { ArnBuilder } from '../../src/config/arn-builder.ts';
 import { ClusterConfig } from '../../src/config/cluster-config.ts';
-import { requireFixtures } from '../support/fixtures.ts';
+import { requireCapture } from '../support/fixtures.ts';
 
 const RAW = fileURLToPath(new URL('../../tools/parity/fixtures/idea-dev27/raw/', import.meta.url));
 const LIVE = fileURLToPath(new URL('../../tools/parity/live/', import.meta.url));
 const SCAN = `${RAW}cluster-settings.scan.json`;
 const MODULES = `${RAW}modules.scan.json`;
-requireFixtures(
+requireCapture(
   [SCAN, MODULES, LIVE],
   "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
 );

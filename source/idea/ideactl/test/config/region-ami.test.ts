@@ -12,7 +12,7 @@ import {
   resolveRegionAmi,
   type RegionsConfig,
 } from '../../src/config/region-ami.ts';
-import { requireFixtures } from '../support/fixtures.ts';
+import { requireCapture } from '../support/fixtures.ts';
 
 const FLAT: RegionsConfig = {
   'us-east-2': { amazonlinux2023: 'ami-flat-al2023', rhel9: 'ami-flat-rhel9' },
@@ -106,7 +106,7 @@ describe('resolveRegionAmi', () => {
   });
 });
 
-requireFixtures([regionAmiConfigPath()], "npm run build");
+requireCapture([regionAmiConfigPath()], "npm run build");
 
 describe('the shipped region_ami_config.yml', () => {
   const config = loadRegionAmiConfig();

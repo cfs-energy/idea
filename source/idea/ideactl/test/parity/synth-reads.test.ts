@@ -7,11 +7,11 @@ import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { liveSynthReads, SynthReadMiss, replaySynthReads, synthReadKey } from '../../src/cdk/synth-reads.ts';
 import { AwsProfileCredentialsError } from '../../src/cli/aws-client-options.ts';
-import { requireFixtures } from '../support/fixtures.ts';
+import { requireCapture } from '../support/fixtures.ts';
 
 const PKG = resolve(import.meta.dirname, '../..');
 const FIXTURE = join(PKG, 'tools/parity/fixtures/idea-dev27/synth-reads.json');
-requireFixtures([FIXTURE], "node tools/parity/capture.ts --from-raw tools/parity/fixtures/idea-dev27/raw --out tools/parity/fixtures/idea-dev27");
+requireCapture([FIXTURE], "node tools/parity/capture.ts --from-raw tools/parity/fixtures/idea-dev27/raw --out tools/parity/fixtures/idea-dev27");
 
 /** The parameters of every captured read of one action, recovered from the keys. */
 function params<T>(service: string, action: string): T[] {

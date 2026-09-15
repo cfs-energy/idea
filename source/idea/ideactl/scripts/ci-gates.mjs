@@ -594,12 +594,26 @@ export function runTypeCheck(packageRoot) {
  * @param {string} packageRoot package directory
  */
 export function runTests(packageRoot) {
-  runChecked(
-    "full test suite",
-    process.execPath,
-    ["--test", "test/**/*.test.ts"],
-    packageRoot,
-  );
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  const result = spawnSync(process.execPath, ["--test", "test/**/*.test.ts"], {
+    cwd: packageRoot,
+    encoding: "utf8",
+    env,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (result.stdout !== "") process.stdout.write(result.stdout);
+  if (result.stderr !== "") process.stderr.write(result.stderr);
+  if (result.error !== undefined) {
+    throw new Error(`full test suite could not start: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    throw new Error(`full test suite failed with exit ${result.status ?? "signal"}`);
+  }
+  // A file that needs a private capture a public checkout cannot have announces itself and
+  // registers no test; the runner lists it as passed, so the honest count is printed here.
+  const notRun = (result.stdout.match(/^PRIVATE CAPTURE ABSENT, tests not run:/gm) ?? []).length;
+  console.log(notRun === 0 ? "PASS full test suite" : `PASS full test suite (${notRun} file(s) not run: private captures absent in this checkout)`);
 }
 
 /**

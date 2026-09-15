@@ -20,13 +20,13 @@ import { dirname, join } from "node:path";
 
 import { BootstrapPackageBuilder } from "../../src/cli/bootstrap-package.ts";
 import { ClusterConfig } from "../../src/config/cluster-config.ts";
-import { requireFixtures } from "../support/fixtures.ts";
+import { requireCapture } from "../support/fixtures.ts";
 import { ideaVersion } from "../../src/version.ts";
 
 /** The `idea-bootstrap` tree, three levels up from this package. */
 export const BOOTSTRAP_SOURCE = join(import.meta.dirname, "..", "..", "..", "idea-bootstrap");
 
-requireFixtures(
+requireCapture(
   [BOOTSTRAP_SOURCE],
   "Restore the bootstrap source tree before running host bootstrap tests",
 );

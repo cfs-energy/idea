@@ -19,7 +19,7 @@ import type { StackBuilder } from "../../src/cdk/app.ts";
 import { buildStack as buildClusterManagerStack } from "../../src/cdk/stacks/cluster-manager.ts";
 import { buildStack as buildSchedulerStack } from "../../src/cdk/stacks/scheduler.ts";
 import { buildStack as buildVdcStack } from "../../src/cdk/stacks/vdc.ts";
-import { requireFixtures } from "../support/fixtures.ts";
+import { requireCapture } from "../support/fixtures.ts";
 import {
   CONFIG_FILE,
   CONTEXT_FILE,
@@ -31,7 +31,7 @@ import {
   type Json,
 } from "../support/ecs-harness.ts";
 
-requireFixtures(
+requireCapture(
   [CONFIG_FILE, SYNTH_READS_FILE, CONTEXT_FILE],
   "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
 );

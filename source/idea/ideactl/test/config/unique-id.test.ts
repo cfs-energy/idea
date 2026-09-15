@@ -4,10 +4,10 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { makeUniqueId } from '../../src/util/unique-id.ts';
-import { requireFixtures } from '../support/fixtures.ts';
+import { requireCapture } from '../support/fixtures.ts';
 
 const LIVE_DIR = fileURLToPath(new URL('../../tools/parity/live', import.meta.url));
-requireFixtures([LIVE_DIR], "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2");
+requireCapture([LIVE_DIR], "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2");
 
 test('makeUniqueId: rules that do not need fixtures', () => {
   // single component: no hash

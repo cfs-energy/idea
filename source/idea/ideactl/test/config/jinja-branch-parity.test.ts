@@ -34,7 +34,7 @@ import { describe, it } from "node:test";
 import { jinjaEnv, renderTemplate } from "../../src/config/jinja.ts";
 import { BRANCH_FAMILIES } from "./jinja-branch-context-table.ts";
 import type { BranchFamily, BranchFlags } from "./jinja-branch-context-table.ts";
-import { optionalService, requireFixtures } from "../support/fixtures.ts";
+import { optionalService, requireCapture, requireFixtures } from "../support/fixtures.ts";
 
 const BOOTSTRAP_SOURCE = join(import.meta.dirname, "..", "..", "..", "idea-bootstrap");
 const CONFIG_TEMPLATE_SOURCE = join(
@@ -49,7 +49,7 @@ const PYTHON_ORACLE = join(import.meta.dirname, "jinja-branch-oracle.py");
 const DIGESTS = join(import.meta.dirname, "expected-digests.json");
 const ORACLE_HOST = process.env.JINJA_BRANCH_ORACLE_HOST;
 const ORACLE_IDENTITY = join(homedir(), ".ssh", "id_ed25519");
-requireFixtures(
+requireCapture(
   [BOOTSTRAP_SOURCE, CONFIG_TEMPLATE_SOURCE, PYTHON_ORACLE],
   "Restore the config template and bootstrap source trees before running this test",
 );

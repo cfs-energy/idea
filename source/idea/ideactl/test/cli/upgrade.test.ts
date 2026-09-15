@@ -21,10 +21,10 @@ import {
   type UpgradeDeps,
   upgradeCluster,
 } from "../../src/cli/commands/upgrade.ts";
-import { requireFixtures } from "../support/fixtures.ts";
+import { requireCapture } from "../support/fixtures.ts";
 
 const fixture = join(process.cwd(), "tools", "parity", "fixtures", "idea-dev27", "values.yml");
-requireFixtures(
+requireCapture(
   [fixture],
   "node tools/parity/capture.ts --from-raw tools/parity/fixtures/idea-dev27/raw --out tools/parity/fixtures/idea-dev27",
 );

@@ -14,7 +14,7 @@
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
 
-import { requireFixtures } from "../support/fixtures.ts";
+import { requireCapture } from "../support/fixtures.ts";
 import {
   CONFIG_FILE,
   CONTEXT_FILE,
@@ -33,7 +33,7 @@ import {
   type Json,
 } from "../support/ecs-harness.ts";
 
-requireFixtures(
+requireCapture(
   [CONFIG_FILE, SYNTH_READS_FILE, CONTEXT_FILE],
   "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
 );

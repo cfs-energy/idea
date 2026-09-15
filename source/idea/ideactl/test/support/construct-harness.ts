@@ -20,7 +20,7 @@ import { makeContext, type IdeaContext } from '../../src/cdk/constructs/base.ts'
 import { replaySynthReads } from '../../src/cdk/synth-reads.ts';
 import { ClusterConfig } from '../../src/config/cluster-config.ts';
 import { ideaVersion } from '../../src/version.ts';
-import { requireFixtures } from '../support/fixtures.ts';
+import { requireCapture } from '../support/fixtures.ts';
 
 export const PKG = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const FIXTURES = join(PKG, 'tools', 'parity', 'fixtures', 'idea-dev27');
@@ -36,7 +36,7 @@ export type Json = Record<string, any>;
 
 export const readJson = (path: string): Json => JSON.parse(readFileSync(path, 'utf8')) as Json;
 
-requireFixtures(
+requireCapture(
   [CONFIG_FILE, SYNTH_READS, CONTEXT_FILE],
   "node tools/parity/capture.ts --from-raw tools/parity/fixtures/idea-dev27/raw --out tools/parity/fixtures/idea-dev27",
 );
@@ -51,7 +51,7 @@ export function haveLive(stack: string): boolean {
 
 /** Require the live template used by a parity assertion. */
 export function requireLiveFixture(stack: string): void {
-  requireFixtures(
+  requireCapture(
     [liveTemplatePath(stack)],
     "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
   );

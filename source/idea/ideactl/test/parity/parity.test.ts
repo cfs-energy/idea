@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path';
 import { after, test } from "node:test";
 import { guardOracleDirectory } from "../../tools/parity/oracle-guard.ts";
 import { compareTemplates, isParity } from "../../tools/parity/parity.ts";
-import { requireFixtures } from '../support/fixtures.ts';
+import { requireCapture } from '../support/fixtures.ts';
 
 type Json = null | boolean | number | string | Json[] | JsonObject;
 type JsonObject = { [key: string]: Json };
@@ -49,7 +49,7 @@ const REQUIRED_TEMPLATES = [
   "idea-dev27-shared-storage.json",
   "idea-dev27-vdc.json",
 ] as const;
-requireFixtures(
+requireCapture(
   REQUIRED_TEMPLATES.map((name) => join(LIVE, name)),
   "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
 );

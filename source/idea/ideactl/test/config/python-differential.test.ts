@@ -11,7 +11,7 @@ import { describe, it } from 'node:test';
 import { ClusterConfig } from '../../src/config/cluster-config.ts';
 import { policyContext, renderPolicy, resourcesDir } from '../../src/cdk/policy.ts';
 import { jinjaEnv, renderTemplate } from '../../src/config/jinja.ts';
-import { requireFixtures, requiredService } from '../support/fixtures.ts';
+import { requireCapture, requiredService } from '../support/fixtures.ts';
 
 const RAW = fileURLToPath(new URL('../../tools/parity/fixtures/idea-dev27/raw/', import.meta.url));
 const SCAN = `${RAW}cluster-settings.scan.json`;
@@ -31,7 +31,7 @@ function haveJinja2(): boolean {
   }
 }
 
-requireFixtures(
+requireCapture(
   [SCAN, MODULES, ARN_BUILDER],
   "node tools/parity/capture.ts --from-raw tools/parity/fixtures/idea-dev27/raw --out tools/parity/fixtures/idea-dev27",
 );

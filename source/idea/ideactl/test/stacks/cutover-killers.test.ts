@@ -27,7 +27,7 @@ import { EcsStack } from "../../src/cdk/stacks/ecs.ts";
 import type { SynthReads } from "../../src/cdk/synth-reads.ts";
 import { ClusterConfig } from "../../src/config/cluster-config.ts";
 import { getTargetGroupName } from "../../src/util/names.ts";
-import { PUBLIC_CHECKOUT_ENV, requireFixtures, requiredService } from "../support/fixtures.ts";
+import { PUBLIC_CHECKOUT_ENV, requireCapture, requiredService } from "../support/fixtures.ts";
 import { ideaVersion } from "../../src/version.ts";
 import { ECS_HOST_SETTINGS, ECS_TASK_SETTINGS } from "../support/ecs-settings.ts";
 import {
@@ -38,7 +38,7 @@ import {
   synthVdcWithEcs,
 } from "../support/ecs-harness.ts";
 
-requireFixtures(
+requireCapture(
   [CONFIG_FILE, SYNTH_READS_FILE, CONTEXT_FILE],
   "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
 );

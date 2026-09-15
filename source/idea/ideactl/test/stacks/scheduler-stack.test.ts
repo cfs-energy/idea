@@ -20,7 +20,7 @@ import { after, describe, test } from 'node:test';
 import { buildApp } from '../../src/cdk/app.ts';
 import { bootstrapPackageBasenames, bootstrapPackageUri } from '../../src/cli/bootstrap-package.ts';
 import { buildStack, ec2BlockDeviceName } from '../../src/cdk/stacks/scheduler.ts';
-import { requireFixtures } from '../support/fixtures.ts';
+import { requireCapture } from '../support/fixtures.ts';
 import { withRetainedStateful } from '../support/retain-stateful.ts';
 import { withRetirements } from '../support/retirements.ts';
 import { cacheSetup } from '../support/setup-cache.ts';
@@ -40,7 +40,7 @@ const DEPLOYMENT_ID = '97999f4c-daaa-4813-b8ac-bd7abaedc26b';
 /** `shake_256('idea-dev27').hexdigest(5)`, the bootstrap qualifier the synthesizer is built with. */
 const QUALIFIER = '6f3b37a775';
 
-requireFixtures(
+requireCapture(
   [CONFIG_FILE, SYNTH_READS, CONTEXT_FILE, LIVE_TEMPLATE],
   "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
 );

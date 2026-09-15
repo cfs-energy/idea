@@ -13,10 +13,10 @@ import { buildDeploymentSupportPackage, PACKAGE_CLUSTER_CONFIG_DB, PACKAGE_VALUE
 import { configureSso, showIdpInfo } from "../../src/cli/commands/sso.ts";
 import { IntegrationTestFailed, parseIntegrationParams, runIntegrationTests } from "../../src/cli/commands/tests.ts";
 import { addPrefixListEntry, awsServiceAvailability, backupUpdateGlobalSettings, prefixListEntries, removePrefixListEntry, type UtilsApi, vpcEndpointServiceInfo } from "../../src/cli/commands/utils.ts";
-import { requireFixtures } from "../support/fixtures.ts";
+import { requireCapture } from "../support/fixtures.ts";
 
 const DEV27_VALUES = join(process.cwd(), "tools", "parity", "fixtures", "idea-dev27", "values.yml");
-requireFixtures(
+requireCapture(
   [DEV27_VALUES],
   "node tools/parity/capture.ts --from-raw tools/parity/fixtures/idea-dev27/raw --out tools/parity/fixtures/idea-dev27",
 );

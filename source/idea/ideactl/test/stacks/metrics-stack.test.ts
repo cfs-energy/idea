@@ -19,7 +19,7 @@ import { replaySynthReads } from '../../src/cdk/synth-reads.ts';
 import { MetricsStack, buildStack } from '../../src/cdk/stacks/metrics.ts';
 import { ClusterConfig } from '../../src/config/cluster-config.ts';
 import { ideaVersion } from '../../src/version.ts';
-import { requireFixtures } from '../support/fixtures.ts';
+import { requireCapture } from '../support/fixtures.ts';
 
 const PKG = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const FIXTURES = join(PKG, 'tools', 'parity', 'fixtures', 'idea-dev27');
@@ -32,7 +32,7 @@ const CLUSTER = 'idea-dev27';
 const REGION = 'us-east-2';
 const DEPLOYMENT_ID = '97999f4c-daaa-4813-b8ac-bd7abaedc26b';
 
-requireFixtures(
+requireCapture(
   [CONFIG_FILE, SYNTH_READS, CONTEXT_FILE, LIVE_TEMPLATE],
   "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
 );

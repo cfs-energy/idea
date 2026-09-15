@@ -35,7 +35,7 @@ import {
   Role,
   SQSQueue,
 } from '../../src/cdk/constructs/common.ts';
-import { requireFixtures } from '../support/fixtures.ts';
+import { requireCapture } from '../support/fixtures.ts';
 import { withRetainedStateful } from '../support/retain-stateful.ts';
 import { NODE_LAMBDA_HANDLER, NODE_RUNTIME } from '../support/node-handlers.ts';
 import { ideaVersion } from '../../src/version.ts';
@@ -52,7 +52,7 @@ const CLUSTER = 'idea-dev27';
 const REGION = 'us-east-2';
 const DEPLOYMENT_ID = '97999f4c-daaa-4813-b8ac-bd7abaedc26b';
 
-requireFixtures(
+requireCapture(
   [
     CONFIG_FILE,
     SYNTH_READS,

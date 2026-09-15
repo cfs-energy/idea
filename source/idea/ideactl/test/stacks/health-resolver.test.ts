@@ -21,7 +21,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { requireFixtures } from "../support/fixtures.ts";
+import { requireCapture } from "../support/fixtures.ts";
 import {
   CONFIG_FILE,
   CONTEXT_FILE,
@@ -31,7 +31,7 @@ import {
   synthVdcWithEcs,
 } from "../support/ecs-harness.ts";
 
-requireFixtures(
+requireCapture(
   [CONFIG_FILE, SYNTH_READS_FILE, CONTEXT_FILE],
   "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
 );

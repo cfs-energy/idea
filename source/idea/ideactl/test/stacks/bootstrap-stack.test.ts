@@ -15,7 +15,7 @@ import {
   regionElbAccountIdPath,
 } from "../../src/cdk/stacks/bootstrap.ts";
 import { DEFAULT_STACK_REGISTRY, type StackBuildProps } from "../../src/cdk/app.ts";
-import { requireFixtures } from "../support/fixtures.ts";
+import { requireCapture } from "../support/fixtures.ts";
 
 const LIVE = fileURLToPath(new URL("../../tools/parity/live/idea-dev27-bootstrap.json", import.meta.url));
 const PYTHON_RENDERED = fileURLToPath(
@@ -29,7 +29,7 @@ const HYGIENE_SCANNED_FILES = [
   BOOTSTRAP_ARGV_TEST,
 ];
 
-requireFixtures(
+requireCapture(
   [LIVE, PYTHON_RENDERED],
   "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
 );

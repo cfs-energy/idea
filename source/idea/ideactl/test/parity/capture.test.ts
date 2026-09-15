@@ -6,14 +6,14 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { CALLER_IDENTITY_KEY, listRolesKey, replaySynthReads } from '../../src/cdk/synth-reads.ts';
-import { requireFixtures } from '../support/fixtures.ts';
+import { requireCapture } from '../support/fixtures.ts';
 
 type DynamoItem = Record<string, unknown>;
 type Table = { Items: DynamoItem[] };
 
 const PKG = resolve(import.meta.dirname, '../..');
 const RAW = join(PKG, 'tools/parity/fixtures/idea-dev27/raw');
-requireFixtures([RAW], "node tools/parity/capture.ts --from-raw SOURCE --out tools/parity/fixtures/idea-dev27");
+requireCapture([RAW], "node tools/parity/capture.ts --from-raw SOURCE --out tools/parity/fixtures/idea-dev27");
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);

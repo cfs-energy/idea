@@ -28,10 +28,10 @@ import {
   uploadReleasePackage,
 } from "../../src/cli/bootstrap-package.ts";
 import { BOOTSTRAP_SOURCE, templateContext } from "./bootstrap-oracle-context.ts";
-import { requireFixtures } from "../support/fixtures.ts";
+import { requireCapture } from "../support/fixtures.ts";
 import { readRawTarArchive, readTarArchive } from "./tar.ts";
 
-requireFixtures(
+requireCapture(
   [BOOTSTRAP_SOURCE],
   "Restore the bootstrap source tree before running bootstrap package tests",
 );

@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFil
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
-import { requireFixtures, requiredService } from '../support/fixtures.ts';
+import { requireCapture, requiredService } from '../support/fixtures.ts';
 
 const PKG = resolve(import.meta.dirname, '../..');
 const FLATTEN = join(PKG, 'tools/parity/flatten.py');
@@ -97,7 +97,7 @@ test('a key with a dot or colon is rejected, and --key-prefix filters', () => {
 // The captured oracles the config generator port is measured against. Cluster names
 // live in the gitignored fixture tree, never in this file.
 const FIXTURES = join(PKG, 'tools/parity/fixtures');
-requireFixtures([FIXTURES], "node tools/parity/capture.ts --from-raw SOURCE --out tools/parity/fixtures");
+requireCapture([FIXTURES], "node tools/parity/capture.ts --from-raw SOURCE --out tools/parity/fixtures");
 const clusters = readdirSync(FIXTURES).filter((c) => existsSync(join(FIXTURES, c, 'flat.json'))).sort();
 if (clusters.length === 0) throw new Error(`Required fixture directory has no flat.json oracles: ${FIXTURES}`);
 

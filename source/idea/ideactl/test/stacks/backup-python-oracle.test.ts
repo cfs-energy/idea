@@ -32,12 +32,12 @@ import { BackupPlan } from '../../src/cdk/constructs/backup.ts';
 import { buildServicePrincipal } from '../../src/cdk/constructs/base.ts';
 import { cleanup, harness } from '../support/construct-harness.ts';
 import type { Json } from '../support/construct-harness.ts';
-import { requireFixtures } from '../support/fixtures.ts';
+import { requireCapture } from '../support/fixtures.ts';
 
 after(cleanup);
 
 const CLUSTERS_DIR = join(homedir(), '.idea', 'clusters');
-requireFixtures(
+requireCapture(
   [CLUSTERS_DIR],
   "Run the Python administrator to synthesize a cluster with backup configuration",
 );

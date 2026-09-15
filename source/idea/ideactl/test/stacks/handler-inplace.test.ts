@@ -14,7 +14,7 @@ import { test } from "node:test";
 
 import { buildApp } from "../../src/cdk/app.ts";
 import { DEPLOYED_HANDLERS, type NodeHandler } from "../../tools/parity/node-handlers.ts";
-import { requireFixtures } from "../support/fixtures.ts";
+import { requireCapture } from "../support/fixtures.ts";
 
 const PKG = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CLUSTER = "idea-dev27";
@@ -42,7 +42,7 @@ const REPLACEMENT_PROPERTIES = ["FunctionName", "PackageType"] as const;
 const NODE_RUNTIME = "nodejs22.x";
 const NODE_HANDLER = "index.handler";
 
-requireFixtures(
+requireCapture(
   [
     CONFIG_FILE,
     SYNTH_READS,

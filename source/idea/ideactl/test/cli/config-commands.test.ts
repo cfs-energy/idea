@@ -25,7 +25,7 @@ import {
 } from '../../src/cli/commands/config.ts';
 import { VALUES_FILE_S3_KEY, clusterRegionDir } from '../../src/cli/cdk-invoker.ts';
 import { fakeDeps, moduleRow, withTempIdeaHome } from '../support/deploy-harness.ts';
-import { requireFixtures } from '../support/fixtures.ts';
+import { requireCapture } from '../support/fixtures.ts';
 
 const CLUSTER = 'sample-cluster';
 const REGION = 'us-east-2';
@@ -281,7 +281,7 @@ function valuesFileFor(name: string): string {
 // -------------------------------------------------------------------------------------------
 
 const DEV27_VALUES = new URL('../../tools/parity/fixtures/idea-dev27/values.yml', import.meta.url).pathname;
-requireFixtures(
+requireCapture(
   [DEV27_VALUES],
   "node tools/parity/capture.ts --from-raw tools/parity/fixtures/idea-dev27/raw --out tools/parity/fixtures/idea-dev27",
 );

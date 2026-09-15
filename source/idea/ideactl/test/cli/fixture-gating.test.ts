@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import {
@@ -62,3 +64,35 @@ test("required services name their setup command", () => {
     },
   );
 });
+
+// A file that requires a private capture ends before registering tests in a declared public
+// checkout, and fails loudly anywhere else; both are observed through a child process, since
+// the public-checkout path ends the process.
+test("a required capture ends the file quietly in a public checkout and loudly elsewhere", () => {
+  const root = mkdtempSync(join(tmpdir(), "ideactl-capture-"));
+  const fixtures = join(dirname(fileURLToPath(import.meta.url)), "..", "support", "fixtures.ts");
+  const script = join(root, "probe.test.ts");
+  writeFileSync(
+    script,
+    [
+      `import { requireCapture } from ${JSON.stringify(fixtures)};`,
+      `requireCapture([${JSON.stringify(join(root, "absent.json"))}], "node tools/parity/capture.ts --live");`,
+      'console.log("REACHED THE TESTS");',
+      "",
+    ].join("\n"),
+  );
+  try {
+    const publicCheckout = spawnSync(process.execPath, [script], { encoding: "utf8", env: { ...process.env, [PUBLIC_CHECKOUT_ENV]: "1" } });
+    assert.equal(publicCheckout.status, 0, publicCheckout.stderr);
+    assert.match(publicCheckout.stdout, /^PRIVATE CAPTURE ABSENT, tests not run: .*absent\.json \(regenerate with: node tools\/parity\/capture\.ts --live\)$/m);
+    assert.doesNotMatch(publicCheckout.stdout, /REACHED THE TESTS/);
+    const env = { ...process.env };
+    delete env[PUBLIC_CHECKOUT_ENV];
+    const privateCheckout = spawnSync(process.execPath, [script], { encoding: "utf8", env });
+    assert.notEqual(privateCheckout.status, 0);
+    assert.match(privateCheckout.stderr, /Required fixture is missing/);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+

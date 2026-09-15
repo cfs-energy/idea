@@ -5,16 +5,16 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
-import { requireAnyFixture, requireFixtures } from '../support/fixtures.ts';
+import { requireAnyCapture, requireCapture } from '../support/fixtures.ts';
 
 const PKG = resolve(import.meta.dirname, '../..');
 const SYNTH = join(PKG, 'tools/parity/synth.ts');
 const FIXTURE = join(PKG, 'tools/parity/fixtures/idea-dev27');
-requireAnyFixture(
+requireAnyCapture(
   [join(FIXTURE, 'cdk.context.json'), join(FIXTURE, 'python/_cdk/cdk.context.json')],
   "node tools/parity/capture.ts --from-raw tools/parity/fixtures/idea-dev27/raw --out tools/parity/fixtures/idea-dev27",
 );
-requireFixtures(
+requireCapture(
   [
     join(FIXTURE, 'python/_cdk/cdk.out.metrics'),
     join(PKG, 'tools/parity/live/idea-dev27-metrics.json'),

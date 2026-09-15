@@ -12,12 +12,12 @@ import {
   type ModuleInfo,
   type ScanPage,
 } from '../../src/config/cluster-config.ts';
-import { requireFixtures } from '../support/fixtures.ts';
+import { requireCapture } from '../support/fixtures.ts';
 
 const FIXTURES = fileURLToPath(new URL('../../tools/parity/fixtures/idea-dev27/raw/', import.meta.url));
 const SCAN = `${FIXTURES}cluster-settings.scan.json`;
 const MODULES = `${FIXTURES}modules.scan.json`;
-requireFixtures([SCAN, MODULES], "node tools/parity/capture.ts --from-raw tools/parity/fixtures/idea-dev27/raw --out tools/parity/fixtures/idea-dev27");
+requireCapture([SCAN, MODULES], "node tools/parity/capture.ts --from-raw tools/parity/fixtures/idea-dev27/raw --out tools/parity/fixtures/idea-dev27");
 
 function dev27(): ClusterConfig {
   return ClusterConfig.fromFile(readFileSync(SCAN, 'utf-8'), readFileSync(MODULES, 'utf-8'));

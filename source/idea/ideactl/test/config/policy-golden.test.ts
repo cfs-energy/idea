@@ -13,7 +13,7 @@ import { load } from 'js-yaml';
 
 import { ClusterConfig } from '../../src/config/cluster-config.ts';
 import { renderPolicy, resourcesDir } from '../../src/cdk/policy.ts';
-import { requireFixtures } from '../support/fixtures.ts';
+import { requireCapture } from '../support/fixtures.ts';
 
 const RAW = fileURLToPath(new URL('../../tools/parity/fixtures/idea-dev27/raw/', import.meta.url));
 const LIVE = fileURLToPath(new URL('../../tools/parity/live/', import.meta.url));
@@ -22,7 +22,7 @@ const MODULES = `${RAW}modules.scan.json`;
 const CLUSTERS = join(homedir(), '.idea', 'clusters');
 const STACKS = ['analytics', 'bastion-host', 'bootstrap', 'cluster', 'cluster-manager', 'directoryservice', 'identity-provider', 'metrics', 'scheduler', 'shared-storage', 'vdc'];
 const missingDev27Templates = STACKS.filter((stack) => !existsSync(`${LIVE}idea-dev27-${stack}.json`));
-requireFixtures(
+requireCapture(
   [
     SCAN,
     MODULES,

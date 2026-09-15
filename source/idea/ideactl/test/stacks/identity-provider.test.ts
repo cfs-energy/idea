@@ -25,7 +25,7 @@ import { replaySynthReads, userPoolKey } from '../../src/cdk/synth-reads.ts';
 import { IdentityProviderStack, buildStack } from '../../src/cdk/stacks/identity-provider.ts';
 import { ClusterConfig } from '../../src/config/cluster-config.ts';
 import { ideaVersion } from '../../src/version.ts';
-import { requireFixtures } from '../support/fixtures.ts';
+import { requireCapture } from '../support/fixtures.ts';
 import { withRetainedStateful } from '../support/retain-stateful.ts';
 import { withRetirements } from '../support/retirements.ts';
 import { NODE_NAG_SUPPRESSION, withNodeHandlers } from '../support/node-handlers.ts';
@@ -44,7 +44,7 @@ const REGION = 'us-east-2';
 const DEPLOYMENT_ID = '97999f4c-daaa-4813-b8ac-bd7abaedc26b';
 const STACK_NAME = `${CLUSTER}-${MODULE}`;
 
-requireFixtures(
+requireCapture(
   [CONFIG_FILE, SYNTH_READS, CONTEXT_FILE, LIVE_TEMPLATE, PYTHON_MANIFEST],
   "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
 );

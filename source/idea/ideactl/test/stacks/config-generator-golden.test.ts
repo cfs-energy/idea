@@ -36,12 +36,12 @@ import {
   readConfigFromFiles,
 } from '../../src/config/generator.ts';
 import { buildContext, loadValuesFile, type UserValues } from '../../src/config/values.ts';
-import { requireFixtures } from '../support/fixtures.ts';
+import { requireCapture } from '../support/fixtures.ts';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const fixturesDir = fileURLToPath(new URL('../../tools/parity/fixtures', import.meta.url));
 const syntheticDir = join(here, 'synthetic');
-requireFixtures(
+requireCapture(
   [fixturesDir],
   "node tools/parity/capture.ts --from-raw SOURCE --out tools/parity/fixtures",
 );

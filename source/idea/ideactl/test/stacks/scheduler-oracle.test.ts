@@ -19,7 +19,7 @@ import { describe, test } from 'node:test';
 
 import { checkIntendedDrift, intendedDriftFor, settingsLookup } from '../../tools/parity/intended-drift.ts';
 import { loadTemplate, type Json, type JsonObject } from '../../tools/parity/parity.ts';
-import { requireFixtures } from '../support/fixtures.ts';
+import { requireCapture } from '../support/fixtures.ts';
 
 const PKG = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SYNTH = join(PKG, 'tools', 'parity', 'synth.ts');
@@ -30,7 +30,7 @@ const LIVE_TEMPLATE = join(PKG, 'tools', 'parity', 'live', 'idea-dev27-scheduler
 const CLUSTER = 'idea-dev27';
 const MODULE_ID = 'scheduler';
 
-requireFixtures(
+requireCapture(
   [CONFIG_FILE, LIVE_TEMPLATE],
   'node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2',
 );

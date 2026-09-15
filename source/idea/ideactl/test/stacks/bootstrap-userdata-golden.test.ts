@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { bootstrapPackagePlans, bootstrapPackageUri } from '../../src/cli/bootstrap-package.ts';
 import { buildBootstrapUserData } from '../../src/cdk/userdata.ts';
-import { requireFixtures } from '../support/fixtures.ts';
+import { requireCapture } from '../support/fixtures.ts';
 
 const pkg = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const liveDir = join(pkg, 'tools', 'parity', 'live');
@@ -98,7 +98,7 @@ function userDataTemplate(resource: { Type: string; Properties: Record<string, a
   return undefined;
 }
 
-requireFixtures(
+requireCapture(
   [
     settingsFile,
     ...CASES.map(([stack]) => join(liveDir, `idea-dev27-${stack}.json`)),

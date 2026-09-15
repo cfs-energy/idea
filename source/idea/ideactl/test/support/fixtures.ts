@@ -36,6 +36,38 @@ export function requireFixtures(paths: readonly string[], regenerate: string): v
 }
 
 /**
+ * Require a private capture at module level, in a file whose every test compares against it.
+ *
+ * Captures live only on machines that made them and are never in a public checkout. Where the
+ * checkout declares itself public (`IDEACTL_PUBLIC_CHECKOUT=1`) and the capture is absent, the
+ * file announces that and ends before registering a test, so the runner lists it as run with no
+ * tests and the gate reports how many files that was. Anywhere else a missing capture is the
+ * loud failure `requireFixtures` gives, since a machine that should have it has lost it.
+ */
+export function requireCapture(paths: readonly string[], regenerate: string): void {
+  const missing = missingPaths(paths);
+  if (missing.length === 0) return;
+  if (process.env[PUBLIC_CHECKOUT_ENV] === "1") {
+    console.log(`${CAPTURE_ABSENT_MARKER} ${missing[0]} (regenerate with: ${regenerate})`);
+    process.exit(0);
+  }
+  throw fixtureFailure(missing, regenerate);
+}
+
+/** The line a file prints before ending for want of a private capture; the gate counts these. */
+export const CAPTURE_ABSENT_MARKER = "PRIVATE CAPTURE ABSENT, tests not run:";
+
+/** `requireCapture` for a set of equivalent locations. */
+export function requireAnyCapture(paths: readonly string[], regenerate: string): void {
+  if (paths.some((path) => existsSync(path))) return;
+  if (process.env[PUBLIC_CHECKOUT_ENV] === "1") {
+    console.log(`${CAPTURE_ABSENT_MARKER} ${paths[0] ?? "?"} (regenerate with: ${regenerate})`);
+    process.exit(0);
+  }
+  throw fixtureFailure(paths, regenerate);
+}
+
+/**
  * Require at least one equivalent fixture location.
  */
 export function requireAnyFixture(paths: readonly string[], regenerate: string): void {

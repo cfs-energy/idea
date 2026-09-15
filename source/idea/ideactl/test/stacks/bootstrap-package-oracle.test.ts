@@ -17,11 +17,11 @@ import test from "node:test";
 
 import { BootstrapPackageBuilder } from "../../src/cli/bootstrap-package.ts";
 import { BOOTSTRAP_SOURCE, ORACLE_CASES, caseContext } from "./bootstrap-oracle-context.ts";
-import { requireFixtures } from "../support/fixtures.ts";
+import { requireCapture } from "../support/fixtures.ts";
 import { readTarArchive } from "./tar.ts";
 
 const ORACLE = join(import.meta.dirname, "..", "..", "tools", "parity", "fixtures", "w16b-bootstrap-oracle");
-requireFixtures(
+requireCapture(
   [
     BOOTSTRAP_SOURCE,
     ...ORACLE_CASES.map((oracleCase) => join(ORACLE, oracleCase.basename)),

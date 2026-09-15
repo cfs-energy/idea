@@ -22,7 +22,7 @@ import * as network from '../../src/cdk/constructs/network.ts';
 import { replaySynthReads } from '../../src/cdk/synth-reads.ts';
 import { ClusterConfig } from '../../src/config/cluster-config.ts';
 import { ideaVersion } from '../../src/version.ts';
-import { requireFixtures } from '../support/fixtures.ts';
+import { requireCapture } from '../support/fixtures.ts';
 
 const PKG = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const FIXTURES = join(PKG, 'tools', 'parity', 'fixtures', 'idea-dev27');
@@ -34,7 +34,7 @@ const CONTEXT_FILE = join(FIXTURES, 'cdk.context.json');
 const CLUSTER = 'idea-dev27';
 const REGION = 'us-east-2';
 
-requireFixtures(
+requireCapture(
   [
     CONFIG_FILE,
     SYNTH_READS,

@@ -26,7 +26,7 @@ import { CALLER_IDENTITY_KEY, listRolesKey, replaySynthReads } from '../../src/c
 import { AnalyticsStack, buildStack, serviceLinkedRolePathPrefixes } from '../../src/cdk/stacks/analytics.ts';
 import { ClusterConfig } from '../../src/config/cluster-config.ts';
 import { ideaVersion } from '../../src/version.ts';
-import { requireFixtures } from '../support/fixtures.ts';
+import { requireCapture } from '../support/fixtures.ts';
 import { withRetainedStateful } from '../support/retain-stateful.ts';
 import { cacheSetup } from '../support/setup-cache.ts';
 
@@ -44,7 +44,7 @@ const STACK = `${CLUSTER}-analytics`;
 const DEPLOYMENT_ID = '97999f4c-daaa-4813-b8ac-bd7abaedc26b';
 const DNS_SUFFIX = 'amazonaws.com';
 
-requireFixtures(
+requireCapture(
   [CONFIG_FILE, SYNTH_READS, CONTEXT_FILE, LIVE_TEMPLATE, PYTHON_MANIFEST],
   "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
 );

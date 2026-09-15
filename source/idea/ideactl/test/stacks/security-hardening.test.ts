@@ -19,7 +19,7 @@ import { ClusterConfig } from "../../src/config/cluster-config.ts";
 import type { SynthReads } from "../../src/cdk/synth-reads.ts";
 import { ideaVersion } from "../../src/version.ts";
 import { settingsLookup } from "../../tools/parity/intended-drift.ts";
-import { requireFixtures } from "../support/fixtures.ts";
+import { requireCapture } from "../support/fixtures.ts";
 import { ECS_HOST_SETTINGS, ECS_TASK_SETTINGS } from "../support/ecs-settings.ts";
 import {
   CONFIG_FILE,
@@ -36,7 +36,7 @@ import {
   type ContainerTemplates,
 } from "../support/ecs-harness.ts";
 
-requireFixtures(
+requireCapture(
   [CONFIG_FILE, SYNTH_READS_FILE, CONTEXT_FILE],
   "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
 );

@@ -19,7 +19,7 @@ import { after, describe, test } from 'node:test';
 
 import { buildApp } from '../../src/cdk/app.ts';
 import { buildStack, ec2BlockDeviceName } from '../../src/cdk/stacks/directoryservice.ts';
-import { requireFixtures } from '../support/fixtures.ts';
+import { requireCapture } from '../support/fixtures.ts';
 import { withRetainedStateful } from '../support/retain-stateful.ts';
 
 const PKG = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -35,7 +35,7 @@ const MODULE_ID = 'directoryservice';
 const REGION = 'us-east-2';
 const DEPLOYMENT_ID = '97999f4c-daaa-4813-b8ac-bd7abaedc26b';
 
-requireFixtures(
+requireCapture(
   [CONFIG_FILE, SYNTH_READS, CONTEXT_FILE, LIVE_TEMPLATE, PYTHON_MANIFEST],
   "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
 );

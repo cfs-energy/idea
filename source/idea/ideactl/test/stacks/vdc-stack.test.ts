@@ -27,7 +27,7 @@ import {
   ECS_SHARED_CAPACITY,
   TARGET_GROUP_HASH,
 } from '../support/ecs-harness.ts';
-import { optionalFixtures, requireFixtures } from '../support/fixtures.ts';
+import { optionalFixtures, requireCapture } from '../support/fixtures.ts';
 import { withCertificateRows, withRetainedCertificates } from '../support/retained-certificates.ts';
 import { withRetainedStateful } from '../support/retain-stateful.ts';
 import { withRetirements } from '../support/retirements.ts';
@@ -65,7 +65,7 @@ function pythonVdcOracles(root: string): { cluster: string; template: string }[]
     .filter((oracle) => existsSync(oracle.template));
 }
 
-requireFixtures(
+requireCapture(
   [CONFIG_FILE, SYNTH_READS, CONTEXT_FILE, LIVE_TEMPLATE, PYTHON_MANIFEST],
   "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
 );

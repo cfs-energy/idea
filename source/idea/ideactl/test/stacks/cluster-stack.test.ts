@@ -26,7 +26,7 @@ import { after, before, describe, test } from 'node:test';
 
 import { buildApp } from '../../src/cdk/app.ts';
 import { buildStack } from '../../src/cdk/stacks/cluster.ts';
-import { requireFixtures } from '../support/fixtures.ts';
+import { requireCapture } from '../support/fixtures.ts';
 import { withRetainedCertificates } from '../support/retained-certificates.ts';
 import { withRetainedStateful } from '../support/retain-stateful.ts';
 import { withRetirements } from '../support/retirements.ts';
@@ -44,7 +44,7 @@ const REGION = 'us-east-2';
 const DEPLOYMENT_ID = '97999f4c-daaa-4813-b8ac-bd7abaedc26b';
 const STACK = `${CLUSTER}-cluster`;
 
-requireFixtures(
+requireCapture(
   [CONFIG_FILE, SYNTH_READS, CONTEXT_FILE, PYTHON_MANIFEST, LIVE_TEMPLATE],
   "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
 );
