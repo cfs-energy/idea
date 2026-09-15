@@ -83,3 +83,26 @@ def test_unsupported_url_is_rejected(context, monkeypatch):
     monkeypatch.setenv('DD_DOGSTATSD_URL', 'http://127.0.0.1:8125')
     with pytest.raises(ValueError):
         DogStatsdMetrics(context=context, namespace='idea-mock/mock')
+
+
+def test_an_epoch_timestamp_marks_the_point_at_that_time(context):
+    # Cost Explorer's day, not the scrape: gauges and counts carry it, a distribution cannot.
+    provider = DogStatsdMetrics(context=context, namespace='idea-mock/mock')
+    day = 1757894400
+    count = _entry('cost.amortized', 12.5, [('module', 'scheduler')])
+    count['Timestamp'] = day
+    assert provider.format_entry(count) == (
+        'idea.cost.amortized:12.5|c|#idea_cluster:idea-mock,idea_module:mock,module:scheduler|T1757894400'
+    )
+    gauge = _entry('storage.used_bytes', 4096, [('user', 'alice')], metric_type='Gauge')
+    gauge['Timestamp'] = day
+    assert provider.format_entry(gauge).endswith(
+        '|g|#idea_cluster:idea-mock,idea_module:mock,user:alice|T1757894400'
+    )
+    summary = _entry('job.cpu_efficiency', 0.5, [], metric_type='Summary')
+    summary['Timestamp'] = day
+    assert '|T' not in provider.format_entry(summary)
+    # BaseMetrics' default is a formatted string for now: no field.
+    live = _entry('jobs_finished', 1, [])
+    live['Timestamp'] = '2026-09-15 00:00:00 +00:00'
+    assert '|T' not in provider.format_entry(live)

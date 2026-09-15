@@ -83,6 +83,31 @@ An upgrade adds settings rows it has not seen and leaves existing rows alone, so
 
 Put the same three keys in `values.yml` as well, so a later regeneration agrees with the table.
 
+### Spend and storage
+
+The same agent carries the account's spend and the ONTAP storage levels once the cluster-manager collectors are on. Both are settings of the cluster-manager module, off by default, and both publish through `metrics.provider`, so they work with any provider.
+
+Spend comes from Cost Explorer, commercial partition only: every trailing full day, re-read on each run so revisions land. `idea.cost.amortized` and `idea.cost.unblended` are partitioned by `module`, `project` and `owner` from the cost allocation tags; `idea.cost.by_service.*` by `module` and `service`; `idea.cost.storage.*` by `service` and `usage_type` for FSx and EFS, tag-blind so history from before the tags survives. Spend that carries no module tag is `module:unknown`, which is where savings plan and reservation credits land. Each point is one day's total stamped at that day, so historical metrics ingestion must be on for the `idea.cost` prefix in Datadog before the first run, or the points are dropped silently.
+
+```bash
+./idea-admin.sh config set --cluster-name <CLUSTER_NAME> --aws-region <REGION> \
+  'Key=cluster-manager.metrics.cost.enabled,Type=bool,Value=true'
+./idea-admin.sh deploy --cluster-name <CLUSTER_NAME> --aws-region <REGION> --upgrade cluster-manager
+```
+
+The deploy grants the cluster-manager role `ce:GetCostAndUsage`, `ce:GetTags` and `ce:GetDimensionValues`; the tag keys default to `idea:ModuleId`, `idea:Project` and `idea:JobOwner` and follow `cluster-manager.metrics.cost.*`.
+
+Storage levels come from each FSx for NetApp ONTAP file system in `shared-storage` that carries metrics credentials: an ONTAP user that can read `/api/storage/quota/reports` and `/api/storage/volumes` on the SVM management endpoint, its password in a Secrets Manager secret tagged `idea:ClusterName=<CLUSTER_NAME>` and `idea:ModuleName=cluster-manager`, which the cluster-manager role can already read. `idea.storage.used_bytes` and `idea.storage.files_used` are per `user`, `volume` and `qtree`; `idea.storage.volume_size_bytes`, `idea.storage.volume_used_bytes` and `idea.storage.volume_tier_bytes` (`tier:ssd`, `tier:capacity_pool`) per volume; every point carries `svm` and `filesystem`.
+
+```bash
+./idea-admin.sh config set --cluster-name <CLUSTER_NAME> --aws-region <REGION> \
+  'Key=shared-storage.<NAME>.fsx_netapp_ontap.metrics.username,Type=str,Value=<ONTAP_USER>' \
+  'Key=shared-storage.<NAME>.fsx_netapp_ontap.metrics.password_secret_arn,Type=str,Value=<SECRET_ARN>' \
+  'Key=cluster-manager.metrics.storage.enabled,Type=bool,Value=true'
+```
+
+The collectors pick the settings up on the next cluster-manager restart; `deploy --upgrade cluster-manager` is one.
+
 ### Rotating the key
 
 Write the new value into the same secret, then restart the daemon so its tasks read it: `aws ecs update-service --force-new-deployment` on the datadog service of the cluster's ECS cluster, whose name is the `ecs.cluster_name` setting. Nothing in IDEA changes.

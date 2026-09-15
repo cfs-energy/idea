@@ -244,6 +244,33 @@ const RETIRED_KEYS: Record<string, string> = {
     'the removed scheduler code was its only reader, and the anonymous metrics it was sent with are gone',
 };
 
+/**
+ * Keys this branch generates that the Python generator never did, each with the reason. Every
+ * entry has to be generated and absent from the oracle, so a key the oracle gains or the
+ * template loses fails here instead of quietly widening the comparison.
+ */
+const ADDED_KEYS: Record<string, string> = Object.fromEntries(
+  [
+    'cost.enabled', 'cost.interval_hours', 'cost.lookback_days', 'cost.module_tag', 'cost.project_tag',
+    'cost.owner_tag', 'cost.by_account', 'storage.enabled', 'storage.interval_minutes', 'storage.verify_tls',
+  ].map((key) => [`cluster-manager.metrics.${key}`, 'the cost and storage metrics collectors arrived with 26.10.0']),
+);
+
+/** The generated output with the added keys dropped, after proving each one is generated and new. */
+function generatedWithoutAddedKeys(
+  name: string,
+  got: Record<string, unknown>,
+  want: Record<string, unknown>,
+): Record<string, unknown> {
+  const remaining: Record<string, unknown> = { ...got };
+  for (const [key, reason] of Object.entries(ADDED_KEYS)) {
+    assert.ok(key in got, `${name}: ${key} is not generated, remove it from ADDED_KEYS (${reason})`);
+    assert.ok(!(key in want), `${name}: ${key} is in the oracle, remove it from ADDED_KEYS (${reason})`);
+    delete remaining[key];
+  }
+  return remaining;
+}
+
 /** The oracle with the retired keys dropped, after proving each one is in it. */
 function oracleWithoutRetiredKeys(name: string, want: Record<string, unknown>): Record<string, unknown> {
   const remaining: Record<string, unknown> = { ...want };
@@ -261,8 +288,8 @@ describe('layer A: generated config equals the Python generator, key for key', (
     it(fixture.name, () => {
       const outDir = tempDir();
       generateConfig(fixture.valuesFile, outDir);
-      const got = flattenConfigDir(outDir);
       const want = oracleWithoutRetiredKeys(fixture.name, readJsonRecord(fixture.flatFile));
+      const got = generatedWithoutAddedKeys(fixture.name, flattenConfigDir(outDir), want);
       const differences = reportDifferences(got, want);
       console.log(
         `${fixture.name}: ${Object.keys(got).length} keys generated, ` +

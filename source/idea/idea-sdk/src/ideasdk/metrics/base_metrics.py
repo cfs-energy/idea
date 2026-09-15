@@ -182,6 +182,15 @@ class BaseMetrics:
     def count(self, **kwargs):
         return self._log(**kwargs, MetricType='Counter', Unit='Count')
 
+    def gauge(self, **kwargs):
+        """
+        a level read at a point in time: bytes on a volume, a queue depth. CloudWatch keeps
+        it as a plain datum; DogStatsD as a gauge; a Timestamp given as an epoch marks the
+        point at that time instead of now.
+        """
+        unit = kwargs.pop('Unit', 'None')
+        return self._log(**kwargs, MetricType='Gauge', Unit=unit)
+
     def invocation(self, **kwargs):
         """
         there is no better way to represent a Prometheus Summary in CloudWatch Metrics.

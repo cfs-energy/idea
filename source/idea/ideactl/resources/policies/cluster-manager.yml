@@ -366,4 +366,15 @@ Statement:
     Sid: BedrockBudgetCostExplorer
     {% endif %}
 
+  {% if context.config.get_bool(context.module_id + '.metrics.cost.enabled', False) %}
+  # Read only: the cost metrics publish the account's spend by tag, service and usage type.
+  - Action:
+      - ce:GetCostAndUsage
+      - ce:GetTags
+      - ce:GetDimensionValues
+    Resource: '*'
+    Effect: Allow
+    Sid: CostMetricsCostExplorer
+  {% endif %}
+
 {% include '_templates/custom-kms-key.yml' %}

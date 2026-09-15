@@ -112,6 +112,16 @@ class DogStatsdMetrics(MetricsProviderProtocol):
         line = f'{METRIC_PREFIX}.{name}:{self._value(value)}|{metric_type}'
         if len(tags) > 0:
             line = f'{line}|#{",".join(tags)}'
+        # An epoch Timestamp stamps the point at that time: Cost Explorer's day, not the
+        # scrape. The agent forwards gauges and counts with a timestamp as they are, so the
+        # value must already be the total for that time.
+        timestamp = entry.get('Timestamp')
+        if (
+            isinstance(timestamp, (int, float))
+            and not isinstance(timestamp, bool)
+            and metric_type in ('g', 'c')
+        ):
+            line = f'{line}|T{int(timestamp)}'
         return line
 
     def log(self, metric_data: List[Dict]):

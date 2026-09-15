@@ -118,6 +118,22 @@ notifications:
 
 # nothing is provisioned while enabled is false. toggling it requires a redeploy of both
 # cluster-manager and virtual-desktop-controller; disable per-project before disabling here.
+# The account's spend and its ONTAP storage levels, published through metrics.provider by this
+# module, so the same agent that collects the cluster's own metrics carries them.
+metrics:
+  cost:
+    enabled: false                     # Cost Explorer: spend by module x project x owner, module x service, storage usage types; commercial partition only
+    interval_hours: 6
+    lookback_days: 3                   # trailing full days re-read on every run; Cost Explorer revises recent days
+    module_tag: idea:ModuleId          # cost allocation tags, activated in Billing
+    project_tag: idea:Project
+    owner_tag: idea:JobOwner
+    by_account: false                  # also module x linked account, when Cost Explorer here sees other accounts
+  storage:
+    enabled: false                     # FSx for NetApp ONTAP quota reports and volumes, for every shared-storage entry carrying metrics credentials
+    interval_minutes: 60
+    verify_tls: false                  # FSx management endpoints present self-signed certificates
+
 bedrock:
   enabled: false
   # empty by design: approving a model here subscribes this account to its marketplace

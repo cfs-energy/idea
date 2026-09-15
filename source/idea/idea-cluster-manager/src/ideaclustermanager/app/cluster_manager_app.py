@@ -19,6 +19,7 @@ from ideasdk.utils import GroupNameHelper
 import ideaclustermanager
 from ideaclustermanager.app.api.api_invoker import ClusterManagerApiInvoker
 from ideaclustermanager.app.projects.bedrock_usage_service import BedrockUsageService
+from ideaclustermanager.app.metrics import CostMetricsService, StorageMetricsService
 from ideaclustermanager.app.projects.projects_service import ProjectsService
 from ideaclustermanager.app.projects.project_tasks import (
     ProjectEnabledTask,
@@ -90,6 +91,8 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
         self.context = context
         self.web_portal: Optional[WebPortal] = None
         self.bedrock_usage: Optional[BedrockUsageService] = None
+        self.cost_metrics: Optional[CostMetricsService] = None
+        self.storage_metrics: Optional[StorageMetricsService] = None
 
     def app_initialize(self):
         # group name helper
@@ -193,6 +196,10 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
             context=self.context, projects_service=self.context.projects
         )
 
+        # spend and storage as metrics
+        self.cost_metrics = CostMetricsService(context=self.context)
+        self.storage_metrics = StorageMetricsService(context=self.context)
+
         # email templates
         self.context.email_templates = EmailTemplatesService(context=self.context)
 
@@ -216,6 +223,10 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
 
         if self.bedrock_usage is not None:
             self.bedrock_usage.start()
+        if self.cost_metrics is not None:
+            self.cost_metrics.start()
+        if self.storage_metrics is not None:
+            self.storage_metrics.start()
 
         try:
             self.context.distributed_lock().acquire(key='initialize-defaults')
@@ -237,3 +248,7 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
 
         if self.bedrock_usage is not None:
             self.bedrock_usage.stop()
+        if self.cost_metrics is not None:
+            self.cost_metrics.stop()
+        if self.storage_metrics is not None:
+            self.storage_metrics.stop()
