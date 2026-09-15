@@ -284,6 +284,39 @@ describe('scheduler stack', () => {
 });
 
 describe('scheduler stack branches', () => {
+  test('the configured hostname agrees across the task and published settings', async () => {
+    const hostname = 'batch.idea-dev27.us-east-2.local';
+    const { template } = await synthScheduler(configWith({
+      ...ECS_SHARED_CAPACITY_VALUES,
+      'scheduler.hostname': hostname,
+    }));
+    const task = Object.values(template.Resources as Json).find(
+      (resource) => resource.Type === 'AWS::ECS::TaskDefinition',
+    ) as Json;
+    const containers = task.Properties.ContainerDefinitions as Json[];
+    const scheduler = containers.find((container) =>
+      container.Environment?.some((entry: Json) => entry.Name === 'IDEA_SCHEDULER_DNS_NAME'),
+    );
+    assert.equal(scheduler?.Environment.find((entry: Json) => entry.Name === 'IDEA_SCHEDULER_DNS_NAME').Value, hostname);
+    assert.equal(template.Resources.ideadev27schedulersettings.Properties.settings.private_dns_name, hostname);
+
+    const sidecar = containers.find((container) => container.Name === 'scheduler-openpbs-logs');
+    assert.ok(sidecar);
+    const script = sidecar.Command[0] as string;
+    for (const directory of ['server_logs', 'sched_logs', 'server_priv/accounting']) {
+      assert.ok(script.includes(`${directory}'/*`), directory);
+    }
+    assert.match(script, /tail -n "\$from_line" -F/);
+    assert.match(script, /sleep 30/);
+    assert.doesNotMatch(script, /\*\.log|exec tail/);
+
+    const { template: host } = await synthScheduler(configWith({ 'scheduler.hostname': hostname }));
+    const record = Object.values(host.Resources as Json).find(
+      (resource) => resource.Type === 'AWS::Route53::RecordSet',
+    ) as Json;
+    assert.equal(record.Properties.Name, `${hostname}.`);
+  });
+
   test('use_stable_server_name changes those two properties and nothing else', async () => {
     // The key is on in the dev27 settings today, which is why the deployed template is one deploy
     // behind. Asserting the two properties it changes is not enough: what has to hold is that the

@@ -92,6 +92,7 @@ export class SchedulerStack extends IdeaBaseStack {
   readonly userPool: cognito.IUserPool;
   private readonly ecsEnabled: boolean;
   private readonly hostsPresent: boolean;
+  private readonly schedulerHostname: string;
 
   oauth2ClientSecret!: OAuthClientIdAndSecret;
   schedulerRole!: Role;
@@ -120,6 +121,11 @@ export class SchedulerStack extends IdeaBaseStack {
       env: props.env,
     });
 
+    const hostname = this.context.config.getString('scheduler.hostname', undefined, {
+      moduleId: this.moduleId,
+    });
+    if (!hostname?.trim()) throw new Error(`Missing required setting: ${this.moduleId}.hostname`);
+    this.schedulerHostname = hostname;
     this.bootstrapPackageUri = this.lookupBootstrapPackageUri();
     this.cluster = new ExistingSocaCluster(this.context, this.stack);
     this.arnBuilder = new ArnBuilder(this.context.config);
@@ -468,7 +474,7 @@ export class SchedulerStack extends IdeaBaseStack {
           undefined,
           { required: true },
         ) as string,
-        IDEA_SCHEDULER_DNS_NAME: `scheduler.${this.clusterName}.${this.awsRegion}.local`,
+        IDEA_SCHEDULER_DNS_NAME: this.schedulerHostname,
         PBS_HOME: SCHEDULER_PBS_HOME,
         PBS_NODE_FAIL_REQUEUE: '600',
       },
@@ -763,14 +769,11 @@ export class SchedulerStack extends IdeaBaseStack {
   }
 
   buildRoute53RecordSet(): void {
-    const hostname = this.context.config.getString('scheduler.hostname', undefined, {
-      required: true,
-    }) as string;
     this.clusterDnsRecordSet = new route53.RecordSet(this.stack, `${this.moduleId}-dns-record`, {
       recordType: route53.RecordType.A,
       target: route53.RecordTarget.fromIpAddresses(this.ec2Instance.attrPrivateIp),
       ttl: Duration.minutes(5),
-      recordName: hostname,
+      recordName: this.schedulerHostname,
       zone: lookupClusterDns(this.context, this.stack),
     });
     // The record is the name clients and execution hosts resolve. Retaining it lets a later
@@ -879,7 +882,7 @@ export class SchedulerStack extends IdeaBaseStack {
     const useStableServerName =
       this.ecsEnabled || this.context.config.getBool('scheduler.use_stable_server_name', false);
     const privateDnsName = useStableServerName
-      ? (this.context.config.getString('scheduler.hostname', undefined, { required: true }) as string)
+      ? this.schedulerHostname
       : this.ec2Instance.attrPrivateDnsName;
 
     const clusterSettings: Record<string, unknown> = {

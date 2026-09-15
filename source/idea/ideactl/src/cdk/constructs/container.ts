@@ -333,20 +333,28 @@ export function addStorageMounts(
   }
 }
 
-/** Follows log files that the awslogs driver cannot tail. */
 export function fileTailScript(directories: string[]): string {
-  // The sidecar mounts the log volume read-only and the writer creates the directory, so this is
-  // only for a volume the writer has not touched yet; a read-only failure must not stop the tail.
-  const mkdirLines = directories.map((directory) => `mkdir -p "${directory}" 2>/dev/null || true`).join("\n");
-  const globList = directories.map((directory) => `"${directory}"/*.log`).join(" ");
+  // OpenPBS names its daily logs by date with no extension, and a new one appears every day, so
+  // every regular file is followed and the directories are rescanned. A file present when the
+  // sidecar starts is followed from its end: replaying months of accounting on every task start
+  // would flood the group. One that appears later is read from its first line.
+  const globList = directories.map((directory) => `'${directory.replaceAll("'", "'\\''")}'/*`).join(" ");
   return [
     "set -euo pipefail",
-    mkdirLines,
+    "shopt -s nullglob dotglob",
+    "followed=()",
+    'from_line="0"',
     "while true; do",
-    "  shopt -s nullglob",
-    `  files=(${globList})`,
-    "  if ((${#files[@]})); then exec tail -F -- \"${files[@]}\"; fi",
-    "  sleep 5",
+    `  for file in ${globList}; do`,
+    '    [[ -f "$file" ]] || continue',
+    '    for existing in "${followed[@]:-}"; do',
+    '      [[ "$existing" != "$file" ]] || continue 2',
+    "    done",
+    '    tail -n "$from_line" -F -- "$file" &',
+    '    followed+=("$file")',
+    "  done",
+    '  from_line="+1"',
+    "  sleep 30",
     "done",
   ].join("\n");
 }
