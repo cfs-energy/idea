@@ -84,6 +84,7 @@ def test_publish_storage_renders_gauges_with_the_tier_split_only_where_served():
     }
     assert used['alice']['Value'] == 150.0
     assert context.dimensions(used['alice']) == {
+        'host': 'test-cluster',
         'user': 'alice',
         'volume': 'data',
         'svm': 'svm1',
@@ -91,6 +92,10 @@ def test_publish_storage_renders_gauges_with_the_tier_split_only_where_served():
     }
     assert context.dimensions(used['bob'])['qtree'] == 'proj'
     assert all(e['MetricType'] == 'Gauge' for e in context.published())
+    assert all(
+        context.dimensions(e)['host'] == context.cluster_name()
+        for e in context.published()
+    )
     tiers = {
         (context.dimensions(e)['volume'], context.dimensions(e)['tier']): e['Value']
         for e in context.published('storage.volume_tier_bytes')
@@ -165,3 +170,19 @@ def test_client_follows_pages_and_refuses_a_failure(monkeypatch):
         assert False, 'a non-200 must raise'
     except RuntimeError as e:
         assert '401' in str(e)
+
+
+def test_missing_password_leaves_storage_checkpoint_unset():
+    context = FakeContext(
+        {
+            'metrics.provider': 'dogstatsd',
+            'shared-storage': {'data': {'provider': 'fsx_netapp_ontap'}},
+            'shared-storage.data.fsx_netapp_ontap.metrics.username': 'reader',
+            'shared-storage.data.fsx_netapp_ontap.svm.management_dns': ENDPOINT,
+        }
+    )
+    StorageMetricsService(context).run_once()
+    assert context.config().db.writes == []
+    assert context.published() == []
+    assert context.distributed_lock().held == []
+    assert any('no password' in line for line in context.logger().lines)

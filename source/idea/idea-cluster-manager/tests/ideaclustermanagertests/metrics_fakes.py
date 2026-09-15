@@ -33,6 +33,7 @@ class FakeConfig:
     def __init__(self, values: Dict, secrets: Dict = None):
         self.values = values
         self.secrets = secrets or {}
+        self.db = FakeSettingsDB()
 
     def _get(self, key, default):
         return self.values.get(key, default)
@@ -119,6 +120,9 @@ class FakeContext:
     def aws(self):
         return self._aws
 
+    def cluster_name(self):
+        return 'test-cluster'
+
     def module_id(self):
         return 'cluster-manager'
 
@@ -139,3 +143,56 @@ class FakeContext:
     @staticmethod
     def dimensions(entry) -> Dict[str, str]:
         return {d['Name']: d['Value'] for d in entry.get('Dimensions', [])}
+
+
+class FakeSettingsDB:
+    def __init__(self):
+        self.cluster_settings_table = self
+        self.values = {}
+        self.reads = []
+        self.writes = []
+        self.lock = None
+        self.fail_read = False
+        self.fail_write = False
+
+    def get_item(self, Key, ConsistentRead=False):
+        assert self.lock is None or self.lock.held
+        self.reads.append((Key, ConsistentRead))
+        if self.fail_read:
+            raise RuntimeError('settings read failed')
+        key = Key['key']
+        return {'Item': {'value': self.values[key]}} if key in self.values else {}
+
+    def set_config_entry(self, key, value):
+        assert self.lock is None or self.lock.held
+        if self.fail_write:
+            raise RuntimeError('settings write failed')
+        self.values[key] = value
+        self.writes.append((key, value))
+
+
+class FakeCollectorSource:
+    def __init__(self, clock):
+        self.clock = clock
+        self.calls = 0
+        self.fail = False
+        self.fs_id = 'fs-test'
+
+    def _read(self):
+        self.calls += 1
+        self.clock['now'] += 10
+        if self.fail:
+            raise RuntimeError('source unavailable')
+
+    def fetch_all(self, *args):
+        from ideaclustermanager.app.metrics.cost_metrics_service import CostRow
+
+        self._read()
+        return [CostRow('cost', '2026-09-13', {'module': 'scheduler'}, 1, 2)]
+
+    def volumes(self):
+        self._read()
+        return [{'name': 'data', 'space': {'size': 100, 'used': 50}}]
+
+    def quota_reports(self):
+        return []

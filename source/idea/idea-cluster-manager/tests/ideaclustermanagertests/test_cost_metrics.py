@@ -270,8 +270,7 @@ def test_reader_asks_once_per_module_plus_the_partition_cuts_and_reads_every_pag
         '2026-09-13',
         (('service', 'amazon_fsx'), ('usage_type', 'use2-ontap-ssd-gb-mo')),
     ) in by_key
-    # a zero group is not a point
-    assert not any(r.amortized == 0 and r.unblended == 0 for r in rows)
+    assert any(r.amortized == 0 and r.unblended == 0 for r in rows)
 
 
 def test_service_publishes_counts_stamped_at_the_day():
@@ -282,6 +281,10 @@ def test_service_publishes_counts_stamped_at_the_day():
 
     service.run_once()
 
+    assert all(
+        context.dimensions(e)['host'] == context.cluster_name()
+        for e in context.published()
+    )
     amortized = context.published('cost.amortized')
     assert len(amortized) > 0
     scheduler = [
@@ -320,3 +323,20 @@ def test_disabled_outside_the_commercial_partition_or_without_a_provider():
     assert not CostMetricsService(
         FakeContext(values(**{'cluster-manager.metrics.cost.enabled': False}))
     ).is_enabled()
+
+
+def test_zero_row_is_published_for_both_cost_bases():
+    context = FakeContext(
+        values(), cost_explorer=StubCostExplorer(['scheduler'], responses())
+    )
+    CostMetricsService(context).run_once()
+    zero_points = [entry for entry in context.published() if entry['Value'] == 0]
+    assert {entry['MetricName'] for entry in zero_points} == {
+        'cost.amortized',
+        'cost.unblended',
+    }
+    assert len(zero_points) == 2
+    assert all(
+        entry['Timestamp'] == int(arrow.get('2026-09-13').timestamp())
+        for entry in zero_points
+    )

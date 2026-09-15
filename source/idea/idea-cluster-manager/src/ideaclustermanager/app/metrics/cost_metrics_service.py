@@ -78,6 +78,7 @@ class CostRow:
 class CostMetrics(BaseMetrics):
     def __init__(self, context: SocaContext):
         super().__init__(context, split_dimensions=False)
+        self.with_required_dimension('host', context.cluster_name())
 
     def publish(
         self,
@@ -184,8 +185,6 @@ class CostExplorerReader:
                     metrics = Utils.get_value_as_dict('Metrics', group, {})
                     amortized = amount(metrics, CE_AMORTIZED)
                     unblended = amount(metrics, CE_UNBLENDED)
-                    if amortized == 0 and unblended == 0:
-                        continue
                     dimensions = dict(constant or {})
                     group_keys = Utils.get_value_as_list('Keys', group, [])
                     for index, name in enumerate(keys):
@@ -268,6 +267,7 @@ class CostMetricsService(SocaService):
         super().__init__(context)
         self.context = context
         self.logger = context.logger('cost-metrics')
+        self._provider_warning_logged = False
         self._exit = threading.Event()
         self._thread = threading.Thread(
             target=self._loop, name='cost-metrics', daemon=True
@@ -282,7 +282,15 @@ class CostMetricsService(SocaService):
     def is_enabled(self) -> bool:
         if not self.context.config().get_bool(self._config_key('enabled'), False):
             return False
-        if Utils.is_empty(self.context.config().get_string('metrics.provider')):
+        provider = self.context.config().get_string('metrics.provider')
+        if provider != 'dogstatsd':
+            if not self._provider_warning_logged:
+                self.logger.warning(
+                    f'cost metrics disabled for provider {provider!r}: '
+                    'absolute daily totals require timestamped replacement, '
+                    'including negative corrections'
+                )
+                self._provider_warning_logged = True
             return False
         # Cost Explorer has no endpoint outside the commercial partition.
         return self.context.aws().aws_partition() == AWS_PARTITION_COMMERCIAL
@@ -342,6 +350,24 @@ class CostMetricsService(SocaService):
             self.logger.info(f'cost metrics are running elsewhere: {e}')
             return
         try:
+            # The standalone collector has no settings table: one task, no checkpoint.
+            db = getattr(self.context.config(), 'db', None)
+            checkpoint_key = self._config_key('last_published')
+            # A replica's settings cache can lag behind the previous lock holder.
+            # A consistent read prevents a completed interval from being published twice.
+            entry = (
+                db.cluster_settings_table.get_item(
+                    Key={'key': checkpoint_key}, ConsistentRead=True
+                ).get('Item', {})
+                if db is not None
+                else {}
+            )
+            last_published = entry.get('value')
+            if last_published is not None and (
+                arrow.utcnow().timestamp() - float(last_published)
+                < self.get_interval_seconds() / 2
+            ):
+                return
             start, end = self.window()
             by_account = self.context.config().get_bool(
                 self._config_key('by_account'), False
@@ -353,6 +379,8 @@ class CostMetricsService(SocaService):
                 metrics.publish(
                     row.family, day_epoch, row.dimensions, row.amortized, row.unblended
                 )
+            if db is not None:
+                db.set_config_entry(checkpoint_key, arrow.utcnow().timestamp())
             self.logger.info(
                 f'cost metrics published: {len(rows)} rows for {start.format("YYYY-MM-DD")}..{end.format("YYYY-MM-DD")}'
             )

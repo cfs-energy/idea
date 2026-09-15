@@ -20,6 +20,7 @@ from ideasdk.service import SocaService
 from ideasdk.utils import Utils
 
 from typing import Dict, List, Optional, Tuple
+import arrow
 import threading
 
 import requests
@@ -157,6 +158,7 @@ def user_usage(reports: List[Dict]) -> Dict[Tuple[str, str, str, str], Tuple[int
 class StorageMetrics(BaseMetrics):
     def __init__(self, context: SocaContext):
         super().__init__(context, split_dimensions=False)
+        self.with_required_dimension('host', context.cluster_name())
 
     def publish_gauge(self, name: str, value: float, dimensions: Dict[str, str]):
         self.push_dimensions()
@@ -244,6 +246,7 @@ class StorageMetricsService(SocaService):
         super().__init__(context)
         self.context = context
         self.logger = context.logger('storage-metrics')
+        self._provider_warning_logged = False
         self._exit = threading.Event()
         self._thread = threading.Thread(
             target=self._loop, name='storage-metrics', daemon=True
@@ -258,7 +261,15 @@ class StorageMetricsService(SocaService):
     def is_enabled(self) -> bool:
         if not self.context.config().get_bool(self._config_key('enabled'), False):
             return False
-        return Utils.is_not_empty(self.context.config().get_string('metrics.provider'))
+        provider = self.context.config().get_string('metrics.provider')
+        if provider not in ('dogstatsd', 'cloudwatch'):
+            if not self._provider_warning_logged:
+                self.logger.warning(
+                    f'storage metrics disabled for provider {provider!r}: storage gauges require gauge support'
+                )
+                self._provider_warning_logged = True
+            return False
+        return True
 
     def get_interval_seconds(self) -> int:
         return (
@@ -320,14 +331,34 @@ class StorageMetricsService(SocaService):
             self.logger.info(f'storage metrics are running elsewhere: {e}')
             return
         try:
+            # The standalone collector has no settings table: one task, no checkpoint.
+            db = getattr(self.context.config(), 'db', None)
+            checkpoint_key = self._config_key('last_published')
+            # A replica's settings cache can lag behind the previous lock holder.
+            # A consistent read prevents a completed interval from being published twice.
+            entry = (
+                db.cluster_settings_table.get_item(
+                    Key={'key': checkpoint_key}, ConsistentRead=True
+                ).get('Item', {})
+                if db is not None
+                else {}
+            )
+            last_published = entry.get('value')
+            if last_published is not None and (
+                arrow.utcnow().timestamp() - float(last_published)
+                < self.get_interval_seconds() / 2
+            ):
+                return
             verify_tls = self.context.config().get_bool(
                 self._config_key('verify_tls'), False
             )
             metrics = StorageMetrics(self.context)
+            succeeded = True
             for target in self.targets():
                 try:
                     password = self.context.config().get_secret(target.password_key)
                     if Utils.is_empty(password):
+                        succeeded = False
                         self.logger.warning(
                             f'{target.name}: no password at {target.password_key}. skip.'
                         )
@@ -345,6 +376,9 @@ class StorageMetricsService(SocaService):
                         f'{target.name}: {published} storage gauges from {len(volumes)} volumes and {len(reports)} quota records'
                     )
                 except Exception as e:
+                    succeeded = False
                     self.logger.warning(f'{target.name}: storage read failed: {e}')
+            if succeeded and db is not None:
+                db.set_config_entry(checkpoint_key, arrow.utcnow().timestamp())
         finally:
             self.context.distributed_lock().release(key=lock_key)
