@@ -135,6 +135,20 @@ If no modules are specified, all modules will be upgraded automatically.
 * `--module-set`: Name of the module set to use (default: default)
 * `--deployment-id`: UUID to identify the deployment
 * `--disable-eol-stacks-in-use`: Disable, rather than delete, end-of-life virtual desktop software stacks that a live session still uses
+* `--drain`: Before the scheduler moves from a host to a container, close job submission and wait for the host scheduler to finish every job it holds
+* `--drain-timeout-minutes`: How long `--drain` waits before stopping with submission still closed (default: 240)
+* `--skip-drain-check`: Do not read the host scheduler's job inventory before the container cutover; any job it still holds is lost
+
+When the upgrade turns containers on (`enable_ecs: true` in `values.yml`) and the scheduler still
+runs on a host, the container scheduler starts with an empty job database, so a job the host still
+holds is lost. Before anything is written, the upgrade reads the host scheduler's own job inventory
+over Systems Manager and refuses to continue while it is not empty. Pass `--drain` to have the
+upgrade close job submission (the cluster maintenance flag, which the portal and `qsub` both
+honour), wait for the inventory to empty, run the upgrade, and reopen submission at the end. Job
+ids start again from zero on the container scheduler, as they did after every scheduler host
+replacement before; from then on the job database lives on the scheduler's file system and
+survives every later upgrade. Upgrades of a scheduler that already runs as a container skip this
+check.
 
 The end-of-life check runs before the upgrade is confirmed and changes nothing: it lists the
 software stacks it will delete or disable, prefixed with `will delete` or `will disable`. Those

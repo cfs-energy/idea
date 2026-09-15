@@ -8,17 +8,12 @@
 
 Boto3 ([https://boto3.amazonaws.com/v1/documentation/api/latest/index.html](https://boto3.amazonaws.com/v1/documentation/api/latest/index.html)) is the official AWS Python SDK. We recommend to update boto3 on a regular basis in order to stay up-to-date with the latest AWS releases (new instance types ...)
 
-To update Boto3, run the following patch command:
+On a cluster whose control plane runs as containers, the SDK version is part of the control plane image: build an image with the newer Boto3 and roll it out as described in [patch-idea-module.md](../first-time-users/cluster-operations/update-idea-cluster/patch-idea-module.md "mention"). On a host, run the update over Systems Manager and restart the services:
 
 ```
-./idea-admin.sh patch scheduler \
-  --cluster-name <CLUSTER_NAME> \
-  --aws-region <REGION> \
-  --force \
-  --patch-command 'sudo idea_pip install boto3 --upgrade && sudo supervisorctl restart all'
+aws ssm send-command --instance-ids <SCHEDULER_INSTANCE_ID> --document-name AWS-RunShellScript \
+  --parameters 'commands=["sudo idea_pip install boto3 --upgrade && sudo supervisorctl restart all"]'
 ```
-
-Refer to [patch-idea-module.md](../first-time-users/cluster-operations/update-idea-cluster/patch-idea-module.md "mention") to learn more about the patch utility
 
 </details>
 
@@ -251,7 +246,7 @@ See [storage](../modules/storage/ "mention") module
 
 <summary>How do I automatically add new tags during the installation?</summary>
 
-Update the last section of idea/idea-administrator/resources/config/templates/global-settings/settings.yml
+Update the last section of source/idea/ideactl/resources/config/templates/global-settings/settings.yml
 
 ```
 # provide custom tags for all resources created by IDEA
@@ -268,7 +263,7 @@ custom_tags: []
 
 <summary>How to automatically add IAM Managed Policies to existing IDEA IAM roles</summary>
 
-Add the managed policy ARN in cluster settings: source/idea-administrator/resources/config/templates/cluster/settings.yml
+Add the managed policy ARN in cluster settings: source/idea/ideactl/resources/config/templates/cluster/settings.yml
 
 All roles will contain the policy(ies) you have added to the list.
 

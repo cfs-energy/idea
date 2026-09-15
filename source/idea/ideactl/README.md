@@ -16,7 +16,8 @@ than improving them.
 | `src/cli/` | The `ideactl` command tree and CDK invocation helpers. |
 | `src/lambda/` | Custom-resource and event handler ports, with shared CloudFormation response support in `commons/`. |
 | `src/util/` | Compatibility helpers such as identifiers, names, hashes, and YAML handling. |
-| `resources-ecs/` | Container-module config templates, overlaid onto `dist/resources/config` during a build. The rest of the resource tree still lives in the administrator package. |
+| `resources/` | Config templates, policies, CDK inputs, Lambda sources, installer parameters and integration-test data, copied into `dist/resources` during a build. |
+| `resources-ecs/` | The container control plane's observability specification. |
 | `tools/parity/` | Offline template comparison, fixture capture, fixture-driven synth, and config flattening. |
 | `tools/e2e/` | Opt-in tools for exercising a deployed control plane through its public endpoints. |
 | `test/` | Focused `node:test` suites, one directory per area under test. |
@@ -35,7 +36,7 @@ Use the installed Node runtime's native TypeScript stripping for focused tests;
 do not compile first:
 
 ```sh
-node --test 'test/w4/*.test.ts'
+node --test 'test/parity/*.test.ts'
 ```
 
 The project is ESM. Relative imports use `.ts` extensions, type-only imports
@@ -71,7 +72,7 @@ Run the harness checks and inspect the flattener interface from this package
 directory:
 
 ```sh
-node --test 'test/w4/*.test.ts'
+node --test 'test/parity/*.test.ts'
 python3 tools/parity/flatten.py --help
 ```
 
@@ -103,7 +104,7 @@ failure behaviour. It must cover every relevant CloudFormation request type
 when Python treats them differently. For example:
 
 ```sh
-node --test 'test/w24-create_tags/*.test.ts'
+node --test 'test/lambda/*.test.ts'
 ```
 
 ## End-to-end tools

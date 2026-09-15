@@ -10,7 +10,7 @@ Search the [open issues](https://github.com/cfs-energy/idea/issues) first; the p
 
 ## What to include
 
-* **The IDEA version:** the contents of `IDEA_VERSION.txt` in the release you deployed, or the `idea-administrator` image tag you ran (for example `26.09.0`).
+* **The IDEA version:** the contents of `IDEA_VERSION.txt` in the release you deployed, or the `idea-control-plane` image tag you ran (for example `v26.09.0`).
 * **Where it happened:** the web portal, the cluster manager, the scheduler, virtual desktops, the installer or an upgrade; the base OS of the host or desktop involved; the AWS region and partition.
 * **Steps to reproduce**, what you expected, and what happened instead.
 * **The exact error text:** the message on screen for the portal, the full command output for `idea-admin.sh`.

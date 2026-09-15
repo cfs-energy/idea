@@ -396,7 +396,7 @@ Deploy module stacks. `all` may be the only module id and means every undeployed
 | `--module-set <module-set>` | yes | `"default"` | no |
 | `--allow-replacement <logical-id>` | yes, repeatable | none | no |
 
-**Reads:** DynamoDB modules and settings. If the deployment includes `ecs`, also reads the account `awsvpcTrunking` setting. **Changes:** bootstrap packages in the cluster bucket, CloudFormation stacks via a change set that is inspected before execute, `deployments/<id>/<module>-outputs.json`. Using `all` with any other module id exits 1 (`fatal error - use of "all" deployment must be the only requested module`). If `awsvpcTrunking` is not enabled, the command prints the exact `aws ecs put-account-setting-default` command and exits 1 without deploying.
+**Reads:** DynamoDB modules and settings. If the deployment includes `ecs`, also reads the account `awsvpcTrunking` setting. **Changes:** bootstrap packages in the cluster bucket, CloudFormation stacks via a change set that is inspected before execute, `deployments/<id>/<module>-outputs.json`. After the `cluster` module deploys, any `cluster.network.client_ip` address the cluster prefix list does not already hold is added to it; nothing is ever removed. Using `all` with any other module id exits 1 (`fatal error - use of "all" deployment must be the only requested module`). If `awsvpcTrunking` is not enabled, the command prints the exact `aws ecs put-account-setting-default` command and exits 1 without deploying.
 
 **Example:** `ideactl deploy --cluster-name sample-cluster --aws-region us-east-2 metrics`
 
@@ -486,7 +486,7 @@ If nothing is deployed, the command prints an error to stderr and still exits 0.
 
 ## `upgrade-cluster`
 
-Upgrade an existing cluster: refuse EOL base OS that is still referenced, preview drift, then run phases 1 to 4 (values base OS, global settings backup and rewrite, optional full config sync, AMI and instance-type keys, then module deploy). Empty `modules` means every module.
+Upgrade an existing cluster: refuse a cluster with any deployed module below the previous published release (a jump across more than one release is not supported), refuse EOL base OS that is still referenced, preview drift, then run phases 1 to 4 (values base OS, global settings backup and rewrite, optional full config sync, AMI and instance-type keys, then module deploy). Empty `modules` means every module.
 
 **Usage:** `ideactl upgrade-cluster [options] [modules...]`
 
@@ -511,8 +511,11 @@ Upgrade an existing cluster: refuse EOL base OS that is still referenced, previe
 | `--accept-config-drift` | no | none | no |
 | `--skip-global-settings-update` | no | none | no |
 | `--disable-eol-stacks-in-use` | no | none | no |
+| `--drain` | no | none | no |
+| `--drain-timeout-minutes <minutes>` | yes | none | no |
+| `--skip-drain-check` | no | none | no |
 
-**Reads:** cluster tables, `values.yml`, AMI maps, EC2 images and instance types, OpenSearch instance types, eVDI software-stack tables. **Changes:** `values.yml`, a `config.golden.<timestamp>/` copy, DynamoDB settings, instance termination protection (cleared then restored), module stacks, and an upload of `values.yml` to the cluster bucket. The scheduler should be drained before this run. **Exit codes:** 1 on EOL refusal, missing AMI, unsupported instance type, or configuration rows the run would overwrite whose value differs from generated configuration without `--accept-config-drift`; 0 if a confirmation is declined.
+**Reads:** cluster tables, `values.yml`, AMI maps, EC2 images and instance types, OpenSearch instance types, eVDI software-stack tables, and the host scheduler's PBS job inventory over Systems Manager when the run turns containers on. **Changes:** `values.yml`, a `config.golden.<timestamp>/` copy, DynamoDB settings, instance termination protection (cleared then restored), module stacks, and an upload of `values.yml` to the cluster bucket. When the run moves the scheduler from a host to a container, the host's job inventory must be empty: the run refuses otherwise, or with `--drain` closes submission (the cluster-manager maintenance flag), waits for it to empty, and reopens submission at the end. **Exit codes:** 1 on the release floor refusal, EOL refusal, missing AMI, unsupported instance type, or configuration rows the run would overwrite whose value differs from generated configuration without `--accept-config-drift`; 0 if a confirmation is declined.
 
 **Example:** `ideactl upgrade-cluster --cluster-name sample-cluster --aws-region us-east-2 --base-os amazonlinux2023 --force`
 
@@ -563,7 +566,7 @@ Delete a cluster. Bootstrap, databases, backups, and log groups stay unless thei
 | `--delete-all` | no | none | no |
 | `--force` | no | none | no |
 
-**Reads:** tagged EC2 instances and CloudFormation stacks, Cognito user pools, backup vault, DynamoDB table names, log groups. **Changes:** terminates instances, deletes stacks (identity-provider and cluster last), optionally recovery points, tables, log groups, the bootstrap stack, and the cluster bucket. **Exit codes:** unhandled abort errors exit 1 with a traceback. Declining the first prompt returns 0.
+**Reads:** tagged EC2 instances and CloudFormation stacks, Cognito user pools, backup vault, DynamoDB table names, log groups. **Changes:** terminates instances, deletes stacks (module stacks, then the container capacity stack, then identity-provider, then the record sets services left in the private hosted zone, then the cluster stack), optionally recovery points, tables, log groups, the bootstrap stack, and the cluster bucket. **Exit codes:** unhandled abort errors exit 1 with a traceback. Declining the first prompt returns 0.
 
 **Example:** `ideactl delete-cluster --cluster-name sample-cluster --aws-region us-east-2 --force`
 

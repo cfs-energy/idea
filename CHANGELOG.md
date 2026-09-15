@@ -4,6 +4,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
+## [26.10.0] - Unreleased
+
+**Upgrade Instructions:**
+* Control plane release on top of 26.09.0. A cluster on 26.09.0 upgrades directly; an older cluster upgrades to 26.09.0 first with that release's administrator, since the upgrade floor moves to 26.09.0
+* The administrator is now `ideactl`, a Node tool that `idea-admin.sh` runs inside the `idea-control-plane` image, or from source with `IDEA_DEV_MODE=true`. Every command keeps its name and flags; `patch` is removed (see the updated documentation)
+* Containers are opt-in per cluster: set `enable_ecs: true` in `values.yml` and run `upgrade-cluster --drain` once. Without it the upgrade redeploys the host shape as before
+* Before turning containers on: the account's `awsvpcTrunking` ECS setting must be enabled, `ecs.hosts.instance_type` (default `m7g.large`) must be offered in the cluster's subnets, and a GovCloud cluster needs the image pushed to a repository in its account with `ecs.image` pointing at it
+* The move makes the cluster manager, the scheduler, and the virtual desktop controller, DCV broker and DCV connection gateway ECS services on a Graviton host pool. Job submission is closed for the run and the host scheduler is drained first; job ids start again from zero, once; the portal is unavailable for a few minutes while the cluster-manager stack cuts over; the bastion host is recreated once, with a new public address
+* Every Lambda handler is now Node 22. The self-signed certificate custom resources remain in the templates as retained no-ops and the solution-metrics function is neutered; both are removed in the next release
+```bash
+./idea-admin.sh upgrade-cluster --aws-region $IDEA_AWS_REGION --cluster-name $IDEA_CLUSTER_NAME --drain
+```
+([Move the control plane to containers](https://docs.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/move-to-containers))
+
+### **✨ New Features**
+* **Container Control Plane**: The control plane modules run as ECS services on a small Graviton host pool instead of one host each, from a single `idea-control-plane` image, on clusters with `enable_ecs: true`
+* **Rolling Upgrades**: Point `ecs.image` at a new release and run `upgrade-cluster`; each service rolls to a new task definition revision behind its load balancer, a job running through the scheduler roll finishes normally, and desktop connections reconnect through the gateway
+* **ideactl**: The administrator is a TypeScript tool with the same commands as before; it synthesizes the same CloudFormation templates as the Python administrator, checked by a parity gate against the deployed templates of real clusters
+* **Change-Set Guard**: Every deploy creates a change set and reads it before executing; a change that replaces or removes a stateful resource is refused and named, and `--allow-replacement <logical-id>` is the operator's explicit acceptance. Task definition revisions and the two retired custom resources are allowed by name
+* **Scheduler Cutover Gate**: `upgrade-cluster` reads the host scheduler's PBS job inventory over Systems Manager before the container cutover and refuses a non-empty one; `--drain` closes submission through the maintenance flag, waits, upgrades and reopens; `--drain-timeout-minutes` and `--skip-drain-check`
+* **Proof Matrix**: `tools/e2e/proof-matrix.ts` proves a running cluster with nine checks: desktop end to end, desktop SSH through the bastion, gateway and broker task replacement, scheduler replacement and image upgrade with a witnessed job, job burst, API load and gateway load
+* **Offline Upgrade Rehearsal**: `tools/parity/upgrade-dry-run.ts` replays `upgrade-cluster` against a captured cluster and lists every write it would make, without touching an account
+
+### **🔧 Improvements**
+* **Upgrades**: The scheduler's DNS record is retained with a policy-only stack update before the container cutover, so the container scheduler takes the name over without CloudFormation deleting it; the container module's module-set registration is held until the last stack deploys, so the running portal keeps working through the upgrade
+* **Deploys**: A bootstrap archive is named by its rendered content, so a host whose bootstrap did not change is left alone by an image-only upgrade; a change set that replaces a termination-protected instance clears the protection first, so the old instance is deleted rather than left running unreferenced
+* **Dependencies**: aws-cdk-lib 2.269, CDK CLI 2.1141, AWS SDK 3.1132, TypeScript 7, cdk-nag 3 and js-yaml 5; an unacknowledged cdk-nag finding now fails synthesis
+* **Documentation**: A runbook for the move to containers, the module code update page rewritten for the deploy paths, and the new `upgrade-cluster` flags
+
+### **🗑️ Removed**
+* The Python administrator (`source/idea/idea-administrator`), its container image and build, the Python Lambda toolchain, and `idea-admin.sh patch`
+
 ## [26.09.0] - 2026-09-04
 
 **Upgrade Instructions:**
