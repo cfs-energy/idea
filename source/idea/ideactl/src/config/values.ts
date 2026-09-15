@@ -514,6 +514,29 @@ function getters(values: UserValues, options: BuildContextOptions) {
       return url;
     },
 
+    /** The container host pool runs the Datadog agent when the modules send to it. */
+    datadogAgent: () => g.enableEcs() && g.metricsProvider() === 'dogstatsd',
+
+    datadogApiKeySecretArn(): string | null {
+      const value = getString('datadog_api_key_secret_arn', values);
+      if (isEmpty(value) && g.datadogAgent()) {
+        throw new GeneralException(
+          'datadog_api_key_secret_arn is required when metrics_provider = dogstatsd and enable_ecs = true',
+        );
+      }
+      return value;
+    },
+
+    datadogAgentImage(): string | null {
+      const value = getString('datadog_agent_image', values);
+      if (isEmpty(value) && g.datadogAgent()) {
+        throw new GeneralException(
+          'datadog_agent_image is required when metrics_provider = dogstatsd and enable_ecs = true',
+        );
+      }
+      return value;
+    },
+
     useExistingVpc: () => getBool('use_existing_vpc', values, false),
 
     vpcId(): string | null {
@@ -729,6 +752,9 @@ export function buildContext(
     enabled_modules: g.enabledModules(),
     metrics_provider: g.metricsProvider(),
     prometheus_remote_write_url: g.prometheusRemoteWriteUrl(),
+    datadog_agent: g.datadogAgent(),
+    datadog_api_key_secret_arn: g.datadogApiKeySecretArn(),
+    datadog_agent_image: g.datadogAgentImage(),
     use_existing_vpc: g.useExistingVpc(),
     vpc_id: g.vpcId(),
     private_subnet_ids: g.privateSubnetIds(),

@@ -49,6 +49,8 @@ SocaInputParamSpec:
             # - name: identity_provider todo - enable after keycloak implementation
             - name: metrics_provider
             - name: prometheus_remote_write_url
+            - name: datadog_api_key_secret_arn
+            - name: datadog_agent_image
             - name: base_os
             - name: instance_type
             - name: volume_size
@@ -103,6 +105,8 @@ SocaInputParamSpec:
             # - name: identity_provider todo - enable after keycloak implementation
             - name: metrics_provider
             - name: prometheus_remote_write_url
+            - name: datadog_api_key_secret_arn
+            - name: datadog_agent_image
             - name: base_os
             - name: instance_type
             - name: volume_size
@@ -449,6 +453,28 @@ SocaInputParamSpec:
       when:
         param: metrics_provider
         eq: prometheus
+    - name: datadog_api_key_secret_arn
+      title: "Datadog API Key Secret ARN"
+      description: "Enter the ARN of the Secrets Manager secret holding the Datadog API key"
+      param_type: text
+      data_type: str
+      help_text: ~
+      validate:
+        required: yes
+      when:
+        param: metrics_provider
+        eq: dogstatsd
+    - name: datadog_agent_image
+      title: "Datadog Agent Image"
+      description: "Enter the digest-pinned Datadog agent image in a private ECR repository"
+      param_type: text
+      data_type: str
+      help_text: ~
+      validate:
+        required: yes
+      when:
+        param: metrics_provider
+        eq: dogstatsd
     #--------------------------------------------------------------------------------------------------
     # existing resources
     #--------------------------------------------------------------------------------------------------

@@ -663,6 +663,7 @@ describe('error paths reject the values file', () => {
     'el10-with-evdi.yml': /not supported with the virtual-desktop-controller module/,
     'arm64-flat-ami-file.yml': /architecture: arm64 was requested/,
     'prometheus-without-url.yml': /prometheus_remote_write_url is required/,
+    'dogstatsd-ecs-without-secret.yml': /datadog_api_key_secret_arn is required/,
     'existing-apps-fs-new-vpc.yml': /use_existing_apps_fs cannot be True/,
   };
   for (const caseFile of syntheticCases(errorsDir)) {

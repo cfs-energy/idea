@@ -22,11 +22,12 @@ const valuesFile = fileURLToPath(new URL("./ecs-values.yml", import.meta.url));
 // CLI, never a key the stack can apply. `ecs.image` resolves to the partition's repository at the
 // release version tag, because the stack requires the setting and a fresh install has no other
 // writer for it; a deploy may replace it with a digest-qualified reference to the same manifest.
-// The metrics agent image is validated separately as a digest-pinned private reference.
+// The metrics agent daemon is off until the modules send to it; the image is validated by the
+// stack as a digest-pinned private reference.
 const expectedSettings = {
   "ecs.datadog.api_key_secret_arn": null,
   "ecs.datadog.enabled": false,
-  "ecs.datadog.image": "public.ecr.aws/datadog/agent:7.83.1",
+  "ecs.datadog.image": null,
   "ecs.enabled": true,
   ...ECS_HOST_SETTINGS,
   "ecs.image": `public.ecr.aws/s5o2b4m0/idea-control-plane:${ideaVersion()}`,
@@ -58,4 +59,16 @@ test("renders the complete ECS configuration key set", () => {
   assert.ok(ids.includes("cluster-manager"), "production idea.yml must still list cluster-manager");
   assert.ok(ids.indexOf("ecs") < ids.indexOf("cluster-manager"), ids.join(","));
   assert.deepStrictEqual(ecsSettings, expectedSettings);
+});
+
+test("turns the metrics agent daemon on from values when the modules send to it", () => {
+  const configDir = mkdtempSync(join(tmpdir(), "ideactl-ecs-config-datadog-"));
+  generateConfig(fileURLToPath(new URL("./ecs-values-datadog.yml", import.meta.url)), configDir);
+  const settings = flattenConfigDir(configDir);
+
+  assert.equal(settings["ecs.datadog.enabled"], true);
+  assert.equal(settings["ecs.datadog.api_key_secret_arn"], "arn:aws:secretsmanager:us-east-2:123456789012:secret:idea-test1-datadog-api-key-AbCdEf");
+  assert.equal(settings["ecs.datadog.image"], "123456789012.dkr.ecr.us-east-2.amazonaws.com/datadog/agent@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+  assert.equal(settings["metrics.provider"], "dogstatsd");
+  assert.equal(settings["metrics.dogstatsd.url"], "unix:///var/run/datadog/dsd.socket");
 });

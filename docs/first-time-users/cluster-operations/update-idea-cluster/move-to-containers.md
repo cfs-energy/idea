@@ -37,20 +37,55 @@ From this release the cluster manager, the scheduler and the virtual desktop con
 
 ## Metrics to Datadog
 
-The modules can send their metrics to a Datadog agent over DogStatsD, and the host pool can run that agent as a daemon on every host. Both are off by default.
+With `metrics_provider: dogstatsd` the modules send their own metrics to a Datadog agent over DogStatsD. Names are prefixed `idea.` and tagged `idea_cluster`, `idea_module` and `component`; the scheduler publishes `idea.job.count`, `idea.job.duration_seconds`, `idea.job.cost`, `idea.job.cost_ondemand`, `idea.job.savings` and `idea.job.cpu_efficiency` as each job completes. On a container cluster the host pool runs the agent as a daemon on every host, every task shares its socket, and the agent adds its own container and host metrics tagged `idea_cluster:<cluster>` with the module in `service`. None of this uses the Datadog AWS integration; that stays a per-account setting on the Datadog side.
 
-1. Copy the agent image into a private ECR repository in the cluster's account and note its digest. The agent runs with the host's Docker socket and process namespace, so the stack accepts only a digest-pinned image from a private repository.
-2. Store the Datadog API key in Secrets Manager.
-3. Set the cluster settings and run `upgrade-cluster`:
+### Once per cluster
 
-```yaml
-ecs.datadog.enabled: true
-ecs.datadog.image: <account>.dkr.ecr.<region>.amazonaws.com/datadog/agent@sha256:<digest>
-ecs.datadog.api_key_secret_arn: arn:aws:secretsmanager:<region>:<account>:secret:<name>
-metrics.provider: dogstatsd
+1. Put the API key in Secrets Manager. The key never enters `values.yml` or the settings table, only the secret's ARN does, and the agent reads it when a task starts.
+
+```bash
+aws secretsmanager create-secret --name idea-<CLUSTER_NAME>-datadog-api-key --secret-string '<API key>' --query ARN
 ```
 
-Every task then mounts the agent's socket at `/var/run/datadog/dsd.socket` and the modules send to it. Metric names are prefixed `idea.` and tagged `idea_cluster`, `idea_module` and `component`; the scheduler publishes `idea.job.count`, `idea.job.duration_seconds`, `idea.job.cost`, `idea.job.cost_ondemand`, `idea.job.savings` and `idea.job.cpu_efficiency` as each job completes. The agent's own container and host metrics arrive tagged `idea_cluster:<cluster>`, with the service name in `service`. Without the daemon, `metrics.dogstatsd.url` points the modules at an agent you run elsewhere.
+2. Copy the agent image into a private ECR repository in the account and record its digest. The agent runs with the host's Docker socket and process namespace, so the stack accepts only a digest-pinned image from a private repository.
+
+```bash
+aws ecr create-repository --repository-name datadog/agent
+docker pull public.ecr.aws/datadog/agent:7.83.1
+docker tag public.ecr.aws/datadog/agent:7.83.1 <ACCOUNT>.dkr.ecr.<REGION>.amazonaws.com/datadog/agent:7.83.1
+docker push <ACCOUNT>.dkr.ecr.<REGION>.amazonaws.com/datadog/agent:7.83.1
+aws ecr describe-images --repository-name datadog/agent --query 'imageDetails[0].imageDigest'
+```
+
+3. Record both in `values.yml`:
+
+```yaml
+metrics_provider: dogstatsd
+datadog_api_key_secret_arn: arn:aws:secretsmanager:<REGION>:<ACCOUNT>:secret:idea-<CLUSTER_NAME>-datadog-api-key-XXXXXX
+datadog_agent_image: <ACCOUNT>.dkr.ecr.<REGION>.amazonaws.com/datadog/agent@sha256:<DIGEST>
+```
+
+A fresh install asks for both when Datadog is the metrics provider. The move to containers generates the container module's settings from them, so `upgrade-cluster --drain` turns the daemon on in the same run. Later upgrades regenerate the same values and never ask for the key again.
+
+### On a cluster already running containers
+
+An upgrade adds settings rows it has not seen and leaves existing rows alone, so switching an existing container cluster is a direct write of the rows the daemon and the modules read, followed by a deploy that gives every task the agent's socket:
+
+```bash
+./idea-admin.sh config set --cluster-name <CLUSTER_NAME> --aws-region <REGION> \
+  'Key=metrics.provider,Type=str,Value=dogstatsd' \
+  'Key=metrics.dogstatsd.url,Type=str,Value=unix:///var/run/datadog/dsd.socket' \
+  'Key=ecs.datadog.enabled,Type=bool,Value=true' \
+  'Key=ecs.datadog.api_key_secret_arn,Type=str,Value=<SECRET_ARN>' \
+  'Key=ecs.datadog.image,Type=str,Value=<IMAGE@sha256:DIGEST>'
+./idea-admin.sh upgrade-cluster --cluster-name <CLUSTER_NAME> --aws-region <REGION>
+```
+
+Put the same three keys in `values.yml` as well, so a later regeneration agrees with the table.
+
+### Rotating the key
+
+Write the new value into the same secret, then restart the daemon so its tasks read it: `aws ecs update-service --force-new-deployment` on the datadog service of the cluster's ECS cluster, whose name is the `ecs.cluster_name` setting. Nothing in IDEA changes.
 
 ## Routine upgrades from here
 

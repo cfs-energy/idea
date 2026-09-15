@@ -245,6 +245,8 @@ describe("installer parameters", () => {
       ["metrics provider required", newNetworkAnswers({ metrics_provider: "" })],
       ["customer key required", newNetworkAnswers({ kms_key_type: "customer-managed", kms_key_id: "" })],
       ["conditional URL required", newNetworkAnswers({ metrics_provider: "prometheus", prometheus_remote_write_url: "" })],
+      ["datadog secret required", newNetworkAnswers({ metrics_provider: "dogstatsd", datadog_api_key_secret_arn: "" })],
+      ["datadog image required", newNetworkAnswers({ metrics_provider: "dogstatsd", datadog_api_key_secret_arn: "arn:aws:secretsmanager:us-east-2:123456789012:secret:idea-test1-datadog-api-key-AbCdEf", datadog_agent_image: "" })],
       ["cluster name", newNetworkAnswers({ cluster_name: "someidea" })],
     ];
 

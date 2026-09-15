@@ -48,6 +48,10 @@ enabled_modules: []
 metrics_provider: cloudwatch
 # required when metrics_provider = prometheus
 prometheus_remote_write_url: ~
+# required when metrics_provider = dogstatsd and enable_ecs = true: the Secrets Manager secret
+# holding the Datadog API key, and the agent image, digest-pinned, in a private ECR repository
+datadog_api_key_secret_arn: ~
+datadog_agent_image: ~
 # aws backup
 enable_aws_backup: true
 # Virtual Desktop Controller - DCV Broker

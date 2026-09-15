@@ -25,11 +25,11 @@ cloudwatch:
 
 {% if metrics_provider == 'dogstatsd' %}
 dogstatsd:
-  # Where the modules send metrics. A Datadog agent next to the module (a sidecar, or
-  # an agent on the host) receives them; nothing is provisioned in AWS for this provider.
-  # udp://host:port, or unix:///path/to/dsd.socket for an agent sharing a volume.
-  # DD_DOGSTATSD_URL in the module environment overrides this.
-  url: udp://127.0.0.1:8125
+  # Where the modules send metrics. On a container cluster the agent daemon shares its socket with
+  # every task; on hosts an agent on the host receives them. udp://host:port, or
+  # unix:///path/to/dsd.socket. When this is empty the module environment's DD_DOGSTATSD_URL is
+  # used, then UDP on localhost.
+  url: {% if enable_ecs %}unix:///var/run/datadog/dsd.socket{% else %}udp://127.0.0.1:8125{% endif %}
 {% endif %}
 
 {% if metrics_provider == 'amazon_managed_prometheus' %}
