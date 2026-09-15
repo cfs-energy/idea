@@ -8,7 +8,7 @@
  * `DeletionPolicy` and every policy on a resource that is not stateful.
  *
  * This helper shares its predicate with the code it is checking, so it cannot notice a type
- * dropped from that predicate. The assertions that can are in `test/retain-stateful`, which
+ * dropped from that predicate. The assertions that can are in `test/stacks/retain-stateful.test.ts`, which
  * carries its own list.
  */
 
