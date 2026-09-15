@@ -217,6 +217,9 @@ export function buildTaskDefinition(
   return taskDefinition;
 }
 
+/** Where the metrics agent daemon listens and every task sends: a socket on a host path both mount. */
+export const DOGSTATSD_SOCKET = "/var/run/datadog/dsd.socket";
+
 /** Common task environment values. */
 export function commonEnvironment(
   scope: ContainerScope,
@@ -224,7 +227,7 @@ export function commonEnvironment(
 ): Record<string, string> {
   return {
     AWS_DEFAULT_REGION: scope.ctx.awsRegion,
-    DD_DOGSTATSD_URL: "unix:///var/run/datadog/dsd.socket",
+    DD_DOGSTATSD_URL: `unix://${DOGSTATSD_SOCKET}`,
     IDEA_CLUSTER_NAME: scope.ctx.clusterName,
     IDEA_CONTAINER_ROLE: input.role,
     IDEA_MODULE_ID: input.moduleId,

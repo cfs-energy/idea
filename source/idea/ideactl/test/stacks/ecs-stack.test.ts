@@ -287,16 +287,19 @@ test("adopts existing agent log groups with 90-day retention and preserves them 
   );
 });
 
-test("keeps the observability task definition for a rollback and uses capacity providers", () => {
+test("keeps the observability task definition for a rollback and runs the daemon on the EC2 launch type", () => {
   const resources = resourcesOf(synth(true));
   for (const [id, task] of byType(resources, "AWS::ECS::TaskDefinition")) {
     assert.equal(task["DeletionPolicy"], "Retain", `${id} retained`);
     assert.equal(task["UpdateReplacePolicy"], "Retain", `${id} retained on replacement`);
   }
+  // ECS refuses a capacity provider strategy on the DAEMON scheduling strategy (idea-dev27-ecs
+  // rolled back on exactly that, 2026-09-15); a daemon names the launch type instead.
   for (const [id, service] of byType(resources, "AWS::ECS::Service")) {
     const properties = record(service["Properties"], `${id} properties`);
-    assert.ok(Array.isArray(properties["CapacityProviderStrategy"]), `${id} uses capacity provider strategy`);
-    assert.equal(properties["LaunchType"], undefined, `${id} does not use launch type`);
+    assert.equal(properties["SchedulingStrategy"], "DAEMON", `${id} is a daemon`);
+    assert.equal(properties["CapacityProviderStrategy"], undefined, `${id} names no capacity provider strategy`);
+    assert.equal(properties["LaunchType"], "EC2", `${id} uses the EC2 launch type`);
   }
 });
 
@@ -348,6 +351,20 @@ test("creates the host observability daemon only when enabled", () => {
   assert.ok(
     services.some(([, service]) => record(service["Properties"], "service properties")["SchedulingStrategy"] === "DAEMON"),
     "observability service uses daemon scheduling",
+  );
+
+  // The tasks send to a socket on a host path; the agent listens on UDP unless told to open it
+  // (idea-dev27 ran a day with every module's metrics going nowhere, 2026-09-15).
+  const [, task] = byType(enabled, "AWS::ECS::TaskDefinition")[0]!;
+  const container = record((record(task["Properties"], "task properties")["ContainerDefinitions"] as unknown[])[0], "agent container");
+  const environment = Object.fromEntries(
+    (container["Environment"] as Array<{ Name: string; Value: string }>).map((entry) => [entry.Name, entry.Value]),
+  );
+  assert.equal(environment["DD_DOGSTATSD_SOCKET"], "/var/run/datadog/dsd.socket");
+  assert.equal(environment["DD_DOGSTATSD_ORIGIN_DETECTION"], "true");
+  assert.ok(
+    (container["MountPoints"] as Array<{ ContainerPath: string }>).some((mount) => mount.ContainerPath === "/var/run/datadog"),
+    "the socket directory is mounted from the host",
   );
 });
 

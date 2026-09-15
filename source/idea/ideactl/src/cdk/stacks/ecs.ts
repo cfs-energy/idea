@@ -15,7 +15,13 @@ import { Aws, CustomResource, RemovalPolicy } from "aws-cdk-lib";
 import type { StackBuildProps } from "../app.ts";
 import { IdeaBaseStack } from "../base-stack.ts";
 import { CustomResourceProvider, LOG_RETENTION_DAYS } from "../constructs/common.ts";
-import { buildExecutionRole, ecsTasksPrincipal, storageMounts, type ContainerScope } from "../constructs/container.ts";
+import {
+  DOGSTATSD_SOCKET,
+  buildExecutionRole,
+  ecsTasksPrincipal,
+  storageMounts,
+  type ContainerScope,
+} from "../constructs/container.ts";
 import { IdeaCodeAsset } from "../code-asset.ts";
 import { ExistingSocaCluster } from "../constructs/existing-resources.ts";
 import * as autoscaling from "aws-cdk-lib/aws-autoscaling";
@@ -442,7 +448,13 @@ export class EcsStack extends IdeaBaseStack {
     // module set only after every stack has deployed (see `heldModuleSetEntries`).
     const datadogLogGroupName = `/${this.clusterName}/${this.moduleId}/datadog`;
     const container = taskDefinition.addContainer("datadog-container", {
-      environment: { DD_TAGS: `idea_cluster:${this.clusterName}` },
+      // The agent listens on UDP by default; the tasks send to the socket they mount, so the
+      // agent has to open it, and origin detection tags each point with its sending container.
+      environment: {
+        DD_DOGSTATSD_ORIGIN_DETECTION: "true",
+        DD_DOGSTATSD_SOCKET: DOGSTATSD_SOCKET,
+        DD_TAGS: `idea_cluster:${this.clusterName}`,
+      },
       image: ecs.ContainerImage.fromRegistry(this.datadogImage()),
       logging: this.adoptedLogDriver("datadog-logs", datadogLogGroupName, STREAM_PREFIX_DATADOG),
       memoryReservationMiB: 512,
@@ -463,8 +475,9 @@ export class EcsStack extends IdeaBaseStack {
         sourceVolume: mount.name,
       });
     }
+    // A daemon runs on every host, so it names no capacity provider: ECS refuses a strategy on
+    // the DAEMON scheduling strategy, and without one CDK sets the plain EC2 launch type.
     const service = new ecs.Ec2Service(this.stack, "datadog-service", {
-      capacityProviderStrategies: [{ capacityProvider: this.capacityProvider.capacityProviderName, weight: 1 }],
       cluster: this.ecsCluster,
       daemon: true,
       taskDefinition,
