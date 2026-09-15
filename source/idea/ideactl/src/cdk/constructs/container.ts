@@ -254,6 +254,24 @@ export function roleSizing(scope: ContainerScope, role: ContainerRole): RoleSizi
 }
 
 /** Returns EFS and host bind mounts declared by shared-storage settings. */
+/**
+ * The host bootstrap mounted a file system on a control plane host when its scope named the
+ * cluster or that host's module; the container hosts serve every control plane module, so the
+ * same rule reads against all of them. No scope means the cluster.
+ */
+const CONTROL_PLANE_SCOPES: ReadonlySet<string> = new Set([
+  "cluster",
+  "cluster-manager",
+  "scheduler",
+  "vdc",
+  "virtual-desktop-controller",
+]);
+
+export function inControlPlaneScope(scope: unknown): boolean {
+  if (!Array.isArray(scope) || scope.length === 0) return true;
+  return scope.some((entry) => typeof entry === "string" && CONTROL_PLANE_SCOPES.has(entry));
+}
+
 export function storageMounts(config: IdeaContext["config"]): StorageMount[] {
   const mounts: StorageMount[] = [];
   const storageRoot = config.getConfig("shared-storage", {}) ?? {};
@@ -261,6 +279,7 @@ export function storageMounts(config: IdeaContext["config"]): StorageMount[] {
     if (!isRecord(storage) || typeof storage["mount_dir"] !== "string" || typeof storage["provider"] !== "string") {
       continue;
     }
+    if (!inControlPlaneScope(storage["scope"])) continue;
     const mountPath = storage["mount_dir"];
     if (storage["provider"] === "efs") {
       const efs = storage["efs"];
@@ -268,7 +287,11 @@ export function storageMounts(config: IdeaContext["config"]): StorageMount[] {
         mounts.push({ fileSystemId: efs["file_system_id"], mountPath, name });
       }
     }
-    if (storage["provider"] === "fsx_lustre" || storage["provider"] === "fsx_netapp_ontap") {
+    if (
+      storage["provider"] === "fsx_lustre" ||
+      storage["provider"] === "fsx_netapp_ontap" ||
+      storage["provider"] === "fsx_openzfs"
+    ) {
       mounts.push({ hostPath: mountPath, mountPath, name });
     }
   }

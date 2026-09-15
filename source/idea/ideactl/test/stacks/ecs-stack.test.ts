@@ -77,8 +77,9 @@ function vpcContext(): Json {
   };
 }
 
-function settings(datadogEnabled = false): ClusterConfig {
+function settings(datadogEnabled = false, extra: Record<string, unknown> = {}): ClusterConfig {
   const values: Record<string, unknown> = {
+    ...extra,
     "cluster.aws.account_id": ACCOUNT,
     "cluster.aws.dns_suffix": "amazonaws.com",
     "cluster.aws.partition": "aws",
@@ -169,11 +170,11 @@ function text(value: unknown): string {
   return value;
 }
 
-function synth(datadogEnabled = false): Json {
+function synth(datadogEnabled = false, extra: Record<string, unknown> = {}): Json {
   const outdir = mkdtempSync(join(tmpdir(), "ideactl-ecs-"));
   workdirs.push(outdir);
   const app = new App({ context: { "aws:cdk:enable-path-metadata": true, ...vpcContext() }, outdir });
-  const config = settings(datadogEnabled);
+  const config = settings(datadogEnabled, extra);
   new EcsStack({
     app,
     ctx: makeContext({
@@ -457,4 +458,51 @@ test("records every command-execution session to a group this stack creates or a
 
   // The deployment tool never holds the caller-side permission.
   assert.ok(!JSON.stringify(resources).includes("ecs:ExecuteCommand"), "no template grants ecs:ExecuteCommand");
+});
+
+test("mounts the control plane's shared storage on the hosts as the host bootstrap did, before the cluster join", () => {
+  const options = "nfs4 nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport 0 0";
+  const resources = resourcesOf(synth(false, {
+    "storage.home.provider": "fsx_netapp_ontap",
+    "storage.home.mount_dir": "/home",
+    "storage.home.mount_options": options,
+    "storage.home.scope": ["cluster"],
+    "storage.home.fsx_netapp_ontap.svm.nfs_dns": "svm-0123456789abcdef0.fs-0123456789abcdef0.fsx.us-east-2.amazonaws.com",
+    "storage.home.fsx_netapp_ontap.volume.volume_path": "/profiles/Users/User_Home_Folders",
+    "storage.scratch.provider": "fsx_lustre",
+    "storage.scratch.mount_dir": "/lustre",
+    "storage.scratch.mount_options": "lustre defaults,noatime,flock,_netdev 0 0",
+    "storage.scratch.scope": ["cluster"],
+    "storage.scratch.fsx_lustre.dns": "fs-0123456789abcdef1.fsx.us-east-2.amazonaws.com",
+    "storage.scratch.fsx_lustre.mount_name": "abcdefgh",
+    "storage.nodes.provider": "fsx_netapp_ontap",
+    "storage.nodes.mount_dir": "/nodes",
+    "storage.nodes.scope": ["compute-node"],
+    "storage.nodes.fsx_netapp_ontap.svm.nfs_dns": "svm-0123456789abcdef0.fs-0123456789abcdef0.fsx.us-east-2.amazonaws.com",
+    "storage.nodes.fsx_netapp_ontap.volume.volume_path": "/nodes",
+  }));
+  const launchTemplate = findResource(resources, "AWS::EC2::LaunchTemplate", () => true);
+  const launchData = record(record(launchTemplate["Properties"], "launch template properties")["LaunchTemplateData"], "launch data");
+  const userData = JSON.stringify(launchData["UserData"]);
+  // The export path and the fstab-shaped options, exactly as the host bootstrap wrote them
+  // (idea-com mounts two ONTAP volumes this way; the first container build mounted the bare SVM).
+  assert.ok(userData.includes(`svm-0123456789abcdef0.fs-0123456789abcdef0.fsx.us-east-2.amazonaws.com:/profiles/Users/User_Home_Folders /home/ ${options}`), "ONTAP fstab entry");
+  assert.ok(userData.includes("fs-0123456789abcdef1.fsx.us-east-2.amazonaws.com@tcp:/abcdefgh /lustre/ lustre defaults,noatime,flock,_netdev 0 0"), "Lustre fstab entry");
+  assert.ok(userData.includes("dnf install -y lustre-client"), "the Lustre client is installed when a Lustre entry exists");
+  assert.ok(userData.includes("mount -a"), "the entries are mounted");
+  assert.ok(!userData.includes("/nodes"), "storage scoped to compute nodes is not mounted on the control plane hosts");
+  const guard = userData.indexOf("mountpoint -q /home");
+  const join = userData.indexOf("ECS_CLUSTER=");
+  assert.ok(guard > 0 && join > guard, "a failed mount stops the host before it joins the cluster");
+});
+
+test("refuses to synthesize a host mount whose endpoint or path is missing", () => {
+  assert.throws(
+    () => synth(false, {
+      "storage.home.provider": "fsx_netapp_ontap",
+      "storage.home.mount_dir": "/home",
+      "storage.home.fsx_netapp_ontap.svm.nfs_dns": "svm-0123456789abcdef0.fs-0123456789abcdef0.fsx.us-east-2.amazonaws.com",
+    }),
+    /shared-storage\.home: fsx_netapp_ontap needs its endpoint and path/,
+  );
 });

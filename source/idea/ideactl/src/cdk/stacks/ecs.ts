@@ -34,6 +34,8 @@ import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 
 /** Stream family for the optional host daemon. */
 const STREAM_PREFIX_DATADOG = "datadog";
+const NFS_MOUNT_OPTIONS = "nfs4 nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport 0 0";
+const LUSTRE_MOUNT_OPTIONS = "lustre defaults,noatime,flock,_netdev 0 0";
 /** Agent-created groups use `cluster.cloudwatch_logs.retention_in_days`, which defaults to 90. */
 const DEFAULT_AGENT_LOG_RETENTION_DAYS = 90;
 
@@ -332,6 +334,9 @@ export class EcsStack extends IdeaBaseStack {
   private buildHostAutoScalingGroup(): autoscaling.AutoScalingGroup {
     const userData = ec2.UserData.forLinux();
     userData.addCommands(
+      // Shared storage first: the cluster name is written last, so a host whose mounts failed
+      // never registers and never receives a task.
+      ...this.hostStorageCommands(),
       "mkdir -p /etc/ecs",
       `echo ECS_CLUSTER=${this.ecsCluster.clusterName} >> /etc/ecs/ecs.config`,
       "echo ECS_AWSVPC_BLOCK_IMDS=true >> /etc/ecs/ecs.config",
@@ -343,7 +348,6 @@ export class EcsStack extends IdeaBaseStack {
       "mkdir -p /etc/systemd/resolved.conf.d",
       `printf '[Resolve]\\nDomains=%s\\n' "${Aws.REGION}.compute.internal" > /etc/systemd/resolved.conf.d/idea-search-domain.conf`,
       "systemctl restart systemd-resolved",
-      ...this.hostStorageCommands(),
     );
     const launchTemplate = new ec2.LaunchTemplate(this.stack, "ecs-host-launch-template", {
       blockDevices: [
@@ -377,34 +381,65 @@ export class EcsStack extends IdeaBaseStack {
   }
 
   /**
-   * Mount commands are emitted only for ONTAP and Lustre, whose host-mounted
-   * paths are subsequently bind-mounted into the tasks.
+   * What the host mounts for the tasks to bind in: ONTAP and OpenZFS over NFS, Lustre with its
+   * client. Each entry mirrors the retired host bootstrap's fstab line, so `mount_options` keeps
+   * its fstab shape ("<type> <options> 0 0") and the source carries the export path. A mount that
+   * fails stops the host before it joins the cluster: a task placed on it would otherwise write
+   * into an empty local directory that dies with the host.
    */
   private hostStorageCommands(): string[] {
-    const commands: string[] = [];
+    const entries: Array<{ directory: string; line: string }> = [];
+    let lustre = false;
     for (const mount of storageMounts(this.context.config)) {
       if (mount.hostPath === undefined) continue;
-      commands.push(`mkdir -p ${mount.hostPath}`);
       const storage = this.context.config.getConfig(`shared-storage.${mount.name}`, {});
-      if (storage === undefined) continue;
+      if (!isRecord(storage)) continue;
       const provider = storage["provider"];
+      const configured = storage["mount_options"];
+      const options = typeof configured === "string" && configured.trim() !== "" ? configured.trim() : undefined;
+      let source: string | undefined;
+      let fallback = NFS_MOUNT_OPTIONS;
       if (provider === "fsx_lustre") {
-        const lustre = storage["fsx_lustre"];
-        if (isRecord(lustre) && typeof lustre["dns"] === "string" && typeof lustre["mount_name"] === "string") {
-          commands.push(
-            `mount -t lustre ${lustre["dns"]}@tcp:/${lustre["mount_name"]} ${mount.hostPath}`,
-          );
+        const lustreConfig = storage["fsx_lustre"];
+        if (isRecord(lustreConfig) && typeof lustreConfig["dns"] === "string" && typeof lustreConfig["mount_name"] === "string") {
+          source = `${lustreConfig["dns"]}@tcp:/${lustreConfig["mount_name"]}`;
+          fallback = LUSTRE_MOUNT_OPTIONS;
+          lustre = true;
         }
-      }
-      if (provider === "fsx_netapp_ontap") {
+      } else if (provider === "fsx_netapp_ontap") {
         const ontap = storage["fsx_netapp_ontap"];
         const svm = isRecord(ontap) ? ontap["svm"] : undefined;
-        if (isRecord(svm) && typeof svm["nfs_dns"] === "string") {
-          commands.push(`mount -t nfs ${svm["nfs_dns"]} ${mount.hostPath}`);
+        const volume = isRecord(ontap) ? ontap["volume"] : undefined;
+        if (isRecord(svm) && typeof svm["nfs_dns"] === "string" && isRecord(volume) && typeof volume["volume_path"] === "string") {
+          source = `${svm["nfs_dns"]}:${volume["volume_path"]}`;
+        }
+      } else if (provider === "fsx_openzfs") {
+        const openzfs = storage["fsx_openzfs"];
+        if (isRecord(openzfs) && typeof openzfs["dns"] === "string" && typeof openzfs["volume_path"] === "string") {
+          source = `${openzfs["dns"]}:${openzfs["volume_path"]}`;
         }
       }
+      if (source === undefined) {
+        throw new Error(
+          `shared-storage.${mount.name}: ${String(provider)} needs its endpoint and path before the container hosts can mount it`,
+        );
+      }
+      entries.push({ directory: mount.hostPath, line: `${source} ${mount.hostPath}/ ${options ?? fallback}` });
     }
-    return commands;
+    if (entries.length === 0) return [];
+    return [
+      ...(lustre ? ["dnf install -y lustre-client"] : []),
+      "dnf install -y nfs-utils",
+      ...entries.flatMap((entry) => [
+        `mkdir -p ${entry.directory}`,
+        `grep -qF "${entry.line}" /etc/fstab || echo "${entry.line}" >> /etc/fstab`,
+      ]),
+      "mount -a",
+      ...entries.map(
+        (entry) =>
+          `mountpoint -q ${entry.directory} || { echo "idea: ${entry.directory} is not mounted; this host does not join the cluster" >&2; exit 1; }`,
+      ),
+    ];
   }
 
   /** Returns a digest-pinned image hosted in a private ECR repository. */
