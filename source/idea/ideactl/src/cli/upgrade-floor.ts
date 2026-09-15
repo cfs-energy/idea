@@ -35,7 +35,7 @@ function parseIdeaRelease(version: string): ParsedRelease | undefined {
   return { major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3]) };
 }
 
-/** Negative when left is older, zero when equal, positive when left is newer; undefined when unparseable. */
+/** Negative when left is older, zero when equal, positive when left is newer; undefined when unparsable. */
 export function compareIdeaRelease(left: string, right: string): number | undefined {
   const parsedLeft = parseIdeaRelease(left);
   const parsedRight = parseIdeaRelease(right);
@@ -46,7 +46,7 @@ export function compareIdeaRelease(left: string, right: string): number | undefi
 }
 
 /**
- * Deployed app and stack modules whose stored release is missing, unparseable, or strictly below
+ * Deployed app and stack modules whose stored release is missing, unparsable, or strictly below
  * the floor. Config rows and undeployed rows are ignored.
  */
 export function modulesBelowFloor<T extends FloorModule>(modules: readonly T[], floor: string): T[] {

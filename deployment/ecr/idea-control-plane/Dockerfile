@@ -67,6 +67,8 @@ RUN set -eux; \
     rm -rf /tmp/dcv-packages /tmp/dcv.tgz /tmp/dcv; dnf clean all; \
     sed -i 's|> /dev/null|2>\&1|' /usr/share/dcv-session-manager-broker/bin/dcv-session-manager-broker.sh
 
+# The reference carries its tag inside the build argument (PBS_IMAGE_TAG), which the linter cannot see.
+# hadolint ignore=DL3006
 FROM ${PBS_IMAGE} AS pbs
 
 FROM dcv-runtime
