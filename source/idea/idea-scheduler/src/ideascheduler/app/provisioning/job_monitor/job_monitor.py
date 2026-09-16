@@ -9,6 +9,7 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
+from ideascheduler.app.accounts_guard import sweep_disabled_jobs, user_enabled, delete_queued_job
 import ideascheduler
 
 from ideadatamodel import exceptions, SocaJob, SocaJobState, JobUpdates, JobUpdate
@@ -214,6 +215,10 @@ class JobMonitor(SocaService, JobMonitorProtocol):
             if job.state == SocaJobState.RUNNING:
                 # if job execution has started running, ensure the job is deleted from provisioning queue.
                 provisioning_queue.delete(job_id=job.job_id)
+                continue
+
+            if not user_enabled(self._context, job.owner):
+                delete_queued_job(self._context, job)
                 continue
 
             if self._provisioning_retries_exhausted(job):
@@ -427,6 +432,7 @@ class JobMonitor(SocaService, JobMonitorProtocol):
         eg. scheduler restarts, hook delivery failures or transient qstat errors.
         """
         try:
+            sweep_disabled_jobs(self._context)
             queue_profiles = self._context.queue_profiles.list_queue_profiles()
             for queue_profile in queue_profiles:
                 if not Utils.is_true(queue_profile.enabled):

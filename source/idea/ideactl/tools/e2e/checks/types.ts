@@ -12,6 +12,7 @@ export const CHECK_NAMES = [
   "api-load",
   "gateway-load",
   "metrics-sink",
+  "account-reconcile",
 ] as const;
 
 export type CheckName = (typeof CHECK_NAMES)[number];
@@ -58,6 +59,10 @@ export interface ProcessRunner {
 }
 
 export interface ProofMatrixOptions {
+  ldapUri?: string;
+  ldapBindDn?: string;
+  ldapPasswordFile?: string;
+  ldapUserBase?: string;
   albHost?: string;
   apiMaxErrorCount?: number;
   apiMaxP95Ms?: number;

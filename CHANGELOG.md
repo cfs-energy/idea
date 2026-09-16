@@ -42,6 +42,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 * **Metrics Delivery Check**: The proof matrix can query Datadog for the cluster's `idea.api_invocations` over the last fifteen minutes; it reports the check as not run when API credentials are absent
 
 ### **🐛 Bug Fixes**
+* **Account Reconciliation**: Optional AD, Cognito and Okta account checks share an administrator dry-run API and periodic service with a bulk-disable cap. Disabled users have desktop schedules cleared and sessions stopped; queued jobs are removed and new submissions refused, while running jobs finish.
 * **Metrics Agent Startup**: The host daemon uses the EC2 launch type without a capacity provider strategy, so ECS accepts the service
 * **Metrics Socket**: The agent listens on the shared DogStatsD socket used by container tasks and enables origin detection for container tags
 * **Collector Replicas**: A shared checkpoint lets one replica publish per interval, and collector points use the cluster name as their host to prevent duplicate totals across hosts

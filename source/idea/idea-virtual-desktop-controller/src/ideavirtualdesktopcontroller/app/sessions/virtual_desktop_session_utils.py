@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from threading import RLock
 from typing import List, Dict, Optional
 
+from ideadatamodel import GetUserRequest
 import ideavirtualdesktopcontroller
 from ideadatamodel import (
     ListSessionsRequest,
@@ -841,6 +842,12 @@ class VirtualDesktopSessionUtils:
                 )
                 self._logger.error(session_orig.failure_reason)
                 fail_response_list.append(session_orig)
+                continue
+
+            user = self.context.accounts_client.get_user(GetUserRequest(username=session.owner)).user
+            if user is None or user.enabled is not True:
+                session.failure_reason = 'Session owner is disabled'
+                fail_response_list.append(session)
                 continue
 
             if session.state not in {VirtualDesktopSessionState.STOPPED}:

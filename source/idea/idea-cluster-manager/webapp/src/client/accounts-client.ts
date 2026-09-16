@@ -60,7 +60,19 @@ import IdeaBaseClient, {IdeaBaseClientProps} from "./base-client";
 export interface AuthAdminClientProps extends IdeaBaseClientProps {
 }
 
+export interface ReconcileReport {
+    dry_run: boolean;
+    checked: number; disabled: number; reenabled: number; missing: number; errors: number;
+    refused: number; reason?: string; would_disable?: number; would_reenable?: number;
+    eligible_enabled?: number; max_disable_fraction?: number;
+    changes: Array<{username: string; action: string; upstream: Record<string, string>; applied?: boolean}>;
+}
+
 class AccountsClient extends IdeaBaseClient<AuthAdminClientProps>{
+
+    reconcileUsers(req: {dry_run: boolean; override_max_disable_fraction?: boolean}): Promise<ReconcileReport> {
+        return this.apiInvoker.invoke_alt('Accounts.ReconcileUsers', req);
+    }
 
     getModuleInfo(): Promise<GetModuleInfoRequest> {
         return this.apiInvoker.invoke_alt<GetModuleInfoRequest, GetModuleInfoResult>(

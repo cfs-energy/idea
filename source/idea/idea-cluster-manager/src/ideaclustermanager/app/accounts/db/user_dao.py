@@ -123,7 +123,7 @@ class UserDAO:
     def get_user(self, username: str) -> Optional[Dict]:
         username = AuthUtils.sanitize_username(username)
         _lu_start = Utils.current_time_ms()
-        result = self.table.get_item(Key={'username': username})
+        result = self.table.get_item(Key={'username': username}, ConsistentRead=True)
         _lu_stop = Utils.current_time_ms()
         if self.logger.isEnabledFor(logging.DEBUG):
             self.logger.debug(

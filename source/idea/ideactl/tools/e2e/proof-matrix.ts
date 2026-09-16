@@ -10,6 +10,7 @@ import { desktopSshCheck } from "./checks/desktop-ssh.ts";
 import { desktopStreamCheck } from "./checks/desktop-stream.ts";
 import { gatewayLoadCheck } from "./checks/gateway-load.ts";
 import { gatewayTaskKillCheck } from "./checks/gateway-task-kill.ts";
+import { accountReconcileCheck } from "./checks/account-reconcile.ts";
 import { metricsSinkCheck } from "./checks/metrics-sink.ts";
 import { jobBurstCheck } from "./checks/job-burst.ts";
 import { schedulerImageUpgradeCheck } from "./checks/scheduler-image-upgrade.ts";
@@ -42,6 +43,7 @@ const CHECKS: ProofCheck[] = [
   apiLoadCheck,
   gatewayLoadCheck,
   metricsSinkCheck,
+  accountReconcileCheck,
 ];
 
 interface ProofMatrixDependencies {
@@ -79,6 +81,10 @@ export function parseProofMatrixOptions(argv: string[], environment: NodeJS.Proc
   const values = new Map<string, string | boolean>();
   const selected: CheckName[] = [];
   const valueFlags = new Set([
+    "ldap-uri",
+    "ldap-bind-dn",
+    "ldap-password-file",
+    "ldap-user-base",
     "alb-host",
     "api-max-error-count",
     "api-max-p95-ms",
@@ -167,6 +173,10 @@ export function parseProofMatrixOptions(argv: string[], environment: NodeJS.Proc
   const parsedDesktopRequest = desktopRequest === undefined ? undefined : parseJsonObject(desktopRequest, "--desktop-request");
 
   return {
+    ldapUri: read("ldap-uri"),
+    ldapBindDn: read("ldap-bind-dn"),
+    ldapPasswordFile: read("ldap-password-file"),
+    ldapUserBase: read("ldap-user-base"),
     albHost: read("alb-host"),
     apiMaxErrorCount: optionalInteger(read("api-max-error-count"), "api-max-error-count"),
     apiMaxP95Ms: optionalPositiveNumber(read("api-max-p95-ms"), "api-max-p95-ms"),
@@ -293,6 +303,13 @@ export function usage(): string {
     "  --gateway-port <number>              IDEA_E2E_GATEWAY_PORT, default 443",
     "  --desktop-request <json>             IDEA_E2E_DESKTOP_REQUEST",
     "  --bastion-host <host>                IDEA_E2E_BASTION_HOST",
+    "",
+    "Account reconciliation flags:",
+    "  --ldap-uri <ldaps-url>              IDEA_E2E_LDAP_URI",
+    "  --ldap-bind-dn <dn>                 IDEA_E2E_LDAP_BIND_DN",
+    "  --ldap-password-file <path>         IDEA_E2E_LDAP_PASSWORD_FILE",
+    "  --ldap-user-base <dn>               IDEA_E2E_LDAP_USER_BASE",
+    "  account-reconcile is NOT RUN without writable directory inputs",
     "",
     "Metrics sink flags:",
     "  --datadog-api-key <key>              IDEA_E2E_DATADOG_API_KEY",

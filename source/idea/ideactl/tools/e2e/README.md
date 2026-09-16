@@ -165,3 +165,28 @@ provided through the matching `IDEA_E2E_*` environment variable. Run
 Task-replacement checks require permissions to stop a task, describe the selected service, and
 describe target health. The selected task must belong to the selected service. The matrix waits for
 the service's desired running count and, where applicable, the target group's healthy count.
+
+## Account reconciliation
+
+`--check account-reconcile` requires an administrator API login, `--desktop-request`,
+LDAP tools (`ldapadd`, `ldapmodify`, `ldapdelete`), and a disposable AD user OU:
+
+```sh
+node tools/e2e/proof-matrix.ts --check account-reconcile \
+  --alb-host control-plane.example.invalid --username cluster-admin \
+  --password-file /secure/path/admin-password \
+  --ldap-uri ldaps://directory.example.invalid \
+  --ldap-bind-dn 'CN=proof-bind,OU=Service,DC=example,DC=invalid' \
+  --ldap-password-file /secure/path/directory-password \
+  --ldap-user-base 'OU=Users,DC=example,DC=invalid' \
+  --desktop-request '<ADMIN_DESKTOP_REQUEST_JSON>'
+```
+
+Use the desktop discovery instructions above; the check replaces the request's owner.
+The OU must be inside the cluster's user search base. Keep LDAP certificate verification
+on. Passwords are read from files. The check creates the LDAP and IDEA users, witnesses
+READY, sets ACCOUNTDISABLE over LDAP, calls Accounts.ReconcileUsers, then asserts disabled
+IDEA state and STOPPED desktop state. It applies the normal cap and refuses a dry-run
+report containing changes outside the fixture. It attempts desktop, IDEA user and LDAP
+cleanup; inspect cleanup failures before retrying. Without directory inputs, a supported
+AD provider, or permission to create the disposable LDAP user, the result is NOT RUN.

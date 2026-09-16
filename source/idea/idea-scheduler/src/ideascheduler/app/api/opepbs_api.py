@@ -9,6 +9,7 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
+from ideascheduler.app.accounts_guard import require_enabled
 import ideascheduler
 
 from ideadatamodel import exceptions, errorcodes, constants
@@ -51,6 +52,7 @@ class OpenPBSAPI(BaseAPI):
                 )
 
             pbs_context.build_and_validate_job()
+            require_enabled(self.context, pbs_context.job.owner)
 
             if pbs_context.is_valid():
                 pbs_context.check_incidentals()

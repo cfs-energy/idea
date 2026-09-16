@@ -1,3 +1,4 @@
+from unittest.mock import Mock
 """
 Test Cases for JobMonitor job intake reconciliation
 
@@ -86,6 +87,8 @@ class FakeScheduler:
         self.list_jobs_calls = []
 
     def list_jobs(self, queue=None, job_ids=None, **kwargs):
+        if job_ids is None:
+            return list(self.jobs_by_id.values())
         self.list_jobs_calls.append(job_ids)
         for job_id in job_ids:
             if job_id in self.failing_job_ids:
@@ -97,6 +100,8 @@ class FakeScheduler:
 
 class FakeContext:
     def __init__(self, config_values=None):
+        self.accounts_client = Mock()
+        self.accounts_client.get_user.return_value.user.enabled = True
         self.config_obj = FakeConfig(values=config_values)
         self.job_cache = FakeJobCache()
         self.provisioning_queue = FakeProvisioningQueue()

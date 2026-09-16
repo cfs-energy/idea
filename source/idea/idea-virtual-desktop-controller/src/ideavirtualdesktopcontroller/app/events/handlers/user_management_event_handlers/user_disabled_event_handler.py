@@ -10,7 +10,10 @@
 #  and limitations under the License.
 
 import ideavirtualdesktopcontroller
-from ideadatamodel import ListSessionsRequest
+from ideadatamodel import (
+    ListSessionsRequest, SocaPaginator, VirtualDesktopWeekSchedule,
+    DayOfWeek, VirtualDesktopSessionState,
+)
 from ideasdk.utils import Utils
 from ideavirtualdesktopcontroller.app.clients.events_client.events_client import (
     VirtualDesktopEvent,
@@ -39,13 +42,29 @@ class UserDisabledEventHandler(BaseVirtualDesktopControllerEventHandler):
             )
             return
 
-        # get all sessions for user and delete them.
-        response = self.session_db.list_all_for_user(
-            request=ListSessionsRequest(), username=username
-        )
-        for session_db_entry in response.listing:
-            self.events_utils.publish_idea_session_terminate_event(
-                idea_session_id=session_db_entry.idea_session_id,
-                idea_session_owner=session_db_entry.owner,
-                force=True,
+        cursor = None
+        while True:
+            response = self.session_db.list_all_for_user(
+                request=ListSessionsRequest(paginator=SocaPaginator(cursor=cursor)),
+                username=username,
             )
+            for session in response.listing:
+                # Delete schedule rows before stopping; queued resume events also check the owner.
+                self.schedule_utils.delete_schedules_for_session(session)
+                session.schedule = VirtualDesktopWeekSchedule(
+                    **{day.value: self.schedule_db.get_empty_schedule(day) for day in DayOfWeek}
+                )
+                self.session_db.update(session)
+                if session.state in (
+                    VirtualDesktopSessionState.STOPPED, VirtualDesktopSessionState.STOPPING,
+                ):
+                    continue
+                session.force = True
+                _, failed = self.session_utils.stop_sessions([session])
+                if failed:
+                    raise self.do_not_delete_message_exception(
+                        'Disabled user session could not be stopped'
+                    )
+            cursor = response.paginator.cursor if response.paginator else None
+            if not cursor:
+                break

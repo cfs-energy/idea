@@ -249,12 +249,22 @@ const RETIRED_KEYS: Record<string, string> = {
  * entry has to be generated and absent from the oracle, so a key the oracle gains or the
  * template loses fails here instead of quietly widening the comparison.
  */
-const ADDED_KEYS: Record<string, string> = Object.fromEntries(
-  [
-    'cost.enabled', 'cost.interval_hours', 'cost.lookback_days', 'cost.module_tag', 'cost.project_tag',
-    'cost.owner_tag', 'cost.by_account', 'storage.enabled', 'storage.interval_minutes', 'storage.verify_tls',
-  ].map((key) => [`cluster-manager.metrics.${key}`, 'the cost and storage metrics collectors arrived with 26.09.1']),
-);
+const ADDED_KEYS: Record<string, string> = {
+  ...Object.fromEntries(
+    [
+      'cost.enabled', 'cost.interval_hours', 'cost.lookback_days', 'cost.module_tag', 'cost.project_tag',
+      'cost.owner_tag', 'cost.by_account', 'storage.enabled', 'storage.interval_minutes', 'storage.verify_tls',
+    ].map((key) => [`cluster-manager.metrics.${key}`, 'the cost and storage metrics collectors arrived with 26.09.1']),
+  ),
+  'cluster-manager.accounts.reconcile.enabled': 'account reconciliation arrived with 26.09.1',
+  'cluster-manager.accounts.reconcile.interval_minutes': 'account reconciliation arrived with 26.09.1',
+  'cluster-manager.accounts.reconcile.dry_run': 'account reconciliation arrived with 26.09.1',
+  'cluster-manager.accounts.reconcile.reenable': 'account reconciliation arrived with 26.09.1',
+  'cluster-manager.accounts.reconcile.max_disable_fraction': 'account reconciliation arrived with 26.09.1',
+  'cluster-manager.accounts.reconcile.check_cognito': 'account reconciliation arrived with 26.09.1',
+  'cluster-manager.accounts.reconcile.okta.org_url': 'account reconciliation arrived with 26.09.1',
+  'cluster-manager.accounts.reconcile.okta.api_token_secret_arn': 'account reconciliation arrived with 26.09.1',
+};
 
 /** The generated output with the added keys dropped, after proving each one is generated and new. */
 function generatedWithoutAddedKeys(
@@ -317,7 +327,7 @@ describe('layer D: every template-produced key the runtime reads is generated', 
     // The inventory counts key patterns: `<app>.server.port` is one entry there and three keys here, as are
     // `<day>`, `<state>`, `<os>`, `<family>` and the `<module>.module_id` mappings.
     const distinct = new Set(RUNTIME_KEY_GROUPS.flatMap((group) => runtimeKeys[group] as string[]));
-    assert.equal(distinct.size, 686);
+    assert.equal(distinct.size, 694);
     // Spot-check expanded key identities.
     for (const key of [
       'global-settings.module_sets.default.virtual-desktop-controller.module_id',
@@ -330,6 +340,7 @@ describe('layer D: every template-produced key the runtime reads is generated', 
       'vdc.dcv_session.working_hours.start_up_time',
       'vdc.vdi_host_backup.backup_plan.rules.default.schedule_expression',
       'cluster.logging.profiles.production.loggers.app.level',
+      'cluster-manager.accounts.reconcile.reenable',
     ]) {
       assert.ok(runtimeKeys.all?.includes(key), `runtime-keys.json is missing ${key}`);
     }
@@ -340,7 +351,11 @@ describe('layer D: every template-produced key the runtime reads is generated', 
     it(fixture.name, () => {
       const outDir = tempDir();
       generateConfig(fixture.valuesFile, outDir);
-      checkRuntimeKeys(fixture.name, flattenConfigDir(outDir), runtimeKeys);
+      const flat = flattenConfigDir(outDir);
+      checkRuntimeKeys(fixture.name, flat, runtimeKeys);
+      if ('cluster-manager.accounts.reconcile.reenable' in flat) {
+        assert.equal(flat['cluster-manager.accounts.reconcile.reenable'], true);
+      }
     });
   }
 });

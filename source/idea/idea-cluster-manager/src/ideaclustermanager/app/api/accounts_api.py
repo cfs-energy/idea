@@ -9,6 +9,7 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
+from ideaclustermanager.app.accounts.account_reconciler import ReconcileUsersRequest
 from ideasdk.api import BaseAPI, ApiInvocationContext
 from ideadatamodel.auth import (
     CreateUserRequest,
@@ -64,6 +65,7 @@ class AccountsAPI(BaseAPI):
         self.SCOPE_READ = f'{self.context.module_id()}/read'
 
         self.acl = {
+            'Accounts.ReconcileUsers': {'scope': self.SCOPE_WRITE, 'method': self.reconcile_users},
             'Accounts.CreateUser': {
                 'scope': self.SCOPE_WRITE,
                 'method': self.create_user,
@@ -160,6 +162,19 @@ class AccountsAPI(BaseAPI):
         if Utils.is_empty(token_scope):
             return False
         return scope in token_scope.split(' ')
+
+    def reconcile_users(self, context: ApiInvocationContext):
+        if not context.is_administrator():
+            raise exceptions.unauthorized_access()
+        request = context.get_request_payload_as(ReconcileUsersRequest)
+        if request.override_max_disable_fraction:
+            self.context.logger().warning(
+                f'account reconciliation cap override requested by {context.get_username()} (dry_run={request.dry_run})'
+            )
+        context.success(self.context.accounts.reconciler.run_once(
+            dry_run=request.dry_run,
+            override_max_disable_fraction=request.override_max_disable_fraction,
+        ))
 
     def create_user(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(CreateUserRequest)

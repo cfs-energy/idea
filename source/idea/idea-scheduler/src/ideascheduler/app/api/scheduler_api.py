@@ -9,6 +9,7 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
+from ideascheduler.app.accounts_guard import require_enabled
 from ideadatamodel import constants, errorcodes, exceptions, SocaPaginator, SocaFilter
 from ideadatamodel.scheduler import (
     SocaJob,
@@ -339,6 +340,8 @@ class SchedulerAPI(BaseAPI):
             raise exceptions.invalid_params(
                 'Mismatched user information in job request'
             )
+
+        require_enabled(self.context, job_owner)
 
         job_script = request.job_script
         if Utils.is_empty(job_script):

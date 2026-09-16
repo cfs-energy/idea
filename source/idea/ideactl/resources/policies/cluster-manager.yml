@@ -378,3 +378,11 @@ Statement:
   {% endif %}
 
 {% include '_templates/custom-kms-key.yml' %}
+
+  {% if context.config.get_string(context.module_id + '.accounts.reconcile.okta.api_token_secret_arn') %}
+  - Action:
+      - secretsmanager:GetSecretValue
+    Resource: '{{ context.config.get_string(context.module_id + ".accounts.reconcile.okta.api_token_secret_arn") }}'
+    Effect: Allow
+    Sid: AccountReconcileOktaSecret
+  {% endif %}

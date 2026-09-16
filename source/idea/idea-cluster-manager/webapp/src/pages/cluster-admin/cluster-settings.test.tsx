@@ -215,3 +215,92 @@ describe('cluster settings bedrock catalog', () => {
         expect(updateModuleSettings).not.toHaveBeenCalled();
     });
 });
+
+describe('account reconciliation settings', () => {
+    afterEach(() => vi.restoreAllMocks());
+    const setup = async (settings = {}) => {
+        const context = initTestAppContext();
+        vi.spyOn(context.getClusterSettingsService(), 'getModuleSettings').mockResolvedValue({accounts: {reconcile: settings}});
+        vi.spyOn(context.getClusterSettingsService(), 'getModuleId').mockReturnValue('cluster-manager');
+        const save = vi.spyOn(context.client().clusterSettings(), 'updateModuleSettings').mockResolvedValue({success: true});
+        const run = vi.spyOn(context.client().accounts(), 'reconcileUsers');
+        renderClusterSettings();
+        await userEvent.click(await screen.findByRole('tab', {name: 'Account reconciliation'}));
+        return {save, run};
+    };
+    const report = {dry_run: true, checked: 4, would_disable: 2, would_reenable: 1, eligible_enabled: 4, max_disable_fraction: 0.25, disabled: 0, reenabled: 0, missing: 2, errors: 0, refused: 1, reason: 'max_disable_fraction exceeded', changes: [{username: 'user0', action: 'disable', upstream: {directory: 'missing'}}]};
+
+    it('defaults to restoration and dry runs and saves every setting through module settings', async () => {
+        const {save} = await setup({last_completed: 123, okta: {org_url: null, api_token_secret_arn: null}});
+        expect(screen.getByRole('checkbox', {name: 'Re-enable restored users'})).toBeChecked();
+        expect(screen.getByRole('checkbox', {name: 'Dry run'})).toBeChecked();
+        await userEvent.click(screen.getByRole('button', {name: 'Save reconciliation settings'}));
+        expect(save).toHaveBeenCalledWith({module_id: 'cluster-manager', settings: {accounts: {reconcile: {enabled: false, interval_minutes: 60, dry_run: true, reenable: true, max_disable_fraction: 0.25, check_cognito: false, okta: {org_url: '', api_token_secret_arn: ''}}}}});
+        expect(await screen.findByText(/Reconciliation settings saved/)).toBeInTheDocument();
+    });
+
+    it.each([
+        ['Interval (minutes)', '0', 'Interval must be'],
+        ['Interval (minutes)', '1441', 'Interval must be'],
+        ['Interval (minutes)', '1.5', 'Interval must be'],
+        ['Maximum disable fraction', '1.1', 'Maximum disable fraction must be'],
+        ['Maximum disable fraction', '-1', 'Maximum disable fraction must be'],
+    ])('rejects invalid %s %s before saving', async (label, value, message) => {
+        const {save} = await setup();
+        await userEvent.clear(screen.getByRole('textbox', {name: label}));
+        await userEvent.type(screen.getByRole('textbox', {name: label}), value);
+        await userEvent.click(screen.getByRole('button', {name: 'Save reconciliation settings'}));
+        expect(await screen.findByText(new RegExp(message))).toBeInTheDocument();
+        expect(save).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        ['http://id.example.invalid', 'placeholder', 'Okta org URL must be'],
+        ['https://id.example.invalid/path', 'placeholder', 'Okta org URL must be'],
+        ['https://id.example.invalid', 'placeholder', 'Okta token must be'],
+        ['https://id.example.invalid', '', 'Both Okta settings are required'],
+    ])('validates Okta fields %s %s', async (org_url, api_token_secret_arn, message) => {
+        const {save} = await setup({okta: {org_url, api_token_secret_arn}});
+        await userEvent.click(screen.getByRole('button', {name: 'Save reconciliation settings'}));
+        expect(await screen.findByText(new RegExp(message))).toBeInTheDocument();
+        expect(save).not.toHaveBeenCalled();
+    });
+
+    it.each([true, false])('renders a refusal and preserves dry-run mode %s when overriding', async (dryRun) => {
+        const {run} = await setup();
+        run.mockResolvedValueOnce({...report, dry_run: dryRun}).mockResolvedValueOnce({...report, dry_run: dryRun, refused: 0});
+        if (!dryRun) await userEvent.click(screen.getByRole('checkbox', {name: 'Dry run'}));
+        await userEvent.click(screen.getByRole('button', {name: 'Run now'}));
+        expect(run).toHaveBeenLastCalledWith({dry_run: dryRun, override_max_disable_fraction: false});
+        expect(await screen.findByText('Reconciliation refused')).toBeInTheDocument();
+        expect(screen.getByText(/Proposed disables: 2 of 4/)).toBeInTheDocument();
+        for (const label of ['Checked', 'Would disable', 'Would re-enable', 'Missing', 'Errors', 'user0']) expect(screen.getByText(label)).toBeInTheDocument();
+        await userEvent.click(screen.getByRole('checkbox', {name: 'Dry run'}));
+        await userEvent.click(screen.getByRole('button', {name: 'Proceed anyway'}));
+        expect(run).toHaveBeenLastCalledWith({dry_run: dryRun, override_max_disable_fraction: true});
+        expect(screen.queryByRole('button', {name: 'Proceed anyway'})).not.toBeInTheDocument();
+        if (!dryRun) await userEvent.click(screen.getByRole('checkbox', {name: 'Dry run'}));
+        run.mockResolvedValue({...report, refused: 0, dry_run: false, disabled: 2});
+        await userEvent.click(screen.getByRole('button', {name: 'Run now'}));
+        expect(run).toHaveBeenLastCalledWith({dry_run: false, override_max_disable_fraction: false});
+        expect(await screen.findByText('Applied-run report')).toBeInTheDocument();
+    });
+
+    it('does not offer an override for upstream errors', async () => {
+        const {run} = await setup();
+        run.mockResolvedValue({...report, errors: 1, reason: 'upstream read failed'});
+        await userEvent.click(screen.getByRole('button', {name: 'Run now'}));
+        expect(await screen.findByText('Reconciliation refused')).toBeInTheDocument();
+        expect(screen.queryByRole('button', {name: 'Proceed anyway'})).not.toBeInTheDocument();
+    });
+
+    it('shows save and run failures', async () => {
+        const {save, run} = await setup();
+        save.mockResolvedValue({success: false});
+        await userEvent.click(screen.getByRole('button', {name: 'Save reconciliation settings'}));
+        expect(await screen.findByText('Failed to update reconciliation settings.')).toBeInTheDocument();
+        run.mockRejectedValue(new Error('Run unavailable'));
+        await userEvent.click(screen.getByRole('button', {name: 'Run now'}));
+        expect(await screen.findByText('Run unavailable')).toBeInTheDocument();
+    });
+});

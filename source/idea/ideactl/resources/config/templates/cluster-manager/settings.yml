@@ -171,3 +171,15 @@ task_manager:
   polling_visibility_timeout: 30 # Visibility timeout for SQS messages
   sqs_wait_time: 20 # SQS polling / Wait time (in seconds). Used to active short or long SQS polling. (Min 0, Max 20)
   debug: false      # Debug task_manager (extra information in logs, logging profile must be 'debug' to see)
+
+accounts:
+  reconcile:
+    enabled: false
+    interval_minutes: 60
+    dry_run: true
+    reenable: true
+    max_disable_fraction: 0.25
+    check_cognito: false
+    okta:
+      org_url: ~
+      api_token_secret_arn: ~

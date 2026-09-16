@@ -9,6 +9,7 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
+from ideascheduler.app.accounts_guard import user_enabled, delete_queued_job
 import ideascheduler
 
 from ideasdk.service import SocaService
@@ -683,6 +684,13 @@ class JobProvisioner(SocaService):
             )
             return False
 
+        try:
+            if not user_enabled(self._context, live_job.owner):
+                delete_queued_job(self._context, live_job)
+                return False
+        except Exception:
+            self._logger.warning('Account state unavailable, skip provisioning')
+            return False
         return True
 
     def _provision_with_retry_backoff(
