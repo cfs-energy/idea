@@ -481,6 +481,14 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       policyTemplateName: 'virtual-desktop-dcv-broker.yml',
     });
     this.dcvBrokerTaskRole = taskRole;
+    // The broker role script reads its ports from cluster-settings; the host bootstrap rendered
+    // them into the configuration file, so the shared policy template never granted the table.
+    taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ['dynamodb:GetItem'],
+        resources: [this.arnBuilder.getDdbTableArn('cluster-settings')],
+      }),
+    );
     const executionRole = buildExecutionRole(
       scope,
       'dcv-broker-task-execution-role',

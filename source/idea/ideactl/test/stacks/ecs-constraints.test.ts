@@ -372,6 +372,17 @@ function roleNameOf(resources: Record<string, Json>, value: unknown): string | u
   return role?.["Type"] === "AWS::IAM::Role" ? (role["Properties"]["RoleName"] as string) : undefined;
 }
 
+test("the broker task role can read the settings rows its role script renders", async () => {
+  const { vdc } = await stacks();
+  const resources = resourcesOf(vdc);
+  const policies = byType(resources, "AWS::IAM::Policy").filter(([, policy]) =>
+    JSON.stringify(policy["Properties"]["Roles"]).includes("dcvbrokertaskrole"),
+  );
+  const statements = policies.flatMap(([, policy]) => policy["Properties"]["PolicyDocument"]["Statement"] as Array<Record<string, unknown>>);
+  const grant = statements.find((statement) => JSON.stringify(statement["Action"]).includes("dynamodb:GetItem") && JSON.stringify(statement["Resource"]).includes(`${FIXTURE_CLUSTER}.cluster-settings`));
+  assert.ok(grant, "the broker role script reads its ports with dynamodb get-item; without this grant the task exits and the deployment circuit breaker rolls the stack back");
+});
+
 test("the PBS file system denies every principal but the scheduler task role", async () => {
   const resources = resourcesOf((await stacks()).scheduler);
   const fileSystem = onlyOne(byType(resources, "AWS::EFS::FileSystem"), "PBS file system")[1];
