@@ -1428,9 +1428,11 @@ async function historicalValuesEnableEcs(deps: UpgradeDeps, options: UpgradeComm
 
 // Historical changes touch every deployed service and need a complete baseline.
 // Refuse missing inventory and unreadable dependencies before maintenance or settings writes.
-export async function planHistoricalUpgrade(deps: UpgradeDeps, options: UpgradeCommandOptions, modules: ModuleInfo[]): Promise<void> {
+export async function planHistoricalUpgrade(deps: UpgradeDeps, options: UpgradeCommandOptions, modules: ModuleInfo[], registersEcs = false): Promise<void> {
   const settings = await scanAll(deps, `${options.clusterName}.cluster-settings`);
   const ids = new Set(modules.map((module) => module.module_id));
+  // A private registry (GovCloud has no public ECR) is set as ecs.image before the run that registers the module.
+  if (registersEcs) ids.add(ECS_MODULE);
   for (const row of settings) {
     const key = valueAsString(row["key"]);
     const owner = key.split(".")[0]!;
@@ -1478,14 +1480,14 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
   const floorRefusal = upgradeFloorRefusal(options.clusterName, modulesBefore);
   if (floorRefusal !== undefined) throw new ClusterConfigError(floorRefusal);
   const historical = modulesBefore.some((module) => module.type !== "config" && module.status === "deployed" && (compareIdeaRelease(String(module.version), "26.09.0") ?? 0) < 0);
+  const restoredEcs = historical && await historicalValuesEnableEcs(deps, options);
   if (historical) {
-    await planHistoricalUpgrade(deps, options, modulesBefore);
+    await planHistoricalUpgrade(deps, options, modulesBefore, restoredEcs);
     options = { ...options, skipGlobalSettingsUpdate: false };
     deps.out("Historical migration: global replacement, full configuration sync, AMI/settings updates and deployment of every deployed module are required; phase skip flags and prompts cannot omit them.");
   }
   let cleared: ClearedInstance[] = [];
   try {
-    const restoredEcs = historical && await historicalValuesEnableEcs(deps, options);
     if (await upgradeDeploysEcs(deps, options, restoredEcs)) await checkAwsvpcTrunking(deps, options);
     const cutoverHost = await pendingSchedulerCutover(deps, options, modulesBefore, restoredEcs);
     const baseOs = await resolveUpgradeBaseOs(deps, options);

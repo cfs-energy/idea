@@ -1248,6 +1248,17 @@ function historicalReplay(replayValue: Replay): void {
   deps.historicalIam = async () => ({ attached: [], inline: ["old-host"], collision: false, available: 10 });
 }
 
+test("historical planning accepts a pre-set ecs.image only when the run registers the container module", async () => {
+  await withFixture(async (state) => {
+    historicalReplay(state);
+    const { deps, rows } = state;
+    rows[`${clusterName}.cluster-settings`]!.push(setting("ecs.image", "private.example/idea-control-plane:v1"));
+    const options = { clusterName, awsRegion, moduleSet: "default" };
+    await assert.rejects(planHistoricalUpgrade(deps, options, rows[`${clusterName}.modules`] as never), /Missing module row for ecs/);
+    await planHistoricalUpgrade(deps, options, rows[`${clusterName}.modules`] as never, true);
+  });
+});
+
 for (const failure of ["missing row", "template", "IAM collision", "IAM quota", "inventory"]) {
   test(`historical planning refuses ${failure} without writes`, async () => {
     await withFixture(async (state) => {
