@@ -19,7 +19,7 @@ jobs:
       id-token: write
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Setup Development Environment
         uses: ./.github/actions/setup_dev_environment
       - name: Pre-commit Linting
@@ -32,7 +32,7 @@ jobs:
       - name: Build Modules
         uses: ./.github/actions/build_modules
       - name: Configure AWS Credentials for ECR Push
-        uses: aws-actions/configure-aws-credentials@v4.2.1
+        uses: aws-actions/configure-aws-credentials@b47578312673ae6fa5b5096b330d9fbac3d116df # v4.2.1
         with:
           audience: sts.amazonaws.com
           aws-region: us-east-1
