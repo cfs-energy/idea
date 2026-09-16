@@ -4,7 +4,8 @@ SMOKE_ROOT=$(mktemp -d)
 trap 'rm -rf "$SMOKE_ROOT"' EXIT
 mkdir -p "$SMOKE_ROOT/config"
 cp source/idea/ideactl/test/cli/shell-path-values.yml "$SMOKE_ROOT/values.yml"
-docker run --rm --entrypoint /bin/bash idea-scheduler-ci:latest -c '/opt/pbs/sbin/pbs_server --version'
+# The pbs_server wrapper needs the /etc/pbs.conf the scheduler role writes at start; the binary answers alone.
+docker run --rm --entrypoint /bin/bash idea-scheduler-ci:latest -c '/opt/pbs/sbin/pbs_server.bin --version'
 docker run --rm --user "$(id -u):$(id -g)" --env HOME=/tmp --workdir /tmp/work idea-control-plane-ci:latest ideactl about
 docker run --rm --user "$(id -u):$(id -g)" --env HOME=/tmp --workdir /tmp/work \
   --volume "$SMOKE_ROOT/values.yml:/tmp/values.yml:ro" \
