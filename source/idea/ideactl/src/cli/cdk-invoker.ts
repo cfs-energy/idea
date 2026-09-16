@@ -166,6 +166,7 @@ export interface ChangeSetDescription {
 }
 
 export interface StackDescription {
+  Tags?: Array<{ Key?: string; Value?: string }>;
   StackStatus?: string;
   StackStatusReason?: string;
   Outputs?: Array<{ OutputKey?: string; OutputValue?: string }>;

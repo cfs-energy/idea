@@ -14,6 +14,7 @@ The credentials belong to an ONTAP role that can read those two paths and nothin
 password sits in Secrets Manager and only its ARN is in the settings.
 """
 
+from ideaclustermanager.app.metrics.collector_outbox import CollectorOutbox
 from ideasdk.context import SocaContext
 from ideasdk.metrics import BaseMetrics
 from ideasdk.service import SocaService
@@ -333,9 +334,13 @@ class StorageMetricsService(SocaService):
         try:
             # The standalone collector has no settings table: one task, no checkpoint.
             db = getattr(self.context.config(), 'db', None)
-            checkpoint_key = self._config_key('last_published')
+            checkpoint_key = self._config_key('last_collected')
+            outbox = CollectorOutbox(
+                self.context, self._config_key('outbox'), historical=False
+            )
+            outbox.replay()
             # A replica's settings cache can lag behind the previous lock holder.
-            # A consistent read prevents a completed interval from being published twice.
+            # A consistent read avoids repeating collection while saved metrics remain retryable.
             entry = (
                 db.cluster_settings_table.get_item(
                     Key={'key': checkpoint_key}, ConsistentRead=True
@@ -343,16 +348,16 @@ class StorageMetricsService(SocaService):
                 if db is not None
                 else {}
             )
-            last_published = entry.get('value')
-            if last_published is not None and (
-                arrow.utcnow().timestamp() - float(last_published)
+            last_collected = entry.get('value')
+            if last_collected is not None and (
+                arrow.utcnow().timestamp() - float(last_collected)
                 < self.get_interval_seconds() / 2
             ):
                 return
             verify_tls = self.context.config().get_bool(
                 self._config_key('verify_tls'), False
             )
-            metrics = StorageMetrics(self.context)
+            metrics = StorageMetrics(outbox)
             succeeded = True
             for target in self.targets():
                 try:
@@ -378,6 +383,8 @@ class StorageMetricsService(SocaService):
                 except Exception as e:
                     succeeded = False
                     self.logger.warning(f'{target.name}: storage read failed: {e}')
+            outbox.save()
+            outbox.replay()
             if succeeded and db is not None:
                 db.set_config_entry(checkpoint_key, arrow.utcnow().timestamp())
         finally:

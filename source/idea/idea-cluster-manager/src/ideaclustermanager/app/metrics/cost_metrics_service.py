@@ -19,6 +19,7 @@ total stamped at that day, so a day Cost Explorer has since revised is replaced 
 run, and a run repeated is a run with no effect.
 """
 
+from ideaclustermanager.app.metrics.collector_outbox import CollectorOutbox
 from ideasdk.context import SocaContext
 from ideasdk.metrics import BaseMetrics
 from ideasdk.service import SocaService
@@ -352,9 +353,13 @@ class CostMetricsService(SocaService):
         try:
             # The standalone collector has no settings table: one task, no checkpoint.
             db = getattr(self.context.config(), 'db', None)
-            checkpoint_key = self._config_key('last_published')
+            checkpoint_key = self._config_key('last_collected')
+            outbox = CollectorOutbox(
+                self.context, self._config_key('outbox'), historical=True
+            )
+            outbox.replay()
             # A replica's settings cache can lag behind the previous lock holder.
-            # A consistent read prevents a completed interval from being published twice.
+            # A consistent read avoids repeating collection while saved metrics remain retryable.
             entry = (
                 db.cluster_settings_table.get_item(
                     Key={'key': checkpoint_key}, ConsistentRead=True
@@ -362,9 +367,9 @@ class CostMetricsService(SocaService):
                 if db is not None
                 else {}
             )
-            last_published = entry.get('value')
-            if last_published is not None and (
-                arrow.utcnow().timestamp() - float(last_published)
+            last_collected = entry.get('value')
+            if last_collected is not None and (
+                arrow.utcnow().timestamp() - float(last_collected)
                 < self.get_interval_seconds() / 2
             ):
                 return
@@ -373,16 +378,18 @@ class CostMetricsService(SocaService):
                 self._config_key('by_account'), False
             )
             rows = aggregate(self.reader().fetch_all(start, end, by_account))
-            metrics = CostMetrics(self.context)
+            metrics = CostMetrics(outbox)
             for row in rows:
                 day_epoch = int(arrow.get(row.day).timestamp())
                 metrics.publish(
                     row.family, day_epoch, row.dimensions, row.amortized, row.unblended
                 )
+            outbox.save()
             if db is not None:
                 db.set_config_entry(checkpoint_key, arrow.utcnow().timestamp())
+            outbox.replay()
             self.logger.info(
-                f'cost metrics published: {len(rows)} rows for {start.format("YYYY-MM-DD")}..{end.format("YYYY-MM-DD")}'
+                f'cost metrics collected: {len(rows)} rows for {start.format("YYYY-MM-DD")}..{end.format("YYYY-MM-DD")}'
             )
         finally:
             self.context.distributed_lock().release(key=lock_key)

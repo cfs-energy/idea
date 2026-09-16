@@ -8,10 +8,10 @@ import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 
 import { ClusterConfig } from "../../src/config/cluster-config.ts";
 import type { IdeaContext } from "../../src/cdk/constructs/base.ts";
-import { buildExecutionRole } from "../../src/cdk/constructs/container.ts";
+import { buildExecutionRole, grantInjectedSecret } from "../../src/cdk/constructs/container.ts";
 
 for (const customerManaged of [true, false]) {
-  test(`gateway certificate injection ${customerManaged ? "grants scoped" : "omits"} KMS decryption`, () => {
+  test(`gateway certificate injection ${customerManaged ? "custom cluster key" : "default cluster key"} grants secret-constrained KMS decryption`, () => {
     const stack = new Stack(new App(), "gateway", { env: { account: "123456789012", region: "us-east-2" } });
     const config = new ClusterConfig(Object.entries({
       "cluster.aws.partition": "aws",
@@ -26,6 +26,7 @@ for (const customerManaged of [true, false]) {
     const task = new ecs.Ec2TaskDefinition(stack, "gateway-task", { executionRole });
     const certificate = secretsmanager.Secret.fromSecretCompleteArn(stack, "certificate", "arn:aws:secretsmanager:us-east-2:123456789012:secret:certificate-abcdef");
     const privateKey = secretsmanager.Secret.fromSecretCompleteArn(stack, "private-key", "arn:aws:secretsmanager:us-east-2:123456789012:secret:private-key-abcdef");
+    for (const secret of [certificate, privateKey]) grantInjectedSecret({ ctx, stack, vpc, privateSubnets: [] }, executionRole, secret.secretArn);
     task.addContainer("gateway", {
       image: ecs.ContainerImage.fromRegistry("example.invalid/gateway"),
       memoryLimitMiB: 128,
@@ -40,6 +41,11 @@ for (const customerManaged of [true, false]) {
       assert.ok(statements.some((statement) => JSON.stringify(statement.Action).includes("secretsmanager:GetSecretValue") && statement.Resource === secret.secretArn));
     }
     const decrypt = statements.filter((statement) => statement.Action === "kms:Decrypt");
-    assert.deepEqual(decrypt, customerManaged ? [{ Action: "kms:Decrypt", Effect: "Allow", Resource: "arn:aws:kms:us-east-2:123456789012:key/cert-key" }] : []);
+    assert.deepEqual(decrypt, [certificate, privateKey].map((secret) => ({
+      Action: "kms:Decrypt", Effect: "Allow", Resource: "*", Condition: { StringEquals: {
+        "kms:ViaService": { "Fn::Join": ["", ["secretsmanager.us-east-2.", { Ref: "AWS::URLSuffix" }]] },
+        "kms:EncryptionContext:SecretARN": secret.secretArn,
+      } },
+    })));
   });
 }

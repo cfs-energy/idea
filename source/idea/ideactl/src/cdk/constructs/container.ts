@@ -21,7 +21,7 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import * as logs from "aws-cdk-lib/aws-logs";
 
 import type { IdeaContext } from "./base.ts";
-import { addCommonTags, addNagSuppression, kmsKeyArn } from "./base.ts";
+import { addCommonTags, addNagSuppression } from "./base.ts";
 import { Policy } from "./common.ts";
 import { buildResourceName, buildTrimmedResourceName } from "../../util/names.ts";
 
@@ -129,13 +129,6 @@ export function buildExecutionRole(scope: ContainerScope, constructId: string, n
     roleName: taskRoleName(scope, name),
   });
   role.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName("service-role/AmazonECSTaskExecutionRolePolicy"));
-  const keyId = scope.ctx.config.getString("cluster.secretsmanager.kms_key_id");
-  if (keyId && scope.ctx.config.getString("cluster.kms.key_type") === "customer-managed") {
-    role.addToPrincipalPolicy(new iam.PolicyStatement({
-      actions: ["kms:Decrypt"],
-      resources: [kmsKeyArn(scope.ctx, keyId)],
-    }));
-  }
   addNagSuppression(
     role,
     [
@@ -145,6 +138,19 @@ export function buildExecutionRole(scope: ContainerScope, constructId: string, n
     true,
   );
   return role;
+}
+
+// Imported secrets can use a key unrelated to the cluster default.
+// Constrain decryption to the injected secret and its Secrets Manager service path.
+export function grantInjectedSecret(scope: ContainerScope, role: iam.IRole, secretArn: string): void {
+  role.addToPrincipalPolicy(new iam.PolicyStatement({
+    actions: ["kms:Decrypt"],
+    resources: ["*"],
+    conditions: { StringEquals: {
+      "kms:ViaService": `secretsmanager.${scope.stack.region}.${scope.stack.urlSuffix}`,
+      "kms:EncryptionContext:SecretARN": secretArn,
+    } },
+  }));
 }
 
 export interface TaskRoleInput {
@@ -270,23 +276,18 @@ export function roleSizing(scope: ContainerScope, role: ContainerRole): RoleSizi
   };
 }
 
-/** Returns EFS and host bind mounts declared by shared-storage settings. */
-/**
- * The host bootstrap mounted a file system on a control plane host when its scope named the
- * cluster or that host's module; the container hosts serve every control plane module, so the
- * same rule reads against all of them. No scope means the cluster.
- */
-const CONTROL_PLANE_SCOPES: ReadonlySet<string> = new Set([
-  "cluster",
-  "cluster-manager",
-  "scheduler",
-  "vdc",
-  "virtual-desktop-controller",
-]);
-
-export function inControlPlaneScope(scope: unknown): boolean {
-  if (!Array.isArray(scope) || scope.length === 0) return true;
-  return scope.some((entry) => typeof entry === "string" && CONTROL_PLANE_SCOPES.has(entry));
+// Hosts serve all control plane modules, with no project or queue context.
+// Apply the bootstrap's scope precedence so combined scopes retain their restrictions.
+export function inControlPlaneScope(storage: Record<string, unknown>): boolean {
+  const scope = Array.isArray(storage["scope"]) ? storage["scope"] : [];
+  const modules = Array.isArray(storage["modules"]) ? storage["modules"] : [];
+  if (scope.length === 0 || scope.includes("cluster")) return true;
+  if (scope.includes("project")) return false;
+  if (scope.includes("module")) {
+    return modules.length === 0 || modules.some((name) =>
+      ["cluster-manager", "scheduler", "virtual-desktop-controller"].includes(String(name)));
+  }
+  return false;
 }
 
 export function storageMounts(config: IdeaContext["config"]): StorageMount[] {
@@ -296,7 +297,7 @@ export function storageMounts(config: IdeaContext["config"]): StorageMount[] {
     if (!isRecord(storage) || typeof storage["mount_dir"] !== "string" || typeof storage["provider"] !== "string") {
       continue;
     }
-    if (!inControlPlaneScope(storage["scope"])) continue;
+    if (!inControlPlaneScope(storage)) continue;
     const mountPath = storage["mount_dir"];
     if (storage["provider"] === "efs") {
       const efs = storage["efs"];
@@ -341,12 +342,11 @@ export function addStorageMounts(
   }
 }
 
-export function fileTailScript(directories: string[]): string {
-  // OpenPBS names its daily logs by date with no extension, and a new one appears every day, so
-  // every regular file is followed and the directories are rescanned. A file present when the
-  // sidecar starts is followed from its end: replaying months of accounting on every task start
-  // would flood the group. One that appears later is read from its first line.
-  const globList = directories.map((directory) => `'${directory.replaceAll("'", "'\\''")}'/*`).join(" ");
+export function fileTailScript(directories: string[], application = false): string {
+  // PBS date files need discovery, but rotated application archives must not be replayed.
+  // Following only the active application path lets the follower handle rename and reopen.
+  const pattern = application ? "application.log" : "*";
+  const globList = directories.map((directory) => `'${directory.replaceAll("'", "'\\''")}'/${pattern}`).join(" ");
   return [
     "set -euo pipefail",
     "shopt -s nullglob dotglob",
@@ -400,7 +400,7 @@ export function addLogTailContainer(
   },
 ): ecs.ContainerDefinition {
   const container = taskDefinition.addContainer(input.containerId, {
-    command: [fileTailScript(input.directories)],
+    command: [fileTailScript(input.directories, input.streamPrefix === STREAM_PREFIX_APPLICATION)],
     entryPoint: ["/bin/bash", "-lc"],
     essential: false,
     image: containerImage(scope),

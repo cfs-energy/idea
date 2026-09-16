@@ -46,6 +46,7 @@ function replay(): Replay {
   const events: string[] = [];
   const rows: Record<string, Array<Record<string, unknown>>> = {
     [`${clusterName}.cluster-settings`]: [
+      setting("global-settings.module_sets.default.cluster-manager.module_id", "cluster-manager"),
       setting("cluster.cluster_s3_bucket", "sample-cluster-bucket"),
       setting("scheduler.base_os", "amazonlinux2023"),
       setting("scheduler.instance_ami", "ami-old"),
@@ -112,7 +113,7 @@ function replay(): Replay {
       },
       async executeChangeSet() {},
       async describeStack() {
-        return {};
+        return { StackStatus: "UPDATE_COMPLETE", Tags: [{ Key: "idea:ModuleVersion", Value: ideaVersion() }] };
       },
     },
     s3: {
@@ -934,7 +935,7 @@ test("--drain closes submission, waits for the host scheduler to empty, upgrades
     const reopened = events.indexOf("set:cluster-manager.maintenance.enabled=false");
     assert.ok(closed >= 0 && closed < phase1, "submission closed before the first phase");
     assert.ok(closed < events.indexOf("jobs:i-sample:2"), "submission closed before inventory read");
-    assert.equal(events.filter((event) => event.startsWith("jobs:i-sample:")).length, 3);
+    assert.equal(events.filter((event) => event.startsWith("jobs:i-sample:")).length, 4);
     assert.ok(deploy > closed);
     assert.ok(reopened > deploy, "submission reopened after the deployment");
     assert.ok(events.includes("All upgrade phases completed successfully"));
@@ -1140,15 +1141,85 @@ for (const portalCurrent of [false, true]) {
   });
 }
 
-test("a scoped upgrade cannot announce ECS even when cluster-manager is at the target release", async () => {
+test("a scoped upgrade preserves ECS when cluster-manager completed the target release", async () => {
   await withFixture(async ({ deps, events, rows }) => {
     enableContainers();
     rows[`${clusterName}.modules`]!.push(
       { ...moduleRow("ecs", "ecs"), version: ideaVersion() },
       { ...moduleRow("cluster-manager", "cluster-manager"), version: ideaVersion() },
     );
+    rows[`${clusterName}.cluster-settings`]!.push(setting("global-settings.module_sets.default.ecs.module_id", "ecs"));
     await upgradeCluster(deps, { ...containerOptions, modules: ["analytics"] });
-    assert.ok(!events.some((event) => event.startsWith("module-sets:") && announcedModules(event).includes("ecs")));
+    assert.ok(rows[`${clusterName}.cluster-settings`]!.some((row) => row["key"] === "global-settings.module_sets.default.ecs.module_id"));
     assert.ok(!events.includes("set:cluster-manager.maintenance.enabled=true"));
   });
 });
+
+for (const appearsDuringPropagation of [false, true]) {
+  test(`empty inventory needs a second observation after propagation, arrivals=${appearsDuringPropagation}`, async () => {
+    await withFixture(async ({ deps, events }) => {
+      enableContainers();
+      trunkingEnabled(deps);
+      let clock = deps.now();
+      const observed: number[] = [];
+      deps.now = () => clock;
+      deps.sleep = async (ms) => { clock += ms; };
+      deps.schedulerJobs = { async activeJobs() {
+        assert.ok(events.includes("set:cluster-manager.maintenance.enabled=true"));
+        observed.push(clock);
+        return { queued: appearsDuringPropagation && observed.length === 2 ? 1 : 0, running: 0, other: 0 };
+      } };
+      if (appearsDuringPropagation) {
+        await assert.rejects(upgradeCluster(deps, containerOptions), /holds 1 queued/);
+        assert.ok(!events.includes("deploy"));
+      } else {
+        await upgradeCluster(deps, containerOptions);
+      }
+      assert.equal(observed.length, 2);
+      assert.ok(observed[1]! - observed[0]! >= 30_000);
+    });
+  });
+}
+
+test("custom module-set owner carries the maintenance baseline through failure and retry", async () => {
+  await withFixture(async ({ deps, events, rows }) => {
+    enableContainers();
+    trunkingEnabled(deps);
+    const table = rows[`${clusterName}.cluster-settings`]!;
+    table.find((row) => row["key"] === "global-settings.module_sets.default.cluster-manager.module_id")!["value"] = "portal";
+    table.push(setting("portal.maintenance.enabled", true), setting("portal.maintenance.message", "planned"));
+    rows[`${clusterName}.modules`]!.push(moduleRow("portal", "cluster-manager"));
+    const deploy = deps.deploy;
+    deps.deploy = async () => { throw new Error("deployment failed"); };
+    const options = { ...containerOptions };
+    await assert.rejects(upgradeCluster(deps, options), /deployment failed/);
+    assert.ok(events.some((event) => event.startsWith("set:portal.maintenance.upgrade_baseline=")));
+    deps.deploy = deploy;
+    await upgradeCluster(deps, options);
+    assert.ok(events.includes("delete:portal.maintenance.upgrade_baseline"));
+    assert.ok(events.includes("set:portal.maintenance.message=planned"));
+    assert.ok(!events.some((event) => /^(set|delete):cluster-manager\.maintenance/.test(event)));
+  });
+});
+
+for (const status of ["UPDATE_FAILED", "UPDATE_ROLLBACK_COMPLETE", "UPDATE_IN_PROGRESS", "CREATE_COMPLETE", "UPDATE_COMPLETE"]) {
+  for (const targetTag of [false, true]) {
+    test(`ECS announcement requires completed target stack: ${status}, target=${targetTag}`, async () => {
+      await withFixture(async ({ deps, events, rows }) => {
+        enableContainers();
+        trunkingEnabled(deps);
+        rows[`${clusterName}.modules`]!.push({ ...moduleRow("cluster-manager", "cluster-manager"), version: ideaVersion() });
+        let deployed = false;
+        deps.cfn.describeStack = async () => ({
+          StackStatus: deployed ? "UPDATE_COMPLETE" : status,
+          Tags: [{ Key: "idea:ModuleVersion", Value: deployed || targetTag ? ideaVersion() : "26.09.0" }],
+        });
+        deps.deploy = async () => { events.push("deploy"); deployed = true; };
+        await upgradeCluster(deps, containerOptions);
+        const early = events.slice(0, events.indexOf("deploy")).some((event) => announcedModules(event).includes("ecs"));
+        assert.equal(early, targetTag && ["CREATE_COMPLETE", "UPDATE_COMPLETE"].includes(status));
+        assert.ok(events.some((event) => announcedModules(event).includes("ecs")));
+      });
+    });
+  }
+}

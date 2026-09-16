@@ -19,6 +19,7 @@ import { App, Aws, Fn } from "aws-cdk-lib";
 import { ClusterConfig } from "../../src/config/cluster-config.ts";
 import { checkAwsvpcTrunking } from "../../src/cli/commands/upgrade.ts";
 import { makeContext } from "../../src/cdk/constructs/base.ts";
+import { storageMounts } from "../../src/cdk/constructs/container.ts";
 import { EcsStack } from "../../src/cdk/stacks/ecs.ts";
 import type { SynthReads } from "../../src/cdk/synth-reads.ts";
 import { ideaVersion } from "../../src/version.ts";
@@ -476,7 +477,8 @@ test("mounts the control plane's shared storage on the hosts as the host bootstr
     "storage.scratch.fsx_lustre.mount_name": "abcdefgh",
     "storage.nodes.provider": "fsx_netapp_ontap",
     "storage.nodes.mount_dir": "/nodes",
-    "storage.nodes.scope": ["compute-node"],
+    "storage.nodes.scope": ["module"],
+    "storage.nodes.modules": ["compute-node"],
     "storage.nodes.fsx_netapp_ontap.svm.nfs_dns": "svm-0123456789abcdef0.fs-0123456789abcdef0.fsx.us-east-2.amazonaws.com",
     "storage.nodes.fsx_netapp_ontap.volume.volume_path": "/nodes",
   }));
@@ -505,7 +507,7 @@ test("refuses to synthesize a host mount whose endpoint or path is missing", () 
     /shared-storage\.home: fsx_netapp_ontap needs its endpoint and path/,
   );
 });
-for (const [label, overrides, expected] of [
+for (const [label, overrides] of [
   ["customer-managed", { "cluster.kms.key_type": "customer-managed", "cluster.secretsmanager.kms_key_id": "test-key" }, true],
   ["default", {}, false],
   ["AWS-managed", { "cluster.kms.key_type": "aws-managed", "cluster.secretsmanager.kms_key_id": "test-key" }, false],
@@ -520,9 +522,38 @@ for (const [label, overrides, expected] of [
       if (!(props["Roles"] as Json[]).some((ref) => ref["Ref"] === role)) return [];
       return record(props["PolicyDocument"], "document")["Statement"] as Json[];
     }).filter((statement) => JSON.stringify(statement["Action"]).includes("kms:Decrypt"));
-    assert.equal(statements.length, expected ? 1 : 0);
-    if (expected) {
-      assert.deepEqual(statements[0], { Action: "kms:Decrypt", Effect: "Allow", Resource: `arn:aws:kms:${REGION}:${ACCOUNT}:key/test-key` });
-    }
+    assert.equal(statements.length, 1);
+    assert.deepEqual(statements[0], { Action: "kms:Decrypt", Effect: "Allow", Resource: "*", Condition: { StringEquals: {
+      "kms:ViaService": { "Fn::Join": ["", [`secretsmanager.${REGION}.`, { Ref: "AWS::URLSuffix" }]] },
+      "kms:EncryptionContext:SecretARN": { "Fn::Join": ["", ["arn:", { Ref: "AWS::Partition" }, `:secretsmanager:${REGION}:`, { Ref: "AWS::AccountId" }, ":secret:synthetic-datadog-secret"]] },
+    } } });
+  });
+}
+
+for (const [scope, modules, expected] of [
+  [["cluster"], ["compute-node"], true],
+  [["module"], ["cluster-manager"], true],
+  [["module"], ["compute-node"], false],
+  [["module"], [], true],
+  [["module", "project"], ["cluster-manager"], false],
+  [["module", "scheduler:queue-profile"], ["scheduler"], true],
+  [["project", "scheduler:queue-profile"], [], false],
+] as const) {
+  test(`storage scope ${scope} modules ${modules} agrees for hosts and task mounts`, () => {
+    const overrides = {
+      "storage.scoped.provider": "fsx_netapp_ontap",
+      "storage.scoped.mount_dir": "/scoped",
+      "storage.scoped.scope": [...scope],
+      "storage.scoped.modules": [...modules],
+      "storage.scoped.fsx_netapp_ontap.svm.nfs_dns": "storage.example.invalid",
+      "storage.scoped.fsx_netapp_ontap.volume.volume_path": "/data",
+    };
+    const resources = resourcesOf(synth(false, overrides));
+    const template = findResource(resources, "AWS::EC2::LaunchTemplate", () => true);
+    assert.equal(JSON.stringify(template).includes("mountpoint -q /scoped"), expected);
+    assert.equal(storageMounts(settings(false, overrides)).some((mount) => mount.mountPath === "/scoped"), expected);
+    const group = findResource(resources, "AWS::AutoScaling::AutoScalingGroup", () => true);
+    assert.equal(record(group["Properties"], "group")["NewInstancesProtectedFromScaleIn"], true);
+    assert.ok(!JSON.stringify(group["UpdatePolicy"]).includes("AutoScalingRollingUpdate"));
   });
 }

@@ -961,3 +961,7 @@ Remove only the named collector stack. No image, secret or subnet flags are need
 | `--force` | no | none | no |
 
 **Reads:** caller identity and the named stack. **Changes:** deletes the collector stack and its logs after confirmation; `--force` skips the prompt. The supplied secret and image repositories remain. **Example:** `ideactl cost-collector destroy --aws-region us-east-1 --stack-name gov-spend`
+
+Existing ECS hosts created before the storage mount correction must follow [manual host replacement](ECS-HOST-REPLACEMENT.md) before application deployment. Collector retry and retention behavior is described in [collector delivery](COLLECTOR-DELIVERY.md).
+
+The scheduler cutover gate resolves maintenance through the selected module set. The settings API requires application authentication unavailable to the upgrade identity, so the gate uses two empty PBS inventory reads at least 30 seconds apart after writing maintenance. A nonempty read resets that sequence; an unreadable inventory fails the upgrade. This propagation fallback is not an acknowledged scheduler barrier. ECS enters the module set only after the cluster-manager stack is `CREATE_COMPLETE` or `UPDATE_COMPLETE` with the target release tag and module version.

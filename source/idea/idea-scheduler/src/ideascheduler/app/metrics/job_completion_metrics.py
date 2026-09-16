@@ -144,15 +144,13 @@ class JobCompletionMetrics(BaseMetrics):
                 Unit='None',
             )
 
-        # One series per job, the drill-down the dashboards used to take from logs. The
-        # job_uid is the unique key: a requeued job shares its job_id and can share an end
-        # second, and a store keeps one value per (metric, tags, time). CloudWatch prices
-        # every dimension set as a metric of its own, so this stays off there.
+        # Unique job labels persist indefinitely in pull-based exporters.
+        # Only the event transport can carry detail without retaining every job locally.
         if (
             cost is not None
             and cost.total is not None
             and cost.total.amount is not None
-            and self.metrics_provider != constants.METRICS_PROVIDER_CLOUDWATCH
+            and self.metrics_provider == 'dogstatsd'
         ):
             detail = ('job_id', 'job_uid', 'instance_type')
             self.with_dimension('job_id', self.tag(job.job_id))

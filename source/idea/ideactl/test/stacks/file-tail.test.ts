@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, renameSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -72,4 +72,38 @@ test('an empty directory list remains a valid polling script', async () => {
   const child = spawn('bash', ['-c', `sleep() { exit 0; }\n${fileTailScript([])}`]);
   const code = await new Promise((resolve) => child.on('close', resolve));
   assert.equal(code, 0);
+});
+
+test('application rotation does not rediscover the renamed archive', { timeout: 10000 }, async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'application-tail-'));
+  const path = join(directory, 'application.log');
+  writeFileSync(path, 'history\n');
+  const script = fileTailScript([directory], true);
+  const child = spawn('bash', ['-c', `sleep() { command sleep 0.05; }\n${script}`], {
+    detached: true, stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let output = '';
+  child.stdout.on('data', (chunk) => { output += chunk; });
+  const closed = new Promise<void>((resolve) => child.on('close', () => resolve()));
+  async function waitFor(line: string): Promise<void> {
+    const deadline = Date.now() + 3500;
+    while (!output.includes(line) && Date.now() < deadline) await delay(25);
+    assert.ok(output.includes(line), output);
+  }
+  try {
+    await delay(200);
+    appendFileSync(path, 'before-rotation\n');
+    await waitFor('before-rotation');
+    renameSync(path, `${path}.2026-09-15`);
+    writeFileSync(path, 'after-rotation\n');
+    await waitFor('after-rotation');
+    await delay(250);
+    assert.equal(output.split('before-rotation').length - 1, 1);
+    assert.equal(output.split('after-rotation').length - 1, 1);
+    assert.ok(!output.includes('history'));
+  } finally {
+    if (child.pid !== undefined) process.kill(-child.pid, 'SIGKILL');
+    await closed;
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

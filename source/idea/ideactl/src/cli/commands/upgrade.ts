@@ -598,11 +598,8 @@ const MODULES_UNKNOWN_TO_DEPLOYED_APPLICATIONS: ReadonlySet<string> = new Set([E
 // ECS capacity alone cannot make an older cluster-manager recognize the new module.
 export function heldModuleSetEntries(
   entries: ConfigEntry[],
-  modules: ModuleInfo[],
-  deploysClusterManager = true,
+  portalReady = false,
 ): { kept: ConfigEntry[]; held: ConfigEntry[] } {
-  const portalReady = deploysClusterManager && modules.some((module) =>
-    module.name === "cluster-manager" && module.status === "deployed" && module.version === ideaVersion());
   const kept: ConfigEntry[] = [];
   const held: ConfigEntry[] = [];
   for (const entry of entries) {
@@ -619,17 +616,28 @@ function moduleSetEntryModule(key: string): string | undefined {
   return parts[0] === "global-settings" && parts[1] === "module_sets" && parts.length >= 5 ? parts[3] : undefined;
 }
 
+// Settings can reach the target release before its service stabilizes.
+// Only a completed stack carrying the target release tag can advertise the new module.
+async function clusterManagerReady(deps: UpgradeDeps, options: UpgradeCommandOptions, modules: ModuleInfo[]): Promise<boolean> {
+  const settings = await scanAll(deps, `${options.clusterName}.cluster-settings`);
+  const id = maintenanceModuleId(settings, options.moduleSet);
+  const portal = modules.find((module) => module.module_id === id);
+  if (portal?.status !== "deployed" || portal.version !== ideaVersion()) return false;
+  const stack = await deps.cfn.describeStack(portal.stack_name ?? `${options.clusterName}-${id}`);
+  return ["CREATE_COMPLETE", "UPDATE_COMPLETE"].includes(stack.StackStatus ?? "")
+    && stack.Tags?.some((tag) => tag.Key === "idea:ModuleVersion" && tag.Value === ideaVersion()) === true;
+}
+
 async function announceHeldModuleSets(
   deps: UpgradeDeps,
   options: UpgradeCommandOptions,
   configDir: string,
-  modules: ModuleInfo[],
 ): Promise<void> {
   if (!existsSync(join(configDir, "idea.yml"))) return;
-  const { held } = heldModuleSetEntries(convertConfigToKeyValuePairs(configDir, "global-settings"), modules);
+  const { held } = heldModuleSetEntries(convertConfigToKeyValuePairs(configDir, "global-settings"));
   if (held.length === 0) return;
   const currentModules = await clusterModules(deps, options.clusterName);
-  if (heldModuleSetEntries(held, currentModules, includesModule(options, currentModules, "cluster-manager")).held.length > 0) return;
+  if (heldModuleSetEntries(held, await clusterManagerReady(deps, options, currentModules)).held.length > 0) return;
   const writer = await deps.configWriter({
     clusterName: options.clusterName,
     awsRegion: options.awsRegion,
@@ -653,11 +661,17 @@ async function backupAndUpdateGlobalSettings(deps: UpgradeDeps, options: Upgrade
     awsRegion: options.awsRegion,
     awsProfile: options.awsProfile,
   });
+  const portalReady = await clusterManagerReady(deps, options, modules);
+  const settings = await scanAll(deps, `${options.clusterName}.cluster-settings`);
+  const ownerKey = `global-settings.module_sets.${options.moduleSet}.cluster-manager.module_id`;
+  const ownerId = maintenanceModuleId(settings, options.moduleSet);
+  const generated = convertConfigToKeyValuePairs(configDir, "global-settings");
+  // Template defaults must not redirect the maintenance owner during the cutover.
+  // Keeping its selected mapping also lets a retry find the durable baseline.
+  const entries = generated.filter((entry) => entry.key !== ownerKey);
+  entries.push({ key: ownerKey, value: ownerId });
   await writer.deleteConfigEntries("global-settings.");
-  await writer.syncClusterSettingsInDb(
-    heldModuleSetEntries(convertConfigToKeyValuePairs(configDir, "global-settings"), modules, includesModule(options, modules, "cluster-manager")).kept,
-    true,
-  );
+  await writer.syncClusterSettingsInDb(heldModuleSetEntries(entries, portalReady).kept, true);
   return configDir;
 }
 
@@ -678,7 +692,7 @@ async function syncFullConfiguration(
   await writer.syncModulesInDb(
     readModulesFromFiles(configDir).map((module) => ({ id: module.id, name: module.name, type: module.type })),
   );
-  await writer.syncClusterSettingsInDb(heldModuleSetEntries(convertConfigToKeyValuePairs(configDir), modules, includesModule(options, modules, "cluster-manager")).kept, false);
+  await writer.syncClusterSettingsInDb(heldModuleSetEntries(convertConfigToKeyValuePairs(configDir), await clusterManagerReady(deps, options, modules)).kept, false);
 }
 
 export function buildAmiUpdateEntries(
@@ -1090,9 +1104,18 @@ async function confirmConfigDrift(
   if (confirm !== true && confirm !== "Yes") throw new ExitWithCode(0);
 }
 
-const MAINTENANCE_ENABLED_KEY = "cluster-manager.maintenance.enabled";
-const MAINTENANCE_MESSAGE_KEY = "cluster-manager.maintenance.message";
-const MAINTENANCE_BASELINE_KEY = "cluster-manager.maintenance.upgrade_baseline";
+function maintenanceModuleId(entries: Array<Record<string, unknown>>, moduleSet: string): string {
+  const key = `global-settings.module_sets.${moduleSet}.cluster-manager.module_id`;
+  const id = entries.find((entry) => entry["key"] === key)?.["value"];
+  if (typeof id !== "string" || id.trim() === "") throw new ClusterConfigError(`${key} is required`);
+  return id;
+}
+
+function maintenanceKeys(entries: Array<Record<string, unknown>>, moduleSet: string) {
+  const id = maintenanceModuleId(entries, moduleSet);
+  return { enabled: `${id}.maintenance.enabled`, message: `${id}.maintenance.message`, baseline: `${id}.maintenance.upgrade_baseline` };
+}
+
 const DRAIN_MESSAGE = "Scheduler upgrade in progress; job submission reopens when it completes.";
 const DRAIN_POLL_MS = 60_000;
 const DEFAULT_DRAIN_TIMEOUT_MINUTES = 240;
@@ -1128,13 +1151,14 @@ function describeInventory(inventory: SchedulerJobInventory): string {
 
 async function restoreSubmission(deps: UpgradeDeps, options: UpgradeCommandOptions): Promise<void> {
   const current = await scanAll(deps, `${options.clusterName}.cluster-settings`);
-  const saved = current.find((entry) => entry["key"] === MAINTENANCE_BASELINE_KEY)?.["value"];
+  const keys = maintenanceKeys(current, options.moduleSet);
+  const saved = current.find((entry) => entry["key"] === keys.baseline)?.["value"];
   if (saved === undefined) return;
   const baseline = JSON.parse(String(saved)) as { enabled: boolean; message: string };
   const writer = await deps.configWriter({ clusterName: options.clusterName, awsRegion: options.awsRegion, awsProfile: options.awsProfile });
-  await writer.setConfigEntry(MAINTENANCE_MESSAGE_KEY, baseline.message);
-  await writer.setConfigEntry(MAINTENANCE_ENABLED_KEY, baseline.enabled);
-  await writer.deleteConfigEntries(MAINTENANCE_BASELINE_KEY);
+  await writer.setConfigEntry(keys.message, baseline.message);
+  await writer.setConfigEntry(keys.enabled, baseline.enabled);
+  await writer.deleteConfigEntries(keys.baseline);
   deps.out(`scheduler cutover gate: previous submission maintenance state restored on ${options.clusterName}`);
 }
 
@@ -1146,18 +1170,19 @@ async function schedulerCutoverGate(
   host: string,
 ): Promise<void> {
   const current = await scanAll(deps, `${options.clusterName}.cluster-settings`);
+  const keys = maintenanceKeys(current, options.moduleSet);
   const prior = (key: string): unknown => current.find((entry) => entry["key"] === key)?.["value"];
   const writer = await deps.configWriter({ clusterName: options.clusterName, awsRegion: options.awsRegion, awsProfile: options.awsProfile });
-  const existingBaseline = prior(MAINTENANCE_BASELINE_KEY);
+  const existingBaseline = prior(keys.baseline);
   if (existingBaseline === undefined) {
-    await writer.setConfigEntry(MAINTENANCE_BASELINE_KEY, JSON.stringify({
-      enabled: prior(MAINTENANCE_ENABLED_KEY) === true,
-      message: typeof prior(MAINTENANCE_MESSAGE_KEY) === "string" ? prior(MAINTENANCE_MESSAGE_KEY) : "",
+    await writer.setConfigEntry(keys.baseline, JSON.stringify({
+      enabled: prior(keys.enabled) === true,
+      message: typeof prior(keys.message) === "string" ? prior(keys.message) : "",
     }));
   }
-  await writer.setConfigEntry(MAINTENANCE_ENABLED_KEY, true);
-  await writer.setConfigEntry(MAINTENANCE_MESSAGE_KEY, DRAIN_MESSAGE);
-  deps.out(`scheduler cutover gate: job submission closed on ${options.clusterName}`);
+  await writer.setConfigEntry(keys.enabled, true);
+  await writer.setConfigEntry(keys.message, DRAIN_MESSAGE);
+  deps.out(`scheduler cutover gate: submission maintenance written on ${options.clusterName}`);
   if (options.skipDrainCheck === true) {
     deps.out(`scheduler cutover gate: inventory check skipped on request; submission stays closed for the run; jobs the host scheduler ${host} still holds will be lost`);
     return;
@@ -1172,33 +1197,30 @@ async function schedulerCutoverGate(
       throw new GeneralException(`scheduler cutover gate: could not read the job inventory on ${host}: ${(error as Error).message}. An unknown inventory is not an empty one; drain by hand and re-run with --skip-drain-check.`);
     }
   };
-  let inventory = await read();
-  if (inventoryTotal(inventory) === 0) {
-    deps.out(`scheduler cutover gate: the host scheduler ${host} holds no jobs`);
-    return;
-  }
-  if (options.drain !== true) {
-    if (existingBaseline === undefined) await restoreSubmission(deps, options);
-    throw new ClusterConfigError(
-      `scheduler cutover gate: the host scheduler ${host} holds ${describeInventory(inventory)} job(s). The container cutover starts the scheduler on an empty job database, so they would be lost. Re-run with --drain to close submission and wait for them to finish, or drain by hand and re-run with --skip-drain-check.`,
-    );
-  }
-
-  deps.out(`scheduler cutover gate: job submission closed on ${options.clusterName}; waiting for ${describeInventory(inventory)} job(s) on ${host} to finish`);
-
   const timeoutMs = (options.drainTimeoutMinutes ?? DEFAULT_DRAIN_TIMEOUT_MINUTES) * 60_000;
   const startedAt = deps.now();
-  while (inventoryTotal(inventory) > 0) {
-    if (deps.now() - startedAt > timeoutMs) {
-      throw new GeneralException(
-        `scheduler cutover gate: ${describeInventory(inventory)} job(s) still on ${host} after ${Math.round(timeoutMs / 60_000)} minutes. Submission stays closed; re-run with --drain to keep waiting, or --drain-timeout-minutes to wait longer.`,
+  let emptyReads = 0;
+  for (;;) {
+    const inventory = await read();
+    emptyReads = inventoryTotal(inventory) === 0 ? emptyReads + 1 : 0;
+    if (emptyReads === 2) {
+      deps.out(`scheduler cutover gate: two empty inventories at least thirty seconds apart after maintenance write; continuing`);
+      return;
+    }
+    if (inventoryTotal(inventory) > 0 && options.drain !== true) {
+      if (existingBaseline === undefined) await restoreSubmission(deps, options);
+      throw new ClusterConfigError(
+        `scheduler cutover gate: the host scheduler ${host} holds ${describeInventory(inventory)} job(s). Re-run with --drain to close submission and wait, or drain by hand and re-run with --skip-drain-check.`,
       );
     }
-    await deps.sleep(DRAIN_POLL_MS);
-    inventory = await read();
-    deps.out(`scheduler cutover gate: ${describeInventory(inventory)}`);
+    if (deps.now() - startedAt > timeoutMs) {
+      throw new GeneralException(
+        `scheduler cutover gate: ${describeInventory(inventory)} job(s) still on ${host} after ${Math.round(timeoutMs / 60_000)} minutes. Submission stays closed; re-run with --drain or --drain-timeout-minutes.`,
+      );
+    }
+    deps.out(`scheduler cutover gate: ${describeInventory(inventory)}; waiting for settings propagation and stable empty inventory`);
+    await deps.sleep(emptyReads > 0 ? 30_000 : DRAIN_POLL_MS);
   }
-  deps.out(`scheduler cutover gate: the host scheduler ${host} is empty; continuing`);
 }
 
 function includesModule(options: UpgradeCommandOptions, modules: ModuleInfo[], name: string): boolean {
@@ -1382,7 +1404,7 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
       moduleIds: allModules ? undefined : options.modules,
     };
     await deps.deploy(deployment);
-    await announceHeldModuleSets(deps, options, configDir, modulesBefore);
+    await announceHeldModuleSets(deps, options, configDir);
     await restoreTerminationProtection(deps, options.awsRegion, await moduleInstances(deps, options));
     await saveValuesFile(deps, options);
     await restoreSubmission(deps, options);
@@ -1390,8 +1412,8 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
   } catch (error) {
     warnClearedProtection(deps, cleared);
     const settings = await scanAll(deps, `${options.clusterName}.cluster-settings`);
-    if (settings.some((entry) => entry["key"] === MAINTENANCE_BASELINE_KEY)) {
-      deps.out(`warning: job submission is still closed on ${options.clusterName} (${MAINTENANCE_ENABLED_KEY}); a completed re-run reopens it.`);
+    if (settings.some((entry) => entry["key"] === maintenanceKeys(settings, options.moduleSet).baseline)) {
+      deps.out(`warning: job submission is still closed on ${options.clusterName} (${maintenanceKeys(settings, options.moduleSet).enabled}); a completed re-run reopens it.`);
     }
     throw error;
   }

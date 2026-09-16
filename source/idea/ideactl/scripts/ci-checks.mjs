@@ -679,6 +679,13 @@ function parseArguments(argv) {
  * @param {string[]} argv process arguments
  */
 export async function runCli(argv) {
+  const flagIndex = argv.findIndex((arg) => arg.startsWith("--"));
+  const commands = argv.slice(0, flagIndex < 0 ? argv.length : flagIndex);
+  if (commands.length > 1) {
+    const flags = flagIndex < 0 ? [] : argv.slice(flagIndex);
+    for (const command of commands) await runCli([command, ...flags]);
+    return;
+  }
   const options = parseArguments(argv);
   const actions = {
     dependencies: () => checkDependencyPins(options.packageRoot),

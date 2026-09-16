@@ -19,6 +19,7 @@ import {
   DOGSTATSD_SOCKET,
   requirePrivateEcrDigest,
   buildExecutionRole,
+  grantInjectedSecret,
   ecsTasksPrincipal,
   storageMounts,
   type ContainerScope,
@@ -368,6 +369,8 @@ export class EcsStack extends IdeaBaseStack {
       securityGroup: this.hostSecurityGroup,
       userData,
     });
+    // Host replacement needs scheduler draining and remote mount checks before retirement.
+    // Keep termination protection; follow docs/ECS-HOST-REPLACEMENT.md for existing hosts.
     const autoScalingGroup = new autoscaling.AutoScalingGroup(this.stack, "ecs-host-auto-scaling-group", {
       autoScalingGroupName: this.buildResourceName("ecs-hosts"),
       launchTemplate,
@@ -474,6 +477,7 @@ export class EcsStack extends IdeaBaseStack {
       "datadog-api-key-secret",
       this.requiredString("ecs.datadog.api_key_secret_arn"),
     );
+    grantInjectedSecret(scope, executionRole, apiKey.secretArn);
     // The module's own id, not the module-set row: an upgrade announces this module in the
     // module set only after every stack has deployed (see `heldModuleSetEntries`).
     const datadogLogGroupName = `/${this.clusterName}/${this.moduleId}/datadog`;

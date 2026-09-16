@@ -90,6 +90,7 @@ import {
   attachApplicationFileLogs,
   buildEc2Service,
   buildExecutionRole,
+  grantInjectedSecret,
   buildTaskDefinition,
   buildTaskRole,
   commonEnvironment,
@@ -1573,6 +1574,8 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
     // stack deploys, so it is written to by name.
     const logGroupName = `/${this.clusterName}/${this.moduleId}/dcv-connection-gateway`;
     const certificateSecrets = this.dcvConnectionGatewayCertificateSecretArns();
+    grantInjectedSecret(scope, executionRole, certificateSecrets.certificate);
+    grantInjectedSecret(scope, executionRole, certificateSecrets.privateKey);
     const container = taskDefinition.addContainer('dcv-connection-gateway-container', {
       cpu: requiredEcsInt(scope, 'ecs.tasks.dcv-gateway.cpu'),
       dockerLabels: dockerLabels(scope, 'dcv-gateway'),

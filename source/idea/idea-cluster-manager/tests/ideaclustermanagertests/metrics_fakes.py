@@ -31,7 +31,7 @@ class FakeLogger:
 
 class FakeConfig:
     def __init__(self, values: Dict, secrets: Dict = None):
-        self.values = values
+        self.values = {"cluster.cluster_s3_bucket": "sample-bucket", **values}
         self.secrets = secrets or {}
         self.db = FakeSettingsDB()
 
@@ -92,6 +92,10 @@ class FakeAws:
     def __init__(self, cost_explorer=None, partition='aws'):
         self._cost_explorer = cost_explorer
         self._partition = partition
+        self._s3 = FakeObjectStore()
+
+    def s3(self):
+        return self._s3
 
     def cost_explorer(self):
         return self._cost_explorer
@@ -196,3 +200,21 @@ class FakeCollectorSource:
 
     def quota_reports(self):
         return []
+
+
+class FakeObjectStore:
+    def __init__(self):
+        self.values = {}
+        self.fail_write = False
+
+    def put_object(self, Bucket, Key, Body, ContentType):
+        if self.fail_write:
+            raise RuntimeError('outbox write failed')
+        self.values[Key] = Body
+
+    def list_objects_v2(self, Bucket, Prefix, **kwargs):
+        return {'Contents': [{'Key': key} for key in self.values if key.startswith(Prefix)]}
+
+    def get_object(self, Bucket, Key):
+        from io import BytesIO
+        return {'Body': BytesIO(self.values[Key])}

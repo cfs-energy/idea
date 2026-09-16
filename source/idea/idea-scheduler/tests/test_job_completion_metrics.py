@@ -134,7 +134,7 @@ def _published(context, monkeypatch, provider, job):
     return recorder.entries
 
 
-def test_detail_cost_carries_the_job_identity_and_only_off_cloudwatch(
+def test_detail_cost_carries_the_job_identity_on_dogstatsd_only(
     context, monkeypatch
 ):
     job = _job(
@@ -154,7 +154,6 @@ def test_detail_cost_carries_the_job_identity_and_only_off_cloudwatch(
     aggregate = {d['Name'] for d in by_name['job.cost']['Dimensions']}
     assert 'job_id' not in aggregate and 'job_uid' not in aggregate
 
-    cloudwatch = {
-        e['MetricName'] for e in _published(context, monkeypatch, 'cloudwatch', job)
-    }
-    assert 'job.cost' in cloudwatch and 'job.detail.cost' not in cloudwatch
+    for provider in ['cloudwatch', 'prometheus', 'unknown']:
+        names = {e['MetricName'] for e in _published(context, monkeypatch, provider, job)}
+        assert 'job.cost' in names and 'job.detail.cost' not in names
