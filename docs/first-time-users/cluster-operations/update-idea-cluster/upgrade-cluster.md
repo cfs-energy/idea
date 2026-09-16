@@ -137,18 +137,37 @@ If no modules are specified, all modules will be upgraded automatically.
 * `--disable-eol-stacks-in-use`: Disable, rather than delete, end-of-life virtual desktop software stacks that a live session still uses
 * `--drain`: Before the scheduler moves from a host to a container, close job submission and wait for the host scheduler to finish every job it holds
 * `--drain-timeout-minutes`: How long `--drain` waits before stopping with submission still closed (default: 240)
-* `--skip-drain-check`: Do not read the host scheduler's job inventory before the container cutover; any job it still holds is lost
+* `--skip-drain-check`: Skip the host scheduler's job inventory check but close submission for the whole run; any job it still holds is lost
 
-When the upgrade turns containers on (`enable_ecs: true` in `values.yml`) and the scheduler still
-runs on a host, the container scheduler starts with an empty job database, so a job the host still
-holds is lost. Before anything is written, the upgrade reads the host scheduler's own job inventory
-over Systems Manager and refuses to continue while it is not empty. Pass `--drain` to have the
-upgrade close job submission (the cluster maintenance flag, which the portal and `qsub` both
-honour), wait for the inventory to empty, run the upgrade, and reopen submission at the end. Job
-ids start again from zero on the container scheduler, as they did after every scheduler host
-replacement before; from then on the job database lives on the scheduler's file system and
-survives every later upgrade. Upgrades of a scheduler that already runs as a container skip this
-check.
+When the scheduler is part of the upgrade and ECS will be enabled at synthesis, a scheduler stack
+that still has an EC2 host needs a cutover. ECS can be enabled by `enable_ecs: true` in `values.yml`,
+or by an ECS module row with `ecs.enabled: true` in settings. This includes a scheduler-only run
+after ECS capacity has already deployed. Before the cutover, Phase 0 retains the scheduler's DNS
+record so removing the host does not delete the name used by the container scheduler.
+
+The container scheduler starts with an empty job database, so a job the host still holds is lost.
+The upgrade closes job submission before reading the host scheduler's inventory over Systems
+Manager, even if the queue is empty. Submission remains closed throughout the upgrade. A non-empty
+queue without `--drain` restores the previous maintenance state and refuses deployment. Pass
+`--drain` to wait for the queue to empty. The maintenance flag is honoured by both the portal and
+`qsub`. `--skip-drain-check` skips the inventory read but still closes submission for the run.
+
+The original maintenance enabled flag and message are saved as JSON in
+`cluster-manager.maintenance.upgrade_baseline` before submission closes. A failed run leaves
+submission closed and preserves that baseline. Re-run the upgrade to completion to restore both
+original values and delete the baseline after the final values upload. This also works after the
+scheduler host is gone, and preserves maintenance that was already enabled before the upgrade.
+A refused retry keeps an earlier failed run's closure and baseline until a run completes.
+
+ECS module-set rows are held until cluster-manager's modules-table row records the target release
+as deployed. Deploying the ECS stack alone does not make the old portal recognize ECS. A retry
+after a cluster-manager deployment failure continues holding those rows, and a scoped run that
+does not deploy cluster-manager does not publish them.
+
+Job ids start again from zero on the container scheduler, as they did after every scheduler host
+replacement before. From then on the job database lives on the scheduler's file system and
+survives later upgrades. Once the scheduler host is gone, upgrades skip the inventory gate and DNS
+retention step, but a successful retry still restores any saved maintenance baseline.
 
 The end-of-life check runs before the upgrade is confirmed and changes nothing: it lists the
 software stacks it will delete or disable, prefixed with `will delete` or `will disable`. Those

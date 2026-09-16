@@ -9,6 +9,7 @@ import test from "node:test";
 
 import { Command } from "commander";
 import { CreateTagsCommand, DeleteTagsCommand, DescribeInstancesCommand, EC2Client } from "@aws-sdk/client-ec2";
+import { ideaVersion } from "../../src/version.ts";
 import type { ConfigWriter, Deps } from "../../src/cli/cdk-invoker.ts";
 import {
   countPbsStates,
@@ -67,9 +68,21 @@ function replay(): Replay {
   const writer: ConfigWriter = {
     async syncModulesInDb(modules) {
       events.push(`modules:${modules.map((module) => module.id).sort().join(",")}`);
+      const table = rows[`${clusterName}.modules`]!;
+      for (const module of modules) {
+        if (!table.some((row) => row["module_id"] === module.id)) {
+          table.push({ ...moduleRow(module.id, module.name, "not-deployed"), type: module.type, version: undefined });
+        }
+      }
     },
     async syncClusterSettingsInDb(entries, overwrite) {
       events.push(`sync:${overwrite === true}:${entries[0]?.key ?? ""}`);
+      const table = rows[`${clusterName}.cluster-settings`]!;
+      for (const entry of entries) {
+        const index = table.findIndex((row) => row["key"] === entry.key);
+        if (index < 0) table.push({ ...entry });
+        else if (overwrite === true) table[index] = { ...entry };
+      }
       const announced = entries
         .map((entry) => entry.key.match(/^global-settings\.module_sets\.default\.([^.]+)\.module_id$/)?.[1])
         .filter((name): name is string => name !== undefined);
@@ -77,9 +90,15 @@ function replay(): Replay {
     },
     async setConfigEntry(key, value) {
       events.push(`set:${key}=${String(value)}`);
+      const table = rows[`${clusterName}.cluster-settings`]!;
+      const index = table.findIndex((row) => row["key"] === key);
+      if (index < 0) table.push(setting(key, value));
+      else table[index] = setting(key, value);
     },
     async deleteConfigEntries(prefix) {
       events.push(`delete:${prefix}`);
+      rows[`${clusterName}.cluster-settings`] = rows[`${clusterName}.cluster-settings`]!
+        .filter((row) => !String(row["key"]).startsWith(prefix));
     },
   };
 
@@ -201,6 +220,12 @@ function replay(): Replay {
     async deploy(input) {
       events.push("deploy");
       events.push(`deploy:${(input.moduleIds ?? ["all"]).join(",")}`);
+      for (const row of rows[`${clusterName}.modules`]!) {
+        if (input.moduleIds === undefined || input.moduleIds.includes(String(row["module_id"]))) {
+          row["status"] = "deployed";
+          row["version"] = ideaVersion();
+        }
+      }
     },
     regionAmiConfig() {
       return { "us-east-2": { amazonlinux2023: "ami-release" } };
@@ -880,14 +905,20 @@ test("countPbsStates maps PBS states to the inventory and ignores finished jobs"
   assert.deepEqual(countPbsStates({}), { queued: 0, running: 0, other: 0 });
 });
 
-test("the cutover gate refuses a host scheduler that still holds jobs, before any write", async () => {
+test("the cutover gate closes submission, refuses a nonempty scheduler, and restores maintenance", async () => {
   await withFixture(async ({ deps, events }) => {
     enableContainers();
     trunkingEnabled(deps);
     jobsOnHost(deps, events, [{ queued: 2, running: 1, other: 0 }]);
     await assert.rejects(upgradeCluster(deps, containerOptions), /scheduler cutover gate: the host scheduler i-sample holds 2 queued, 1 running, 0 other job\(s\)[\s\S]*--drain/);
     assert.ok(!events.includes("deploy"));
-    assert.ok(!events.some((event) => event.startsWith("delete:") || event.startsWith("set:") || event.startsWith("sync:")), "refused before any mutation");
+    const closed = events.indexOf("set:cluster-manager.maintenance.enabled=true");
+    const read = events.indexOf("jobs:i-sample:3");
+    const restored = events.indexOf("set:cluster-manager.maintenance.enabled=false");
+    assert.ok(closed >= 0 && read > closed && restored > read);
+    assert.ok(events.includes("set:cluster-manager.maintenance.message="));
+    assert.ok(events.includes("delete:cluster-manager.maintenance.upgrade_baseline"));
+    assert.ok(!events.some((event) => event.startsWith("sync:")), "no configuration phase ran");
   });
 });
 
@@ -902,6 +933,7 @@ test("--drain closes submission, waits for the host scheduler to empty, upgrades
     const deploy = events.indexOf("deploy");
     const reopened = events.indexOf("set:cluster-manager.maintenance.enabled=false");
     assert.ok(closed >= 0 && closed < phase1, "submission closed before the first phase");
+    assert.ok(closed < events.indexOf("jobs:i-sample:2"), "submission closed before inventory read");
     assert.equal(events.filter((event) => event.startsWith("jobs:i-sample:")).length, 3);
     assert.ok(deploy > closed);
     assert.ok(reopened > deploy, "submission reopened after the deployment");
@@ -928,7 +960,9 @@ test("an unreadable inventory refuses the cutover instead of assuming it is empt
     deps.schedulerJobs = { async activeJobs() { throw new Error("ssm: InvalidInstanceId"); } };
     await assert.rejects(upgradeCluster(deps, { ...containerOptions, drain: true }), /could not read the job inventory on i-sample: ssm: InvalidInstanceId/);
     assert.ok(!events.includes("deploy"));
-    assert.ok(!events.some((event) => event.startsWith("set:")), "nothing written");
+    assert.ok(events.includes("set:cluster-manager.maintenance.enabled=true"));
+    assert.ok(!events.includes("delete:cluster-manager.maintenance.upgrade_baseline"));
+    assert.ok(events.some((event) => event.includes("a completed re-run reopens it")));
   });
 });
 
@@ -987,5 +1021,134 @@ test("a failed marker deletion can be retried after protection is restored", asy
     await upgradeCluster(deps, options);
     assert.ok(protection.has("i-sample"));
     assert.equal(protectionTags.has("i-sample"), false);
+  });
+});
+
+test("an empty scheduler stays closed from before inventory through the last phase", async () => {
+  await withFixture(async ({ deps, events, rows }) => {
+    enableContainers();
+    trunkingEnabled(deps);
+    jobsOnHost(deps, events, [{ queued: 0, running: 0, other: 0 }]);
+    await upgradeCluster(deps, containerOptions);
+    const baseline = events.findIndex((event) => event.startsWith("set:cluster-manager.maintenance.upgrade_baseline="));
+    const closed = events.indexOf("set:cluster-manager.maintenance.enabled=true");
+    const read = events.indexOf("jobs:i-sample:0");
+    const restored = events.indexOf("set:cluster-manager.maintenance.enabled=false");
+    assert.ok(baseline >= 0 && closed > baseline && read > closed);
+    assert.ok(restored > events.indexOf("save-values"));
+    assert.ok(restored < events.indexOf("All upgrade phases completed successfully"));
+    assert.ok(!rows[`${clusterName}.cluster-settings`]!.some((row) => row["key"] === "cluster-manager.maintenance.upgrade_baseline"));
+  });
+});
+
+test("--skip-drain-check closes submission for the run without reading inventory", async () => {
+  await withFixture(async ({ deps, events }) => {
+    enableContainers();
+    trunkingEnabled(deps);
+    jobsOnHost(deps, events, [{ queued: 3, running: 2, other: 0 }]);
+    await upgradeCluster(deps, { ...containerOptions, skipDrainCheck: true });
+    assert.ok(!events.some((event) => event.startsWith("jobs:")));
+    const closed = events.indexOf("set:cluster-manager.maintenance.enabled=true");
+    assert.ok(closed >= 0 && closed < events.indexOf("Phase 1: Update Base OS in values.yml"));
+    assert.ok(events.indexOf("set:cluster-manager.maintenance.enabled=false") > events.indexOf("save-values"));
+    const program = new Command("ideactl");
+    registerUpgradeCommands(program, deps);
+    assert.match(program.commands[0]!.helpInformation(), /close submission for the run/);
+  });
+});
+
+for (const hasHost of [true, false]) {
+  test(`scheduler-only upgrade with ECS enabled ${hasHost ? "gates and retains host DNS" : "skips the gate and DNS after cutover"}`, async () => {
+    await withFixture(async ({ deps, events, rows }) => {
+      rows[`${clusterName}.modules`]!.push(moduleRow("ecs", "ecs"));
+      rows[`${clusterName}.cluster-settings`]!.push(setting("ecs.enabled", true));
+      deps.cloudFormation.listStackResources = async () => ({ instanceIds: hasHost ? ["i-sample"] : [] });
+      deps.cfn.getTemplate = async () => {
+        events.push("read-template");
+        return schedulerTemplate();
+      };
+      deps.cfn.updateStack = async () => { events.push("retain-dns"); };
+      deps.cfn.describeStack = async () => ({ StackStatus: "UPDATE_COMPLETE" });
+      jobsOnHost(deps, events, [{ queued: 0, running: 0, other: 0 }]);
+      await upgradeCluster(deps, { ...containerOptions, modules: ["scheduler"] });
+      assert.equal(events.includes("jobs:i-sample:0"), hasHost);
+      assert.equal(events.includes("set:cluster-manager.maintenance.enabled=true"), hasHost);
+      assert.equal(events.includes("read-template"), hasHost);
+      assert.equal(events.includes("retain-dns"), hasHost);
+      if (hasHost) assert.ok(events.indexOf("retain-dns") < events.indexOf("deploy:scheduler"));
+      assert.ok(events.includes("deploy:scheduler"));
+      assert.ok(!events.some((event) => event.startsWith("module-sets:") && announcedModules(event).includes("ecs")));
+    });
+  });
+}
+
+for (const { retryHasHost, originallyEnabled } of [
+  { retryHasHost: true, originallyEnabled: false },
+  { retryHasHost: false, originallyEnabled: false },
+  { retryHasHost: true, originallyEnabled: true },
+  { retryHasHost: false, originallyEnabled: true },
+]) {
+  test(`a successful retry restores maintenance enabled=${originallyEnabled} ${retryHasHost ? "with the host still present" : "after the host is gone"}`, async () => {
+    await withFixture(async ({ deps, events, rows }) => {
+      enableContainers();
+      trunkingEnabled(deps);
+      const key = "cluster-manager.maintenance.upgrade_baseline";
+      const original = { enabled: originallyEnabled, message: "Scheduled maintenance" };
+      rows[`${clusterName}.cluster-settings`]!.push(
+        setting("cluster-manager.maintenance.enabled", original.enabled),
+        setting("cluster-manager.maintenance.message", original.message),
+      );
+      jobsOnHost(deps, events, [{ queued: 0, running: 0, other: 0 }]);
+      const deploy = deps.deploy;
+      deps.deploy = async () => { throw new Error("cluster-manager deployment failed"); };
+      await assert.rejects(upgradeCluster(deps, containerOptions), /cluster-manager deployment failed/);
+      const value = (name: string) => rows[`${clusterName}.cluster-settings`]!.find((row) => row["key"] === name)?.["value"];
+      assert.deepEqual(JSON.parse(String(value(key))), original);
+      assert.equal(value("cluster-manager.maintenance.enabled"), true);
+      assert.notEqual(value("cluster-manager.maintenance.message"), original.message);
+      assert.ok(events.some((event) => event.includes("a completed re-run reopens it")));
+      const retryStart = events.length;
+      deps.deploy = deploy;
+      if (!retryHasHost) deps.cloudFormation.listStackResources = async () => ({ instanceIds: [] });
+      await upgradeCluster(deps, containerOptions);
+      assert.equal(value("cluster-manager.maintenance.enabled"), original.enabled);
+      assert.equal(value("cluster-manager.maintenance.message"), original.message);
+      assert.equal(value(key), undefined);
+      assert.equal(events.filter((event) => event.startsWith(`set:${key}=`)).length, 1);
+      assert.ok(events.lastIndexOf(`delete:${key}`) > events.lastIndexOf("save-values"));
+      assert.equal(events.slice(retryStart).some((event) => event.startsWith("jobs:")), retryHasHost);
+    });
+  });
+}
+
+for (const portalCurrent of [false, true]) {
+  test(`deployed ECS module-set rows ${portalCurrent ? "publish for the target cluster-manager release" : "stay held for the previous cluster-manager release"}`, async () => {
+    await withFixture(async ({ deps, events, rows }) => {
+      enableContainers();
+      trunkingEnabled(deps);
+      rows[`${clusterName}.modules`]!.push(
+        { ...moduleRow("ecs", "ecs"), version: ideaVersion() },
+        { ...moduleRow("cluster-manager", "cluster-manager"), version: portalCurrent ? ideaVersion() : "26.09.0" },
+      );
+      deps.deploy = async () => { events.push("deploy"); };
+      await upgradeCluster(deps, containerOptions);
+      const publications = events.filter((event) => event.startsWith("module-sets:") && announcedModules(event).includes("ecs"));
+      assert.equal(publications.length > 0, portalCurrent);
+      if (portalCurrent) assert.ok(events.indexOf(publications[0]!) < events.indexOf("deploy"));
+      assert.equal(rows[`${clusterName}.cluster-settings`]!.some((row) => row["key"] === "global-settings.module_sets.default.ecs.module_id"), portalCurrent);
+    });
+  });
+}
+
+test("a scoped upgrade cannot announce ECS even when cluster-manager is at the target release", async () => {
+  await withFixture(async ({ deps, events, rows }) => {
+    enableContainers();
+    rows[`${clusterName}.modules`]!.push(
+      { ...moduleRow("ecs", "ecs"), version: ideaVersion() },
+      { ...moduleRow("cluster-manager", "cluster-manager"), version: ideaVersion() },
+    );
+    await upgradeCluster(deps, { ...containerOptions, modules: ["analytics"] });
+    assert.ok(!events.some((event) => event.startsWith("module-sets:") && announcedModules(event).includes("ecs")));
+    assert.ok(!events.includes("set:cluster-manager.maintenance.enabled=true"));
   });
 });

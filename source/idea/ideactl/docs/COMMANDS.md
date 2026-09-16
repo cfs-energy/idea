@@ -517,7 +517,23 @@ Upgrade an existing cluster: refuse a cluster with any deployed module below the
 | `--drain-timeout-minutes <minutes>` | yes | none | no |
 | `--skip-drain-check` | no | none | no |
 
-**Reads:** cluster tables, `values.yml`, AMI maps, EC2 images and instance types, OpenSearch instance types, eVDI software-stack tables, and the host scheduler's PBS job inventory over Systems Manager when the run turns containers on. **Changes:** `values.yml`, a `config.golden.<timestamp>/` copy, DynamoDB settings, instance termination protection (cleared then restored), module stacks, and an upload of `values.yml` to the cluster bucket. When the run moves the scheduler from a host to a container, the host's job inventory must be empty: the run refuses otherwise, or with `--drain` closes submission (the cluster-manager maintenance flag), waits for it to empty, and reopens submission at the end. **Exit codes:** 1 on the release floor refusal, EOL refusal, missing AMI, unsupported instance type, or configuration rows the run would overwrite whose value differs from generated configuration without `--accept-config-drift`; 0 if a confirmation is declined.
+**Reads:** cluster tables, `values.yml`, AMI maps, EC2 images and instance types, OpenSearch instance types, eVDI software-stack tables, and the host scheduler's PBS job inventory over Systems Manager when a scheduler cutover is pending. **Changes:** `values.yml`, a `config.golden.<timestamp>/` copy, DynamoDB settings, instance termination protection (cleared then restored), module stacks, and an upload of `values.yml` to the cluster bucket. When the run moves the scheduler from a host to a container, it closes submission before reading the host's inventory, including when that inventory is empty. A non-empty inventory without `--drain` restores the previous maintenance state and refuses deployment; `--drain` waits for it to empty. `--skip-drain-check` skips the inventory read but still closes submission for the whole run. **Exit codes:** 1 on the release floor refusal, EOL refusal, missing AMI, unsupported instance type, or configuration rows the run would overwrite whose value differs from generated configuration without `--accept-config-drift`; 0 if a confirmation is declined.
+
+The cutover gate and Phase 0 DNS retention apply when the scheduler is in scope (explicitly or
+through all modules), ECS will be enabled at synthesis (`enable_ecs: true` in `values.yml`, or an
+ECS module row plus `ecs.enabled: true` in settings), and the scheduler stack still has an EC2
+host. This includes scheduler-only runs after ECS capacity has already deployed. Both steps are
+skipped once the scheduler host is gone.
+
+Before closing submission, the upgrade saves its original enabled flag and message as JSON in
+`cluster-manager.maintenance.upgrade_baseline`. Failed runs preserve that row and leave submission
+closed. Retries keep the original baseline. Successful completion, including a retry after the
+host is gone, restores both maintenance values and deletes the baseline after the values upload.
+A refusal on a retry preserves an earlier failed run's baseline and closure.
+
+ECS module-set rows remain held until cluster-manager's modules-table row records `deployed` at
+the target release, even if the ECS stack has already deployed. Held rows are checked again after
+deployment. A scoped run that excludes cluster-manager does not publish them.
 
 **Example:** `ideactl upgrade-cluster --cluster-name sample-cluster --aws-region us-east-2 --base-os amazonlinux2023 --force`
 
