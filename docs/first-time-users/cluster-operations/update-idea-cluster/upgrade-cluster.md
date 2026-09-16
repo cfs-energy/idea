@@ -26,7 +26,9 @@ holds the previous release's generated defaults in many rows (GPU driver version
 lists, DCV package URLs), which the preview lists as differing from generated configuration,
 so a historical run needs `--accept-config-drift` after reviewing that preview. An operator
 pointing `ecs.image` at a private registry before the run (partitions without a public
-registry) keeps that row; the run registers the container module around it. The scheduler's old periodic-check interval
+registry) keeps that row; the run registers the container module around it. The AMI and
+instance-type moves replace the bastion instance, which the change-set guard refuses until the
+run is given `--allow-replacement bastionhostinstance`. The scheduler's old periodic-check interval
 is copied to the reconciler interval only if the latter is absent. Conflicts are reported and
 preserved, and the old key remains for older running code. Existing lists keep their custom values.
 Before success, settings and deployed module versions are read back. A failed verification requires

@@ -511,13 +511,14 @@ Upgrade an existing cluster: refuse a cluster with any deployed module below 25.
 | `--module-set <module-set>` | yes | `"default"` | no |
 | `--force` | no | none | no |
 | `--accept-config-drift` | no | none | no |
+| `--allow-replacement <logical-id>` | yes, repeatable | none | no |
 | `--skip-global-settings-update` | no | none | no |
 | `--disable-eol-stacks-in-use` | no | none | no |
 | `--drain` | no | none | no |
 | `--drain-timeout-minutes <minutes>` | yes | 240 minutes (effective) | no |
 | `--skip-drain-check` | no | none | no |
 
-**Reads:** cluster tables, `values.yml`, AMI maps, EC2 images and instance types, OpenSearch instance types, eVDI software-stack tables, and the host scheduler's PBS job inventory over Systems Manager when a scheduler cutover is pending. **Changes:** `values.yml`, a `config.golden.<timestamp>/` copy, DynamoDB settings, instance termination protection (cleared then restored), module stacks, and an upload of `values.yml` to the cluster bucket. When the run moves the scheduler from a host to a container, it closes submission before reading the host's inventory, including when that inventory is empty. A non-empty inventory without `--drain` restores the previous maintenance state and refuses deployment; `--drain` waits for it to empty. `--skip-drain-check` skips the inventory read but still closes submission for the whole run. **Exit codes:** 1 on the release floor refusal, EOL refusal, missing AMI, unsupported instance type, or configuration rows the run would overwrite whose value differs from generated configuration without `--accept-config-drift`; 0 if a confirmation is declined.
+**Reads:** cluster tables, `values.yml`, AMI maps, EC2 images and instance types, OpenSearch instance types, eVDI software-stack tables, and the host scheduler's PBS job inventory over Systems Manager when a scheduler cutover is pending. **Changes:** `values.yml`, a `config.golden.<timestamp>/` copy, DynamoDB settings, instance termination protection (cleared then restored), module stacks, and an upload of `values.yml` to the cluster bucket. When the run moves the scheduler from a host to a container, it closes submission before reading the host's inventory, including when that inventory is empty. A non-empty inventory without `--drain` restores the previous maintenance state and refuses deployment; `--drain` waits for it to empty. `--skip-drain-check` skips the inventory read but still closes submission for the whole run. **Exit codes:** 1 on the release floor refusal, EOL refusal, missing AMI, unsupported instance type, or configuration rows the run would overwrite whose value differs from generated configuration without `--accept-config-drift`; 0 if a confirmation is declined. A change set that would replace or remove a stateful resource (a historical run replaces the bastion instance through its AMI and instance-type moves) is refused unless that logical id is passed to `--allow-replacement`.
 
 The cutover gate and Phase 0 DNS retention apply when the scheduler is in scope (explicitly or
 through all modules), ECS will be enabled at synthesis (`enable_ecs: true` in `values.yml`, or an

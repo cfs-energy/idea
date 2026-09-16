@@ -1042,6 +1042,19 @@ test("an empty scheduler stays closed from before inventory through the last pha
   });
 });
 
+test("--allow-replacement reaches the deploy guard from upgrade-cluster", async () => {
+  await withFixture(async ({ deps }) => {
+    const seen: Array<readonly string[] | undefined> = [];
+    const originalDeploy = deps.deploy;
+    deps.deploy = async (input) => { seen.push(input.allowReplacement); await originalDeploy(input); };
+    await upgradeCluster(deps, { ...containerOptions, allowReplacement: ["bastionhostinstance", "other"] });
+    assert.deepEqual(seen, [["bastionhostinstance", "other"]]);
+    const program = new Command("ideactl");
+    registerUpgradeCommands(program, deps);
+    assert.match(program.commands[0]!.helpInformation(), /--allow-replacement <logical-id>/);
+  });
+});
+
 test("--skip-drain-check closes submission for the run without reading inventory", async () => {
   await withFixture(async ({ deps, events }) => {
     enableContainers();

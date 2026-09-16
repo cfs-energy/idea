@@ -225,6 +225,7 @@ export interface UpgradeDeploymentOptions {
   moduleSet: string;
   allModules: boolean;
   moduleIds?: readonly string[];
+  allowReplacement?: readonly string[];
 }
 
 /** Jobs the batch server on a scheduler host still holds, by state. */
@@ -272,6 +273,7 @@ export interface UpgradeCommandOptions {
   /** Skip the job inventory check before the container cutover; the operator has drained by hand. */
   skipDrainCheck?: boolean;
   modules?: readonly string[];
+  allowReplacement?: string[];
 }
 
 interface EolStack {
@@ -1102,6 +1104,7 @@ async function defaultDeployment(deps: Deps, options: UpgradeDeploymentOptions):
     optimizeDeployment: options.optimizeDeployment,
     moduleIds: options.moduleIds,
     rollback: options.rollback,
+    allowReplacement: options.allowReplacement,
     deps,
   });
   await helper.invoke();
@@ -1595,6 +1598,7 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
       moduleSet: options.moduleSet,
       allModules,
       moduleIds: allModules ? undefined : options.modules,
+      allowReplacement: options.allowReplacement,
     };
     await deps.deploy(deployment);
     await announceHeldModuleSets(deps, options, configDir);
@@ -1645,6 +1649,11 @@ export function registerUpgradeCommands(program: Command, deps: UpgradeDeps): vo
     .option(
       "--accept-config-drift",
       "Overwrite configuration rows whose value differs from generated configuration. Not covered by --force.",
+    )
+    .option(
+      "--allow-replacement <logical-id>",
+      "Accept a change-set entry the deploy guard would refuse, by logical ID. Repeatable.",
+      (value: string, previous: string[] = []) => [...previous, value],
     )
     .option("--skip-global-settings-update", "Skip updating global settings.")
     .option("--disable-eol-stacks-in-use", "Disable end-of-life eVDI software stacks that are in use.")
