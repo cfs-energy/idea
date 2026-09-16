@@ -159,7 +159,7 @@ test("dependency check rejects a package version that differs from the release f
   assertDeliberateFailure(
     "dependencies",
     runCheck("dependencies", "--root", root),
-    /package\.json version 26\.09\.0 must equal IDEA_VERSION\.txt 26\.10\.0/u,
+    /package\.json version 26\.09\.0 must equal IDEA_VERSION\.txt 26\.09\.1/u,
   );
 });
 
