@@ -1158,10 +1158,10 @@
     "@juggle/resize-observer" "^3.3.1"
     tslib "^2.3.1"
 
-"@cloudscape-design/components@<=3.0.606":
-  version "3.0.606"
-  resolved "https://registry.yarnpkg.com/@cloudscape-design/components/-/components-3.0.606.tgz#ee282ae37056ed8891c1aa51f90efe1ebb7f8a37"
-  integrity sha512-VCXdKWGo5zn6vbNmd+r1eIlYm0LkCxISe2RQzhPLw9UEnGQpXS+Nx4nK8aZDB4nTD1UPqSUCSJPy4dOqdfhrnw==
+"@cloudscape-design/components@<=3.0.1377":
+  version "3.0.1377"
+  resolved "https://registry.yarnpkg.com/@cloudscape-design/components/-/components-3.0.1377.tgz#93805064c620907028db4919d3f20fe364f11d55"
+  integrity sha512-0IXlbkvmAu7DQZM6GY/w0cFqE5JQE/oWn/eE0sc7gJPT+c24J5mUa0YfvHn47JzKfUOys/pN/lghWLRSZe3QyA==
   dependencies:
     "@cloudscape-design/collection-hooks" "^1.0.0"
     "@cloudscape-design/component-toolkit" "^1.0.0-beta"
@@ -1170,15 +1170,13 @@
     "@dnd-kit/core" "^6.0.8"
     "@dnd-kit/sortable" "^7.0.2"
     "@dnd-kit/utilities" "^3.2.1"
-    "@juggle/resize-observer" "^3.3.1"
-    ace-builds "^1.32.6"
-    balanced-match "^1.0.2"
+    ace-builds "^1.34.0"
     clsx "^1.1.0"
     d3-shape "^1.3.7"
     date-fns "^2.25.0"
     intl-messageformat "^10.3.1"
     mnth "^2.0.0"
-    react-keyed-flatten-children "^1.3.0"
+    react-is "^18.2.0"
     react-transition-group "^4.4.2"
     tslib "^2.4.0"
     weekstart "^1.1.0"
@@ -3385,10 +3383,15 @@ accepts@~1.3.4, accepts@~1.3.8:
     mime-types "~2.1.34"
     negotiator "0.6.3"
 
-ace-builds@^1.12.3, ace-builds@^1.32.6:
+ace-builds@^1.12.3:
   version "1.41.0"
   resolved "https://registry.yarnpkg.com/ace-builds/-/ace-builds-1.41.0.tgz#682db7c31624bd42d69be4e975075fb60751ca75"
   integrity sha512-tiEUfw7V/FpHuI4tG7KS+muOTMIuPh6zReBAD2Uqhe9t00tLeyVGxjXu0tSqz5OIPWy7/wvuJBVXAsNWx0rYvQ==
+
+ace-builds@^1.34.0:
+  version "1.44.0"
+  resolved "https://registry.yarnpkg.com/ace-builds/-/ace-builds-1.44.0.tgz#d657730f665fccf72d2945d95887e12c514a29f1"
+  integrity sha512-PFNMSYqFdEUkul2Ntud0HvA09AgY+F1ag0UYdpMH60wNI/qOA8cB8tlTgoALMEwIdUPJK2CjrIQ7OnbiSS/ugQ==
 
 acorn-globals@^6.0.0:
   version "6.0.0"
@@ -3887,7 +3890,7 @@ bail@^2.0.0:
   resolved "https://registry.yarnpkg.com/bail/-/bail-2.0.2.tgz#d26f5cd8fe5d6f832a31517b9f7c356040ba6d5d"
   integrity sha512-0xO6mYd7JB2YesxDKplafRpsiOzPt9V02ddPCLbY1xYGPOX24NTyN50qnUxgCPcSoYMhKpAuBTjQoRZCAkUDRw==
 
-balanced-match@^1.0.0, balanced-match@^1.0.2:
+balanced-match@^1.0.0:
   version "1.0.2"
   resolved "https://registry.yarnpkg.com/balanced-match/-/balanced-match-1.0.2.tgz#e83e3a7e3f300b34cb9d87f615fa0cbf357690ee"
   integrity sha512-3oSeUO0TMV67hN1AmbXsK4yaqU7tjiHlbxRDZOpH0KW9+CeX4bRAaX0Anxt0tx2MrpRpWwQaPwIlISEJhYU5Pw==
@@ -10065,7 +10068,7 @@ react-intl@^6.6.2:
     intl-messageformat "10.7.7"
     tslib "2"
 
-react-is@^16.13.1, react-is@^16.7.0, react-is@^16.8.6:
+react-is@^16.13.1, react-is@^16.7.0:
   version "16.13.1"
   resolved "https://registry.yarnpkg.com/react-is/-/react-is-16.13.1.tgz#789729a4dc36de2999dc156dd6c1d9c18cea56a4"
   integrity sha512-24e6ynE2H+OKt4kqsOvNd8kBpV65zoxbA4BVsEOB3ARVWQki/DHzaUoC5KuON/BiccDaCCTZBuOcfZs70kR8bQ==
@@ -10075,7 +10078,7 @@ react-is@^17.0.1, react-is@^17.0.2:
   resolved "https://registry.yarnpkg.com/react-is/-/react-is-17.0.2.tgz#e691d4a8e9c789365655539ab372762b0efb54f0"
   integrity sha512-w2GsyukL62IJnlaff/nRegPQR94C/XXamvMWmSHRJ4y7Ts/4ocGRmTHvOs8PSE6pB3dWOrD/nueuU5sduBsQ4w==
 
-react-is@^18.0.0:
+react-is@^18.0.0, react-is@^18.2.0:
   version "18.3.1"
   resolved "https://registry.yarnpkg.com/react-is/-/react-is-18.3.1.tgz#e83557dc12eae63a99e003a46388b1dcbb44db7e"
   integrity sha512-/LLMVyas0ljjAtoYiPqYiL8VWXzUUdThrmU5+n20DZv+a+ClRoevUzw5JxU+Ieh5/c87ytoTBV9G1FiKfNJdmg==
@@ -10111,13 +10114,6 @@ react-jss@^10.10.0:
     shallow-equal "^1.2.0"
     theming "^3.3.0"
     tiny-warning "^1.0.2"
-
-react-keyed-flatten-children@^1.3.0:
-  version "1.3.0"
-  resolved "https://registry.yarnpkg.com/react-keyed-flatten-children/-/react-keyed-flatten-children-1.3.0.tgz#38d171582c6358909f430648a7a7d094aebae42a"
-  integrity sha512-qB7A6n+NHU0x88qTZGAJw6dsqwI941jcRPBB640c/CyWqjPQQ+YUmXOuzPziuHb7iqplM3xksWAbGYwkQT0tXA==
-  dependencies:
-    react-is "^16.8.6"
 
 react-lifecycles-compat@^3.0.4:
   version "3.0.4"
