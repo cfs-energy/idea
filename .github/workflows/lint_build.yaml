@@ -55,6 +55,8 @@ jobs:
         if: steps.inputs.outputs.images == 'true'
         uses: docker/bake-action@v6
         with:
+          # The staged packages are untracked, so the checkout is the context, not the Git remote.
+          source: .
           files: .github/ci-images.hcl
           allow: fs.read=/tmp/dcv-packages
           load: true
