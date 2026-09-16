@@ -514,7 +514,7 @@ Upgrade an existing cluster: refuse a cluster with any deployed module below the
 | `--skip-global-settings-update` | no | none | no |
 | `--disable-eol-stacks-in-use` | no | none | no |
 | `--drain` | no | none | no |
-| `--drain-timeout-minutes <minutes>` | yes | none | no |
+| `--drain-timeout-minutes <minutes>` | yes | 240 minutes (effective) | no |
 | `--skip-drain-check` | no | none | no |
 
 **Reads:** cluster tables, `values.yml`, AMI maps, EC2 images and instance types, OpenSearch instance types, eVDI software-stack tables, and the host scheduler's PBS job inventory over Systems Manager when a scheduler cutover is pending. **Changes:** `values.yml`, a `config.golden.<timestamp>/` copy, DynamoDB settings, instance termination protection (cleared then restored), module stacks, and an upload of `values.yml` to the cluster bucket. When the run moves the scheduler from a host to a container, it closes submission before reading the host's inventory, including when that inventory is empty. A non-empty inventory without `--drain` restores the previous maintenance state and refuses deployment; `--drain` waits for it to empty. `--skip-drain-check` skips the inventory read but still closes submission for the whole run. **Exit codes:** 1 on the release floor refusal, EOL refusal, missing AMI, unsupported instance type, or configuration rows the run would overwrite whose value differs from generated configuration without `--accept-config-drift`; 0 if a confirmation is declined.
@@ -936,14 +936,14 @@ Deploy standalone account spend collection in a commercial billing account, with
 
 **Reads:** caller identity, subnet route tables and CloudFormation change sets. **Changes:** one stack containing a log group, ECS cluster, Fargate service, two-container task, security group and IAM roles. Deploy prepares a change set and applies the existing guard before execution; task definition revisions are allowed. It waits for stack completion.
 
-The agent image must be a digest-pinned private ECR reference. Both images must support Linux x86_64. The secret must contain the raw Datadog API key, reside in the deployment region, and permit the execution role to decrypt it if a custom KMS key policy restricts access. Subnets must share a VPC and be all public or all private. Public IPs are assigned when the effective route tables have an internet gateway route; private subnets need NAT access. The service stops its old task before starting a replacement to prevent duplicate collection. The cluster name is only the `idea_cluster` metric tag, not a spend filter. Historical ingestion for `idea.cost` must be enabled in Datadog.
+The agent image must be a digest-pinned private ECR reference. Both images must support Linux x86_64. The secret must contain the raw Datadog API key, reside in the deployment region, and permit the execution role to decrypt it if a custom KMS key policy restricts access. Subnets must share a VPC and be all public or all private. Public IPs are assigned when the effective route tables have an internet gateway route; private subnets need NAT access. The service stops its old task before starting a replacement to prevent duplicate collection. The cluster name is only the `idea_cluster` metric tag, not a spend filter. Historical ingestion for `idea.cost` must be enabled in Datadog. The standard agent uses US1 (`datadoghq.com`); the deployment does not configure `DD_SITE`. Follow the [image preparation and cost verification runbook](../../../../docs/first-time-users/cluster-operations/update-idea-cluster/move-to-containers.md#spend-and-storage), using the AMD64 digest from the `datadog/agent` repository.
 
 **Example:**
 
 ```bash
-ideactl cost-collector deploy --aws-region us-east-1 --stack-name gov-spend \
+ideactl cost-collector deploy --aws-profile <BILLING_PROFILE> --aws-region us-east-1 --stack-name gov-spend \
   --cluster-name gov-cluster --control-plane-image <CONTROL_PLANE_IMAGE> \
-  --agent-image <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/datadog-agent@sha256:<DIGEST> \
+  --agent-image <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/datadog/agent@sha256:<AMD64_DIGEST> \
   --datadog-api-key-secret-arn <SECRET_ARN> --subnet-ids <SUBNET_ID>
 ```
 

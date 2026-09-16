@@ -16,15 +16,22 @@ The `upgrade-cluster` command combines multiple steps that were previously separ
 The first phase reads `~/.idea/clusters/<cluster-name>/<aws-region>/values.yml` to set the new Base
 OS. If that file is missing locally, the command downloads `values/values.yml` from the cluster S3
 bucket, writes it to that path and continues, so an upgrade can run from a workstation that never
-held the original file. If the bucket has no copy either, the command stops and names both the local
-path and the S3 URI it checked; upload an existing copy with `idea-admin.sh config save-values`
-before retrying. When both copies exist and differ, the command reports which keys differ and uses
-the local copy.
+held the original file. If the S3 object is missing, the underlying S3 error stops the command;
+it does not provide a diagnostic naming both paths. Restore a known-good copy to the local path
+and run `./idea-admin.sh config save-values --cluster-name <CLUSTER_NAME> --aws-region <REGION>`
+before retrying. When both copies exist, a raw-text difference produces a generic warning, not a
+key-by-key comparison; the local copy wins.
+
+For the first container migration, download and edit the local file before starting, as described
+in [Move to containers](move-to-containers.md). The early trunking and scheduler-cutover gates do
+not wait for S3 restoration.
 
 After every module deploys successfully, the command uploads the local `values.yml` back to
-`values/values.yml` in the cluster bucket so the next upgrade can restore it. A failed upload logs a
-warning naming the `idea-admin.sh config save-values` command to run and does not fail the upgrade,
-because static STS credentials often expire before the last phase of a long run finishes.
+`values/values.yml` in the cluster bucket. An upload failure fails the upgrade and prints a
+`config save-values` recovery command; it also leaves any saved maintenance baseline closed,
+because restoration runs after the upload. Refresh expired credentials, save the file successfully,
+then rerun the upgrade to completion to restore the baseline; saving the file alone does not reopen
+submission.
 
 ### Compute Node Image
 
@@ -40,11 +47,11 @@ offered in all 28 of the 29 regions in `region_ami_config.yml` that can be check
 is preferred over the newer `m8i.large`; the twenty-ninth, me-south-1, is an opt-in region that
 could not be queried. An upgrade moves a host whose stored instance type is still `m6i.large` onto
 the new type, after one check that the region offers it, and leaves any other stored value alone
-because it is a type you chose. The setting is what the launch template renders, so a moved host
+regardless of whether you explicitly chose `m6i.large` or inherited it as a default. The setting is what the launch template renders, so a moved host
 runs the new type when its instance is next replaced rather than during the upgrade.
 
 If you install into a region that does not offer `m7i.large`, pick an instance type that region does
-offer, such as `m6i.large`, and the upgrade leaves that cluster on the type you chose.
+offer, such as `m6i.large`, and the upgrade keeps `m6i.large` only while `m7i.large` is unavailable (or its availability cannot be read).
 
 ### Analytics Data Node Instance Type
 
@@ -78,8 +85,15 @@ immediately, far above what the broker uses. DynamoDB limits how often a table m
 mode; when that limit is reached the controller logs a warning and tries again at its next start or
 the next broker boot instead of failing the upgrade.
 
-Set `virtual-desktop-controller.dcv_broker.dynamodb_table.on_demand` to false to keep provisioned
-capacity and the autoscaling policies.
+To keep provisioned capacity and the autoscaling policies, write the stored module ID prefix,
+`vdc` for the generated desktop module. Configuration readers translate the logical name
+`virtual-desktop-controller`, but `config set` writes the key literally; use `list-modules` to
+check a customized module ID.
+
+```bash
+./idea-admin.sh config set --cluster-name <CLUSTER_NAME> --aws-region <REGION> \
+  'Key=vdc.dcv_broker.dynamodb_table.on_demand,Type=bool,Value=false'
+```
 
 ### Before You Start
 
@@ -121,16 +135,17 @@ If no modules are specified, all modules will be upgraded automatically.
   * `amazonlinux2023`
   * `rhel8`
   * `rhel9`
-  * `rhel10`
+  * `rhel10`: refused if virtual-desktop-controller is deployed, including scoped upgrades
   * `rocky8`
   * `rocky9`
-  * `rocky10`
+  * `rocky10`: refused if virtual-desktop-controller is deployed, including scoped upgrades
 * `--aws-profile`: AWS profile to use for the operation
 * `--termination-protection`: Set CloudFormation stack termination protection (default: true)
 * `--force-build-bootstrap`: Re-build bootstrap package even if directory exists
 * `--rollback/--no-rollback`: Enable/disable stack rollback on failure (default: true)
 * `--optimize-deployment`: Deploy applicable stacks in parallel to speed up the process
-* `--force`: Skip all confirmation prompts
+* `--force`: Skip phase confirmation prompts; differing overwritten rows still require explicit drift acceptance
+* `--accept-config-drift`: Accept overwriting rows that differ from generated configuration, after reviewing `./idea-admin.sh config preview-upgrade`; separate from `--force`
 * `--skip-global-settings-update`: Skip the global settings update if you've already done it
 * `--module-set`: Name of the module set to use (default: default)
 * `--deployment-id`: UUID to identify the deployment
@@ -142,8 +157,9 @@ If no modules are specified, all modules will be upgraded automatically.
 When the scheduler is part of the upgrade and ECS will be enabled at synthesis, a scheduler stack
 that still has an EC2 host needs a cutover. ECS can be enabled by `enable_ecs: true` in `values.yml`,
 or by an ECS module row with `ecs.enabled: true` in settings. This includes a scheduler-only run
-after ECS capacity has already deployed. Before the cutover, Phase 0 retains the scheduler's DNS
-record so removing the host does not delete the name used by the container scheduler.
+after ECS capacity has already deployed. The order is maintenance writes, inventory/drain, OS and
+end-of-life validation, configuration preview and applicable confirmations, then Phase 0 DNS retention
+and the upgrade phases. DNS retention prevents host removal from deleting the container scheduler's name.
 
 The container scheduler starts with an empty job database, so a job the host still holds is lost.
 The upgrade closes job submission before reading the host scheduler's inventory over Systems
@@ -169,11 +185,12 @@ replacement before. From then on the job database lives on the scheduler's file 
 survives later upgrades. Once the scheduler host is gone, upgrades skip the inventory gate and DNS
 retention step, but a successful retry still restores any saved maintenance baseline.
 
-The end-of-life check runs before the upgrade is confirmed and changes nothing: it lists the
+The end-of-life check itself changes no software stacks and runs before its confirmation, but
+the cutover gate may already have written maintenance settings. The check lists the
 software stacks it will delete or disable, prefixed with `will delete` or `will disable`. Those
 changes are applied only after you confirm the upgrade, or immediately when you pass `--force`.
 
-By default the upgrade stops before making any change when a virtual desktop session still runs on
+By default the upgrade stops before changing software stacks when a virtual desktop session still runs on
 a software stack whose base OS has reached end-of-life, and lists the sessions that block it.
 Passing `--disable-eol-stacks-in-use` sets `enabled` to false on each of those stacks instead and
 continues. The stack record is kept, so running desktops are unaffected, but no new session can be
@@ -184,7 +201,7 @@ does not change.
 A stack is disabled in DynamoDB, while the portal lists software stacks from the search index, so it
 keeps reading as enabled until the index catches up. The virtual-desktop-controller redeploy later in
 the same upgrade reconciles the index at startup. To reindex sooner, run
-`ideactl reindex-software-stacks --reset` on the virtual-desktop-controller host.
+`ideactl reindex-software-stacks --reset` on a host deployment. For containers, use ECS Exec in the VDC application container to invoke its application CLI.
 
 ### Examples
 
@@ -193,7 +210,7 @@ the same upgrade reconciles the index at startup. To reindex sooner, run
 Without `--base-os` the upgrade keeps the Base OS the cluster already runs. It reads that value from
 the cluster settings, prints it, and refuses to start if the settings hold no Base OS or more than
 one, because guessing would redeploy every module onto an OS nobody asked for. That matters most
-with `--force`, which answers every confirmation prompt for you. Passing `--base-os` changes the
+with `--force`, which accepts phase prompts but does not accept configuration drift. Passing `--base-os` changes the
 Base OS and prints what it is changing from.
 
 The simplest way to upgrade all infrastructure components:
@@ -204,6 +221,19 @@ The simplest way to upgrade all infrastructure components:
   --cluster-name idea-test1 \
   --aws-profile default
 ```
+
+#### Unattended Upgrade After Drift Review
+
+Review `./idea-admin.sh config preview-upgrade --cluster-name <CLUSTER_NAME> --aws-region <REGION>` first.
+Only after accepting its listed overwrites, run:
+
+```bash
+IDEA_ADMIN_NO_TTY=true ./idea-admin.sh upgrade-cluster \
+  --cluster-name <CLUSTER_NAME> --aws-region <REGION> --force --accept-config-drift
+```
+
+With `--force` alone, differing overwritten rows stop the upgrade even if the cutover gate has
+already closed submission. Reconcile those rows or explicitly accept the reviewed drift and retry.
 
 #### Full Upgrade with Explicit Base OS
 

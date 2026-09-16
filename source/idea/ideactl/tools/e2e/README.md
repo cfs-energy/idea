@@ -1,6 +1,6 @@
 # Control-plane E2E harness
 
-These tools exercise an already deployed control plane. They do not make AWS SDK calls: provide the relevant load-balancer hostname, a user name, and the path to a file containing that user's password. No hostname, credential path, or cluster identifier is embedded in the tools.
+These tools exercise an already deployed control plane. The API and load tools do not make AWS SDK calls: provide the relevant load-balancer hostname, a user name, and the path to a file containing that user's password. No hostname, credential path, or cluster identifier is embedded in the tools.
 
 The API tools cache an access token in `~/.ideactl/e2e/tokens/`, using a separate URL-escaped filename for each user. Pass `--token-dir` to use a different cache location. TLS certificates are verified by default; use `--insecure` only when intentionally testing an endpoint with a certificate the test host does not trust.
 
@@ -61,8 +61,41 @@ Run any tool with `--help` for its accepted flags. Required connection and crede
 ## ECS cutover proof matrix
 
 `proof-matrix.ts` runs the required ECS cutover checks and exits nonzero when any check fails.
-It prints the action, observations, and a `PASS` or `FAIL` line for each selected check. It deletes
-every desktop it creates, including after a failed gateway or task-replacement check.
+It prints the action, observations, and a `PASS` or `FAIL` line for each selected check. It attempts desktop cleanup after reaching `READY`, including after later gateway or replacement
+failures. A desktop that fails to reach `READY` can remain, and deletion itself can fail: after a
+failed run, list your sessions, identify the proof desktop by name and creation time, delete it in
+the portal, and verify that both its session and instance are removed before retrying.
+
+The matrix uses AWS SDK credentials from the standard credential chain for ECS and ELB checks;
+select the target account with `AWS_PROFILE` and pass `--region`. Task-replacement checks call
+`StopTask`, and `scheduler-image-upgrade` executes the supplied upgrade command; these checks
+mutate the selected deployment.
+
+Job checks require access to the `normal` queue. The shared submission helper selects project
+`default`, so the test user must also have access to that project and permission to submit jobs.
+
+Discover desktop inputs using the same user that will run the proof (`jq` is required for the last command). Inspect `/tmp/proof-stacks.json` and select the stack ID before running the instance-type query; it passes the full stack object so architecture and instance restrictions apply:
+
+```sh
+node tools/e2e/api.ts --alb-host control-plane.example.invalid --username test-user \
+  --password-file /secure/path/password.txt --namespace Projects.ListProjects --payload '{}'
+node tools/e2e/api.ts --alb-host control-plane.example.invalid --username test-user \
+  --password-file /secure/path/password.txt --namespace VirtualDesktop.ListSoftwareStacks \
+  --payload '{"project_id":"<PROJECT_ID>"}' > /tmp/proof-stacks.json
+node tools/e2e/api.ts --alb-host control-plane.example.invalid --username test-user \
+  --password-file /secure/path/password.txt --namespace VirtualDesktopUtils.ListAllowedInstanceTypes \
+  --payload "$(jq -c --arg id '<STACK_ID>' \
+    '{hibernation_support:false,software_stack:(.payload.listing[] | select(.stack_id==$id))}' /tmp/proof-stacks.json)"
+```
+
+Choose an accessible project and an enabled software stack assigned to it; take `stack_id`, `base_os`
+and `min_storage` from the stack response. Choose an allowed instance type, a compatible session
+type (`VIRTUAL` for ARM64 Linux, `CONSOLE` for Windows), and a root volume in GiB at least the stack's `min_storage` (convert its unit if needed)
+and within the cluster limit. The example below uses hibernation disabled and a 40 GiB volume;
+adjust that size to the selected stack, and replace every placeholder before running. If enabling
+hibernation, rediscover instance types with `hibernation_support:true` and add instance RAM to the
+minimum root volume. An administrator can read the maximum from the repository root with
+`./idea-admin.sh config show --cluster-name <CLUSTER_NAME> --aws-region <REGION> --query vdc.dcv_session.max_root_volume_memory`.
 
 ```sh
 node tools/e2e/proof-matrix.ts \
@@ -71,8 +104,13 @@ node tools/e2e/proof-matrix.ts \
   --username test-user \
   --password-file /secure/path/password.txt \
   --gateway-host gateway.example.invalid \
-  --desktop-request '{"session":{"name":"proof-desktop"}}'
+  --desktop-request '{"session":{"name":"proof-desktop","project":{"project_id":"<PROJECT_ID>"},"software_stack":{"stack_id":"<STACK_ID>","base_os":"<BASE_OS>"},"type":"VIRTUAL","hibernation_enabled":false,"server":{"instance_type":"<INSTANCE_TYPE>","root_volume_size":40}}}'
 ```
+
+For recovery, call `VirtualDesktop.ListSessions` with `{}` using `api.ts`, then
+`VirtualDesktop.DeleteSession` with `{"session":{"idea_session_id":"<SESSION_ID>"}}` for the
+leftover proof session. Poll the session list and check the instance termination in EC2; if deletion
+fails, retain the response and ask the cluster administrator to recover that session.
 
 The available checks are:
 
@@ -108,7 +146,7 @@ The available checks are:
   point count and newest timestamp in UTC. No points or a query error fails the check.
 
 For `metrics-sink`, provide `--cluster`, `--datadog-api-key <key>` and `--datadog-app-key <key>`.
-`--datadog-site` defaults to `datadoghq.com`; use the site's domain, such as `datadoghq.eu`.
+`--datadog-site` defaults to `datadoghq.com` and selects only the query endpoint. The supplied daemon and cost-only deployments omit `DD_SITE` and use US1 with the standard agent image; another query site does not redirect ingestion.
 These accept `IDEA_E2E_CLUSTER`, `IDEA_E2E_DATADOG_API_KEY`, `IDEA_E2E_DATADOG_APP_KEY`
 and `IDEA_E2E_DATADOG_SITE` as environment alternatives. Without both keys the check prints
 `NOT RUN` and does not fail the matrix. This check needs no portal credentials.

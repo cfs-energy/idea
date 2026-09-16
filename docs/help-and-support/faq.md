@@ -26,7 +26,7 @@ To safelist a new IP, navigate to VPC > Managed Prefix List and add your new ent
 Alternatively, you can run the following `idea-admin.sh` command:
 
 ```
-./idea-admin.sh utils cluster-prefix-list add-entry
+./idea-admin.sh utils cluster-prefix-list add-entry \
   --cluster-name <CLUSTER_NAME> \
   --aws-region <REGION> \
   --cidr x.x.x.x/x \
@@ -39,100 +39,21 @@ Alternatively, you can run the following `idea-admin.sh` command:
 
 <summary>I never received the welcome email after installing IDEA, how can I create an admin user?</summary>
 
-Use `ideactl` If you cannot receive email from Cognito due to IT restriction. Login to the Cluster Manager EC2 instance and run `ideactl accounts create-user`
+For a container deployment, connect to a running cluster-manager application task using the ECS
+Exec procedure under **How to debug a module not starting correctly** below. The task must be
+healthy enough to serve its local application socket; if it is not, inspect its logs and restore
+service first. In that container's root shell, run the application CLI:
 
-<pre><code><strong># Make sure to run this command as root on the CLUSTER Manager
-</strong><strong># ideactl accounts create-user --email "sampleuser@example.com" --password "Password123@" --username "sampleuser2" --sudo --email-verified
-</strong>{
-  "username": "sampleuser2",
-  "email": "sampleuser@example.com",
-  "uid": 5068,
-  "gid": 5077,
-  "group_name": "sampleuser2-user-group",
-  "login_shell": "/bin/bash",
-  "home_dir": "/data/home/sampleuser2",
-  "sudo": true,
-  "status": "CONFIRMED",
-  "enabled": true,
-  "created_on": "2022-12-21T16:37:32.033000+00:00",
-  "updated_on": "2022-12-21T16:37:32.033000+00:00"
-}
-</code></pre>
+```bash
+python3.13 -m ideaclustermanager.cli.cli_main accounts create-user \
+  --email '<ADMIN_EMAIL>' --password '<NEW_PASSWORD>' --username '<ADMIN_USERNAME>' \
+  --sudo --email-verified
+```
 
-If you cannot use SSM, you can use `idea-admin.sh` . Run the following commands to create a new admin user via IDEA APIs
-
-<pre class="language-bash"><code class="lang-bash">IDEA_ADMIN_USER="username"
-IDEA_ADMIN_USER_PASSWORD="password"
-IDEA_USER_EMAIL_ADDRESS="email_address"
-IDEA_CLUSTER_NAME="idea-xxx"
-IDEA_DEPLOYMENT_REGION="region where you deployed IDEA"
-
-# Retrieve Client ID
-CLIENT_ID_ARN=$(./idea-admin.sh config show \
---query "cluster-manager.client_id" \
---cluster-name $IDEA_CLUSTER_NAME \
---aws-region $IDEA_DEPLOYMENT_REGION \
---format raw)
-
-CLIENT_ID=$(aws secretsmanager get-secret-value --secret-id $CLIENT_ID_ARN --query "SecretString" --output text --region $IDEA_DEPLOYMENT_REGION)# Retrieve Client Secret
-
-# Retrieve Client secret
-CLIENT_SECRET_ARN=$(./idea-admin.sh config show \
---query "cluster-manager.client_secret" \
---cluster-name $IDEA_CLUSTER_NAME \
---aws-region $IDEA_DEPLOYMENT_REGION \
---format raw)
-
-CLIENT_SECRET=$(aws secretsmanager get-secret-value --secret-id $CLIENT_SECRET_ARN --query "SecretString" --output text --region $IDEA_DEPLOYMENT_REGION)
-
-# Retrieve Cognito URL
-COGNITO_USER_POOL=$(./idea-admin.sh config show \
---query "identity-provider.cognito.domain_url" \
---cluster-name $IDEA_CLUSTER_NAME \
---aws-region $IDEA_DEPLOYMENT_REGION \
---format raw)
-
-# Retrieve ALB endpoint
-IDEA_ALB=$(./idea-admin.sh config show \
---query "cluster.load_balancers.external_alb.load_balancer_dns_name" \
---cluster-name $IDEA_CLUSTER_NAME \
---aws-region $IDEA_DEPLOYMENT_REGION \
---format raw)
-
-# Generate Authorization Header (remove -w 0 if using Mac)
-AUTHORIZATION_HEADER=$(echo -n $CLIENT_ID:$CLIENT_SECRET | base64 -w 0)
-
-<strong># Request Bearer
-</strong>curl --silent --insecure --location --request POST "$COGNITO_USER_POOL/oauth2/token" \
---header "Authorization: Basic $AUTHORIZATION_HEADER" \
---header "Content-Type: application/x-www-form-urlencoded" \
---data-urlencode "grant_type=client_credentials" \
---data-urlencode "scope=cluster-manager/read cluster-manager/write" > .bearer
-
-# Bearer output is stored as text file in order to use -r. File is removed shortly after
-BEARER=$(cat .bearer | jq -r ".access_token")
-
-rm -rf .bearer
-
-<strong># Create Admin User
-</strong>curl --silent --insecure --location --request POST "https://$IDEA_ALB/cluster-manager/api/v1" \
---header "Authorization: Bearer $BEARER" \
---header "Content-Type: application/json" \
---data-raw '{
-"header": {
-"namespace": "Accounts.CreateUser"
-},
-"payload": {
-"user": {
-"username": "'$IDEA_ADMIN_USER'",
-"password": "'$IDEA_ADMIN_USER_PASSWORD'",
-"email": "'$IDEA_USER_EMAIL_ADDRESS'",
-"additional_groups": ["managers-cluster-group", "administrators-cluster-group]
-},
-"email_verified": true
-}
-}'
-</code></pre>
+This creates a confirmed administrator without sending an invitation email. Use the same
+application task's logs to investigate a failed request. On a host deployment, connect to the
+cluster-manager EC2 instance through Systems Manager and run
+`sudo ideactl accounts create-user --email '<ADMIN_EMAIL>' --password '<NEW_PASSWORD>' --username '<ADMIN_USERNAME>' --sudo --email-verified`.
 
 </details>
 
@@ -298,6 +219,15 @@ To fix this, enable DNS hostname/resolution on your VPC
 
 <summary>Where are the application logs stored?</summary>
 
+For containers, CloudWatch log groups persist across task replacement. With the generated module
+IDs, the groups are `/<CLUSTER_NAME>/cluster-manager`, `/<CLUSTER_NAME>/scheduler`,
+`/<CLUSTER_NAME>/scheduler/openpbs`, `/<CLUSTER_NAME>/vdc/controller`,
+`/<CLUSTER_NAME>/vdc/dcv-broker` and `/<CLUSTER_NAME>/vdc/dcv-connection-gateway`.
+The Datadog daemon writes to `/<CLUSTER_NAME>/ecs/datadog`. Check both the main container's stdout
+stream and the file-tail sidecar streams: application files and PBS/broker/gateway logs do not all
+appear on stdout. Streams include the container and task ID, so use the failed task's ID when
+investigating a replacement.
+
 IDEA modules such as cluster-manager, virtual-desktop-controller and scheduler run a python based application server.
 
 The application server logs are available under: **/opt/idea/app/logs**
@@ -326,22 +256,35 @@ Logging can configured per application server using IDEA Cluster Configuration. 
 
 <summary>How to debug a module not starting correctly</summary>
 
-1 - Log in to the EC2 machine and check the logs under **/root/bootstrap/logs.**
+For a container deployment, inspect ECS service events, desired/running task counts, and the failed
+task's stopped reason and container exit codes. Open its CloudWatch streams from the task's Logs
+tab, including application-file sidecars; image pulls, secret access, mounts and health checks can
+fail before the application starts.
 
-Try to find some potential issue(s) by looking for keywords like:
+Use a profile for the target account, AWS CLI with the Session Manager plugin, and permission for
+ECS Exec. Read the ECS cluster name and discover the service and task:
 
-* error
-* fatal
-* denied
-* permission
+```bash
+./idea-admin.sh config show --cluster-name <CLUSTER_NAME> --aws-region <REGION> \
+  --query ecs.cluster_name --format raw
+aws --profile <PROFILE> --region <REGION> ecs list-services --cluster <ECS_CLUSTER>
+aws --profile <PROFILE> --region <REGION> ecs describe-services --cluster <ECS_CLUSTER> --services <SERVICE>
+aws --profile <PROFILE> --region <REGION> ecs list-tasks --cluster <ECS_CLUSTER> --service-name <SERVICE>
+aws --profile <PROFILE> --region <REGION> ecs describe-tasks --cluster <ECS_CLUSTER> --tasks <TASK_ARN>
+aws --profile <PROFILE> --region <REGION> ecs execute-command --cluster <ECS_CLUSTER> \
+  --task <TASK_ARN> --container <APPLICATION_CONTAINER_NAME> --interactive --command /bin/bash
+```
 
-All infrastructure nodes such as directoryservice (openldap-server), scheduler, bastion-host, virtual-desktop controller use a standard directory structure during bootstrap.
+Select the application container from `describe-tasks`, not its log sidecar; use the cluster-manager
+service for account recovery. Inspect `/opt/idea/app/logs` there. After correcting configuration or
+deploying a corrected image, use `aws --profile <PROFILE> --region <REGION> ecs update-service --cluster <ECS_CLUSTER> --service <SERVICE> --force-new-deployment`
+and wait for the service to stabilize. Scheduler replacement briefly interrupts submissions/API
+access. Containers run their role directly and are restarted by ECS, so supervisor commands do not
+apply to them.
 
-2 - Check if supervisord is running correctly (/opt/idea/python/latest/bin/supervisorctl status), if not check /var/log/supervisord.log
-
-3 - Depending your module, you can also check the app log via /opt/idea/app/logs
-
-Make sure to run supervisorctl restart all after making any changes
+For a host deployment, connect through Systems Manager, inspect `/root/bootstrap/logs`, then
+`/opt/idea/app/logs`. Check `/opt/idea/python/latest/bin/supervisorctl status` and
+`/var/log/supervisord.log`; after fixing the cause, run `sudo supervisorctl restart all` on that host.
 
 </details>
 
