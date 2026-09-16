@@ -7,7 +7,7 @@
     "@aperturerobotics/chonky-icon-fontawesome": "^0.3.1",
     "@cloudscape-design/components": "<=3.0.606",
     "@cloudscape-design/design-tokens": "<=3.0.35",
-    "@cloudscape-design/global-styles": "<=1.0.27",
+    "@cloudscape-design/global-styles": "<=1.0.70",
     "@fortawesome/fontawesome-svg-core": "^6.2.0",
     "@fortawesome/free-brands-svg-icons": "^6.2.0",
     "@fortawesome/free-solid-svg-icons": "^6.2.0",
