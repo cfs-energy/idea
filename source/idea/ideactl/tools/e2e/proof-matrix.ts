@@ -10,6 +10,7 @@ import { desktopSshCheck } from "./checks/desktop-ssh.ts";
 import { desktopStreamCheck } from "./checks/desktop-stream.ts";
 import { gatewayLoadCheck } from "./checks/gateway-load.ts";
 import { gatewayTaskKillCheck } from "./checks/gateway-task-kill.ts";
+import { metricsSinkCheck } from "./checks/metrics-sink.ts";
 import { jobBurstCheck } from "./checks/job-burst.ts";
 import { schedulerImageUpgradeCheck } from "./checks/scheduler-image-upgrade.ts";
 import { schedulerReplacementCheck } from "./checks/scheduler-replacement.ts";
@@ -40,9 +41,11 @@ const CHECKS: ProofCheck[] = [
   jobBurstCheck,
   apiLoadCheck,
   gatewayLoadCheck,
+  metricsSinkCheck,
 ];
 
 interface ProofMatrixDependencies {
+  fetch?: typeof fetch;
   api: ApiClient;
   cloud: CloudClient;
   gateway: GatewayConnector;
@@ -87,6 +90,9 @@ export function parseProofMatrixOptions(argv: string[], environment: NodeJS.Proc
     "broker-task",
     "check",
     "cluster",
+    "datadog-api-key",
+    "datadog-app-key",
+    "datadog-site",
     "desktop-request",
     "expected-exit-status",
     "gateway-connections",
@@ -173,6 +179,9 @@ export function parseProofMatrixOptions(argv: string[], environment: NodeJS.Proc
     brokerTask: read("broker-task"),
     checks: selected.length === 0 ? [...CHECK_NAMES] : selected,
     cluster: read("cluster"),
+    datadogApiKey: read("datadog-api-key"),
+    datadogAppKey: read("datadog-app-key"),
+    datadogSite: read("datadog-site") ?? "datadoghq.com",
     desktopRequest: parsedDesktopRequest,
     expectedExitStatus: optionalInteger(read("expected-exit-status"), "expected-exit-status"),
     gatewayConnections: optionalPositiveInteger(read("gateway-connections"), "gateway-connections"),
@@ -230,23 +239,29 @@ export async function runProofMatrix(
     for (const observation of result.observed) {
       dependencies.output(`OBSERVED ${check.name}: ${observation}`);
     }
-    dependencies.output(`${result.passed ? "PASS" : "FAIL"} ${check.name}`);
+    dependencies.output(`${result.skipped ? "NOT RUN" : result.passed ? "PASS" : "FAIL"} ${check.name}`);
     results.push({ name: check.name, result });
   }
-  return { exitCode: results.every(({ result }) => result.passed) ? 0 : 1, results };
+  return { exitCode: results.every(({ result }) => result.passed || result.skipped) ? 0 : 1, results };
 }
 
 /** Creates live adapters only after required flags have been validated. */
 export function createLiveDependencies(options: ProofMatrixOptions): ProofMatrixDependencies {
-  const api = new IdeaApiClient({
-    albHost: requiredString(options.albHost, "alb-host"),
-    username: requiredString(options.username, "username"),
-    passwordFile: requiredString(options.passwordFile, "password-file"),
-    tokenDirectory: options.tokenDirectory,
-    insecureTls: options.insecureTls,
-  });
+  let api: IdeaApiClient | undefined;
   return {
-    api,
+    api: {
+      async request(namespace, payload) {
+        api ??= new IdeaApiClient({
+          albHost: requiredString(options.albHost, "alb-host"),
+          username: requiredString(options.username, "username"),
+          passwordFile: requiredString(options.passwordFile, "password-file"),
+          tokenDirectory: options.tokenDirectory,
+          insecureTls: options.insecureTls,
+        });
+        return api.request(namespace, payload);
+      },
+    },
+    fetch: globalThis.fetch,
     cloud: new LiveCloudClient(options.region),
     gateway: new TlsGatewayConnector(),
     now: () => Date.now(),
@@ -278,6 +293,12 @@ export function usage(): string {
     "  --gateway-port <number>              IDEA_E2E_GATEWAY_PORT, default 443",
     "  --desktop-request <json>             IDEA_E2E_DESKTOP_REQUEST",
     "  --bastion-host <host>                IDEA_E2E_BASTION_HOST",
+    "",
+    "Metrics sink flags:",
+    "  --datadog-api-key <key>              IDEA_E2E_DATADOG_API_KEY",
+    "  --datadog-app-key <key>              IDEA_E2E_DATADOG_APP_KEY",
+    "  --datadog-site <site>                IDEA_E2E_DATADOG_SITE, default datadoghq.com",
+    "  metrics-sink is NOT RUN without both keys; --cluster is required with keys",
     "",
     "ECS replacement flags:",
     "  --cluster <name>                     IDEA_E2E_CLUSTER",

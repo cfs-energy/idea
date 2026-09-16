@@ -398,6 +398,8 @@ Deploy module stacks. `all` may be the only module id and means every undeployed
 
 **Reads:** DynamoDB modules and settings. If the deployment includes `ecs`, also reads the account `awsvpcTrunking` setting. **Changes:** bootstrap packages in the cluster bucket, CloudFormation stacks via a change set that is inspected before execute, `deployments/<id>/<module>-outputs.json`. After the `cluster` module deploys, any `cluster.network.client_ip` address the cluster prefix list does not already hold is added to it; nothing is ever removed. Using `all` with any other module id exits 1 (`fatal error - use of "all" deployment must be the only requested module`). If `awsvpcTrunking` is not enabled, the command prints the exact `aws ecs put-account-setting-default` command and exits 1 without deploying.
 
+If all requested modules are already deployed, the command keeps the already-deployed message and exits 1. Pass `--upgrade` to re-deploy them.
+
 **Example:** `ideactl deploy --cluster-name sample-cluster --aws-region us-east-2 metrics`
 
 A change set that would replace or remove a stateful resource is refused unless that logical id is passed to `--allow-replacement`.

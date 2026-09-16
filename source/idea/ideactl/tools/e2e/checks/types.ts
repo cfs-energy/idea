@@ -11,6 +11,7 @@ export const CHECK_NAMES = [
   "job-burst",
   "api-load",
   "gateway-load",
+  "metrics-sink",
 ] as const;
 
 export type CheckName = (typeof CHECK_NAMES)[number];
@@ -69,6 +70,9 @@ export interface ProofMatrixOptions {
   brokerTask?: string;
   checks: CheckName[];
   cluster?: string;
+  datadogApiKey?: string;
+  datadogAppKey?: string;
+  datadogSite?: string;
   desktopRequest?: JsonObject;
   expectedExitStatus?: number;
   gatewayConnections?: number;
@@ -98,6 +102,7 @@ export interface ProofMatrixOptions {
 
 export interface CheckContext {
   api: ApiClient;
+  fetch?: typeof fetch;
   cloud: CloudClient;
   gateway: GatewayConnector;
   now(): number;
@@ -108,6 +113,7 @@ export interface CheckContext {
 }
 
 export interface CheckResult {
+  skipped?: boolean;
   observed: string[];
   passed: boolean;
 }

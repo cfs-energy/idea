@@ -103,6 +103,21 @@ The available checks are:
 - `job-burst`, submit concurrent short jobs and verify their exit statuses.
 - `api-load`, run `load-api.ts` and enforce its p95 and error thresholds.
 - `gateway-load`, run `load-gateway.ts` and enforce its handshake and failure thresholds.
+- `metrics-sink`, query Datadog for `idea.api_invocations` filtered by `idea_cluster:<cluster>`
+  over the last 15 minutes. At least one non-null point passes; the observations include the
+  point count and newest timestamp in UTC. No points or a query error fails the check.
+
+For `metrics-sink`, provide `--cluster`, `--datadog-api-key <key>` and `--datadog-app-key <key>`.
+`--datadog-site` defaults to `datadoghq.com`; use the site's domain, such as `datadoghq.eu`.
+These accept `IDEA_E2E_CLUSTER`, `IDEA_E2E_DATADOG_API_KEY`, `IDEA_E2E_DATADOG_APP_KEY`
+and `IDEA_E2E_DATADOG_SITE` as environment alternatives. Without both keys the check prints
+`NOT RUN` and does not fail the matrix. This check needs no portal credentials.
+
+```sh
+node tools/e2e/proof-matrix.ts --check metrics-sink --cluster sample-cluster \
+  --datadog-api-key "$IDEA_E2E_DATADOG_API_KEY" \
+  --datadog-app-key "$IDEA_E2E_DATADOG_APP_KEY"
+```
 
 Pass `--check` more than once or provide a comma-separated list. With no `--check`, the matrix
 runs every check. Connection, service, task, target-group, and threshold values may instead be

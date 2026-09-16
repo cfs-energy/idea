@@ -9,7 +9,7 @@
 
 import { ClusterConfig, GeneralException, MODULE_METADATA, isEmpty, type ModuleInfo } from '../config/cluster-config.ts';
 import { buildBootstrapContext } from './bootstrap-context.ts';
-import { CdkInvoker, type ConfigWriter, type Deps } from './cdk-invoker.ts';
+import { CdkInvoker, ExitWithCode, type ConfigWriter, type Deps } from './cdk-invoker.ts';
 import { ensureSelfSignedCertificate, type CertificateRequest } from './certificates.ts';
 import { mergeClientIpEntries } from './commands/utils.ts';
 
@@ -290,6 +290,7 @@ export class DeploymentHelper {
         `[${moduleIds.join(', ')}] are already deployed. use the --upgrade flag to re-deploy these modules.`,
       );
     }
+    throw new ExitWithCode(1);
   }
 
   async deployModule(moduleId: string): Promise<void> {

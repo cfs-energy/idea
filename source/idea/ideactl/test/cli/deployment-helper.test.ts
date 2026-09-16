@@ -210,10 +210,22 @@ describe('DeploymentHelper.invoke', () => {
       [moduleRow('cluster', 'cluster', 'stack', 'deployed')],
       { allModules: true },
     );
-    await helper.invoke();
+    await assert.rejects(() => helper.invoke(), { name: 'ExitWithCode', code: 1 });
     assert.deepEqual(deps.spawns, []);
     assert.ok(deps.stdout.some((line) => line.includes('is already deployed. use the --upgrade flag')));
   });
+
+  for (const optimizeDeployment of [false, true]) {
+    it(`refuses an already deployed group with optimizeDeployment=${optimizeDeployment}`, async () => {
+      const { deps, helper } = await openHelper(
+        [moduleRow('analytics', 'analytics', 'stack', 'deployed'), moduleRow('metrics', 'metrics', 'stack', 'deployed')],
+        { allModules: true, optimizeDeployment },
+      );
+      await assert.rejects(() => helper.invoke(), { name: 'ExitWithCode', code: 1 });
+      assert.deepEqual(deps.spawns, []);
+      assert.ok(deps.stdout.includes('[analytics, metrics] are already deployed. use the --upgrade flag to re-deploy these modules.'));
+    });
+  }
 
   it('re-deploys a deployed module with --upgrade', async () => {
     const deps = fakeDeps({ tables: tablesWith([moduleRow('cluster', 'cluster', 'stack', 'deployed')]) });

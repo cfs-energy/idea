@@ -484,7 +484,7 @@ test("mounts the control plane's shared storage on the hosts as the host bootstr
   const launchData = record(record(launchTemplate["Properties"], "launch template properties")["LaunchTemplateData"], "launch data");
   const userData = JSON.stringify(launchData["UserData"]);
   // The export path and the fstab-shaped options, exactly as the host bootstrap wrote them
-  // (idea-com mounts two ONTAP volumes this way; the first container build mounted the bare SVM).
+  // (a production cluster mounts two ONTAP volumes this way; the first container build mounted the bare SVM).
   assert.ok(userData.includes(`svm-0123456789abcdef0.fs-0123456789abcdef0.fsx.us-east-2.amazonaws.com:/profiles/Users/User_Home_Folders /home/ ${options}`), "ONTAP fstab entry");
   assert.ok(userData.includes("fs-0123456789abcdef1.fsx.us-east-2.amazonaws.com@tcp:/abcdefgh /lustre/ lustre defaults,noatime,flock,_netdev 0 0"), "Lustre fstab entry");
   assert.ok(userData.includes("dnf install -y lustre-client"), "the Lustre client is installed when a Lustre entry exists");
