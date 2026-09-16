@@ -424,6 +424,7 @@ async function checkEolBaseOs(
   if (findings.length > 0) {
     deps.err("This cluster still references a Base OS that has reached end-of-life and is no longer supported by IDEA.");
     for (const finding of findings) deps.err(`  - ${finding}`);
+    deps.err(`Move each to a supported Base OS first, for example: ideactl config set --cluster-name ${options.clusterName} --aws-region ${options.awsRegion} 'Key=scheduler.compute_node_os,Type=str,Value=amazonlinux2023' (queue profiles change in the portal's HPC queue settings). upgrade-cluster then sets the matching compute image.`);
     throw new ExitWithCode(1);
   }
 
@@ -988,6 +989,7 @@ export async function prepareUpgradeDriftInput(
 async function moduleInstances(deps: UpgradeDeps, options: UpgradeCommandOptions): Promise<ClearedInstance[]> {
   const instances: ClearedInstance[] = [];
   for (const module of await clusterModules(deps, options.clusterName)) {
+    if (module.type === "config") continue;
     const stackName = valueAsString(module.stack_name) || `${options.clusterName}-${module.module_id}`;
     let nextToken: string | undefined;
     try {
