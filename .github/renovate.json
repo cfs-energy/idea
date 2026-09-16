@@ -22,15 +22,13 @@
     ]
   },
   "pip_requirements": {
-    "fileMatch": [
-      "/(^|/)requirements/[^/]+\\.in$/"
-    ]
+    "enabled": false
   },
   "customManagers": [
     {
       "customType": "regex",
       "fileMatch": [
-        "/(^|/)software_versions\\.yml$/"
+        "^software_versions\\.yml$"
       ],
       "matchStrings": [
         "node_version:\\s*(?<currentValue>\\S+)"
@@ -41,7 +39,7 @@
     {
       "customType": "regex",
       "fileMatch": [
-        "/(^|/)software_versions\\.yml$/"
+        "^software_versions\\.yml$"
       ],
       "matchStrings": [
         "python_version:\\s*(?<currentValue>\\S+)"
@@ -52,7 +50,7 @@
     {
       "customType": "regex",
       "fileMatch": [
-        "/(^|/)software_versions\\.yml$/"
+        "^software_versions\\.yml$"
       ],
       "matchStrings": [
         "nvm_version:\\s*(?<currentValue>\\S+)"
@@ -100,6 +98,20 @@
       ],
       "groupName": "all non-major dependencies",
       "groupSlug": "all-non-major"
+    },
+    {
+      "matchManagers": [
+        "pip-compile"
+      ],
+      "matchDepTypes": [
+        "indirect"
+      ],
+      "enabled": true
     }
-  ]
+  ],
+  "pip-compile": {
+    "fileMatch": [
+      "^requirements/[^/]+\\.txt$"
+    ]
+  }
 }

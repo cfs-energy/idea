@@ -1,8 +1,6 @@
 name: Build Tests
 on:
   pull_request:
-    paths-ignore:
-      - 'docs/**'
   push:
     branches:
       - main
@@ -15,6 +13,13 @@ jobs:
     runs-on: ubuntu-large
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Detect image inputs
+        id: inputs
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: bash scripts/ci-inputs.sh
       - name: Check version consistency
         run: |
           SH_REV=$(grep -m1 '^IDEA_REVISION=' idea-admin.sh | sed -E 's/.*:-"([^"]+)"\}.*/\1/')
@@ -33,3 +38,27 @@ jobs:
         uses: ./.github/actions/setup_dev_environment
       - name: Build Modules
         uses: ./.github/actions/build_modules
+      - name: Verify Python locks by recompiling
+        run: |
+          python -m unittest discover -s scripts -p 'test_*.py'
+          python scripts/requirements-locks.py --check
+      - name: Exercise runtime installer
+        if: steps.inputs.outputs.runtimes == 'true'
+        run: bash scripts/ci-runtime.sh
+      - name: Stage image packages
+        if: steps.inputs.outputs.images == 'true'
+        run: bash scripts/ci-stage-images.sh
+      - name: Set up image builder
+        if: steps.inputs.outputs.images == 'true'
+        uses: docker/setup-buildx-action@v3
+      - name: Build deployment images without publishing
+        if: steps.inputs.outputs.images == 'true'
+        uses: docker/bake-action@v6
+        with:
+          files: .github/ci-images.hcl
+          allow: fs.read=/tmp/dcv-packages
+          load: true
+          push: false
+      - name: Smoke-test deployment images
+        if: steps.inputs.outputs.images == 'true'
+        run: bash scripts/ci-smoke-images.sh

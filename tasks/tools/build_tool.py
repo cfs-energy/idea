@@ -362,7 +362,7 @@ class BuildTool:
             return
 
         with self.c.cd(self.webapp_dir):
-            self.c.run('yarn install && yarn build')
+            self.c.run('yarn install --frozen-lockfile && yarn build')
 
     def copy_build_outputs(self):
         output_dir = self.output_dir

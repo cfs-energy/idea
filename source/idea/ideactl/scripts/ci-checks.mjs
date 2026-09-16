@@ -142,10 +142,29 @@ export function checkDependencyPins(packageRoot) {
     throw new Error("package-lock.json must describe the root package");
   }
 
+  const approvals = manifest.allowScripts ?? {};
+  if (!isRecord(approvals)) throw new Error("allowScripts must be an object");
+  const scriptPackages = new Set();
+  for (const [path, entry] of Object.entries(packages)) {
+    if (!isRecord(entry) || entry.hasInstallScript !== true) continue;
+    const name = path.slice(path.lastIndexOf("node_modules/") + "node_modules/".length);
+    const key = `${name}@${entry.version}`;
+    scriptPackages.add(key);
+    if (typeof approvals[key] !== "boolean") {
+      throw new Error(`install script requires an explicit versioned allowScripts decision: ${key}`);
+    }
+  }
+  for (const key of Object.keys(approvals)) {
+    if (!scriptPackages.has(key)) throw new Error(`stale install-script approval: ${key}`);
+  }
+
   let checked = 0;
   for (const section of ["dependencies", "devDependencies"]) {
     const declared = readStringMap(manifest, section);
     const locked = readStringMap(lockRoot, section);
+    for (const name of Object.keys(locked)) {
+      if (!(name in declared)) throw new Error(`${section}.${name} exists only in package-lock.json`);
+    }
     for (const [name, version] of Object.entries(declared)) {
       if (!EXACT_VERSION.test(version)) {
         throw new Error(`${section}.${name} must be an exact version, found ${version}`);
@@ -531,7 +550,8 @@ export function checkWorkflows(workflowRoot) {
       throw new Error(`${workflow} must contain a YAML object`);
     }
   }
-  console.log(`PASS workflow parsing (${workflows.length} workflows)`);
+  runChecked("workflow lint", "actionlint", ["-shellcheck=", "-pyflakes=", ...workflows], resolve(workflowRoot, "../.."));
+  console.log(`PASS workflow parsing and lint (${workflows.length} workflows)`);
 }
 
 /**
@@ -551,14 +571,15 @@ function runChecked(label, command, args, cwd) {
     env,
     maxBuffer: 64 * 1024 * 1024,
   });
+  // A command that never started has null streams; report the start failure, not a write error.
+  if (result.error !== undefined) {
+    throw new Error(`${label} could not start: ${result.error.message}`);
+  }
   if (result.stdout !== "") {
     process.stdout.write(result.stdout);
   }
   if (result.stderr !== "") {
     process.stderr.write(result.stderr);
-  }
-  if (result.error !== undefined) {
-    throw new Error(`${label} could not start: ${result.error.message}`);
   }
   if (result.status !== 0) {
     throw new Error(`${label} failed with exit ${result.status ?? "signal"}`);

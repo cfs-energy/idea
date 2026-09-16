@@ -301,3 +301,32 @@ test("multiple named checks run in order and stop on failure", () => {
   assert.doesNotMatch(failure.stdout, /PASS repository hygiene/);
   assert.equal(runCheck("all", "hygiene", "--root", root).status, 1);
 });
+
+test("dependency check rejects missing and stale install-script decisions", () => {
+  const root = temporaryRoot("install-policy");
+  writeDependencyFixture(root, "1.2.3");
+  const lockFile = join(root, "package-lock.json");
+  const lock = JSON.parse(readFileSync(lockFile, "utf8"));
+  lock.packages["node_modules/sample-package"].hasInstallScript = true;
+  writeJson(lockFile, lock);
+  assertDeliberateFailure("dependencies", runCheck("dependencies", "--root", root), /explicit versioned allowScripts/);
+  const manifestFile = join(root, "package.json");
+  const manifest = JSON.parse(readFileSync(manifestFile, "utf8"));
+  manifest.allowScripts = { "sample-package@1.2.3": true };
+  writeJson(manifestFile, manifest);
+  assert.equal(runCheck("dependencies", "--root", root).status, 0);
+  manifest.allowScripts["sample-package@1.2.2"] = true;
+  writeJson(manifestFile, manifest);
+  assertDeliberateFailure("dependencies", runCheck("dependencies", "--root", root), /stale install-script approval/);
+});
+
+test("workflow check rejects a valid YAML workflow with an invalid expression", () => {
+  const root = temporaryRoot("workflow-expression");
+  const workflows = join(root, ".github", "workflows");
+  mkdirSync(workflows, { recursive: true });
+  writeFileSync(join(workflows, "broken.yml"), [
+    "on: push", "jobs:", "  check:", "    runs-on: ubuntu-latest", "    steps:",
+    "      - run: echo ${{ nonexistent.value }}", "",
+  ].join("\n"));
+  assertDeliberateFailure("workflows", runCheck("workflows", "--root", root, "--workflows", workflows), /undefined variable|context/);
+});
