@@ -65,7 +65,10 @@ class AccountsAPI(BaseAPI):
         self.SCOPE_READ = f'{self.context.module_id()}/read'
 
         self.acl = {
-            'Accounts.ReconcileUsers': {'scope': self.SCOPE_WRITE, 'method': self.reconcile_users},
+            'Accounts.ReconcileUsers': {
+                'scope': self.SCOPE_WRITE,
+                'method': self.reconcile_users,
+            },
             'Accounts.CreateUser': {
                 'scope': self.SCOPE_WRITE,
                 'method': self.create_user,
@@ -171,10 +174,12 @@ class AccountsAPI(BaseAPI):
             self.context.logger().warning(
                 f'account reconciliation cap override requested by {context.get_username()} (dry_run={request.dry_run})'
             )
-        context.success(self.context.accounts.reconciler.run_once(
-            dry_run=request.dry_run,
-            override_max_disable_fraction=request.override_max_disable_fraction,
-        ))
+        context.success(
+            self.context.accounts.reconciler.run_once(
+                dry_run=request.dry_run,
+                override_max_disable_fraction=request.override_max_disable_fraction,
+            )
+        )
 
     def create_user(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(CreateUserRequest)

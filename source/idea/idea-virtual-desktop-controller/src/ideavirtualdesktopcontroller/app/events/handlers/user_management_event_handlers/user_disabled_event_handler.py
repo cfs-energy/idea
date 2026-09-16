@@ -11,8 +11,11 @@
 
 import ideavirtualdesktopcontroller
 from ideadatamodel import (
-    ListSessionsRequest, SocaPaginator, VirtualDesktopWeekSchedule,
-    DayOfWeek, VirtualDesktopSessionState,
+    ListSessionsRequest,
+    SocaPaginator,
+    VirtualDesktopWeekSchedule,
+    DayOfWeek,
+    VirtualDesktopSessionState,
 )
 from ideasdk.utils import Utils
 from ideavirtualdesktopcontroller.app.clients.events_client.events_client import (
@@ -52,11 +55,15 @@ class UserDisabledEventHandler(BaseVirtualDesktopControllerEventHandler):
                 # Delete schedule rows before stopping; queued resume events also check the owner.
                 self.schedule_utils.delete_schedules_for_session(session)
                 session.schedule = VirtualDesktopWeekSchedule(
-                    **{day.value: self.schedule_db.get_empty_schedule(day) for day in DayOfWeek}
+                    **{
+                        day.value: self.schedule_db.get_empty_schedule(day)
+                        for day in DayOfWeek
+                    }
                 )
                 self.session_db.update(session)
                 if session.state in (
-                    VirtualDesktopSessionState.STOPPED, VirtualDesktopSessionState.STOPPING,
+                    VirtualDesktopSessionState.STOPPED,
+                    VirtualDesktopSessionState.STOPPING,
                 ):
                     continue
                 session.force = True

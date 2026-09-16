@@ -1,4 +1,3 @@
-from unittest.mock import Mock
 """
 Test Cases for JobMonitor job intake reconciliation
 
@@ -7,6 +6,8 @@ scheduler commits the job, so the scan triggered by the event can run too early
 and find nothing. the queued sweep and the periodic job reconciler must adopt
 such orphaned jobs.
 """
+
+from unittest.mock import Mock
 
 import logging
 from threading import Event

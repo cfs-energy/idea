@@ -84,7 +84,7 @@ export default function AccountReconcileSettings({settings}: {settings: any}) {
             <Header variant="h3">Run on demand</Header>
             <Checkbox checked={dryRun} disabled={busy} onChange={e => setDryRun(e.detail.checked)}>Dry run</Checkbox>
             <Button disabled={busy} onClick={() => run()}>Run now</Button>
-            {report && <>
+            {report && <SpaceBetween size="m">
                 {Boolean(report.refused) && <Alert type="warning" header="Reconciliation refused">{report.reason}. Proposed disables: {report.would_disable ?? 0} of {report.eligible_enabled ?? 0} eligible enabled users; cap: {report.max_disable_fraction ?? 0}.
                     {report.reason === 'max_disable_fraction exceeded' && <Button disabled={busy} onClick={() => run(true)}>Proceed anyway</Button>}
                 </Alert>}
@@ -98,7 +98,7 @@ export default function AccountReconcileSettings({settings}: {settings: any}) {
                     {id: 'upstream', header: 'Upstream', cell: item => Object.entries(item.upstream).map(([key, value]) => `${key}: ${value}`).join(', ')},
                     {id: 'applied', header: 'Applied', cell: item => item.applied === true ? 'Yes' : 'No'},
                 ]}/>
-            </>}
+            </SpaceBetween>}
         </SpaceBetween>
     </Container>;
 }

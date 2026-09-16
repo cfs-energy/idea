@@ -66,13 +66,26 @@ def relaunch_on_linux():
         return
     # click's flag handling changed the header text between versions, so both are pinned.
     pins = ' '.join(
-        line.strip() for line in (ROOT / 'requirements' / 'dev.txt').read_text().splitlines()
+        line.strip()
+        for line in (ROOT / 'requirements' / 'dev.txt').read_text().splitlines()
         if line.startswith(('pip-tools==', 'click=='))
     )
     command = [
-        'docker', 'run', '--rm', '-v', f'{ROOT}:/work', '-w', '/work',
-        '-e', 'REQUIREMENTS_LOCKS_NATIVE=1', 'python:3.13-slim', 'sh', '-c',
-        f'pip install -q {pins} && python scripts/requirements-locks.py "$@"', 'sh', *sys.argv[1:],
+        'docker',
+        'run',
+        '--rm',
+        '-v',
+        f'{ROOT}:/work',
+        '-w',
+        '/work',
+        '-e',
+        'REQUIREMENTS_LOCKS_NATIVE=1',
+        'python:3.13-slim',
+        'sh',
+        '-c',
+        f'pip install -q {pins} && python scripts/requirements-locks.py "$@"',
+        'sh',
+        *sys.argv[1:],
     ]
     raise SystemExit(subprocess.run(command).returncode)
 

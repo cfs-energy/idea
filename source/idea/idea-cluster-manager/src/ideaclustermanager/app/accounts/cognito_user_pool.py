@@ -127,7 +127,9 @@ class CognitoUserPool:
             id_token=id_token,
         )
 
-    def admin_get_user(self, username: str, use_cache: bool = True) -> Optional[CognitoUser]:
+    def admin_get_user(
+        self, username: str, use_cache: bool = True
+    ) -> Optional[CognitoUser]:
         if Utils.is_empty(username):
             raise exceptions.invalid_params('username is required')
 

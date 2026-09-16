@@ -22,20 +22,37 @@ def test_admission_refuses_disabled_owner():
 
 def test_queued_and_held_deleted_running_jobs_finish():
     ctx = context()
-    jobs = [SocaJob(job_id=str(index), owner='user', queue_type='normal', state=state)
-            for index, state in enumerate((SocaJobState.QUEUED, SocaJobState.HELD, SocaJobState.RUNNING, SocaJobState.WAITING))]
+    jobs = [
+        SocaJob(job_id=str(index), owner='user', queue_type='normal', state=state)
+        for index, state in enumerate(
+            (
+                SocaJobState.QUEUED,
+                SocaJobState.HELD,
+                SocaJobState.RUNNING,
+                SocaJobState.WAITING,
+            )
+        )
+    ]
     ctx.scheduler.list_jobs.return_value = jobs
     ctx.scheduler.get_job.side_effect = lambda job_id: jobs[int(job_id)]
     sweep_disabled_jobs(ctx)
-    assert [call.args[0] for call in ctx.scheduler.delete_job.call_args_list] == ['0', '1', '3']
+    assert [call.args[0] for call in ctx.scheduler.delete_job.call_args_list] == [
+        '0',
+        '1',
+        '3',
+    ]
     ctx.accounts_client.get_user.assert_called_once()
     assert ctx.queue_profiles.get_provisioning_queue.return_value.delete.call_count == 3
 
 
 def test_dispatch_since_snapshot_is_left_running():
     ctx = context()
-    ctx.scheduler.list_jobs.return_value = [SocaJob(job_id='1', owner='user', state=SocaJobState.QUEUED)]
-    ctx.scheduler.get_job.return_value = SocaJob(job_id='1', owner='user', state=SocaJobState.RUNNING)
+    ctx.scheduler.list_jobs.return_value = [
+        SocaJob(job_id='1', owner='user', state=SocaJobState.QUEUED)
+    ]
+    ctx.scheduler.get_job.return_value = SocaJob(
+        job_id='1', owner='user', state=SocaJobState.RUNNING
+    )
     sweep_disabled_jobs(ctx)
     ctx.scheduler.delete_job.assert_not_called()
 
@@ -43,7 +60,9 @@ def test_dispatch_since_snapshot_is_left_running():
 def test_lookup_failure_does_not_delete_jobs():
     ctx = context()
     ctx.accounts_client.get_user.side_effect = RuntimeError('unavailable')
-    ctx.scheduler.list_jobs.return_value = [SocaJob(job_id='1', owner='user', state=SocaJobState.QUEUED)]
+    ctx.scheduler.list_jobs.return_value = [
+        SocaJob(job_id='1', owner='user', state=SocaJobState.QUEUED)
+    ]
     with pytest.raises(RuntimeError):
         sweep_disabled_jobs(ctx)
     ctx.scheduler.delete_job.assert_not_called()

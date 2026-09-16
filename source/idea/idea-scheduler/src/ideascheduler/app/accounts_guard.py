@@ -1,4 +1,5 @@
 """Account state gates admission and queued work; executing jobs retain their allocation."""
+
 from ideadatamodel import GetUserRequest, SocaJobState, exceptions
 
 
@@ -20,7 +21,9 @@ def delete_queued_job(context, job):
     current = context.scheduler.get_job(job.job_id)
     if current is not None and current.state in QUEUED_STATES:
         context.scheduler.delete_job(job.job_id)
-        queue = context.queue_profiles.get_provisioning_queue(queue_profile_name=job.queue_type)
+        queue = context.queue_profiles.get_provisioning_queue(
+            queue_profile_name=job.queue_type
+        )
         if queue is not None:
             queue.delete(job_id=job.job_id)
 

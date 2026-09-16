@@ -844,7 +844,9 @@ class VirtualDesktopSessionUtils:
                 fail_response_list.append(session_orig)
                 continue
 
-            user = self.context.accounts_client.get_user(GetUserRequest(username=session.owner)).user
+            user = self.context.accounts_client.get_user(
+                GetUserRequest(username=session.owner)
+            ).user
             if user is None or user.enabled is not True:
                 session.failure_reason = 'Session owner is disabled'
                 fail_response_list.append(session)

@@ -13,7 +13,9 @@ import pytest
 from unittest.mock import Mock
 
 from ideadatamodel import (
-    SocaAnyPayload, User, GetUserResult,
+    SocaAnyPayload,
+    User,
+    GetUserResult,
 )
 from ideascheduler import SchedulerAppContext
 from ideasdk.context import SocaContextOptions
@@ -152,5 +154,7 @@ def context(monkeypatch):
     )
 
     context.accounts_client = Mock()
-    context.accounts_client.get_user.return_value = GetUserResult(user=User(enabled=True))
+    context.accounts_client.get_user.return_value = GetUserResult(
+        user=User(enabled=True)
+    )
     return context
