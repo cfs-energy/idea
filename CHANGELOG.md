@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
-## [26.10.0] - Unreleased
+## [26.09.1] - Unreleased
 
 **Upgrade Instructions:**
 * Control plane release on top of 26.09.0. A cluster on 26.09.0 upgrades directly; an older cluster upgrades to 26.09.0 first with that release's administrator, since the upgrade floor moves to 26.09.0

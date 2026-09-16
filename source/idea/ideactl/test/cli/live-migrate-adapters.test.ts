@@ -414,7 +414,7 @@ test("an acceptance is bound to the release and to every deployed template", () 
   const base = templateComparisonFingerprint(RELEASE, stacks);
 
   assert.equal(base, templateComparisonFingerprint(RELEASE, [...stacks].reverse()));
-  assert.notEqual(base, templateComparisonFingerprint("26.10.0", stacks));
+  assert.notEqual(base, templateComparisonFingerprint("26.09.1", stacks));
   assert.notEqual(base, templateComparisonFingerprint(RELEASE, [{ stackName: "a", digest: "1" }, { stackName: "b", digest: "3" }]));
   assert.notEqual(driftReportFingerprint(RELEASE, ["a"]), driftReportFingerprint(RELEASE, ["a", "b"]));
   assert.equal(driftReportFingerprint(RELEASE, ["b", "a"]), driftReportFingerprint(RELEASE, ["a", "b"]));

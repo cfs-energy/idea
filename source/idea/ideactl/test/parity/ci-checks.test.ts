@@ -155,7 +155,7 @@ test("dependency check rejects a package version that differs from the release f
   const manifestFile = join(root, "package.json");
   const manifest = JSON.parse(readFileSync(manifestFile, "utf8")) as Record<string, unknown>;
   writeJson(manifestFile, { ...manifest, version: "26.09.0" });
-  writeFileSync(join(repository, "IDEA_VERSION.txt"), "26.10.0\n");
+  writeFileSync(join(repository, "IDEA_VERSION.txt"), "26.09.1\n");
   assertDeliberateFailure(
     "dependencies",
     runCheck("dependencies", "--root", root),

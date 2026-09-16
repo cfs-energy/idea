@@ -1,6 +1,6 @@
 // Moves the local parity reference to a new release string.
 //
-//   node tools/parity/retag-release.ts <from> <to>      e.g. 26.09.0 26.10.0
+//   node tools/parity/retag-release.ts <from> <to>      e.g. 26.09.0 26.09.1
 //
 // The reference under tools/parity/live and tools/parity/fixtures/<cluster> is what the Python
 // administrator last deployed, and that administrator is gone, so the reference can never be
@@ -14,7 +14,7 @@ import { join } from "node:path";
 
 const [from, to] = process.argv.slice(2);
 if (from === undefined || to === undefined || !/^\d+\.\d+\.\d+$/.test(from) || !/^\d+\.\d+\.\d+$/.test(to)) {
-  console.error("usage: retag-release.ts <from> <to>   (release strings, e.g. 26.09.0 26.10.0)");
+  console.error("usage: retag-release.ts <from> <to>   (release strings, e.g. 26.09.0 26.09.1)");
   process.exit(2);
 }
 

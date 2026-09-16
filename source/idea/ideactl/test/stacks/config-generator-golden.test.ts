@@ -253,7 +253,7 @@ const ADDED_KEYS: Record<string, string> = Object.fromEntries(
   [
     'cost.enabled', 'cost.interval_hours', 'cost.lookback_days', 'cost.module_tag', 'cost.project_tag',
     'cost.owner_tag', 'cost.by_account', 'storage.enabled', 'storage.interval_minutes', 'storage.verify_tls',
-  ].map((key) => [`cluster-manager.metrics.${key}`, 'the cost and storage metrics collectors arrived with 26.10.0']),
+  ].map((key) => [`cluster-manager.metrics.${key}`, 'the cost and storage metrics collectors arrived with 26.09.1']),
 );
 
 /** The generated output with the added keys dropped, after proving each one is generated and new. */

@@ -51,7 +51,7 @@ test("the refusal names the floor, the below-floor modules, and the operator pat
     { module_id: "cluster", type: "stack", status: "deployed", version: "25.12.0" },
     { module_id: "scheduler", type: "app", status: "deployed", version: "25.12.0" },
   ];
-  const message = upgradeFloorMessage("sample-cluster", "26.10.0", UPGRADE_FLOOR_VERSION, below);
+  const message = upgradeFloorMessage("sample-cluster", "26.09.1", UPGRADE_FLOOR_VERSION, below);
   assert.match(message, /Cluster sample-cluster is below the supported upgrade floor/);
   assert.match(message, /already at 26\.09\.0 or newer/);
   assert.match(message, /cluster {3}25\.12\.0/);
