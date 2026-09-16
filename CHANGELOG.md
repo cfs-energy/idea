@@ -19,22 +19,39 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 ([Move the control plane to containers](https://docs.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/move-to-containers))
 
 ### **✨ New Features**
-* **Cost-only deployment**: `ideactl cost-collector deploy|destroy` runs account spend collection and a Datadog sidecar in one Fargate task in a commercial billing account, including bills for GovCloud clusters
+* **Cost-only deployment**: `ideactl cost-collector deploy|destroy` runs account spend collection and a Datadog sidecar in one Fargate task in a commercial billing account, including bills for GovCloud clusters, without cluster settings tables
 * **Container Control Plane**: The control plane modules run as ECS services on a small Graviton host pool instead of one host each, from a single `idea-control-plane` image, on clusters with `enable_ecs: true`
 * **Rolling Upgrades**: Point `ecs.image` at a new release and run `upgrade-cluster`; each service rolls to a new task definition revision behind its load balancer, a job running through the scheduler roll finishes normally, and desktop connections reconnect through the gateway
 * **ideactl**: The administrator is a TypeScript tool with the same commands as before; it synthesizes the same CloudFormation templates as the Python administrator, checked by a parity gate against the deployed templates of real clusters
 * **Change-Set Guard**: Every deploy creates a change set and reads it before executing; a change that replaces or removes a stateful resource is refused and named, and `--allow-replacement <logical-id>` is the operator's explicit acceptance. Task definition revisions and the two retired custom resources are allowed by name
 * **Scheduler Cutover Gate**: `upgrade-cluster` reads the host scheduler's PBS job inventory over Systems Manager before the container cutover and refuses a non-empty one; `--drain` closes submission through the maintenance flag, waits, upgrades and reopens; `--drain-timeout-minutes` and `--skip-drain-check`
-* **Proof Matrix**: `tools/e2e/proof-matrix.ts` proves a running cluster with nine checks: desktop end to end, desktop SSH through the bastion, gateway and broker task replacement, scheduler replacement and image upgrade with a witnessed job, job burst, API load and gateway load
+* **Proof Matrix**: `tools/e2e/proof-matrix.ts` proves a running cluster with nine core checks: desktop end to end, desktop SSH through the bastion, gateway and broker task replacement, scheduler replacement and image upgrade with a witnessed job, job burst, API load and gateway load
 * **Offline Upgrade Rehearsal**: `tools/parity/upgrade-dry-run.ts` replays `upgrade-cluster` against a captured cluster and lists every write it would make, without touching an account
-* **Datadog Metrics**: `metrics_provider: dogstatsd` sends the modules' metrics, including per-job cost, duration and CPU efficiency from the scheduler and a per-job `idea.job.detail.cost` carrying the job id, to a Datadog agent over DogStatsD; on a container cluster `datadog_api_key_secret_arn` and `datadog_agent_image` in `values.yml` run the agent as a daemon on every host from a digest-pinned image in the account's ECR, with the key read from Secrets Manager
-* **Spend and Storage Metrics**: The cluster-manager reads the account's spend from Cost Explorer (`idea.cost.*` by module, project, owner, service and storage usage type, one point per day) and the FSx for NetApp ONTAP quota reports and volumes (`idea.storage.*` per user and volume) and publishes both through `metrics.provider`; `cluster-manager.metrics.cost.enabled` and `cluster-manager.metrics.storage.enabled`, off by default
+* **Datadog Metrics**: `metrics_provider: dogstatsd` sends the modules' metrics, including per-job cost, duration and CPU efficiency from the scheduler, to a Datadog agent over DogStatsD; on a container cluster `datadog_api_key_secret_arn` and `datadog_agent_image` in `values.yml` run the agent as a daemon on every host from a digest-pinned image in the account's ECR, with the key read from Secrets Manager
+* **Per-Job Cost Detail**: `idea.job.detail.cost` tags each completed job with `job_id`, `job_uid` and `instance_type` for dashboard drill-down; disabled on CloudWatch to avoid a separate metric charge for every job
+* **Spend Metrics**: The cluster-manager publishes Cost Explorer spend as `idea.cost.*` by module, project, owner, service and storage usage type, rereading a trailing window to replace revised daily totals; enable with `cluster-manager.metrics.cost.enabled`, off by default
+* **Storage Metrics**: The cluster-manager publishes FSx for NetApp ONTAP quota and volume gauges as `idea.storage.*` per user, volume and tier using read-only credentials stored in Secrets Manager; enable with `cluster-manager.metrics.storage.enabled`, off by default
 
 ### **🔧 Improvements**
 * **Upgrades**: The scheduler's DNS record is retained with a policy-only stack update before the container cutover, so the container scheduler takes the name over without CloudFormation deleting it; the container module's module-set registration is held until the last stack deploys, so the running portal keeps working through the upgrade
 * **Deploys**: A bootstrap archive is named by its rendered content, so a host whose bootstrap did not change is left alone by an image-only upgrade; a change set that replaces a termination-protected instance clears the protection first, so the old instance is deleted rather than left running unreferenced
-* **Dependencies**: aws-cdk-lib 2.269, CDK CLI 2.1141, AWS SDK 3.1132, TypeScript 7, cdk-nag 3 and js-yaml 5; an unacknowledged cdk-nag finding now fails synthesis
+* **Dependencies**: aws-cdk-lib 2.269, CDK CLI 2.1141, AWS SDK 3.1133, TypeScript 7, cdk-nag 3 and js-yaml 5; an unacknowledged cdk-nag finding now fails synthesis
 * **Documentation**: A runbook for the move to containers, the module code update page rewritten for the deploy paths, and the new `upgrade-cluster` flags
+* **Metrics Delivery Check**: The proof matrix can query Datadog for the cluster's `idea.api_invocations` over the last fifteen minutes; it reports the check as not run when API credentials are absent
+
+### **🐛 Bug Fixes**
+* **Metrics Agent Startup**: The host daemon uses the EC2 launch type without a capacity provider strategy, so ECS accepts the service
+* **Metrics Socket**: The agent listens on the shared DogStatsD socket used by container tasks and enables origin detection for container tags
+* **Collector Replicas**: A shared checkpoint lets one replica publish per interval, and collector points use the cluster name as their host to prevent duplicate totals across hosts
+* **Collector Providers**: Spend collection runs only on DogStatsD, and storage collection on DogStatsD or CloudWatch, so each uses a provider that supports its metric semantics
+* **Spend Corrections**: Zero spend rows replace earlier nonzero values when Cost Explorer revises a daily total
+* **Container Storage Mounts**: Hosts mount ONTAP, OpenZFS and Lustre with configured volume paths and mount options, install the Lustre client when needed, respect node scope and stop before joining ECS if a mount fails
+* **Scheduler Logs**: Log sidecars follow date-named files and rescan for new files, starting existing files at their end to avoid replaying old logs
+* **Scheduler Hostname**: The scheduler task, settings and DNS record use the configured module hostname
+* **Secret Decryption**: Execution roles receive `kms:Decrypt` scoped to the configured customer-managed key so ECS can resolve injected secrets
+* **Termination Protection**: Upgrades save each instance's protection baseline before clearing it, allowing a later run to restore protection after a failed upgrade
+* **Retained Resource Guard**: The change-set guard allows retained removals only for Route 53 record sets used in DNS handover; retained storage removals still require explicit permission
+* **Deploy Exit Status**: `deploy` exits nonzero when the requested modules are already deployed, so scripts can detect that no deployment ran
 
 ### **🗑️ Removed**
 * The Python administrator (`source/idea/idea-administrator`), its container image and build, the Python Lambda toolchain, and `idea-admin.sh patch`

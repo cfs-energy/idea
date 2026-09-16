@@ -906,6 +906,14 @@ Commander built-in. Prints help for the program or for a named command.
 
 **Example:** `ideactl help deploy`
 
+## `cost-collector`
+
+Deploy or remove account spend collection without a cluster. A group.
+
+**Usage:** `ideactl cost-collector [options] [command]`
+
+No command-specific options. **Example:** `ideactl cost-collector -h`
+
 ## `cost-collector deploy`
 
 Deploy standalone account spend collection in a commercial billing account, without cluster settings tables.
@@ -924,11 +932,11 @@ Deploy standalone account spend collection in a commercial billing account, with
 | `--subnet-ids <ids...>` | yes | none | yes |
 | `--interval-hours <hours>` | yes | `6` | no |
 | `--lookback-days <days>` | yes | `3` | no |
-| `--module-tag <key>` | yes | `idea:ModuleId` | no |
-| `--project-tag <key>` | yes | `idea:Project` | no |
-| `--owner-tag <key>` | yes | `idea:JobOwner` | no |
+| `--module-tag <key>` | yes | `"idea:ModuleId"` | no |
+| `--project-tag <key>` | yes | `"idea:Project"` | no |
+| `--owner-tag <key>` | yes | `"idea:JobOwner"` | no |
 | `--by-account` | no | `false` | no |
-| `--allow-replacement <logical-id>` | yes, repeatable | none | no |
+| `--allow-replacement <logical-id>` | yes, repeatable | `[]` | no |
 
 **Reads:** caller identity, subnet route tables and CloudFormation change sets. **Changes:** one stack containing a log group, ECS cluster, Fargate service, two-container task, security group and IAM roles. Deploy prepares a change set and applies the existing guard before execution; task definition revisions are allowed. It waits for stack completion.
 
@@ -954,6 +962,6 @@ Remove only the named collector stack. No image, secret or subnet flags are need
 | `--aws-region <region>` | yes | none | yes |
 | `--aws-profile <profile>` | yes | none | no |
 | `--stack-name <name>` | yes | none | yes |
-| `--force` | no | `false` | no |
+| `--force` | no | none | no |
 
 **Reads:** caller identity and the named stack. **Changes:** deletes the collector stack and its logs after confirmation; `--force` skips the prompt. The supplied secret and image repositories remain. **Example:** `ideactl cost-collector destroy --aws-region us-east-1 --stack-name gov-spend`
