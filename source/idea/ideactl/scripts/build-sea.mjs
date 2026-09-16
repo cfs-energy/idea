@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * Builds the two same-architecture release files: macOS for this machine,
- * and Linux for a small virtual machine of the same processor.
+ * Builds native macOS, Linux, or Windows releases with an explicit target.
+ * The default remains the same-architecture macOS and Linux pair.
  *
  * `npm run build:dist` produces both. Each file is the official Node runtime
  * for that operating system, with the application, deployment CLI, and
@@ -59,7 +59,7 @@ function requireNonemptyString(value, name) {
  * @returns {string}
  */
 function releaseTarget(platform, architecture) {
-  if (platform !== "darwin" && platform !== "linux") {
+  if (platform !== "darwin" && platform !== "linux" && platform !== "win32") {
     throw new Error(`unsupported release operating system: ${platform}`);
   }
   const releaseArchitecture =
@@ -67,7 +67,7 @@ function releaseTarget(platform, architecture) {
   if (releaseArchitecture === undefined) {
     throw new Error(`unsupported release processor architecture: ${architecture}`);
   }
-  return `${platform}-${releaseArchitecture}`;
+  return `${platform === "win32" ? "windows" : platform}-${releaseArchitecture}`;
 }
 
 /**
@@ -124,9 +124,10 @@ function parseArguments(argv) {
     index += 1;
   }
 
-  if (!releaseTargets().includes(target)) {
+  const supportedTargets = process.platform === "win32" ? [releaseTarget("win32", process.arch)] : releaseTargets();
+  if (!supportedTargets.includes(target)) {
     throw new Error(
-      `unsupported release target for ${process.arch}: ${target}; expected ${releaseTargets().join(" or ")}`,
+      `unsupported release target for ${process.arch}: ${target}; expected ${supportedTargets.join(" or ")}`,
     );
   }
   const hostTarget = releaseTarget(process.platform, process.arch);
@@ -160,10 +161,12 @@ function parseArguments(argv) {
  * @param {string} command executable name or path
  * @param {string[]} args command arguments
  * @param {string} cwd working directory
+ * @param {NodeJS.ProcessEnv} env child environment
  */
-function run(command, args, cwd = PACKAGE_ROOT) {
+function run(command, args, cwd = PACKAGE_ROOT, env = process.env) {
   const result = spawnSync(command, args, {
     cwd,
+    env,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -202,13 +205,13 @@ function canBuildSea(executable, probeConfig) {
  */
 function officialRuntime(target, temporaryRoot) {
   const separator = target.lastIndexOf("-");
-  const platform = target.slice(0, separator);
+  const platform = target.startsWith("windows-") ? "win" : target.slice(0, separator);
   const releaseArchitecture = target.slice(separator + 1) === "amd64" ? "x64" : "arm64";
   const directoryName = `node-${process.version}-${platform}-${releaseArchitecture}`;
-  const archiveName = `${directoryName}.tar.gz`;
+  const archiveName = `${directoryName}.${platform === "win" ? "zip" : "tar.gz"}`;
   const downloadRoot = `https://nodejs.org/dist/${process.version}`;
   const cacheRoot = join(PACKAGE_ROOT, "node_modules", ".cache", "ideactl-sea", directoryName);
-  const cachedExecutable = join(cacheRoot, "bin", "node");
+  const cachedExecutable = join(cacheRoot, ...(platform === "win" ? ["node.exe"] : ["bin", "node"]));
   if (existsSync(cachedExecutable)) return cachedExecutable;
 
   const downloadDirectory = join(temporaryRoot, "node-download");
@@ -232,8 +235,8 @@ function officialRuntime(target, temporaryRoot) {
     throw new Error(`runtime checksum mismatch for ${archiveName}: expected ${expected}, got ${actual}`);
   }
 
-  run("tar", ["-xzf", archive, "-C", extraction]);
-  const extractedExecutable = join(extraction, directoryName, "bin", "node");
+  run("tar", ["-xf", archive, "-C", extraction]);
+  const extractedExecutable = join(extraction, directoryName, ...(platform === "win" ? ["node.exe"] : ["bin", "node"]));
   if (!existsSync(extractedExecutable)) {
     throw new Error(`runtime archive did not contain ${directoryName}/bin/node`);
   }
@@ -500,7 +503,7 @@ const {
 } = require("node:fs");
 const { getAsset } = require("node:sea");
 const { tmpdir } = require("node:os");
-const { dirname, join, resolve, sep } = require("node:path");
+const { delimiter, dirname, join, resolve, sep } = require("node:path");
 const { gunzipSync } = require("node:zlib");
 
 const VERSION = ${JSON.stringify(VERSION)};
@@ -552,10 +555,6 @@ function extractRuntime(destination) {
   }
 }
 
-function shellQuote(value) {
-  return \`'\${value.replaceAll("'", "'\\\\''")}'\`;
-}
-
 function ensureRuntime() {
   const uid = typeof process.getuid === "function" ? String(process.getuid()) : "user";
   const parent = join(tmpdir(), \`ideactl-\${uid}\`);
@@ -586,16 +585,9 @@ function ensureRuntime() {
     }
   }
 
-  const cdkShim = join(destination, "bin", "cdk");
-  mkdirSync(dirname(cdkShim), { recursive: true });
-  writeFileSync(
-    cdkShim,
-    \`#!/bin/sh\\nexec \${shellQuote(process.execPath)} ${INTERNAL_CDK_ARGUMENT} "$@"\\n\`,
-    { mode: 0o700 },
-  );
-  chmodSync(cdkShim, 0o700);
-  process.env.IDEA_CDK_BIN = cdkShim;
-  process.env.PATH = \`\${dirname(process.execPath)}:\${process.env.PATH ?? ""}\`;
+  process.env.IDEA_CDK_BIN = process.execPath;
+  process.env.IDEA_SEA = "1";
+  process.env.PATH = \`\${dirname(process.execPath)}\${delimiter}\${process.env.PATH ?? ""}\`;
   return destination;
 }
 
@@ -619,7 +611,7 @@ main().catch((error) => {
 }
 
 /**
- * Writes the release tarball containing only the executable.
+ * Writes the release archive containing only the executable.
  *
  * @param {string} executable built executable path
  * @param {string} archive output archive path
@@ -628,6 +620,13 @@ main().catch((error) => {
 function writeReleaseArchive(executable, archive, temporaryRoot) {
   const releaseRoot = join(temporaryRoot, "release-package");
   mkdirSync(releaseRoot);
+  if (archive.endsWith(".zip")) {
+    copyFileSync(executable, join(releaseRoot, "ideactl.exe"));
+    run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+      "$ErrorActionPreference = 'Stop'; Compress-Archive -Force -LiteralPath $env:IDEA_ZIP_SOURCE -DestinationPath $env:IDEA_ZIP_DESTINATION"],
+      PACKAGE_ROOT, { ...process.env, IDEA_ZIP_SOURCE: join(releaseRoot, "ideactl.exe"), IDEA_ZIP_DESTINATION: archive });
+    return;
+  }
   copyFileSync(executable, join(releaseRoot, "ideactl"));
   chmodSync(join(releaseRoot, "ideactl"), 0o755);
   writeFileSync(archive, createTarGz(releaseRoot));
@@ -647,9 +646,9 @@ function main() {
   const launcher = join(temporaryRoot, "sea-launcher.cjs");
   const seaConfig = join(temporaryRoot, "sea-config.json");
   const targetDirectory = join(outputDirectory, target);
-  const builtExecutable = join(targetDirectory, "ideactl");
+  const builtExecutable = join(targetDirectory, target.startsWith("windows-") ? "ideactl.exe" : "ideactl");
   const artifactBase = `ideactl-v${VERSION}-${target}`;
-  const releaseArchive = join(outputDirectory, `${artifactBase}.tar.gz`);
+  const releaseArchive = join(outputDirectory, `${artifactBase}.${target.startsWith("windows-") ? "zip" : "tar.gz"}`);
   const checksumFile = `${releaseArchive}.sha256`;
   const metadataFile = join(outputDirectory, `${artifactBase}.json`);
 

@@ -41,8 +41,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: bash source/idea/ideactl/scripts/assert-new-release.sh
   build_ideactl_artifacts:
-    name: Build ideactl macOS arm64
-    runs-on: macos-15
+    name: Build ideactl ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-arm64
+            runner: macos-15
+          - target: darwin-amd64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
     defaults:
       run:
         working-directory: source/idea/ideactl
@@ -69,27 +77,35 @@ jobs:
       - name: Install dependencies
         run: npm ci
       - name: Build the macOS release file
-        run: npm run build:dist -- --target darwin-arm64
+        run: npm run build:dist -- --target ${{ matrix.target }}
       - name: Test the extracted macOS release file offline
         run: |
           set -euo pipefail
           SMOKE_ROOT=$(mktemp -d)
           trap 'rm -rf "$SMOKE_ROOT"' EXIT
-          tar -xzf dist/release/ideactl-v*-darwin-arm64.tar.gz -C "$SMOKE_ROOT"
+          tar -xzf dist/release/ideactl-v*-${{ matrix.target }}.tar.gz -C "$SMOKE_ROOT"
           node test/support/release-smoke.ts "$SMOKE_ROOT/ideactl"
       - name: Upload the macOS release artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ideactl-darwin-arm64
+          name: ideactl-${{ matrix.target }}
           path: |
-            source/idea/ideactl/dist/release/darwin-arm64/ideactl
-            source/idea/ideactl/dist/release/ideactl-v*-darwin-arm64.tar.gz
-            source/idea/ideactl/dist/release/ideactl-v*-darwin-arm64.tar.gz.sha256
+            source/idea/ideactl/dist/release/${{ matrix.target }}/ideactl
+            source/idea/ideactl/dist/release/ideactl-v*-${{ matrix.target }}.tar.gz
+            source/idea/ideactl/dist/release/ideactl-v*-${{ matrix.target }}.tar.gz.sha256
           if-no-files-found: error
           retention-days: 7
   build_ideactl_linux_artifact:
-    name: Build ideactl Linux arm64
-    runs-on: ubuntu-24.04-arm
+    name: Build ideactl ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+          - target: linux-amd64
+            runner: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     defaults:
       run:
         working-directory: source/idea/ideactl
@@ -116,13 +132,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
       - name: Build the Linux release file
-        run: npm run build:dist -- --target linux-arm64
+        run: npm run build:dist -- --target ${{ matrix.target }}
       - name: Test the extracted Linux release file offline
         run: |
           set -euo pipefail
           SMOKE_ROOT=$(mktemp -d)
           trap 'rm -rf "$SMOKE_ROOT"' EXIT
-          tar -xzf dist/release/ideactl-v*-linux-arm64.tar.gz -C "$SMOKE_ROOT"
+          tar -xzf dist/release/ideactl-v*-${{ matrix.target }}.tar.gz -C "$SMOKE_ROOT"
           node test/support/release-smoke.ts "$SMOKE_ROOT/ideactl"
       - name: Test the Linux release file in a container image
         run: |
@@ -135,7 +151,7 @@ jobs:
           docker build \
             --tag "$IMAGE" \
             --file scripts/ideactl-linux.Dockerfile \
-            dist/release/linux-arm64
+            dist/release/${{ matrix.target }}
           docker run --rm \
             --env PATH=/tmp/empty \
             --workdir /tmp/work \
@@ -155,15 +171,60 @@ jobs:
       - name: Upload the Linux release artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ideactl-linux-arm64
+          name: ideactl-${{ matrix.target }}
           path: |
-            source/idea/ideactl/dist/release/linux-arm64/ideactl
-            source/idea/ideactl/dist/release/ideactl-v*-linux-arm64.tar.gz
-            source/idea/ideactl/dist/release/ideactl-v*-linux-arm64.tar.gz.sha256
+            source/idea/ideactl/dist/release/${{ matrix.target }}/ideactl
+            source/idea/ideactl/dist/release/ideactl-v*-${{ matrix.target }}.tar.gz
+            source/idea/ideactl/dist/release/ideactl-v*-${{ matrix.target }}.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 7
+  build_ideactl_windows_artifact:
+    name: Build ideactl Windows x64
+    runs-on: windows-2025
+    defaults:
+      run:
+        working-directory: source/idea/ideactl
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up release runtime
+        uses: actions/setup-node@v4
+        with:
+          node-version: '26.8.2'
+          cache: npm
+          cache-dependency-path: source/idea/ideactl/package-lock.json
+      - name: Check package version
+        run: |
+          $packageVersion = (Get-Content package.json | ConvertFrom-Json).version
+          $releaseVersion = (Get-Content ../../../IDEA_VERSION.txt -Raw).Trim()
+          if ($packageVersion -ne $releaseVersion) { throw "Package and release versions differ" }
+      - name: Install dependencies
+        run: npm ci
+      - name: Build the Windows release file
+        run: npm run build:dist -- --target windows-amd64
+      - name: Test the extracted Windows release file offline
+        run: |
+          $smokeRoot = Join-Path $env:RUNNER_TEMP 'ideactl smoke'
+          New-Item -ItemType Directory -Path $smokeRoot -Force | Out-Null
+          try {
+            $archive = Get-Item dist/release/ideactl-v*-windows-amd64.zip
+            Expand-Archive -LiteralPath $archive.FullName -DestinationPath $smokeRoot
+            node test/support/release-smoke.ts (Join-Path $smokeRoot 'ideactl.exe')
+            if ($LASTEXITCODE -ne 0) { throw "Release smoke failed" }
+          } finally {
+            Remove-Item -Recurse -Force $smokeRoot
+          }
+      - name: Upload the Windows release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ideactl-windows-amd64
+          path: |
+            source/idea/ideactl/dist/release/windows-amd64/ideactl.exe
+            source/idea/ideactl/dist/release/ideactl-v*-windows-amd64.zip
+            source/idea/ideactl/dist/release/ideactl-v*-windows-amd64.zip.sha256
           if-no-files-found: error
           retention-days: 7
   build_push_ideactl:
-    needs: [release_available, checks, tests, build_ideactl_artifacts, build_ideactl_linux_artifact]
+    needs: [release_available, checks, tests, build_ideactl_artifacts, build_ideactl_linux_artifact, build_ideactl_windows_artifact]
     runs-on: ubuntu-large
     permissions:
       id-token: write
@@ -299,6 +360,7 @@ jobs:
     needs:
       - build_ideactl_artifacts
       - build_ideactl_linux_artifact
+      - build_ideactl_windows_artifact
       - build_push_ideactl
     runs-on: ubuntu-24.04
     permissions:
@@ -315,7 +377,7 @@ jobs:
         working-directory: release
         run: |
           set -euo pipefail
-          cat ./*.tar.gz.sha256 | LC_ALL=C sort > SHA256SUMS
+          cat ./*.tar.gz.sha256 ./*.zip.sha256 | LC_ALL=C sort > SHA256SUMS
           sha256sum --check SHA256SUMS
       - name: Publish source release
         env:
@@ -328,7 +390,9 @@ jobs:
           gh release create "$TAG" \
             release/*.tar.gz \
             release/*.tar.gz.sha256 \
+            release/*.zip \
+            release/*.zip.sha256 \
             release/SHA256SUMS \
             --target "$GITHUB_SHA" \
             --title "IDEA ${VERSION}" \
-            --notes "Self-contained ideactl executables and checksums for this release."
+            --notes "Self-contained ideactl executables for macOS and Linux (arm64 and amd64), and Windows (amd64), with checksums. Windows ideactl.exe is unsigned: SmartScreen may warn. After verifying the checksum, choose More info > Run anyway, or use PowerShell Unblock-File .\\ideactl.exe and run .\\ideactl.exe about."

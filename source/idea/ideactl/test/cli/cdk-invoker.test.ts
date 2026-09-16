@@ -52,6 +52,17 @@ describe('getCdkAppCmd', () => {
     `cdk cdk-app --cluster-name ${CLUSTER} --aws-region ${REGION} --module-id cluster ` +
     `--module-name cluster --deployment-id ${DEPLOYMENT_ID} --termination-protection true`;
 
+  it('re-enters the standalone executable without an interpreter or path lookup', () => {
+    const previous = process.env.IDEA_SEA;
+    process.env.IDEA_SEA = '1';
+    try {
+      assert.equal(invoker().getCdkAppCmd(), `"${process.execPath}" ${reEntryArguments}`);
+    } finally {
+      if (previous === undefined) delete process.env.IDEA_SEA;
+      else process.env.IDEA_SEA = previous;
+    }
+  });
+
   it('re-enters by name when the tool is on the path, matching the reference form', () => {
     const binDirectory = mkdtempSync(join(tmpdir(), 'ideactl-path-'));
     const stub = join(binDirectory, 'ideactl');

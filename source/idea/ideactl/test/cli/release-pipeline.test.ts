@@ -10,7 +10,7 @@ import { buildProgram } from '../../src/cli/main.ts';
 import { fakeDeps } from '../support/deploy-harness.ts';
 
 type Step = { name?: string; run?: string; uses?: string };
-type Job = { needs?: string[]; uses?: string; steps?: Step[] };
+type Job = { 'runs-on'?: string; strategy?: { matrix: { include: { target: string; runner: string }[] } };  needs?: string[]; uses?: string; steps?: Step[] };
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../..');
 const workflowText = readFileSync(join(root, '.github/workflows/build_push.yaml'), 'utf8');
 const workflow = load(workflowText) as { jobs: Record<string, Job>; concurrency: { group: string; 'cancel-in-progress': boolean } };
@@ -25,7 +25,7 @@ test('publication requires both validation workflows and extracted artifact smok
     const called = load(readFileSync(join(root, `.github/workflows/${name}.yaml`), 'utf8')) as { on: Record<string, unknown> };
     assert.ok('workflow_call' in called.on);
   }
-  assert.deepEqual(workflow.jobs.build_push_ideactl?.needs, ['release_available', 'checks', 'tests', 'build_ideactl_artifacts', 'build_ideactl_linux_artifact']);
+  assert.deepEqual(workflow.jobs.build_push_ideactl?.needs, ['release_available', 'checks', 'tests', 'build_ideactl_artifacts', 'build_ideactl_linux_artifact', 'build_ideactl_windows_artifact']);
   assert.ok(workflow.jobs.publish_ideactl_artifacts?.needs?.includes('build_push_ideactl'));
   assert.equal(workflow.concurrency['cancel-in-progress'], false);
   assert.ok(workflow.concurrency.group);
@@ -40,6 +40,30 @@ test('publication requires both validation workflows and extracted artifact smok
     const path = match[0].startsWith('source/') ? match[0] : `source/idea/ideactl/${match[0]}`;
     assert.ok(readFileSync(join(root, path)).length > 0);
   }
+});
+
+test('native runners cover each release target and publication includes Windows checksums', () => {
+  assert.deepEqual(workflow.jobs.build_ideactl_artifacts?.strategy?.matrix.include, [
+    { target: 'darwin-arm64', runner: 'macos-15' }, { target: 'darwin-amd64', runner: 'macos-15-intel' },
+  ]);
+  assert.deepEqual(workflow.jobs.build_ideactl_linux_artifact?.strategy?.matrix.include, [
+    { target: 'linux-arm64', runner: 'ubuntu-24.04-arm' }, { target: 'linux-amd64', runner: 'ubuntu-24.04' },
+  ]);
+  const windows = workflow.jobs.build_ideactl_windows_artifact;
+  assert.equal(windows?.['runs-on'], 'windows-2025');
+  const smoke = windows?.steps?.find((step) => step.name?.startsWith('Test the extracted'))?.run ?? '';
+  assert.match(smoke, /Expand-Archive/);
+  assert.match(smoke, /node test\/support\/release-smoke.ts .*ideactl.exe/);
+  assert.match(smoke, /LASTEXITCODE/);
+  assert.ok(workflow.jobs.publish_ideactl_artifacts?.needs?.includes('build_ideactl_windows_artifact'));
+  const checksums = workflow.jobs.publish_ideactl_artifacts?.steps?.find((step) => step.name === 'Verify and combine checksums')?.run ?? '';
+  assert.match(checksums, /\.\/\*\.tar\.gz\.sha256 \.\/\*\.zip\.sha256/);
+  assert.match(checksums, /sha256sum --check SHA256SUMS/);
+  const publication = workflow.jobs.publish_ideactl_artifacts?.steps?.find((step) => step.name === 'Publish source release')?.run ?? '';
+  assert.match(publication, /release\/\*\.zip/);
+  assert.match(publication, /unsigned.*SmartScreen.*Run anyway/);
+  const container = workflow.jobs.build_ideactl_linux_artifact?.steps?.find((step) => step.name?.includes('container image'))?.run ?? '';
+  assert.match(container, /dist\/release\/\$\{\{ matrix.target \}\}/);
 });
 
 function exercise(mode: string, script: string): { status: number | null; output: string; commands: string[][] } {

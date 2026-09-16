@@ -257,7 +257,7 @@ test("the copied executable runs and renders config without a runtime or package
   );
 });
 
-test("release automation builds exactly the two agreed targets and parses", { skip: !canBuild }, () => {
+test("release automation builds all operator targets and parses", { skip: !canBuild }, () => {
   const workflowDirectory = join(REPOSITORY_ROOT, ".github", "workflows");
   const workflowNames = [
     "build_push.yaml",
@@ -272,21 +272,16 @@ test("release automation builds exactly the two agreed targets and parses", { sk
 
   const releaseWorkflow = readFileSync(join(workflowDirectory, "build_push.yaml"), "utf8");
 
-  // The platform owner asked for two prebuilt targets and no matrix: this machine's
-  // architecture on macOS, and the same architecture on Linux. Asserting the exact set
-  // rather than a subset means adding a third target fails here instead of shipping
-  // an artifact nobody decided to support.
-  const builtTargets = [...releaseWorkflow.matchAll(/build:dist -- --target (\S+)/g)].map(
-    (match) => match[1],
-  );
-  assert.deepEqual(builtTargets.sort(), ["darwin-arm64", "linux-arm64"]);
+  const targets = [...releaseWorkflow.matchAll(/target: ((?:darwin|linux)-\S+)|build:dist -- --target (windows-\S+)/g)]
+    .map((match) => match[1] ?? match[2]);
+  assert.deepEqual(targets.sort(), ["darwin-amd64", "darwin-arm64", "linux-amd64", "linux-arm64", "windows-amd64"]);
 
   assert.match(releaseWorkflow, /sha256sum --check SHA256SUMS/);
   assert.match(releaseWorkflow, /release create/);
   assert.doesNotMatch(releaseWorkflow, /--clobber/);
   assert.match(
     releaseWorkflow,
-    /needs:\s*\n\s+- build_ideactl_artifacts\s*\n\s+- build_ideactl_linux_artifact\s*\n\s+- build_push_ideactl/,
+    /needs:\s*\n\s+- build_ideactl_artifacts\s*\n\s+- build_ideactl_linux_artifact\s*\n\s+- build_ideactl_windows_artifact\s*\n\s+- build_push_ideactl/,
   );
   assert.match(releaseWorkflow, /secrets\.ECR_ROLE/);
 });

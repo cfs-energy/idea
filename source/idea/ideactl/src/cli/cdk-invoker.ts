@@ -133,7 +133,9 @@ export type Spawn = (argv: string[], options: { cwd: string; env: Record<string,
 /** Streams the CDK CLI's output to this process's stdio, as `exec_shell` does. */
 export const liveSpawn: Spawn = (argv, options) =>
   new Promise((resolve, reject) => {
-    const [command, ...args] = argv;
+    const invocation = options.env.IDEA_SEA === '1' && argv[0] === process.execPath
+      ? [process.execPath, '__ideactl_internal_cdk__', ...argv.slice(1)] : argv;
+    const [command, ...args] = invocation;
     if (command === undefined) throw new GeneralException('empty argv');
     const child = spawnProcess(command, args, { cwd: options.cwd, env: options.env, stdio: 'inherit' });
     child.on('error', reject);
@@ -305,6 +307,7 @@ export interface BootstrapContextInput {
  * runtime and entry point so a checkout works without installing anything.
  */
 function cdkAppInvocation(): string {
+  if (process.env.IDEA_SEA === '1') return `"${process.execPath}"`;
   const onPath = spawnSync('sh', ['-c', 'command -v ideactl'], { encoding: 'utf8' });
   if (onPath.status === 0 && onPath.stdout.trim() !== '') return 'ideactl';
   const entry = process.argv[1];

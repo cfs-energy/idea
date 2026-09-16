@@ -1,5 +1,20 @@
 # Standard Installation
 
+Download the matching archive from the [GitHub release](https://github.com/cfs-energy/idea/releases) (replace `<VERSION>` with the release version):
+
+| Operator platform | Release file |
+| --- | --- |
+| macOS Apple silicon | `ideactl-v<VERSION>-darwin-arm64.tar.gz` |
+| macOS Intel | `ideactl-v<VERSION>-darwin-amd64.tar.gz` |
+| Linux ARM64 | `ideactl-v<VERSION>-linux-arm64.tar.gz` |
+| Linux x64 | `ideactl-v<VERSION>-linux-amd64.tar.gz` |
+| Windows x64 | `ideactl-v<VERSION>-windows-amd64.zip` |
+
+Each archive has a `.sha256` sidecar and is included in `SHA256SUMS`. Extract it to get one `ideactl` file (`ideactl.exe` on Windows). The Node runtime and deployment CLI are embedded; no Node or npm installation is required. Run `./ideactl about` on macOS/Linux or `.\ideactl.exe about` in PowerShell.
+
+Windows releases have no code signing. SmartScreen may warn: after verifying the archive with `Get-FileHash -Algorithm SHA256` against the release checksum, choose **More info > Run anyway**, or run `Unblock-File .\ideactl.exe` in PowerShell before launching it. Organization policy may prevent this override.
+
+
 {% hint style="warning" %}
 Review [pre-requisites.md](pre-requisites.md "mention") section first
 {% endhint %}

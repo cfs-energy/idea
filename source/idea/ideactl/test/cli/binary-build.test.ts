@@ -1,5 +1,5 @@
 /**
- * Guards the two-target standalone release surface.
+ * Guards the native releases and same-architecture macOS cross-build.
  */
 
 import assert from "node:assert/strict";
@@ -28,7 +28,7 @@ test("the release command builds the same-architecture pair", () => {
   );
 });
 
-test("the release automation has two arm64 targets and no matrix", () => {
+test("the release automation covers all five native targets", () => {
   const workflow = readFileSync(
     join(repositoryRoot, ".github", "workflows", "build_push.yaml"),
     "utf8",
@@ -40,13 +40,15 @@ test("the release automation has two arm64 targets and no matrix", () => {
   assert.notEqual(end, -1);
   const releaseJobs = workflow.slice(start, end);
   const targets = new Set(
-    [...releaseJobs.matchAll(/\b(?:darwin|linux)-(?:amd64|arm64)\b/g)].map(
+    [...releaseJobs.matchAll(/\b(?:darwin|linux|windows)-(?:amd64|arm64)\b/g)].map(
       (match) => match[0],
     ),
   );
 
-  assert.deepEqual([...targets].sort(), ["darwin-arm64", "linux-arm64"]);
-  assert.doesNotMatch(releaseJobs, /\bmatrix\b/);
+  assert.deepEqual([...targets].sort(), ["darwin-amd64", "darwin-arm64", "linux-amd64", "linux-arm64", "windows-amd64"]);
+  assert.match(releaseJobs, /windows-2025/);
+  assert.match(releaseJobs, /macos-15-intel/);
+  assert.match(workflow, /release\/\*\.zip\.sha256/);
   assert.match(workflow, /release\/\*\.tar\.gz\.sha256/);
   assert.match(workflow, /ideactl config generate/);
 });

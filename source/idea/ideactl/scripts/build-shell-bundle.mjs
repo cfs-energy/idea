@@ -7,6 +7,7 @@
  * installation tree and does not require a compiler or package manager.
  */
 
+import { buildSync } from "esbuild";
 import { spawnSync } from "node:child_process";
 import { builtinModules, createRequire } from "node:module";
 import {
@@ -28,7 +29,6 @@ import { fileURLToPath } from "node:url";
 
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(PACKAGE_ROOT, "package.json"), "utf8"));
-const BUNDLER = join(PACKAGE_ROOT, "node_modules", ".bin", "esbuild");
 const DEFAULT_OUTPUT = join(PACKAGE_ROOT, "dist", "ideactl-shell");
 const DEFAULT_ARCHIVE = join(PACKAGE_ROOT, "dist", `ideactl-shell-${PACKAGE_JSON.version}.tar.gz`);
 
@@ -112,7 +112,7 @@ function firstExisting(candidates, description) {
  */
 function makeStackImportsStatic(sourceRoot) {
   const appFile = join(sourceRoot, "cdk", "app.ts");
-  let source = readFileSync(appFile, "utf8");
+  let source = readFileSync(appFile, "utf8").replaceAll("\r\n", "\n");
   const localImport =
     "import { liveSynthReads, replaySynthReads, type SynthReads } from './synth-reads.ts';";
   const staticImports = [
@@ -332,22 +332,21 @@ module.exports = {
 `,
     );
 
-    run(
-      BUNDLER,
-      [
-        join(copiedSource, "cli", "main.ts"),
-        "--bundle",
-        "--platform=node",
-        "--format=esm",
-        "--target=node22",
-        "--legal-comments=external",
-        `--alias:chokidar=${optionalWatcherShim}`,
-        `--banner:js=import { createRequire as __ideactlCreateRequire } from "node:module"; const require = __ideactlCreateRequire(import.meta.url); const __filename = import.meta.filename; const __dirname = import.meta.dirname;`,
-        `--metafile=${metadataFile}`,
-        `--outfile=${bundleFile}`,
-      ],
-      { ...process.env, NODE_PATH: join(PACKAGE_ROOT, "node_modules") },
-    );
+    // The API avoids platform-specific package-manager launchers.
+    const bundleResult = buildSync({
+      entryPoints: [join(copiedSource, "cli", "main.ts")],
+      bundle: true,
+      platform: "node",
+      format: "esm",
+      target: "node22",
+      legalComments: "external",
+      alias: { chokidar: optionalWatcherShim },
+      banner: { js: 'import { createRequire as __ideactlCreateRequire } from "node:module"; const require = __ideactlCreateRequire(import.meta.url); const __filename = import.meta.filename; const __dirname = import.meta.dirname;' },
+      metafile: true,
+      outfile: bundleFile,
+      nodePaths: [join(PACKAGE_ROOT, "node_modules")],
+    });
+    writeFileSync(metadataFile, JSON.stringify(bundleResult.metafile));
     chmodSync(bundleFile, 0o755);
 
     // CDK resolves these non-JavaScript inputs relative to its bundled module location.

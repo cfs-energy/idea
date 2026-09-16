@@ -8,7 +8,7 @@ import { pathToFileURL } from 'node:url';
 // The identity provider needs no compute instances or live service reads for a new pool.
 // Its claim handler exercises prebuilt Lambda assets through the real application entry point.
 export function smokeRelease(executable: string, runtimePath?: string): void {
-  const root = mkdtempSync(join(tmpdir(), 'ideactl-release-smoke-'));
+  const root = mkdtempSync(join(tmpdir(), 'ideactl release smoke-'));
   try {
     for (const name of ['home', 'tmp', 'work', 'empty-path']) mkdirSync(join(root, name));
     const work = join(root, 'work');
@@ -44,18 +44,29 @@ export function smokeRelease(executable: string, runtimePath?: string): void {
       const result = spawnSync(executable, args, {
         cwd: work, encoding: 'utf8',
         env: {
+          SystemRoot: process.env.SystemRoot,
+          USERPROFILE: join(root, 'home'), TEMP: join(root, 'tmp'), TMP: join(root, 'tmp'),
           HOME: join(root, 'home'), IDEA_USER_HOME: join(root, 'home', '.idea'),
           TMPDIR: join(root, 'tmp'), PATH: runtimePath ?? join(root, 'empty-path'),
+          AWS_EC2_METADATA_DISABLED: 'true', CDK_DISABLE_CLI_TELEMETRY: '1',
           NODE_PATH: '', LANG: 'en_US.UTF-8', CDK_OUTDIR: join(work, 'cdk.out'),
         },
       });
       assert.equal(result.status, 0, `${args.join(' ')}\n${result.stdout}\n${result.stderr}\n${result.error ?? ''}`);
     };
     run(['about']);
+    if (runtimePath === undefined) run(['__ideactl_internal_cdk__', '--version']);
     run(['config', 'generate', '--values-file', join(work, 'values.yml'), '--config-dir', work, '--force']);
-    run(['cdk', 'cdk-app', '--cluster-name', 'idea-test1', '--aws-region', region,
+    const synthArgs = ['cdk', 'cdk-app', '--cluster-name', 'idea-test1', '--aws-region', region,
       '--module-id', 'identity-provider', '--module-name', 'identity-provider',
-      '--deployment-id', 'release-smoke', '--config-file', join(work, 'settings.json'), '--synth-reads', join(work, 'reads.json')]);
+      '--deployment-id', 'release-smoke', '--config-file', join(work, 'settings.json'), '--synth-reads', join(work, 'reads.json'), '--termination-protection', 'true'];
+    run(synthArgs);
+    if (runtimePath === undefined) {
+      // Exercise the deployment CLI's shell re-entry with spaces and no installed runtime.
+      const quote = (value: string): string => /\s/.test(value) ? `"${value}"` : value;
+      run(['__ideactl_internal_cdk__', 'synth', '--app', [executable, ...synthArgs].map(quote).join(' '),
+        '--no-notices', '--no-lookups', '--no-version-reporting']);
+    }
     const template = JSON.parse(readFileSync(join(work, 'cdk.out', 'idea-test1-identity-provider.template.json'), 'utf8')) as { Resources: Record<string, { Type: string; Properties?: { Handler?: string } }> };
     assert.ok(Object.values(template.Resources).some((resource) => resource.Type === 'AWS::Lambda::Function' && resource.Properties?.Handler === 'index.handler'));
     const manifest = JSON.parse(readFileSync(join(work, 'cdk.out', 'manifest.json'), 'utf8')) as { missing?: unknown[] };
