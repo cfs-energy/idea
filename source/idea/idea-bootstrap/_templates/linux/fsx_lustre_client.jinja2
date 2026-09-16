@@ -214,7 +214,9 @@ log_error "FSx for Lustre client is not available for Ubuntu 26.04: the FSx clie
     wget -O - https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-ubuntu-public-key.asc | gpg --dearmor | sudo tee /usr/share/keyrings/fsx-ubuntu-public-key.gpg >/dev/null
     bash -c 'echo "deb [signed-by=/usr/share/keyrings/fsx-ubuntu-public-key.gpg] https://fsx-lustre-client-repo.s3.amazonaws.com/ubuntu $(lsb_release -cs) main" > /etc/apt/sources.list.d/fsxlustreclientrepo.list && apt update'
 
-    if DEBIAN_FRONTEND=noninteractive apt install -y lustre-client-modules-aws; then
+    # Request the running kernel's module package directly so the metapackage cannot
+    # move to another ABI before the host installs the client.
+    if DEBIAN_FRONTEND=noninteractive apt install -y lustre-client-utils lustre-client-modules-$(uname -r); then
       set_reboot_required "FSx for Lustre client installed"
       log_info "FSx Lustre client installed successfully"
     else
@@ -222,8 +224,10 @@ log_error "FSx for Lustre client is not available for Ubuntu 26.04: the FSx clie
       # bash rejects `return` with an error and continues anyway
       log_error "Failed to install FSx Lustre client - dpkg may be interrupted. Lustre filesystems will NOT be mounted on this node."
     fi
-  else
+  elif modinfo -n lustre >/dev/null 2>&1; then
     log_info "Lustre Client Already Installed"
+  else
+    log_error "FSx for Lustre client is installed but has no module for kernel $(uname -r). Lustre filesystems will NOT be mounted on this node."
   fi
 {% endif %}
 # Performance tuning

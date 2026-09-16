@@ -33,6 +33,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 * **Storage Metrics**: The cluster-manager publishes FSx for NetApp ONTAP quota and volume gauges as `idea.storage.*` per user, volume and tier using read-only credentials stored in Secrets Manager; enable with `cluster-manager.metrics.storage.enabled`, off by default
 
 ### **🔧 Improvements**
+* Ubuntu desktop hosts now install the kernel the FSx for Lustre modules are built for, so /lustre mounts again
 * **Upgrades**: The scheduler's DNS record is retained with a policy-only stack update before the container cutover, so the container scheduler takes the name over without CloudFormation deleting it; the container module's module-set registration is held until the last stack deploys, so the running portal keeps working through the upgrade
 * **Deploys**: A bootstrap archive is named by its rendered content, so a host whose bootstrap did not change is left alone by an image-only upgrade; a change set that replaces a termination-protected instance clears the protection first, so the old instance is deleted rather than left running unreferenced
 * **Dependencies**: aws-cdk-lib 2.269, CDK CLI 2.1141, AWS SDK 3.1133, TypeScript 7, cdk-nag 3 and js-yaml 5; an unacknowledged cdk-nag finding fails synthesis when scanning is enabled; the wrapper defaults scanning off, so set `IDEA_ADMIN_ENABLE_CDK_NAG_SCAN=true` to enable it
