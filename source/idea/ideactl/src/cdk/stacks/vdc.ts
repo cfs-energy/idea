@@ -698,6 +698,9 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       ),
     );
     this.ssmCommandPassRole.grantPassRole(this.controllerRole);
+    // The controller task passes the same roles the controller host did; only the bedrock
+    // project roles come through the policy template.
+    if (this.controllerTaskRole !== undefined) this.ssmCommandPassRole.grantPassRole(this.controllerTaskRole);
 
     this.ssmCommandsSnsTopic = new SNSTopic(
       this.context,
@@ -847,6 +850,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
     );
     this.dcvHostRole.addManagedPolicy(this.dcvHostPolicy);
     this.dcvHostRole.grantPassRole(this.controllerRole);
+    if (this.controllerTaskRole !== undefined) this.dcvHostRole.grantPassRole(this.controllerTaskRole);
 
     this.dcvHostInstanceProfile = new InstanceProfile(
       this.context,

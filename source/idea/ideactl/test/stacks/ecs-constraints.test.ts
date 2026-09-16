@@ -383,6 +383,19 @@ test("the broker task role can read the settings rows its role script renders", 
   assert.ok(grant, "the broker role script reads its ports with dynamodb get-item; without this grant the task exits and the deployment circuit breaker rolls the stack back");
 });
 
+test("the controller task can pass the desktop host role and the SSM command role", async () => {
+  const { vdc } = await stacks();
+  const resources = resourcesOf(vdc);
+  const statements = byType(resources, "AWS::IAM::Policy")
+    .filter(([, policy]) => JSON.stringify(policy["Properties"]["Roles"]).includes("controllertaskrole"))
+    .flatMap(([, policy]) => policy["Properties"]["PolicyDocument"]["Statement"] as Array<Record<string, unknown>>)
+    .filter((statement) => JSON.stringify(statement["Action"]).includes("iam:PassRole"));
+  const passed = JSON.stringify(statements.map((statement) => statement["Resource"]));
+  for (const role of ["vdchostrole", "ssmcommandssnstopicrole"]) {
+    assert.ok(passed.toLowerCase().includes(role), `${role}: without this pass the controller task cannot launch a desktop on a cluster without bedrock project roles`);
+  }
+});
+
 test("the PBS file system denies every principal but the scheduler task role", async () => {
   const resources = resourcesOf((await stacks()).scheduler);
   const fileSystem = onlyOne(byType(resources, "AWS::EFS::FileSystem"), "PBS file system")[1];
