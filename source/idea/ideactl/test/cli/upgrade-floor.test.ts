@@ -11,7 +11,7 @@ import {
 } from "../../src/cli/upgrade-floor.ts";
 
 test("calendar and legacy three-part releases compare numerically", () => {
-  const ordered = ["3.1.10", "25.06.1", "25.12.0", "26.08.0", "26.09.0"];
+  const ordered = ["3.1.10", "25.06.1", "25.10.0", "26.08.0", "26.09.0"];
   for (let index = 0; index < ordered.length - 1; index += 1) {
     const older = ordered[index] as string;
     const newer = ordered[index + 1] as string;
@@ -35,7 +35,7 @@ test("the floor ignores config rows and undeployed rows", () => {
 
 test("deployed modules older than the floor, missing, or unparsable fail it", () => {
   const modules: FloorModule[] = [
-    { module_id: "cluster", type: "stack", status: "deployed", version: "25.12.0" },
+    { module_id: "cluster", type: "stack", status: "deployed", version: "25.10.0" },
     { module_id: "scheduler", type: "app", status: "deployed", version: "26.09.0" },
     { module_id: "vdc", type: "app", status: "deployed", version: null },
     { module_id: "analytics", type: "stack", status: "deployed", version: "not-a-version" },
@@ -48,15 +48,15 @@ test("deployed modules older than the floor, missing, or unparsable fail it", ()
 
 test("the refusal names the floor, the below-floor modules, and the operator path", () => {
   const below: FloorModule[] = [
-    { module_id: "cluster", type: "stack", status: "deployed", version: "25.12.0" },
-    { module_id: "scheduler", type: "app", status: "deployed", version: "25.12.0" },
+    { module_id: "cluster", type: "stack", status: "deployed", version: "25.10.0" },
+    { module_id: "scheduler", type: "app", status: "deployed", version: "25.10.0" },
   ];
   const message = upgradeFloorMessage("sample-cluster", "26.09.1", UPGRADE_FLOOR_VERSION, below);
   assert.match(message, /Cluster sample-cluster is below the supported upgrade floor/);
-  assert.match(message, /already at 26\.09\.0 or newer/);
-  assert.match(message, /cluster {3}25\.12\.0/);
-  assert.match(message, /scheduler {3}25\.12\.0/);
-  assert.match(message, /Upgrade this cluster to 26\.09\.0 using the 26\.09\.0 administrator/);
+  assert.match(message, /already at 25\.11\.0 or newer/);
+  assert.match(message, /cluster {3}25\.10\.0/);
+  assert.match(message, /scheduler {3}25\.10\.0/);
+  assert.match(message, /Upgrade this cluster to 25\.11\.0 using the 25\.11\.0 administrator/);
   assert.doesNotMatch(message, /--force/);
 });
 
@@ -70,13 +70,20 @@ test("upgrade-cluster refuses a below-floor cluster before touching anything els
       scanned.push(input.TableName);
       return {
         Items: [
-          { module_id: "cluster", name: "cluster", type: "stack", status: "deployed", version: "25.12.0" },
+          { module_id: "cluster", name: "cluster", type: "stack", status: "deployed", version: "25.10.0" },
           { module_id: "scheduler", name: "scheduler", type: "app", status: "deployed", version: "26.08.0" },
         ],
       };
     },
   } as unknown as Parameters<typeof upgradeCluster>[0];
   const options = { clusterName: "sample-cluster", awsRegion: "us-east-2" } as Parameters<typeof upgradeCluster>[1];
-  await assert.rejects(upgradeCluster(deps, options), /below the supported upgrade floor[\s\S]*cluster {3}25\.12\.0/);
+  await assert.rejects(upgradeCluster(deps, options), /below the supported upgrade floor[\s\S]*cluster {3}25\.10\.0/);
   assert.deepEqual(scanned, ["sample-cluster.modules"]);
+});
+
+test("25.11 and later deployed releases clear the direct upgrade floor", () => {
+  assert.equal(UPGRADE_FLOOR_VERSION, "25.11.0");
+  for (const version of ["25.11.0", "25.12.0", "26.08.0", "26.09.0"]) {
+    assert.deepEqual(modulesBelowFloor([{ module_id: "scheduler", type: "app", status: "deployed", version }], UPGRADE_FLOOR_VERSION), []);
+  }
 });

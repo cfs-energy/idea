@@ -27,6 +27,7 @@ import {
 } from "../../src/cli/commands/upgrade.ts";
 import type { ConfigWriter } from "../../src/cli/cdk-invoker.ts";
 import { Command } from "commander";
+import { ideaVersion } from "../../src/version.ts";
 
 const CLUSTER = "sample-cluster";
 const REGION = "us-east-2";
@@ -472,6 +473,10 @@ function upgradeReplay(input: {
     async syncClusterSettingsInDb() {},
     async setConfigEntry(key, value) {
       events.push(`set:${key}=${String(value)}`);
+      const table = rows[`${CLUSTER}.cluster-settings`]!;
+      const row = table.find((entry) => entry["key"] === key);
+      if (row === undefined) table.push({ key, value });
+      else row["value"] = value;
     },
     async deleteConfigEntries() {},
   };
@@ -578,6 +583,7 @@ function upgradeReplay(input: {
     async deploy() {
       events.push("deploy");
       if (input.deployFails === true) throw new Error("Stack sample-cluster-scheduler ended UPDATE_ROLLBACK_COMPLETE.");
+      for (const row of rows[`${CLUSTER}.modules`]!) row["version"] = ideaVersion();
     },
     regionAmiConfig() {
       return { [REGION]: { amazonlinux2023: "ami-release" } };

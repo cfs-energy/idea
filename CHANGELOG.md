@@ -7,7 +7,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 ## [26.09.1] - Unreleased
 
 **Upgrade Instructions:**
-* Control plane release on top of 26.09.0. A cluster on 26.09.0 upgrades directly; an older cluster upgrades to 26.09.0 first with that release's administrator, since the upgrade floor moves to 26.09.0
+* Clusters on 25.11.0 or newer upgrade directly in one run of `upgrade-cluster`. Below 26.09.0, the read-only historical plan requires complete module coverage, global replacement, full settings sync, interval-key migration, AMI/settings updates and all deployed modules; completion requires settings and version readback
 * The administrator is now `ideactl`, a Node tool that `idea-admin.sh` runs inside the `idea-control-plane` image, or from source with `IDEA_DEV_MODE=true`. Every command keeps its name and flags; `patch` is removed (see the updated documentation)
 * Existing clusters opt in to containers; the interactive installer initializes new clusters with `enable_ecs: true`. For an existing cluster: set `enable_ecs: true` in `values.yml` and run `upgrade-cluster --drain` once. Without it the upgrade redeploys the host shape as before
 * Before turning containers on: the account's `awsvpcTrunking` ECS setting must be enabled, `ecs.hosts.instance_type` (default `m7g.large`) must be offered in the cluster's subnets, and a GovCloud cluster needs the image pushed to a repository in its account with `ecs.image` pointing at it

@@ -13,6 +13,7 @@ import { ideaVersion } from "../../src/version.ts";
 import type { ConfigWriter, Deps } from "../../src/cli/cdk-invoker.ts";
 import {
   countPbsStates,
+  planHistoricalUpgrade,
   createLiveUpgradeDeps,
   registerUpgradeCommands,
   type SchedulerJobInventory,
@@ -163,6 +164,7 @@ function replay(): Replay {
     ec2: {
       async describeImages() {
         return [
+          { ImageId: "ami-old", Name: "old", CreationDate: "2025-01-01T00:00:00.000Z" },
           { ImageId: "ami-built", Name: ["idea", "compute", "node", "sample"].join("-"), CreationDate: "2026-02-02T00:00:00.000Z" },
           { ImageId: "ami-release", Name: "release", CreationDate: "2026-01-01T00:00:00.000Z" },
         ];
@@ -187,8 +189,8 @@ function replay(): Replay {
         protectionTags.delete(input.instanceId);
       },
       async describeLiveInstances(input) {
-        assert.equal(input.tagKey, "idea:TerminationProtectionCleared");
-        return input.instanceIds.filter((id) => protectionTags.has(id));
+        assert.ok(input.tagKey === undefined || input.tagKey === "idea:TerminationProtectionCleared");
+        return input.instanceIds.filter((id) => input.tagKey === undefined || protectionTags.has(id));
       },
     },
     cloudFormation: {
@@ -584,7 +586,7 @@ test("a deployment failure deliberately does not restore cleared termination pro
 });
 
 test("a successful rerun restores the durable baseline from a failed deployment", async () => {
-  await withFixture(async ({ deps, events, protection, protectionTags }) => {
+  await withFixture(async ({ deps, events, rows, protection, protectionTags }) => {
     const options = { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true };
     deps.deploy = async () => { throw new Error("deployment failed"); };
     await assert.rejects(upgradeCluster(deps, options), /deployment failed/);
@@ -592,7 +594,7 @@ test("a successful rerun restores the durable baseline from a failed deployment"
     assert.equal(protectionTags.get("i-sample"), new Date(deps.now()).toISOString());
     assert.ok(events.indexOf("tag:i-sample") < events.indexOf("clear:i-sample"));
     protectionTags.set("i-other-cluster", "earlier");
-    deps.deploy = async () => {};
+    deps.deploy = async () => { for (const row of rows[`${clusterName}.modules`]!) { row["version"] = ideaVersion(); row["status"] = "deployed"; } };
     await upgradeCluster(deps, options);
     assert.ok(protection.has("i-sample"));
     assert.equal(protectionTags.has("i-sample"), false);
@@ -741,16 +743,14 @@ test("skip-global-settings-update omits the global prefix delete and overwrite s
   });
 });
 
-test("a failed values.yml upload leaves the upgrade unfinished", async () => {
+test("a failed values.yml upload warns after a successful deployment", async () => {
   await withFixture(async ({ deps, events }) => {
     deps.s3.putObject = async () => {
       throw new Error("simulated object write failure");
     };
-    await assert.rejects(
-      upgradeCluster(deps, { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true }),
-      /simulated object write failure/,
-    );
-    assert.ok(!events.includes("All upgrade phases completed successfully"));
+    await upgradeCluster(deps, { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true });
+    assert.ok(events.some((event) => event.includes("warning: Upgrade") && event.includes("simulated object write failure")));
+    assert.ok(events.includes("All upgrade phases completed successfully"));
   });
 });
 
@@ -1131,8 +1131,12 @@ for (const portalCurrent of [false, true]) {
         { ...moduleRow("ecs", "ecs"), version: ideaVersion() },
         { ...moduleRow("cluster-manager", "cluster-manager"), version: portalCurrent ? ideaVersion() : "26.09.0" },
       );
-      deps.deploy = async () => { events.push("deploy"); };
-      await upgradeCluster(deps, containerOptions);
+      deps.deploy = async () => {
+        events.push("deploy");
+        for (const row of rows[`${clusterName}.modules`]!) if (row["module_id"] !== "cluster-manager") { row["version"] = ideaVersion(); row["status"] = "deployed"; }
+      };
+      if (portalCurrent) await upgradeCluster(deps, containerOptions);
+      else await assert.rejects(upgradeCluster(deps, containerOptions), /Completion verification failed for module cluster-manager/);
       const publications = events.filter((event) => event.startsWith("module-sets:") && announcedModules(event).includes("ecs"));
       assert.equal(publications.length > 0, portalCurrent);
       if (portalCurrent) assert.ok(events.indexOf(publications[0]!) < events.indexOf("deploy"));
@@ -1224,7 +1228,8 @@ for (const status of ["UPDATE_FAILED", "UPDATE_ROLLBACK_COMPLETE", "UPDATE_IN_PR
           StackStatus: deployed ? "UPDATE_COMPLETE" : status,
           Tags: [{ Key: "idea:ModuleVersion", Value: deployed || targetTag ? ideaVersion() : "26.09.0" }],
         });
-        deps.deploy = async () => { events.push("deploy"); deployed = true; };
+        const originalDeploy = deps.deploy;
+        deps.deploy = async (input) => { await originalDeploy(input); deployed = true; };
         await upgradeCluster(deps, containerOptions);
         const early = events.slice(0, events.indexOf("deploy")).some((event) => announcedModules(event).includes("ecs"));
         assert.equal(early, targetTag && ["CREATE_COMPLETE", "UPDATE_COMPLETE"].includes(status));
@@ -1233,3 +1238,201 @@ for (const status of ["UPDATE_FAILED", "UPDATE_ROLLBACK_COMPLETE", "UPDATE_IN_PR
     });
   }
 }
+
+function historicalReplay(replayValue: Replay): void {
+  const { deps, rows } = replayValue;
+  rows[`${clusterName}.modules`]!.push(moduleRow("cluster-manager", "cluster-manager"), { ...moduleRow("cluster", "cluster"), type: "stack" }, { ...moduleRow("global-settings", "global-settings"), type: "config" });
+  for (const row of rows[`${clusterName}.modules`]!) row["version"] = "25.11.0";
+  rows[`${clusterName}.cluster-settings`]!.push(setting("vdc.dcv_host_role_name", "sample-host"));
+  deps.cfn.getTemplate = async () => JSON.stringify({ Resources: {} });
+  deps.historicalIam = async () => ({ attached: [], inline: ["old-host"], collision: false, available: 10 });
+}
+
+for (const failure of ["missing row", "template", "IAM collision", "IAM quota", "inventory"]) {
+  test(`historical planning refuses ${failure} without writes`, async () => {
+    await withFixture(async (state) => {
+      historicalReplay(state);
+      const { deps, rows, events } = state;
+      if (failure === "missing row") rows[`${clusterName}.cluster-settings`]!.push(setting("global-settings.module_sets.default.missing.module_id", "missing"));
+      if (failure === "template") deps.cfn.getTemplate = async () => { throw new Error("missing template"); };
+      if (failure.startsWith("IAM")) deps.historicalIam = async () => ({ attached: [], inline: [], collision: failure.endsWith("collision"), available: 0 });
+      if (failure === "inventory") deps.ec2.describeInstanceAttribute = async () => { throw new Error("inventory unavailable"); };
+      await assert.rejects(planHistoricalUpgrade(deps, { clusterName, awsRegion, moduleSet: "default" }, rows[`${clusterName}.modules`] as never));
+      assert.equal(events.length, 0);
+    });
+  });
+}
+
+for (const newValue of [undefined, 17, 60]) {
+  test(`interval migration preserves old and new values: ${newValue}`, async () => {
+    await withFixture(async ({ deps, rows, events }) => {
+      const prefix = "scheduler.job_provisioning.";
+      rows[`${clusterName}.cluster-settings`]!.push(setting(`${prefix}job_periodic_check_interval_seconds`, 17));
+      if (newValue !== undefined) rows[`${clusterName}.cluster-settings`]!.push(setting(`${prefix}job_reconciler_interval_seconds`, newValue));
+      const options = { clusterName, awsRegion, moduleSet: "default", force: true, acceptConfigDrift: true };
+      await upgradeCluster(deps, options);
+      await upgradeCluster(deps, options);
+      const read = (key: string): unknown => rows[`${clusterName}.cluster-settings`]!.find((row) => row["key"] === prefix + key)?.["value"];
+      assert.equal(read("job_periodic_check_interval_seconds"), 17);
+      assert.equal(read("job_reconciler_interval_seconds"), newValue ?? 17);
+      assert.equal(events.some((event) => event.includes("conflicting reconciler intervals")), newValue === 60);
+    });
+  });
+}
+
+test("historical planning refuses a partial module scope", async () => {
+  await withFixture(async (state) => {
+    historicalReplay(state);
+    await assert.rejects(planHistoricalUpgrade(state.deps, { clusterName, awsRegion, moduleSet: "default", modules: ["scheduler"] }, state.rows[`${clusterName}.modules`] as never), /every deployed module/);
+    assert.equal(state.events.length, 0);
+  });
+});
+
+for (const failure of ["version", "setting", "published"]) {
+  test(`completion refuses missing ${failure} readback`, async () => {
+    await withFixture(async ({ deps, rows, events }) => {
+      rows[`${clusterName}.cluster-settings`]!.push({ ...setting("scheduler.published", "old"), source: "stack" });
+      const deploy = deps.deploy;
+      deps.deploy = async (input) => {
+        await deploy(input);
+        if (failure === "version") rows[`${clusterName}.modules`]![0]!["version"] = "26.09.0";
+        else rows[`${clusterName}.cluster-settings`] = rows[`${clusterName}.cluster-settings`]!.filter((row) => row["key"] !== (failure === "setting" ? "scheduler.instance_ami" : "scheduler.published"));
+      };
+      await assert.rejects(upgradeCluster(deps, { clusterName, awsRegion, moduleSet: "default", force: true, acceptConfigDrift: true }), /Completion verification failed/);
+      assert.ok(!events.includes("All upgrade phases completed successfully"));
+    });
+  });
+}
+
+test("each scheduler keeps its newer built compute image", async () => {
+  await withFixture(async ({ deps, rows }) => {
+    rows[`${clusterName}.modules`]!.push(moduleRow("batch", "scheduler"));
+    rows[`${clusterName}.cluster-settings`]!.push(setting("batch.compute_node_ami", "ami-built"), setting("batch.compute_node_os", "rocky9"));
+    await upgradeCluster(deps, { clusterName, awsRegion, moduleSet: "default", force: true, acceptConfigDrift: true });
+    assert.equal(rows[`${clusterName}.cluster-settings`]!.find((row) => row["key"] === "batch.compute_node_ami")?.["value"], "ami-built");
+    assert.equal(rows[`${clusterName}.cluster-settings`]!.find((row) => row["key"] === "batch.compute_node_os")?.["value"], "rocky9");
+  });
+});
+
+for (const enumerationFails of [false, true]) {
+  test(`restore a surviving original instance after deployment, enumeration fails=${enumerationFails}`, async () => {
+    await withFixture(async ({ deps, protection }) => {
+      const deploy = deps.deploy;
+      deps.deploy = async (input) => {
+        await deploy(input);
+        deps.cloudFormation.listStackResources = async () => {
+          if (enumerationFails) throw new Error("enumeration unavailable");
+          return { instanceIds: [] };
+        };
+      };
+      await upgradeCluster(deps, { clusterName, awsRegion, moduleSet: "default", force: true, acceptConfigDrift: true });
+      assert.ok(protection.has("i-sample"));
+    });
+  });
+}
+
+test("25.11 migration ignores phase skips, verifies DCV publication and completes in one run", async () => {
+  await withFixture(async (state) => {
+    historicalReplay(state);
+    const { deps, rows, events } = state;
+    const deploy = deps.deploy;
+    deps.deploy = async (input) => {
+      await deploy(input);
+      rows[`${clusterName}.cluster-settings`]!.push(setting("vdc.dcv_host_policy_arn", "arn:aws:iam::sample:policy/host-policy"));
+      deps.historicalIam = async () => ({ attached: ["host-policy"], inline: [], collision: false, available: 10 });
+    };
+    deps.prompt = async (choice) => {
+      assert.ok(!/global settings|Sync full|AMI and settings/.test(choice.message));
+      return true;
+    };
+    await upgradeCluster(deps, { clusterName, awsRegion, moduleSet: "default", skipGlobalSettingsUpdate: true, acceptConfigDrift: true });
+    assert.equal(events.filter((event) => event.startsWith("Historical migration:")).length, 1);
+    assert.ok(events.includes("delete:global-settings."));
+    assert.ok(events.includes("Phase 2b: Sync full configuration without overwrite"));
+    assert.ok(events.includes("set:scheduler.instance_ami=ami-release"));
+    assert.ok(events.includes("All upgrade phases completed successfully"));
+  });
+});
+
+for (const version of [undefined, "unreadable"]) {
+  test(`unreadable historical module version refuses without writes: ${version}`, async () => {
+    await withFixture(async (state) => {
+      historicalReplay(state);
+      state.rows[`${clusterName}.modules`]![0]!["version"] = version;
+      await assert.rejects(upgradeCluster(state.deps, { clusterName, awsRegion, moduleSet: "default" }), /supported upgrade floor/);
+      assert.equal(state.events.length, 0);
+    });
+  });
+}
+
+for (const point of ["global-write", "full-sync", "phase3", "deployment"]) {
+  test(`retry converges after failure at ${point}`, async () => {
+    await withFixture(async ({ deps, rows, events }) => {
+      const originalWriter = deps.configWriter;
+      const originalDeploy = deps.deploy;
+      let failed = false;
+      deps.configWriter = async (input) => {
+        const writer = await originalWriter(input);
+        return {
+          ...writer,
+          async syncClusterSettingsInDb(entries, overwrite) {
+            if (!failed && ((point === "global-write" && overwrite) || (point === "full-sync" && !overwrite))) {
+              failed = true;
+              throw new Error("injected interruption");
+            }
+            await writer.syncClusterSettingsInDb(entries, overwrite);
+          },
+          async setConfigEntry(key, value) {
+            if (!failed && point === "phase3" && key === "scheduler.instance_ami") {
+              failed = true;
+              throw new Error("injected interruption");
+            }
+            await writer.setConfigEntry(key, value);
+          },
+        };
+      };
+      deps.deploy = async (input) => {
+        if (!failed && point === "deployment") { failed = true; throw new Error("injected interruption"); }
+        await originalDeploy(input);
+      };
+      const options = { clusterName, awsRegion, moduleSet: "default", force: true, acceptConfigDrift: true };
+      await assert.rejects(upgradeCluster(deps, options), /injected interruption/);
+      assert.ok(!events.includes("All upgrade phases completed successfully"));
+      await upgradeCluster(deps, options);
+      assert.ok(events.includes("All upgrade phases completed successfully"));
+      assert.ok(!rows[`${clusterName}.cluster-settings`]!.some((row) => row["key"] === "cluster.upgrade_module_set_owners"));
+    });
+  });
+}
+
+test("original cleared IDs restore protection even when their tags disappear", async () => {
+  await withFixture(async ({ deps, protection, protectionTags }) => {
+    const deploy = deps.deploy;
+    deps.deploy = async (input) => { await deploy(input); protectionTags.clear(); };
+    await upgradeCluster(deps, { clusterName, awsRegion, moduleSet: "default", force: true, acceptConfigDrift: true });
+    assert.ok(protection.has("i-sample"));
+  });
+});
+
+test("declining a historical deployment leaves every mutation unapplied", async () => {
+  await withFixture(async (state) => {
+    historicalReplay(state);
+    state.deps.prompt = async () => false;
+    await assert.rejects(upgradeCluster(state.deps, { clusterName, awsRegion, moduleSet: "default", acceptConfigDrift: true }));
+    assert.ok(!state.events.some((event) => /^(set:|sync:|delete:|clear:|deploy$|disable-eol|delete-eol)/.test(event)));
+  });
+});
+
+test("historical remote values reach the container gate before local restoration", async () => {
+  await withFixture(async (state) => {
+    historicalReplay(state);
+    const path = join(process.env.IDEA_USER_HOME!, "clusters", clusterName, awsRegion, "values.yml");
+    rmSync(path);
+    state.deps.s3.getObject = async () => `${fixtureValues}\nenable_ecs: true\n`;
+    state.deps.ecsAccountSettings = { async listAccountSettings() { return []; } };
+    await assert.rejects(upgradeCluster(state.deps, { clusterName, awsRegion, moduleSet: "default", force: true }));
+    assert.ok(state.events.some((event) => event.includes("awsvpcTrunking is not enabled")));
+    assert.equal(existsSync(path), false);
+    assert.ok(!state.events.some((event) => /^(set:|sync:|delete:|clear:|deploy$)/.test(event)));
+  });
+});

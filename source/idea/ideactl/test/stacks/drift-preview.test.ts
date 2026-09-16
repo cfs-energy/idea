@@ -217,7 +217,7 @@ function upgradeHarness(answer: boolean): UpgradeHarness {
       { key: "global-settings.module_sets.default.cluster-manager.module_id", value: "cluster-manager" },
       { key: "cluster.base_os", value: "amazonlinux2023" },
     ],
-    [`${CLUSTER}.modules`]: [],
+    [`${CLUSTER}.modules`]: [{ module_id: "cluster", name: "cluster", type: "stack", status: "deployed", version: "26.09.0" }],
   };
   const base = baseDeps(events);
   const deps: UpgradeDeps = {

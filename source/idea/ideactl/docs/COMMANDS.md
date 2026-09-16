@@ -488,7 +488,7 @@ If nothing is deployed, the command prints an error to stderr and still exits 0.
 
 ## `upgrade-cluster`
 
-Upgrade an existing cluster: refuse a cluster with any deployed module below the previous published release (a jump across more than one release is not supported), refuse EOL base OS that is still referenced, preview drift, then run phases 1 to 4 (values base OS, global settings backup and rewrite, optional full config sync, AMI and instance-type keys, then module deploy). Empty `modules` means every module.
+Upgrade an existing cluster: refuse a cluster with any deployed module below 25.11.0 or an unreadable version, refuse EOL base OS that is still referenced, preview drift, then run phases 1 to 4 (values base OS, global settings backup and rewrite, optional full config sync, AMI and instance-type keys, then module deploy). Empty `modules` means every module. Clusters below 26.09.0 require complete deployed-module coverage and a read-only plan of settings, values, templates, EOL tables, IAM policy capacity, image metadata and instance protection before mutation. Global replacement, full sync and AMI/settings updates cannot be skipped in this mode. The old scheduler periodic interval is copied to the reconciler interval only when absent; conflicts are reported and both keys remain. Settings and deployed module versions are read back before success. A values upload failure after deployment is a warning with a recovery command.
 
 **Usage:** `ideactl upgrade-cluster [options] [modules...]`
 

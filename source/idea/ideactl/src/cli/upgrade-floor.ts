@@ -1,13 +1,13 @@
 /**
- * The oldest deployed release `upgrade-cluster` will take a cluster from. A jump across more than
- * one published release is not supported: an older cluster is upgraded one release at a time with
- * that release's tool, following its upgrade instructions.
+ * Direct upgrades need a known baseline for historical configuration and policy changes.
+ * Older releases must reach that baseline before this migration can validate them.
  */
 
 import { ideaVersion } from "../version.ts";
 
-/** Previous published feature release named by the current changelog's upgrade instructions. */
-export const UPGRADE_FLOOR_VERSION = "26.09.0";
+// The historical plan covers this baseline and every subsequent supported release.
+// Lower versions need their published upgrade instructions first.
+export const UPGRADE_FLOOR_VERSION = "25.11.0";
 
 /** The module-table fields the floor reads; a `ModuleInfo` row satisfies it. */
 export interface FloorModule {
@@ -80,7 +80,7 @@ export function upgradeFloorMessage(
   }
   lines.push(
     "",
-    `A jump across more than one release is not supported. Upgrade this cluster to ${floor} using the ${floor} administrator, then re-run this command.`,
+    `Upgrade this cluster to ${floor} using the ${floor} administrator, then re-run this command.`,
     "",
     `If the cluster is older than ${floor}, upgrade one published release at a time with that release's administrator, following that release's Upgrade Instructions.`,
   );

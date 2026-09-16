@@ -63,6 +63,7 @@ export interface ScanPage {
 export type TableScanner = (input: {
   TableName: string;
   ExclusiveStartKey?: Record<string, unknown>;
+  ConsistentRead?: boolean;
 }) => Promise<ScanPage>;
 
 export interface FromDynamoDbOptions extends ClusterConfigOptions {

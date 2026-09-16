@@ -1,16 +1,7 @@
-// Runs `upgrade-cluster` against a captured cluster with every write recorded instead of applied.
-//
-//   node tools/parity/upgrade-dry-run.ts --capture <dir> --values <values.yml> [--templates <dir>] [--enable-ecs] [--out <file>]
-//
-// <dir> holds cluster-settings.json and modules.json as `aws dynamodb scan` wrote them; the
-// cluster name and region come from the settings rows. --templates names a directory of
-// `get-template` bodies, one <stack-name>.json each, for the Phase 0 record-set retention.
-// --enable-ecs sets `enable_ecs: true` on a copy of the values, the migration's one switch.
-//
-// The report is every line the command prints plus every table write, module sync, stack update
-// and deploy it would perform, in order. Cloud reads the capture cannot answer are stated at the
-// top of the report as assumptions.
+// Captured inventories make historical refusals and state changes reproducible offline.
+// Writes update only replay state; upgrade-dry-run.md describes the required captures.
 
+import { ideaVersion } from "../../src/version.ts";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,19 +12,31 @@ import type { ConfigWriter, Deps } from "../../src/cli/cdk-invoker.ts";
 import { type UpgradeDeps, upgradeCluster } from "../../src/cli/commands/upgrade.ts";
 
 const ASSUMPTIONS = [
-  "awsvpcTrunking is enabled in the account (the pre-flight otherwise refuses)",
-  "the built compute image is newer than the release image, so it is kept",
-  "every instance type in the values is offered in the region",
-  "OpenSearch offers m7g.large.search for the domain's engine version",
-  "the software-stack, session and queue-profile tables were not captured, so the EOL phase sees none",
-  "no stack resources are enumerated, so no termination protection is cleared or restored, and the scheduler cutover gate sees no host to drain",
+  "deployment is simulated; supplied deployment settings and IAM outcomes are applied, not proven",
+  "without --inventory, recent-release runs assume empty auxiliary tables and instance inventory, available offerings and a newer built image",
 ];
+
+interface Inventory {
+  tables: Record<string, Array<Record<string, unknown>>>;
+  images: Array<{ ImageId: string; Name?: string; CreationDate?: string }>;
+  stacks: Record<string, string[]>;
+  protection: Record<string, boolean>;
+  protectionTags: string[];
+  iam: Record<string, { attached: string[]; inline: string[]; collision: boolean; available: number }>;
+  deployedIam: Inventory["iam"];
+  deploymentSettings: Array<{ key: string; value: unknown }>;
+  instanceTypes: string[];
+  openSearchTypes: string[];
+  jobs: Record<string, { queued: number; running: number; other: number }>;
+  trunking: boolean;
+}
 
 const { values: args } = parseArgs({
   options: {
     capture: { type: "string" },
     values: { type: "string" },
     templates: { type: "string" },
+    inventory: { type: "string" },
     "enable-ecs": { type: "boolean", default: false },
     out: { type: "string" },
   },
@@ -43,6 +46,9 @@ if (args.capture === undefined || args.values === undefined) {
   process.exit(2);
 }
 
+const inventory = args.inventory === undefined ? undefined : JSON.parse(readFileSync(args.inventory, "utf8")) as Inventory;
+const tags = new Set(inventory?.protectionTags ?? []);
+let deployed = false;
 type Row = Record<string, unknown>;
 function scanRows(file: string): Row[] {
   const parsed = JSON.parse(readFileSync(file, "utf8")) as { Items?: Array<Record<string, never>> } | Array<Record<string, never>>;
@@ -63,6 +69,7 @@ if (clusterName === "" || awsRegion === "") throw new Error("cluster.cluster_nam
 const rows: Record<string, Row[]> = {
   [`${clusterName}.cluster-settings`]: settings,
   [`${clusterName}.modules`]: modules,
+  ...inventory?.tables,
 };
 const lines: string[] = [];
 const record = (line: string): void => { lines.push(line); };
@@ -79,6 +86,9 @@ writeFileSync(join(valuesDirectory, "values.yml"), valuesText);
 const writer: ConfigWriter = {
   async syncModulesInDb(moduleList) {
     record(`WRITE modules table: ${moduleList.map((module) => module.id).sort().join(", ")}`);
+    for (const module of moduleList) if (!modules.some((row) => row.module_id === module.id)) {
+      modules.push({ module_id: module.id, name: module.name, type: module.type, status: "not-deployed" });
+    }
   },
   async syncClusterSettingsInDb(entries, overwrite) {
     const table = rows[`${clusterName}.cluster-settings`] ?? [];
@@ -113,7 +123,7 @@ const base: Deps = {
   cfn: {
     async describeChangeSet() { return {}; },
     async executeChangeSet() {},
-    async describeStack() { return { StackStatus: "UPDATE_COMPLETE" }; },
+    async describeStack() { return { StackStatus: "UPDATE_COMPLETE", Tags: deployed ? [{ Key: "idea:ModuleVersion", Value: ideaVersion() }] : [] }; },
     ...(args.templates === undefined ? {} : {
       async getTemplate(stackName: string) {
         const file = join(args.templates as string, `${stackName}.json`);
@@ -129,7 +139,10 @@ const base: Deps = {
     async putObject(input) { record(`S3 put ${input.Bucket}/${input.Key}`); },
     async getObject() { return valuesText; },
   },
-  async scan(input) { return { Items: rows[input.TableName] ?? [] }; },
+  async scan(input) {
+    if (inventory !== undefined && rows[input.TableName] === undefined) throw new Error(`Missing captured table ${input.TableName}`);
+    return { Items: rows[input.TableName] ?? [] };
+  },
   async configWriter() { return writer; },
   async accountId() { return ["123456", "789012"].join(""); },
   async httpStatus() { return 200; },
@@ -143,37 +156,81 @@ const base: Deps = {
 
 const deps: UpgradeDeps = {
   ...base,
-  ecsAccountSettings: { async listAccountSettings() { return [{ name: "awsvpcTrunking", value: "enabled" }]; } },
+  ecsAccountSettings: { async listAccountSettings() { return [{ name: "awsvpcTrunking", value: inventory?.trunking === false ? "disabled" : "enabled" }]; } },
+  ...(inventory === undefined ? {} : {
+    async historicalIam(role: string) {
+      const state = (deployed ? inventory.deployedIam : inventory.iam)[role];
+      if (state === undefined) throw new Error(`Missing captured IAM role ${role}`);
+      return state;
+    },
+    schedulerJobs: { async activeJobs(input: { instanceId: string }) {
+      const jobs = inventory.jobs[input.instanceId];
+      if (jobs === undefined) throw new Error(`Missing captured job inventory for ${input.instanceId}`);
+      return jobs;
+    } },
+  }),
   ec2: {
     async describeImages(input) {
+      if (inventory !== undefined) {
+        return input.imageIds.map((id) => {
+          const image = inventory.images.find((entry) => entry.ImageId === id);
+          if (image === undefined) throw new Error(`Missing captured image ${id}`);
+          return image;
+        });
+      }
       return input.imageIds.map((imageId, index) => ({
         ImageId: imageId,
         Name: index === 0 ? `idea-compute-node-${clusterName}` : "release",
         CreationDate: index === 0 ? "2026-09-01T00:00:00.000Z" : "2026-01-01T00:00:00.000Z",
       }));
     },
-    async describeInstanceTypeOfferings(input) { return [input.instanceType]; },
-    async describeInstanceAttribute() { return false; },
-    async modifyInstanceAttribute(input) { record(`EC2 termination protection ${input.protected ? "restored" : "cleared"} on ${input.instanceId}`); },
-    async createTags(input) { record(`EC2 protection marker created on ${input.instanceId}`); },
-    async deleteTags(input) { record(`EC2 protection marker removed on ${input.instanceId}`); },
-    async describeLiveInstances(input) { return input.instanceIds; },
+    async describeInstanceTypeOfferings(input) { return inventory?.instanceTypes ?? [input.instanceType]; },
+    async describeInstanceAttribute(input) {
+      if (inventory === undefined) return false;
+      if (!(input.instanceId in inventory.protection)) throw new Error(`Missing protection for ${input.instanceId}`);
+      return inventory.protection[input.instanceId]!;
+    },
+    async modifyInstanceAttribute(input) { if (inventory !== undefined) inventory.protection[input.instanceId] = input.protected; record(`EC2 termination protection ${input.protected ? "restored" : "cleared"} on ${input.instanceId}`); },
+    async createTags(input) { tags.add(input.instanceId); record(`EC2 protection marker created on ${input.instanceId}`); },
+    async deleteTags(input) { tags.delete(input.instanceId); record(`EC2 protection marker removed on ${input.instanceId}`); },
+    async describeLiveInstances(input) { return input.instanceIds.filter((id) => input.tagKey === undefined || tags.has(id)); },
   },
-  cloudFormation: { async listStackResources() { return { instanceIds: [] }; } },
+  cloudFormation: { async listStackResources(input) {
+    if (inventory === undefined) return { instanceIds: [] };
+    const instanceIds = inventory.stacks[input.stackName];
+    if (instanceIds === undefined) {
+      if (modules.some((row) => `${clusterName}-${String(row.module_id)}` === input.stackName && row.status === "not-deployed")) return { instanceIds: [] };
+      throw new Error(`Missing captured resources for ${input.stackName}`);
+    }
+    return { instanceIds };
+  } },
   openSearch: {
     async describeDomain() { return { engineVersion: "OpenSearch_2.19" }; },
-    async listInstanceTypeDetails() { return ["m5.large.search", "m6g.large.search", "m7g.large.search"]; },
+    async listInstanceTypeDetails() { return inventory?.openSearchTypes ?? ["m5.large.search", "m6g.large.search", "m7g.large.search"]; },
   },
   eolSoftwareStacks: {
-    async setEnabled(input) { record(`EOL software stack ${JSON.stringify(input)} disabled`); },
-    async delete(input) { record(`EOL software stack ${JSON.stringify(input)} deleted`); },
+    async setEnabled(input) {
+      const row = rows[input.tableName]?.find((entry) => entry.stack_id === input.stackId && entry.base_os === input.baseOs);
+      if (row !== undefined) row.enabled = input.enabled;
+      record(`EOL software stack ${JSON.stringify(input)} disabled`); },
+    async delete(input) {
+      rows[input.tableName] = (rows[input.tableName] ?? []).filter((entry) => entry.stack_id !== input.stackId || entry.base_os !== input.baseOs);
+      record(`EOL software stack ${JSON.stringify(input)} deleted`); },
   },
-  async deploy(input) { record(`DEPLOY ${(input.moduleIds ?? ["all"]).join(", ")}`); },
+  async deploy(input) {
+    record(`DEPLOY ${(input.moduleIds ?? ["all"]).join(", ")}`);
+    for (const module of modules) if (input.moduleIds === undefined || input.moduleIds.includes(String(module.module_id))) {
+      module.status = "deployed";
+      module.version = ideaVersion();
+    }
+    for (const entry of inventory?.deploymentSettings ?? []) await writer.setConfigEntry(entry.key, entry.value);
+    deployed = true;
+  },
 };
 
 let failure: string | undefined;
 try {
-  await upgradeCluster(deps, { clusterName, awsRegion, moduleSet: "default", force: true, terminationProtection: true });
+  await upgradeCluster(deps, { clusterName, awsRegion, moduleSet: "default", force: true, acceptConfigDrift: true, terminationProtection: true });
 } catch (error) {
   failure = (error as Error).message;
 } finally {
@@ -184,7 +241,8 @@ const report = [
   `# upgrade-cluster dry run: ${clusterName} (${awsRegion})`,
   `capture: ${args.capture}`,
   `values: ${args.values}${args["enable-ecs"] ? " + enable_ecs: true" : ""}`,
-  `templates: ${args.templates ?? "(none; Phase 0 skipped)"}`,
+  `templates: ${args.templates ?? "(none; historical migration refuses)"}`,
+  `inventory: ${args.inventory ?? "(none)"}`,
   "assumptions:",
   ...ASSUMPTIONS.map((assumption) => `  - ${assumption}`),
   "",

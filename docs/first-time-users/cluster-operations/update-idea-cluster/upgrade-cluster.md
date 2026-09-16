@@ -11,6 +11,22 @@ The `upgrade-cluster` command combines multiple steps that were previously separ
 3. Backing up and regenerating global settings
 4. Deploying all modules with the `--upgrade` flag
 
+### Direct upgrades from 25.11.0
+
+Every deployed module must have a readable release of 25.11.0 or newer. A cluster on 25.11.0
+upgrades in one run. A run starting below 26.09.0 requires all deployed modules, including the
+DCV policy transition. Before mutation it reads settings, values, deployed templates, queue
+profiles, desktop stacks and sessions, IAM attachments and quotas, image metadata and instance
+protection. Missing module rows or unreadable versions stop the run.
+
+Historical upgrades always replace global settings, add missing configuration, and apply paired
+OS/AMI and conditional instance-type updates. Phase prompts and skip flags cannot omit these
+steps. Drift acceptance and EOL refusal still apply. The scheduler's old periodic-check interval
+is copied to the reconciler interval only if the latter is absent. Conflicts are reported and
+preserved, and the old key remains for older running code. Existing lists keep their custom values.
+Before success, settings and deployed module versions are read back. A failed verification requires
+repair and a rerun; it does not reopen submission.
+
 ### values.yml Restore and Save
 
 The first phase reads `~/.idea/clusters/<cluster-name>/<aws-region>/values.yml` to set the new Base
@@ -27,16 +43,15 @@ in [Move to containers](move-to-containers.md). The early trunking and scheduler
 not wait for S3 restoration.
 
 After every module deploys successfully, the command uploads the local `values.yml` back to
-`values/values.yml` in the cluster bucket. An upload failure fails the upgrade and prints a
-`config save-values` recovery command; it also leaves any saved maintenance baseline closed,
-because restoration runs after the upload. Refresh expired credentials, save the file successfully,
-then rerun the upgrade to completion to restore the baseline; saving the file alone does not reopen
-submission.
+`values/values.yml` in the cluster bucket. An upload failure produces a warning with a
+`config save-values` recovery command. Save the local file before using another workstation,
+which could otherwise restore stale values. A successful verified deployment still restores
+the saved maintenance baseline.
 
 ### Compute Node Image
 
 The upgrade moves compute nodes onto the release's AMI for the cluster's Base OS, unless
-`scheduler.compute_node_ami` names an image built from the Custom AMIs page that is newer than the
+each scheduler module's `compute_node_ami` names an image built from the Custom AMIs page that is newer than the
 release image, which is kept and reported. An older built image is replaced, and can be rebuilt
 from Custom AMIs after the upgrade.
 
