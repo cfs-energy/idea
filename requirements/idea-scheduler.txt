@@ -53,6 +53,8 @@ events==0.5
     # via opensearch-py
 fastcounter==1.1.0
     # via -r idea-sdk.in
+greenlet==3.5.6
+    # via sqlalchemy
 html5tagger==2.0.0
     # via
     #   sanic

@@ -2,7 +2,10 @@
 
 import argparse
 import difflib
+import os
 import pathlib
+import platform
+import sys
 import shutil
 import subprocess
 import tempfile
@@ -56,6 +59,24 @@ def check_locks(root):
             raise SystemExit('Requirements locks differ:\n' + ''.join(differences))
 
 
+def relaunch_on_linux():
+    """pip-compile resolves platform markers for the machine it runs on (sqlalchemy pulls
+    greenlet on Linux only), so the tracked locks are Linux locks, as CI and Renovate make them."""
+    if platform.system() == 'Linux' or os.environ.get('REQUIREMENTS_LOCKS_NATIVE'):
+        return
+    # click's flag handling changed the header text between versions, so both are pinned.
+    pins = ' '.join(
+        line.strip() for line in (ROOT / 'requirements' / 'dev.txt').read_text().splitlines()
+        if line.startswith(('pip-tools==', 'click=='))
+    )
+    command = [
+        'docker', 'run', '--rm', '-v', f'{ROOT}:/work', '-w', '/work',
+        '-e', 'REQUIREMENTS_LOCKS_NATIVE=1', 'python:3.13-slim', 'sh', '-c',
+        f'pip install -q {pins} && python scripts/requirements-locks.py "$@"', 'sh', *sys.argv[1:],
+    ]
+    raise SystemExit(subprocess.run(command).returncode)
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--check', action='store_true')
@@ -63,6 +84,7 @@ if __name__ == '__main__':
     parser.add_argument('--upgrade', action='store_true')
     parser.add_argument('--package')
     args = parser.parse_args()
+    relaunch_on_linux()
     if args.check:
         check_locks(ROOT)
     else:
