@@ -67,6 +67,10 @@ function releaseTarget(platform, architecture) {
   if (releaseArchitecture === undefined) {
     throw new Error(`unsupported release processor architecture: ${architecture}`);
   }
+  // Apple no longer ships Intel Macs; the release does not build for them.
+  if (platform === "darwin" && releaseArchitecture === "amd64") {
+    throw new Error("Intel macOS is not a release target");
+  }
   return `${platform === "win32" ? "windows" : platform}-${releaseArchitecture}`;
 }
 

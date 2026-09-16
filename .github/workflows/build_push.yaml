@@ -48,8 +48,6 @@ jobs:
         include:
           - target: darwin-arm64
             runner: macos-15
-          - target: darwin-amd64
-            runner: macos-15-intel
     runs-on: ${{ matrix.runner }}
     defaults:
       run:

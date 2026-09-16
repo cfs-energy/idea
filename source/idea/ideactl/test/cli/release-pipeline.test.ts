@@ -44,7 +44,7 @@ test('publication requires both validation workflows and extracted artifact smok
 
 test('native runners cover each release target and publication includes Windows checksums', () => {
   assert.deepEqual(workflow.jobs.build_ideactl_artifacts?.strategy?.matrix.include, [
-    { target: 'darwin-arm64', runner: 'macos-15' }, { target: 'darwin-amd64', runner: 'macos-15-intel' },
+    { target: 'darwin-arm64', runner: 'macos-15' },
   ]);
   assert.deepEqual(workflow.jobs.build_ideactl_linux_artifact?.strategy?.matrix.include, [
     { target: 'linux-arm64', runner: 'ubuntu-24.04-arm' }, { target: 'linux-amd64', runner: 'ubuntu-24.04' },

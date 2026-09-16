@@ -274,7 +274,7 @@ test("release automation builds all operator targets and parses", { skip: !canBu
 
   const targets = [...releaseWorkflow.matchAll(/target: ((?:darwin|linux)-\S+)|build:dist -- --target (windows-\S+)/g)]
     .map((match) => match[1] ?? match[2]);
-  assert.deepEqual(targets.sort(), ["darwin-amd64", "darwin-arm64", "linux-amd64", "linux-arm64", "windows-amd64"]);
+  assert.deepEqual(targets.sort(), ["darwin-arm64", "linux-amd64", "linux-arm64", "windows-amd64"]);
 
   assert.match(releaseWorkflow, /sha256sum --check SHA256SUMS/);
   assert.match(releaseWorkflow, /release create/);

@@ -45,9 +45,8 @@ test("the release automation covers all five native targets", () => {
     ),
   );
 
-  assert.deepEqual([...targets].sort(), ["darwin-amd64", "darwin-arm64", "linux-amd64", "linux-arm64", "windows-amd64"]);
+  assert.deepEqual([...targets].sort(), ["darwin-arm64", "linux-amd64", "linux-arm64", "windows-amd64"]);
   assert.match(releaseJobs, /windows-2025/);
-  assert.match(releaseJobs, /macos-15-intel/);
   assert.match(workflow, /release\/\*\.zip\.sha256/);
   assert.match(workflow, /release\/\*\.tar\.gz\.sha256/);
   assert.match(workflow, /ideactl config generate/);

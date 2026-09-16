@@ -5,7 +5,6 @@ Download the matching archive from the [GitHub release](https://github.com/cfs-e
 | Operator platform | Release file |
 | --- | --- |
 | macOS Apple silicon | `ideactl-v<VERSION>-darwin-arm64.tar.gz` |
-| macOS Intel | `ideactl-v<VERSION>-darwin-amd64.tar.gz` |
 | Linux ARM64 | `ideactl-v<VERSION>-linux-arm64.tar.gz` |
 | Linux x64 | `ideactl-v<VERSION>-linux-amd64.tar.gz` |
 | Windows x64 | `ideactl-v<VERSION>-windows-amd64.zip` |
