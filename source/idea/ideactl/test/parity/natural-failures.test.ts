@@ -476,7 +476,12 @@ function upgradeReplay(input: {
     async deleteConfigEntries() {},
   };
   const rows: Record<string, Array<Record<string, unknown>>> = {
-    [`${CLUSTER}.cluster-settings`]: input.settings,
+    // Recovery needs the module-set owner even when only the scheduler is upgraded.
+    // Include the deployed mapping so both runs reach the durable protection baseline.
+    [`${CLUSTER}.cluster-settings`]: [
+      { key: "global-settings.module_sets.default.cluster-manager.module_id", value: "cluster-manager" },
+      ...input.settings,
+    ],
     [`${CLUSTER}.modules`]: [moduleRow("scheduler", "scheduler")],
   };
 
@@ -625,6 +630,7 @@ test("a second run restores termination protection from the first run's marker",
     "the failing run names the instance it left unprotected",
   );
   assert.equal(protectedInstances.has("i-0sample"), false);
+  assert.deepEqual([...protectionTags], ["i-0sample"]);
 
   const second = upgradeReplay({ protectedInstances, protectionTags, settings: AL2023_SETTINGS });
   await upgradeCluster(second.deps, {

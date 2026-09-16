@@ -1,4 +1,4 @@
-from ideadatamodel import SocaJob, constants
+from ideadatamodel import SocaJob
 from ideasdk.context import SocaContext
 from ideasdk.metrics import BaseMetrics
 from ideasdk.utils import Utils

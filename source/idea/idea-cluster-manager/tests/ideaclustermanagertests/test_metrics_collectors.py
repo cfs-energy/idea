@@ -146,7 +146,8 @@ def test_async_socket_failure_keeps_payload_for_another_replica(collector, monke
     backlog = queue.Queue()
     publisher = SimpleNamespace(_metrics_backlog_queue=backlog)
     monkeypatch.setattr(
-        contexts[0].metrics_service, 'publish',
+        contexts[0].metrics_service,
+        'publish',
         lambda entries: MetricsService.publish(publisher, entries),
     )
     provider = DogStatsdMetrics(contexts[0], 'test-cluster/cluster-manager')
@@ -178,7 +179,7 @@ def test_async_socket_failure_keeps_payload_for_another_replica(collector, monke
             services[1].run_once()
     else:
         services[1].run_once()
-    assert contexts[1].published()[:len(queued)] == queued
+    assert contexts[1].published()[: len(queued)] == queued
 
 
 def test_outbox_paginates_and_keeps_latest_correction(collector, monkeypatch):

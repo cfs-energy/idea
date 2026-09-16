@@ -31,7 +31,7 @@ class FakeLogger:
 
 class FakeConfig:
     def __init__(self, values: Dict, secrets: Dict = None):
-        self.values = {"cluster.cluster_s3_bucket": "sample-bucket", **values}
+        self.values = {'cluster.cluster_s3_bucket': 'sample-bucket', **values}
         self.secrets = secrets or {}
         self.db = FakeSettingsDB()
 
@@ -213,8 +213,11 @@ class FakeObjectStore:
         self.values[Key] = Body
 
     def list_objects_v2(self, Bucket, Prefix, **kwargs):
-        return {'Contents': [{'Key': key} for key in self.values if key.startswith(Prefix)]}
+        return {
+            'Contents': [{'Key': key} for key in self.values if key.startswith(Prefix)]
+        }
 
     def get_object(self, Bucket, Key):
         from io import BytesIO
+
         return {'Body': BytesIO(self.values[Key])}

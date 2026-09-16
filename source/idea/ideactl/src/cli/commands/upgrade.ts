@@ -1199,6 +1199,9 @@ async function schedulerCutoverGate(
   };
   const timeoutMs = (options.drainTimeoutMinutes ?? DEFAULT_DRAIN_TIMEOUT_MINUTES) * 60_000;
   const startedAt = deps.now();
+  // Submission settings propagate asynchronously to the scheduler.
+  // Let it observe maintenance before counting any inventory toward a safe cutover.
+  await deps.sleep(30_000);
   let emptyReads = 0;
   for (;;) {
     const inventory = await read();

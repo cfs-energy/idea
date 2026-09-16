@@ -1161,11 +1161,21 @@ for (const appearsDuringPropagation of [false, true]) {
       enableContainers();
       trunkingEnabled(deps);
       let clock = deps.now();
+      let maintenanceWrittenAt: number | undefined;
+      const configWriter = deps.configWriter;
+      deps.configWriter = async (input) => {
+        const writer = await configWriter(input);
+        return { ...writer, async setConfigEntry(key, value) {
+          await writer.setConfigEntry(key, value);
+          if (key === "cluster-manager.maintenance.enabled" && value === true) maintenanceWrittenAt = clock;
+        } };
+      };
       const observed: number[] = [];
       deps.now = () => clock;
       deps.sleep = async (ms) => { clock += ms; };
       deps.schedulerJobs = { async activeJobs() {
         assert.ok(events.includes("set:cluster-manager.maintenance.enabled=true"));
+        assert.ok(maintenanceWrittenAt !== undefined && clock - maintenanceWrittenAt >= 30_000);
         observed.push(clock);
         return { queued: appearsDuringPropagation && observed.length === 2 ? 1 : 0, running: 0, other: 0 };
       } };

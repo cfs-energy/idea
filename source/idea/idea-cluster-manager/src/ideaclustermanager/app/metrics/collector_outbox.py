@@ -11,7 +11,8 @@ class CollectorOutbox:
         self.entries = []
         self.bucket = (
             context.config().get_string('cluster.cluster_s3_bucket', required=True)
-            if self.db is not None else None
+            if self.db is not None
+            else None
         )
         self.client = context.aws().s3() if self.db is not None else None
         self.object_prefix = f'metrics/outbox/{prefix}/'
@@ -37,13 +38,21 @@ class CollectorOutbox:
                 publisher.publish([entry])
             return
         for entry in self.entries:
-            identity = [entry.get('Namespace'), entry['MetricName'], entry['Dimensions']]
+            identity = [
+                entry.get('Namespace'),
+                entry['MetricName'],
+                entry['Dimensions'],
+            ]
             if self.historical:
                 identity.append(entry['Timestamp'])
-            digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+            digest = hashlib.sha256(
+                json.dumps(identity, sort_keys=True).encode()
+            ).hexdigest()
             self.client.put_object(
-                Bucket=self.bucket, Key=f'{self.object_prefix}{digest}.json',
-                Body=json.dumps(entry, sort_keys=True).encode(), ContentType='application/json',
+                Bucket=self.bucket,
+                Key=f'{self.object_prefix}{digest}.json',
+                Body=json.dumps(entry, sort_keys=True).encode(),
+                ContentType='application/json',
             )
 
     def replay(self):

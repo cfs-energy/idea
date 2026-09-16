@@ -212,6 +212,9 @@ function upgradeHarness(answer: boolean): UpgradeHarness {
   const events: string[] = [];
   const tables: Record<string, Array<Record<string, unknown>>> = {
     [`${CLUSTER}.cluster-settings`]: [
+      // Maintenance recovery resolves its owner before the preview can complete.
+      // Keep that required mapping even when no stack is selected in this fixture.
+      { key: "global-settings.module_sets.default.cluster-manager.module_id", value: "cluster-manager" },
       { key: "cluster.base_os", value: "amazonlinux2023" },
     ],
     [`${CLUSTER}.modules`]: [],

@@ -8,7 +8,19 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 import { fileTailScript } from '../../src/cdk/constructs/container.ts';
 
-test('discovers date-named and later files while keeping existing followers', { timeout: 4000 }, async () => {
+// Starting the shell does not mean its followers have opened their files yet.
+// Observe a fresh append before exercising writes that must appear exactly once.
+async function waitForFollower(path: string, output: () => string): Promise<void> {
+  const marker = `follower-ready:${path}\n`;
+  const deadline = Date.now() + 10_000;
+  while (!output().includes(marker) && Date.now() < deadline) {
+    appendFileSync(path, marker);
+    await delay(100);
+  }
+  assert.ok(output().includes(marker), `follower did not read ${path}`);
+}
+
+test('discovers date-named and later files while keeping existing followers', { timeout: 30_000 }, async () => {
   const directory = mkdtempSync(join(tmpdir(), 'file-tail-'));
   const logs = join(directory, "logs with ' quotes");
   const laterDirectory = join(directory, 'later');
@@ -33,14 +45,15 @@ test('discovers date-named and later files while keeping existing followers', { 
   child.stderr.on('data', (chunk) => { errors += chunk; });
   const closed = new Promise<void>((resolve) => child.on('close', () => resolve()));
   async function waitFor(line: string): Promise<void> {
-    const deadline = Date.now() + 1800;
+    const deadline = Date.now() + 10_000;
     while (!output.includes(line) && Date.now() < deadline && child.exitCode === null) await delay(20);
     assert.ok(output.includes(line), `${line}: stdout=${output}, stderr=${errors}`);
   }
   try {
     // Files present at start are followed from their end: what they already hold is history
     // (a month of accounting records) and must not replay into the log group on every start.
-    await delay(200);
+    await waitForFollower(join(logs, '20260915'), () => output);
+    await waitForFollower(join(logs, '.hidden'), () => output);
     appendFileSync(join(logs, '20260915'), 'first-appended\n');
     appendFileSync(join(logs, '.hidden'), 'hidden-appended\n');
     await waitFor('first-appended');
@@ -74,7 +87,7 @@ test('an empty directory list remains a valid polling script', async () => {
   assert.equal(code, 0);
 });
 
-test('application rotation does not rediscover the renamed archive', { timeout: 10000 }, async () => {
+test('application rotation does not rediscover the renamed archive', { timeout: 30_000 }, async () => {
   const directory = mkdtempSync(join(tmpdir(), 'application-tail-'));
   const path = join(directory, 'application.log');
   writeFileSync(path, 'history\n');
@@ -86,12 +99,12 @@ test('application rotation does not rediscover the renamed archive', { timeout: 
   child.stdout.on('data', (chunk) => { output += chunk; });
   const closed = new Promise<void>((resolve) => child.on('close', () => resolve()));
   async function waitFor(line: string): Promise<void> {
-    const deadline = Date.now() + 3500;
+    const deadline = Date.now() + 10_000;
     while (!output.includes(line) && Date.now() < deadline) await delay(25);
     assert.ok(output.includes(line), output);
   }
   try {
-    await delay(200);
+    await waitForFollower(path, () => output);
     appendFileSync(path, 'before-rotation\n');
     await waitFor('before-rotation');
     renameSync(path, `${path}.2026-09-15`);
