@@ -541,7 +541,7 @@ deployment. A scoped run that excludes cluster-manager does not publish them.
 
 ## `migrate`
 
-Run or resume the one-phase control-plane migration: the fixed serial order of 22 durable boundaries that moves an existing cluster to the container control plane in one operation. Progress lives in a conditionally written record in the cluster bucket, so an interrupted run resumes at the boundary it stopped on instead of starting again.
+The supported path to the container control plane is `upgrade-cluster` with `enable_ecs: true` in `values.yml`. The `migrate` executor is incomplete. It refuses new and resumed runs before any mutation when any execution capability is missing, with one message naming all missing capabilities.
 
 **Usage:** `ideactl migrate [options]`
 
@@ -560,11 +560,7 @@ Run or resume the one-phase control-plane migration: the fixed serial order of 2
 | `--accept-template-comparison <fingerprint>` | yes | none | no |
 | `--accept-drift <fingerprint>` | yes | none | no |
 
-**Reads:** the cluster tables, every deployed module-stack template and status, the tagged instance, load balancer, listener, target group and private DNS inventory, the effective account setting for task network interface trunking, the stored `values.yml`, and the external endpoint's health. **Changes:** the operation record and the before-state capture, both objects in the cluster bucket. A step that changes the cluster refuses before its started marker is written when this release cannot execute or verify it, so a run that cannot finish changes nothing. **Exit codes:** 1 on any refusal.
-
-**Example:** `ideactl migrate --cluster-name sample-cluster --aws-region us-east-2 --state-bucket sample-cluster-cluster-bucket --target-base-os amazonlinux2023 --image-digest registry.example.invalid/control-plane@sha256:<digest> --selected-module cluster --selected-module cluster-manager`
-
-A new run needs `--target-base-os`, `--image-digest` and at least one `--selected-module`; `--resume <deployment-id>` takes those from the record instead and cannot be combined with `--deployment-id`. The image reference must be immutable, ending in `@sha256:` and 64 hexadecimal characters. Pre-flight is a refusal, not a repair: it checks task network interface trunking, that the target-template comparison was accepted for exactly the templates deployed now, and that no configuration row the run overwrites holds a value the generator would not produce. The last two are accepted by fingerprint, which the refusal prints, so an acceptance cannot outlive the report it was given for. Pre-flight also prints what it could not check, and the migration steps this release cannot yet execute along with the missing piece each one waits on.
+**Changes:** none while capabilities are missing, including no operation record, maintenance setting, or admission change. **Exit codes:** 1 on refusal. Template or drift acceptance does not bypass this gate.
 
 ## `delete-cluster`
 

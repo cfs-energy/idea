@@ -964,15 +964,17 @@ export class LiveMigrationSteps implements MigrationStepExecutor {
     const notChecked = [
       "NOT CHECKED: that the control-plane image digest is present in this account's registry. No registry client is declared, so the account prerequisite is verified by hand.",
     ];
-    // The capability report says where the run stops; it is not a pre-flight failure. The run is
-    // meant to reach the boundary it cannot pass and refuse there, because that boundary is where
-    // a person is in the loop, and because every mutating step refuses before its started marker.
+    // An incomplete plan can strand a cluster in maintenance with no recovery path.
+    // Refuse before the driver creates a journal or changes admission state.
+    const missing = MIGRATION_CAPABILITIES.map((capability) => capability.id);
     const detail = [
       renderPreflightReport(report),
       ...notChecked,
-      ...(capabilityReport() === undefined ? [] : [capabilityReport() as string]),
+      ...(missing.length === 0 ? [] : [
+        `Migration unavailable: missing capabilities: ${missing.join(", ")}. Use upgrade-cluster with enable_ecs: true in values.yml for the supported container upgrade path.`,
+      ]),
     ].join("\n");
-    return { ok: report.passed, detail };
+    return { ok: report.passed && missing.length === 0, detail };
   }
 
   async #identity(context: Readonly<MigrationContext>): Promise<{ account: string; arn: string }> {

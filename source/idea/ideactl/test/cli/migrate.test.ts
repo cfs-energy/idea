@@ -279,3 +279,23 @@ test("the command registration exposes migrate without executing it", () => {
 
   assert.ok(program.commands.some((command) => command.name() === "migrate"));
 });
+
+test("resume rechecks preflight before changing an existing journal", async () => {
+  const stateObjects = new MemoryStateObjects();
+  await assert.rejects(
+    migrateCluster(makeDeps(stateObjects, new FakeSteps({ throwAt: "ECS_STAGED" })), newRunOptions),
+    /simulated interruption/,
+  );
+  const before = await stateObjects.getObject();
+  const steps = new FakeSteps({ failPrecondition: "PREFLIGHT_PASSED" });
+  await assert.rejects(migrateCluster(makeDeps(stateObjects, steps), {
+    clusterName: newRunOptions.clusterName,
+    awsRegion: newRunOptions.awsRegion,
+    stateBucket: newRunOptions.stateBucket,
+    moduleSet: "default",
+    resume: deploymentId,
+  }), MigrationRefusedError);
+  assert.deepEqual(await stateObjects.getObject(), before);
+  assert.deepEqual(steps.actions, []);
+  assert.deepEqual(steps.reconciliations, []);
+});

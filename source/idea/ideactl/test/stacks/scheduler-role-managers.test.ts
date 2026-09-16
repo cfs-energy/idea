@@ -40,9 +40,9 @@ after(() => {
 function grantBlock(): string {
   const start = SOURCE.indexOf("BASTION_PRIVATE_DNS_NAME=");
   assert.notEqual(start, -1, "the role script grants the bastion host batch-manager rights");
-  const end = SOURCE.indexOf("\nfi\n", start);
+  const end = SOURCE.indexOf("\n  fi\n", start);
   assert.notEqual(end, -1, "the grant is a closed conditional");
-  return SOURCE.slice(start, end + 4);
+  return SOURCE.slice(start, end + 6);
 }
 
 /** Runs the grant with a settings table holding `rows`, and returns the batch client's arguments. */
@@ -90,15 +90,9 @@ test("ignores the private-zone alias, which resolves but never matches a connect
   assert.deepEqual(calls, [], "an entry built from bastion-host.hostname would be a grant that never matches");
 });
 
-test("applies the grant on every start, not only on a first configuration", () => {
-  // The grant sits outside the marker-guarded block, so a replaced bastion is picked up by the
-  // next task start rather than never, since that block never runs again on an existing PBS_HOME.
+test("preserves imported manager policy on subsequent starts", () => {
+  const guard = SOURCE.indexOf('if [[ "${PBS_CREATE}" == 1 ]]; then', SOURCE.indexOf('pbs server did not come up'));
   const grant = SOURCE.indexOf("BASTION_PRIVATE_DNS_NAME=");
-  const markerGuards = [...SOURCE.matchAll(/if \[\[ ! -f "\$\{MARKER\}" \]\]; then/g)].map((match) => match.index);
-  assert.equal(markerGuards.length, 2, "the marker guards this test knows about");
-  const enclosing = markerGuards.filter((guard) => guard < grant).map((guard) => SOURCE.indexOf("\nfi\n", guard));
-  assert.ok(
-    enclosing.every((close) => close < grant),
-    "the grant is not inside a marker-guarded block",
-  );
+  const close = SOURCE.indexOf('\nfi\n\nlog "starting pbs_sched"', grant);
+  assert.ok(guard >= 0 && guard < grant && close > grant);
 });

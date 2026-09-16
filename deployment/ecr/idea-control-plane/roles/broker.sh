@@ -37,18 +37,26 @@ broker-to-broker-discovery-aws-alb-target-group-arn = ${IDEA_BROKER_CLIENT_TARGE
 fi
 
 setting() {
-  aws dynamodb get-item --region "${AWS_DEFAULT_REGION}" \
+  local value
+  # A failed read must not silently replace the configured value with a default.
+  # Only a successful lookup with no value permits the optional fallback.
+  value="$(aws dynamodb get-item --region "${AWS_DEFAULT_REGION}" \
     --table-name "${IDEA_CLUSTER_NAME}.cluster-settings" \
     --key "{\"key\":{\"S\":\"$1\"}}" \
-    --query "Item.value.S || Item.value.N" --output text 2>/dev/null | grep -v '^None$' || echo "$2"
+    --query "Item.value.S || Item.value.N" --output text)" || return $?
+  if [[ "${value}" == "None" ]]; then
+    printf '%s\n' "$2"
+  else
+    printf '%s\n' "${value}"
+  fi
 }
 
-CLIENT_PORT="$(setting virtual-desktop-controller.dcv_broker.client_communication_port 8444)"
-AGENT_PORT="$(setting virtual-desktop-controller.dcv_broker.agent_communication_port 8445)"
-GATEWAY_PORT="$(setting virtual-desktop-controller.dcv_broker.gateway_communication_port 8446)"
-TOKEN_MINUTES="$(setting virtual-desktop-controller.dcv_broker.session_token_validity 1440)"
-RCU="$(setting virtual-desktop-controller.dcv_broker.dynamodb_table.read_capacity.min_units 5)"
-WCU="$(setting virtual-desktop-controller.dcv_broker.dynamodb_table.write_capacity.min_units 5)"
+CLIENT_PORT="$(setting "${IDEA_MODULE_ID}.dcv_broker.client_communication_port" 8444)"
+AGENT_PORT="$(setting "${IDEA_MODULE_ID}.dcv_broker.agent_communication_port" 8445)"
+GATEWAY_PORT="$(setting "${IDEA_MODULE_ID}.dcv_broker.gateway_communication_port" 8446)"
+TOKEN_MINUTES="$(setting "${IDEA_MODULE_ID}.dcv_broker.session_token_validity" 1440)"
+RCU="$(setting "${IDEA_MODULE_ID}.dcv_broker.dynamodb_table.read_capacity.min_units" 5)"
+WCU="$(setting "${IDEA_MODULE_ID}.dcv_broker.dynamodb_table.write_capacity.min_units" 5)"
 PROVIDER_URL="${IDEA_COGNITO_PROVIDER_URL:-$(setting identity-provider.cognito.provider_url "")}"
 : "${PROVIDER_URL:?identity-provider.cognito.provider_url is not set}"
 

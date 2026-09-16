@@ -652,6 +652,7 @@ export async function migrateCluster(deps: MigrateDeps, options: MigrateOptions)
       );
     }
     context = resumedContext(deps, options, record);
+    initialPreflight = await checkPrecondition(deps, context, "PREFLIGHT_PASSED");
     journal = await UpgradeStateJournal.resume(
       deps.stateObjects,
       location,

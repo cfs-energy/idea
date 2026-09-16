@@ -79,7 +79,9 @@ fi
 install -d -m 755 -o postgres -g postgres /run/postgresql
 
 # Initialize PBS_HOME and its datastore.
-/opt/pbs/libexec/pbs_habitat || true
+if [[ "${PBS_CREATE}" == 1 ]]; then
+  /opt/pbs/libexec/pbs_habitat
+fi
 
 # Configure a new PBS server before its daemons start.
 setting() {
@@ -88,9 +90,10 @@ setting() {
     --key "{\"key\":{\"S\":\"$1\"}}" \
     --query "Item.value.S || Item.value.N" --output text 2>/dev/null | grep -v '^None$' || echo "$2"
 }
-# Use a marker so incomplete configuration runs again.
+# Imported databases may have no container marker and still contain live policy.
+# Only a datastore absent at startup permits installation defaults.
 MARKER="${PBS_HOME}/.idea-server-configured"
-if [[ ! -f "${MARKER}" ]]; then
+if [[ "${PBS_CREATE}" == 1 && ! -f "${MARKER}" ]]; then
   log "applying the scheduler's PBS server configuration"
   cat > "${PBS_HOME}/server_priv/resourcedef" <<'RESOURCEDEF'
 anonymous_metrics type=string
@@ -164,29 +167,18 @@ if ! /opt/pbs/bin/qstat -B >/dev/null 2>&1; then
   exit 1
 fi
 
-# Keep the scheduler host aligned with the stable name.
-/opt/pbs/bin/qmgr -c "set sched default sched_host = ${IDEA_SCHEDULER_DNS_NAME}"
-
-# Allow execution hosts time to reconnect after a replacement.
-/opt/pbs/bin/qmgr -c "set server node_fail_requeue = ${PBS_NODE_FAIL_REQUEUE:-600}"
-
-# A person, not this tool, closes admission before a migration and reopens it afterwards. Those
-# are qmgr operations and qmgr needs the caller in the server's managers list, which is otherwise
-# the software default of root on this server's own host -- and this server's host is now a task
-# with no shell into it. The bastion host keeps its batch client and stays an instance, so putting
-# it in the list gives those commands an authorised client over the batch protocol.
-#
-# It must be the EC2 private DNS name: the server matches the name it reverse-resolves the
-# caller's address to, not the private-zone alias in bastion-host.hostname. An absent row means no
-# bastion module, so no grant. `|| true` because re-adding an existing entry must not fail a start.
-#
-# Known ceiling: the entry names an address-derived host name, so after the bastion is replaced
-# the grant is stale until this task next starts, and the superseded entry is left behind. Prune
-# or re-resolve here if either becomes a problem.
-BASTION_PRIVATE_DNS_NAME="$(setting bastion-host.private_dns_name '')"
-if [[ -n "${BASTION_PRIVATE_DNS_NAME}" ]]; then
-  log "granting qmgr manager rights to root@${BASTION_PRIVATE_DNS_NAME}"
-  /opt/pbs/bin/qmgr -c "set server managers += root@${BASTION_PRIVATE_DNS_NAME}" || true
+# Existing scheduler policy belongs to the datastore, including host and retry settings.
+# Import preparation must supply any changes needed for the target environment.
+if [[ "${PBS_CREATE}" == 1 ]]; then
+  /opt/pbs/bin/qmgr -c "set sched default sched_host = ${IDEA_SCHEDULER_DNS_NAME}"
+  /opt/pbs/bin/qmgr -c "set server node_fail_requeue = ${PBS_NODE_FAIL_REQUEUE:-600}"
+  # The server authorizes managers by reverse-resolved host name.
+  # A private-zone alias cannot grant the bastion an administrative connection.
+  BASTION_PRIVATE_DNS_NAME="$(setting bastion-host.private_dns_name '')"
+  if [[ -n "${BASTION_PRIVATE_DNS_NAME}" ]]; then
+    log "granting qmgr manager rights to root@${BASTION_PRIVATE_DNS_NAME}"
+    /opt/pbs/bin/qmgr -c "set server managers += root@${BASTION_PRIVATE_DNS_NAME}" || true
+  fi
 fi
 
 log "starting pbs_sched"
@@ -203,7 +195,7 @@ if [[ -n "${IDEA_ROUTE53_ZONE_ID:-}" ]]; then
     --query Command.CommandId --output text 2>&1 | sed "s/^/[entrypoint] ssm command: /" || true
 fi
 
-if [[ ! -f "${MARKER}" ]]; then
+if [[ "${PBS_CREATE}" == 1 && ! -f "${MARKER}" ]]; then
   log "server attributes, default queue and hooks"
   /opt/pbs/bin/qmgr -c "set server flatuid = $(setting scheduler.openpbs.server.flatuid true)"
   /opt/pbs/bin/qmgr -c "set server job_history_enable = $(setting scheduler.openpbs.server.job_history_enable 1)"

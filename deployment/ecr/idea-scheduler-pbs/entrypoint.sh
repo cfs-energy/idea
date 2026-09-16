@@ -103,7 +103,9 @@ install -d -m 755 -o postgres -g postgres /run/postgresql
 # when PBS_HOME does not exist yet, then creates the datastore. Nothing here pre-creates
 # any of it: a partial tree makes postinstall skip population and the server then fails
 # chk_file_sec on the pieces that are missing. On an existing PBS_HOME it is a no-op.
-/opt/pbs/libexec/pbs_habitat || true
+if [[ "${PBS_CREATE}" == 1 ]]; then
+  /opt/pbs/libexec/pbs_habitat
+fi
 
 # First start only: the configuration a module host applies to a new PBS server in
 # configure_openpbs_server.jinja2, minus the host-only parts (systemd, the login alias).
@@ -116,10 +118,10 @@ setting() {
     --key "{\"key\":{\"S\":\"$1\"}}" \
     --query "Item.value.S || Item.value.N" --output text 2>/dev/null | grep -v '^None$' || echo "$2"
 }
-# Gated on a marker rather than on the datastore's absence: a PBS_HOME that exists but was
-# never configured (or a task that died mid-way) is configured on the next start.
+# Imported databases may have no container marker and still contain live policy.
+# Only a datastore absent at startup permits installation defaults.
 MARKER="${PBS_HOME}/.idea-server-configured"
-if [[ ! -f "${MARKER}" ]]; then
+if [[ "${PBS_CREATE}" == 1 && ! -f "${MARKER}" ]]; then
   log "applying the scheduler's PBS server configuration"
   cat > "${PBS_HOME}/server_priv/resourcedef" <<'RESOURCEDEF'
 anonymous_metrics type=string
@@ -194,23 +196,13 @@ if ! /opt/pbs/bin/qstat -B >/dev/null 2>&1; then
   exit 1
 fi
 
-# Every start, not only the first: the sched object's host is persisted in the datastore
-# and defaults to whatever host created it (sched_func.c sets it only when unset). The
-# sched identifies itself by the stable name, and the server refuses its registration
-# with PBSE_BADHOST unless this matches, so pin it to the stable name here.
-/opt/pbs/bin/qmgr -c "set sched default sched_host = ${IDEA_SCHEDULER_DNS_NAME}"
+# Existing scheduler policy belongs to the datastore, including host and retry settings.
+# Import preparation must supply any changes needed for the target environment.
+if [[ "${PBS_CREATE}" == 1 ]]; then
+  /opt/pbs/bin/qmgr -c "set sched default sched_host = ${IDEA_SCHEDULER_DNS_NAME}"
+  /opt/pbs/bin/qmgr -c "set server node_fail_requeue = ${PBS_NODE_FAIL_REQUEUE:-600}"
+fi
 
-# How long the server tolerates an unreachable execution host before requeuing its jobs.
-# The default, 310 s, is shorter than a replacement plus the hosts' re-read, so a slow
-# heal would rerun every running job from the start. Ten minutes covers a replacement
-# with margin; a host that is really gone just waits that long before its jobs move.
-/opt/pbs/bin/qmgr -c "set server node_fail_requeue = ${PBS_NODE_FAIL_REQUEUE:-600}"
-
-# The sched registers two connections with the server and the server checks the
-# sched's address against sched_host on each. Starting it only after that attribute is
-# pinned means its first registration is clean; starting it alongside the server (the
-# init script default) leaves the server holding a half-registered sched it then rejects
-# with PBSE_IVALREQ on every retry.
 log "starting pbs_sched"
 /opt/pbs/sbin/pbs_sched
 
@@ -233,7 +225,7 @@ if [[ -n "${IDEA_ROUTE53_ZONE_ID:-}" ]]; then
     --query Command.CommandId --output text 2>&1 | sed "s/^/[entrypoint] ssm command: /" || true
 fi
 
-if [[ ! -f "${MARKER}" ]]; then
+if [[ "${PBS_CREATE}" == 1 && ! -f "${MARKER}" ]]; then
   log "server attributes, default queue and hooks"
   /opt/pbs/bin/qmgr -c "set server flatuid = $(setting scheduler.openpbs.server.flatuid true)"
   /opt/pbs/bin/qmgr -c "set server job_history_enable = $(setting scheduler.openpbs.server.job_history_enable 1)"

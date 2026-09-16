@@ -466,7 +466,7 @@ test("the capability report names where the run stops and what each remaining st
 // step 0
 // ---------------------------------------------------------------------------------------------
 
-test("pre-flight passes on green account checks and says where the run will stop", async () => {
+test("pre-flight refuses missing capabilities even with green account checks", async () => {
   const state = fakeState();
   const observation = await steps(state).checkPrecondition("PREFLIGHT_PASSED", context({
     acceptTemplateComparison: expectedTemplateAcceptance(state),
@@ -477,8 +477,9 @@ test("pre-flight passes on green account checks and says where the run will stop
   assert.match(observation.detail, /PASS \[error\] template-comparison/);
   assert.match(observation.detail, /PASS \[error\] configuration-drift/);
   assert.match(observation.detail, /NOT CHECKED: that the control-plane image digest/);
-  assert.match(observation.detail, /^STOPS AT LEGACY_SCHEDULER_CAPTURED: 4 of 22 boundaries/m);
-  assert.equal(observation.ok, true);
+  for (const capability of MIGRATION_CAPABILITIES) assert.ok(observation.detail.includes(capability.id));
+  assert.match(observation.detail, /Use upgrade-cluster with enable_ecs: true/);
+  assert.equal(observation.ok, false);
 });
 
 test("pre-flight fails on each account check on its own", async () => {
@@ -1069,27 +1070,19 @@ async function driveMigration(state: FakeState, overrides: Partial<MigrateOption
   return bucket;
 }
 
-test("the run reaches the admission boundary, announces maintenance and stops there", async () => {
-  const state = fakeState();
-  const bucket = await driveMigration(state);
-
-  const record = JSON.parse([...bucket.objects.values()][0]?.body ?? "{}");
-  const snapshots = (record.snapshots as Array<{ name: string }>).map((snapshot) => snapshot.name);
-
-  assert.ok(snapshots.includes("migration:PREFLIGHT_PASSED:committed"));
-  assert.ok(snapshots.includes("migration:OPERATION_STARTED:committed"));
-  assert.ok(snapshots.includes("migration:ADMISSION_CLOSED:started"));
-  assert.ok(!snapshots.includes("migration:ADMISSION_CLOSED:committed"));
-  assert.equal(record.status, "failed");
-  assert.deepEqual(state.puts.map((put) => put.key), [captureKey(context())]);
-  assert.deepEqual(state.writes.map((write) => write.key), [
-    "cluster-manager.maintenance.message",
-    "cluster-manager.maintenance.enabled",
-  ]);
-  assert.ok(state.output.some((line) => line.startsWith("ANNOUNCE [ADMISSION_CLOSED]")));
-  assert.ok(state.output.some((line) => line.startsWith("RUN [OPERATION_STARTED]")));
-  assert.ok(!state.output.some((line) => line.startsWith("RUN [WORKLOAD_DRAINED]")));
-});
+for (const [name, stateFactory] of [["open", fakeState], ["closed", closedState]] as const) {
+  test(`missing capabilities refuse with admission ${name} before any mutation`, async () => {
+    const state = stateFactory();
+    const bucket = await driveMigration(state);
+    assert.equal(bucket.objects.size, 0);
+    assert.deepEqual(state.puts, []);
+    assert.deepEqual(state.writes, []);
+    assert.ok(!state.output.some((line) => line.startsWith("RUN [")));
+    const refusal = state.output.filter((line) => line.includes("missing capabilities:"));
+    assert.equal(refusal.length, 1);
+    for (const capability of MIGRATION_CAPABILITIES) assert.ok(refusal[0]?.includes(capability.id));
+  });
+}
 
 test("a failed account check stops the run before a record exists", async () => {
   const state = fakeState();
@@ -1098,24 +1091,4 @@ test("a failed account check stops the run before a record exists", async () => 
   assert.equal(bucket.objects.size, 0, "a refused pre-flight must not create a record");
   assert.deepEqual(state.writes, []);
   assert.ok(!state.output.some((line) => line.startsWith("RUN [")));
-});
-
-test("with admission closed by hand the run clears both admission boundaries and stops at the capture", async () => {
-  const state = closedState();
-  const bucket = await driveMigration(state);
-
-  const record = JSON.parse([...bucket.objects.values()][0]?.body ?? "{}");
-  const snapshots = (record.snapshots as Array<{ name: string }>).map((snapshot) => snapshot.name);
-
-  assert.ok(snapshots.includes("migration:ADMISSION_CLOSED:committed"), "admission did not commit");
-  assert.ok(snapshots.includes("migration:WORKLOAD_DRAINED:committed"), "the drain did not commit");
-  assert.ok(
-    !snapshots.includes("migration:LEGACY_SCHEDULER_CAPTURED:started"),
-    "a blocked step must refuse before its started marker",
-  );
-  assert.ok(state.output.some((line) => line.startsWith("RUN [WORKLOAD_DRAINED]")));
-  assert.ok(
-    state.output.some((line) => line.includes("LEGACY_SCHEDULER_CAPTURED cannot be executed")),
-    "the run did not name where it stopped",
-  );
 });
