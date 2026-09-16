@@ -99,6 +99,8 @@ The deploy grants the cluster-manager role `ce:GetCostAndUsage`, `ce:GetTags` an
 
 For GovCloud billing, or a commercial billing account with no cluster, use cost-only mode in the commercial account that can read the bill. It runs the same collector and a Datadog sidecar in one Fargate task, with no cluster settings table. Enable historical ingestion for `idea.cost` as above, activate the cost allocation tags in that billing account, and deploy:
 
+Prepare the billing account once, exactly as for a cluster: copy the control-plane image and the Datadog agent image into that account's ECR and record the agent digest, create the Datadog API key secret there, and make sure the subnets you name can reach Cost Explorer and Datadog. The collector tags every point with the `--cluster-name` you give, so use the name the metrics should carry, not the billing account's.
+
 ```bash
 ideactl cost-collector deploy --aws-region us-east-1 --stack-name gov-spend \
   --cluster-name <GOVCLOUD_CLUSTER_NAME> \
@@ -110,6 +112,22 @@ ideactl cost-collector deploy --aws-region us-east-1 --stack-name gov-spend \
 Use images supporting Linux x86_64 and an API key secret in the deployment region. Subnets must be in one VPC and all public or all private. Public subnets receive a public IP; private subnets need outbound access through NAT. The default interval is six hours with a three-day lookback and the same tag keys as the cluster collector; `--by-account` adds linked account spend. `--cluster-name` labels the account's bill; it does not filter it to that cluster. Remove it with `ideactl cost-collector destroy --aws-region us-east-1 --stack-name gov-spend`.
 
 Storage levels come from each FSx for NetApp ONTAP file system in `shared-storage` that carries metrics credentials: an ONTAP user that can read `/api/storage/quota/reports` and `/api/storage/volumes` on the SVM management endpoint, its password in a Secrets Manager secret tagged `idea:ClusterName=<CLUSTER_NAME>` and `idea:ModuleName=cluster-manager`, which the cluster-manager role can already read. `idea.storage.used_bytes` and `idea.storage.files_used` are per `user`, `volume` and `qtree`; `idea.storage.volume_size_bytes`, `idea.storage.volume_used_bytes` and `idea.storage.volume_tier_bytes` (`tier:ssd`, `tier:capacity_pool`) per volume; every point carries `svm` and `filesystem`.
+
+Create the ONTAP user on the file system's cluster shell, once per file system, and its password secret once per cluster that reads it. The SVM shell has no `security login` commands, so this is `fsxadmin` on the management endpoint (set its password in the FSx console first):
+
+```bash
+ssh fsxadmin@management.<FILE_SYSTEM_ID>.fsx.<REGION>.amazonaws.com
+security login rest-role create -vserver <SVM> -role idea-metrics -api /api/storage/quota/reports -access readonly
+security login rest-role create -vserver <SVM> -role idea-metrics -api /api/storage/volumes -access readonly
+security login create -vserver <SVM> -user-or-group-name idea-metrics -application http -authentication-method password -role idea-metrics
+```
+
+```bash
+aws secretsmanager create-secret --name idea-<CLUSTER_NAME>-ontap-metrics-<NAME> --secret-string '<password>' \
+  --tags Key=idea:ClusterName,Value=<CLUSTER_NAME> Key=idea:ModuleName,Value=cluster-manager --query ARN
+```
+
+The two tags are what let the cluster-manager role read the secret; without them the collector logs a read failure and publishes nothing for that file system. Then point the settings at both:
 
 ```bash
 ./idea-admin.sh config set --cluster-name <CLUSTER_NAME> --aws-region <REGION> \
