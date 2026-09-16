@@ -314,6 +314,10 @@ function stageRuntime(shellArtifact, runtimeRoot) {
     join(shellDist, "node_modules", "aws-cdk"),
     join(runtimeRoot, "dist", "node_modules", "aws-cdk"),
   );
+  copyRequired(
+    join(shellDist, "custom-resource-handlers"),
+    join(runtimeRoot, "dist", "custom-resource-handlers"),
+  );
   copyRequired(join(shellDist, "cdk.json"), join(runtimeRoot, "dist", "cdk.json"));
 
   writeFileSync(

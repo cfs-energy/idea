@@ -22,7 +22,24 @@ on:
         required: false
         default: ''
         type: string
+concurrency:
+  group: release-publication
+  cancel-in-progress: false
 jobs:
+  checks:
+    uses: ./.github/workflows/ideactl_checks.yaml
+  tests:
+    uses: ./.github/workflows/unit_tests.yaml
+  release_available:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Refuse an existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash source/idea/ideactl/scripts/assert-new-release.sh
   build_ideactl_artifacts:
     name: Build ideactl macOS arm64
     runs-on: macos-15
@@ -53,37 +70,13 @@ jobs:
         run: npm ci
       - name: Build the macOS release file
         run: npm run build:dist -- --target darwin-arm64
-      - name: Test the macOS release file from an empty directory
+      - name: Test the extracted macOS release file offline
         run: |
           set -euo pipefail
-          ARTIFACT="${PWD}/dist/release/darwin-arm64/ideactl"
           SMOKE_ROOT=$(mktemp -d)
           trap 'rm -rf "$SMOKE_ROOT"' EXIT
-          mkdir -p "$SMOKE_ROOT/config" "$SMOKE_ROOT/home" "$SMOKE_ROOT/tmp" "$SMOKE_ROOT/empty-path" "$SMOKE_ROOT/work"
-          cp test/shell-path/values.yml "$SMOKE_ROOT/values.yml"
-          (
-            cd "$SMOKE_ROOT/work"
-            env -i \
-              HOME="$SMOKE_ROOT/home" \
-              IDEA_USER_HOME="$SMOKE_ROOT/home/.idea" \
-              LANG=en_US.UTF-8 \
-              NODE_PATH= \
-              PATH="$SMOKE_ROOT/empty-path" \
-              TMPDIR="$SMOKE_ROOT/tmp" \
-              "$ARTIFACT" about
-            env -i \
-              HOME="$SMOKE_ROOT/home" \
-              IDEA_USER_HOME="$SMOKE_ROOT/home/.idea" \
-              LANG=en_US.UTF-8 \
-              NODE_PATH= \
-              PATH="$SMOKE_ROOT/empty-path" \
-              TMPDIR="$SMOKE_ROOT/tmp" \
-              "$ARTIFACT" config generate \
-                --values-file "$SMOKE_ROOT/values.yml" \
-                --config-dir "$SMOKE_ROOT/config" \
-                --force
-          )
-          test -s "$SMOKE_ROOT/config/config/idea.yml"
+          tar -xzf dist/release/ideactl-v*-darwin-arm64.tar.gz -C "$SMOKE_ROOT"
+          node test/support/release-smoke.ts "$SMOKE_ROOT/ideactl"
       - name: Upload the macOS release artifact
         uses: actions/upload-artifact@v4
         with:
@@ -124,38 +117,13 @@ jobs:
         run: npm ci
       - name: Build the Linux release file
         run: npm run build:dist -- --target linux-arm64
-      - name: Test the Linux release file from an empty directory
+      - name: Test the extracted Linux release file offline
         run: |
           set -euo pipefail
-          ARTIFACT="${PWD}/dist/release/linux-arm64/ideactl"
-          chmod +x "$ARTIFACT"
           SMOKE_ROOT=$(mktemp -d)
           trap 'rm -rf "$SMOKE_ROOT"' EXIT
-          mkdir -p "$SMOKE_ROOT/config" "$SMOKE_ROOT/home" "$SMOKE_ROOT/tmp" "$SMOKE_ROOT/empty-path" "$SMOKE_ROOT/work"
-          cp test/shell-path/values.yml "$SMOKE_ROOT/values.yml"
-          (
-            cd "$SMOKE_ROOT/work"
-            env -i \
-              HOME="$SMOKE_ROOT/home" \
-              IDEA_USER_HOME="$SMOKE_ROOT/home/.idea" \
-              LANG=en_US.UTF-8 \
-              NODE_PATH= \
-              PATH="$SMOKE_ROOT/empty-path" \
-              TMPDIR="$SMOKE_ROOT/tmp" \
-              "$ARTIFACT" about
-            env -i \
-              HOME="$SMOKE_ROOT/home" \
-              IDEA_USER_HOME="$SMOKE_ROOT/home/.idea" \
-              LANG=en_US.UTF-8 \
-              NODE_PATH= \
-              PATH="$SMOKE_ROOT/empty-path" \
-              TMPDIR="$SMOKE_ROOT/tmp" \
-              "$ARTIFACT" config generate \
-                --values-file "$SMOKE_ROOT/values.yml" \
-                --config-dir "$SMOKE_ROOT/config" \
-                --force
-          )
-          test -s "$SMOKE_ROOT/config/config/idea.yml"
+          tar -xzf dist/release/ideactl-v*-linux-arm64.tar.gz -C "$SMOKE_ROOT"
+          node test/support/release-smoke.ts "$SMOKE_ROOT/ideactl"
       - name: Test the Linux release file in a container image
         run: |
           set -euo pipefail
@@ -163,7 +131,7 @@ jobs:
           SMOKE_ROOT=$(mktemp -d)
           trap 'rm -rf "$SMOKE_ROOT"' EXIT
           mkdir -p "$SMOKE_ROOT/config"
-          cp test/shell-path/values.yml "$SMOKE_ROOT/values.yml"
+          cp test/cli/shell-path-values.yml "$SMOKE_ROOT/values.yml"
           docker build \
             --tag "$IMAGE" \
             --file scripts/ideactl-linux.Dockerfile \
@@ -195,6 +163,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
   build_push_ideactl:
+    needs: [release_available, checks, tests, build_ideactl_artifacts, build_ideactl_linux_artifact]
     runs-on: ubuntu-large
     permissions:
       id-token: write
@@ -254,14 +223,20 @@ jobs:
               nice-dcv-amzn2023-aarch64.tgz \
               > checksums.txt
           )
-      - name: Build and Push Scheduler and Control-Plane Images
+      - name: Set up cross-platform smoke execution
+        uses: docker/setup-qemu-action@v3
+      - name: Build and test temporary images
         env:
+          GH_TOKEN: ${{ github.token }}
           ECR_REGISTRY: ${{ github.event.inputs.ecr_repository }}
           CONTROL_PLANE_IMAGE_NAME: ${{ github.event.inputs.control_plane_image_name || 'idea-control-plane' }}
           SCHEDULER_IMAGE_NAME: ${{ github.event.inputs.scheduler_image_name || 'idea-scheduler-pbs' }}
         run: |
           set -euo pipefail
+          bash source/idea/ideactl/scripts/assert-new-release.sh
+          test -s source/idea/ideactl/test/cli/shell-path-values.yml
           VERSION=$(tr -d '[:space:]' < IDEA_VERSION.txt)
+          TEMP_TAG="build-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           ECR_REGISTRY="${ECR_REGISTRY:-$(sed -nE 's|^IDEA_DOCKER_REPO_DEFAULT="([^/]+/[^/]+)/.*"$|\1|p' idea-admin.sh)}"
           if [ -z "${ECR_REGISTRY}" ]; then
             echo "::error::Could not determine the public registry from idea-admin.sh."
@@ -277,34 +252,48 @@ jobs:
             --build-arg IDEA_VERSION="${VERSION}" \
             --cache-from type=gha,scope=idea-scheduler-pbs \
             --cache-to type=gha,mode=max,scope=idea-scheduler-pbs \
-            -t "${ECR_REGISTRY}/${SCHEDULER_IMAGE_NAME}:v${VERSION}" \
+            --metadata-file /tmp/scheduler-image.json \
+            -t "${ECR_REGISTRY}/${SCHEDULER_IMAGE_NAME}:${TEMP_TAG}" \
             deployment/ecr/idea-scheduler-pbs
+          SCHEDULER_DIGEST=$(jq -er '.["containerimage.digest"]' /tmp/scheduler-image.json)
+          SCHEDULER_REF="${ECR_REGISTRY}/${SCHEDULER_IMAGE_NAME}@${SCHEDULER_DIGEST}"
           docker buildx build --push --platform linux/amd64,linux/arm64 \
             --build-arg IDEA_VERSION="${VERSION}" \
-            --build-arg PBS_IMAGE="${ECR_REGISTRY}/${SCHEDULER_IMAGE_NAME}:v${VERSION}" \
+            --build-arg PBS_IMAGE="${SCHEDULER_REF}" \
             --build-context dcv-packages=/tmp/dcv-packages \
             --cache-from type=gha,scope=idea-control-plane \
             --cache-to type=gha,mode=max,scope=idea-control-plane \
-            -t "${ECR_REGISTRY}/${CONTROL_PLANE_IMAGE_NAME}:v${VERSION}" \
-            -t "${ECR_REGISTRY}/${CONTROL_PLANE_IMAGE_NAME}:${VERSION}" \
-            -t "${ECR_REGISTRY}/${CONTROL_PLANE_IMAGE_NAME}:latest" \
+            --metadata-file /tmp/control-plane-image.json \
+            -t "${ECR_REGISTRY}/${CONTROL_PLANE_IMAGE_NAME}:${TEMP_TAG}" \
             -f deployment/ecr/idea-control-plane/Dockerfile .
           SMOKE_ROOT=$(mktemp -d)
           trap 'rm -rf "$SMOKE_ROOT"' EXIT
           mkdir -p "$SMOKE_ROOT/config"
-          cp source/idea/ideactl/test/shell-path/values.yml "$SMOKE_ROOT/values.yml"
-          IMAGE="${ECR_REGISTRY}/${CONTROL_PLANE_IMAGE_NAME}:v${VERSION}"
-          docker run --rm --workdir /tmp/work "$IMAGE" ideactl about
-          docker run --rm \
-            --workdir /tmp/work \
-            --volume "$SMOKE_ROOT/values.yml:/tmp/values.yml:ro" \
-            --volume "$SMOKE_ROOT/config:/tmp/config" \
-            "$IMAGE" \
-            ideactl config generate \
-              --values-file /tmp/values.yml \
-              --config-dir /tmp/config \
-              --force
-          test -s "$SMOKE_ROOT/config/config/idea.yml"
+          cp source/idea/ideactl/test/cli/shell-path-values.yml "$SMOKE_ROOT/values.yml"
+          CONTROL_PLANE_DIGEST=$(jq -er '.["containerimage.digest"]' /tmp/control-plane-image.json)
+          IMAGE="${ECR_REGISTRY}/${CONTROL_PLANE_IMAGE_NAME}@${CONTROL_PLANE_DIGEST}"
+          for PLATFORM in linux/amd64 linux/arm64; do
+            docker run --rm --platform "$PLATFORM" --entrypoint /bin/bash "$SCHEDULER_REF" -c '/opt/pbs/sbin/pbs_server --version'
+            docker run --rm --platform "$PLATFORM" --workdir /tmp/work "$IMAGE" ideactl about
+            docker run --rm --platform "$PLATFORM" \
+              --workdir /tmp/work \
+              --volume "$SMOKE_ROOT/values.yml:/tmp/values.yml:ro" \
+              --volume "$SMOKE_ROOT/config:/tmp/config" \
+              "$IMAGE" \
+              ideactl config generate \
+                --values-file /tmp/values.yml \
+                --config-dir /tmp/config \
+                --force
+            test -s "$SMOKE_ROOT/config/config/idea.yml"
+          done
+          bash source/idea/ideactl/scripts/assert-new-release.sh
+          for REF in "$SCHEDULER_REF" "$IMAGE"; do
+            REPOSITORY="${REF%@*}"
+            docker buildx imagetools create \
+              --tag "${REPOSITORY}:v${VERSION}" \
+              --tag "${REPOSITORY}:${VERSION}" \
+              --tag "${REPOSITORY}:latest" "$REF"
+          done
   publish_ideactl_artifacts:
     if: github.event_name == 'push' && github.ref_name == 'main'
     needs:
@@ -335,17 +324,11 @@ jobs:
           set -euo pipefail
           VERSION=$(tr -d '[:space:]' < IDEA_VERSION.txt)
           TAG="v${VERSION}"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" --clobber \
-              release/*.tar.gz \
-              release/*.tar.gz.sha256 \
-              release/SHA256SUMS
-          else
-            gh release create "$TAG" \
-              release/*.tar.gz \
-              release/*.tar.gz.sha256 \
-              release/SHA256SUMS \
-              --target "$GITHUB_SHA" \
-              --title "IDEA ${VERSION}" \
-              --notes "Self-contained ideactl executables and checksums for this release."
-          fi
+          bash source/idea/ideactl/scripts/assert-new-release.sh
+          gh release create "$TAG" \
+            release/*.tar.gz \
+            release/*.tar.gz.sha256 \
+            release/SHA256SUMS \
+            --target "$GITHUB_SHA" \
+            --title "IDEA ${VERSION}" \
+            --notes "Self-contained ideactl executables and checksums for this release."

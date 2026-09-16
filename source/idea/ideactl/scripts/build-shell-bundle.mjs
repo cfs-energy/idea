@@ -8,7 +8,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { builtinModules } from "node:module";
+import { builtinModules, createRequire } from "node:module";
 import {
   chmodSync,
   copyFileSync,
@@ -342,13 +342,26 @@ module.exports = {
         "--target=node22",
         "--legal-comments=external",
         `--alias:chokidar=${optionalWatcherShim}`,
-        `--banner:js=import { createRequire as __ideactlCreateRequire } from "node:module"; const require = __ideactlCreateRequire(import.meta.url);`,
+        `--banner:js=import { createRequire as __ideactlCreateRequire } from "node:module"; const require = __ideactlCreateRequire(import.meta.url); const __filename = import.meta.filename; const __dirname = import.meta.dirname;`,
         `--metafile=${metadataFile}`,
         `--outfile=${bundleFile}`,
       ],
       { ...process.env, NODE_PATH: join(PACKAGE_ROOT, "node_modules") },
     );
     chmodSync(bundleFile, 0o755);
+
+    // CDK resolves these non-JavaScript inputs relative to its bundled module location.
+    // Keep them beside the application so synthesis also works after archive extraction.
+    const cdkRequire = createRequire(join(PACKAGE_ROOT, "node_modules", "aws-cdk-lib", "package.json"));
+    copyFileSync(
+      join(dirname(cdkRequire.resolve("@aws/cloudformation-validate")), "bindings_wasm_bg.wasm"),
+      join(dirname(bundleFile), "bindings_wasm_bg.wasm"),
+    );
+    cpSync(
+      join(PACKAGE_ROOT, "node_modules", "aws-cdk-lib", "custom-resource-handlers"),
+      join(output, "dist", "custom-resource-handlers"),
+      { recursive: true },
+    );
 
     run(process.execPath, [join(PACKAGE_ROOT, "scripts", "build-lambda-bundles.mjs"), lambdaAssets]);
     const resources = copyRuntimeResources(

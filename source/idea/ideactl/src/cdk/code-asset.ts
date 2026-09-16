@@ -2,7 +2,7 @@
  * Locates Lambda code assets.
  *
  * Every handler is a Node handler: `src/lambda/<package>/index.ts` in the source tree, or
- * `dist/src/lambda/<package>/index.js` in a build. A package with neither is an error.
+ * `dist/src/lambda/<package>/index.js` in a build. Standalone releases use prebuilt bundles.
  *
  * An asset root holds one bundled `index.mjs`, so the handler string is `index.handler`. Two are
  * supported:
@@ -137,8 +137,11 @@ export class IdeaCodeAsset {
   readonly lambdaPackageName: string;
 
   constructor(lambdaPackageName: string) {
+    if (!/^[a-zA-Z0-9_-]+$/.test(lambdaPackageName)) {
+      throw new Error(`invalid lambda package name: ${lambdaPackageName}`);
+    }
     this.lambdaPackageName = lambdaPackageName;
-    if (nodeLambdaEntryPoint(lambdaPackageName) === undefined) {
+    if (this.prebuiltPath() === undefined && nodeLambdaEntryPoint(lambdaPackageName) === undefined) {
       throw new Error(
         `lambda package not found: ${lambdaPackageName}; looked for ` +
           `${join(NODE_LAMBDA_DIR, lambdaPackageName, 'index.ts')} and ` +
@@ -158,9 +161,17 @@ export class IdeaCodeAsset {
 
   /** The directory handed to `lambda.Code.fromAsset`. */
   assetPath(): string {
+    return this.prebuiltPath() ?? this.buildNodeLambda();
+  }
+
+  private prebuiltPath(): string | undefined {
     const prebuilt = join(distResourcesDir(), 'lambda_assets', this.lambdaPackageName);
-    if (existsSync(prebuilt)) return prebuilt;
-    return this.buildNodeLambda();
+    if (!existsSync(prebuilt)) return undefined;
+    const bundle = join(prebuilt, NODE_BUNDLE_FILE);
+    if (!existsSync(bundle) || !statSync(bundle).isFile() || statSync(bundle).size === 0) {
+      throw new Error(`invalid prebuilt lambda bundle: ${bundle}; expected a nonempty file`);
+    }
+    return prebuilt;
   }
 
   /**

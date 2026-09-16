@@ -17,6 +17,7 @@ import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import * as yaml from "js-yaml";
+import { smokeRelease } from "../support/release-smoke.ts";
 import { ideaVersion } from "../../src/version.ts";
 import { optionalService } from "../support/fixtures.ts";
 
@@ -281,10 +282,15 @@ test("release automation builds exactly the two agreed targets and parses", { sk
   assert.deepEqual(builtTargets.sort(), ["darwin-arm64", "linux-arm64"]);
 
   assert.match(releaseWorkflow, /sha256sum --check SHA256SUMS/);
-  assert.match(releaseWorkflow, /release upload/);
+  assert.match(releaseWorkflow, /release create/);
+  assert.doesNotMatch(releaseWorkflow, /--clobber/);
   assert.match(
     releaseWorkflow,
     /needs:\s*\n\s+- build_ideactl_artifacts\s*\n\s+- build_ideactl_linux_artifact\s*\n\s+- build_push_ideactl/,
   );
   assert.match(releaseWorkflow, /secrets\.ECR_ROLE/);
+});
+
+test("extracted standalone executable synthesizes a Lambda stack", { skip: !canBuild }, () => {
+  smokeRelease(EXECUTABLE);
 });

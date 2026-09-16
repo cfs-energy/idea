@@ -11,11 +11,11 @@
  */
 
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { IdeaCodeAsset, nodeLambdaPackages } from '../../src/cdk/code-asset.ts';
+import { IdeaCodeAsset, nodeLambdaPackages, distResourcesDir } from '../../src/cdk/code-asset.ts';
 
 test('a Node asset root holds the bundle index.handler names', () => {
   const packages = nodeLambdaPackages();
@@ -45,4 +45,33 @@ test('a package with no handler source is an error', () => {
     () => new IdeaCodeAsset('idea_no_such_handler_package'),
     /lambda package not found: idea_no_such_handler_package/,
   );
+});
+
+
+test('a validated prebuilt bundle works without handler sources', () => {
+  const name = 'release_test_handler';
+  const root = join(distResourcesDir(), 'lambda_assets', name);
+  mkdirSync(root, { recursive: true });
+  try {
+    assert.throws(() => new IdeaCodeAsset(name), /invalid prebuilt lambda bundle/);
+    writeFileSync(join(root, 'index.mjs'), '');
+    assert.throws(() => new IdeaCodeAsset(name), /invalid prebuilt lambda bundle/);
+    rmSync(join(root, 'index.mjs'));
+    mkdirSync(join(root, 'index.mjs'));
+    assert.throws(() => new IdeaCodeAsset(name), /invalid prebuilt lambda bundle/);
+    rmSync(join(root, 'index.mjs'), { recursive: true });
+    writeFileSync(join(root, 'index.mjs'), 'export const handler = async () => {};');
+    const asset = new IdeaCodeAsset(name);
+    assert.equal(asset.assetPath(), root);
+    rmSync(join(root, 'index.mjs'));
+    assert.throws(() => asset.assetPath(), /invalid prebuilt lambda bundle/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('package names cannot escape the asset root', () => {
+  for (const name of ['', '..', '../other', '/tmp/handler', 'a/b']) {
+    assert.throws(() => new IdeaCodeAsset(name), /invalid lambda package name/);
+  }
 });

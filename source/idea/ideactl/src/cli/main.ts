@@ -505,7 +505,9 @@ const program = new Command('ideactl')
           ? positionalRegion
           : undefined;
     selectActionRegion(awsRegion);
-    if (awsRegion !== undefined && deps.callerIdentity !== undefined) {
+    const offlineReplay = actionCommand.name() === "cdk-app" &&
+      typeof options.configFile === "string" && typeof options.synthReads === "string";
+    if (!offlineReplay && awsRegion !== undefined && deps.callerIdentity !== undefined) {
       const identity = await deps.callerIdentity({ awsRegion, awsProfile: selected });
       deps.out(formatAwsIdentity(identity, selected));
     }

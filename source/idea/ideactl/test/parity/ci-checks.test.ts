@@ -287,3 +287,17 @@ test("full-suite check propagates a test failure", () => {
     /controlled failure|full test suite failed/u,
   );
 });
+
+
+test("multiple named checks run in order and stop on failure", () => {
+  const root = temporaryRoot("multiple");
+  writeDependencyFixture(root, "1.2.3");
+  const success = runCheck("hygiene", "dependencies", "--root", root);
+  assert.equal(success.status, 0, success.stdout + success.stderr);
+  assert.match(success.stdout, /PASS repository hygiene[\s\S]*PASS/);
+  writeDependencyFixture(root, "^1.2.3");
+  const failure = runCheck("dependencies", "hygiene", "--root", root);
+  assert.equal(failure.status, 1);
+  assert.doesNotMatch(failure.stdout, /PASS repository hygiene/);
+  assert.equal(runCheck("all", "hygiene", "--root", root).status, 1);
+});

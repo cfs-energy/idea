@@ -15,6 +15,7 @@ import { dirname, join } from "node:path";
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { smokeRelease } from "../support/release-smoke.ts";
 import { ideaVersion } from "../../src/version.ts";
 
 interface ShellManifest {
@@ -207,4 +208,9 @@ test("clean runtime prints its version and renders configuration", () => {
       deploymentCli.stdout.trim(),
     ].join("\n"),
   );
+});
+
+test("extracted shell artifact synthesizes a Lambda stack without handler sources", () => {
+  assert.equal(existsSync(join(ARTIFACT, "dist", "src", "lambda")), false);
+  smokeRelease(join(ARTIFACT, "bin", "ideactl"), RUNTIME_BIN);
 });

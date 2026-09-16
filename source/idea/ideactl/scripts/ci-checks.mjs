@@ -629,19 +629,23 @@ export function runSyntheticParity(packageRoot, testFile) {
  *
  * @param {string[]} argv process arguments
  * @returns {{
- *   command: string;
+ *   commands: string[];
  *   packageRoot: string;
  *   workflowRoot: string | undefined;
  *   parityTest: string | undefined;
  * }}
  */
 function parseArguments(argv) {
-  const command = argv[0] ?? "all";
+  const commands = [];
   let packageRoot = DEFAULT_PACKAGE_ROOT;
   let workflowRoot;
   let parityTest;
-  for (let index = 1; index < argv.length; index += 1) {
+  for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
+    if (flag !== undefined && !flag.startsWith("--")) {
+      commands.push(flag);
+      continue;
+    }
     const value = argv[index + 1];
     if (
       !["--root", "--workflows", "--parity-test"].includes(flag ?? "") ||
@@ -660,7 +664,7 @@ function parseArguments(argv) {
     index += 1;
   }
   return {
-    command,
+    commands: commands.length === 0 ? ["all"] : commands,
     packageRoot,
     workflowRoot:
       workflowRoot ??
@@ -691,7 +695,8 @@ export async function runCli(argv) {
     },
   };
 
-  if (options.command === "all") {
+  if (options.commands.includes("all")) {
+    if (options.commands.length !== 1) throw new Error("all cannot be combined with other checks");
     const failures = [];
     for (const check of [
       "dependencies",
@@ -719,11 +724,11 @@ export async function runCli(argv) {
     return;
   }
 
-  const action = actions[options.command];
-  if (action === undefined) {
-    throw new Error(`unknown check: ${options.command}`);
+  for (const command of options.commands) {
+    const action = actions[command];
+    if (action === undefined) throw new Error(`unknown check: ${command}`);
+    action();
   }
-  action();
 }
 
 const entry = process.argv[1];
