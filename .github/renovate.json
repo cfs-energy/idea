@@ -3,11 +3,65 @@
   "extends": [
     "config:best-practices"
   ],
-  "pip_requirements": {
-    "fileMatch": [
-      "requirements\\/.*\\.(in)$"
+  "timezone": "America/New_York",
+  "schedule": [
+    "* 0-6 * * 1"
+  ],
+  "dependencyDashboard": true,
+  "prConcurrentLimit": 5,
+  "branchConcurrentLimit": 5,
+  "prHourlyLimit": 2,
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "prConcurrentLimit": 5
+  },
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": [
+      "* 0-6 1 * *"
     ]
   },
+  "pip_requirements": {
+    "fileMatch": [
+      "/(^|/)requirements/[^/]+\\.in$/"
+    ]
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "fileMatch": [
+        "/(^|/)software_versions\\.yml$/"
+      ],
+      "matchStrings": [
+        "node_version:\\s*(?<currentValue>\\S+)"
+      ],
+      "depNameTemplate": "node",
+      "datasourceTemplate": "node-version"
+    },
+    {
+      "customType": "regex",
+      "fileMatch": [
+        "/(^|/)software_versions\\.yml$/"
+      ],
+      "matchStrings": [
+        "python_version:\\s*(?<currentValue>\\S+)"
+      ],
+      "depNameTemplate": "python",
+      "datasourceTemplate": "python-version"
+    },
+    {
+      "customType": "regex",
+      "fileMatch": [
+        "/(^|/)software_versions\\.yml$/"
+      ],
+      "matchStrings": [
+        "nvm_version:\\s*(?<currentValue>\\S+)"
+      ],
+      "depNameTemplate": "nvm-sh/nvm",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.*)$"
+    }
+  ],
   "labels": [
     "renovate"
   ],
@@ -35,6 +89,17 @@
       "addLabels": [
         "optional"
       ]
+    },
+    {
+      "description": "Group every scheduled non-major update, including digest pins",
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "pin",
+        "digest"
+      ],
+      "groupName": "all non-major dependencies",
+      "groupSlug": "all-non-major"
     }
   ]
 }
