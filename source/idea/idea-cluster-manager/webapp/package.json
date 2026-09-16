@@ -28,7 +28,7 @@
     "dot-object": "^2.1.4",
     "idb": "^8.0.0",
     "loader-utils": "^3.2.1",
-    "minimatch": "3.1.2",
+    "minimatch": "3.1.5",
     "minimist": ">=1.2.6",
     "moment": "^2.29.4",
     "moment-timezone": "^0.5.38",
@@ -83,7 +83,7 @@
     "sass": "sass src/Sass:src/Css --watch --no-source-map"
   },
   "resolutions": {
-    "minimatch": "3.1.2",
+    "minimatch": "3.1.5",
     "nth-check": ">=2.0.1",
     "d3-color": ">=3.1.0",
     "minimist": ">=1.2.6",
