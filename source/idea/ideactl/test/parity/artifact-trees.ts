@@ -210,7 +210,10 @@ export function assembleShellResources(destination: string): void {
         "copyRuntimeResources(destination, lambdaAssets);",
       ].join("\n"),
     );
-  const work = mkdtempSync(join(tmpdir(), "ideactl-artifact-parity-shell-"));
+  // The copied script imports esbuild by name, so it has to run under the package's node_modules.
+  const cache = join(PACKAGE_ROOT, "node_modules", ".cache");
+  mkdirSync(cache, { recursive: true });
+  const work = mkdtempSync(join(cache, "artifact-parity-shell-"));
   const harness = join(work, "run-shell-copy.mjs");
   const lambdaAssets = join(work, "lambda_assets");
   mkdirSync(lambdaAssets, { recursive: true });
