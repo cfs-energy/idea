@@ -27,6 +27,7 @@ import { run } from "../../src/cli/main.ts";
 import { deleteBackupsCommand, deleteCluster, type DeleteClusterDeps } from "../../src/cli/commands/delete-cluster.ts";
 import { configUpdate } from "../../src/cli/commands/config.ts";
 import { runDeploy } from "../../src/cli/commands/deploy.ts";
+import { ExitWithCode } from "../../src/cli/cdk-invoker.ts";
 import { ClusterConfig, type ModuleInfo, type ScanPage } from "../../src/config/cluster-config.ts";
 import type { ConfigEntry, ModuleSpec } from "../../src/config/cluster-config-db.ts";
 import {
@@ -302,7 +303,9 @@ test("deploy without upgrade performs no second deployment after the first run m
     deploymentId: "00000000-0000-4000-8000-000000000001",
   };
   await runDeploy(deps, ["cluster"], options);
-  await runDeploy(deps, ["cluster"], options);
+  // The second run deploys nothing and says so with a non-zero exit, so a script cannot mistake
+  // advice for work done.
+  await assert.rejects(runDeploy(deps, ["cluster"], options), (error: unknown) => error instanceof ExitWithCode && error.code === 1);
 
   assert.equal(deps.spawned.length, 1);
   assert.equal(deps.executed.length, 1);
