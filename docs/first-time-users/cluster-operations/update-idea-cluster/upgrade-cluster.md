@@ -21,7 +21,12 @@ protection. Missing module rows or unreadable versions stop the run.
 
 Historical upgrades always replace global settings, add missing configuration, and apply paired
 OS/AMI and conditional instance-type updates. Phase prompts and skip flags cannot omit these
-steps. Drift acceptance and EOL refusal still apply. The scheduler's old periodic-check interval
+steps. Drift acceptance and EOL refusal still apply: a cluster more than one release behind
+holds the previous release's generated defaults in many rows (GPU driver versions, package
+lists, DCV package URLs), which the preview lists as differing from generated configuration,
+so a historical run needs `--accept-config-drift` after reviewing that preview. An operator
+pointing `ecs.image` at a private registry before the run (partitions without a public
+registry) keeps that row; the run registers the container module around it. The scheduler's old periodic-check interval
 is copied to the reconciler interval only if the latter is absent. Conflicts are reported and
 preserved, and the old key remains for older running code. Existing lists keep their custom values.
 Before success, settings and deployed module versions are read back. A failed verification requires
