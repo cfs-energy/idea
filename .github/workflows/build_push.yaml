@@ -35,7 +35,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Refuse an existing release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -53,15 +53,15 @@ jobs:
       run:
         working-directory: source/idea/ideactl
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Set up release runtime
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '26.8.2'
           cache: npm
           cache-dependency-path: source/idea/ideactl/package-lock.json
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.13'
       - name: Check package version
@@ -84,7 +84,7 @@ jobs:
           tar -xzf dist/release/ideactl-v*-${{ matrix.target }}.tar.gz -C "$SMOKE_ROOT"
           node test/support/release-smoke.ts "$SMOKE_ROOT/ideactl"
       - name: Upload the macOS release artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ideactl-${{ matrix.target }}
           path: |
@@ -108,15 +108,15 @@ jobs:
       run:
         working-directory: source/idea/ideactl
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Set up release runtime
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '26.8.2'
           cache: npm
           cache-dependency-path: source/idea/ideactl/package-lock.json
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.13'
       - name: Check package version
@@ -170,7 +170,7 @@ jobs:
               --force
           test -s "$SMOKE_ROOT/config/config/idea.yml"
       - name: Upload the Linux release artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ideactl-${{ matrix.target }}
           path: |
@@ -186,9 +186,9 @@ jobs:
       run:
         working-directory: source/idea/ideactl
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Set up release runtime
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '26.8.2'
           cache: npm
@@ -215,7 +215,7 @@ jobs:
             Remove-Item -Recurse -Force $smokeRoot
           }
       - name: Upload the Windows release artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ideactl-windows-amd64
           path: |
@@ -240,7 +240,7 @@ jobs:
             echo "::error::A dispatch from $GITHUB_REF_NAME must set both control_plane_image_name and scheduler_image_name, or it would overwrite released images from an unmerged ref."
             exit 1
           fi
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check version consistency
         run: |
           SH_REV=$(grep -m1 '^IDEA_REVISION=' idea-admin.sh | sed -E 's/.*:-"([^"]+)"\}.*/\1/')
@@ -258,7 +258,7 @@ jobs:
       - name: Build Modules
         uses: ./.github/actions/build_modules
       - name: Configure AWS Credentials for ECR Push
-        uses: aws-actions/configure-aws-credentials@v4.2.1
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           audience: sts.amazonaws.com
           aws-region: us-east-1
@@ -285,8 +285,13 @@ jobs:
               nice-dcv-amzn2023-aarch64.tgz \
               > checksums.txt
           )
-      - name: Set up cross-platform smoke execution
-        uses: docker/setup-qemu-action@v3
+      - name: Use the registry credential helper
+        # Tokens are fetched per pull and push from the job's role; nothing is written to the Docker config.
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -q amazon-ecr-credential-helper
+          mkdir -p ~/.docker
+          printf '{"credHelpers":{"public.ecr.aws":"ecr-login"}}\n' > ~/.docker/config.json
       - name: Build and test temporary images
         env:
           GH_TOKEN: ${{ github.token }}
@@ -307,10 +312,9 @@ jobs:
           cp "dist/all-${VERSION}.tar.gz" "deployment/ecr/idea-scheduler-pbs/all-${VERSION}.tar.gz"
           cp "dist/all-${VERSION}.tar.gz" "deployment/ecr/idea-control-plane/all-${VERSION}.tar.gz"
           cp "dist/idea-dcv-connection-gateway-${VERSION}.tar.gz" "deployment/ecr/idea-control-plane/idea-dcv-connection-gateway-${VERSION}.tar.gz"
-          aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin "${ECR_REGISTRY}"
-          docker buildx create --use --platform linux/amd64,linux/arm64 --name idea-images-builder
+          docker buildx create --use --platform linux/arm64 --name idea-images-builder
           docker buildx inspect --bootstrap
-          docker buildx build --push --platform linux/amd64,linux/arm64 \
+          docker buildx build --push --platform linux/arm64 \
             --build-arg IDEA_VERSION="${VERSION}" \
             --cache-from type=gha,scope=idea-scheduler-pbs \
             --cache-to type=gha,mode=max,scope=idea-scheduler-pbs \
@@ -319,7 +323,7 @@ jobs:
             deployment/ecr/idea-scheduler-pbs
           SCHEDULER_DIGEST=$(jq -er '.["containerimage.digest"]' /tmp/scheduler-image.json)
           SCHEDULER_REF="${ECR_REGISTRY}/${SCHEDULER_IMAGE_NAME}@${SCHEDULER_DIGEST}"
-          docker buildx build --push --platform linux/amd64,linux/arm64 \
+          docker buildx build --push --platform linux/arm64 \
             --build-arg IDEA_VERSION="${VERSION}" \
             --build-arg PBS_IMAGE="${SCHEDULER_REF}" \
             --build-context dcv-packages=/tmp/dcv-packages \
@@ -334,20 +338,20 @@ jobs:
           cp source/idea/ideactl/test/cli/shell-path-values.yml "$SMOKE_ROOT/values.yml"
           CONTROL_PLANE_DIGEST=$(jq -er '.["containerimage.digest"]' /tmp/control-plane-image.json)
           IMAGE="${ECR_REGISTRY}/${CONTROL_PLANE_IMAGE_NAME}@${CONTROL_PLANE_DIGEST}"
-          for PLATFORM in linux/amd64 linux/arm64; do
-            docker run --rm --platform "$PLATFORM" --entrypoint /bin/bash "$SCHEDULER_REF" -c '/opt/pbs/sbin/pbs_server --version'
-            docker run --rm --platform "$PLATFORM" --workdir /tmp/work "$IMAGE" ideactl about
-            docker run --rm --platform "$PLATFORM" \
-              --workdir /tmp/work \
-              --volume "$SMOKE_ROOT/values.yml:/tmp/values.yml:ro" \
-              --volume "$SMOKE_ROOT/config:/tmp/config" \
-              "$IMAGE" \
-              ideactl config generate \
-                --values-file /tmp/values.yml \
-                --config-dir /tmp/config \
-                --force
-            test -s "$SMOKE_ROOT/config/config/idea.yml"
-          done
+          # The pbs_server wrapper needs the /etc/pbs.conf the scheduler role writes at start;
+          # the binary answers alone. The runner's own user keeps the generated files removable.
+          docker run --rm --entrypoint /bin/bash "$SCHEDULER_REF" -c '/opt/pbs/sbin/pbs_server.bin --version'
+          docker run --rm --user "$(id -u):$(id -g)" --env HOME=/tmp --workdir /tmp/work "$IMAGE" ideactl about
+          docker run --rm --user "$(id -u):$(id -g)" --env HOME=/tmp \
+            --workdir /tmp/work \
+            --volume "$SMOKE_ROOT/values.yml:/tmp/values.yml:ro" \
+            --volume "$SMOKE_ROOT/config:/tmp/config" \
+            "$IMAGE" \
+            ideactl config generate \
+              --values-file /tmp/values.yml \
+              --config-dir /tmp/config \
+              --force
+          test -s "$SMOKE_ROOT/config/config/idea.yml"
           bash source/idea/ideactl/scripts/assert-new-release.sh
           for REF in "$SCHEDULER_REF" "$IMAGE"; do
             REPOSITORY="${REF%@*}"
@@ -367,9 +371,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Download release artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: ideactl-*
           path: release

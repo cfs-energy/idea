@@ -26,7 +26,7 @@ runs:
       run: |
         echo "PRE_COMMIT_CACHE_DIR=$(python -c 'import platformdirs; print(platformdirs.user_cache_dir("pre-commit"))')" >> $GITHUB_ENV
       shell: bash
-    - uses: actions/cache@v4
+    - uses: actions/cache@v6
       with:
         path: ${{ env.PRE_COMMIT_CACHE_DIR }}
         key: pre-commit-3|${{ env.PYTHON_PATH }}|${{ runner.arch }}|${{ hashFiles('.pre-commit-config.yaml') }}
