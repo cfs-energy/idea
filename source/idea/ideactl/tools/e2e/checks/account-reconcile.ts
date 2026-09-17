@@ -30,7 +30,11 @@ export const accountReconcileCheck: ProofCheck = {
     if (provider !== "activedirectory" && provider !== "aws_managed_activedirectory") {
       return skip("cluster has no Active Directory to write to");
     }
-    if (!options.ldapUri.startsWith("ldaps://")) return failed("LDAP proof requires ldaps://");
+    // A plain ldap:// is accepted only for a local tunnel (SSM port forwarding encrypts it); AWS
+    // Managed Microsoft AD has no LDAPS unless a CA is attached, and it refuses password writes
+    // over plain LDAP, so the tunnel path creates a passwordless account (PASSWD_NOTREQD).
+    const tunnel = /^ldap:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/u.test(options.ldapUri);
+    if (!options.ldapUri.startsWith("ldaps://") && !tunnel) return failed("LDAP proof requires ldaps://, or ldap:// to a local tunnel");
     const username = `proof${randomUUID().replaceAll("-", "").slice(0, 12)}`;
     const dn = `CN=${username},${options.ldapUserBase}`;
     const directory = await mkdtemp(join(tmpdir(), "account-reconcile-"));
@@ -46,7 +50,7 @@ export const accountReconcileCheck: ProofCheck = {
     try {
       const password = `"${randomBytes(24).toString("base64")}aA1!"`;
       const unicodePassword = Buffer.from(password, "utf16le").toString("base64");
-      const added = await modify(`dn: ${dn}\nobjectClass: top\nobjectClass: person\nobjectClass: organizationalPerson\nobjectClass: user\ncn: ${username}\nsn: ${username}\nsAMAccountName: ${username}\nmail: ${username}@example.invalid\nunicodePwd:: ${unicodePassword}\nuserAccountControl: 512\n\n`, "ldapadd");
+      const added = await modify(`dn: ${dn}\nobjectClass: top\nobjectClass: person\nobjectClass: organizationalPerson\nobjectClass: user\ncn: ${username}\nsn: ${username}\nsAMAccountName: ${username}\nmail: ${username}@example.invalid${tunnel ? "" : `\nunicodePwd:: ${unicodePassword}`}\nuserAccountControl: ${tunnel ? 544 : 512}\n\n`, "ldapadd");
       if (added.exitCode !== 0) return skip("directory fixture could not be created with the supplied LDAP access");
       directoryCreated = true;
       context.output(`ACTION create disposable IDEA user ${username}`);
