@@ -580,3 +580,97 @@ def test_upstream_warning_logs_only_exception_type_and_numeric_ldap_result(
     assert f'exception_type={exception_type}, ldap_result_code={result_code}' in logs
     assert 'secret' not in logs and 'https://' not in logs
     context.accounts.disable_user.assert_not_called()
+
+
+@pytest.mark.parametrize('bound', [False, True])
+@pytest.mark.parametrize('inventory_enabled', [False, True])
+def test_disabled_directory_dry_run_then_apply(bound, inventory_enabled):
+    from copy import deepcopy
+    from contextlib import nullcontext
+
+    from ideaclustermanager.app.accounts.ldapclient.abstract_ldap_client import (
+        AbstractLDAPClient,
+    )
+
+    service, context = build(
+        users=[User(username='proofuser', email='proof@example.invalid', enabled=True)],
+        values={PREFIX + 'max_disable_fraction': '1'},
+    )
+    stored = use_real_account_transitions(context)
+    guid = bytes.fromhex('0123456789abcdef00282a295cff807f')
+    if bound:
+        stored['proofuser']['directory_identity'] = guid.hex()
+    original = deepcopy(stored)
+    # Model a DAO returning shared metadata, and a stale eventually consistent scan.
+    context.accounts.user_dao.get_user.side_effect = lambda username: stored[username]
+    context.accounts.list_users.side_effect = [
+        ListUsersResult(
+            listing=[
+                User(
+                    username='proofuser', email='proof@example.invalid', enabled=enabled
+                )
+            ]
+        )
+        for enabled in (True, inventory_enabled)
+    ]
+    client = real_directory_reader(context, [])
+    connection = Mock()
+    client.get_ldap_root_connection.return_value = nullcontext(connection)
+    client.search_s.side_effect = lambda **kwargs: AbstractLDAPClient.search_s(
+        client, **kwargs
+    )
+    selectors = []
+
+    def search(base, scope, filterstr, attrlist, attrsonly):
+        selectors.append(filterstr)
+        expected = (
+            '(objectGUID=\\01\\23\\45\\67\\89\\ab\\cd\\ef\\00\\28\\2a\\29\\5c\\ff\\80\\7f)'
+            if bound
+            else '(mail=proof@example.invalid)'
+        )
+        assert filterstr == f'(&(objectClass=user){expected})'
+        return [
+            (
+                'cn=proofuser',
+                {
+                    'objectGUID': [guid],
+                    'sAMAccountName': [b'proofuser'],
+                    'userAccountControl': [b'514'],
+                },
+            )
+        ]
+
+    connection.search_s.side_effect = search
+    preview = service.run_once()
+    assert preview['would_disable'] == 1
+    assert preview['errors'] == 0
+    assert stored == original
+    context.accounts.user_dao.update_user.assert_not_called()
+    context.accounts.disable_user.assert_not_called()
+    applied = service.run_once(dry_run=False)
+    assert applied['errors'] == 0 and applied['refused'] == 0
+    assert applied['eligible_enabled'] == 1
+    assert applied['disabled'] == 1
+    assert stored['proofuser']['enabled'] is False
+    assert stored['proofuser']['directory_identity'] == guid.hex()
+    assert stored['proofuser']['reconcile_sources'] == ['directory']
+    context.accounts.user_pool.admin_disable_user.assert_called_once_with('proofuser')
+    context.accounts.evdi_client.publish_user_disabled_event.assert_called_once_with(
+        username='proofuser'
+    )
+    assert len(selectors) == 2
+    assert context._lock.held == []
+
+
+def test_current_administrator_disable_overrides_stale_enabled_inventory():
+    service, context = build()
+    context.accounts.user_dao.get_user.side_effect = lambda username: {
+        'enabled': False,
+        'reconcile_sources': [],
+    }
+    report = service.run_once(dry_run=False)
+    assert report['eligible_enabled'] == 0
+    assert report['changes'] == []
+    context.accounts.ldap_client.get_reconcile_user.assert_not_called()
+    context.accounts.disable_user.assert_not_called()
+    context.accounts.enable_user.assert_not_called()

@@ -3,6 +3,7 @@
 import math
 import ldap
 import threading
+from copy import copy
 from urllib.parse import quote
 
 import arrow
@@ -208,12 +209,16 @@ class AccountReconciler(SocaService):
                 if self.protected(user):
                     report['skipped'].append(user.username)
                     continue
-                enabled += int(user.enabled is True)
                 report['checked'] += 1
                 try:
-                    metadata = (
+                    metadata = dict(
                         self.context.accounts.user_dao.get_user(user.username) or {}
                     )
+                    # Inventory scans are eventually consistent. Use the current
+                    # DAO state for decisions and the safety-cap denominator.
+                    user = copy(user)
+                    user.enabled = metadata.get('enabled', user.enabled)
+                    enabled += int(user.enabled is True)
                     sources = metadata.get('reconcile_sources', [])
                     if metadata.get('disable_pending'):
                         # This finishes an already committed revocation, independent of upstream health.
