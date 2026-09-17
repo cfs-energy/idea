@@ -14,6 +14,7 @@ import type { ConfigWriter, Deps } from "../../src/cli/cdk-invoker.ts";
 import {
   countPbsStates,
   planHistoricalUpgrade,
+  prepareUpgradeDriftInput,
   createLiveUpgradeDeps,
   registerUpgradeCommands,
   type SchedulerJobInventory,
@@ -1457,6 +1458,152 @@ test("historical remote values reach the container gate before local restoration
     await assert.rejects(upgradeCluster(state.deps, { clusterName, awsRegion, moduleSet: "default", force: true }));
     assert.ok(state.events.some((event) => event.includes("awsvpcTrunking is not enabled")));
     assert.equal(existsSync(path), false);
+    assert.ok(!state.events.some((event) => /^(set:|sync:|delete:|clear:|deploy$)/.test(event)));
+  });
+});
+
+for (const containers of [true, false]) {
+  test(`completion permits obsolete scheduler publications only during cutover: ${containers}`, async () => {
+    await withFixture(async ({ deps, rows, events }) => {
+      if (containers) { enableContainers(); trunkingEnabled(deps); }
+      const removed = ["scheduler.instance_id", "scheduler.private_ip"];
+      rows[`${clusterName}.cluster-settings`]!.push(...removed.map((key) => ({ ...setting(key, "old"), source: "stack" })));
+      const deploy = deps.deploy;
+      deps.deploy = async (input) => {
+        await deploy(input);
+        rows[`${clusterName}.cluster-settings`] = rows[`${clusterName}.cluster-settings`]!.filter((row) => !removed.includes(String(row["key"])));
+      };
+      if (containers) {
+        await upgradeCluster(deps, containerOptions);
+        assert.ok(events.includes("set:cluster-manager.maintenance.enabled=false"));
+        assert.ok(events.includes("delete:cluster-manager.maintenance.upgrade_baseline"));
+      } else await assert.rejects(upgradeCluster(deps, containerOptions), /published setting scheduler.instance_id/);
+    });
+  });
+}
+
+for (const suffix of ["metrics.cost.last_collected", "metrics.storage.last_collected", "accounts.reconcile.last_completed", "metrics.cost.enabled", "unrelated.last_published"]) {
+  test(`completion scopes runtime checkpoint exceptions: ${suffix}`, async () => {
+    await withFixture(async ({ deps, rows }) => {
+      rows[`${clusterName}.modules`]!.push(moduleRow("cluster-manager", "cluster-manager"));
+      const key = `cluster-manager.${suffix}`;
+      rows[`${clusterName}.cluster-settings`]!.push(setting(key, 1));
+      const deploy = deps.deploy;
+      deps.deploy = async (input) => {
+        await deploy(input);
+        rows[`${clusterName}.cluster-settings`]!.find((row) => row["key"] === key)!["value"] = 2;
+      };
+      if (suffix.endsWith("last_collected") || suffix.endsWith("last_completed")) await upgradeCluster(deps, containerOptions);
+      else await assert.rejects(upgradeCluster(deps, containerOptions), /Completion verification failed for setting/);
+    });
+  });
+}
+
+for (const reorderArray of [false, true]) {
+  test(`completion compares nested maps structurally and arrays in order: ${reorderArray}`, async () => {
+    await withFixture(async ({ deps, rows }) => {
+      const key = "scheduler.custom_map";
+      rows[`${clusterName}.cluster-settings`]!.push(setting(key, { first: { a: 1, b: 2 }, second: [1, 2] }));
+      const deploy = deps.deploy;
+      deps.deploy = async (input) => {
+        await deploy(input);
+        rows[`${clusterName}.cluster-settings`]!.find((row) => row["key"] === key)!["value"] = { second: reorderArray ? [2, 1] : [1, 2], first: { b: 2, a: 1 } };
+      };
+      if (reorderArray) await assert.rejects(upgradeCluster(deps, containerOptions), /setting scheduler.custom_map/);
+      else await upgradeCluster(deps, containerOptions);
+    });
+  });
+}
+
+test("historical upgrade ignores retired host images and unrelated ami strings", async () => {
+  await withFixture(async (state) => {
+    historicalReplay(state);
+    const { deps, rows, events } = state;
+    rows[`${clusterName}.cluster-settings`]!.push(setting("scheduler.description", "ami-unrelated"));
+    const describe = deps.ec2.describeImages;
+    deps.ec2.describeImages = async (input) => {
+      assert.ok(!input.imageIds.includes("ami-old"));
+      assert.ok(!input.imageIds.includes("ami-unrelated"));
+      return (await describe(input)).filter((image) => image.ImageId !== "ami-old");
+    };
+    const deploy = deps.deploy;
+    deps.deploy = async (input) => {
+      await deploy(input);
+      rows[`${clusterName}.cluster-settings`]!.push(setting("vdc.dcv_host_policy_arn", "arn:aws:iam::sample:policy/host-policy"));
+      deps.historicalIam = async () => ({ attached: ["host-policy"], inline: [], collision: false, available: 10 });
+    };
+    await upgradeCluster(deps, containerOptions);
+    assert.ok(events.includes("set:scheduler.instance_ami=ami-release"));
+    assert.equal(rows[`${clusterName}.cluster-settings`]!.find((row) => row["key"] === "scheduler.compute_node_ami")?.["value"], "ami-built");
+  });
+});
+
+test("historical completion remains required after deployed versions advance on a failed run", async () => {
+  await withFixture(async (state) => {
+    historicalReplay(state);
+    const { deps, rows } = state;
+    await assert.rejects(upgradeCluster(deps, containerOptions), /DCV policy publication/);
+    assert.ok(rows[`${clusterName}.modules`]!.filter((row) => row["type"] !== "config").every((row) => row["version"] === ideaVersion()));
+    await assert.rejects(upgradeCluster(deps, containerOptions), /DCV policy publication/);
+    const deploy = deps.deploy;
+    deps.deploy = async (input) => {
+      await deploy(input);
+      rows[`${clusterName}.cluster-settings`]!.push(setting("vdc.dcv_host_policy_arn", "arn:aws:iam::sample:policy/host-policy"));
+      deps.historicalIam = async () => ({ attached: ["host-policy"], inline: [], collision: false, available: 10 });
+    };
+    await upgradeCluster(deps, containerOptions);
+    assert.ok(!rows[`${clusterName}.cluster-settings`]!.some((row) => row["key"] === "cluster.upgrade_historical_pending"));
+  });
+});
+
+for (const changed of [false, true]) {
+  test(`completion structurally checks target publications: changed=${changed}`, async () => {
+    await withFixture(async ({ deps, rows }) => {
+      const key = "scheduler.published_map";
+      rows[`${clusterName}.cluster-settings`]!.push({ ...setting(key, { a: 0 }), source: "stack" });
+      const drift = await prepareUpgradeDriftInput(deps, containerOptions);
+      drift.stacks!.find((stack) => stack.moduleId === "scheduler")!.target = { published_map: { a: 1, b: { c: 2, d: 3 } } };
+      deps.loadUpgradeDriftInput = async () => drift;
+      const deploy = deps.deploy;
+      deps.deploy = async (input) => {
+        await deploy(input);
+        rows[`${clusterName}.cluster-settings`]!.find((row) => row["key"] === key)!["value"] = { b: { d: 3, c: changed ? 4 : 2 }, a: 1 };
+      };
+      if (changed) await assert.rejects(upgradeCluster(deps, containerOptions), /published setting scheduler.published_map/);
+      else await upgradeCluster(deps, containerOptions);
+    });
+  });
+}
+
+test("historical planning still rejects a missing release image before mutation", async () => {
+  await withFixture(async (state) => {
+    historicalReplay(state);
+    const describe = state.deps.ec2.describeImages;
+    state.deps.ec2.describeImages = async (input) => (await describe(input)).filter((image) => image.ImageId !== "ami-release");
+    await assert.rejects(upgradeCluster(state.deps, containerOptions), /Missing release AMI metadata/);
+    assert.ok(!state.events.some((event) => /^(set:|sync:|delete:|clear:|deploy$)/.test(event)));
+  });
+});
+
+test("completion accepts reordered saved module-set owners", async () => {
+  await withFixture(async ({ deps, rows }) => {
+    rows[`${clusterName}.cluster-settings`]!.push(setting("global-settings.module_sets.secondary.cluster-manager.module_id", "cluster-manager"));
+    const scan = deps.scan;
+    deps.scan = async (input) => {
+      const result = await scan(input);
+      return { ...result, Items: result.Items?.map((row) => row["key"] === "cluster.upgrade_module_set_owners"
+        ? { ...row, value: Object.fromEntries(Object.entries(row["value"] as Record<string, unknown>).reverse()) } : row) };
+    };
+    await upgradeCluster(deps, containerOptions);
+  });
+});
+
+test("historical planning requires metadata for compute image preservation", async () => {
+  await withFixture(async (state) => {
+    historicalReplay(state);
+    const describe = state.deps.ec2.describeImages;
+    state.deps.ec2.describeImages = async (input) => (await describe(input)).filter((image) => image.ImageId !== "ami-built");
+    await assert.rejects(upgradeCluster(state.deps, containerOptions), /Missing AMI metadata for ami-built/);
     assert.ok(!state.events.some((event) => /^(set:|sync:|delete:|clear:|deploy$)/.test(event)));
   });
 });

@@ -6,6 +6,7 @@
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 import type { Command } from "commander";
 
@@ -1368,20 +1369,24 @@ async function retainSchedulerDnsRecord(deps: UpgradeDeps, options: UpgradeComma
 // Read back the intended writes and deployed versions before reopening submission.
 async function verifyUpgradeCompletion(
   deps: UpgradeDeps, options: UpgradeCommandOptions, modules: ModuleInfo[], expected: Map<string, unknown>,
-  drift: UpgradeDriftInput, historical: boolean,
+  drift: UpgradeDriftInput, historical: boolean, schedulerCutover: boolean,
 ): Promise<void> {
   const current = new Map((await scanAll(deps, `${options.clusterName}.cluster-settings`)).map((row) => [String(row["key"]), row["value"]]));
   const published = new Set(drift.current.filter((row) => row.source === "stack").map((row) => row.key));
+  const checkpoints = new Set(modules.filter((module) => module.name === "cluster-manager").flatMap((module) =>
+    ["metrics.cost.last_collected", "metrics.storage.last_collected", "accounts.reconcile.last_completed"].map((key) => `${module.module_id}.${key}`)));
   for (const [key, value] of expected) {
-    // The metrics collectors stamp their own checkpoint rows while the stacks deploy.
-    if (key.endsWith(".last_published")) continue;
-    if (!published.has(key) && JSON.stringify(current.get(key)) !== JSON.stringify(value)) throw new ClusterConfigError(`Completion verification failed for setting ${key}`);
+    // Application checkpoints can advance while deployment runs; configuration cannot.
+    if (!published.has(key) && checkpoints.has(key)) continue;
+    if (!published.has(key) && !isDeepStrictEqual(current.get(key), value)) throw new ClusterConfigError(`Completion verification failed for setting ${key}`);
   }
   for (const stack of drift.stacks ?? []) {
     if (!stack.selected) continue;
     for (const [key, value] of Object.entries(stack.target ?? stack.previous)) {
+      // The container scheduler no longer publishes its retired host identity.
+      if (schedulerCutover && stack.target === undefined && modules.some((module) => module.module_id === stack.moduleId && module.name === "scheduler") && ["instance_id", "private_ip"].includes(key)) continue;
       const fullKey = `${stack.moduleId}.${key}`;
-      if (!current.has(fullKey) || (stack.target !== undefined && JSON.stringify(current.get(fullKey)) !== JSON.stringify(value))) {
+      if (!current.has(fullKey) || (stack.target !== undefined && !isDeepStrictEqual(current.get(fullKey), value))) {
         throw new ClusterConfigError(`Completion verification failed for published setting ${fullKey}`);
       }
     }
@@ -1464,7 +1469,9 @@ export async function planHistoricalUpgrade(deps: UpgradeDeps, options: UpgradeC
       if (inventory.collision || inventory.available < 1) throw new ClusterConfigError(`DCV managed-policy collision or quota exhausted for ${module.module_id}`);
     }
   }
-  const imageIds = [...new Set(settings.flatMap((row) => typeof row["value"] === "string" && row["value"].startsWith("ami-") ? [row["value"]] : []))];
+  // Only existing compute images affect preservation; host images are superseded.
+  const computeKeys = new Set(modules.filter((module) => module.name === "scheduler").map((module) => `${module.module_id}.compute_node_ami`));
+  const imageIds = [...new Set(settings.flatMap((row) => computeKeys.has(String(row["key"])) && typeof row["value"] === "string" && row["value"] !== "" ? [row["value"]] : []))];
   if (imageIds.length > 0) {
     const images = await deps.ec2.describeImages({ awsRegion: options.awsRegion, imageIds });
     for (const id of imageIds) if (!images.some((image) => image.ImageId === id)) throw new ClusterConfigError(`Missing AMI metadata for ${id}`);
@@ -1482,7 +1489,8 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
   if (modulesBefore.length === 0) throw new ClusterConfigError("Missing module rows");
   const floorRefusal = upgradeFloorRefusal(options.clusterName, modulesBefore);
   if (floorRefusal !== undefined) throw new ClusterConfigError(floorRefusal);
-  const historical = modulesBefore.some((module) => module.type !== "config" && module.status === "deployed" && (compareIdeaRelease(String(module.version), "26.09.0") ?? 0) < 0);
+  const pendingHistorical = (await scanAll(deps, `${options.clusterName}.cluster-settings`)).some((row) => row["key"] === "cluster.upgrade_historical_pending" && row["value"] === true);
+  const historical = pendingHistorical || modulesBefore.some((module) => module.type !== "config" && module.status === "deployed" && (compareIdeaRelease(String(module.version), "26.09.0") ?? 0) < 0);
   const restoredEcs = historical && await historicalValuesEnableEcs(deps, options);
   if (historical) {
     await planHistoricalUpgrade(deps, options, modulesBefore, restoredEcs);
@@ -1533,6 +1541,8 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
       const confirm = await deps.prompt({ message: "Proceed with deploying all modules?", default: true });
       if (confirm !== true && confirm !== "Yes") throw new ExitWithCode(0);
     }
+    // Module versions advance before completion, so retries need a durable migration marker.
+    if (historical) await (await deps.configWriter(options)).setConfigEntry("cluster.upgrade_historical_pending", true);
     if (cutoverHost !== undefined) await schedulerCutoverGate(deps, options, cutoverHost);
     await applyEolSoftwareStacks(deps, options.awsRegion, eolPlans);
     if (cutoverHost !== undefined) await retainSchedulerDnsRecord(deps, options, modulesBefore);
@@ -1614,10 +1624,11 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
       deps.out(`warning: could not restore termination protection: ${(error as Error).message}`);
       warnClearedProtection(deps, cleared);
     }
-    await verifyUpgradeCompletion(deps, options, [...expectedModules.values()], expected, driftInput, historical);
+    await verifyUpgradeCompletion(deps, options, [...expectedModules.values()], expected, driftInput, historical, cutoverHost !== undefined);
     await saveValuesFile(deps, options);
     await restoreSubmission(deps, options);
     await (await deps.configWriter(options)).deleteConfigEntries("cluster.upgrade_module_set_owners");
+    if (historical) await (await deps.configWriter(options)).deleteConfigEntries("cluster.upgrade_historical_pending");
     deps.out("All upgrade phases completed successfully");
   } catch (error) {
     warnClearedProtection(deps, cleared);
