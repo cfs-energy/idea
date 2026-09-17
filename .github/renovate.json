@@ -6,12 +6,12 @@
   "assignees": [
     "cfsnate"
   ],
-  "baseBranches": [
+  "baseBranchPatterns": [
     "/^dev-.*/"
   ],
   "pip_requirements": {
-    "fileMatch": [
-      "requirements\\/.*\\.(in)$"
+    "managerFilePatterns": [
+      "/requirements\\/.*\\.(in)$/"
     ]
   },
   "labels": [
