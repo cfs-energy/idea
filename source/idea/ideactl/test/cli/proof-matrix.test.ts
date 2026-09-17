@@ -170,7 +170,7 @@ test("uses injected API, cloud, and gateway clients for task replacement", async
     brokerTask: "broker-task",
     checks: ["broker-task-kill"],
     cluster: "sample-cluster",
-    desktopRequest: { session: { name: "proof-desktop" } },
+    desktopRequest: { session: { name: "proof-desktop", project: { project_id: "proof-project" } } },
     gatewayHost: "gateway.example.invalid",
     insecureTls: false,
     passwordFile: "/tmp/password",
@@ -222,6 +222,10 @@ test("account reconciliation disables via LDAP, witnesses STOPPED, and cleans up
         return response({ refused: 0, errors: 0, changes: [{ username, action: "disable" }] });
       }
       if (namespace === "Accounts.GetUser") return response({ user: { enabled: !applied } });
+      if (namespace === "ClusterSettings.ListClusterModules") return response({ listing: [{ name: "virtual-desktop-controller", module_id: "vdc" }] });
+      if (namespace === "Accounts.AddUserToGroup") return response({});
+      if (namespace === "Projects.GetProject") return response({ project: { project_id: "proof-project", ldap_groups: ["proof-group"] } });
+      if (namespace === "Projects.GetUserProjects") return response({ projects: [{ project_id: "proof-project" }] });
       if (namespace === "VirtualDesktopAdmin.DeleteSessions" || namespace === "Accounts.DeleteUser") return response({});
       throw new Error(`unexpected API ${namespace}`);
     },
@@ -238,7 +242,7 @@ test("account reconciliation disables via LDAP, witnesses STOPPED, and cleans up
   const options = parseProofMatrixOptions([
     "--check", "account-reconcile", "--ldap-uri", "ldaps://directory.example.invalid",
     "--ldap-bind-dn", "CN=bind,DC=example,DC=invalid", "--ldap-user-base", "OU=Users,DC=example,DC=invalid",
-    "--ldap-password-file", "/tmp/directory-password", "--desktop-request", '{"session":{}}',
+    "--ldap-password-file", "/tmp/directory-password", "--desktop-request", '{"session":{"project":{"project_id":"proof-project"}}}',
   ], {});
   const run = await runProofMatrix(options, { ...deps, api, processes });
   assert.equal(run.exitCode, 0);
