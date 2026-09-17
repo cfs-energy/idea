@@ -250,6 +250,7 @@ const RETIRED_KEYS: Record<string, string> = {
  * template loses fails here instead of quietly widening the comparison.
  */
 const ADDED_KEYS: Record<string, string> = {
+  "cluster-manager.task_manager.task_timeout_seconds": "task deadline the container supervisor enforces; the host worker had none",
   ...Object.fromEntries(
     [
       'cost.enabled', 'cost.interval_hours', 'cost.lookback_days', 'cost.module_tag', 'cost.project_tag',
@@ -327,7 +328,7 @@ describe('layer D: every template-produced key the runtime reads is generated', 
     // The inventory counts key patterns: `<app>.server.port` is one entry there and three keys here, as are
     // `<day>`, `<state>`, `<os>`, `<family>` and the `<module>.module_id` mappings.
     const distinct = new Set(RUNTIME_KEY_GROUPS.flatMap((group) => runtimeKeys[group] as string[]));
-    assert.equal(distinct.size, 694);
+    assert.equal(distinct.size, 695);
     // Spot-check expanded key identities.
     for (const key of [
       'global-settings.module_sets.default.virtual-desktop-controller.module_id',

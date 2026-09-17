@@ -15,14 +15,6 @@
     "enabled": true,
     "prConcurrentLimit": 5
   },
-  "lockFileMaintenance": {
-    "enabled": true,
-    "schedule": [
-      "* 0-6 * * 1"
-    ],
-    "groupName": "all dependencies",
-    "groupSlug": "all-dependencies"
-  },
   "pip_requirements": {
     "enabled": false
   },

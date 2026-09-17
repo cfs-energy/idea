@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Compare with the PR base, including deleted inputs; manual and push runs prove everything.
+# Compare with the PR base, including both sides of renames; manual and push runs prove everything.
 if [ "${GITHUB_EVENT_NAME:-}" = pull_request ]; then
-  git diff --name-only "$PR_BASE_SHA" HEAD > "$RUNNER_TEMP/ci-changed-paths"
+  git diff --no-renames --name-only "$PR_BASE_SHA" HEAD > "$RUNNER_TEMP/ci-changed-paths"
 else
   printf '%s\n' source/idea/ideactl/ > "$RUNNER_TEMP/ci-changed-paths"
 fi

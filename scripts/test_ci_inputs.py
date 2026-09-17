@@ -67,6 +67,56 @@ class InputTests(unittest.TestCase):
                     },
                 )
 
+    def test_real_renames_out_of_gated_trees(self):
+        for source, release in [
+            ('deployment/ecr/idea-control-plane/Dockerfile', 'false'),
+            ('source/idea/ideactl/resources/input.txt', 'true'),
+        ]:
+            with (
+                self.subTest(source=source),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+
+                def git(*args):
+                    return subprocess.check_output(
+                        ['git', *args], cwd=root, text=True
+                    ).strip()
+
+                git('init', '-q')
+                git('config', 'commit.gpgsign', 'false')
+                git('config', 'user.name', 'fixture')
+                git('config', 'user.email', 'fixture@example.invalid')
+                path = root / source
+                path.parent.mkdir(parents=True)
+                path.write_text('FROM scratch\n')
+                git('add', '.')
+                git('commit', '-qm', 'input')
+                base = git('rev-parse', 'HEAD')
+                (root / 'docs').mkdir()
+                git('mv', source, 'docs/example.txt')
+                git('commit', '-qm', 'move')
+                self.assertTrue(
+                    git('diff', '--name-status', '-M', base).startswith('R100')
+                )
+                output = root / 'outputs'
+                subprocess.run(
+                    ['bash', str(SCRIPT)],
+                    cwd=root,
+                    env={
+                        **os.environ,
+                        'RUNNER_TEMP': directory,
+                        'GITHUB_OUTPUT': str(output),
+                        'GITHUB_EVENT_NAME': 'pull_request',
+                        'PR_BASE_SHA': base,
+                    },
+                    check=True,
+                )
+                self.assertEqual(
+                    dict(line.split('=') for line in output.read_text().splitlines()),
+                    {'images': 'true', 'release': release, 'runtimes': 'false'},
+                )
+
     def test_push_dispatch_and_diff_failure(self):
         for event in ['push', 'workflow_dispatch', 'workflow_call']:
             code, values = self.run_gate('', event)
