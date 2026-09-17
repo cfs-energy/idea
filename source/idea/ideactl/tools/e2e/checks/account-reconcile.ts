@@ -61,11 +61,39 @@ export const accountReconcileCheck: ProofCheck = {
       if (typeof user?.uid !== "number" || typeof user.gid !== "number") return failed("created user has no POSIX IDs");
       const mapped = await modify(`dn: ${dn}\nchangetype: modify\nreplace: uidNumber\nuidNumber: ${user.uid}\n-\nreplace: gidNumber\ngidNumber: ${user.gid}\n-\nreplace: unixHomeDirectory\nunixHomeDirectory: /home/${username}\n-\nreplace: loginShell\nloginShell: /bin/bash\n\n`);
       if (mapped.exitCode !== 0) return failed("directory POSIX mapping failed");
+      // A desktop needs its owner in the desktop module's users group; a fresh account is in none.
+      const modules = await context.api.request("ClusterSettings.ListClusterModules", {});
+      const listing = payloadObject(modules)?.listing;
+      const desktopModule = (Array.isArray(listing) ? listing : []).map((entry) => asObject(entry))
+        .find((entry) => entry?.name === "virtual-desktop-controller")?.module_id;
+      const grouped = await context.api.request("Accounts.AddUserToGroup", { usernames: [username], group_name: `${typeof desktopModule === "string" ? desktopModule : "vdc"}-users-module-group` });
+      if (!apiSucceeded(grouped)) return failed(`could not add the proof user to the desktop users group: ${JSON.stringify(grouped).slice(0, 300)}`);
       const desktopRequest = asObject(options.desktopRequest?.session);
       if (!desktopRequest) return failed("desktop-request.session is required");
+      // Project membership is by directory group: join one the desktop's project already lists.
+      const projectId = asObject(desktopRequest.project)?.project_id;
+      if (typeof projectId !== "string") return failed("desktop-request.session.project.project_id is required");
+      const project = await context.api.request("Projects.GetProject", { project_id: projectId });
+      const projectRecord = asObject(payloadObject(project)?.project);
+      const originalGroups = Array.isArray(projectRecord?.ldap_groups) ? (projectRecord.ldap_groups as unknown[]).filter((entry): entry is string => typeof entry === "string") : [];
+      if (!apiSucceeded(project) || !projectRecord) return failed(`could not read the desktop's project: ${JSON.stringify(project).slice(0, 300)}`);
+      // Project membership is rebuilt from group membership by an asynchronous task, so the proof
+      // joins a group the project already lists and waits for the mapping.
+      const projectGroup = originalGroups[0];
+      if (projectGroup === undefined) return failed("the desktop's project lists no group to join");
+      const joined = await context.api.request("Accounts.AddUserToGroup", { usernames: [username], group_name: projectGroup });
+      if (!apiSucceeded(joined)) return failed(`could not add the proof user to the project's group: ${JSON.stringify(joined).slice(0, 300)}`);
+      let lastProjects: unknown;
+      const member = await waitUntil(context, 600, "proof user visible in the desktop's project", async () => {
+        const result = await context.api.request("Projects.GetUserProjects", { username });
+        lastProjects = result;
+        const projects = payloadObject(result)?.projects;
+        return apiSucceeded(result) && Array.isArray(projects) && projects.some((entry) => asObject(entry)?.project_id === projectId);
+      });
+      if (!member) return failed(`the proof user never appeared in the desktop's project; last answer ${JSON.stringify(lastProjects).slice(0, 300)}`);
       const desktop = await context.api.request("VirtualDesktopAdmin.CreateSession", { session: { ...desktopRequest, owner: username } });
       session = asObject(payloadObject(desktop)?.session);
-      if (!apiSucceeded(desktop) || !session) return failed("proof desktop creation failed");
+      if (!apiSucceeded(desktop) || !session) return failed(`proof desktop creation failed: ${JSON.stringify(desktop).slice(0, 400)}`);
       const ready = await waitUntil(context, options.readyTimeoutSeconds ?? 1800, "proof desktop ready", async () => {
         const result = await context.api.request("VirtualDesktopAdmin.GetSessionInfo", { session: session ?? {} });
         return apiSucceeded(result) && asObject(payloadObject(result)?.session)?.state === "READY";
