@@ -127,13 +127,15 @@ class CognitoUserPool:
             id_token=id_token,
         )
 
-    def admin_get_user(self, username: str) -> Optional[CognitoUser]:
+    def admin_get_user(
+        self, username: str, use_cache: bool = True
+    ) -> Optional[CognitoUser]:
         if Utils.is_empty(username):
             raise exceptions.invalid_params('username is required')
 
         cache_key = self.build_user_cache_key(username)
 
-        user = self._context.cache().short_term().get(cache_key)
+        user = self._context.cache().short_term().get(cache_key) if use_cache else None
         if user is not None:
             return user
 
@@ -248,9 +250,14 @@ class CognitoUserPool:
         if Utils.is_empty(username):
             raise exceptions.invalid_params('username is required')
 
-        self._context.aws().cognito_idp().admin_disable_user(
-            UserPoolId=self.user_pool_id, Username=username
-        )
+        try:
+            self._context.aws().cognito_idp().admin_disable_user(
+                UserPoolId=self.user_pool_id, Username=username
+            )
+        except botocore.exceptions.ClientError as e:
+            # A deleted upstream user still needs local sessions and jobs stopped.
+            if e.response['Error']['Code'] != 'UserNotFoundException':
+                raise
         self._context.cache().short_term().delete(self.build_user_cache_key(username))
 
     def admin_add_sudo_user(self, username: str):

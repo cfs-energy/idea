@@ -3,6 +3,8 @@ Test Cases for ClusterSettingsAPI validation
 """
 
 import unittest
+
+import pytest
 from types import SimpleNamespace
 from unittest.mock import Mock
 from ideaclustermanager.app.api.cluster_settings_api import ClusterSettingsAPI
@@ -17,6 +19,9 @@ class FakeConfig:
             'cluster.aws.partition': partition,
             'cluster.aws.region': region,
         }
+
+    def get_list(self, key, default=None):
+        return self.values.get(key, default)
 
     def get_module_id(self, module_name):
         return module_name
@@ -43,6 +48,9 @@ class FakeApiInvocationContext:
 
     def __init__(self, request):
         self.request = request
+
+    def is_administrator(self):
+        return True
 
     def is_authorized(self, elevated_access=False, scopes=None):
         return True
@@ -360,3 +368,201 @@ class TestBedrockReconcileReadsStoredSettings(unittest.TestCase):
         self.assertEqual(raised.exception.error_code, errorcodes.GENERAL_ERROR)
         self.assertIn(f'{MODULE_ID}.bedrock', raised.exception.message)
         self.assertIn('not reconciled', raised.exception.message)
+
+
+class TestReconcileSettingsValidation(unittest.TestCase):
+    def setUp(self):
+        self.api = bedrock_settings_api()
+        self.api.context.config().values[
+            'cluster-manager.accounts.reconcile.okta.approved_origins'
+        ] = ['https://id.example.invalid', 'https://new.example.invalid']
+        self.api.context.config().db = Mock()
+        self.api.context.config().db.cluster_settings_table.get_item.return_value = {}
+
+    def validate(self, values):
+        settings = {'accounts': {'reconcile': values}}
+        self.api.validate_settings_allowed('cluster-manager', settings)
+        self.api.validate_reconcile_settings('cluster-manager', settings)
+
+    def test_all_fields_are_allowed(self):
+        self.validate(
+            dict(
+                enabled=True,
+                dry_run=True,
+                reenable=True,
+                check_cognito=False,
+                interval_minutes=60,
+                max_disable_fraction=0.25,
+                okta=dict(org_url='', api_token_secret_arn=''),
+            )
+        )
+
+    def test_invalid_values(self):
+        for key, values in {
+            'interval_minutes': [0, 1441, 1.5, True, '60'],
+            'max_disable_fraction': [-0.1, 1.1, float('nan'), True, '0.25'],
+            'enabled': ['true'],
+            'dry_run': [0],
+            'reenable': [1],
+            'check_cognito': [None],
+        }.items():
+            for value in values:
+                with (
+                    self.subTest(key=key, value=value),
+                    self.assertRaises(exceptions.SocaException),
+                ):
+                    self.validate({key: value})
+
+    def test_boundaries(self):
+        for minutes in (1, 1440):
+            for fraction in (0, 1):
+                self.validate(
+                    dict(interval_minutes=minutes, max_disable_fraction=fraction)
+                )
+
+    def test_okta_shapes_and_partial_edits(self):
+        token_arn = (
+            'arn:aws:secretsmanager:us-east-2:123456789012:secret:directory-token'
+        )
+        self.validate(
+            {
+                'okta': dict(
+                    org_url='https://id.example.invalid', api_token_secret_arn=token_arn
+                )
+            }
+        )
+        self.api.context.config().db.cluster_settings_table.get_item.side_effect = (
+            lambda Key, ConsistentRead: {
+                'Item': {
+                    'value': token_arn
+                    if Key['key'].endswith('api_token_secret_arn')
+                    else 'https://id.example.invalid'
+                }
+            }
+        )
+        self.validate({'okta': {'org_url': 'https://new.example.invalid/'}})
+        for org in (
+            'http://id.example.invalid',
+            'https://id.example.invalid/path',
+            'https://user@id.example.invalid',
+            'https://id.example.invalid:8443',
+            'https://id.example.invalid?q=x',
+        ):
+            with self.subTest(org=org), self.assertRaises(exceptions.SocaException):
+                self.validate({'okta': {'org_url': org}})
+        for secret in ('token', 'arn:aws:iam::role/token', ''):
+            with (
+                self.subTest(secret=secret),
+                self.assertRaises(exceptions.SocaException),
+            ):
+                self.validate({'okta': {'api_token_secret_arn': secret}})
+
+    def test_validation_precedes_write(self):
+        request = UpdateModuleSettingsRequest(
+            module_id='cluster-manager',
+            settings={'accounts': {'reconcile': {'interval_minutes': 0}}},
+        )
+        with self.assertRaises(exceptions.SocaException):
+            self.api.update_module_settings(FakeApiInvocationContext(request))
+        self.api.context.config().db.sync_cluster_settings_in_db.assert_not_called()
+
+    def test_update_writes_flat_reconcile_keys(self):
+        invocation = Mock()
+        invocation.get_request_payload_as.return_value = UpdateModuleSettingsRequest(
+            module_id='cluster-manager',
+            settings={
+                'accounts': {'reconcile': {'reenable': True, 'interval_minutes': 60}}
+            },
+        )
+        self.api.update_module_settings(invocation)
+        self.api.context.config().db.sync_cluster_settings_in_db.assert_called_once_with(
+            config_entries=[
+                {'key': 'cluster-manager.accounts.reconcile.reenable', 'value': True},
+                {
+                    'key': 'cluster-manager.accounts.reconcile.interval_minutes',
+                    'value': 60,
+                },
+            ],
+            overwrite=True,
+        )
+        invocation.success.assert_called_once()
+
+
+def test_manager_cannot_write_reconciliation_settings():
+    from ideasdk.api.api_invocation_context import ApiInvocationContext
+
+    api = bedrock_settings_api()
+    api.context.config().db = Mock()
+    invocation = Mock(spec=ApiInvocationContext)
+    invocation.is_authorized = lambda **kwargs: ApiInvocationContext.is_authorized(
+        invocation, **kwargs
+    )
+    invocation.is_administrator.return_value = False
+    invocation.is_manager.return_value = True
+    invocation.is_authorized_app.return_value = False
+    invocation.get_request_payload_as.return_value = UpdateModuleSettingsRequest(
+        module_id='cluster-manager',
+        settings={
+            'accounts': {
+                'reconcile': {
+                    'enabled': True,
+                    'dry_run': False,
+                    'max_disable_fraction': 1,
+                }
+            }
+        },
+    )
+    assert invocation.is_authorized(elevated_access=True)
+    with pytest.raises(exceptions.SocaException):
+        api.update_module_settings(invocation)
+    api.context.config().db.sync_cluster_settings_in_db.assert_not_called()
+
+
+def test_portal_cannot_approve_token_destinations():
+    api = bedrock_settings_api()
+    with pytest.raises(exceptions.SocaException):
+        api.validate_settings_allowed(
+            'cluster-manager',
+            {
+                'accounts': {
+                    'reconcile': {
+                        'okta': {
+                            'approved_origins': ['https://unapproved.example.invalid']
+                        }
+                    }
+                }
+            },
+        )
+
+
+def test_partial_okta_edit_reads_committed_partner():
+    api = bedrock_settings_api()
+    config = api.context.config()
+    config.values['cluster-manager.accounts.reconcile.okta.approved_origins'] = [
+        'https://id.example.invalid'
+    ]
+    config.db = Mock()
+    config.db.get_config_entry.return_value = {
+        'value': 'arn:aws:secretsmanager:us-east-2:123456789012:secret:directory-token'
+    }
+
+    def read(Key, ConsistentRead=False):
+        # The stale replica predates the secret removal; the committed value is empty.
+        if Key['key'].endswith('api_token_secret_arn') and not ConsistentRead:
+            return {'Item': {'value': 'secret-ref'}}
+        return {'Item': {'value': ''}}
+
+    config.db.cluster_settings_table.get_item.side_effect = read
+    with pytest.raises(exceptions.SocaException, match='Both Okta settings'):
+        api.validate_reconcile_settings(
+            'cluster-manager',
+            {
+                'accounts': {
+                    'reconcile': {'okta': {'org_url': 'https://id.example.invalid'}}
+                }
+            },
+        )
+    assert all(
+        call.kwargs['ConsistentRead']
+        for call in config.db.cluster_settings_table.get_item.call_args_list
+    )

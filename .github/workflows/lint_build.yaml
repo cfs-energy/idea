@@ -1,8 +1,6 @@
 name: Build Tests
 on:
   pull_request:
-    paths-ignore:
-      - 'docs/**'
   push:
     branches:
       - main
@@ -15,17 +13,22 @@ jobs:
     runs-on: ubuntu-large
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Detect image inputs
+        id: inputs
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: bash scripts/ci-inputs.sh
       - name: Check version consistency
         run: |
           SH_REV=$(grep -m1 '^IDEA_REVISION=' idea-admin.sh | sed -E 's/.*:-"([^"]+)"\}.*/\1/')
-          PS1_REV=$(grep -m1 '[$]IDEARevision = if' idea-admin-windows.ps1 | sed -E 's/.*else \{"([^"]+)"\}.*/\1/')
           VERSION=$(tr -d '[:space:]' < IDEA_VERSION.txt)
           EXPECTED="v${VERSION}"
           echo "idea-admin.sh revision:          ${SH_REV}"
-          echo "idea-admin-windows.ps1 revision: ${PS1_REV}"
           echo "IDEA_VERSION.txt:                ${VERSION} (expected revision ${EXPECTED})"
-          if [ "${SH_REV}" != "${EXPECTED}" ] || [ "${PS1_REV}" != "${EXPECTED}" ]; then
-            echo "::error::Version mismatch: IDEA_VERSION.txt=${VERSION} (expected revision ${EXPECTED}), idea-admin.sh default=${SH_REV}, idea-admin-windows.ps1 default=${PS1_REV}"
+          if [ "${SH_REV}" != "${EXPECTED}" ]; then
+            echo "::error::Version mismatch: IDEA_VERSION.txt=${VERSION} (expected revision ${EXPECTED}), idea-admin.sh default=${SH_REV}"
             exit 1
           fi
           echo "Version consistency check passed (${EXPECTED})"
@@ -35,6 +38,29 @@ jobs:
         uses: ./.github/actions/setup_dev_environment
       - name: Build Modules
         uses: ./.github/actions/build_modules
-      - name: Build Docker Image
+      - name: Verify Python locks by recompiling
         run: |
-          invoke docker.build --gha-cache
+          python -m unittest discover -s scripts -p 'test_*.py'
+          python scripts/requirements-locks.py --check
+      - name: Exercise runtime installer
+        if: steps.inputs.outputs.runtimes == 'true'
+        run: bash scripts/ci-runtime.sh
+      - name: Stage image packages
+        if: steps.inputs.outputs.images == 'true'
+        run: bash scripts/ci-stage-images.sh
+      - name: Set up image builder
+        if: steps.inputs.outputs.images == 'true'
+        uses: docker/setup-buildx-action@v3
+      - name: Build deployment images without publishing
+        if: steps.inputs.outputs.images == 'true'
+        uses: docker/bake-action@v6
+        with:
+          # The staged packages are untracked, so the checkout is the context, not the Git remote.
+          source: .
+          files: .github/ci-images.hcl
+          allow: fs.read=/tmp/dcv-packages
+          load: true
+          push: false
+      - name: Smoke-test deployment images
+        if: steps.inputs.outputs.images == 'true'
+        run: bash scripts/ci-smoke-images.sh

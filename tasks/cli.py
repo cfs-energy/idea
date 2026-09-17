@@ -60,15 +60,3 @@ def virtual_desktop_controller(c, args):
 
     tokens = Utils.from_json(Utils.base64_decode(args))
     invoke_cli(c, 'ideactl', 'ideavirtualdesktopcontroller.cli.cli_main', tokens)
-
-
-@task
-def admin(c, args):
-    # type: (Context, str) -> None
-    """
-    invoke administrator app cli
-    """
-    from ideasdk.utils import Utils
-
-    tokens = Utils.from_json(Utils.base64_decode(args))
-    invoke_cli(c, 'idea-admin', 'ideaadministrator.app_main', tokens)

@@ -3,7 +3,19 @@
 # kernel series here match what the FSx for Lustre client ships modules for (wildcard = latest in series).
 # rhel10, rocky10, ubuntu2604 are absent: only the eVDI setup includes this template, none has eVDI support.
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
-TARGET_KERNEL_VERSION="6.8*"
+# The module metapackage follows the Ubuntu HWE kernel but only recommends its kernel.
+# Resolve its exact ABI so the host boots the kernel that carries the Lustre module.
+# Add the repository here because kernel selection runs before client installation.
+. /etc/os-release
+wget -q -O - https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-ubuntu-public-key.asc | gpg --dearmor > /usr/share/keyrings/fsx-ubuntu-public-key.gpg
+echo "deb [signed-by=/usr/share/keyrings/fsx-ubuntu-public-key.gpg] https://fsx-lustre-client-repo.s3.amazonaws.com/ubuntu ${VERSION_CODENAME} main" > /etc/apt/sources.list.d/fsxlustreclientrepo.list
+apt-get update -qq
+TARGET_KERNEL_ABI=$(apt-cache depends lustre-client-modules-aws 2>/dev/null | sed -n 's/^ *Depends: lustre-client-modules-//p' | sort -V | tail -1)
+if [[ -z "${TARGET_KERNEL_ABI}" ]]; then
+  log_error "Could not resolve the FSx for Lustre kernel ABI from lustre-client-modules-aws"
+  exit 1
+fi
+TARGET_KERNEL_VERSION="${TARGET_KERNEL_ABI%-aws}*"
 {% elif context.base_os in ('amazonlinux2023',) %}
 TARGET_KERNEL_VERSION="6.1*"
 {% elif context.base_os in ('rhel8', 'rocky8') %}
@@ -121,12 +133,13 @@ function install_target_kernel() {
   # Update package cache
   apt-get update
 
-  # Install target kernel packages (use base version for Ubuntu meta-packages)
+  # Exact ABI, not the linux-aws-<series> meta-package: the meta-package resolves to
+  # whatever Ubuntu published last, which the FSx repo may not have modules for yet
   if DEBIAN_FRONTEND=noninteractive apt install -y \
-      linux-aws-${target_base} \
-      linux-image-aws-${target_base} \
-      linux-headers-aws-${target_base} \
-      linux-modules-extra-aws-${target_base} \
+      linux-image-${TARGET_KERNEL_ABI} \
+      linux-modules-${TARGET_KERNEL_ABI} \
+      linux-modules-extra-${TARGET_KERNEL_ABI} \
+      linux-headers-${TARGET_KERNEL_ABI} \
       --allow-change-held-packages; then
     log_info "Target kernel ${target_version} packages installed successfully"
   else
@@ -223,8 +236,9 @@ function set_kernel_version() {
   # Set default boot kernel
   if [[ -f /etc/default/grub ]]; then
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
-    # Update GRUB to default to target kernel
-    sed -i 's/^GRUB_DEFAULT=.*/GRUB_DEFAULT="1>2"/' /etc/default/grub
+    # Select by title because a positional entry changes as kernels are added or removed.
+    # The exact ABI keeps the boot choice aligned with the installed Lustre module.
+    sed -i "s/^GRUB_DEFAULT=.*/GRUB_DEFAULT=\"Advanced options for Ubuntu>Ubuntu, with Linux ${TARGET_KERNEL_ABI}\"/" /etc/default/grub
     update-grub
 {% elif context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
     # For other RHEL-based systems, set GRUB_DEFAULT to 0 to boot the latest (target) kernel

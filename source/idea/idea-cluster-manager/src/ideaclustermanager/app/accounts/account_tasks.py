@@ -140,6 +140,11 @@ class SyncUserInDirectoryServiceTask(BaseTask):
         enabled = user['enabled']
         sudo = Utils.get_value_as_bool('sudo', user, False)
         readonly = self.context.ldap_client.is_readonly()
+        # Reconciliation observes authoritative AD; queued mirror tasks must not mutate it.
+        if user.get('preserve_directory') and self.context.config().get_string(
+            'directoryservice.provider'
+        ) in ('activedirectory', 'aws_managed_activedirectory'):
+            return
 
         if readonly:
             self.logger.info(

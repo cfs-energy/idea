@@ -1,0 +1,6 @@
+# rocky10 hosts. virtual-desktop-controller is omitted: Amazon DCV publishes no EL10 packages.
+base_os: rocky10
+enabled_modules:
+  - metrics
+  - scheduler
+  - bastion-host

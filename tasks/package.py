@@ -30,47 +30,6 @@ def scheduler(c):
 
 
 @task
-def administrator(c):
-    # type: (Context) -> None # type: ignore
-    """
-    package administrator
-    """
-
-    # requirements for administrator app need to be handled a bit differently
-    # as administrator app needs to be supported on Windows too.
-    # sanic - the web server component used to serve HTTP traffic uses uvloop for faster performance
-    # uvloop is not available on windows, so we remove the uvloop from requirements and create
-    # a separate requirements file for windows
-    def requirements_handler(tool: PackageTool):
-        requirements_file = tool.find_requirements_file()
-
-        # linux/mac
-        admin_requirements_txt_dest = os.path.join(tool.output_dir, 'requirements.txt')
-        shutil.copyfile(requirements_file, admin_requirements_txt_dest)
-
-        # windows
-        admin_requirements_txt_windows = []
-        with open(requirements_file, 'r') as f:
-            lines = f.readlines()
-            for line in lines:
-                # skip uvloop as it is not supported on windows
-                if line.startswith('uvloop=='):
-                    continue
-                admin_requirements_txt_windows.append(line)
-        admin_requirements_txt_dest_windows = os.path.join(
-            tool.output_dir, 'requirements-windows.txt'
-        )
-        with open(admin_requirements_txt_dest_windows, 'w') as f:
-            f.write(''.join(admin_requirements_txt_windows))
-
-    package_tool = PackageTool(
-        c, 'idea-administrator', requirements_handler=requirements_handler
-    )
-    package_tool.package()
-    idea.console.success(f'distribution created: {package_tool.output_archive_name}')
-
-
-@task
 def cluster_manager(c):
     # type: (Context) -> None # type: ignore
     """
@@ -141,8 +100,6 @@ def package_all(c):
     idea.console.print_header_block('begin: package all', style='main')
 
     scheduler(c)
-
-    administrator(c)
 
     cluster_manager(c)
 

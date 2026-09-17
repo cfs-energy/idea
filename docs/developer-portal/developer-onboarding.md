@@ -1,5 +1,19 @@
 # Developer Onboarding
 
+Download the matching archive from the [GitHub release](https://github.com/cfs-energy/idea/releases) (replace `<VERSION>` with the release version):
+
+| Operator platform | Release file |
+| --- | --- |
+| macOS Apple silicon | `ideactl-v<VERSION>-darwin-arm64.tar.gz` |
+| Linux ARM64 | `ideactl-v<VERSION>-linux-arm64.tar.gz` |
+| Linux x64 | `ideactl-v<VERSION>-linux-amd64.tar.gz` |
+| Windows x64 | `ideactl-v<VERSION>-windows-amd64.zip` |
+
+Each archive has a `.sha256` sidecar and is included in `SHA256SUMS`. Extract it to get one `ideactl` file (`ideactl.exe` on Windows). The Node runtime and deployment CLI are embedded; no Node or npm installation is required. Run `./ideactl about` on macOS/Linux or `.\ideactl.exe about` in PowerShell.
+
+Windows releases have no code signing. SmartScreen may warn: after verifying the archive with `Get-FileHash -Algorithm SHA256` against the release checksum, choose **More info > Run anyway**, or run `Unblock-File .\ideactl.exe` in PowerShell before launching it. Organization policy may prevent this override.
+
+
 ## Pre-Requisites
 
 * [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
@@ -11,11 +25,9 @@
 {% hint style="warning" %}
 #### Versions
 
-Replace the variables in the code snippets below with the following values:
-
-* PYTHON\_VERSION: 3.9.18
-* NODEJS\_VERSION: 16.20.2
-* CDK\_VERSION: 2.115.0
+Replace the variables in the code snippets below with the values in `software_versions.yml`
+at the repository root (`python_version`, `node_version`). The CDK CLI needs no version of its
+own: the deploy tool pins it.
 {% endhint %}
 
 ## Prepare environment
@@ -25,7 +37,6 @@ Replace the variables in the code snippets below with the following values:
 ```
 PYTHON_VERSION=<see above>
 NODEJS_VERSION=<see above>
-CDK_VERSION=<see above>
 ```
 
 ### Install pyenv and nvm
@@ -65,28 +76,10 @@ nvm install $NODEJS_VERSION
 nvm use $NODEJS_VERSION
 ```
 
-#### **AWS CDK \<CDK\_VERSION>**
+#### AWS CDK
 
-{% hint style="danger" %}
-**Note:** Do **NOT** install CDK globally using `npm -g` or `yarn global add`
-{% endhint %}
-
-Follow the instructions below:
-
-```bash
-mkdir -p ~/.idea/lib/idea-cdk && pushd ~/.idea/lib/idea-cdk
-npm init --force --yes
-npm install aws-cdk@$CDK_VERSION --save
-popd
-```
-
-{% hint style="info" %}
-If you want to **upgrade** CDK version for your existing IDEA dev environment, run:
-
-```bash
-invoke devtool.upgrade-cdk
-```
-{% endhint %}
+The CDK CLI is a pinned dependency of the deploy tool under `source/idea/ideactl`; `npm ci`
+there installs the version the release was tested with. Do not install it globally.
 
 #### **Docker Desktop (Optional)**
 
@@ -158,82 +151,103 @@ invoke -l
 
 Running this command should print output like below:
 
-<pre><code>Available tasks:
-admin.main (admin)                   call administrator app main
-build.administrator                  build administrator
-build.all (build)                    build all
-build.cluster-manager                build cluster manager
-build.data-model                     build data-model
-build.dcv-connection-gateway         build dcv connection gateway
-build.scheduler                      build scheduler
-build.sdk                            build sdk
-build.virtual-desktop-controller     build virtual desktop controller
-clean.administrator                  clean administrator
-clean.all (clean)                    clean all components
-clean.cluster-manager                clean cluster manager
-clean.data-model                     clean data-model
-clean.dcv-connection-gateway         clean dcv connection gateway
-clean.scheduler                      clean scheduler
-clean.sdk                            clean sdk
-clean.virtual-desktop-controller     clean virtual desktop controller
-devtool.build                        wrapper utility for invoke clean.&#x3C;module> build.&#x3C;module> package.&#x3C;module>
-devtool.configure                    configure devtool
-devtool.ssh                          ssh into the workstation
-devtool.sync                         rsync local sources with remote development server
-devtool.upload-packages              upload packages
-docker.build                         build administrator docker image
-docker.prepare-artifacts             copy administrator docker image artifacts to deployment dir
-docker.print-commands                print docker push commands for ECR
-package.administrator                package administrator
-package.all (package)                package all components
-package.cluster-manager              package cluster manager
-package.dcv-connection-gateway       package dcv connection gateway
-package.scheduler                    package scheduler
-package.virtual-desktop-controller   package virtual desktop controller
-release.prepare-opensource-package
-release.update-version
-req.install                          Install python requirements
-req.update                           Update python requirements using pip-compile.
-scheduler.cli (scheduler)            call scheduler cli
-tests.run-integration-tests          Run Integration Tests
-tests.run-unit-tests                 Run Unit Tests
-web-portal.serve                     serve web-portal frontend app in web-browser
-web-portal.typings                   convert idea python models to typescript
+```
+Available tasks:
 
+  apispec.all (apispec)                build OpenAPI 3.0 spec for all modules
+  apispec.cluster-manager              cluster-manager api spec
+  apispec.scheduler                    scheduler api spec
+  apispec.virtual-desktop-controller   virtual desktop controller api spec
+  build.all (build)                    build all
+  build.cluster-manager                build cluster manager
+  build.data-model                     build data-model
+  build.scheduler                      build scheduler
+  build.sdk                            build sdk
+  build.virtual-desktop-controller     build virtual desktop controller
+  clean.all (clean)                    clean all components
+  clean.cluster-manager                clean cluster manager
+  clean.data-model                     clean data-model
+  clean.scheduler                      clean scheduler
+  clean.sdk                            clean sdk
+  clean.virtual-desktop-controller     clean virtual desktop controller
+  cli.cluster-manager                  invoke cluster-manager cli
+  cli.scheduler                        invoke scheduler cli
+  cli.virtual-desktop-controller       invoke virtual desktop controller cli
+  devtool.build                        wrapper utility for invoke clean.<module> build.<module> package.<module>
+  devtool.configure                    configure devtool
+  devtool.ssh                          ssh into the workstation
+  devtool.sync                         rsync local sources with remote development server
+  devtool.upload-packages              upload packages
+  package.all (package)                package all components
+  package.cluster-manager              package cluster manager
+  package.make-all-archive             build an all archive containing all package archived
+  package.scheduler                    package scheduler
+  package.virtual-desktop-controller   package virtual desktop controller
+  release.build-opensource-dist        build open source package for Github
+  release.build-s3-dist                build s3 distribution package for global assets
+  release.update-version               update idea release version in all applicable places
+  req.install                          Install python requirements
+  req.update                           Update python requirements using pip-compile.
+  tests.all (tests)                    run unit tests for all components
+  tests.cluster-manager                run cluster-manager unit tests
+  tests.scheduler                      run scheduler unit tests
+  tests.sdk                            run sdk unit tests
+  tests.virtual-desktop-controller     run virtual desktop controller unit tests
+  tests.web-portal                     run cluster-manager web-portal (webapp) tests via vitest
+  web-portal.serve                     serve web-portal frontend app in web-browser
+  web-portal.typings                   convert idea python models to typescript
+```
 
+Clean, build and package the Python modules:
 
-
-
-
-
-Clean, Build and Package
+```bash
 invoke clean build package
-Run idea-admin.sh in Developer Mode
-<strong>The IDEA_DEV_MODE environment variable is used to indicate if idea-admin.sh should use the Docker Image or Run from sources.
-</strong>
-If IDEA_DEV_MODE=true, idea-admin.sh will execute administrator app directly using sources.
-If IDEA_DEV_MODE=false (default), idea-admin.sh will attempt to download the docker image for the latest release version and execute administrator app using Docker Container.
+```
 
-Export IDEA_DEV_MODE=true on your terminal, before executing idea-admin.sh on from project root.
-# Enable Dev Modeexport IDEA_DEV_MODE=true
-<strong>You will need to run export IDEA_DEV_MODE=true, each time you open a new Terminal session.
-</strong><strong>Verify if Developer Mode is enabled
-</strong><strong>To verify, if Developer Mode is enabled, run below command. This should print (Developer Mode) at the end of the banner.
-</strong>| ./idea-admin.sh about'####:'########::'########::::'###::::. ##:: ##.... ##: ##.....::::'## ##:::: ##:: ##:::: ##: ######:::'##:::. ##:: ##:: ##:::: ##: ##...:::: #########:'####: ########:: ########: ##:::: ##:Integrated Digital Engineering on AWSVersion 3.0.0-beta.1(Developer Mode)
-</code></pre>
+## Build the deploy tool
 
-## Publishing the administrator image
+`idea-admin.sh` runs `ideactl`, a TypeScript program under `source/idea/ideactl`. It
+needs Node.js 22 or newer; `software_versions.yml` names the version the images are
+built with.
 
-The administrator container image is published by the Build and Push workflow in
-`.github/workflows/build_push.yaml`.
+```bash
+cd source/idea/ideactl
+npm ci
+npm run build
+```
+
+## Run idea-admin.sh in Developer Mode
+
+`IDEA_DEV_MODE` selects where `idea-admin.sh` gets the deploy tool from.
+
+If `IDEA_DEV_MODE=true`, the wrapper rebuilds `source/idea/ideactl` and runs it from
+your checkout. If `IDEA_DEV_MODE=false` (the default), it pulls the control-plane
+image for the release named in `IDEA_VERSION.txt` and runs `ideactl` in a container.
+
+Export it before running the wrapper from the project root. It applies to that
+terminal session only.
+
+```bash
+export IDEA_DEV_MODE=true
+./idea-admin.sh about
+```
+
+`npm ci` has to have been run at least once; developer mode fails with an explicit
+message if `node_modules` is missing.
+
+## Publishing the container images
+
+The Build and Push workflow in `.github/workflows/build_push.yaml` publishes the
+images, and the release executables for the deploy tool.
 
 ### Normal path
 
-Merging to `main` runs the workflow. It lints, runs the unit tests, builds every
-module, assumes the OIDC role held in the `ECR_ROLE` repository secret, and pushes
-one multi-architecture manifest to `public.ecr.aws/s5o2b4m0/idea-administrator`
-under three tags: the contents of `IDEA_VERSION.txt`, the same value prefixed with
-`v`, and `latest`.
+Merging to `main` runs the workflow. It builds every Python module, assumes the OIDC
+role held in the `ECR_ROLE` repository secret, then builds and pushes
+`idea-scheduler-pbs` followed by `idea-control-plane` to `public.ecr.aws/s5o2b4m0`.
+The control-plane image gets three tags: the contents of `IDEA_VERSION.txt`, the same
+value prefixed with `v`, and `latest`. The scheduler image gets the `v` tag only,
+because the control-plane build consumes it by that exact reference.
 
 ### Rerun path
 
@@ -244,28 +258,29 @@ publishing by hand:
 gh workflow run build_push.yaml --ref main
 ```
 
-Two inputs change the target. `ecr_repository` selects the registry and
-`image_name` selects the repository within it. From a ref other than `main` the
-workflow stops immediately unless `image_name` is set, so a branch dispatch cannot
-overwrite the released image:
+Three inputs change the target. `ecr_repository` selects the registry, and
+`control_plane_image_name` and `scheduler_image_name` select the repositories within
+it. From a ref other than `main` the workflow stops immediately unless both image
+names are set, so a branch dispatch cannot overwrite the released images:
 
 ```bash
 gh workflow run build_push.yaml --ref release-26.09.0 \
-  -f image_name=idea-administrator-ci-test
+  -f control_plane_image_name=idea-control-plane-ci-test \
+  -f scheduler_image_name=idea-scheduler-pbs-ci-test
 ```
 
-The named repository has to exist already, because ECR Public does not create one
+The named repositories have to exist already, because ECR Public does not create one
 on push. Delete a throwaway repository once the check is finished.
 
 ### Emergency path
 
-`invoke docker.build-push-multi <registry> <version>` produces the same three tags
-from a workstation, but it skips the lint, test and build gates the workflow
-applies. Use it only when the workflow itself cannot run.
+There is none. The control-plane image is built from a private package context that
+only the workflow assembles, so CI is the only supported publisher. If the workflow
+itself cannot run, fix the workflow.
 
 ### The publishing role
 
-The role named by `ECR_ROLE` trusts any ref of this repository, so the `image_name`
-guard above is the only control that stops a branch dispatch from replacing the
+The role named by `ECR_ROLE` trusts any ref of this repository, so the image-name
+guard above is the only control that stops a branch dispatch from replacing a
 released image. Narrowing the role trust condition to `main` would remove the need
 for that guard.

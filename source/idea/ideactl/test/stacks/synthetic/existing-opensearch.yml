@@ -1,0 +1,8 @@
+# existing OpenSearch domain: analytics renders domain_vpc_endpoint_url only.
+use_existing_vpc: true
+vpc_id: vpc-000000000000000a1
+private_subnet_ids: [subnet-000000000000000b1]
+public_subnet_ids: [subnet-000000000000000c1]
+use_existing_opensearch_cluster: true
+opensearch_domain_endpoint: vpc-idea-test1.us-east-2.es.amazonaws.com
+opensearch_domain_arn: arn:aws:es:us-east-2:123456789012:domain/idea-test1

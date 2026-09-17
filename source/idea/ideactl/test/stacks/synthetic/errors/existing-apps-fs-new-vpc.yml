@@ -1,0 +1,3 @@
+# an existing file system is only supported inside an existing VPC.
+use_existing_apps_fs: true
+existing_apps_fs_id: fs-000000000000000d1

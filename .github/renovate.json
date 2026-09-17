@@ -3,17 +3,57 @@
   "extends": [
     "config:best-practices"
   ],
-  "assignees": [
-    "cfsnate"
+  "timezone": "America/New_York",
+  "schedule": [
+    "* 0-6 * * 1"
   ],
-  "baseBranchPatterns": [
-    "/^dev-.*/"
-  ],
-  "pip_requirements": {
-    "managerFilePatterns": [
-      "/requirements\\/.*\\.(in)$/"
-    ]
+  "dependencyDashboard": true,
+  "prConcurrentLimit": 2,
+  "branchConcurrentLimit": 2,
+  "prHourlyLimit": 2,
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "prConcurrentLimit": 5
   },
+  "pip_requirements": {
+    "enabled": false
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "fileMatch": [
+        "^software_versions\\.yml$"
+      ],
+      "matchStrings": [
+        "node_version:\\s*(?<currentValue>\\S+)"
+      ],
+      "depNameTemplate": "node",
+      "datasourceTemplate": "node-version"
+    },
+    {
+      "customType": "regex",
+      "fileMatch": [
+        "^software_versions\\.yml$"
+      ],
+      "matchStrings": [
+        "python_version:\\s*(?<currentValue>\\S+)"
+      ],
+      "depNameTemplate": "python",
+      "datasourceTemplate": "python-version"
+    },
+    {
+      "customType": "regex",
+      "fileMatch": [
+        "^software_versions\\.yml$"
+      ],
+      "matchStrings": [
+        "nvm_version:\\s*(?<currentValue>\\S+)"
+      ],
+      "depNameTemplate": "nvm-sh/nvm",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.*)$"
+    }
+  ],
   "labels": [
     "renovate"
   ],
@@ -43,28 +83,35 @@
       ]
     },
     {
-      "matchPackageNames": [
-        "prompt-toolkit"
+      "matchManagers": [
+        "pip-compile"
       ],
-      "allowedVersions": "3.0.36"
+      "matchDepTypes": [
+        "indirect"
+      ],
+      "enabled": true
     },
     {
-      "matchPackageNames": [
-        "sqlalchemy"
+      "description": "Every scheduled update lands in one pull request, majors included; vulnerability alerts stay separate and immediate",
+      "matchUpdateTypes": [
+        "major",
+        "minor",
+        "patch",
+        "pin",
+        "digest",
+        "pinDigest",
+        "rollback",
+        "replacement"
       ],
-      "allowedVersions": "1.4.52"
-    },
-    {
-      "matchPackageNames": [
-        "typeguard"
-      ],
-      "allowedVersions": "2.13.3"
-    },
-    {
-      "matchPackageNames": [
-        "urllib3"
-      ],
-      "allowedVersions": "1.26.18"
+      "groupName": "all dependencies",
+      "groupSlug": "all-dependencies"
     }
-  ]
+  ],
+  "pip-compile": {
+    "fileMatch": [
+      "^requirements/[^/]+\\.txt$"
+    ]
+  },
+  "separateMajorMinor": false,
+  "separateMultipleMajor": false
 }

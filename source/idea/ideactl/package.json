@@ -1,0 +1,65 @@
+{
+  "name": "ideactl",
+  "version": "26.09.1",
+  "private": true,
+  "type": "module",
+  "description": "IDEA administrator: TypeScript CDK app and cluster CLI, shipped inside the idea image",
+  "bin": {
+    "ideactl": "dist/src/cli/main.js"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-resources.mjs && node scripts/build-lambda-bundles.mjs",
+    "build:dist": "node scripts/build-sea.mjs",
+    "build:shell": "node scripts/build-shell-bundle.mjs",
+    "lint": "tsc --noEmit -p tsconfig.json",
+    "test": "node --test 'test/**/*.test.ts'",
+    "parity": "node tools/parity/synth.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-acm": "3.1133.0",
+    "@aws-sdk/client-auto-scaling": "3.1133.0",
+    "@aws-sdk/client-backup": "3.1133.0",
+    "@aws-sdk/client-bedrock": "3.1133.0",
+    "@aws-sdk/client-cloudformation": "3.1133.0",
+    "@aws-sdk/client-cloudwatch": "3.1133.0",
+    "@aws-sdk/client-cloudwatch-logs": "3.1133.0",
+    "@aws-sdk/client-cognito-identity-provider": "3.1133.0",
+    "@aws-sdk/client-directory-service": "3.1133.0",
+    "@aws-sdk/client-dynamodb": "3.1133.0",
+    "@aws-sdk/client-ec2": "3.1133.0",
+    "@aws-sdk/client-ecs": "3.1133.0",
+    "@aws-sdk/client-elastic-load-balancing-v2": "3.1133.0",
+    "@aws-sdk/client-iam": "3.1133.0",
+    "@aws-sdk/client-opensearch": "3.1133.0",
+    "@aws-sdk/client-resource-groups-tagging-api": "3.1133.0",
+    "@aws-sdk/client-route-53": "3.1133.0",
+    "@aws-sdk/client-s3": "3.1133.0",
+    "@aws-sdk/client-secrets-manager": "3.1133.0",
+    "@aws-sdk/client-sns": "3.1133.0",
+    "@aws-sdk/client-sqs": "3.1133.0",
+    "@aws-sdk/client-ssm": "3.1133.0",
+    "@aws-sdk/client-sts": "3.1133.0",
+    "@aws-sdk/credential-provider-ini": "3.973.16",
+    "@aws-sdk/lib-dynamodb": "3.1133.0",
+    "aws-cdk": "2.1141.0",
+    "aws-cdk-lib": "2.269.0",
+    "cdk-nag": "3.0.2",
+    "commander": "15.0.0",
+    "constructs": "10.8.1",
+    "js-yaml": "5.4.2",
+    "nunjucks": "3.2.4"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "4.0.9",
+    "@types/node": "26.5.1",
+    "@types/nunjucks": "3.2.6",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  }
+}

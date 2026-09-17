@@ -122,6 +122,25 @@ class DistributedLock(SocaService, DistributedLockProtocol):
         with self._lock:
             self._active_locks[key] = acquired_lock
 
+    def assert_held(self, key: str):
+        with self._lock:
+            lock = self._active_locks.get(key)
+        if lock is None:
+            raise RuntimeError('Distributed lock is not held')
+        with lock.thread_lock:
+            # A paused worker must not renew an expired lease and continue its old scan.
+            if (
+                lock.status != lock.LOCKED
+                or time.monotonic() - lock.last_updated_time
+                >= self._lock_client._safe_period.total_seconds()
+            ):
+                raise RuntimeError('Distributed lock lease is no longer safe')
+            version = lock.record_version_number
+            # The library heartbeat conditionally updates the owned version in DynamoDB.
+            self._lock_client._send_heartbeat(lock)
+            if lock.status != lock.LOCKED or version == lock.record_version_number:
+                raise RuntimeError('Distributed lock ownership could not be verified')
+
     def release(self, key: str):
         if key not in self._active_locks:
             return

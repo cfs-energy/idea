@@ -1,0 +1,2 @@
+# Seven mandatory modules only. idea.yml drops scheduler, vdc, metrics, and bastion-host.
+enabled_modules: []

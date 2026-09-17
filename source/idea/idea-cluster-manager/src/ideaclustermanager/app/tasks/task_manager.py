@@ -8,7 +8,9 @@
 #  or in the 'license' file accompanying this file. This file is distributed on an 'AS IS' BASIS, WITHOUT WARRANTIES
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
-import logging
+import os
+import faulthandler
+from concurrent.futures import ThreadPoolExecutor
 
 from ideasdk.context import SocaContext
 from ideasdk.service import SocaService
@@ -17,12 +19,10 @@ from ideadatamodel import constants
 from ideaclustermanager.app.tasks.base_task import BaseTask
 
 from typing import Dict, List
-from ideasdk.thread_pool import ThreadPoolExecutor, ThreadPoolMaxCapacity
 import threading
 import ldap
 import time
 
-DEFAULT_MIN_WORKERS = 1  # The default setting if the configuration cannot be found
 DEFAULT_MAX_WORKERS = 5  # The default setting if the configuration cannot be found
 MAX_WORKERS = 10  # The absolute maximum
 
@@ -30,11 +30,6 @@ MAX_WORKERS = 10  # The absolute maximum
 #  https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-short-and-long-polling.html
 DEFAULT_WAIT_TIME = 20  # WaitTime for SQS polling (short or long polling)
 MAX_WAIT_TIME = 20  # The absolute maximum
-
-# MaxMessages from SQS in one API call
-# NOTE - Due to message processing time and dependency - the suggested value is 1
-DEFAULT_MAX_MESSAGES = 1  # WaitTime for SQS polling (short or long polling)
-MAX_MESSAGES = 10  # The absolute maximum
 
 # Max Visibility from SQS in one API call
 DEFAULT_VISIBILITY = constants.SQS_VISIBILITY_TASKS
@@ -76,39 +71,20 @@ class TaskManager(SocaService):
             )
             self._wait_time = MAX_WAIT_TIME
 
-        self._min_workers = self.context.config().get_int(
-            'cluster-manager.task_manager.min_workers', default=DEFAULT_MIN_WORKERS
-        )
         self._max_workers = self.context.config().get_int(
             'cluster-manager.task_manager.max_workers', default=DEFAULT_MAX_WORKERS
         )
 
-        self._polling_max_messages = self.context.config().get_int(
-            'cluster-manager.task_manager.polling_max_messages',
-            default=DEFAULT_MAX_MESSAGES,
-        )
         self._polling_visibility_timeout = self.context.config().get_int(
             'cluster-manager.task_manager.polling_visibility_timeout',
             default=DEFAULT_VISIBILITY,
         )
-
-        if self._min_workers <= 0:
-            self.logger.warning(
-                f'Minimum task workers cannot be 0 or negative. Setting minimum workers to {DEFAULT_MIN_WORKERS}'
-            )
-            self._min_workers = DEFAULT_MIN_WORKERS
 
         if self._max_workers <= 0:
             self.logger.warning(
                 f'Maximum task workers cannot be 0 or negative. Setting maximum workers to {DEFAULT_MAX_WORKERS}'
             )
             self._max_workers = DEFAULT_MAX_WORKERS
-
-        if self._polling_max_messages <= 0:
-            self.logger.warning(
-                f'Maximum messages cannot be 0 or negative. Setting maximum messages to {DEFAULT_MAX_MESSAGES}'
-            )
-            self._polling_max_messages = DEFAULT_MAX_MESSAGES
 
         if self._polling_visibility_timeout <= 0:
             self.logger.warning(
@@ -126,33 +102,93 @@ class TaskManager(SocaService):
                 self.logger.warning(
                     f'Maximum task workers exceeds suggested maximum of {MAX_WORKERS}. Setting maximum workers to {MAX_WORKERS}. Set debug mode (cluster-manager.task_manager.debug) to remove this safeguard'
                 )
-                _max_workers = MAX_WORKERS
-
-        if self._min_workers > self._max_workers:
-            self.logger.warning(
-                f'Minimum task workers > Maximum workers ({self._min_workers}) < ({self._max_workers}). Setting minimum workers to maximum workers ({self._max_workers})'
-            )
-            self._min_workers = self._max_workers
-
-        if self._polling_max_messages > MAX_MESSAGES:
-            self.logger.warning(
-                f'Maximum messages cannot be > {MAX_MESSAGES}. Setting maximum messages to {MAX_MESSAGES}'
-            )
-            self._polling_max_messages = MAX_MESSAGES
+                self._max_workers = MAX_WORKERS
 
         if self._polling_visibility_timeout > MAX_VISIBILITY:
             self.logger.warning(
                 f'Polling Visibility cannot be > {MAX_VISIBILITY}. Setting visibility to {MAX_VISIBILITY}'
             )
-            self._polling_max_visibility = MAX_VISIBILITY
+            self._polling_visibility_timeout = MAX_VISIBILITY
 
-        self.task_executors = ThreadPoolExecutor(
-            context=context,
-            min_workers=self._min_workers,
-            max_workers=self._max_workers,
-            thread_pool_name='task-executor-pool',
-            debug=self._debug,
+        self._task_timeout = max(
+            1,
+            min(
+                self.context.config().get_int(
+                    'cluster-manager.task_manager.task_timeout_seconds', default=120
+                ),
+                MAX_VISIBILITY - 30,
+            ),
         )
+        # Stop the process before SQS can redeliver a task still making side effects.
+        self._polling_visibility_timeout = max(
+            self._polling_visibility_timeout, self._task_timeout + 30
+        )
+        self._slots = threading.BoundedSemaphore(self._max_workers)
+        self._full_since = None
+        self._full_warned = False
+        self.task_executors = ThreadPoolExecutor(
+            max_workers=self._max_workers, thread_name_prefix='task-executor'
+        )
+
+    def _task_expired(self):
+        # Python cannot safely cancel a running thread. The supervisor must replace the
+        # process; leaving the receipt unacknowledged preserves FIFO retry ordering.
+        try:
+            os.write(
+                2, b'Task deadline exceeded; terminating worker process for restart\n'
+            )
+            faulthandler.dump_traceback(all_threads=True)
+        finally:
+            os._exit(1)
+
+    def _execute_with_deadline(self, message):
+        timer = threading.Timer(self._task_timeout, self._task_expired)
+        timer.daemon = True
+        timer.start()
+        try:
+            self.execute_task(message)
+        finally:
+            timer.cancel()
+            self._slots.release()
+
+    def _reserve_slot(self):
+        if self._slots.acquire(blocking=False):
+            self._full_since = None
+            self._full_warned = False
+            return True
+        now = time.monotonic()
+        if self._full_since is None:
+            self._full_since = now
+        elif not self._full_warned and now - self._full_since > self._task_timeout:
+            self.logger.warning(
+                'Task executor pool has been full longer than the task timeout'
+            )
+            self._full_warned = True
+        return False
+
+    def _discard_deleted_user(self, task_name, payload, receipt_handle):
+        if task_name not in {
+            'accounts.sync-user',
+            'accounts.sync-password',
+            'accounts.create-home-directory',
+            'accounts.group-membership-updated',
+        }:
+            return False
+        if not isinstance(payload, dict):
+            return False
+        username = payload.get('username')
+        if (
+            not username
+            or self.context.accounts.user_dao.get_user(username) is not None
+        ):
+            return False
+        # LDAP absence alone can mean replication lag; only the authoritative
+        # account record establishes that retrying this work is obsolete.
+        self.logger.warning(f'failed task for deleted user; discarding: {task_name}')
+        self.context.aws().sqs().delete_message(
+            QueueUrl=self.get_task_queue_url(), ReceiptHandle=receipt_handle
+        )
+        return True
 
     def get_task_queue_url(self) -> str:
         return self.context.config().get_string(
@@ -161,6 +197,8 @@ class TaskManager(SocaService):
 
     def execute_task(self, sqs_message: Dict):
         task_name = None
+        task_payload = None
+        receipt_handle = None
         try:
             _task_start = Utils.current_time_ms()
             message_body = Utils.get_value_as_string('Body', sqs_message)
@@ -186,6 +224,8 @@ class TaskManager(SocaService):
 
             task = self.tasks[task_name]
 
+            if self._discard_deleted_user(task_name, task_payload, receipt_handle):
+                return
             task.invoke(task_payload)
             _task_end = Utils.current_time_ms()
             _task_duration = int(_task_end - _task_start)
@@ -208,90 +248,42 @@ class TaskManager(SocaService):
             )
 
         except Exception as e:
+            if self._discard_deleted_user(task_name, task_payload, receipt_handle):
+                return
             self.logger.exception(f'failed to execute task: {task_name} - {e}')
 
     def task_queue_listener(self):
         while not self.exit.is_set():
+            if not self._reserve_slot():
+                # Do not receive and release work at capacity: each receive counts
+                # towards the DLQ limit even though no task has attempted it.
+                self.exit.wait(1)
+                continue
+            submitted = False
             try:
-                if self.logger.isEnabledFor(logging.DEBUG):
-                    self.logger.debug(
-                        f'Polling SQS with max messages: {self._polling_max_messages}, visibility timeout: {self._polling_visibility_timeout}, wait time: {self._wait_time}'
-                    )
                 result = (
                     self.context.aws()
                     .sqs()
                     .receive_message(
                         QueueUrl=self.get_task_queue_url(),
-                        MaxNumberOfMessages=self._polling_max_messages,
+                        # A FIFO batch can contain multiple messages in the same group.
+                        # Receiving one prevents concurrent execution within that group.
+                        MaxNumberOfMessages=1,
                         AttributeNames=['All'],
                         VisibilityTimeout=self._polling_visibility_timeout,
                         WaitTimeSeconds=self._wait_time,
                     )
                 )
-                messages: List[Dict] = Utils.get_value_as_list(
-                    'Messages', result, default=[]
-                )
-                if len(messages) == 0:
-                    continue
-                self.logger.info(f'received {len(messages)} messages from SQS')
-                if self.logger.isEnabledFor(logging.DEBUG):
-                    self.logger.debug(f'messages: {messages}')
-
-                last_message_index = 0
-                try:
-                    for i, message in enumerate(messages):
-                        last_message_index = i
-                        self.logger.debug(f'Sending {i} to task_executor {message}')
-                        message.setdefault(
-                            'VisibilityTimeout',
-                            constants.SQS_VISIBILITY_TIMEOUT_DEFAULT,
-                        )
-                        self.task_executors.submit(
-                            lambda message_: self.execute_task(message_), message
-                        )
-
-                except ThreadPoolMaxCapacity:
-                    self.logger.debug(
-                        'ThreadPoolMaxCapacity encountered - releasing messages'
-                    )
-                    # change the visibility timeout so that message can be processed by another server in ASG.
-                    messages_not_processed = []
-                    for i in range(last_message_index, len(messages)):
-                        message = messages[i]
-                        receipt_handle = Utils.get_value_as_string(
-                            'ReceiptHandle', message
-                        )
-                        messages_not_processed.append(
-                            {
-                                'Id': Utils.uuid(),
-                                'ReceiptHandle': receipt_handle,
-                                'VisibilityTimeout': 0,
-                            }
-                        )
-
-                    # 10 is the max size of entries that can be posted in batch to change_message_visibility_batch
-                    for _batch_num in range(0, len(messages_not_processed), 10):
-                        batch = messages_not_processed[_batch_num : _batch_num + 10]
-                        self.logger.debug(
-                            f'Updating visibility timeout to 0 for: {batch}'
-                        )
-                        try:
-                            self.context.aws().sqs().change_message_visibility_batch(
-                                QueueUrl=self.get_task_queue_url(), Entries=batch
-                            )
-                        except Exception as e:
-                            self.logger.error(
-                                f'failed to update visibility timeout: {e}'
-                            )
-                    # wait for few seconds to poll the SQS queue
-                    self.logger.debug(
-                        'Waiting for 10 seconds to poll the SQS queue after ThreadPoolMaxCapacity'
-                    )
-                    self.exit.wait(10)
-
+                messages = Utils.get_value_as_list('Messages', result, default=[])
+                if messages:
+                    self.task_executors.submit(self._execute_with_deadline, messages[0])
+                    submitted = True
             except Exception as e:
                 self.logger.exception(f'failed to poll queue: {e}')
-                time.sleep(1)
+                self.exit.wait(1)
+            finally:
+                if not submitted:
+                    self._slots.release()
 
     def send(
         self,
@@ -319,10 +311,9 @@ class TaskManager(SocaService):
 
     def start(self):
         self.task_monitor_thread.start()
-        self.task_executors.start()
 
     def stop(self):
         self.exit.set()
         if self.task_monitor_thread.is_alive():
             self.task_monitor_thread.join()
-        self.task_executors.stop(wait=True)
+        self.task_executors.shutdown(wait=True)

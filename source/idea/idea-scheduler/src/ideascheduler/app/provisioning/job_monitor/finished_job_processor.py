@@ -26,6 +26,7 @@ from threading import Thread, Event
 import arrow
 import logging
 
+from ideascheduler.app.metrics.job_completion_metrics import JobCompletionMetrics
 from ideascheduler.app.provisioning.lifecycle_events import (
     ProvisioningLifecycleEvents,
 )
@@ -190,6 +191,8 @@ class ProcessFinishedJob:
                     queue_type=self.job.queue_type,
                     duration_secs=int(total_duration.total_seconds()),
                 )
+
+            JobCompletionMetrics(context=self._context, job=self.job).publish()
         except Exception as e:
             self._logger.exception(
                 f'{self.job.log_tag} failed to publish job metrics: {e}'
@@ -263,6 +266,10 @@ class ProcessFinishedJob:
                 self.job.end_time = arrow.utcnow().datetime
 
             self.log_job_complete()
+
+            # counted with its outcome, so the jobs that never got capacity sit in the
+            # same series as the ones that ran
+            self.publish_job_metrics()
 
             self.publish_lifecycle_event(disposition=disposition)
 

@@ -1,0 +1,7 @@
+# Collector delivery and retries
+
+Cost and storage collectors use a durable outbox in the cluster bucket. Collection writes the metric payload before advancing `last_collected`; this checkpoint schedules source reads and never claims delivery. Every invocation replays saved payloads, including invocations where another replica already collected the interval. The old `last_published` value is ignored.
+
+DogStatsD does not acknowledge ingestion. Outbox payloads therefore remain after enqueueing or sending, including when a socket failure is suppressed by the provider. Cost entries retain the latest correction for each metric, day and dimension set beyond the source lookback window. Storage entries retain the latest gauge for each metric and dimension set. Each payload occupies its own object under `metrics/outbox/`, keeping history out of application settings caches. Pagination keeps replay memory bounded.
+
+Historical cost objects are intentionally not expired automatically. They consume bucket storage and generate retry traffic until an operator verifies ingestion and removes the corresponding outbox objects. Monitor bucket size and request usage. Transport or destination age limits can still reject old timestamps; retained payloads support recovery but cannot prove remote ingestion. A future acknowledged transport can retire objects automatically. The standalone collector has no shared settings database or cross-replica checkpoint and retains its existing delivery behavior.

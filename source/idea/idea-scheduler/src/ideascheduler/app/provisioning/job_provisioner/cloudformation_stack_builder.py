@@ -15,7 +15,6 @@ from ideadatamodel import (
     errorcodes,
     constants,
     SocaJob,
-    SocaAnonymousMetrics,
     GetProjectRequest,
     GetUserRequest,
 )
@@ -698,71 +697,6 @@ class CloudFormationStackBuilder:
         fsx_lustre.Tags = Tags(**self.get_common_tags(), **fsx_tags)
         return fsx_lustre
 
-    def build_metrics(self) -> SocaAnonymousMetrics:
-        spot_price = 'false'
-        if self.job.params.spot:
-            if self.job.params.spot_price:
-                spot_price = str(self.job.params.spot_price.amount)
-            else:
-                spot_price = 'auto'
-        metrics = SocaAnonymousMetrics('SendAnonymousData')
-        solution_metrics_lambda_arn = self.context.config().get_string(
-            'cluster.solution.solution_metrics_lambda_arn', required=True
-        )
-        metrics.ServiceToken = solution_metrics_lambda_arn
-        metrics.DesiredCapacity = str(self.job.ondemand_nodes() + self.job.spot_nodes())
-        metrics.InstanceType = str(self.job.params.instance_types)
-        metrics.Efa = str(self.job.params.enable_efa_support).lower()
-        metrics.ScratchSize = str(self.job.params.scratch_storage_size.int_val())
-        metrics.RootSize = str(self.job.params.root_storage_size.int_val())
-        metrics.SpotPrice = spot_price
-        metrics.BaseOS = str(self.job.params.base_os)
-        metrics.StackUUID = self.job.provisioning_options.stack_uuid
-        metrics.KeepForever = str(self.job.provisioning_options.keep_forever).lower()
-        metrics.FsxLustre = str(self.job.params.fsx_lustre.enabled).lower()
-
-        if not self.job.params.fsx_lustre.existing_fsx:
-            if Utils.get_as_bool(self.job.params.fsx_lustre.enabled, default=False):
-                deployment_type = Utils.get_as_string(
-                    self.job.params.fsx_lustre.deployment_type,
-                    default=constants.DEFAULT_FSX_LUSTRE_DEPLOYMENT_TYPE,
-                ).upper()
-
-                if deployment_type in constants.FSX_LUSTRE_PER_UNIT_THROUGHPUT_TYPES:
-                    per_unit_throughput = Utils.get_as_int(
-                        self.job.params.fsx_lustre.per_unit_throughput, default=100
-                    )
-                else:
-                    # Scratch filesystems
-                    per_unit_throughput = 200
-
-                metrics.FsxLustreInfo = {
-                    'DeploymentType': deployment_type,
-                    'PerUnitStorageThroughput': per_unit_throughput,
-                    'Size': Utils.get_as_int(
-                        self.job.params.fsx_lustre.size.int_val(), default=0
-                    ),
-                }
-            else:
-                metrics.FsxLustreInfo = {}
-        else:
-            metrics.FsxLustreInfo = {
-                'ExistingFSx': self.job.params.fsx_lustre.existing_fsx
-            }
-
-        metrics.TerminateWhenIdle = str(
-            self.job.provisioning_options.terminate_when_idle
-        ).lower()
-        metrics.Dcv = 'false'
-        metrics.Version = ideascheduler.__version__
-        metrics.Region = self.context.config().get_string(
-            'cluster.aws.region', required=True
-        )
-        metrics.Misc = self.context.config().get_string(
-            'cluster.solution.custom_anonymous_metric_entry', required=False, default=''
-        )
-        return metrics
-
     def build_template(self) -> str:
         # build launch template
         launch_template = self.build_launch_template()
@@ -785,10 +719,6 @@ class CloudFormationStackBuilder:
         if self.job.params.fsx_lustre.enabled:
             if not self.job.params.fsx_lustre.existing_fsx:
                 self.template.add_resource(self.build_fsx_lustre())
-
-        # send anonymous metrics to AWS
-        if self.job.params.enable_anonymous_metrics:
-            self.template.add_resource(self.build_metrics())
 
         return self.template.to_yaml()
 

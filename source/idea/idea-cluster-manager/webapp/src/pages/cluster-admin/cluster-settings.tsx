@@ -11,6 +11,7 @@
  * and limitations under the License.
  */
 
+import AccountReconcileSettings from "./account-reconcile-settings";
 import React, {Component, RefObject} from "react";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import IdeaAppLayout, {IdeaAppLayoutProps} from "../../components/app-layout";
@@ -588,7 +589,7 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                 ]}
                 header={(
                     <Header variant={"h1"}
-                            description={"View cluster settings. Every setting on this page is read-only except the Maintenance and Bedrock tabs; use idea-admin.sh to update the rest."}
+                            description={"View cluster settings. Every setting on this page is read-only except the Maintenance, Bedrock and Account reconciliation tabs; use idea-admin.sh to update the rest."}
                             actions={(<SpaceBetween size={"s"}>
                                 <Button variant={"primary"} onClick={() => this.props.navigate('/cluster/status')}>View Cluster Status</Button>
                             </SpaceBetween>)}>
@@ -969,6 +970,11 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                                     label: 'Maintenance',
                                     id: 'maintenance',
                                     content: this.buildMaintenanceSettings()
+                                },
+                                {
+                                    label: 'Account reconciliation',
+                                    id: 'account-reconciliation',
+                                    content: <AccountReconcileSettings settings={this.state.clusterManager?.accounts?.reconcile}/>
                                 },
                                 {
                                     label: 'Bedrock',

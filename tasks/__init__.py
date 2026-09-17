@@ -18,7 +18,6 @@ idea.utils.update_source_paths(
     [
         idea.props.data_model_src,
         idea.props.sdk_src,
-        idea.props.administrator_src,
         idea.props.cluster_manager_src,
         idea.props.scheduler_src,
         idea.props.virtual_desktop_src,
@@ -36,9 +35,7 @@ import tasks.cli as cli  # noqa: E402
 import tasks.tests as tests  # noqa: E402
 import tasks.devtool as devtool  # noqa: E402
 import tasks.web_portal as web_portal  # noqa: E402
-import tasks.docker as docker  # noqa: E402
 import tasks.apispec as apispec  # noqa: E402
-import tasks.admin as admin  # noqa: E402
 
 ns = Collection()
 ns.configure({'run': {'echo': True}})
@@ -51,9 +48,7 @@ ns.add_collection(release)
 ns.add_collection(requirements, name='req')
 ns.add_collection(cli)
 ns.add_collection(web_portal)
-ns.add_collection(docker)
 ns.add_collection(apispec)
-ns.add_collection(admin)
 ns.add_collection(tests)
 
 # local development - unique for individual developer.

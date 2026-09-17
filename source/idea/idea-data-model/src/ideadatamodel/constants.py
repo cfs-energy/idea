@@ -352,6 +352,7 @@ MODULE_SCHEDULER = 'scheduler'
 MODULE_CLUSTER_MANAGER = 'cluster-manager'
 MODULE_VIRTUAL_DESKTOP_CONTROLLER = 'virtual-desktop-controller'
 MODULE_BASTION_HOST = 'bastion-host'
+MODULE_ECS = 'ecs'
 MODULE_METRICS = 'metrics'
 ALL_MODULES = [
     MODULE_BOOTSTRAP,
@@ -396,6 +397,7 @@ DEFAULT_COPYRIGHT_TEXT = (
 METRICS_PROVIDER_CLOUDWATCH = 'cloudwatch'
 METRICS_PROVIDER_PROMETHEUS = 'prometheus'
 METRICS_PROVIDER_AMAZON_MANAGED_PROMETHEUS = 'amazon_managed_prometheus'
+METRICS_PROVIDER_DOGSTATSD = 'dogstatsd'
 
 # services
 SERVICE_ID_LEADER_ELECTION = 'leader-election'

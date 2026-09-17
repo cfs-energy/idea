@@ -1,0 +1,2 @@
+# OpenLDAP provider. Includes directoryservice/_templates/openldap.yml.
+directory_service_provider: openldap

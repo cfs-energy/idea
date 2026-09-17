@@ -1,0 +1,105 @@
+name: ideactl checks
+on:
+  workflow_call:
+  pull_request:
+  push:
+    branches:
+      - main
+      - 'release-*'
+    paths-ignore:
+      - 'docs/**'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-large
+    defaults:
+      run:
+        working-directory: source/idea/ideactl
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Detect release inputs
+        id: inputs
+        working-directory: .
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: bash scripts/ci-inputs.sh
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "26.8.2"
+          cache: npm
+          cache-dependency-path: source/idea/ideactl/package-lock.json
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install the test oracles
+        # flatten.py and the Jinja2 rendering oracle are Python; the settings-sync tests run
+        # against DynamoDB Local at the path the suite looks for.
+        run: |
+          python3 -m pip install 'jinja2==3.1.6' 'PyYAML==6.0.3'
+          mkdir -p ~/.idea/lib/dynamodb-local
+          curl -fsSL https://d1ni2b6xgvw0s0.cloudfront.net/v2.x/dynamodb_local_latest.tar.gz | tar -xz -C ~/.idea/lib/dynamodb-local
+      - name: Check package version
+        run: |
+          PACKAGE_VERSION=$(node --input-type=module -e 'import packageJson from "./package.json" with { type: "json" }; process.stdout.write(packageJson.version)')
+          RELEASE_VERSION=$(tr -d '[:space:]' < ../../../IDEA_VERSION.txt)
+          if [ "$PACKAGE_VERSION" != "$RELEASE_VERSION" ]; then
+            echo "::error::ideactl package version ${PACKAGE_VERSION} does not match IDEA_VERSION.txt ${RELEASE_VERSION}."
+            exit 1
+          fi
+      - name: Install workflow linter
+        env:
+          GOBIN: ${{ runner.temp }}/ci-tools
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          echo "$GOBIN" >> "$GITHUB_PATH"
+      - name: Install dependencies
+        run: npm ci --strict-allow-scripts
+      - name: Build without changing tracked files
+        run: |
+          npm run build
+          git diff --exit-code -- .
+      - name: Run checks
+        # tools/parity/live, tools/parity/fixtures and docs/port hold real cluster data and are
+        # untracked in this public repository. Declaring the checkout public makes the tests that
+        # need them skip (the skip-policy check lists each one) instead of failing at setup.
+        env:
+          IDEACTL_PUBLIC_CHECKOUT: '1'
+        run: node scripts/ci-checks.mjs all
+      - name: Build the runner release executable
+        if: steps.inputs.outputs.release == 'true'
+        run: npm run build:dist -- --target linux-amd64
+      - name: Smoke-test the extracted release executable
+        if: steps.inputs.outputs.release == 'true'
+        run: |
+          set -euo pipefail
+          SMOKE_ROOT=$(mktemp -d)
+          trap 'rm -rf "$SMOKE_ROOT"' EXIT
+          tar -xzf dist/release/ideactl-v*-linux-amd64.tar.gz -C "$SMOKE_ROOT"
+          node test/support/release-smoke.ts "$SMOKE_ROOT/ideactl"
+      - name: Smoke-test the Linux executable image
+        if: steps.inputs.outputs.release == 'true'
+        run: |
+          set -euo pipefail
+          IMAGE=ideactl-linux-smoke
+          SMOKE_ROOT=$(mktemp -d)
+          trap 'rm -rf "$SMOKE_ROOT"' EXIT
+          mkdir -p "$SMOKE_ROOT/config"
+          cp test/cli/shell-path-values.yml "$SMOKE_ROOT/values.yml"
+          docker build --tag "$IMAGE" --file scripts/ideactl-linux.Dockerfile dist/release/linux-amd64
+          docker run --rm --user "$(id -u):$(id -g)" --env HOME=/tmp --env PATH=/tmp/empty --workdir /tmp/work "$IMAGE" about
+          docker run --rm --user "$(id -u):$(id -g)" --env HOME=/tmp --env PATH=/tmp/empty --workdir /tmp/work \
+            --volume "$SMOKE_ROOT/values.yml:/tmp/values.yml:ro" \
+            --volume "$SMOKE_ROOT/config:/tmp/config" "$IMAGE" \
+            config generate --values-file /tmp/values.yml --config-dir /tmp/config --force
+          test -s "$SMOKE_ROOT/config/config/idea.yml"

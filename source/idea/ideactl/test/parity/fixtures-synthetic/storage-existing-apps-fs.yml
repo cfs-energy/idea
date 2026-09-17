@@ -1,0 +1,10 @@
+# Existing apps file system. The data file system id check follows the apps flag.
+use_existing_vpc: true
+vpc_id: vpc-000000000000000a1
+private_subnet_ids:
+  - subnet-000000000000000b1
+public_subnet_ids:
+  - subnet-000000000000000c1
+use_existing_apps_fs: true
+existing_apps_fs_id: fs-000000000000000d1
+existing_data_fs_id: fs-000000000000000d2

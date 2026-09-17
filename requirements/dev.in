@@ -1,5 +1,4 @@
 -r idea-dev-lambda.in
--r idea-administrator.in
 -r idea-scheduler.in
 -r idea-virtual-desktop-controller.in
 -r idea-cluster-manager.in

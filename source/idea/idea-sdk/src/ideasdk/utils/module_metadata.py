@@ -74,6 +74,12 @@ MODULE_METADATA = [
         deployment_priority=4,
     ),
     ModuleMetadata(
+        name=constants.MODULE_ECS,
+        title='Container Control Plane',
+        type=constants.MODULE_TYPE_STACK,
+        deployment_priority=5,
+    ),
+    ModuleMetadata(
         name=constants.MODULE_CLUSTER_MANAGER,
         title='Cluster Manager',
         type=constants.MODULE_TYPE_APP,

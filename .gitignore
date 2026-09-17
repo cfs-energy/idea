@@ -4,7 +4,7 @@ __pycache__/
 *$py.class
 
 # IDEA Specific
-deployment/ecr/idea-administrator/*.tar.gz
+deployment/ecr/*/*.tar.gz
 open-source/
 deployment/global-s3-assets/
 deployment/regional-s3-assets/
@@ -197,6 +197,9 @@ integration-test-results/
 package.json
 package-lock.json
 yarn.lock
+# The deploy tool is an npm package; its manifest and lockfile are part of the build.
+!source/idea/ideactl/package.json
+!source/idea/ideactl/package-lock.json
 
 region_ami_config_backup_*.yml
 base-software-stack-config_backup_*.yaml

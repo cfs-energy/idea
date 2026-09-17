@@ -1,5 +1,21 @@
 # IDEA CLI utility
 
+Download the matching archive from the [GitHub release](https://github.com/cfs-energy/idea/releases) (replace `<VERSION>` with the release version):
+
+| Operator platform | Release file |
+| --- | --- |
+| macOS Apple silicon | `ideactl-v<VERSION>-darwin-arm64.tar.gz` |
+| Linux ARM64 | `ideactl-v<VERSION>-linux-arm64.tar.gz` |
+| Linux x64 | `ideactl-v<VERSION>-linux-amd64.tar.gz` |
+| Windows x64 | `ideactl-v<VERSION>-windows-amd64.zip` |
+
+Each archive has a `.sha256` sidecar and is included in `SHA256SUMS`. Extract it to get one `ideactl` file (`ideactl.exe` on Windows). The Node runtime and deployment CLI are embedded; no Node or npm installation is required. Run `./ideactl about` on macOS/Linux or `.\ideactl.exe about` in PowerShell.
+
+Windows releases have no code signing. SmartScreen may warn: after verifying the archive with `Get-FileHash -Algorithm SHA256` against the release checksum, choose **More info > Run anyway**, or run `Unblock-File .\ideactl.exe` in PowerShell before launching it. Organization policy may prevent this override.
+
+On Windows, certificate generation still needs `openssl` on PATH and diagnostic archive collection needs `tar`. Host bootstrap packaging still assumes POSIX paths and file modes; use a Linux or macOS operator for host-module deployments until that path is validated. The release smoke covers configuration generation and an offline identity-provider synthesis, not a live cluster deployment. Session Manager links open the AWS console; the executable does not bundle or invoke the Session Manager plugin.
+
+
 `idea-admin.sh` utility is designed to simplify your interaction with your IDEA environment. With this simple tool, you can install a new environment, delete an existing cluster, update the configuration of a live environment or even retrieve the connection endpoints of your deployment via simple 1-liner commands. See some examples below:
 
 * Install a new cluster: `quick-setup` ([install-idea](../first-time-users/install-idea/ "mention"))

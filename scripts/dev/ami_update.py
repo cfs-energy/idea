@@ -17,7 +17,7 @@ EC2_CLIENT_CONFIG = Config(connect_timeout=5, retries={'max_attempts': 2})
 # quarantine directory instead of the tree.
 CONFIG_FILE_PATH = os.environ.get(
     'IDEA_AMI_CONFIG_PATH',
-    '../../source/idea/idea-administrator/resources/config/region_ami_config.yml',
+    '../../source/idea/ideactl/resources/config/region_ami_config.yml',
 )
 
 # GovCloud rows need credentials in the aws-us-gov partition and are refreshed from there

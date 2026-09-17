@@ -9,6 +9,10 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
+import math
+import re
+from ideaclustermanager.app.accounts.reconcile_settings import approved_okta_origin
+
 import ideaclustermanager
 
 from ideasdk.api import ApiInvocationContext, BaseAPI
@@ -213,6 +217,14 @@ class ClusterSettingsAPI(BaseAPI):
                 'compute_node_ami',
             ],
             'cluster-manager': [
+                'accounts.reconcile.enabled',
+                'accounts.reconcile.interval_minutes',
+                'accounts.reconcile.dry_run',
+                'accounts.reconcile.reenable',
+                'accounts.reconcile.max_disable_fraction',
+                'accounts.reconcile.check_cognito',
+                'accounts.reconcile.okta.org_url',
+                'accounts.reconcile.okta.api_token_secret_arn',
                 # feature flag and the org-approved model catalog. edited from the
                 # bedrock tab on the cluster settings page.
                 'bedrock.enabled',
@@ -296,9 +308,16 @@ class ClusterSettingsAPI(BaseAPI):
         if request.settings is None:
             raise exceptions.invalid_params('settings is required')
 
+        if (
+            'reconcile' in request.settings.get('accounts', {})
+            and not context.is_administrator()
+        ):
+            raise exceptions.unauthorized_access()
+
         # Validate that only allowed settings are being updated
         self.validate_settings_allowed(module_id, request.settings)
         self.validate_bedrock_settings(module_id, request.settings)
+        self.validate_reconcile_settings(module_id, request.settings)
 
         # Convert nested settings to flat config entries
         config_entries = []
@@ -313,6 +332,67 @@ class ClusterSettingsAPI(BaseAPI):
         self.reconcile_bedrock_projects(module_id, request.settings)
 
         context.success(UpdateModuleSettingsResult(success=True))
+
+    def validate_reconcile_settings(self, module_id: str, settings: dict) -> None:
+        if module_id != self.context.config().get_module_id(
+            constants.MODULE_CLUSTER_MANAGER
+        ):
+            return
+        reconcile = settings.get('accounts', {}).get('reconcile', {})
+        for key, value in reconcile.items():
+            if key in ('enabled', 'dry_run', 'reenable', 'check_cognito'):
+                if type(value) is not bool:
+                    raise exceptions.invalid_params(f'{key} must be a boolean')
+            elif key == 'interval_minutes':
+                if type(value) is not int or not 1 <= value <= 1440:
+                    raise exceptions.invalid_params(
+                        'interval_minutes must be an integer from 1 to 1440'
+                    )
+            elif key == 'max_disable_fraction':
+                if (
+                    type(value) not in (int, float)
+                    or not math.isfinite(value)
+                    or not 0 <= value <= 1
+                ):
+                    raise exceptions.invalid_params(
+                        'max_disable_fraction must be a number from 0 to 1'
+                    )
+        if 'okta' not in reconcile:
+            return
+        # Merge partial edits with persisted values, since the config cache can lag a save.
+        okta = self.read_reconcile_okta_settings_from_db(module_id)
+        okta.update(reconcile['okta'])
+        org, secret = okta.get('org_url'), okta.get('api_token_secret_arn')
+        if (org is not None and not isinstance(org, str)) or (
+            secret is not None and not isinstance(secret, str)
+        ):
+            raise exceptions.invalid_params('Okta settings must be strings')
+        if bool(org) != bool(secret):
+            raise exceptions.invalid_params('Both Okta settings are required')
+        if org:
+            try:
+                approved_okta_origin(self.context.config(), module_id, org)
+            except ValueError as error:
+                raise exceptions.invalid_params(str(error)) from error
+        if secret and not re.fullmatch(
+            r'arn:aws(?:-us-gov|-cn)?:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+',
+            secret,
+        ):
+            raise exceptions.invalid_params(
+                'Okta token must be a Secrets Manager secret ARN'
+            )
+
+    def read_reconcile_okta_settings_from_db(self, module_id: str) -> dict:
+        db = self.context.config().db
+        return {
+            key: (
+                db.cluster_settings_table.get_item(
+                    Key={'key': f'{module_id}.accounts.reconcile.okta.{key}'},
+                    ConsistentRead=True,
+                ).get('Item', {})
+            ).get('value')
+            for key in ('org_url', 'api_token_secret_arn')
+        }
 
     def validate_bedrock_settings(self, module_id: str, settings: dict) -> None:
         """

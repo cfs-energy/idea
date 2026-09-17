@@ -1,0 +1,2 @@
+# metrics_provider prometheus requires prometheus_remote_write_url.
+metrics_provider: prometheus

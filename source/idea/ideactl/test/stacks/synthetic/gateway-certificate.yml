@@ -1,0 +1,6 @@
+# operator supplied DCV connection gateway certificate, with QUIC on.
+dcv_session_quic_support: true
+dcv_connection_gateway_custom_certificate_provided: true
+dcv_connection_gateway_custom_dns_hostname: gateway.example.invalid
+dcv_connection_gateway_custom_certificate_certificate_secret_arn: arn:aws:secretsmanager:us-east-2:123456789012:secret:idea-test1-gw-cert
+dcv_connection_gateway_custom_certificate_private_key_secret_arn: arn:aws:secretsmanager:us-east-2:123456789012:secret:idea-test1-gw-key

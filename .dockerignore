@@ -1,0 +1,9 @@
+.git
+**/node_modules
+**/dist
+**/cdk.out*
+source/idea/ideactl/tools/parity/live
+source/idea/ideactl/tools/parity/fixtures
+source/idea/ideactl/docs/port
+source/idea/ideactl/tools/e2e/reference
+*.pem

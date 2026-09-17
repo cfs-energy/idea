@@ -1,0 +1,2 @@
+# amazonlinux2 is end of life: get_base_os fails before any AMI lookup.
+base_os: amazonlinux2

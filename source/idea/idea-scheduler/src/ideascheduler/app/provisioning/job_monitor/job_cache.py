@@ -95,11 +95,30 @@ class JobsDB:
         self._db_lock = RLock()  # Keep the RLock for database operations
         self.init_db()
 
+    # SQLite serialises writers; with the default rollback journal a writer also blocks
+    # every reader, and the API's job listings share this file with the job monitor's
+    # writes. WAL lets readers run beside the writer, the busy timeout keeps a writer
+    # waiting instead of failing, and the pool covers the API's worker threads plus the
+    # monitors. Measured: at 7 listings a second the defaults starved the pool the
+    # moment a job finished, and every listing then waited out the 30 s pool timeout.
+    ENGINE_KWARGS = {
+        'pool_size': 20,
+        'max_overflow': 20,
+        'pool_timeout': 30,
+        'connect_args': {'timeout': 30, 'check_same_thread': False},
+    }
+
+    def _connect(self):
+        db = dataset.connect(self.connection_string, engine_kwargs=self.ENGINE_KWARGS)
+        db.query('PRAGMA journal_mode=WAL')
+        db.query('PRAGMA synchronous=NORMAL')
+        return db
+
     def init_db(self):
         self._logger.info(f'initializing job cache db file: {self.connection_string}')
         try:
             # Create the database connection
-            self.db = dataset.connect(self.connection_string)
+            self.db = self._connect()
 
             # First check if tables already exist
             existing_tables = self.db.tables
@@ -166,7 +185,7 @@ class JobsDB:
                 conn.close()
 
         # Refresh database object after raw connection usage
-        self.db = dataset.connect(self.connection_string)
+        self.db = self._connect()
 
     def init_tables(self):
         # This method is kept for backward compatibility
@@ -205,7 +224,7 @@ class JobsDB:
 
         if dropped:
             # Refresh database object after raw connection usage
-            self.db = dataset.connect(self.connection_string)
+            self.db = self._connect()
 
     def init_indices(self):
         """Initialize all indices outside of any transaction"""

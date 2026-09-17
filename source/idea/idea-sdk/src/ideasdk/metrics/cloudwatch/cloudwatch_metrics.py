@@ -11,6 +11,7 @@
 
 from ideasdk.protocols import MetricsProviderProtocol, SocaContextProtocol
 
+import arrow
 from typing import List, Dict
 
 # This is defined by CloudWatch
@@ -121,6 +122,9 @@ class CloudWatchMetrics(MetricsProviderProtocol):
         for entry in metric_data:
             if self.storage_resolution is not None:
                 entry['StorageResolution'] = self.storage_resolution
+            timestamp = entry.get('Timestamp')
+            if isinstance(timestamp, (int, float)) and not isinstance(timestamp, bool):
+                entry['Timestamp'] = arrow.get(timestamp).datetime
             if 'MetricType' in entry:
                 del entry['MetricType']
             if 'Namespace' in entry:

@@ -9,6 +9,7 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
+from ideaclustermanager.app.accounts.account_reconciler import AccountReconciler
 import ideasdk.app
 from ideasdk.auth import TokenService, TokenServiceOptions
 from ideadatamodel import constants
@@ -19,6 +20,7 @@ from ideasdk.utils import GroupNameHelper
 import ideaclustermanager
 from ideaclustermanager.app.api.api_invoker import ClusterManagerApiInvoker
 from ideaclustermanager.app.projects.bedrock_usage_service import BedrockUsageService
+from ideaclustermanager.app.metrics import CostMetricsService, StorageMetricsService
 from ideaclustermanager.app.projects.projects_service import ProjectsService
 from ideaclustermanager.app.projects.project_tasks import (
     ProjectEnabledTask,
@@ -90,6 +92,9 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
         self.context = context
         self.web_portal: Optional[WebPortal] = None
         self.bedrock_usage: Optional[BedrockUsageService] = None
+        self.account_reconciler: Optional[AccountReconciler] = None
+        self.cost_metrics: Optional[CostMetricsService] = None
+        self.storage_metrics: Optional[StorageMetricsService] = None
 
     def app_initialize(self):
         # group name helper
@@ -193,6 +198,13 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
             context=self.context, projects_service=self.context.projects
         )
 
+        self.account_reconciler = AccountReconciler(self.context)
+        self.context.accounts.reconciler = self.account_reconciler
+
+        # spend and storage as metrics
+        self.cost_metrics = CostMetricsService(context=self.context)
+        self.storage_metrics = StorageMetricsService(context=self.context)
+
         # email templates
         self.context.email_templates = EmailTemplatesService(context=self.context)
 
@@ -216,6 +228,12 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
 
         if self.bedrock_usage is not None:
             self.bedrock_usage.start()
+        if self.cost_metrics is not None:
+            self.cost_metrics.start()
+        if self.account_reconciler is not None:
+            self.account_reconciler.start()
+        if self.storage_metrics is not None:
+            self.storage_metrics.start()
 
         try:
             self.context.distributed_lock().acquire(key='initialize-defaults')
@@ -226,6 +244,9 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
             self.context.distributed_lock().release(key='initialize-defaults')
 
     def app_stop(self):
+        if self.account_reconciler is not None:
+            self.account_reconciler.stop()
+
         if self.context.ad_automation_agent is not None:
             self.context.ad_automation_agent.stop()
 
@@ -237,3 +258,7 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
 
         if self.bedrock_usage is not None:
             self.bedrock_usage.stop()
+        if self.cost_metrics is not None:
+            self.cost_metrics.stop()
+        if self.storage_metrics is not None:
+            self.storage_metrics.stop()

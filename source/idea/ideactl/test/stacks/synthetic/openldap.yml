@@ -1,0 +1,2 @@
+# openldap directory service: pulls in directoryservice/_templates/openldap.yml.
+directory_service_provider: openldap

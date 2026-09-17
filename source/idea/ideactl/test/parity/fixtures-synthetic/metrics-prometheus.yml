@@ -1,0 +1,3 @@
+# Custom Prometheus. Requires a remote write URL and adds package_config.prometheus.
+metrics_provider: prometheus
+prometheus_remote_write_url: https://prometheus.example.invalid/api/v1/write

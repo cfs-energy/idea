@@ -243,7 +243,7 @@ GLOBAL_SETTINGS_TEMPLATE_DIR = os.path.abspath(
         os.path.dirname(__file__),
         '..',
         '..',
-        'idea-administrator',
+        'ideactl',
         'resources',
         'config',
         'templates',

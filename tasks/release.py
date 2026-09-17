@@ -44,18 +44,6 @@ def update_version(c, version):
         with open(idea_admin_sh, 'w') as f:
             f.write(content)
 
-        print(f'updating idea-admin-windows.ps1 with version: {version}')
-        idea_admin_ps1 = os.path.join(
-            idea.props.project_root_dir, 'idea-admin-windows.ps1'
-        )
-        with open(idea_admin_ps1, 'r') as f:
-            content = f.read()
-            replace_old = f'$IDEARevision = if ($Env:IDEA_REVISION) {{$Env:IDEA_REVISION}} else {{"v{old_version}"}}'
-            replace_new = f'$IDEARevision = if ($Env:IDEA_REVISION) {{$Env:IDEA_REVISION}} else {{"v{version}"}}'
-            content = content.replace(replace_old, replace_new)
-        with open(idea_admin_ps1, 'w') as f:
-            f.write(content)
-
         # print(f'updating integrated-digital-engineering-on-aws.template with version: {version}')
         # cfn_template = os.path.join(idea.props.project_deployment_dir, 'integrated-digital-engineering-on-aws.template')
         # with open(cfn_template, 'r') as f:
@@ -87,8 +75,6 @@ def build_opensource_dist(c):
             if name.startswith('.pytest_cache'):
                 ignored_names.append(name)
             if src_base_name == 'webapp' and name == 'build':
-                ignored_names.append(name)
-            if src_base_name == 'idea-administrator' and name.endswith('tar.gz'):
                 ignored_names.append(name)
             if src_base_name == 'deployment' and name in (
                 'idea',
@@ -137,7 +123,6 @@ def build_opensource_dist(c):
         'IDEA_VERSION.txt',
         'software_versions.yml',
         'idea-admin.sh',
-        'idea-admin-windows.ps1',
     ]
     for target in targets:
         if os.path.isdir(os.path.join(idea.props.project_root_dir, target)):
@@ -216,7 +201,7 @@ def build_s3_dist(c):
     supported_aws_partitions = ['aws', 'aws-us-gov']
 
     policy_source_dir = os.path.join(
-        idea.props.administrator_project_dir, 'resources', 'installer_policies'
+        idea.props.project_source_dir, 'ideactl', 'resources', 'installer_policies'
     )
     policy_target_dir = os.path.join(global_s3_assets_dir, 'installer_policies')
     os.makedirs(policy_target_dir)

@@ -164,26 +164,6 @@ def virtual_desktop_controller(
     raise SystemExit(exit_code)
 
 
-@task(iterable=['params'])
-def administrator(c, keywords=None, params=None, capture_output=False, cov_report=None):
-    # type: (Context, str, List[str], bool, str) -> None
-    """
-    run administrator unit tests
-    """
-    exit_code = _run_unit_tests(
-        c=c,
-        component_name='administrator',
-        component_src=idea.props.administrator_src,
-        component_tests_src=idea.props.administrator_tests_src,
-        package_name='ideaadministrator',
-        params=params,
-        capture_output=capture_output,
-        keywords=keywords,
-        cov_report=cov_report,
-    )
-    raise SystemExit(exit_code)
-
-
 @task(name='web-portal')
 def web_portal(c):
     # type: (Context) -> None
@@ -204,7 +184,6 @@ def run_all(c, keywords=None, params=None, capture_output=False, cov_report=None
 
     components = [
         sdk,
-        administrator,
         cluster_manager,
         scheduler,
         virtual_desktop_controller,

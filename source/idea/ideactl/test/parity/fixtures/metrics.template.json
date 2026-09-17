@@ -1,0 +1,72 @@
+{
+  "Description": "ModuleId: metrics, Cluster: sample-cluster, Version: 26.09.0",
+  "Resources": {
+    "cloudwatchdashboard84BE33F2": {
+      "Type": "AWS::CloudWatch::Dashboard",
+      "Properties": {
+        "DashboardBody": "{\"widgets\":[]}",
+        "DashboardName": "sample-cluster_us-east-2"
+      }
+    },
+    "sampleclustermetricssettings": {
+      "Type": "Custom::ClusterSettings",
+      "Properties": {
+        "ServiceToken": "arn:aws:lambda:us-east-2:123456789012:function:sample-cluster-settings",
+        "cluster_name": "sample-cluster",
+        "module_id": "metrics",
+        "version": "26.09.0",
+        "settings": {
+          "deployment_id": "sample-deployment",
+          "cloudwatch.dashboard_arn": {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition"
+                },
+                ":cloudwatch::123456789012:dashboard/sample-cluster_us-east-2"
+              ]
+            ]
+          }
+        }
+      },
+      "UpdateReplacePolicy": "Delete",
+      "DeletionPolicy": "Delete"
+    }
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Type": "AWS::SSM::Parameter::Value<String>",
+      "Default": "/cdk-bootstrap/cb775ba9c5/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]"
+    }
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5"
+                  ],
+                  {
+                    "Ref": "BootstrapVersion"
+                  }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI."
+        }
+      ]
+    }
+  }
+}

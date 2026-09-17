@@ -227,6 +227,8 @@ class FakeClusterConfig:
 
 class FakeContext:
     def __init__(self, config: FakeClusterConfig):
+        self.accounts_client = Mock()
+        self.accounts_client.get_user.return_value.user.enabled = True
         self._config = config
         self.notification_async_client = FakeNotificationClient()
 

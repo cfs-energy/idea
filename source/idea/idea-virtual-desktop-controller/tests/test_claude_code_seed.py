@@ -14,7 +14,7 @@ import pytest
 
 TEMPLATE = 'source/idea/idea-bootstrap/_templates/linux/claude_code_settings.jinja2'
 SETTINGS = (
-    'source/idea/idea-administrator/resources/config/templates/'
+    'source/idea/ideactl/resources/config/templates/'
     'virtual-desktop-controller/settings.yml'
 )
 

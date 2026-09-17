@@ -1,0 +1,2 @@
+# fsx_lustre apps storage: the shared-storage macro includes _templates/fsx_lustre.yml.
+storage_apps_provider: fsx_lustre

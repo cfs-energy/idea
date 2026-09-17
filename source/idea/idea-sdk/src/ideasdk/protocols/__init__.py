@@ -661,6 +661,10 @@ class ApiInvokerProtocol(SocaBaseProtocol):
 
 class DistributedLockProtocol(SocaBaseProtocol):
     @abstractmethod
+    def assert_held(self, key: str):
+        pass
+
+    @abstractmethod
     def acquire(self, key: str):
         pass
 

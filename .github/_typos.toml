@@ -1,4 +1,6 @@
 [default.extend-words]
+# the stem of an escaped accented word in two JSON fixtures
+caf = "caf"
 CLEA = "CLEA"
 Pn = "Pn"
 Ded = "Ded"
@@ -10,6 +12,8 @@ Sur = "Sur"
 extend-ignore-re = [
   "ami-[0-9a-f]+",
   "fs-[0-9a-f]+",
+  # CDK logical ids end in an eight-character hex hash whose letters read as words.
+  "[a-z]+[0-9A-F]{8}\\b",
   # Cloudscape class names are generated and carry a per-release build hash.
   "awsui_[A-Za-z0-9_]+"
 ]

@@ -42,15 +42,6 @@ def scheduler(c):
 
 
 @task
-def administrator(c):
-    # type: (Context) -> None # type: ignore
-    """
-    clean administrator
-    """
-    CleanTool(c, 'idea-administrator').clean()
-
-
-@task
 def cluster_manager(c):
     # type: (Context) -> None # type: ignore
     """
@@ -83,8 +74,6 @@ def clean_all(c):
     sdk(c)
 
     scheduler(c)
-
-    administrator(c)
 
     cluster_manager(c)
 

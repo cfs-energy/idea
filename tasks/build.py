@@ -53,15 +53,6 @@ def scheduler(c):
 
 
 @task
-def administrator(c):
-    # type: (Context) -> None # type: ignore
-    """
-    build administrator
-    """
-    BuildTool(c, 'idea-administrator').build()
-
-
-@task
 def cluster_manager(c):
     # type: (Context) -> None # type: ignore
     """
@@ -117,8 +108,6 @@ def build_all(c):
     sdk(c)
 
     scheduler(c)
-
-    administrator(c)
 
     cluster_manager(c)
 

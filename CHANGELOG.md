@@ -4,6 +4,61 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
+## [26.09.1] - 2026-09-17
+
+**Upgrade Instructions:**
+* Clusters on 25.11.0 or newer upgrade directly in one run of `upgrade-cluster`. Below 26.09.0, the read-only historical plan requires complete module coverage, global replacement, full settings sync, interval-key migration, AMI/settings updates and all deployed modules; completion requires settings and version readback
+* The administrator is now `ideactl`, a Node tool that `idea-admin.sh` runs inside the `idea-control-plane` image, or from source with `IDEA_DEV_MODE=true`. Every command keeps its name and flags; `patch` is removed (see the updated documentation)
+* Existing clusters opt in to containers; the interactive installer initializes new clusters with `enable_ecs: true`. For an existing cluster: set `enable_ecs: true` in `values.yml` and run `upgrade-cluster --drain` once. Without it the upgrade redeploys the host shape as before
+* Before turning containers on: the account's `awsvpcTrunking` ECS setting must be enabled, `ecs.hosts.instance_type` (default `m7g.large`) must be offered in the cluster's subnets, and a GovCloud cluster needs the image pushed to a repository in its account with `ecs.image` pointing at it
+* The move makes the cluster manager, the scheduler, and the virtual desktop controller, DCV broker and DCV connection gateway ECS services on a Graviton host pool. Job submission is closed for the run and the host scheduler is drained first; job ids start again from zero, once; the portal is unavailable for a few minutes while the cluster-manager stack cuts over; the bastion host is recreated once, with a new public address
+* Every Lambda handler is now Node 22. The self-signed certificate custom resources remain in the templates as retained no-ops and the solution-metrics function is neutered; both are removed in the next release
+```bash
+./idea-admin.sh upgrade-cluster --aws-region $IDEA_AWS_REGION --cluster-name $IDEA_CLUSTER_NAME --drain
+```
+([Move the control plane to containers](https://docs.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/move-to-containers))
+
+### **✨ New Features**
+* **Cost-only deployment**: `ideactl cost-collector deploy|destroy` runs account spend collection and a Datadog sidecar in one Fargate task in a commercial billing account, including bills for GovCloud clusters, without cluster settings tables
+* **Container Control Plane**: The control plane modules run as ECS services on a small Graviton host pool instead of one host each, from a single `idea-control-plane` image, on clusters with `enable_ecs: true`
+* **Rolling Upgrades**: Point `ecs.image` at a new release and run `upgrade-cluster`; most services roll behind their load balancer; the scheduler stops before its replacement starts, briefly interrupting submissions and its API while running jobs are designed to survive, and desktop connections may reconnect through the gateway
+* **ideactl**: The administrator is a TypeScript tool with the same commands as before; it synthesizes the same CloudFormation templates as the Python administrator, checked by a parity gate against the deployed templates of real clusters
+* **Change-Set Guard**: Every deploy creates a change set and reads it before executing; definite replacements of any resource, conditional stateful replacements, stateful removals and unrecognized custom-resource removals are refused and named. Deliberate exceptions require a reviewed `deploy --upgrade --allow-replacement <logical-id>`; `upgrade-cluster` has no such flag. Task definition revisions and the two retired custom resources are allowed by name
+* **Scheduler Cutover Gate**: `upgrade-cluster` reads the host scheduler's PBS job inventory over Systems Manager before the container cutover and refuses a non-empty one; `--drain` closes submission through the maintenance flag, waits, upgrades and reopens; `--drain-timeout-minutes` and `--skip-drain-check`
+* **Proof Matrix**: `tools/e2e/proof-matrix.ts` proves a running cluster with ten non-metrics checks plus `metrics-sink`: desktop end to end, `desktop-stream`, desktop SSH through the bastion, gateway and broker task replacement, scheduler replacement and image upgrade with a witnessed job, job burst, API load and gateway load
+* **Offline Upgrade Rehearsal**: `tools/parity/upgrade-dry-run.ts` replays `upgrade-cluster` against a captured cluster and lists every write it would make, without touching an account
+* **Datadog Metrics**: `metrics_provider: dogstatsd` sends the modules' metrics, including per-job cost, duration and CPU efficiency from the scheduler, to a Datadog agent over DogStatsD; on a container cluster `datadog_api_key_secret_arn` and `datadog_agent_image` in `values.yml` run the agent as a daemon on every host from a digest-pinned image in the account's ECR, with the key read from Secrets Manager
+* **Per-Job Cost Detail**: `idea.job.detail.cost` tags each completed job with `job_id`, `job_uid` and `instance_type` for dashboard drill-down; disabled on CloudWatch to avoid a separate metric charge for every job
+* **Spend Metrics**: The cluster-manager publishes Cost Explorer spend as `idea.cost.*` by module, project, owner, service and storage usage type, rereading a trailing window to replace revised daily totals; enable with `cluster-manager.metrics.cost.enabled`, off by default
+* **Storage Metrics**: The cluster-manager publishes FSx for NetApp ONTAP quota and volume gauges as `idea.storage.*` per user, volume and tier using read-only credentials stored in Secrets Manager; enable with `cluster-manager.metrics.storage.enabled`, off by default
+
+### **🔧 Improvements**
+* **Release files**: Self-contained ideactl for macOS arm64, Linux arm64 and x64, and unsigned Windows x64, with native offline smoke tests and release checksums
+* Ubuntu desktop hosts now install the kernel the FSx for Lustre modules are built for, so /lustre mounts again
+* **Upgrades**: The scheduler's DNS record is retained with a policy-only stack update before the container cutover, so the container scheduler takes the name over without CloudFormation deleting it; the container module's module-set registration is held until the last stack deploys, so the running portal keeps working through the upgrade
+* **Deploys**: A bootstrap archive is named by its rendered content, so a host whose bootstrap did not change is left alone by an image-only upgrade; a change set that replaces a termination-protected instance clears the protection first, so the old instance is deleted rather than left running unreferenced
+* **Dependencies**: aws-cdk-lib 2.269, CDK CLI 2.1141, AWS SDK 3.1133, TypeScript 7, cdk-nag 3 and js-yaml 5; an unacknowledged cdk-nag finding fails synthesis when scanning is enabled; the wrapper defaults scanning off, so set `IDEA_ADMIN_ENABLE_CDK_NAG_SCAN=true` to enable it
+* **Documentation**: A runbook for the move to containers, the module code update page rewritten for the deploy paths, and the new `upgrade-cluster` flags
+* **Metrics Delivery Check**: The proof matrix can query Datadog for the cluster's `idea.api_invocations` over the last fifteen minutes; it reports the check as not run when API credentials are absent
+
+### **🐛 Bug Fixes**
+* **Account Reconciliation**: Optional AD, Cognito and Okta account checks share an administrator dry-run API and periodic service with a bulk-disable cap. Disabled users have desktop schedules cleared and sessions stopped; queued jobs are removed and new submissions refused, while running jobs finish.
+* **Metrics Agent Startup**: The host daemon uses the EC2 launch type without a capacity provider strategy, so ECS accepts the service
+* **Metrics Socket**: The agent listens on the shared DogStatsD socket used by container tasks and enables origin detection for container tags
+* **Collector Replicas**: A shared checkpoint lets one replica publish per interval, and collector points use the cluster name as their host to prevent duplicate totals across hosts
+* **Collector Providers**: Spend collection runs only on DogStatsD, and storage collection on DogStatsD or CloudWatch, so each uses a provider that supports its metric semantics
+* **Spend Corrections**: Zero spend rows replace earlier nonzero values when Cost Explorer revises a daily total
+* **Container Storage Mounts**: Hosts mount ONTAP, OpenZFS and Lustre with configured volume paths and mount options, install the Lustre client when needed, respect node scope and stop before joining ECS if a mount fails
+* **Scheduler Logs**: Log sidecars follow date-named files and rescan for new files, starting existing files at their end to avoid replaying old logs
+* **Scheduler Hostname**: The scheduler task, settings and DNS record use the configured module hostname
+* **Secret Decryption**: Execution roles receive `kms:Decrypt` scoped to the configured customer-managed key so ECS can resolve injected secrets
+* **Termination Protection**: Upgrades save each instance's protection baseline before clearing it, allowing a later run to restore protection after a failed upgrade
+* **Retained Resource Guard**: The change-set guard allows retained removals only for Route 53 record sets used in DNS handover; retained storage removals still require explicit permission
+* **Deploy Exit Status**: `deploy` exits nonzero when the requested modules are already deployed, so scripts can detect that no deployment ran
+
+### **🗑️ Removed**
+* The Python administrator (`source/idea/idea-administrator`), its container image and build, the Python Lambda toolchain, and `idea-admin.sh patch`
+
 ## [26.09.0] - 2026-09-04
 
 **Upgrade Instructions:**

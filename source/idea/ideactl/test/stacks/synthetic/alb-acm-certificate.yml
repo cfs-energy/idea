@@ -1,0 +1,4 @@
+# operator supplied ACM certificate on the external ALB.
+alb_custom_certificate_provided: true
+alb_custom_certificate_acm_certificate_arn: arn:aws:acm:us-east-2:123456789012:certificate/00000000-1111-2222-3333-444444444444
+alb_custom_dns_name: idea.example.invalid

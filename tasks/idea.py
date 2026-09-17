@@ -80,11 +80,6 @@ class SocaDevelopmentProps:
         return self.software_versions['nvm_version']
 
     @property
-    def idea_cdk_version(self) -> str:
-        cdk_version = self.software_versions['aws_cdk_version']
-        return cdk_version.strip()
-
-    @property
     def project_root_dir(self) -> str:
         path = Path(os.path.dirname(os.path.realpath(__file__)))
         return str(path.parent.absolute())
@@ -124,28 +119,8 @@ class SocaDevelopmentProps:
         return os.path.join(self.project_root_dir, 'requirements')
 
     @property
-    def administrator_project_dir(self) -> str:
-        return os.path.join(self.project_source_dir, 'idea-administrator')
-
-    @property
     def deployment_ecr_dir(self) -> str:
         return os.path.join(self.project_deployment_dir, 'ecr')
-
-    @property
-    def deployment_administrator_dir(self) -> str:
-        return os.path.join(self.deployment_ecr_dir, 'idea-administrator')
-
-    @property
-    def administrator_webapp_dir(self) -> str:
-        return os.path.join(self.administrator_project_dir, 'webapp')
-
-    @property
-    def administrator_src(self) -> str:
-        return os.path.join(self.administrator_project_dir, 'src')
-
-    @property
-    def administrator_tests_src(self) -> str:
-        return os.path.join(self.administrator_project_dir, 'tests')
 
     @property
     def virtual_desktop_project_dir(self) -> str:
@@ -240,13 +215,6 @@ class SocaDevelopmentProps:
         )
         os.makedirs(idea_user_home, exist_ok=True)
         return idea_user_home
-
-    @property
-    def idea_cdk_dir(self) -> str:
-        idea_user_home = self.idea_user_home
-        idea_cdk_dir = os.path.join(idea_user_home, 'lib', 'idea-cdk')
-        os.makedirs(idea_cdk_dir, exist_ok=True)
-        return idea_cdk_dir
 
     @property
     def idea_user_config_file(self) -> str:
@@ -443,8 +411,6 @@ class SocaDevelopmentUtils:
             return 'virtual-desktop-controller'
         if token in ('cluster-manager', 'cm'):
             return 'cluster-manager'
-        if token in ('admin', 'administrator'):
-            return 'administrator'
         return None
 
 

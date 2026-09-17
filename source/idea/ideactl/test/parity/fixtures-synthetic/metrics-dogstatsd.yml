@@ -1,0 +1,2 @@
+# DogStatsD. No CloudWatch dashboard, no prometheus package config.
+metrics_provider: dogstatsd

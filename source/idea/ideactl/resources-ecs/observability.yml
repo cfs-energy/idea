@@ -1,0 +1,173 @@
+# Observability continuity for the container cutover.
+# Placeholders: {cluster}, {cm-id}, {scheduler-id}, {vdc-id}.
+# Retention for adopted agent groups is cluster.cloudwatch_logs.retention_in_days (default 90).
+retention_in_days: 90
+preserved_log_groups:
+  - name: "/{cluster}/{cm-id}"
+    stream_prefix: application
+    verdict: fix
+    fix: adopt the agent group, keep 90-day retention, awslogs plus a file-tail sidecar for application.log
+  - name: "/{cluster}/{scheduler-id}"
+    stream_prefix: application
+    verdict: fix
+    fix: same adopt, retention, awslogs, and application.log sidecar
+  - name: "/{cluster}/{scheduler-id}/openpbs"
+    stream_prefix: openpbs
+    verdict: fix
+    fix: sidecar tails PBS_HOME server_logs, sched_logs, and server_priv/accounting
+  - name: "/{cluster}/{vdc-id}/controller"
+    stream_prefix: application
+    verdict: fix
+    fix: same adopt, retention, awslogs, and application.log sidecar
+  - name: "/{cluster}/{vdc-id}/dcv-broker"
+    stream_prefix: dcv-session-manager-broker
+    verdict: fix
+    fix: adopt the agent group, awslogs on stdout, sidecar tails /var/log/dcv-session-manager-broker
+  - name: "/{cluster}/{vdc-id}/dcv-connection-gateway"
+    stream_prefix: dcv-connection-gateway
+    verdict: fix
+    fix: adopt the agent group, awslogs on stdout, sidecar tails /var/log/dcv-connection-gateway
+preserved_metric_namespaces:
+  - name: "{cluster}/{cm-id}"
+    verdict: fix
+    fix: IDEA_MODULE_ID is the cluster-manager module id so PutMetricData keeps this namespace
+  - name: "{cluster}/{scheduler-id}"
+    verdict: fix
+    fix: IDEA_MODULE_ID is the scheduler module id
+  - name: "{cluster}/{vdc-id}/controller"
+    verdict: fix
+    fix: IDEA_MODULE_ID is the VDC module id, and the controller process appends /controller
+  - name: "{cluster}"
+    metric: DCV broker fleet dimension metrics-fleet-name-dimension
+    verdict: fix
+    fix: broker properties keep metrics-fleet-name-dimension equal to the cluster name
+preserved_application_metric_names:
+  - api_invocations_count
+  - api_invocations_duration
+  - count
+  - jobs_pending
+  - jobs_provisioned
+  - jobs_running
+  - jobs_finished
+  - jobs_pending_duration
+  - jobs_provisioning_duration
+  - jobs_running_duration
+  - jobs_total_duration
+  - nodes_ready_duration
+  - node_housekeeping_duration
+  - node_housekeeping_failed
+  - job_cache_sync_failed
+  - instance_cache_sync_failed
+  - job.count
+  - job.duration_seconds
+  - job.cost
+  - job.cost_ondemand
+  - job.savings
+  - job.cpu_efficiency
+planned_target_group_identifiers:
+  - cm-ecs-e
+  - cm-ecs-i
+  - cm-ecs-w
+  - vdc-ecs-e
+  - vdc-ecs-i
+  - sched-ecs-e
+  - sched-ecs-i
+  - brk-ecs-c
+  - brk-ecs-a
+  - brk-ecs-g
+  - gw-ecs-TN
+  - gw-ecs-TUN
+new_surfaces:
+  - name: "/{cluster}/ecs/datadog"
+    stream_prefix: datadog
+    verdict: new
+    note: used only when ecs.datadog.enabled is true, never the gateway group
+  - name: ECS/ContainerInsights
+    verdict: new
+    note: classic Container Insights on cluster {cluster}-ecs
+  - name: "/aws/ecs/containerinsights/{cluster}-ecs/performance"
+    verdict: new
+  - name: AWS/ECS
+    verdict: new
+dropped:
+  - id: host-metrics-per-module
+    surface: CloudWatch agent cpu, disk, diskio, mem, net, netstat, processes, swap in {cluster}/{module}
+    verdict: drop
+    reason: nothing publishes those series after the module instances are gone. Use ECS/ContainerInsights and AWS/ECS by service name.
+  - id: syslog-streams
+    surface: system_{ip} and syslog_{ip} streams on the five moved roles
+    verdict: drop
+    reason: awslogs captures container stdout, not host syslog.
+  - id: asg-ec2-metrics
+    surface: AWS/EC2 and AWS/AutoScaling on the five deleted module groups, including scheduler detailed monitoring
+    verdict: drop
+    reason: those resources are deleted. Retarget alarms before cutover.
+  - id: prometheus-node-exporter
+    surface: node_exporter and app_exporter on module hosts
+    verdict: drop
+    reason: only clusters whose metrics.provider is prometheus or amazon_managed_prometheus used it. Not re-homed on ECS hosts.
+  - id: session-manager-module-vm
+    surface: SSM onto a module VM to read /opt/idea/app/logs or PBS_HOME
+    verdict: drop
+    reason: there is no module VM. Logs are in the preserved CloudWatch groups.
+  - id: hostname-cardinality
+    surface: one hostname dimension per module VM
+    verdict: drop
+    reason: three shared ECS hosts are not five module-shaped series.
+  - id: ip-stream-names
+    surface: log stream suffix _{ip_address}
+    verdict: drop
+    reason: tasks have no stable IP in stream names. Query {prefix}/{container}/{task-id}.
+  - id: broker-instance-id-dimension
+    surface: DCV broker CloudWatch series that attached InstanceId from instance metadata
+    verdict: drop
+    reason: tasks block instance metadata. Fleet name {cluster} remains.
+  - id: asg-name-as-autoscaling-group
+    surface: settings keys asg_name and asg_arn treated as Auto Scaling groups
+    verdict: drop
+    reason: the keys stay, the values become the ECS service name and ARN.
+  - id: empty-dashboard
+    surface: CloudWatch dashboard {cluster}_{region} with body {"widgets":[]}
+    verdict: drop
+    reason: it is empty today, so leaving it empty is not a cutover regression.
+  - id: lambda-log-retention
+    surface: /aws/lambda/{cluster}-* retention
+    verdict: drop
+    reason: already unset, unrelated to ECS.
+regressions:
+  - id: log-group-create-collision
+    verdict: fix
+    note: do not emit AWS::Logs::LogGroup for agent names. Adopt via create-or-ignore, never delete.
+  - id: log-group-names
+    verdict: fix
+    note: groups use module ids, not container role strings.
+  - id: log-retention-90
+    verdict: fix
+    note: adopted groups keep cluster.cloudwatch_logs.retention_in_days, default 90, not the CDK two-year default.
+  - id: application-file-logs
+    verdict: fix
+    note: production profile still writes files. A sidecar tails them into the preserved group.
+  - id: openpbs-logs
+    verdict: fix
+    note: OpenPBS files stay in /{cluster}/{scheduler-id}/openpbs.
+  - id: gateway-broker-file-logs
+    verdict: fix
+    note: file-tail sidecars keep the agent file destinations in the preserved groups.
+  - id: stream-prefix
+    verdict: fix
+    note: awslogs-stream-prefix is pinned per group.
+  - id: idea-module-id
+    verdict: fix
+    note: IDEA_MODULE_ID is the cluster-settings module id so metric namespaces do not rename.
+  - id: put-metric-data-iam
+    verdict: request
+    note: cluster-manager and scheduler policies still condition PutMetricData on IDEA/*. Keep the CloudWatch agent managed policy on those roles until the condition matches {cluster}/*.
+  - id: module-asg-alarms
+    verdict: request
+    note: alarms on deleted ASG, instance, or instance-target-group dimensions must be retargeted or disabled before cutover.
+  - id: broker-put-metric-data-without-imds
+    verdict: request
+    note: confirm broker PutMetricData with instance metadata blocked. cloud-watch-region is already set. InstanceId dimensions are dropped.
+  - id: production-console-handler
+    verdict: request
+    note: add the console handler when IDEA_CONTAINER_ROLE is set so stdout carries application lines without a sidecar.
