@@ -8,8 +8,8 @@
     "* 0-6 * * 1"
   ],
   "dependencyDashboard": true,
-  "prConcurrentLimit": 5,
-  "branchConcurrentLimit": 5,
+  "prConcurrentLimit": 2,
+  "branchConcurrentLimit": 2,
   "prHourlyLimit": 2,
   "vulnerabilityAlerts": {
     "enabled": true,
@@ -18,8 +18,10 @@
   "lockFileMaintenance": {
     "enabled": true,
     "schedule": [
-      "* 0-6 1 * *"
-    ]
+      "* 0-6 * * 1"
+    ],
+    "groupName": "all dependencies",
+    "groupSlug": "all-dependencies"
   },
   "pip_requirements": {
     "enabled": false
@@ -89,17 +91,6 @@
       ]
     },
     {
-      "description": "Group every scheduled non-major update, including digest pins",
-      "matchUpdateTypes": [
-        "minor",
-        "patch",
-        "pin",
-        "digest"
-      ],
-      "groupName": "all non-major dependencies",
-      "groupSlug": "all-non-major"
-    },
-    {
       "matchManagers": [
         "pip-compile"
       ],
@@ -107,11 +98,28 @@
         "indirect"
       ],
       "enabled": true
+    },
+    {
+      "description": "Every scheduled update lands in one pull request, majors included; vulnerability alerts stay separate and immediate",
+      "matchUpdateTypes": [
+        "major",
+        "minor",
+        "patch",
+        "pin",
+        "digest",
+        "pinDigest",
+        "rollback",
+        "replacement"
+      ],
+      "groupName": "all dependencies",
+      "groupSlug": "all-dependencies"
     }
   ],
   "pip-compile": {
     "fileMatch": [
       "^requirements/[^/]+\\.txt$"
     ]
-  }
+  },
+  "separateMajorMinor": false,
+  "separateMultipleMajor": false
 }
