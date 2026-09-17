@@ -91,7 +91,7 @@ if (name === 'gh') {
 if (name === 'jq') console.log(args.at(-1).includes('scheduler') ? 'sha256:scheduler' : 'sha256:control');
 if (name === 'docker' && args[0] === 'buildx' && args[1] === 'build' && mode === 'build-failure') process.exit(1);
 if (name === 'docker' && args[0] === 'run') {
-  if (mode === 'smoke-failure' || (mode === 'arm-failure' && args.includes('linux/arm64')) ||
+  if (mode === 'smoke-failure' ||
       (mode === 'control-failure' && args.includes('about')) || (mode === 'config-failure' && args.includes('generate'))) process.exit(1);
   if (args.includes('generate')) {
     const mount = args.find(a => a.endsWith(':/tmp/config'));
@@ -129,7 +129,7 @@ test('only an explicit missing release permits publication', () => {
   }
 });
 
-test('temporary images are tested on both architectures before their exact digests are promoted', () => {
+test('temporary images are smoked natively before their exact digests are promoted', () => {
   const result = exercise('absent', imageScript);
   assert.equal(result.status, 0, result.output);
   const builds = result.commands.filter((args) => args[0] === 'docker' && args[2] === 'build');
@@ -140,8 +140,8 @@ test('temporary images are tested on both architectures before their exact diges
   }
   assert.ok(builds[1]?.includes('PBS_IMAGE=registry.example.invalid/scheduler@sha256:scheduler'));
   const smoke = result.commands.filter((args) => args[1] === 'run');
-  assert.equal(smoke.length, 6);
-  for (const arch of ['linux/amd64', 'linux/arm64']) assert.equal(smoke.filter((args) => args.includes(arch)).length, 3);
+  assert.equal(smoke.length, 3);
+  assert.ok(smoke.every((args) => !args.includes('--platform')), 'the images are built and smoked natively on the arm64 runner');
   const promotions = result.commands.filter((args) => args[2] === 'imagetools');
   assert.equal(promotions.length, 2);
   for (const [index, name] of ['scheduler', 'control'].entries()) {
@@ -153,7 +153,7 @@ test('temporary images are tested on both architectures before their exact diges
 });
 
 test('build, smoke, fixture, or release-check failures never promote image tags', () => {
-  for (const mode of ['existing', 'late-existing', 'network', 'missing-fixture', 'build-failure', 'smoke-failure', 'arm-failure', 'control-failure', 'config-failure']) {
+  for (const mode of ['existing', 'late-existing', 'network', 'missing-fixture', 'build-failure', 'smoke-failure', 'control-failure', 'config-failure']) {
     const result = exercise(mode, imageScript);
     assert.notEqual(result.status, 0, mode);
     assert.equal(result.commands.some((args) => args[2] === 'imagetools'), false, mode);
