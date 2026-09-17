@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
-## [26.09.1] - Unreleased
+## [26.09.1] - 2026-09-17
 
 **Upgrade Instructions:**
 * Clusters on 25.11.0 or newer upgrade directly in one run of `upgrade-cluster`. Below 26.09.0, the read-only historical plan requires complete module coverage, global replacement, full settings sync, interval-key migration, AMI/settings updates and all deployed modules; completion requires settings and version readback
