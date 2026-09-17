@@ -31,7 +31,7 @@ runs:
       # Unpack outside the checkout: the installer expands to an aws/ directory of about
       # 25,000 files, which every tool that walks the working tree would read as project files.
       run: |
-        curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "${RUNNER_TEMP}/awscliv2.zip"
+        curl "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o "${RUNNER_TEMP}/awscliv2.zip"
         unzip -q "${RUNNER_TEMP}/awscliv2.zip" -d "${RUNNER_TEMP}"
         sudo "${RUNNER_TEMP}/aws/install" --update
     - name: Install system dependencies
@@ -63,9 +63,9 @@ runs:
       id: cache-venv
       with:
         path: venv
-        key: venv-${{ runner.os }}-${{ steps.versions.outputs.python_version }}-${{ hashFiles('requirements/dev.txt') }}
+        key: venv-${{ runner.os }}-${{ runner.arch }}-${{ steps.versions.outputs.python_version }}-${{ hashFiles('requirements/dev.txt') }}
         restore-keys: |
-          venv-${{ runner.os }}-${{ steps.versions.outputs.python_version }}-
+          venv-${{ runner.os }}-${{ runner.arch }}-${{ steps.versions.outputs.python_version }}-
     - name: Create virtual environment
       if: steps.cache-venv.outputs.cache-hit != 'true'
       shell: bash

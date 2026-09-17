@@ -52,6 +52,9 @@ test('native runners cover each release target and publication includes Windows 
   const windows = workflow.jobs.build_ideactl_windows_artifact;
   assert.equal(windows?.['runs-on'], 'windows-2025');
   assert.equal(workflow.jobs.build_push_ideactl?.['runs-on'], 'ubuntu-24.04-arm', 'the images are built natively, never through emulation');
+  const setup = readFileSync(join(root, '.github/actions/setup_dev_environment/action.yml'), 'utf8');
+  assert.match(setup, /key: venv-\$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}-/, 'the virtual environment cache is per architecture');
+  assert.doesNotMatch(setup, /linux-x86_64/, 'the AWS CLI download follows the runner architecture');
   const smoke = windows?.steps?.find((step) => step.name?.startsWith('Test the extracted'))?.run ?? '';
   assert.match(smoke, /Expand-Archive/);
   assert.match(smoke, /node test\/support\/release-smoke.ts .*ideactl.exe/);
