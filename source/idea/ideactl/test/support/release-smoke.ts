@@ -44,7 +44,8 @@ export function smokeRelease(executable: string, runtimePath?: string): void {
       const result = spawnSync(executable, args, {
         cwd: work, encoding: 'utf8',
         env: {
-          SystemRoot: process.env.SystemRoot,
+          // The CDK CLI runs the app command through the shell, which Node resolves from ComSpec.
+          SystemRoot: process.env.SystemRoot, ComSpec: process.env.ComSpec,
           USERPROFILE: join(root, 'home'), TEMP: join(root, 'tmp'), TMP: join(root, 'tmp'),
           HOME: join(root, 'home'), IDEA_USER_HOME: join(root, 'home', '.idea'),
           TMPDIR: join(root, 'tmp'), PATH: runtimePath ?? join(root, 'empty-path'),
