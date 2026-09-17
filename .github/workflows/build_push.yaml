@@ -150,12 +150,15 @@ jobs:
             --tag "$IMAGE" \
             --file scripts/ideactl-linux.Dockerfile \
             dist/release/${{ matrix.target }}
+          # The runner's own user, so the generated files can be removed afterwards.
           docker run --rm \
+            --user "$(id -u):$(id -g)" --env HOME=/tmp \
             --env PATH=/tmp/empty \
             --workdir /tmp/work \
             "$IMAGE" \
             about
           docker run --rm \
+            --user "$(id -u):$(id -g)" --env HOME=/tmp \
             --env PATH=/tmp/empty \
             --workdir /tmp/work \
             --volume "$SMOKE_ROOT/values.yml:/tmp/values.yml:ro" \
