@@ -1,5 +1,6 @@
 from unittest.mock import Mock
 
+import ldap
 import pytest
 from ideadatamodel import User, ListUsersResult, SocaPaginator, CognitoUser
 from ideaclustermanager.app.accounts.account_reconciler import (
@@ -427,9 +428,11 @@ def real_directory_reader(context, results):
     client.ldap_user_base = 'ou=users,dc=example,dc=invalid'
     client.ldap_user_filterstr = '(objectClass=user)'
     client.search_s.return_value = results
-    client.convert_ldap_user.side_effect = lambda attrs: {
-        'user_account_control': int(attrs['userAccountControl'][0])
-    }
+    client.is_activedirectory.return_value = True
+    client.password_max_age = None
+    client.convert_ldap_user.side_effect = lambda attrs: (
+        ActiveDirectoryClient.convert_ldap_user(client, attrs)
+    )
     context.accounts.ldap_client.get_reconcile_user.side_effect = (
         lambda *args: ActiveDirectoryClient.get_reconcile_user(client, *args)
     )
@@ -502,3 +505,78 @@ def test_disable_cleanup_is_retried_after_persisted_revocation(failed_effect):
     count = accounts.evdi_client.publish_user_disabled_event.call_count
     service.run_once(dry_run=False)
     assert accounts.evdi_client.publish_user_disabled_event.call_count == count
+
+
+@pytest.mark.parametrize('control', [544, 514])
+@pytest.mark.parametrize('pwd_last_set', [b'0', b'134341266774992927'])
+def test_proof_record_uses_real_conversion_and_persisted_identity(
+    control, pwd_last_set
+):
+    service, context = build(
+        users=[
+            User(username='proofuser', email='proofuser@example.invalid', enabled=True)
+        ]
+    )
+    stored = use_real_account_transitions(context)
+    attrs = {
+        'objectClass': [b'top', b'person', b'organizationalPerson', b'user'],
+        'cn': [b'proofuser'],
+        'sn': [b'proofuser'],
+        'sAMAccountName': [b'proofuser'],
+        'mail': [b'proofuser@example.invalid'],
+        'objectGUID': [bytes(range(16))],
+        'userAccountControl': [str(control).encode()],
+        'uidNumber': [b'5001'],
+        'gidNumber': [b'5001'],
+        'unixHomeDirectory': [b'/home/proofuser'],
+        'loginShell': [b'/bin/bash'],
+        'pwdLastSet': [pwd_last_set],
+    }
+    client = real_directory_reader(context, [('cn=proofuser', attrs)])
+    first = service.run_once()
+    assert first['errors'] == 0
+    assert first['would_disable'] == int(control == 514)
+    context.accounts.user_dao.update_user.assert_not_called()
+    stored['proofuser']['directory_identity'] = bytes(range(16)).hex()
+    second = service.run_once()
+    assert second['errors'] == 0
+    assert second['would_disable'] == int(control == 514)
+    assert 'objectGUID=' in client.search_s.call_args.kwargs['filterstr']
+    stored['proofuser'].pop('directory_identity')
+    conflict = {**attrs, 'objectGUID': [bytes(reversed(range(16)))]}
+    client.search_s.return_value.append(('cn=proofuser\\0ACNF:conflict', conflict))
+    report = service.run_once(dry_run=False)
+    assert report['errors'] == 1 and report['refused'] == 1
+    context.accounts.disable_user.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    'error,exception_type,result_code',
+    [
+        (ValueError('https://credential.invalid/secret'), 'ValueError', None),
+        (
+            ldap.INVALID_CREDENTIALS(
+                {'result': 49, 'desc': 'secret', 'info': 'https://credential.invalid'}
+            ),
+            'INVALID_CREDENTIALS',
+            49,
+        ),
+        (ldap.SERVER_DOWN({'desc': 'secret'}), 'SERVER_DOWN', None),
+        (
+            ldap.LDAPError({'result': 'https://credential.invalid/secret'}),
+            'LDAPError',
+            None,
+        ),
+    ],
+)
+def test_upstream_warning_logs_only_exception_type_and_numeric_ldap_result(
+    error, exception_type, result_code
+):
+    service, context = build()
+    context.accounts.ldap_client.get_reconcile_user.side_effect = error
+    report = service.run_once(dry_run=False)
+    assert report['errors'] == 4 and report['refused'] == 1
+    logs = str(context._logger.lines)
+    assert f'exception_type={exception_type}, ldap_result_code={result_code}' in logs
+    assert 'secret' not in logs and 'https://' not in logs
+    context.accounts.disable_user.assert_not_called()

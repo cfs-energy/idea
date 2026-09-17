@@ -1,6 +1,7 @@
 """Compare account state before applying any changes, under one cluster-wide lock."""
 
 import math
+import ldap
 import threading
 from urllib.parse import quote
 
@@ -231,11 +232,20 @@ class AccountReconciler(SocaService):
                     states = self.upstream(user, metadata)
                     if metadata.get('directory_identity') != previous_identity:
                         identities[user.username] = metadata['directory_identity']
-                except Exception:
+                except Exception as error:
                     # Exception strings from HTTP clients can contain credentials or URLs.
+                    result_code = None
+                    if isinstance(error, ldap.LDAPError) and error.args:
+                        details = error.args[0]
+                        if (
+                            isinstance(details, dict)
+                            and type(details.get('result')) is int
+                        ):
+                            result_code = details['result']
                     report['errors'] += 1
                     self.logger.warning(
-                        f'upstream account read failed for {user.username}'
+                        f'upstream account read failed for {user.username}: '
+                        f'exception_type={type(error).__name__}, ldap_result_code={result_code}'
                     )
                     continue
                 missing = 'missing' in states.values()

@@ -32,7 +32,7 @@ export const accountReconcileCheck: ProofCheck = {
     }
     // A plain ldap:// is accepted only for a local tunnel (SSM port forwarding encrypts it); AWS
     // Managed Microsoft AD has no LDAPS unless a CA is attached, and it refuses password writes
-    // over plain LDAP, so the tunnel path creates a passwordless account (PASSWD_NOTREQD).
+    // over plain LDAP, so the tunnel path enables a passwordless account (PASSWD_NOTREQD).
     const tunnel = /^ldap:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/u.test(options.ldapUri);
     if (!options.ldapUri.startsWith("ldaps://") && !tunnel) return failed("LDAP proof requires ldaps://, or ldap:// to a local tunnel");
     const username = `proof${randomUUID().replaceAll("-", "").slice(0, 12)}`;
@@ -50,15 +50,29 @@ export const accountReconcileCheck: ProofCheck = {
     try {
       const password = `"${randomBytes(24).toString("base64")}aA1!"`;
       const unicodePassword = Buffer.from(password, "utf16le").toString("base64");
-      const added = await modify(`dn: ${dn}\nobjectClass: top\nobjectClass: person\nobjectClass: organizationalPerson\nobjectClass: user\ncn: ${username}\nsn: ${username}\nsAMAccountName: ${username}\nmail: ${username}@example.invalid${tunnel ? "" : `\nunicodePwd:: ${unicodePassword}`}\nuserAccountControl: ${tunnel ? 544 : 512}\n\n`, "ldapadd");
-      if (added.exitCode !== 0) return skip("directory fixture could not be created with the supplied LDAP access");
-      directoryCreated = true;
+      // The external AD provider never creates directory objects; Managed AD sync does.
+      // Use exactly one directory writer so replication cannot produce duplicate identities.
+      if (provider === "activedirectory") {
+        const added = await modify(`dn: ${dn}\nobjectClass: top\nobjectClass: person\nobjectClass: organizationalPerson\nobjectClass: user\ncn: ${username}\nsn: ${username}\nsAMAccountName: ${username}\nmail: ${username}@example.invalid${tunnel ? "" : `\nunicodePwd:: ${unicodePassword}`}\nuserAccountControl: ${tunnel ? 544 : 512}\n\n`, "ldapadd");
+        if (added.exitCode !== 0) return skip("directory fixture could not be created with the supplied LDAP access");
+        directoryCreated = true;
+      }
       context.output(`ACTION create disposable IDEA user ${username}`);
       const created = await context.api.request("Accounts.CreateUser", { user: { username, email: `${username}@example.invalid` } });
       if (!apiSucceeded(created)) return failed("IDEA user creation failed");
       ideaCreated = true;
       const user = asObject(payloadObject(created)?.user);
       if (typeof user?.uid !== "number" || typeof user.gid !== "number") return failed("created user has no POSIX IDs");
+      // The sync worker may use a different controller from the tunnel; wait for replication
+      // before modifying its object. External AD objects are created above instead.
+      const visible = await waitUntil(context, 600, "directory user visible", async () => {
+        const found = await context.processes.run("ldapsearch", [...args, "-LLL", "-b", dn, "-s", "base", "(objectClass=user)", "sAMAccountName"]);
+        return found.exitCode === 0 && found.stdout.split(/\r?\n/u).includes(`sAMAccountName: ${username}`);
+      });
+      if (!visible) return failed("directory user did not become visible through LDAP");
+      directoryCreated = true;
+      const enabled = await modify(`dn: ${dn}\nchangetype: modify${tunnel ? "" : `\nreplace: unicodePwd\nunicodePwd:: ${unicodePassword}\n-`}\nreplace: userAccountControl\nuserAccountControl: ${tunnel ? 544 : 512}\n\n`);
+      if (enabled.exitCode !== 0) return failed("directory fixture could not be enabled with the supplied LDAP access");
       const mapped = await modify(`dn: ${dn}\nchangetype: modify\nreplace: uidNumber\nuidNumber: ${user.uid}\n-\nreplace: gidNumber\ngidNumber: ${user.gid}\n-\nreplace: unixHomeDirectory\nunixHomeDirectory: /home/${username}\n-\nreplace: loginShell\nloginShell: /bin/bash\n\n`);
       if (mapped.exitCode !== 0) return failed("directory POSIX mapping failed");
       // A desktop needs its owner in the desktop module's users group; a fresh account is in none.

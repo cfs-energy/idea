@@ -199,54 +199,71 @@ test("account reconciliation reports NOT RUN without a writable directory", asyn
   assert.deepEqual(deps.calls, []);
 });
 
-test("account reconciliation disables via LDAP, witnesses STOPPED, and cleans up", async () => {
-  const { readFile } = await import("node:fs/promises");
-  const { asObject } = await import("../../tools/e2e/checks/shared.ts");
-  const deps = dependencies("");
-  let username = "";
-  let applied = false;
-  const ldif: string[] = [];
-  const calls: string[] = [];
-  const api = {
-    async request(namespace: string, payload: JsonValue) {
-      calls.push(namespace);
-      if (namespace === "ClusterSettings.GetModuleSettings") return response({ settings: { provider: "activedirectory" } });
-      if (namespace === "Accounts.CreateUser") {
-        username = String(asObject(asObject(payload)?.user)?.username);
-        return response({ user: { username, uid: 6000, gid: 6000 } });
-      }
-      if (namespace === "VirtualDesktopAdmin.CreateSession") return response({ session: { idea_session_id: "proof-session", owner: username } });
-      if (namespace === "VirtualDesktopAdmin.GetSessionInfo") return response({ session: { state: applied ? "STOPPED" : "READY" } });
-      if (namespace === "Accounts.ReconcileUsers") {
-        if (asObject(payload)?.dry_run === false) applied = true;
-        return response({ refused: 0, errors: 0, changes: [{ username, action: "disable" }] });
-      }
-      if (namespace === "Accounts.GetUser") return response({ user: { enabled: !applied } });
-      if (namespace === "ClusterSettings.ListClusterModules") return response({ listing: [{ name: "virtual-desktop-controller", module_id: "vdc" }] });
-      if (namespace === "Accounts.AddUserToGroup") return response({});
-      if (namespace === "Projects.GetProject") return response({ project: { project_id: "proof-project", ldap_groups: ["proof-group"] } });
-      if (namespace === "Projects.GetUserProjects") return response({ projects: [{ project_id: "proof-project" }] });
-      if (namespace === "VirtualDesktopAdmin.DeleteSessions" || namespace === "Accounts.DeleteUser") return response({});
-      throw new Error(`unexpected API ${namespace}`);
-    },
-  };
-  const processes = {
-    async run(command: string, args: string[]) {
-      calls.push(command);
-      const index = args.indexOf("-f");
-      if (index >= 0) ldif.push(await readFile(args[index + 1]!, "utf8"));
-      assert.ok(args.includes("-y"));
-      return { exitCode: 0, stderr: "", stdout: "" };
-    },
-  };
-  const options = parseProofMatrixOptions([
-    "--check", "account-reconcile", "--ldap-uri", "ldaps://directory.example.invalid",
-    "--ldap-bind-dn", "CN=bind,DC=example,DC=invalid", "--ldap-user-base", "OU=Users,DC=example,DC=invalid",
-    "--ldap-password-file", "/tmp/directory-password", "--desktop-request", '{"session":{"project":{"project_id":"proof-project"}}}',
-  ], {});
-  const run = await runProofMatrix(options, { ...deps, api, processes });
-  assert.equal(run.exitCode, 0);
-  assert.equal(run.results[0]?.result.passed, true);
-  assert.ok(ldif.some((text) => text.includes("userAccountControl: 514")));
-  assert.deepEqual(calls.slice(-3), ["VirtualDesktopAdmin.DeleteSessions", "Accounts.DeleteUser", "ldapdelete"]);
-});
+for (const [uri, provider] of [
+  ["ldaps://directory.example.invalid", "aws_managed_activedirectory"],
+  ["ldap://127.0.0.1:3890", "aws_managed_activedirectory"],
+  ["ldaps://directory.example.invalid", "activedirectory"],
+] as const) {
+  test(`account reconciliation uses one directory creator, waits for replication, and cleans up (${provider}, ${uri})`, async () => {
+    const { readFile } = await import("node:fs/promises");
+    const { asObject } = await import("../../tools/e2e/checks/shared.ts");
+    const deps = dependencies("");
+    let username = "";
+    let applied = false;
+    let directoryReads = 0;
+    const ldif: string[] = [];
+    const calls: string[] = [];
+    const api = {
+      async request(namespace: string, payload: JsonValue) {
+        calls.push(namespace);
+        if (namespace === "ClusterSettings.GetModuleSettings") return response({ settings: { provider } });
+        if (namespace === "Accounts.CreateUser") {
+          username = String(asObject(asObject(payload)?.user)?.username);
+          return response({ user: { username, uid: 6000, gid: 6000 } });
+        }
+        if (namespace === "VirtualDesktopAdmin.CreateSession") return response({ session: { idea_session_id: "proof-session", owner: username } });
+        if (namespace === "VirtualDesktopAdmin.GetSessionInfo") return response({ session: { state: applied ? "STOPPED" : "READY" } });
+        if (namespace === "Accounts.ReconcileUsers") {
+          if (asObject(payload)?.dry_run === false) applied = true;
+          return response({ refused: 0, errors: 0, changes: [{ username, action: "disable" }] });
+        }
+        if (namespace === "Accounts.GetUser") return response({ user: { enabled: !applied } });
+        if (namespace === "ClusterSettings.ListClusterModules") return response({ listing: [{ name: "virtual-desktop-controller", module_id: "vdc" }] });
+        if (namespace === "Accounts.AddUserToGroup") return response({});
+        if (namespace === "Projects.GetProject") return response({ project: { project_id: "proof-project", ldap_groups: ["proof-group"] } });
+        if (namespace === "Projects.GetUserProjects") return response({ projects: [{ project_id: "proof-project" }] });
+        if (namespace === "VirtualDesktopAdmin.DeleteSessions" || namespace === "Accounts.DeleteUser") return response({});
+        throw new Error(`unexpected API ${namespace}`);
+      },
+    };
+    const processes = {
+      async run(command: string, args: string[]) {
+        calls.push(command);
+        const index = args.indexOf("-f");
+        if (index >= 0) ldif.push(await readFile(args[index + 1]!, "utf8"));
+        assert.ok(args.includes("-y"));
+        if (command === "ldapsearch") {
+          assert.ok(calls.includes("Accounts.CreateUser"));
+          if (++directoryReads === 1) return { exitCode: 32, stderr: "", stdout: "" };
+          return { exitCode: 0, stderr: "", stdout: `sAMAccountName: ${username}\n` };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    };
+    const options = parseProofMatrixOptions([
+      "--check", "account-reconcile", "--ldap-uri", uri,
+      "--ldap-bind-dn", "CN=bind,DC=example,DC=invalid", "--ldap-user-base", "OU=Users,DC=example,DC=invalid",
+      "--ldap-password-file", "/tmp/directory-password", "--desktop-request", '{"session":{"project":{"project_id":"proof-project"}}}',
+    ], {});
+    const run = await runProofMatrix(options, { ...deps, api, processes });
+    assert.equal(run.exitCode, 0);
+    assert.equal(run.results[0]?.result.passed, true);
+    assert.equal(directoryReads, 2);
+    assert.ok(ldif[0]?.includes(`userAccountControl: ${uri.startsWith("ldaps:") ? 512 : 544}`));
+    assert.equal(ldif.some((text) => text.includes("unicodePwd")), uri.startsWith("ldaps:"));
+    assert.equal(calls.includes("ldapadd"), provider === "activedirectory");
+    assert.ok(calls.indexOf("ldapsearch") < calls.indexOf("ldapmodify"));
+    assert.ok(ldif.some((text) => text.includes("userAccountControl: 514")));
+    assert.deepEqual(calls.slice(-3), ["VirtualDesktopAdmin.DeleteSessions", "Accounts.DeleteUser", "ldapdelete"]);
+  });
+}
