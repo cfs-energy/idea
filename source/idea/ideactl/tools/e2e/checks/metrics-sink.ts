@@ -11,7 +11,8 @@ export const metricsSinkCheck: ProofCheck = {
       return { passed: false, skipped: true, observed: ["requires --datadog-api-key and --datadog-app-key"] };
     }
     if (!context.fetch) return failed("this runner cannot query Datadog");
-    const cluster = requiredOption(context.options, "cluster");
+    // The metric tag carries the IDEA cluster name; the runner is given the ECS cluster, named <cluster>-ecs.
+    const cluster = requiredOption(context.options, "cluster").replace(/-ecs$/u, "");
     const to = Math.floor(context.now() / 1000);
     const url = new URL(`https://api.${datadogSite ?? "datadoghq.com"}/api/v1/query`);
     url.search = new URLSearchParams({ from: String(to - 900), to: String(to), query: `sum:idea.api_invocations{idea_cluster:${cluster}}` }).toString();
