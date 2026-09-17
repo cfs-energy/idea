@@ -20,6 +20,7 @@ from ideaclustermanager.app.accounts.ldapclient.abstract_ldap_client import (
 
 from typing import Dict, Optional
 import ldap  # noqa
+from ldap.filter import escape_filter_chars
 import time
 from typing import List
 
@@ -179,6 +180,34 @@ class ActiveDirectoryClient(AbstractLDAPClient):
             return None
 
         return self.convert_ldap_user(results[0][1])
+
+    def get_reconcile_user(self, username, email, identity=None):
+        if identity:
+            raw = bytes.fromhex(identity)
+            if len(raw) != 16:
+                raise ValueError('Invalid directory identity')
+            selector = '(objectGUID=' + ''.join(f'\\{byte:02x}' for byte in raw) + ')'
+        elif email:
+            selector = f'(mail={escape_filter_chars(email)})'
+        else:
+            selector = f'(sAMAccountName={escape_filter_chars(username)})'
+        results = self.search_s(
+            base=self.ldap_user_base,
+            filterstr=f'(&{self.ldap_user_filterstr}{selector})',
+            trace=False,
+        )
+        if not results and identity:
+            return None
+        if len(results) != 1:
+            # An unbound identity or duplicate email cannot establish upstream deletion.
+            raise ValueError('Directory identity must resolve uniquely')
+        attributes = results[0][1]
+        guid = attributes.get('objectGUID', [])
+        if len(guid) != 1 or len(guid[0]) != 16:
+            raise ValueError('Directory did not return objectGUID')
+        record = self.convert_ldap_user(attributes)
+        record['directory_identity'] = guid[0].hex()
+        return record
 
     def change_password(self, username: str, password: str):
         ad_provider = self.context.config().get_string(

@@ -972,8 +972,14 @@ class AccountsService:
         if is_enabled:
             return
 
+        if existing_user.get('disable_pending'):
+            self.disable_user(
+                username, reconcile_sources=existing_user.get('reconcile_sources', [])
+            )
         self.user_pool.admin_enable_user(username)
-        self.user_dao.update_user({'username': username, 'enabled': True})
+        self.user_dao.update_user(
+            {'username': username, 'enabled': True, 'reconcile_sources': []}
+        )
         self.group_dao.update_group(
             {'group_name': existing_user['group_name'], 'enabled': True}
         )
@@ -985,7 +991,9 @@ class AccountsService:
             message_dedupe_id=f'{username}.enable-user.{nonce()}',
         )
 
-    def disable_user(self, username: str):
+    def disable_user(
+        self, username: str, *, preserve_directory=False, reconcile_sources=None
+    ):
         if Utils.is_empty(username):
             raise exceptions.invalid_params('username is required')
 
@@ -1003,10 +1011,25 @@ class AccountsService:
 
         is_enabled = Utils.get_value_as_bool('enabled', existing_user, False)
         if not is_enabled:
-            return
-
+            if reconcile_sources is None:
+                # An explicit administrator disable takes precedence over automatic restoration.
+                self.user_dao.update_user(
+                    {'username': username, 'reconcile_sources': []}
+                )
+            if not existing_user.get('disable_pending'):
+                return
+        else:
+            # Persist the retry obligation with local revocation before any remote effect.
+            self.user_dao.update_user(
+                {
+                    'username': username,
+                    'enabled': False,
+                    'preserve_directory': preserve_directory,
+                    'reconcile_sources': reconcile_sources or [],
+                    'disable_pending': True,
+                }
+            )
         self.user_pool.admin_disable_user(username)
-        self.user_dao.update_user({'username': username, 'enabled': False})
         self.group_dao.update_group(
             {'group_name': existing_user['group_name'], 'enabled': False}
         )
@@ -1018,6 +1041,7 @@ class AccountsService:
             message_dedupe_id=f'{username}.disable-user.{nonce()}',
         )
         self.evdi_client.publish_user_disabled_event(username=username)
+        self.user_dao.update_user({'username': username, 'disable_pending': False})
 
     def delete_user(self, username: str):
         log_tag = f'(DeleteUser: {username})'

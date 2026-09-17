@@ -50,6 +50,9 @@ class FakeConfig:
         value = self._get(key, default)
         return int(value) if value is not None else default
 
+    def get_list(self, key, default=None):
+        return self._get(key, default)
+
     def get_config(self, key, default=None, required=False, module_id=None):
         return self._get(key, default)
 
@@ -64,6 +67,9 @@ class FakeLock:
 
     def acquire(self, key):
         self.held.append(key)
+
+    def assert_held(self, key):
+        assert key in self.held
 
     def release(self, key):
         self.held.remove(key)

@@ -2,13 +2,14 @@
 
 import math
 import threading
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
 
 import arrow
 import requests
 from pydantic import StrictBool
 
 from ideadatamodel import ListUsersRequest, SocaPaginator, SocaBaseModel, constants
+from ideaclustermanager.app.accounts.reconcile_settings import approved_okta_origin
 from ideasdk.metrics import BaseMetrics
 from ideasdk.service import SocaService
 
@@ -86,19 +87,22 @@ class AccountReconciler(SocaService):
             'centos',
         }
 
-    def upstream(self, user):
+    def upstream(self, user, metadata=None):
+        metadata = metadata if metadata is not None else {}
+        sources = metadata.get('reconcile_sources', [])
         config = self.context.config()
         states = {}
         if config.get_string('directoryservice.provider') in (
             'aws_managed_activedirectory',
             'activedirectory',
         ):
-            record = self.context.accounts.ldap_client.get_user(
-                user.username, trace=False
+            record = self.context.accounts.ldap_client.get_reconcile_user(
+                user.username, user.email, metadata.get('directory_identity')
             )
             if record is None:
                 states['directory'] = 'missing'
             else:
+                metadata['directory_identity'] = record['directory_identity']
                 control = record.get('user_account_control')
                 if control is None:
                     raise ValueError('directory did not return userAccountControl')
@@ -109,17 +113,7 @@ class AccountReconciler(SocaService):
         if bool(org) != bool(secret):
             raise ValueError('both Okta settings are required')
         if org and secret:
-            parsed = urlparse(org)
-            if (
-                parsed.scheme != 'https'
-                or not parsed.hostname
-                or parsed.username
-                or parsed.password
-                or parsed.query
-                or parsed.fragment
-                or parsed.path not in ('', '/')
-            ):
-                raise ValueError('Okta org_url must be an HTTPS origin')
+            org = approved_okta_origin(config, self.context.module_id(), org)
             token = config.get_secret(
                 self.key('okta.api_token_secret_arn'), required=True
             )
@@ -155,10 +149,9 @@ class AccountReconciler(SocaService):
                 else:
                     raise ValueError('unknown Okta status')
 
-        # Our disable path also disables Cognito. External restoration must not be
-        # vetoed by that mirror, while native users require explicit Cognito restoration.
+        # Only a recorded external revocation explains a disabled Cognito mirror.
         if config.get_bool(self.key('check_cognito'), False) and (
-            user.enabled or not states
+            user.enabled or not sources or 'cognito' in sources or not states
         ):
             record = self.context.accounts.user_pool.admin_get_user(
                 user.username, use_cache=False
@@ -172,6 +165,11 @@ class AccountReconciler(SocaService):
             else:
                 raise ValueError('Cognito did not return Enabled')
         return states
+
+    def assert_lease(self):
+        self.context.distributed_lock().assert_held(
+            key=f'{self.context.module_id()}-account-reconcile'
+        )
 
     def _reconcile(self, dry_run, override_max_disable_fraction=False):
         report = dict(
@@ -203,16 +201,36 @@ class AccountReconciler(SocaService):
                 if not cursor:
                     break
             enabled = 0
+            identities = {}
             for user in users:
+                self.assert_lease()
                 if self.protected(user):
                     report['skipped'].append(user.username)
                     continue
                 enabled += int(user.enabled is True)
-                if not user.enabled and not config.get_bool(self.key('reenable'), True):
-                    continue
                 report['checked'] += 1
                 try:
-                    states = self.upstream(user)
+                    metadata = (
+                        self.context.accounts.user_dao.get_user(user.username) or {}
+                    )
+                    sources = metadata.get('reconcile_sources', [])
+                    if metadata.get('disable_pending'):
+                        # This finishes an already committed revocation, independent of upstream health.
+                        if not dry_run:
+                            self.assert_lease()
+                            self.context.accounts.disable_user(
+                                user.username,
+                                reconcile_sources=sources,
+                            )
+                        continue
+                    if not user.enabled and (
+                        not sources or not config.get_bool(self.key('reenable'), True)
+                    ):
+                        continue
+                    previous_identity = metadata.get('directory_identity')
+                    states = self.upstream(user, metadata)
+                    if metadata.get('directory_identity') != previous_identity:
+                        identities[user.username] = metadata['directory_identity']
                 except Exception:
                     # Exception strings from HTTP clients can contain credentials or URLs.
                     report['errors'] += 1
@@ -227,6 +245,8 @@ class AccountReconciler(SocaService):
                     action = 'disable'
                 elif (
                     not user.enabled
+                    and sources
+                    and all(states.get(source) == 'enabled' for source in sources)
                     and states
                     and all(s == 'enabled' for s in states.values())
                 ):
@@ -256,10 +276,27 @@ class AccountReconciler(SocaService):
                     else 'max_disable_fraction exceeded'
                 )
             if not dry_run and not report['refused']:
+                for username, identity in identities.items():
+                    self.assert_lease()
+                    self.context.accounts.user_dao.update_user(
+                        {
+                            'username': username,
+                            'directory_identity': identity,
+                        }
+                    )
                 for change in report['changes']:
+                    self.assert_lease()
                     try:
                         if change['action'] == 'disable':
-                            self.context.accounts.disable_user(change['username'])
+                            self.context.accounts.disable_user(
+                                change['username'],
+                                preserve_directory=True,
+                                reconcile_sources=[
+                                    source
+                                    for source, state in change['upstream'].items()
+                                    if state in ('disabled', 'missing')
+                                ],
+                            )
                             report['disabled'] += 1
                         else:
                             self.context.accounts.enable_user(change['username'])
@@ -306,6 +343,7 @@ class AccountReconciler(SocaService):
                     override_max_disable_fraction=override_max_disable_fraction
                     and not periodic,
                 )
+                self.assert_lease()
                 if periodic:
                     config.db.set_config_entry(checkpoint, arrow.utcnow().timestamp())
                 return report

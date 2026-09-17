@@ -16,6 +16,7 @@ def build(values=None, records=None, users=None):
         {
             'metrics.provider': 'cloudwatch',
             'directoryservice.provider': 'activedirectory',
+            PREFIX + 'okta.approved_origins': ['https://id.example.invalid'],
             **(values or {}),
         }
     )
@@ -24,10 +25,19 @@ def build(values=None, records=None, users=None):
         records if records is not None else {'user0': {'user_account_control': 514}}
     )
     accounts = Mock()
+    accounts.user_dao.get_user.return_value = {}
     accounts.ldap_client.ldap_root_username = 'bind-service'
     accounts.ldap_client.get_user.side_effect = lambda username, **kw: records.get(
         username, {'user_account_control': 512}
     )
+
+    def directory_record(username, email, identity):
+        record = accounts.ldap_client.get_user(username, trace=False)
+        return (
+            {**record, 'directory_identity': '00' * 16} if record is not None else None
+        )
+
+    accounts.ldap_client.get_reconcile_user.side_effect = directory_record
     accounts.is_cluster_administrator.side_effect = (
         lambda username: username == 'cluster-admin'
     )
@@ -45,7 +55,9 @@ def test_directory_disabled_or_missing(provider, record, missing):
     report = service.run_once(dry_run=False)
     assert report['disabled'] == 1
     assert report['missing'] == missing
-    context.accounts.disable_user.assert_called_once_with('user0')
+    context.accounts.disable_user.assert_called_once_with(
+        'user0', preserve_directory=True, reconcile_sources=['directory']
+    )
     assert context.published('accounts.reconcile.disabled')[0]['Value'] == 1
     assert context._lock.held == []
 
@@ -87,6 +99,9 @@ def test_reenable(reenable):
         records={},
         users=[User(username='user0', enabled=False)],
     )
+    context.accounts.user_dao.get_user.return_value = {
+        'reconcile_sources': ['directory']
+    }
     report = service.run_once(dry_run=False)
     assert report['reenabled'] == int(reenable)
     assert context.accounts.enable_user.call_count == int(reenable)
@@ -209,10 +224,10 @@ def test_metrics_have_all_families_on_both_providers(provider):
     }
 
 
-def test_reenable_defaults_to_directory_state():
+def test_default_reenable_preserves_administrator_disable():
     service, context = build(records={}, users=[User(username='user0', enabled=False)])
-    assert service.run_once(dry_run=False)['reenabled'] == 1
-    context.accounts.enable_user.assert_called_once_with('user0')
+    assert service.run_once(dry_run=False)['reenabled'] == 0
+    context.accounts.enable_user.assert_not_called()
 
 
 @pytest.mark.parametrize('dry_run', [True, False])
@@ -285,3 +300,205 @@ def test_worker_starts_when_disabled_so_portal_can_enable_it():
 def test_interval_bounds(minutes, seconds):
     service, context = build({PREFIX + 'interval_minutes': minutes})
     assert service.interval_seconds() == seconds
+
+
+def test_unapproved_origin_never_receives_token(monkeypatch):
+    service, context = build(
+        {
+            PREFIX + 'okta.org_url': 'https://unapproved.example.invalid',
+            PREFIX + 'okta.api_token_secret_arn': 'secret-ref',
+        }
+    )
+    context._config.secrets['secret-ref'] = 'test-token'
+    get = Mock()
+    monkeypatch.setattr(
+        'ideaclustermanager.app.accounts.account_reconciler.requests.get', get
+    )
+    assert service.run_once()['errors'] == 4
+    get.assert_not_called()
+    assert 'test-token' not in str(context._logger.lines)
+
+
+def use_real_account_transitions(context):
+    from ideaclustermanager.app.accounts.accounts_service import AccountsService
+    from ideaclustermanager.app.accounts.account_tasks import (
+        SyncUserInDirectoryServiceTask,
+    )
+    from ideaclustermanager.app.accounts.db.user_dao import UserDAO
+
+    accounts = context.accounts
+    stored = {
+        user.username: {
+            'username': user.username,
+            'enabled': user.enabled,
+            'email': user.email,
+            'group_name': user.username,
+        }
+        for user in accounts.list_users.return_value.listing
+    }
+    accounts.user_dao.get_user.side_effect = lambda username: dict(stored[username])
+
+    def update(values):
+        stored[values['username']].update(values)
+        return dict(stored[values['username']])
+
+    accounts.user_dao.update_user.side_effect = update
+    accounts.list_users.side_effect = lambda request: ListUsersResult(
+        listing=[
+            UserDAO.convert_from_db(accounts.user_dao, row) for row in stored.values()
+        ]
+    )
+    accounts.disable_user.side_effect = (
+        lambda *args, **kwargs: AccountsService.disable_user(accounts, *args, **kwargs)
+    )
+    accounts.enable_user.side_effect = (
+        lambda *args, **kwargs: AccountsService.enable_user(accounts, *args, **kwargs)
+    )
+    context.ldap_client = accounts.ldap_client
+    context.ldap_client.is_readonly.return_value = False
+    accounts.task_manager.send.side_effect = (
+        lambda **kwargs: SyncUserInDirectoryServiceTask(context).invoke(
+            kwargs['payload']
+        )
+    )
+    return stored
+
+
+def test_managed_ad_disable_keeps_authoritative_objects():
+    service, context = build(
+        {'directoryservice.provider': 'aws_managed_activedirectory'}
+    )
+    stored = use_real_account_transitions(context)
+    assert service.run_once(dry_run=False)['disabled'] == 1
+    assert stored['user0']['enabled'] is False
+    context.accounts.user_pool.admin_disable_user.assert_called_once_with('user0')
+    context.accounts.evdi_client.publish_user_disabled_event.assert_called_once_with(
+        username='user0'
+    )
+    context.accounts.task_manager.send.assert_called_once()
+    context.ldap_client.delete_user.assert_not_called()
+    context.ldap_client.delete_group.assert_not_called()
+
+
+def test_cognito_revocation_is_not_reversed_on_next_run():
+    service, context = build({PREFIX + 'check_cognito': True}, records={})
+    stored = use_real_account_transitions(context)
+    context.accounts.task_manager.send.side_effect = None
+    context.accounts.user_pool.admin_get_user.side_effect = (
+        lambda username, **kwargs: CognitoUser(Enabled=username != 'user0')
+    )
+    assert service.run_once(dry_run=False)['disabled'] == 1
+    assert service.run_once(dry_run=False)['reenabled'] == 0
+    assert stored['user0']['enabled'] is False
+    context.accounts.user_pool.admin_enable_user.assert_not_called()
+
+
+def test_only_external_disable_is_restored_by_default():
+    records = {'user0': {'user_account_control': 514}}
+    service, context = build({PREFIX + 'check_cognito': True}, records=records)
+    stored = use_real_account_transitions(context)
+    context.accounts.user_pool.admin_get_user.return_value = CognitoUser(Enabled=True)
+    assert service.run_once(dry_run=False)['disabled'] == 1
+    context.accounts.user_pool.admin_get_user.side_effect = (
+        lambda username, **kwargs: CognitoUser(Enabled=username != 'user0')
+    )
+    assert service.run_once(dry_run=False)['reenabled'] == 0
+    records['user0'] = {'user_account_control': 512}
+    assert service.run_once(dry_run=False)['reenabled'] == 1
+    assert stored['user0']['reconcile_sources'] == []
+    context.accounts.disable_user('user0')
+    assert service.run_once(dry_run=False)['reenabled'] == 0
+
+
+def test_administrator_can_retain_an_already_reconciled_disable():
+    service, context = build()
+    stored = use_real_account_transitions(context)
+    service.run_once(dry_run=False)
+    context.accounts.disable_user('user0')
+    assert stored['user0']['reconcile_sources'] == []
+
+
+def real_directory_reader(context, results):
+    from ideaclustermanager.app.accounts.ldapclient.active_directory_client import (
+        ActiveDirectoryClient,
+    )
+
+    client = Mock()
+    client.ldap_user_base = 'ou=users,dc=example,dc=invalid'
+    client.ldap_user_filterstr = '(objectClass=user)'
+    client.search_s.return_value = results
+    client.convert_ldap_user.side_effect = lambda attrs: {
+        'user_account_control': int(attrs['userAccountControl'][0])
+    }
+    context.accounts.ldap_client.get_reconcile_user.side_effect = (
+        lambda *args: ActiveDirectoryClient.get_reconcile_user(client, *args)
+    )
+    return client
+
+
+def test_different_directory_username_maps_by_unique_email_and_persists_guid():
+    service, context = build(
+        users=[User(username='local-user', email='user@example.invalid', enabled=True)]
+    )
+    stored = use_real_account_transitions(context)
+    attrs = {
+        'objectGUID': [bytes(range(16))],
+        'userAccountControl': [b'512'],
+        'sAMAccountName': [b'directory-user'],
+    }
+    client = real_directory_reader(context, [('dn', attrs)])
+    assert service.run_once(dry_run=False)['errors'] == 0
+    assert (
+        '(mail=user@example.invalid)' in client.search_s.call_args.kwargs['filterstr']
+    )
+    assert stored['local-user']['directory_identity'] == bytes(range(16)).hex()
+    context.accounts.disable_user.assert_not_called()
+    service.run_once()
+    assert 'objectGUID=' in client.search_s.call_args.kwargs['filterstr']
+    client.search_s.return_value = []
+    report = service.run_once()
+    assert report['missing'] == 1 and report['would_disable'] == 1
+
+
+@pytest.mark.parametrize('matches', [0, 2])
+def test_unbound_or_ambiguous_directory_identity_is_error(matches):
+    service, context = build(
+        users=[User(username='local-user', email='user@example.invalid', enabled=True)]
+    )
+    real_directory_reader(context, [('dn', {})] * matches)
+    report = service.run_once(dry_run=False)
+    assert report['errors'] == 1 and report['missing'] == 0 and report['refused'] == 1
+    context.accounts.disable_user.assert_not_called()
+
+
+def test_identity_mapping_dry_run_does_not_write():
+    service, context = build()
+    service.run_once()
+    context.accounts.user_dao.update_user.assert_not_called()
+
+
+@pytest.mark.parametrize('failed_effect', ['cognito', 'group', 'queue', 'event'])
+def test_disable_cleanup_is_retried_after_persisted_revocation(failed_effect):
+    service, context = build({PREFIX + 'reenable': False})
+    stored = use_real_account_transitions(context)
+    accounts = context.accounts
+    target = {
+        'cognito': accounts.user_pool.admin_disable_user,
+        'group': accounts.group_dao.update_group,
+        'queue': accounts.task_manager.send,
+        'event': accounts.evdi_client.publish_user_disabled_event,
+    }[failed_effect]
+    effect = target.side_effect
+    target.side_effect = RuntimeError('transient effect failure')
+    assert service.run_once(dry_run=False)['errors'] == 1
+    assert stored['user0']['enabled'] is False
+    assert stored['user0']['disable_pending'] is True
+    target.side_effect = effect
+    assert service.run_once(dry_run=False)['errors'] == 0
+    assert stored['user0']['disable_pending'] is False
+    accounts.evdi_client.publish_user_disabled_event.assert_called_with(
+        username='user0'
+    )
+    count = accounts.evdi_client.publish_user_disabled_event.call_count
+    service.run_once(dry_run=False)
+    assert accounts.evdi_client.publish_user_disabled_event.call_count == count

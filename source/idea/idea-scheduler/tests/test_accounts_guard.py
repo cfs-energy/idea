@@ -63,8 +63,7 @@ def test_lookup_failure_does_not_delete_jobs():
     ctx.scheduler.list_jobs.return_value = [
         SocaJob(job_id='1', owner='user', state=SocaJobState.QUEUED)
     ]
-    with pytest.raises(RuntimeError):
-        sweep_disabled_jobs(ctx)
+    sweep_disabled_jobs(ctx)
     ctx.scheduler.delete_job.assert_not_called()
 
 
@@ -90,3 +89,57 @@ def test_pbs_hook_refuses_direct_qsub():
     api.hook_validate_job(hook)
     assert hook.api_context.success.call_args.args[0].accept is False
     hook.check_incidentals.assert_not_called()
+
+
+@pytest.mark.parametrize('error_code', ['AUTH_USER_NOT_FOUND', 'GENERAL_ERROR'])
+def test_deleted_or_unavailable_owner_does_not_block_later_jobs(error_code):
+    from ideadatamodel import errorcodes
+
+    ctx = context()
+    jobs = [
+        SocaJob(
+            job_id=str(i),
+            owner=f'user{i}',
+            queue_type='normal',
+            state=SocaJobState.QUEUED,
+        )
+        for i in range(2)
+    ]
+    ctx.scheduler.list_jobs.return_value = jobs
+    ctx.scheduler.get_job.side_effect = lambda job_id: jobs[int(job_id)]
+    ctx.accounts_client.get_user.side_effect = [
+        exceptions.soca_exception(
+            error_code=getattr(errorcodes, error_code), message='lookup failed'
+        ),
+        SimpleNamespace(user=SimpleNamespace(enabled=False)),
+    ]
+    sweep_disabled_jobs(ctx)
+    assert [call.args[0] for call in ctx.scheduler.delete_job.call_args_list] == (
+        ['0', '1'] if error_code == 'AUTH_USER_NOT_FOUND' else ['1']
+    )
+
+
+def test_accounts_service_failure_still_rejects_admission():
+    ctx = context()
+    ctx.accounts_client.get_user.side_effect = RuntimeError('unavailable')
+    with pytest.raises(RuntimeError):
+        require_enabled(ctx, 'user')
+
+
+def test_sweep_failure_does_not_skip_queue_adoption():
+    from ideascheduler.app.provisioning.job_monitor.job_monitor import JobMonitor
+
+    monitor = JobMonitor.__new__(JobMonitor)
+    monitor._context = context()
+    monitor._context.scheduler.list_jobs.side_effect = RuntimeError('unavailable')
+    monitor._context.queue_profiles.list_queue_profiles.return_value = [
+        SimpleNamespace(enabled=True, queues=['normal'])
+    ]
+    monitor._logger = Mock()
+    monitor._exit = Mock()
+    monitor._exit.is_set.return_value = False
+    monitor._reconcile_queue = Mock(return_value=1)
+    monitor._job_reconciler()
+    monitor._reconcile_queue.assert_called_once_with(
+        queue='normal', log_tag='job-reconciler'
+    )

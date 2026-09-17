@@ -61,10 +61,8 @@ class UserDisabledEventHandler(BaseVirtualDesktopControllerEventHandler):
                     }
                 )
                 self.session_db.update(session)
-                if session.state in (
-                    VirtualDesktopSessionState.STOPPED,
-                    VirtualDesktopSessionState.STOPPING,
-                ):
+                # STOPPING can be persisted before EC2 accepts the stop; retries must resend it.
+                if session.state == VirtualDesktopSessionState.STOPPED:
                     continue
                 session.force = True
                 _, failed = self.session_utils.stop_sessions([session])

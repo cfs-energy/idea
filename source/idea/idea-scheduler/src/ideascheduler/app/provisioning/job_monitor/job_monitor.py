@@ -437,6 +437,9 @@ class JobMonitor(SocaService, JobMonitorProtocol):
         """
         try:
             sweep_disabled_jobs(self._context)
+        except Exception:
+            self._logger.exception('Disabled account sweep failed')
+        try:
             queue_profiles = self._context.queue_profiles.list_queue_profiles()
             for queue_profile in queue_profiles:
                 if not Utils.is_true(queue_profile.enabled):

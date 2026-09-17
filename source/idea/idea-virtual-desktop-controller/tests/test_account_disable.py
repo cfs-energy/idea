@@ -99,3 +99,41 @@ def test_already_queued_resume_cannot_restart_disabled_owner():
     result = util.resume_sessions([session])
     assert result == ([], [session])
     util._server_utils.start_servers.assert_not_called()
+
+
+def test_retry_reissues_ec2_stop_after_stopping_was_persisted():
+    from ideadatamodel import VirtualDesktopServer
+
+    h = handler()
+    session = VirtualDesktopSession(
+        owner='user',
+        idea_session_id='1',
+        state=VirtualDesktopSessionState.READY,
+        server=VirtualDesktopServer(instance_id='i-example'),
+    )
+    h.session_db.list_all_for_user.return_value = SimpleNamespace(
+        listing=[session], paginator=None
+    )
+    util = VirtualDesktopSessionUtils.__new__(VirtualDesktopSessionUtils)
+    util.context = Mock()
+    util.context.dcv_broker_client.delete_sessions.return_value = ([], [])
+    util._logger = Mock()
+    util._session_db = h.session_db
+    util._session_db.get_from_db.return_value = session
+    util._session_db.update.side_effect = lambda value: value
+    util._server_utils = Mock()
+    util._server_utils.stop_or_hibernate_servers.side_effect = [
+        RuntimeError('transient stop failure'),
+        None,
+    ]
+    h.session_utils = util
+    event = SimpleNamespace(detail={'username': 'user'})
+    with pytest.raises(RuntimeError):
+        h.handle_event('message', 'role:session', event)
+    assert session.state == VirtualDesktopSessionState.STOPPING
+    h.handle_event('message', 'role:session', event)
+    assert util._server_utils.stop_or_hibernate_servers.call_count == 2
+    assert util._server_utils.stop_or_hibernate_servers.call_args.args == (
+        [session.server],
+        [],
+    )

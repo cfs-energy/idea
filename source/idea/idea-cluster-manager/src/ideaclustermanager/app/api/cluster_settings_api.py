@@ -11,7 +11,7 @@
 
 import math
 import re
-from urllib.parse import urlparse
+from ideaclustermanager.app.accounts.reconcile_settings import approved_okta_origin
 
 import ideaclustermanager
 
@@ -308,6 +308,12 @@ class ClusterSettingsAPI(BaseAPI):
         if request.settings is None:
             raise exceptions.invalid_params('settings is required')
 
+        if (
+            'reconcile' in request.settings.get('accounts', {})
+            and not context.is_administrator()
+        ):
+            raise exceptions.unauthorized_access()
+
         # Validate that only allowed settings are being updated
         self.validate_settings_allowed(module_id, request.settings)
         self.validate_bedrock_settings(module_id, request.settings)
@@ -365,24 +371,9 @@ class ClusterSettingsAPI(BaseAPI):
             raise exceptions.invalid_params('Both Okta settings are required')
         if org:
             try:
-                parsed = urlparse(org)
-                valid = (
-                    parsed.scheme == 'https'
-                    and parsed.hostname
-                    and not parsed.username
-                    and not parsed.password
-                    and not parsed.query
-                    and not parsed.fragment
-                    and parsed.path in ('', '/')
-                    and parsed.port in (None, 443)
-                    and not any(c.isspace() for c in org)
-                )
-            except ValueError:
-                valid = False
-            if not valid:
-                raise exceptions.invalid_params(
-                    'Okta org_url must be an HTTPS origin on port 443'
-                )
+                approved_okta_origin(self.context.config(), module_id, org)
+            except ValueError as error:
+                raise exceptions.invalid_params(str(error)) from error
         if secret and not re.fullmatch(
             r'arn:aws(?:-us-gov|-cn)?:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+',
             secret,
@@ -395,7 +386,10 @@ class ClusterSettingsAPI(BaseAPI):
         db = self.context.config().db
         return {
             key: (
-                db.get_config_entry(f'{module_id}.accounts.reconcile.okta.{key}') or {}
+                db.cluster_settings_table.get_item(
+                    Key={'key': f'{module_id}.accounts.reconcile.okta.{key}'},
+                    ConsistentRead=True,
+                ).get('Item', {})
             ).get('value')
             for key in ('org_url', 'api_token_secret_arn')
         }
