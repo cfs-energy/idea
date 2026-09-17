@@ -226,7 +226,7 @@ jobs:
           retention-days: 7
   build_push_ideactl:
     needs: [release_available, checks, tests, build_ideactl_artifacts, build_ideactl_linux_artifact, build_ideactl_windows_artifact]
-    runs-on: ubuntu-large
+    runs-on: ubuntu-24.04-arm
     permissions:
       id-token: write
       contents: read
