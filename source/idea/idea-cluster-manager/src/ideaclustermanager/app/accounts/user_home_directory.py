@@ -14,10 +14,8 @@ from ideadatamodel.auth import User
 from ideasdk.utils import Utils
 from ideadatamodel import exceptions
 
-import time
 import os
 import shutil
-import pwd
 from cryptography.hazmat.primitives import serialization as crypto_serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.backends import default_backend as crypto_default_backend
@@ -42,11 +40,8 @@ class UserHomeDirectory:
         return os.path.join(self.user.home_dir, '.ssh')
 
     def own_path(self, path: str):
-        shutil.chown(
-            path,
-            user=self.user.username,
-            group=Utils.get_as_int(pwd.getpwnam(self.user.username).pw_gid, default=0),
-        )
+        # Account IDs are authoritative and work without NSS/SSSD in containers.
+        os.chown(path, self.user.uid, self.user.gid)
 
     def initialize_ssh_dir(self):
         os.makedirs(self.ssh_dir, exist_ok=True)
@@ -107,21 +102,15 @@ class UserHomeDirectory:
             self.own_path(dest_file)
 
     def initialize(self):
-        # wait for system to sync the newly created user by using system libraries to resolve the user
-        # this happens on a fresh installation of auth-server, where all system services have just started
-        # and a new clusteradmin user is created.
-        # although the user is created in directory services, it's not yet synced with the local system
-        # If you continue to see this log message it may indicate that the underlying cluster-manager
-        # host is not properly linked to the back-end directory service in some fashion.
-        while True:
-            try:
-                pwd.getpwnam(self.user.username)
-                break
-            except KeyError:
-                self._logger.info(
-                    f'{self.user.username} not available yet. waiting for user to be synced ...'
-                )
-                time.sleep(5)
+        if (
+            self.user.uid is None
+            or self.user.gid is None
+            or self.user.uid <= 0
+            or self.user.gid <= 0
+        ):
+            raise exceptions.invalid_params(
+                'Home directory requires positive uid and gid'
+            )
 
         self.initialize_home_dir()
         self.initialize_ssh_dir()
