@@ -1654,3 +1654,61 @@ test("a cluster that keeps CloudWatch sees no provider write", async () => {
     assert.equal(table.find((row) => row["key"] === "metrics.provider")?.["value"], "cloudwatch");
   });
 });
+
+/** A deployed template whose settings resource publishes exactly `keys`. */
+function publishingTemplate(keys: string[]): string {
+  return JSON.stringify({
+    Resources: {
+      settings: { Type: "Custom::ClusterSettings", Properties: { module_id: "scheduler", settings: Object.fromEntries(keys.map((key) => [key, { Ref: "AWS::StackId" }])) } },
+      schedulerdnsrecord: { Type: "AWS::Route53::RecordSet", Properties: {} },
+    },
+  });
+}
+
+for (const stillPublished of [false, true]) {
+  test(`completion reads the deployed template: a row the stack stopped publishing may be gone (${stillPublished ? "still published, must exist" : "dropped, may be absent"})`, async () => {
+    // The metrics stack publishes its CloudWatch dashboard ARN only on a CloudWatch cluster; once the
+    // provider is DogStatsD the deployed template no longer names the row and its settings handler
+    // deletes it. Requiring every previously published row to survive stopped a live upgrade at the
+    // read-back after every stack had deployed. The deployed template is the truth about what a
+    // stack publishes now.
+    await withFixture(async ({ deps, rows, events }) => {
+      rows[`${clusterName}.cluster-settings`]!.push({ ...setting("scheduler.published", "old"), source: "stack" });
+      deps.cfn.getTemplate = async () => publishingTemplate(stillPublished ? ["deployment_id", "published"] : ["deployment_id"]);
+      const deploy = deps.deploy;
+      deps.deploy = async (input) => {
+        await deploy(input);
+        rows[`${clusterName}.cluster-settings`] = rows[`${clusterName}.cluster-settings`]!.filter((row) => row["key"] !== "scheduler.published");
+      };
+      const options = { clusterName, awsRegion, moduleSet: "default", force: true, acceptConfigDrift: true };
+      if (stillPublished) {
+        await assert.rejects(upgradeCluster(deps, options), /Completion verification failed for published setting scheduler.published/);
+      } else {
+        await upgradeCluster(deps, options);
+        assert.ok(events.includes("scheduler.published is no longer published by the deployed idea-test1-scheduler stack"), events.filter((event) => event.includes("published")).join(" | "));
+        assert.ok(events.includes("All upgrade phases completed successfully"));
+      }
+    });
+  });
+}
+
+test("the cleared-protection warning names only instances that still exist", async () => {
+  // The deployment replaces the instances it cleared, and a warning naming a terminated instance
+  // sends the operator after a ghost.
+  await withFixture(async ({ deps, rows, events, protection }) => {
+    rows[`${clusterName}.cluster-settings`]!.push({ ...setting("scheduler.published", "old"), source: "stack" });
+    protection.add("i-survivor");
+    protection.add("i-replaced");
+    deps.cloudFormation.listStackResources = async (input) => ({ instanceIds: input.stackName.endsWith("-scheduler") ? ["i-survivor", "i-replaced"] : [] });
+    deps.ec2.describeLiveInstances = async (input) => input.instanceIds.filter((id) => id === "i-survivor");
+    const deploy = deps.deploy;
+    deps.deploy = async (input) => {
+      await deploy(input);
+      rows[`${clusterName}.cluster-settings`] = rows[`${clusterName}.cluster-settings`]!.filter((row) => row["key"] !== "scheduler.published");
+    };
+    await assert.rejects(upgradeCluster(deps, { clusterName, awsRegion, moduleSet: "default", force: true, acceptConfigDrift: true }), /Completion verification failed/);
+    const warning = events.find((event) => event.startsWith("warning: termination protection is still cleared"));
+    assert.ok(warning, events.filter((event) => event.startsWith("warning")).join(" | "));
+    assert.ok(warning.includes("i-survivor") && !warning.includes("i-replaced"), warning);
+  });
+});

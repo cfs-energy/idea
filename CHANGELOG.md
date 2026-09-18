@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
+## [Unreleased]
+
+### **🐛 Bug Fixes**
+* **Upgrade read-back**: The completion verification reads each deployed stack's template and accepts rows the stack no longer publishes (the metrics stack drops `metrics.cloudwatch.dashboard_arn` once the provider is DogStatsD), instead of stopping a finished upgrade at the read-back
+* **Termination protection warning**: A run that stops after deployment names only instances that still exist, not the ones the deployment replaced
+
 ## [26.09.2] - 2026-09-18
 
 **Upgrade Instructions:**

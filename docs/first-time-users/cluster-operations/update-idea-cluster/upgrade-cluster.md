@@ -31,8 +31,11 @@ instance-type moves replace the bastion instance, which the change-set guard ref
 run is given `--allow-replacement bastionhostinstance`. The scheduler's old periodic-check interval
 is copied to the reconciler interval only if the latter is absent. Conflicts are reported and
 preserved, and the old key remains for older running code. Existing lists keep their custom values.
-Before success, settings and deployed module versions are read back. A failed verification requires
-repair and a rerun; it does not reopen submission.
+Before success, settings and deployed module versions are read back. Rows a stack published before
+the upgrade must still exist unless the deployed template no longer names them in its settings
+resource (the metrics stack drops its CloudWatch dashboard once the provider is DogStatsD), which the
+read-back reports and accepts. A failed verification requires repair and a rerun; it does not reopen
+submission.
 
 ### values.yml Restore and Save
 
