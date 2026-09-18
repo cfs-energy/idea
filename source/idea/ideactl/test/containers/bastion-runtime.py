@@ -217,12 +217,25 @@ class TaskIdentity(unittest.TestCase):
             'session',
         )
 
+    def test_activating_task_is_a_member(self):
+        # sshd is the container health check, so at join time the task is still ACTIVATING.
+        self.assertEqual(
+            identity.verify_bastion_task(
+                self.context(lastStatus='ACTIVATING', desiredStatus='RUNNING'),
+                'ROLE:session',
+                'task/cluster/session',
+            ),
+            'session',
+        )
+
     def test_spoofed_role_session_service_and_stopped_task(self):
         for sender, arn, changes in [
             ('OTHER:session', 'task/cluster/session', {}),
             ('ROLE:other', 'task/cluster/session', {}),
             ('ROLE:session', 'task/cluster/session', {'group': 'service:another'}),
             ('ROLE:session', 'task/cluster/session', {'lastStatus': 'STOPPED'}),
+            ('ROLE:session', 'task/cluster/session', {'lastStatus': 'PENDING'}),
+            ('ROLE:session', 'task/cluster/session', {'desiredStatus': 'STOPPED'}),
             ('ROLE:session', 'task/cluster/session', {'taskArn': 'task/other/session'}),
         ]:
             with (

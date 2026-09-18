@@ -20,9 +20,15 @@ def verify_bastion_task(context, sender_id, task_arn):
     if result.get('failures') or len(tasks) != 1:
         raise ValueError('Bastion task was not found in the cluster')
     task = tasks[0]
+    # A task whose container carries a health check stays ACTIVATING until the check passes, and
+    # the bastion's check is sshd, which starts only after this join. A started task the service
+    # still wants running is a member; one being stopped, or not yet started, is not.
+    started = task.get('lastStatus') in ('ACTIVATING', 'RUNNING')
+    wanted = task.get('desiredStatus', 'RUNNING') == 'RUNNING'
     if (
         task.get('taskArn') != task_arn
-        or task.get('lastStatus') != 'RUNNING'
+        or not started
+        or not wanted
         or task.get('group') != f'service:{service}'
     ):
         raise ValueError('Bastion task is not a running member of the service')
