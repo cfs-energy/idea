@@ -5,7 +5,7 @@ import * as ecs from "aws-cdk-lib/aws-ecs";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
-import { DOGSTATSD_SOCKET, requirePrivateEcrDigest } from "../constructs/container.ts";
+import { DOGSTATSD_SOCKET, requireDigestPinnedImage } from "../constructs/container.ts";
 
 export interface CostCollectorSettings {
   clusterName: string;
@@ -29,7 +29,7 @@ export interface CostCollectorNetwork {
 export class CostCollectorStack extends Stack {
   constructor(scope: Construct, id: string, props: StackProps & CostCollectorSettings & CostCollectorNetwork) {
     super(scope, id, props);
-    const agentImage = requirePrivateEcrDigest(props.agentImage, "agent image");
+    const agentImage = requireDigestPinnedImage(props.agentImage, "agent image");
     for (const value of [props.intervalHours ?? 6, props.lookbackDays ?? 3]) {
       if (!Number.isInteger(value) || value < 1) throw new Error("interval and lookback must be positive integers");
     }

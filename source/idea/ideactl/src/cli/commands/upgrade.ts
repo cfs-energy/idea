@@ -849,6 +849,33 @@ export async function planUpgradePhase3Entries(
   ];
 }
 
+/** The rows the add-only sync leaves on the previous provider when values move metrics to the daemon. */
+export const METRICS_PROVIDER_CUTOVER_KEYS = ["metrics.provider", "metrics.dogstatsd.url"] as const;
+
+/**
+ * Plan the metrics provider cutover: with `metrics_provider: dogstatsd` and `enable_ecs: true`
+ * in values the generated configuration turns the agent daemon on, and the modules must send to
+ * it. The full sync never overwrites, so the two rows the modules read are written after Phase 3,
+ * from the same generated values, when the table still names another provider or another
+ * destination. A cluster whose rows already agree plans nothing.
+ */
+export function planMetricsProviderCutover(
+  generated: readonly ConfigEntry[],
+  current: readonly CurrentConfigRow[],
+): ConfigEntry[] {
+  const generatedRows = new Map(generated.map((entry) => [entry.key, entry.value]));
+  if (generatedRows.get("ecs.datadog.enabled") !== true) return [];
+  const currentRows = new Map(current.map((entry) => [entry.key, entry.value]));
+  const entries: ConfigEntry[] = [];
+  for (const key of METRICS_PROVIDER_CUTOVER_KEYS) {
+    const value = generatedRows.get(key);
+    if (typeof value !== "string" || value === "") continue;
+    if (currentRows.get(key) === value) continue;
+    entries.push({ key, value });
+  }
+  return entries;
+}
+
 /** Apply the already previewed Phase 3 plan without recalculating it after approval. */
 async function applyPhase3Entries(
   writer: Awaited<ReturnType<UpgradeDeps["configWriter"]>>,
@@ -859,7 +886,9 @@ async function applyPhase3Entries(
   const previous = new Map(current.map((entry) => [entry.key, entry.value]));
   for (const entry of entries) {
     await writer.setConfigEntry(entry.key, entry.value);
-    if (entry.value === MODULE_HOST_INSTANCE_TYPE && previous.get(entry.key) === MODULE_HOST_INSTANCE_TYPE_OLD) {
+    if (entry.key === "metrics.provider") {
+      out(`${entry.key} moves from ${String(previous.get(entry.key) ?? "(unset)")} to ${String(entry.value)}; the modules send to the agent daemon once they run as tasks`);
+    } else if (entry.value === MODULE_HOST_INSTANCE_TYPE && previous.get(entry.key) === MODULE_HOST_INSTANCE_TYPE_OLD) {
       out(`${entry.key} moves from ${MODULE_HOST_INSTANCE_TYPE_OLD} to ${MODULE_HOST_INSTANCE_TYPE}; the host runs it when the instance is next replaced`);
     } else if (
       entry.value === OPENSEARCH_DATA_NODE_INSTANCE_TYPE &&
@@ -983,6 +1012,7 @@ export async function prepareUpgradeDriftInput(
     current,
     generated,
     phase3,
+    providerCutover: planMetricsProviderCutover(generated, current),
     stacks: inferredStackPlans(current, modules, options.modules),
     replaceGlobalSettings: options.skipGlobalSettingsUpdate !== true,
     syncFullConfiguration: true,
@@ -1583,7 +1613,7 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
     }
     if (updateAmis) {
       const writer = await deps.configWriter({ clusterName: options.clusterName, awsRegion: options.awsRegion, awsProfile: options.awsProfile });
-      await applyPhase3Entries(writer, driftInput.phase3 ?? [], driftInput.current, deps.out);
+      await applyPhase3Entries(writer, [...(driftInput.phase3 ?? []), ...(driftInput.providerCutover ?? [])], driftInput.current, deps.out);
     }
 
     deps.out("Phase 4: Module Deployment");

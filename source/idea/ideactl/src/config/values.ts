@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import * as yaml from 'js-yaml';
 
 import { ClusterConfigError, GeneralException, isEmpty } from './cluster-config.ts';
+import { DATADOG_AGENT_IMAGE, isDigestPinnedImage } from './datadog-agent.ts';
 import { loadRegionAmiConfig, regionAmiConfigPath, resolveRegionAmi } from './region-ami.ts';
 import { ideaVersion } from '../version.ts';
 
@@ -527,11 +528,13 @@ function getters(values: UserValues, options: BuildContextOptions) {
       return value;
     },
 
+    /** The release's official Datadog image unless the values name another digest-pinned one. */
     datadogAgentImage(): string | null {
       const value = getString('datadog_agent_image', values);
-      if (isEmpty(value) && g.datadogAgent()) {
+      if (isEmpty(value)) return g.datadogAgent() ? DATADOG_AGENT_IMAGE : null;
+      if (!isDigestPinnedImage(value as string)) {
         throw new GeneralException(
-          'datadog_agent_image is required when metrics_provider = dogstatsd and enable_ecs = true',
+          'datadog_agent_image must be a digest-pinned image reference (<registry>/<repository>@sha256:<digest>), not a tag',
         );
       }
       return value;

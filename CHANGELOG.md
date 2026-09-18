@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
+## [26.09.2] - 2026-09-18
+
+**Upgrade Instructions:**
+* A hotfix to the container control plane release. Clusters on 26.09.1 or 26.09.0 upgrade with the same `upgrade-cluster` run as before; a cluster moving to containers with Datadog metrics no longer needs a private copy of the agent image or a `config set` before the run
+```bash
+./idea-admin.sh upgrade-cluster --aws-region $IDEA_AWS_REGION --cluster-name $IDEA_CLUSTER_NAME --drain
+```
+
+### **🐛 Bug Fixes**
+* **Datadog agent image**: The host-pool daemon and the cost-only collector run Datadog's official image from Datadog's public ECR gallery, pinned by digest to agent 7.83.2, instead of requiring a copy in a private ECR repository of every account. `datadog_agent_image` (values) and `--agent-image` (cost collector) are now optional overrides and accept any digest-pinned image reference at the operator's own risk; a tag is still refused because the agent holds the host's Docker socket
+* **Metrics provider cutover in one run**: With `metrics_provider: dogstatsd` in `values.yml`, `upgrade-cluster` writes `metrics.provider` and `metrics.dogstatsd.url` after Phase 3 instead of leaving them on the previous provider through the add-only sync; the preview lists both under `PROVIDER_CUTOVER` and they never count as operator drift. The runbook's separate `config set` step and the five-row container path are gone
+([Move the control plane to containers](https://docs.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/move-to-containers))
+
 ## [26.09.1] - 2026-09-17
 
 **Upgrade Instructions:**

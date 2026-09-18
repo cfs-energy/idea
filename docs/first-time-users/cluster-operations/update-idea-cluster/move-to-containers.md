@@ -29,7 +29,7 @@ With `metrics_provider: dogstatsd` the modules send their own metrics to a Datad
 
 ### Once per cluster
 
-Complete this before running the upgrade when selecting DogStatsD. Both daemon values are required during configuration generation. Neither the host daemon nor the cost-only sidecar supplies `DD_SITE`; with the standard agent image, ingestion uses `datadoghq.com` (US1). Other sites need a deployment code change; `--datadog-site` only changes the proof query destination.
+Complete this before running the upgrade when selecting DogStatsD. The secret's ARN is required during configuration generation; the agent image has a release default. Neither the host daemon nor the cost-only sidecar supplies `DD_SITE`; with the standard agent image, ingestion uses `datadoghq.com` (US1). Other sites need a deployment code change; `--datadog-site` only changes the proof query destination.
 
 1. Select the target account profile and region, verify the caller ARN, then put the API key in Secrets Manager. The key never enters `values.yml` or the settings table, only the secret's ARN does, and the agent reads it when a task starts.
 
@@ -39,40 +39,16 @@ aws --profile <PROFILE> --region <REGION> secretsmanager create-secret \
   --name idea-<CLUSTER_NAME>-datadog-api-key --secret-string '<API_KEY>' --query ARN
 ```
 
-2. Copy the agent image into a private ECR repository in the account and record its digest. The agent runs with the host's Docker socket and process namespace, so the stack accepts only a digest-pinned image from a private repository.
+2. The agent image is Datadog's official image from their public ECR gallery, pinned by digest to the version this release ships. Nothing to copy. To run another build, name any digest-pinned reference in `datadog_agent_image`, at your own risk: the agent holds the host's Docker socket and process namespace, so a tag is refused.
 
-```bash
-aws --profile <PROFILE> --region <REGION> ecr create-repository --repository-name datadog/agent
-aws --profile <PROFILE> --region <REGION> ecr get-login-password | \
-  docker login --username AWS --password-stdin <ACCOUNT>.dkr.ecr.<REGION>.amazonaws.com
-for arch in arm64 amd64; do
-  docker pull --platform "linux/$arch" public.ecr.aws/datadog/agent:7.83.1
-  docker tag public.ecr.aws/datadog/agent:7.83.1 <ACCOUNT>.dkr.ecr.<REGION>.amazonaws.com/datadog/agent:7.83.1-$arch
-  docker push <ACCOUNT>.dkr.ecr.<REGION>.amazonaws.com/datadog/agent:7.83.1-$arch
-  aws --profile <PROFILE> --region <REGION> ecr describe-images --repository-name datadog/agent \
-    --image-ids imageTag=7.83.1-$arch --query 'imageDetails[0].imageDigest' --output text
-done
-```
-
-Verify the caller ARN is for the target account before creating resources. Reuse the repository if it already exists; verify each returned digest with `docker buildx imagetools inspect <REGISTRY>/datadog/agent@sha256:<DIGEST>`, and use the ARM64 digest for the default Graviton hosts and the AMD64 digest for cost-only Fargate tasks.
-
-3. Record both in `values.yml`:
+3. Record the provider and the secret in `values.yml`:
 
 ```yaml
 metrics_provider: dogstatsd
 datadog_api_key_secret_arn: arn:aws:secretsmanager:<REGION>:<ACCOUNT>:secret:idea-<CLUSTER_NAME>-datadog-api-key-XXXXXX
-datadog_agent_image: <ACCOUNT>.dkr.ecr.<REGION>.amazonaws.com/datadog/agent@sha256:<DIGEST>
 ```
 
-A fresh install asks for both when Datadog is the metrics provider. During migration, values generate missing `ecs.enabled` and `ecs.datadog.{enabled,api_key_secret_arn,image}` rows, and missing metrics rows. Synchronization is add-only: on a cluster that ran the previous release, `metrics.provider` and any existing `metrics.dogstatsd.url` remain unchanged, so explicitly set the live rows before the migration:
-
-```bash
-./idea-admin.sh config set --cluster-name <CLUSTER_NAME> --aws-region <REGION> \
-  'Key=metrics.provider,Type=str,Value=dogstatsd' \
-  'Key=metrics.dogstatsd.url,Type=str,Value=unix:///var/run/datadog/dsd.socket'
-```
-
-Existing ECS rows are also preserved. If an earlier attempt or deployment already created them, apply the five-row command below as well. Keep the three values-file keys above for future generation; editing them alone does not update live rows. Metrics on old hosts may be interrupted until the applications move to tasks with the socket mounted.
+A fresh install asks for the secret when Datadog is the metrics provider. During migration, values generate the missing `ecs.enabled` and `ecs.datadog.{enabled,api_key_secret_arn,image}` rows and any missing metrics rows. Synchronization is add-only, so on a cluster that ran the previous release `metrics.provider` would keep its old value; the upgrade therefore writes `metrics.provider` and `metrics.dogstatsd.url` itself after Phase 3, from the same generated values, and the preview lists both under `PROVIDER_CUTOVER`. No separate `config set` is needed, and nothing else in the table is overwritten. Metrics from the old hosts stop for the length of the run; the tasks send to the daemon from their first start.
 
 `ecs.image` and `ecs.hosts.instance_type` are settings-table keys, not values-file overrides. If you need a private control-plane image or a different host type, set them before deployment (choose an image supporting the host architecture):
 
@@ -84,19 +60,7 @@ Existing ECS rows are also preserved. If an earlier attempt or deployment alread
 
 ### On a cluster already running containers
 
-Full configuration synchronization adds missing non-global rows and preserves existing ones, so switching an existing container cluster is a direct write of the rows the daemon and the modules read, followed by a deploy that gives every task the agent's socket:
-
-```bash
-./idea-admin.sh config set --cluster-name <CLUSTER_NAME> --aws-region <REGION> \
-  'Key=metrics.provider,Type=str,Value=dogstatsd' \
-  'Key=metrics.dogstatsd.url,Type=str,Value=unix:///var/run/datadog/dsd.socket' \
-  'Key=ecs.datadog.enabled,Type=bool,Value=true' \
-  'Key=ecs.datadog.api_key_secret_arn,Type=str,Value=<SECRET_ARN>' \
-  'Key=ecs.datadog.image,Type=str,Value=<IMAGE@sha256:DIGEST>'
-./idea-admin.sh upgrade-cluster --cluster-name <CLUSTER_NAME> --aws-region <REGION>
-```
-
-Put `metrics_provider`, `datadog_api_key_secret_arn` and `datadog_agent_image` in `values.yml` as well, so a later regeneration agrees with the table.
+Put `metrics_provider: dogstatsd` and `datadog_api_key_secret_arn` in `values.yml` and run `upgrade-cluster` without `--drain`. The `ecs.datadog.*` rows are added if absent, the provider rows are written as above, the daemon service is created and every task is redeployed with the agent's socket. A cluster whose `ecs.datadog.*` rows already exist from an earlier attempt keeps them; correct those with `config set` first if they name a different secret or image.
 
 ## Run it
 
@@ -141,17 +105,16 @@ After deploying, force a new cluster-manager service deployment using the restar
 
 For GovCloud billing, or a commercial billing account with no cluster, use cost-only mode in the commercial account that can read the bill. It runs the same collector and a Datadog sidecar in one Fargate task, with no cluster settings table. Enable historical ingestion for `idea.cost` as above, activate the cost allocation tags in that billing account, and deploy:
 
-Prepare the billing account once, exactly as for a cluster: copy the control-plane image and the Datadog agent image into that account's ECR and record the agent digest, create the Datadog API key secret there, and make sure the subnets you name can reach Cost Explorer and Datadog. The collector tags every point with the `--cluster-name` you give, so use the name the metrics should carry, not the billing account's.
+Prepare the billing account once: create the Datadog API key secret there and make sure the subnets you name can reach Cost Explorer, Datadog and both public registries (or pass `--control-plane-image` and `--agent-image` for images reachable from that account). The agent image defaults to the same official Datadog image the clusters use. The collector tags every point with the `--cluster-name` you give, so use the name the metrics should carry, not the billing account's.
 
 ```bash
 ideactl cost-collector deploy --aws-profile <BILLING_PROFILE> --aws-region us-east-1 --stack-name gov-spend \
   --cluster-name <GOVCLOUD_CLUSTER_NAME> \
   --control-plane-image <CONTROL_PLANE_IMAGE> \
-  --agent-image <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/datadog/agent@sha256:<AMD64_DIGEST> \
   --datadog-api-key-secret-arn <SECRET_ARN> --subnet-ids <SUBNET_ID> <SUBNET_ID>
 ```
 
-Use images supporting Linux x86_64 and an API key secret in the deployment region. Subnets must be in one VPC and all public or all private. Public subnets receive a public IP; private subnets need outbound access through NAT. The default interval is six hours with a three-day lookback and the same tag keys as the cluster collector; `--by-account` adds linked account spend. `--cluster-name` labels the account's bill; it does not filter it to that cluster. Remove it with `ideactl cost-collector destroy --aws-region us-east-1 --stack-name gov-spend`.
+The task is x86_64; the default agent image is multi-architecture, and any override must support Linux x86_64. Use an API key secret in the deployment region. Subnets must be in one VPC and all public or all private. Public subnets receive a public IP; private subnets need outbound access through NAT. The default interval is six hours with a three-day lookback and the same tag keys as the cluster collector; `--by-account` adds linked account spend. `--cluster-name` labels the account's bill; it does not filter it to that cluster. Remove it with `ideactl cost-collector destroy --aws-region us-east-1 --stack-name gov-spend`.
 
 To verify cost-only delivery, wait for a collection cycle, then query `sum:idea.cost.amortized{idea_cluster:<CLUSTER_NAME>}` in Datadog over the trailing three full UTC days (or the configured lookback), including yesterday; require non-null daily points and compare them with Cost Explorer. `metrics-sink` checks API invocations, which this task does not emit. In ECS, open the task's Logs tab and inspect both `cost-metrics/cost-metrics/<TASK_ID>` and `datadog/datadog/<TASK_ID>` in the stack-created log group for collection failures, dropped historical points or ingestion errors.
 
@@ -202,4 +165,4 @@ Write the new value into the same secret, then restart the daemon so its tasks r
 
 Point `ecs.image` at the new release's image and run `upgrade-cluster` without `--drain`. Most services roll behind their load balancer; the scheduler stops its old task before starting the replacement, briefly interrupting submissions and its API while running jobs are designed to survive on persistent PBS state.
 
-The change-set guard refuses definite replacements of any resource, conditional replacements of stateful resources, stateful removals and unrecognized custom-resource removals, with specific named exceptions such as retained task-definition revisions. Review any refusal and its data/lifecycle impact. `upgrade-cluster` has no `--allow-replacement` option; a deliberate exception requires a separately reviewed `deploy --upgrade <MODULE_ID> --allow-replacement <LOGICAL_ID>` operation.
+The change-set guard refuses definite replacements of any resource, conditional replacements of stateful resources, stateful removals and unrecognized custom-resource removals, with specific named exceptions such as retained task-definition revisions. Review any refusal and its data/lifecycle impact before passing `--allow-replacement <LOGICAL_ID>` for that one entry; the bastion instance is the usual case on a first move.

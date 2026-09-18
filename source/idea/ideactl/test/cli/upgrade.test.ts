@@ -10,6 +10,7 @@ import test from "node:test";
 import { Command } from "commander";
 import { CreateTagsCommand, DeleteTagsCommand, DescribeInstancesCommand, EC2Client } from "@aws-sdk/client-ec2";
 import { ideaVersion } from "../../src/version.ts";
+import { DATADOG_AGENT_IMAGE } from "../../src/config/datadog-agent.ts";
 import type { ConfigWriter, Deps } from "../../src/cli/cdk-invoker.ts";
 import {
   countPbsStates,
@@ -351,6 +352,15 @@ test("Phase 2b registers every generated module before the add-only settings syn
 function enableContainers(): void {
   const valuesPath = join(process.env["IDEA_USER_HOME"] as string, "clusters", clusterName, awsRegion, "values.yml");
   writeFileSync(valuesPath, `${readFileSync(valuesPath, "utf8")}\nenable_ecs: true\n`);
+}
+
+function sendMetricsToDatadog(): void {
+  const valuesPath = join(process.env["IDEA_USER_HOME"] as string, "clusters", clusterName, awsRegion, "values.yml");
+  // The metrics module owns the provider rows; the base fixture leaves it out.
+  const values = readFileSync(valuesPath, "utf8")
+    .replace(/^metrics_provider:.*\n/m, "")
+    .replace(/^enabled_modules:.*\n/m, "enabled_modules: [metrics, scheduler, virtual-desktop-controller]\n");
+  writeFileSync(valuesPath, `${values}\nmetrics_provider: dogstatsd\ndatadog_api_key_secret_arn: arn:aws:secretsmanager:us-east-2:123456789012:secret:idea-test1-datadog-api-key-AbCdEf\n`);
 }
 
 function trunkingEnabled(deps: UpgradeDeps): void {
@@ -1605,5 +1615,42 @@ test("historical planning requires metadata for compute image preservation", asy
     state.deps.ec2.describeImages = async (input) => (await describe(input)).filter((image) => image.ImageId !== "ami-built");
     await assert.rejects(upgradeCluster(state.deps, containerOptions), /Missing AMI metadata for ami-built/);
     assert.ok(!state.events.some((event) => /^(set:|sync:|delete:|clear:|deploy$)/.test(event)));
+  });
+});
+
+test("moving metrics to the agent daemon writes the provider rows the add-only sync would skip", async () => {
+  // The host cluster runs on CloudWatch. With `metrics_provider: dogstatsd` in values the generated
+  // configuration turns the daemon on, but `metrics.provider` already exists, so the full sync
+  // keeps CloudWatch and the tasks would start sending nowhere. The one run must land both rows.
+  await withFixture(async ({ deps, events, rows }) => {
+    enableContainers();
+    sendMetricsToDatadog();
+    trunkingEnabled(deps);
+    rows[`${clusterName}.cluster-settings`]!.push(setting("metrics.provider", "cloudwatch"));
+    await upgradeCluster(deps, { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true });
+
+    const table = rows[`${clusterName}.cluster-settings`]!;
+    const value = (key: string): unknown => table.find((row) => row["key"] === key)?.["value"];
+    assert.equal(value("metrics.provider"), "dogstatsd");
+    assert.equal(value("metrics.dogstatsd.url"), "unix:///var/run/datadog/dsd.socket");
+    assert.equal(value("ecs.datadog.enabled"), true);
+    assert.equal(value("ecs.datadog.image"), DATADOG_AGENT_IMAGE, "the release's official agent image is the default");
+    const cutover = events.indexOf("set:metrics.provider=dogstatsd");
+    const phase3 = events.indexOf("Phase 3: Update AMI IDs and Settings");
+    const phase4 = events.indexOf("Phase 4: Module Deployment");
+    assert.ok(cutover > phase3 && cutover < phase4, `the provider moves in Phase 3: ${events.join(" | ")}`);
+  });
+});
+
+test("a cluster that keeps CloudWatch sees no provider write", async () => {
+  await withFixture(async ({ deps, events, rows }) => {
+    enableContainers();
+    trunkingEnabled(deps);
+    rows[`${clusterName}.cluster-settings`]!.push(setting("metrics.provider", "cloudwatch"));
+    await upgradeCluster(deps, { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true });
+
+    assert.ok(!events.some((event) => event.startsWith("set:metrics.provider=")), events.filter((event) => event.startsWith("set:")).join(" | "));
+    const table = rows[`${clusterName}.cluster-settings`]!;
+    assert.equal(table.find((row) => row["key"] === "metrics.provider")?.["value"], "cloudwatch");
   });
 });

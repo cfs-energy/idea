@@ -49,7 +49,8 @@ metrics_provider: cloudwatch
 # required when metrics_provider = prometheus
 prometheus_remote_write_url: ~
 # required when metrics_provider = dogstatsd and enable_ecs = true: the Secrets Manager secret
-# holding the Datadog API key, and the agent image, digest-pinned, in a private ECR repository
+# holding the Datadog API key. The agent image defaults to the release's official Datadog image
+# from Datadog's public ECR, digest-pinned; name another digest-pinned reference to override it
 datadog_api_key_secret_arn: ~
 datadog_agent_image: ~
 # aws backup

@@ -44,6 +44,7 @@ function completeInput(): UpgradeDriftInput {
       { key: "scheduler.instance_ami", value: "ami-manual", version: 9 },
       { key: "cluster-manager.endpoint", value: "operator value", source: "stack", version: 6 },
       { key: "cluster-manager.removed", value: "old output", source: "stack", version: 3 },
+      { key: "metrics.provider", value: "cloudwatch", version: 1 },
     ],
     generated: [
       { key: "global-settings.portal_text", value: "generated text" },
@@ -54,8 +55,10 @@ function completeInput(): UpgradeDriftInput {
       { key: "vdc.usb", value: [] },
       { key: "scheduler.instance_ami", value: "ami-generated" },
       { key: "cluster-manager.endpoint", value: "generated endpoint" },
+      { key: "metrics.provider", value: "dogstatsd" },
     ],
     phase3: [{ key: "scheduler.instance_ami", value: "ami-release" }],
+    providerCutover: [{ key: "metrics.provider", value: "dogstatsd" }],
     stacks: [{
       moduleId: "cluster-manager",
       selected: true,
@@ -157,7 +160,7 @@ test("classifies every upgrade action and marks changed generator drift", (conte
 
   const rendered = renderUpgradeDrift(report);
   for (const action of UPGRADE_DRIFT_ACTIONS) assert.match(rendered, new RegExp(action));
-  assert.match(rendered, /Rows: 1 added, 5 changed, 2 deleted, 3 preserved/);
+  assert.match(rendered, /Rows: 1 added, 6 changed, 2 deleted, 3 preserved/);
   assert.doesNotMatch(rendered, /incident text|operator value|ami-manual|stack target/);
   context.diagnostic(rendered);
 });
@@ -174,7 +177,7 @@ test("registers and runs the standalone preview from injected reads", async () =
     clusterName: CLUSTER,
     awsRegion: REGION,
   });
-  assert.equal(report.findings.length, 11);
+  assert.equal(report.findings.length, 12);
   assert.equal(output.length, 1);
   assert.match(output[0] ?? "", /^Configuration preview/);
 
@@ -434,4 +437,35 @@ test("a stack row whose future value is known is still compared", () => {
   assert.equal(row?.targetType, "S");
   assert.equal(row?.differsFromGenerated, true);
   assert.deepEqual(report.changedRowsDifferingFromGenerated, ["vdc.endpoint"]);
+});
+
+test("the metrics provider cutover is a planned write, never an operator edit at risk", () => {
+  // `metrics_provider: dogstatsd` in values is the operator asking for the daemon; the add-only
+  // sync would leave the two rows the modules read on the previous provider, so the upgrade writes
+  // them after Phase 3 and the gate does not ask the operator to accept losing their own request.
+  const report = compareUpgradeDrift({
+    current: [
+      { key: "metrics.provider", value: "cloudwatch", version: 1 },
+      { key: "ecs.datadog.enabled", value: true, version: 1 },
+    ],
+    generated: [
+      { key: "metrics.provider", value: "dogstatsd" },
+      { key: "metrics.dogstatsd.url", value: "unix:///var/run/datadog/dsd.socket" },
+      { key: "ecs.datadog.enabled", value: true },
+    ],
+    providerCutover: [
+      { key: "metrics.provider", value: "dogstatsd" },
+      { key: "metrics.dogstatsd.url", value: "unix:///var/run/datadog/dsd.socket" },
+    ],
+  });
+
+  const provider = report.findings.find((row) => row.key === "metrics.provider");
+  assert.equal(provider?.action, "PROVIDER_CUTOVER");
+  assert.equal(provider?.effect, "CHANGE");
+  assert.equal(provider?.differsFromGenerated, false);
+  const url = report.findings.find((row) => row.key === "metrics.dogstatsd.url");
+  assert.equal(url?.action, "PROVIDER_CUTOVER");
+  assert.equal(url?.effect, "ADD");
+  assert.deepEqual(report.changedRowsDifferingFromGenerated, []);
+  assert.match(renderUpgradeDrift(report), /PROVIDER_CUTOVER\s+\w+\s+2/);
 });

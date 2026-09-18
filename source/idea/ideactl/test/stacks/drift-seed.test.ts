@@ -15,7 +15,7 @@ import { DeleteTableCommand, DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, ScanCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 
 import type { ConfigWriter, Deps } from "../../src/cli/cdk-invoker.ts";
-import { planUpgradePhase3Entries, type UpgradeDeps } from "../../src/cli/commands/upgrade.ts";
+import { planMetricsProviderCutover, planUpgradePhase3Entries, type UpgradeDeps } from "../../src/cli/commands/upgrade.ts";
 import { ClusterConfigDb } from "../../src/config/cluster-config-db.ts";
 import {
   compareUpgradeDrift,
@@ -62,6 +62,7 @@ const SEQUENCE = [
   'db.deleteConfigEntries("global-settings.")',
   "db.syncClusterSettingsInDb(generated keys starting with global-settings., overwrite=true)",
   "db.syncClusterSettingsInDb(GENERATED, overwrite=false)",
+  "db.setConfigEntry for each Phase 3 entry, then for the metrics provider cutover",
   `planUpgradePhase3Entries(..., amiId=${RELEASE_AMI}, baseOs=${BASE_OS}) then db.setConfigEntry for each planned row`,
   "Custom::ClusterSettings Update for selected module cluster-manager (not metrics)",
 ].join("\n");
@@ -648,10 +649,17 @@ test("upgrade settings sync matches the analysis prediction for every edit class
     "retained OpenSearch default must be in Phase 3",
   );
 
+  const providerCutover = planMetricsProviderCutover(GENERATED, current);
+  assert.ok(
+    providerCutover.some((entry) => entry.key === "metrics.provider" && entry.value === "dogstatsd"),
+    "the values file's provider must be in the cutover",
+  );
+
   const drift = compareUpgradeDrift({
     current,
     generated: GENERATED,
     phase3,
+    providerCutover,
     stacks: [SELECTED_STACK, UNSELECTED_STACK],
     replaceGlobalSettings: true,
     syncFullConfiguration: true,
@@ -668,7 +676,7 @@ test("upgrade settings sync matches the analysis prediction for every edit class
     true,
   );
   await db.syncClusterSettingsInDb(GENERATED, false);
-  for (const entry of phase3) {
+  for (const entry of [...phase3, ...providerCutover]) {
     await db.setConfigEntry(entry.key, entry.value);
   }
   const stackResponses = await applySelectedStackUpdate(doc, CLUSTER);

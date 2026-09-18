@@ -924,7 +924,7 @@ Deploy standalone account spend collection in a commercial billing account, with
 | `--stack-name <name>` | yes | none | yes |
 | `--cluster-name <name>` | yes | none | yes |
 | `--control-plane-image <image>` | yes | none | yes |
-| `--agent-image <image>` | yes | none | yes |
+| `--agent-image <image>` | yes | the release's Datadog agent image, digest-pinned, from Datadog's public ECR | no |
 | `--datadog-api-key-secret-arn <arn>` | yes | none | yes |
 | `--subnet-ids <ids...>` | yes | none | yes |
 | `--interval-hours <hours>` | yes | `6` | no |
@@ -937,14 +937,13 @@ Deploy standalone account spend collection in a commercial billing account, with
 
 **Reads:** caller identity, subnet route tables and CloudFormation change sets. **Changes:** one stack containing a log group, ECS cluster, Fargate service, two-container task, security group and IAM roles. Deploy prepares a change set and applies the existing guard before execution; task definition revisions are allowed. It waits for stack completion.
 
-The agent image must be a digest-pinned private ECR reference. Both images must support Linux x86_64. The secret must contain the raw Datadog API key, reside in the deployment region, and permit the execution role to decrypt it if a custom KMS key policy restricts access. Subnets must share a VPC and be all public or all private. Public IPs are assigned when the effective route tables have an internet gateway route; private subnets need NAT access. The service stops its old task before starting a replacement to prevent duplicate collection. The cluster name is only the `idea_cluster` metric tag, not a spend filter. Historical ingestion for `idea.cost` must be enabled in Datadog. The standard agent uses US1 (`datadoghq.com`); the deployment does not configure `DD_SITE`. Follow the [image preparation and cost verification runbook](../../../../docs/first-time-users/cluster-operations/update-idea-cluster/move-to-containers.md#spend-and-storage), using the AMD64 digest from the `datadog/agent` repository.
+The agent image defaults to Datadog's official public ECR image at the version the release pins; any override must be a digest-pinned reference, never a tag, because the agent runs with the host's Docker socket. Both images must support Linux x86_64. The secret must contain the raw Datadog API key, reside in the deployment region, and permit the execution role to decrypt it if a custom KMS key policy restricts access. Subnets must share a VPC and be all public or all private. Public IPs are assigned when the effective route tables have an internet gateway route; private subnets need NAT access. The service stops its old task before starting a replacement to prevent duplicate collection. The cluster name is only the `idea_cluster` metric tag, not a spend filter. Historical ingestion for `idea.cost` must be enabled in Datadog. The standard agent uses US1 (`datadoghq.com`); the deployment does not configure `DD_SITE`. Follow the [image preparation and cost verification runbook](../../../../docs/first-time-users/cluster-operations/update-idea-cluster/move-to-containers.md#spend-and-storage), using the AMD64 digest from the `datadog/agent` repository.
 
 **Example:**
 
 ```bash
 ideactl cost-collector deploy --aws-profile <BILLING_PROFILE> --aws-region us-east-1 --stack-name gov-spend \
   --cluster-name gov-cluster --control-plane-image <CONTROL_PLANE_IMAGE> \
-  --agent-image <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/datadog/agent@sha256:<AMD64_DIGEST> \
   --datadog-api-key-secret-arn <SECRET_ARN> --subnet-ids <SUBNET_ID>
 ```
 

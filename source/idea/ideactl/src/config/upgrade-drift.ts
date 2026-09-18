@@ -20,6 +20,7 @@ export const UPGRADE_DRIFT_ACTIONS = [
   "PRESERVE_TYPE_DRIFT",
   "ORPHAN_PRESERVED",
   "PHASE3_OVERWRITE",
+  "PROVIDER_CUTOVER",
   "STACK_OVERWRITE",
   "STACK_DELETE",
 ] as const;
@@ -52,6 +53,11 @@ export interface UpgradeDriftInput {
   current: readonly CurrentConfigRow[];
   generated: readonly ConfigEntry[];
   phase3?: readonly ConfigEntry[];
+  /**
+   * The metrics rows the values file moves to the agent daemon. Written after Phase 3 and never
+   * gated as operator drift: `metrics_provider: dogstatsd` in values is the operator asking.
+   */
+  providerCutover?: readonly ConfigEntry[];
   stacks?: readonly StackSettingsPlan[];
   replaceGlobalSettings?: boolean;
   syncFullConfiguration?: boolean;
@@ -216,6 +222,7 @@ export function compareUpgradeDrift(input: UpgradeDriftInput): UpgradeDriftRepor
   const current = keyedRows(input.current, "current settings");
   const generated = keyedRows(input.generated, "generated settings");
   const phase3 = keyedRows(input.phase3 ?? [], "Phase 3 settings");
+  const providerCutover = keyedRows(input.providerCutover ?? [], "metrics provider cutover");
   const { plans: stacks, ownedKeys } = expandStackPlans(input.stacks ?? []);
   const findings = new Map<string, UpgradeDriftFinding>();
   const replaceGlobals = input.replaceGlobalSettings !== false;
@@ -285,6 +292,15 @@ export function compareUpgradeDrift(input: UpgradeDriftInput): UpgradeDriftRepor
         true,
       ),
     );
+  }
+
+  // The values file names the metrics provider; a cluster whose modules move to the agent daemon
+  // gets the rows the add-only sync would otherwise leave on the previous provider.
+  for (const [key, target] of providerCutover) {
+    findings.set(key, {
+      ...finding("PROVIDER_CUTOVER", current.has(key) ? "CHANGE" : "ADD", key, current.get(key), generated.get(key), target, true),
+      differsFromGenerated: false,
+    });
   }
 
   // Selected stack writes are last. They can overwrite, add, or remove their owned rows.

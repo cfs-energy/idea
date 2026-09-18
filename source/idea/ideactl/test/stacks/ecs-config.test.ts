@@ -3,7 +3,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,6 +13,7 @@ import {
   flattenConfigDir,
   generateConfig,
 } from "../../src/config/generator.ts";
+import { DATADOG_AGENT_IMAGE, DATADOG_AGENT_VERSION } from "../../src/config/datadog-agent.ts";
 import { ideaVersion } from "../../src/version.ts";
 import { ECS_HOST_SETTINGS, ECS_TASK_SETTINGS } from "../support/ecs-settings.ts";
 
@@ -23,7 +24,7 @@ const valuesFile = fileURLToPath(new URL("./ecs-values.yml", import.meta.url));
 // release version tag, because the stack requires the setting and a fresh install has no other
 // writer for it; a deploy may replace it with a digest-qualified reference to the same manifest.
 // The metrics agent daemon is off until the modules send to it; the image is validated by the
-// stack as a digest-pinned private reference.
+// stack as a digest-pinned reference.
 const expectedSettings = {
   "ecs.datadog.api_key_secret_arn": null,
   "ecs.datadog.enabled": false,
@@ -71,4 +72,22 @@ test("turns the metrics agent daemon on from values when the modules send to it"
   assert.equal(settings["ecs.datadog.image"], "123456789012.dkr.ecr.us-east-2.amazonaws.com/datadog/agent@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
   assert.equal(settings["metrics.provider"], "dogstatsd");
   assert.equal(settings["metrics.dogstatsd.url"], "unix:///var/run/datadog/dsd.socket");
+});
+
+test("the agent image defaults to the release's official Datadog image when values name none", () => {
+  const configDir = mkdtempSync(join(tmpdir(), "ideactl-ecs-config-datadog-default-"));
+  const values = readFileSync(fileURLToPath(new URL("./ecs-values-datadog.yml", import.meta.url)), "utf8")
+    .replace(/^datadog_agent_image:.*\n/m, "");
+  const valuesPath = join(configDir, "values.yml");
+  writeFileSync(valuesPath, values);
+  generateConfig(valuesPath, configDir);
+  const settings = flattenConfigDir(configDir);
+
+  assert.equal(settings["ecs.datadog.enabled"], true);
+  assert.equal(settings["ecs.datadog.image"], DATADOG_AGENT_IMAGE);
+  assert.match(DATADOG_AGENT_IMAGE, /^public\.ecr\.aws\/datadog\/agent@sha256:[0-9a-f]{64}$/, "IDEA publishes no agent image; the default is Datadog's own");
+
+  // A tag is refused at generation, before anything reaches a table.
+  writeFileSync(valuesPath, `${values}datadog_agent_image: public.ecr.aws/datadog/agent:${DATADOG_AGENT_VERSION}\n`);
+  assert.throws(() => generateConfig(valuesPath, mkdtempSync(join(tmpdir(), "ideactl-ecs-config-datadog-tag-"))), /digest-pinned image reference/);
 });
