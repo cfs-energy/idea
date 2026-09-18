@@ -32,6 +32,7 @@ const CONTAINER_INPUTS = ["ecs.enabled", "ecs.retain_existing_hosts"] as const;
 
 /** Stack file -> module name, for the files that branch on either input. */
 const MODULE_NAME_BY_STACK_FILE: Record<string, string> = {
+  "bastion-host.ts": "bastion-host",
   "cluster.ts": "cluster",
   "cluster-manager.ts": "cluster-manager",
   "scheduler.ts": "scheduler",
@@ -92,7 +93,7 @@ test("every stack that reads a container input is a known one", () => {
   // A new reader that this file does not know about would not be covered by the selection tests
   // below, so discovering one takes this red rather than passing silently.
   const files = readerStackFiles();
-  assert.deepEqual(files, ["cluster-manager.ts", "scheduler.ts", "vdc.ts"]);
+  assert.deepEqual(files, ["bastion-host.ts", "cluster-manager.ts", "scheduler.ts", "vdc.ts"]);
   for (const file of files) {
     assert.ok(MODULE_NAME_BY_STACK_FILE[file] !== undefined, `${file} has no module name mapping`);
   }
