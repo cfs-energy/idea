@@ -235,19 +235,21 @@ export IDEA_DEV_MODE=true
 `npm ci` has to have been run at least once; developer mode fails with an explicit
 message if `node_modules` is missing.
 
-## Publishing the container images
+## Publishing the container image
 
 The Build and Push workflow in `.github/workflows/build_push.yaml` publishes the
-images, and the release executables for the deploy tool.
+control-plane image, and the release executables for the deploy tool.
 
 ### Normal path
 
 Merging to `main` runs the workflow. It builds every Python module, assumes the OIDC
 role held in the `ECR_ROLE` repository secret, then builds and pushes
-`idea-scheduler-pbs` followed by `idea-control-plane` to `public.ecr.aws/s5o2b4m0`.
-The control-plane image gets three tags: the contents of `IDEA_VERSION.txt`, the same
-value prefixed with `v`, and `latest`. The scheduler image gets the `v` tag only,
-because the control-plane build consumes it by that exact reference.
+`idea-control-plane` to `public.ecr.aws/s5o2b4m0` on the arm64 runner. OpenPBS is
+compiled in a cached stage of that image. A temporary tag is pushed first; the
+OpenPBS version, `ideactl about`, and `config generate` smoke checks run against its
+digest. After they pass, that exact digest gets three tags: the contents of
+`IDEA_VERSION.txt`, the same value prefixed with `v`, and `latest`. An existing
+release stops publication.
 
 ### Rerun path
 
@@ -258,18 +260,17 @@ publishing by hand:
 gh workflow run build_push.yaml --ref main
 ```
 
-Three inputs change the target. `ecr_repository` selects the registry, and
-`control_plane_image_name` and `scheduler_image_name` select the repositories within
-it. From a ref other than `main` the workflow stops immediately unless both image
-names are set, so a branch dispatch cannot overwrite the released images:
+Two inputs change the target. `ecr_repository` selects the registry, and
+`control_plane_image_name` selects the repository within it. From a ref other than
+`main` the workflow stops immediately unless the image name is set, so a branch
+dispatch must explicitly select its target repository:
 
 ```bash
 gh workflow run build_push.yaml --ref release-26.09.0 \
-  -f control_plane_image_name=idea-control-plane-ci-test \
-  -f scheduler_image_name=idea-scheduler-pbs-ci-test
+  -f control_plane_image_name=idea-control-plane-ci-test
 ```
 
-The named repositories have to exist already, because ECR Public does not create one
+The named repository has to exist already, because ECR Public does not create one
 on push. Delete a throwaway repository once the check is finished.
 
 ### Emergency path

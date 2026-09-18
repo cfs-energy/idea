@@ -6,6 +6,9 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 
 ## [Unreleased]
 
+### **🔧 Improvements**
+* **Container builds**: OpenPBS compiles in a cached stage of `idea-control-plane`, the only published image. Release builds smoke-test OpenPBS and ideactl in that image before promoting its exact digest to the version tags and `latest`
+
 ### **🐛 Bug Fixes**
 * **Upgrade read-back**: The completion verification reads each deployed stack's template and accepts rows the stack no longer publishes (the metrics stack drops `metrics.cloudwatch.dashboard_arn` once the provider is DogStatsD), instead of stopping a finished upgrade at the read-back
 * **Termination protection warning**: A run that stops after deployment names only instances that still exist, not the ones the deployment replaced

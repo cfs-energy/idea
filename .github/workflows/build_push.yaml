@@ -13,12 +13,7 @@ on:
         default: 'public.ecr.aws/s5o2b4m0'
         type: string
       control_plane_image_name:
-        description: 'Repository name for the control-plane image. Leave empty for the released image. A non-main dispatch must set this and scheduler_image_name.'
-        required: false
-        default: ''
-        type: string
-      scheduler_image_name:
-        description: 'Repository name for the scheduler image. Leave empty for the released image. A non-main dispatch must set this and control_plane_image_name.'
+        description: 'Repository name for the control-plane image. Leave empty for the released image. A non-main dispatch must set this input.'
         required: false
         default: ''
         type: string
@@ -231,13 +226,12 @@ jobs:
       id-token: write
       contents: read
     steps:
-      - name: Validate the image names
+      - name: Validate the image name
         env:
           CONTROL_PLANE_IMAGE_NAME: ${{ github.event.inputs.control_plane_image_name }}
-          SCHEDULER_IMAGE_NAME: ${{ github.event.inputs.scheduler_image_name }}
         run: |
-          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$GITHUB_REF_NAME" != "main" ] && { [ -z "$CONTROL_PLANE_IMAGE_NAME" ] || [ -z "$SCHEDULER_IMAGE_NAME" ]; }; then
-            echo "::error::A dispatch from $GITHUB_REF_NAME must set both control_plane_image_name and scheduler_image_name, or it would overwrite released images from an unmerged ref."
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$GITHUB_REF_NAME" != "main" ] && [ -z "$CONTROL_PLANE_IMAGE_NAME" ]; then
+            echo "::error::A dispatch from $GITHUB_REF_NAME must set control_plane_image_name, or it would overwrite released images from an unmerged ref."
             exit 1
           fi
       - uses: actions/checkout@v7
@@ -292,12 +286,22 @@ jobs:
           sudo apt-get install -y -q amazon-ecr-credential-helper
           mkdir -p ~/.docker
           printf '{"credHelpers":{"public.ecr.aws":"ecr-login"}}\n' > ~/.docker/config.json
-      - name: Build and test temporary images
+      - name: Expose the build cache runtime
+        # Shell buildx commands need the cache credentials provided to JavaScript actions.
+        uses: actions/github-script@v8
+        with:
+          script: |
+            for (const name of ['ACTIONS_RUNTIME_TOKEN', 'ACTIONS_RESULTS_URL']) {
+              const value = process.env[name];
+              if (!value) throw new Error(`Missing ${name}`);
+              if (name === 'ACTIONS_RUNTIME_TOKEN') core.setSecret(value);
+              core.exportVariable(name, value);
+            }
+      - name: Build and test temporary image
         env:
           GH_TOKEN: ${{ github.token }}
           ECR_REGISTRY: ${{ github.event.inputs.ecr_repository }}
           CONTROL_PLANE_IMAGE_NAME: ${{ github.event.inputs.control_plane_image_name || 'idea-control-plane' }}
-          SCHEDULER_IMAGE_NAME: ${{ github.event.inputs.scheduler_image_name || 'idea-scheduler-pbs' }}
         run: |
           set -euo pipefail
           bash source/idea/ideactl/scripts/assert-new-release.sh
@@ -309,26 +313,15 @@ jobs:
             echo "::error::Could not determine the public registry from idea-admin.sh."
             exit 1
           fi
-          cp "dist/all-${VERSION}.tar.gz" "deployment/ecr/idea-scheduler-pbs/all-${VERSION}.tar.gz"
           cp "dist/all-${VERSION}.tar.gz" "deployment/ecr/idea-control-plane/all-${VERSION}.tar.gz"
           cp "dist/idea-dcv-connection-gateway-${VERSION}.tar.gz" "deployment/ecr/idea-control-plane/idea-dcv-connection-gateway-${VERSION}.tar.gz"
           docker buildx create --use --platform linux/arm64 --name idea-images-builder
           docker buildx inspect --bootstrap
           docker buildx build --push --platform linux/arm64 \
             --build-arg IDEA_VERSION="${VERSION}" \
-            --cache-from type=gha,scope=idea-scheduler-pbs \
-            --cache-to type=gha,mode=max,scope=idea-scheduler-pbs \
-            --metadata-file /tmp/scheduler-image.json \
-            -t "${ECR_REGISTRY}/${SCHEDULER_IMAGE_NAME}:${TEMP_TAG}" \
-            deployment/ecr/idea-scheduler-pbs
-          SCHEDULER_DIGEST=$(jq -er '.["containerimage.digest"]' /tmp/scheduler-image.json)
-          SCHEDULER_REF="${ECR_REGISTRY}/${SCHEDULER_IMAGE_NAME}@${SCHEDULER_DIGEST}"
-          docker buildx build --push --platform linux/arm64 \
-            --build-arg IDEA_VERSION="${VERSION}" \
-            --build-arg PBS_IMAGE="${SCHEDULER_REF}" \
             --build-context dcv-packages=/tmp/dcv-packages \
-            --cache-from type=gha,scope=idea-control-plane \
-            --cache-to type=gha,mode=max,scope=idea-control-plane \
+            --cache-from type=gha,version=2,scope=idea-control-plane \
+            --cache-to type=gha,version=2,mode=max,scope=idea-control-plane \
             --metadata-file /tmp/control-plane-image.json \
             -t "${ECR_REGISTRY}/${CONTROL_PLANE_IMAGE_NAME}:${TEMP_TAG}" \
             -f deployment/ecr/idea-control-plane/Dockerfile .
@@ -340,7 +333,7 @@ jobs:
           IMAGE="${ECR_REGISTRY}/${CONTROL_PLANE_IMAGE_NAME}@${CONTROL_PLANE_DIGEST}"
           # The pbs_server wrapper needs the /etc/pbs.conf the scheduler role writes at start;
           # the binary answers alone. The runner's own user keeps the generated files removable.
-          docker run --rm --entrypoint /bin/bash "$SCHEDULER_REF" -c '/opt/pbs/sbin/pbs_server.bin --version'
+          docker run --rm --entrypoint /bin/bash "$IMAGE" -c '/opt/pbs/sbin/pbs_server.bin --version'
           docker run --rm --user "$(id -u):$(id -g)" --env HOME=/tmp --workdir /tmp/work "$IMAGE" ideactl about
           docker run --rm --user "$(id -u):$(id -g)" --env HOME=/tmp \
             --workdir /tmp/work \
@@ -353,13 +346,11 @@ jobs:
               --force
           test -s "$SMOKE_ROOT/config/config/idea.yml"
           bash source/idea/ideactl/scripts/assert-new-release.sh
-          for REF in "$SCHEDULER_REF" "$IMAGE"; do
-            REPOSITORY="${REF%@*}"
-            docker buildx imagetools create \
-              --tag "${REPOSITORY}:v${VERSION}" \
-              --tag "${REPOSITORY}:${VERSION}" \
-              --tag "${REPOSITORY}:latest" "$REF"
-          done
+          REPOSITORY="${IMAGE%@*}"
+          docker buildx imagetools create \
+            --tag "${REPOSITORY}:v${VERSION}" \
+            --tag "${REPOSITORY}:${VERSION}" \
+            --tag "${REPOSITORY}:latest" "$IMAGE"
   publish_ideactl_artifacts:
     if: github.event_name == 'push' && github.ref_name == 'main'
     needs:

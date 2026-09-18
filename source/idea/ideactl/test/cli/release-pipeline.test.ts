@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -15,7 +15,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../..');
 const workflowText = readFileSync(join(root, '.github/workflows/build_push.yaml'), 'utf8');
 const workflow = load(workflowText) as { jobs: Record<string, Job>; concurrency: { group: string; 'cancel-in-progress': boolean } };
 const guard = join(root, 'source/idea/ideactl/scripts/assert-new-release.sh');
-const imageScript = workflow.jobs.build_push_ideactl?.steps?.find((step) => step.name === 'Build and test temporary images')?.run;
+const imageScript = workflow.jobs.build_push_ideactl?.steps?.find((step) => step.name === 'Build and test temporary image')?.run;
 assert.ok(imageScript);
 
 test('publication requires both validation workflows and extracted artifact smoke tests', () => {
@@ -51,7 +51,7 @@ test('native runners cover each release target and publication includes Windows 
   ]);
   const windows = workflow.jobs.build_ideactl_windows_artifact;
   assert.equal(windows?.['runs-on'], 'windows-2025');
-  assert.equal(workflow.jobs.build_push_ideactl?.['runs-on'], 'ubuntu-24.04-arm', 'the images are built natively, never through emulation');
+  assert.equal(workflow.jobs.build_push_ideactl?.['runs-on'], 'ubuntu-24.04-arm', 'the image is built natively, never through emulation');
   const setup = readFileSync(join(root, '.github/actions/setup_dev_environment/action.yml'), 'utf8');
   assert.match(setup, /key: venv-\$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}-/, 'the virtual environment cache is per architecture');
   assert.doesNotMatch(setup, /linux-x86_64/, 'the AWS CLI download follows the runner architecture');
@@ -92,7 +92,7 @@ if (name === 'gh') {
   console.error(mode === 'unauthorized' ? 'gh: Forbidden (HTTP 403)' : mode === 'network' ? 'connection failed' : 'gh: Not Found (HTTP 404)');
   process.exit(1);
 }
-if (name === 'jq') console.log(args.at(-1).includes('scheduler') ? 'sha256:scheduler' : 'sha256:control');
+if (name === 'jq') console.log('sha256:control');
 if (name === 'docker' && args[0] === 'buildx' && args[1] === 'build' && mode === 'build-failure') process.exit(1);
 if (name === 'docker' && args[0] === 'run') {
   if (mode === 'smoke-failure' ||
@@ -105,17 +105,17 @@ if (name === 'docker' && args[0] === 'run') {
 }
 `;
     for (const name of ['gh', 'aws', 'docker', 'jq']) writeFileSync(join(bin, name), stub, { mode: 0o755 });
-    for (const name of ['dist', 'deployment/ecr/idea-scheduler-pbs', 'deployment/ecr/idea-control-plane', 'source/idea/ideactl/scripts', 'source/idea/ideactl/test/cli']) mkdirSync(join(directory, name), { recursive: true });
+    for (const name of ['dist', 'deployment/ecr/idea-control-plane', 'source/idea/ideactl/scripts', 'source/idea/ideactl/test/cli']) mkdirSync(join(directory, name), { recursive: true });
     cpSync(guard, join(directory, 'source/idea/ideactl/scripts/assert-new-release.sh'));
     writeFileSync(join(directory, 'IDEA_VERSION.txt'), '1.2.3\n');
     writeFileSync(join(directory, 'dist/all-1.2.3.tar.gz'), 'archive');
     writeFileSync(join(directory, 'dist/idea-dcv-connection-gateway-1.2.3.tar.gz'), 'archive');
     if (mode !== 'missing-fixture') writeFileSync(join(directory, 'source/idea/ideactl/test/cli/shell-path-values.yml'), 'fixture');
-    const result = spawnSync('bash', ['-c', script], {
+    const result: SpawnSyncReturns<string> = spawnSync('bash', ['-c', script], {
       cwd: directory, encoding: 'utf8',
       env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, COMMAND_LOG: log, RELEASE_TEST_MODE: mode,
         GITHUB_REPOSITORY: 'example/project', GITHUB_SHA: 'test-commit', GITHUB_RUN_ID: '5', GITHUB_RUN_ATTEMPT: '2',
-        ECR_REGISTRY: 'registry.example.invalid', SCHEDULER_IMAGE_NAME: 'scheduler', CONTROL_PLANE_IMAGE_NAME: 'control' },
+        ECR_REGISTRY: 'registry.example.invalid', CONTROL_PLANE_IMAGE_NAME: 'control' },
     });
     return { status: result.status, output: result.stdout + result.stderr, commands: readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line) as string[]) };
   } finally {
@@ -133,26 +133,56 @@ test('only an explicit missing release permits publication', () => {
   }
 });
 
-test('temporary images are smoked natively before their exact digests are promoted', () => {
+test('the temporary image is smoked natively before its exact digest is promoted', () => {
   const result = exercise('absent', imageScript);
   assert.equal(result.status, 0, result.output);
   const builds = result.commands.filter((args) => args[0] === 'docker' && args[2] === 'build');
-  assert.equal(builds.length, 2);
+  assert.equal(builds.length, 1);
   for (const build of builds) {
     assert.equal(build.filter((arg) => arg === '-t').length, 1);
     assert.match(build[build.indexOf('-t') + 1] ?? '', /:build-test-commit-5-2$/);
   }
-  assert.ok(builds[1]?.includes('PBS_IMAGE=registry.example.invalid/scheduler@sha256:scheduler'));
+  assert.ok(builds[0]?.includes('linux/arm64'));
+  assert.ok(builds[0]?.includes('type=gha,version=2,mode=max,scope=idea-control-plane'), 'intermediate stages are cached');
   const smoke = result.commands.filter((args) => args[1] === 'run');
   assert.equal(smoke.length, 3);
-  assert.ok(smoke.every((args) => !args.includes('--platform')), 'the images are built and smoked natively on the arm64 runner');
+  assert.ok(smoke.every((args) => !args.includes('--platform')), 'the image is built and smoked natively on the arm64 runner');
+  assert.ok(smoke.every((args) => args.includes('registry.example.invalid/control@sha256:control')));
+  assert.ok(smoke[0]?.includes('/opt/pbs/sbin/pbs_server.bin --version'));
+  assert.deepEqual(smoke[1]?.slice(-2), ['ideactl', 'about']);
+  assert.ok(smoke[2]?.includes('generate'));
   const promotions = result.commands.filter((args) => args[2] === 'imagetools');
-  assert.equal(promotions.length, 2);
-  for (const [index, name] of ['scheduler', 'control'].entries()) {
-    const promotion = promotions[index];
-    assert.ok(promotion);
-    assert.deepEqual(promotion.slice(4), ['--tag', `registry.example.invalid/${name}:v1.2.3`, '--tag', `registry.example.invalid/${name}:1.2.3`, '--tag', `registry.example.invalid/${name}:latest`, `registry.example.invalid/${name}@sha256:${name}`]);
-    assert.ok(result.commands.indexOf(promotion) > result.commands.indexOf(smoke.at(-1)!));
+  assert.equal(promotions.length, 1);
+  const promotion = promotions[0]!;
+  assert.deepEqual(promotion.slice(4), ['--tag', 'registry.example.invalid/control:v1.2.3', '--tag', 'registry.example.invalid/control:1.2.3', '--tag', 'registry.example.invalid/control:latest', 'registry.example.invalid/control@sha256:control']);
+  assert.ok(result.commands.indexOf(promotion) > result.commands.indexOf(smoke.at(-1)!));
+});
+
+test('pull requests smoke OpenPBS and ideactl in the single deployment image', () => {
+  const script = readFileSync(join(root, 'scripts/ci-smoke-images.sh'), 'utf8');
+  const result = exercise('absent', script);
+  assert.equal(result.status, 0, result.output);
+  const smoke = result.commands.filter((args) => args[1] === 'run');
+  assert.equal(smoke.length, 3);
+  assert.ok(smoke.every((args) => args.includes('idea-control-plane-ci:latest')));
+  assert.ok(smoke[0]?.includes('/opt/pbs/sbin/pbs_server.bin --version'));
+  for (const mode of ['smoke-failure', 'control-failure', 'config-failure']) {
+    assert.notEqual(exercise(mode, script).status, 0, mode);
+  }
+});
+
+test('branch dispatch requires an explicit control-plane repository', () => {
+  const script = workflow.jobs.build_push_ideactl?.steps?.find((step) => step.name === 'Validate the image name')?.run;
+  assert.ok(script);
+  for (const [event, ref, name, status] of [
+    ['push', 'main', '', 0], ['workflow_dispatch', 'main', '', 0],
+    ['workflow_dispatch', 'patch', '', 1], ['workflow_dispatch', 'patch', 'control-test', 0],
+  ] as const) {
+    const result: SpawnSyncReturns<string> = spawnSync('bash', ['-c', script], {
+      encoding: 'utf8',
+      env: { ...process.env, GITHUB_EVENT_NAME: event, GITHUB_REF_NAME: ref, CONTROL_PLANE_IMAGE_NAME: name },
+    });
+    assert.equal(result.status, status, result.stderr);
   }
 });
 

@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 
 const images = resolve(import.meta.dirname, "../../../../../deployment/ecr");
-for (const script of ["idea-control-plane/roles/scheduler.sh", "idea-scheduler-pbs/entrypoint.sh"]) {
+for (const script of ["idea-control-plane/roles/scheduler.sh"]) {
   for (const state of ["fresh", "existing", "marked", "habitat-failure"]) {
     test(`${script}: ${state}`, () => {
       const work = mkdtempSync(join(tmpdir(), "scheduler-settings-"));
