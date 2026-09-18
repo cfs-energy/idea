@@ -466,12 +466,12 @@ SocaInputParamSpec:
         eq: dogstatsd
     - name: datadog_agent_image
       title: "Datadog Agent Image"
-      description: "Enter the digest-pinned Datadog agent image in a private ECR repository"
+      description: "Leave empty for the release's official Datadog agent image (public ECR, digest-pinned), or enter another digest-pinned image reference"
       param_type: text
       data_type: str
       help_text: ~
       validate:
-        required: yes
+        required: no
       when:
         param: metrics_provider
         eq: dogstatsd

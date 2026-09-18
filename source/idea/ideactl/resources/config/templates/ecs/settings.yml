@@ -43,8 +43,8 @@ tasks:
     desired: 2
 
 # The metrics agent daemon on every host: on when the modules send to it (metrics_provider
-# dogstatsd), from a digest-pinned image in a private ECR repository, with the API key read from
-# Secrets Manager when a task starts.
+# dogstatsd), from Datadog's official public ECR image pinned by digest unless the values name
+# another digest-pinned image, with the API key read from Secrets Manager when a task starts.
 datadog:
   enabled: {{ datadog_agent | default(false) | lower }}
   api_key_secret_arn: {{ datadog_api_key_secret_arn or '~' }}

@@ -5,7 +5,7 @@ import { Annotations, App, Stack } from "aws-cdk-lib";
 import { InvalidArgumentError, type Command } from "commander";
 import { EC2Client, DescribeSubnetsCommand, DescribeRouteTablesCommand, type Subnet, type RouteTable } from "@aws-sdk/client-ec2";
 import { CostCollectorStack, type CostCollectorNetwork, type CostCollectorSettings } from "../../cdk/stacks/cost-collector.ts";
-import { requirePrivateEcrDigest } from "../../cdk/constructs/container.ts";
+import { DATADOG_AGENT_IMAGE, requireDigestPinnedImage } from "../../config/datadog-agent.ts";
 import { awsClientOptions } from "../aws-client-options.ts";
 import { cdkBin, CDK_DEPLOY_CHANGE_SET_NAME, ChangeSetRefused, evaluateChangeSet, ExitWithCode, type Deps } from "../cdk-invoker.ts";
 
@@ -67,7 +67,7 @@ export const readCollectorNetwork: NetworkReader = async (options) => {
 };
 
 export async function deployCostCollector(deps: Deps, options: CostCollectorOptions, readNetwork: NetworkReader): Promise<void> {
-  requirePrivateEcrDigest(options.agentImage, "agent image");
+  requireDigestPinnedImage(options.agentImage, "agent image");
   if (options.awsRegion.startsWith("us-gov-") || options.awsRegion.startsWith("cn-")) {
     throw new Error("Cost Explorer requires a commercial AWS region");
   }
@@ -156,7 +156,7 @@ export function registerCostCollectorCommands(program: Command, deps: Deps, read
   target("deploy")
     .requiredOption("--cluster-name <name>", "idea_cluster metric tag value")
     .requiredOption("--control-plane-image <image>", "Control-plane image")
-    .requiredOption("--agent-image <image>", "Digest-pinned private ECR Datadog agent image")
+    .option("--agent-image <image>", "Digest-pinned Datadog agent image. Default: the release's official public ECR image", DATADOG_AGENT_IMAGE)
     .requiredOption("--datadog-api-key-secret-arn <arn>", "Datadog API key secret ARN")
     .requiredOption("--subnet-ids <ids...>", "Subnets in one VPC, all public or all private")
     .option("--interval-hours <hours>", "Collection interval", positiveInteger, 6)

@@ -64,6 +64,9 @@ export const GENERATED: ConfigEntry[] = [
   { key: "vdc.dcv_connection_gateway.autoscaling.instance_type", value: "m6i.large" },
   { key: "bastion-host.instance_type", value: "m6i.large" },
   { key: "cluster.iam.ec2_managed_policy_arns", value: [] },
+  { key: "ecs.datadog.enabled", value: true },
+  { key: "metrics.provider", value: "dogstatsd" },
+  { key: "metrics.dogstatsd.url", value: "unix:///var/run/datadog/dsd.socket" },
 ];
 
 /**
@@ -265,6 +268,14 @@ export const EDITS: OperatorEdit[] = [
     operatorValue: OPERATOR_AMI,
     predictedSurvive: false,
     note: "Unrecognised custom image. Phase 3 writes the release AMI.",
+  },
+  {
+    id: "metrics-provider-cutover",
+    editClass: "PROVIDER_CUTOVER",
+    key: "metrics.provider",
+    operatorValue: "cloudwatch",
+    predictedSurvive: false,
+    note: "The values file moves metrics to the agent daemon. Written after Phase 3; never gated as drift.",
   },
   {
     id: "compute-built-image",

@@ -3,6 +3,7 @@ import test from "node:test";
 import { App } from "aws-cdk-lib";
 import { Template, Match } from "aws-cdk-lib/assertions";
 import { CostCollectorStack } from "../../src/cdk/stacks/cost-collector.ts";
+import { DATADOG_AGENT_IMAGE } from "../../src/config/datadog-agent.ts";
 
 const props = {
   env: { account: "123456789012", region: "us-east-1" },
@@ -108,10 +109,17 @@ test("private subnets do not get public IPs and overrides reach the collector", 
 });
 
 for (const agentImage of ["datadog/agent:latest", "public.ecr.aws/datadog/agent:latest", props.agentImage.replace(/@.*/, ":latest"), props.agentImage.slice(0, -1)]) {
-  test(`rejects unpinned or nonprivate agent image ${agentImage}`, () => {
-    assert.throws(() => template({ agentImage }), /digest-pinned private ECR/);
+  test(`rejects unpinned agent image ${agentImage}`, () => {
+    assert.throws(() => template({ agentImage }), /digest-pinned image reference/);
   });
 }
+
+test("accepts Datadog's official public ECR image when it is digest-pinned", () => {
+  const rendered = template({ agentImage: DATADOG_AGENT_IMAGE });
+  rendered.hasResourceProperties("AWS::ECS::TaskDefinition", {
+    ContainerDefinitions: Match.arrayWith([Match.objectLike({ Image: DATADOG_AGENT_IMAGE })]),
+  });
+});
 
 test("invalid schedules and empty subnet lists fail synthesis", () => {
   for (const intervalHours of [0, -1, 1.5, NaN]) assert.throws(() => template({ intervalHours }), /positive integers/);

@@ -890,7 +890,7 @@ test("5. makes host-level observability explicit and secret-scoped", async () =>
         datadogEnabled: true,
         datadogImage: "public.ecr.aws/example/agent:latest",
       }),
-    /digest-pinned private ECR image/,
+    /digest-pinned image reference/,
   );
 
   const enabledResources = resourcesOf(synth({ datadogEnabled: true }));

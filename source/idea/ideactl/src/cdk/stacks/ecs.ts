@@ -17,7 +17,7 @@ import { IdeaBaseStack } from "../base-stack.ts";
 import { CustomResourceProvider, LOG_RETENTION_DAYS } from "../constructs/common.ts";
 import {
   DOGSTATSD_SOCKET,
-  requirePrivateEcrDigest,
+  requireDigestPinnedImage,
   buildExecutionRole,
   grantInjectedSecret,
   ecsTasksPrincipal,
@@ -446,9 +446,9 @@ export class EcsStack extends IdeaBaseStack {
     ];
   }
 
-  /** Returns a digest-pinned image hosted in a private ECR repository. */
+  /** Returns the agent image, which must be digest-pinned: the daemon holds the host's Docker socket. */
   private datadogImage(): string {
-    return requirePrivateEcrDigest(this.requiredString("ecs.datadog.image"), "ecs.datadog.image");
+    return requireDigestPinnedImage(this.requiredString("ecs.datadog.image"), "ecs.datadog.image");
   }
 
   /** Creates the optional host-network observability daemon. */

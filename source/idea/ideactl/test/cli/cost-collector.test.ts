@@ -116,7 +116,7 @@ test("required flags and positive schedule values are enforced", async () => {
 
 test("invalid image and noncommercial region fail before network reads", async () => {
   const noRead = async (): Promise<never> => { throw new Error("network should not be read"); };
-  await assert.rejects(deployCostCollector(fakeDeps(), { ...options, agentImage: "agent:latest" }, noRead), /private ECR/);
+  await assert.rejects(deployCostCollector(fakeDeps(), { ...options, agentImage: "agent:latest" }, noRead), /digest-pinned image reference/);
   for (const awsRegion of ["us-gov-west-1", "cn-north-1"]) {
     await assert.rejects(deployCostCollector(fakeDeps(), { ...options, awsRegion }, noRead), /commercial AWS/);
   }
