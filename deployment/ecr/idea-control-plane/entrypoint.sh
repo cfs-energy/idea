@@ -5,8 +5,8 @@ set -euo pipefail
 
 # A role passed as the first argument overrides IDEA_CONTAINER_ROLE.
 case "${1:-}" in
-  ideactl|cost-metrics|cluster-manager|vdc|scheduler|dcv-broker|dcv-gateway) ROLE="$1"; shift ;;
-  *) ROLE="${IDEA_CONTAINER_ROLE:?IDEA_CONTAINER_ROLE is required: ideactl|cost-metrics|cluster-manager|vdc|scheduler|dcv-broker|dcv-gateway}" ;;
+  ideactl|cost-metrics|cluster-manager|vdc|scheduler|dcv-broker|dcv-gateway|bastion-host) ROLE="$1"; shift ;;
+  *) ROLE="${IDEA_CONTAINER_ROLE:?IDEA_CONTAINER_ROLE is required: ideactl|cost-metrics|cluster-manager|vdc|scheduler|dcv-broker|dcv-gateway|bastion-host}" ;;
 esac
 
 # Module packages share an ideaserver command, so run each module's main directly.
@@ -72,6 +72,7 @@ case "${ROLE}" in
   vdc)             run_module ideavirtualdesktopcontroller ;;
   scheduler)       exec /opt/idea/roles/scheduler.sh ;;
   dcv-broker)      exec /opt/idea/roles/broker.sh ;;
+  bastion-host)    exec /opt/idea/roles/bastion.sh ;;
   dcv-gateway)     exec /opt/idea/roles/gateway.sh ;;
   *) echo "[entrypoint] unknown IDEA_CONTAINER_ROLE=${ROLE}" >&2; exit 1 ;;
 esac

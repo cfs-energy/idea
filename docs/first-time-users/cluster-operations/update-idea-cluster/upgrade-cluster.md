@@ -26,15 +26,13 @@ holds the previous release's generated defaults in many rows (GPU driver version
 lists, DCV package URLs), which the preview lists as differing from generated configuration,
 so a historical run needs `--accept-config-drift` after reviewing that preview. An operator
 pointing `ecs.image` at a private registry before the run (partitions without a public
-registry) keeps that row; the run registers the container module around it. The AMI and
-instance-type moves replace the bastion instance, which the change-set guard refuses until the
-run is given `--allow-replacement bastionhostinstance`. The scheduler's old periodic-check interval
+registry) keeps that row; the run registers the container module around it. With `enable_ecs: true`, the bastion instance is retired into an SSH service on the shared host pool; no bastion replacement override is needed. Public clusters receive fixed Elastic IPs on a dedicated NLB, and SSH host keys persist in Secrets Manager. The cutover changes the address and fingerprint once; later task replacements preserve both. Private clusters use an internal NLB. Existing SSH sessions must reconnect after task replacement. With containers disabled, AMI and instance-type moves still replace the host bastion and require `--allow-replacement bastionhostinstance`. The scheduler's old periodic-check interval
 is copied to the reconciler interval only if the latter is absent. Conflicts are reported and
 preserved, and the old key remains for older running code. Existing lists keep their custom values.
 Before success, settings and deployed module versions are read back. Rows a stack published before
 the upgrade must still exist unless the deployed template no longer names them in its settings
 resource (the metrics stack drops its CloudWatch dashboard once the provider is DogStatsD), which the
-read-back reports and accepts. A failed verification requires repair and a rerun; it does not reopen
+read-back reports and accepts. This includes the retired bastion instance ID, private IP and instance-profile ARN; its module ID and stack remain in place. A failed verification requires repair and a rerun; it does not reopen
 submission.
 
 ### values.yml Restore and Save

@@ -24,6 +24,8 @@ import botocore.exceptions
 import secrets
 import string
 import copy
+from types import SimpleNamespace
+from .task_directory_identity import verify_bastion_task
 
 
 # Fallback value - seconds to cache a domain discovery (domain controller IP addresses)
@@ -113,38 +115,54 @@ class PresetComputeHelper:
                 message='Unable to verify cluster node identity: Invalid SenderId',
             )
 
-        instance_id = sender_id_tokens[1]
-        try:
-            ec2_instances = self.context.aws_util().ec2_describe_instances(
-                filters=[
-                    {'Name': 'instance-id', 'Values': [instance_id]},
-                    {'Name': 'instance-state-name', 'Values': ['running']},
-                ]
-            )
-        except botocore.exceptions.ClientError as e:
-            error_code = str(e.response['Error']['Code'])
-            if error_code.startswith('InvalidInstanceID'):
+        task_arn = Utils.get_value_as_string('task_arn', payload)
+        if task_arn:
+            try:
+                verify_bastion_task(self.context, sender_id, task_arn)
+            except ValueError as error:
                 raise exceptions.soca_exception(
                     error_code=errorcodes.AD_AUTOMATION_PRESET_COMPUTER_FAILED,
-                    message=f'Unable to verify cluster node identity: Invalid InstanceId - {instance_id}',
-                )
-            else:
-                # for all other errors, retry
-                raise e
-
-        if len(ec2_instances) == 0:
-            raise exceptions.soca_exception(
-                error_code=errorcodes.AD_AUTOMATION_PRESET_COMPUTER_FAILED,
-                message=f'Unable to verify cluster node identity: InstanceId = {instance_id} not found',
+                    message=str(error),
+                ) from error
+            # The full sender identity also scopes the task's DynamoDB read permission.
+            self.instance_id = sender_id
+            self.ec2_instance = SimpleNamespace(
+                soca_node_type='infra',
+                idea_module_id=self.context.config().get_module_id('bastion-host'),
             )
+        else:
+            instance_id = sender_id_tokens[1]
+            try:
+                ec2_instances = self.context.aws_util().ec2_describe_instances(
+                    filters=[
+                        {'Name': 'instance-id', 'Values': [instance_id]},
+                        {'Name': 'instance-state-name', 'Values': ['running']},
+                    ]
+                )
+            except botocore.exceptions.ClientError as e:
+                error_code = str(e.response['Error']['Code'])
+                if error_code.startswith('InvalidInstanceID'):
+                    raise exceptions.soca_exception(
+                        error_code=errorcodes.AD_AUTOMATION_PRESET_COMPUTER_FAILED,
+                        message=f'Unable to verify cluster node identity: Invalid InstanceId - {instance_id}',
+                    )
+                else:
+                    # for all other errors, retry
+                    raise e
 
-        self.instance_id = instance_id
+            if len(ec2_instances) == 0:
+                raise exceptions.soca_exception(
+                    error_code=errorcodes.AD_AUTOMATION_PRESET_COMPUTER_FAILED,
+                    message=f'Unable to verify cluster node identity: InstanceId = {instance_id} not found',
+                )
 
-        self.ec2_instance = ec2_instances[0]
+            self.instance_id = instance_id
+
+            self.ec2_instance = ec2_instances[0]
 
         # for Windows instances, there is no way to fetch the hostname from describe instances API.
         # request payload from windows instances will contain hostname. e.g. EC2AMAZ-6S29U5P
-        hostname = Utils.get_value_as_string('hostname', payload)
+        hostname = None if task_arn else Utils.get_value_as_string('hostname', payload)
         if Utils.is_empty(hostname):
             # Generate and make use of an IDEA hostname
             hostname_data = f'{self.aws_region}|{self.aws_account}|{self.cluster_name}|{self.instance_id}'

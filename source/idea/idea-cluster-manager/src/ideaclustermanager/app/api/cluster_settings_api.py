@@ -72,6 +72,7 @@ USER_VISIBLE_MODULE_SETTINGS: Dict[str, List[str]] = {
         'public',
         'public_ip',
         'private_ip',
+        'private_dns_name',
     ],
     constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER: [
         'dcv_session.working_hours.start_up_time',

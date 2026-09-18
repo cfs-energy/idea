@@ -1454,6 +1454,8 @@ async function verifyUpgradeCompletion(
       // The container scheduler no longer publishes its retired host identity.
       if (schedulerCutover && stack.target === undefined && modules.some((module) => module.module_id === stack.moduleId && module.name === "scheduler") && ["instance_id", "private_ip"].includes(key)) continue;
       const fullKey = `${stack.moduleId}.${key}`;
+      // The bastion keeps its DNS record and module stack during cutover. Its instance rows
+      // disappear through the settings delta, so the deployed template is the completion contract.
       if (publishedNow !== undefined && !publishedNow.has(key)) {
         deps.out(`${fullKey} is no longer published by the deployed ${stackName} stack`);
         continue;

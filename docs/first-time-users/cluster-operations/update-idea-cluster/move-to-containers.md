@@ -1,6 +1,6 @@
 # Move the control plane to containers
 
-From this release the cluster manager, the scheduler and the virtual desktop controller with its DCV broker and connection gateway can run as container tasks on a small pool of hosts, instead of one host each. A cluster moves over once, with `upgrade-cluster`; later upgrades replace tasks while preserving running jobs, with a brief scheduler submission/API interruption. This page is the runbook for that one move.
+From this release the bastion, the cluster manager, the scheduler and the virtual desktop controller with its DCV broker and connection gateway can run as container tasks on a small pool of hosts, instead of one host each. A cluster moves over once, with `upgrade-cluster`; later upgrades replace tasks while preserving running jobs, with a brief scheduler submission/API interruption. This page is the runbook for that one move.
 
 ## Before you start
 
@@ -80,13 +80,16 @@ Put `metrics_provider: dogstatsd` and `datadog_api_key_secret_arn` in `values.ym
 * Base OS and end-of-life validation, configuration preview and applicable confirmations follow. Maintenance has already been written, so a refusal here can leave submission closed until a successful retry.
 * The scheduler's DNS record is retained with a policy-only stack update before the upgrade phases, so removing the host does not delete its name.
 * Global settings are regenerated, full synchronization adds missing rows and registers ECS, and Phase 3 applies the previewed AMI/settings updates. ECS module-set registration remains held until cluster-manager records the target release as deployed and the deployment completes.
-* Stacks deploy in dependency order. The new `ecs` stack creates the host pool. Cluster-manager cuts its load balancer rules over to the container service; the portal is unavailable for a few minutes. The desktop stack moves the controller, broker and gateway to services. The scheduler starts on an empty job database and retires its host. The bastion host is recreated once.
+* Stacks deploy in dependency order. The new `ecs` stack creates the host pool. Cluster-manager cuts its load balancer rules over to the container service; the portal is unavailable for a few minutes. The desktop stack moves the controller, broker and gateway to services. The scheduler starts on an empty job database and retires its host. The bastion stack retires its instance and starts an SSH service behind its own Network Load Balancer. Its existing private DNS record becomes an alias to that load balancer.
 * After deployment and a successful values upload, the original maintenance state is restored. A failed run retains the saved baseline for a completed retry.
 
 ## After
 
 * Job ids start again from zero, once. The scheduler's database now lives on a file system that outlives its task and preserves running jobs through later replacements.
-* The bastion has a new public address. Update anything that pinned the old one.
+* The bastion has a one-time public address and SSH fingerprint change. Each public subnet now has an Elastic IP on the SSH load balancer; `bastion-host.public_ip` and the portal show the first, and `bastion-host.public_ips` lists all of them. Update pinned addresses and verify the new fingerprint before replacing old known-host entries. Task and host-pool replacements keep these addresses and the keys in the bastion's Secrets Manager secret. A private cluster uses an internal load balancer without Elastic IPs.
+* Directory users keep their SSH keys in their shared home directories. The task runs SSSD against OpenLDAP or AD, and uses the existing AD automation service to obtain one-time machine join credentials. The cluster-manager image must therefore be upgraded before the bastion. The `ec2-user` administrator login keeps the cluster's EC2 key pair; the task reads its public key at startup. The key pair must still exist. Directory administrators and ECS Exec remain available. `show-connection-info` prints the fixed address and no instance Session Manager URL.
+* Existing SSH sessions and transfers end when their task stops; reconnect to the same address. The service defaults to two tasks, with shared host keys, so new connections can use the remaining task during replacement. Settings `ecs.tasks.bastion-host.{cpu,memory,desired}` control sizing.
+* Fail2ban is not run in the container. The existing bastion security group still restricts SSH sources, and the NLB preserves client IPs. Outbound SSH host-check behavior and the host's TCP transfer tuning carry over. `/data` and `/apps` use the shared storage mounted by the other module tasks.
 * `./idea-admin.sh check-cluster-status --cluster-name <CLUSTER_NAME> --aws-region <REGION>` checks application HTTP endpoints and the analytics dashboard. Separately check ECS desired/running counts and service events, create/connect/delete a desktop, and run the [proof matrix](../../../../source/idea/ideactl/tools/e2e/README.md) desktop and `metrics-sink` checks to verify desktop connectivity and Datadog delivery.
 
 ## Spend and storage
@@ -165,4 +168,4 @@ Write the new value into the same secret, then restart the daemon so its tasks r
 
 Point `ecs.image` at the new release's image and run `upgrade-cluster` without `--drain`. Most services roll behind their load balancer; the scheduler stops its old task before starting the replacement, briefly interrupting submissions and its API while running jobs are designed to survive on persistent PBS state.
 
-The change-set guard refuses definite replacements of any resource, conditional replacements of stateful resources, stateful removals and unrecognized custom-resource removals, with specific named exceptions such as retained task-definition revisions. Review any refusal and its data/lifecycle impact before passing `--allow-replacement <LOGICAL_ID>` for that one entry; the bastion instance is the usual case on a first move.
+The change-set guard refuses definite replacements of any resource, conditional replacements of stateful resources, stateful removals and unrecognized custom-resource removals, with specific named exceptions such as retained task-definition revisions. Review any refusal and its data/lifecycle impact before passing `--allow-replacement <LOGICAL_ID>` for that one entry. The bastion instance is removed during the move, so neither that removal nor later SSH task revisions require `--allow-replacement bastionhostinstance`. Clusters keeping `enable_ecs: false` retain the host shape and its replacement guard.

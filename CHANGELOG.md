@@ -6,6 +6,9 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 
 ## [Unreleased]
 
+### **✨ New Features**
+* **Container bastion**: With `enable_ecs: true`, the existing bastion stack runs SSH tasks on the shared ECS host pool behind a dedicated TCP Network Load Balancer. Public subnets receive fixed Elastic IPs; private clusters use an internal load balancer. SSH host keys persist in Secrets Manager, directory authentication and shared home directories carry over, and the cutover no longer needs a bastion instance replacement override. The first move changes the address and fingerprint; later task replacements preserve both, although active sessions must reconnect. Host clusters keep their existing deployment shape.
+
 ### **🔧 Improvements**
 * **Container builds**: OpenPBS compiles in a cached stage of `idea-control-plane`, the only published image. Release builds smoke-test OpenPBS and ideactl in that image before promoting its exact digest to the version tags and `latest`
 

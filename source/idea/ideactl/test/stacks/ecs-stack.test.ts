@@ -241,6 +241,7 @@ test("emits the shared capacity and nothing an application stack owns", () => {
 test("adopts existing agent log groups with 90-day retention and preserves them on deletion", () => {
   const resources = resourcesOf(synth());
   const expectedLogGroupNames = [
+    `/${CLUSTER}/bastion-host`,
     `/${CLUSTER}/cm`,
     `/${CLUSTER}/ecs/exec`,
     `/${CLUSTER}/scheduler`,

@@ -205,7 +205,7 @@ export class EcsStack extends IdeaBaseStack {
   }
 
   /**
-   * Creates or adopts every group the five application tasks write to.
+   * Creates or adopts every group the module tasks write to.
    *
    * The groups are agent-created on any cluster that has ever run hosts, and none of the module
    * stacks carries a create-or-adopt provider. This stack deploys before all of them and owns the
@@ -217,6 +217,7 @@ export class EcsStack extends IdeaBaseStack {
     const schedulerId = config.moduleId("scheduler");
     const vdcId = config.moduleId("virtual-desktop-controller");
     const groups: Array<[string, string]> = [
+      ["bastion-logs-ensure", `/${this.clusterName}/${config.getString(`global-settings.module_sets.${config.moduleSet}.bastion-host.module_id`, "bastion-host")}`],
       ["cluster-manager-logs-ensure", `/${this.clusterName}/${clusterManagerId}`],
       ["scheduler-logs-ensure", `/${this.clusterName}/${schedulerId}`],
       ["scheduler-openpbs-logs-ensure", `/${this.clusterName}/${schedulerId}/openpbs`],
@@ -339,6 +340,7 @@ export class EcsStack extends IdeaBaseStack {
       // Shared storage first: the cluster name is written last, so a host whose mounts failed
       // never registers and never receives a task.
       ...this.hostStorageCommands(),
+      "sysctl -w net.core.rmem_max=16777216 net.core.wmem_max=16777216 net.core.netdev_max_backlog=5000",
       "mkdir -p /etc/ecs",
       `echo ECS_CLUSTER=${this.ecsCluster.clusterName} >> /etc/ecs/ecs.config`,
       "echo ECS_AWSVPC_BLOCK_IMDS=true >> /etc/ecs/ecs.config",

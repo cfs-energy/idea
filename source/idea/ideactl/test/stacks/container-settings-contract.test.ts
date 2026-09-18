@@ -30,6 +30,9 @@ const templateDirectory = fileURLToPath(
 );
 
 const CONFIGURATION_KEYS = [
+  "ecs.tasks.bastion-host.cpu",
+  "ecs.tasks.bastion-host.desired",
+  "ecs.tasks.bastion-host.memory",
   "ecs.datadog.api_key_secret_arn",
   "ecs.datadog.enabled",
   "ecs.datadog.image",

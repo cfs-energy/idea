@@ -65,7 +65,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
       gcc openldap-devel cyrus-sasl-devel \
       postgresql17-server postgresql17-contrib \
       expat libedit tcl tk libical hwloc-libs \
-      adcli krb5-workstation sssd-ad realmd \
+      adcli krb5-workstation sssd-ad sssd-ldap sssd-tools realmd authselect openssh-server openssh-clients \
       java-11-amazon-corretto-headless \
       nginx openssl nmap-ncat \
       glibc-langpack-en shadow-utils procps-ng iproute hostname sudo util-linux jq tar gzip which awscli-2 curl-minimal \
@@ -168,6 +168,6 @@ RUN chmod +x /opt/idea/entrypoint.sh /opt/idea/roles/*.sh
 
 # module 8443; broker 8444/8445/8446 client/agent/gateway and 47100/47500 between brokers;
 # gateway 8443 web and QUIC and 8989 health.
-EXPOSE 8443 8444 8445 8446 8989 47100 47500
+EXPOSE 22 8443 8444 8445 8446 8989 47100 47500
 
 ENTRYPOINT ["/opt/idea/entrypoint.sh"]

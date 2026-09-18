@@ -174,13 +174,12 @@ export function connectionInfo(
     } else if (module.name === 'bastion-host') {
       const keyPairName = config.getString('cluster.network.ssh_key_pair');
       const ipAddress =
-        config.getString(`${module.module_id}.public_ip`) ?? config.getString(`${module.module_id}.private_ip`);
+        config.getString(`${module.module_id}.public_ip`) ?? config.getString(`${module.module_id}.private_ip`) ?? config.getString(`${module.module_id}.private_dns_name`);
       if (!isEmpty(ipAddress)) {
-        // Read for its refusal: a bastion with no base_os is a broken module row, not a default.
-        config.getString(`${module.module_id}.base_os`, undefined, { required: true });
+        if (config.getString(`${module.module_id}.service_name`) === undefined) config.getString(`${module.module_id}.base_os`, undefined, { required: true });
         entries.push({
           key: 'Bastion Host (SSH Access)',
-          // Every supported base OS uses the same login user.
+          // Hosts and tasks accept the cluster's EC2 key pair for administrator access.
           value: `ssh -i ~/.ssh/${keyPairName}.pem ec2-user@${ipAddress as string}`,
           weight: 1,
         });

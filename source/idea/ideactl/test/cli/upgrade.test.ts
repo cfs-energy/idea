@@ -1712,3 +1712,42 @@ test("the cleared-protection warning names only instances that still exist", asy
     assert.ok(warning.includes("i-survivor") && !warning.includes("i-replaced"), warning);
   });
 });
+
+for (const hasHost of [true, false]) {
+  test(`bastion cutover reads deployed publications and tolerates no instance: host=${hasHost}`, async () => {
+    await withFixture(async ({ deps, rows, events, protection }) => {
+      enableContainers();
+      trunkingEnabled(deps);
+      rows[`${clusterName}.modules`]!.push({ ...moduleRow('bastion-host', 'bastion-host'), type: 'stack' });
+      rows[`${clusterName}.cluster-settings`]!.push(
+        setting('bastion-host.base_os', 'amazonlinux2023'),
+        setting('bastion-host.instance_ami', 'ami-old'),
+        setting('bastion-host.instance_type', 'm7i.large'),
+        ...['instance_id', 'private_ip', 'instance_profile_arn', 'public_ip', 'private_dns_name'].map((key) => ({ ...setting(`bastion-host.${key}`, 'old'), source: 'stack' })),
+      );
+      let deployed = false;
+      const list = deps.cloudFormation.listStackResources;
+      deps.cloudFormation.listStackResources = async (input) => input.stackName.endsWith('-bastion-host')
+        ? { instanceIds: hasHost && !deployed ? ['i-bastion'] : [] } : list(input);
+      if (hasHost) protection.add('i-bastion');
+      deps.ec2.describeLiveInstances = async (input) => input.instanceIds.filter((id) => !(deployed && id === 'i-bastion'));
+      deps.cfn.getTemplate = async (stackName) => stackName.endsWith('-bastion-host') && deployed
+        ? JSON.stringify({ Resources: { settings: { Type: 'Custom::ClusterSettings', Properties: { settings: { public_ip: 'stable', private_dns_name: 'nlb.example.invalid' } } } } })
+        : '{}';
+      const deploy = deps.deploy;
+      deps.deploy = async (input) => {
+        assert.deepEqual(input.allowReplacement ?? [], []);
+        await deploy(input);
+        deployed = true;
+        const retired = ['instance_id', 'private_ip', 'instance_profile_arn'].map((key) => `bastion-host.${key}`);
+        rows[`${clusterName}.cluster-settings`] = rows[`${clusterName}.cluster-settings`]!.filter((row) => !retired.includes(String(row['key'])));
+      };
+      await upgradeCluster(deps, containerOptions);
+      assert.ok(events.includes('All upgrade phases completed successfully'));
+      assert.ok(!events.includes('restore:i-bastion'));
+      assert.equal(events.includes('clear:i-bastion'), hasHost);
+      assert.ok(events.some((event) => event.includes('bastion-host.instance_id is no longer published')));
+      assert.ok(rows[`${clusterName}.modules`]!.some((row) => row['module_id'] === 'bastion-host'));
+    });
+  });
+}
