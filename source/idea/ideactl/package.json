@@ -1,6 +1,6 @@
 {
   "name": "ideactl",
-  "version": "26.09.2",
+  "version": "26.09.3",
   "private": true,
   "type": "module",
   "description": "IDEA administrator: TypeScript CDK app and cluster CLI, shipped inside the idea image",

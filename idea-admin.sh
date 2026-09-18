@@ -19,7 +19,7 @@
 #                         automatically. Combine with --force for an unattended run.
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-IDEA_REVISION=${IDEA_REVISION:-"v26.09.2"}
+IDEA_REVISION=${IDEA_REVISION:-"v26.09.3"}
 IDEA_DOCKER_REPO_DEFAULT="public.ecr.aws/s5o2b4m0/idea-control-plane"
 IDEA_DOCKER_REPO=${IDEA_DOCKER_REPO:-"${IDEA_DOCKER_REPO_DEFAULT}"}
 IDEA_ECR_CREDS_RESET=${IDEA_ECR_CREDS_RESET:-"true"}

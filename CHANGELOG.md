@@ -4,7 +4,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
-## [Unreleased]
+## [26.09.3] - 2026-09-18
+
+**Upgrade Instructions:**
+* Clusters on 26.09.1 or 26.09.2 upgrade with `upgrade-cluster` (no `--drain`, no `--allow-replacement`). On a cluster with `enable_ecs: true` the bastion host moves from an instance to an ECS service behind a Network Load Balancer: its public address and SSH host fingerprint change once, then stay fixed across every future replacement. The account needs Elastic IP quota for one address per public subnet; check `aws service-quotas get-service-quota --service-code ec2 --quota-code L-0263D0A3` before the window. Users with the old bastion address or fingerprint pinned update them once
+```bash
+./idea-admin.sh upgrade-cluster --aws-region $IDEA_AWS_REGION --cluster-name $IDEA_CLUSTER_NAME
+```
 
 ### **✨ New Features**
 * **Container bastion**: With `enable_ecs: true`, the existing bastion stack runs SSH tasks on the shared ECS host pool behind a dedicated TCP Network Load Balancer. Public subnets receive fixed Elastic IPs; private clusters use an internal load balancer. SSH host keys persist in Secrets Manager, directory authentication and shared home directories carry over, and the cutover no longer needs a bastion instance replacement override. The first move changes the address and fingerprint; later task replacements preserve both, although active sessions must reconnect. Host clusters keep their existing deployment shape.
