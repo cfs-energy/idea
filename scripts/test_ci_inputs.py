@@ -44,7 +44,7 @@ class InputTests(unittest.TestCase):
     def test_changed_inputs_and_docs(self):
         for path, images, release, runtimes in [
             ('requirements/dev.txt', True, False, False),
-            ('deployment/ecr/idea-scheduler-pbs/Dockerfile', True, False, False),
+            ('deployment/ecr/idea-control-plane/Dockerfile', True, False, False),
             ('source/idea/ideactl/scripts/ideactl-linux.Dockerfile', True, True, False),
             ('source/idea/idea-bootstrap/bootstrap.py', True, True, False),
             ('source/idea/idea-cluster-manager/webapp/yarn.lock', True, False, False),

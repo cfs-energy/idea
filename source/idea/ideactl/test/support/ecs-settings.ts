@@ -11,6 +11,9 @@ export const ECS_HOST_SETTINGS = {
 };
 
 export const ECS_TASK_SETTINGS = {
+  "ecs.tasks.bastion-host.cpu": 256,
+  "ecs.tasks.bastion-host.desired": 2,
+  "ecs.tasks.bastion-host.memory": 512,
   "ecs.tasks.cluster-manager.cpu": 256,
   "ecs.tasks.cluster-manager.desired": 2,
   "ecs.tasks.cluster-manager.memory": 1024,

@@ -471,7 +471,7 @@ Print Title, Name, Module ID, Type, Stack Name, Version, and Status.
 
 ## `show-connection-info`
 
-Print portal, bastion SSH, Session Manager, and analytics URLs for deployed modules.
+Print portal, bastion SSH, Session Manager, and analytics URLs for deployed modules. A container bastion keeps the `ec2-user` key-pair login, uses its fixed public IP or internal NLB DNS name, and omits the instance Session Manager URL. Directory accounts also keep their shared-home SSH keys.
 
 **Usage:** `ideactl show-connection-info [options]`
 
@@ -518,7 +518,9 @@ Upgrade an existing cluster: refuse a cluster with any deployed module below 25.
 | `--drain-timeout-minutes <minutes>` | yes | 240 minutes (effective) | no |
 | `--skip-drain-check` | no | none | no |
 
-**Reads:** cluster tables, `values.yml`, AMI maps, EC2 images and instance types, OpenSearch instance types, eVDI software-stack tables, and the host scheduler's PBS job inventory over Systems Manager when a scheduler cutover is pending. **Changes:** `values.yml`, a `config.golden.<timestamp>/` copy, DynamoDB settings, instance termination protection (cleared then restored), module stacks, and an upload of `values.yml` to the cluster bucket. When the run moves the scheduler from a host to a container, it closes submission before reading the host's inventory, including when that inventory is empty. A non-empty inventory without `--drain` restores the previous maintenance state and refuses deployment; `--drain` waits for it to empty. `--skip-drain-check` skips the inventory read but still closes submission for the whole run. **Exit codes:** 1 on the release floor refusal, EOL refusal, missing AMI, unsupported instance type, or configuration rows the run would overwrite whose value differs from generated configuration without `--accept-config-drift`; 0 if a confirmation is declined. A change set that would replace or remove a stateful resource (a historical run replaces the bastion instance through its AMI and instance-type moves) is refused unless that logical id is passed to `--allow-replacement`.
+With `enable_ecs: true`, the bastion moves into a service in its existing module stack. Its address and SSH fingerprint change once, then persist across task replacements. The cutover and later task revisions need no bastion replacement override.
+
+**Reads:** cluster tables, `values.yml`, AMI maps, EC2 images and instance types, OpenSearch instance types, eVDI software-stack tables, and the host scheduler's PBS job inventory over Systems Manager when a scheduler cutover is pending. **Changes:** `values.yml`, a `config.golden.<timestamp>/` copy, DynamoDB settings, instance termination protection (cleared then restored), module stacks, and an upload of `values.yml` to the cluster bucket. When the run moves the scheduler from a host to a container, it closes submission before reading the host's inventory, including when that inventory is empty. A non-empty inventory without `--drain` restores the previous maintenance state and refuses deployment; `--drain` waits for it to empty. `--skip-drain-check` skips the inventory read but still closes submission for the whole run. **Exit codes:** 1 on the release floor refusal, EOL refusal, missing AMI, unsupported instance type, or configuration rows the run would overwrite whose value differs from generated configuration without `--accept-config-drift`; 0 if a confirmation is declined. A change set that would replace or remove a stateful resource (a historical run with containers disabled replaces the bastion instance through its AMI and instance-type moves) is refused unless that logical id is passed to `--allow-replacement`.
 
 The cutover gate and Phase 0 DNS retention apply when the scheduler is in scope (explicitly or
 through all modules), ECS will be enabled at synthesis (`enable_ecs: true` in `values.yml`, or an

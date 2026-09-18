@@ -1091,9 +1091,18 @@ async function restoreTerminationProtection(deps: UpgradeDeps, awsRegion: string
   }
 }
 
-function warnClearedProtection(deps: UpgradeDeps, cleared: ClearedInstance[]): void {
-  if (cleared.length > 0) {
-    deps.out(`warning: termination protection is still cleared on ${cleared.map((instance) => instance.instanceId).join(", ")}. Re-enable it by hand once the cluster is stable.`);
+async function warnClearedProtection(deps: UpgradeDeps, awsRegion: string, cleared: ClearedInstance[]): Promise<void> {
+  if (cleared.length === 0) return;
+  // An instance the deployment replaced is gone; naming it would send the operator after a ghost.
+  let alive: string[] | undefined;
+  try {
+    alive = await deps.ec2.describeLiveInstances({ awsRegion, instanceIds: cleared.map((instance) => instance.instanceId) });
+  } catch {
+    alive = undefined;
+  }
+  const remaining = alive === undefined ? cleared : cleared.filter((instance) => alive.includes(instance.instanceId));
+  if (remaining.length > 0) {
+    deps.out(`warning: termination protection is still cleared on ${remaining.map((instance) => instance.instanceId).join(", ")}. Re-enable it by hand once the cluster is stable.`);
   }
 }
 
@@ -1395,6 +1404,33 @@ async function retainSchedulerDnsRecord(deps: UpgradeDeps, options: UpgradeComma
   }
 }
 
+/**
+ * The module-relative keys a deployed stack's settings resources publish, read from the deployed
+ * template. A stack that stops publishing a key (the metrics stack drops its CloudWatch dashboard
+ * once the provider is DogStatsD) deletes the row through its settings handler, and the read-back
+ * must not demand it. Undefined when the template cannot be read or carries no settings resource,
+ * in which case the caller falls back to requiring every previously published row.
+ */
+async function deployedPublishedKeys(deps: UpgradeDeps, stackName: string): Promise<Set<string> | undefined> {
+  if (deps.cfn.getTemplate === undefined) return undefined;
+  let template: string | undefined;
+  try {
+    template = await deps.cfn.getTemplate(stackName);
+  } catch {
+    return undefined;
+  }
+  if (template === undefined) return undefined;
+  const resources = asRecord(asRecord(JSON.parse(template))["Resources"]);
+  const keys = new Set<string>();
+  let found = false;
+  for (const resource of Object.values(resources)) {
+    if (asRecord(resource)["Type"] !== "Custom::ClusterSettings") continue;
+    found = true;
+    for (const key of Object.keys(asRecord(asRecord(asRecord(resource)["Properties"])["settings"]))) keys.add(key);
+  }
+  return found ? keys : undefined;
+}
+
 // A successful stack operation does not prove that its settings publisher finished.
 // Read back the intended writes and deployed versions before reopening submission.
 async function verifyUpgradeCompletion(
@@ -1412,10 +1448,18 @@ async function verifyUpgradeCompletion(
   }
   for (const stack of drift.stacks ?? []) {
     if (!stack.selected) continue;
+    const stackName = valueAsString(modules.find((module) => module.module_id === stack.moduleId)?.stack_name) || `${options.clusterName}-${stack.moduleId}`;
+    const publishedNow = stack.target === undefined ? await deployedPublishedKeys(deps, stackName) : undefined;
     for (const [key, value] of Object.entries(stack.target ?? stack.previous)) {
       // The container scheduler no longer publishes its retired host identity.
       if (schedulerCutover && stack.target === undefined && modules.some((module) => module.module_id === stack.moduleId && module.name === "scheduler") && ["instance_id", "private_ip"].includes(key)) continue;
       const fullKey = `${stack.moduleId}.${key}`;
+      // The bastion keeps its DNS record and module stack during cutover. Its instance rows
+      // disappear through the settings delta, so the deployed template is the completion contract.
+      if (publishedNow !== undefined && !publishedNow.has(key)) {
+        deps.out(`${fullKey} is no longer published by the deployed ${stackName} stack`);
+        continue;
+      }
       if (!current.has(fullKey) || (stack.target !== undefined && !isDeepStrictEqual(current.get(fullKey), value))) {
         throw new ClusterConfigError(`Completion verification failed for published setting ${fullKey}`);
       }
@@ -1652,7 +1696,7 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
       await restoreTerminationProtection(deps, options.awsRegion, restore, cleared);
     } catch (error) {
       deps.out(`warning: could not restore termination protection: ${(error as Error).message}`);
-      warnClearedProtection(deps, cleared);
+      await warnClearedProtection(deps, options.awsRegion, cleared);
     }
     await verifyUpgradeCompletion(deps, options, [...expectedModules.values()], expected, driftInput, historical, cutoverHost !== undefined);
     await saveValuesFile(deps, options);
@@ -1661,7 +1705,7 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
     if (historical) await (await deps.configWriter(options)).deleteConfigEntries("cluster.upgrade_historical_pending");
     deps.out("All upgrade phases completed successfully");
   } catch (error) {
-    warnClearedProtection(deps, cleared);
+    await warnClearedProtection(deps, options.awsRegion, cleared);
     const settings = await scanAll(deps, `${options.clusterName}.cluster-settings`);
     if (settings.some((entry) => entry["key"] === maintenanceKeys(settings, options.moduleSet).baseline)) {
       deps.out(`warning: job submission is still closed on ${options.clusterName} (${maintenanceKeys(settings, options.moduleSet).enabled}); a completed re-run reopens it.`);

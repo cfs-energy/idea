@@ -51,7 +51,7 @@ jobs:
       - name: Set up image builder
         if: steps.inputs.outputs.images == 'true'
         uses: docker/setup-buildx-action@v4
-      - name: Build deployment images without publishing
+      - name: Build deployment image without publishing
         if: steps.inputs.outputs.images == 'true'
         uses: docker/bake-action@v7
         with:
@@ -61,6 +61,6 @@ jobs:
           allow: fs.read=/tmp/dcv-packages
           load: true
           push: false
-      - name: Smoke-test deployment images
+      - name: Smoke-test deployment image
         if: steps.inputs.outputs.images == 'true'
         run: bash scripts/ci-smoke-images.sh

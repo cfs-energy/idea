@@ -50,7 +50,7 @@ class SSHAccess extends Component<SSHAccessProps, SSHAccessState> {
             if (Utils.asBoolean(moduleInfo.public)) {
                 sshHostIp = Utils.asString(moduleInfo.public_ip)
             } else {
-                sshHostIp = Utils.asString(moduleInfo.private_ip)
+                sshHostIp = Utils.asString(moduleInfo.private_ip || moduleInfo.private_dns_name)
             }
             this.setState({
                 sshHostIp: sshHostIp

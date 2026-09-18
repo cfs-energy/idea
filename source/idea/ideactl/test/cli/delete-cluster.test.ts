@@ -402,3 +402,27 @@ test("a zone with nothing but its own NS and SOA is left alone", async () => {
   await deleteCluster(deps, allOptions());
   assert.ok(!trace.some((event) => event.startsWith("delete-zone-records:")));
 });
+
+test('the bastion service stack is deleted before its capacity with no bastion instance', async () => {
+  const { deps, trace } = makeDeps();
+  const load = deps.loadConfig;
+  deps.loadConfig = async (input) => {
+    const config = await load(input);
+    assert.ok(config);
+    config.modules().push(
+      { module_id: 'bastion-host', name: 'bastion-host', type: 'stack', stack_name: `${target}-bastion-host` },
+      { module_id: 'ecs', name: 'ecs', type: 'stack', stack_name: `${target}-ecs` },
+    );
+    return config;
+  };
+  const stacks = deps.getTaggedStacks;
+  deps.getTaggedStacks = async (input) => {
+    const page = await stacks(input);
+    return { ...page, stacks: [`${target}-ecs`, `${target}-bastion-host`, ...page.stacks] };
+  };
+  deps.findInstances = async () => [];
+  await deleteCluster(deps, allOptions());
+  assertBefore(trace, `delete-stack:${target}-bastion-host`, `delete-stack:${target}-ecs`);
+  assertBefore(trace, `delete-stack:${target}-ecs`, `delete-stack:${target}-cluster`);
+  assert.ok(!trace.some((entry) => entry.startsWith('disable-instance-protection:')));
+});

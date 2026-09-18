@@ -21,6 +21,10 @@ hosts:
   volume_size: 60
 
 tasks:
+  bastion-host:
+    cpu: 256
+    memory: 512
+    desired: 2
   cluster-manager:
     cpu: 256
     memory: 1024

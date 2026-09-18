@@ -317,7 +317,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
     componentDidMount() {
         AppContext.get().getClusterSettingsService().getModuleSettings(Constants.MODULE_BASTION_HOST).then(moduleInfo => {
             this.setState({
-                sshHostIp: Utils.asString(moduleInfo.public_ip),
+                sshHostIp: Utils.asString(moduleInfo.public_ip || moduleInfo.private_dns_name || moduleInfo.private_ip),
                 sshAccess: true
             })
         }).catch(error => {

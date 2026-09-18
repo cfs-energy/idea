@@ -461,6 +461,14 @@ export class ClusterManagerStack extends IdeaBaseStack {
       policyTemplateName: 'cluster-manager.yml',
       policyModuleId: this.moduleId,
     });
+    if (['activedirectory', 'aws_managed_activedirectory'].includes(
+      this.context.config.getString('directoryservice.provider', '') as string,
+    )) {
+      taskRole.addToPolicy(new iam.PolicyStatement({
+        actions: ['ecs:DescribeTasks'],
+        resources: [this.stack.formatArn({ service: 'ecs', resource: 'task', resourceName: `${this.context.config.getString('ecs.cluster_name')}/*` })],
+      }));
+    }
     const executionRole = buildExecutionRole(
       scope,
       'cluster-manager-task-execution-role',

@@ -17,6 +17,7 @@ import { App, Aws, Fn } from "aws-cdk-lib";
 import { buildApp, type StackBuilder } from "../../src/cdk/app.ts";
 import { makeContext } from "../../src/cdk/constructs/base.ts";
 import { ClusterConfig } from "../../src/config/cluster-config.ts";
+import { BastionHostStack } from "../../src/cdk/stacks/bastion-host.ts";
 import { EcsStack } from "../../src/cdk/stacks/ecs.ts";
 import { buildStack as buildClusterManagerStack } from "../../src/cdk/stacks/cluster-manager.ts";
 import { buildStack as buildSchedulerStack } from "../../src/cdk/stacks/scheduler.ts";
@@ -375,4 +376,44 @@ export function byType(resources: Record<string, Json>, type: string): Array<[st
 export function onlyOne(entries: Array<[string, Json]>, what: string): [string, Json] {
   if (entries.length !== 1) throw new Error(`expected exactly one ${what}, found ${entries.length}`);
   return entries[0] as [string, Json];
+}
+
+/** Bastion synthesis uses public synthetic settings and never loads a capture. */
+export function synthBastion(overrides: Record<string, unknown> = {}, stackType = BastionHostStack): Json {
+  const config = ecsSettings(false);
+  const values: Record<string, unknown> = {
+    "ecs.enabled": true,
+    "ecs.cluster_name": `${ECS_CLUSTER}-ecs`,
+    "ecs.capacity_provider": `${ECS_CLUSTER}-ecs-capacity-provider`,
+    "ecs.cpu_architecture": "ARM64",
+    "cluster.network.ssh_key_pair": "sample-key",
+    "bastion-host.hostname": "bastion-host",
+    "bastion-host.public": true,
+    "cluster.route53.private_hosted_zone_name": `${ECS_CLUSTER}.${REGION}.local`,
+    "cluster.network.security_groups.bastion-host": "sg-0123456789abcdef8",
+    "cluster.network.public_subnets": ["subnet-0123456789abcde00", "subnet-0123456789abcde01"],
+    "directoryservice.provider": "openldap",
+    "directoryservice.hostname": "directory.example.invalid",
+    "directoryservice.ldap_base": "dc=example,dc=invalid",
+    "directoryservice.tls_certificate_secret_arn": syntheticArn("secretsmanager", "secret:directory-certificate-abcdef"),
+    "directoryservice.name": "example.invalid",
+    "directoryservice.sudoers.group_name": "Administrators",
+    "directoryservice.ad_automation.sqs_queue_url": "https://queue.example.invalid/ad-automation",
+    "directoryservice.ad_automation.sqs_queue_arn": syntheticArn("sqs", "ad-automation"),
+    ...overrides,
+  };
+  for (const [key, value] of Object.entries(values)) config.setEntry(key, value);
+  const context = vpcContext();
+  const vpc = Object.values(context)[0];
+  vpc.subnetGroups.push({ name: "public", type: "Public", subnets: [
+    { availabilityZone: "us-east-2a", subnetId: "subnet-0123456789abcde00", routeTableId: "rtb-public-a", cidr: "198.51.100.0/25" },
+    { availabilityZone: "us-east-2b", subnetId: "subnet-0123456789abcde01", routeTableId: "rtb-public-b", cidr: "198.51.100.128/25" },
+  ] });
+  const app = new App({ context, outdir: workdir("ideactl-bastion-synthetic-") });
+  new stackType({
+    app, ctx: makeContext({ awsRegion: REGION, config, moduleId: "bastion-host", releaseVersion: ideaVersion(), synthReads: SYNTH_READS }),
+    deploymentId: "synthetic-deployment", env: { account: ACCOUNT, region: REGION },
+    moduleName: "bastion-host", terminationProtection: true,
+  });
+  return app.synth().getStackByName(`${ECS_CLUSTER}-bastion-host`).template as Json;
 }

@@ -113,6 +113,8 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
 {% include '_templates/linux/disable_strict_host_check.jinja2' %}
 
+{% include '_templates/linux/ssh_post_quantum_kex.jinja2' %}
+
 {% include '_templates/linux/disable_motd_update.jinja2' %}
 
 {% with secure_path = '/sbin:/bin:/usr/sbin:/usr/bin:/opt/idea/python/latest/bin' %}

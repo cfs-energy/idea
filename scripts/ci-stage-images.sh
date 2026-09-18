@@ -20,7 +20,6 @@ curl --fail --location --silent --show-error -o "$PACKAGE_DIR/nice-dcv-amzn2023-
     > checksums.txt
 )
 VERSION=$(tr -d '[:space:]' < IDEA_VERSION.txt)
-cp "dist/all-${VERSION}.tar.gz" "deployment/ecr/idea-scheduler-pbs/all-${VERSION}.tar.gz"
 cp "dist/all-${VERSION}.tar.gz" "deployment/ecr/idea-control-plane/all-${VERSION}.tar.gz"
 cp "dist/idea-dcv-connection-gateway-${VERSION}.tar.gz" "deployment/ecr/idea-control-plane/idea-dcv-connection-gateway-${VERSION}.tar.gz"
 printf 'IDEA_VERSION=%s\n' "$VERSION" >> "$GITHUB_ENV"

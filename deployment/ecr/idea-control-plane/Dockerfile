@@ -3,7 +3,7 @@
 # Use the repository root as the build context:
 #   docker buildx build --platform linux/amd64,linux/arm64 \
 #     --build-context dcv-packages=/path/to/dcv-packages \
-#     -f deployment/ecr/idea-control-plane/Dockerfile --build-arg IDEA_VERSION=26.09.2 .
+#     -f deployment/ecr/idea-control-plane/Dockerfile --build-arg IDEA_VERSION=26.09.3 .
 # Copy the release tarballs into this directory before the build.
 # The dcv-packages context contains NICE-GPG-KEY, checksums.txt, the broker RPM,
 # both gateway RPMs, and both DCV archives. checksums.txt covers each package
@@ -13,12 +13,40 @@
 # dockerfile:1.7 frontend a global declaration with no default shadows the builder's value,
 # every stage then sees an empty string, and the build only works if a single architecture is
 # passed by hand, which a two-architecture build cannot do.
-# Set PBS_IMAGE_REPO and PBS_IMAGE_TAG for a registry copy, or PBS_IMAGE for a full reference.
 
-ARG IDEA_VERSION
-ARG PBS_IMAGE_REPO=idea-scheduler-pbs
-ARG PBS_IMAGE_TAG=v${IDEA_VERSION}
-ARG PBS_IMAGE=${PBS_IMAGE_REPO}:${PBS_IMAGE_TAG}
+# OpenPBS 23.06 embeds CPython and needs eval.h, removed after Python 3.10.
+# AL2023 supplies python3-devel at 3.9 for OpenPBS and Python 3.13 for the modules.
+# The PostgreSQL major version must match an existing PBS_HOME/datastore/PG_VERSION.
+# PBS_HOME lives on shared storage; pbs_dblock permits one server at a time.
+# A replacement keeps the datastore and server name while jobs stay on execution hosts.
+FROM public.ecr.aws/amazonlinux/amazonlinux:2023 AS pbs
+
+ARG OPENPBS_VERSION=23.06.06
+ARG OPENPBS_URL=https://github.com/openpbs/openpbs/archive/v23.06.06.tar.gz
+ARG OPENPBS_SHA384=8a4d7f9c326fd1de5c103e700422bc4d49edc9d50f142c033e9e7de8d10d52f5c4f92e902e107b8e89d3e12c147ebef4
+
+# python3-devel is 3.9 here, which is what supplies eval.h.
+RUN dnf install -y --setopt=install_weak_deps=False \
+    gcc gcc-c++ make libtool autoconf automake tar gzip \
+    hwloc-devel libX11-devel libXt-devel libedit-devel libical-devel ncurses-devel \
+    perl postgresql17-devel python3-devel tcl-devel tk-devel swig \
+    expat-devel openssl-devel libXext-devel libXft-devel zlib-devel \
+    && dnf clean all
+
+WORKDIR /build
+# A checksum failure inside the pipe has to fail the step.
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+RUN set -eux; \
+    curl -fsSL -o openpbs.tar.gz "${OPENPBS_URL}"; \
+    echo "${OPENPBS_SHA384}  openpbs.tar.gz" | sha384sum -c -; \
+    tar xzf openpbs.tar.gz; \
+    cd "openpbs-${OPENPBS_VERSION}"; \
+    ./autogen.sh; \
+    ./configure PBS_VERSION="${OPENPBS_VERSION}" --prefix=/opt/pbs; \
+    make -j"$(nproc)"; \
+    make install; \
+    /opt/pbs/libexec/pbs_postinstall; \
+    chmod 4755 /opt/pbs/sbin/pbs_iff /opt/pbs/sbin/pbs_rcp
 
 FROM public.ecr.aws/amazonlinux/amazonlinux:2023 AS dcv-runtime
 
@@ -37,7 +65,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
       gcc openldap-devel cyrus-sasl-devel \
       postgresql17-server postgresql17-contrib \
       expat libedit tcl tk libical hwloc-libs \
-      adcli krb5-workstation sssd-ad realmd \
+      adcli krb5-workstation sssd-ad sssd-ldap sssd-tools realmd authselect openssh-server openssh-clients \
       java-11-amazon-corretto-headless \
       nginx openssl nmap-ncat \
       glibc-langpack-en shadow-utils procps-ng iproute hostname sudo util-linux jq tar gzip which awscli-2 curl-minimal \
@@ -66,10 +94,6 @@ RUN set -eux; \
     rpm -K /tmp/dcv/nice-dcv-web-viewer-*.rpm; dnf install -y /tmp/dcv/nice-dcv-web-viewer-*.rpm; \
     rm -rf /tmp/dcv-packages /tmp/dcv.tgz /tmp/dcv; dnf clean all; \
     sed -i 's|> /dev/null|2>\&1|' /usr/share/dcv-session-manager-broker/bin/dcv-session-manager-broker.sh
-
-# The reference carries its tag inside the build argument (PBS_IMAGE_TAG), which the linter cannot see.
-# hadolint ignore=DL3006
-FROM ${PBS_IMAGE} AS pbs
 
 FROM dcv-runtime
 
@@ -144,6 +168,6 @@ RUN chmod +x /opt/idea/entrypoint.sh /opt/idea/roles/*.sh
 
 # module 8443; broker 8444/8445/8446 client/agent/gateway and 47100/47500 between brokers;
 # gateway 8443 web and QUIC and 8989 health.
-EXPOSE 8443 8444 8445 8446 8989 47100 47500
+EXPOSE 22 8443 8444 8445 8446 8989 47100 47500
 
 ENTRYPOINT ["/opt/idea/entrypoint.sh"]

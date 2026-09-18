@@ -92,6 +92,8 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
 {% include '_templates/linux/nfs_utils.jinja2' %}
 
+{% include '_templates/linux/ssh_post_quantum_kex.jinja2' %}
+
 {% include '_templates/linux/mount_shared_storage.jinja2' %}
 
 mkdir -p ${IDEA_COMPUTE_NODE_LOGS_DIR}

@@ -1,9 +1,9 @@
 /**
- * What the five container services share.
+ * What the container services share.
  *
  * Each application service is created by the stack that publishes the settings the application
  * reads, so a task starts only after its own module has written `client_id` and the rest. That
- * puts five services in four stacks, and these are plain functions over an explicit input rather
+ * puts six services in four stacks, and these are plain functions over an explicit input rather
  * than methods on a stack, so every one of them can use the same task, service and log shapes
  * without inheriting anything.
  *
@@ -63,7 +63,7 @@ export const APPLICATION_START_SECONDS = 120;
 export const TARGET_REGISTRATION_SECONDS = 150;
 
 /** Container role, which is the `ecs.tasks.<role>` sizing key and the `IDEA_CONTAINER_ROLE` value. */
-export type ContainerRole = "cluster-manager" | "vdc" | "scheduler" | "dcv-broker" | "dcv-gateway";
+export type ContainerRole = "cluster-manager" | "vdc" | "scheduler" | "dcv-broker" | "dcv-gateway" | "bastion-host";
 
 /** What every function here needs from the stack calling it. */
 export interface ContainerScope {
@@ -278,7 +278,7 @@ export function inControlPlaneScope(storage: Record<string, unknown>): boolean {
   if (scope.includes("project")) return false;
   if (scope.includes("module")) {
     return modules.length === 0 || modules.some((name) =>
-      ["cluster-manager", "scheduler", "virtual-desktop-controller"].includes(String(name)));
+      ["cluster-manager", "scheduler", "virtual-desktop-controller", "bastion-host"].includes(String(name)));
   }
   return false;
 }
