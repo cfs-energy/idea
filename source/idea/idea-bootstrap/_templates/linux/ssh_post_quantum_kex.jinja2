@@ -1,0 +1,23 @@
+# Begin: Post-Quantum SSH Key Exchange
+{% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10', 'ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
+# The system crypto policy on the RHEL family pins a KexAlgorithms list with no post-quantum
+# entry, so an OpenSSH 10 client warns on every connection even though sshd 9.9 supports
+# mlkem768x25519-sha256. A drop-in sorted before the policy's include wins, because sshd keeps the
+# first value of a keyword. Only the algorithms this sshd knows are named, so an older OpenSSH
+# (Rocky 9 ships 8.7) still starts, and the policy's own list follows so older clients still connect.
+if command -v sshd > /dev/null 2>&1; then
+  IDEA_PQ_KEX=$(ssh -Q kex 2>/dev/null | grep -E '^(mlkem768x25519-sha256|sntrup761x25519-sha512@openssh\.com)$' | paste -sd, -)
+  IDEA_POLICY_KEX=$(sshd -T 2>/dev/null | awk '/^kexalgorithms /{print $2}')
+  if [ -n "${IDEA_PQ_KEX}" ]; then
+    mkdir -p /etc/ssh/sshd_config.d
+    echo "KexAlgorithms ${IDEA_PQ_KEX}${IDEA_POLICY_KEX:+,${IDEA_POLICY_KEX}}" > /etc/ssh/sshd_config.d/10-idea-kex.conf
+    if sshd -t 2>/dev/null; then
+      systemctl restart sshd || systemctl restart ssh || true
+    else
+      rm -f /etc/ssh/sshd_config.d/10-idea-kex.conf
+      log_warning "post-quantum key exchange drop-in rejected by sshd -t; removed"
+    fi
+  fi
+fi
+{% endif %}
+# End: Post-Quantum SSH Key Exchange

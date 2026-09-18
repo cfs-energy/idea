@@ -12,6 +12,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 ### **🐛 Bug Fixes**
 * **Upgrade read-back**: The completion verification reads each deployed stack's template and accepts rows the stack no longer publishes (the metrics stack drops `metrics.cloudwatch.dashboard_arn` once the provider is DogStatsD), instead of stopping a finished upgrade at the read-back
 * **Termination protection warning**: A run that stops after deployment names only instances that still exist, not the ones the deployment replaced
+* **Post-quantum SSH key exchange**: The bastion, Linux desktops and compute nodes offer `mlkem768x25519-sha256` and `sntrup761x25519-sha512` first; the RHEL-family crypto policy pinned a list without them, so OpenSSH 10 clients warned on every connection
 
 ## [26.09.2] - 2026-09-18
 
