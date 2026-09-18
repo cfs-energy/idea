@@ -121,3 +121,14 @@ test('cutover updates the existing DNS and settings resources and deletion relea
   }));
   assert.deepEqual(evaluateChangeSet({ Changes: removals }).refusals, []);
 });
+
+test('the container bastion synthesizes while the upgrade holds the ecs module-set row', () => {
+  // An upgrade deletes global-settings.module_sets.*.ecs.module_id in Phase 2 and writes it back
+  // only after the last stack has deployed, so the old portal keeps working through the window.
+  // The bastion stack must not resolve the ecs module through that row: the first live run of this
+  // stack stopped at synthesis on exactly that lookup.
+  const template = synthBastion({ 'global-settings.module_sets.default.ecs.module_id': null });
+  const service = one(resourcesOf(template), 'AWS::ECS::Service');
+  assert.ok(service, 'the service still synthesizes');
+  assert.match(JSON.stringify(template), /\/ecs\/exec/);
+});

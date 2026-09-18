@@ -142,8 +142,10 @@ export class BastionHostStack extends IdeaBaseStack {
       resources: ['*'],
     }));
     taskRole.addToPolicy(new iam.PolicyStatement({ actions: ['ec2:DescribeKeyPairs', 'logs:DescribeLogGroups'], resources: ['*'] }));
+    // The ecs module's id is always its name: an upgrade holds its module-set row until the last
+    // stack has deployed, so a lookup through that row would fail exactly when this stack synthesizes.
     logs.LogGroup.fromLogGroupName(this.stack, 'bastion-exec-log-group',
-      `/${this.clusterName}/${config.moduleId('ecs')}/exec`).grantWrite(taskRole);
+      `/${this.clusterName}/ecs/exec`).grantWrite(taskRole);
     this.addNagSuppression([
       { rule_id: 'AwsSolutions-IAM5', reason: 'ECS Exec channels, log discovery and EC2 public key lookup require wildcard resources; secret access is restricted to the host key secret.' },
     ], taskRole, true);
