@@ -212,9 +212,11 @@ export class BastionHostStack extends IdeaBaseStack {
       recordName: config.getString('bastion-host.hostname', undefined, { required: true }) as string,
       zone: lookupClusterDns(this.context, this.stack),
     });
+    // `bastion-host.public` stays the values-generated row this stack reads: a custom resource
+    // property is a string by the time it reaches the handler, and a published boolean would
+    // overwrite the typed row and be deleted with the map the day it is dropped.
     const settings = this.updateClusterSettings({
       deployment_id: this.deploymentId, private_dns_name: nlb.loadBalancerDnsName,
-      public: isPublic,
       ...(isPublic ? { public_ip: addresses[0]!.address.ref, public_ips: addresses.map(({ address }) => address.ref) } : {}),
       iam_role_arn: taskRole.roleArn, task_role_id: (taskRole.node.defaultChild as iam.CfnRole).attrRoleId,
       service_name: `${this.clusterName}-${this.moduleId}`, host_keys_secret_arn: secret.ref,

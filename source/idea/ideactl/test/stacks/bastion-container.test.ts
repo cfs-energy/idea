@@ -56,7 +56,7 @@ for (const overrides of [{ 'bastion-host.public': false }, { 'cluster.network.pu
     assert.equal(byType(resources, 'AWS::EC2::EIP').length, 0);
     assert.equal(one(resources, 'AWS::ElasticLoadBalancingV2::LoadBalancer')[1].Properties.Scheme, 'internal');
     const settings = one(resources, 'Custom::ClusterSettings')[1].Properties.settings;
-    assert.equal(settings.public, false);
+    assert.equal(settings.public, undefined);
     assert.equal(settings.public_ip, undefined);
     assert.ok(settings.private_dns_name);
   });
@@ -131,4 +131,13 @@ test('the container bastion synthesizes while the upgrade holds the ecs module-s
   const service = one(resourcesOf(template), 'AWS::ECS::Service');
   assert.ok(service, 'the service still synthesizes');
   assert.match(JSON.stringify(template), /\/ecs\/exec/);
+});
+
+test('the container bastion publishes no boolean and never its own public flag', () => {
+  // Custom resource properties reach the handler as strings; a published boolean overwrote the
+  // typed values row on the first live run and failed the completion read-back.
+  const settings = one(resourcesOf(synthBastion()), 'Custom::ClusterSettings')[1] as { Properties: { settings: Record<string, unknown> } };
+  const published = settings.Properties.settings;
+  assert.equal(published['public'], undefined);
+  for (const [key, value] of Object.entries(published)) assert.notEqual(typeof value, 'boolean', key);
 });
