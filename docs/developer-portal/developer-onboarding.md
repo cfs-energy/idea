@@ -237,7 +237,7 @@ message if `node_modules` is missing.
 
 ## Dependency updates
 
-Renovate runs from this repository's own workflow, `renovate.yaml`, once a week early Monday, with the configuration in `.github/renovate.json`:
+Renovate runs once a week, early Monday, from `.github/renovate.json`:
 
 * Minor, patch, pin and digest updates arrive together in one pull request. Majors arrive one per dependency so each is judged on its own.
 * Platform pins move by hand in their own change: the Node line (`software_versions.yml` and the image's `NODE_VERSION`, kept in step), the Python line, the Amazon Linux base image, the CI runner images and the JDK. Patch releases within a pinned line still flow.
@@ -245,7 +245,7 @@ Renovate runs from this repository's own workflow, `renovate.yaml`, once a week 
 * Vulnerability alerts open immediately, outside the schedule.
 * OpenPBS is pinned with a checksum in the control-plane Dockerfile and moves by hand.
 
-The workflow runs Renovate itself rather than the hosted app because the app's sandbox cannot build this repository's lock files: npm refuses the tarball fetch that aws-cdk-lib's bundled dependencies need, and its pip-compile writes `--no-index` into the lock header, which the lock check then rejects. The workflow signs in as a GitHub App installed on the repository, from the `RENOVATE_APP_ID` and `RENOVATE_APP_PRIVATE_KEY` secrets. The App needs read and write on contents, pull requests, issues, workflows and commit statuses, and read on Dependabot alerts. To see a run outside the Monday window, start the workflow by hand with "ignore schedule" ticked.
+Renovate's hosted app cannot regenerate this repository's lock files in its sandbox, so a Renovate pull request arrives with its manifests updated and its lock files stale until they are regenerated on the branch.
 
 ## Publishing the container image
 
