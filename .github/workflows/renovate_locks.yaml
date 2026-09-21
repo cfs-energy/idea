@@ -1,0 +1,56 @@
+name: renovate locks
+# Renovate's hosted app cannot regenerate this repository's lock files in its sandbox: npm refuses
+# the tarball fetch that aws-cdk-lib's bundled dependencies need, and its pip-compile writes
+# --no-index into the lock header, which the lock check rejects. This job regenerates the locks on
+# every Renovate branch and pushes them back as the repository's app, which re-runs the checks.
+# Without the app secrets it reports the drift and stops, and the pull request stays red.
+on:
+  pull_request:
+    types: [opened, synchronize]
+permissions:
+  contents: read
+concurrency:
+  group: renovate-locks-${{ github.head_ref }}
+  cancel-in-progress: true
+jobs:
+  locks:
+    if: startsWith(github.head_ref, 'renovate/')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Sign in as the repository's app
+        id: app
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.RENOVATE_LOCKS_APP_ID }}
+          private-key: ${{ secrets.RENOVATE_LOCKS_APP_PRIVATE_KEY }}
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.head_ref }}
+          token: ${{ steps.app.outputs.token || github.token }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.21.0'
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Regenerate the npm and yarn locks
+        run: |
+          (cd source/idea/ideactl && npm install --package-lock-only --ignore-scripts --no-audit --no-fund)
+          npm install -g yarn
+          (cd source/idea/idea-cluster-manager/webapp && yarn install --ignore-scripts --non-interactive --ignore-engines)
+      - name: Regenerate the Python locks
+        run: |
+          python3 -m pip install 'pip-tools==7.6.1' 'click==8.4.2'
+          python3 scripts/requirements-locks.py
+      - name: Push the locks back to the branch
+        env:
+          HAS_APP: ${{ steps.app.outputs.token != '' }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          git add -A source/idea/ideactl/package-lock.json source/idea/idea-cluster-manager/webapp/yarn.lock requirements
+          if git diff --cached --quiet; then echo "locks already current"; exit 0; fi
+          git diff --cached --stat
+          if [ "$HAS_APP" != "true" ]; then echo "::error::the locks differ and no app token is configured; regenerate them locally"; exit 1; fi
+          git -c user.name=idea-locks -c user.email=idea-locks@users.noreply.github.com commit -q -m "chore(deps): regenerate lock files"
+          git push origin "HEAD:$HEAD_REF"
