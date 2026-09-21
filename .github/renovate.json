@@ -8,32 +8,56 @@
     "* 0-6 * * 1"
   ],
   "dependencyDashboard": true,
-  "prConcurrentLimit": 2,
-  "branchConcurrentLimit": 2,
-  "prHourlyLimit": 2,
+  "gitIgnoredAuthors": [
+    "idea-locks@example.invalid"
+  ],
+  "prConcurrentLimit": 6,
+  "branchConcurrentLimit": 6,
+  "prHourlyLimit": 6,
+  "minimumReleaseAge": "3 days",
+  "osvVulnerabilityAlerts": true,
   "vulnerabilityAlerts": {
-    "enabled": true,
+    "labels": [
+      "renovate",
+      "security"
+    ],
     "prConcurrentLimit": 5
   },
+  "separateMajorMinor": true,
+  "separateMultipleMajor": false,
+  "lockFileMaintenance": {
+    "enabled": false
+  },
+  "labels": [
+    "renovate"
+  ],
   "pip_requirements": {
     "enabled": false
+  },
+  "pip-compile": {
+    "managerFilePatterns": [
+      "/^requirements/[^/]+\\.txt$/"
+    ]
   },
   "customManagers": [
     {
       "customType": "regex",
-      "fileMatch": [
-        "^software_versions\\.yml$"
+      "description": "The Node line the tool and the image run; the Dockerfile ARG follows the same dependency so the two pins never drift",
+      "managerFilePatterns": [
+        "/^software_versions\\.yml$/",
+        "/^deployment/ecr/idea-control-plane/Dockerfile$/"
       ],
       "matchStrings": [
-        "node_version:\\s*(?<currentValue>\\S+)"
+        "node_version:\\s*(?<currentValue>\\S+)",
+        "ARG NODE_VERSION=(?<currentValue>\\S+)"
       ],
       "depNameTemplate": "node",
       "datasourceTemplate": "node-version"
     },
     {
       "customType": "regex",
-      "fileMatch": [
-        "^software_versions\\.yml$"
+      "managerFilePatterns": [
+        "/^software_versions\\.yml$/"
       ],
       "matchStrings": [
         "python_version:\\s*(?<currentValue>\\S+)"
@@ -43,8 +67,8 @@
     },
     {
       "customType": "regex",
-      "fileMatch": [
-        "^software_versions\\.yml$"
+      "managerFilePatterns": [
+        "/^software_versions\\.yml$/"
       ],
       "matchStrings": [
         "nvm_version:\\s*(?<currentValue>\\S+)"
@@ -52,10 +76,19 @@
       "depNameTemplate": "nvm-sh/nvm",
       "datasourceTemplate": "github-releases",
       "extractVersionTemplate": "^v(?<version>.*)$"
+    },
+    {
+      "customType": "regex",
+      "description": "The Datadog agent the host pool runs: version and the multi-architecture index digest move together",
+      "managerFilePatterns": [
+        "/^source/idea/ideactl/src/config/datadog-agent\\.ts$/"
+      ],
+      "matchStrings": [
+        "DATADOG_AGENT_VERSION = \"(?<currentValue>[^\"]+)\";[\\s\\S]*?public\\.ecr\\.aws/datadog/agent@(?<currentDigest>sha256:[0-9a-f]{64})"
+      ],
+      "depNameTemplate": "public.ecr.aws/datadog/agent",
+      "datasourceTemplate": "docker"
     }
-  ],
-  "labels": [
-    "renovate"
   ],
   "packageRules": [
     {
@@ -92,9 +125,8 @@
       "enabled": true
     },
     {
-      "description": "Every scheduled update lands in one pull request, majors included; vulnerability alerts stay separate and immediate",
+      "description": "Every scheduled minor, patch, pin and digest update lands in one pull request; majors arrive one per dependency so each is judged on its own; vulnerability alerts stay separate and immediate",
       "matchUpdateTypes": [
-        "major",
         "minor",
         "patch",
         "pin",
@@ -105,13 +137,34 @@
       ],
       "groupName": "all dependencies",
       "groupSlug": "all-dependencies"
+    },
+    {
+      "description": "Platform pins move by hand in their own change: the Node line, Python line, the base image, the CI runner images and the JDK. Patch releases within the pinned line still flow; the next Node LTS, Amazon Linux 2027 and new runner images are deliberate",
+      "matchDepNames": [
+        "node",
+        "python",
+        "public.ecr.aws/amazonlinux/amazonlinux",
+        "ubuntu",
+        "java-jdk"
+      ],
+      "matchUpdateTypes": [
+        "major",
+        "minor"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "The Datadog agent moves at any version within its major; a new major is judged on its own like every other major",
+      "matchDepNames": [
+        "public.ecr.aws/datadog/agent"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "digest"
+      ],
+      "groupName": "all dependencies",
+      "groupSlug": "all-dependencies"
     }
-  ],
-  "pip-compile": {
-    "fileMatch": [
-      "^requirements/[^/]+\\.txt$"
-    ]
-  },
-  "separateMajorMinor": false,
-  "separateMultipleMajor": false
+  ]
 }
