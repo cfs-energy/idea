@@ -92,9 +92,8 @@
       "enabled": true
     },
     {
-      "description": "Every scheduled update lands in one pull request, majors included; vulnerability alerts stay separate and immediate",
+      "description": "Every scheduled minor, patch, pin and digest update lands in one pull request; majors arrive one per dependency so each can be judged on its own; vulnerability alerts stay separate and immediate",
       "matchUpdateTypes": [
-        "major",
         "minor",
         "patch",
         "pin",
@@ -105,6 +104,21 @@
       ],
       "groupName": "all dependencies",
       "groupSlug": "all-dependencies"
+    },
+    {
+      "description": "Platform pins move deliberately: the Node line of the tool, image and release files, the base image, the CI runner images and the JDK are bumped by hand in their own change, never by the weekly run. Patch releases within the pinned line still flow",
+      "matchDepNames": [
+        "node",
+        "public.ecr.aws/amazonlinux/amazonlinux",
+        "ubuntu",
+        "java-jdk",
+        "python"
+      ],
+      "matchUpdateTypes": [
+        "major",
+        "minor"
+      ],
+      "enabled": false
     }
   ],
   "pip-compile": {
@@ -112,6 +126,9 @@
       "^requirements/[^/]+\\.txt$"
     ]
   },
-  "separateMajorMinor": false,
-  "separateMultipleMajor": false
+  "separateMajorMinor": true,
+  "separateMultipleMajor": false,
+  "lockFileMaintenance": {
+    "enabled": false
+  }
 }
