@@ -9,7 +9,7 @@
   ],
   "dependencyDashboard": true,
   "gitIgnoredAuthors": [
-    "idea-locks@users.noreply.github.com"
+    "idea-locks@example.com"
   ],
   "prConcurrentLimit": 6,
   "branchConcurrentLimit": 6,
