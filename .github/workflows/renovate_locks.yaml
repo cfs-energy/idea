@@ -52,5 +52,5 @@ jobs:
           if git diff --cached --quiet; then echo "locks already current"; exit 0; fi
           git diff --cached --stat
           if [ "$HAS_APP" != "true" ]; then echo "::error::the locks differ and no app token is configured; regenerate them locally"; exit 1; fi
-          git -c user.name=idea-locks -c user.email=idea-locks@example.com commit -q -m "chore(deps): regenerate lock files"
+          git -c user.name=idea-locks -c user.email=idea-locks@example.invalid commit -q -m "chore(deps): regenerate lock files"
           git push origin "HEAD:$HEAD_REF"
