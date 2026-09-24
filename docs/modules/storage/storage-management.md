@@ -50,7 +50,7 @@ Project scoped shared storage mounts are applicable for Compute Nodes or eVDI Ho
 {% endtab %}
 {% endtabs %}
 
-**Scale-Out Computing: Queue Profiles**
+**Administration > Manage jobs > Queues**
 
 Queue Profile scoped shared storage mounts are applicable for all Compute Nodes launched for Jobs submitted to the queues configured under a Queue Profile.
 
@@ -156,7 +156,7 @@ updating config: shared-storage.testefs.efs.transition_to_ia = None
 
 `idea-admin.sh` utility will automatically update your IDEA cluster environment if you select " Update Cluster Settings and Exit". You can also choose to automatically "Deploy" the cluster which will automatize the steps mentioned below. For this demo, we are just Updating Cluster Settings and will proceed to a manual deployment afterwards.
 
-Once done, you can validate your new mount point in the web interface via "**Cluster Management**" > "**Settings**" > "**Shared Storage**"
+Once done, you can validate your new mount point in the web interface via "**Administration**" > "**Settings**" > "**Storage - Read-only**"
 
 <figure><img src="../../.gitbook/assets/mods_ss_man_mountconf.webp" alt=""><figcaption><p>IDEA is now configured with the new mount but EFS has not been created yet</p></figcaption></figure>
 
@@ -529,7 +529,7 @@ Shared storage settings can be viewed via **Web Portal** and **IDEA** **CLI**.
 
 ### Web Portal
 
-Navigate to "**Cluster Management**" > "**Settings**" > "**Shared Storage**"
+Navigate to "**Administration**" > "**Settings**" > "**Storage - Read-only**"
 
 <figure><img src="../../.gitbook/assets/mods_ss_man_webportal.webp" alt=""><figcaption></figcaption></figure>
 

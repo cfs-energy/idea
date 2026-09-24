@@ -209,7 +209,7 @@ describe('path bar', () => {
             await waitForRow('run.log');
             expect(trail()).toEqual(['root', 'data', 'projects', 'alpha']);
             expect(pathField()).toBeNull();
-            expect(screen.getByTestId('url-query').textContent).toBe('?cwd=/data/projects/alpha');
+            await waitFor(() => expect(screen.getByTestId('url-query').textContent).toBe('?cwd=/data/projects/alpha'));
         });
 
         it('says why a path did not open, and leaves the listing where it was', async () => {

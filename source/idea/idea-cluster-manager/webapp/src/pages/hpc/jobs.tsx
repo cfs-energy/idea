@@ -14,7 +14,7 @@
 import React, {Component, RefObject} from "react";
 
 import IdeaListView from "../../components/list-view";
-import {TableProps} from "@cloudscape-design/components/table/interfaces";
+import {TableProps} from "@cloudscape-design/components/table";
 import {DeleteJobRequest, DeleteJobResult, SocaJob} from "../../client/data-model"
 import {AppContext} from "../../common";
 import {SchedulerAdminClient, SchedulerClient} from "../../client"
@@ -315,7 +315,7 @@ class Jobs extends Component<JobsProps, JobsState> {
                          onConfirm={() => {
                              this.deleteSelectedJob()
                          }}>
-                Job Id: <b>{this.getSelected()?.job_id}</b> will be removed from the queue. If the job is running, deleting
+                Job Id: <Box variant="strong">{this.getSelected()?.job_id}</Box> will be removed from the queue. If the job is running, deleting
                 it stops the job and anything it has not already written to storage is lost. This cannot be undone.
             </IdeaConfirm>
         )
@@ -336,7 +336,7 @@ class Jobs extends Component<JobsProps, JobsState> {
                 ref={this.listing}
                 preferencesKey={'hpc-jobs'}
                 showPreferences={true}
-                title={(this.isActiveJobs()) ? 'Active Jobs' : 'Completed Jobs'}
+                title={(this.isActiveJobs()) ? 'Active' : 'Completed'}
                 description={(this.isActiveJobs()) ? 'All active Jobs' : 'All completed Jobs'}
                 selectionType="single"
                 enableExportToCsv={this.isCompletedJobs()}

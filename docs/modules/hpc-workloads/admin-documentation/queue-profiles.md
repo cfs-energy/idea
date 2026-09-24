@@ -1,6 +1,6 @@
 # Queue Profiles
 
-IDEA let you create queues and queue profiles. To access this section, click "**Scale-Out Compute**" > "**Queue Profiles**" on the left sidebar
+IDEA let you create queues and queue profiles. To access this section, click "**Administration**" > "**Manage jobs**" > "**Queues**"
 
 {% hint style="info" %}
 You must have admin permission to the Scale-Out Compute module

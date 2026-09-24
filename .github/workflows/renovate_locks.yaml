@@ -24,14 +24,14 @@ jobs:
         with:
           app-id: ${{ secrets.RENOVATE_LOCKS_APP_ID }}
           private-key: ${{ secrets.RENOVATE_LOCKS_APP_PRIVATE_KEY }}
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.head_ref }}
           token: ${{ steps.app.outputs.token || github.token }}
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: '24.21.0'
-      - uses: actions/setup-python@v7
+          node-version: '26.8.2'
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: '3.13'
       - name: Regenerate the npm and yarn locks

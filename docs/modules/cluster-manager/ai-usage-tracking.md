@@ -4,7 +4,7 @@ description: Read the Amazon Bedrock invocation logging that AI usage reporting 
 
 # AI Usage Tracking
 
-The **AI Usage** column on the **Projects** page reports the last 30 days of tokens and requests per project, alongside the project's Bedrock spend over the same 30 days. The breakdown per model and per user is on the **AI Usage** page under **Cluster Management**.
+The **AI Usage** column on the **Projects** page reports the last 30 days of tokens and requests per project, alongside the project's Bedrock spend over the same 30 days. The breakdown per model and per user is on **Administration > Costs and usage > AI**.
 
 The window is a trailing one ending today, not the calendar month, so a project last used a few weeks ago still reads as used on the first of a month. Tokens are aggregated from Amazon Bedrock **model invocation logging**, not from billing data, and the aggregation runs every 15 minutes by default. If invocation logging is not delivering to the cluster log group, nothing is collected and every project reads as unused.
 
@@ -14,7 +14,7 @@ The spend figure comes from AWS Cost Explorer, filtered to the project's `idea:P
 
 ## The AI Usage page
 
-**Cluster Management** > **AI Usage** lists every project with a Bedrock configuration over the same trailing 30 days: tokens, requests, cost and the model the project spent the most tokens on. A project that has not been used is still listed, reading as no usage, so an idle project is distinguishable from a missing one.
+**Administration** > **Costs and usage** > **AI** lists every project with a Bedrock configuration over the same trailing 30 days: tokens, requests, cost and the model the project spent the most tokens on. A project that has not been used is still listed, reading as no usage, so an idle project is distinguishable from a missing one.
 
 Selecting a project opens a breakdown in the split panel:
 

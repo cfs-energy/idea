@@ -49,6 +49,13 @@ from ideavirtualdesktopcontroller.app.session_permissions.virtual_desktop_sessio
 from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_db import (
     VirtualDesktopSessionDB,
 )
+from ideavirtualdesktopcontroller.app.ssm_commands.virtual_desktop_ssm_commands_db import (
+    VirtualDesktopSSMCommandsDB,
+)
+from ideavirtualdesktopcontroller.app.ssm_commands.virtual_desktop_ssm_commands_utils import (
+    BOOTSTRAP_REFRESH_VERSION,
+    VirtualDesktopSSMCommandsUtils,
+)
 from ideavirtualdesktopcontroller.app.virtual_desktop_controller_utils import (
     VirtualDesktopControllerUtils,
     build_bootstrap_failure_message,
@@ -137,6 +144,19 @@ def instance_state(instance: Optional[Dict]) -> str:
 # guards the sweep resume cursors below, which every queue handler thread shares
 SWEEP_CURSOR_LOCK = RLock()
 
+BOOTSTRAP_REFRESH_LINUX_BASE_OS = {
+    'amazonlinux2023',
+    'rhel8',
+    'rhel9',
+    'rhel10',
+    'rocky8',
+    'rocky9',
+    'rocky10',
+    'ubuntu2204',
+    'ubuntu2404',
+    'ubuntu2604',
+}
+
 
 class VirtualDesktopSessionUtils:
     # where the last sweep stopped, so a table larger than one pass's time budget is still
@@ -150,6 +170,7 @@ class VirtualDesktopSessionUtils:
     _instance_profile_repair_cursor: Optional[str] = None
     _provisioning_timeout_cursor: Optional[str] = None
     _stopped_session_cleanup_cursor: Optional[str] = None
+    _bootstrap_refresh_cursor: Optional[str] = None
 
     def __init__(
         self,
@@ -304,6 +325,60 @@ class VirtualDesktopSessionUtils:
         with SWEEP_CURSOR_LOCK:
             VirtualDesktopSessionUtils._instance_profile_repair_cursor = None
         return repaired
+
+    def refresh_bootstrap(self, time_budget_ms: int = 10 * 1000) -> int:
+        commands = VirtualDesktopSSMCommandsUtils(
+            self.context, VirtualDesktopSSMCommandsDB(self.context)
+        )
+        attempted = 0
+        submitted = 0
+        deadline = Utils.current_time_ms() + time_budget_ms
+        with SWEEP_CURSOR_LOCK:
+            cursor = VirtualDesktopSessionUtils._bootstrap_refresh_cursor
+        resume_cursor = cursor
+        while True:
+            result = self._session_db.list_all_from_db(
+                ListSessionsRequest(paginator=SocaPaginator(cursor=cursor))
+            )
+            for session in Utils.get_as_list(result.listing, []):
+                if attempted >= 5 or Utils.current_time_ms() >= deadline:
+                    with SWEEP_CURSOR_LOCK:
+                        VirtualDesktopSessionUtils._bootstrap_refresh_cursor = (
+                            resume_cursor
+                        )
+                    return submitted
+                try:
+                    if (
+                        session.state == VirtualDesktopSessionState.READY
+                        and session.base_os in BOOTSTRAP_REFRESH_LINUX_BASE_OS
+                        and session.server is not None
+                        and session.server.instance_id
+                    ):
+                        # Session rows embed an older copy of the server, so only the
+                        # server table can establish whether a completed refresh ran.
+                        server = self._session_db.server_db.get(
+                            session.server.instance_id
+                        )
+                        if (
+                            server is not None
+                            and (server.bootstrap_refresh_version or 0)
+                            < BOOTSTRAP_REFRESH_VERSION
+                        ):
+                            attempted += 1
+                            commands.submit_ssm_command_to_refresh_bootstrap(session)
+                            submitted += 1
+                except Exception as e:
+                    self._logger.warning(
+                        f'Bootstrap refresh failed for session '
+                        f'{session.idea_session_id}: {" ".join(str(e).splitlines())}'
+                    )
+                resume_cursor = self._session_db.cursor_for(session) or resume_cursor
+            cursor = result.cursor
+            resume_cursor = cursor
+            if Utils.is_empty(cursor):
+                with SWEEP_CURSOR_LOCK:
+                    VirtualDesktopSessionUtils._bootstrap_refresh_cursor = None
+                return submitted
 
     def _is_bedrock_enabled(self) -> bool:
         # no project carries an instance profile while the feature is off, so the whole

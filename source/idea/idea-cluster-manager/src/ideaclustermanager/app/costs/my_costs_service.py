@@ -536,11 +536,14 @@ class MyCostsService:
             if all_users:
                 rows = self._scan_history(table)
             else:
-                rows = Utils.get_value_as_list(
-                    'Items',
-                    table.query(KeyConditionExpression=Key('owner').eq(username)),
-                    [],
-                )
+                rows = []
+                request = {'KeyConditionExpression': Key('owner').eq(username)}
+                while True:
+                    page = table.query(**request)
+                    rows.extend(Utils.get_value_as_list('Items', page, []))
+                    if not page.get('LastEvaluatedKey'):
+                        break
+                    request['ExclusiveStartKey'] = page['LastEvaluatedKey']
         except Exception as e:
             # additive: a history read that fails leaves the live sessions intact
             self.logger.warning(f'failed to read desktop session history: {e}')

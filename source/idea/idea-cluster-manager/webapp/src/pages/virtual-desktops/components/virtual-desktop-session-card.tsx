@@ -38,7 +38,7 @@ import {
     faHourglassHalf
 } from "@fortawesome/free-solid-svg-icons";
 import VirtualDesktopSessionStatusIndicator from "./virtual-desktop-session-status-indicator";
-import {ButtonDropdownProps} from "@cloudscape-design/components/button-dropdown/interfaces";
+import {ButtonDropdownProps} from "@cloudscape-design/components/button-dropdown";
 import {KeyValue} from "../../../components/key-value";
 
 interface VirtualDesktopSessionCardProps {
@@ -141,7 +141,7 @@ function VirtualDesktopScheduleDescription(props: VirtualDesktopScheduleDescript
                 </ColumnLayout>
             }
         >
-            <small>{label}</small>
+            <Box variant="small">{label}</Box>
         </Popover>
     )
 }
@@ -221,9 +221,9 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
                 <Badge color="blue">{Utils.getOsTitle(this.props.session.software_stack?.base_os)}</Badge>
                 <Badge color="blue">{this.props.session.server?.instance_type}</Badge>
                 {this.hasSchedule() &&
-                    <small style={{color: 'grey'}}><FontAwesomeIcon icon={faClock}/>&nbsp;{<VirtualDesktopScheduleDescription session={this.props.session}/>}</small>}
+                    <Box variant="small" color="text-body-secondary"><FontAwesomeIcon icon={faClock}/>{' '}{<VirtualDesktopScheduleDescription session={this.props.session}/>}</Box>}
                 {this.getIdleAutoStopOverride() > 0 &&
-                    <small style={{color: 'grey'}}><FontAwesomeIcon icon={faHourglassHalf}/>&nbsp;Stops after {this.getIdleAutoStopOverride()} min idle</small>}
+                    <Box variant="small" color="text-body-secondary"><FontAwesomeIcon icon={faHourglassHalf}/>{' '}Stops after {this.getIdleAutoStopOverride()} min idle</Box>}
                 {this.props.projectAiAccessPending &&
                     <StatusIndicator type="warning">This desktop cannot use the project's AI models yet. {this.canStart()
                         ? 'Start it and it will come up with them.'

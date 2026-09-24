@@ -486,6 +486,22 @@ Print portal, bastion SSH, Session Manager, and analytics URLs for deployed modu
 
 If nothing is deployed, the command prints an error to stderr and still exits 0.
 
+## `return-hosts`
+
+Drain and remove a container host the host group holds beyond its minimum. Managed scaling only removes an empty host and nothing moves tasks off one, so an upgrade that borrowed a host leaves it in service. The newest extra host is drained, its tasks move under the services' deployment rules, its scale-in protection is cleared and the group shrinks by one. `upgrade-cluster` runs the same step at its end unless `--keep-borrowed-hosts` is set.
+
+**Usage:** `ideactl return-hosts [options]`
+
+| Flag | Value | Default | Required |
+| --- | --- | --- | --- |
+| `--cluster-name <cluster-name>` | yes | none | yes |
+| `--aws-region <aws-region>` | yes | none | yes |
+| `--aws-profile <aws-profile>` | yes | none | no |
+
+**Reads:** DynamoDB cluster config, the capacity provider, the host group and the container instances. **Changes:** one container instance to DRAINING, its scale-in protection, and the host group's desired capacity. **Exit codes:** 1 on an error before the drain; a host that does not empty within 15 minutes stays in service, draining, and the command prints a warning.
+
+**Example:** `ideactl return-hosts --cluster-name sample-cluster --aws-region us-east-2`
+
 ## `upgrade-cluster`
 
 Upgrade an existing cluster: refuse a cluster with any deployed module below 25.11.0 or an unreadable version, refuse EOL base OS that is still referenced, preview drift, then run phases 1 to 4 (values base OS, global settings backup and rewrite, optional full config sync, AMI and instance-type keys, then module deploy). Empty `modules` means every module. Clusters below 26.09.0 require complete deployed-module coverage and a read-only plan of settings, values, templates, EOL tables, IAM policy capacity, image metadata and instance protection before mutation. Global replacement, full sync and AMI/settings updates cannot be skipped in this mode. The old scheduler periodic interval is copied to the reconciler interval only when absent; conflicts are reported and both keys remain. Settings and deployed module versions are read back before success. A values upload failure after deployment is a warning with a recovery command.
@@ -502,6 +518,7 @@ Upgrade an existing cluster: refuse a cluster with any deployed module below 25.
 | `--aws-region <aws-region>` | yes | none | yes |
 | `--aws-profile <aws-profile>` | yes | none | no |
 | `--termination-protection <termination-protection>` | yes | `"true"` | no |
+| `--keep-borrowed-hosts` | no | none | no |
 | `--deployment-id <deployment-id>` | yes | none | no |
 | `--base-os <base-os>` | yes | none | no |
 | `--force-build-bootstrap` | no | none | no |

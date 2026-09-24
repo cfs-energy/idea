@@ -1,4 +1,6 @@
-## Shared Virtual Desktops
+## My desktops
+
+### Shared
 
 Access your Windows & Linux virtual desktops that are shared with you, powered by [Amazon DCV](https://aws.amazon.com/hpc/dcv/).
 

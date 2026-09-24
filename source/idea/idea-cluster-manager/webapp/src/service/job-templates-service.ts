@@ -12,7 +12,7 @@
  */
 
 import {openDB, DBSchema} from "idb";
-import {IDBPDatabase} from "idb/build/entry";
+import {IDBPDatabase} from "idb";
 import Utils from "../common/utils";
 import IdeaException from "../common/exceptions";
 

@@ -189,6 +189,7 @@ class VirtualDesktopServer(SocaBaseModel):
     root_volume_size: Optional[SocaMemory] = Field(default=None)
     root_volume_iops: Optional[int] = Field(default=None)
     instance_profile_arn: Optional[str] = Field(default=None)
+    bootstrap_refresh_version: Optional[int] = Field(default=None)
     security_groups: Optional[List[str]] = Field(default=None)
     subnet_id: Optional[str] = Field(default=None)
     key_pair_name: Optional[str] = Field(default=None)

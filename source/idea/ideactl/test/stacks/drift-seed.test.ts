@@ -59,7 +59,6 @@ const SEQUENCE = [
   "db.syncModulesInDb(MODULES)",
   "db.syncClusterSettingsInDb(GENERATED except ADD keys)",
   "write STACK_SEED with source=stack, then db.setConfigEntry for each seeded operator overlay",
-  'db.deleteConfigEntries("global-settings.")',
   "db.syncClusterSettingsInDb(generated keys starting with global-settings., overwrite=true)",
   "db.syncClusterSettingsInDb(GENERATED, overwrite=false)",
   "db.setConfigEntry for each Phase 3 entry, then for the metrics provider cutover",
@@ -453,7 +452,7 @@ function renderReport(input: {
     "```",
     "",
     "Those writes are the same ClusterConfigDb calls as upgrade Phase 2",
-    "(`deleteConfigEntries(\"global-settings.\")` then sync with overwrite),",
+    "(sync with overwrite in place, obsolete rows removed after deployment),",
     "Phase 2b (full add-only sync), Phase 3 (`planUpgradePhase3Entries` then",
     "`setConfigEntry`), and Phase 4 (`Custom::ClusterSettings` Update for the",
     "selected module). Phase 4 here updates only cluster-manager. A full upgrade",
@@ -670,7 +669,6 @@ test("upgrade settings sync matches the analysis prediction for every edit class
     assert.ok(previewActions.has(action), `preview missing action ${action}`);
   }
 
-  await db.deleteConfigEntries("global-settings.");
   await db.syncClusterSettingsInDb(
     GENERATED.filter((entry) => entry.key.startsWith("global-settings.")),
     true,
@@ -682,6 +680,12 @@ test("upgrade settings sync matches the analysis prediction for every edit class
   const stackResponses = await applySelectedStackUpdate(doc, CLUSTER);
   assert.equal(stackResponses.length, 1);
   assert.equal(stackResponses[0]?.status, "SUCCESS");
+  // After every stack has deployed the rows this release no longer generates are removed, one
+  // exact key at a time.
+  const generatedGlobal = new Set(GENERATED.filter((entry) => entry.key.startsWith("global-settings.")).map((entry) => entry.key));
+  for (const key of [...before.keys()].filter((key) => key.startsWith("global-settings.") && !generatedGlobal.has(key))) {
+    await db.deleteConfigEntries(key);
+  }
 
   const after = await loadRows(doc, db.clusterSettingsTableName);
   const measured = measureEdits(before, after, drift.findings);
@@ -751,8 +755,9 @@ test("upgrade settings sync matches the analysis prediction for every edit class
   assert.equal(added?.value, true);
   assert.equal(after.get("cluster.timezone")?.value, "America/New_York");
 
+  // Rewritten in place now, so the row keeps its identity and its version only grows.
   const rewritten = after.get("global-settings.same");
-  assert.equal(rewritten?.version, 1);
+  assert.ok((rewritten?.version ?? 0) >= 1);
   assert.equal(rewritten?.source, undefined);
 
   const locale = after.get("cluster.locale");

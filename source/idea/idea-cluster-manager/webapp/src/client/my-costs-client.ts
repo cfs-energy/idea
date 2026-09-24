@@ -1,4 +1,7 @@
 import {
+    GetMyCostsResult,
+    GetCostTickerRequest,
+    GetCostTickerResult,
     GetMyCostsSummaryRequest,
     GetMyCostsSummaryResult,
     GetUserCostsSummaryRequest,
@@ -11,6 +14,18 @@ export interface MyCostsClientProps extends IdeaBaseClientProps {
 }
 
 class MyCostsClient extends IdeaBaseClient<MyCostsClientProps> {
+
+    getCostTicker(req: GetCostTickerRequest = {}): Promise<GetCostTickerResult> {
+        return this.apiInvoker.invoke_alt<GetCostTickerRequest, GetCostTickerResult>('MyCosts.GetCostTicker', req)
+    }
+
+    refresh(): Promise<GetMyCostsResult> {
+        return this.apiInvoker.invoke_alt('MyCosts.Refresh', {})
+    }
+
+    getCosts(req: GetMyCostsSummaryRequest): Promise<GetMyCostsResult> {
+        return this.apiInvoker.invoke_alt<GetMyCostsSummaryRequest, GetMyCostsResult>('MyCosts.GetCosts', req)
+    }
 
     getSummary(req: GetMyCostsSummaryRequest): Promise<GetMyCostsSummaryResult> {
         return this.apiInvoker.invoke_alt<GetMyCostsSummaryRequest, GetMyCostsSummaryResult>(
@@ -31,6 +46,14 @@ class MyCostsClient extends IdeaBaseClient<MyCostsClientProps> {
     getUserSummary(req: GetUserCostsSummaryRequest): Promise<GetMyCostsSummaryResult> {
         return this.apiInvoker.invoke_alt<GetUserCostsSummaryRequest, GetMyCostsSummaryResult>(
             'Costs.GetUserSummary',
+            req
+        )
+    }
+
+    // Admin only. Calendar-month costs from the same cached service as the personal billboard.
+    getUserCosts(req: GetUserCostsSummaryRequest): Promise<GetMyCostsResult> {
+        return this.apiInvoker.invoke_alt<GetUserCostsSummaryRequest, GetMyCostsResult>(
+            'Costs.GetUserCosts',
             req
         )
     }

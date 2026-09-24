@@ -12,7 +12,7 @@
  */
 
 import React, {Component} from "react";
-import {Link} from "@cloudscape-design/components";
+import {Link, SpaceBetween} from "@cloudscape-design/components";
 import Box from "@cloudscape-design/components/box";
 
 import {SocaUserInputParamMetadata} from "../../client/data-model";
@@ -111,16 +111,15 @@ class IdeaFormReviewField extends Component<IdeaFormReviewFieldProps, IdeaFormRe
             })
         }
         return (
-            <span>
+            <SpaceBetween direction="horizontal" size="xs">
                 {password()}
-                &nbsp;&nbsp;
                 <span onClick={(_) => toggle()}>
                     <Link variant={"secondary"}
                           fontSize={"body-s"}>
                         {(this.state.showPassword) ? "Hide" : "Show"}
                     </Link>
                 </span>
-            </span>
+            </SpaceBetween>
         )
     }
 

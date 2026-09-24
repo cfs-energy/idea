@@ -1,26 +1,23 @@
 from ideasdk.protocols import MetricsProviderProtocol, SocaContextProtocol
 from ideasdk.utils import Utils
+from ideasdk.metrics.datadog_format import DatadogFormat
 
 from typing import Dict, List, Optional, Tuple
 from threading import RLock
 from urllib.parse import urlparse
 import os
-import re
 import socket
 
 DEFAULT_URL = 'udp://127.0.0.1:8125'
-METRIC_PREFIX = 'idea'
 # The agent reads datagrams of up to 8 KiB; one datagram carries many newline-separated lines.
 MAX_DATAGRAM_BYTES = 8192
-# Tag values may not carry the characters the wire format uses to delimit.
-_TAG_UNSAFE = re.compile(r'[,|#\n\r\t ]+')
 
 # Counters become counts and Summaries distributions, so the agent aggregates across
 # tasks; anything else is a gauge.
 _METRIC_TYPES = {'Counter': 'c', 'Summary': 'd'}
 
 
-class DogStatsdMetrics(MetricsProviderProtocol):
+class DogStatsdMetrics(DatadogFormat, MetricsProviderProtocol):
     """
     Ship IDEA metrics to a Datadog agent over DogStatsD.
 
@@ -30,7 +27,8 @@ class DogStatsdMetrics(MetricsProviderProtocol):
 
     The target is metrics.dogstatsd.url, then DD_DOGSTATSD_URL, then UDP on localhost:
     udp://host:port, or unix:///path/to/dsd.socket when the agent shares a volume with
-    the task. Sending never raises: a missing agent costs a warning, not the request.
+    the task. Sending warns by default; durable callers can request send exceptions
+    so a local delivery failure leaves their saved payload available for retry.
     """
 
     def __init__(self, context: SocaContextProtocol, namespace: str):
@@ -38,12 +36,7 @@ class DogStatsdMetrics(MetricsProviderProtocol):
         self.logger = context.logger('dogstatsd-metrics')
         self.namespace = namespace
 
-        self.base_tags: List[str] = []
-        for key, value in zip(
-            ('idea_cluster', 'idea_module', 'component'), namespace.split('/')
-        ):
-            if Utils.is_not_empty(value):
-                self.base_tags.append(f'{key}:{self._tag_value(value)}')
+        DatadogFormat.__init__(self, namespace)
 
         url = context.config().get_string('metrics.dogstatsd.url')
         if Utils.is_empty(url):
@@ -66,34 +59,10 @@ class DogStatsdMetrics(MetricsProviderProtocol):
         )
 
     @staticmethod
-    def _tag_value(value) -> str:
-        text = _TAG_UNSAFE.sub('_', str(value).strip())
-        return text[:200] if Utils.is_not_empty(text) else 'unknown'
-
-    @staticmethod
     def _value(value) -> str:
         # plain decimals: no exponent, no trailing zeros, so 86514.0 travels as 86514
         text = f'{float(value):.6f}'.rstrip('0').rstrip('.')
         return text if text not in ('', '-0') else '0'
-
-    @staticmethod
-    def complete_entries(metric_data: List[Dict]) -> List[Dict]:
-        """
-        one entry per metric name: the one with the most dimensions. BaseMetrics emits
-        the per-dimension splits and the complete entry in one batch; sending all of them
-        would count the same event once per dimension.
-        """
-        chosen: Dict[str, Dict] = {}
-        order: List[str] = []
-        for entry in metric_data:
-            name = entry.get('MetricName')
-            width = len(Utils.get_value_as_list('Dimensions', entry, []))
-            if name not in chosen:
-                order.append(name)
-                chosen[name] = entry
-            elif width > len(Utils.get_value_as_list('Dimensions', chosen[name], [])):
-                chosen[name] = entry
-        return [chosen[name] for name in order]
 
     def format_entry(self, entry: Dict) -> Optional[str]:
         name = entry.get('MetricName')
@@ -103,13 +72,9 @@ class DogStatsdMetrics(MetricsProviderProtocol):
         if value is None:
             return None
         metric_type = _METRIC_TYPES.get(entry.get('MetricType'), 'g')
-        tags = list(self.base_tags)
-        for dimension in Utils.get_value_as_list('Dimensions', entry, []):
-            key = _TAG_UNSAFE.sub('_', str(dimension.get('Name', '')).strip().lower())
-            if Utils.is_empty(key):
-                continue
-            tags.append(f'{key}:{self._tag_value(dimension.get("Value"))}')
-        line = f'{METRIC_PREFIX}.{name}:{self._value(value)}|{metric_type}'
+        collector = name.startswith(('cost.', 'storage.'))
+        metric_name, tags = self.name_and_tags(entry)
+        line = f'{metric_name}:{self._value(value)}|{metric_type}'
         if len(tags) > 0:
             line = f'{line}|#{",".join(tags)}'
         # An epoch Timestamp stamps the point at that time: Cost Explorer's day, not the
@@ -122,9 +87,13 @@ class DogStatsdMetrics(MetricsProviderProtocol):
             and metric_type in ('g', 'c')
         ):
             line = f'{line}|T{int(timestamp)}'
+        # Socket peer credentials can enrich points even without a container ID.
+        # Infrastructure totals must not inherit the identity of the collecting task.
+        if collector:
+            line = f'{line}|card:none'
         return line
 
-    def log(self, metric_data: List[Dict]):
+    def log(self, metric_data: List[Dict], raise_on_error: bool = False):
         lines = []
         for entry in self.complete_entries(metric_data):
             line = self.format_entry(entry)
@@ -140,13 +109,13 @@ class DogStatsdMetrics(MetricsProviderProtocol):
                 len(datagram) + len(encoded) + 1 > MAX_DATAGRAM_BYTES
                 and len(datagram) > 0
             ):
-                self._send(datagram)
+                self._send(datagram, raise_on_error=raise_on_error)
                 datagram = b''
             datagram = encoded if len(datagram) == 0 else datagram + b'\n' + encoded
         if len(datagram) > 0:
-            self._send(datagram)
+            self._send(datagram, raise_on_error=raise_on_error)
 
-    def _send(self, datagram: bytes):
+    def _send(self, datagram: bytes, raise_on_error: bool = False):
         with self._lock:
             try:
                 if self._socket is None:
@@ -166,6 +135,9 @@ class DogStatsdMetrics(MetricsProviderProtocol):
                         f'dogstatsd send to {self._address} failed '
                         f'({self._send_failures} in a row): {e}'
                     )
+
+                if raise_on_error:
+                    raise
 
     def flush(self):
         # datagrams leave as they are built; nothing is held back.

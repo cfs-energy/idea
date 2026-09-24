@@ -16,8 +16,8 @@ import {VirtualDesktopSchedule, VirtualDesktopWeekSchedule} from "../../../clien
 import React, {Component, RefObject} from "react";
 import IdeaTimeRangeSlider from "../../../components/time-range-slider";
 import {IdeaFormField} from "../../../components/form-field";
-import moment from "moment";
-import {Alert, Box, Button, ColumnLayout, Form, Header, Modal, SpaceBetween} from "@cloudscape-design/components";
+import moment from "moment-timezone";
+import {Alert, Box, Button, ColumnLayout, Form, Header, Modal, SpaceBetween, Link} from "@cloudscape-design/components";
 import {AppContext} from "../../../common";
 
 // Day Of Week Schedule Component (reusing the same structure)
@@ -271,8 +271,7 @@ class DefaultScheduleModal extends Component<DefaultScheduleModalProps, DefaultS
                         <>
                             Setup default schedules for new virtual desktop sessions. These schedules will be applied to new sessions unless users customize their schedules.
                             The schedule operates at the cluster timezone setup by your cluster administrator.
-                            <br /><br /><a href="https://docs.idea-hpc.com/modules/virtual-desktop-interfaces/user-documentation/virtual-desktop-scheduling"
-                                target="_blank" rel="noopener noreferrer">See documentation for scheduling explanations</a>.
+                             <Link external href="https://docs.idea-hpc.com/modules/virtual-desktop-interfaces/user-documentation/virtual-desktop-scheduling">See documentation for scheduling explanations</Link>.
                         </>
                     }>Edit Default Schedules</Header>
                    }
@@ -289,7 +288,7 @@ class DefaultScheduleModal extends Component<DefaultScheduleModalProps, DefaultS
 
                 <SpaceBetween size={"m"}>
                     <Alert>
-                        <strong>Cluster Time: {this.state.currentTime && this.state.currentTime.tz(AppContext.get().getClusterSettingsService().getClusterTimeZone()).format('LLL')} ({AppContext.get().getClusterSettingsService().getClusterTimeZone()})</strong><br/>
+                        <SpaceBetween size="xxs"><Box variant="strong">Cluster Time: {this.state.currentTime && this.state.currentTime.tz(AppContext.get().getClusterSettingsService().getClusterTimeZone()).format('LLL')} ({AppContext.get().getClusterSettingsService().getClusterTimeZone()})</Box><Box></Box></SpaceBetween>
                     </Alert>
 
                     <Form errorText={this.state.errorMessage}>

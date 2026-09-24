@@ -1,0 +1,22 @@
+# Begin: GNOME Online Accounts
+# Red Hat family desktops keep Kerberos tickets in KCM or the kernel keyring. GNOME Online Accounts
+# adopts that identity and then asks for a password it cannot renew with. A per-user ticket file,
+# which Ubuntu desktops already use, keeps Online Accounts working without the prompt.
+if [ -f /etc/dconf/db/local.d/00-idea-online-accounts ] || [ -f /etc/dconf/db/local.d/locks/idea-online-accounts ]; then
+  log_info "Removing the Online Accounts lock applied by an earlier refresh"
+  rm -f /etc/dconf/db/local.d/00-idea-online-accounts /etc/dconf/db/local.d/locks/idea-online-accounts
+  if command -v dconf > /dev/null 2>&1; then
+    dconf update || exit 1
+  fi
+fi
+if grep -rqsE '^[[:space:]]*default_ccache_name[[:space:]]*=[[:space:]]*(KCM|KEYRING)' /etc/krb5.conf /etc/krb5.conf.d/; then
+  log_info "Keeping Kerberos tickets in per-user files"
+  for file in /etc/krb5.conf $(grep -rlsE '^[[:space:]]*default_ccache_name[[:space:]]*=[[:space:]]*(KCM|KEYRING)' /etc/krb5.conf.d/); do
+    sed -e 's/^\([[:space:]]*default_ccache_name[[:space:]]*=[[:space:]]*KCM\)/#\1/' \
+        -e 's/^\([[:space:]]*default_ccache_name[[:space:]]*=[[:space:]]*KEYRING\)/#\1/' "$file" > "$file.idea" || exit 1
+    cat "$file.idea" > "$file" && rm -f "$file.idea" || exit 1
+  done
+  mkdir -p /etc/krb5.conf.d || exit 1
+  printf '[libdefaults]\n    default_ccache_name = FILE:/tmp/krb5cc_%%{uid}\n' > /etc/krb5.conf.d/00-idea-file-ccache || exit 1
+fi
+# End: GNOME Online Accounts

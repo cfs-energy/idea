@@ -77,7 +77,7 @@ In this example:
 
 ## Create the HTML form <a href="#create-the-html-form" id="create-the-html-form"></a>
 
-Now that you have identified all variables, you must create their associated HTML components. As a HPC admin, navigate to "**Application**" tab in the left sidebar. Click "**Create Application**" to load the application interface. You will see three tabs:
+Now that you have identified all variables, you must create their associated HTML components. As a HPC admin, navigate to "**Administration**" > "**Images and applications**" > "**Submission forms**". Click "**Create Application**" to load the application interface. You will see three tabs:
 
 * Preview Form: Live rendering of the form you are creating
 * Form Builder: Where you build the HTML form
@@ -401,7 +401,7 @@ Finally, click "Next" choose an name, upload a thumbnail if needed (optional) an
 
 ## Submit a test job <a href="#submit-a-test-job" id="submit-a-test-job"></a>
 
-To submit a job, first navigate to "File Browser" on the left sidebar [file-browser.md](../../../first-time-users/file-browser.md "mention").
+To submit a job, first navigate to "Files" on the left sidebar [file-browser.md](../../../first-time-users/file-browser.md "mention").
 
 Choose your input file and click "**Submit Job**" icon. This will open the submit job interface.wizard
 

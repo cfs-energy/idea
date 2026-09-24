@@ -1,56 +1,24 @@
-import { render, waitFor } from '@testing-library/react';
-import { SideNavigationProps } from '@cloudscape-design/components';
+import {render, screen} from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import {vi} from 'vitest';
 import IdeaSideNavigation from './index';
-import { Constants } from '../../common/constants';
+import {initTestAppContext} from '../../test-support';
+import {IdeaSideNavItems} from '../../navigation/side-nav-items';
 
-const items: SideNavigationProps.Item[] = [
-    { type: 'link', text: 'Dashboard', href: '#/' },
-    { type: 'divider' },
-    { type: 'link', text: Constants.ADMIN_ZONE_LINK_TEXT, href: '#' },
-    { type: 'link', text: 'Projects', href: '#/cluster/projects' }
-];
-
-describe('side navigation', () => {
-    // side-navigation.scss styles the admin-zone entry as a section heading
-    // through this id. The lookup that sets it used to key on a Cloudscape class
-    // name, which stopped matching years ago.
-    it('tags the admin-zone entry so the stylesheet can reach it', () => {
-        const { container } = render(
-            <IdeaSideNavigation
-                sideNavHeader={{ text: 'IDEA', href: '#/' }}
-                sideNavItems={items}
-                onSideNavChange={() => {}}
-                navigate={() => {}}
-                location={{ pathname: '/' } as any}
-                params={{}}
-                searchParams={new URLSearchParams()}
-                setSearchParams={() => {}}
-            />
-        );
-
-        const tagged = container.querySelector('#idea-admin-zone-link');
-        expect(tagged).not.toBeNull();
-        expect(tagged!.textContent).toBe(Constants.ADMIN_ZONE_LINK_TEXT);
-        expect(container.querySelectorAll('#idea-admin-zone-link')).toHaveLength(1);
-    });
-
-    // App renders the side nav before its items load, so the anchors that carry
-    // the tag do not exist at mount.
-    it('tags the admin-zone entry when the items arrive after mount', async () => {
-        const props = {
-            sideNavHeader: { text: 'IDEA', href: '#/' },
-            onSideNavChange: () => {},
-            navigate: () => {},
-            location: { pathname: '/' } as any,
-            params: {},
-            searchParams: new URLSearchParams(),
-            setSearchParams: () => {}
-        };
-        const { container, rerender } = render(<IdeaSideNavigation {...props} sideNavItems={[]} />);
-        expect(container.querySelector('#idea-admin-zone-link')).toBeNull();
-
-        rerender(<IdeaSideNavigation {...props} sideNavItems={items} />);
-        await waitFor(() => expect(container.querySelector('#idea-admin-zone-link')).not.toBeNull());
-        expect(container.querySelectorAll('#idea-admin-zone-link')).toHaveLength(1);
-    });
+it('collapses Administration and follows aliases with the task selected', async () => {
+    const context = initTestAppContext();
+    vi.spyOn(context.auth(), 'isModuleAdmin').mockReturnValue(true);
+    vi.spyOn(context.auth(), 'hasModuleAccess').mockReturnValue(true);
+    const navigate = vi.fn();
+    render(<IdeaSideNavigation sideNavHeader={{text: 'IDEA', href: '#/home/virtual-desktops'}}
+        sideNavItems={IdeaSideNavItems(context)} onSideNavChange={() => {}} navigate={navigate}
+        location={{pathname: '/cluster/groups', search: ''} as any} params={{}} searchParams={new URLSearchParams()} setSearchParams={() => {}}/>);
+    expect(screen.queryByText('ADMIN ZONE')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', {name: 'People and access'})).toHaveAttribute('aria-current', 'page');
+    await userEvent.click(screen.getByRole('link', {name: 'Projects'}));
+    expect(navigate).toHaveBeenCalledWith('/cluster/projects');
+    const boundary = screen.getByRole('button', {name: 'Administration'});
+    expect(boundary).toHaveAttribute('aria-expanded', 'true');
+    await userEvent.click(boundary);
+    expect(boundary).toHaveAttribute('aria-expanded', 'false');
 });

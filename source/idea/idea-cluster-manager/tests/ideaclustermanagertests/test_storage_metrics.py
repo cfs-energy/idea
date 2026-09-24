@@ -84,7 +84,6 @@ def test_publish_storage_renders_gauges_with_the_tier_split_only_where_served():
     }
     assert used['alice']['Value'] == 150.0
     assert context.dimensions(used['alice']) == {
-        'host': 'test-cluster',
         'user': 'alice',
         'volume': 'data',
         'svm': 'svm1',
@@ -92,10 +91,7 @@ def test_publish_storage_renders_gauges_with_the_tier_split_only_where_served():
     }
     assert context.dimensions(used['bob'])['qtree'] == 'proj'
     assert all(e['MetricType'] == 'Gauge' for e in context.published())
-    assert all(
-        context.dimensions(e)['host'] == context.cluster_name()
-        for e in context.published()
-    )
+    assert all('host' not in context.dimensions(e) for e in context.published())
     tiers = {
         (context.dimensions(e)['volume'], context.dimensions(e)['tier']): e['Value']
         for e in context.published('storage.volume_tier_bytes')
@@ -186,3 +182,41 @@ def test_missing_password_leaves_storage_checkpoint_unset():
     assert context.published() == []
     assert context.distributed_lock().held == []
     assert any('no password' in line for line in context.logger().lines)
+
+
+def test_latest_reports_are_retained_per_target_and_joined_by_user(monkeypatch):
+    context = FakeContext(
+        {
+            'metrics.provider': 'dogstatsd',
+            'shared-storage': {'data': {'provider': 'fsx_netapp_ontap'}},
+            'shared-storage.data.fsx_netapp_ontap.metrics.username': 'reader',
+            'shared-storage.data.fsx_netapp_ontap.svm.management_dns': ENDPOINT,
+            'shared-storage.data.fsx_netapp_ontap.metrics.password_secret_arn': 'arn:secret',
+        },
+        secrets={'arn:secret': 'pw'},
+    )
+    alice = quota('CORP\\Alice', 'data', 123, 4)
+    alice['space']['hard_limit'] = 1024
+    reports = [
+        alice,
+        quota('bob', 'data', 99, 2),
+        quota('*', 'data', 999, 9),
+        quota('alice', 'data', 999, 9, kind='group'),
+    ]
+    monkeypatch.setattr(OntapClient, 'volumes', lambda _: [])
+    monkeypatch.setattr(OntapClient, 'quota_reports', lambda _: reports)
+    service = StorageMetricsService(context)
+    service.run_once()
+    rows = service.get_user_quotas('alice')
+    assert len(rows) == 1
+    assert rows[0]['target'] == 'data'
+    assert rows[0]['used_bytes'] == 123
+    assert rows[0]['files'] == 4
+    assert rows[0]['limit_bytes'] == 1024
+    assert rows[0]['measured_at'] > 0
+    assert service.get_user_quotas('nobody') == []
+    service._quota_reports['scratch'] = (123, [quota('alice', 'scratch', 5, 1)])
+    service._quota_reports['data'] = (124, [quota('alice', 'data', 200, 6)])
+    rows = service.get_user_quotas('ALICE')
+    assert [row['used_bytes'] for row in rows] == [200, 5]
+    assert rows[0]['limit_bytes'] is None

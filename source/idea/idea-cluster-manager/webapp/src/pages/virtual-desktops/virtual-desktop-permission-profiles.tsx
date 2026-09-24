@@ -16,7 +16,7 @@ import React, {Component, RefObject} from "react";
 import IdeaListView from "../../components/list-view";
 import {VirtualDesktopAdminClient} from '../../client'
 import {AppContext} from "../../common";
-import {TableProps} from "@cloudscape-design/components/table/interfaces";
+import {TableProps} from "@cloudscape-design/components/table";
 import {VirtualDesktopPermission, VirtualDesktopPermissionProfile} from '../../client/data-model'
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import IdeaAppLayout, {IdeaAppLayoutProps} from "../../components/app-layout";
@@ -232,7 +232,7 @@ class VirtualDesktopPermissionProfiles extends Component<VirtualDesktopPermissio
         return (
             <IdeaListView
                 ref={this.listing}
-                title="Permission Profiles"
+                title="Desktop permissions"
                 preferencesKey={'permission-profile'}
                 showPreferences={true}
                 description="Manage your Virtual Desktop Permission Profiles"
@@ -324,11 +324,11 @@ class VirtualDesktopPermissionProfiles extends Component<VirtualDesktopPermissio
                         href: '#/'
                     },
                     {
-                        text: 'Virtual Desktops',
-                        href: '#/virtual-desktop/sessions'
+                        text: 'People and access',
+                        href: '#/cluster/users'
                     },
                     {
-                        text: 'Permission Profiles',
+                        text: 'Desktop permissions',
                         href: ''
                     }
                 ]}

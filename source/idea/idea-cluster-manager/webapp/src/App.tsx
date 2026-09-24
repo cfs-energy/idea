@@ -27,33 +27,31 @@ import VirtualDesktopDashboard from "./pages/virtual-desktops/virtual-desktop-da
 import VirtualDesktopSessions from "./pages/virtual-desktops/virtual-desktop-sessions";
 import VirtualDesktopSoftwareStacks from "./pages/virtual-desktops/virtual-desktop-software-stacks";
 import MyVirtualDesktopSessions from "./pages/virtual-desktops/my-virtual-desktop-sessions";
-import VirtualDesktopSettings from "./pages/virtual-desktops/virtual-desktop-settings";
 import VirtualDesktopSessionDetail from "./pages/virtual-desktops/virtual-desktop-session-detail";
 import VirtualDesktopDebug from "./pages/virtual-desktops/virtual-desktop-debug";
-import {DashboardMain} from "./pages/dashboard";
+import {Navigate} from "react-router-dom";
 import UpdateHpcApplication from "./pages/hpc/update-hpc-application";
 import SubmitJob from "./pages/hpc/submit-job";
 import AccountSettings from "./pages/account/account-settings";
 import SSHAccess from "./pages/home/ssh-access";
 import MyCosts from "./pages/home/my-costs";
 import CustomDashboard from "./pages/home/custom-dashboard";
-import ClusterSettings from "./pages/cluster-admin/cluster-settings";
+import PortalSettings, {SettingsServiceDetails} from "./pages/cluster-admin/portal-settings";
+import HpcNodes from "./pages/hpc/hpc-nodes";
+import ReconciliationRuns from "./pages/cluster-admin/reconciliation-runs";
 import ClusterStatus from "./pages/cluster-admin/cluster-status";
 import Projects from "./pages/cluster-admin/projects";
-import AiUsage from "./pages/cluster-admin/ai-usage";
 import UserCostsPage from "./pages/cluster-admin/user-costs";
-import {Box, HelpPanel, SideNavigationProps, StatusIndicator} from "@cloudscape-design/components";
-import {NonCancelableCustomEvent} from "@cloudscape-design/components/internal/events";
-import {FlashbarProps} from "@cloudscape-design/components/flashbar/interfaces";
+import {Box, Header, HelpPanel, Link, SideNavigationProps, SpaceBetween, StatusIndicator} from "@cloudscape-design/components";
+import {NonCancelableCustomEvent} from "@cloudscape-design/components/interfaces";
+import {FlashbarProps} from "@cloudscape-design/components/flashbar";
 import HpcLicenses from "./pages/hpc/hpc-licenses";
 import HpcCustomAmis from "./pages/hpc/hpc-custom-amis";
-import EmailTemplates from "./pages/cluster-admin/email-templates";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import {applyDensity, applyMode, Density, Mode} from "@cloudscape-design/global-styles";
 import UpdateHpcLicense from "./pages/hpc/update-hpc-license";
-import HpcSchedulerSettings from "./pages/hpc/hpc-scheduler-settings";
 import VirtualDesktopPermissionProfiles from "./pages/virtual-desktops/virtual-desktop-permission-profiles";
 import VirtualDesktopPermissionProfileDetail from "./pages/virtual-desktops/virtual-desktop-permission-profile-detail";
 import MySharedVirtualDesktopSessions from "./pages/virtual-desktops/my-shared-virtual-desktop-sessions";
@@ -63,6 +61,9 @@ import {IdeaAppNavigationProps, withRouter} from './navigation/navigation-utils'
 import {Routes, Route} from "react-router-dom";
 import IdeaLogTail from "./pages/home/log-tail";
 import Utils from './common/utils';
+import {hasAccess} from './navigation/task-navigation';
+import {LandingPage} from './navigation/landing-page';
+import {Constants} from './common/constants';
 import ScriptWorkbench from "./pages/hpc/script-workbench";
 
 // context-help markdown, emitted as hashed asset URLs and fetched on demand
@@ -213,7 +214,22 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
                             tools: (<HelpPanel
                                 header={<ReactMarkdown children={header}/>}
                                 children={<ReactMarkdown children={children} remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}/>}
-                                footer={<ReactMarkdown children={footerContent} remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}/>}
+                                footer={<SpaceBetween size="m">
+                                    <Header variant="h3">API reference</Header>
+                                    {([
+                                        ['cluster', Constants.MODULE_CLUSTER_MANAGER, 'Portal'],
+                                        ['desktop', Constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER, 'Desktops'],
+                                        ['jobs', Constants.MODULE_SCHEDULER, 'Jobs']
+                                    ] as const).filter(([access]) => hasAccess(AppContext.get(), access) || hasAccess(AppContext.get(), `${access}-admin`)).map(([, module, title]) => {
+                                        const url = `${AppContext.get().getHttpEndpoint()}${Utils.getApiContextPath(module)}/openapi.yml`
+                                        return <SpaceBetween key={module} size="xs">
+                                            <Link external href={url}>{title} API specification</Link>
+                                            <Link external href={`https://editor-next.swagger.io/?url=${encodeURIComponent(url)}`}>{title} Swagger Editor</Link>
+                                        </SpaceBetween>
+                                    })}
+                                    <Link href="#/">Introduction</Link>
+                                    <ReactMarkdown children={footerContent} remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}/>
+                                </SpaceBetween>}
                             />)
                         })
                     })
@@ -276,6 +292,13 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
     }
 
     render() {
+        const view = this.props.searchParams.get('view')
+        const tab = this.props.searchParams.get('tab')
+        const AdminJobs = view === 'nodes' ? HpcNodes : AdminActiveJobs
+        const People = view === 'reconciliation' ? ReconciliationRuns : Users
+        const DesktopSettingsPage = view === 'services' || tab === 'controller' ? SettingsServiceDetails : PortalSettings
+        const JobSettingsPage = view === 'service' || tab === 'general' ? SettingsServiceDetails : PortalSettings
+
         return (this.state.isInitialized &&
             <Routes>
                 {/*authentication pages*/}
@@ -303,6 +326,12 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
                 {/*home*/}
                 <Route path="/" element={
                     <IdeaAuthenticatedRoute isLoggedIn={this.state.isLoggedIn}>
+                        <LandingPage/>
+                    </IdeaAuthenticatedRoute>
+                }/>
+
+                <Route path="/home" element={
+                    <IdeaAuthenticatedRoute isLoggedIn={this.state.isLoggedIn}>
                         <Home
                             ideaPageId="home"
                             toolsOpen={this.state.toolsOpen}
@@ -320,18 +349,7 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
 
                 <Route path="/dashboard" element={
                     <IdeaAuthenticatedRoute isLoggedIn={this.state.isLoggedIn}>
-                        <DashboardMain
-                            ideaPageId="dashboard"
-                            toolsOpen={this.state.toolsOpen}
-                            tools={this.state.tools}
-                            onToolsChange={this.onToolsChange}
-                            onPageChange={this.onPageChange}
-                            sideNavItems={this.state.sideNavItems}
-                            sideNavHeader={this.state.sideNavHeader}
-                            onSideNavChange={this.onSideNavChange}
-                            onFlashbarChange={this.onFlashbarChange}
-                            flashbarItems={this.state.flashbarItems}
-                        />
+                        <Navigate to={`/home/active-jobs${this.props.location.search}`} replace state={{retiredDashboard: true}}/>
                     </IdeaAuthenticatedRoute>
                 }/>
 
@@ -519,7 +537,7 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
                 }/>
                 <Route path="/soca/active-jobs" element={
                     <IdeaAuthenticatedRoute isLoggedIn={this.state.isLoggedIn}>
-                        <AdminActiveJobs
+                        <AdminJobs
                             ideaPageId="active-jobs"
                             toolsOpen={this.state.toolsOpen}
                             tools={this.state.tools}
@@ -709,9 +727,9 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
                         />
                     </IdeaAuthenticatedRoute>
                 }/>
-                <Route path="/soca/settings" element={
+                <Route path="/soca/settings/*" element={
                     <IdeaAuthenticatedRoute isLoggedIn={this.state.isLoggedIn}>
-                        <HpcSchedulerSettings
+                        <JobSettingsPage
                             ideaPageId="hpc-settings"
                             toolsOpen={this.state.toolsOpen}
                             tools={this.state.tools}
@@ -807,9 +825,9 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
                         />
                     </IdeaAuthenticatedRoute>
                 }/>
-                <Route path="/virtual-desktop/settings" element={
+                <Route path="/virtual-desktop/settings/*" element={
                     <IdeaAuthenticatedRoute isLoggedIn={this.state.isLoggedIn}>
-                        <VirtualDesktopSettings
+                        <DesktopSettingsPage
                             ideaPageId="virtual-desktop-settings"
                             toolsOpen={this.state.toolsOpen}
                             tools={this.state.tools}
@@ -904,25 +922,10 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
                         />
                     </IdeaAuthenticatedRoute>
                 }/>
-                <Route path="/cluster/ai-usage" element={
-                    <IdeaAuthenticatedRoute isLoggedIn={this.state.isLoggedIn}>
-                        <AiUsage
-                            ideaPageId="ai-usage"
-                            toolsOpen={this.state.toolsOpen}
-                            tools={this.state.tools}
-                            onToolsChange={this.onToolsChange}
-                            onPageChange={this.onPageChange}
-                            sideNavItems={this.state.sideNavItems}
-                            sideNavHeader={this.state.sideNavHeader}
-                            onSideNavChange={this.onSideNavChange}
-                            onFlashbarChange={this.onFlashbarChange}
-                            flashbarItems={this.state.flashbarItems}
-                        />
-                    </IdeaAuthenticatedRoute>
-                }/>
+                <Route path="/cluster/ai-usage" element={<Navigate to="/cluster/user-costs" replace/>}/>
                 <Route path="/cluster/users" element={
                     <IdeaAuthenticatedRoute isLoggedIn={this.state.isLoggedIn}>
-                        <Users
+                        <People
                             ideaPageId="users"
                             toolsOpen={this.state.toolsOpen}
                             tools={this.state.tools}
@@ -970,7 +973,7 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
                 }/>
                 <Route path="/cluster/email-templates" element={
                     <IdeaAuthenticatedRoute isLoggedIn={this.state.isLoggedIn}>
-                        <EmailTemplates
+                        <PortalSettings
                             ideaPageId="email-templates"
                             toolsOpen={this.state.toolsOpen}
                             tools={this.state.tools}
@@ -984,9 +987,9 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
                         />
                     </IdeaAuthenticatedRoute>
                 }/>
-                <Route path="/cluster/settings" element={
+                <Route path="/cluster/settings/*" element={
                     <IdeaAuthenticatedRoute isLoggedIn={this.state.isLoggedIn}>
-                        <ClusterSettings
+                        <PortalSettings
                             ideaPageId="cluster-settings"
                             toolsOpen={this.state.toolsOpen}
                             tools={this.state.tools}

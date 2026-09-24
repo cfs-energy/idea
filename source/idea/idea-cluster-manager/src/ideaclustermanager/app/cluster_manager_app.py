@@ -55,6 +55,9 @@ from ideaclustermanager.app.notifications.notifications_service import (
     NotificationsService,
 )
 
+from ideaclustermanager.app.costs.personal_costs_store import PersonalCostsStore
+from ideaclustermanager.app.costs.personal_costs_collector import PersonalCostsCollector
+
 from typing import Optional
 
 
@@ -90,6 +93,7 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
             **kwargs,
         )
         self.context = context
+        self.personal_costs = None
         self.web_portal: Optional[WebPortal] = None
         self.bedrock_usage: Optional[BedrockUsageService] = None
         self.account_reconciler: Optional[AccountReconciler] = None
@@ -204,6 +208,13 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
         # spend and storage as metrics
         self.cost_metrics = CostMetricsService(context=self.context)
         self.storage_metrics = StorageMetricsService(context=self.context)
+        self.context.storage_metrics = self.storage_metrics
+
+        self.context.personal_costs_store = PersonalCostsStore(self.context)
+        self.context.personal_costs_store.initialize()
+        self.personal_costs = PersonalCostsCollector(
+            self.context, self.context.personal_costs_store
+        )
 
         # email templates
         self.context.email_templates = EmailTemplatesService(context=self.context)
@@ -242,8 +253,12 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
             self.context.email_templates.create_defaults()
         finally:
             self.context.distributed_lock().release(key='initialize-defaults')
+        self.personal_costs.start()
 
     def app_stop(self):
+        if self.personal_costs is not None:
+            self.personal_costs.stop()
+
         if self.account_reconciler is not None:
             self.account_reconciler.stop()
 

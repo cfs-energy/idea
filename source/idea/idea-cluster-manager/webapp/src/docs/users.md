@@ -1,4 +1,6 @@
-## Users
+## People and access
+
+### Users
 
 Create and manage LDAP users of your IDEA cluster.
 

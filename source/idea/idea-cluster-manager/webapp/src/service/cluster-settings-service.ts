@@ -17,7 +17,7 @@ import {Constants, ErrorCodes} from "../common/constants";
 import IdeaException from "../common/exceptions";
 import Utils from "../common/utils";
 import moment from "moment";
-import {FlashbarProps} from "@cloudscape-design/components/flashbar/interfaces";
+import {FlashbarProps} from "@cloudscape-design/components/flashbar";
 
 export interface ClusterSettingsServiceProps {
     clusterSettings: ClusterSettingsClient

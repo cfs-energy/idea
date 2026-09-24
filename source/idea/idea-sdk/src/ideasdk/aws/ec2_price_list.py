@@ -75,7 +75,7 @@ def _is_standard_1yr_no_upfront(row: Dict[str, str]) -> bool:
 
 
 def parse_ec2_offer_csv(
-    lines: Iterable[str], region: str
+    lines: Iterable[str], region: str, ebs_prices=None
 ) -> Dict[str, EC2InstanceUnitPrice]:
     """
     the on-demand and reserved hourly rates per instance type, from the lines of an EC2
@@ -91,6 +91,17 @@ def parse_ec2_offer_csv(
     reserved: Dict[str, float] = {}
 
     for row in csv.DictReader(rows):
+        if (
+            ebs_prices is not None
+            and row.get('Region Code') == region
+            and row.get('TermType') == 'OnDemand'
+            and row.get('Product Family') == 'Storage'
+            and row.get('Unit') == 'GB-Mo'
+        ):
+            price = _as_price(row.get('PricePerUnit'))
+            volume_type = row.get('Volume API Name')
+            if price is not None and volume_type:
+                ebs_prices[volume_type] = price
         instance_type = row.get('Instance Type')
         if not instance_type:
             continue
@@ -138,6 +149,7 @@ class EC2PriceList:
         self._logger = logger
         self._lock = threading.Lock()
         self._prices: Optional[Dict[str, EC2InstanceUnitPrice]] = None
+        self._ebs_prices = {}
         self._loaded_at = 0.0
         self._failed_at = 0.0
         self._refreshing = False
@@ -152,6 +164,11 @@ class EC2PriceList:
         if prices is None:
             return None
         return prices.get(instance_type)
+
+    def get_volume_price(self, volume_type: str) -> Optional[float]:
+        self._start_refresh_if_due()
+        with self._lock:
+            return self._ebs_prices.get(volume_type)
 
     def _start_refresh_if_due(self):
         with self._lock:
@@ -203,7 +220,11 @@ class EC2PriceList:
             # iter_lines only decodes when the response declares a charset and this one
             # does not, so the rows arrive as bytes.
             lines = (line.decode('utf-8') for line in response.iter_lines())
-            return parse_ec2_offer_csv(lines, self._region)
+            ebs_prices = {}
+            prices = parse_ec2_offer_csv(lines, self._region, ebs_prices)
+            with self._lock:
+                self._ebs_prices = ebs_prices
+            return prices
 
 
 # one map per region per process, so two AWSUtil instances do not each download the file.

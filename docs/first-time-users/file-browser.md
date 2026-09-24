@@ -1,16 +1,16 @@
 ---
-description: File Browser section let each user access their filesystem via a web browser.
+description: Files lets you access your filesystem via a web browser.
 ---
 
-# File Browser
+# Files
 
-To access it this section, click "**File Browser**" on the left sidebar.
+To access it this section, click "**Files**" on the left sidebar.
 
 <figure><img src="../.gitbook/assets/ftu_filebrowser_menu.webp" alt=""><figcaption></figcaption></figure>
 
 This will open a new interface from where you can manage all files available on the underlying file-system.
 
-<figure><img src="../.gitbook/assets/ftu_filebrowser_interface.webp" alt=""><figcaption><p>File Browser Interface</p></figcaption></figure>
+<figure><img src="../.gitbook/assets/ftu_filebrowser_interface.webp" alt=""><figcaption><p>Files</p></figcaption></figure>
 
 {% hint style="info" %}
 The file browser runs as you and honors filesystem permissions. System directories such as `/etc`, `/tmp`, `/usr` and `/var` are refused outright, whatever their permissions, and so is any path containing `..`.
@@ -67,6 +67,16 @@ Select one or more entries and click "**Rename**". The modal lists every selecte
 ## Delete file(s)
 
 Select the file(s) you want to delete and click "**Actions**" > "**Delete files**". Alternatively, you can right-click to display the context menu and click "**Delete files**". The confirmation lists everything that will go.
+
+## Delete a folder
+
+Select exactly one folder and click the visible **Delete folder** button. The same action remains available under **Actions** and in the right-click menu. The confirmation measures the folder and shows its size, file count, last change and measurement time. It warns that deleting the folder and everything inside it is permanent.
+
+Type the folder name exactly to enable **Delete folder**. Deletion stays disabled until a complete measurement and folder identity are available. Scans stop at 100,000 entries or ten seconds, with a directory depth limit of 128; unreadable data also produces a partial result. Partial sizes read **At least**.
+
+Only folders inside your home directory can be deleted this way; the home directory itself cannot. If the folder identity no longer matches its measurement, deletion is refused with **Folder changed since it was measured**. Close the confirmation, measure the folder again and review it before retrying. The identity check compares the directory device and inode; it does not detect every change to files inside it.
+
+Open [My costs](my-costs.md#storage) for home usage, top-level folder sizes and ages, bytes unchanged for 90 days, and available ONTAP quota reports.
 
 ## Download file(s)
 

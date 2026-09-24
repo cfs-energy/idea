@@ -14,7 +14,7 @@
 import {Component} from "react";
 import {IdeaAppLayoutProps} from "../../components/app-layout";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
-import {ColumnLayout, Container, Grid, Header, SpaceBetween, Tabs} from "@cloudscape-design/components";
+import {ColumnLayout, Container, Grid, Header, SpaceBetween, Tabs, Box} from "@cloudscape-design/components";
 import IdeaAppLayout from "../../components/app-layout/app-layout";
 import {KeyValue} from "../../components/key-value";
 import {AppContext} from "../../common";
@@ -317,13 +317,13 @@ class VirtualDesktopSessionDetail extends Component<VirtualDesktopSessionDetailP
                                     content: (
                                         <Container header={<Header variant={"h2"}>Monitoring (Coming Soon)</Header>}>
                                             <li>
-                                                eVDI Session <u>detailed</u> monitoring needs <b>Metrics and Monitoring</b> module to be enabled.
+                                                eVDI Session detailed monitoring needs <Box variant="strong">Metrics and Monitoring</Box> module to be enabled.
                                             </li>
                                             <li>
-                                                If <b>Metrics and Monitoring</b> is enabled, metrics collected via CloudWatch or Prometheus will be queried and rendered.
+                                                If <Box variant="strong">Metrics and Monitoring</Box> is enabled, metrics collected via CloudWatch or Prometheus will be queried and rendered.
                                             </li>
                                             <li>
-                                                If <b>Metrics and Monitoring</b> is not enabled, default EC2 Instance metrics available from CloudWatch will be rendered.
+                                                If <Box variant="strong">Metrics and Monitoring</Box> is not enabled, default EC2 Instance metrics available from CloudWatch will be rendered.
                                             </li>
                                         </Container>
                                     )

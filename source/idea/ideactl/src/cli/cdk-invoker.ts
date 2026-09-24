@@ -17,6 +17,7 @@
  */
 
 import { spawn as spawnProcess, spawnSync } from 'node:child_process';
+import { retryDelayMs } from './aws-client-options.ts';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -128,7 +129,16 @@ export function setupClusterCdkDir(clusterName: string, awsRegion: string): stri
 // ---------------------------------------------------------------------------------------------
 
 /** One child process. Resolves with the exit code; it never throws on a non-zero exit. */
-export type Spawn = (argv: string[], options: { cwd: string; env: Record<string, string | undefined> }) => Promise<number>;
+export type Spawn = (
+  argv: string[],
+  options: { cwd: string; env: Record<string, string | undefined>; onStderr?: (chunk: string) => void },
+) => Promise<number>;
+
+/** Error text from Node, the SDK or the CDK toolkit that means the network, not the request, failed. */
+export const NETWORK_FAILURE = /\b(ENETUNREACH|EHOSTUNREACH|EADDRNOTAVAIL|ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|socket hang up)\b/;
+
+/** Runs of one CDK command, first included. The command is create-change-set, synth or diff, all repeatable. */
+export const CDK_RUN_ATTEMPTS = 6;
 
 /** Streams the CDK CLI's output to this process's stdio, as `exec_shell` does. */
 export const liveSpawn: Spawn = (argv, options) =>
@@ -137,7 +147,13 @@ export const liveSpawn: Spawn = (argv, options) =>
       ? [process.execPath, '__ideactl_internal_cdk__', ...argv.slice(1)] : argv;
     const [command, ...args] = invocation;
     if (command === undefined) throw new GeneralException('empty argv');
-    const child = spawnProcess(command, args, { cwd: options.cwd, env: options.env, stdio: 'inherit' });
+    const child = spawnProcess(command, args, {
+      cwd: options.cwd, env: options.env, stdio: ['inherit', 'inherit', options.onStderr ? 'pipe' : 'inherit'],
+    });
+    child.stderr?.on('data', (chunk: Buffer) => {
+      process.stderr.write(chunk);
+      options.onStderr?.(chunk.toString());
+    });
     child.on('error', reject);
     child.on('close', (code) => resolve(code ?? 1));
   });
@@ -724,8 +740,21 @@ export class CdkInvoker {
   /** `exec_shell`: run it in the cluster `_cdk` directory, non-zero exit becomes `SystemExit`. */
   async execCdk(argv: string[]): Promise<void> {
     this.deps.out(`shell> ${argv.join(' ')}`);
-    const code = await this.deps.spawn(argv, { cwd: this.cdkHome, env: this.env() });
-    if (code !== 0) throw new ExitWithCode(code);
+    for (let run = 1; ; run++) {
+      let tail = '';
+      const code = await this.deps.spawn(argv, {
+        cwd: this.cdkHome,
+        env: this.env(),
+        onStderr: (chunk) => { tail = (tail + chunk).slice(-8192); },
+      });
+      if (code === 0) return;
+      // A failed network call is repeated with the same backoff as the tool's own AWS calls; any
+      // other failure stops the command, as before.
+      if (!NETWORK_FAILURE.test(tail) || run >= CDK_RUN_ATTEMPTS) throw new ExitWithCode(code);
+      const delay = retryDelayMs(run);
+      this.deps.out(`The CDK command failed on a network error; running it again in ${delay / 1000} s (run ${run + 1} of ${CDK_RUN_ATTEMPTS}).`);
+      await this.deps.sleep(delay);
+    }
   }
 
   async cdkSynth(): Promise<void> {

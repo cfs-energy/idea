@@ -1,4 +1,6 @@
-## Create Application
+## Images and applications
+
+### Create Application
 
 Create a web-based workflow to submit your HPC jobs.
 

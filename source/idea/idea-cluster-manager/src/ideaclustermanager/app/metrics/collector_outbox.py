@@ -1,6 +1,8 @@
 import hashlib
 import json
 
+from ideasdk.metrics.datadog_api import DatadogAPI
+
 
 class CollectorOutbox:
     def __init__(self, context, prefix, historical=False):
@@ -31,11 +33,17 @@ class CollectorOutbox:
     def publish(self, metric_data):
         self.entries.extend(metric_data)
 
+    def deliver(self, entries):
+        if self.context.config().get_string('metrics.provider') == 'dogstatsd':
+            DatadogAPI.from_context(self.context).log(entries)
+        else:
+            self.context.service_registry().get_service('metrics-service').publish(
+                entries, synchronous=True
+            )
+
     def save(self):
         if self.db is None:
-            publisher = self.context.service_registry().get_service('metrics-service')
-            for entry in self.entries:
-                publisher.publish([entry])
+            self.deliver(self.entries)
             return
         for entry in self.entries:
             identity = [
@@ -58,17 +66,17 @@ class CollectorOutbox:
     def replay(self):
         if self.db is None:
             return
-        # Datagram transports cannot acknowledge ingestion, so enqueuing never retires a payload.
-        # Object storage keeps historical corrections out of every application's settings cache.
+        # Retaining delivered points replays historical spend on every collection.
+        # HTTP acceptance is required before durable points can be retired.
         request = {'Bucket': self.bucket, 'Prefix': self.object_prefix}
-        publisher = self.context.service_registry().get_service('metrics-service')
         while True:
             page = self.client.list_objects_v2(**request)
             for row in page.get('Contents', []):
                 response = self.client.get_object(Bucket=self.bucket, Key=row['Key'])
                 body = response['Body']
                 try:
-                    publisher.publish([json.loads(body.read())])
+                    self.deliver([json.loads(body.read())])
+                    self.client.delete_object(Bucket=self.bucket, Key=row['Key'])
                 finally:
                     body.close()
             token = page.get('NextContinuationToken')

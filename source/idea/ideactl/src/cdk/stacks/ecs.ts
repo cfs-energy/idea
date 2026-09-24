@@ -11,7 +11,7 @@
  * only order a fresh install can satisfy: those rows do not exist until the module stack runs.
  */
 
-import { Aws, CustomResource, RemovalPolicy } from "aws-cdk-lib";
+import { Aws, CustomResource, Duration, RemovalPolicy } from "aws-cdk-lib";
 import type { StackBuildProps } from "../app.ts";
 import { IdeaBaseStack } from "../base-stack.ts";
 import { CustomResourceProvider, LOG_RETENTION_DAYS } from "../constructs/common.ts";
@@ -88,6 +88,13 @@ export class EcsStack extends IdeaBaseStack {
       env: props.env,
     });
 
+    const minHosts = this.context.config.getInt("ecs.hosts.min", 3);
+    const maxHosts = this.context.config.getInt("ecs.hosts.max", 4);
+    const surgeRoles = ["cluster-manager", "vdc", "dcv-broker", "dcv-gateway", "bastion-host"];
+    if (maxHosts <= minHosts && surgeRoles.some(role => this.context.config.getInt(`ecs.tasks.${role}.desired`, 2) > 0)) {
+      throw new Error("ecs.hosts.max must exceed ecs.hosts.min: distinct-instance service surges require a spare host (defaults: min 3, max 4).");
+    }
+
     this.cluster = new ExistingSocaCluster(this.context, this.stack);
     const execLogGroupName = this.execCommandLogGroupName();
     const execLogGroup = this.ensureAgentLogGroup("exec-log-group-ensure", execLogGroupName);
@@ -121,6 +128,7 @@ export class EcsStack extends IdeaBaseStack {
       enableManagedScaling: true,
       enableManagedTerminationProtection: true,
       targetCapacityPercent: 100,
+      enableManagedDraining: true,
     });
     this.ecsCluster.addAsgCapacityProvider(this.capacityProvider);
     this.releaseScaleInProtectionOnDelete();
@@ -494,6 +502,11 @@ export class EcsStack extends IdeaBaseStack {
       image: ecs.ContainerImage.fromRegistry(this.datadogImage()),
       logging: this.adoptedLogDriver("datadog-logs", datadogLogGroupName, STREAM_PREFIX_DATADOG),
       memoryReservationMiB: 512,
+      healthCheck: {
+        command: ["CMD", "agent", "health"], interval: Duration.seconds(5),
+        timeout: Duration.seconds(5), retries: 3, startPeriod: Duration.seconds(120),
+      },
+      stopTimeout: Duration.seconds(30),
       secrets: { DD_API_KEY: ecs.Secret.fromSecretsManager(apiKey) },
     });
     this.bindContainerToLogGroup(container, datadogLogGroupName);
@@ -516,6 +529,10 @@ export class EcsStack extends IdeaBaseStack {
     const service = new ecs.Ec2Service(this.stack, "datadog-service", {
       cluster: this.ecsCluster,
       daemon: true,
+      // One agent owns the host socket. Replacing it requires a local collection gap.
+      minHealthyPercent: 50,
+      maxHealthyPercent: 100,
+      circuitBreaker: { rollback: true },
       taskDefinition,
     });
     // The daemon is the likeliest thing in this stack to fail, and the release has to already

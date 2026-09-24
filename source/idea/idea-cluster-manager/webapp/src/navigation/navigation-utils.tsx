@@ -16,12 +16,7 @@ import {
     useNavigate,
     useParams, useSearchParams
 } from "react-router-dom";
-import {NavigateFunction} from "react-router/dist/lib/hooks";
-import {Location} from "@remix-run/router";
-import {URLSearchParamsInit} from "react-router-dom/dist/dom";
-import {NavigateOptions} from "react-router";
-
-declare type SetURLSearchParams = (nextInit?: URLSearchParamsInit | ((prev: URLSearchParams) => URLSearchParamsInit), navigateOpts?: NavigateOptions) => void;
+import type {Location, NavigateFunction, SetURLSearchParams} from "react-router-dom";
 
 export interface IdeaAppNavigationProps {
     navigate: NavigateFunction

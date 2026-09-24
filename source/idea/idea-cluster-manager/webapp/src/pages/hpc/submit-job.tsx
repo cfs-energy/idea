@@ -41,7 +41,7 @@ import {ProjectsClient, SchedulerClient} from "../../client";
 import IdeaException from '../../common/exceptions'
 import {AppContext} from "../../common";
 import Utils from "../../common/utils";
-import {TableProps} from "@cloudscape-design/components/table/interfaces";
+import {TableProps} from "@cloudscape-design/components/table";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import {JobTemplate} from "../../service/job-templates-service";
 import IdeaAppLayout, {IdeaAppLayoutProps} from "../../components/app-layout";
@@ -634,12 +634,8 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                             columns={3}
                             items={this.state.filteredJobTemplates.map((jobTemplate) => {
                                 return {
-                                    label: (
-                                        <div>
-                                            <strong>{jobTemplate.title!}</strong><br/>
-                                            <span>{jobTemplate.description}</span>
-                                        </div>
-                                    ),
+                                    label: jobTemplate.title!,
+                                    description: jobTemplate.description,
                                     value: jobTemplate.id!
                                 }
                             })}
@@ -702,11 +698,10 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
     }
 
     buildApplicationCard(application: HpcApplication) {
-        return <div style={{display: 'flex', flexDirection: 'row', alignItems: 'center'}}>
+        return <SpaceBetween direction="horizontal" size="xs" alignItems="center">
             {this.getApplicationImage(application)}
-            &nbsp;&nbsp;
-            <span style={{display: 'inline-block', paddingRight: '10px'}}>{application.title}</span>
-        </div>
+            <span>{application.title}</span>
+        </SpaceBetween>
     }
 
     buildSubmitJobForm() {
@@ -1696,11 +1691,11 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                         href: '#/'
                     },
                     {
-                        text: 'Submit Job',
+                        text: 'Submit job',
                         href: ''
                     }
                 ]}
-                header={<Header variant={"h1"} actions={this.buildJobActions()}>Submit Job</Header>}
+                header={<Header variant={"h1"} actions={this.buildJobActions()}>Submit job</Header>}
                 contentType={"form"}
                 content={
                     <div>

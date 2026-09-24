@@ -1,4 +1,6 @@
-## Manage Permission Profiles
+## People and access
+
+### Desktop permissions
 
 Manage your permission profiles. A permission profile is a set of permissions that are granted to a user/group on any given session
 

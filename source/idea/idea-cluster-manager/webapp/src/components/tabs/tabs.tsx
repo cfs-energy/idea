@@ -15,7 +15,7 @@ import React, {Component} from "react";
 import {
     Tabs
 } from "@cloudscape-design/components";
-import {TabsProps} from "@cloudscape-design/components/tabs/interfaces";
+import {TabsProps} from "@cloudscape-design/components/tabs";
 
 export interface IdeaTabsProps {
     onRefresh?: () => void

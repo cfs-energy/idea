@@ -21,7 +21,7 @@ This tool is particularly useful for users who are familiar with PBS directives 
 You can access the Script Workbench from the IDEA web interface:
 
 1. Log in to your IDEA cluster web interface
-2. Navigate to **IDEA** → **Home** → **Script Workbench**
+2. Navigate to **My jobs** → **Write script**
 
 ## Using the Script Workbench
 

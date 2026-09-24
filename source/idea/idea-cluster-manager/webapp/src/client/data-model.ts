@@ -131,6 +131,7 @@ export interface User {
   password_max_age?: number;
   created_on?: string;
   updated_on?: string;
+  landing_page?: string;
 }
 export interface AddUserToGroupRequest {
   usernames?: string[];
@@ -222,6 +223,7 @@ export interface VirtualDesktopServer {
   root_volume_size?: SocaMemory;
   root_volume_iops?: number;
   instance_profile_arn?: string;
+  bootstrap_refresh_version?: number;
   security_groups?: string[];
   subnet_id?: string;
   key_pair_name?: string;
@@ -428,6 +430,21 @@ export interface CheckHpcLicenseResourceAvailabilityRequest {
 }
 export interface CheckHpcLicenseResourceAvailabilityResult {
   available_count?: number;
+}
+export interface ClusterService {
+  name: string;
+  desired?: number;
+  running?: number;
+  pending?: number;
+  images?: string[];
+  rollout_state?: string;
+  updated_at?: string;
+  tasks?: ClusterServiceTask[];
+}
+export interface ClusterServiceTask {
+  task_id: string;
+  started_at?: string;
+  health?: string;
 }
 export interface ConfirmForgotPasswordRequest {
   client_id?: string;
@@ -904,6 +921,30 @@ export interface DescribeSessionsResponse {
     [k: string]: unknown;
   };
 }
+export interface DescribeSettingsCatalogRequest {}
+export interface DescribeSettingsCatalogResult {
+  settings: SettingDefinition[];
+}
+export interface SettingDefinition {
+  key: string;
+  module: string;
+  path: string;
+  group: string;
+  section: string;
+  label: string;
+  description: string;
+  value_type: "string" | "integer" | "number" | "boolean" | "list" | "enum" | "secret";
+  choices?: string[];
+  validation: SettingValidation;
+  advanced: boolean;
+  effect: "runtime" | "restart" | "deployment";
+}
+export interface SettingValidation {
+  required?: boolean;
+  minimum?: number;
+  maximum?: number;
+  pattern?: string;
+}
 export interface DisableGroupRequest {
   group_name?: string;
 }
@@ -983,6 +1024,15 @@ export interface ForgotPasswordResult {}
 export interface GetBasePermissionsRequest {}
 export interface GetBasePermissionsResponse {
   permissions?: VirtualDesktopPermission[];
+}
+export interface GetCostTickerRequest {}
+export interface GetCostTickerResult {
+  enabled?: boolean;
+  period?: string;
+  total?: number;
+  currency?: string;
+  as_of?: string;
+  incomplete?: boolean;
 }
 export interface GetEmailTemplateRequest {
   name?: string;
@@ -1187,7 +1237,86 @@ export interface GetModuleSettingsRequest {
 export interface GetModuleSettingsResult {
   settings?: unknown;
 }
-export interface GetMyCostsSummaryRequest {}
+export interface GetMyCostsResult {
+  currency: string;
+  state: string;
+  refreshed_at?: string;
+  generation?: string;
+  timezone?: string;
+  expected_ready_at?: string;
+  collecting_delayed?: boolean;
+  collecting_reason?: string;
+  refresh_pending?: boolean;
+  refresh_acknowledged?: boolean;
+  current?: MyCostsMonth;
+  previous?: MyCostsMonth;
+}
+export interface MyCostsMonth {
+  start_date: string;
+  end_date: string;
+  total?: number;
+  incomplete?: boolean;
+  jobs: MyCostsAmount;
+  desktops: MyCostsAmount;
+  desktop_disks: MyCostsAmount;
+  shared_storage: MyCostsAmount;
+  ai: MyCostsAmount;
+  disks?: MyCostsDisk[];
+  storage?: MyCostsStorageShare[];
+  details?: GetMyCostsSummaryResult;
+}
+export interface MyCostsAmount {
+  cost?: number;
+  status?: string;
+  note?: string;
+  amount?: number;
+  reason?: string;
+  coverage?: MyCostsCoverage;
+  source_as_of?: string;
+  daily?: MyCostsDaily[];
+}
+export interface MyCostsCoverage {
+  known_days?: number;
+  missing_days?: number;
+  missing_prices?: number;
+  inferred_intervals?: number;
+}
+export interface MyCostsDaily {
+  date: string;
+  day: number;
+  amount?: number;
+  status: string;
+}
+export interface MyCostsDisk {
+  cost?: number;
+  status?: string;
+  note?: string;
+  amount?: number;
+  reason?: string;
+  coverage?: MyCostsCoverage;
+  source_as_of?: string;
+  daily?: MyCostsDaily[];
+  volume_id: string;
+  desktop: string;
+  state: string;
+  size_gb: number;
+  volume_type: string;
+  gb_month_rate?: number;
+}
+export interface MyCostsStorageShare {
+  cost?: number;
+  status?: string;
+  note?: string;
+  amount?: number;
+  reason?: string;
+  coverage?: MyCostsCoverage;
+  source_as_of?: string;
+  daily?: MyCostsDaily[];
+  filesystem: string;
+  used_bytes?: number;
+  share?: number;
+  measured_at?: number;
+}
 export interface GetMyCostsSummaryResult {
   username?: string;
   window?: string;
@@ -1276,6 +1405,7 @@ export interface MyCostsDesktopSession {
   stop_time_estimated?: boolean;
   price_unavailable?: boolean;
 }
+export interface GetMyCostsSummaryRequest {}
 export interface GetParamChoicesRequest {
   paginator?: SocaPaginator;
   sort_by?: SocaSortBy;
@@ -1575,6 +1705,11 @@ export interface ListClusterModulesResult {
   date_range?: SocaDateRange;
   listing?: (SocaBaseModel | unknown)[];
   filters?: SocaFilter[];
+}
+export interface ListClusterServicesRequest {}
+export interface ListClusterServicesResult {
+  listing?: ClusterService[];
+  errors?: string[];
 }
 export interface ListComputeImagesRequest {}
 export interface ListComputeImagesResult {
@@ -1899,9 +2034,10 @@ export interface ListUserCostsResult {
   ai_unavailable?: boolean;
   jobs_unavailable?: boolean;
   desktops_unavailable?: boolean;
+  storage_unavailable?: boolean;
 }
 /**
- * one user's totals across the three sections, for the admin listing.
+ * one user's totals for the admin listing.
  */
 export interface UserCosts {
   username?: string;
@@ -1917,6 +2053,8 @@ export interface UserCosts {
   job_cost?: number;
   job_unpriced_jobs?: number;
   job_cost_unavailable?: boolean;
+  storage_cost?: number;
+  storage_gb?: number;
   total_cost?: number;
 }
 export interface ListUsersInGroupRequest {
@@ -2292,6 +2430,15 @@ export interface UpdateModuleSettingsRequest {
 }
 export interface UpdateModuleSettingsResult {
   success?: boolean;
+  effects?: {
+    [k: string]: string;
+  };
+}
+export interface UpdateMyPreferencesRequest {
+  landing_page?: string;
+}
+export interface UpdateMyPreferencesResult {
+  user?: User;
 }
 export interface UpdatePermissionProfileRequest {
   profile?: VirtualDesktopPermissionProfile;

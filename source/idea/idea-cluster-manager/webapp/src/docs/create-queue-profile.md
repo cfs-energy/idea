@@ -1,4 +1,6 @@
-## Create Queue Profile
+## Manage jobs
+
+### Create Queue Profile
 
 Create a new queue profile
 

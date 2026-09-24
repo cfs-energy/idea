@@ -15,6 +15,8 @@ __all__ = (
     'GetUserResult',
     'ModifyUserRequest',
     'ModifyUserResult',
+    'UpdateMyPreferencesRequest',
+    'UpdateMyPreferencesResult',
     'DeleteUserRequest',
     'DeleteUserResult',
     'EnableUserRequest',
@@ -110,6 +112,14 @@ class ModifyUserRequest(SocaPayload):
 
 
 class ModifyUserResult(SocaPayload):
+    user: Optional[User] = Field(default=None)
+
+
+class UpdateMyPreferencesRequest(SocaPayload):
+    landing_page: Optional[str] = Field(default=None)
+
+
+class UpdateMyPreferencesResult(SocaPayload):
     user: Optional[User] = Field(default=None)
 
 
@@ -446,6 +456,13 @@ OPEN_API_SPEC_ENTRIES_AUTH = [
         namespace='Accounts.ModifyUser',
         request=ModifyUserRequest,
         result=ModifyUserResult,
+        is_listing=False,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='Auth.UpdateMyPreferences',
+        request=UpdateMyPreferencesRequest,
+        result=UpdateMyPreferencesResult,
         is_listing=False,
         is_public=False,
     ),

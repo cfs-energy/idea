@@ -199,7 +199,7 @@ class VirtualDesktopSoftwareStackDetail extends Component<VirtualDesktopSoftware
                         href: '#/virtual-desktop/software-stacks'
                     },
                     {
-                        text: 'Software Stacks',
+                        text: 'Desktop images',
                         href: '#/virtual-desktop/software-stacks'
                     },
                     {

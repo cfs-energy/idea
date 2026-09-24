@@ -22,7 +22,7 @@ import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import {
   addStorageMounts, adoptedLogDriver, buildEc2Service, buildExecutionRole,
   buildTaskDefinition, commonEnvironment, containerImage, dockerLabels,
-  ecsTasksPrincipal, grantInjectedSecret, healthCheckGrace, roleSizing, taskRoleName,
+  applicationContainerSettings, ecsTasksPrincipal, grantInjectedSecret, healthCheckGrace, roleSizing, taskRoleName,
   type ContainerScope,
 } from '../constructs/container.ts';
 
@@ -114,7 +114,7 @@ export class BastionHostStack extends IdeaBaseStack {
     const targetGroup = new elbv2.NetworkTargetGroup(this.stack, 'bastion-target-group', {
       vpc: this.cluster.vpc, port: 22, protocol: elbv2.Protocol.TCP,
       targetType: elbv2.TargetType.IP, preserveClientIp: true,
-      healthCheck: { protocol: elbv2.Protocol.TCP, port: '22' },
+      healthCheck: { protocol: elbv2.Protocol.TCP, port: '22', interval: Duration.seconds(5), timeout: Duration.seconds(4), healthyThresholdCount: 2, unhealthyThresholdCount: 2 },
       deregistrationDelay: Duration.seconds(30), connectionTermination: true,
     });
     const listener = nlb.addListener('ssh', { port: 22, protocol: elbv2.Protocol.TCP, defaultTargetGroups: [targetGroup] });
@@ -186,6 +186,7 @@ export class BastionHostStack extends IdeaBaseStack {
     }
     const task = buildTaskDefinition(scope, 'bastion-task-definition', { executionRole, taskRole });
     const container = task.addContainer('bastion', {
+      ...applicationContainerSettings('bastion-host'),
       image: containerImage(scope), cpu: sizing.cpu, memoryLimitMiB: sizing.memory,
       environment, secrets, dockerLabels: dockerLabels(scope, 'bastion-host'),
       logging: adoptedLogDriver(scope, 'bastion-log-group', `/${this.clusterName}/${this.moduleId}`, 'sshd'),
@@ -201,7 +202,6 @@ export class BastionHostStack extends IdeaBaseStack {
       constructId: 'bastion-service', serviceName: `${this.clusterName}-${this.moduleId}`,
       taskDefinition: task, desiredCount: sizing.desired,
       securityGroups: [bastionSecurityGroup, healthSecurityGroup],
-      minHealthyPercent: 100, maxHealthyPercent: 200,
       healthCheckGracePeriod: healthCheckGrace('bastion-host'),
       dependencies: [taskRole, executionRole, listener],
     });

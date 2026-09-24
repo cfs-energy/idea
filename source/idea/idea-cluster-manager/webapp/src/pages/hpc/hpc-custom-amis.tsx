@@ -20,6 +20,7 @@ import {AppContext} from "../../common";
 import {Constants} from "../../common/constants";
 import Utils from "../../common/utils";
 import {withRouter} from "../../navigation/navigation-utils";
+import {hasAccess} from "../../navigation/task-navigation";
 import {ImageBuildRecord, ImageInventoryRow} from "../../client/data-model";
 import {
     Box,
@@ -125,7 +126,7 @@ class HpcCustomAmis extends Component<HpcCustomAmisProps, HpcCustomAmisState> {
             compute: [],
             desktop: [],
             loading: true,
-            vdcDeployed: AppContext.get().getClusterSettingsService().isVirtualDesktopDeployed(),
+            vdcDeployed: hasAccess(AppContext.get(), 'desktop-admin'),
             baseAmi: '',
             instanceType: '',
             efa: true,
@@ -187,11 +188,13 @@ class HpcCustomAmis extends Component<HpcCustomAmisProps, HpcCustomAmisState> {
         this.setState({loading: true})
         const clients = AppContext.get().client()
         // Each table fetches and fails on its own, so a controller error does not blank the compute rows.
-        const compute = clients.schedulerAdmin().listComputeImages({}).then(result => {
-            this.setState({compute: result.listing ?? [], supportedBaseOs: result.supported_base_os ?? [], computeNodeOs: result.compute_node_os, computeError: undefined})
-        }).catch(error => {
-            this.setState({computeError: `Failed to list compute images: ${error.message}`})
-        })
+        const compute = hasAccess(AppContext.get(), 'jobs-admin')
+            ? clients.schedulerAdmin().listComputeImages({}).then(result => {
+                this.setState({compute: result.listing ?? [], supportedBaseOs: result.supported_base_os ?? [], computeNodeOs: result.compute_node_os, computeError: undefined})
+            }).catch(error => {
+                this.setState({computeError: `Failed to list compute images: ${error.message}`})
+            })
+            : Promise.resolve()
         const desktop = this.state.vdcDeployed
             ? clients.virtualDesktopAdmin().listDesktopImages({}).then(result => {
                 this.setState({desktop: result.listing ?? [], desktopError: undefined})
@@ -848,11 +851,11 @@ class HpcCustomAmis extends Component<HpcCustomAmisProps, HpcCustomAmisState> {
                         href: '#/'
                     },
                     {
-                        text: 'Scale-Out Computing',
-                        href: '#/soca/active-jobs'
+                        text: 'Images and applications',
+                        href: '#/virtual-desktop/software-stacks'
                     },
                     {
-                        text: 'Custom AMIs',
+                        text: 'Custom images',
                         href: ''
                     }
                 ]}
@@ -864,12 +867,12 @@ class HpcCustomAmis extends Component<HpcCustomAmisProps, HpcCustomAmisState> {
                                 description="What this cluster launches from today, per base OS and architecture, and whether it has been built. A build pre-installs the node software, so a launch takes minutes instead of about 15."
                                 actions={<Button iconName="refresh" onClick={this.load} loading={this.state.loading}>Refresh</Button>}
                             >
-                                Custom AMIs
+                                Custom images
                             </Header>
                         }>
                             <Box>Builds started here run on the module hosts and keep going if you leave the page. Rows that are building refresh every 30 seconds.</Box>
                         </Container>
-                        {this.renderTable('compute', this.visibleComputeRows(), 'Compute images', 'Images jobs run on: the scheduler default and the queue profiles that name an image, one row per base OS and architecture. Combinations with neither an image nor a build are hidden; Add image starts one.', this.state.computeError, this.renderAddImageButton())}
+                        {hasAccess(AppContext.get(), 'jobs-admin') && this.renderTable('compute', this.visibleComputeRows(), 'Compute images', 'Images jobs run on: the scheduler default and the queue profiles that name an image, one row per base OS and architecture. Combinations with neither an image nor a build are hidden; Add image starts one.', this.state.computeError, this.renderAddImageButton())}
                         {this.state.vdcDeployed && this.renderTable('desktop', this.state.desktop, 'Desktop images', 'Images the ss-base-* software stacks launch desktops from.', this.state.desktopError, <Button data-testid="build-all" onClick={this.openBuildAll}>Build all desktop images</Button>)}
                         {this.renderBuildDialog()}
                         {this.renderBuildAllDialog()}

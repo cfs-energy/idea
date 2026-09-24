@@ -115,6 +115,8 @@ export interface CheckContext {
   output(line: string): void;
   processes: ProcessRunner;
   sleep(milliseconds: number): Promise<void>;
+  /** One fresh connection to a neutral host outside the cluster; defaults to the live control URL. */
+  control?(): Promise<true | string>;
 }
 
 export interface CheckResult {

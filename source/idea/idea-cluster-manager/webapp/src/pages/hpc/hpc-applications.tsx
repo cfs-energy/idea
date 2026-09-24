@@ -13,7 +13,7 @@
 
 import React, {Component, RefObject} from "react";
 
-import {TableProps} from "@cloudscape-design/components/table/interfaces";
+import {TableProps} from "@cloudscape-design/components/table";
 import {HpcApplication} from '../../client/data-model'
 import IdeaListView from "../../components/list-view";
 import {SchedulerAdminClient} from "../../client";
@@ -23,6 +23,7 @@ import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import IdeaAppLayout, {IdeaAppLayoutProps} from "../../components/app-layout";
 import Utils from "../../common/utils";
 import {withRouter} from "../../navigation/navigation-utils";
+import {Box} from "@cloudscape-design/components";
 
 
 export interface HpcApplicationsProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
@@ -140,7 +141,7 @@ class HpcApplications extends Component<HpcApplicationsProps, HpcApplicationsSta
                                  this.getListing().setFlashMessage(`Failed to delete application: ${error.message}`, 'error')
                              })
                          }}>
-                Are you sure you want to delete application: <b>{this.getSelected()?.title}</b> ?
+                Are you sure you want to delete application: <Box variant="strong">{this.getSelected()?.title}</Box> ?
             </IdeaConfirm>
         )
     }
@@ -149,7 +150,7 @@ class HpcApplications extends Component<HpcApplicationsProps, HpcApplicationsSta
         return (
             <IdeaListView
                 ref={this.listing}
-                title="Applications"
+                title="Submission forms"
                 preferencesKey={'applications'}
                 showPreferences={false}
                 description="Scale-Out Applications"
@@ -243,11 +244,11 @@ class HpcApplications extends Component<HpcApplicationsProps, HpcApplicationsSta
                         href: '#/'
                     },
                     {
-                        text: 'Scale-Out Computing',
-                        href: '#/soca/active-jobs'
+                        text: 'Images and applications',
+                        href: '#/virtual-desktop/software-stacks'
                     },
                     {
-                        text: 'Applications',
+                        text: 'Submission forms',
                         href: ''
                     }
                 ]}

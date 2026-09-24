@@ -16,6 +16,7 @@ from ideadatamodel import exceptions
 
 import os
 import shutil
+import subprocess
 from cryptography.hazmat.primitives import serialization as crypto_serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.backends import default_backend as crypto_default_backend
@@ -182,23 +183,23 @@ class UserHomeDirectory:
             result = self._shell.invoke('command -v puttygen', shell=True)
             if result.returncode != 0:
                 raise exceptions.general_exception('puttygen binary not found in PATH')
-            putty_gen_bin = result.stdout
+            putty_gen_bin = result.stdout.strip()
             if not os.access(putty_gen_bin, os.X_OK):
                 os.chmod(putty_gen_bin, 0o700)
 
             id_rsa_ppk_file = os.path.join(self.ssh_dir, 'id_rsa.ppk')
             if not Utils.is_file(id_rsa_ppk_file):
-                result = self._shell.invoke(
-                    [
-                        'su',
-                        self.user.username,
-                        '-c',
-                        f'{putty_gen_bin} {id_rsa_file} -o {id_rsa_ppk_file}',
-                    ]
+                # Convert as the service user; containers cannot switch to directory users.
+                result = subprocess.run(
+                    [putty_gen_bin, id_rsa_file, '-o', id_rsa_ppk_file],
+                    capture_output=True,
+                    text=True,
                 )
                 if result.returncode != 0:
                     raise exceptions.general_exception(
-                        f'failed to generate .ppk file: {result}'
+                        f'failed to generate .ppk file: {result.stderr.strip()}'
                     )
+                os.chmod(id_rsa_ppk_file, 0o600)
+                self.own_path(id_rsa_ppk_file)
 
             return read_private_key_content(id_rsa_ppk_file)

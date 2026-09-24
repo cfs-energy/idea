@@ -13,7 +13,7 @@
 
 import React, {Component, RefObject} from "react";
 
-import {TableProps} from "@cloudscape-design/components/table/interfaces";
+import {TableProps} from "@cloudscape-design/components/table";
 import {Project, SocaUserInputChoice, SocaUserInputParamMetadata} from '../../client/data-model'
 import IdeaListView from "../../components/list-view";
 import {AccountsClient, ProjectsClient} from "../../client";

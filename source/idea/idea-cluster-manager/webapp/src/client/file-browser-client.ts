@@ -33,10 +33,43 @@ import {
 } from './data-model'
 import IdeaBaseClient, {IdeaBaseClientProps} from "./base-client";
 
+export interface StorageFolderUsage {
+    identity?: {device: string, inode: string}
+    path: string
+    name: string
+    bytes: number
+    files: number
+    newest_mtime: number | null
+    oldest_mtime: number | null
+    unchanged_90_days_bytes: number
+    partial: boolean
+}
+
+export interface StorageUsageResult {
+    state: 'computing' | 'ready' | 'error'
+    home: string
+    measured_at?: number
+    partial?: boolean
+    total?: StorageFolderUsage
+    folders?: StorageFolderUsage[]
+    folder?: StorageFolderUsage | null
+    message?: string
+    quota_status?: 'available' | 'unavailable'
+    quotas?: {target: string, volume: string, qtree: string, used_bytes: number, files: number, limit_bytes: number | null, measured_at: number}[]
+}
+
 export interface FileBrowserClientProps extends IdeaBaseClientProps {
 }
 
 class FileBrowserClient extends IdeaBaseClient<FileBrowserClientProps> {
+
+    getStorageUsage(req: {folder?: string} = {}): Promise<StorageUsageResult> {
+        return this.apiInvoker.invoke_alt<{folder?: string}, StorageUsageResult>('FileBrowser.GetStorageUsage', req)
+    }
+
+    deleteFolder(req: {path: string, identity: {device: string, inode: string}}): Promise<DeleteFilesResult> {
+        return this.apiInvoker.invoke_alt('FileBrowser.DeleteFolder', req)
+    }
 
     listFiles(req: ListFilesRequest): Promise<ListFilesResult> {
         return this.apiInvoker.invoke_alt<ListFilesRequest, ListFilesResult>(

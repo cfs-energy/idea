@@ -1,4 +1,6 @@
-## Groups
+## People and access
+
+### Groups
 
 Create and manage the LDAP groups of your IDEA cluster.
 

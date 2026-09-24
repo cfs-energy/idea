@@ -4,11 +4,11 @@ description: Pick a model from the ones your project allows
 
 # Choose an AI model
 
-Cluster administrators keep a catalog of approved models, and each project is granted a subset of it. The models available to you are listed under **Account Settings** > **My Projects**.
+Cluster administrators keep a catalog of approved models, and each project is granted a subset of it. The models available to you are listed under **My account** > **My Projects**.
 
 ## Invoke the profile, not the model id
 
-Under each model, **Account Settings** > **My Projects** also shows an ARN ending in
+Under each model, **My account** > **My Projects** also shows an ARN ending in
 `application-inference-profile/...`. That ARN is what you pass as the model id when you call Bedrock.
 
 The model id itself will not work. Passing `us.anthropic.claude-...` directly is refused with
@@ -38,7 +38,7 @@ is granted its own profile rather than the shared one. A wizard that goes green 
 invoking a shared profile and the spend is not being attributed to any project. Skip it.
 
 `/status` shows what you are on. The model reads as an `application-inference-profile` ARN, which is
-opaque by design; the banner and **Account Settings** > **My Projects** both map it back to a model id.
+opaque by design; the banner and **My account** > **My Projects** both map it back to a model id.
 
 ### Defaults you can change
 

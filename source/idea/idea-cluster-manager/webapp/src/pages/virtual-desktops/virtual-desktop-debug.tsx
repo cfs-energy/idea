@@ -137,7 +137,7 @@ class VirtualDesktopDebug extends Component<VirtualDesktopDebugProps, VirtualDes
                                     }}/>
                                 </SpaceBetween>
                             }>
-                        Debug Virtual Desktop Sessions
+                        Diagnostics
                     </Header>}
                 contentType="default"
                 content={

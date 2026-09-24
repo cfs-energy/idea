@@ -43,11 +43,7 @@ test("plans the exact global rewrite and non-global add-only synchronization", (
     ],
   );
 
-  assert.deepEqual(plan.globalDeletes, [
-    "global-settings.changed",
-    "global-settings.removed",
-    "global-settings.same",
-  ]);
+  assert.deepEqual(plan.globalDeletes, []);
   assert.deepEqual(plan.globalWrites, [
     "global-settings.added",
     "global-settings.changed",
@@ -55,7 +51,7 @@ test("plans the exact global rewrite and non-global add-only synchronization", (
   ]);
   assert.deepEqual(plan.addOnlyWrites, ["cluster.added"]);
   assert.deepEqual(plan.changedGlobalRows, ["global-settings.changed"]);
-  assert.deepEqual(plan.removedGlobalRows, ["global-settings.removed"]);
+  assert.deepEqual(plan.removedGlobalRows, []);
   assert.deepEqual(plan.preservedDrift, ["cluster.preserved"]);
 });
 
@@ -154,7 +150,10 @@ test(
     // module stack owns its own service now, so no stack reads a row a later stack writes. The
     // detector itself is still exercised by the unit test above, which plants one.
     assert.doesNotMatch(result.stdout, /FINDING OBSERVED LATER_WRITER_READ /);
-    assert.match(result.stdout, /FINDING RISK TRANSIENT_ABSENCE /);
+    // Global rows are rewritten in place and obsolete ones removed only after deployment, so no
+    // row is ever absent while an application may read it.
+    assert.doesNotMatch(result.stdout, /FINDING RISK TRANSIENT_ABSENCE /);
+    assert.match(result.stdout, /^SYNC global_delete=0 /m);
     // The routed step keeps the hosts and a migration step sets the input that selects it, so
     // neither the missing shape nor the undriven shape is reported any more.
     assert.doesNotMatch(result.stdout, /FINDING BLOCKING ROUTE_STAGE_UNDRIVEN /);

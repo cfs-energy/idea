@@ -12,19 +12,21 @@
  */
 
 import React, {Component} from "react";
-import {Box, BreadcrumbGroup, Flashbar, SpaceBetween} from "@cloudscape-design/components";
+import {Box, BreadcrumbGroup, Button, Flashbar, Header, SpaceBetween, Tabs} from "@cloudscape-design/components";
 import {AppContext} from "../../common";
 import AppLayout from "@cloudscape-design/components/app-layout";
-import {NonCancelableEventHandler} from "@cloudscape-design/components/internal/events";
-import {AppLayoutProps} from "@cloudscape-design/components/app-layout/interfaces";
-import {BreadcrumbGroupProps} from "@cloudscape-design/components/breadcrumb-group/interfaces";
+import {AppLayoutProps} from "@cloudscape-design/components/app-layout";
+import {BreadcrumbGroupProps} from "@cloudscape-design/components/breadcrumb-group";
 import {OnFlashbarChangeEvent, OnPageChangeEvent, OnToolsChangeEvent} from "../../App";
-import {FlashbarProps} from "@cloudscape-design/components/flashbar/interfaces";
+import {FlashbarProps} from "@cloudscape-design/components/flashbar";
 import {withRouter} from "../../navigation/navigation-utils";
 import IdeaSideNavigation, {IdeaSideNavigationProps} from "../side-navigation";
 import IdeaNavbar from "../navbar";
 import Utils from "../../common/utils";
 import {MaintenanceSettings, maintenanceFlashbarItems} from "../../service/cluster-settings-service";
+
+import {resolveTask, tabViews} from '../../navigation/task-navigation';
+import {EmbeddedPageContext} from './embedded-page-context';
 
 // How often the banner is re-read while a page is open. Every page mounts this component, so a
 // navigation picks up a change as well.
@@ -46,9 +48,9 @@ export interface IdeaAppLayoutProps extends IdeaSideNavigationProps {
     splitPanelSize?: number
     splitPanelOpen?: boolean;
     splitPanelPreferences?: AppLayoutProps.SplitPanelPreferences;
-    onSplitPanelResize?: NonCancelableEventHandler<AppLayoutProps.SplitPanelResizeDetail>;
-    onSplitPanelToggle?: NonCancelableEventHandler<AppLayoutProps.ChangeDetail>;
-    onSplitPanelPreferencesChange?: NonCancelableEventHandler<AppLayoutProps.SplitPanelPreferences>;
+    onSplitPanelResize?: AppLayoutProps['onSplitPanelResize'];
+    onSplitPanelToggle?: AppLayoutProps['onSplitPanelToggle'];
+    onSplitPanelPreferencesChange?: AppLayoutProps['onSplitPanelPreferencesChange'];
     onFlashbarChange: (event: OnFlashbarChangeEvent) => void
     flashbarItems: FlashbarProps.MessageDefinition[]
     sideNavActivePath?: string
@@ -59,6 +61,9 @@ export interface IdeaAppLayoutState {
 }
 
 class IdeaAppLayout extends Component<IdeaAppLayoutProps, IdeaAppLayoutState> {
+
+    static contextType = EmbeddedPageContext
+    declare context: React.ContextType<typeof EmbeddedPageContext>
 
     private maintenancePoll?: ReturnType<typeof setInterval>
     private mounted: boolean = false
@@ -74,12 +79,13 @@ class IdeaAppLayout extends Component<IdeaAppLayoutProps, IdeaAppLayoutState> {
 
     componentDidMount() {
 
+        if (this.context) return
         this.mounted = true
 
         Utils.hideLoadingAnimation()
 
         this.props.onPageChange({
-            pageId: this.props.ideaPageId
+            pageId: resolveTask(this.props.location.pathname, this.props.location.search)?.task.id ?? this.props.ideaPageId
         })
 
         this.refreshMaintenance()
@@ -103,6 +109,14 @@ class IdeaAppLayout extends Component<IdeaAppLayoutProps, IdeaAppLayoutState> {
 
     buildBreadCrumbs() {
         let items = this.props.breadcrumbItems
+        const resolved = resolveTask(this.props.location.pathname, this.props.location.search)
+        if (resolved) {
+            const first = tabViews(resolved.task, AppContext.get())[0]
+            const leaf = items?.[items.length - 1]
+            items = [{text: resolved.task.title, href: `#${first?.path ?? resolved.view.path}`}]
+            if (resolved.task.views.length > 1 && resolved.task.id !== 'settings') items.push({text: resolved.view.label, href: `#${resolved.view.path}`})
+            if (leaf && this.props.location.pathname !== resolved.view.path.split('?')[0]) items.push(leaf)
+        }
         if (!items) {
             return null
         }
@@ -122,14 +136,26 @@ class IdeaAppLayout extends Component<IdeaAppLayoutProps, IdeaAppLayoutState> {
             <Box textAlign="center">
                 <SpaceBetween direction="vertical" size="xxxs">
                     <span>{AppContext.get().getCopyRightText()}</span>
-                    <span><small><b>Release:</b> v{AppContext.get().releaseVersion()}
-                        &nbsp;v{AppContext.get().releaseVersion()}</small></span>
+                    <Box variant="small"><Box variant="strong">Release:</Box> v{AppContext.get().releaseVersion()}</Box>
                 </SpaceBetween>
             </Box>
         </footer>
     }
 
     render() {
+        if (this.context) return <>{this.props.header}{this.props.content}</>
+        const resolved = resolveTask(this.props.location.pathname, this.props.location.search)
+        const views = resolved ? tabViews(resolved.task, AppContext.get()) : []
+        const grouped = resolved && resolved.task.id !== 'settings' && resolved.task.views.filter(view => view.tab !== false).length > 1
+        const atViewRoot = resolved && this.props.location.pathname === resolved.view.path.split('?')[0]
+        const innerHeader = React.isValidElement<any>(this.props.header) ? React.cloneElement<any>(this.props.header, {variant: 'h2', ...(atViewRoot ? {children: resolved?.view.label} : {})}) : this.props.header
+        const content = <>{grouped && innerHeader}{this.props.location.state?.retiredDashboard && <Box>The former dashboard has moved to My jobs.</Box>}{this.props.content}</>
+        const taskHeader = resolved ? <Header variant="h1"
+            description={resolved.task.id === 'manage-jobs' ? 'All users' : undefined}
+            actions={resolved.task.id === 'my-jobs' ? <SpaceBetween direction="horizontal" size="s">
+                <Button onClick={() => this.props.navigate('/soca/jobs/submit-job')}>Submit</Button>
+                <Button onClick={() => this.props.navigate('/home/script-workbench')}>Write script</Button>
+            </SpaceBetween> : undefined}>{resolved.task.title}</Header> : this.props.header
         return (
             <div>
                 <div id="h" style={{position: 'sticky', top: 0, zIndex: 1002}}>
@@ -150,7 +176,7 @@ class IdeaAppLayout extends Component<IdeaAppLayoutProps, IdeaAppLayoutState> {
                             setSearchParams={this.props.setSearchParams}
                         />
                     }
-                    contentHeader={this.props.header}
+                    contentHeader={resolved && !grouped && React.isValidElement<any>(this.props.header) ? React.cloneElement<any>(this.props.header, resolved.task.id === 'reports' ? {} : {children: resolved.task.title}) : taskHeader}
                     breadcrumbs={this.buildBreadCrumbs()}
                     stickyNotifications={true}
                     notifications={this.buildNotifications()}
@@ -158,7 +184,11 @@ class IdeaAppLayout extends Component<IdeaAppLayoutProps, IdeaAppLayoutState> {
                     content={
                         <section>
                             <main className="soca-app-content">
-                                {this.props.content}
+                                {grouped && views.length ? <><Tabs activeTabId={resolved.view.path}
+                                    onChange={event => this.props.navigate(event.detail.activeTabId)}
+                                    tabs={views.map(view => ({id: view.path, label: view.label, content: view.path === resolved.view.path ? content : null}))}/>
+                                    {resolved.view.tab === false && content}</>
+                                    : resolved ? content : this.props.content}
                             </main>
                         </section>
                     }
@@ -169,7 +199,7 @@ class IdeaAppLayout extends Component<IdeaAppLayoutProps, IdeaAppLayoutState> {
                         if (this.props.onToolsChange) {
                             this.props.onToolsChange({
                                 open: event.detail.open,
-                                pageId: this.props.ideaPageId
+                                pageId: resolveTask(this.props.location.pathname, this.props.location.search)?.task.id ?? this.props.ideaPageId
                             })
                         }
                     }}

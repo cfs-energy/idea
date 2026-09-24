@@ -476,13 +476,11 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
                 confirmAction: {
                     actionTitle: "Terminate Virtual Desktop",
                     actionText: (
-                        <div>
-                            Are you sure you want to terminate virtual desktop: {session.name}?
-                            <br /><br />
-                            This will <strong>permanently delete</strong> the instance and its local data.
-                            <br /><br />
-                            <strong>Note:</strong> Shared storage filesystems will <strong>not</strong> be affected.
-                        </div>
+                        <SpaceBetween size="s">
+                            <Box>Are you sure you want to terminate virtual desktop: {session.name}?</Box>
+                            <Box>This will <strong>permanently delete</strong> the instance and its local data.</Box>
+                            <Box><strong>Note:</strong> Shared storage filesystems will <strong>not</strong> be affected.</Box>
+                        </SpaceBetween>
                     ),
                     onConfirm: () => {
                         this.getVirtualDesktopClient().deleteSessions({
@@ -1082,7 +1080,7 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
                             </Button>
                         </SpaceBetween>
                     }>
-                    Virtual Desktops
+                    My desktops
                 </Header>
             }
             trackBy="idea_session_id"
@@ -1161,7 +1159,7 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
             ]}
             empty={
                 <Box textAlign="center" color="inherit" padding={{top: 'xxxl', bottom: "s"}}>
-                    <b>No virtual desktops found.</b>
+                    <Box variant="strong">No virtual desktops found.</Box>
                     <Box
                         padding={{top: 'xxxl', bottom: "s"}}
                         variant="p"
@@ -1198,7 +1196,7 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
                         href: '#/'
                     },
                     {
-                        text: 'Virtual Desktops',
+                        text: 'My desktops',
                         href: ''
                     }
                 ]}

@@ -1,4 +1,6 @@
-## Active Jobs
+## My jobs
+
+### Active
 
 View your current queue in real-time
 

@@ -78,8 +78,11 @@ class FakeLock:
 class RecordingMetricsService:
     def __init__(self):
         self.published: List[Dict] = []
+        self.fail_after = None
 
-    def publish(self, metric_data):
+    def publish(self, metric_data, synchronous=False):
+        if self.fail_after is not None and len(self.published) >= self.fail_after:
+            raise RuntimeError('publish failed')
         self.published.extend(metric_data)
 
 
@@ -223,7 +226,23 @@ class FakeObjectStore:
             'Contents': [{'Key': key} for key in self.values if key.startswith(Prefix)]
         }
 
+    def delete_object(self, Bucket, Key):
+        del self.values[Key]
+
     def get_object(self, Bucket, Key):
         from io import BytesIO
 
         return {'Body': BytesIO(self.values[Key])}
+
+
+def synchronous_metrics_service(context, provider):
+    import queue
+    from unittest.mock import Mock
+    from ideasdk.metrics.metrics_service import MetricsService
+
+    service = MetricsService.__new__(MetricsService)
+    service.default_namespace = f'{context.cluster_name()}/{context.module_id()}'
+    service._metrics_backlog_queue = queue.Queue()
+    service._factory = Mock()
+    service._factory.get_provider.return_value = provider
+    return service

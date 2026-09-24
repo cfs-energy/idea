@@ -36,6 +36,13 @@ Statement:
       {{ context.utils.to_yaml(context.arns.s3_bucket_arns) | indent(6) }}
     Effect: Allow
 
+  # The cost and storage collectors retire an outbox object once it is sent; only that prefix.
+  - Action:
+      - s3:DeleteObject
+    Resource:
+      - '{{ context.arns.s3_bucket_arns[1] }}/metrics/outbox/*'
+    Effect: Allow
+
   - Action:
       - dynamodb:GetItem
       - dynamodb:Query
@@ -54,6 +61,7 @@ Statement:
       - dynamodb:UpdateTimeToLive
     Resource:
       - '{{ context.arns.get_ddb_table_arn("cluster-settings") }}'
+      - '{{ context.arns.get_ddb_table_arn("cluster-manager.personal-costs") }}'
       - '{{ context.arns.get_ddb_table_arn("cluster-settings/stream/*") }}'
       - '{{ context.arns.get_ddb_table_arn("modules") }}'
       - '{{ context.arns.get_ddb_table_arn("email-templates") }}'
@@ -144,7 +152,6 @@ Statement:
     Resource:
       - '{{ context.arns.get_project_role_arn() }}'
     Effect: Allow
-    Sid: BedrockProjectRoleCreate
     Condition:
       StringEquals:
         iam:PermissionsBoundary: '{{ context.arns.get_project_permissions_boundary_arn() }}'
@@ -157,7 +164,6 @@ Statement:
     Resource:
       - '{{ context.arns.get_project_role_arn() }}'
     Effect: Allow
-    Sid: BedrockProjectRolePolicyAttach
     Condition:
       StringEquals:
         iam:PermissionsBoundary: '{{ context.arns.get_project_permissions_boundary_arn() }}'
@@ -185,7 +191,6 @@ Statement:
     Resource:
       - '{{ context.arns.get_project_role_arn() }}'
     Effect: Allow
-    Sid: BedrockProjectRoleRead
 
   - Action:
       - iam:CreateInstanceProfile
@@ -197,7 +202,6 @@ Statement:
     Resource:
       - '{{ context.arns.get_project_instance_profile_arn() }}'
     Effect: Allow
-    Sid: BedrockProjectInstanceProfile
 
   # PassRole is required since AddRoleToInstanceProfile implicitly passes the role to ec2; scoped to the project role path and ec2 only.
   - Action:
@@ -205,7 +209,6 @@ Statement:
     Resource:
       - '{{ context.arns.get_project_role_arn() }}'
     Effect: Allow
-    Sid: BedrockProjectPassRole
     Condition:
       StringEquals:
         iam:PassedToService: 'ec2.{{ context.config.get_string("cluster.aws.dns_suffix", required=True) }}'
@@ -224,7 +227,6 @@ Statement:
     Resource:
       - '{{ context.arns.get_project_policy_arn() }}'
     Effect: Allow
-    Sid: BedrockProjectPolicy
 
   # The boundary document itself is read, not only its existence: the provisioner
   # compares an administrator supplied policy against it before attaching it.
@@ -235,7 +237,6 @@ Statement:
     Resource:
       - '{{ context.arns.get_project_permissions_boundary_arn() }}'
     Effect: Allow
-    Sid: BedrockProjectBoundaryRead
 
     {%- if context.config.get_list("cluster.iam.ec2_managed_policy_arns", []) %}
   # Read only, and only the policies cluster.iam.ec2_managed_policy_arns names, so a
@@ -249,7 +250,6 @@ Statement:
       - '{{ policy_arn }}'
       {%- endfor %}
     Effect: Allow
-    Sid: BedrockAdministratorPolicyRead
     {%- endif %}
 
   - Action:
@@ -259,7 +259,6 @@ Statement:
       - '{{ context.arns.bedrock_system_inference_profile_arn }}'
       - '{{ context.arns.bedrock_foundation_model_arn }}'
     Effect: Allow
-    Sid: BedrockCreateApplicationInferenceProfile
 
   # Only the profiles this module creates are deletable or taggable. The system
   # profile ARN is read only here, since it is the copyFrom source.
@@ -271,14 +270,12 @@ Statement:
     Resource:
       - '{{ context.arns.bedrock_application_inference_profile_arn }}'
     Effect: Allow
-    Sid: BedrockManageApplicationInferenceProfiles
 
   - Action:
       - bedrock:GetInferenceProfile
     Resource:
       - '{{ context.arns.bedrock_system_inference_profile_arn }}'
     Effect: Allow
-    Sid: BedrockReadSystemInferenceProfiles
 
   # ListInferenceProfiles has no resource types, so this filters the account wide listing to the named profiles.
   # GetFoundationModel below resolves whether a model id needs on demand throughput or a system profile.
@@ -286,14 +283,12 @@ Statement:
       - bedrock:ListInferenceProfiles
     Resource: '*'
     Effect: Allow
-    Sid: BedrockListInferenceProfiles
 
   - Action:
       - bedrock:GetFoundationModel
     Resource:
       - '{{ context.arns.bedrock_foundation_model_arn }}'
     Effect: Allow
-    Sid: BedrockReadFoundationModels
 
   # invocation logging is one configuration per account and region; idea only sets it if unset.
   # no delete action is granted, so it cannot be removed with these credentials.
@@ -302,7 +297,6 @@ Statement:
       - bedrock:PutModelInvocationLoggingConfiguration
     Resource: '*'
     Effect: Allow
-    Sid: BedrockInvocationLoggingConfiguration
 
   # scoped to the one delivery role name (trailing wildcard covers the region suffix the Role construct appends); can only be passed to bedrock.
   - Action:
@@ -310,7 +304,6 @@ Statement:
     Resource:
       - '{{ context.arns.get_arn("iam", "role/" + context.cluster_name + "-bedrock-invocation-logging-*", aws_region="") }}'
     Effect: Allow
-    Sid: BedrockPassInvocationLoggingRole
     Condition:
       StringEquals:
         iam:PassedToService: 'bedrock.{{ context.config.get_string("cluster.aws.dns_suffix", required=True) }}'
@@ -321,7 +314,6 @@ Statement:
       - '{{ context.arns.bedrock_invocation_log_group_arn }}'
       - '{{ context.arns.bedrock_invocation_log_group_arn }}:*'
     Effect: Allow
-    Sid: BedrockUsageStartQuery
 
   # GetQueryResults and StopQuery have no resource types.
   - Action:
@@ -329,7 +321,6 @@ Statement:
       - logs:StopQuery
     Resource: '*'
     Effect: Allow
-    Sid: BedrockUsageQueryResults
 
   # the cost pages read desktops that no longer exist from the record the virtual
   # desktop controller writes when it terminates one. read only: the controller owns it.
@@ -355,7 +346,6 @@ Statement:
       - '{{ context.arns.get_ddb_table_arn("bedrock.usage") }}'
       - '{{ context.arns.get_ddb_table_arn("bedrock.instances") }}'
     Effect: Allow
-    Sid: BedrockUsageTables
 
   # Read only, and the one action needed to report how much of a project's spend was
   # Bedrock. Cost Explorer has no resource types and no GovCloud endpoint.
@@ -363,7 +353,6 @@ Statement:
       - ce:GetCostAndUsage
     Resource: '*'
     Effect: Allow
-    Sid: BedrockBudgetCostExplorer
     {% endif %}
 
   {% if context.config.get_bool(context.module_id + '.metrics.cost.enabled', False) %}
@@ -386,3 +375,23 @@ Statement:
     Effect: Allow
     Sid: AccountReconcileOktaSecret
   {% endif %}
+
+{% if context.config.get_string("ecs.cluster_name") %}
+  # Read-only view of the control-plane services, scoped to the cluster; DescribeTaskDefinition
+  # has no resource-level permissions. Kept to two statements: the role's inline policies share
+  # a 10240-byte limit.
+  - Effect: Allow
+    Action:
+      - ecs:ListServices
+      - ecs:ListTasks
+      - ecs:DescribeServices
+      - ecs:DescribeTasks
+    Resource: '*'
+    Condition:
+      ArnEquals:
+        ecs:cluster: '{{ context.arns.get_arn("ecs", "cluster/" + context.config.get_string("ecs.cluster_name")) }}'
+  - Effect: Allow
+    Action:
+      - ecs:DescribeTaskDefinition
+    Resource: '*'
+{% endif %}

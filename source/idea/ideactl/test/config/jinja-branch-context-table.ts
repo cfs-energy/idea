@@ -134,7 +134,7 @@ const baseOsFamilies: readonly BranchFamily[] = BASE_OS_VALUES.map((baseOs) => (
   source: "bootstrap" as const,
   flags: { directory: true, metrics: true, gpu: true, fsx: true, instanceStorage: true, storageScope: true },
   baseOs,
-  templates: COMPONENT_ENTRY_POINTS,
+  templates: [...COMPONENT_ENTRY_POINTS, "_templates/linux/gnome_online_accounts.jinja2"],
 }));
 
 export const BRANCH_FAMILIES: readonly BranchFamily[] = [

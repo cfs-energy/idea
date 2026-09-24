@@ -92,12 +92,12 @@ def test_an_epoch_timestamp_marks_the_point_at_that_time(context):
     count = _entry('cost.amortized', 12.5, [('module', 'scheduler')])
     count['Timestamp'] = day
     assert provider.format_entry(count) == (
-        'idea.cost.amortized:12.5|c|#idea_cluster:idea-mock,idea_module:mock,module:scheduler|T1757894400'
+        'idea.cost.amortized:12.5|c|#idea_cluster:idea-mock,module:scheduler|T1757894400|card:none'
     )
     gauge = _entry('storage.used_bytes', 4096, [('user', 'alice')], metric_type='Gauge')
     gauge['Timestamp'] = day
     assert provider.format_entry(gauge).endswith(
-        '|g|#idea_cluster:idea-mock,idea_module:mock,user:alice|T1757894400'
+        '|g|#idea_cluster:idea-mock,user:alice|T1757894400|card:none'
     )
     summary = _entry('job.cpu_efficiency', 0.5, [], metric_type='Summary')
     summary['Timestamp'] = day
@@ -106,3 +106,50 @@ def test_an_epoch_timestamp_marks_the_point_at_that_time(context):
     live = _entry('jobs_finished', 1, [])
     live['Timestamp'] = '2026-09-15 00:00:00 +00:00'
     assert '|T' not in provider.format_entry(live)
+
+
+@pytest.mark.parametrize(
+    'transport', ['udp://127.0.0.1:8125', 'unix:///tmp/dsd.socket']
+)
+@pytest.mark.parametrize('family', ['cost.amortized', 'storage.used_bytes'])
+def test_collectors_disable_origin_enrichment_on_shared_provider(
+    context, monkeypatch, transport, family
+):
+    from unittest.mock import Mock
+
+    monkeypatch.setenv('DD_DOGSTATSD_URL', transport)
+    monkeypatch.setenv('DD_ENTITY_ID', 'pod-id')
+    monkeypatch.setenv('DD_CONTAINER_ID', 'container-id')
+    sender = Mock()
+    monkeypatch.setattr(socket, 'socket', Mock(return_value=sender))
+    provider = DogStatsdMetrics(context, 'idea-mock/mock/component')
+    metric_type = 'Gauge' if family.startswith('storage.') else 'Counter'
+    provider.log(
+        [_entry(family, 2, [('module', 'cluster'), ('host', 'old-host')], metric_type)]
+    )
+    assert (
+        sender.sendto.call_args.args[0]
+        == (
+            f'idea.{family}:2|{"g" if metric_type == "Gauge" else "c"}'
+            '|#idea_cluster:idea-mock,module:cluster|card:none'
+        ).encode()
+    )
+    provider.log([_entry('job.count', 1, [])])
+    assert sender.sendto.call_args.args[0] == (
+        b'idea.job.count:1|c|#idea_cluster:idea-mock,idea_module:mock,component:component'
+    )
+
+
+def test_synchronous_send_failure_raises_and_next_send_recovers(context, monkeypatch):
+    from unittest.mock import Mock
+
+    failed, recovered = Mock(), Mock()
+    failed.sendto.side_effect = OSError('agent unavailable')
+    monkeypatch.setattr(socket, 'socket', Mock(side_effect=[failed, recovered]))
+    provider = DogStatsdMetrics(context, 'idea-mock/mock')
+    with pytest.raises(OSError, match='agent unavailable'):
+        provider.log([_entry('cost.amortized', 2, [])], raise_on_error=True)
+    failed.close.assert_called_once()
+    provider.log([_entry('cost.amortized', 2, [])], raise_on_error=True)
+    recovered.sendto.assert_called_once()
+    assert provider._send_failures == 0

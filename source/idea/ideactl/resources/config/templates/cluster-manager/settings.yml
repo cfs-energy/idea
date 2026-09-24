@@ -44,6 +44,15 @@ web_portal:
   # eg. localStorage.setItem('idea.log-level', '4')
   default_log_level: 3
 
+  # optional cached personal cost total displayed beside the signed-in user
+  cost_ticker:
+    enabled: false
+    # valid values: wtd, mtd, qtd, ytd
+    period: mtd
+
+  # valid values: home, my-jobs, my-desktops, files, my-costs, reports
+  default_landing_page: home
+
   # optional external dashboard embedded in the web portal via a sandboxed iframe.
   # the nav entry and page stay hidden unless enabled is true and url is an http(s) url.
   # url must be reachable from the user's browser and must permit framing by the web portal origin.
@@ -130,7 +139,7 @@ metrics:
     owner_tag: idea:JobOwner
     by_account: false                  # also module x linked account, when Cost Explorer here sees other accounts
   storage:
-    enabled: false                     # FSx for NetApp ONTAP quota reports and volumes, for every shared-storage entry carrying metrics credentials
+    enabled: {{ 'true' if 'fsx_netapp_ontap' in (storage_data_provider, storage_apps_provider) else 'false' }}                     # FSx for NetApp ONTAP quota reports and volumes, for every shared-storage entry carrying metrics credentials
     interval_minutes: 60
     verify_tls: false                  # FSx management endpoints present self-signed certificates
 
@@ -179,6 +188,7 @@ accounts:
     interval_minutes: 60
     dry_run: true
     reenable: true
+    # Cap proposed disables / enabled users and read errors / checked users.
     max_disable_fraction: 0.25
     check_cognito: false
     okta:

@@ -19,10 +19,11 @@ import {ListFilesResult} from '../../client/data-model'
 import {LocalStorageService} from '../../service'
 import Utils from "../../common/utils";
 import {registerAceWorkerUrls} from "../../common/ace-worker-urls";
-import {Alert, Box, Button, ButtonDropdown, CodeEditor, ColumnLayout, Container, Header, Link, Modal, SpaceBetween, StatusIndicator, Tabs, Tiles, Table, Input, FormField} from "@cloudscape-design/components";
-import {ButtonDropdownProps} from "@cloudscape-design/components/button-dropdown/interfaces";
+import {Alert, Box, Button, ButtonDropdown, CodeEditor, ColumnLayout, Container, Header, Link, Modal, SpaceBetween, StatusIndicator, Tabs, TextContent, Tiles, Table, Input, FormField} from "@cloudscape-design/components";
+import {ButtonDropdownProps} from "@cloudscape-design/components/button-dropdown";
 import {toast} from "react-toastify";
 import FileBrowserTable, {entryKey, FileBrowserEntry, FileBrowserMenuItem} from "./file-browser-table";
+import DeleteFolderDialog from "./delete-folder-dialog";
 import FileBrowserPath, {describeListingFailure} from "./file-browser-path";
 
 import 'ace-builds/css/ace.css';
@@ -30,13 +31,13 @@ import 'ace-builds/css/theme/dawn.css';
 import 'ace-builds/css/theme/github_light_default.css';
 import 'ace-builds/css/theme/github_dark.css';
 
-import {CodeEditorProps} from "@cloudscape-design/components/code-editor/interfaces";
+import {CodeEditorProps} from "@cloudscape-design/components/code-editor";
 import {faDownload} from "@fortawesome/free-solid-svg-icons";
 import Uppy from "@uppy/core";
 import XHRUpload from "@uppy/xhr-upload";
 import Dashboard from "@uppy/dashboard";
-import '@uppy/core/dist/style.css'
-import '@uppy/dashboard/dist/style.css'
+import '@uppy/core/css/style.css'
+import '@uppy/dashboard/css/style.css'
 import IdeaForm from "../../components/form";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import IdeaAppLayout, {IdeaAppLayoutProps} from "../../components/app-layout";
@@ -60,6 +61,7 @@ export interface IdeaFileBrowserState {
     showHiddenFiles: boolean
     filesToDelete: FileBrowserEntry[]
     showDeleteConfirmModal: boolean
+    folderToDelete: {path: string, name: string} | null
     editorOpen: boolean
     fileUploadResult: any
     activeTabId: string
@@ -181,7 +183,7 @@ class IdeaFileEditorModal extends Component<IdeaFileEditorProps, IdeaFileEditorS
             onDismiss={this.props.onClose}
             size="max"
             header={
-                <small>{this.state.filepath}</small>
+                <Box variant="small">{this.state.filepath}</Box>
             }
             footer={
                 <div>
@@ -297,6 +299,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
             fileTransferMethod: 'file-zilla',
             filesToDelete: [],
             showDeleteConfirmModal: false,
+            folderToDelete: null,
             filesToRename: [],
             showRenameModal: false,
             renameFormValues: {},
@@ -775,7 +778,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                     method: 'PUT',
                     bundle: true
                 })
-            const dashboard: Dashboard = uppy.getPlugin('Dashboard')!
+            const dashboard = uppy.getPlugin('Dashboard')!
             dashboard.openModal()
             uppy.on('complete', () => {
                 this.listFiles(this.getCwd()).finally()
@@ -1208,6 +1211,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
     }
 
     deleteFiles(files: FileBrowserEntry[]) {
+        if (files.some(file => file.isDir)) return
         this.setState({
             filesToDelete: files,
             showDeleteConfirmModal: true
@@ -1274,7 +1278,9 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
             {id: 'download', text: 'Download files', enabled: any, run: () => this.downloadFiles(selected)},
             {id: 'copy', text: 'Copy selection', enabled: any, run: () => this.copyPath(selected[0])},
             {id: 'rename', text: 'Rename', enabled: any, run: () => this.checkRenamePermissions(selected)},
-            {id: 'delete', text: 'Delete files', enabled: any, run: () => this.deleteFiles(selected)},
+            {id: 'delete', text: 'Delete files', enabled: any && selected.every(file => !file.isDir), run: () => this.deleteFiles(selected)},
+            {id: 'delete-folder', text: 'Delete folder', enabled: selected.length === 1 && !!selected[0].isDir,
+                run: () => this.setState({folderToDelete: {path: this.getFilePath(selected[0]), name: selected[0].name!}})},
             {id: 'favorite', text: 'Favorite', enabled: any, run: () => selected.forEach((file) => this.addFavorite(file))},
             {id: 'tail', text: 'Tail File', enabled: any, run: () => this.tailFile(selected[0])},
             {
@@ -1364,7 +1370,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                 <Button disabled={!favorite.enabled} onClick={() => favorite.run()}>Favorite</Button>
                 <Button disabled={!rename.enabled} onClick={() => rename.run()}>Rename</Button>
                 {submitJob != null && <Button disabled={!submitJob.enabled} onClick={() => submitJob.run()}>Submit Job</Button>}
-                {this.buildDropdown(actions, ['open', 'download', 'copy', 'delete', 'tail', 'workbench'])}
+                {this.buildDropdown(actions, ['open', 'download', 'copy', 'delete', 'delete-folder', 'tail', 'workbench'])}
                 <Button onClick={() => this.getCreateFolderForm().showModal()}>Create folder</Button>
                 <Button variant="primary" onClick={() => this.showUploadModal()}>Upload files</Button>
                 <ButtonDropdown
@@ -1391,7 +1397,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
         return (
             <IdeaAppLayout
                 ideaPageId={this.props.ideaPageId}
-                header={<Header variant={"h1"}>File Browser</Header>}
+                header={<Header variant={"h1"}>Files</Header>}
                 toolsOpen={this.props.toolsOpen}
                 tools={this.props.tools}
                 onToolsChange={this.props.onToolsChange}
@@ -1411,7 +1417,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                         href: '#/'
                     },
                     {
-                        text: 'File Browser',
+                        text: 'Files',
                         href: ''
                     }
                 ]}
@@ -1420,6 +1426,13 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                 content={
                     <div style={{marginTop: '20px'}}>
                         {this.state.showDeleteConfirmModal && this.buildDeleteFileConfirmModal()}
+                        {this.state.folderToDelete && <DeleteFolderDialog
+                            {...this.state.folderToDelete}
+                            onClose={() => this.setState({folderToDelete: null})}
+                            onDeleted={() => {
+                                this.setState({folderToDelete: null})
+                                this.listFiles(this.getCwd()).finally()
+                            }}/>}
                         {this.buildCreateFolderForm()}
                         {this.buildRenameFileModal()}
                         {this.buildFileEditor()}
@@ -1479,24 +1492,22 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                     disabled: !this.state.sshAccess,
                                     content: (
                                         <SpaceBetween size={"s"}>
-                                            <Container>
-                                                <b>File Transfer Method</b><br/>
-                                                <p>We recommend using below methods to transfer large files to your IDEA cluster. Select an option below.</p>
+                                            <Container header={<Header variant="h3" description="Use one of these to move large files to your cluster.">File transfer method</Header>}>
                                                 <Tiles value={this.state.fileTransferMethod}
                                                        columns={3}
                                                        items={[
                                                            {
-                                                               label: <b>FileZilla</b>,
+                                                               label: 'FileZilla',
                                                                description: 'Available for download on Windows, MacOS and Linux',
                                                                value: 'file-zilla'
                                                            },
                                                            {
-                                                               label: <b>WinSCP</b>,
+                                                               label: 'WinSCP',
                                                                description: 'Available for download on Windows Only',
                                                                value: 'winscp'
                                                            },
                                                            {
-                                                               label: <b>AWS Transfer</b>,
+                                                               label: 'AWS Transfer',
                                                                description: 'Your IDEA cluster must be using Amazon EFS to use AWS Transfer',
                                                                value: 'aws-transfer'
                                                            }
@@ -1509,9 +1520,10 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                                 />
                                             </Container>
                                             {this.state.fileTransferMethod === 'file-zilla' && <Container header={<Header variant={"h3"}>FileZilla</Header>}>
+                                                <TextContent>
                                                 <SpaceBetween size={"s"}>
                                                     <Box>
-                                                        <h2>Step 1: Download FileZilla</h2>
+                                                        <h4>Step 1: Download FileZilla</h4>
                                                         <ul>
                                                             <li>
                                                                 <Link external={true} href={"https://filezilla-project.org/download.php?platform=osx"}>Download FileZilla (MacOS)</Link>
@@ -1525,14 +1537,14 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                                         </ul>
                                                     </Box>
                                                     <Box>
-                                                        <h2>Step 2: Download Key File</h2>
+                                                        <h4>Step 2: Download Key File</h4>
                                                         <SpaceBetween size={"l"} direction={"horizontal"}>
                                                             <Button variant={"normal"} onClick={() => this.onDownloadPrivateKey('pem')} loading={this.state.downloadPemLoading}><FontAwesomeIcon icon={faDownload}/> Download Key File [*.pem] (MacOS / Linux)</Button>
                                                             <Button variant={"normal"} onClick={() => this.onDownloadPrivateKey('ppk')} loading={this.state.downloadPpkLoading}><FontAwesomeIcon icon={faDownload}/> Download Key File [*.ppk] (Windows)</Button>
                                                         </SpaceBetween>
                                                     </Box>
                                                     <Box>
-                                                        <h2>Step 3: Configure FileZilla</h2>
+                                                        <h4>Step 3: Configure FileZilla</h4>
                                                         <p>Open FileZilla and select <b>File &gt; Site Manager</b> to create a new Site using below options:</p>
                                                         <Container>
                                                             <ColumnLayout columns={2}>
@@ -1547,13 +1559,15 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                                         <p><b>Save</b> the settings and click <b>Connect</b></p>
                                                     </Box>
                                                     <Box>
-                                                        <h2>Step 4: Connect and transfer file to FileZilla</h2>
+                                                        <h4>Step 4: Connect and transfer file to FileZilla</h4>
                                                         <p>During your first connection, you will be asked whether or not you want to trust {this.state.sshHostIp}. Check "Always Trust this Host" and Click "Ok".</p>
                                                         <p>Once connected, simply drag & drop to upload/download files.</p>
                                                     </Box>
                                                 </SpaceBetween>
+                                                </TextContent>
                                             </Container>}
                                             {this.state.fileTransferMethod === 'winscp' && <Container header={<Header variant={"h3"}>WinSCP (Windows)</Header>}>
+                                                <TextContent>
                                                 <SpaceBetween size={"s"}>
                                                     <Box>
                                                         <Alert onDismiss={() => false}
@@ -1561,7 +1575,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                                                header="Info">
                                                             WinSCP is only available on Windows. Please use alternate methods (FileZilla, AWS FTP) if you are running Linux/Mac clients.
                                                         </Alert>
-                                                        <h2>Step 1: Download WinSCP</h2>
+                                                        <h4>Step 1: Download WinSCP</h4>
                                                         <ul>
                                                             <li>
                                                                 <Link external={true} href={"https://winscp.net/eng/download.php"}>Download WinSCP (Windows)</Link>
@@ -1569,14 +1583,14 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                                         </ul>
                                                     </Box>
                                                     <Box>
-                                                        <h2>Step 2: Download Key File</h2>
+                                                        <h4>Step 2: Download Key File</h4>
                                                         <SpaceBetween size={"l"} direction={"horizontal"}>
                                                             <Button variant={"normal"} onClick={() => this.onDownloadPrivateKey('pem')} loading={this.state.downloadPemLoading}><FontAwesomeIcon icon={faDownload}/> Download Key File [*.pem] (MacOS / Linux)</Button>
                                                             <Button variant={"normal"} onClick={() => this.onDownloadPrivateKey('ppk')} loading={this.state.downloadPpkLoading}><FontAwesomeIcon icon={faDownload}/> Download Key File [*.ppk] (Windows)</Button>
                                                         </SpaceBetween>
                                                     </Box>
                                                     <Box>
-                                                        <h2>Step 3: Configure WinSCP</h2>
+                                                        <h4>Step 3: Configure WinSCP</h4>
                                                         <p>Open WinSCP and select <b>File &gt; Site Manager</b> to create a new Site using below options:</p>
                                                         <Container>
                                                             <ColumnLayout columns={2}>
@@ -1593,13 +1607,15 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                                         <p><b>Save</b> the settings and click <b>Connect</b></p>
                                                     </Box>
                                                     <Box>
-                                                        <h2>Step 4: Connect and transfer file to WinSCP</h2>
+                                                        <h4>Step 4: Connect and transfer file to WinSCP</h4>
                                                         <p>During your first connection, you will be asked whether or not you want to trust {this.state.sshHostIp}. Check "Always Trust this Host" and Click "Ok".</p>
                                                         <p>Once connected, simply drag & drop to upload/download files.</p>
                                                     </Box>
                                                 </SpaceBetween>
+                                                </TextContent>
                                             </Container>}
                                             {this.state.fileTransferMethod === 'aws-transfer' && <Container header={<Header variant={"h3"}>AWS Transfer</Header>}>
+                                                <TextContent>
                                                 <SpaceBetween size={"s"}>
                                                     <Box>
                                                         <Alert onDismiss={() => false}
@@ -1607,7 +1623,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                                                header="Limitations">
                                                             Your IDEA cluster must be using Amazon EFS to use AWS Transfer
                                                         </Alert>
-                                                        <h2>Step 1: Configure AWS Transfer</h2>
+                                                        <h4>Step 1: Configure AWS Transfer</h4>
                                                         <ul>
                                                             <li>Open AWS Console and navigate to the service named <b>AWS Transfer Family</b> then click <b>Create Server</b></li>
                                                             <li>Select <b>SFTP (SSH File Transfer Protocol) - file transfer over Secure Shell</b></li>
@@ -1619,7 +1635,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                                             <li>In the <b>Review and create</b> section click <b>Create server</b></li>
                                                         </ul>
 
-                                                        <h2>Step 2: Create IAM role for your AWS Transfer Users</h2>
+                                                        <h4>Step 2: Create IAM role for your AWS Transfer Users</h4>
                                                         <ul>
                                                             <li>Open AWS Console and navigate to the service named <b>IAM</b> then click <b>Roles</b> on the left sidebar and finally click <b>Create Role</b></li>
                                                             <li>Select <b>AWS Service</b> as Trusted Entity Type and select <b>Transfer</b> as Use Case</li>
@@ -1627,17 +1643,17 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                                             <li>Select a Role name (for example <b>TransferEFSClient</b> and save it</li>
                                                         </ul>
 
-                                                        <h2>Step 3: Download PEM Key File (Public)</h2>
+                                                        <h4>Step 3: Download PEM Key File (Public)</h4>
                                                         <ul>
                                                             <li>Download your <b>public</b> SSH key. You can retrieve it under <b>$HOME/.ssh/id_rsa.pub</b></li>
                                                         </ul>
 
-                                                        <h2>Step 4: Download your PEM key File (Private)</h2>
+                                                        <h4>Step 4: Download your PEM key File (Private)</h4>
                                                         <SpaceBetween size={"l"} direction={"horizontal"}>
                                                             <Button variant={"normal"} onClick={() => this.onDownloadPrivateKey('pem')} loading={this.state.downloadPemLoading}><FontAwesomeIcon icon={faDownload}/> Download Key File [*.pem] (MacOS / Linux)</Button>
                                                         </SpaceBetween>
 
-                                                        <h2>Step 5: Register your AWS Transfer Users</h2>
+                                                        <h4>Step 5: Register your AWS Transfer Users</h4>
                                                         <Alert onDismiss={() => false}
                                                                dismissAriaLabel="Close alert"
                                                                header="User Information">
@@ -1664,7 +1680,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                                             </ColumnLayout>
                                                         </Container>
 
-                                                        <h2>Step 6: Test</h2>
+                                                        <h4>Step 6: Test</h4>
                                                         <p>Open AWS Console and navigate to the service named <b>AWS Transfer Family</b> select the server you have created, and retrieve the <b>Endpoint</b> under <b>Endpoint Details</b>.</p>
                                                         <Alert onDismiss={() => false}
                                                                dismissAriaLabel="Close alert"
@@ -1679,6 +1695,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                                         <p>Alternatively, you can use WinSCP/FileZilla. Refer to the instructions available on this website and use your AWS Transfer endpoint as hostname.</p>
                                                     </Box>
                                                 </SpaceBetween>
+                                                </TextContent>
                                             </Container>}
                                         </SpaceBetween>
 

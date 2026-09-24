@@ -1,4 +1,13 @@
 __all__ = (
+    'MyCostsAmount',
+    'MyCostsDaily',
+    'MyCostsCoverage',
+    'MyCostsStorageShare',
+    'MyCostsDisk',
+    'MyCostsMonth',
+    'GetMyCostsResult',
+    'GetCostTickerRequest',
+    'GetCostTickerResult',
     'MyCostsAiModel',
     'MyCostsAiProject',
     'MyCostsAi',
@@ -18,7 +27,7 @@ __all__ = (
 from ideadatamodel import SocaPayload, SocaBaseModel
 
 from typing import Optional, List
-from pydantic import Field
+from pydantic import Field, model_serializer
 
 
 class MyCostsAiModel(SocaBaseModel):
@@ -140,7 +149,7 @@ class GetMyCostsSummaryResult(SocaPayload):
 
 
 class UserCosts(SocaBaseModel):
-    """one user's totals across the three sections, for the admin listing."""
+    """one user's totals for the admin listing."""
 
     username: Optional[str] = Field(default=None)
     ai_requests: Optional[int] = Field(default=None)
@@ -155,6 +164,8 @@ class UserCosts(SocaBaseModel):
     job_cost: Optional[float] = Field(default=None)
     job_unpriced_jobs: Optional[int] = Field(default=None)
     job_cost_unavailable: Optional[bool] = Field(default=None)
+    storage_cost: Optional[float] = Field(default=None)
+    storage_gb: Optional[float] = Field(default=None)
     total_cost: Optional[float] = Field(default=None)
 
 
@@ -174,6 +185,7 @@ class ListUserCostsResult(SocaPayload):
     ai_unavailable: Optional[bool] = Field(default=None)
     jobs_unavailable: Optional[bool] = Field(default=None)
     desktops_unavailable: Optional[bool] = Field(default=None)
+    storage_unavailable: Optional[bool] = Field(default=None)
 
 
 # Costs.GetUserSummary
@@ -181,3 +193,95 @@ class GetUserCostsSummaryRequest(SocaPayload):
     # admin only, and the one place a username is accepted. the self scoped
     # MyCosts.GetSummary still takes none.
     username: Optional[str] = Field(default=None)
+
+
+class MyCostsDaily(SocaBaseModel):
+    date: str
+    day: int
+    amount: Optional[float] = Field(default=None)
+    status: str
+
+    @model_serializer(mode='wrap')
+    def serialize_daily(self, handler):
+        result = handler(self)
+        # API payloads otherwise omit None fields. A missing day is explicitly null.
+        result['amount'] = self.amount
+        return result
+
+
+class MyCostsCoverage(SocaBaseModel):
+    known_days: int = Field(default=0)
+    missing_days: int = Field(default=0)
+    missing_prices: int = Field(default=0)
+    inferred_intervals: int = Field(default=0)
+
+
+class MyCostsAmount(SocaBaseModel):
+    cost: Optional[float] = Field(default=None)
+    status: str = Field(default='unavailable')
+    note: str = Field(default='')
+    amount: Optional[float] = Field(default=None)
+    reason: str = Field(default='')
+    coverage: Optional[MyCostsCoverage] = Field(default=None)
+    source_as_of: Optional[str] = Field(default=None)
+    daily: List[MyCostsDaily] = Field(default_factory=list)
+
+
+class MyCostsStorageShare(MyCostsAmount):
+    filesystem: str
+    used_bytes: Optional[int] = Field(default=None)
+    share: Optional[float] = Field(default=None)
+    measured_at: Optional[float] = Field(default=None)
+
+
+class MyCostsDisk(MyCostsAmount):
+    volume_id: str
+    desktop: str
+    state: str
+    size_gb: int
+    volume_type: str
+    gb_month_rate: Optional[float] = Field(default=None)
+
+
+class MyCostsMonth(SocaBaseModel):
+    start_date: str
+    end_date: str
+    total: Optional[float] = Field(default=None)
+    incomplete: bool = Field(default=True)
+    jobs: MyCostsAmount
+    desktops: MyCostsAmount
+    desktop_disks: MyCostsAmount
+    shared_storage: MyCostsAmount
+    ai: MyCostsAmount
+    disks: List[MyCostsDisk] = Field(default_factory=list)
+    storage: List[MyCostsStorageShare] = Field(default_factory=list)
+    details: Optional[GetMyCostsSummaryResult] = Field(default=None)
+
+
+# MyCosts.GetCosts: identity comes only from the authenticated invocation.
+class GetMyCostsResult(SocaPayload):
+    currency: str
+    state: str
+    refreshed_at: Optional[str] = Field(default=None)
+    generation: Optional[str] = Field(default=None)
+    timezone: Optional[str] = Field(default=None)
+    expected_ready_at: Optional[str] = Field(default=None)
+    collecting_delayed: bool = Field(default=False)
+    collecting_reason: Optional[str] = Field(default=None)
+    refresh_pending: bool = Field(default=False)
+    refresh_acknowledged: bool = Field(default=False)
+    current: Optional[MyCostsMonth] = Field(default=None)
+    previous: Optional[MyCostsMonth] = Field(default=None)
+
+
+class GetCostTickerRequest(SocaPayload):
+    pass
+
+
+class GetCostTickerResult(SocaPayload):
+    enabled: bool = Field(default=False)
+    period: Optional[str] = Field(default=None)
+    total: Optional[float] = Field(default=None)
+    currency: Optional[str] = Field(default=None)
+    as_of: Optional[str] = Field(default=None)
+    incomplete: Optional[bool] = Field(default=None)

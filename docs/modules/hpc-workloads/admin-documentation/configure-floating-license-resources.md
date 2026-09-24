@@ -94,7 +94,7 @@ python3 /apps/utils/license_check.py -s lic1.idea-licenses.internal -p 1999 -f c
 The name of the resource **must** be `*_lic_*`. We recommend using `<application>_lic_<feature_name>`
 {% endhint %}
 
-Navigate to "**Licenses**" under "**Scale-Out Computing**" section on your IDEA web interface then click "**Create License Resource**" to fill out the form below.
+Navigate to "**Administration**" > "**Manage jobs**" > "**Licenses**" on your IDEA web interface then click "**Create License Resource**" to fill out the form below.
 
 In our example, the availability check script command is:
 

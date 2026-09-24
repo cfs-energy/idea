@@ -1,3 +1,4 @@
+import {IdeaSideNavHeader} from '../../navigation/side-nav-items';
 /*
  * Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
  *
@@ -18,6 +19,8 @@ import {TopNavigation} from "@cloudscape-design/components";
 import {AppContext} from "../../common";
 import Utils from "../../common/utils";
 import IdeaForm from "../form";
+import {personalCostsCache} from '../../client/personal-costs-cache';
+import {GetCostTickerResult} from '../../client/data-model';
 
 export interface IdeaNavbarProps {
     logo?: IdeaNavbarLogo
@@ -29,6 +32,7 @@ export interface IdeaNavbarState {
     darkMode: boolean
     compactMode: boolean
     showPreferences: boolean
+    ticker: GetCostTickerResult | null
 }
 
 export interface IdeaNavbarItem {
@@ -55,7 +59,8 @@ class IdeaNavbar extends Component<IdeaNavbarProps, IdeaNavbarState> {
         this.state = {
             darkMode: false,
             compactMode: false,
-            showPreferences: false
+            showPreferences: false,
+            ticker: null
         }
     }
 
@@ -69,6 +74,68 @@ class IdeaNavbar extends Component<IdeaNavbarProps, IdeaNavbarState> {
             this.setThemeMode(darkMode)
             this.setThemeDensity(compactMode)
         })
+        this.refreshTicker()
+        this.tickerPoll = setInterval(() => {
+            if (document.visibilityState === 'visible') this.refreshTicker()
+        }, 300000)
+        document.addEventListener('visibilitychange', this.onVisibilityChange)
+    }
+
+    private disposed = false
+    private unsubscribeCosts?: () => void
+    private tickerPoll?: ReturnType<typeof setInterval>
+    private tickerRetry?: ReturnType<typeof setTimeout>
+    private tooltipTimer?: ReturnType<typeof setTimeout>
+
+    componentWillUnmount() {
+        this.disposed = true
+        this.unsubscribeCosts?.()
+        clearInterval(this.tickerPoll)
+        clearTimeout(this.tickerRetry)
+        clearTimeout(this.tooltipTimer)
+        document.removeEventListener('visibilitychange', this.onVisibilityChange)
+    }
+
+    componentDidUpdate() {
+        clearTimeout(this.tooltipTimer)
+        this.tooltipTimer = setTimeout(this.applyTickerTooltip, 0)
+    }
+
+    applyTickerTooltip = () => {
+        const ticker = this.state.ticker
+        if (!ticker?.enabled || ticker.total == null) return
+        const control = Array.from(document.querySelectorAll('[aria-label]'))
+            .find(element => element.getAttribute('aria-label')?.startsWith(`${ticker.period} cost as of`))
+        if (control) {
+            control.setAttribute('title', `As of ${ticker.as_of ? new Date(ticker.as_of).toLocaleString() : 'the latest calculation'}`)
+        }
+    }
+
+    onVisibilityChange = () => {
+        if (document.visibilityState === 'visible') this.refreshTicker()
+    }
+
+    refreshTicker = () => {
+        clearTimeout(this.tickerRetry)
+        AppContext.get().client().myCosts().getCostTicker({})
+            .then(ticker => {
+                if (this.disposed) return
+                if (!ticker.enabled || ticker.period !== 'MTD') {
+                    this.unsubscribeCosts?.()
+                    this.unsubscribeCosts = undefined
+                }
+                this.setState({ticker})
+                if (ticker.enabled && ticker.period === 'MTD' && !this.unsubscribeCosts) {
+                    this.unsubscribeCosts = personalCostsCache().subscribe(costs => {
+                        if (costs.current) this.setState({ticker: {...ticker, total: costs.current.total,
+                            currency: costs.currency, incomplete: costs.current.incomplete, as_of: costs.refreshed_at}})
+                    })
+                }
+                if (ticker.enabled && ticker.total == null) {
+                    this.tickerRetry = setTimeout(this.refreshTicker, 15000)
+                }
+            })
+            .catch(() => {})
     }
 
     invokeLogout() {
@@ -192,6 +259,14 @@ class IdeaNavbar extends Component<IdeaNavbarProps, IdeaNavbarState> {
             return expiryText
         }
 
+        const ticker = this.state.ticker
+        const tickerUtility = ticker?.enabled && ticker.total != null && ticker.currency && ticker.period ? [{
+            type: 'button' as const,
+            text: `${ticker.incomplete === false ? 'Estimated costs' : 'Known costs'} · ${new Intl.NumberFormat(undefined, {style: 'currency', currency: ticker.currency}).format(ticker.total)} · ${ticker.period}`,
+            href: '#/home/my-costs',
+            ariaLabel: `${ticker.period} cost as of ${ticker.as_of ? new Date(ticker.as_of).toLocaleString() : 'the latest calculation'}. Open My costs`
+        }] : []
+
         let hasNotifications = false
         const getNotifications = () => {
             let passwordExpirationMessage = getPasswordExpirationMessage()
@@ -221,7 +296,7 @@ class IdeaNavbar extends Component<IdeaNavbarProps, IdeaNavbarState> {
                 {this.buildPreferencesForm()}
                 <TopNavigation
                     identity={{
-                        href: '#',
+                        href: IdeaSideNavHeader(AppContext.get()).href,
                         title: getTitle(),
                         logo: {
                             src: getLogo(),
@@ -241,6 +316,7 @@ class IdeaNavbar extends Component<IdeaNavbarProps, IdeaNavbarState> {
                             },
                             items: getNotifications()
                         },
+                        ...tickerUtility,
                         {
                             type: "menu-dropdown",
                             text: getUsername(),
@@ -265,7 +341,7 @@ class IdeaNavbar extends Component<IdeaNavbarProps, IdeaNavbarState> {
                                 }
                             },
                             items: [
-                                {id: "account-settings", text: "Account Settings"},
+                                {id: "account-settings", text: "My account"},
                                 {id: "preferences", text: "Preferences"},
                                 {
                                     id: "support-group",

@@ -106,7 +106,7 @@ export const EDITS: OperatorEdit[] = [
     key: "global-settings.operator_only",
     operatorValue: "keep me",
     predictedSurvive: false,
-    note: "Custom global row is deleted and has no generated replacement.",
+    note: "Custom global row has no generated replacement and is removed once every stack has deployed.",
   },
   {
     id: "global-same",

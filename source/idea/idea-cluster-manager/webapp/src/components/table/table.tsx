@@ -12,12 +12,11 @@
  */
 
 import React, {Component} from "react";
-import {NonCancelableEventHandler} from "@cloudscape-design/components/internal/events";
-import {TableProps} from "@cloudscape-design/components/table/interfaces";
+import {TableProps} from "@cloudscape-design/components/table";
 import {Box, CollectionPreferences, Pagination, PropertyFilter, PropertyFilterProps, Select, SpaceBetween, Table, TextFilter} from "@cloudscape-design/components";
 import {SocaFilter, SocaUserInputParamMetadata} from "../../client/data-model";
 import Utils from "../../common/utils";
-import {CollectionPreferencesProps} from "@cloudscape-design/components/collection-preferences/interfaces";
+import {CollectionPreferencesProps} from "@cloudscape-design/components/collection-preferences";
 import {AppContext} from "../../common";
 import {useCollection} from '@cloudscape-design/collection-hooks';
 
@@ -29,7 +28,7 @@ export interface IdeaTableProps<T = any> {
     showPreferences?: boolean
     preferencesKey?: string
     onPreferenceChange?: (detail: CollectionPreferencesProps.Preferences<T>) => void
-    onSelectionChange?: NonCancelableEventHandler<TableProps.SelectionChangeDetail<T>>
+    onSelectionChange?: TableProps<T>['onSelectionChange']
     columnDefinitions?: ReadonlyArray<TableProps.ColumnDefinition<T>>
     loading?: boolean
     showFilters?: boolean
@@ -524,7 +523,7 @@ export class IdeaTableClass extends Component<IdeaTableClassProps, IdeaTableStat
                 items={this.props.listing}
                 empty={
                     <Box textAlign="center" color="inherit">
-                        <b>No records</b>
+                        <Box variant="strong">No records</Box>
                     </Box>
                 }
             />

@@ -1,13 +1,16 @@
 import React, {Component} from "react";
 import {Box, Container, Header, Pagination, SpaceBetween, Table, TextFilter} from "@cloudscape-design/components";
-import {TableProps} from "@cloudscape-design/components/table/interfaces";
+import {TableProps} from "@cloudscape-design/components/table";
 import {useCollection} from "@cloudscape-design/collection-hooks";
-import {GetMyCostsSummaryResult, ListUserCostsResult, UserCosts} from "../../client/data-model";
+import {GetMyCostsResult, GetMyCostsSummaryResult, ListUserCostsResult, UserCosts} from "../../client/data-model";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import IdeaAppLayout, {IdeaAppLayoutProps} from "../../components/app-layout";
-import CostSections, {ESTIMATED_NOTE, hours, money, number, summaryCost} from "../../components/cost-sections";
+import CostSections, {hours, money, number, summaryCost} from "../../components/cost-sections";
 import {withRouter} from "../../navigation/navigation-utils";
 import {AppContext} from "../../common";
+import IdeaSplitPanel from "../../components/split-panel";
+import {CostsBillboard} from "../../components/monthly-costs";
+import {DailyCostCharts} from "../../components/cost-charts";
 
 export interface UserCostsProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
 }
@@ -16,7 +19,9 @@ export interface UserCostsState {
     listing: ListUserCostsResult | null
     selected: UserCosts[]
     summary: GetMyCostsSummaryResult | null
+    costs: GetMyCostsResult | null
     summaryLoading: boolean
+    splitPanelOpen: boolean
     error: string | null
 }
 
@@ -31,6 +36,8 @@ const USER_COLUMNS: TableProps.ColumnDefinition<UserCosts>[] = [
         sortingField: 'ai_cost',
         cell: (item) => (item.ai_cost_unavailable ? 'Not available' : money(item.ai_cost))
     },
+    {id: 'storage_cost', header: 'Storage', sortingField: 'storage_cost', cell: (item) => money(item.storage_cost)},
+    {id: 'storage_gb', header: 'Storage GB', sortingField: 'storage_gb', cell: (item) => item.storage_gb == null ? '-' : `${item.storage_gb.toFixed(2)} GB`},
     {
         id: 'desktop_hours',
         header: 'Desktop hours',
@@ -64,16 +71,16 @@ const TOTAL_COLUMN = USER_COLUMNS[USER_COLUMNS.length - 1]
 
 const EMPTY_STATE = (
     <Box textAlign="center" color="inherit">
-        <b>No measured costs</b>
+        <Box variant="strong">No measured costs</Box>
         <Box variant="p" color="inherit">
-            IDEA recorded no AI usage, desktop hours or completed jobs for anyone in the last 30 days.
+            IDEA recorded no AI usage, storage, desktop hours or completed jobs for anyone in the measurement window.
         </Box>
     </Box>
 )
 
 const NO_MATCH_STATE = (
     <Box textAlign="center" color="inherit">
-        <b>No matching users</b>
+        <Box variant="strong">No matching users</Box>
         <Box variant="p" color="inherit">No user in the window matches that name.</Box>
     </Box>
 )
@@ -160,7 +167,7 @@ class UserCostsPage extends Component<UserCostsProps, UserCostsState> {
 
     constructor(props: UserCostsProps) {
         super(props);
-        this.state = {listing: null, selected: [], summary: null, summaryLoading: false, error: null}
+        this.state = {listing: null, selected: [], summary: null, costs: null, summaryLoading: false, splitPanelOpen: false, error: null}
     }
 
     componentDidMount() {
@@ -189,12 +196,12 @@ class UserCostsPage extends Component<UserCostsProps, UserCostsState> {
 
     onSelect(selected: UserCosts[]) {
         const username = selected[0]?.username
-        this.setState({selected: selected, summary: null, summaryLoading: username != null})
+        this.setState({selected: selected, summary: null, costs: null, summaryLoading: username != null, splitPanelOpen: username != null})
         if (username == null) {
             return
         }
-        this.client().getUserSummary({username: username}).then((result) => {
-            this.setState({summary: result, summaryLoading: false})
+        Promise.all([this.client().getUserSummary({username: username}), this.client().getUserCosts({username: username})]).then(([summary, costs]) => {
+            this.setState({summary: costs.current?.details ?? summary, costs: costs, summaryLoading: false})
         }).catch((e) => {
             this.setState({summary: {} as GetMyCostsSummaryResult, summaryLoading: false})
             this.props.onFlashbarChange({
@@ -208,6 +215,17 @@ class UserCostsPage extends Component<UserCostsProps, UserCostsState> {
         })
     }
 
+    buildSplitPanel() {
+        const username = this.selectedUsername()
+        return username == null ? undefined : <IdeaSplitPanel title={`Costs for ${username}`}>
+            <SpaceBetween size="l">
+                <CostsBillboard costs={this.state.costs}/>
+                <CostSections summary={this.state.summary} loading={this.state.summaryLoading} subject="user"/>
+                <DailyCostCharts costs={this.state.costs}/>
+            </SpaceBetween>
+        </IdeaSplitPanel>
+    }
+
     selectedUsername(): string | undefined {
         return this.state.selected[0]?.username
     }
@@ -216,6 +234,7 @@ class UserCostsPage extends Component<UserCostsProps, UserCostsState> {
         const listing = this.state.listing
         const missing = [
             listing?.ai_unavailable ? 'AI usage' : null,
+            listing?.storage_unavailable ? 'storage' : null,
             listing?.desktops_unavailable ? 'desktops' : null,
             listing?.jobs_unavailable ? 'jobs' : null
         ].filter((entry) => entry != null)
@@ -242,7 +261,6 @@ class UserCostsPage extends Component<UserCostsProps, UserCostsState> {
     }
 
     render() {
-        const username = this.selectedUsername()
         return (
             <IdeaAppLayout
                 ideaPageId={this.props.ideaPageId}
@@ -258,30 +276,22 @@ class UserCostsPage extends Component<UserCostsProps, UserCostsState> {
                 breadcrumbItems={[
                     {text: 'IDEA', href: '#/'},
                     {text: 'Cluster Management', href: '#/cluster/status'},
-                    {text: 'User Costs', href: ''}
+                    {text: 'By user', href: ''}
                 ]}
                 header={
                     <Header
                         variant="h1"
-                        description={`${ESTIMATED_NOTE} Window: the last 30 days.`}>
-                        User Costs
+                        description="Estimated measurements: compute and AI cover the last 30 days; storage covers the current month.">
+                        By user
                     </Header>
                 }
                 contentType={"default"}
                 content={
-                    <SpaceBetween size="l">
-                        {this.renderListing()}
-                        {username != null &&
-                            <SpaceBetween size="l">
-                                <Header variant="h2">{`Costs for ${username}`}</Header>
-                                <CostSections
-                                    summary={this.state.summary}
-                                    loading={this.state.summaryLoading}
-                                    subject="user"
-                                />
-                            </SpaceBetween>}
-                    </SpaceBetween>
-                }/>
+                    this.renderListing()
+                }
+                splitPanelOpen={this.state.splitPanelOpen}
+                splitPanel={this.buildSplitPanel()}
+                onSplitPanelToggle={(event: any) => this.setState({splitPanelOpen: event.detail.open})}/>
         )
     }
 }

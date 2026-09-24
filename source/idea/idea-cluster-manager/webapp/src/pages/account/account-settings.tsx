@@ -14,8 +14,8 @@
 import React, {Component, RefObject} from "react";
 
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
-import {Box, Button, ButtonDropdown, ColumnLayout, Container, Header, SpaceBetween, StatusIndicator, Table, Tabs} from "@cloudscape-design/components";
-import {TableProps} from "@cloudscape-design/components/table/interfaces";
+import {Box, Button, ButtonDropdown, ColumnLayout, Container, FormField, Header, Select, SpaceBetween, StatusIndicator, Table, Tabs} from "@cloudscape-design/components";
+import {TableProps} from "@cloudscape-design/components/table";
 import {KeyValue, KeyValueGroup} from "../../components/key-value";
 import {CopyToClipBoard, ProjectBedrockModels} from "../../components/common";
 import {AuthClient, ProjectsClient} from "../../client";
@@ -39,6 +39,7 @@ export interface AccountSettingsState {
     projects: Project[] | null
     projectsError: string | null
     bedrockEnabled: boolean
+    savingLandingPage: boolean
 }
 
 const MY_PROJECTS_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<Project>[] = [
@@ -70,6 +71,16 @@ const MY_PROJECTS_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<Project>
     }
 ]
 
+const LANDING_OPTIONS = [
+    {label: 'Cluster default', value: ''},
+    {label: 'Home', value: 'home'},
+    {label: 'My jobs', value: 'my-jobs'},
+    {label: 'My desktops', value: 'my-desktops'},
+    {label: 'Files', value: 'files'},
+    {label: 'My costs', value: 'my-costs'},
+    {label: 'Reports', value: 'reports'}
+]
+
 // shown only when bedrock.enabled. Renders the project model list with the same
 // component as the script workbench.
 const MY_PROJECTS_BEDROCK_COLUMN_DEFINITION: TableProps.ColumnDefinition<Project> = {
@@ -95,7 +106,8 @@ class AccountSettings extends Component<AccountSettingsProps, AccountSettingsSta
             usersInGroup: null,
             projects: null,
             projectsError: null,
-            bedrockEnabled: false
+            bedrockEnabled: false,
+            savingLandingPage: false
         }
     }
 
@@ -123,6 +135,16 @@ class AccountSettings extends Component<AccountSettingsProps, AccountSettingsSta
 
     getProjectsClient(): ProjectsClient {
         return AppContext.get().client().projects()
+    }
+
+    updateLandingPage(value: string) {
+        this.setState({savingLandingPage: true})
+        AppContext.get().client().accounts().updateMyPreferences({landing_page: value}).then(result => {
+            this.setState({user: result.user ?? this.state.user, savingLandingPage: false})
+        }).catch(error => {
+            this.setState({savingLandingPage: false})
+            this.props.onFlashbarChange({items: [{type: 'error', header: 'Could not save landing page', content: error?.message ?? `${error}`, dismissible: true}]})
+        })
     }
 
     getChangePasswordForm(): IdeaForm {
@@ -388,7 +410,7 @@ class AccountSettings extends Component<AccountSettingsProps, AccountSettingsSta
                         href: '#/'
                     },
                     {
-                        text: 'Account Settings',
+                        text: 'My account',
                         href: '#'
                     }
                 ]}
@@ -420,7 +442,7 @@ class AccountSettings extends Component<AccountSettingsProps, AccountSettingsSta
                                 }}>Change Password</Button>
                             </SpaceBetween>
                         }
-                    > Account Settings</Header>}
+                    > My account</Header>}
                 contentType={"default"}
                 content={
                     <div>
@@ -446,6 +468,14 @@ class AccountSettings extends Component<AccountSettingsProps, AccountSettingsSta
                                                         <KeyValue title="Created On" value={new Date(this.state.user?.created_on!).toLocaleString()}/>
                                                         {isPasswordRotationApplicable() && <KeyValue title="Password Expires In" value={getPasswordExpiresIn()}/>}
                                                     </KeyValueGroup>
+                                                    <FormField label="Landing page" description="Choose where the portal opens after sign-in.">
+                                                        <Select
+                                                            selectedOption={LANDING_OPTIONS.find(option => option.value === (this.state.user?.landing_page || '')) ?? LANDING_OPTIONS[0]}
+                                                            onChange={event => this.updateLandingPage(event.detail.selectedOption.value ?? '')}
+                                                            options={LANDING_OPTIONS}
+                                                            disabled={this.state.savingLandingPage}
+                                                        />
+                                                    </FormField>
                                                     <KeyValueGroup title="LDAP Info">
                                                         <KeyValue title="UID" value={this.state.user?.uid}/>
                                                         <KeyValue title="GID" value={this.state.user?.gid}/>
@@ -467,12 +497,12 @@ class AccountSettings extends Component<AccountSettingsProps, AccountSettingsSta
                                                     columnDefinitions={(this.state.bedrockEnabled) ? [...MY_PROJECTS_TABLE_COLUMN_DEFINITIONS, MY_PROJECTS_BEDROCK_COLUMN_DEFINITION] : MY_PROJECTS_TABLE_COLUMN_DEFINITIONS}
                                                     empty={this.state.projectsError
                                                         ? <Box textAlign="center" color="inherit">
-                                                            <b>Could not load your projects</b>
+                                                            <Box variant="strong">Could not load your projects</Box>
                                                             <Box variant="p" color="inherit">{this.state.projectsError}</Box>
                                                             <Button onClick={() => this.setState({projects: null, projectsError: null}, () => this.fetchProjects().finally())}>Retry</Button>
                                                         </Box>
                                                         : <Box textAlign="center" color="inherit">
-                                                            <b>No projects</b>
+                                                            <Box variant="strong">No projects</Box>
                                                             <Box variant="p" color="inherit">You are not a member of any project.</Box>
                                                         </Box>}
                                                 />

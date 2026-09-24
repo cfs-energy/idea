@@ -87,6 +87,7 @@ import {
   addStorageMounts,
   adoptedLogDriver,
   applicationTargetGroup,
+  applicationContainerSettings,
   attachApplicationFileLogs,
   buildEc2Service,
   buildExecutionRole,
@@ -439,6 +440,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
     });
     const logGroupName = `/${this.clusterName}/${this.moduleId}/controller`;
     const container = taskDefinition.addContainer('controller-container', {
+      ...applicationContainerSettings('vdc'),
       cpu: sizing.cpu,
       dockerLabels: dockerLabels(scope, 'vdc'),
       environment: commonEnvironment(scope, {
@@ -460,8 +462,6 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       taskDefinition,
       desiredCount: sizing.desired,
       securityGroups: [this.controllerSecurityGroup],
-      minHealthyPercent: 50,
-      maxHealthyPercent: 200,
       healthCheckGracePeriod: healthCheckGrace('vdc'),
       dependencies: [taskRole, taskPolicy, executionRole, ...this.controllerEndpoints],
     });
@@ -501,6 +501,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
     const logGroupName = `/${this.clusterName}/${this.moduleId}/dcv-broker`;
     const namespaceName = this.requiredString('ecs.namespace_name');
     const container = taskDefinition.addContainer('dcv-broker-container', {
+      ...applicationContainerSettings('dcv-broker', this.brokerTargetGroupPorts),
       cpu: sizing.cpu,
       dockerLabels: dockerLabels(scope, 'dcv-broker'),
       environment: {
@@ -560,8 +561,6 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       taskDefinition,
       desiredCount: sizing.desired,
       securityGroups: [this.dcvBrokerSecurityGroup],
-      minHealthyPercent: 50,
-      maxHealthyPercent: 200,
       healthCheckGracePeriod: healthCheckGrace('dcv-broker'),
       cloudMapOptions: {
         cloudMapNamespace: namespace,
@@ -1444,6 +1443,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
         loadBalancerName: `${this.clusterName}-${this.moduleId}-external-nlb`,
         vpc: this.cluster.vpc,
         internetFacing: isPublic,
+        crossZoneEnabled: this.ecsEnabled ? true : undefined,
         vpcSubnets: { subnets: externalNlbSubnets },
       },
     );
@@ -1475,7 +1475,8 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
           targetType: elbv2.TargetType.IP,
           vpc: this.cluster.vpc,
           targetGroupName: this.getTargetGroupName(`gw-ecs-${tgSuffix}`),
-          healthCheck: { port: '8989', protocol: elbv2.Protocol.TCP },
+          healthCheck: { port: '8989', protocol: elbv2.Protocol.TCP, interval: Duration.seconds(5), timeout: Duration.seconds(4), healthyThresholdCount: 2, unhealthyThresholdCount: 2 },
+          deregistrationDelay: Duration.seconds(300),
           connectionTermination: true,
         },
       );
@@ -1589,6 +1590,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
     grantInjectedSecret(scope, executionRole, certificateSecrets.certificate);
     grantInjectedSecret(scope, executionRole, certificateSecrets.privateKey);
     const container = taskDefinition.addContainer('dcv-connection-gateway-container', {
+      ...applicationContainerSettings('dcv-gateway'),
       cpu: requiredEcsInt(scope, 'ecs.tasks.dcv-gateway.cpu'),
       dockerLabels: dockerLabels(scope, 'dcv-gateway'),
       environment: {
@@ -1648,8 +1650,6 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       taskDefinition,
       desiredCount: requiredEcsInt(scope, 'ecs.tasks.dcv-gateway.desired'),
       securityGroups: [this.dcvConnectionGatewaySecurityGroup],
-      minHealthyPercent: 50,
-      maxHealthyPercent: 200,
       healthCheckGracePeriod: healthCheckGrace('dcv-gateway'),
       dependencies: [taskRole, taskPolicy, executionRole],
     });

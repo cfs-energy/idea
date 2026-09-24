@@ -1,6 +1,6 @@
 import React, {useCallback, useEffect, useMemo, useRef, useState} from "react";
 import {Box, Header, Input, Pagination, Table} from "@cloudscape-design/components";
-import {TableProps} from "@cloudscape-design/components/table/interfaces";
+import {TableProps} from "@cloudscape-design/components/table";
 import {useCollection} from "@cloudscape-design/collection-hooks";
 import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
 import {IconDefinition} from "@fortawesome/fontawesome-svg-core";

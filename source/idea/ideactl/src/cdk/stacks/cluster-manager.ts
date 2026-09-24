@@ -40,11 +40,13 @@ import {
   addStorageMounts,
   adoptedLogDriver,
   applicationTargetGroup,
+  applicationContainerSettings,
   attachApplicationFileLogs,
   buildEc2Service,
   buildExecutionRole,
   buildTaskDefinition,
   buildTaskRole,
+  grantInjectedSecret,
   commonEnvironment,
   containerImage,
   dockerLabels,
@@ -461,6 +463,15 @@ export class ClusterManagerStack extends IdeaBaseStack {
       policyTemplateName: 'cluster-manager.yml',
       policyModuleId: this.moduleId,
     });
+    // The cost history backfill posts to the Datadog API with the daemon's key.
+    const datadogSecretArn = this.context.config.getString('ecs.datadog.api_key_secret_arn');
+    if (datadogSecretArn) {
+      taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
+        actions: ['secretsmanager:GetSecretValue'],
+        resources: [datadogSecretArn],
+      }));
+      grantInjectedSecret(scope, taskRole, datadogSecretArn);
+    }
     if (['activedirectory', 'aws_managed_activedirectory'].includes(
       this.context.config.getString('directoryservice.provider', '') as string,
     )) {
@@ -480,6 +491,7 @@ export class ClusterManagerStack extends IdeaBaseStack {
     });
     const logGroupName = `/${this.clusterName}/${this.moduleId}`;
     const container = taskDefinition.addContainer('cluster-manager-container', {
+      ...applicationContainerSettings('cluster-manager'),
       cpu: sizing.cpu,
       dockerLabels: dockerLabels(scope, 'cluster-manager'),
       environment: commonEnvironment(scope, {
@@ -506,8 +518,6 @@ export class ClusterManagerStack extends IdeaBaseStack {
       taskDefinition,
       desiredCount: sizing.desired,
       securityGroups: [this.clusterManagerSecurityGroup],
-      minHealthyPercent: 50,
-      maxHealthyPercent: 200,
       healthCheckGracePeriod: healthCheckGrace('cluster-manager'),
       dependencies: [
         taskRole,

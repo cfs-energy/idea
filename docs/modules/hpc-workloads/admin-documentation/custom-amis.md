@@ -1,6 +1,6 @@
 # Custom AMIs
 
-Scale-Out Computing > Custom AMIs lists the images your cluster launches from and lets an administrator build new ones from the portal. Use it to see which operating systems have a built image and which still launch from a stock vendor image.
+Administration > Images and applications > Job images lists the images your cluster launches from and lets an administrator build new ones from the portal. Use it to see which operating systems have a built image and which still launch from a stock vendor image.
 
 ## What the page shows
 

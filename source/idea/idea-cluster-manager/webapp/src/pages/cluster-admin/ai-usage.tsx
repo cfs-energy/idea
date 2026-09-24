@@ -1,6 +1,6 @@
 import React, {Component, RefObject} from "react";
 
-import {TableProps} from "@cloudscape-design/components/table/interfaces";
+import {TableProps} from "@cloudscape-design/components/table";
 import {BedrockModelUsage, BedrockUserUsage, Project, SocaAmount} from '../../client/data-model'
 import IdeaListView from "../../components/list-view";
 import IdeaSplitPanel from "../../components/split-panel";
@@ -196,7 +196,7 @@ class AiUsage extends Component<AiUsageProps, AiUsageState> {
         return (
             <IdeaListView
                 ref={this.listing}
-                title="AI Usage"
+                title="AI"
                 description="Amazon Bedrock tokens, requests and cost per project over the last 30 days. Select a project to break it down per model and per user."
                 selectionType="single"
                 onRefresh={() => {
@@ -270,7 +270,7 @@ class AiUsage extends Component<AiUsageProps, AiUsageState> {
                         href: '#/cluster/status'
                     },
                     {
-                        text: 'AI Usage',
+                        text: 'AI',
                         href: ''
                     }
                 ]}

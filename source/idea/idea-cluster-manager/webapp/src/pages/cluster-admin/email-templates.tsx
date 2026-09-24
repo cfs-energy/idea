@@ -21,7 +21,7 @@ import {EmailTemplatesClient} from "../../client";
 import {AppContext} from "../../common";
 import {ClusterSettingsService} from "../../service";
 import Utils from "../../common/utils";
-import {TableProps} from "@cloudscape-design/components/table/interfaces";
+import {TableProps} from "@cloudscape-design/components/table";
 import {withRouter} from "../../navigation/navigation-utils";
 
 export interface EmailTemplatesProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {

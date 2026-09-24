@@ -11,12 +11,20 @@
 from typing import List
 
 import ideavirtualdesktopcontroller
-from ideadatamodel import VirtualDesktopBaseOS
-from ideasdk.utils import Utils
+from ideadatamodel import VirtualDesktopBaseOS, VirtualDesktopSession
+from ideasdk.utils import Utils, Jinja2Utils
 from ideavirtualdesktopcontroller.app.ssm_commands.virtual_desktop_ssm_commands_db import (
     VirtualDesktopSSMCommandsDB,
     VirtualDesktopSSMCommand,
     VirtualDesktopSSMCommandType,
+)
+
+
+# Bump whenever the refresh set or the contents of its templates change.
+BOOTSTRAP_REFRESH_VERSION = 2
+BOOTSTRAP_REFRESH_TEMPLATES = (
+    '_templates/linux/ssh_post_quantum_kex.jinja2',
+    '_templates/linux/gnome_online_accounts.jinja2',
 )
 
 
@@ -204,6 +212,50 @@ class VirtualDesktopSSMCommandsUtils:
         )
         self._logger.info(
             f'SSM command to enable userdata execution sent to {instance_id}.'
+        )
+        return command_id
+
+    def submit_ssm_command_to_refresh_bootstrap(
+        self, session: VirtualDesktopSession
+    ) -> str:
+        env = Jinja2Utils.env_using_file_system_loader(self.context.get_bootstrap_dir())
+        block = '\n'.join(
+            env.get_template(template).render(context={'base_os': session.base_os})
+            for template in BOOTSTRAP_REFRESH_TEMPLATES
+        )
+        response = self._ssm_client.send_command(
+            InstanceIds=[session.server.instance_id],
+            DocumentName='AWS-RunShellScript',
+            Comment=f'Refresh bootstrap for {session.idea_session_id}',
+            Parameters={
+                'commands': [
+                    'log_info() { echo "$@"; }\nlog_warning() { echo "$@"; }\n' + block
+                ]
+            },
+            ServiceRoleArn=self.context.config().get_string(
+                'virtual-desktop-controller.ssm_commands_pass_role_arn', required=True
+            ),
+            NotificationConfig={
+                'NotificationArn': self.context.config().get_string(
+                    'virtual-desktop-controller.ssm_commands_sns_topic_arn',
+                    required=True,
+                ),
+                'NotificationEvents': ['All'],
+                'NotificationType': 'Invocation',
+            },
+        )
+        command_id = response['Command']['CommandId']
+        self._ssm_commands_db.create(
+            VirtualDesktopSSMCommand(
+                command_id=command_id,
+                command_type=VirtualDesktopSSMCommandType.REFRESH_BOOTSTRAP,
+                additional_payload={
+                    'idea_session_id': session.idea_session_id,
+                    'idea_session_owner': session.owner,
+                    'instance_id': session.server.instance_id,
+                    'refresh_version': BOOTSTRAP_REFRESH_VERSION,
+                },
+            )
         )
         return command_id
 

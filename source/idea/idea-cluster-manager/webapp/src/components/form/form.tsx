@@ -24,7 +24,7 @@ import {
     SocaUserInputParamMetadata
 } from "../../client/data-model";
 import {IdeaFormFieldStateChangeEventHandler} from "../form-field";
-import {ModalProps} from "@cloudscape-design/components/modal/interfaces";
+import {ModalProps} from "@cloudscape-design/components/modal";
 
 export interface IdeaFormProps {
     name: string

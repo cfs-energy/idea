@@ -11,12 +11,14 @@
  * and limitations under the License.
  */
 
+import {SettingsSection, SettingsSource} from '../cluster-admin/settings-sections';
+
 import React, {Component, RefObject} from "react";
 
-import {ColumnLayout, Container, Header, Link, SpaceBetween, Tabs} from "@cloudscape-design/components";
+import {ColumnLayout, Container, Header} from "@cloudscape-design/components";
 import IdeaForm from "../../components/form";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
-import IdeaAppLayout, {IdeaAppLayoutProps} from "../../components/app-layout";
+import {IdeaAppLayoutProps} from "../../components/app-layout";
 import {KeyValue} from "../../components/key-value";
 import {AppContext} from "../../common";
 import dot from "dot-object";
@@ -26,13 +28,15 @@ import Utils from "../../common/utils";
 import {withRouter} from "../../navigation/navigation-utils";
 
 export interface HpcSchedulerSettingsProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
+    renderSections: (source: SettingsSource) => React.ReactNode
 
 }
 
 export interface HpcSchedulerSettingsState {
     moduleInfo: any
     settings: any
-    activeTabId: string
+    cluster: any
+    settingsErrors: string[]
 }
 
 class HpcSchedulerSettings extends Component<HpcSchedulerSettingsProps, HpcSchedulerSettingsState> {
@@ -45,106 +49,49 @@ class HpcSchedulerSettings extends Component<HpcSchedulerSettingsProps, HpcSched
         this.state = {
             moduleInfo: {},
             settings: {},
-            activeTabId: 'general'
+            cluster: {},
+            settingsErrors: [],
         }
     }
 
     componentDidMount() {
-        AppContext.get().getClusterSettingsService().getSchedulerSettings().then(settings => {
+        const service = AppContext.get().getClusterSettingsService()
+        Promise.allSettled([service.getSchedulerSettings(), service.getClusterSettings()]).then(results => {
+            const value = (index: number) => {
+                const result = results[index]
+                return result.status === 'fulfilled' ? result.value ?? {} : {}
+            }
             let moduleInfo = AppContext.get().getClusterSettingsService().getModuleInfo(Constants.MODULE_SCHEDULER)
             this.setState({
                 moduleInfo: moduleInfo,
-                settings: settings
+                settings: value(0),
+                cluster: value(1),
+                settingsErrors: results.flatMap((result, index) => result.status === 'rejected' ? [`Could not read ${index === 0 ? 'job service' : 'cluster'} settings.`] : [])
             })
         })
     }
 
     render() {
 
-        const getSchedulerOpenAPISpecUrl = () => {
-            return `${AppContext.get().getHttpEndpoint()}${Utils.getApiContextPath(Constants.MODULE_SCHEDULER)}/openapi.yml`
-        }
-
-        const getSchedulerSwaggerEditorUrl = () => {
-            return `https://editor-next.swagger.io/?url=${getSchedulerOpenAPISpecUrl()}`
-        }
-
-        return (
-            <IdeaAppLayout
-                ideaPageId={this.props.ideaPageId}
-                toolsOpen={this.props.toolsOpen}
-                tools={this.props.tools}
-                onToolsChange={this.props.onToolsChange}
-                onPageChange={this.props.onPageChange}
-                sideNavHeader={this.props.sideNavHeader}
-                sideNavItems={this.props.sideNavItems}
-                onSideNavChange={this.props.onSideNavChange}
-                onFlashbarChange={this.props.onFlashbarChange}
-                flashbarItems={this.props.flashbarItems}
-                breadcrumbItems={[
-                    {
-                        text: 'IDEA',
-                        href: '#/'
-                    },
-                    {
-                        text: 'Scale-Out Computing',
-                        href: '#/soca/active-jobs'
-                    },
-                    {
-                        text: 'Settings',
-                        href: ''
-                    }
-                ]}
-                header={<Header variant={"h1"} description={"Manage Scale-Out Computing settings (Read-Only, use idea-admin.sh to update SOCA settings.)"}>Scale-Out Computing Settings</Header>}
-                contentType={"default"}
-                content={
-                    <SpaceBetween size={"l"}>
-                        <Container>
-                            <ColumnLayout variant={"text-grid"} columns={3}>
-                                <KeyValue title="Module Name" value={dot.pick('name', this.state.moduleInfo)}/>
-                                <KeyValue title="Module ID" value={dot.pick('module_id', this.state.moduleInfo)}/>
-                                <KeyValue title="Version" value={dot.pick('version', this.state.moduleInfo)}/>
-                            </ColumnLayout>
-                        </Container>
-                        <Tabs
-                            activeTabId={this.state.activeTabId}
-                            onChange={(event) => {
-                                this.setState({
-                                    activeTabId: event.detail.activeTabId
-                                })
-                            }}
-                            tabs={[
-                                {
-                                    label: 'General',
-                                    id: 'general',
-                                    content: (
-                                        <Container header={<Header variant={"h2"} info={<Link external={true} href={"https://spec.openapis.org/oas/v3.1.0"}>Info</Link>}>OpenAPI Specification</Header>}>
-                                            <ColumnLayout variant={"text-grid"} columns={1}>
-                                                <KeyValue title="Scale-Out Computing on AWS API Spec" value={getSchedulerOpenAPISpecUrl()} type={"external-link"} clipboard/>
-                                                <KeyValue title="Swagger Editor" value={getSchedulerSwaggerEditorUrl()} type={"external-link"} clipboard/>
-                                            </ColumnLayout>
-                                        </Container>
-                                    )
-                                },
-                                {
-                                    label: 'CloudWatch Logs',
-                                    id: 'cloudwatch-logs',
-                                    content: (
-                                        <Container header={<Header variant={"h2"}>CloudWatch Logs</Header>}>
-                                            <ColumnLayout variant={"text-grid"} columns={3}>
-                                                <KeyValue title="Status">
-                                                    <EnabledDisabledStatusIndicator enabled={true}/>
-                                                </KeyValue>
-                                                <KeyValue title="Force Flush Interval" value={5} suffix={"seconds"}/>
-                                                <KeyValue title="Log Retention" value={90} suffix={"days"}/>
-                                            </ColumnLayout>
-                                        </Container>
-                                    )
-                                }
-                            ]}/>
-                    </SpaceBetween>
-                }/>
-        )
+        const sections: SettingsSection[] = [
+            {
+                label: 'CloudWatch Logs',
+                id: 'cloudwatch-logs',
+                content: (
+                    <Container header={<Header variant={"h2"}>CloudWatch Logs</Header>}>
+                        <ColumnLayout variant={"text-grid"} columns={3}>
+                            <KeyValue title="Status">
+                                <EnabledDisabledStatusIndicator enabled={Utils.asBoolean(dot.pick('cloudwatch_logs.enabled', this.state.settings)) && Utils.asBoolean(dot.pick('cloudwatch_logs.enabled', this.state.cluster))}/>
+                            </KeyValue>
+                            <KeyValue title="Force Flush Interval" value={dot.pick('cloudwatch_logs.force_flush_interval', this.state.cluster)} suffix={"seconds"}/>
+                            <KeyValue title="Log Retention" value={dot.pick('cloudwatch_logs.retention_in_days', this.state.cluster)} suffix={"days"}/>
+                        </ColumnLayout>
+                    </Container>
+                )
+            }
+        ];
+        return <>{this.props.renderSections({sections, values: {scheduler: this.state.settings, cluster: this.state.cluster}, errors: this.state.settingsErrors})}
+        </>
     }
 }
 

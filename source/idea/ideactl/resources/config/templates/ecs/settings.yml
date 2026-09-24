@@ -16,6 +16,7 @@ image_repositories:
 
 hosts:
   instance_type: m7g.large
+  # Three hosts at rest; a deployment surge that does not fit borrows the fourth for its duration.
   min: 3
   max: 4
   volume_size: 60

@@ -22,6 +22,8 @@ from ideavirtualdesktopcontroller.app.ssm_commands import (
 
 class VirtualDesktopSSMCommandType(str, Enum):
     RESUME_SESSION = 'RESUME_SESSION'
+    REFRESH_SSH_KEX = 'REFRESH_SSH_KEX'  # Accept completions from before versioning.
+    REFRESH_BOOTSTRAP = 'REFRESH_BOOTSTRAP'
     CPU_UTILIZATION_CHECK_STOP_SCHEDULED_SESSION = (
         'CPU_UTILIZATION_CHECK_STOP_SCHEDULED_SESSION'
     )

@@ -118,7 +118,7 @@ class VirtualDesktopDashboard extends Component<VirtualDesktopDashboardProps, Vi
                 <Button variant={"primary"} onClick={() => {
                     this.props.navigate('/virtual-desktop/sessions')
                 }}>View Sessions</Button>
-            </SpaceBetween>}>Virtual Desktop Dashboard</Header>}
+            </SpaceBetween>}>Overview</Header>}
             contentType={"default"}
             content={
                 <Grid

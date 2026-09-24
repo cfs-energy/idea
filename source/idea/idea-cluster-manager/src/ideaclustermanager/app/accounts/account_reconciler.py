@@ -1,17 +1,22 @@
 """Compare account state before applying any changes, under one cluster-wide lock."""
 
+import json
 import math
-import ldap
 import threading
 from copy import copy
+from decimal import Decimal
 from urllib.parse import quote
 
 import arrow
+import ldap
 import requests
 from pydantic import StrictBool
 
 from ideadatamodel import ListUsersRequest, SocaPaginator, SocaBaseModel, constants
-from ideaclustermanager.app.accounts.reconcile_settings import approved_okta_origin
+from ideaclustermanager.app.accounts.reconcile_settings import (
+    approved_okta_origin,
+    read_reconcile_settings,
+)
 from ideasdk.metrics import BaseMetrics
 from ideasdk.service import SocaService
 
@@ -40,6 +45,8 @@ class AccountReconciler(SocaService):
         self.context = context
         self.logger = context.logger('account-reconcile')
         self._exit = threading.Event()
+        self._wake = threading.Event()
+        self._next_delay = 60
         self._local_lock = threading.Lock()
         self._thread = threading.Thread(
             target=self._loop, name='account-reconcile', daemon=True
@@ -51,8 +58,12 @@ class AccountReconciler(SocaService):
     def key(self, suffix):
         return f'{self.context.module_id()}.accounts.reconcile.{suffix}'
 
-    def interval_seconds(self):
-        minutes = self.context.config().get_int(self.key('interval_minutes'), 60)
+    def interval_seconds(self, settings=None):
+        if settings is None:
+            settings = read_reconcile_settings(
+                self.context.config(), self.context.module_id()
+            )
+        minutes = int(settings['interval_minutes'])
         return max(1, min(1440, minutes)) * 60
 
     def start(self):
@@ -60,17 +71,23 @@ class AccountReconciler(SocaService):
 
     def stop(self):
         self._exit.set()
+        self._wake.set()
         if self._thread.is_alive():
             self._thread.join()
 
+    def settings_changed(self):
+        self._wake.set()
+
     def _loop(self):
         while not self._exit.is_set():
+            self._wake.clear()
+            self._next_delay = 60
             try:
-                if self.context.config().get_bool(self.key('enabled'), False):
-                    self.run_once(periodic=True)
+                self.run_once(periodic=True)
             except Exception:
                 self.logger.exception('account reconciliation failed')
-            self._exit.wait(60)
+            if not self._exit.is_set():
+                self._wake.wait(self._next_delay)
 
     def protected(self, user):
         username = user.username.lower()
@@ -89,10 +106,12 @@ class AccountReconciler(SocaService):
             'centos',
         }
 
-    def upstream(self, user, metadata=None):
+    def upstream(self, user, metadata=None, settings=None):
         metadata = metadata if metadata is not None else {}
         sources = metadata.get('reconcile_sources', [])
         config = self.context.config()
+        if settings is None:
+            settings = read_reconcile_settings(config, self.context.module_id())
         states = {}
         if config.get_string('directoryservice.provider') in (
             'aws_managed_activedirectory',
@@ -110,14 +129,16 @@ class AccountReconciler(SocaService):
                     raise ValueError('directory did not return userAccountControl')
                 states['directory'] = 'disabled' if int(control) & 2 else 'enabled'
 
-        org = config.get_string(self.key('okta.org_url'))
-        secret = config.get_string(self.key('okta.api_token_secret_arn'))
+        org = settings['okta']['org_url']
+        secret = settings['okta']['api_token_secret_arn']
         if bool(org) != bool(secret):
             raise ValueError('both Okta settings are required')
         if org and secret:
             org = approved_okta_origin(config, self.context.module_id(), org)
-            token = config.get_secret(
-                self.key('okta.api_token_secret_arn'), required=True
+            token = (
+                config.db.aws.secretsmanager()
+                .get_secret_value(SecretId=secret)
+                .get('SecretString')
             )
             if not token:
                 raise ValueError('Okta token is empty')
@@ -152,7 +173,7 @@ class AccountReconciler(SocaService):
                     raise ValueError('unknown Okta status')
 
         # Only a recorded external revocation explains a disabled Cognito mirror.
-        if config.get_bool(self.key('check_cognito'), False) and (
+        if settings['check_cognito'] and (
             user.enabled or not sources or 'cognito' in sources or not states
         ):
             record = self.context.accounts.user_pool.admin_get_user(
@@ -173,7 +194,7 @@ class AccountReconciler(SocaService):
             key=f'{self.context.module_id()}-account-reconcile'
         )
 
-    def _reconcile(self, dry_run, override_max_disable_fraction=False):
+    def _reconcile(self, dry_run, override_max_disable_fraction=False, settings=None):
         report = dict(
             dry_run=dry_run,
             checked=0,
@@ -187,9 +208,9 @@ class AccountReconciler(SocaService):
         )
         config = self.context.config()
         try:
-            fraction = float(
-                config.get_string(self.key('max_disable_fraction'), '0.25')
-            )
+            if settings is None:
+                settings = read_reconcile_settings(config, self.context.module_id())
+            fraction = float(settings['max_disable_fraction'])
             if not math.isfinite(fraction) or not 0 <= fraction <= 1:
                 raise ValueError('invalid safety cap')
             users = []
@@ -203,6 +224,7 @@ class AccountReconciler(SocaService):
                 if not cursor:
                     break
             enabled = 0
+            directory_unreachable = False
             identities = {}
             for user in users:
                 self.assert_lease()
@@ -229,28 +251,40 @@ class AccountReconciler(SocaService):
                                 reconcile_sources=sources,
                             )
                         continue
-                    if not user.enabled and (
-                        not sources or not config.get_bool(self.key('reenable'), True)
-                    ):
+                    if not user.enabled and (not sources or not settings['reenable']):
                         continue
                     previous_identity = metadata.get('directory_identity')
-                    states = self.upstream(user, metadata)
+                    states = self.upstream(user, metadata, settings)
                     if metadata.get('directory_identity') != previous_identity:
                         identities[user.username] = metadata['directory_identity']
                 except Exception as error:
-                    # Exception strings from HTTP clients can contain credentials or URLs.
-                    result_code = None
-                    if isinstance(error, ldap.LDAPError) and error.args:
-                        details = error.args[0]
-                        if (
-                            isinstance(details, dict)
-                            and type(details.get('result')) is int
-                        ):
-                            result_code = details['result']
+                    directory_unreachable |= isinstance(
+                        error,
+                        (
+                            ldap.SERVER_DOWN,
+                            ldap.CONNECT_ERROR,
+                            ldap.TIMEOUT,
+                            ldap.UNAVAILABLE,
+                            ldap.INVALID_CREDENTIALS,
+                        ),
+                    )
+                    # Credential-bearing requests can put secrets in exception messages.
+                    # Only structured failure metadata is safe to persist or log.
+                    message = type(error).__name__
+                    response = getattr(error, 'response', None)
+                    if response is not None:
+                        message += f' (HTTP {response.status_code})'
                     report['errors'] += 1
+                    report['changes'].append(
+                        dict(
+                            username=user.username,
+                            action='error',
+                            upstream={},
+                            error=message[:1024],
+                        )
+                    )
                     self.logger.warning(
-                        f'upstream account read failed for {user.username}: '
-                        f'exception_type={type(error).__name__}, ldap_result_code={result_code}'
+                        f'upstream account read failed for {user.username}: {message}'
                     )
                     continue
                 missing = 'missing' in states.values()
@@ -279,15 +313,24 @@ class AccountReconciler(SocaService):
                 eligible_enabled=enabled,
                 max_disable_fraction=fraction,
             )
-            if report['errors'] or (
-                not override_max_disable_fraction
-                and enabled
-                and proposed / enabled > fraction
+            read_errors_exceeded = (
+                report['checked'] and report['errors'] / report['checked'] > fraction
+            )
+            if (
+                directory_unreachable
+                or read_errors_exceeded
+                or (
+                    not override_max_disable_fraction
+                    and enabled
+                    and proposed / enabled > fraction
+                )
             ):
                 report['refused'] = 1
                 report['reason'] = (
-                    'upstream read failed'
-                    if report['errors']
+                    'directory unreachable'
+                    if directory_unreachable
+                    else 'upstream error fraction exceeded'
+                    if read_errors_exceeded
                     else 'max_disable_fraction exceeded'
                 )
             if not dry_run and not report['refused']:
@@ -300,6 +343,8 @@ class AccountReconciler(SocaService):
                         }
                     )
                 for change in report['changes']:
+                    if change['action'] == 'error':
+                        continue
                     self.assert_lease()
                     try:
                         if change['action'] == 'disable':
@@ -341,26 +386,49 @@ class AccountReconciler(SocaService):
             self.context.distributed_lock().acquire(key=key)
             try:
                 config = self.context.config()
+                settings = read_reconcile_settings(config, self.context.module_id())
                 checkpoint = self.key('last_completed')
                 if periodic:
+                    if not settings['enabled']:
+                        return {'skipped': 'disabled'}
                     entry = config.db.cluster_settings_table.get_item(
                         Key={'key': checkpoint},
                         ConsistentRead=True,
                     ).get('Item', {})
-                    if (
-                        arrow.utcnow().timestamp() - float(entry.get('value', 0))
-                        < self.interval_seconds()
-                    ):
+                    remaining = (
+                        float(entry.get('value', 0))
+                        + self.interval_seconds(settings)
+                        - arrow.utcnow().timestamp()
+                    )
+                    if remaining > 0:
+                        self._next_delay = min(60, remaining)
                         return {'skipped': 'interval'}
-                    dry_run = config.get_bool(self.key('dry_run'), True)
+                    dry_run = settings['dry_run']
                 report = self._reconcile(
                     dry_run,
+                    settings=settings,
                     override_max_disable_fraction=override_max_disable_fraction
                     and not periodic,
                 )
                 self.assert_lease()
+                completed = int(arrow.utcnow().timestamp())
+                # Bound the saved report to fit a settings row; the API returns every row.
+                saved_report = {
+                    **report,
+                    'changes': report['changes'][:100],
+                    'skipped': report['skipped'][:100],
+                    'truncated': len(report['changes']) > 100
+                    or len(report['skipped']) > 100,
+                }
+                config.db.set_config_entry(
+                    self.key('last_run'),
+                    json.loads(
+                        json.dumps({'at': completed, 'report': saved_report}),
+                        parse_float=Decimal,
+                    ),
+                )
                 if periodic:
-                    config.db.set_config_entry(checkpoint, arrow.utcnow().timestamp())
+                    config.db.set_config_entry(checkpoint, completed)
                 return report
             finally:
                 self.context.distributed_lock().release(key=key)

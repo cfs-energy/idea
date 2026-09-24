@@ -1,0 +1,13 @@
+{
+  "requiredReadActions": [
+    "ec2:DescribeInstances",
+    "ec2:DescribeVolumes",
+    "pricing:GetProducts",
+    "ce:GetCostAndUsage"
+  ],
+  "outboxDelete": {
+    "Action": "s3:DeleteObject",
+    "Effect": "Allow",
+    "Resource": "metrics/outbox/*"
+  }
+}

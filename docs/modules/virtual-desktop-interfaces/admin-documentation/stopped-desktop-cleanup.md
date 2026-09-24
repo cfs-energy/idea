@@ -27,7 +27,7 @@ The cleanup runs on the same 30-minute schedule as the other controller sweeps, 
 
 ## Settings
 
-All settings live under `virtual-desktop-controller.dcv_session.stopped_session_cleanup`. All but `keep_tags` are edited from **Virtual Desktops > Settings > Server**. `keep_tags` is not shown there; it is set with `idea-admin.sh` and exists for automation outside IDEA that already tags instances.
+All settings live under `virtual-desktop-controller.dcv_session.stopped_session_cleanup`. All but `keep_tags` are edited from **Administration > Settings > Desktop access and lifecycle**. `keep_tags` is shown in the read-only subsection; it is set with `idea-admin.sh` and exists for automation outside IDEA that already tags instances.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
@@ -42,7 +42,7 @@ All settings live under `virtual-desktop-controller.dcv_session.stopped_session_
 
 With `warn_days_before` above zero, the owner is emailed before the desktop is deleted and the deletion waits until they have had the whole warning window. With `stopped_after_days: 30` and `warn_days_before: 7`, a desktop stopped on day 0 gets the notice on day 23 and is deleted on day 30. A desktop that is already past the cutoff when the feature is turned on is warned first and deleted `warn_days_before` days later.
 
-The email, `virtual-desktop-controller.session-cleanup-warning` under **Cluster Settings > Email Templates**, says how many days the desktop has been stopped, the date (UTC) it will be deleted unless it is started before then, that starting it resets the clock, and that an administrator can exempt it if it must be kept. It is sent once per stop: starting the desktop clears the notice, and the next stop starts the count again. The notice can be switched off under `dcv_session.notifications.cleanup_warning`, in which case the warning window still applies but no email goes out. The session detail page shows when the notice was sent.
+The email, `virtual-desktop-controller.session-cleanup-warning` under **Administration > Settings > Email and notifications**, says how many days the desktop has been stopped, the date (UTC) it will be deleted unless it is started before then, that starting it resets the clock, and that an administrator can exempt it if it must be kept. It is sent once per stop: starting the desktop clears the notice, and the next stop starts the count again. The notice can be switched off under `dcv_session.notifications.cleanup_warning`, in which case the warning window still applies but no email goes out. The session detail page shows when the notice was sent.
 
 ## Exempting a desktop
 

@@ -118,10 +118,12 @@ export async function waitForRunningIdentity(context: CheckContext, job: Submitt
 export async function waitForWitnessedFinish(
   context: CheckContext,
   job: SubmittedJob,
+  minimumWaitSeconds = 0,
 ): Promise<{ observed: string[]; passed: boolean }> {
   const expected = context.options.expectedExitStatus ?? 0;
   let exitStatus: number | undefined;
-  const finished = await waitUntil(context, context.options.readyTimeoutSeconds ?? 1_800, `completion of job ${job.jobUid}`, async () => {
+  const timeout = Math.max(context.options.readyTimeoutSeconds ?? 1_800, minimumWaitSeconds);
+  const finished = await waitUntil(context, timeout, `completion of job ${job.jobUid}`, async () => {
     exitStatus = numberValue((await completedJob(context.api, job))?.["exit_status"]);
     return exitStatus !== undefined;
   });

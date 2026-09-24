@@ -4,7 +4,7 @@ description: Create a powerful Linux or Windows virtual desktop in a single clic
 
 # Create a virtual desktop (Linux/Windows)
 
-To access the Virtual Desktop section, click "**Virtual Desktops**" on the left sidebar:
+To access the Virtual Desktop section, click "**My desktops**" on the left sidebar:
 
 <figure><img src="../../../.gitbook/assets/mods_vdi_user_create_menu.webp" alt=""><figcaption></figcaption></figure>
 

@@ -1,4 +1,6 @@
-## Applications
+## Images and applications
+
+### Submission forms
 
 Create a web-based workflow to submit your HPC jobs.
 

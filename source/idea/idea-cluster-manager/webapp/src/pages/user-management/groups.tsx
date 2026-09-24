@@ -23,7 +23,7 @@ import IdeaConfirm from "../../components/modals";
 import {AccountsClient} from "../../client";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import IdeaAppLayout, {IdeaAppLayoutProps} from "../../components/app-layout";
-import {StatusIndicator} from "@cloudscape-design/components";
+import {StatusIndicator, Box} from "@cloudscape-design/components";
 import {withRouter} from "../../navigation/navigation-utils";
 
 export interface GroupsProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
@@ -248,7 +248,7 @@ class Groups extends Component<GroupsProps, GroupsState> {
                              }
                          }}
             >
-                {message} <b>{this.getSelected()?.name}</b> ?
+                {message} <Box variant="strong">{this.getSelected()?.name}</Box> ?
             </IdeaConfirm>
         )
     }
@@ -277,7 +277,7 @@ class Groups extends Component<GroupsProps, GroupsState> {
                              })
                          }}
             >
-                Are you sure you want to remove below users from group: <b>{this.getSelected()?.name}</b> ?
+                Are you sure you want to remove below users from group: <Box variant="strong">{this.getSelected()?.name}</Box> ?
                 <ul>
                     {this.getUserListing()?.getSelectedItems<User>().map((user => {
                         return <li key={user.username}>{user.username}</li>

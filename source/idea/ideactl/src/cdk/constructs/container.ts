@@ -55,10 +55,8 @@ export const PBS_SERVER_WAIT_SECONDS = 150;
 export const BROKER_DISCOVERY_WAIT_SECONDS = 60;
 export const APPLICATION_START_SECONDS = 120;
 /**
- * The load balancer grace has to cover registration as well as the start, because a target that has
- * not yet passed its consecutive successful checks is not healthy yet and the grace is what keeps the
- * platform from acting on that. These target groups use the library health check, which is five
- * checks thirty seconds apart.
+ * Registration allowance, including the network load balancer's distributed health checks.
+ * Grace suppresses premature replacement; it does not delay a successful readiness check.
  */
 export const TARGET_REGISTRATION_SECONDS = 150;
 
@@ -448,11 +446,11 @@ export function applicationTargetGroup(
   },
 ): elbv2.ApplicationTargetGroup {
   return new elbv2.ApplicationTargetGroup(scope.stack, input.constructId, {
-    deregistrationDelay:
-      input.deregistrationDelaySeconds === undefined
-        ? undefined
-        : Duration.seconds(input.deregistrationDelaySeconds),
-    healthCheck: { path: input.healthCheckPath, protocol: elbv2.Protocol.HTTPS },
+    deregistrationDelay: Duration.seconds(input.deregistrationDelaySeconds ?? 300),
+    healthCheck: {
+      path: input.healthCheckPath, protocol: elbv2.Protocol.HTTPS,
+      interval: Duration.seconds(5), timeout: Duration.seconds(4), healthyThresholdCount: 2,
+    },
     port: input.port,
     protocol: elbv2.ApplicationProtocol.HTTPS,
     targetGroupName: input.targetGroupName,
@@ -476,6 +474,28 @@ export function taskStartAllowance(role: ContainerRole): Duration {
 /** The task start plus the time its target needs to register as healthy behind a load balancer. */
 export function healthCheckGrace(role: ContainerRole): Duration {
   return Duration.seconds(taskStartAllowance(role).toSeconds() + TARGET_REGISTRATION_SECONDS);
+}
+
+/** Readiness and shutdown controls for every application container. */
+export function applicationContainerSettings(role: ContainerRole, brokerPorts = [8444, 8445, 8446]): Pick<ecs.ContainerDefinitionOptions, "healthCheck" | "stopTimeout"> {
+  const http = (url: string) => `curl --fail --silent --show-error --insecure --max-time 4 ${url}`;
+  const command = role === "dcv-broker"
+    ? brokerPorts.map((port) => http(`https://localhost:${port}/health`)).join(" && ")
+    : role === "dcv-gateway"
+      // The gateway exposes a dedicated TCP readiness listener, not an HTTP endpoint.
+      ? "timeout 4 bash -c '</dev/tcp/127.0.0.1/8989'"
+      : role === "bastion-host"
+        ? "timeout 4 ssh-keyscan -p 22 127.0.0.1 >/dev/null 2>&1"
+        : http("https://localhost:8443/healthcheck");
+  return {
+    healthCheck: {
+      command: ["CMD-SHELL", command], interval: Duration.seconds(5),
+      timeout: Duration.seconds(5), retries: 3, startPeriod: taskStartAllowance(role),
+    },
+    // ECS deregisters the task and drains its target groups before entering STOPPING.
+    // This is the separate allowance between SIGTERM and SIGKILL, not a drain timer.
+    stopTimeout: Duration.seconds(30),
+  };
 }
 
 /** The cluster the container stack created, imported once per stack. */
@@ -508,8 +528,8 @@ export interface ServiceInput {
   readonly taskDefinition: ecs.Ec2TaskDefinition;
   readonly desiredCount: number;
   readonly securityGroups: ec2.ISecurityGroup[];
-  readonly minHealthyPercent: number;
-  readonly maxHealthyPercent: number;
+  /** Only the single PBS writer stops before its replacement starts. */
+  readonly singleWriter?: boolean;
   readonly healthCheckGracePeriod?: Duration;
   readonly cloudMapOptions?: ecs.CloudMapOptions;
   /** False only for the scheduler, whose single task must not be spread. */
@@ -524,6 +544,8 @@ export interface ServiceInput {
 
 /** Creates an EC2 service on the container stack's shared capacity. */
 export function buildEc2Service(scope: ContainerScope, input: ServiceInput): ecs.Ec2Service {
+  if (!Number.isInteger(input.desiredCount) || input.desiredCount < 1) throw new Error("A service needs at least one desired task");
+  if (input.singleWriter === true && input.desiredCount !== 1) throw new Error("The scheduler requires exactly one task");
   const service = new ecs.Ec2Service(scope.stack, input.constructId, {
     capacityProviderStrategies: [
       { capacityProvider: requiredString(scope, "ecs.capacity_provider"), weight: 1 },
@@ -538,10 +560,19 @@ export function buildEc2Service(scope: ContainerScope, input: ServiceInput): ecs
     // adding one. It stays out of this tool's own identity: the tool observes and refuses.
     enableExecuteCommand: true,
     healthCheckGracePeriod: input.healthCheckGracePeriod,
-    maxHealthyPercent: input.maxHealthyPercent,
-    minHealthyPercent: input.minHealthyPercent,
+    maxHealthyPercent: input.singleWriter === true ? 100 : Math.ceil(100 * (input.desiredCount + 1) / input.desiredCount),
+    // Surge by one task when a distinct host has room; otherwise ECS may stop one replica first.
+    // At a floor of 100 a two-task distinct-instance service needs a third host with the task's
+    // memory free, and a rollout that finds none waits until the stack times out.
+    minHealthyPercent: input.singleWriter === true ? 0 : Math.floor(100 * (input.desiredCount - 1) / input.desiredCount),
     placementConstraints:
       input.distinctInstances === false ? undefined : [ecs.PlacementConstraint.distinctInstances()],
+    // Spread replicas across zones, then pack by memory: random placement fragments the hosts so a
+    // large task finds no hole and the host group cannot shrink back to its minimum.
+    placementStrategies: [
+      ecs.PlacementStrategy.spreadAcross(ecs.BuiltInAttributes.AVAILABILITY_ZONE),
+      ecs.PlacementStrategy.packedByMemory(),
+    ],
     securityGroups: input.securityGroups,
     serviceName: input.serviceName,
     taskDefinition: input.taskDefinition,

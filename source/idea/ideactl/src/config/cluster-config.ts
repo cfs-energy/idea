@@ -223,7 +223,8 @@ function toModuleInfo(row: Record<string, unknown>): ModuleInfo {
 async function defaultTableScanner(region: string): Promise<TableScanner> {
   const { DynamoDBClient } = await import('@aws-sdk/client-dynamodb');
   const { DynamoDBDocumentClient, ScanCommand } = await import('@aws-sdk/lib-dynamodb');
-  const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region }));
+  const { networkTolerantRetryStrategy } = await import('../cli/aws-client-options.ts');
+  const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region, retryStrategy: networkTolerantRetryStrategy }));
   return (input) => doc.send(new ScanCommand(input));
 }
 

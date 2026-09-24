@@ -1,6 +1,6 @@
 # Groups management
 
-To manage IDEA groups, navigate to the **"Cluster Management**" section on the left sidebar of IDEA menu and click "**Groups**"
+To manage IDEA groups, navigate to "**Administration**" > "**People and access**" > "**Groups**"
 
 <figure><img src="../.gitbook/assets/Screen Shot 2022-10-23 at 9.46.37 AM.png" alt=""><figcaption><p>Groups management on IDEA</p></figcaption></figure>
 

@@ -11,13 +11,29 @@
 
 import math
 import re
-from ideaclustermanager.app.accounts.reconcile_settings import approved_okta_origin
+import time
+
+from ideaclustermanager.app.settings_catalog import (
+    MODULES,
+    coerce_settings,
+    settings_catalog,
+)
+
+from ideaclustermanager.app.accounts.reconcile_settings import (
+    approved_okta_origin,
+    read_reconcile_settings,
+)
 
 import ideaclustermanager
+from ideaclustermanager.app.metrics.cost_metrics_backfill import CostMetricsBackfill
 
 from ideasdk.api import ApiInvocationContext, BaseAPI
 from ideadatamodel.cluster_settings import (
+    DescribeSettingsCatalogResult,
     ListClusterModulesResult,
+    ListClusterServicesResult,
+    ClusterService,
+    ClusterServiceTask,
     ListClusterHostsRequest,
     ListClusterHostsResult,
     GetModuleSettingsRequest,
@@ -28,6 +44,7 @@ from ideadatamodel.cluster_settings import (
 )
 from ideadatamodel import exceptions, errorcodes, constants
 from ideasdk.utils import Utils
+from ideasdk.aws.aws_client_provider import AWS_CLIENT_ECS
 
 from ideaclustermanager.app.projects.bedrock_provisioner import (
     validate_no_global_profiles,
@@ -57,6 +74,7 @@ USER_VISIBLE_MODULE_SETTINGS: Dict[str, List[str]] = {
         'web_portal.custom_dashboard.enabled',
         'web_portal.custom_dashboard.title',
         'web_portal.custom_dashboard.url',
+        'web_portal.default_landing_page',
         # maintenance banner. every user sees it, so every user has to be able to read it.
         'maintenance.enabled',
         'maintenance.message',
@@ -91,6 +109,7 @@ class ClusterSettingsAPI(BaseAPI):
     def __init__(self, context: ideaclustermanager.AppContext):
         self.context = context
         self.instance_types_lock = RLock()
+        self.cost_metrics_backfill = CostMetricsBackfill(context)
 
     def _scope(self, access: str) -> str:
         # app (client-credentials) tokens are authorized by module scope, users by elevation
@@ -109,6 +128,17 @@ class ClusterSettingsAPI(BaseAPI):
 
         module_config = self.context.config().get_config(module_id, module_id=module_id)
         settings = module_config.as_plain_ordered_dict()
+
+        if (
+            context.is_administrator()
+            and self.get_module_name(module_id) == constants.MODULE_CLUSTER_MANAGER
+        ):
+            fresh = read_reconcile_settings(
+                self.context.config(), module_id, status=True
+            )
+            reconcile = settings.setdefault('accounts', {}).setdefault('reconcile', {})
+            reconcile.setdefault('okta', {}).update(fresh.pop('okta'))
+            reconcile.update(fresh)
 
         if not context.is_authorized(
             elevated_access=True, scopes=[self._scope('read')]
@@ -160,6 +190,42 @@ class ClusterSettingsAPI(BaseAPI):
 
         return result
 
+    def catalog_module_name(self, module_id):
+        if module_id == 'vdc':
+            return constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER
+        if module_id in MODULES:
+            return module_id
+        return self.get_module_name(module_id)
+
+    def settings_catalog(self):
+        storage = self.context.config().get_config('shared-storage', required=False)
+        values = storage.as_plain_ordered_dict() if storage is not None else {}
+        names = (
+            [
+                name
+                for name, value in values.items()
+                if isinstance(value, dict) and value.get('provider')
+            ]
+            if isinstance(values, dict)
+            else []
+        )
+        rules = {}
+        for prefix in (
+            'cluster.backups.backup_plan.rules',
+            'virtual-desktop-controller.vdi_host_backup.backup_plan.rules',
+        ):
+            config = self.context.config().get_config(prefix, required=False)
+            values = config.as_plain_ordered_dict() if config is not None else {}
+            rules[prefix] = list(values) if isinstance(values, dict) else []
+        return settings_catalog(names, rules)
+
+    def describe_settings_catalog(self, context):
+        if not context.is_authorized(
+            elevated_access=True, scopes=[self._scope('read')]
+        ):
+            raise exceptions.unauthorized_access()
+        context.success(DescribeSettingsCatalogResult(settings=self.settings_catalog()))
+
     def get_allowed_settings_for_module(self, module_id: str) -> List[str]:
         """
         Define which settings can be updated via the web UI for each module.
@@ -176,7 +242,7 @@ class ClusterSettingsAPI(BaseAPI):
                 'dcv_session.max_root_volume_memory',
                 'dcv_session.instance_types.allow',
                 'dcv_session.instance_types.deny',
-                # Stopped desktop cleanup; keep_tags stays on idea-admin.sh
+                # Stopped desktop cleanup; additional fields are defined by the catalog
                 'dcv_session.stopped_session_cleanup.enabled',
                 'dcv_session.stopped_session_cleanup.dry_run',
                 'dcv_session.stopped_session_cleanup.stopped_after_days',
@@ -238,7 +304,13 @@ class ClusterSettingsAPI(BaseAPI):
             ],
         }
 
-        return allowed_settings.get(module_id, [])
+        module_name = self.catalog_module_name(module_id)
+        catalogued = [
+            item['path']
+            for item in self.settings_catalog()
+            if item['module'] == module_name
+        ]
+        return list(dict.fromkeys(allowed_settings.get(module_id, []) + catalogued))
 
     def validate_settings_allowed(self, module_id: str, settings: dict) -> None:
         """
@@ -306,17 +378,22 @@ class ClusterSettingsAPI(BaseAPI):
         if Utils.is_empty(module_id):
             raise exceptions.invalid_params('module_id is required')
 
-        if request.settings is None:
-            raise exceptions.invalid_params('settings is required')
+        if not isinstance(request.settings, dict):
+            raise exceptions.invalid_params('settings must be an object')
 
+        # Reject unknown paths, then normalize every value before validating related fields.
+        self.validate_settings_allowed(module_id, request.settings)
+        request.settings, effects = coerce_settings(
+            self.catalog_module_name(module_id),
+            request.settings,
+            self.settings_catalog(),
+        )
         if (
             'reconcile' in request.settings.get('accounts', {})
             and not context.is_administrator()
         ):
             raise exceptions.unauthorized_access()
 
-        # Validate that only allowed settings are being updated
-        self.validate_settings_allowed(module_id, request.settings)
         self.validate_bedrock_settings(module_id, request.settings)
         self.validate_reconcile_settings(module_id, request.settings)
 
@@ -332,7 +409,13 @@ class ClusterSettingsAPI(BaseAPI):
 
         self.reconcile_bedrock_projects(module_id, request.settings)
 
-        context.success(UpdateModuleSettingsResult(success=True))
+        if 'reconcile' in request.settings.get('accounts', {}):
+            cluster_config.db.set_config_entry(
+                f'{module_id}.accounts.reconcile.last_saved', int(time.time())
+            )
+            self.context.accounts.reconciler.settings_changed()
+
+        context.success(UpdateModuleSettingsResult(success=True, effects=effects))
 
     def validate_reconcile_settings(self, module_id: str, settings: dict) -> None:
         if module_id != self.context.config().get_module_id(
@@ -493,6 +576,116 @@ class ClusterSettingsAPI(BaseAPI):
 
         context.success(ListClusterHostsResult(listing=result))
 
+    def list_cluster_services(self, context: ApiInvocationContext):
+        if not context.is_administrator():
+            raise exceptions.unauthorized_access()
+        result = ListClusterServicesResult()
+        cluster = self.context.config().get_string('ecs.cluster_name', required=False)
+        if not cluster:
+            context.success(result)
+            return
+
+        def timestamp(value):
+            return value.isoformat() if value else None
+
+        def pages(method, key, **kwargs):
+            values = []
+            while True:
+                response = method(**kwargs)
+                values.extend(response.get(key, []))
+                token = response.get('nextToken')
+                if not token:
+                    return values
+                kwargs['nextToken'] = token
+
+        try:
+            ecs = self.context.aws().get_client(AWS_CLIENT_ECS)
+            arns = pages(ecs.list_services, 'serviceArns', cluster=cluster)
+            definitions = {}
+            for offset in range(0, len(arns), 10):
+                try:
+                    response = ecs.describe_services(
+                        cluster=cluster, services=arns[offset : offset + 10]
+                    )
+                except Exception:
+                    result.errors.append(
+                        'Could not read some services. Refresh to try again.'
+                    )
+                    continue
+                if response.get('failures'):
+                    result.errors.append(
+                        'Some services could not be read. Refresh to try again.'
+                    )
+                for service in response.get('services', []):
+                    primary = next(
+                        (
+                            d
+                            for d in service.get('deployments', [])
+                            if d.get('status') == 'PRIMARY'
+                        ),
+                        {},
+                    )
+                    row = ClusterService(
+                        name=service['serviceName'],
+                        desired=service.get('desiredCount', 0),
+                        running=service.get('runningCount', 0),
+                        pending=service.get('pendingCount', 0),
+                        rollout_state=primary.get('rolloutState'),
+                        updated_at=timestamp(primary.get('updatedAt')),
+                    )
+                    result.listing.append(row)
+                    try:
+                        definition = (
+                            primary.get('taskDefinition') or service['taskDefinition']
+                        )
+                        if definition not in definitions:
+                            definitions[definition] = ecs.describe_task_definition(
+                                taskDefinition=definition
+                            )['taskDefinition']
+                        row.images = [
+                            c['image']
+                            for c in definitions[definition].get(
+                                'containerDefinitions', []
+                            )
+                            if c.get('image')
+                        ]
+                    except Exception:
+                        result.errors.append(
+                            f'Could not read images for {row.name}. Refresh to try again.'
+                        )
+                    try:
+                        tasks = pages(
+                            ecs.list_tasks,
+                            'taskArns',
+                            cluster=cluster,
+                            serviceName=row.name,
+                            desiredStatus='RUNNING',
+                        )
+                        for start in range(0, len(tasks), 100):
+                            described = ecs.describe_tasks(
+                                cluster=cluster, tasks=tasks[start : start + 100]
+                            )
+                            if described.get('failures'):
+                                result.errors.append(
+                                    f'Some tasks for {row.name} could not be read. Refresh to try again.'
+                                )
+                            row.tasks.extend(
+                                ClusterServiceTask(
+                                    task_id=t['taskArn'].rsplit('/', 1)[-1],
+                                    started_at=timestamp(t.get('startedAt')),
+                                    health=t.get('healthStatus', 'UNKNOWN'),
+                                )
+                                for t in described.get('tasks', [])
+                                if t.get('lastStatus') == 'RUNNING'
+                            )
+                    except Exception:
+                        result.errors.append(
+                            f'Could not read tasks for {row.name}. Refresh to try again.'
+                        )
+        except Exception:
+            result.errors.append('Could not load services. Refresh to try again.')
+        context.success(result)
+
     def describe_instance_types(self, context: ApiInvocationContext):
         instance_types = (
             self.context.cache().long_term().get('aws.ec2.all-instance-types')
@@ -542,12 +735,28 @@ class ClusterSettingsAPI(BaseAPI):
             raise exceptions.unauthorized_access()
 
         namespace = context.namespace
-        if namespace == 'ClusterSettings.ListClusterModules':
+        if namespace in (
+            'ClusterSettings.BackfillCostMetrics',
+            'ClusterSettings.GetCostMetricsBackfill',
+        ):
+            if not context.is_authorized(elevated_access=True, scopes=None):
+                raise exceptions.unauthorized_access()
+            if namespace == 'ClusterSettings.BackfillCostMetrics':
+                context.success(
+                    self.cost_metrics_backfill.start_request(context.request_payload)
+                )
+            else:
+                context.success(self.cost_metrics_backfill.status())
+        elif namespace == 'ClusterSettings.ListClusterModules':
             self.list_cluster_modules(context)
+        elif namespace == 'ClusterSettings.DescribeSettingsCatalog':
+            self.describe_settings_catalog(context)
         elif namespace == 'ClusterSettings.GetModuleSettings':
             self.get_module_settings(context)
         elif namespace == 'ClusterSettings.UpdateModuleSettings':
             self.update_module_settings(context)
+        elif namespace == 'ClusterSettings.ListClusterServices':
+            self.list_cluster_services(context)
         elif namespace == 'ClusterSettings.ListClusterHosts':
             self.list_cluster_hosts(context)
         elif namespace == 'ClusterSettings.DescribeInstanceTypes':

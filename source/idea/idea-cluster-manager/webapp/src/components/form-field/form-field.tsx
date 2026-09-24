@@ -34,7 +34,6 @@ import {
     Textarea,
     Toggle
 } from "@cloudscape-design/components";
-import {BaseKeyDetail} from "@cloudscape-design/components/internal/events";
 import {faAdd, faRemove} from "@fortawesome/free-solid-svg-icons";
 import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
 import ReactMarkdown from "react-markdown";
@@ -1054,7 +1053,7 @@ class IdeaFormField extends Component<IdeaFormFieldProps, IdeaFormFieldState> {
         }
     }
 
-    onKeyDown = (event: CustomEvent<BaseKeyDetail>) => {
+    onKeyDown = (event: CustomEvent<InputProps.KeyDetail>) => {
         if (event.detail.key === 'Enter' && this.props.onKeyEnter) {
             this.props.onKeyEnter({
                 ref: this

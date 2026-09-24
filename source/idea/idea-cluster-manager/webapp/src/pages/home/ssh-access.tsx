@@ -11,12 +11,9 @@
  * and limitations under the License.
  */
 
-import {Component} from "react";
+import React, {Component} from "react";
 
-import {Badge, Box, Button, Container, Grid, Header, Link, SpaceBetween} from "@cloudscape-design/components";
-import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
-import {faLinux, faApple, faWindows} from "@fortawesome/free-brands-svg-icons";
-import {faDownload} from "@fortawesome/free-solid-svg-icons";
+import {Badge, Box, Button, Container, CopyToClipboard, Grid, Header, Link, SpaceBetween, TextContent} from "@cloudscape-design/components";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import {AppContext} from "../../common";
 import Utils from "../../common/utils";
@@ -79,39 +76,36 @@ class SSHAccess extends Component<SSHAccessProps, SSHAccessState> {
     }
 
     render() {
-
-        const getKeyName = (keyFormat: string): string  => {
-            const clusterName = AppContext.get().auth().getClusterName()
-            const username = AppContext.get().auth().getUsername()
-            return `${username}_${clusterName}_privatekey.${keyFormat}`
-        }
-
-        const getUsername = (): string => {
-            return AppContext.get().auth().getUsername()
-        }
-
-        const getClusterName = (): string => {
-            return AppContext.get().auth().getClusterName()
-        }
-
-        const getAwsRegion = (): string => {
-            return AppContext.get().auth().getAwsRegion()
-        }
-
-        // Create a custom CommandBox component using CloudScape Box with appropriate props
-        const CommandBox = (props: any) => (
-            <Box
-                variant="code"
-                padding="s"
-                fontSize="body-s"
-                fontWeight="normal"
-                color="text-status-info"
-                display="block"
-                className="ssh-command-box"
-            >
-                {props.children}
+        const auth = AppContext.get().auth()
+        const username = auth.getUsername()
+        const keyName = (keyFormat: string) => `${username}_${auth.getClusterName()}_privatekey.${keyFormat}`
+        const host = this.state.sshHostIp
+        const alias = `${auth.getClusterName()}-${auth.getAwsRegion()}`
+        const sshConfig = [
+            `Host ${alias}`,
+            `  User ${username}`,
+            `  Hostname ${host}`,
+            '  ServerAliveInterval 10',
+            '  ServerAliveCountMax 2',
+            `  IdentityFile ~/.ssh/${keyName('pem')}`
+        ].join('\n')
+        const command = (text: string) => (
+            <CopyToClipboard
+                variant="inline"
+                textToCopy={text}
+                copyButtonAriaLabel="Copy command"
+                copySuccessText="Copied"
+                copyErrorText="Copy failed"
+            />
+        )
+        const step = (title: string, content: React.ReactNode, optional = false) => (
+            <Box key={title}>
+                <Box variant="h4" padding={{bottom: 'xxs'}}>
+                    {title} {optional && <Badge>Optional</Badge>}
+                </Box>
+                {content}
             </Box>
-        );
+        )
 
         return (
             <IdeaAppLayout
@@ -128,132 +122,93 @@ class SSHAccess extends Component<SSHAccessProps, SSHAccessState> {
                 breadcrumbItems={[
                     {
                         text: 'IDEA',
-                        href: '#/'
+                        href: '#'
                     },
                     {
                         text: 'Home',
-                        href: '#/'
+                        href: '#'
                     },
                     {
-                        text: 'SSH Access',
+                        text: 'SSH access',
                         href: ''
                     }
                 ]}
-                header={<Header variant={"h1"}>SSH Access</Header>}
+                header={<Header variant={"h1"}>SSH access</Header>}
                 contentType={"default"}
                 content={
                     <Grid gridDefinition={[
-                        {colspan: {xxs: 12, xs: 6}},
-                        {colspan: {xxs: 12, xs: 6}}
+                        {colspan: {xxs: 12, s: 6}},
+                        {colspan: {xxs: 12, s: 6}}
                     ]}>
-                        <Container
-                            variant="default"
-                        >
-                            <SpaceBetween size={"xl"}>
-                                <Box textAlign="center">
-                                    <FontAwesomeIcon icon={faLinux} size="5x"/>
-                                    &nbsp;
-                                    &nbsp;
-                                    <FontAwesomeIcon icon={faApple} size="5x"/>
-                                </Box>
-                                <Header variant="h3">
-                                    Access cluster using Linux / MacOS
-                                </Header>
-                            </SpaceBetween>
-                            <p>Follow the below steps to connect to the cluster using Terminal on your Linux or MacOS
-                                laptop/workstation:</p>
-                            <SpaceBetween size="m" direction="vertical">
-                                <Box>
-                                    <h3>Step 1: Download my Private Key</h3>
-                                    <p>Download the private key file, and save it your ~/.ssh directory. </p>
-                                    <p><Button variant="primary" loading={this.state.downloadPemLoading}
-                                               onClick={() => this.onDownloadPrivateKey('pem')}><FontAwesomeIcon
-                                        icon={faDownload}/> Download Private Key</Button>
-                                    </p>
-                                </Box>
-                                <Box>
-                                    <h3>Step 2: Modify key permissions</h3>
-                                    <CommandBox>
-                                        chmod 600 ~/.ssh/{getKeyName('pem')}
-                                    </CommandBox>
-                                </Box>
-                                <Box>
-                                    <h3>Step 3: Connect to the cluster</h3>
-                                    <CommandBox>
-                                        ssh -i ~/.ssh/{getKeyName('pem')} {getUsername()}@{this.state.sshHostIp}
-                                    </CommandBox>
-                                </Box>
-                                <Box>
-                                    <h3><Badge color="green">Optional</Badge> Step 4: Create SSH config</h3>
-                                    <p>
-                                        If you don't want your session to be automatically closed after a couple of minutes of
-                                        inactivity,
-                                        edit: <code>~/.ssh/config</code> and add:
-                                    </p>
-
-                                    <CommandBox>
-                                        Host {getClusterName()}-{getAwsRegion()}<br/>
-                                        &nbsp;&nbsp;User {getUsername()}<br/>
-                                        &nbsp;&nbsp;Hostname {this.state.sshHostIp}<br/>
-                                        &nbsp;&nbsp;ServerAliveInterval 10<br/>
-                                        &nbsp;&nbsp;ServerAliveCountMax 2<br/>
-                                        &nbsp;&nbsp;IdentityFile ~/.ssh/{getKeyName('pem')}
-                                    </CommandBox>
-
-                                    <p>
-                                        Once updated, you can simply run below to connect to your cluster: <br/>
-                                        <CommandBox>ssh {getClusterName()}-{getAwsRegion()}</CommandBox>
-                                    </p>
-                                </Box>
+                        <Container header={<Header variant="h2" description="Connect from a terminal.">Linux and macOS</Header>}>
+                            <SpaceBetween size="l">
+                                {step('1. Download your private key', (
+                                    <SpaceBetween size="xs">
+                                        <Box variant="p">Save it in your ~/.ssh directory.</Box>
+                                        <Button
+                                            variant="primary"
+                                            iconName="download"
+                                            loading={this.state.downloadPemLoading}
+                                            onClick={() => this.onDownloadPrivateKey('pem')}
+                                        >
+                                            Download private key
+                                        </Button>
+                                    </SpaceBetween>
+                                ))}
+                                {step('2. Restrict the key permissions', command(`chmod 600 ~/.ssh/${keyName('pem')}`))}
+                                {step('3. Connect', command(`ssh -i ~/.ssh/${keyName('pem')} ${username}@${host}`))}
+                                {step('4. Keep the session alive', (
+                                    <SpaceBetween size="xs">
+                                        <Box variant="p">
+                                            Add this to <Box variant="code">~/.ssh/config</Box> so idle sessions stay open,
+                                            then connect with <Box variant="code">ssh {alias}</Box>.
+                                        </Box>
+                                        <Box variant="code" display="block" padding="s" className="idea-code-block">{sshConfig}</Box>
+                                        <CopyToClipboard
+                                            variant="button"
+                                            textToCopy={sshConfig}
+                                            copyButtonText="Copy"
+                                            copySuccessText="Copied"
+                                            copyErrorText="Copy failed"
+                                        />
+                                    </SpaceBetween>
+                                ), true)}
                             </SpaceBetween>
                         </Container>
-
-                        <Container
-                            variant="default"
-                        >
-                            <SpaceBetween size={"xl"}>
-                                <Box textAlign="center">
-                                    <FontAwesomeIcon icon={faWindows} size="5x"/>
-                                </Box>
-                                <Header variant="h3">Access cluster using Windows (PuTTY)</Header>
-                            </SpaceBetween>
-
-                            <p>Follow the below steps to connect to the cluster using Terminal on your Windows laptop/workstation:</p>
-                            <SpaceBetween size="m" direction="vertical">
-                                <Box>
-                                    <h3>Step 1: Download my PuTTY private key</h3>
-                                    <p><Button loading={this.state.downloadPpkLoading} variant="primary"
-                                               onClick={() => this.onDownloadPrivateKey('ppk')}><FontAwesomeIcon
-                                        icon={faDownload}/> Download Private Key</Button>
-                                    </p>
-                                </Box>
-                                <Box>
-                                    <h3>Step 2: Configure PuTTY</h3>
-                                    <ul>
-                                        <li>
-                                            <Link external={true} href="https://www.chiark.greenend.org.uk/~sgtatham/putty/latest.html">
-                                                Download PuTTY
-                                            </Link>
-                                        </li>
-                                        <li>
-                                            As hostname, enter <code>{this.state.sshHostIp}</code>
-                                        </li>
-                                        <li>
-                                            Navigate to Connection &gt; SSH &gt; Auth and enter the path of your
-                                            key <code>{getKeyName('ppk')}</code> under <b>"Private Key used for
-                                            Authentication"</b>
-                                        </li>
-                                        <li>Save your session</li>
-                                        <li>Click connect/open to access the cluster</li>
-                                    </ul>
-                                </Box>
-                                <Box>
-                                    <h3><Badge color="green">Optional</Badge> Step 3: Enable KeepAlive</h3>
-                                    <p>
-                                        If you don't want your session to be automatically closed after a couple of minutes of
-                                        inactivity, go to Connection and add "3" as <b>"Seconds between KeepAlives"</b>
-                                    </p>
-                                </Box>
+                        <Container header={<Header variant="h2" description="Connect with PuTTY.">Windows</Header>}>
+                            <SpaceBetween size="l">
+                                {step('1. Download your PuTTY private key', (
+                                    <Button
+                                        variant="primary"
+                                        iconName="download"
+                                        loading={this.state.downloadPpkLoading}
+                                        onClick={() => this.onDownloadPrivateKey('ppk')}
+                                    >
+                                        Download private key
+                                    </Button>
+                                ))}
+                                {step('2. Configure PuTTY', (
+                                    <TextContent>
+                                        <ul>
+                                            <li>
+                                                <Link external={true} href="https://www.chiark.greenend.org.uk/~sgtatham/putty/latest.html">
+                                                    Download PuTTY
+                                                </Link>
+                                            </li>
+                                            <li>Host name: <code>{host}</code></li>
+                                            <li>
+                                                Under Connection, SSH, Auth, set the private key file
+                                                to <code>{keyName('ppk')}</code>
+                                            </li>
+                                            <li>Save the session, then open it</li>
+                                        </ul>
+                                    </TextContent>
+                                ))}
+                                {step('3. Keep the session alive', (
+                                    <Box variant="p">
+                                        Under Connection, set <strong>Seconds between keepalives</strong> to 3 so idle sessions stay open.
+                                    </Box>
+                                ), true)}
                             </SpaceBetween>
                         </Container>
                     </Grid>

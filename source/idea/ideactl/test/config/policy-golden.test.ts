@@ -277,6 +277,34 @@ function varsFor(entry: Attribution, template: Template, cluster: string): Recor
   return undefined;
 }
 
+// Release additions live in test fixtures; captured deployment documents stay immutable.
+const COST_POLICY = JSON.parse(readFileSync(new URL('./fixtures/cluster-manager-cost-policy.json', import.meta.url), 'utf-8')) as {
+  requiredReadActions: string[];
+  outboxDelete: { Action: string; Effect: string; Resource: string };
+};
+
+function expectedPolicy(templateName: string, captured: unknown): unknown {
+  if (templateName !== 'cluster-manager.yml') return captured;
+  const document = structuredClone(captured) as { Statement: { Action: string | string[]; Resource: string | string[]; Effect: string }[] };
+  const actions = (statement: { Action: string | string[] }) => Array.isArray(statement.Action) ? statement.Action : [statement.Action];
+  for (const action of COST_POLICY.requiredReadActions) {
+    assert.ok(document.Statement.some(statement => actions(statement).includes(action)
+      && statement.Effect === 'Allow' && statement.Resource === '*'), `cost read permission missing: ${action}`);
+  }
+  if (!document.Statement.some(statement => actions(statement).includes(COST_POLICY.outboxDelete.Action))) {
+    const storageIndex = document.Statement.findIndex(statement => actions(statement).includes('s3:PutObject'));
+    assert.ok(storageIndex >= 0, 'cluster object write statement is required');
+    const resources = document.Statement[storageIndex].Resource;
+    assert.ok(Array.isArray(resources));
+    const objectArn = resources.find(resource => resource.endsWith('/*'));
+    assert.ok(objectArn, 'cluster object ARN is required');
+    document.Statement.splice(storageIndex + 1, 0, {
+      ...COST_POLICY.outboxDelete, Resource: objectArn.slice(0, -1) + COST_POLICY.outboxDelete.Resource,
+    });
+  }
+  return document;
+}
+
 function compareAll(cluster: Cluster): { matched: string[]; failed: string[]; absent: string[] } {
   const config = cluster.configFor();
   const matched: string[] = [];
@@ -301,7 +329,7 @@ function compareAll(cluster: Cluster): { matched: string[]; failed: string[]; ab
       vars: varsFor(entry, template as Template, cluster.name),
     });
     try {
-      assert.deepStrictEqual(policyDocumentForComparison(rendered), found[1].Properties.PolicyDocument);
+      assert.deepStrictEqual(policyDocumentForComparison(rendered), expectedPolicy(entry.template, found[1].Properties.PolicyDocument));
       matched.push(label);
     } catch (error) {
       failed.push(`${label} (${entry.template}): ${String(error).split('\n').slice(0, 20).join('\n')}`);
@@ -468,7 +496,7 @@ const ORACLE_MARKER = 'REFERENCE-ORACLE';
  */
 function discoverSynthClusters(): { name: string; root: string }[] {
   const found: { name: string; root: string }[] = [];
-  for (const name of readdirSync(CLUSTERS)) {
+  for (const name of readdirSync(CLUSTERS, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name)) {
     for (const region of readdirSync(join(CLUSTERS, name)).filter((r) => existsSync(join(CLUSTERS, name, r, '_cdk')))) {
       const root = join(CLUSTERS, name, region);
       if (!existsSync(join(root, ORACLE_MARKER))) continue;

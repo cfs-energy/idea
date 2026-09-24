@@ -14,7 +14,7 @@
 import React, {Component, RefObject} from "react";
 
 import IdeaListView from "../../components/list-view";
-import {TableProps} from "@cloudscape-design/components/table/interfaces";
+import {TableProps} from "@cloudscape-design/components/table";
 import {SocaComputeNode} from '../../client/data-model'
 import {AppContext} from "../../common";
 import {SchedulerAdminClient} from "../../client";

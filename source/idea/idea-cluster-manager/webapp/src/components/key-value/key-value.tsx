@@ -14,7 +14,7 @@
 import React, {Component} from "react";
 import Box from "@cloudscape-design/components/box";
 import Utils from "../../common/utils";
-import {ColumnLayout, Link} from "@cloudscape-design/components";
+import {ColumnLayout, Link, SpaceBetween} from "@cloudscape-design/components";
 import {AppContext} from "../../common";
 import {CopyToClipBoard} from "../common";
 
@@ -169,11 +169,10 @@ export class KeyValue extends Component<KeyValueProps, KeyValueState> {
 
         switch (this.props.type) {
             case 'ec2:instance-id':
-                return (<span>
+                return (<SpaceBetween direction="horizontal" size="xs">
                     <Link external={true} href={Utils.getEc2InstanceUrl(AppContext.get().auth().getAwsRegion(), Utils.asString(value))}>{value}</Link>
-                    &nbsp;&nbsp;
                     <Link external={true} href={Utils.getSessionManagerConnectionUrl(AppContext.get().auth().getAwsRegion(), Utils.asString(value))}>(Connect)</Link>
-                </span>)
+                </SpaceBetween>)
             case 'ec2:security-group-id':
                 return <Link external={true} href={Utils.getSecurityGroupUrl(AppContext.get().auth().getAwsRegion(), Utils.asString(value))}>{value}</Link>
             case 'ec2:asg-arn':

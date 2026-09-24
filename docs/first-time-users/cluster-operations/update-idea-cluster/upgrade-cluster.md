@@ -59,9 +59,9 @@ the saved maintenance baseline.
 ### Compute Node Image
 
 The upgrade moves compute nodes onto the release's AMI for the cluster's Base OS, unless
-each scheduler module's `compute_node_ami` names an image built from the Custom AMIs page that is newer than the
+each scheduler module's `compute_node_ami` names an image built from **Administration → Images and applications → Custom images** that is newer than the
 release image, which is kept and reported. An older built image is replaced, and can be rebuilt
-from Custom AMIs after the upgrade.
+from **Custom images** after the upgrade.
 
 ### Module Host Instance Type
 
@@ -89,6 +89,26 @@ The instance type is part of the domain cluster configuration, so changing it up
 place rather than replacing it. OpenSearch Service applies the change as a blue/green deployment:
 it brings up the new nodes, migrates the shards and retires the old nodes. This typically takes tens
 of minutes and the domain stays available throughout, with no downtime and no data loss.
+
+### Rolling Service Updates
+
+For container deployments, the cluster manager, virtual desktop controller, DCV broker,
+connection gateway and SSH bastion retain their desired healthy task count while replacement
+tasks pass health checks. With the default task count, each service can add one replacement
+task at a time. Running jobs and desktops remain on their existing compute hosts.
+
+The scheduler uses exactly one task. Its old task stops before the replacement starts against
+persistent scheduler state, leaving a gap in scheduler API availability and submissions. The
+length of that gap depends on startup and readiness checks; in release testing it was about a minute
+and a half. Jobs already running on compute nodes continue, and the portal retries scheduler requests. An SSH connection through a
+replaced bastion task must reconnect after draining; it uses the same address and host key.
+
+### Borrowed Hosts
+
+While services roll, the container host group may grow one host past its minimum. Nothing moves
+tasks off a host on its own, so the upgrade ends by draining the newest extra host, waiting for
+its tasks to move, and shrinking the group with that host unprotected. Pass `--keep-borrowed-hosts`
+to leave the extra host in service; run `return-hosts` later to give it back.
 
 ### DCV Broker Table Billing Mode
 
@@ -132,8 +152,8 @@ refused with it instead of a generic failure. Neither change needs a redeploy.
   --aws-region <REGION>
 ```
 
-The same three settings are editable from Cluster Management, then Settings, then the Maintenance
-tab. See [Maintenance Banner](../../../modules/cluster-manager/maintenance-banner.md) for the
+The same three settings are editable from Administration, then Settings, then Maintenance
+notice. See [Maintenance Banner](../../../modules/cluster-manager/maintenance-banner.md) for the
 optional end time and for what the banner does not cover.
 
 ### Usage

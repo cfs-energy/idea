@@ -1,3 +1,5 @@
-## Virtual Desktop Session
+## Manage desktops
+
+### Sessions
 
 Context help coming soon ...

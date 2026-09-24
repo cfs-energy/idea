@@ -33,11 +33,13 @@ import {
   adoptedLogDriver,
   addLogTailContainer,
   applicationTargetGroup,
+  applicationContainerSettings,
   attachApplicationFileLogs,
   buildEc2Service,
   buildExecutionRole,
   buildTaskDefinition,
   buildTaskRole,
+  grantInjectedSecret,
   commonEnvironment,
   containerImage,
   dockerLabels,
@@ -450,6 +452,14 @@ export class SchedulerStack extends IdeaBaseStack {
         spot_fleet_request_role_arn: this.spotFleetRequestRole.roleArn,
       }),
     });
+    const datadogSecretArn = this.context.config.getString('ecs.datadog.api_key_secret_arn');
+    if (datadogSecretArn) {
+      taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
+        actions: ['secretsmanager:GetSecretValue'],
+        resources: [datadogSecretArn],
+      }));
+      grantInjectedSecret(scope, taskRole, datadogSecretArn);
+    }
     const executionRole = buildExecutionRole(
       scope,
       'scheduler-task-execution-role',
@@ -478,12 +488,14 @@ export class SchedulerStack extends IdeaBaseStack {
         PBS_HOME: SCHEDULER_PBS_HOME,
         PBS_NODE_FAIL_REQUEUE: '600',
       },
+      ...applicationContainerSettings('scheduler'),
       healthCheck: {
         command: [
           'CMD-SHELL',
           'qstat -B && curl --fail --silent --show-error --unix-socket /run/idea.sock --max-time 4 --header \'Content-Type: application/json\' --data \'{"header":{"namespace":"Scheduler.ListActiveJobs"}}\' http://localhost/scheduler/api/v1',
         ],
-        interval: Duration.seconds(30),
+        interval: Duration.seconds(5),
+        timeout: Duration.seconds(5),
         retries: 3,
         // The container check has no allowance but this one, on a first start and on every
         // replacement, so it matches the load balancer grace. A shorter period would let the
@@ -520,8 +532,7 @@ export class SchedulerStack extends IdeaBaseStack {
       taskDefinition,
       desiredCount: sizing.desired,
       securityGroups: [this.schedulerSecurityGroup],
-      minHealthyPercent: 0,
-      maxHealthyPercent: 100,
+      singleWriter: true,
       distinctInstances: false,
       healthCheckGracePeriod: healthCheckGrace('scheduler'),
       dependencies: [taskRole, taskPolicy, executionRole, this.externalEndpoint, this.internalEndpoint],

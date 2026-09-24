@@ -6,7 +6,7 @@ To see all APIs available, refer to APIs section for each [https://github.com/cf
 
 All actions performed by IDEA web interface can also be triggered via HTTP APIs. APIs cover all modules such as creating IDEA users, submit a job or control virtual desktops.
 
-IDEA provides a Swagger documentation available on the IDEA web interface under "Module Name" > "Settings" (example below for "**eVDI**" > "**Settings**")
+IDEA provides a Swagger documentation available on the IDEA web interface in **Help > API reference** (the illustration below shows the former Settings location)
 
 <figure><img src="../../.gitbook/assets/ftu_access_apis_spec.webp" alt=""><figcaption><p>API Spec and Swagger link available for each module</p></figcaption></figure>
 

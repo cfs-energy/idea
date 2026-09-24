@@ -78,7 +78,7 @@ function discoverCases(): OracleCase[] {
   ];
 
   const cases: OracleCase[] = [];
-  for (const cluster of readdirSync(CLUSTERS_DIR)) {
+  for (const cluster of readdirSync(CLUSTERS_DIR, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name)) {
     const clusterDir = join(CLUSTERS_DIR, cluster);
     for (const region of readdirSync(clusterDir).filter((entry) => existsSync(join(clusterDir, entry, '_cdk')))) {
       const root = join(clusterDir, region);

@@ -12,7 +12,7 @@
  */
 
 import React, {Component, RefObject} from "react";
-import {TableProps} from "@cloudscape-design/components/table/interfaces";
+import {TableProps} from "@cloudscape-design/components/table";
 import {Badge, Link} from "@cloudscape-design/components";
 import {SocaUserInputChoice, VirtualDesktopSession, VirtualDesktopSessionBatchResponsePayload} from "../../client/data-model";
 import IdeaListView from "../../components/list-view";
@@ -27,7 +27,7 @@ import IdeaForm from "../../components/form";
 import IdeaAppLayout from "../../components/app-layout/app-layout";
 import VirtualDesktopSessionStatusIndicator from "./components/virtual-desktop-session-status-indicator";
 import Utils from "../../common/utils";
-import {FlashbarProps} from "@cloudscape-design/components/flashbar/interfaces";
+import {FlashbarProps} from "@cloudscape-design/components/flashbar";
 import VirtualDesktopCreateSessionForm from "./forms/virtual-desktop-create-session-form";
 import {withRouter} from "../../navigation/navigation-utils";
 import VirtualDesktopDCVClient from "../../client/virtual-desktop-dcv-client";

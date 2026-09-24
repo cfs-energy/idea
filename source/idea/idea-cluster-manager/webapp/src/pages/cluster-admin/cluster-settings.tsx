@@ -11,11 +11,14 @@
  * and limitations under the License.
  */
 
+import MetricsHistorySettings from "./metrics-history-settings";
+import {SettingsSection, SettingsSource} from './settings-sections';
+
 import AccountReconcileSettings from "./account-reconcile-settings";
 import React, {Component, RefObject} from "react";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
-import IdeaAppLayout, {IdeaAppLayoutProps} from "../../components/app-layout";
-import {Alert, Box, Button, ColumnLayout, Container, FormField, Header, Input, Link, SpaceBetween, Table, Tabs, Textarea, Toggle} from "@cloudscape-design/components";
+import {IdeaAppLayoutProps} from "../../components/app-layout";
+import {Alert, Box, Button, ColumnLayout, Container, FormField, Header, Input, SpaceBetween, Table, Textarea, Toggle} from "@cloudscape-design/components";
 import moment from "moment";
 import {KeyValue, KeyValueGroup} from "../../components/key-value";
 import {AppContext} from "../../common";
@@ -31,6 +34,7 @@ import IdeaConfirm from "../../components/modals";
 import {SocaUserInputParamMetadata} from "../../client/data-model";
 
 export interface ClusterSettingsProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
+    renderSections: (source: SettingsSource) => React.ReactNode
 
 }
 
@@ -42,7 +46,6 @@ export interface ClusterSettingsState {
     analytics: any
     metrics: any
     clusterManager: any
-    activeTabId: string
 
     sharedStorageTableItems: any
     selectedFileSystem: SharedStorageFileSystem[]
@@ -63,9 +66,8 @@ export interface ClusterSettingsState {
     maintenanceUpdating: boolean
     maintenanceError: string | null
     maintenanceSaved: boolean
+    settingsErrors: string[]
 }
-
-const DEFAULT_ACTIVE_TAB_ID = 'general'
 
 const BEDROCK_ENABLED_SETTING: SocaUserInputParamMetadata = {
     name: 'enabled',
@@ -93,7 +95,6 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
             analytics: {},
             metrics: {},
             clusterManager: {},
-            activeTabId: DEFAULT_ACTIVE_TAB_ID,
 
             sharedStorageTableItems: [],
             selectedFileSystem: [],
@@ -115,7 +116,8 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
             maintenanceEndsAt: '',
             maintenanceUpdating: false,
             maintenanceError: null,
-            maintenanceSaved: false
+            maintenanceSaved: false,
+            settingsErrors: []
         }
     }
 
@@ -141,8 +143,6 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
         if (clusterSettingsService.isMetricsEnabled()) {
             promises.push(clusterSettingsService.getMetricsSettings())
         }
-        const queryParams = new URLSearchParams(this.props.location.search)
-        const activeTabId = Utils.asString(queryParams.get('tab'), DEFAULT_ACTIVE_TAB_ID)
         // one read that fails must not blank every tab: what did load is rendered and
         // the rest reads as unset.
         Promise.allSettled(promises).then(results => {
@@ -153,9 +153,12 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                 }
                 return (settled.value != null) ? settled.value : {}
             }
-            results.forEach((settled) => {
+            const settingsErrors: string[] = []
+            results.forEach((settled, index) => {
                 if (settled.status === 'rejected') {
                     console.error('Failed to read cluster settings:', settled.reason)
+                    const sources = ['cluster', 'identity provider', 'directory service', 'shared storage', 'analytics', 'cluster manager', 'desktop controller', 'metrics']
+                    settingsErrors.push(`Could not read ${sources[index]} settings.`)
                 }
             })
             const sharedStorageTableItems = this.getSharedStorageTableItems(result(3))
@@ -169,7 +172,6 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                 analytics: result(4),
                 clusterManager: clusterManager,
                 metrics: (clusterSettingsService.isMetricsEnabled()) ? result(7) : {},
-                activeTabId: activeTabId,
                 sharedStorageTableItems: sharedStorageTableItems,
                 selectedFileSystem: sharedStorageTableItems.slice(0, 1),
                 bedrockEnabled: Utils.asBoolean(dot.pick('bedrock.enabled', clusterManager), false),
@@ -183,7 +185,8 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                 bedrockUsageLoggingManaged: Utils.asBoolean(dot.pick('bedrock.invocation_logging.manage_configuration', clusterManager), true),
                 maintenanceEnabled: Utils.asBoolean(dot.pick('maintenance.enabled', clusterManager), false),
                 maintenanceMessage: Utils.asString(dot.pick('maintenance.message', clusterManager)),
-                maintenanceEndsAt: Utils.asString(dot.pick('maintenance.ends_at', clusterManager))
+                maintenanceEndsAt: Utils.asString(dot.pick('maintenance.ends_at', clusterManager)),
+                settingsErrors: settingsErrors
             })
         })
     }
@@ -294,7 +297,7 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                                  this.removeBedrockModel(modelId)
                              }
                          }}>
-                Every project that lists <b>{modelId}</b> is reconciled as soon as this is saved: access to the model is revoked and its members
+                Every project that lists <Box variant="strong">{modelId}</Box> is reconciled as soon as this is saved: access to the model is revoked and its members
                 can no longer invoke it. Those projects keep it in their model list, flagged as not in the cluster catalog.
             </IdeaConfirm>
         )
@@ -367,7 +370,7 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                             Show the maintenance banner and refuse job submissions
                         </Toggle>
                         <FormField label="Message"
-                                   description="Plain text, shown to every user. Say what is happening and what they should do.">
+                                   description="Plain text, shown to every user. Saved changes reach open portal pages within a minute and the scheduler within about half a minute.">
                             <Textarea value={this.state.maintenanceMessage}
                                       rows={3}
                                       disabled={this.state.maintenanceUpdating}
@@ -375,7 +378,7 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                                       onChange={(event) => this.setState({maintenanceMessage: event.detail.value})}/>
                         </FormField>
                         <FormField label="End time - optional"
-                                   description="ISO 8601, for example 2026-09-15T18:00:00Z. A value with no offset is read as UTC, and each user sees it in their own timezone. Leave empty to show no end time.">
+                                   description="ISO 8601, for example 2026-09-15T18:00:00Z. A value with no offset is read as UTC, and each user sees it in their own timezone. Leave empty to show no end time. This does not automatically reopen submissions.">
                             <Input value={this.state.maintenanceEndsAt}
                                    disabled={this.state.maintenanceUpdating}
                                    placeholder="2026-09-15T18:00:00Z"
@@ -387,8 +390,9 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                                     onClick={this.saveMaintenance}>Save</Button>
                         </Box>
                         <Alert type="info">
-                            The banner does not cover the few minutes while the cluster-manager module is being replaced,
-                            when the portal is down and serves nothing. Announce that separately.
+                            On a container cluster the portal and desktops stay up through an upgrade; only job submission
+                            pauses for about a minute while the scheduler swaps. Turn the banner on for a host-to-container
+                            move or any planned outage, and off again afterwards.
                         </Alert>
                     </SpaceBetween>
                 </Container>
@@ -414,8 +418,8 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                 {this.state.bedrockEnabled && this.state.bedrockProvisionerReady && !this.state.bedrockUsageLoggingManaged &&
                     <Alert type="info" header="IDEA is not managing Bedrock model invocation logging">
                         Usage is aggregated from Amazon Bedrock model invocation logging, which is one configuration per AWS account and region.
-                        <b> invocation_logging.manage_configuration</b> is false, so IDEA does not set it. Until logging for this account and region delivers
-                        to <b>{dot.pick('bedrock.invocation_log_group_name', this.state.clusterManager)}</b>, every project reports no usage whether or not
+                        <Box variant="strong"> invocation_logging.manage_configuration</Box> is false, so IDEA does not set it. Until logging for this account and region delivers
+                        to <Box variant="strong">{dot.pick('bedrock.invocation_log_group_name', this.state.clusterManager)}</Box>, every project reports no usage whether or not
                         models were invoked. Either configure model invocation logging with that log group as its destination, or set
                         manage_configuration to true and let IDEA adopt it when no other configuration exists.
                     </Alert>}
@@ -483,7 +487,7 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                                ]}
                                empty={
                                    <Box textAlign="center" color="inherit">
-                                       <b>No models</b>
+                                       <Box variant="strong">No models</Box>
                                        <Box variant="p" color="inherit">No models are approved for this cluster.</Box>
                                    </Box>
                                }/>
@@ -533,14 +537,6 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
             return dot.pick('provider', this.state.metrics) === 'amazon_managed_prometheus'
         }
 
-        const getClusterManagerOpenAPISpecUrl = () => {
-            return `${AppContext.get().getHttpEndpoint()}${Utils.getApiContextPath(Constants.MODULE_CLUSTER_MANAGER)}/openapi.yml`
-        }
-
-        const getClusterManagerSwaggerEditorUrl = () => {
-            return `https://editor-next.swagger.io/?url=${getClusterManagerOpenAPISpecUrl()}`
-        }
-
         const getSelectedFileSystem = () => {
             if(this.state.selectedFileSystem.length === 0){
                 return null
@@ -561,525 +557,465 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
             return Utils.asBoolean(dot.pick('backups.enabled', this.state.cluster))
         }
 
-        return (
-            <IdeaAppLayout
-                ideaPageId={this.props.ideaPageId}
-                toolsOpen={this.props.toolsOpen}
-                tools={this.props.tools}
-                onToolsChange={this.props.onToolsChange}
-                onPageChange={this.props.onPageChange}
-                sideNavHeader={this.props.sideNavHeader}
-                sideNavItems={this.props.sideNavItems}
-                onSideNavChange={this.props.onSideNavChange}
-                onFlashbarChange={this.props.onFlashbarChange}
-                flashbarItems={this.props.flashbarItems}
-                breadcrumbItems={[
-                    {
-                        text: 'IDEA',
-                        href: '#/'
-                    },
-                    {
-                        text: 'Cluster Management',
-                        href: '#/cluster/status'
-                    },
-                    {
-                        text: 'Settings',
-                        href: ''
-                    }
-                ]}
-                header={(
-                    <Header variant={"h1"}
-                            description={"View cluster settings. Every setting on this page is read-only except the Maintenance, Bedrock and Account reconciliation tabs; use idea-admin.sh to update the rest."}
-                            actions={(<SpaceBetween size={"s"}>
-                                <Button variant={"primary"} onClick={() => this.props.navigate('/cluster/status')}>View Cluster Status</Button>
-                            </SpaceBetween>)}>
-                        Cluster Settings
-                    </Header>
-                )}
-                contentType={"default"}
-                content={
-                    <SpaceBetween size={"l"}>
-                        <Container>
+        const sections: SettingsSection[] = [
+            {
+                label: 'General',
+                id: 'general',
+                content: (
+                    <SpaceBetween size="m">
+                        <Container header={<Header variant={"h2"}>General Settings</Header>}>
                             <ColumnLayout variant={"text-grid"} columns={3}>
-                                <KeyValue title="Cluster Name" value={dot.pick('cluster_name', this.state.cluster)} clipboard={true}/>
-                                <KeyValue title="AWS Region" value={dot.pick('aws.region', this.state.cluster)}/>
-                                <KeyValue title="S3 Bucket" value={dot.pick('cluster_s3_bucket', this.state.cluster)} clipboard={true} type={"s3:bucket-name"}/>
+                                <KeyValue title="Cluster Name" value={dot.pick('cluster_name', this.state.cluster)}/>
+                                <KeyValue title="S3 Bucket" value={dot.pick('cluster_s3_bucket', this.state.cluster)}/>
+                                <KeyValue title="Administrator Username" value={dot.pick('administrator_username', this.state.cluster)}/>
+                                <KeyValue title="Administrator Email" value={dot.pick('administrator_email', this.state.cluster)} clipboard={true}/>
+                                <KeyValue title="Cluster Home Directory" value={dot.pick('home_dir', this.state.cluster)} clipboard={true}/>
+                                <KeyValue title="Default Encoding" value={dot.pick('encoding', this.state.cluster)}/>
                             </ColumnLayout>
                         </Container>
-                        <Tabs
-                            activeTabId={this.state.activeTabId}
-                            onChange={(event) => {
-                                this.setState({
-                                    activeTabId: event.detail.activeTabId
-                                }, () => {
-                                    this.props.searchParams.set('tab', event.detail.activeTabId)
-                                    this.props.setSearchParams(this.props.searchParams)
-                                })
-                            }}
-                            tabs={[
-                                {
-                                    label: 'General',
-                                    id: 'general',
-                                    content: (
-                                        <SpaceBetween size="m">
-                                            <Container header={<Header variant={"h2"}>General Settings</Header>}>
-                                                <ColumnLayout variant={"text-grid"} columns={3}>
-                                                    <KeyValue title="Administrator Username" value={dot.pick('administrator_username', this.state.cluster)}/>
-                                                    <KeyValue title="Administrator Email" value={dot.pick('administrator_email', this.state.cluster)} clipboard={true}/>
-                                                    <KeyValue title="Cluster Home Directory" value={dot.pick('home_dir', this.state.cluster)} clipboard={true}/>
-                                                    <KeyValue title="Locale" value={dot.pick('locale', this.state.cluster)}/>
-                                                    <KeyValue title="Timezone" value={dot.pick('timezone', this.state.cluster)}/>
-                                                    <KeyValue title="Default Encoding" value={dot.pick('encoding', this.state.cluster)}/>
-                                                </ColumnLayout>
-                                            </Container>
-                                            <Container header={<Header variant={"h2"} info={<Link external={true} href={"https://spec.openapis.org/oas/v3.1.0"}>Info</Link>}>OpenAPI Specification</Header>}>
-                                                <ColumnLayout variant={"text-grid"} columns={1}>
-                                                    <KeyValue title="Cluster Manager API Spec" value={getClusterManagerOpenAPISpecUrl()} type={"external-link"} clipboard/>
-                                                    <KeyValue title="Swagger Editor" value={getClusterManagerSwaggerEditorUrl()} type={"external-link"} clipboard/>
-                                                </ColumnLayout>
-                                            </Container>
-                                        </SpaceBetween>
-                                    )
-                                },
-                                {
-                                    label: 'Network',
-                                    id: 'network',
-                                    content: (
-                                        <SpaceBetween size={"l"}>
-                                            <Container header={<Header variant={"h2"}>VPC</Header>}>
-                                                <ColumnLayout variant={"text-grid"} columns={3}>
-                                                    <KeyValue title="VPC Id" value={dot.pick('network.vpc_id', this.state.cluster)} clipboard={true}/>
-                                                    <KeyValue title="Private Subnets" value={dot.pick('network.private_subnets', this.state.cluster)} clipboard={true}/>
-                                                    <KeyValue title="Public Subnets" value={dot.pick('network.public_subnets', this.state.cluster)} clipboard={true}/>
-                                                    <KeyValue title="Cluster Prefix List Id" value={dot.pick('network.cluster_prefix_list_id', this.state.cluster)} clipboard={true}/>
-                                                    <KeyValue title="Existing VPC?" value={dot.pick('network.use_existing_vpc', this.state.cluster)} type={"boolean"}/>
-                                                </ColumnLayout>
-                                            </Container>
-                                            <Container header={<Header variant={"h2"}>Security Groups</Header>}>
-                                                <ColumnLayout variant={"text-grid"} columns={3}>
-                                                    <KeyValue title="Bastion Host" value={dot.pick('network.security_groups.bastion-host', this.state.cluster)} clipboard={true} type={"ec2:security-group-id"}/>
-                                                    <KeyValue title="External Load Balancer" value={dot.pick('network.security_groups.external-load-balancer', this.state.cluster)} clipboard={true} type={"ec2:security-group-id"}/>
-                                                    <KeyValue title="Internal Load Balancer" value={dot.pick('network.security_groups.internal-load-balancer', this.state.cluster)} clipboard={true} type={"ec2:security-group-id"}/>
-                                                    <KeyValue title="Default Security Group" value={dot.pick('network.security_groups.cluster', this.state.cluster)} clipboard={true} type={"ec2:security-group-id"}/>
-                                                </ColumnLayout>
-                                            </Container>
-                                            <Container header={<Header variant={"h2"}>External Load Balancer</Header>}>
-                                                <SpaceBetween size={"m"}>
-                                                    <ColumnLayout variant={"text-grid"} columns={2}>
-                                                        <KeyValue title="Load Balancer DNS Name" value={ConfigUtils.getExternalAlbDnsName(this.state.cluster)} clipboard={true}/>
-                                                        <KeyValue title="Custom DNS Name" value={ConfigUtils.getExternalAlbCustomDnsName(this.state.cluster)} clipboard={true}/>
-                                                        <KeyValue title="Load Balancer ARN" value={ConfigUtils.getExternalAlbArn(this.state.cluster)} clipboard={true}/>
-                                                        <KeyValue title="Deploy in Public Subnets?" value={dot.pick('load_balancers.external_alb.public', this.state.cluster)} type={"boolean"}/>
-                                                    </ColumnLayout>
-                                                    <Box>
-                                                        <h3>SSL/TLS Settings</h3>
-                                                        <ColumnLayout variant={"text-grid"} columns={2}>
-                                                            <KeyValue title="Certificates" value={isExternalAlbCertSelfSigned() ? 'Self-Signed' : 'ACM'}/>
-                                                            {isExternalAlbCertSelfSigned() && <KeyValue title="Certificate Secret ARN" value={ConfigUtils.getExternalAlbCertificateSecretArn(this.state.cluster)} clipboard={true}/>}
-                                                            {isExternalAlbCertSelfSigned() && <KeyValue title="Certificate Private Key Secret ARN" value={ConfigUtils.getExternalAlbPrivateKeySecretArn(this.state.cluster)} clipboard={true}/>}
-                                                            <KeyValue title="ACM Certificate ARN" value={ConfigUtils.getExternalAlbAcmCertificateArn(this.state.cluster)} clipboard={true}/>
-                                                        </ColumnLayout>
-                                                    </Box>
-                                                </SpaceBetween>
-                                            </Container>
-                                            <Container header={<Header variant={"h2"}>Internal Load Balancer</Header>}>
-                                                <SpaceBetween size={"m"}>
-                                                    <ColumnLayout variant={"text-grid"} columns={2}>
-                                                        <KeyValue title="Load Balancer DNS Name" value={ConfigUtils.getInternalAlbDnsName(this.state.cluster)} clipboard={true}/>
-                                                        <KeyValue title="Custom DNS Name" value={ConfigUtils.getInternalAlbCustomDnsName(this.state.cluster)} clipboard={true}/>
-                                                        <KeyValue title="Load Balancer ARN" value={ConfigUtils.getInternalAlbArn(this.state.cluster)} clipboard={true}/>
-                                                    </ColumnLayout>
-                                                    <Box>
-                                                        <h3>SSL/TLS Settings</h3>
-                                                        <ColumnLayout variant={"text-grid"} columns={2}>
-                                                            <KeyValue title="Certificates" value="Self-Signed"/>
-                                                            <KeyValue title="Certificate Secret ARN" value={ConfigUtils.getInternalAlbCertificateSecretArn(this.state.cluster)} clipboard={true}/>
-                                                            <KeyValue title="Certificate Private Key Secret ARN" value={ConfigUtils.getInternalAlbPrivateKeySecretArn(this.state.cluster)} clipboard={true}/>
-                                                            <KeyValue title="ACM Certificate ARN" value={ConfigUtils.getInternalAlbAcmCertificateArn(this.state.cluster)} clipboard={true}/>
-                                                        </ColumnLayout>
-                                                    </Box>
-                                                </SpaceBetween>
-                                            </Container>
-                                        </SpaceBetween>
-                                    )
-                                },
-                                {
-                                    label: 'Shared Storage',
-                                    id: 'shared-storage',
-                                    content: (
-                                        <SpaceBetween size={"l"}>
-                                            <Container header={<Header variant={"h2"}>General</Header>}>
-                                                <ColumnLayout variant={"text-grid"} columns={3}>
-                                                    <KeyValue title="Security Group (Applicable only for new File Systems)" value={dot.pick('security_group_id', this.state.sharedStorage)} clipboard={true} type={"ec2:security-group-id"}/>
-                                                </ColumnLayout>
-                                            </Container>
-                                            <Table header={<Header variant={"h2"}>File Systems</Header>}
-                                                   items={this.state.sharedStorageTableItems}
-                                                   selectionType={"single"}
-                                                   selectedItems={this.state.selectedFileSystem}
-                                                   onSelectionChange={(event) => {
-                                                       this.setState({
-                                                           selectedFileSystem: event.detail.selectedItems
-                                                       })
-                                                   }}
-                                                   columnDefinitions={[
-                                                       {
-                                                           header: 'Title',
-                                                           id: 'title',
-                                                           cell: e => {
-                                                               return e.getTitle()
-                                                           }
-                                                       },
-                                                       {
-                                                           header: 'Name',
-                                                           id: 'name',
-                                                           cell: e => {
-                                                               return e.getName()
-                                                           }
-                                                       },
-                                                       {
-                                                           header: 'Mount Target',
-                                                           id: 'mount_dir',
-                                                           cell: e => e.getMountTarget()
-                                                       },
-                                                       {
-                                                           id: 'scope',
-                                                           header: 'Scope',
-                                                           cell: e => {
-                                                               return (
-                                                                   <div>
-                                                                       {
-                                                                           e.getScope().map((name, index) => {
-                                                                               return <li key={index}>{name}</li>
-                                                                           })
-                                                                       }
-                                                                   </div>
-                                                               )
-                                                           }
-                                                       },
-                                                       {
-                                                           header: 'Provider',
-                                                           id: 'provider',
-                                                           cell: e => e.getProviderTitle()
-                                                       },
-                                                       {
-                                                           header: 'File System ID',
-                                                           id: 'file_system_id',
-                                                           cell: e => <span><CopyToClipBoard text={e.getFileSystemId()} feedback={`${e.getName()} - File System Id copied`}/> {e.getFileSystemId()}</span>
-                                                       },
-                                                       {
-                                                           header: 'Existing?',
-                                                           id: 'existing_fs',
-                                                           cell: e => (e.isExistingFileSystem()) ? 'Yes' : 'No'
-                                                       }
-                                                   ]}
-                                            />
-                                            <Container header={<Header variant={"h2"}>{getSelectedFileSystemTitle()}</Header>}>
-                                                {this.state.selectedFileSystem.length === 0 && <ColumnLayout columns={1}>
-                                                    <p>Select a file system above to view additional details.</p>
-                                                </ColumnLayout>}
-
-                                                {this.state.selectedFileSystem.length > 0 && <ColumnLayout variant={"text-grid"} columns={1}>
-                                                    <KeyValueGroup title={"General"}>
-                                                        <KeyValue title="Name" value={getSelectedFileSystem()?.getName()} clipboard={true}/>
-                                                        <KeyValue title="Title" value={getSelectedFileSystem()?.getTitle()} clipboard={true}/>
-                                                        <KeyValue title="Provider" value={getSelectedFileSystem()?.getProviderTitle()} clipboard={true}/>
-                                                        <KeyValue title="Is Existing File System?" value={getSelectedFileSystem()?.isExistingFileSystem()} type={"boolean"}/>
-                                                        <KeyValue title="File System Id" value={getSelectedFileSystem()?.getFileSystemId()} clipboard={true}/>
-                                                        {!getSelectedFileSystem()?.isFsxNetAppOntap() && <KeyValue title="DNS Name " value={getSelectedFileSystem()?.getFileSystemDns()} clipboard={true}/>}
-                                                    </KeyValueGroup>
-
-                                                    <KeyValueGroup title={"Mount Settings"}>
-                                                        {!getSelectedFileSystem()?.isFsxWindowsFileServer() && <KeyValue title="Mount Directory (Linux)" value={getSelectedFileSystem()?.getMountDirectory()} clipboard={true}/>}
-                                                        {getSelectedFileSystem()?.hasMountDrive() && <KeyValue title="Mount Drive (Windows)" value={getSelectedFileSystem()?.getMountDrive()}/>}
-                                                        {!getSelectedFileSystem()?.isFsxWindowsFileServer() && <KeyValue title="Mount Options" value={getSelectedFileSystem()?.getMountOptions()} clipboard={true}/>}
-                                                        <KeyValue title="Scope" value={getSelectedFileSystem()?.getScope()}/>
-                                                        {getSelectedFileSystem()?.isScopeProjects() && <KeyValue title="Projects" value={getSelectedFileSystem()?.getProjects()}/>}
-                                                        {getSelectedFileSystem()?.isScopeModule() && <KeyValue title="Modules" value={getSelectedFileSystem()?.getModules()}/>}
-                                                        {getSelectedFileSystem()?.isScopeQueueProfile() && <KeyValue title="Queue Profiles" value={getSelectedFileSystem()?.getQueueProfiles()}/>}
-                                                        {getSelectedFileSystem()?.isFsxLustre() && <KeyValue title="FSx for Lustre: Mount Name" value={getSelectedFileSystem()?.getMountName()}/>}
-                                                        {getSelectedFileSystem()?.isFsxLustre() && <KeyValue title="FSx for Lustre: Version" value={getSelectedFileSystem()?.getLustreVersion()}/>}
-                                                    </KeyValueGroup>
-
-                                                    {getSelectedFileSystem()?.isFsxNetAppOntap() && <KeyValueGroup title={"Storage Virtual Machine"}>
-                                                        <KeyValue title="Storage Virtual Machine Id" value={getSelectedFileSystem()?.getSvmId()} clipboard={true}/>
-                                                        <KeyValue title="SMB DNS" value={getSelectedFileSystem()?.getSvmSmbDns()} clipboard={true}/>
-                                                        <KeyValue title="NFS DNS" value={getSelectedFileSystem()?.getSvmNfsDns()} clipboard={true}/>
-                                                        <KeyValue title="Management DNS" value={getSelectedFileSystem()?.getSvmManagementDns()} clipboard={true}/>
-                                                        <KeyValue title="iSCSI DNS" value={getSelectedFileSystem()?.getSvmIscsiDns()} clipboard={true}/>
-                                                    </KeyValueGroup>}
-
-                                                    {getSelectedFileSystem()?.isVolumeApplicable() && <KeyValueGroup title={"Volume"}>
-                                                        <KeyValue title="Volume Id" value={getSelectedFileSystem()?.getVolumeId()} clipboard={true}/>
-                                                        <KeyValue title="Volume Path" value={getSelectedFileSystem()?.getVolumePath()} clipboard={true}/>
-                                                        {getSelectedFileSystem()?.isFsxNetAppOntap() && <KeyValue title="Security Style" value={getSelectedFileSystem()?.getVolumeSecurityStyle()} clipboard={true}/>}
-                                                    </KeyValueGroup>}
-
-                                                </ColumnLayout>}
-                                            </Container>
-                                        </SpaceBetween>
-                                    )
-                                },
-                                {
-                                    label: 'Identity Provider',
-                                    id: 'identity-provider',
-                                    content: (
-                                        <SpaceBetween size={"l"}>
-                                            <Container header={<Header variant={"h2"}>Identity Provider</Header>}>
-                                                <ColumnLayout variant={"text-grid"} columns={3}>
-                                                    <KeyValue title="Provider Name" value={dot.pick('provider', this.state.identityProvider)}/>
-                                                    <KeyValue title="User Pool Id" value={dot.pick('cognito.user_pool_id', this.state.identityProvider)} clipboard={true} type={"cognito:user-pool-id"}/>
-                                                    <KeyValue title="Administrators Group Name" value={dot.pick('cognito.administrators_group_name', this.state.identityProvider)} clipboard={true}/>
-                                                    <KeyValue title="Managers Group Name" value={dot.pick('cognito.managers_group_name', this.state.identityProvider)} clipboard={true}/>
-                                                    <KeyValue title="Domain URL" value={dot.pick('cognito.domain_url', this.state.identityProvider)} clipboard={true}/>
-                                                    <KeyValue title="Provider URL" value={dot.pick('cognito.provider_url', this.state.identityProvider)} clipboard={true}/>
-                                                </ColumnLayout>
-                                            </Container>
-                                            <Container header={<Header variant={"h2"}>Single Sign-On</Header>}>
-                                                <ColumnLayout variant={"text-grid"} columns={3}>
-                                                    <KeyValue title="Status" value={<EnabledDisabledStatusIndicator enabled={isSingleSignOnEnabled()}/>} type={"react-node"}/>
-                                                </ColumnLayout>
-                                            </Container>
-                                        </SpaceBetween>
-                                    )
-                                },
-                                {
-                                    label: 'Directory Service',
-                                    id: 'directory-service',
-                                    content: (
-                                        <SpaceBetween size={"l"}>
-                                            <Container header={<Header variant={"h2"}>Directory Service</Header>}>
-                                                <ColumnLayout variant={"text-grid"} columns={2}>
-                                                    <KeyValue title="Provider" value={Utils.getDirectoryServiceTitle(dot.pick('provider', this.state.directoryservice))}/>
-                                                    <KeyValue title="Automation Directory" value={dot.pick('automation_dir', this.state.directoryservice)} clipboard={true}/>
-                                                    <KeyValue title="Root Username Secret ARN" value={dot.pick('root_username_secret_arn', this.state.directoryservice)} clipboard={true}/>
-                                                    <KeyValue title="Root Password Secret ARN" value={dot.pick('root_password_secret_arn', this.state.directoryservice)} clipboard={true}/>
-                                                </ColumnLayout>
-                                            </Container>
-                                            {isDirectoryServiceOpenLDAP() && <Container header={<Header variant={"h2"}>OpenLDAP Settings</Header>}>
-                                                <SpaceBetween size={"m"}>
-                                                    <ColumnLayout variant={"text-grid"} columns={3}>
-                                                        <KeyValue title="Name" value={dot.pick('name', this.state.directoryservice)} clipboard={true}/>
-                                                        <KeyValue title="LDAP Base" value={dot.pick('ldap_base', this.state.directoryservice)} clipboard={true}/>
-                                                        <KeyValue title="LDAP Connection URI" value={dot.pick('ldap_connection_uri', this.state.directoryservice)} clipboard={true}/>
-                                                    </ColumnLayout>
-                                                    <Box>
-                                                        <h3>EC2 Instance Details</h3>
-                                                        <ColumnLayout variant={"text-grid"} columns={3}>
-                                                            <KeyValue title="Hostname" value={dot.pick('hostname', this.state.directoryservice)} clipboard={true}/>
-                                                            <KeyValue title="Private IP" value={dot.pick('private_ip', this.state.directoryservice)} clipboard={true}/>
-                                                            <KeyValue title="Instance Id" value={dot.pick('instance_id', this.state.directoryservice)} clipboard={true} type={"ec2:instance-id"}/>
-                                                            <KeyValue title="Instance Type" value={dot.pick('instance_type', this.state.directoryservice)}/>
-                                                            <KeyValue title="Security Group Id" value={dot.pick('security_group_id', this.state.directoryservice)} clipboard={true} type={"ec2:security-group-id"}/>
-                                                            <KeyValue title="Base OS" value={Utils.getOsTitle(dot.pick('base_os', this.state.directoryservice))}/>
-                                                            <KeyValue title="CloudWatch Logs Enabled" value={<EnabledDisabledStatusIndicator enabled={Utils.asBoolean(dot.pick('cloudwatch_logs.enabled', this.state.directoryservice), false)}/>} type={"react-node"}/>
-                                                            <KeyValue title="Is Public?" value={dot.pick('public', this.state.directoryservice)} type={"boolean"}/>
-                                                            <KeyValue title="Public IP" value={dot.pick('public_ip', this.state.directoryservice)}/>
-                                                        </ColumnLayout>
-                                                    </Box>
-                                                </SpaceBetween>
-                                            </Container>}
-                                            {isDirectoryServiceActiveDirectory() && <Container header={<Header variant={"h2"}>Microsoft AD Settings</Header>}>
-                                                <ColumnLayout variant={"text-grid"} columns={2}>
-                                                    <KeyValue title="Directory Id" value={dot.pick('directory_id', this.state.directoryservice)}/>
-                                                    <KeyValue title="Short Name (NETBIOS)" value={dot.pick('ad_short_name', this.state.directoryservice)}/>
-                                                    <KeyValue title="Edition" value={dot.pick('ad_edition', this.state.directoryservice)}/>
-                                                    <KeyValue title="Domain Name" value={dot.pick('name', this.state.directoryservice)} clipboard={true}/>
-                                                    <KeyValue title="Password Max Age" value={dot.pick('password_max_age', this.state.directoryservice)} suffix={"days"}/>
-                                                    <KeyValue title="AD Automation SQS Queue Url" value={dot.pick('ad_automation.sqs_queue_url', this.state.directoryservice)} clipboard={true}/>
-                                                    <KeyValue title="AD Automation DynamoDB Table Name" value={`${AppContext.get().auth().getClusterName()}.ad-automation`} clipboard={true}/>
-                                                </ColumnLayout>
-                                            </Container>}
-                                        </SpaceBetween>
-                                    )
-                                },
-                                {
-                                    label: 'Analytics',
-                                    id: 'analytics',
-                                    content: (
-                                        <SpaceBetween size={"l"}>
-                                            <Container header={<Header variant={"h2"}>OpenSearch Settings</Header>}>
-                                                <ColumnLayout variant={"text-grid"} columns={2}>
-                                                    <KeyValue title="Domain Name" value={dot.pick('opensearch.domain_name', this.state.analytics)} clipboard={true}/>
-                                                    <KeyValue title="Domain ARN" value={dot.pick('opensearch.domain_arn', this.state.analytics)} clipboard={true}/>
-                                                    <KeyValue title="Domain Endpoint" value={dot.pick('opensearch.domain_endpoint', this.state.analytics)} clipboard={true}/>
-                                                    <KeyValue title="Dashboard URL" value={getOpenSearchDashboardUrl()} type={"external-link"} clipboard={true}/>
-                                                    <KeyValue title="Existing OpenSearch Service Domain?" value={dot.pick('opensearch.use_existing', this.state.analytics)} type={"boolean"}/>
-                                                </ColumnLayout>
-                                            </Container>
-                                            <Container header={<Header variant={"h2"}>Kinesis Settings</Header>}>
-                                                <ColumnLayout variant={"text-grid"} columns={2}>
-                                                    <KeyValue title="Stream Name" value={dot.pick('kinesis.stream_name', this.state.analytics)} clipboard={true}/>
-                                                    <KeyValue title="Stream ARN" value={dot.pick('kinesis.stream_arn', this.state.analytics)} clipboard={true}/>
-                                                    <KeyValue title="Stream Mode" value={dot.pick('kinesis.stream_mode', this.state.analytics)}/>
-                                                    <KeyValue title="Shard Count" value={dot.pick('kinesis.shard_count', this.state.analytics)}/>
-                                                </ColumnLayout>
-                                            </Container>
-                                        </SpaceBetween>
-                                    )
-                                },
-                                {
-                                    label: 'Metrics',
-                                    id: 'metrics',
-                                    content: (
-                                        <SpaceBetween size={"l"}>
-                                            <Container header={<Header variant={"h2"}>Metrics</Header>}>
-                                                <ColumnLayout variant={"text-grid"} columns={3}>
-                                                    <KeyValue title="Status" value={<EnabledDisabledStatusIndicator enabled={isMetricsEnabled()}/>} type={"react-node"}/>
-                                                    <KeyValue title="Provider Name" value={dot.pick('provider', this.state.metrics)}/>
-                                                </ColumnLayout>
-                                            </Container>
-                                            {isMetricsProviderCloudWatch() && <Container header={<Header variant={"h2"}>CloudWatch Metrics</Header>}>
-                                                <SpaceBetween size={"m"}>
-                                                    <ColumnLayout variant={"text-grid"} columns={3}>
-                                                        <KeyValue title="Metrics Collection Interval" value={dot.pick('cloudwatch.metrics_collection_interval', this.state.metrics)} suffix={"seconds"}/>
-                                                        <KeyValue title="Force Flush Interval" value={dot.pick('cloudwatch.force_flush_interval', this.state.metrics)} suffix={"seconds"}/>
-                                                    </ColumnLayout>
-                                                    <Box>
-                                                        <h4>CloudWatch Dashboard</h4>
-                                                        <ColumnLayout variant={"text-grid"} columns={2}>
-                                                            <KeyValue title="Dashboard ARN" value={dot.pick('cloudwatch.dashboard_arn', this.state.metrics)} clipboard={true}/>
-                                                            <KeyValue title="Dashboard Name" value={dot.pick('cloudwatch.dashboard_name', this.state.metrics)} clipboard={true}/>
-                                                        </ColumnLayout>
-                                                    </Box>
-                                                </SpaceBetween>
-                                            </Container>}
-                                            {isMetricsProviderAmazonManagedPrometheus() && <Container header={<Header variant={"h2"}>Amazon Managed Prometheus</Header>}>
-                                                <SpaceBetween size={"m"}>
-                                                    <ColumnLayout variant={"text-grid"} columns={3}>
-                                                        <KeyValue title="Workspace Name" value={dot.pick('amazon_managed_prometheus.workspace_name', this.state.metrics)}/>
-                                                        <KeyValue title="Workspace ID" value={dot.pick('amazon_managed_prometheus.workspace_id', this.state.metrics)}/>
-                                                        <KeyValue title="Workspace ARN" value={dot.pick('amazon_managed_prometheus.workspace_arn', this.state.metrics)}/>
-                                                        <KeyValue title="Remote Write Url" value={dot.pick('prometheus.remote_write.url', this.state.metrics)}/>
-                                                        <KeyValue title="Remote Read Url" value={dot.pick('prometheus.remote_read.url', this.state.metrics)}/>
-                                                    </ColumnLayout>
-                                                </SpaceBetween>
-                                            </Container>}
-                                            {isMetricsProviderPrometheus() && <Container header={<Header variant={"h2"}>Custom Prometheus</Header>}>
-                                                <SpaceBetween size={"m"}>
-                                                    <ColumnLayout variant={"text-grid"} columns={3}>
-                                                        <KeyValue title="Remote Write Url" value={dot.pick('prometheus.remote_write.url', this.state.metrics)}/>
-                                                        <KeyValue title="Remote Read Url" value={dot.pick('prometheus.remote_read.url', this.state.metrics)}/>
-                                                    </ColumnLayout>
-                                                </SpaceBetween>
-                                            </Container>}
-                                        </SpaceBetween>
-                                    )
-                                },
-                                {
-                                    label: 'Maintenance',
-                                    id: 'maintenance',
-                                    content: this.buildMaintenanceSettings()
-                                },
-                                {
-                                    label: 'Account reconciliation',
-                                    id: 'account-reconciliation',
-                                    content: <AccountReconcileSettings settings={this.state.clusterManager?.accounts?.reconcile}/>
-                                },
-                                {
-                                    label: 'Bedrock',
-                                    id: 'bedrock',
-                                    content: this.buildBedrockSettings()
-                                },
-                                {
-                                    label: 'CloudWatch Logs',
-                                    id: 'cloudwatch-logs',
-                                    content: (
-                                        <Container header={<Header variant={"h2"}>CloudWatch Logs</Header>}>
-                                            <ColumnLayout variant={"text-grid"} columns={3}>
-                                                <KeyValue title="Status" value={<EnabledDisabledStatusIndicator enabled={Utils.asBoolean(dot.pick('cloudwatch_logs.enabled', this.state.cluster), false)}/>} type={"react-node"}/>
-                                                <KeyValue title="Force Flush Interval" value={dot.pick('cloudwatch_logs.force_flush_interval', this.state.cluster)} suffix={"seconds"}/>
-                                                <KeyValue title="Log Retention" value={dot.pick('cloudwatch_logs.retention_in_days', this.state.cluster)} suffix={"days"}/>
-                                            </ColumnLayout>
-                                        </Container>
-                                    )
-                                },
-                                {
-                                    label: 'SES',
-                                    id: 'ses',
-                                    content: (
-                                        <Container header={<Header variant={"h2"}>Simple Email Service (SES)</Header>}>
-                                            <ColumnLayout variant={"text-grid"} columns={3}>
-                                                <KeyValue title="Status" value={<EnabledDisabledStatusIndicator enabled={Utils.asBoolean(dot.pick('ses.enabled', this.state.cluster), false)}/>} type={"react-node"}/>
-                                                <KeyValue title="AWS Account ID" value={dot.pick('ses.account_id', this.state.cluster)} clipboard={true}/>
-                                                <KeyValue title="AWS Region" value={dot.pick('ses.region', this.state.cluster)}/>
-                                                <KeyValue title="Sender Email" value={dot.pick('ses.sender_email', this.state.cluster)} clipboard={true}/>
-                                                <KeyValue title="Max Sending Rate" value={dot.pick('ses.max_sending_rate', this.state.cluster)} suffix={" / second"}/>
-                                            </ColumnLayout>
-                                        </Container>
-                                    )
-                                },
-                                {
-                                    label: 'EC2',
-                                    id: 'ec2',
-                                    content: (
-                                        <Container header={<Header variant={"h2"}>EC2</Header>}>
-                                            <ColumnLayout variant={"text-grid"} columns={1}>
-                                                <KeyValue title="SSH Key Pair" value={dot.pick('network.ssh_key_pair', this.state.cluster)} clipboard={true}/>
-                                                <KeyValue title="Custom EC2 Managed Policy ARNs" value={dot.pick('iam.ec2_managed_policy_arns', this.state.cluster)} clipboard={true}/>
-                                            </ColumnLayout>
-                                        </Container>
-                                    )
-                                },
-                                {
-                                    label: 'Backup',
-                                    id: 'backups',
-                                    content: (
-                                        <SpaceBetween size={"l"}>
-                                            <Container header={<Header variant={"h2"}>AWS Backup</Header>}>
-                                                <ColumnLayout variant={"text-grid"} columns={2}>
-                                                    <KeyValue title="Status" value={<EnabledDisabledStatusIndicator enabled={isBackupEnabled()}/>} type={"react-node"}/>
-                                                </ColumnLayout>
-                                            </Container>
-                                            {isBackupEnabled() && <Container header={<Header variant={"h2"}>Backup Vault</Header>}>
-                                                <ColumnLayout variant={"text-grid"} columns={2}>
-                                                    <KeyValue title="ARN" value={dot.pick('backups.backup_vault.arn', this.state.cluster)} clipboard={true}/>
-                                                    <KeyValue title="KMS Key Id (CMK)" value={dot.pick('backups.backup_vault.kms_key_id', this.state.cluster)} clipboard={true}/>
-                                                </ColumnLayout>
-                                            </Container>}
-                                            {isBackupEnabled() && <Container header={<Header variant={"h2"}>Backup Plan</Header>}>
-                                                <ColumnLayout variant={"text-grid"} columns={2}>
-                                                    <KeyValue title="ARN" value={dot.pick('backups.backup_plan.arn', this.state.cluster)} clipboard={true}/>
-                                                    <KeyValue title="Selection" value={dot.pick('backups.backup_plan.selection.tags', this.state.cluster)}/>
-                                                </ColumnLayout>
-                                            </Container>}
-                                        </SpaceBetween>
-                                    )
-                                },
-                                {
-                                    label: 'Route 53',
-                                    id: 'route-53',
-                                    content: (
-                                        <SpaceBetween size={"l"}>
-                                            <Container header={<Header variant={"h2"}>Private Hosted Zone</Header>}>
-                                                <ColumnLayout variant={"text-grid"} columns={2}>
-                                                    <KeyValue title="Hosted Zone Name" value={dot.pick('route53.private_hosted_zone_name', this.state.cluster)} clipboard={true}/>
-                                                    <KeyValue title="Hosted Zone ID" value={dot.pick('route53.private_hosted_zone_id', this.state.cluster)} clipboard={true}/>
-                                                    <KeyValue title="Hosted Zone ARN" value={dot.pick('route53.private_hosted_zone_arn', this.state.cluster)} clipboard={true}/>
-                                                </ColumnLayout>
-                                            </Container>
-                                        </SpaceBetween>
-                                    )
-                                },
-                                {
-                                    label: 'AWS Account',
-                                    id: 'aws-account',
-                                    content: (
-                                        <Container header={<Header variant={"h2"}>AWS Account Settings</Header>}>
-                                            <ColumnLayout variant={"text-grid"} columns={3}>
-                                                <KeyValue title="AWS Account ID" value={dot.pick('aws.account_id', this.state.cluster)} clipboard={true}/>
-                                                <KeyValue title="AWS Region" value={dot.pick('aws.region', this.state.cluster)} clipboard={true}/>
-                                                <KeyValue title="Pricing API Region" value={dot.pick('aws.pricing_region', this.state.cluster)} clipboard={true}/>
-                                                <KeyValue title="AWS Partition" value={dot.pick('aws.partition', this.state.cluster)}/>
-                                                <KeyValue title="AWS DNS Suffix" value={dot.pick('aws.dns_suffix', this.state.cluster)}/>
-                                            </ColumnLayout>
-                                        </Container>
-                                    )
-                                }
-                            ]}/>
                     </SpaceBetween>
-                }/>
-        )
+                )
+            },
+            {
+                label: 'Network',
+                id: 'network',
+                content: (
+                    <SpaceBetween size={"l"}>
+                        <Container header={<Header variant={"h2"}>VPC</Header>}>
+                            <ColumnLayout variant={"text-grid"} columns={3}>
+                                <KeyValue title="VPC Id" value={dot.pick('network.vpc_id', this.state.cluster)} clipboard={true}/>
+                                <KeyValue title="Private Subnets" value={dot.pick('network.private_subnets', this.state.cluster)} clipboard={true}/>
+                                <KeyValue title="Public Subnets" value={dot.pick('network.public_subnets', this.state.cluster)} clipboard={true}/>
+                                <KeyValue title="Cluster Prefix List Id" value={dot.pick('network.cluster_prefix_list_id', this.state.cluster)} clipboard={true}/>
+                                <KeyValue title="Existing VPC?" value={dot.pick('network.use_existing_vpc', this.state.cluster)} type={"boolean"}/>
+                            </ColumnLayout>
+                        </Container>
+                        <Container header={<Header variant={"h2"}>Security Groups</Header>}>
+                            <ColumnLayout variant={"text-grid"} columns={3}>
+                                <KeyValue title="Bastion Host" value={dot.pick('network.security_groups.bastion-host', this.state.cluster)} clipboard={true} type={"ec2:security-group-id"}/>
+                                <KeyValue title="External Load Balancer" value={dot.pick('network.security_groups.external-load-balancer', this.state.cluster)} clipboard={true} type={"ec2:security-group-id"}/>
+                                <KeyValue title="Internal Load Balancer" value={dot.pick('network.security_groups.internal-load-balancer', this.state.cluster)} clipboard={true} type={"ec2:security-group-id"}/>
+                                <KeyValue title="Default Security Group" value={dot.pick('network.security_groups.cluster', this.state.cluster)} clipboard={true} type={"ec2:security-group-id"}/>
+                            </ColumnLayout>
+                        </Container>
+                        <Container header={<Header variant={"h2"}>External Load Balancer</Header>}>
+                            <SpaceBetween size={"m"}>
+                                <ColumnLayout variant={"text-grid"} columns={2}>
+                                    <KeyValue title="Load Balancer DNS Name" value={ConfigUtils.getExternalAlbDnsName(this.state.cluster)} clipboard={true}/>
+                                    <KeyValue title="Custom DNS Name" value={ConfigUtils.getExternalAlbCustomDnsName(this.state.cluster)} clipboard={true}/>
+                                    <KeyValue title="Load Balancer ARN" value={ConfigUtils.getExternalAlbArn(this.state.cluster)} clipboard={true}/>
+                                    <KeyValue title="Deploy in Public Subnets?" value={dot.pick('load_balancers.external_alb.public', this.state.cluster)} type={"boolean"}/>
+                                </ColumnLayout>
+                                <Box>
+                                    <h3>SSL/TLS Settings</h3>
+                                    <ColumnLayout variant={"text-grid"} columns={2}>
+                                        <KeyValue title="Certificates" value={isExternalAlbCertSelfSigned() ? 'Self-Signed' : 'ACM'}/>
+                                        {isExternalAlbCertSelfSigned() && <KeyValue title="Certificate Secret ARN" value={ConfigUtils.getExternalAlbCertificateSecretArn(this.state.cluster)} clipboard={true}/>}
+                                        {isExternalAlbCertSelfSigned() && <KeyValue title="Certificate Private Key Secret ARN" value={ConfigUtils.getExternalAlbPrivateKeySecretArn(this.state.cluster)} clipboard={true}/>}
+                                        <KeyValue title="ACM Certificate ARN" value={ConfigUtils.getExternalAlbAcmCertificateArn(this.state.cluster)} clipboard={true}/>
+                                    </ColumnLayout>
+                                </Box>
+                            </SpaceBetween>
+                        </Container>
+                        <Container header={<Header variant={"h2"}>Internal Load Balancer</Header>}>
+                            <SpaceBetween size={"m"}>
+                                <ColumnLayout variant={"text-grid"} columns={2}>
+                                    <KeyValue title="Load Balancer DNS Name" value={ConfigUtils.getInternalAlbDnsName(this.state.cluster)} clipboard={true}/>
+                                    <KeyValue title="Custom DNS Name" value={ConfigUtils.getInternalAlbCustomDnsName(this.state.cluster)} clipboard={true}/>
+                                    <KeyValue title="Load Balancer ARN" value={ConfigUtils.getInternalAlbArn(this.state.cluster)} clipboard={true}/>
+                                </ColumnLayout>
+                                <Box>
+                                    <h3>SSL/TLS Settings</h3>
+                                    <ColumnLayout variant={"text-grid"} columns={2}>
+                                        <KeyValue title="Certificates" value="Self-Signed"/>
+                                        <KeyValue title="Certificate Secret ARN" value={ConfigUtils.getInternalAlbCertificateSecretArn(this.state.cluster)} clipboard={true}/>
+                                        <KeyValue title="Certificate Private Key Secret ARN" value={ConfigUtils.getInternalAlbPrivateKeySecretArn(this.state.cluster)} clipboard={true}/>
+                                        <KeyValue title="ACM Certificate ARN" value={ConfigUtils.getInternalAlbAcmCertificateArn(this.state.cluster)} clipboard={true}/>
+                                    </ColumnLayout>
+                                </Box>
+                            </SpaceBetween>
+                        </Container>
+                    </SpaceBetween>
+                )
+            },
+            {
+                label: 'Shared Storage',
+                id: 'shared-storage',
+                content: (
+                    <SpaceBetween size={"l"}>
+                        <Container header={<Header variant={"h2"}>General</Header>}>
+                            <ColumnLayout variant={"text-grid"} columns={3}>
+                                <KeyValue title="Security Group (Applicable only for new File Systems)" value={dot.pick('security_group_id', this.state.sharedStorage)} clipboard={true} type={"ec2:security-group-id"}/>
+                            </ColumnLayout>
+                        </Container>
+                        <Table header={<Header variant={"h2"}>File Systems</Header>}
+                               items={this.state.sharedStorageTableItems}
+                               empty={<Box textAlign="center">No file systems configured.</Box>}
+                               selectionType={"single"}
+                               selectedItems={this.state.selectedFileSystem}
+                               onSelectionChange={(event) => {
+                                   this.setState({
+                                       selectedFileSystem: event.detail.selectedItems
+                                   })
+                               }}
+                               columnDefinitions={[
+                                   {
+                                       header: 'Title',
+                                       id: 'title',
+                                       cell: e => {
+                                           return e.getTitle()
+                                       }
+                                   },
+                                   {
+                                       header: 'Name',
+                                       id: 'name',
+                                       cell: e => {
+                                           return e.getName()
+                                       }
+                                   },
+                                   {
+                                       header: 'Mount Target',
+                                       id: 'mount_dir',
+                                       cell: e => e.getMountTarget()
+                                   },
+                                   {
+                                       id: 'scope',
+                                       header: 'Scope',
+                                       cell: e => {
+                                           return (
+                                               <div>
+                                                   {
+                                                       e.getScope().map((name, index) => {
+                                                           return <li key={index}>{name}</li>
+                                                       })
+                                                   }
+                                               </div>
+                                           )
+                                       }
+                                   },
+                                   {
+                                       header: 'Provider',
+                                       id: 'provider',
+                                       cell: e => e.getProviderTitle()
+                                   },
+                                   {
+                                       header: 'File System ID',
+                                       id: 'file_system_id',
+                                       cell: e => <span><CopyToClipBoard text={e.getFileSystemId()} feedback={`${e.getName()} - File System Id copied`}/> {e.getFileSystemId()}</span>
+                                   },
+                                   {
+                                       header: 'Existing?',
+                                       id: 'existing_fs',
+                                       cell: e => (e.isExistingFileSystem()) ? 'Yes' : 'No'
+                                   }
+                               ]}
+                        />
+                        <Container header={<Header variant={"h2"}>{getSelectedFileSystemTitle()}</Header>}>
+                            {this.state.selectedFileSystem.length === 0 && <ColumnLayout columns={1}>
+                                <p>Select a file system above to view additional details.</p>
+                            </ColumnLayout>}
+
+                            {this.state.selectedFileSystem.length > 0 && <ColumnLayout variant={"text-grid"} columns={1}>
+                                <KeyValueGroup title={"General"}>
+                                    <KeyValue title="Name" value={getSelectedFileSystem()?.getName()} clipboard={true}/>
+                                    <KeyValue title="Title" value={getSelectedFileSystem()?.getTitle()} clipboard={true}/>
+                                    <KeyValue title="Provider" value={getSelectedFileSystem()?.getProviderTitle()} clipboard={true}/>
+                                    <KeyValue title="Is Existing File System?" value={getSelectedFileSystem()?.isExistingFileSystem()} type={"boolean"}/>
+                                    <KeyValue title="File System Id" value={getSelectedFileSystem()?.getFileSystemId()} clipboard={true}/>
+                                    {!getSelectedFileSystem()?.isFsxNetAppOntap() && <KeyValue title="DNS Name " value={getSelectedFileSystem()?.getFileSystemDns()} clipboard={true}/>}
+                                </KeyValueGroup>
+
+                                <KeyValueGroup title={"Mount Settings"}>
+                                    {!getSelectedFileSystem()?.isFsxWindowsFileServer() && <KeyValue title="Mount Directory (Linux)" value={getSelectedFileSystem()?.getMountDirectory()} clipboard={true}/>}
+                                    {getSelectedFileSystem()?.hasMountDrive() && <KeyValue title="Mount Drive (Windows)" value={getSelectedFileSystem()?.getMountDrive()}/>}
+                                    {!getSelectedFileSystem()?.isFsxWindowsFileServer() && <KeyValue title="Mount Options" value={getSelectedFileSystem()?.getMountOptions()} clipboard={true}/>}
+                                    <KeyValue title="Scope" value={getSelectedFileSystem()?.getScope()}/>
+                                    {getSelectedFileSystem()?.isScopeProjects() && <KeyValue title="Projects" value={getSelectedFileSystem()?.getProjects()}/>}
+                                    {getSelectedFileSystem()?.isScopeModule() && <KeyValue title="Modules" value={getSelectedFileSystem()?.getModules()}/>}
+                                    {getSelectedFileSystem()?.isScopeQueueProfile() && <KeyValue title="Queue Profiles" value={getSelectedFileSystem()?.getQueueProfiles()}/>}
+                                    {getSelectedFileSystem()?.isFsxLustre() && <KeyValue title="FSx for Lustre: Mount Name" value={getSelectedFileSystem()?.getMountName()}/>}
+                                    {getSelectedFileSystem()?.isFsxLustre() && <KeyValue title="FSx for Lustre: Version" value={getSelectedFileSystem()?.getLustreVersion()}/>}
+                                </KeyValueGroup>
+
+                                {getSelectedFileSystem()?.isFsxNetAppOntap() && <KeyValueGroup title={"Storage Virtual Machine"}>
+                                    <KeyValue title="Storage Virtual Machine Id" value={getSelectedFileSystem()?.getSvmId()} clipboard={true}/>
+                                    <KeyValue title="SMB DNS" value={getSelectedFileSystem()?.getSvmSmbDns()} clipboard={true}/>
+                                    <KeyValue title="NFS DNS" value={getSelectedFileSystem()?.getSvmNfsDns()} clipboard={true}/>
+                                    <KeyValue title="Management DNS" value={getSelectedFileSystem()?.getSvmManagementDns()} clipboard={true}/>
+                                    <KeyValue title="iSCSI DNS" value={getSelectedFileSystem()?.getSvmIscsiDns()} clipboard={true}/>
+                                </KeyValueGroup>}
+
+                                {getSelectedFileSystem()?.isVolumeApplicable() && <KeyValueGroup title={"Volume"}>
+                                    <KeyValue title="Volume Id" value={getSelectedFileSystem()?.getVolumeId()} clipboard={true}/>
+                                    <KeyValue title="Volume Path" value={getSelectedFileSystem()?.getVolumePath()} clipboard={true}/>
+                                    {getSelectedFileSystem()?.isFsxNetAppOntap() && <KeyValue title="Security Style" value={getSelectedFileSystem()?.getVolumeSecurityStyle()} clipboard={true}/>}
+                                </KeyValueGroup>}
+
+                            </ColumnLayout>}
+                        </Container>
+                    </SpaceBetween>
+                )
+            },
+            {
+                label: 'Identity Provider',
+                id: 'identity-provider',
+                content: (
+                    <SpaceBetween size={"l"}>
+                        <Container header={<Header variant={"h2"}>Identity Provider</Header>}>
+                            <ColumnLayout variant={"text-grid"} columns={3}>
+                                <KeyValue title="Provider Name" value={dot.pick('provider', this.state.identityProvider)}/>
+                                <KeyValue title="User Pool Id" value={dot.pick('cognito.user_pool_id', this.state.identityProvider)} clipboard={true} type={"cognito:user-pool-id"}/>
+                                <KeyValue title="Administrators Group Name" value={dot.pick('cognito.administrators_group_name', this.state.identityProvider)} clipboard={true}/>
+                                <KeyValue title="Managers Group Name" value={dot.pick('cognito.managers_group_name', this.state.identityProvider)} clipboard={true}/>
+                                <KeyValue title="Domain URL" value={dot.pick('cognito.domain_url', this.state.identityProvider)} clipboard={true}/>
+                                <KeyValue title="Provider URL" value={dot.pick('cognito.provider_url', this.state.identityProvider)} clipboard={true}/>
+                            </ColumnLayout>
+                        </Container>
+                        <Container header={<Header variant={"h2"}>Single Sign-On</Header>}>
+                            <ColumnLayout variant={"text-grid"} columns={3}>
+                                <KeyValue title="Status" value={<EnabledDisabledStatusIndicator enabled={isSingleSignOnEnabled()}/>} type={"react-node"}/>
+                            </ColumnLayout>
+                        </Container>
+                    </SpaceBetween>
+                )
+            },
+            {
+                label: 'Directory Service',
+                id: 'directory-service',
+                content: (
+                    <SpaceBetween size={"l"}>
+                        <Container header={<Header variant={"h2"}>Directory Service</Header>}>
+                            <ColumnLayout variant={"text-grid"} columns={2}>
+                                <KeyValue title="Provider" value={Utils.getDirectoryServiceTitle(dot.pick('provider', this.state.directoryservice))}/>
+                                <KeyValue title="Automation Directory" value={dot.pick('automation_dir', this.state.directoryservice)} clipboard={true}/>
+                                <KeyValue title="Root Username Secret ARN" value={dot.pick('root_username_secret_arn', this.state.directoryservice)} clipboard={true}/>
+                                <KeyValue title="Root Password Secret ARN" value={dot.pick('root_password_secret_arn', this.state.directoryservice)} clipboard={true}/>
+                            </ColumnLayout>
+                        </Container>
+                        {isDirectoryServiceOpenLDAP() && <Container header={<Header variant={"h2"}>OpenLDAP Settings</Header>}>
+                            <SpaceBetween size={"m"}>
+                                <ColumnLayout variant={"text-grid"} columns={3}>
+                                    <KeyValue title="Name" value={dot.pick('name', this.state.directoryservice)} clipboard={true}/>
+                                    <KeyValue title="LDAP Base" value={dot.pick('ldap_base', this.state.directoryservice)} clipboard={true}/>
+                                    <KeyValue title="LDAP Connection URI" value={dot.pick('ldap_connection_uri', this.state.directoryservice)} clipboard={true}/>
+                                </ColumnLayout>
+                                <Box>
+                                    <h3>EC2 Instance Details</h3>
+                                    <ColumnLayout variant={"text-grid"} columns={3}>
+                                        <KeyValue title="Hostname" value={dot.pick('hostname', this.state.directoryservice)} clipboard={true}/>
+                                        <KeyValue title="Private IP" value={dot.pick('private_ip', this.state.directoryservice)} clipboard={true}/>
+                                        <KeyValue title="Instance Id" value={dot.pick('instance_id', this.state.directoryservice)} clipboard={true} type={"ec2:instance-id"}/>
+                                        <KeyValue title="Instance Type" value={dot.pick('instance_type', this.state.directoryservice)}/>
+                                        <KeyValue title="Security Group Id" value={dot.pick('security_group_id', this.state.directoryservice)} clipboard={true} type={"ec2:security-group-id"}/>
+                                        <KeyValue title="Base OS" value={Utils.getOsTitle(dot.pick('base_os', this.state.directoryservice))}/>
+                                        <KeyValue title="CloudWatch Logs Enabled" value={<EnabledDisabledStatusIndicator enabled={Utils.asBoolean(dot.pick('cloudwatch_logs.enabled', this.state.directoryservice), false)}/>} type={"react-node"}/>
+                                        <KeyValue title="Is Public?" value={dot.pick('public', this.state.directoryservice)} type={"boolean"}/>
+                                        <KeyValue title="Public IP" value={dot.pick('public_ip', this.state.directoryservice)}/>
+                                    </ColumnLayout>
+                                </Box>
+                            </SpaceBetween>
+                        </Container>}
+                        {isDirectoryServiceActiveDirectory() && <Container header={<Header variant={"h2"}>Microsoft AD Settings</Header>}>
+                            <ColumnLayout variant={"text-grid"} columns={2}>
+                                <KeyValue title="Directory Id" value={dot.pick('directory_id', this.state.directoryservice)}/>
+                                <KeyValue title="Short Name (NETBIOS)" value={dot.pick('ad_short_name', this.state.directoryservice)}/>
+                                <KeyValue title="Edition" value={dot.pick('ad_edition', this.state.directoryservice)}/>
+                                <KeyValue title="Domain Name" value={dot.pick('name', this.state.directoryservice)} clipboard={true}/>
+                                <KeyValue title="Password Max Age" value={dot.pick('password_max_age', this.state.directoryservice)} suffix={"days"}/>
+                                <KeyValue title="AD Automation SQS Queue Url" value={dot.pick('ad_automation.sqs_queue_url', this.state.directoryservice)} clipboard={true}/>
+                                <KeyValue title="AD Automation DynamoDB Table Name" value={`${AppContext.get().auth().getClusterName()}.ad-automation`} clipboard={true}/>
+                            </ColumnLayout>
+                        </Container>}
+                    </SpaceBetween>
+                )
+            },
+            {
+                label: 'Analytics',
+                id: 'analytics',
+                content: (
+                    <SpaceBetween size={"l"}>
+                        <Container header={<Header variant={"h2"}>OpenSearch Settings</Header>}>
+                            <ColumnLayout variant={"text-grid"} columns={2}>
+                                <KeyValue title="Domain Name" value={dot.pick('opensearch.domain_name', this.state.analytics)} clipboard={true}/>
+                                <KeyValue title="Domain ARN" value={dot.pick('opensearch.domain_arn', this.state.analytics)} clipboard={true}/>
+                                <KeyValue title="Domain Endpoint" value={dot.pick('opensearch.domain_endpoint', this.state.analytics)} clipboard={true}/>
+                                <KeyValue title="Dashboard URL" value={getOpenSearchDashboardUrl()} type={"external-link"} clipboard={true}/>
+                                <KeyValue title="Existing OpenSearch Service Domain?" value={dot.pick('opensearch.use_existing', this.state.analytics)} type={"boolean"}/>
+                            </ColumnLayout>
+                        </Container>
+                        <Container header={<Header variant={"h2"}>Kinesis Settings</Header>}>
+                            <ColumnLayout variant={"text-grid"} columns={2}>
+                                <KeyValue title="Stream Name" value={dot.pick('kinesis.stream_name', this.state.analytics)} clipboard={true}/>
+                                <KeyValue title="Stream ARN" value={dot.pick('kinesis.stream_arn', this.state.analytics)} clipboard={true}/>
+                                <KeyValue title="Stream Mode" value={dot.pick('kinesis.stream_mode', this.state.analytics)}/>
+                                <KeyValue title="Shard Count" value={dot.pick('kinesis.shard_count', this.state.analytics)}/>
+                            </ColumnLayout>
+                        </Container>
+                    </SpaceBetween>
+                )
+            },
+            {
+                label: 'Metrics',
+                id: 'metrics',
+                content: (
+                    <SpaceBetween size={"l"}>
+                        <MetricsHistorySettings active={true}/>
+                        <Container header={<Header variant={"h2"}>Metrics</Header>}>
+                            <ColumnLayout variant={"text-grid"} columns={3}>
+                                <KeyValue title="Status" value={<EnabledDisabledStatusIndicator enabled={isMetricsEnabled()}/>} type={"react-node"}/>
+                                <KeyValue title="Provider Name" value={dot.pick('provider', this.state.metrics)}/>
+                            </ColumnLayout>
+                        </Container>
+                        {isMetricsProviderCloudWatch() && <Container header={<Header variant={"h2"}>CloudWatch Metrics</Header>}>
+                            <SpaceBetween size={"m"}>
+                                <ColumnLayout variant={"text-grid"} columns={3}>
+                                    <KeyValue title="Metrics Collection Interval" value={dot.pick('cloudwatch.metrics_collection_interval', this.state.metrics)} suffix={"seconds"}/>
+                                    <KeyValue title="Force Flush Interval" value={dot.pick('cloudwatch.force_flush_interval', this.state.metrics)} suffix={"seconds"}/>
+                                </ColumnLayout>
+                                <Box>
+                                    <h4>CloudWatch Dashboard</h4>
+                                    <ColumnLayout variant={"text-grid"} columns={2}>
+                                        <KeyValue title="Dashboard ARN" value={dot.pick('cloudwatch.dashboard_arn', this.state.metrics)} clipboard={true}/>
+                                        <KeyValue title="Dashboard Name" value={dot.pick('cloudwatch.dashboard_name', this.state.metrics)} clipboard={true}/>
+                                    </ColumnLayout>
+                                </Box>
+                            </SpaceBetween>
+                        </Container>}
+                        {isMetricsProviderAmazonManagedPrometheus() && <Container header={<Header variant={"h2"}>Amazon Managed Prometheus</Header>}>
+                            <SpaceBetween size={"m"}>
+                                <ColumnLayout variant={"text-grid"} columns={3}>
+                                    <KeyValue title="Workspace Name" value={dot.pick('amazon_managed_prometheus.workspace_name', this.state.metrics)}/>
+                                    <KeyValue title="Workspace ID" value={dot.pick('amazon_managed_prometheus.workspace_id', this.state.metrics)}/>
+                                    <KeyValue title="Workspace ARN" value={dot.pick('amazon_managed_prometheus.workspace_arn', this.state.metrics)}/>
+                                    <KeyValue title="Remote Write Url" value={dot.pick('prometheus.remote_write.url', this.state.metrics)}/>
+                                    <KeyValue title="Remote Read Url" value={dot.pick('prometheus.remote_read.url', this.state.metrics)}/>
+                                </ColumnLayout>
+                            </SpaceBetween>
+                        </Container>}
+                        {isMetricsProviderPrometheus() && <Container header={<Header variant={"h2"}>Custom Prometheus</Header>}>
+                            <SpaceBetween size={"m"}>
+                                <ColumnLayout variant={"text-grid"} columns={3}>
+                                    <KeyValue title="Remote Write Url" value={dot.pick('prometheus.remote_write.url', this.state.metrics)}/>
+                                    <KeyValue title="Remote Read Url" value={dot.pick('prometheus.remote_read.url', this.state.metrics)}/>
+                                </ColumnLayout>
+                            </SpaceBetween>
+                        </Container>}
+                    </SpaceBetween>
+                )
+            },
+            {
+                label: 'Maintenance',
+                id: 'maintenance',
+                content: this.buildMaintenanceSettings()
+            },
+            {
+                label: 'Account reconciliation',
+                id: 'account-reconciliation',
+                content: <AccountReconcileSettings active={true} identityProvider={this.state.identityProvider} mode="policy"/>
+            },
+            {
+                label: 'Bedrock',
+                id: 'bedrock',
+                content: this.buildBedrockSettings()
+            },
+            {
+                label: 'CloudWatch Logs',
+                id: 'cloudwatch-logs',
+                content: (
+                    <Container header={<Header variant={"h2"}>CloudWatch Logs</Header>}>
+                        <ColumnLayout variant={"text-grid"} columns={3}>
+                            <KeyValue title="Status" value={<EnabledDisabledStatusIndicator enabled={Utils.asBoolean(dot.pick('cloudwatch_logs.enabled', this.state.cluster), false)}/>} type={"react-node"}/>
+                            <KeyValue title="Force Flush Interval" value={dot.pick('cloudwatch_logs.force_flush_interval', this.state.cluster)} suffix={"seconds"}/>
+                            <KeyValue title="Log Retention" value={dot.pick('cloudwatch_logs.retention_in_days', this.state.cluster)} suffix={"days"}/>
+                        </ColumnLayout>
+                    </Container>
+                )
+            },
+            {
+                label: 'SES',
+                id: 'ses',
+                content: (
+                    <Container header={<Header variant={"h2"}>Simple Email Service (SES)</Header>}>
+                        <ColumnLayout variant={"text-grid"} columns={3}>
+                            <KeyValue title="Status" value={<EnabledDisabledStatusIndicator enabled={Utils.asBoolean(dot.pick('ses.enabled', this.state.cluster), false)}/>} type={"react-node"}/>
+                            <KeyValue title="AWS Account ID" value={dot.pick('ses.account_id', this.state.cluster)} clipboard={true}/>
+                            <KeyValue title="AWS Region" value={dot.pick('ses.region', this.state.cluster)}/>
+                            <KeyValue title="Sender Email" value={dot.pick('ses.sender_email', this.state.cluster)} clipboard={true}/>
+                            <KeyValue title="Max Sending Rate" value={dot.pick('ses.max_sending_rate', this.state.cluster)} suffix={" / second"}/>
+                        </ColumnLayout>
+                    </Container>
+                )
+            },
+            {
+                label: 'EC2',
+                id: 'ec2',
+                content: (
+                    <Container header={<Header variant={"h2"}>EC2</Header>}>
+                        <ColumnLayout variant={"text-grid"} columns={1}>
+                            <KeyValue title="SSH Key Pair" value={dot.pick('network.ssh_key_pair', this.state.cluster)} clipboard={true}/>
+                            <KeyValue title="Custom EC2 Managed Policy ARNs" value={dot.pick('iam.ec2_managed_policy_arns', this.state.cluster)} clipboard={true}/>
+                        </ColumnLayout>
+                    </Container>
+                )
+            },
+            {
+                label: 'Backup',
+                id: 'backups',
+                content: (
+                    <SpaceBetween size={"l"}>
+                        <Container header={<Header variant={"h2"}>AWS Backup</Header>}>
+                            <ColumnLayout variant={"text-grid"} columns={2}>
+                                <KeyValue title="Status" value={<EnabledDisabledStatusIndicator enabled={isBackupEnabled()}/>} type={"react-node"}/>
+                            </ColumnLayout>
+                        </Container>
+                        {isBackupEnabled() && <Container header={<Header variant={"h2"}>Backup Vault</Header>}>
+                            <ColumnLayout variant={"text-grid"} columns={2}>
+                                <KeyValue title="ARN" value={dot.pick('backups.backup_vault.arn', this.state.cluster)} clipboard={true}/>
+                                <KeyValue title="KMS Key Id (CMK)" value={dot.pick('backups.backup_vault.kms_key_id', this.state.cluster)} clipboard={true}/>
+                            </ColumnLayout>
+                        </Container>}
+                        {isBackupEnabled() && <Container header={<Header variant={"h2"}>Backup Plan</Header>}>
+                            <ColumnLayout variant={"text-grid"} columns={2}>
+                                <KeyValue title="ARN" value={dot.pick('backups.backup_plan.arn', this.state.cluster)} clipboard={true}/>
+                                <KeyValue title="Selection" value={dot.pick('backups.backup_plan.selection.tags', this.state.cluster)}/>
+                            </ColumnLayout>
+                        </Container>}
+                    </SpaceBetween>
+                )
+            },
+            {
+                label: 'Route 53',
+                id: 'route-53',
+                content: (
+                    <SpaceBetween size={"l"}>
+                        <Container header={<Header variant={"h2"}>Private Hosted Zone</Header>}>
+                            <ColumnLayout variant={"text-grid"} columns={2}>
+                                <KeyValue title="Hosted Zone Name" value={dot.pick('route53.private_hosted_zone_name', this.state.cluster)} clipboard={true}/>
+                                <KeyValue title="Hosted Zone ID" value={dot.pick('route53.private_hosted_zone_id', this.state.cluster)} clipboard={true}/>
+                                <KeyValue title="Hosted Zone ARN" value={dot.pick('route53.private_hosted_zone_arn', this.state.cluster)} clipboard={true}/>
+                            </ColumnLayout>
+                        </Container>
+                    </SpaceBetween>
+                )
+            },
+            {
+                label: 'AWS Account',
+                id: 'aws-account',
+                content: (
+                    <Container header={<Header variant={"h2"}>AWS Account Settings</Header>}>
+                        <ColumnLayout variant={"text-grid"} columns={3}>
+                            <KeyValue title="AWS Account ID" value={dot.pick('aws.account_id', this.state.cluster)} clipboard={true}/>
+                            <KeyValue title="AWS Region" value={dot.pick('aws.region', this.state.cluster)} clipboard={true}/>
+                            <KeyValue title="Pricing API Region" value={dot.pick('aws.pricing_region', this.state.cluster)} clipboard={true}/>
+                            <KeyValue title="AWS Partition" value={dot.pick('aws.partition', this.state.cluster)}/>
+                            <KeyValue title="AWS DNS Suffix" value={dot.pick('aws.dns_suffix', this.state.cluster)}/>
+                        </ColumnLayout>
+                    </Container>
+                )
+            }
+        ];
+        return <>{this.props.renderSections({sections, values: {cluster: this.state.cluster, 'cluster-manager': this.state.clusterManager, 'shared-storage': this.state.sharedStorage}, errors: this.state.settingsErrors})}
+        </>
     }
 }
 

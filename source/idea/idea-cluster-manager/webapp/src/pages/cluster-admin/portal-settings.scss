@@ -1,0 +1,20 @@
+@use '@cloudscape-design/design-tokens/index.scss' as awsui;
+
+.portal-settings {
+    display: grid;
+    grid-template-columns: minmax(220px, 1fr) minmax(0, 3fr);
+    gap: 24px;
+    nav { align-self: start; position: sticky; top: 80px; }
+    section { scroll-margin-top: 100px; margin-bottom: 32px; }
+    .settings-values { overflow-wrap: anywhere; }
+    .settings-values dd { margin: 4px 0 16px; }
+    @media (max-width: 800px) {
+        grid-template-columns: minmax(0, 1fr);
+        nav { position: static; }
+    }
+}
+.portal-settings {
+    .setting-editor { scroll-margin-top: 100px; }
+    .setting-highlight { border-left: 4px solid awsui.$color-border-status-info; padding-left: 8px; }
+    nav small { display: block; overflow-wrap: anywhere; }
+}

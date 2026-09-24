@@ -1,4 +1,6 @@
-## Update Queue Profile
+## Manage jobs
+
+### Update Queue Profile
 
 Update an existing queue profile
 

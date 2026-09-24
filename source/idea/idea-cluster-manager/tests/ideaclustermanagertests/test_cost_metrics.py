@@ -281,10 +281,7 @@ def test_service_publishes_counts_stamped_at_the_day():
 
     service.run_once()
 
-    assert all(
-        context.dimensions(e)['host'] == context.cluster_name()
-        for e in context.published()
-    )
+    assert all('host' not in context.dimensions(e) for e in context.published())
     amortized = context.published('cost.amortized')
     assert len(amortized) > 0
     scheduler = [
@@ -340,3 +337,32 @@ def test_zero_row_is_published_for_both_cost_bases():
         entry['Timestamp'] == int(arrow.get('2026-09-13').timestamp())
         for entry in zero_points
     )
+
+
+def test_two_runs_publish_each_day_once_with_only_documented_tags():
+    from ideasdk.metrics.dogstatsd.dogstatsd_metrics import DogStatsdMetrics
+
+    context = FakeContext(
+        values(), cost_explorer=StubCostExplorer(['scheduler'], responses())
+    )
+    service = CostMetricsService(context)
+    service.run_once()
+    first = list(context.published())
+    assert first
+    assert context.aws().s3().values == {}
+    service.run_once()
+    assert context.published() == first
+    points = context.published('cost.amortized')
+    identities = [
+        (e['Timestamp'], tuple(sorted(context.dimensions(e).items()))) for e in points
+    ]
+    assert len(identities) == len(set(identities))
+    assert len({e['Timestamp'] for e in points}) == 2
+    provider = DogStatsdMetrics(context, 'test-cluster/cluster-manager')
+    for point in points:
+        tags = set(provider.format_entry(point).split('|#')[1].split('|')[0].split(','))
+        assert tags == {
+            'idea_cluster:test-cluster',
+            *[f'{key}:{value}' for key, value in context.dimensions(point).items()],
+        }
+        assert set(context.dimensions(point)) == {'module', 'project', 'owner'}

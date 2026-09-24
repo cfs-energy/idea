@@ -1,4 +1,6 @@
-## Email Templates
+## Settings
+
+### Email and notifications
 
 Manage your SES email notifications
 
