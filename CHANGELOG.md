@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
-## [Unreleased]
+## [26.09.4] - 2026-09-24
 
 * **Cost header**: administrators can enable a compact cached WTD, MTD, QTD or YTD personal cost total beside the signed-in user's name, with its as-of time and a link to My costs.
 * **Landing page and Home**: administrators can choose the portal's default landing destination, users can override it for their own account, and Home now independently loads the cost billboard, recent jobs and desktops, and quick links instead of static marketing content.
