@@ -145,9 +145,9 @@ class NpmPackageJsonFileUpdater(BaseMetadataUpdater):
             updated = line
             token = updated.strip()
             if token.startswith('"name"'):
-                updated = f'  "name": "web-portal", {os.linesep}'
+                updated = f'  "name": "web-portal",{os.linesep}'
             elif token.startswith('"version"'):
-                updated = f'  "version": "{self.app_version}", {os.linesep}'
+                updated = f'  "version": "{self.app_version}",{os.linesep}'
             updates.append(updated)
         package_json_contents = ''.join(updates)
 

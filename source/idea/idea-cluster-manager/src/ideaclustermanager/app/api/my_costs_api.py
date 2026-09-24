@@ -3,7 +3,7 @@ import ideaclustermanager
 from ideasdk.api import ApiInvocationContext, BaseAPI
 from ideadatamodel import exceptions
 
-from ideaclustermanager.app.costs.my_costs_service import MyCostsService
+from ideaclustermanager.app.costs.personal_costs_store import StoredPersonalCostsService
 
 
 class MyCostsAPI(BaseAPI):
@@ -15,7 +15,8 @@ class MyCostsAPI(BaseAPI):
 
     def __init__(self, context: ideaclustermanager.AppContext):
         self.context = context
-        self.my_costs = MyCostsService(context)
+        self.my_costs = StoredPersonalCostsService(context)
+        self.monthly_costs = StoredPersonalCostsService(context)
 
     def get_summary(self, context: ApiInvocationContext):
         context.success(self.my_costs.get_summary(username=context.get_username()))
@@ -26,7 +27,13 @@ class MyCostsAPI(BaseAPI):
         if not context.is_authorized_user():
             raise exceptions.unauthorized_access()
 
-        if context.namespace == 'MyCosts.GetSummary':
+        if context.namespace == 'MyCosts.GetCosts':
+            context.success(self.monthly_costs.get_costs(context.get_username()))
+        elif context.namespace == 'MyCosts.GetCostTicker':
+            context.success(self.monthly_costs.get_ticker(context.get_username()))
+        elif context.namespace == 'MyCosts.Refresh':
+            context.success(self.monthly_costs.refresh(context.get_username()))
+        elif context.namespace == 'MyCosts.GetSummary':
             self.get_summary(context)
         else:
             raise exceptions.unauthorized_access()

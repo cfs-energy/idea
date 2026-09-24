@@ -26,7 +26,10 @@ from threading import Thread, Event
 import arrow
 import logging
 
-from ideascheduler.app.metrics.job_completion_metrics import JobCompletionMetrics
+from ideascheduler.app.metrics.job_completion_metrics import (
+    JobCompletionMetrics,
+    JobCompletionBatch,
+)
 from ideascheduler.app.provisioning.lifecycle_events import (
     ProvisioningLifecycleEvents,
 )
@@ -44,8 +47,10 @@ class ProcessFinishedJob:
         logger: logging.Logger,
         job: SocaJob,
         job_export_logger: logging.Logger,
+        metrics_context=None,
     ):
         self._context = context
+        self._metrics_context = metrics_context or context
         self._logger = logger
         self.job = job
         self._job_export_logger = job_export_logger
@@ -192,7 +197,7 @@ class ProcessFinishedJob:
                     duration_secs=int(total_duration.total_seconds()),
                 )
 
-            JobCompletionMetrics(context=self._context, job=self.job).publish()
+            JobCompletionMetrics(context=self._metrics_context, job=self.job).publish()
         except Exception as e:
             self._logger.exception(
                 f'{self.job.log_tag} failed to publish job metrics: {e}'
@@ -361,6 +366,7 @@ class FinishedJobProcessor:
             job_ids=finished_job_ids, job_state=SocaJobState.FINISHED
         )
 
+        metrics_batch = JobCompletionBatch(self._context)
         jobs_to_index = []
         for finished_job in finished_jobs:
             try:
@@ -375,6 +381,7 @@ class FinishedJobProcessor:
                     logger=self._logger,
                     job=finished_job,
                     job_export_logger=self._jobs_export_logger,
+                    metrics_context=metrics_batch,
                 ).invoke()
                 if job_to_index is not None:
                     jobs_to_index.append(job_to_index)
@@ -383,6 +390,10 @@ class FinishedJobProcessor:
                     f'{finished_job.log_tag} failed to process finished job: {e}'
                 )
 
+        try:
+            metrics_batch.flush()
+        except Exception as error:
+            self._logger.exception(f'failed to publish completion metrics: {error}')
         try:
             self._context.document_store.add_jobs(jobs=jobs_to_index)
         except Exception as e:
@@ -403,6 +414,7 @@ class FinishedJobProcessor:
         write jobs that never got capacity straight to the finished jobs table. they
         cannot be re-read from the scheduler, and they are never priced.
         """
+        metrics_batch = JobCompletionBatch(self._context)
         jobs_to_index = []
         for job in jobs:
             try:
@@ -411,6 +423,7 @@ class FinishedJobProcessor:
                     logger=self._logger,
                     job=job,
                     job_export_logger=self._jobs_export_logger,
+                    metrics_context=metrics_batch,
                 ).invoke_unprovisioned()
                 if job_to_index is not None:
                     jobs_to_index.append(job_to_index)
@@ -419,6 +432,10 @@ class FinishedJobProcessor:
                     f'{job.log_tag} failed to record unprovisioned job: {e}'
                 )
 
+        try:
+            metrics_batch.flush()
+        except Exception as error:
+            self._logger.exception(f'failed to publish completion metrics: {error}')
         try:
             self._context.document_store.add_jobs(jobs=jobs_to_index)
         except Exception as e:

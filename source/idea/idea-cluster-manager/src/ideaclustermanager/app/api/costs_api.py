@@ -5,6 +5,7 @@ from ideadatamodel import exceptions, GetUserCostsSummaryRequest
 from ideasdk.utils import Utils
 
 from ideaclustermanager.app.costs.my_costs_service import MyCostsService
+from ideaclustermanager.app.costs.personal_costs_store import StoredPersonalCostsService
 
 
 class CostsAPI(BaseAPI):
@@ -17,6 +18,8 @@ class CostsAPI(BaseAPI):
     def __init__(self, context: ideaclustermanager.AppContext):
         self.context = context
         self.my_costs = MyCostsService(context)
+        # Stored projections only: an admin listing must never start a per-user computation.
+        self.monthly_costs = StoredPersonalCostsService(context)
 
         self.SCOPE_READ = f'{self.context.module_id()}/read'
 
@@ -31,16 +34,47 @@ class CostsAPI(BaseAPI):
                 'scope': self.SCOPE_READ,
                 'method': self.get_user_summary,
             },
+            'Costs.GetUserCosts': {
+                'scope': self.SCOPE_READ,
+                'method': self.get_user_costs,
+            },
         }
 
     def list_user_costs(self, context: ApiInvocationContext):
-        context.success(self.my_costs.list_user_costs())
+        result = self.my_costs.list_user_costs()
+        storage_unavailable = False
+        for row in result.listing or []:
+            try:
+                costs = self.monthly_costs.get_costs(row.username)
+            except Exception as e:
+                self.context.logger().warning(
+                    f'failed to read stored costs for {row.username}: {e}'
+                )
+                storage_unavailable = True
+                continue
+            month = costs.current
+            if month is None or month.shared_storage.status == 'unavailable':
+                storage_unavailable = True
+                continue
+            row.storage_cost = month.shared_storage.cost
+            row.storage_gb = round(
+                sum(item.used_bytes or 0 for item in month.storage) / (1024**3), 2
+            )
+            row.total_cost = round((row.total_cost or 0) + (row.storage_cost or 0), 2)
+        result.storage_unavailable = storage_unavailable
+        context.success(result)
 
     def get_user_summary(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(GetUserCostsSummaryRequest)
         if Utils.is_empty(request.username):
             raise exceptions.invalid_params('username is required')
         context.success(self.my_costs.get_summary(username=request.username))
+
+    def get_user_costs(self, context: ApiInvocationContext):
+        request = context.get_request_payload_as(GetUserCostsSummaryRequest)
+        if Utils.is_empty(request.username):
+            raise exceptions.invalid_params('username is required')
+        context.success(self.monthly_costs.get_costs(request.username))
 
     def invoke(self, context: ApiInvocationContext):
         acl_entry = Utils.get_value_as_dict(context.namespace, self.acl)

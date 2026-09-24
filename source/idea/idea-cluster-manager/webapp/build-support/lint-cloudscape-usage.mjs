@@ -1,4 +1,4 @@
-// Two Cloudscape coupling rules that nothing else in the toolchain catches. Runs over the file paths
+// Three Cloudscape usage rules that nothing else in the toolchain catches. Runs over the file paths
 // given as arguments (pre-commit), or over src/ when called with none (yarn lint).
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -27,6 +27,14 @@ const ALLOW_MARKER = 'awsui-hashed-class-name-allowed';
 const FLATTEN_CONSUMERS = new Set(['ColumnLayout', 'Grid', 'SpaceBetween']);
 
 const FRAGMENT_MARKER = 'cloudscape-fragment-child-allowed';
+
+// Rule 3: presentational HTML in JSX bypasses the design system: bold and line-break tags, spacer
+// entities and inline styles render browser defaults and never follow the theme. Prose belongs in
+// TextContent (which styles native tags), spacing in SpaceBetween/Box, emphasis in Box variants.
+const RAW_MARKUP_TAGS = new Set(['b', 'i', 'u', 'br', 'font', 'center', 'small', 'big']);
+const RAW_MARKUP_ENTITIES = /&nbsp;|&ensp;|&emsp;/;
+const RAW_MARKUP_MARKER = 'cloudscape-raw-markup-allowed';
+const PROSE_WRAPPER = 'TextContent';
 
 function collect(directory, found = []) {
     for (const entry of readdirSync(directory)) {
@@ -109,6 +117,41 @@ function scanFragments(file, text) {
     return violations;
 }
 
+
+function scanRawMarkup(file, text) {
+    const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const lines = text.split('\n');
+    const violations = [];
+
+    const report = (node, what) => {
+        const line = source.getLineAndCharacterOfPosition(node.getStart(source)).line;
+        if (line > 0 && lines[line - 1].includes(RAW_MARKUP_MARKER)) {
+            return;
+        }
+        violations.push({ line: line + 1, what });
+    };
+
+    // Inside TextContent the native tags are the documented way to write prose.
+    const walk = (node, inProse) => {
+        let prose = inProse;
+        if (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node)) {
+            const name = tagName(node);
+            if (name === PROSE_WRAPPER) {
+                prose = true;
+            } else if (!prose && RAW_MARKUP_TAGS.has(name)) {
+                report(node, `<${name}>`);
+            }
+        }
+        if (ts.isJsxText(node) && RAW_MARKUP_ENTITIES.test(node.getText())) {
+            report(node, 'spacer entity');
+        }
+        node.forEachChild((child) => walk(child, prose));
+    };
+
+    walk(source, false);
+    return violations;
+}
+
 const args = process.argv.slice(2);
 const files =
     args.length > 0
@@ -117,6 +160,7 @@ const files =
 
 const hashedClassNames = [];
 const fragmentChildren = [];
+const rawMarkup = [];
 
 for (const file of files) {
     const text = readFileSync(file, 'utf8');
@@ -134,6 +178,11 @@ for (const file of files) {
     if (file.endsWith('.tsx') || file.endsWith('.jsx')) {
         for (const violation of scanFragments(file, text)) {
             fragmentChildren.push(`${name}:${violation.line}: fragment child of <${violation.parent}>`);
+        }
+        if (!/\.test\.[jt]sx$/.test(file)) {
+            for (const violation of scanRawMarkup(file, text)) {
+                rawMarkup.push(`${name}:${violation.line}: ${violation.what}`);
+            }
         }
     }
 }
@@ -156,6 +205,15 @@ if (fragmentChildren.length > 0) {
         console.error(`  ${violation}`);
     }
     console.error(`\nReturn a keyed array instead of a fragment. To allow one, put "${FRAGMENT_MARKER}: <reason>" on the line above.`);
+}
+
+if (rawMarkup.length > 0) {
+    failed = true;
+    console.error(`${failed ? '\n' : ''}Presentational HTML outside TextContent (browser defaults, off-theme):\n`);
+    for (const violation of rawMarkup) {
+        console.error(`  ${violation}`);
+    }
+    console.error(`\nWrap prose in TextContent, use Box variants for emphasis and SpaceBetween for spacing. To allow one, put "${RAW_MARKUP_MARKER}: <reason>" on the line above.`);
 }
 
 if (failed) {

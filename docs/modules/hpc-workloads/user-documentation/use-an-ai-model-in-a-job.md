@@ -4,7 +4,7 @@ description: Call the models your project allows from a compute node
 
 # Use an AI model in a job
 
-A job can call Amazon Bedrock models when three things are true: the cluster administrator has enabled Bedrock, enabled it for jobs, and your project has been granted at least one model. The models your project allows are listed under **Account Settings** > **My Projects**; if the **AI Models** column is absent, the feature is off for this cluster.
+A job can call Amazon Bedrock models when three things are true: the cluster administrator has enabled Bedrock, enabled it for jobs, and your project has been granted at least one model. The models your project allows are listed under **My account** > **My Projects**; if the **AI Models** column is absent, the feature is off for this cluster.
 
 ## Credentials
 
@@ -21,7 +21,7 @@ A model that is not on your project's list fails with `AccessDeniedException`. T
 
 ## Invoke a model
 
-Pass your project's **application inference profile ARN** as the model id, not the model id itself. Both are listed under **Account Settings** > **My Projects** > **AI Models**: the model id on the first line, the profile ARN under it.
+Pass your project's **application inference profile ARN** as the model id, not the model id itself. Both are listed under **My account** > **My Projects** > **AI Models**: the model id on the first line, the profile ARN under it.
 
 ```bash
 #!/bin/bash

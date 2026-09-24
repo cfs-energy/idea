@@ -12,6 +12,8 @@
 from ideasdk.api import BaseAPI, ApiInvocationContext
 from ideadatamodel.auth import (
     GetUserResult,
+    UpdateMyPreferencesRequest,
+    UpdateMyPreferencesResult,
     InitiateAuthRequest,
     RespondToAuthChallengeRequest,
     ForgotPasswordRequest,
@@ -171,10 +173,22 @@ class AuthAPI(BaseAPI):
         result = self.context.accounts.list_users_in_group(request)
         context.success(result)
 
+    def update_my_preferences(self, context: ApiInvocationContext):
+        # The signed-in user's own record only: the username comes from the token.
+        if not context.is_authorized_user():
+            raise exceptions.unauthorized_access()
+        request = context.get_request_payload_as(UpdateMyPreferencesRequest)
+        user = self.context.accounts.update_my_preferences(
+            context.get_username(), request.landing_page
+        )
+        context.success(UpdateMyPreferencesResult(user=user))
+
     def invoke(self, context: ApiInvocationContext):
         namespace = context.namespace
         if namespace == 'Auth.GlobalSignOut':
             self.global_sign_out(context)
+        elif namespace == 'Auth.UpdateMyPreferences':
+            self.update_my_preferences(context)
         elif namespace == 'Auth.SignOut':
             self.sign_out(context)
         elif namespace == 'Auth.InitiateAuth':

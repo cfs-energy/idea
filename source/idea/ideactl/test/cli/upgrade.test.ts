@@ -21,6 +21,8 @@ import {
   type SchedulerJobInventory,
   type UpgradeDeps,
   upgradeCluster,
+  planEcsImageFollowsRelease,
+  returnBorrowedHosts,
 } from "../../src/cli/commands/upgrade.ts";
 
 const fixture = join(import.meta.dirname, "../stacks/ecs-values.yml");
@@ -319,14 +321,14 @@ test("prompts at each pre-mutation and optional phase boundary without --force",
   });
 });
 
-test("Phase 2 deletes and rewrites only the global settings prefix before Phase 2b add-only sync", async () => {
+test("Phase 2 updates global settings without removing rows read by running applications", async () => {
   await withFixture(async ({ deps, events }) => {
     await upgradeCluster(deps, { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true });
     const deleteIndex = events.indexOf("delete:global-settings.");
     const overwriteSync = events.findIndex((event) => event.startsWith("sync:true:"));
     const addOnlySync = events.findIndex((event) => event.startsWith("sync:false:"));
     assert.ok(events.some((event) => event.startsWith("Backup created successfully at ")));
-    assert.ok(deleteIndex >= 0);
+    assert.equal(deleteIndex, -1);
     assert.ok(overwriteSync > deleteIndex);
     assert.ok(addOnlySync > overwriteSync);
   });
@@ -1169,6 +1171,52 @@ for (const portalCurrent of [false, true]) {
   });
 }
 
+test("a cluster-manager that already knows the container module keeps its module-set row through the run", async () => {
+  // On the first production upgrade of a container cluster the row was held for the whole run and
+  // every portal page answered 500 until the last stack finished: the hold asked whether the
+  // portal was already on the target release, not whether it could resolve the module.
+  await withFixture(async ({ deps, events, rows }) => {
+    enableContainers();
+    trunkingEnabled(deps);
+    rows[`${clusterName}.modules`]!.push(
+      { ...moduleRow("ecs", "ecs"), version: "26.09.2" },
+      { ...moduleRow("cluster-manager", "cluster-manager"), version: "26.09.2" },
+    );
+    rows[`${clusterName}.cluster-settings`]!.push(setting("global-settings.module_sets.default.ecs.module_id", "ecs"));
+    rows[`${clusterName}.cluster-settings`]!.push(
+      setting("global-settings.module_sets.default.analytics.module_id", "search"),
+      setting("global-settings.retired_option", "still needed"),
+    );
+    const originalWriter = deps.configWriter;
+    deps.configWriter = async (input) => {
+      const writer = await originalWriter(input);
+      return new Proxy(writer, {
+        get(target, property) {
+          const method = Reflect.get(target, property) as (...args: unknown[]) => Promise<void>;
+          if (typeof method !== "function") return method;
+          return async (...args: unknown[]) => {
+            await method.apply(target, args);
+            // Every write before deployment leaves the rows a running application reads in place;
+            // a row this release no longer generates goes only once the stacks have deployed.
+            assert.equal(rows[`${clusterName}.cluster-settings`]!.find((row) => row["key"] === "global-settings.module_sets.default.analytics.module_id")?.["value"], "search");
+            if (!events.includes("deploy")) assert.ok(rows[`${clusterName}.cluster-settings`]!.some((row) => row["key"] === "global-settings.retired_option"));
+            assert.ok(rows[`${clusterName}.cluster-settings`]!.some((row) => row["key"] === "global-settings.module_sets.default.ecs.module_id"));
+          };
+        },
+      });
+    };
+    deps.deploy = async () => {
+      events.push("deploy");
+      for (const row of rows[`${clusterName}.modules`]!) { row["version"] = ideaVersion(); row["status"] = "deployed"; }
+    };
+    await upgradeCluster(deps, containerOptions);
+    const globalRewrite = events.findIndex((event) => event.startsWith("sync:true:"));
+    const deploy = events.indexOf("deploy");
+    const republished = events.findIndex((event, index) => index > globalRewrite && event.startsWith("module-sets:") && announcedModules(event).includes("ecs"));
+    assert.ok(globalRewrite >= 0 && republished > globalRewrite && republished < deploy, `the row must come back before any stack deploys: ${events.join(" | ")}`);
+  });
+});
+
 test("a scoped upgrade preserves ECS when cluster-manager completed the target release", async () => {
   await withFixture(async ({ deps, events, rows }) => {
     enableContainers();
@@ -1382,7 +1430,7 @@ test("25.11 migration ignores phase skips, verifies DCV publication and complete
     };
     await upgradeCluster(deps, { clusterName, awsRegion, moduleSet: "default", skipGlobalSettingsUpdate: true, acceptConfigDrift: true });
     assert.equal(events.filter((event) => event.startsWith("Historical migration:")).length, 1);
-    assert.ok(events.includes("delete:global-settings."));
+    assert.ok(!events.includes("delete:global-settings."));
     assert.ok(events.includes("Phase 2b: Sync full configuration without overwrite"));
     assert.ok(events.includes("set:scheduler.instance_ami=ami-release"));
     assert.ok(events.includes("All upgrade phases completed successfully"));
@@ -1492,7 +1540,7 @@ for (const containers of [true, false]) {
   });
 }
 
-for (const suffix of ["metrics.cost.last_collected", "metrics.storage.last_collected", "accounts.reconcile.last_completed", "metrics.cost.enabled", "unrelated.last_published"]) {
+for (const suffix of ["metrics.cost.last_collected", "metrics.storage.last_collected", "metrics.storage.usage_snapshot", "accounts.reconcile.last_completed", "metrics.cost.enabled", "unrelated.last_published"]) {
   test(`completion scopes runtime checkpoint exceptions: ${suffix}`, async () => {
     await withFixture(async ({ deps, rows }) => {
       rows[`${clusterName}.modules`]!.push(moduleRow("cluster-manager", "cluster-manager"));
@@ -1503,7 +1551,7 @@ for (const suffix of ["metrics.cost.last_collected", "metrics.storage.last_colle
         await deploy(input);
         rows[`${clusterName}.cluster-settings`]!.find((row) => row["key"] === key)!["value"] = 2;
       };
-      if (suffix.endsWith("last_collected") || suffix.endsWith("last_completed")) await upgradeCluster(deps, containerOptions);
+      if (suffix.endsWith("last_collected") || suffix.endsWith("last_completed") || suffix.endsWith("usage_snapshot")) await upgradeCluster(deps, containerOptions);
       else await assert.rejects(upgradeCluster(deps, containerOptions), /Completion verification failed for setting/);
     });
   });
@@ -1751,3 +1799,92 @@ for (const hasHost of [true, false]) {
     });
   });
 }
+
+test("a global row this release no longer generates is removed after every stack has deployed, never before", async () => {
+  await withFixture(async ({ deps, events, rows }) => {
+    rows[`${clusterName}.cluster-settings`]!.push(setting("global-settings.retired_option", "still needed"), setting("global-settings.retired_option_family", "kept"));
+    await upgradeCluster(deps, { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true });
+    const deploy = events.indexOf("deploy");
+    const removed = events.indexOf("delete:global-settings.retired_option_family");
+    assert.ok(removed > deploy, `removed after deployment: ${events.filter((event) => event.startsWith("delete:")).join(" | ")}`);
+    assert.ok(!events.slice(0, deploy).some((event) => event.startsWith("delete:global-settings.")), "nothing global is deleted while applications may read it");
+    // The writer deletes by prefix, so the key that prefixes its sibling is left alone and named.
+    assert.ok(!events.includes("delete:global-settings.retired_option"));
+    assert.ok(events.some((event) => event.includes("global-settings.retired_option is no longer generated but prefixes another row")));
+  });
+});
+
+test("the image row follows the release only when it names the release repository at an older release tag", () => {
+  const repository = "public.ecr.aws/s5o2b4m0/idea-control-plane";
+  const rows = (image: string) => [
+    { key: "ecs.image_repositories.aws", value: repository },
+    { key: "ecs.image", value: image },
+  ];
+  assert.deepEqual(
+    planEcsImageFollowsRelease(rows(`${repository}:26.09.3`), "26.09.4"),
+    [{ key: "ecs.image", value: `${repository}:26.09.4` }],
+  );
+  for (const image of [
+    `${repository}:26.09.4`,
+    `${repository}:26.10.0`,
+    `${repository}:build-6e82332-dev27`,
+    `${repository}@sha256:${"0".repeat(64)}`,
+    "private.example/idea-control-plane:26.09.3",
+  ]) {
+    assert.deepEqual(planEcsImageFollowsRelease(rows(image), "26.09.4"), [], image);
+  }
+  assert.deepEqual(planEcsImageFollowsRelease([{ key: "ecs.image", value: `${repository}:26.09.3` }], "26.09.4"), [], "no repository row");
+});
+
+
+function hostReturnDeps(hosts: { minSize: number; instances: string[] }, empties: boolean) {
+  const out: string[] = [];
+  const calls: string[] = [];
+  const deps = {
+    out: (line: string) => out.push(line),
+    containerHosts: {
+      async hostGroup() {
+        return { name: "hosts", minSize: hosts.minSize, desiredCapacity: hosts.instances.length, instanceIds: hosts.instances };
+      },
+      async containerInstances() {
+        return [
+          { arn: "arn:a", instanceId: "i-a", status: "ACTIVE", runningTasks: 5, registeredAt: "2026-09-15T00:00:00.000Z" },
+          { arn: "arn:d", instanceId: "i-d", status: "ACTIVE", runningTasks: 3, registeredAt: "2026-09-21T14:23:00.000Z" },
+          { arn: "arn:b", instanceId: "i-b", status: "ACTIVE", runningTasks: 2, registeredAt: "2026-09-15T00:00:00.000Z" },
+          { arn: "arn:c", instanceId: "i-c", status: "ACTIVE", runningTasks: 5, registeredAt: "2026-09-15T00:00:00.000Z" },
+        ];
+      },
+      async drain(input: { arn: string }) { calls.push(`drain ${input.arn}`); },
+      async activate(input: { arn: string }) { calls.push(`activate ${input.arn}`); },
+      async waitUntilEmpty(input: { arn: string }) { calls.push(`wait ${input.arn}`); return empties; },
+      async release(input: { instanceId: string; desiredCapacity: number }) { calls.push(`release ${input.instanceId} desired=${input.desiredCapacity}`); },
+    },
+  } as unknown as UpgradeDeps;
+  return { deps, out, calls };
+}
+
+const HOST_ROWS = [{ key: "ecs.cluster_name", value: "cluster-ecs" }, { key: "ecs.capacity_provider", value: "cluster-capacity" }];
+
+test("return-hosts drains the newest borrowed host and shrinks the group once it is empty", async () => {
+  const { deps, out, calls } = hostReturnDeps({ minSize: 3, instances: ["i-a", "i-b", "i-c", "i-d"] }, true);
+  await returnBorrowedHosts(deps, { clusterName: "cluster", awsRegion: "us-east-1" }, HOST_ROWS);
+  assert.deepEqual(calls, ["drain arn:d", "wait arn:d", "release i-d desired=3"]);
+  assert.ok(out.some((line) => line.includes("Returned i-d")), out.join("\n"));
+});
+
+test("return-hosts leaves a host in service when it does not empty in time", async () => {
+  const { deps, out, calls } = hostReturnDeps({ minSize: 3, instances: ["i-a", "i-b", "i-c", "i-d"] }, false);
+  await returnBorrowedHosts(deps, { clusterName: "cluster", awsRegion: "us-east-1" }, HOST_ROWS);
+  assert.deepEqual(calls, ["drain arn:d", "wait arn:d", "activate arn:d"]);
+  assert.ok(out.some((line) => line.startsWith("warning: i-d still ran tasks")), out.join("\n"));
+});
+
+test("return-hosts does nothing at the group minimum or without container settings", async () => {
+  const atMinimum = hostReturnDeps({ minSize: 3, instances: ["i-a", "i-b", "i-c"] }, true);
+  await returnBorrowedHosts(atMinimum.deps, { clusterName: "cluster", awsRegion: "us-east-1" }, HOST_ROWS);
+  assert.deepEqual(atMinimum.calls, []);
+  assert.ok(atMinimum.out.some((line) => line.includes("nothing to return")));
+  const noContainers = hostReturnDeps({ minSize: 3, instances: ["i-a", "i-b", "i-c", "i-d"] }, true);
+  await returnBorrowedHosts(noContainers.deps, { clusterName: "cluster", awsRegion: "us-east-1" }, []);
+  assert.deepEqual(noContainers.calls, []);
+});

@@ -122,7 +122,7 @@ class VirtualDesktopBaseOSChart extends VirtualDesktopBaseChart<VirtualDesktopBa
                 innerMetricValue={this.state.total}
                 empty={
                     <Box textAlign="center" color="inherit">
-                        <b>No sessions available</b>
+                        <Box variant="strong">No sessions available</Box>
                         <Box variant="p" color="inherit">
                             There are no sessions available
                         </Box>

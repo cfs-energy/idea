@@ -8,7 +8,17 @@ to ask about whom, which is the whole reason the admin API is a separate class.
 
 from ideaclustermanager.app.api.costs_api import CostsAPI
 from ideaclustermanager.app.api.my_costs_api import MyCostsAPI
-from ideadatamodel import exceptions, GetMyCostsSummaryResult, ListUserCostsResult
+from unittest.mock import Mock
+from ideadatamodel import (
+    exceptions,
+    GetMyCostsResult,
+    GetMyCostsSummaryResult,
+    ListUserCostsResult,
+    MyCostsAmount,
+    MyCostsMonth,
+    MyCostsStorageShare,
+    UserCosts,
+)
 
 import pytest
 
@@ -139,6 +149,56 @@ def test_get_user_summary_requires_a_username():
         api.invoke(context)
 
 
+def test_list_user_costs_adds_cached_shared_storage_to_each_row():
+    api, _ = build_costs_api()
+    api.my_costs.list_user_costs = lambda: ListUserCostsResult(
+        listing=[UserCosts(username='user-a', total_cost=4.0)]
+    )
+    api.monthly_costs = Mock()
+    api.monthly_costs.get_costs.return_value = GetMyCostsResult(
+        currency='USD',
+        state='ready',
+        current=MyCostsMonth(
+            start_date='2026-09-01',
+            end_date='2026-09-22',
+            incomplete=False,
+            jobs=MyCostsAmount(status='ready'),
+            desktops=MyCostsAmount(status='ready'),
+            desktop_disks=MyCostsAmount(status='ready'),
+            shared_storage=MyCostsAmount(cost=2.5, status='ready'),
+            ai=MyCostsAmount(status='ready'),
+            storage=[
+                MyCostsStorageShare(
+                    filesystem='shared', used_bytes=3 * 1024**3, status='ready'
+                )
+            ],
+        ),
+    )
+    context = FakeApiInvocationContext('Costs.ListUserCosts', 'admin', elevated=True)
+
+    api.invoke(context)
+
+    row = context.response_payload.listing[0]
+    assert row.storage_cost == 2.5
+    assert row.storage_gb == 3.0
+    assert row.total_cost == 6.5
+
+
+def test_get_user_costs_uses_the_personal_billboard_service_for_the_named_user():
+    api, _ = build_costs_api()
+    api.monthly_costs = Mock()
+    api.monthly_costs.get_costs.return_value = GetMyCostsResult(
+        currency='USD', state='ready'
+    )
+    context = FakeApiInvocationContext(
+        'Costs.GetUserCosts', 'admin', {'username': 'user-b'}, elevated=True
+    )
+
+    api.invoke(context)
+
+    api.monthly_costs.get_costs.assert_called_once_with('user-b')
+
+
 def test_costs_api_rejects_an_unknown_namespace():
     api, _ = build_costs_api()
     context = FakeApiInvocationContext('Costs.Whatever', 'admin', elevated=True)
@@ -188,3 +248,25 @@ def test_my_costs_rejects_a_user_who_is_not_in_the_module_group():
         api.invoke(context)
 
     assert service.summary_calls == []
+
+
+def test_monthly_costs_uses_token_identity_even_with_a_username_in_payload():
+    api, _ = build_my_costs_api()
+    from unittest.mock import Mock
+
+    api.monthly_costs = Mock()
+    invocation = FakeApiInvocationContext(
+        'MyCosts.GetCosts', 'user-a', {'username': 'user-b'}
+    )
+    api.invoke(invocation)
+    api.monthly_costs.get_costs.assert_called_once_with('user-a')
+
+
+def test_monthly_costs_requires_authorized_membership():
+    api, _ = build_my_costs_api()
+    with pytest.raises(Exception):
+        api.invoke(
+            FakeApiInvocationContext(
+                'MyCosts.GetCosts', 'user-a', authorized_user=False
+            )
+        )

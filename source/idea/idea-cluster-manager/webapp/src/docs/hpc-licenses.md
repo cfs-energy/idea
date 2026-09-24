@@ -1,4 +1,6 @@
-## License Resources
+## Manage jobs
+
+### Licenses
 
 Create scheduler resources for your floating/network licenses.
 

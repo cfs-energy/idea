@@ -214,3 +214,8 @@ source/idea/idea-cluster-manager/tests/*.db
 
 # DynamoDB Local metadata written by the test suites
 **/dynamodb-local-metadata.json
+
+# Local renders and captures of the administration tool
+source/idea/ideactl/out/
+source/idea/ideactl/tools/parity/fixtures
+source/idea/ideactl/tools/parity/live

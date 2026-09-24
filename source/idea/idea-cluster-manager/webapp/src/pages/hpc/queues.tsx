@@ -18,7 +18,7 @@ import {SchedulerAdminClient} from "../../client";
 import {AppContext} from "../../common";
 import {HpcQueueProfile} from '../../client/data-model'
 import IdeaSplitPanel from "../../components/split-panel";
-import {TableProps} from "@cloudscape-design/components/table/interfaces";
+import {TableProps} from "@cloudscape-design/components/table";
 import Utils from "../../common/utils";
 import {ColumnLayout, StatusIndicator, Tabs} from "@cloudscape-design/components";
 import {KeyValue, KeyValueGroup} from "../../components/key-value";
@@ -92,23 +92,10 @@ export const HPC_QUEUE_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<Hpc
             if (!queue.enabled) {
                 return '-'
             }
-            let color
             const status = queue.status!
-            let displayStatus
-            if (status === 'idle') {
-                color = '#c77405'
-                displayStatus = 'Idle'
-            } else if (status === 'active') {
-                color = 'green'
-                displayStatus = 'Active'
-            } else {
-                color = 'red'
-                displayStatus = 'Blocked'
-            }
-            return (<b style={{
-                color: color,
-                fontSize: "small"
-            }}>{displayStatus}</b>)
+            if (status === 'active') return <StatusIndicator type="success">Active</StatusIndicator>
+            if (status === 'idle') return <StatusIndicator type="pending">Idle</StatusIndicator>
+            return <StatusIndicator type="error">Blocked</StatusIndicator>
         },
         sortingComparator: (a, b) => {
             // Status priority: active (highest), idle, blocked (lowest)
@@ -179,7 +166,7 @@ class Queues extends Component<QueuesProps, QueuesState> {
                 ref={this.listing}
                 preferencesKey={'queues'}
                 showPreferences={false}
-                title="Queue Profiles"
+                title="Queues"
                 description="Scale-Out Queue Management"
                 selectionType="single"
                 primaryAction={{
@@ -445,7 +432,7 @@ class Queues extends Component<QueuesProps, QueuesState> {
                         href: '#/'
                     },
                     {
-                        text: 'Scale-Out Computing',
+                        text: 'Manage jobs',
                         href: '#/soca/active-jobs'
                     },
                     {

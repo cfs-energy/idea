@@ -137,7 +137,12 @@ The available checks are:
 - `scheduler-image-upgrade`, run the operator's own upgrade command (`--upgrade-command`, through
   `sh -c`) while a witnessed job runs, then apply the scheduler-replacement proof to it. This is
   the check for the routine upgrade path: a new image tag rolled through `upgrade-cluster` must not
-  requeue a running job.
+  requeue a running job. Supply `--gateway-host` as well: the check polls the portal page and API,
+  scheduler API, and gateway TLS endpoint every second while the command runs, reporting sample
+  counts, failures, and `longest_gap_ms` per endpoint. Portal or gateway failures fail the check;
+  the single scheduler's interruption is measured and its recovery and job survival remain required.
+  A one-second probe timeout counts as a failure. These observations do not measure desktop stream
+  continuity; the desktop and task-kill checks cover that separately.
 - `job-burst`, submit concurrent short jobs and verify their exit statuses.
 - `api-load`, run `load-api.ts` and enforce its p95 and error thresholds.
 - `gateway-load`, run `load-gateway.ts` and enforce its handshake and failure thresholds.

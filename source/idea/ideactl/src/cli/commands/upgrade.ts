@@ -241,8 +241,30 @@ export interface SchedulerJobsApi {
   activeJobs(input: { awsRegion: string; instanceId: string }): Promise<SchedulerJobInventory>;
 }
 
+export interface ContainerHost {
+  arn: string;
+  instanceId: string;
+  status: string;
+  runningTasks: number;
+  registeredAt?: string;
+}
+
+/** The container host group behind a cluster's capacity provider. */
+export interface ContainerHostsApi {
+  hostGroup(input: { awsRegion: string; capacityProvider: string }): Promise<{ name: string; minSize: number; desiredCapacity: number; instanceIds: string[] }>;
+  containerInstances(input: { awsRegion: string; cluster: string }): Promise<ContainerHost[]>;
+  drain(input: { awsRegion: string; cluster: string; arn: string }): Promise<void>;
+  /** Put a host back in service after a drain that could not empty it. */
+  activate(input: { awsRegion: string; cluster: string; arn: string }): Promise<void>;
+  /** Poll until the host runs no tasks; false when the wait runs out. */
+  waitUntilEmpty(input: { awsRegion: string; cluster: string; arn: string; timeoutMs: number }): Promise<boolean>;
+  /** Clear scale-in protection on the empty host and shrink the group so it is the one removed. */
+  release(input: { awsRegion: string; name: string; instanceId: string; desiredCapacity: number }): Promise<void>;
+}
+
 export interface UpgradeDeps extends ConfigDriftPreviewDeps {
   ec2: UpgradeEc2Api;
+  containerHosts?: ContainerHostsApi;
   ecsAccountSettings?: EcsAccountSettingsApi;
   cloudFormation: UpgradeCloudFormationApi;
   openSearch: UpgradeOpenSearchApi;
@@ -258,6 +280,7 @@ export interface UpgradeCommandOptions {
   awsRegion: string;
   awsProfile?: string;
   terminationProtection?: string | boolean;
+  keepBorrowedHosts?: boolean;
   deploymentId?: string;
   baseOs?: string;
   forceBuildBootstrap?: boolean;
@@ -317,6 +340,53 @@ function toModuleInfo(row: Record<string, unknown>): ModuleInfo | undefined {
   const name = valueAsString(row["name"]);
   const type = valueAsString(row["type"]);
   return moduleId === "" || name === "" || type === "" ? undefined : { ...row, module_id: moduleId, name, type };
+}
+
+function settingString(rows: readonly Record<string, unknown>[], key: string): string | undefined {
+  const value = rows.find((entry) => entry["key"] === key)?.["value"];
+  return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+/**
+ * Give back the host the upgrade borrowed. Services roll with more tasks than they keep, so the
+ * host group grows past its minimum; managed scaling only removes an empty host and nothing moves
+ * tasks off one by itself. Drain the newest extra host, wait for it to empty, then shrink the group
+ * with that host unprotected so it is the one removed.
+ */
+export async function returnBorrowedHosts(
+  deps: UpgradeDeps,
+  options: Pick<UpgradeCommandOptions, "clusterName" | "awsRegion">,
+  rows?: readonly Record<string, unknown>[],
+): Promise<void> {
+  const hostsApi = deps.containerHosts;
+  if (hostsApi === undefined) return;
+  const settings = rows ?? await scanAll(deps, `${options.clusterName}.cluster-settings`);
+  const cluster = settingString(settings, "ecs.cluster_name");
+  const capacityProvider = settingString(settings, "ecs.capacity_provider");
+  if (cluster === undefined || capacityProvider === undefined) return;
+  const group = await hostsApi.hostGroup({ awsRegion: options.awsRegion, capacityProvider });
+  const extra = group.instanceIds.length - group.minSize;
+  if (extra <= 0) {
+    deps.out(`Host group ${group.name} holds ${group.instanceIds.length} hosts at its minimum; nothing to return`);
+    return;
+  }
+  const hosts = (await hostsApi.containerInstances({ awsRegion: options.awsRegion, cluster }))
+    .filter((host) => host.status === "ACTIVE" && group.instanceIds.includes(host.instanceId))
+    .sort((a, b) => (b.registeredAt ?? "").localeCompare(a.registeredAt ?? "") || a.runningTasks - b.runningTasks);
+  let desired = group.instanceIds.length;
+  for (const host of hosts.slice(0, extra)) {
+    deps.out(`Returning borrowed host ${host.instanceId} (${host.runningTasks} tasks): draining`);
+    await hostsApi.drain({ awsRegion: options.awsRegion, cluster, arn: host.arn });
+    const empty = await hostsApi.waitUntilEmpty({ awsRegion: options.awsRegion, cluster, arn: host.arn, timeoutMs: 15 * 60_000 });
+    if (!empty) {
+      await hostsApi.activate({ awsRegion: options.awsRegion, cluster, arn: host.arn });
+      deps.out(`warning: ${host.instanceId} still ran tasks after 15 minutes and is back in service; its tasks found no room elsewhere. Run return-hosts later.`);
+      return;
+    }
+    desired -= 1;
+    await hostsApi.release({ awsRegion: options.awsRegion, name: group.name, instanceId: host.instanceId, desiredCapacity: desired });
+    deps.out(`Returned ${host.instanceId}; host group ${group.name} desired capacity is now ${desired}`);
+  }
 }
 
 async function scanAll(deps: Deps, tableName: string): Promise<Array<Record<string, unknown>>> {
@@ -622,13 +692,26 @@ function moduleSetEntryModule(key: string): string | undefined {
   return parts[0] === "global-settings" && parts[1] === "module_sets" && parts.length >= 5 ? parts[3] : undefined;
 }
 
-// Settings can reach the target release before its service stabilizes.
-// Only a completed stack carrying the target release tag can advertise the new module.
+/** The first release whose cluster-manager resolves the container module in its module table. */
+export const MODULE_TABLE_KNOWS_ECS_FROM = "26.09.1";
+
+// The portal resolves every advertised module through its deployed application's module table.
+// A cluster-manager from before the container release cannot resolve the new module, so its row
+// waits until the stack has completed on the target release. One that already knows the module
+// keeps the row for the whole run: holding it back from a portal that depends on it takes every
+// page down for the length of the upgrade.
 async function clusterManagerReady(deps: UpgradeDeps, options: UpgradeCommandOptions, modules: ModuleInfo[]): Promise<boolean> {
   const settings = await scanAll(deps, `${options.clusterName}.cluster-settings`);
   const id = maintenanceModuleId(settings, options.moduleSet);
   const portal = modules.find((module) => module.module_id === id);
-  if (portal?.status !== "deployed" || portal.version !== ideaVersion()) return false;
+  if (portal?.status !== "deployed") return false;
+  const deployed = typeof portal.version === "string" ? portal.version.trim() : "";
+  const knows = compareIdeaRelease(deployed, MODULE_TABLE_KNOWS_ECS_FROM);
+  // A row already at the target release may have advanced ahead of a stack that never completed,
+  // so only a completed stack carrying the tag proves that one; any earlier container release
+  // was reached by a completed run and its application resolves the module.
+  if (knows !== undefined && knows >= 0 && deployed !== ideaVersion()) return true;
+  if (deployed !== ideaVersion()) return false;
   const stack = await deps.cfn.describeStack(portal.stack_name ?? `${options.clusterName}-${id}`);
   return ["CREATE_COMPLETE", "UPDATE_COMPLETE"].includes(stack.StackStatus ?? "")
     && stack.Tags?.some((tag) => tag.Key === "idea:ModuleVersion" && tag.Value === ideaVersion()) === true;
@@ -652,6 +735,27 @@ async function announceHeldModuleSets(
   await writer.syncClusterSettingsInDb(held, false);
 }
 
+// Global rows are rewritten in place so a running application never sees a missing row; the rows
+// this release no longer generates are removed only once every stack has deployed and nothing
+// running reads them. The writer deletes by prefix, so a key that prefixes another current key is
+// left alone and named.
+async function removeObsoleteGlobalSettings(deps: UpgradeDeps, options: UpgradeCommandOptions, configDir: string): Promise<void> {
+  if (!existsSync(join(configDir, "idea.yml"))) return;
+  const generated = new Set(convertConfigToKeyValuePairs(configDir, "global-settings").map((entry) => entry.key));
+  const current = (await scanAll(deps, `${options.clusterName}.cluster-settings`)).map((row) => String(row["key"]));
+  const obsolete = current.filter((key) => key.startsWith("global-settings.") && !generated.has(key)).sort();
+  if (obsolete.length === 0) return;
+  const writer = await deps.configWriter({ clusterName: options.clusterName, awsRegion: options.awsRegion, awsProfile: options.awsProfile });
+  for (const key of obsolete) {
+    if (current.some((other) => other !== key && other.startsWith(key))) {
+      deps.out(`${key} is no longer generated but prefixes another row; left in place`);
+      continue;
+    }
+    await writer.deleteConfigEntries(key);
+    deps.out(`removed ${key}: no longer generated by this release`);
+  }
+}
+
 async function backupAndUpdateGlobalSettings(deps: UpgradeDeps, options: UpgradeCommandOptions, modules: ModuleInfo[]): Promise<string> {
   const regionDir = join(valuesFilePath(options.clusterName, options.awsRegion), "..");
   const configDir = join(regionDir, "config");
@@ -672,16 +776,20 @@ async function backupAndUpdateGlobalSettings(deps: UpgradeDeps, options: Upgrade
   const ownerKey = `global-settings.module_sets.${options.moduleSet}.cluster-manager.module_id`;
   const ownerId = maintenanceModuleId(settings, options.moduleSet);
   const generated = convertConfigToKeyValuePairs(configDir, "global-settings");
-  // Template defaults must not redirect the maintenance owner during the cutover.
+  // Template defaults must not redirect a running application to a different module id.
   // Keeping its selected mapping also lets a retry find the durable baseline.
-  const entries = generated.filter((entry) => entry.key !== ownerKey);
+  const moduleIds = new Map(settings.filter((row) => moduleSetEntryModule(String(row["key"])) !== undefined && String(row["key"]).endsWith(".module_id"))
+    .map((row) => [String(row["key"]), row["value"]]));
+  const entries = generated.filter((entry) => entry.key !== ownerKey).map((entry) =>
+    moduleIds.has(entry.key) ? { ...entry, value: moduleIds.get(entry.key) } : entry);
   entries.push({ key: ownerKey, value: ownerId });
-  // Global replacement briefly removes the module-set owner needed by failure recovery.
-  // Save that mapping outside the deleted namespace so a retry can still find maintenance.
+  // Keep the maintenance owner durable across retries of older interrupted upgrades.
   const savedOwners = asRecord(settings.find((entry) => entry["key"] === "cluster.upgrade_module_set_owners")?.["value"]);
   const owners = { ...savedOwners, ...Object.fromEntries(settings.filter((entry) => valueAsString(entry["key"]).startsWith("global-settings.module_sets.") && valueAsString(entry["key"]).endsWith(".cluster-manager.module_id")).map((entry) => [String(entry["key"]), entry["value"]])) };
   await writer.setConfigEntry("cluster.upgrade_module_set_owners", owners);
-  await writer.deleteConfigEntries("global-settings.");
+  // Update rows in place. Running applications resolve module sets and global settings on
+  // requests; deleting the prefix exposes missing configuration even when the rewrite succeeds.
+  // Retain obsolete rows for old tasks and scoped upgrades that leave some modules untouched.
   await writer.syncClusterSettingsInDb(heldModuleSetEntries(entries, portalReady).kept, true);
   return configDir;
 }
@@ -840,12 +948,14 @@ export async function planUpgradePhase3Entries(
   settings: readonly CurrentConfigRow[],
   amiId: string,
   baseOs: string,
+  releaseVersion: string = ideaVersion(),
 ): Promise<ConfigEntry[]> {
   const keepKeys = await computeAmiKeepKeys(deps, options, modules, amiId, settings);
   return [
     ...buildAmiUpdateEntries(amiId, baseOs, modules, keepKeys),
     ...await planModuleHostInstanceTypes(deps, options, modules, settings),
     ...await planOpenSearchDataNodeInstanceType(deps, options, modules, settings),
+    ...planEcsImageFollowsRelease(settings, releaseVersion),
   ];
 }
 
@@ -876,6 +986,29 @@ export function planMetricsProviderCutover(
   return entries;
 }
 
+/** A release tag as the release pipeline publishes it: two-digit year, month, patch. */
+const RELEASE_IMAGE_TAG = /^\d{2}\.\d{2}\.\d+$/;
+
+/**
+ * Plan the image row's move to the release being installed. The row is add-only for the sync, so
+ * a routine upgrade would otherwise deploy the new templates on the previous image. Only a row
+ * that names this partition's release repository at an older release tag moves; a private
+ * registry, a digest-qualified reference, a build tag or a newer tag is the operator's and stays.
+ */
+export function planEcsImageFollowsRelease(
+  current: readonly CurrentConfigRow[],
+  releaseVersion: string,
+): ConfigEntry[] {
+  const rows = new Map(current.map((entry) => [entry.key, entry.value]));
+  const image = rows.get("ecs.image");
+  const repository = rows.get("ecs.image_repositories.aws");
+  if (typeof image !== "string" || typeof repository !== "string" || repository === "") return [];
+  if (!image.startsWith(`${repository}:`)) return [];
+  const tag = image.slice(repository.length + 1);
+  if (!RELEASE_IMAGE_TAG.test(tag) || (compareIdeaRelease(tag, releaseVersion) ?? 0) >= 0) return [];
+  return [{ key: "ecs.image", value: `${repository}:${releaseVersion}` }];
+}
+
 /** Apply the already previewed Phase 3 plan without recalculating it after approval. */
 async function applyPhase3Entries(
   writer: Awaited<ReturnType<UpgradeDeps["configWriter"]>>,
@@ -886,7 +1019,9 @@ async function applyPhase3Entries(
   const previous = new Map(current.map((entry) => [entry.key, entry.value]));
   for (const entry of entries) {
     await writer.setConfigEntry(entry.key, entry.value);
-    if (entry.key === "metrics.provider") {
+    if (entry.key === "ecs.image") {
+      out(`${entry.key} moves from ${String(previous.get(entry.key) ?? "(unset)")} to ${String(entry.value)}; every task rolls to the release image`);
+    } else if (entry.key === "metrics.provider") {
       out(`${entry.key} moves from ${String(previous.get(entry.key) ?? "(unset)")} to ${String(entry.value)}; the modules send to the agent daemon once they run as tasks`);
     } else if (entry.value === MODULE_HOST_INSTANCE_TYPE && previous.get(entry.key) === MODULE_HOST_INSTANCE_TYPE_OLD) {
       out(`${entry.key} moves from ${MODULE_HOST_INSTANCE_TYPE_OLD} to ${MODULE_HOST_INSTANCE_TYPE}; the host runs it when the instance is next replaced`);
@@ -1440,7 +1575,7 @@ async function verifyUpgradeCompletion(
   const current = new Map((await scanAll(deps, `${options.clusterName}.cluster-settings`)).map((row) => [String(row["key"]), row["value"]]));
   const published = new Set(drift.current.filter((row) => row.source === "stack").map((row) => row.key));
   const checkpoints = new Set(modules.filter((module) => module.name === "cluster-manager").flatMap((module) =>
-    ["metrics.cost.last_collected", "metrics.storage.last_collected", "accounts.reconcile.last_completed"].map((key) => `${module.module_id}.${key}`)));
+    ["metrics.cost.last_collected", "metrics.storage.last_collected", "metrics.storage.usage_snapshot", "accounts.reconcile.last_completed"].map((key) => `${module.module_id}.${key}`)));
   for (const [key, value] of expected) {
     // Application checkpoints can advance while deployment runs; configuration cannot.
     if (!published.has(key) && checkpoints.has(key)) continue;
@@ -1686,6 +1821,7 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
     };
     await deps.deploy(deployment);
     await announceHeldModuleSets(deps, options, configDir);
+    if (options.skipGlobalSettingsUpdate !== true) await removeObsoleteGlobalSettings(deps, options, configDir);
     let restore = cleared;
     try {
       restore = [...new Map([...cleared, ...await moduleInstances(deps, options)].map((instance) => [instance.instanceId, instance])).values()];
@@ -1701,6 +1837,13 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
     await verifyUpgradeCompletion(deps, options, [...expectedModules.values()], expected, driftInput, historical, cutoverHost !== undefined);
     await saveValuesFile(deps, options);
     await restoreSubmission(deps, options);
+    if (!historical && options.keepBorrowedHosts !== true) {
+      try {
+        await returnBorrowedHosts(deps, options);
+      } catch (error) {
+        deps.out(`warning: could not return a borrowed host: ${(error as Error).message}. Run return-hosts later.`);
+      }
+    }
     await (await deps.configWriter(options)).deleteConfigEntries("cluster.upgrade_module_set_owners");
     if (historical) await (await deps.configWriter(options)).deleteConfigEntries("cluster.upgrade_historical_pending");
     deps.out("All upgrade phases completed successfully");
@@ -1723,6 +1866,7 @@ export function registerUpgradeCommands(program: Command, deps: UpgradeDeps): vo
     .requiredOption("--aws-region <aws-region>", "AWS Region")
     .option("--aws-profile <aws-profile>", "AWS Profile Name")
     .option("--termination-protection <termination-protection>", "Set termination protection to true or false. Default: true", "true")
+    .option("--keep-borrowed-hosts", "Leave a container host the upgrade added beyond the host group minimum in service.")
     .option("--deployment-id <deployment-id>", "A UUID to identify the deployment.")
     .option("--base-os <base-os>", "Base OS to upgrade to.")
     .option("--force-build-bootstrap", "Render bootstrap packages again.")
@@ -1748,6 +1892,15 @@ export function registerUpgradeCommands(program: Command, deps: UpgradeDeps): vo
     .argument("[modules...]", "module ids")
     .action(async (modules: string[], commandOptions: UpgradeCommandOptions) => {
       await upgradeCluster(deps, { ...commandOptions, modules });
+    });
+  program
+    .command("return-hosts")
+    .description("drain and remove a container host the host group holds beyond its minimum")
+    .requiredOption("--cluster-name <cluster-name>", "Cluster Name")
+    .requiredOption("--aws-region <aws-region>", "AWS Region")
+    .option("--aws-profile <aws-profile>", "AWS Profile Name")
+    .action(async (options: Pick<UpgradeCommandOptions, "clusterName" | "awsRegion" | "awsProfile">) => {
+      await returnBorrowedHosts(deps, options);
     });
 }
 
@@ -1816,6 +1969,73 @@ export function liveSchedulerJobs(sleep: (ms: number) => Promise<void>): Schedul
 
 export function createLiveUpgradeDeps(deps: Deps): UpgradeDeps {
   const ecsAccountSettings = liveEcsAccountSettings();
+  const containerHosts: ContainerHostsApi = {
+    async hostGroup(input) {
+      const { DescribeCapacityProvidersCommand, ECSClient } = await import("@aws-sdk/client-ecs");
+      const { AutoScalingClient, DescribeAutoScalingGroupsCommand } = await import("@aws-sdk/client-auto-scaling");
+      const providers = await new ECSClient(await awsClientOptions(input.awsRegion)).send(
+        new DescribeCapacityProvidersCommand({ capacityProviders: [input.capacityProvider] }),
+      );
+      const arn = providers.capacityProviders?.[0]?.autoScalingGroupProvider?.autoScalingGroupArn;
+      if (arn === undefined) throw new GeneralException(`capacity provider ${input.capacityProvider} has no host group`);
+      const name = arn.slice(arn.lastIndexOf("/") + 1);
+      const groups = await new AutoScalingClient(await awsClientOptions(input.awsRegion)).send(
+        new DescribeAutoScalingGroupsCommand({ AutoScalingGroupNames: [name] }),
+      );
+      const group = groups.AutoScalingGroups?.[0];
+      if (group === undefined) throw new GeneralException(`host group ${name} was not found`);
+      return {
+        name,
+        minSize: group.MinSize ?? 0,
+        desiredCapacity: group.DesiredCapacity ?? 0,
+        instanceIds: (group.Instances ?? []).filter((i) => i.LifecycleState === "InService").map((i) => i.InstanceId ?? "").filter(Boolean),
+      };
+    },
+    async containerInstances(input) {
+      const { DescribeContainerInstancesCommand, ECSClient, ListContainerInstancesCommand } = await import("@aws-sdk/client-ecs");
+      const client = new ECSClient(await awsClientOptions(input.awsRegion));
+      const arns = (await client.send(new ListContainerInstancesCommand({ cluster: input.cluster }))).containerInstanceArns ?? [];
+      if (arns.length === 0) return [];
+      const described = await client.send(new DescribeContainerInstancesCommand({ cluster: input.cluster, containerInstances: arns }));
+      return (described.containerInstances ?? []).map((host) => ({
+        arn: host.containerInstanceArn ?? "",
+        instanceId: host.ec2InstanceId ?? "",
+        status: host.status ?? "",
+        runningTasks: host.runningTasksCount ?? 0,
+        registeredAt: host.registeredAt?.toISOString(),
+      }));
+    },
+    async drain(input) {
+      const { ECSClient, UpdateContainerInstancesStateCommand } = await import("@aws-sdk/client-ecs");
+      await new ECSClient(await awsClientOptions(input.awsRegion)).send(
+        new UpdateContainerInstancesStateCommand({ cluster: input.cluster, containerInstances: [input.arn], status: "DRAINING" }),
+      );
+    },
+    async activate(input) {
+      const { ECSClient, UpdateContainerInstancesStateCommand } = await import("@aws-sdk/client-ecs");
+      await new ECSClient(await awsClientOptions(input.awsRegion)).send(
+        new UpdateContainerInstancesStateCommand({ cluster: input.cluster, containerInstances: [input.arn], status: "ACTIVE" }),
+      );
+    },
+    async waitUntilEmpty(input) {
+      const { DescribeContainerInstancesCommand, ECSClient } = await import("@aws-sdk/client-ecs");
+      const client = new ECSClient(await awsClientOptions(input.awsRegion));
+      const deadline = Date.now() + input.timeoutMs;
+      do {
+        const described = await client.send(new DescribeContainerInstancesCommand({ cluster: input.cluster, containerInstances: [input.arn] }));
+        const host = described.containerInstances?.[0];
+        if ((host?.runningTasksCount ?? 0) === 0 && (host?.pendingTasksCount ?? 0) === 0) return true;
+        await new Promise((resolve) => setTimeout(resolve, 15_000));
+      } while (Date.now() < deadline);
+      return false;
+    },
+    async release(input) {
+      const { AutoScalingClient, SetDesiredCapacityCommand, SetInstanceProtectionCommand } = await import("@aws-sdk/client-auto-scaling");
+      const client = new AutoScalingClient(await awsClientOptions(input.awsRegion));
+      await client.send(new SetInstanceProtectionCommand({ AutoScalingGroupName: input.name, InstanceIds: [input.instanceId], ProtectedFromScaleIn: false }));
+      await client.send(new SetDesiredCapacityCommand({ AutoScalingGroupName: input.name, DesiredCapacity: input.desiredCapacity, HonorCooldown: false }));
+    },
+  };
   const ec2: UpgradeEc2Api = {
     async describeImages(input) {
       const { DescribeImagesCommand, EC2Client } = await import("@aws-sdk/client-ec2");
@@ -1894,6 +2114,7 @@ export function createLiveUpgradeDeps(deps: Deps): UpgradeDeps {
     ...deps,
     ec2,
     ecsAccountSettings,
+    containerHosts,
     schedulerJobs: liveSchedulerJobs(deps.sleep),
     async historicalIam(roleName, policyName, options, ownsPolicy) {
       const { IAMClient, GetAccountSummaryCommand, ListAttachedRolePoliciesCommand, ListRolePoliciesCommand, ListPoliciesCommand } = await import("@aws-sdk/client-iam");

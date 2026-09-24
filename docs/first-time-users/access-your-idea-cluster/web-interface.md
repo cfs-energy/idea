@@ -2,24 +2,23 @@
 
 IDEA includes a web-interface designed to simplify user-experience for your end-users.
 
-<figure><img src="../../.gitbook/assets/ftu_access_web_interface.webp" alt=""><figcaption><p>IDEA interface</p></figcaption></figure>
+The header contains the customizable cluster logo and name, the user menu, notifications, and the help toggle. Use the user menu to view account information, change preferences, or reset your password.
 
-<mark style="color:red;">**Red**</mark>: Logo/Cluster (can be customized)
+The sidebar starts with personal tasks: **My desktops**, **My jobs**, **Files**, **SSH access**, **My costs**, and **Reports**. Items appear only when the corresponding module or report is available to you. **My account** remains in the header menu.
 
-<mark style="color:blue;">**Light Blue**</mark>: User Menu.Options may vary based on the module(s) installed on your environment. For example, "Virtual Desktops" is not visible if you do not have installed [virtual-desktop-interfaces](../../modules/virtual-desktop-interfaces/ "mention") module
+Administrators have one collapsible **Administration** section. It groups tasks under **Manage desktops**, **Manage jobs**, **Images and applications**, **Projects**, **People and access**, **Costs and usage**, **Operations**, and **Settings**. The available tasks depend on your administrative access and installed modules.
 
-<mark style="color:blue;">**Dark Blue**</mark>: Page content
+| Destination | Tabs |
+| --- | --- |
+| My desktops | Owned, Shared |
+| My jobs | Active, Completed |
+| Manage desktops | Overview, Sessions, Diagnostics |
+| Manage jobs | Active, Completed, Queues, Licenses, Nodes |
+| Images and applications | Desktop images, Custom images, Submission forms |
+| People and access | Users, Groups, Desktop permissions, Reconciliation runs |
+| Costs and usage | By user, AI |
+| Operations | Health, Desktop services, Job service |
 
-<mark style="color:orange;">**Orange**</mark>: Admin Zone. This section is only visible to users with admin privileges
+Breadcrumbs start with the destination, followed by the selected tab where applicable. Detail pages add their own final breadcrumb. **Settings** keeps a single breadcrumb and groups its content on one searchable page. See [Settings](../cluster-operations/settings.md) for the groups and save controls.
 
-<mark style="color:green;">**Green**</mark>:  [Modules](https://app.gitbook.com/s/f38qThSa0Aa40txosxbS/modules "mention") section displaying installed/available modules such as:
-
-* [hpc-workloads](../../modules/hpc-workloads/ "mention")
-* [virtual-desktop-interfaces](../../modules/virtual-desktop-interfaces/ "mention")
-* [cluster-manager](../../modules/cluster-manager/ "mention")
-
-Refer to the [Modules](https://app.gitbook.com/s/f38qThSa0Aa40txosxbS/modules "mention") for an up-to-date list of modules supported by IDEA
-
-<mark style="color:yellow;">**Yellow**</mark>: User settings and notifications. View account info, change IDEA preferences, reset your password and more.
-
-<mark style="color:purple;">**Purple**</mark>: Help section. You can hide/show this section as needed by clicking on the toggle button
+Custom images builds and adopts both job and desktop images at `/soca/custom-amis`. Desktop images manages the desktop catalog and project access.

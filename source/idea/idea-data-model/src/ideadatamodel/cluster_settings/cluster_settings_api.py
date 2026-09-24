@@ -10,12 +10,20 @@
 #  and limitations under the License.
 
 __all__ = (
+    'DescribeSettingsCatalogRequest',
+    'DescribeSettingsCatalogResult',
+    'SettingDefinition',
+    'SettingValidation',
     'ListClusterModulesRequest',
     'ListClusterModulesResult',
     'GetModuleSettingsResult',
     'GetModuleSettingsRequest',
     'UpdateModuleSettingsRequest',
     'UpdateModuleSettingsResult',
+    'ListClusterServicesRequest',
+    'ListClusterServicesResult',
+    'ClusterService',
+    'ClusterServiceTask',
     'ListClusterHostsRequest',
     'ListClusterHostsResult',
     'DescribeInstanceTypesRequest',
@@ -25,8 +33,41 @@ __all__ = (
 
 from ideadatamodel import SocaPayload, SocaListingPayload, IdeaOpenAPISpecEntry
 
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Dict, Literal
 from pydantic import Field
+
+
+class SettingValidation(SocaPayload):
+    required: bool = False
+    minimum: Optional[float] = None
+    maximum: Optional[float] = None
+    pattern: Optional[str] = None
+
+
+class SettingDefinition(SocaPayload):
+    key: str
+    module: str
+    path: str
+    group: str
+    section: str
+    label: str
+    description: str
+    value_type: Literal[
+        'string', 'integer', 'number', 'boolean', 'list', 'enum', 'secret'
+    ]
+    choices: List[str] = Field(default_factory=list)
+    validation: SettingValidation
+    advanced: bool
+    effect: Literal['runtime', 'restart', 'deployment']
+
+
+class DescribeSettingsCatalogRequest(SocaPayload):
+    pass
+
+
+class DescribeSettingsCatalogResult(SocaPayload):
+    settings: List[SettingDefinition]
+
 
 # ClusterSettings.ListClusterModules
 
@@ -60,6 +101,7 @@ class UpdateModuleSettingsRequest(SocaPayload):
 
 class UpdateModuleSettingsResult(SocaPayload):
     success: Optional[bool] = Field(default=True)
+    effects: Dict[str, str] = Field(default_factory=dict)
 
 
 # ClusterSettings.ListClusterHosts
@@ -69,6 +111,32 @@ class ListClusterHostsRequest(SocaListingPayload):
 
 class ListClusterHostsResult(SocaListingPayload):
     listing: Optional[List[Any]] = Field(default=None)
+
+
+class ClusterServiceTask(SocaPayload):
+    task_id: str
+    started_at: Optional[str] = None
+    health: str = 'UNKNOWN'
+
+
+class ClusterService(SocaPayload):
+    name: str
+    desired: int = 0
+    running: int = 0
+    pending: int = 0
+    images: List[str] = Field(default_factory=list)
+    rollout_state: Optional[str] = None
+    updated_at: Optional[str] = None
+    tasks: List[ClusterServiceTask] = Field(default_factory=list)
+
+
+class ListClusterServicesRequest(SocaPayload):
+    pass
+
+
+class ListClusterServicesResult(SocaPayload):
+    listing: List[ClusterService] = Field(default_factory=list)
+    errors: List[str] = Field(default_factory=list)
 
 
 # ClusterSettings.DescribeInstanceTypes
@@ -81,6 +149,20 @@ class DescribeInstanceTypesResult(SocaPayload):
 
 
 OPEN_API_SPEC_ENTRIES_CLUSTER_SETTINGS = [
+    IdeaOpenAPISpecEntry(
+        namespace='ClusterSettings.ListClusterServices',
+        request=ListClusterServicesRequest,
+        result=ListClusterServicesResult,
+        is_listing=False,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='ClusterSettings.DescribeSettingsCatalog',
+        request=DescribeSettingsCatalogRequest,
+        result=DescribeSettingsCatalogResult,
+        is_listing=False,
+        is_public=False,
+    ),
     IdeaOpenAPISpecEntry(
         namespace='ClusterSettings.ListClusterModules',
         request=ListClusterModulesRequest,

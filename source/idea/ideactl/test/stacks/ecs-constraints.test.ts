@@ -192,7 +192,7 @@ test("each service gets a start allowance sized from its own start, not the libr
     START_ALLOWANCE_SECONDS["scheduler"],
     "the scheduler container start period covers its own batch server wait",
   );
-  assert.equal(checked[0]?.["HealthCheck"]["Interval"], 30, "container check interval");
+  assert.equal(checked[0]?.["HealthCheck"]["Interval"], 5, "container check interval");
   assert.equal(checked[0]?.["HealthCheck"]["Retries"], 3, "container check retries");
   assert.ok(
     JSON.stringify(checked[0]).includes("qstat -B && curl"),
@@ -226,6 +226,8 @@ test("every application service rolls its own failed deployment back", async () 
     const deployment = servicesByRole(resourcesOf(all[stack]))[role]?.["Properties"]["DeploymentConfiguration"] as
       | Json
       | undefined;
+    assert.equal(deployment?.["MinimumHealthyPercent"], role === "scheduler" ? 0 : 50, `${role} healthy floor: one replica may stop before the new one places`);
+    assert.equal(deployment?.["MaximumPercent"], role === "scheduler" ? 100 : 150, `${role} surge`);
     assert.deepEqual(
       deployment?.["DeploymentCircuitBreaker"],
       { Enable: true, Rollback: true },
@@ -547,4 +549,29 @@ test("every task definition is retained, observability included", async () => {
   assert.equal(observability.length, 1, "the observability daemon task definition");
   assert.equal(observability[0]?.[1]["DeletionPolicy"], "Retain", "the daemon keeps its revision");
   assert.equal(observability[0]?.[1]["UpdateReplacePolicy"], "Retain", "the daemon keeps it on replacement");
+});
+
+test("application tasks use readiness checks and explicit shutdown allowances", async () => {
+  const all = await stacks();
+  for (const { role, stack } of SERVICES) {
+    const resources = resourcesOf(all[stack]);
+    const task = taskDefinitionOf(resources, role);
+    assert.equal(servicesByRole(resources)[role].Properties.DesiredCount, role === "scheduler" ? 1 : 2, role);
+    const container = (task.Properties.ContainerDefinitions as Json[]).find((entry) => entry.HealthCheck !== undefined);
+    assert.ok(container, `${role} readiness`);
+    assert.equal(container.StopTimeout, 30, role);
+    assert.equal(container.HealthCheck.Interval, 5, role);
+    assert.equal(container.HealthCheck.StartPeriod, START_ALLOWANCE_SECONDS[role], role);
+    const command = JSON.stringify(container.HealthCheck.Command);
+    assert.ok(command.includes(role === "scheduler" ? "Scheduler.ListActiveJobs" : role === "dcv-gateway" ? "/8989" : role === "dcv-broker" ? "/health" : "/healthcheck"), role);
+    if (role === "dcv-broker") for (const port of [8444, 8445, 8446]) assert.ok(command.includes(`:${port}/health`));
+    const service = servicesByRole(resources)[role];
+    for (const target of service.Properties.LoadBalancers as Json[]) {
+      const group = resources[target.TargetGroupArn.Ref].Properties;
+      assert.equal(group.HealthCheckIntervalSeconds, 5, role);
+      assert.equal(group.HealthyThresholdCount, 2, role);
+      assert.equal(group.TargetGroupAttributes.find((entry: Json) => entry.Key === "deregistration_delay.timeout_seconds")?.Value, role === "scheduler" ? "15" : "300", role);
+      assert.equal(group.HealthCheckProtocol, role === "dcv-gateway" ? "TCP" : "HTTPS", role);
+    }
+  }
 });

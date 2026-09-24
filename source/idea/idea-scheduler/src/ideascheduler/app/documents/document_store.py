@@ -490,6 +490,48 @@ class DocumentStore(DocumentStoreProtocol):
             body=body,
         )
 
+    def finished_job_pages(self, start, end, page_size=500):
+        client = self.opensearch_client.os_client
+        scroll_id = None
+        try:
+            response = client.search(
+                index=self._jobs_alias,
+                scroll='15m',
+                size=page_size,
+                body={
+                    'query': {
+                        'bool': {
+                            'filter': [
+                                {'term': {'state': 'finished'}},
+                                {
+                                    'range': {
+                                        'end_time': {
+                                            'gte': start.isoformat(),
+                                            'lt': end.isoformat(),
+                                        }
+                                    }
+                                },
+                            ]
+                        }
+                    },
+                    'sort': [{'end_time': 'asc'}, '_doc'],
+                },
+            )
+            while True:
+                scroll_id = response.get('_scroll_id', scroll_id)
+                if response.get('timed_out') or response.get('_shards', {}).get(
+                    'failed', 0
+                ):
+                    raise RuntimeError('Job history search returned incomplete results')
+                hits = response.get('hits', {}).get('hits', [])
+                if not hits:
+                    break
+                yield [SocaJob(**hit['_source']) for hit in hits]
+                response = client.scroll(scroll_id=scroll_id, scroll='15m')
+        finally:
+            if scroll_id:
+                client.clear_scroll(scroll_id=scroll_id)
+
     def search_jobs(self, options: ListJobsRequest, **kwargs) -> ListJobsResult:
         if not self.is_enabled() or not self.is_initialized():
             return ListJobsResult(

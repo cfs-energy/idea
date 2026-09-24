@@ -610,6 +610,32 @@ class AccountsService:
 
         return self.user_dao.convert_from_db(user)
 
+    def update_my_preferences(self, username: str, landing_page: str = None) -> User:
+        username = AuthUtils.sanitize_username(username)
+        if Utils.is_empty(username):
+            raise exceptions.unauthorized_access()
+        allowed = {
+            None,
+            '',
+            'home',
+            'my-jobs',
+            'my-desktops',
+            'files',
+            'my-costs',
+            'reports',
+        }
+        if landing_page not in allowed:
+            raise exceptions.invalid_params('landing_page is not a portal destination')
+        if self.user_dao.get_user(username) is None:
+            raise exceptions.soca_exception(
+                error_code=errorcodes.AUTH_USER_NOT_FOUND,
+                message=f'User not found: {username}',
+            )
+        updated = self.user_dao.update_user(
+            {'username': username, 'landing_page': landing_page or ''}
+        )
+        return self.user_dao.convert_from_db(updated)
+
     def create_user(self, user: User, email_verified: bool = False) -> User:
         """
         create a new user

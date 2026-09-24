@@ -30,7 +30,7 @@ import urllib3
 PROVIDER = 'fsx_netapp_ontap'
 QUOTA_REPORTS = (
     '/api/storage/quota/reports?return_records=true&max_records=1000'
-    '&fields=svm.name,volume.name,qtree.name,type,users.name,users.id,space.used.total,files.used.total'
+    '&fields=svm.name,volume.name,qtree.name,type,users.name,users.id,space.used.total,space.hard_limit,files.used.total'
 )
 VOLUMES = (
     '/api/storage/volumes?return_records=true&max_records=1000'
@@ -159,7 +159,6 @@ def user_usage(reports: List[Dict]) -> Dict[Tuple[str, str, str, str], Tuple[int
 class StorageMetrics(BaseMetrics):
     def __init__(self, context: SocaContext):
         super().__init__(context, split_dimensions=False)
-        self.with_required_dimension('host', context.cluster_name())
 
     def publish_gauge(self, name: str, value: float, dimensions: Dict[str, str]):
         self.push_dimensions()
@@ -248,9 +247,68 @@ class StorageMetricsService(SocaService):
         self.context = context
         self.logger = context.logger('storage-metrics')
         self._provider_warning_logged = False
+        self._quota_reports = {}
+        self._quota_lock = threading.Lock()
         self._exit = threading.Event()
         self._thread = threading.Thread(
             target=self._loop, name='storage-metrics', daemon=True
+        )
+
+    def get_user_quotas(self, username: str) -> List[Dict]:
+        user = normalize_user(username, None)
+        with self._quota_lock:
+            snapshots = list(self._quota_reports.items())
+        quotas = []
+        for target, (measured_at, reports) in snapshots:
+            for record in reports:
+                if record.get('type') != 'user':
+                    continue
+                if not any(
+                    normalize_user(item.get('name'), item.get('id')) == user
+                    for item in record.get('users', [])
+                ):
+                    continue
+                space = record.get('space', {})
+                quotas.append(
+                    dict(
+                        target=target,
+                        volume=record.get('volume', {}).get('name', ''),
+                        qtree=record.get('qtree', {}).get('name', ''),
+                        used_bytes=space.get('used', {}).get('total', 0),
+                        files=record.get('files', {}).get('used', {}).get('total', 0),
+                        limit_bytes=space.get('hard_limit'),
+                        measured_at=measured_at,
+                    )
+                )
+        return quotas
+
+    def usage_by_filesystem(self):
+        # JSON keeps dots in usernames literal when settings become a configuration tree.
+        snapshots = Utils.from_json(
+            self.context.config().get_string(self._config_key('usage_snapshot'), '{}')
+        )
+        with self._quota_lock:
+            reports = dict(self._quota_reports)
+        for target in self.targets():
+            if target.name not in reports:
+                continue
+            measured_at, records = reports[target.name]
+            users = {}
+            for (_, _, _, user), (used, _) in user_usage(records).items():
+                users[user] = users.get(user, 0) + used
+            snapshots[fs_id_from_host(target.endpoint)] = dict(
+                measured_at=measured_at, users=users
+            )
+        return snapshots
+
+    def has_ontap_storage(self) -> bool:
+        shared_storage = (
+            self.context.config().get_config('shared-storage', default={}) or {}
+        )
+        return any(
+            Utils.get_value_as_string('provider', entry) == PROVIDER
+            for entry in shared_storage.values()
+            if isinstance(entry, dict) or hasattr(entry, 'get')
         )
 
     def service_id(self) -> str:
@@ -376,6 +434,11 @@ class StorageMetricsService(SocaService):
                     )
                     volumes = client.volumes()
                     reports = client.quota_reports()
+                    with self._quota_lock:
+                        self._quota_reports[target.name] = (
+                            arrow.utcnow().timestamp(),
+                            reports,
+                        )
                     published = publish_storage(metrics, client.fs_id, volumes, reports)
                     self.logger.info(
                         f'{target.name}: {published} storage gauges from {len(volumes)} volumes and {len(reports)} quota records'
@@ -386,6 +449,10 @@ class StorageMetricsService(SocaService):
             outbox.save()
             outbox.replay()
             if succeeded and db is not None:
+                db.set_config_entry(
+                    self._config_key('usage_snapshot'),
+                    Utils.to_json(self.usage_by_filesystem()),
+                )
                 db.set_config_entry(checkpoint_key, arrow.utcnow().timestamp())
         finally:
             self.context.distributed_lock().release(key=lock_key)

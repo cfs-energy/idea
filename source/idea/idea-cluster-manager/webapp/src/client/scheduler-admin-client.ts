@@ -11,6 +11,7 @@
  * and limitations under the License.
  */
 
+import {MetricsBackfillStatus} from './metrics-backfill';
 import {
     ListNodesRequest,
     ListNodesResult,
@@ -73,6 +74,14 @@ export interface SchedulerAdminClientProps extends IdeaBaseClientProps {
 }
 
 class SchedulerAdminClient extends IdeaBaseClient<SchedulerAdminClientProps> {
+    backfillJobMetrics(request: {start_date: string; end_date: string; dry_run: boolean}): Promise<MetricsBackfillStatus> {
+        return this.apiInvoker.invoke_alt('SchedulerAdmin.BackfillJobMetrics', request);
+    }
+
+    getJobMetricsBackfill(): Promise<MetricsBackfillStatus> {
+        return this.apiInvoker.invoke_alt('SchedulerAdmin.GetJobMetricsBackfill', {});
+    }
+
 
     getModuleInfo(): Promise<GetModuleInfoRequest> {
         return this.apiInvoker.invoke_alt<GetModuleInfoRequest, GetModuleInfoResult>(

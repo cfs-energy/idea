@@ -1,4 +1,6 @@
-## Queue Profiles
+## Manage jobs
+
+### Queues
 
 Manage your queues and queue profiles.
 Queue profiles can combine multiple queues and use default parameters.

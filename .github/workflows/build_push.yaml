@@ -30,7 +30,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Refuse an existing release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -48,15 +48,15 @@ jobs:
       run:
         working-directory: source/idea/ideactl
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Set up release runtime
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: '26.8.2'
           cache: npm
           cache-dependency-path: source/idea/ideactl/package-lock.json
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: '3.13'
       - name: Check package version
@@ -79,7 +79,7 @@ jobs:
           tar -xzf dist/release/ideactl-v*-${{ matrix.target }}.tar.gz -C "$SMOKE_ROOT"
           node test/support/release-smoke.ts "$SMOKE_ROOT/ideactl"
       - name: Upload the macOS release artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ideactl-${{ matrix.target }}
           path: |
@@ -103,15 +103,15 @@ jobs:
       run:
         working-directory: source/idea/ideactl
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Set up release runtime
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: '26.8.2'
           cache: npm
           cache-dependency-path: source/idea/ideactl/package-lock.json
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: '3.13'
       - name: Check package version
@@ -165,7 +165,7 @@ jobs:
               --force
           test -s "$SMOKE_ROOT/config/config/idea.yml"
       - name: Upload the Linux release artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ideactl-${{ matrix.target }}
           path: |
@@ -181,9 +181,9 @@ jobs:
       run:
         working-directory: source/idea/ideactl
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Set up release runtime
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: '26.8.2'
           cache: npm
@@ -210,7 +210,7 @@ jobs:
             Remove-Item -Recurse -Force $smokeRoot
           }
       - name: Upload the Windows release artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ideactl-windows-amd64
           path: |
@@ -234,7 +234,7 @@ jobs:
             echo "::error::A dispatch from $GITHUB_REF_NAME must set control_plane_image_name, or it would overwrite released images from an unmerged ref."
             exit 1
           fi
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Check version consistency
         run: |
           SH_REV=$(grep -m1 '^IDEA_REVISION=' idea-admin.sh | sed -E 's/.*:-"([^"]+)"\}.*/\1/')
@@ -252,7 +252,7 @@ jobs:
       - name: Build Modules
         uses: ./.github/actions/build_modules
       - name: Configure AWS Credentials for ECR Push
-        uses: aws-actions/configure-aws-credentials@v6
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6
         with:
           audience: sts.amazonaws.com
           aws-region: us-east-1
@@ -362,9 +362,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Download release artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: ideactl-*
           path: release

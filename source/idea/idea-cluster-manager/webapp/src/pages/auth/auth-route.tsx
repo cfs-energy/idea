@@ -1,3 +1,6 @@
+import {Alert} from '@cloudscape-design/components';
+import {AppContext} from '../../common';
+import {hasAccess, permittedViews, resolveTask} from '../../navigation/task-navigation';
 /*
  * Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
  *
@@ -31,6 +34,11 @@ class IdeaAuthenticatedRoute extends Component<IdeaAuthRouteProps> {
             if (isAuthRoute) {
                 return <Navigate to='/'/>
             } else {
+                const resolved = resolveTask(this.props.location.pathname, this.props.location.search)
+                const viewAccess = resolved && (Array.isArray(resolved.view.access) ? resolved.view.access : [resolved.view.access]);
+                if (resolved && !(resolved.task.id === 'settings' ? permittedViews(resolved.task, AppContext.get()).length : viewAccess?.some(access => hasAccess(AppContext.get(), access)))) {
+                    return <Alert type="warning" header="Destination unavailable">This destination requires module access and a deployed module.</Alert>
+                }
                 return this.props.children
             }
         } else {

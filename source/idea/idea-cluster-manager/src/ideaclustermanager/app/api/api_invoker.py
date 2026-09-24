@@ -30,7 +30,7 @@ from ideadatamodel.auth import (
 from ideadatamodel.filesystem import ReadFileResult, TailFileResult, SaveFileRequest
 
 from ideasdk.app import SocaAppAPI
-from ideasdk.filesystem.filebrowser_api import FileBrowserAPI
+from ideaclustermanager.app.api.file_browser_api import ClusterFileBrowserAPI
 from ideaclustermanager.app.api.cluster_settings_api import ClusterSettingsAPI
 from ideaclustermanager.app.api.analytics_api import AnalyticsAPI
 from ideaclustermanager.app.api.projects_api import ProjectsAPI
@@ -47,7 +47,7 @@ class ClusterManagerApiInvoker(ApiInvokerProtocol):
     def __init__(self, context: ideaclustermanager.AppContext):
         self._context = context
         self.app_api = SocaAppAPI(context)
-        self.file_browser_api = FileBrowserAPI(context)
+        self.file_browser_api = ClusterFileBrowserAPI(context)
         self.cluster_settings_api = ClusterSettingsAPI(context)
         self.analytics_api = AnalyticsAPI(context)
         self.projects_api = ProjectsAPI(context)

@@ -17,7 +17,7 @@ import React, {Component, RefObject} from "react";
 import IdeaTimeRangeSlider from "../../../components/time-range-slider";
 import {IdeaFormField} from "../../../components/form-field";
 import moment from "moment";
-import {Alert, Box, Button, ColumnLayout, Form, Header, Modal, SpaceBetween} from "@cloudscape-design/components";
+import {Alert, Box, Button, ColumnLayout, Form, Header, Modal, SpaceBetween, Link} from "@cloudscape-design/components";
 import {AppContext} from "../../../common";
 import Utils from "../../../common/utils";
 
@@ -276,8 +276,7 @@ class VirtualDesktopScheduleModal extends Component<VirtualDesktopScheduleModalP
                         <>
                             Setup a schedule to start/stop your virtual desktop to save and manage costs.
                             The schedule operates at the cluster timezone setup by your cluster administrator.
-                            <br /><br /><a href="https://docs.idea-hpc.com/modules/virtual-desktop-interfaces/user-documentation/virtual-desktop-scheduling"
-                                target="_blank" rel="noopener noreferrer">See documentation for scheduling explanations</a>.
+                             <Link external href="https://docs.idea-hpc.com/modules/virtual-desktop-interfaces/user-documentation/virtual-desktop-scheduling">See documentation for scheduling explanations</Link>.
                         </>
                     }>Schedule for {this.state.session?.name}</Header>
                    }
@@ -294,7 +293,7 @@ class VirtualDesktopScheduleModal extends Component<VirtualDesktopScheduleModalP
 
                 <SpaceBetween size={"m"}>
                     <Alert>
-                        <strong>Cluster Time: {this.state.currentTime.tz(AppContext.get().getClusterSettingsService().getClusterTimeZone()).format('LLL')} ({AppContext.get().getClusterSettingsService().getClusterTimeZone()})</strong><br/>
+                        <SpaceBetween size="xxs"><Box variant="strong">Cluster Time: {this.state.currentTime.tz(AppContext.get().getClusterSettingsService().getClusterTimeZone()).format('LLL')} ({AppContext.get().getClusterSettingsService().getClusterTimeZone()})</Box><Box></Box></SpaceBetween>
                     </Alert>
 
                     <Form errorText={this.state.errorMessage}>

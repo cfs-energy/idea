@@ -16,6 +16,7 @@ from ideasdk.protocols import (
     SocaContextProtocol,
 )
 from ideasdk.metrics.metrics_provider_factory import MetricsProviderFactory
+from ideasdk.metrics.dogstatsd.dogstatsd_metrics import DogStatsdMetrics
 from ideasdk.utils import Utils
 
 from typing import Optional, List, Dict
@@ -73,23 +74,7 @@ class MetricsService(SocaService, MetricsServiceProtocol):
                 if metric_data is None or len(metric_data) == 0:
                     continue
 
-                namespaces = {}
-                for entry in metric_data:
-                    namespace = Utils.get_value_as_string('Namespace', entry)
-                    if namespace is None:
-                        namespace = self.default_namespace
-                        entry['Namespace'] = self.default_namespace
-
-                    if namespace in namespaces:
-                        namespace_metrics = namespaces[namespace]
-                    else:
-                        namespace_metrics = []
-                        namespaces[namespace] = namespace_metrics
-                    namespace_metrics.append(entry)
-
-                for namespace, namespace_metrics in namespaces.items():
-                    provider = self._factory.get_provider(namespace)
-                    provider.log(metric_data=namespace_metrics)
+                self._publish(metric_data)
 
                 current += 1
             except queue.Empty:
@@ -136,10 +121,37 @@ class MetricsService(SocaService, MetricsServiceProtocol):
             finally:
                 self._exit.wait(ACCUMULATED_METRICS_INTERVAL_SECS)
 
-    def publish(self, metric_data: List[Dict]):
+    def _publish(self, metric_data: List[Dict], synchronous: bool = False):
+        namespaces = {}
+        for entry in metric_data:
+            namespace = Utils.get_value_as_string('Namespace', entry)
+            if namespace is None:
+                namespace = self.default_namespace
+                entry['Namespace'] = self.default_namespace
+
+            if namespace in namespaces:
+                namespace_metrics = namespaces[namespace]
+            else:
+                namespace_metrics = []
+                namespaces[namespace] = namespace_metrics
+            namespace_metrics.append(entry)
+
+        for namespace, namespace_metrics in namespaces.items():
+            provider = self._factory.get_provider(namespace)
+            if synchronous and isinstance(provider, DogStatsdMetrics):
+                provider.log(metric_data=namespace_metrics, raise_on_error=True)
+            else:
+                provider.log(metric_data=namespace_metrics)
+
+    def publish(self, metric_data: List[Dict], synchronous: bool = False):
         if metric_data is None:
             return
-        self._metrics_backlog_queue.put(metric_data)
+        # Durable callers must observe delivery failures before retiring their payloads.
+        # Queue acceptance alone cannot establish that a socket send succeeded.
+        if synchronous:
+            self._publish(metric_data, synchronous=True)
+        else:
+            self._metrics_backlog_queue.put(metric_data)
 
     def register_accumulator(self, accumulator: MetricsAccumulatorProtocol):
         self._logger.info(

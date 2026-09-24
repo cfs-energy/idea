@@ -42,6 +42,9 @@ class FakeAppContext:
     def module_id(self) -> str:
         return 'cluster-manager'
 
+    def config(self):
+        return None
+
 
 class FakeApiInvocationContext:
     def __init__(self, namespace: str, elevated: bool, app_scopes=None):

@@ -13,16 +13,16 @@
 
 import {Component} from 'react';
 import {SideNavigation, SideNavigationProps} from '@cloudscape-design/components'
-import {NonCancelableEventHandler} from "@cloudscape-design/components/internal/events";
-import {Constants} from "../../common/constants";
+import {AppContext} from "../../common";
+import {permittedViews, resolveTask} from "../../navigation/task-navigation";
 import Utils from "../../common/utils";
 import {IdeaAppNavigationProps} from "../../navigation/navigation-utils";
-import './side-navigation.scss'
+
 
 export interface IdeaSideNavigationProps extends IdeaAppNavigationProps {
     sideNavHeader: SideNavigationProps.Header
     sideNavItems: SideNavigationProps.Item[]
-    onSideNavChange: NonCancelableEventHandler<SideNavigationProps.ChangeDetail>
+    onSideNavChange: NonNullable<SideNavigationProps['onChange']>
     activePath?: string
 }
 
@@ -35,26 +35,10 @@ class IdeaSideNavigation extends Component<IdeaSideNavigationProps> {
         }
     }
 
-    // The admin-zone entry is a link with href="#" acting as a section heading;
-    // tag it so side-navigation.scss can style it as one.
-    tagAdminZoneLink() {
-        document.querySelectorAll('.idea-side-nav a').forEach((link) => {
-            if (link.textContent!.trim() === Constants.ADMIN_ZONE_LINK_TEXT) {
-                link.setAttribute('id', 'idea-admin-zone-link')
-            }
-        })
-    }
-
-    componentDidMount() {
-        this.tagAdminZoneLink()
-    }
-
-    // Items can arrive after mount, and the anchors they render are new nodes.
-    componentDidUpdate() {
-        this.tagAdminZoneLink()
-    }
-
     getActivePath(): string {
+        const resolved = resolveTask(this.props.location.pathname, this.props.location.search);
+        const first = resolved && permittedViews(resolved.task, AppContext.get())[0];
+        if (first) return `#${first.path}`;
         if(Utils.isNotEmpty(this.props.activePath)) {
             return `#${this.props.activePath}`
         } else {

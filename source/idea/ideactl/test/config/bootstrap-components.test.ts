@@ -23,6 +23,18 @@ import {
 
 const cases = componentCases();
 
+for (const baseOs of ["amazonlinux2023", "rhel8", "rhel9", "rocky8", "rocky9", "ubuntu2204", "ubuntu2404"]) {
+  test(`Linux desktop bootstrap keeps Kerberos tickets in files for Online Accounts on ${baseOs}`, () => {
+    withWorkdir((workDirectory) => {
+      const archive = buildComponent("virtual-desktop-host-linux", workDirectory, {}, baseOs);
+      const extracted = unpackLikeLinux(archive, join(workDirectory, "linux"));
+      const content = readFileSync(join(extracted, "virtual-desktop-host-linux/configure_dcv_host.sh"), "utf8");
+      assert.ok(content.includes("/etc/krb5.conf.d/00-idea-file-ccache"));
+      assert.ok(content.includes("rm -f /etc/dconf/db/local.d/00-idea-online-accounts"));
+    });
+  });
+}
+
 const ALL_COMPONENTS = [
   "bastion-host",
   "cluster-manager",

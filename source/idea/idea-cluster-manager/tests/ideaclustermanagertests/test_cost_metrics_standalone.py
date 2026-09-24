@@ -110,7 +110,7 @@ def test_metrics_service_publishes_to_socket(monkeypatch):
         sender.sendto.call_args_list, [('amortized', 2), ('unblended', 3)]
     ):
         assert call.args == (
-            f'idea.cost.{basis}:{value}|c|#idea_cluster:gov-cluster,idea_module:cost-metrics,host:gov-cluster,module:scheduler|T123456'.encode(),
+            f'idea.cost.{basis}:{value}|c|#idea_cluster:gov-cluster,module:scheduler|T123456|card:none'.encode(),
             path,
         )
 

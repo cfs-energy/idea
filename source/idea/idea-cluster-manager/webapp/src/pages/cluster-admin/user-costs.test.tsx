@@ -19,6 +19,8 @@ const LISTING = {
             ai_requests: 8,
             ai_tokens: 1050,
             ai_cost: 105.0,
+            storage_cost: 7.5,
+            storage_gb: 12.25,
             desktop_session_count: 0,
             desktop_hours: 0,
             desktop_cost: 0,
@@ -26,13 +28,15 @@ const LISTING = {
             job_count: 4,
             job_cost: 10.0,
             job_unpriced_jobs: 0,
-            total_cost: 115.0
+            total_cost: 122.5
         },
         {
             username: 'alice',
             ai_requests: 2,
             ai_tokens: 150,
             ai_cost: 15.0,
+            storage_cost: 2.0,
+            storage_gb: 3.5,
             desktop_session_count: 2,
             desktop_hours: 6.5,
             desktop_cost: 0,
@@ -40,7 +44,7 @@ const LISTING = {
             job_count: 0,
             job_cost: 0,
             job_unpriced_jobs: 0,
-            total_cost: 15.0
+            total_cost: 17.0
         }
     ]
 };
@@ -80,9 +84,20 @@ const ALICE_SUMMARY = {
     }
 };
 
+const ALICE_COSTS = {
+    currency: 'USD', state: 'ready', refreshed_at: '2026-09-01T00:00:00Z',
+    current: {
+        start_date: '2026-09-01', end_date: '2026-09-22', total: 17, incomplete: false,
+        jobs: {cost: 0, status: 'ready'}, desktops: {cost: 0, status: 'ready'},
+        desktop_disks: {cost: 0, status: 'ready'}, shared_storage: {cost: 2, status: 'ready'}, ai: {cost: 15, status: 'ready'},
+        disks: [], storage: [{filesystem: 'shared', used_bytes: 3758096384, share: 0.1, cost: 2, status: 'ready'}], details: ALICE_SUMMARY
+    }
+};
+
 const stub = (context: AppContext, listing: any, summary: any) => {
     vi.spyOn(context.client().myCosts(), 'listUserCosts').mockResolvedValue(listing);
     vi.spyOn(context.client().myCosts(), 'getUserSummary').mockResolvedValue(summary);
+    vi.spyOn(context.client().myCosts(), 'getUserCosts').mockResolvedValue(ALICE_COSTS);
 };
 
 const renderPage = () => {
@@ -109,6 +124,8 @@ const userRow = (username: string, total: number) => ({
     ai_requests: 0,
     ai_tokens: 0,
     ai_cost: 0,
+    storage_cost: 0,
+    storage_gb: 0,
     desktop_session_count: 0,
     desktop_hours: 0,
     desktop_cost: 0,
@@ -146,6 +163,16 @@ describe('admin user costs page', () => {
         );
     }, 20000);
 
+    it('shows shared storage cost and usage columns', async () => {
+        const context = initTestAppContext();
+        stub(context, LISTING, ALICE_SUMMARY);
+        renderPage();
+
+        expect(await screen.findByRole('columnheader', {name: 'Storage'}, {timeout: 10000})).toBeVisible();
+        expect(screen.getByRole('columnheader', {name: 'Storage GB'})).toBeVisible();
+        expect(screen.getByText('12.25 GB')).toBeVisible();
+    });
+
     it('reports a users desktop cost as not available when nothing could be priced', async () => {
         const context = initTestAppContext();
         stub(context, LISTING, ALICE_SUMMARY);
@@ -165,6 +192,7 @@ describe('admin user costs page', () => {
         await userEvent.click(screen.getByRole('radio', {name: 'Show costs for alice'}));
 
         expect(await screen.findByText('Costs for alice')).toBeInTheDocument();
+        expect(await screen.findByText('Your costs')).toBeInTheDocument();
         expect(await screen.findByRole('heading', {name: 'AI usage'})).toBeInTheDocument();
         expect(await screen.findByText('Project A')).toBeInTheDocument();
         expect(await screen.findByText('alice-desktop')).toBeInTheDocument();

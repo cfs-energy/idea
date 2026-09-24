@@ -32,7 +32,7 @@ import Header from "@cloudscape-design/components/header";
 import Button from "@cloudscape-design/components/button";
 import ColumnLayout from "@cloudscape-design/components/column-layout";
 import Box from "@cloudscape-design/components/box";
-import {WizardProps} from "@cloudscape-design/components/wizard/interfaces";
+import {WizardProps} from "@cloudscape-design/components/wizard";
 import Wizard from "@cloudscape-design/components/wizard";
 import IdeaFormReviewField from "../form-review-field";
 import {v4 as uuid} from "uuid"

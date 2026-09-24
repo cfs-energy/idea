@@ -13,7 +13,7 @@
 
 import React, {Component} from "react";
 import {Box, Button, Header, Modal, SpaceBetween} from "@cloudscape-design/components";
-import {ButtonProps} from "@cloudscape-design/components/button/interfaces";
+import {ButtonProps} from "@cloudscape-design/components/button";
 
 export interface IdeaViewProps {
     title: string

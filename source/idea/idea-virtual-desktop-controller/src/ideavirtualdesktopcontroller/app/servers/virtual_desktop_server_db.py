@@ -11,6 +11,7 @@
 
 
 import ideavirtualdesktopcontroller
+from botocore.exceptions import ClientError
 from ideadatamodel import exceptions, VirtualDesktopServer
 from ideasdk.utils import Utils
 from ideavirtualdesktopcontroller.app.virtual_desktop_notifiable_db import (
@@ -87,6 +88,11 @@ class VirtualDesktopServerDB(VirtualDesktopNotifiableDB):
                 server.instance_profile_arn
             )
 
+        if Utils.is_not_empty(server.bootstrap_refresh_version):
+            db_dict[servers_constants.DCV_HOST_DB_BOOTSTRAP_REFRESH_VERSION_KEY] = (
+                server.bootstrap_refresh_version
+            )
+
         return db_dict
 
     @staticmethod
@@ -115,7 +121,30 @@ class VirtualDesktopServerDB(VirtualDesktopNotifiableDB):
             instance_profile_arn=Utils.get_value_as_string(
                 servers_constants.DCV_HOST_DB_INSTANCE_PROFILE_ARN_KEY, db_entry
             ),
+            bootstrap_refresh_version=Utils.get_value_as_int(
+                servers_constants.DCV_HOST_DB_BOOTSTRAP_REFRESH_VERSION_KEY, db_entry
+            ),
         )
+
+    def mark_bootstrap_refreshed(self, instance_id: str, version: int):
+        # Late or repeated completions must not downgrade a version or recreate a host.
+        try:
+            self._table.update_item(
+                Key={servers_constants.DCV_HOST_DB_HASH_KEY: instance_id},
+                UpdateExpression='SET #version = :version',
+                ConditionExpression=(
+                    'attribute_exists(#instance_id) AND '
+                    '(attribute_not_exists(#version) OR #version < :version)'
+                ),
+                ExpressionAttributeNames={
+                    '#instance_id': servers_constants.DCV_HOST_DB_HASH_KEY,
+                    '#version': servers_constants.DCV_HOST_DB_BOOTSTRAP_REFRESH_VERSION_KEY,
+                },
+                ExpressionAttributeValues={':version': version},
+            )
+        except ClientError as e:
+            if e.response['Error']['Code'] != 'ConditionalCheckFailedException':
+                raise
 
     def create(
         self,

@@ -25,7 +25,7 @@ import Utils from "../../common/utils";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import 'moment-timezone';
 import IdeaAppLayout, {IdeaAppLayoutProps} from "../../components/app-layout";
-import {TableProps} from "@cloudscape-design/components/table/interfaces";
+import {TableProps} from "@cloudscape-design/components/table";
 import IdeaListView from "../../components/list-view";
 import VirtualDesktopSessionStatusIndicator from "./components/virtual-desktop-session-status-indicator";
 import {withRouter} from "../../navigation/navigation-utils";
@@ -163,7 +163,7 @@ class MySharedVirtualDesktopSessions extends Component<MySharedVirtualDesktopPro
         return (
             <IdeaListView
                 ref={this.listing}
-                title="Shared Desktops"
+                title="My desktops"
                 showPreferences={true}
                 preferencesKey={'shared-desktops'}
                 description="List of Virtual Desktops shared with you"
@@ -342,7 +342,7 @@ class MySharedVirtualDesktopSessions extends Component<MySharedVirtualDesktopPro
                         href: '#/'
                     },
                     {
-                        text: 'Shared Desktops',
+                        text: 'My desktops',
                         href: ''
                     }
                 ]}

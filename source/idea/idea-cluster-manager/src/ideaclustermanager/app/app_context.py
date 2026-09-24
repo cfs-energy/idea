@@ -29,6 +29,8 @@ from ideaclustermanager.app.notifications.notifications_service import (
 )
 from ideaclustermanager.app.tasks.task_manager import TaskManager
 
+from ideaclustermanager.app.metrics.storage_metrics_service import StorageMetricsService
+
 from typing import Optional, Union
 
 
@@ -37,6 +39,8 @@ class ClusterManagerAppContext(SocaContext):
         super().__init__(options=options)
 
         self.token_service: Optional[TokenService] = None
+        self.personal_costs_store = None
+        self.storage_metrics: Optional[StorageMetricsService] = None
         self.projects: Optional[ProjectsService] = None
         self.user_pool: Optional[CognitoUserPool] = None
         self.ldap_client: Optional[Union[OpenLDAPClient, ActiveDirectoryClient]] = None

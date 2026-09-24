@@ -1,4 +1,6 @@
-## Virtual Desktops
+## My desktops
+
+### Owned
 
 Manage your Windows & Linux virtual desktops, powered by [Amazon DCV](https://aws.amazon.com/hpc/dcv/).
 

@@ -16,13 +16,13 @@ import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import IdeaAppLayout, {IdeaAppLayoutProps} from "../../components/app-layout";
 import IdeaListView from "../../components/list-view";
 import Utils from "../../common/utils";
-import {TableProps} from "@cloudscape-design/components/table/interfaces";
+import {TableProps} from "@cloudscape-design/components/table";
 import {HpcLicenseResource} from "../../client/data-model";
 import {SchedulerAdminClient} from "../../client";
 import {AppContext} from "../../common";
 import IdeaForm from "../../components/form";
 import {ClusterSettingsService} from "../../service";
-import {Link, Popover, StatusIndicator} from "@cloudscape-design/components";
+import {Link, Popover, StatusIndicator, SpaceBetween} from "@cloudscape-design/components";
 import {withRouter} from "../../navigation/navigation-utils";
 
 export interface HpcLicensesProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
@@ -99,7 +99,7 @@ class CheckLicenseAvailability extends Component<CheckLicenseAvailabilityProps, 
 
     getAvailableCount() {
         if (typeof this.state.status === 'undefined') {
-            return <StatusIndicator type={"in-progress"} colorOverride={"grey"}>&nbsp;</StatusIndicator>
+            return <StatusIndicator type="pending">Not checked</StatusIndicator>
         } else {
             if (this.state.status) {
                 if (this.state.available_count === 0) {
@@ -147,7 +147,7 @@ class CheckLicenseAvailability extends Component<CheckLicenseAvailabilityProps, 
         return (
             <div>
                 {!this.state.loading && <div>
-                    <span>{this.getAvailableCount()}</span>&nbsp;&nbsp;(<Link fontSize="body-s" onFollow={this.checkAvailability}>Check Availability</Link>)
+                    <SpaceBetween direction="horizontal" size="xs"><span>{this.getAvailableCount()}</span><Link fontSize="body-s" onFollow={this.checkAvailability}>Check availability</Link></SpaceBetween>
                 </div>}
                 {this.state.loading && <StatusIndicator type="loading"/>}
             </div>

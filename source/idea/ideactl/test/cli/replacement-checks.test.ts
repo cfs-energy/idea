@@ -12,7 +12,8 @@ import test from "node:test";
 
 import type { ApiCallResult, JsonValue } from "../../tools/e2e/api.ts";
 import { WITNESS_RERUN_EXIT_STATUS } from "../../tools/e2e/checks/job-survival.ts";
-import { schedulerImageUpgradeCheck } from "../../tools/e2e/checks/scheduler-image-upgrade.ts";
+import { measureUpgradeAvailability, summarise } from "../../tools/e2e/checks/upgrade-availability.ts";
+import { schedulerImageUpgradeCheck, upgradeIsContinuous } from "../../tools/e2e/checks/scheduler-image-upgrade.ts";
 import { schedulerReplacementCheck } from "../../tools/e2e/checks/scheduler-replacement.ts";
 import {
   runSchedulerVmReplacementCheck,
@@ -64,7 +65,7 @@ function jobApi(reported: Reported, replaced: () => boolean): {
         scripts.push(Buffer.from(script, "base64").toString("utf8"));
         return { body: { payload: { job: { job_id: "3", job_uid: "uid-3" } }, success: true }, status: 200 };
       }
-      if (namespace === "Scheduler.ListActiveJobs") {
+      if (namespace === "Projects.ListProjects" || namespace === "Scheduler.ListActiveJobs") {
         return { body: { payload: { jobs: [] }, success: true }, status: 200 };
       }
       if (namespace === "Scheduler.GetCompletedJob") {
@@ -244,8 +245,11 @@ function upgradeContext(reported: Reported, exitCode = 0): { context: CheckConte
     ...harness,
     commands,
     context: {
+      control: async () => true,
       ...harness.context,
-      options: { ...options, checks: ["scheduler-image-upgrade"], upgradeCommand: "ideactl upgrade-cluster --force" },
+      fetch: async () => new Response("portal", { status: 200 }),
+      gateway: { async connect() { return { close() {}, isOpen: () => true }; } },
+      options: { ...options, gatewayHost: "gateway.example.invalid", checks: ["scheduler-image-upgrade"], upgradeCommand: "ideactl upgrade-cluster --force" },
       processes: {
         async run(command, args) {
           commands.push([command, ...args]);
@@ -304,4 +308,111 @@ test("scheduler-vm-replacement fails on a requeue with no start time reported", 
   const observed = result.observed.join("\n");
   assert.match(observed, /the job script ran a second time: the run was requeued/);
   assert.match(observed, /not_compared=start_time/);
+});
+
+test("routine upgrade polling measures gaps while the command is still running", async () => {
+  const harness = upgradeContext(survived);
+  let started: number | undefined;
+  const probes: string[] = [];
+  const context: CheckContext = {
+    ...harness.context,
+    now: Date.now,
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    api: {
+      async request(namespace) {
+        probes.push(namespace);
+        const failed = started !== undefined && Date.now() - started < (namespace.startsWith("Scheduler") ? 1_500 : 500);
+        return { status: failed ? 503 : 200, body: { success: !failed } };
+      },
+    },
+  };
+  const measured = await measureUpgradeAvailability(context, async () => {
+    started = Date.now();
+    await context.sleep(2_200);
+    return "finished";
+  });
+  assert.equal(measured.result, "finished");
+  const scheduler = measured.availability.find((row) => row.endpoint === "scheduler")!;
+  assert.ok(scheduler.failures > 0);
+  assert.ok(scheduler.longestGapMs >= 900 && scheduler.longestGapMs < 3_500, JSON.stringify(scheduler));
+  assert.equal(measured.availability.find((row) => row.endpoint === "gateway")!.failures, 0);
+  assert.ok(probes.length >= 6, "requests continue during the upgrade");
+});
+
+test("an otherwise successful upgrade fails its proof when the portal has a gap", async () => {
+  const harness = upgradeContext(survived);
+  const original = harness.context.processes;
+  let upgrading = false;
+  const context: CheckContext = {
+    ...harness.context,
+    now: Date.now,
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    fetch: async () => new Response("portal", { status: upgrading ? 503 : 200 }),
+    processes: {
+      async run(command, args) {
+        const result = await original.run(command, args);
+        upgrading = true;
+        await context.sleep(1_200);
+        upgrading = false;
+        return result;
+      },
+    },
+  };
+  const result = await schedulerImageUpgradeCheck.run(context);
+  assert.equal(result.passed, false, result.observed.join("\n"));
+  assert.ok(result.observed.some((line) => /endpoint=portal .*failures=[1-9]/.test(line)), result.observed.join("\n"));
+  assert.ok(result.observed.some((line) => line.startsWith("upgrade command exited 0")));
+});
+
+
+test("a brief gateway connection gap during task replacement passes", async () => {
+  const harness = upgradeContext(survived);
+  const original = harness.context.processes;
+  let upgrading = false;
+  const context: CheckContext = {
+    ...harness.context,
+    now: Date.now,
+    sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
+    gateway: {async connect() {
+      if (upgrading) throw new Error("gateway task swapping");
+      return {close() {}, isOpen: () => true};
+    }},
+    processes: {async run(command, args) {
+      const result = await original.run(command, args);
+      upgrading = true;
+      await context.sleep(1_200);
+      upgrading = false;
+      return result;
+    }},
+  };
+  const result = await schedulerImageUpgradeCheck.run(context);
+  assert.equal(result.passed, true, result.observed.join("\n"));
+  assert.ok(result.observed.some(line => /endpoint=gateway .*failures=[1-9]/.test(line)));
+});
+
+
+test("upgrade continuity allows at most fifteen seconds of gateway connection failures", () => {
+  const rows = [
+    {endpoint: "portal", samples: 20, failures: 0, slow: 0, longestGapMs: 0, failureDetails: []},
+    {endpoint: "gateway", samples: 20, failures: 15, slow: 0, longestGapMs: 15_000, failureDetails: []},
+    {endpoint: "scheduler", samples: 20, failures: 20, slow: 0, longestGapMs: 20_000, failureDetails: []},
+  ];
+  assert.equal(upgradeIsContinuous(rows), true);
+  assert.equal(upgradeIsContinuous(rows.map(row => row.endpoint === "gateway" ? {...row, longestGapMs: 15_001} : row)), false);
+  assert.equal(upgradeIsContinuous(rows.map(row => row.endpoint === "portal" ? {...row, failures: 1} : row)), false);
+});
+
+test("a failure that overlaps a control failure is a client drop, not a cluster gap", () => {
+  const at = (started: number, ok: boolean) => ({ started, ended: started + (ok ? 100 : 5_000), ok, reason: ok ? "" : "timeout 5000ms", elapsedMs: ok ? 100 : 5_000 });
+  const control = [at(0, true), at(10_000, false), at(15_000, true), at(40_000, true)];
+  // Client drop at 10-15 s (the control failed too), then a real cluster gap at 30-40 s.
+  const gateway = [at(0, true), at(10_000, false), at(15_000, true), at(30_000, false), at(35_000, false), at(40_000, true)];
+  const row = summarise("gateway", gateway, control);
+  assert.equal(row.clientDrops, 1);
+  assert.equal(row.failures, 2);
+  assert.equal(row.longestGapMs, 10_100);
+  // Without a control failure the same client drop is counted against the cluster.
+  const unfiltered = summarise("gateway", gateway, control.map((c) => ({ ...c, ok: true })));
+  assert.equal(unfiltered.clientDrops, 0);
+  assert.equal(unfiltered.failures, 3);
 });

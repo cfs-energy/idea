@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import {MemoryRouter} from 'react-router-dom';
 import HpcCustomAmis from './hpc-custom-amis';
 import {initTestAppContext} from '../../test-support';
+import {AppContext} from '../../common';
 
 const COMPUTE_ROW = {base_os: 'rocky9', architecture: 'x86_64', state: 'stock', referenced_by: ['scheduler default']};
 const DESKTOP_ROWS = [
@@ -10,7 +11,10 @@ const DESKTOP_ROWS = [
     {base_os: 'amazonlinux2023', architecture: 'x86_64', stack_id: 'ss-base-amazonlinux2023-x86-64-base', state: 'stock', referenced_by: []}
 ];
 
-const renderPage = (onFlashbarChange = () => {}) => {
+const renderPage = (onFlashbarChange = () => {}, preserveAccess = false) => {
+    const auth = AppContext.get().auth();
+    vi.spyOn(AppContext.get().getClusterSettingsService(), 'isSchedulerDeployed').mockReturnValue(true);
+    if (!preserveAccess) vi.spyOn(auth, 'isModuleAdmin').mockReturnValue(true);
     render(
         <MemoryRouter>
             <HpcCustomAmis
@@ -31,6 +35,8 @@ const renderPage = (onFlashbarChange = () => {}) => {
 
 const primeContext = () => {
     const context = initTestAppContext();
+    vi.spyOn(context.auth(), 'isModuleAdmin').mockReturnValue(true);
+    vi.spyOn(context.getClusterSettingsService(), 'isSchedulerDeployed').mockReturnValue(true);
     vi.spyOn(context.getClusterSettingsService(), 'isVirtualDesktopDeployed').mockReturnValue(true);
     vi.spyOn(context.client().schedulerAdmin(), 'listComputeImages').mockResolvedValue({listing: [COMPUTE_ROW]});
     vi.spyOn(context.client().virtualDesktopAdmin(), 'listDesktopImages').mockResolvedValue({listing: DESKTOP_ROWS});
@@ -41,6 +47,19 @@ describe('custom amis page', () => {
 
     afterEach(() => {
         vi.restoreAllMocks();
+    });
+
+    it('shows desktop build actions without reading job images for a desktop-only administrator', async () => {
+        const context = initTestAppContext();
+        vi.spyOn(context.auth(), 'isModuleAdmin').mockImplementation(module => module === 'virtual-desktop-controller');
+        vi.spyOn(context.getClusterSettingsService(), 'isVirtualDesktopDeployed').mockReturnValue(true);
+        const compute = vi.spyOn(context.client().schedulerAdmin(), 'listComputeImages');
+        vi.spyOn(context.client().virtualDesktopAdmin(), 'listDesktopImages').mockResolvedValue({listing: DESKTOP_ROWS});
+        renderPage(() => {}, true);
+        expect(await screen.findByTestId('build-all')).toBeInTheDocument();
+        expect(screen.getByRole('heading', {name: 'Custom images'})).toBeInTheDocument();
+        expect(screen.queryByRole('heading', {name: 'Compute images'})).not.toBeInTheDocument();
+        expect(compute).not.toHaveBeenCalled();
     });
 
     it('build dialog sends both drivers by default', async () => {
@@ -169,6 +188,8 @@ describe('custom amis page', () => {
 
     it('set as default is offered only within the compute operating system', async () => {
         const context = initTestAppContext();
+        vi.spyOn(context.auth(), 'isModuleAdmin').mockReturnValue(true);
+        vi.spyOn(context.getClusterSettingsService(), 'isSchedulerDeployed').mockReturnValue(true);
         vi.spyOn(context.getClusterSettingsService(), 'isVirtualDesktopDeployed').mockReturnValue(false);
         const rocky = {base_os: 'rocky9', architecture: 'x86_64', image_id: 'ami-rocky', state: 'built', referenced_by: ['queue profile: bio']};
         const list = vi.spyOn(context.client().schedulerAdmin(), 'listComputeImages')

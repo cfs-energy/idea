@@ -10,4 +10,4 @@
 #  and limitations under the License.
 
 __name__ = 'idea-data-model'
-__version__ = '26.09.3'
+__version__ = '26.09.4'

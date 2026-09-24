@@ -1,6 +1,6 @@
 # Users management
 
-To manage IDEA users, navigate to the **"Cluster Management**" section on the left sidebar of IDEA menu and click "**Users**"
+To manage IDEA users, navigate to "**Administration**" > "**People and access**" > "**Users**"
 
 <figure><img src="../.gitbook/assets/Screen Shot 2022-10-23 at 11.36.57 AM.png" alt=""><figcaption><p>Users portal</p></figcaption></figure>
 

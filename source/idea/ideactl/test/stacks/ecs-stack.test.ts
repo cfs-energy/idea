@@ -558,3 +558,8 @@ for (const [scope, modules, expected] of [
     assert.ok(!JSON.stringify(group["UpdatePolicy"]).includes("AutoScalingRollingUpdate"));
   });
 }
+
+
+test("refuses a fixed pool without a spare host for distinct-instance surges", () => {
+  assert.throws(() => synth(false, {"ecs.hosts.min": 3, "ecs.hosts.max": 3}), /ecs.hosts.max must exceed ecs.hosts.min.*spare host/);
+});

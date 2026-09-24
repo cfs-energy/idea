@@ -24,13 +24,12 @@ import {
     SpaceBetween,
     Toggle
 } from "@cloudscape-design/components";
-import {ButtonDropdownProps} from "@cloudscape-design/components/button-dropdown/interfaces";
+import {ButtonDropdownProps} from "@cloudscape-design/components/button-dropdown";
 import IdeaTable, {IdeaTableRef} from "../table";
-import {TableProps} from "@cloudscape-design/components/table/interfaces";
-import {NonCancelableEventHandler} from "@cloudscape-design/components/internal/events";
+import {TableProps} from "@cloudscape-design/components/table";
 import {SocaDateRange, SocaFilter, SocaListingPayload, SocaPaginator, SocaUserInputParamMetadata} from "../../client/data-model";
 import Utils from "../../common/utils";
-import {CollectionPreferencesProps} from "@cloudscape-design/components/collection-preferences/interfaces";
+import {CollectionPreferencesProps} from "@cloudscape-design/components/collection-preferences";
 
 // the backing list calls contend with server-side locks, so a poll can never be
 // faster than this no matter what a caller asks for
@@ -74,7 +73,7 @@ export interface IdeaListViewProps<T = any> {
     showDateRange?: boolean
     dateRange?: DateRangePickerProps.Value,
     onDateRange?: (dateRange: SocaDateRange) => SocaDateRange,
-    onSelectionChange?: NonCancelableEventHandler<TableProps.SelectionChangeDetail<T>>
+    onSelectionChange?: TableProps<T>['onSelectionChange']
     columnDefinitions?: ReadonlyArray<TableProps.ColumnDefinition<T>>
     showPaginator?: boolean
     paginator?: SocaPaginator

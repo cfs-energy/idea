@@ -33,9 +33,10 @@ from ideadatamodel.filesystem import (
     FileData,
 )
 from ideadatamodel import exceptions, errorcodes
-from ideasdk.utils import Utils, GroupNameHelper
+from ideasdk.utils import Utils
 from ideasdk.protocols import SocaContextProtocol
-from ideasdk.shell import ShellInvoker
+from functools import wraps
+from ideasdk.filesystem.user_identity import UserIdentity
 
 import arrow
 import mimetypes
@@ -91,6 +92,16 @@ _active_tail_users: set = set()
 _last_global_cleanup = 0
 
 
+# Running the entire operation keeps metadata probes and file handles out of the parent.
+# Nested checks reuse the worker so every access uses the same account credentials.
+def as_user(method):
+    @wraps(method)
+    def invoke(self, *args, **kwargs):
+        return self.run_as_user(lambda: method(self, *args, **kwargs))
+
+    return invoke
+
+
 class FileSystemHelper:
     """
     File System Helper
@@ -104,11 +115,15 @@ class FileSystemHelper:
         if Utils.is_empty(username):
             raise exceptions.invalid_params('username is required')
         self.username = username
-        self.shell = ShellInvoker(logger=self.logger)
+        self._identity = None
         # Permission cache: {(file_path, username, check_type): (result, timestamp)}
         self._permission_cache: Dict[Tuple[str, str, str], Tuple[bool, float]] = {}
         self._last_permission_cleanup = 0
-        self.group_name_helper = GroupNameHelper(context)
+
+    def run_as_user(self, operation):
+        if self._identity is None:
+            self._identity = UserIdentity(self.context.accounts, self.username)
+        return self._identity.run(operation)
 
     def get_user_home(self) -> str:
         user_home = self.context.config().get_string(
@@ -119,6 +134,7 @@ class FileSystemHelper:
         user_home = f'{user_home}/home/{self.username}'
         return user_home
 
+    @as_user
     def has_access(self, file: str) -> bool:
         try:
             # Check if the access has been cached
@@ -149,10 +165,8 @@ class FileSystemHelper:
         except:  # noqa
             return False
 
-    def _check_shell_permission(
-        self, file: str, check_type: str, shell_cmd: List[str]
-    ) -> bool:
-        """Check permission using shell command with caching"""
+    @as_user
+    def _check_permission(self, file: str, check_type: str) -> bool:
         cache_key = (file, self.username, check_type)
         current_time = time.time()
 
@@ -166,9 +180,13 @@ class FileSystemHelper:
                     )
                 return result
 
-        # Execute shell command
-        result_obj = self.shell.invoke(shell_cmd)
-        result = result_obj.returncode == 0
+        # Kernel checks use the same numeric credentials as the actual operation.
+        # Directory traversal still requires search permission when entries are opened.
+        result = (
+            os.path.isdir(file)
+            if check_type == 'dir'
+            else os.access(file, os.R_OK if check_type == 'read' else os.W_OK)
+        )
 
         # Cache the result
         self._permission_cache[cache_key] = (result, current_time)
@@ -187,6 +205,7 @@ class FileSystemHelper:
 
         return result
 
+    @as_user
     def check_access(
         self, file: str, check_dir=False, check_read=True, check_write=True
     ):
@@ -213,24 +232,19 @@ class FileSystemHelper:
             raise exceptions.unauthorized_access()
 
         if check_dir:
-            is_dir = self._check_shell_permission(
-                file, 'dir', ['su', self.username, '-c', f'test -d "{file}"']
-            )
+            is_dir = self._check_permission(file, 'dir')
             if not is_dir:
                 raise exceptions.unauthorized_access()
         if check_read:
-            can_read = self._check_shell_permission(
-                file, 'read', ['su', self.username, '-c', f'test -r "{file}"']
-            )
+            can_read = self._check_permission(file, 'read')
             if not can_read:
                 raise exceptions.unauthorized_access()
         if check_write:
-            can_write = self._check_shell_permission(
-                file, 'write', ['su', self.username, '-c', f'test -w "{file}"']
-            )
+            can_write = self._check_permission(file, 'write')
             if not can_write:
                 raise exceptions.unauthorized_access()
 
+    @as_user
     def list_files(self, request: ListFilesRequest) -> ListFilesResult:
         cwd = request.cwd
 
@@ -281,6 +295,7 @@ class FileSystemHelper:
 
         return ListFilesResult(cwd=cwd, listing=result)
 
+    @as_user
     def read_file(self, request: ReadFileRequest) -> ReadFileResult:
         file = request.file
 
@@ -313,6 +328,13 @@ class FileSystemHelper:
         )
 
     def tail_file(self, request: TailFileRequest) -> TailFileResult:
+        self._cleanup_permission_cache()
+        self._cleanup_global_state()
+        self._check_tail_rate_limit(self.username)
+        return self._tail_file(request)
+
+    @as_user
+    def _tail_file(self, request: TailFileRequest) -> TailFileResult:
         file = request.file
         start_time = Utils.current_time_ms()
 
@@ -322,9 +344,6 @@ class FileSystemHelper:
         # Clean up caches periodically (these have built-in throttling)
         self._cleanup_permission_cache()
         self._cleanup_global_state()
-
-        # Check rate limits before proceeding
-        self._check_tail_rate_limit(self.username)
 
         # For continuation requests (with next_token), skip permission checks since
         # the user already had access to start the tail operation
@@ -497,6 +516,7 @@ class FileSystemHelper:
             lines.reverse()
             return lines[-max_lines:] if len(lines) > max_lines else lines
 
+    @as_user
     def save_file(self, request: SaveFileRequest) -> SaveFileResult:
         file = request.file
         if Utils.is_empty(file):
@@ -523,6 +543,7 @@ class FileSystemHelper:
 
         return SaveFileResult()
 
+    @as_user
     def download_files(self, request: DownloadFilesRequest) -> str:
         files = Utils.get_as_list(request.files, [])
         if not files:
@@ -574,7 +595,6 @@ class FileSystemHelper:
 
             download_list.append(file)
 
-        group_name = self.group_name_helper.get_user_group(self.username)
         downloads_dir = os.path.join(self.get_user_home(), 'idea_downloads')
         if Utils.is_symlink(downloads_dir):
             # prevent symlink/hijack attacks
@@ -583,7 +603,6 @@ class FileSystemHelper:
             )
 
         os.makedirs(downloads_dir, exist_ok=True)
-        shutil.chown(downloads_dir, user=self.username, group=group_name)
 
         # Create meaningful filename with timestamp
         timestamp = arrow.now().format('YYYY-MM-DD_HH-mm-ss')
@@ -682,8 +701,6 @@ class FileSystemHelper:
                     # Handle directory recursively
                     self._add_directory_to_zip(zip_archive, download_item, used_names)
 
-        shutil.chown(zip_file_path, user=self.username, group=group_name)
-
         # Log successful completion of large downloads
         zip_size = os.path.getsize(zip_file_path)
         if total_size > 100 * 1024 * 1024:  # 100MB+
@@ -694,6 +711,7 @@ class FileSystemHelper:
 
         return zip_file_path
 
+    @as_user
     def create_file(self, request: CreateFileRequest) -> CreateFileResult:
         cwd = request.cwd
 
@@ -740,9 +758,6 @@ class FileSystemHelper:
             with open(create_path, 'w') as f:
                 f.write('')
 
-        group_name = self.group_name_helper.get_user_group(self.username)
-        shutil.chown(create_path, self.username, group_name)
-
         if self.logger.isEnabledFor(logging.DEBUG):
             self.logger.debug(
                 f'File created - User: {self.username}, Type: {"directory" if is_folder else "file"}, Path: {create_path}'
@@ -750,6 +765,7 @@ class FileSystemHelper:
 
         return CreateFileResult()
 
+    @as_user
     def delete_files(self, request: DeleteFilesRequest) -> DeleteFilesResult:
         files = request.files
         if Utils.is_empty(files):
@@ -820,6 +836,7 @@ class FileSystemHelper:
         # Consider adding error details to the result model if needed
         return DeleteFilesResult()
 
+    @as_user
     def rename_file(self, request: RenameFileRequest) -> RenameFileResult:
         file = request.file
         new_name = request.new_name
@@ -876,10 +893,6 @@ class FileSystemHelper:
             # Perform the rename operation
             os.rename(file, new_file_path)
 
-            # Update ownership to maintain proper permissions
-            group_name = self.group_name_helper.get_user_group(self.username)
-            shutil.chown(new_file_path, self.username, group_name)
-
             if self.logger.isEnabledFor(logging.DEBUG):
                 self.logger.debug(
                     f'File renamed - User: {self.username}, From: {file}, To: {new_file_path}'
@@ -912,6 +925,7 @@ class FileSystemHelper:
 
         return RenameFileResult()
 
+    @as_user
     def check_files_permissions(
         self, request: CheckFilesPermissionsRequest
     ) -> CheckFilesPermissionsResult:
@@ -1347,10 +1361,9 @@ class FileSystemHelper:
 
                     try:
                         # Explicitly check read permission for each file before processing
-                        can_read = self._check_shell_permission(
+                        can_read = self._check_permission(
                             file_path,
                             'read',
-                            ['su', self.username, '-c', f'test -r "{file_path}"'],
                         )
                         if not can_read:
                             if self.logger.isEnabledFor(logging.DEBUG):

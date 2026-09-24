@@ -57,10 +57,14 @@ from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_counters_
 from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_db import (
     VirtualDesktopSessionDB,
 )
+from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_utils import (
+    VirtualDesktopSessionUtils,
+)
 from ideavirtualdesktopcontroller.app.software_stacks.virtual_desktop_software_stack_db import (
     VirtualDesktopSoftwareStackDB,
 )
 import threading
+import time
 
 from ideavirtualdesktopcontroller.app.software_stacks.virtual_desktop_software_stack_utils import (
     VirtualDesktopSoftwareStackUtils,
@@ -117,27 +121,31 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
         self._reindex_software_stacks()
 
     def _initialize_dbs(self):
-        self._session_counter_db = VirtualDesktopSessionCounterDB(
-            self.context
-        ).initialize()
-        self._ssm_commands_db = VirtualDesktopSSMCommandsDB(self.context).initialize()
-        self._server_db = VirtualDesktopServerDB(self.context).initialize()
-        self._software_stack_db = VirtualDesktopSoftwareStackDB(
-            self.context
-        ).initialize()
-        self._schedule_db = VirtualDesktopScheduleDB(self.context).initialize()
+        # Keep the objects: initialize() creates the tables and returns nothing.
+        self._session_counter_db = VirtualDesktopSessionCounterDB(self.context)
+        self._ssm_commands_db = VirtualDesktopSSMCommandsDB(self.context)
+        self._server_db = VirtualDesktopServerDB(self.context)
+        self._software_stack_db = VirtualDesktopSoftwareStackDB(self.context)
+        self._schedule_db = VirtualDesktopScheduleDB(self.context)
         self._session_db = VirtualDesktopSessionDB(
             context=self.context,
             server_db=self._server_db,
             software_stack_db=self._software_stack_db,
             schedule_db=self._schedule_db,
-        ).initialize()
-        self._permission_profile_db = VirtualDesktopPermissionProfileDB(
-            self.context
-        ).initialize()
-        self._session_permissions_db = VirtualDesktopSessionPermissionDB(
-            self.context
-        ).initialize()
+        )
+        self._permission_profile_db = VirtualDesktopPermissionProfileDB(self.context)
+        self._session_permissions_db = VirtualDesktopSessionPermissionDB(self.context)
+        for db in (
+            self._session_counter_db,
+            self._ssm_commands_db,
+            self._server_db,
+            self._software_stack_db,
+            self._schedule_db,
+            self._session_db,
+            self._permission_profile_db,
+            self._session_permissions_db,
+        ):
+            db.initialize()
         self._initialize_image_builds()
 
     def _initialize_image_builds(self):
@@ -329,12 +337,40 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
         self.context.dcv_broker_client = DCVBrokerClient(context=self.context)
 
     def _initialize_services(self):
+        self._bootstrap_exit = threading.Event()
+        self._bootstrap_thread = threading.Thread(
+            name='bootstrap-refresh', target=self._refresh_bootstrap_loop
+        )
+        # Built on first use: the tables the sweep reads are created after this method runs.
+        self._bootstrap_session_utils = None
         self.context.event_queue_monitor_service = EventsQueueMonitoringService(
             context=self.context
         )
         self.context.controller_queue_monitor_service = ControllerQueueMonitorService(
             context=self.context
         )
+
+    def _refresh_bootstrap_loop(self):
+        # Leadership may settle after startup, and replicas must not multiply the
+        # command limit. Waiting here leaves desktop provisioning off this path.
+        next_refresh = 0
+        while not self._bootstrap_exit.is_set():
+            try:
+                if time.monotonic() >= next_refresh and self.context.is_leader():
+                    next_refresh = time.monotonic() + 6 * 60 * 60
+                    if self._bootstrap_session_utils is None:
+                        self._bootstrap_session_utils = VirtualDesktopSessionUtils(
+                            context=self.context,
+                            db=self._session_db,
+                            session_permission_db=self._session_permissions_db,
+                            permission_profile_db=self._permission_profile_db,
+                        )
+                    self._bootstrap_session_utils.refresh_bootstrap()
+            except Exception as e:
+                self.context.logger('virtual-desktop-controller-app').warning(
+                    f'Bootstrap refresh sweep failed: {" ".join(str(e).splitlines())}'
+                )
+            self._bootstrap_exit.wait(60)
 
     def app_start(self):
         subnet_pin_warning = preferred_subnet_pin_warning(self.context)
@@ -344,8 +380,11 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
             )
         self.context.event_queue_monitor_service.start()
         self.context.controller_queue_monitor_service.start()
+        self._bootstrap_thread.start()
 
     def app_stop(self):
+        self._bootstrap_exit.set()
+        self._bootstrap_thread.join()
         if Utils.is_not_empty(self.context.event_queue_monitor_service):
             self.context.event_queue_monitor_service.stop()
 

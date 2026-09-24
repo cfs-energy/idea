@@ -116,6 +116,8 @@ else
   log_info "Found window manager pre-installed... skipping dcv prereq installation..."
 fi
 
+{% include '_templates/linux/gnome_online_accounts.jinja2' %}
+
 {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
 rpm --import ${DCV_GPG_KEY_DCV_SERVER}
 {% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}

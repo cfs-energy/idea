@@ -65,6 +65,7 @@ class UserDAO:
                 'additional_groups': Utils.get_value_as_list('additional_groups', user),
                 'created_on': Utils.get_value_as_int('created_on', user),
                 'updated_on': Utils.get_value_as_int('updated_on', user),
+                'landing_page': Utils.get_value_as_string('landing_page', user),
             }
         )
 
@@ -101,6 +102,8 @@ class UserDAO:
             db_user['password_max_age'] = int(user.password_max_age)
         if user.additional_groups is not None:
             db_user['additional_groups'] = user.additional_groups
+        if user.landing_page is not None:
+            db_user['landing_page'] = user.landing_page
 
         return db_user
 

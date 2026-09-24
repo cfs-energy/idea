@@ -11,7 +11,7 @@ import {
     Link,
     SpaceBetween,
     StatusIndicator,
-    Table,
+    Table, TextContent
 } from "@cloudscape-design/components";
 import { v4 as uuid } from "uuid";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -24,8 +24,8 @@ import Utils from "../../common/utils";
 import { IdeaSideNavigationProps } from "../../components/side-navigation";
 import IdeaAppLayout, { IdeaAppLayoutProps } from "../../components/app-layout";
 import { withRouter } from "../../navigation/navigation-utils";
-import { NavigateFunction } from "react-router/dist/lib/hooks";
-import { CodeEditorProps } from "@cloudscape-design/components/code-editor/interfaces";
+import type { NavigateFunction } from "react-router-dom";
+import { CodeEditorProps } from "@cloudscape-design/components/code-editor";
 import 'ace-builds/css/ace.css';
 import 'ace-builds/css/theme/github_light_default.css';
 import 'ace-builds/css/theme/github_dark.css';
@@ -114,7 +114,7 @@ function AvailableVariable(props: AvailableVariableProps) {
     }
     return (
         <div>
-            <code style={getStyle()}>{props.name}</code>&nbsp;&nbsp;
+            <code style={getStyle()}>{props.name}</code>{' '}
             <Box variant="span"
                  color="text-body-secondary">
                 {getText()}
@@ -1011,7 +1011,7 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
                 href: '#/'
             },
             {
-                text: 'Script Workbench',
+                text: 'Write script',
                 href: '#/home/script-workbench'
             }
         ];
@@ -1019,11 +1019,10 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
         const content = (
             <Container>
                 <SpaceBetween size="l" direction="vertical">
-                    <Box variant="div">
-                        This form allows you to create and submit PBS job scripts directly without going through the application interface or using qsub.
-                        You must include all job parameters directly in your script using #PBS directives.
-                        <br/><br/>
-                        For more information, see:
+                    <TextContent>
+                        <p>This form allows you to create and submit PBS job scripts directly without going through the application interface or using qsub.
+                        You must include all job parameters directly in your script using #PBS directives.</p>
+                        <p>For more information, see:</p>
                         <ul>
                             <li>
                                 <Link external href="https://docs.idea-hpc.com/modules/hpc-workloads/user-documentation/submit-a-job">
@@ -1036,7 +1035,7 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
                                 </Link>
                             </li>
                         </ul>
-                    </Box>
+                    </TextContent>
 
                     {this.buildRequiredVariablesSection()}
                     {this.buildProjectAiModelsSection()}
@@ -1189,7 +1188,7 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
             ...this.props,
             contentType: "default",
             breadcrumbItems: breadcrumbs,
-            header: <Header variant="h1">Script Workbench</Header>,
+            header: <Header variant="h1">Write script</Header>,
             content: content
         };
 

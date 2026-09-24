@@ -53,7 +53,11 @@ import {
     RemoveSudoUserRequest,
     RemoveSudoUserResult,
     ResetPasswordRequest,
-    ResetPasswordResult, GetModuleInfoRequest, GetModuleInfoResult
+    ResetPasswordResult,
+    GetModuleInfoRequest,
+    GetModuleInfoResult,
+    UpdateMyPreferencesRequest,
+    UpdateMyPreferencesResult
 } from './data-model'
 import IdeaBaseClient, {IdeaBaseClientProps} from "./base-client";
 
@@ -64,11 +68,17 @@ export interface ReconcileReport {
     dry_run: boolean;
     checked: number; disabled: number; reenabled: number; missing: number; errors: number;
     refused: number; reason?: string; would_disable?: number; would_reenable?: number;
-    eligible_enabled?: number; max_disable_fraction?: number;
-    changes: Array<{username: string; action: string; upstream: Record<string, string>; applied?: boolean}>;
+    eligible_enabled?: number; max_disable_fraction?: number; truncated?: boolean;
+    changes: Array<{username: string; action: string; upstream: Record<string, string>; applied?: boolean; error?: string}>;
 }
 
 class AccountsClient extends IdeaBaseClient<AuthAdminClientProps>{
+
+    updateMyPreferences(req: UpdateMyPreferencesRequest): Promise<UpdateMyPreferencesResult> {
+        return this.apiInvoker.invoke_alt<UpdateMyPreferencesRequest, UpdateMyPreferencesResult>(
+            'Auth.UpdateMyPreferences', req
+        )
+    }
 
     reconcileUsers(req: {dry_run: boolean; override_max_disable_fraction?: boolean}): Promise<ReconcileReport> {
         return this.apiInvoker.invoke_alt('Accounts.ReconcileUsers', req);

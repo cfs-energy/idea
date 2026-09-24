@@ -1,6 +1,6 @@
 # Control my jobs
 
-Once your job is submitted ( [submit-a-job.md](submit-a-job.md "mention")), you can access the job information via the left sidebar, either under "**Active Jobs**" or "**Completed Jobs**" (depending whether your job is running or not).
+Once your job is submitted ( [submit-a-job.md](submit-a-job.md "mention")), you can access the job information via "**My jobs**", in either the "**Active**" or "**Completed**" view (depending whether your job is running or not).
 
 ## Active Jobs
 
@@ -12,7 +12,7 @@ As a regular user, you can only see your jobs. As an admin, you can view everyon
 
 <figure><img src="../../../.gitbook/assets/mods_hpc_control_view.webp" alt=""><figcaption><p>Real-Time view of the jobs available in the scheduler queue</p></figcaption></figure>
 
-You can terminate your running job(s) or get information about finished job(s) via the "**Jobs**" section available on the left sidebar.
+You can terminate your running job(s) or get information about finished job(s) via the "**My jobs**" page.
 
 To delete a job, select the job then click "**Actions**" > "**Delete Job**"
 
@@ -22,7 +22,7 @@ To get detailed information about a job, select the job id and refer to the Deta
 
 ## Completed Jobs
 
-Access "Completed Jobs" section on the left sidebar to get a historical of all the jobs.
+Access "My jobs" > "Completed" to get a historical of all the jobs.
 
 {% hint style="info" %}
 As a regular user, you can only see your jobs. As an admin, you can view everyone's else jobs (click "**Completed Jobs**" under the Admin section)

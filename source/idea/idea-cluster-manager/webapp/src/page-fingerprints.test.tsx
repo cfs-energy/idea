@@ -5,6 +5,7 @@ import App from './App';
 import { AppContext } from './common';
 import { fingerprint } from './dom-fingerprint';
 import { initTestAppContext } from './test-support';
+import HpcCustomAmis from './pages/hpc/hpc-custom-amis';
 import FileBrowser from './pages/home/file-browser';
 import MyVirtualDesktopSessions from './pages/virtual-desktops/my-virtual-desktop-sessions';
 import PieOrDonutChart from './components/charts/pie-or-donut-chart';
@@ -42,6 +43,20 @@ function stubVirtualDesktopSettings(context: AppContext) {
 }
 
 describe('page dom fingerprints', () => {
+    it('custom images', async () => {
+        const context = initTestAppContext();
+        vi.spyOn(context.auth(), 'isModuleAdmin').mockReturnValue(true);
+        vi.spyOn(context.getClusterSettingsService(), 'isSchedulerDeployed').mockReturnValue(true);
+        vi.spyOn(context.getClusterSettingsService(), 'isVirtualDesktopDeployed').mockReturnValue(true);
+        vi.spyOn(context.client().schedulerAdmin(), 'listComputeImages').mockResolvedValue({listing: []});
+        vi.spyOn(context.client().virtualDesktopAdmin(), 'listDesktopImages').mockResolvedValue({listing: []});
+        const {container} = render(<MemoryRouter><HpcCustomAmis {...pageProps}/></MemoryRouter>);
+        expect(await screen.findByRole('heading', {name: 'Custom images'})).toBeVisible();
+        expect(screen.getByLabelText('Breadcrumbs')).toHaveTextContent('Custom images');
+        await waitFor(() => expect(screen.queryByText('Loading images')).not.toBeInTheDocument());
+        expect(fingerprint(container)).toMatchSnapshot();
+    });
+
     it('sign-in', async () => {
         initTestAppContext();
         // HashRouter as in index.tsx: the unauthenticated route renders sign-in.
@@ -115,7 +130,7 @@ describe('page dom fingerprints', () => {
                 <MyVirtualDesktopSessions {...pageProps} />
             </MemoryRouter>
         );
-        await screen.findAllByText('Virtual Desktops');
+        expect(await screen.findByRole('heading', {name: 'My desktops'})).toBeInTheDocument();
         expect(fingerprint(container)).toMatchSnapshot();
     });
 
@@ -209,7 +224,7 @@ describe('page dom fingerprints', () => {
                 <FileBrowser {...pageProps} />
             </MemoryRouter>
         );
-        await screen.findAllByText('File Browser');
+        expect(await screen.findByRole('heading', {name: 'Files'})).toBeInTheDocument();
         expect(fingerprint(container)).toMatchSnapshot();
     });
 });

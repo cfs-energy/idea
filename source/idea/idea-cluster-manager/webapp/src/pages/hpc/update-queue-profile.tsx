@@ -23,6 +23,7 @@ import {SchedulerAdminClient} from "../../client";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import IdeaAppLayout, {IdeaAppLayoutProps} from "../../components/app-layout";
 import {withRouter} from "../../navigation/navigation-utils";
+import {Box} from "@cloudscape-design/components";
 
 export interface HpcUpdateQueueProfileProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
 
@@ -1005,7 +1006,7 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                                 if (error.payload && error.payload.validation_errors) {
                                     message = (
                                         <div>
-                                            <div><b>{error.message}</b></div>
+                                            <div><Box variant="strong">{error.message}</Box></div>
                                             {error.payload.validation_errors.results.map((entry: any) => {
                                                 return <li>({entry.error_code}) {entry.message}</li>
                                             })}

@@ -7,7 +7,8 @@
 # (Rocky 9 ships 8.7) still starts, and the policy's own list follows so older clients still connect.
 if command -v sshd > /dev/null 2>&1; then
   IDEA_PQ_KEX=$(ssh -Q kex 2>/dev/null | grep -E '^(mlkem768x25519-sha256|sntrup761x25519-sha512@openssh\.com)$' | paste -sd, -)
-  IDEA_POLICY_KEX=$(sshd -T 2>/dev/null | awk '/^kexalgorithms /{print $2}')
+  # Drop the post-quantum names from the policy list so a re-run (the running-desktop refresh) does not repeat them.
+  IDEA_POLICY_KEX=$(sshd -T 2>/dev/null | awk '/^kexalgorithms /{print $2}' | tr ',' '\n' | grep -v -E '^(mlkem768x25519-sha256|sntrup761x25519-sha512@openssh\.com)$' | paste -sd, -)
   if [ -n "${IDEA_PQ_KEX}" ]; then
     mkdir -p /etc/ssh/sshd_config.d
     echo "KexAlgorithms ${IDEA_PQ_KEX}${IDEA_POLICY_KEX:+,${IDEA_POLICY_KEX}}" > /etc/ssh/sshd_config.d/10-idea-kex.conf

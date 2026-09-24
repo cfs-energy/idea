@@ -54,6 +54,7 @@ from ideadatamodel.scheduler import (
 )
 from ideasdk.api import BaseAPI, ApiInvocationContext
 from ideasdk.utils import Utils
+from ideascheduler.app.metrics.job_metrics_backfill import JobMetricsBackfill
 
 import ideascheduler
 
@@ -79,7 +80,16 @@ class SchedulerAdminAPI(BaseAPI):
         self.SCOPE_WRITE = f'{self.context.module_id()}/write'
         self.SCOPE_READ = f'{self.context.module_id()}/read'
 
+        self.job_metrics_backfill = JobMetricsBackfill(context)
         self.acl = {
+            'SchedulerAdmin.BackfillJobMetrics': {
+                'scope': None,
+                'method': self.backfill_job_metrics,
+            },
+            'SchedulerAdmin.GetJobMetricsBackfill': {
+                'scope': None,
+                'method': self.get_job_metrics_backfill,
+            },
             'SchedulerAdmin.ListActiveJobs': {
                 'scope': self.SCOPE_READ,
                 'method': self.list_active_jobs,
@@ -188,6 +198,14 @@ class SchedulerAdminAPI(BaseAPI):
             },
         }
         self._compute_images = None
+
+    def backfill_job_metrics(self, context: ApiInvocationContext):
+        context.success(
+            self.job_metrics_backfill.start_request(context.request_payload)
+        )
+
+    def get_job_metrics_backfill(self, context: ApiInvocationContext):
+        context.success(self.job_metrics_backfill.status())
 
     def list_active_jobs(self, context: ApiInvocationContext):
         payload = context.get_request_payload_as(ListJobsRequest)

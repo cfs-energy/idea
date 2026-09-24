@@ -31,3 +31,27 @@ def test_missing_or_unsafe_ids_fail_before_writing(uid, gid, tmp_path):
     with pytest.raises(Exception, match='positive uid and gid'):
         helper.initialize()
     assert not home.exists()
+
+
+def test_ppk_conversion_runs_without_su_and_owns_the_result(monkeypatch, tmp_path):
+    user = User(username='user', uid=12001, gid=12002, home_dir=str(tmp_path))
+    helper = UserHomeDirectory(Mock(), user)
+    (tmp_path / '.ssh').mkdir()
+    key = tmp_path / '.ssh/id_rsa'
+    key.write_text('PRIVATE KEY\n')
+    puttygen = tmp_path / 'puttygen'
+    puttygen.write_text('')
+    puttygen.chmod(0o755)
+    helper._shell = Mock()
+    helper._shell.invoke.return_value = Mock(returncode=0, stdout=f'{puttygen}\n')
+    chown = Mock()
+    monkeypatch.setattr('os.chown', chown)
+
+    def convert(args, **kwargs):
+        assert args == [str(puttygen), str(key), '-o', str(key.with_suffix('.ppk'))]
+        key.with_suffix('.ppk').write_text('converted key\n')
+        return Mock(returncode=0)
+
+    monkeypatch.setattr('subprocess.run', convert)
+    assert helper.get_key_material('ppk') == 'converted key'
+    chown.assert_called_once_with(str(key.with_suffix('.ppk')), 12001, 12002)

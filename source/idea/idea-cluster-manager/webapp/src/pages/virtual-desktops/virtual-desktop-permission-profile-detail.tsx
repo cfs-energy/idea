@@ -213,7 +213,7 @@ class VirtualDesktopPermissionProfileDetail extends Component<VirtualDesktopPerm
                         href: '#/virtual-desktop/sessions'
                     },
                     {
-                        text: 'Permission Profiles',
+                        text: 'Desktop permissions',
                         href: '#/virtual-desktop/permission-profiles'
                     },
                     {

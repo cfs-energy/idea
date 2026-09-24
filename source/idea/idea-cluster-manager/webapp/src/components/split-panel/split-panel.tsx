@@ -13,7 +13,7 @@
 
 import React, {Component} from "react";
 import {Button, ButtonDropdown, Header, SpaceBetween, SplitPanel} from "@cloudscape-design/components";
-import {ButtonDropdownProps} from "@cloudscape-design/components/button-dropdown/interfaces";
+import {ButtonDropdownProps} from "@cloudscape-design/components/button-dropdown";
 
 export interface IdeaSplitPanelAction {
     id: string

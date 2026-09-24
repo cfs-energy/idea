@@ -4,7 +4,7 @@ description: How to share your result files on IDEA
 
 # Data Sharing Between Users
 
-* Navigate to your IDEA cluster > account settings
+* Navigate to your IDEA cluster > the header account menu > My account
 
 <figure><img src="../../.gitbook/assets/f445dc5a-a54b-44ad-bcd4-2871ad3dd3e3.png" alt=""><figcaption></figcaption></figure>
 

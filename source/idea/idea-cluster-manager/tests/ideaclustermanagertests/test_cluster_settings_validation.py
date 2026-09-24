@@ -20,6 +20,9 @@ class FakeConfig:
             'cluster.aws.region': region,
         }
 
+    def get_config(self, key, default=None, required=False):
+        return None
+
     def get_list(self, key, default=None):
         return self.values.get(key, default)
 
@@ -114,7 +117,9 @@ class TestBedrockCatalogValidation(unittest.TestCase):
 
 class TestClusterSettingsValidation(unittest.TestCase):
     def setUp(self):
-        self.api = ClusterSettingsAPI(Mock())
+        app = Mock()
+        app.get_cluster_module_info.return_value = None
+        self.api = ClusterSettingsAPI(app)
 
     def test_allowed_settings_valid(self):
         """Test that allowed settings pass validation"""
@@ -197,17 +202,17 @@ class TestClusterSettingsValidation(unittest.TestCase):
             'scheduler', {'compute_node_ami': 'ami-0123'}
         )
 
-    def test_another_scheduler_setting_is_still_rejected(self):
-        """the allowance is one key wide, not the whole scheduler module"""
+    def test_an_uncataloged_scheduler_setting_is_still_rejected(self):
+        """Expanding the catalog must not make unknown paths writable."""
 
         with self.assertRaises(exceptions.SocaException) as context:
             self.api.validate_settings_allowed(
                 'scheduler',
-                {'compute_node_ami': 'ami-0123', 'compute_node_os': 'rocky9'},
+                {'compute_node_ami': 'ami-0123', 'unknown_setting': 'unused'},
             )
 
         self.assertIn(
-            'not allowed to be updated via web UI: compute_node_os.',
+            'not allowed to be updated via web UI: unknown_setting.',
             str(context.exception),
         )
 
@@ -413,6 +418,11 @@ class TestReconcileSettingsValidation(unittest.TestCase):
                 ):
                     self.validate({key: value})
 
+    def test_checkpoints_are_not_editable(self):
+        for key in ('last_completed', 'last_run', 'last_saved'):
+            with self.subTest(key=key), self.assertRaises(exceptions.SocaException):
+                self.validate({key: 0})
+
     def test_boundaries(self):
         for minutes in (1, 1440):
             for fraction in (0, 1):
@@ -467,6 +477,7 @@ class TestReconcileSettingsValidation(unittest.TestCase):
         self.api.context.config().db.sync_cluster_settings_in_db.assert_not_called()
 
     def test_update_writes_flat_reconcile_keys(self):
+        self.api.context.accounts = Mock()
         invocation = Mock()
         invocation.get_request_payload_as.return_value = UpdateModuleSettingsRequest(
             module_id='cluster-manager',
@@ -486,6 +497,8 @@ class TestReconcileSettingsValidation(unittest.TestCase):
             overwrite=True,
         )
         invocation.success.assert_called_once()
+        self.api.context.accounts.reconciler.settings_changed.assert_called_once()
+        self.api.context.config().db.set_config_entry.assert_called_once()
 
 
 def test_manager_cannot_write_reconciliation_settings():

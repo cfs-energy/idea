@@ -1,6 +1,6 @@
 import React, {useCallback, useEffect, useMemo, useRef, useState} from "react";
 import {Button, FormField, Input} from "@cloudscape-design/components";
-import {InputProps} from "@cloudscape-design/components/input/interfaces";
+import {InputProps} from "@cloudscape-design/components/input";
 import Utils from "../../common/utils";
 
 /** The current directory, as a trail of clickable ancestors that can be swapped for a text field and

@@ -1,3 +1,5 @@
-## Virtual Desktop Software Stack
+## Images and applications
+
+### Desktop images
 
 Context help coming soon ...

@@ -1,9 +1,9 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.27@sha256:bde3983e9c939224420ddaf6b784cc30e09b035a4dea01f581230c50809f372e
 # Build the control-plane image. IDEA_CONTAINER_ROLE selects the task process.
 # Use the repository root as the build context:
 #   docker buildx build --platform linux/amd64,linux/arm64 \
 #     --build-context dcv-packages=/path/to/dcv-packages \
-#     -f deployment/ecr/idea-control-plane/Dockerfile --build-arg IDEA_VERSION=26.09.3 .
+#     -f deployment/ecr/idea-control-plane/Dockerfile --build-arg IDEA_VERSION=26.09.4 .
 # Copy the release tarballs into this directory before the build.
 # The dcv-packages context contains NICE-GPG-KEY, checksums.txt, the broker RPM,
 # both gateway RPMs, and both DCV archives. checksums.txt covers each package
@@ -68,7 +68,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
       adcli krb5-workstation sssd-ad sssd-ldap sssd-tools realmd authselect openssh-server openssh-clients \
       java-11-amazon-corretto-headless \
       nginx openssl nmap-ncat \
-      glibc-langpack-en shadow-utils procps-ng iproute hostname sudo util-linux jq tar gzip which awscli-2 curl-minimal \
+      glibc-langpack-en libatomic shadow-utils procps-ng iproute hostname sudo util-linux jq tar gzip which awscli-2 curl-minimal \
   && dnf clean all
 
 # Install the session-manager broker, connection gateway, and web viewer from the
@@ -125,7 +125,7 @@ RUN cp -a /tmp/idea-gateway/static_resources/. /usr/share/dcv/www/ && rm -rf /tm
 
 # Build ideactl and include its pinned CDK CLI.
 # The build uses the repository path expected by its resource-copy script.
-ARG NODE_VERSION=22.23.2
+ARG NODE_VERSION=26.8.2
 RUN set -eux; \
     case "${TARGETARCH:-}" in \
       amd64) N=x64 ;; \

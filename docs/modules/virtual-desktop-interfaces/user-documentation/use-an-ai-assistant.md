@@ -4,7 +4,7 @@ description: Call the models your project allows from a Linux or Windows virtual
 
 # Use an AI assistant
 
-Your virtual desktop can call Amazon Bedrock models when two things are true: the cluster administrator has enabled Bedrock, and your project has been granted at least one model. Both are visible under **Account Settings** > **My Projects**. The **AI Models** column lists the models your project can invoke; if the column is absent, the feature is off for this cluster.
+Your virtual desktop can call Amazon Bedrock models when two things are true: the cluster administrator has enabled Bedrock, and your project has been granted at least one model. Both are visible under **My account** > **My Projects**. The **AI Models** column lists the models your project can invoke; if the column is absent, the feature is off for this cluster.
 
 ## Credentials
 
@@ -37,7 +37,7 @@ aws bedrock-runtime converse \
   --messages '[{"role":"user","content":[{"text":"Summarize the file I just wrote."}]}]'
 ```
 
-The `--model-id` value is your project's **application inference profile ARN**, not the model id. Both are listed under **Account Settings** > **My Projects** > **AI Models**: the model id on the first line, the profile ARN under it. The policy requires the call to go through the profile, so a bare foundation model id is denied.
+The `--model-id` value is your project's **application inference profile ARN**, not the model id. Both are listed under **My account** > **My Projects** > **AI Models**: the model id on the first line, the profile ARN under it. The policy requires the call to go through the profile, so a bare foundation model id is denied.
 
 A model showing `Not provisioned yet` has been granted but its profile has not been created; it becomes usable once the cluster reconciles the project.
 

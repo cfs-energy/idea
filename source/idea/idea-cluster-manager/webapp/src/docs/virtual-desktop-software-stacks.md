@@ -1,4 +1,6 @@
-## Manage Software Stacks
+## Images and applications
+
+### Desktop images
 
 Manage your Windows and Linux software stack. A stack is an EC2 AMI with pre-configured applications.
 

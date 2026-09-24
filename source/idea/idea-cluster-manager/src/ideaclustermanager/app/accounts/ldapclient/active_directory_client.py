@@ -196,10 +196,16 @@ class ActiveDirectoryClient(AbstractLDAPClient):
             filterstr=f'(&{self.ldap_user_filterstr}{selector})',
             trace=False,
         )
-        if not results and identity:
+        if not results and not identity and email:
+            selector = f'(sAMAccountName={escape_filter_chars(username)})'
+            results = self.search_s(
+                base=self.ldap_user_base,
+                filterstr=f'(&{self.ldap_user_filterstr}{selector})',
+                trace=False,
+            )
+        if not results:
             return None
         if len(results) != 1:
-            # An unbound identity or duplicate email cannot establish upstream deletion.
             raise ValueError('Directory identity must resolve uniquely')
         attributes = results[0][1]
         guid = attributes.get('objectGUID', [])

@@ -90,7 +90,7 @@ First, query your IDEA configuration to verify if the integration is active by c
 +-----------------------------+-------+---------+
 ```
 
-Alternatively, you can validate this setting via the web interface under "**Cluster Settings**":
+Alternatively, you can validate this setting via the web interface under "**Administration**" > "**Settings**":
 
 ![](../../../.gitbook/assets/ftu\_ops\_update\_backup.webp)
 
@@ -148,6 +148,6 @@ You can now re-run the `./idea-admin.sh config show` command to validate the con
 
 ```
 
-Alternatively, you can validate this setting via the web interface under "**Cluster Settings**" and config the integration with AWS Backup is now disabled.
+Alternatively, you can validate this setting via the web interface under "**Administration**" > "**Settings**" and config the integration with AWS Backup is now disabled.
 
 ![](../../../.gitbook/assets/ftu\_ops\_update\_backup\_dis.webp)

@@ -13,7 +13,7 @@
 
 import React, {Component, RefObject} from "react";
 import {Box, Button, Container, Form, Grid, Header, Modal, SpaceBetween} from "@cloudscape-design/components";
-import {ModalProps} from "@cloudscape-design/components/modal/interfaces";
+import {ModalProps} from "@cloudscape-design/components/modal";
 import {SocaUserInputChoice, SocaUserInputParamMetadata, User, VirtualDesktopPermissionProfile, VirtualDesktopSession, VirtualDesktopSessionPermission, ListUsersInGroupResult} from "../../../client/data-model";
 import {AuthClient, ProjectsClient, VirtualDesktopClient} from "../../../client";
 import {AppContext} from "../../../common";

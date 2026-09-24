@@ -1,6 +1,6 @@
 import React, {useState} from "react";
 import {Badge, Box, Button, ColumnLayout, Container, Header, SpaceBetween, Table} from "@cloudscape-design/components";
-import {TableProps} from "@cloudscape-design/components/table/interfaces";
+import {TableProps} from "@cloudscape-design/components/table";
 import {GetMyCostsSummaryResult, MyCostsDesktopSession, MyCostsJob, MyCostsJobGroup} from "../client/data-model";
 import Utils from "../common/utils";
 
@@ -47,7 +47,7 @@ export const unpricedNote = (unpriced?: number, rowCount?: number, noun?: string
 
 const empty = (title: string, message: string) => (
     <Box textAlign="center" color="inherit">
-        <b>{title}</b>
+        <Box variant="strong">{title}</Box>
         <Box variant="p" color="inherit">{message}</Box>
     </Box>
 )
@@ -123,6 +123,7 @@ const CostSections: React.FC<CostSectionsProps> = ({summary, loading, error, onR
 
     const [expandedAi, setExpandedAi] = useState<AiRow[]>([])
 
+    const period = summary?.window === 'calendar_month' ? 'this calendar month' : 'the last 30 days'
     const who = subject === 'self' ? 'You have' : 'This user has'
 
     const aiRows = (): AiRow[] => (summary?.ai?.projects ?? []).map((project) => ({
@@ -150,7 +151,7 @@ const CostSections: React.FC<CostSectionsProps> = ({summary, loading, error, onR
         if (error != null) {
             return (
                 <Box textAlign="center" color="inherit">
-                    <b>Could not load these costs</b>
+                    <Box variant="strong">Could not load these costs</Box>
                     <Box variant="p" color="inherit">{error}</Box>
                     {onRetry != null && <Button onClick={onRetry}>Retry</Button>}
                 </Box>
@@ -202,7 +203,7 @@ const CostSections: React.FC<CostSectionsProps> = ({summary, loading, error, onR
                     }}
                     empty={ai?.is_unavailable
                         ? empty('AI usage is not available', 'IDEA could not read the Bedrock usage.')
-                        : tableEmpty('No AI usage', `${who} not invoked a model in a project in the last 30 days.`)}
+                        : tableEmpty('No AI usage', `${who} not invoked a model in a project in ${period}.`)}
                 />
             </SpaceBetween>
         </Container>
@@ -235,7 +236,7 @@ const CostSections: React.FC<CostSectionsProps> = ({summary, loading, error, onR
                     columnDefinitions={DESKTOP_COLUMNS}
                     empty={desktops?.is_unavailable
                         ? empty('Desktop costs are not available', 'IDEA could not read the desktop sessions.')
-                        : tableEmpty('No desktops', `${who} not run a virtual desktop in the last 30 days.`)}
+                        : tableEmpty('No desktops', `${who} not run a virtual desktop in ${period}.`)}
                 />
             </SpaceBetween>
         </Container>
@@ -266,7 +267,7 @@ const CostSections: React.FC<CostSectionsProps> = ({summary, loading, error, onR
                     columnDefinitions={GROUP_COLUMNS('Project')}
                     empty={jobs?.is_unavailable
                         ? empty('Job costs are not available', 'IDEA could not read the completed jobs.')
-                        : tableEmpty('No completed jobs', `${who} not completed a job in the last 30 days.`)}
+                        : tableEmpty('No completed jobs', `${who} not completed a job in ${period}.`)}
                 />
                 <Table
                     variant="embedded"
@@ -285,7 +286,7 @@ const CostSections: React.FC<CostSectionsProps> = ({summary, loading, error, onR
                     loading={loading}
                     loadingText="Retrieving jobs ..."
                     columnDefinitions={JOB_COLUMNS}
-                    empty={empty('No completed jobs', `${who} not completed a job in the last 30 days.`)}
+                    empty={empty('No completed jobs', `${who} not completed a job in ${period}.`)}
                 />
             </SpaceBetween>
         </Container>
@@ -293,9 +294,11 @@ const CostSections: React.FC<CostSectionsProps> = ({summary, loading, error, onR
 
     return (
         <SpaceBetween size="l">
-            {showAiSection(summary, loading) && renderAi()}
-            {renderDesktops()}
-            {renderJobs()}
+            <section id="cost-ai" tabIndex={-1} aria-label="AI cost details">
+                {showAiSection(summary, loading) ? renderAi() : <Box>No AI usage in this period.</Box>}
+            </section>
+            <section id="cost-desktops" tabIndex={-1} aria-label="Desktop cost details">{renderDesktops()}</section>
+            <section id="cost-jobs" tabIndex={-1} aria-label="Job cost details">{renderJobs()}</section>
         </SpaceBetween>
     )
 }

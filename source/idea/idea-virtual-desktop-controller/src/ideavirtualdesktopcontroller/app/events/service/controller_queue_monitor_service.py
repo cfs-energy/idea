@@ -195,7 +195,30 @@ class ControllerQueueMonitorService(SocaService):
             f'[msg-id: {message_id}] Handling SSM Command message for command id {command_id}'
         )
 
-        if ssm_command.command_type == VirtualDesktopSSMCommandType.RESUME_SESSION:
+        if ssm_command.command_type in {
+            VirtualDesktopSSMCommandType.REFRESH_BOOTSTRAP,
+            VirtualDesktopSSMCommandType.REFRESH_SSH_KEX,
+        }:
+            if status not in {'Success', 'Failed', 'Cancelled', 'TimedOut'}:
+                return
+            session_id = ssm_command.additional_payload['idea_session_id']
+            if status == 'Success':
+                instance_id = ssm_command.additional_payload['instance_id']
+                server = self._server_db.get(instance_id=instance_id)
+                # An old SSH-only command has no version and cannot mark this set.
+                version = ssm_command.additional_payload.get('refresh_version')
+                if (
+                    server is not None
+                    and server.idea_session_id == session_id
+                    and version is not None
+                ):
+                    self._server_db.mark_bootstrap_refreshed(instance_id, version)
+            else:
+                self._logger.warning(
+                    f'Bootstrap refresh failed for session {session_id}: {status}'
+                )
+            self._ssm_commands_db.delete(command_id)
+        elif ssm_command.command_type == VirtualDesktopSSMCommandType.RESUME_SESSION:
             self._events_utils.publish_resume_session_command_status_event(
                 idea_session_id=Utils.get_value_as_string(
                     'idea_session_id', ssm_command.additional_payload, ''

@@ -90,7 +90,7 @@ export function JobSubmissionsWidget() {
             yTitle="Jobs Submitted"
             empty={
                 <Box textAlign="center" color="inherit">
-                    <b>No data available</b>
+                    <Box variant="strong">No data available</Box>
                     <Box variant="p" color="inherit">
                         There is no data available
                     </Box>
@@ -98,7 +98,7 @@ export function JobSubmissionsWidget() {
             }
             noMatch={
                 <Box textAlign="center" color="inherit">
-                    <b>No matching data</b>
+                    <Box variant="strong">No matching data</Box>
                     <Box variant="p" color="inherit">
                         There is no matching data to display
                     </Box>

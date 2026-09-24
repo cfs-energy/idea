@@ -324,3 +324,19 @@ def context(ddb_local):
 
     print('cluster manager context clean-up ...')
     monkeypatch.undo()
+
+
+@pytest.fixture(autouse=True)
+def collector_http_transport(monkeypatch):
+    from unittest.mock import Mock
+    from ideasdk.metrics.datadog_api import DatadogAPI
+    from ideaclustermanagertests.metrics_fakes import FakeContext
+
+    original = DatadogAPI.from_context
+
+    def transport(context):
+        if isinstance(context, FakeContext):
+            return Mock(log=lambda entries: context.metrics_service.publish(entries))
+        return original(context)
+
+    monkeypatch.setattr(DatadogAPI, 'from_context', transport)

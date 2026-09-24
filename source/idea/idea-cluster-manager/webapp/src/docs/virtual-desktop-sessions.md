@@ -1,4 +1,6 @@
-## Manage Virtual Desktop
+## Manage desktops
+
+### Sessions
 
 Manage all Virtual Desktops running on your IDEA cluster
 

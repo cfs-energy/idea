@@ -20,7 +20,7 @@ Permissions profiles are customizable by the IDEA administrator. Refer to [permi
 
 ## How to access a shared session
 
-Click "**Shared Desktops**" section on the left sidebar to see all the virtual desktop(s) shared with you.
+Click "**My desktops**" > "**Shared**" to see all the virtual desktop(s) shared with you.
 
 <figure><img src="../../../.gitbook/assets/mods_vdi_user_share_accessmenu.webp" alt=""><figcaption><p>Access your shared desktops</p></figcaption></figure>
 

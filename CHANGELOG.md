@@ -1,8 +1,38 @@
 # Change Log
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
+
+## [Unreleased]
+
+* **Cost header**: administrators can enable a compact cached WTD, MTD, QTD or YTD personal cost total beside the signed-in user's name, with its as-of time and a link to My costs.
+* **Landing page and Home**: administrators can choose the portal's default landing destination, users can override it for their own account, and Home now independently loads the cost billboard, recent jobs and desktops, and quick links instead of static marketing content.
+* **Custom images**: rename Job images to Custom images across administrator navigation, page titles and guides to reflect job and desktop image building.
+* **Health**: hide an empty Infrastructure hosts section on container clusters; host clusters retain their existing view.
+* **Live services**: Desktop services and Job service use a fixed-width role-first table with full service names, multi-tag images, digests and task health in popovers, plus rollout indicators and relative deployment times.
+
+* **Metrics history**: administrators can backfill native job and cost metrics through the Datadog HTTP API.
+* **Personal storage**: Home and My costs now share durable calendar-month estimates for completed-job compute, desktop time, provisioned desktop disks, dated shared-storage allocation, and daily token-apportioned AI. A leader-only collector publishes every user's five facets and daily series at startup and every 15 minutes to a dedicated table; personal reads and the MTD ticker use stored generations. Compact comparison charts, coverage badges, missing-day notes, collecting estimates and deduplicated refresh requests keep unknown costs explicit and visible amounts stable. My costs groups folder usage and quotas separately from calculation rules. Files retains folder deletion with size and age details and exact folder-name confirmation; large scans return partial results and usage is cached for one hour.
+* **Portal navigation**: user destinations and administrative task tabs retain existing route aliases and per-view access filters, align page and breadcrumb names, give My jobs actions their own leaves, preserve configured report titles, and refresh related Settings, storage, Files, help, and guide copy.
+* **Settings administration**: frequently used groups lead the navigation and rarely changed groups sit under Advanced; sections use key-value view mode with one Edit/Save/Cancel cycle at a time, only restart and upgrade badges remain, and search uses a Setting/Group/Key results table.
+* **Costs by user**: adds shared-storage cost and GB columns, keeps AI totals, sorts by Total, and opens the five-facet personal cost view with project AI spend in a split panel; the separate AI navigation tab is removed.
+* **Portal polish**: SSH access and the Files transfer help use Cloudscape steps, copy buttons and text content; the Files toolbar keeps the same buttons whatever is selected; queue status, empty states, confirmations and help panels drop hand-styled markup for Cloudscape primitives, and the portal lint now rejects presentational HTML outside TextContent.
+* **Dependencies**: the portal moves to Font Awesome 7, xterm 6, Uppy 6, react-router 7 and Vitest 4; the build, image and tool run on Node 26.8.2; grouped minor and patch updates across the tool, portal and Python packages.
+
+### **🐛 Bug Fixes**
+* **Upgrades survive a flaky network**: AWS calls retry transient network failures for about two and a half minutes with growing backoff (1, 2, 4, 8, 16 s, then 20 s), and a CDK deploy that fails on a network error is run again with the same backoff; other failures still stop at once. Container services may replace one of two replicas before its successor starts, so a rollout no longer waits on a host with spare memory.
+* **No more surprise password prompts**: Amazon Linux and Red Hat family desktops stop asking for your password through GNOME Online Accounts, and Online Accounts keeps working, the same way it already does on Ubuntu desktops. New desktops get it from the start; running desktops pick it up within a few hours and apply it at your next log out and back in.
+* **Files is back**: on container clusters, Files could not open your home folder. It now browses, uploads and downloads as before, shows how much space each folder takes and how long since anything in it changed, and lets you delete a folder you no longer need after you type its name to confirm.
+* **Post-quantum SSH key exchange**: existing Linux desktops receive the sshd drop-in after READY, off the boot path.
+* **Account reconciliation**: the admin page opens with saved table values, applies saves immediately, and shows the next run and last result. The main view has an on/off switch and dry-run/apply buttons; optional settings are under Advanced. Users deleted before their first scan are treated as missing after email and username lookups. Individual read errors leave those users unchanged while successful reads can still apply; errors above the cap or an unreachable directory refuse the run.
+* **Rolling upgrades don't drop replicas anymore**: new tasks come up and pass a real app health check before old ones drain, so the portal, controller, broker and gateway stay at full strength through an image upgrade. A surge that doesn't fit on the three hosts borrows a fourth for the length of the deploy and gives it back. Global settings are updated in place instead of deleted and rewritten, and leftovers are cleared after the last stack. The scheduler is still a single task by design; expect job submission to pause for about a minute and a half while it swaps (87 s measured on dev)
+* **Borrowed container hosts are returned**: the upgrade drains the host it added beyond the group minimum once every service has rolled, and `return-hosts` does the same on demand.
+* **Image row follows the release**: `upgrade-cluster` moves `ecs.image` to the new release tag when it names the release repository at an older tag; a private-registry, digest-qualified or build-tagged image stays as set.
+* **Portal outage on a container-to-container upgrade**: `upgrade-cluster` held the `ecs` module-set row for the whole run on a cluster whose cluster-manager already resolves the container module, so every portal page answered 500 until the last stack finished. The row is held only for a cluster-manager from before 26.09.1
+* **Native cost and job metrics count once**: collector points carry no container tags and the outbox retires a point after it is sent, job points are stamped with the job's end time, unpriced jobs count as `job.price_unavailable` instead of `job.cost`, and job points carry `state` and both `cluster` and `idea_cluster`.
+
 
 ## [26.09.3] - 2026-09-18
 

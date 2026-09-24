@@ -24,7 +24,7 @@ If the window is turned on with no message, the banner and the job rejection bot
 
 ## Setting it from the portal
 
-Cluster Management, then Settings, then the **Maintenance** tab. Set the message and the end time, turn the toggle on, and save. All three values are written together, so the banner never appears carrying the previous window's text.
+Administration, then Settings, then **Maintenance notice**. Set the message and the end time, turn the toggle on, and save. All three values are written together, so the banner never appears carrying the previous window's text.
 
 You need to be a cluster administrator. Every signed-in user can read the three keys, which is how the banner reaches them; the rest of the cluster-manager settings stay admin-only.
 

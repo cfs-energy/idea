@@ -228,7 +228,8 @@ export function compareUpgradeDrift(input: UpgradeDriftInput): UpgradeDriftRepor
   const replaceGlobals = input.replaceGlobalSettings !== false;
   const syncFull = input.syncFullConfiguration !== false;
 
-  // Global rows are replaced wholesale unless the upgrade explicitly skips that phase.
+  // Global rows are updated in place; a row this release no longer generates is removed only
+  // after every stack has deployed, so nothing running reads a missing row.
   if (replaceGlobals) {
     const globalKeys = new Set(
       [...current.keys(), ...generated.keys()].filter((key) => key.startsWith("global-settings.")),
@@ -243,6 +244,9 @@ export function compareUpgradeDrift(input: UpgradeDriftInput): UpgradeDriftRepor
           key,
           finding("GLOBAL_REMOVE", "DELETE", key, currentRow, undefined, undefined, true),
         );
+      } else if (currentRow !== undefined && generatedRow !== undefined && /^global-settings\.module_sets\.[^.]+\.[^.]+\.module_id$/.test(key)) {
+        const result = addOnlyFinding(key, currentRow, generatedRow);
+        if (result !== undefined) findings.set(key, result);
       } else if (currentRow !== undefined && generatedRow !== undefined) {
         const typeChanged = dynamoValueType(currentRow.value) !== dynamoValueType(generatedRow.value);
         const valueChanged = !isDeepStrictEqual(currentRow.value, generatedRow.value);
@@ -311,6 +315,9 @@ export function compareUpgradeDrift(input: UpgradeDriftInput): UpgradeDriftRepor
     for (const [key, target] of targetRows) {
       if (selectedStackKeys.has(key)) throw new TypeError(`Multiple selected stacks own configuration key: ${key}`);
       selectedStackKeys.add(key);
+      // A Phase 3 write lands before the stack deploys and is the value the stack then reads
+      // back, so the report keeps naming the Phase 3 target instead of the stack's unknown one.
+      if (phase3.has(key)) continue;
       findings.set(
         key,
         finding(

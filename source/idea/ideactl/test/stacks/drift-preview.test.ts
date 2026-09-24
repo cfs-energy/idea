@@ -469,3 +469,19 @@ test("the metrics provider cutover is a planned write, never an operator edit at
   assert.deepEqual(report.changedRowsDifferingFromGenerated, []);
   assert.match(renderUpgradeDrift(report), /PROVIDER_CUTOVER\s+\w+\s+2/);
 });
+
+test("a global module id the operator set is kept; an obsolete global row is removed only after deployment", () => {
+  const report = compareUpgradeDrift({
+    current: [
+      { key: "global-settings.module_sets.default.scheduler.module_id", value: "batch" },
+      { key: "global-settings.obsolete", value: true },
+    ],
+    generated: [{ key: "global-settings.module_sets.default.scheduler.module_id", value: "scheduler" }],
+  });
+  assert.equal(report.findings.find((row) => row.key.endsWith(".scheduler.module_id"))?.action, "PRESERVE_DRIFT");
+  const obsolete = report.findings.find((row) => row.key === "global-settings.obsolete");
+  assert.equal(obsolete?.action, "GLOBAL_REMOVE");
+  assert.equal(obsolete?.effect, "DELETE");
+  assert.equal(report.totals.CHANGE, 0);
+  assert.deepEqual(report.changedRowsDifferingFromGenerated, []);
+});

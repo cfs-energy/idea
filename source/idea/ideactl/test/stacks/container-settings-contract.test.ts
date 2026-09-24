@@ -7,8 +7,15 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import test from "node:test";
-import { App, Aws, Fn } from "aws-cdk-lib";
+import test, { after } from "node:test";
+import { byType, resourcesOf, synthBastion, synthEcs, cleanupWorkdirs } from "../support/ecs-harness.ts";
+import { applicationContainerSettings } from "../../src/cdk/constructs/container.ts";
+
+after(cleanupWorkdirs);
+import { App, Aws, Fn, Stack } from "aws-cdk-lib";
+import * as iam from "aws-cdk-lib/aws-iam";
+import { Template } from "aws-cdk-lib/assertions";
+import { renderPolicy } from "../../src/cdk/policy.ts";
 import * as yaml from "js-yaml";
 
 import { ClusterConfig, MODULE_METADATA } from "../../src/config/cluster-config.ts";
@@ -305,4 +312,116 @@ test("the ECS template declares every configuration key", () => {
 
 test("the ECS stack publishes every cutover setting by name", () => {
   assert.deepEqual(Object.keys(publishedSettings()).sort(), PUBLISHED_SETTING_KEYS);
+});
+
+test("the host pool takes its bounds from the rows and drains managed instances", () => {
+  // Three hosts at rest, four at most: a surge that does not fit borrows the fourth for the
+  // length of the deployment and managed scaling gives it back.
+  const resources = resourcesOf(synthEcs(true));
+  const group = byType(resources, "AWS::AutoScaling::AutoScalingGroup")[0]![1];
+  assert.equal(group.Properties.MinSize, String(ECS_HOST_SETTINGS["ecs.hosts.min"]));
+  assert.equal(group.Properties.MaxSize, String(ECS_HOST_SETTINGS["ecs.hosts.max"]));
+  assert.equal(group.UpdatePolicy?.AutoScalingRollingUpdate, undefined);
+  assert.equal(group.UpdatePolicy?.AutoScalingReplacingUpdate, undefined);
+  assert.equal(group.Properties.NewInstancesProtectedFromScaleIn, true);
+  const provider = byType(resources, "AWS::ECS::CapacityProvider")[0]![1].Properties.AutoScalingGroupProvider;
+  assert.equal(provider.ManagedScaling.TargetCapacity, 100);
+  assert.equal(provider.ManagedDraining, "ENABLED");
+  assert.equal(provider.ManagedTerminationProtection, "ENABLED");
+  const service = byType(resources, "AWS::ECS::Service")[0]![1].Properties;
+  assert.deepEqual({ ...service.DeploymentConfiguration, Alarms: undefined }, {
+    Alarms: undefined,
+    MinimumHealthyPercent: 50, MaximumPercent: 100,
+    DeploymentCircuitBreaker: { Enable: true, Rollback: true },
+  });
+  assert.equal(service.HealthCheckGracePeriodSeconds, undefined);
+  const container = byType(resources, "AWS::ECS::TaskDefinition")[0]![1].Properties.ContainerDefinitions[0];
+  assert.deepEqual(container.HealthCheck.Command, ["CMD", "agent", "health"]);
+  assert.equal(container.StopTimeout, 30);
+});
+
+test("bastion keeps one healthy task while an SSH replacement starts", () => {
+  const resources = resourcesOf(synthBastion());
+  const service = byType(resources, "AWS::ECS::Service")[0]![1].Properties;
+  assert.equal(service.DesiredCount, 2);
+  assert.deepEqual({ ...service.DeploymentConfiguration, Alarms: undefined }, {
+    Alarms: undefined,
+    // One of two may stop before its replacement places: at 100 a one-per-host pair needs a third
+    // host with room, and the rollout waits until the stack times out when none has it.
+    MinimumHealthyPercent: 50, MaximumPercent: 150,
+    DeploymentCircuitBreaker: { Enable: true, Rollback: true },
+  });
+  assert.equal(service.HealthCheckGracePeriodSeconds, 270);
+  // Zone spread first, then pack by memory, so the borrowed host can empty and be returned.
+  assert.deepEqual(service.PlacementStrategies, [
+    { Type: "spread", Field: "attribute:ecs.availability-zone" },
+    { Type: "binpack", Field: "MEMORY" },
+  ]);
+  const container = byType(resources, "AWS::ECS::TaskDefinition")[0]![1].Properties.ContainerDefinitions[0];
+  assert.match(container.HealthCheck.Command.join(" "), /ssh-keyscan/);
+  assert.equal(container.StopTimeout, 30);
+  const group = byType(resources, "AWS::ElasticLoadBalancingV2::TargetGroup")[0]![1].Properties;
+  assert.equal(group.HealthCheckProtocol, "TCP");
+  assert.equal(group.HealthCheckPort, "22");
+  assert.equal(group.HealthCheckIntervalSeconds, 5);
+  assert.equal(group.HealthyThresholdCount, 2);
+  assert.equal(group.TargetGroupAttributes.find((entry: { Key: string }) => entry.Key === "deregistration_delay.timeout_seconds").Value, "30");
+});
+
+test("readiness checks use the application endpoints on every role", () => {
+  for (const role of ["cluster-manager", "vdc", "dcv-broker", "dcv-gateway", "bastion-host"] as const) {
+    const settings = applicationContainerSettings(role);
+    assert.equal(settings.healthCheck?.interval?.toSeconds(), 5);
+    assert.equal(settings.stopTimeout?.toSeconds(), 30);
+    const command = settings.healthCheck!.command.join(" ");
+    assert.match(command, role === "dcv-broker" ? /8444\/health.*8445\/health.*8446\/health/ : role === "dcv-gateway" ? /8989/ : role === "bastion-host" ? /ssh-keyscan/ : /https:\/\/localhost:8443\/healthcheck/);
+  }
+});
+
+test("three resting hosts can borrow a fourth for each service surge", () => {
+  const settings = ECS_TASK_SETTINGS as Record<string, number>;
+  const roles = ["bastion-host", "cluster-manager", "vdc", "scheduler", "dcv-broker", "dcv-gateway"];
+  const tasks = roles.map(role => ({
+    role, cpu: settings[`ecs.tasks.${role}.cpu`]!,
+    memory: settings[`ecs.tasks.${role}.memory`]! + (role === "bastion-host" ? 0 : role === "scheduler" ? 64 : 32),
+    desired: settings[`ecs.tasks.${role}.desired`]!,
+  }));
+  const minimum = ECS_HOST_SETTINGS["ecs.hosts.min"];
+  const maximum = ECS_HOST_SETTINGS["ecs.hosts.max"];
+  assert.equal(minimum, 3);
+  assert.equal(maximum, 4);
+  const usableMemory = 8192 - 512 - 512;
+  const hosts = Array.from({length: minimum}, () => ({memory: 0, cpu: 0, roles: new Set<string>()}));
+  const resting = tasks.flatMap(task => Array.from({length: task.desired}, () => task)).sort((a, b) => b.memory - a.memory);
+  function place(index: number): boolean {
+    const task = resting[index];
+    if (task === undefined) return true;
+    for (const host of hosts) {
+      if (host.roles.has(task.role) || host.memory + task.memory > usableMemory || host.cpu + task.cpu > 2046) continue;
+      host.roles.add(task.role); host.memory += task.memory; host.cpu += task.cpu;
+      if (place(index + 1)) return true;
+      host.roles.delete(task.role); host.memory -= task.memory; host.cpu -= task.cpu;
+    }
+    return false;
+  }
+  assert.ok(place(0), "the resting tasks fit the configured minimum");
+  for (const task of tasks.filter(task => task.role !== "scheduler")) {
+    assert.ok(maximum > minimum, "a surge can borrow a host outside the resting pool");
+    assert.ok(task.memory <= usableMemory && task.cpu <= 2046, task.role);
+  }
+});
+
+
+test("synthesized cluster-manager policy permits retirement only on the outbox prefix", () => {
+  const stack = new Stack();
+  new iam.ManagedPolicy(stack, "collector-policy", {
+    document: iam.PolicyDocument.fromJson(renderPolicy("cluster-manager.yml", {config: ecsConfig(), moduleId: "cluster-manager"})),
+  });
+  const policies = Template.fromStack(stack).findResources("AWS::IAM::ManagedPolicy");
+  const policy = Object.values(policies)[0]!;
+  const statements = policy.Properties.PolicyDocument.Statement as Array<{Action: string | string[]; Resource: string | string[]; Effect: string}>;
+  const deletes = statements.filter(statement => [statement.Action].flat().includes("s3:DeleteObject"));
+  assert.equal(deletes.length, 1);
+  assert.equal(deletes[0]!.Effect, "Allow");
+  assert.deepEqual([deletes[0]!.Resource].flat(), ["arn:aws:s3:::sample-cluster-bucket/metrics/outbox/*"]);
 });

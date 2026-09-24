@@ -16,12 +16,12 @@ import React, {Component, RefObject} from "react";
 import {AppContext} from "../../common";
 import IdeaForm from "../../components/form";
 import IdeaListView from "../../components/list-view";
-import {TableProps} from "@cloudscape-design/components/table/interfaces";
+import {TableProps} from "@cloudscape-design/components/table";
 import {GetParamChoicesRequest, GetParamChoicesResult, SocaFilter, SocaUserInputChoice, User} from "../../client/data-model";
 import {AccountsClient} from "../../client";
 import Utils from "../../common/utils";
 import IdeaConfirm from "../../components/modals";
-import {StatusIndicator} from "@cloudscape-design/components";
+import {StatusIndicator, Box} from "@cloudscape-design/components";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import IdeaAppLayout, {IdeaAppLayoutProps} from "../../components/app-layout";
 import {withRouter} from "../../navigation/navigation-utils";
@@ -621,7 +621,7 @@ class Users extends Component<UsersProps, UsersState> {
                                  })
                              }
                          }}>
-                {message} <b>{this.getSelectedUser()?.username}</b> ?
+                {message} <Box variant="strong">{this.getSelectedUser()?.username}</Box> ?
             </IdeaConfirm>
         )
     }
@@ -658,7 +658,7 @@ class Users extends Component<UsersProps, UsersState> {
                                  })
                              }
                          }}>
-                {message} <b>{this.getSelectedUser()?.username}</b> ?
+                {message} <Box variant="strong">{this.getSelectedUser()?.username}</Box> ?
             </IdeaConfirm>
         )
     }
@@ -679,7 +679,7 @@ class Users extends Component<UsersProps, UsersState> {
                              })
                          }}
             >
-                Are you sure you want to reset password for user: <b>{this.getSelectedUser()?.username}</b> ?
+                Are you sure you want to reset password for user: <Box variant="strong">{this.getSelectedUser()?.username}</Box> ?
             </IdeaConfirm>
         )
     }

@@ -35,6 +35,7 @@ import {
   CONTEXT_FILE,
   SYNTH_READS_FILE,
   cleanupWorkdirs,
+  synthBastion,
   synthVdcWithEcs,
 } from "../support/ecs-harness.ts";
 
@@ -485,4 +486,28 @@ test("a host instance family whose architecture cannot be resolved is refused", 
       error instanceof Error &&
       error.message.includes("ecs.hosts.instance_type m7g is not an instance type"),
   );
+});
+
+test("every load balancer health check completes inside its interval", async () => {
+  // ELB rejects a target group whose timeout is not shorter than its interval, and the NLB default
+  // timeout is 10 s, so a 5 s interval without an explicit timeout fails at deploy time (dev27,
+  // 2026-09-21: the gateway group rolled the whole desktop stack back).
+  const templates: Record<string, JsonObject> = {
+    vdc: record(await desktop, "vdc template"),
+    bastion: record(synthBastion(), "bastion template"),
+  };
+  let checked = 0;
+  for (const [stack, stackTemplate] of Object.entries(templates)) {
+    for (const group of byType(stackTemplate, "AWS::ElasticLoadBalancingV2::TargetGroup")) {
+      const properties = record(group["Properties"], `${stack} target group properties`);
+      const interval = properties["HealthCheckIntervalSeconds"];
+      if (typeof interval !== "number") continue;
+      const timeout = properties["HealthCheckTimeoutSeconds"];
+      const name = `${stack} ${String(properties["Name"] ?? properties["Protocol"])}`;
+      assert.equal(typeof timeout, "number", `${name}: an interval needs an explicit timeout`);
+      assert.ok((timeout as number) < interval, `${name}: timeout ${String(timeout)} must be shorter than interval ${interval}`);
+      checked += 1;
+    }
+  }
+  assert.ok(checked >= 2, `the gateway and bastion groups were checked (${checked})`);
 });

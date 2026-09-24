@@ -11,6 +11,7 @@
  * and limitations under the License.
  */
 
+import {hasContainerControlPlane} from './cluster-services';
 import React, {Component} from "react";
 
 import {Box, Button, ColumnLayout, Container, Header, Link, Popover, SpaceBetween, StatusIndicator, Table} from "@cloudscape-design/components";
@@ -32,6 +33,8 @@ export interface ClusterStatusState {
     instances: any
     instances_loading: boolean
 
+    hostsLoaded: boolean
+    containerControlPlane: boolean
     modules: any
     modules_loading: boolean
 
@@ -217,6 +220,8 @@ class ClusterStatus extends Component<ClusterStatusProps, ClusterStatusState> {
     constructor(props: ClusterStatusProps) {
         super(props);
         this.state = {
+            hostsLoaded: false,
+            containerControlPlane: false,
             instances: [],
             instances_loading: true,
             modules: [],
@@ -233,6 +238,7 @@ class ClusterStatus extends Component<ClusterStatusProps, ClusterStatusState> {
     }
 
     componentDidMount() {
+        hasContainerControlPlane().then(containerControlPlane => this.setState({containerControlPlane})).catch(() => {});
         this.loadClusterHosts()
         this.loadClusterModules()
     }
@@ -321,11 +327,13 @@ class ClusterStatus extends Component<ClusterStatusProps, ClusterStatusState> {
                 );
 
                 this.setState({
+                    hostsLoaded: true,
                     instances: sortedInstances,
                     instances_loading: false
                 })
             }).catch(error => {
                 this.setState({
+                    hostsLoaded: false,
                     instances_loading: false
                 });
                 console.error("Error loading cluster hosts:", error);
@@ -718,20 +726,21 @@ class ClusterStatus extends Component<ClusterStatusProps, ClusterStatusState> {
                 header={(
                     <Header variant={"h1"}
                             actions={(<SpaceBetween size={"s"}>
-                                <Button variant={"primary"} onClick={() => this.props.navigate('/cluster/settings')}>View Cluster Settings</Button>
+                                <Button variant={"primary"} onClick={() => this.props.navigate('/cluster/settings')}>Settings</Button>
                             </SpaceBetween>)}>
-                        Cluster Status
+                        Health
                     </Header>
                 )}
                 contentType={"default"}
                 content={
                     <SpaceBetween size="xxl">
+                        <Link external href="https://docs.idea-hpc.com/first-time-users/cluster-operations">CLI runbooks</Link>
                         <Container>
                             {this.buildModuleInfo()}
                         </Container>
-                        <Container>
+                        {!(this.state.containerControlPlane && this.state.hostsLoaded && !this.state.instances_loading && this.state.instances.length === 0) && <Container>
                             {this.buildHostInfo()}
-                        </Container>
+                        </Container>}
                     </SpaceBetween>
                 }/>
         )

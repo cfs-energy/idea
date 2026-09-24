@@ -128,6 +128,7 @@ class TestClusterSettingsScoping(unittest.TestCase):
             module_id=module_id
         )
         context.is_authorized.return_value = elevated
+        context.is_administrator.return_value = False
         self.api.get_module_settings(context)
         result = context.success.call_args[0][0]
         return result.settings
@@ -296,6 +297,37 @@ class TestClusterSettingsScoping(unittest.TestCase):
             'vdc', {'dcv_session': {'idle_timeout': 60}}, elevated=False
         )
         self.assertEqual(settings, {'dcv_session': {'working_hours': {}}})
+
+
+def test_administrator_reads_reconcile_rows_instead_of_stale_config():
+    from ideaclustermanagertests.metrics_fakes import FakeSettingsDB
+
+    context = Mock()
+    context.module_id.return_value = 'cluster-manager'
+    context.get_cluster_module_info.return_value = {'name': 'cluster-manager'}
+    config = context.config.return_value
+    config.get_config.return_value.as_plain_ordered_dict.return_value = {
+        'accounts': {'reconcile': {'enabled': False, 'interval_minutes': 60}}
+    }
+    config.db = FakeSettingsDB()
+    config.db.values = {
+        'cluster-manager.accounts.reconcile.enabled': True,
+        'cluster-manager.accounts.reconcile.interval_minutes': 5,
+        'cluster-manager.accounts.reconcile.max_disable_fraction': 0,
+        'cluster-manager.accounts.reconcile.last_completed': 100,
+        'cluster-manager.accounts.reconcile.last_saved': 200,
+    }
+    invocation = Mock()
+    invocation.get_request_payload_as.return_value = GetModuleSettingsRequest(
+        module_id='cluster-manager'
+    )
+    invocation.is_administrator.return_value = True
+    ClusterSettingsAPI(context).get_module_settings(invocation)
+    settings = invocation.success.call_args.args[0].settings['accounts']['reconcile']
+    assert settings['enabled'] is True and settings['interval_minutes'] == 5
+    assert settings['max_disable_fraction'] == 0
+    assert settings['last_completed'] == 100 and settings['last_saved'] == 200
+    assert all(consistent for _, consistent in config.db.reads)
 
 
 if __name__ == '__main__':

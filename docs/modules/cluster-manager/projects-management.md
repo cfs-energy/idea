@@ -16,7 +16,7 @@ For [.](./ "mention") module, projects control what shared file-systems are moun
 You can add additional AWS tags per project. IDEA will automatically tag all AWS resources created by jobs/desktops using this project.
 {% endhint %}
 
-To create a new project, navigate to the **"Cluster Management**" section on the left sidebar of IDEA menu and click "**Projects**"
+To create a new project, navigate to "**Administration**" > "**Projects**"
 
 <figure><img src="../../.gitbook/assets/mods_cm_projsec.webp" alt=""><figcaption><p>Projects section on IDEA</p></figcaption></figure>
 

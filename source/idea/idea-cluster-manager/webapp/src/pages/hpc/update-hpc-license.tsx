@@ -273,21 +273,9 @@ class UpdateHpcLicense extends Component<UpdateHpcLicenseProps, UpdateHpcLicense
                                                    dismissAriaLabel="Close alert"
                                                    header="Info">
                                                 <li>IDEA generates a template license check script when scheduler is deployed.</li>
-                                                <li>Ensure you have updated <b>{this.getPythonScriptPath()}</b> as per your environment and requirements after first time deployment.</li>
+                                                <li>Ensure you have updated <Box variant="strong">{this.getPythonScriptPath()}</Box> as per your environment and requirements after first time deployment.</li>
                                                 <ExpandableSection header={"license_check.py Usage"}>
-                                                    <code className="idea-code-block">
-                                                        python3 {this.getPythonScriptPath()} --help <br/>
-                                                        usage: license_check.py [-h] -s [SERVER] -p [PORT] -f [FEATURE] <br/>
-                                                        <br/>
-                                                        optional arguments:<br/>
-                                                        &nbsp;&nbsp;-h, --help            show this help message and exit<br/>
-                                                        &nbsp;&nbsp;-s [SERVER], --server [SERVER]<br/>
-                                                        &nbsp;&nbsp;FlexLM hostname<br/>
-                                                        &nbsp;&nbsp;-p [PORT], --port [PORT]<br/>
-                                                        &nbsp;&nbsp;FlexLM Port<br/>
-                                                        &nbsp;&nbsp;-f [FEATURE], --feature [FEATURE]<br/>
-                                                        &nbsp;&nbsp;FlexLM Feature<br/>
-                                                    </code>
+                                                    <Box variant="code" display="block" className="idea-code-block">{[`python3 ${this.getPythonScriptPath()} --help`, 'usage: license_check.py [-h] -s [SERVER] -p [PORT] -f [FEATURE]', '', 'optional arguments:', '  -h, --help            show this help message and exit', '  -s [SERVER], --server [SERVER]', '  FlexLM hostname', '  -p [PORT], --port [PORT]', '  FlexLM Port', '  -f [FEATURE], --feature [FEATURE]', '  FlexLM Feature'].join('\n')}</Box>
                                                 </ExpandableSection>
                                             </Alert>
                                         </SpaceBetween>
@@ -331,11 +319,11 @@ class UpdateHpcLicense extends Component<UpdateHpcLicenseProps, UpdateHpcLicense
                                         <Container header={<Header variant={"h3"}>Update resourcedef</Header>}>
 
                                             <Box variant={"h4"}>
-                                                Edit: <b><code>{OPENPBS_RESOURCE_DEF_FILE}</code></b>
+                                                Edit: <Box variant="code">{OPENPBS_RESOURCE_DEF_FILE}</Box>
                                                 <CopyToClipBoard text={OPENPBS_RESOURCE_DEF_FILE} feedback={`${OPENPBS_RESOURCE_DEF_FILE} copied`}/>
                                             </Box>
                                             <p>
-                                                Resources created on this file will be visible by OpenPBS and will be usable at qsub time via the -l parameter. Add your new resource with <b>type=long</b>.
+                                                Resources created on this file will be visible by OpenPBS and will be usable at qsub time via the -l parameter. Add your new resource with <Box variant="code">type=long</Box>.
                                             </p>
                                             <p>
                                                 <code>
@@ -349,16 +337,16 @@ class UpdateHpcLicense extends Component<UpdateHpcLicenseProps, UpdateHpcLicense
                                         <Container header={<Header variant={"h3"}>Update sched_config</Header>}>
                                             <SpaceBetween size={"m"}>
                                                 <Box variant={"h4"}>
-                                                    Edit: <b><code>{OPENPBS_SCHED_CONFIG_FILE}</code></b>
+                                                    Edit: <Box variant="code">{OPENPBS_SCHED_CONFIG_FILE}</Box>
                                                     <CopyToClipBoard text={OPENPBS_SCHED_CONFIG_FILE} feedback={`${OPENPBS_SCHED_CONFIG_FILE} copied`}/>
                                                 </Box>
                                                 <Box>
                                                     <p>
-                                                        <b>Edit 1) </b>
-                                                        Find the relevant section containing <b>resources</b>.
+                                                        <Box variant="strong">Edit 1)</Box>
+                                                        Find the relevant section containing <Box variant="code">resources</Box>.
                                                         This line tells OpenPBS to honor the requested resources and do not start a job unless all resources requirements have been met.
                                                     </p>
-                                                    <p><u>Edit</u> the line as below:</p>
+                                                    <p>Edit the line as below:</p>
                                                     <p>
                                                         <code>
                                                             resources: "{this.state.license.name}, ncpus, mem, arch, host, vnode, aoe, eoe, compute_node"
@@ -373,11 +361,11 @@ class UpdateHpcLicense extends Component<UpdateHpcLicenseProps, UpdateHpcLicense
                                                 </Box>
                                                 <Box>
                                                     <p>
-                                                        <b>Edit 2) </b>
-                                                        Find the relevant section containing <b>server_dyn_res</b>.
+                                                        <Box variant="strong">Edit 2)</Box>
+                                                        Find the relevant section containing <Box variant="code">server_dyn_res</Box>.
                                                         This line tells OpenPBS what script/command to run when it detects the resources.
                                                     </p>
-                                                    <p><u>Add a new line</u> as below:</p>
+                                                    <p>Add a new line as below:</p>
                                                     <p>
                                                         <code>
                                                             {getOpenPBSServerDynResourceText()}
@@ -397,7 +385,7 @@ class UpdateHpcLicense extends Component<UpdateHpcLicenseProps, UpdateHpcLicense
                                                 <CopyToClipBoard text={'systemctl restart pbs'} feedback={`systemctl restart pbs copied`}/>
                                             </p>
                                             <Alert>
-                                                <b>Pro Tip: </b> If you are adding multiple license resources, create all license resources before restarting pbs server.
+                                                <Box variant="strong">Pro tip:</Box> If you are adding multiple license resources, create all license resources before restarting pbs server.
                                             </Alert>
                                         </Container>
                                     </SpaceBetween>

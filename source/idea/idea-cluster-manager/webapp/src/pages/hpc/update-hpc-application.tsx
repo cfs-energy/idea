@@ -19,9 +19,9 @@ import {AppContext} from "../../common";
 import Utils from "../../common/utils";
 import {registerAceWorkerUrls} from "../../common/ace-worker-urls";
 import IdeaForm from "../../components/form";
-import {Box, Button, CodeEditor, ColumnLayout, Container, FormField, Link, SpaceBetween, Wizard} from "@cloudscape-design/components";
+import {Box, Button, CodeEditor, ColumnLayout, Container, FormField, Link, SpaceBetween, Wizard, TextContent} from "@cloudscape-design/components";
 import IdeaFormBuilder from "../../components/form-builder";
-import {CodeEditorProps} from "@cloudscape-design/components/code-editor/interfaces";
+import {CodeEditorProps} from "@cloudscape-design/components/code-editor";
 import 'ace-builds/css/ace.css';
 import 'ace-builds/css/theme/dawn.css';
 import {IdeaFormField} from "../../components/form-field";
@@ -105,7 +105,7 @@ function AvailableVariable(props: AvailableVariableProps) {
     }
     return (
         <div>
-            <code style={getStyle()}>{props.name}</code>&nbsp;&nbsp;
+            <code style={getStyle()}>{props.name}</code>{' '}
             <Box variant="span"
                  color="text-body-secondary">
                 {getText()}
@@ -314,36 +314,40 @@ class UpdateHpcApplication extends Component<UpdateHpcApplicationProps, UpdateHp
         let content
         if (id === 'job-design-form') {
             content = <SpaceBetween size="s" direction="vertical">
-                <Box padding={{left: 'l', right: 'l'}}>
+                <Box padding={{left: 'l', right: 'l'}}><TextContent>
                     <h3>Reserved Variables</h3>
                     <p>You can use your own variable names, however some variables are pre-configured for you when you use the following
                         variables:</p>
 
-                    <li><i>job_name</i>: If present, will be automatically populated with the input file name</li>
-                    <li><i>input_name</i>: If present, will be automatically populated with the input file path</li>
-                    <li><i>instance_type</i>: Used to calculate the number of node to provision</li>
-                    <li><i>cpus</i>: Used to calculate the number of node(s) to provision</li>
-                    <li><i>scratch_size</i>: Used to estimate the cost of your simulation</li>
-                    <li><i>root_size</i>: Used to estimate the cost of your simulation</li>
-                    <li><i>fsx_size</i>: Used to estimate the cost of your simulation</li>
-                    <li><i>wall_time</i>: Used to estimate the cost of your simulation</li>
-                </Box>
-                <Box padding={{left: 'l', right: 'l'}}>
+                    <ul>
+                    <li><code>job_name</code>: If present, will be automatically populated with the input file name</li>
+                    <li><code>input_name</code>: If present, will be automatically populated with the input file path</li>
+                    <li><code>instance_type</code>: Used to calculate the number of node to provision</li>
+                    <li><code>cpus</code>: Used to calculate the number of node(s) to provision</li>
+                    <li><code>scratch_size</code>: Used to estimate the cost of your simulation</li>
+                    <li><code>root_size</code>: Used to estimate the cost of your simulation</li>
+                    <li><code>fsx_size</code>: Used to estimate the cost of your simulation</li>
+                    <li><code>wall_time</code>: Used to estimate the cost of your simulation</li>
+                </ul>
+                </TextContent></Box>
+                <Box padding={{left: 'l', right: 'l'}}><TextContent>
                     <h3>Calculate number of nodes to provision automatically</h3>
-                    <p>If <i>instance_type</i> and <i>cpus</i> parameters are specified, SOCA will automatically calculate the number of
-                        node(s) to provision. If not set, you will need to find a way to specify <i>nodes</i> resource.</p>
-                </Box>
-                <Box padding={{left: 'l', right: 'l'}}>
+                    <p>If <code>instance_type</code> and <code>cpus</code> parameters are specified, SOCA will automatically calculate the number of
+                        node(s) to provision. If not set, you will need to find a way to specify <code>nodes</code> resource.</p>
+                </TextContent></Box>
+                <Box padding={{left: 'l', right: 'l'}}><TextContent>
                     <h3>Calculate Job Cost Estimate Automatically</h3>
                     <p>Parameters below will be used to estimate the price of a simulation:</p>
 
-                    <li><i>instance_type</i>: Used to calculate the number of node to provision</li>
-                    <li><i>cpus</i>: Used to calculate the number of node(s) to provision</li>
-                    <li><i>scratch_size</i>: Used to estimate the cost of your simulation</li>
-                    <li><i>root_size</i>: Used to estimate the cost of your simulation</li>
-                    <li><i>fsx_size</i>: Used to estimate the cost of your simulation</li>
-                    <li><i>wall_time</i>: Used to estimate the cost of your simulation</li>
-                </Box>
+                    <ul>
+                    <li><code>instance_type</code>: Used to calculate the number of node to provision</li>
+                    <li><code>cpus</code>: Used to calculate the number of node(s) to provision</li>
+                    <li><code>scratch_size</code>: Used to estimate the cost of your simulation</li>
+                    <li><code>root_size</code>: Used to estimate the cost of your simulation</li>
+                    <li><code>fsx_size</code>: Used to estimate the cost of your simulation</li>
+                    <li><code>wall_time</code>: Used to estimate the cost of your simulation</li>
+                </ul>
+                </TextContent></Box>
             </SpaceBetween>
         }
         if (content) {

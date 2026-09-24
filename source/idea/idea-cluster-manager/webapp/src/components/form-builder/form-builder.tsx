@@ -33,7 +33,7 @@ import {registerAceWorkerUrls} from "../../common/ace-worker-urls";
 import {DragDropContext, Draggable, DraggableProvided, Droppable, DroppableProvided, DropResult} from '@hello-pangea/dnd'
 import {faCheck, faCopy, faEdit, faTrash, faWindowClose} from "@fortawesome/free-solid-svg-icons";
 import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
-import {CodeEditorProps} from "@cloudscape-design/components/code-editor/interfaces";
+import {CodeEditorProps} from "@cloudscape-design/components/code-editor";
 import 'ace-builds/css/ace.css';
 import 'ace-builds/css/theme/dawn.css';
 import 'ace-builds/css/theme/github_light_default.css';

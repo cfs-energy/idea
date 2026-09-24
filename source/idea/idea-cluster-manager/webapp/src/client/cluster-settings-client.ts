@@ -11,7 +11,11 @@
  * and limitations under the License.
  */
 
+import {MetricsBackfillStatus} from './metrics-backfill';
 import {
+    ListClusterServicesRequest,
+    ListClusterServicesResult,
+    DescribeSettingsCatalogResult,
     ListClusterModulesRequest,
     ListClusterModulesResult,
     GetModuleSettingsRequest,
@@ -28,6 +32,18 @@ export interface ClusterSettingsClientProps extends IdeaBaseClientProps {
 }
 
 class ClusterSettingsClient extends IdeaBaseClient<ClusterSettingsClientProps> {
+    describeSettingsCatalog(): Promise<DescribeSettingsCatalogResult> {
+        return this.apiInvoker.invoke_alt('ClusterSettings.DescribeSettingsCatalog', {});
+    }
+
+    backfillCostMetrics(request: {days: number; dry_run: boolean}): Promise<MetricsBackfillStatus> {
+        return this.apiInvoker.invoke_alt('ClusterSettings.BackfillCostMetrics', request);
+    }
+
+    getCostMetricsBackfill(): Promise<MetricsBackfillStatus> {
+        return this.apiInvoker.invoke_alt('ClusterSettings.GetCostMetricsBackfill', {});
+    }
+
 
     getModuleInfo(): Promise<GetModuleInfoRequest> {
         return this.apiInvoker.invoke_alt<GetModuleInfoRequest, GetModuleInfoResult>(
@@ -55,6 +71,10 @@ class ClusterSettingsClient extends IdeaBaseClient<ClusterSettingsClientProps> {
             'ClusterSettings.UpdateModuleSettings',
             req
         )
+    }
+
+    listClusterServices(req: ListClusterServicesRequest): Promise<ListClusterServicesResult> {
+        return this.apiInvoker.invoke_alt('ClusterSettings.ListClusterServices', req)
     }
 
     listClusterHosts(req: ListClusterHostsRequest): Promise<ListClusterHostsResult> {

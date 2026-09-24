@@ -56,7 +56,7 @@ def test_replicas_share_collection_checkpoint_but_always_retry_outbox(collector)
     clock['now'] = completed + first.get_interval_seconds() / 2 - 1
     second.run_once()
     assert source.calls == 1
-    assert contexts[1].published()
+    assert contexts[1].published() == []
     assert key not in contexts[1].config().values
     assert db.writes[-1] == (key, completed)
     clock['now'] += 1
@@ -67,8 +67,7 @@ def test_replicas_share_collection_checkpoint_but_always_retry_outbox(collector)
     assert contexts[0].published() and contexts[1].published()
     for context in contexts:
         assert all(
-            context.dimensions(entry)['host'] == context.cluster_name()
-            for entry in context.published()
+            'host' not in context.dimensions(entry) for entry in context.published()
         )
         assert context.distributed_lock().held == []
     assert all(read == ({'key': key}, True) for read in db.reads)
@@ -110,7 +109,7 @@ def test_failed_run_keeps_checkpoint_and_can_retry(collector, failure, monkeypat
     context.config().secrets['secret'] = 'pw'
     services[1].run_once()
     assert db.values[key] == clock['now']
-    assert context.aws().s3().values
+    assert context.aws().s3().values == {}
 
 
 @pytest.mark.parametrize(
@@ -136,42 +135,19 @@ def test_provider_support_and_single_warning(collector, provider):
         ) in warnings[0]
 
 
-def test_async_socket_failure_keeps_payload_for_another_replica(collector, monkeypatch):
-    import queue
-    from types import SimpleNamespace
-    from ideasdk.metrics.metrics_service import MetricsService
-    from ideasdk.metrics.dogstatsd.dogstatsd_metrics import DogStatsdMetrics
-
+def test_connection_failure_keeps_payload_for_another_replica(collector, monkeypatch):
     kind, clock, source, contexts, services = collector
-    backlog = queue.Queue()
-    publisher = SimpleNamespace(_metrics_backlog_queue=backlog)
     monkeypatch.setattr(
         contexts[0].metrics_service,
         'publish',
-        lambda entries: MetricsService.publish(publisher, entries),
+        Mock(side_effect=ConnectionError('unavailable')),
     )
-    provider = DogStatsdMetrics(contexts[0], 'test-cluster/cluster-manager')
-    monkeypatch.setattr(
-        'ideasdk.metrics.dogstatsd.dogstatsd_metrics.socket.socket',
-        Mock(side_effect=OSError('agent unavailable')),
-    )
-    services[0].run_once()
-    queued = []
-    while not backlog.empty():
-        batch = backlog.get_nowait()
-        queued.extend(batch)
-        provider.log(batch)
-    assert queued and provider._send_failures > 0
-    db = contexts[0].config().db
-    assert f'cluster-manager.metrics.{kind}.last_published' not in db.values
+    with pytest.raises(ConnectionError, match='unavailable'):
+        services[0].run_once()
     assert contexts[0].aws().s3().values
-    services[1].run_once()
-    assert source.calls == 1
-    assert contexts[1].published() == queued
 
-    # Retrying must not depend on a source day remaining in the moving lookback.
-    # A failed source read still leaves the saved correction available to another replica.
-    contexts[1].metrics_service.published.clear()
+    # A retry must survive the source day leaving the moving lookback window.
+    # The saved points remain deliverable even when a later source read fails.
     clock['now'] += 90 * 86400
     source.fail = True
     if kind == 'cost':
@@ -179,7 +155,15 @@ def test_async_socket_failure_keeps_payload_for_another_replica(collector, monke
             services[1].run_once()
     else:
         services[1].run_once()
-    assert contexts[1].published()[: len(queued)] == queued
+    published = list(contexts[1].published())
+    assert published
+    assert contexts[0].aws().s3().values == {}
+    if kind == 'cost':
+        with pytest.raises(RuntimeError, match='source unavailable'):
+            services[1].run_once()
+    else:
+        services[1].run_once()
+    assert contexts[1].published() == published
 
 
 def test_outbox_paginates_and_keeps_latest_correction(collector, monkeypatch):
@@ -213,6 +197,77 @@ def test_outbox_paginates_and_keeps_latest_correction(collector, monkeypatch):
         outbox.replay()
         assert len(requests) == 2
         assert context.published() == [metric]
-        assert len(db.values) == 1
+        assert db.values == {}
     finally:
         context.distributed_lock().release('test')
+
+
+def test_outbox_retires_only_successful_points(collector):
+    from ideaclustermanager.app.metrics.collector_outbox import CollectorOutbox
+
+    _, _, _, contexts, _ = collector
+    context = contexts[0]
+    outbox = CollectorOutbox(context, 'partial', historical=True)
+    entries = [
+        {
+            'MetricName': 'cost.amortized',
+            'Timestamp': day,
+            'Dimensions': [],
+            'Value': day,
+        }
+        for day in (1, 2, 3)
+    ]
+    outbox.publish(entries)
+    outbox.save()
+    assert len(context.aws().s3().values) == 3
+    context.metrics_service.fail_after = 1
+    with pytest.raises(RuntimeError, match='publish failed'):
+        outbox.replay()
+    assert context.published() == entries[:1]
+    assert len(context.aws().s3().values) == 2
+    context.metrics_service.fail_after = None
+    outbox.replay()
+    outbox.replay()
+    assert context.published() == entries
+    assert context.aws().s3().values == {}
+
+
+@pytest.mark.parametrize('outcome', [202, 200, 204, 503, 'connection'])
+def test_outbox_requires_http_202(collector, monkeypatch, outcome):
+    import requests
+    from ideasdk.metrics.datadog_api import DatadogAPI
+    from ideaclustermanager.app.metrics.collector_outbox import CollectorOutbox
+
+    _, _, _, contexts, _ = collector
+    context = contexts[0]
+    transport = DatadogAPI('key', 'datadoghq.com', 'test-cluster/cluster-manager')
+    monkeypatch.setattr(DatadogAPI, 'from_context', lambda _: transport)
+    response = requests.Response()
+    response.status_code = outcome if isinstance(outcome, int) else 503
+    post = Mock(return_value=response)
+    if outcome == 'connection':
+        post.side_effect = requests.ConnectionError('offline')
+    monkeypatch.setattr('ideasdk.metrics.datadog_api.requests.post', post)
+    monkeypatch.setattr('ideasdk.metrics.datadog_api.time.sleep', lambda _: None)
+    outbox = CollectorOutbox(context, 'acknowledged', historical=True)
+    outbox.publish(
+        [
+            dict(
+                MetricName='cost.amortized',
+                MetricType='Counter',
+                Value=1,
+                Timestamp=1700000000,
+                Dimensions=[],
+            )
+        ]
+    )
+    outbox.save()
+    if outcome == 202:
+        outbox.replay()
+        assert not context.aws().s3().values
+    else:
+        with pytest.raises(requests.RequestException):
+            outbox.replay()
+        assert len(context.aws().s3().values) == 1
+    assert context.published() == []
+    assert post.called

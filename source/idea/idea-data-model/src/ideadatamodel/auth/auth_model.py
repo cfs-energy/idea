@@ -37,6 +37,7 @@ class User(SocaBaseModel):
     password_max_age: Optional[float] = Field(default=None)
     created_on: Optional[datetime] = Field(default=None)
     updated_on: Optional[datetime] = Field(default=None)
+    landing_page: Optional[str] = Field(default=None)
 
 
 class Group(SocaBaseModel):

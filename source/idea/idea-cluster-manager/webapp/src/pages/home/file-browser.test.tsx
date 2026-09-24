@@ -99,10 +99,12 @@ function renderFileBrowser(options: HarnessOptions = {}) {
 
     const client = context.client().fileBrowser();
     const api = {
+        getStorageUsage: vi.spyOn(client, 'getStorageUsage').mockResolvedValue({state: 'computing', home: HOME}),
         listFiles: vi.spyOn(client, 'listFiles').mockResolvedValue({ cwd: cwd, listing: listing } as any),
         readFile: vi.spyOn(client, 'readFile').mockResolvedValue({ content: btoa('hello') } as any),
         saveFile: vi.spyOn(client, 'saveFile').mockResolvedValue({} as any),
         createFile: vi.spyOn(client, 'createFile').mockResolvedValue({} as any),
+        deleteFolder: vi.spyOn(client, 'deleteFolder').mockResolvedValue({} as any),
         deleteFiles: vi.spyOn(client, 'deleteFiles').mockResolvedValue({} as any),
         renameFile: vi.spyOn(client, 'renameFile').mockResolvedValue({} as any),
         downloadFiles: vi.spyOn(client, 'downloadFiles').mockResolvedValue({
@@ -699,6 +701,98 @@ describe('file browser', () => {
     });
 
     describe('deleting', () => {
+        it('keeps the toolbar stable and enables Delete folder under Actions for one selected folder', async () => {
+            const {user} = renderFileBrowser();
+            await waitForRow('reports');
+            const toolbarButtons = () => {
+                // The toolbar row is the nearest ancestor of Actions that also holds Refresh.
+                let toolbar = screen.getByRole('button', {name: 'Actions'});
+                while (within(toolbar).queryByRole('button', {name: 'Refresh'}) == null) toolbar = toolbar.parentElement!;
+                return Array.from(toolbar.querySelectorAll('button')).map((button) => button.textContent);
+            };
+            const before = toolbarButtons();
+            expect(before).not.toContain('Delete folder');
+            const deleteFolderEnabled = async () => {
+                await user.click(screen.getByRole('button', {name: 'Actions'}));
+                await waitFor(() => expect(openMenuItem('Delete folder')).not.toBeNull());
+                const enabled = openMenuItem('Delete folder')!.getAttribute('aria-disabled') !== 'true';
+                await user.keyboard('{Escape}');
+                return enabled;
+            };
+            expect(await deleteFolderEnabled()).toBe(false);
+            await selectEntry(user, 'reports');
+            expect(toolbarButtons()).toEqual(before);
+            expect(await deleteFolderEnabled()).toBe(true);
+            await addToSelection(user, 'notes.txt');
+            expect(toolbarButtons()).toEqual(before);
+            expect(await deleteFolderEnabled()).toBe(false);
+        });
+
+        it('requires the exact folder name and sends one delete even on a double click', async () => {
+            const {api, user} = renderFileBrowser();
+            const measured = Date.now() / 1000;
+            api.getStorageUsage.mockResolvedValue({
+                state: 'ready', home: HOME, measured_at: measured,
+                folder: {path: `${HOME}/reports`, name: 'reports', bytes: 1024, files: 2,
+                    newest_mtime: measured - 10 * 86400, oldest_mtime: measured - 100 * 86400,
+                    unchanged_90_days_bytes: 512, partial: false, identity: {device: '12', inode: '34'}}
+            });
+            let finishDelete: (value: any) => void = () => {};
+            api.deleteFolder.mockImplementation(() => new Promise(resolve => { finishDelete = resolve; }));
+            await waitForRow('reports');
+            await chooseFromContextMenu(user, 'reports', 'Delete folder');
+            const dialog = await findDialogContaining('Permanently delete');
+            expect(await within(dialog).findByText('Size: 1 KiB in 2 files')).toBeInTheDocument();
+            expect(within(dialog).getByText(/Last changed: 10 days ago/)).toBeInTheDocument();
+            expect(api.getStorageUsage).toHaveBeenCalledWith({folder: `${HOME}/reports`});
+            const confirm = within(dialog).getByRole('button', {name: 'Delete folder'});
+            const input = within(dialog).getByRole('textbox', {name: 'Type reports to confirm deletion'});
+            expect(confirm).toBeDisabled();
+            await user.type(input, 'Reports');
+            expect(confirm).toBeDisabled();
+            await user.clear(input);
+            await user.type(input, 'reports ');
+            expect(confirm).toBeDisabled();
+            expect(api.deleteFolder).not.toHaveBeenCalled();
+            await user.clear(input);
+            await user.type(input, 'reports');
+            expect(confirm).toBeEnabled();
+            await user.dblClick(confirm);
+            expect(api.deleteFolder).toHaveBeenCalledTimes(1);
+            expect(api.deleteFolder).toHaveBeenCalledWith({path: `${HOME}/reports`, identity: {device: '12', inode: '34'}});
+            api.listFiles.mockClear();
+            finishDelete({});
+            await waitFor(() => expect(api.listFiles).toHaveBeenCalledWith({cwd: HOME}));
+            await waitFor(() => expect(dialogContaining('Permanently delete')).toBeNull());
+        });
+
+        it('refuses folder deletion with partial usage and cancels without deleting', async () => {
+            const {api, user} = renderFileBrowser();
+            api.getStorageUsage.mockResolvedValue({state: 'ready', home: HOME, measured_at: Date.now() / 1000,
+                folder: {path: `${HOME}/reports`, name: 'reports', bytes: 10, files: 1,
+                    newest_mtime: null, oldest_mtime: null, unchanged_90_days_bytes: 0, partial: true}});
+            await waitForRow('reports');
+            await chooseFromContextMenu(user, 'reports', 'Delete folder');
+            const dialog = await findDialogContaining('Permanently delete');
+            await user.type(within(dialog).getByRole('textbox'), 'reports');
+            expect(within(dialog).getByRole('button', {name: 'Delete folder'})).toBeDisabled();
+            expect(within(dialog).getByText(/Complete usage is unavailable/)).toBeInTheDocument();
+            await user.click(within(dialog).getByRole('button', {name: 'Cancel'}));
+            expect(api.deleteFolder).not.toHaveBeenCalled();
+        });
+
+        it('does not allow mixed selections to bypass folder confirmation', async () => {
+            const {api, user} = renderFileBrowser();
+            await waitForRow('reports');
+            await selectEntry(user, 'reports');
+            await addToSelection(user, 'notes.txt');
+            await user.pointer({target: requireRow('notes.txt'), keys: '[MouseRight]'});
+            await waitFor(() => expect(openMenuItem('Favorite')).not.toBeNull());
+            expect(openMenuItem('Delete files')).toBeNull();
+            expect(openMenuItem('Delete folder')).toBeNull();
+            expect(api.deleteFiles).not.toHaveBeenCalled();
+        });
+
         it('confirms with the user, names what will go, then deletes it', async () => {
             const { api, user } = renderFileBrowser();
 

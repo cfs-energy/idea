@@ -17,7 +17,6 @@ import { IdeaCodeAsset } from "../../src/cdk/code-asset.ts";
 import { deploymentOrder } from "../../src/cli/deployment-helper.ts";
 import {
   ClusterConfig,
-  ConfigKeyNotFound,
   unmarshallAttribute,
   type ModuleInfo,
 } from "../../src/config/cluster-config.ts";
@@ -318,7 +317,7 @@ function entryMap<T extends ConfigEntry>(entries: readonly T[], label: string): 
 }
 
 /**
- * Compute the physical global delete and rewrite plus the non-global add-only
+ * Compute the global update in place plus the non-global add-only
  * synchronization. Lists contain keys only, so no captured value is exposed.
  */
 export function planConfigurationSync(
@@ -327,9 +326,7 @@ export function planConfigurationSync(
 ): ConfigurationSyncPlan {
   const currentByKey = entryMap(current, "current settings");
   const generatedByKey = entryMap(generated, "generated settings");
-  const globalDeletes = [...currentByKey.keys()]
-    .filter((key) => key.startsWith("global-settings."))
-    .sort();
+  const globalDeletes: string[] = [];
   const globalWrites = [...generatedByKey.keys()]
     .filter((key) => key.startsWith("global-settings."))
     .sort();
@@ -344,7 +341,8 @@ export function planConfigurationSync(
     const before = currentByKey.get(key);
     if (key.startsWith("global-settings.")) {
       if (before !== undefined && !isDeepStrictEqual(before.value, target.value)) {
-        changedGlobalRows.push(key);
+        if (/^global-settings\.module_sets\.[^.]+\.[^.]+\.module_id$/.test(key)) preservedDrift.push(key);
+        else changedGlobalRows.push(key);
       }
       continue;
     }
@@ -371,10 +369,8 @@ function applyConfigurationSync(
   generated: readonly ConfigEntry[],
 ): Settings {
   const settings: Settings = new Map(current.map((row) => [row.key, row.value]));
-  for (const key of [...settings.keys()]) {
-    if (key.startsWith("global-settings.")) settings.delete(key);
-  }
   for (const entry of generated) {
+    if (/^global-settings\.module_sets\.[^.]+\.[^.]+\.module_id$/.test(entry.key) && settings.has(entry.key)) continue;
     if (entry.key.startsWith("global-settings.") || !settings.has(entry.key)) {
       settings.set(entry.key, entry.value);
     }
@@ -957,28 +953,6 @@ export async function rehearseUpgrade(options: RehearseOptions = {}): Promise<Up
             `${consumer} requires the key when its target template is synthesized`,
           ],
         });
-      }
-    }
-
-    const withoutGlobals = current.filter((row) => !row.key.startsWith("global-settings."));
-    const transientConfig = new ClusterConfig(withoutGlobals);
-    try {
-      transientConfig.moduleId("cluster-manager");
-    } catch (error) {
-      if (error instanceof ConfigKeyNotFound) {
-        findings.push({
-          stage: 6,
-          code: "TRANSIENT_ABSENCE",
-          severity: "RISK",
-          summary: "cluster-manager cannot resolve its module id during the global prefix gap",
-          evidence: [
-            "global synchronization deletes the complete global-settings prefix before rewriting it",
-            "the in-memory snapshot between those operations raised ConfigKeyNotFound",
-            "the missing key is global-settings.module_sets.default.cluster-manager.module_id",
-          ],
-        });
-      } else {
-        throw error;
       }
     }
 

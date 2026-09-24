@@ -16,13 +16,13 @@ import React, {Component, RefObject} from "react";
 import IdeaListView from "../../components/list-view";
 import {ProjectsClient, VirtualDesktopAdminClient} from '../../client'
 import {AppContext} from "../../common";
-import {TableProps} from "@cloudscape-design/components/table/interfaces";
+import {TableProps} from "@cloudscape-design/components/table";
 import IdeaForm from "../../components/form";
 import {Project, SocaUserInputChoice, VirtualDesktopBaseOS, VirtualDesktopSoftwareStack, BaseSoftwareStackAmiRefreshResult, VirtualDesktopTenancy} from '../../client/data-model'
 import Utils from "../../common/utils";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import IdeaAppLayout, {IdeaAppLayoutProps} from "../../components/app-layout";
-import {Box, Button, Link, Modal, StatusIndicator, Table} from "@cloudscape-design/components";
+import {Box, Button, Link, Modal, StatusIndicator, Table, SpaceBetween} from "@cloudscape-design/components";
 import VirtualDesktopSoftwareStackEditForm from "./forms/virtual-desktop-software-stack-edit-form";
 import {withRouter} from "../../navigation/navigation-utils";
 import VirtualDesktopUtilsClient from "../../client/virtual-desktop-utils-client";
@@ -624,11 +624,10 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
             confirmAction: {
                 actionTitle: `Delete Software Stack${plural ? 's' : ''}`,
                 actionText: (
-                    <div>
-                        Are you sure you want to delete the following software stack{plural ? 's' : ''}: <strong>{stackNames}</strong>?
-                        <br /><br />
-                        This will <strong>permanently delete</strong> the software stack{plural ? 's' : ''} and {plural ? 'they' : 'it'} will no longer be available for launching virtual desktops.
-                    </div>
+                    <SpaceBetween size="s">
+                        <Box>Are you sure you want to delete the following software stack{plural ? 's' : ''}: <strong>{stackNames}</strong>?</Box>
+                        <Box>This will <strong>permanently delete</strong> the software stack{plural ? 's' : ''} and {plural ? 'they' : 'it'} will no longer be available for launching virtual desktops.</Box>
+                    </SpaceBetween>
                 ),
                 onConfirm: () => {
                     // Create an array of software stacks with just the necessary fields for deletion
@@ -833,7 +832,7 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
         return (
             <IdeaListView
                 ref={this.listing}
-                title="Software Stacks"
+                title="Desktop images"
                 preferencesKey={'software-stack'}
                 showPreferences={true}
                 description="Manage your Virtual Desktop Software Stacks"
@@ -1107,11 +1106,11 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                         href: '#/'
                     },
                     {
-                        text: 'Virtual Desktops',
-                        href: '#/virtual-desktop/sessions'
+                        text: 'Images and applications',
+                        href: '#/virtual-desktop/software-stacks'
                     },
                     {
-                        text: 'Software Stacks (AMIs)',
+                        text: 'Desktop images',
                         href: ''
                     }
                 ]}

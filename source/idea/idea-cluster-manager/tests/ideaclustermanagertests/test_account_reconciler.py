@@ -21,6 +21,13 @@ def build(values=None, records=None, users=None):
             **(values or {}),
         }
     )
+    context._config.db.values.update(
+        {key: value for key, value in (values or {}).items() if key.startswith(PREFIX)}
+    )
+    context._config.db.aws = Mock()
+    context._config.db.aws.secretsmanager.return_value.get_secret_value.side_effect = (
+        lambda SecretId: {'SecretString': context._config.secrets.get(SecretId)}
+    )
     users = users or [User(username=f'user{index}', enabled=True) for index in range(4)]
     records = (
         records if records is not None else {'user0': {'user_account_control': 514}}
@@ -84,13 +91,14 @@ def test_cap_refuses_whole_run():
 
 
 @pytest.mark.parametrize('control', [None, 'invalid'])
-def test_incomplete_read_refuses_whole_run(control):
+def test_incomplete_read_at_cap_applies_successful_reads(control):
     service, context = build(
         records={'user0': None, 'user1': {'user_account_control': control}}
     )
     report = service.run_once(dry_run=False)
-    assert report['refused'] == 1 and report['errors'] == 1
-    context.accounts.disable_user.assert_not_called()
+    assert report['refused'] == 0 and report['errors'] == 1
+    assert report['disabled'] == 1
+    assert any(row['action'] == 'error' for row in report['changes'])
 
 
 @pytest.mark.parametrize('reenable', [False, True])
@@ -193,7 +201,7 @@ def test_protected_and_pagination():
 
 
 def test_periodic_checkpoint_is_read_consistently_under_lock():
-    service, context = build()
+    service, context = build({PREFIX + 'enabled': True})
     context._config.db.lock = context._lock
     service.run_once(periodic=True)
     assert service.run_once(periodic=True) == {'skipped': 'interval'}
@@ -243,7 +251,11 @@ def test_cap_override(dry_run):
 
 def test_override_does_not_bypass_read_errors():
     service, context = build(
-        records={'user0': None, 'user1': {'user_account_control': None}}
+        records={
+            'user0': None,
+            'user1': {'user_account_control': None},
+            'user2': {'user_account_control': None},
+        }
     )
     report = service.run_once(dry_run=False, override_max_disable_fraction=True)
     assert report['refused'] == 1
@@ -252,7 +264,8 @@ def test_override_does_not_bypass_read_errors():
 
 def test_periodic_never_overrides():
     service, context = build(
-        {PREFIX + 'dry_run': False}, records={'user0': None, 'user1': None}
+        {PREFIX + 'enabled': True, PREFIX + 'dry_run': False},
+        records={'user0': None, 'user1': None},
     )
     report = service.run_once(periodic=True, override_max_disable_fraction=True)
     assert report['refused'] == 1
@@ -463,12 +476,11 @@ def test_different_directory_username_maps_by_unique_email_and_persists_guid():
     assert report['missing'] == 1 and report['would_disable'] == 1
 
 
-@pytest.mark.parametrize('matches', [0, 2])
-def test_unbound_or_ambiguous_directory_identity_is_error(matches):
+def test_ambiguous_directory_identity_is_error():
     service, context = build(
         users=[User(username='local-user', email='user@example.invalid', enabled=True)]
     )
-    real_directory_reader(context, [('dn', {})] * matches)
+    real_directory_reader(context, [('dn', {})] * 2)
     report = service.run_once(dry_run=False)
     assert report['errors'] == 1 and report['missing'] == 0 and report['refused'] == 1
     context.accounts.disable_user.assert_not_called()
@@ -551,35 +563,32 @@ def test_proof_record_uses_real_conversion_and_persisted_identity(
 
 
 @pytest.mark.parametrize(
-    'error,exception_type,result_code',
+    'error',
     [
-        (ValueError('https://credential.invalid/secret'), 'ValueError', None),
-        (
-            ldap.INVALID_CREDENTIALS(
-                {'result': 49, 'desc': 'secret', 'info': 'https://credential.invalid'}
-            ),
-            'INVALID_CREDENTIALS',
-            49,
-        ),
-        (ldap.SERVER_DOWN({'desc': 'secret'}), 'SERVER_DOWN', None),
-        (
-            ldap.LDAPError({'result': 'https://credential.invalid/secret'}),
-            'LDAPError',
-            None,
-        ),
+        ValueError('Directory identity must resolve uniquely'),
+        ldap.INVALID_CREDENTIALS({'result': 49, 'desc': 'Invalid credentials'}),
+        ldap.SERVER_DOWN({'desc': 'Directory unavailable'}),
     ],
 )
-def test_upstream_warning_logs_only_exception_type_and_numeric_ldap_result(
-    error, exception_type, result_code
-):
+def test_upstream_warning_reports_exception_class(error):
     service, context = build()
     context.accounts.ldap_client.get_reconcile_user.side_effect = error
     report = service.run_once(dry_run=False)
     assert report['errors'] == 4 and report['refused'] == 1
-    logs = str(context._logger.lines)
-    assert f'exception_type={exception_type}, ldap_result_code={result_code}' in logs
-    assert 'secret' not in logs and 'https://' not in logs
+    assert type(error).__name__ in str(context._logger.lines)
+    assert report['changes'][0]['error'] == type(error).__name__
     context.accounts.disable_user.assert_not_called()
+
+
+def test_upstream_warning_redacts_http_urls():
+    service, context = build()
+    context.accounts.ldap_client.get_reconcile_user.side_effect = ValueError(
+        'Lookup failed at https://token@example.invalid/private'
+    )
+    service.run_once()
+    logs = str(context._logger.lines)
+    assert 'ValueError' in logs
+    assert 'token@' not in logs
 
 
 @pytest.mark.parametrize('bound', [False, True])
@@ -674,3 +683,187 @@ def test_current_administrator_disable_overrides_stale_enabled_inventory():
     context.accounts.ldap_client.get_reconcile_user.assert_not_called()
     context.accounts.disable_user.assert_not_called()
     context.accounts.enable_user.assert_not_called()
+
+
+def test_deleted_before_first_run_is_missing_and_proposes_disable():
+    service, context = build(
+        users=[
+            User(username='deleted-user', email='deleted@example.invalid', enabled=True)
+        ]
+    )
+    client = real_directory_reader(context, [])
+    report = service.run_once()
+    assert report['errors'] == 0 and report['missing'] == 1
+    assert report['would_disable'] == 1
+    assert (
+        '(mail=deleted@example.invalid)'
+        in (client.search_s.call_args_list[0].kwargs['filterstr'])
+    )
+    assert (
+        '(sAMAccountName=deleted-user)'
+        in (client.search_s.call_args_list[1].kwargs['filterstr'])
+    )
+    context.accounts.disable_user.assert_not_called()
+
+
+def test_first_lookup_falls_back_to_escaped_username():
+    service, context = build(
+        users=[User(username='local*(user)', email='old@example.invalid', enabled=True)]
+    )
+    client = real_directory_reader(context, [])
+    attrs = {'objectGUID': [bytes(range(16))], 'userAccountControl': [b'512']}
+    client.search_s.side_effect = [[], [('dn', attrs)]]
+    assert service.run_once()['errors'] == 0
+    assert (
+        r'(sAMAccountName=local\2a\28user\29)'
+        in (client.search_s.call_args.kwargs['filterstr'])
+    )
+
+
+def test_ambiguous_email_does_not_block_other_offboards_at_cap():
+    service, context = build(
+        users=[
+            User(username=f'user{i}', email=f'user{i}@example.invalid', enabled=True)
+            for i in range(4)
+        ]
+    )
+    client = real_directory_reader(context, [])
+    attrs = {'objectGUID': [bytes(range(16))], 'userAccountControl': [b'512']}
+
+    def search(**kwargs):
+        selector = kwargs['filterstr']
+        if 'user0' in selector:
+            return []
+        if 'user1' in selector:
+            assert 'mail=' in selector
+            return [('dn', attrs), ('other', attrs)]
+        return [('dn', attrs)]
+
+    client.search_s.side_effect = search
+    report = service.run_once(dry_run=False)
+    assert report['errors'] == 1 and report['refused'] == 0
+    assert report['disabled'] == 1
+    context.accounts.disable_user.assert_called_once_with(
+        'user0', preserve_directory=True, reconcile_sources=['directory']
+    )
+    assert report['changes'][1]['action'] == 'error'
+    assert report['changes'][1]['error'] == 'ValueError'
+
+
+@pytest.mark.parametrize('override', [False, True])
+def test_error_fraction_above_cap_refuses(override):
+    service, context = build(records={'user0': None, 'user1': {}, 'user2': {}})
+    report = service.run_once(dry_run=False, override_max_disable_fraction=override)
+    assert report['errors'] == 2 and report['refused'] == 1
+    assert report['reason'] == 'upstream error fraction exceeded'
+    context.accounts.disable_user.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    'error',
+    [
+        ldap.SERVER_DOWN,
+        ldap.TIMEOUT,
+        ldap.CONNECT_ERROR,
+        ldap.UNAVAILABLE,
+        ldap.INVALID_CREDENTIALS,
+    ],
+)
+def test_directory_unreachable_refuses_even_with_one_error_and_override(error):
+    service, context = build()
+    enabled = {'directory_identity': '00' * 16, 'user_account_control': 512}
+    context.accounts.ldap_client.get_reconcile_user.side_effect = [
+        None,
+        error('Directory unavailable'),
+        enabled,
+        enabled,
+    ]
+    report = service.run_once(dry_run=False, override_max_disable_fraction=True)
+    assert report['errors'] == 1 and report['reason'] == 'directory unreachable'
+    context.accounts.disable_user.assert_not_called()
+
+
+def test_settings_write_wakes_worker_and_shorter_interval_is_used_immediately():
+    import arrow
+
+    service, context = build(
+        {PREFIX + 'enabled': True, PREFIX + 'interval_minutes': 60}
+    )
+    context._config.db.values[PREFIX + 'last_completed'] = (
+        arrow.utcnow().timestamp() - 120
+    )
+    assert service.run_once(periodic=True) == {'skipped': 'interval'}
+    context._config.db.values[PREFIX + 'interval_minutes'] = 1
+    context._config.db.values[PREFIX + 'dry_run'] = False
+    service.settings_changed()
+    assert service._wake.is_set()
+    assert service.run_once(periodic=True)['disabled'] == 1
+    context._config.db.values[PREFIX + 'enabled'] = False
+    assert service.run_once(periodic=True) == {'skipped': 'disabled'}
+
+
+def test_manual_run_reads_current_settings_and_saves_report_without_delaying_periodic_run():
+    service, context = build(
+        {PREFIX + 'max_disable_fraction': 0}, records={'user0': None}
+    )
+    context._config.db.values[PREFIX + 'max_disable_fraction'] = 1
+    report = service.run_once(dry_run=False)
+    assert report['disabled'] == 1
+    assert context._config.db.values[PREFIX + 'last_run']['report']['disabled'] == 1
+    assert PREFIX + 'last_completed' not in context._config.db.values
+
+
+def test_worker_wait_is_interrupted_by_save_and_stop():
+    from threading import Event
+
+    service, context = build()
+    first_run = Event()
+    second_run = Event()
+
+    def run(**kwargs):
+        if first_run.is_set():
+            second_run.set()
+        else:
+            first_run.set()
+
+    service.run_once = Mock(side_effect=run)
+    service.start()
+    try:
+        assert first_run.wait(5)
+        service.settings_changed()
+        assert second_run.wait(5)
+    finally:
+        service.stop()
+    assert not service._thread.is_alive()
+
+
+def test_invalid_header_never_discloses_credentials():
+    import requests
+
+    service, context = build()
+    context.accounts.ldap_client.get_reconcile_user.side_effect = (
+        requests.exceptions.InvalidHeader(
+            'Invalid header value: Authorization: SSWS TOKEN\nSECOND_LINE'
+        )
+    )
+    report = service.run_once(dry_run=False)
+    assert report['changes'][0]['error'] == 'InvalidHeader'
+    for value in (
+        str(report),
+        str(context._logger.lines),
+        str(context.config().db.values),
+    ):
+        assert 'TOKEN' not in value
+        assert 'SECOND_LINE' not in value
+
+
+def test_http_failure_reports_status_without_message():
+    import requests
+
+    service, context = build()
+    response = requests.Response()
+    response.status_code = 403
+    context.accounts.ldap_client.get_reconcile_user.side_effect = requests.HTTPError(
+        'credential', response=response
+    )
+    assert service.run_once()['changes'][0]['error'] == 'HTTPError (HTTP 403)'

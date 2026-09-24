@@ -79,7 +79,6 @@ class CostRow:
 class CostMetrics(BaseMetrics):
     def __init__(self, context: SocaContext):
         super().__init__(context, split_dimensions=False)
-        self.with_required_dimension('host', context.cluster_name())
 
     def publish(
         self,

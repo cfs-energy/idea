@@ -3,6 +3,15 @@
  * to the client credential provider.
  */
 
+/** The SDK's retry strategy contract (RetryStrategyV2), narrowed to what this file uses. */
+interface RetryToken { getRetryCount(): number; getRetryDelay(): number }
+interface RetryErrorInfo { errorType: "TRANSIENT" | "THROTTLING" | "SERVER_ERROR" | "CLIENT_ERROR"; error?: { name?: string } }
+export interface RetryStrategyV2 {
+  acquireInitialRetryToken(scope: string): Promise<RetryToken>;
+  refreshRetryTokenForRetry(token: RetryToken, errorInfo: RetryErrorInfo): Promise<RetryToken>;
+  recordSuccess(token: RetryToken): void;
+}
+
 type ProfileCredentialsProvider = ReturnType<
   typeof import("@aws-sdk/credential-provider-ini")["fromIni"]
 >;
@@ -10,7 +19,40 @@ type ProfileCredentialsProvider = ReturnType<
 export interface AwsClientOptions {
   region: string;
   credentials?: ProfileCredentialsProvider;
+  retryStrategy: RetryStrategyV2;
 }
+
+/** Attempts per AWS call, first try included. The backoff below spans about two and a half minutes. */
+export const AWS_CALL_ATTEMPTS = 10;
+
+/** Wait before retry number `retry` (1-based): 1, 2, 4, 8, 16 s, then 20 s each. */
+export function retryDelayMs(retry: number): number {
+  return Math.min(1000 * 2 ** (retry - 1), 20_000);
+}
+
+/**
+ * A client network drops a few seconds of new connections now and then. The SDK already classes
+ * unreachable networks, failed lookups, resets and throttling as retryable, but its default gives
+ * up after three attempts within about a second, so one blip aborted a whole upgrade. This keeps
+ * the SDK's classification and only stretches the budget: client errors still fail at once.
+ */
+export const networkTolerantRetryStrategy: RetryStrategyV2 = {
+  async acquireInitialRetryToken(): Promise<RetryToken> {
+    return { getRetryCount: () => 0, getRetryDelay: () => 0 };
+  },
+  async refreshRetryTokenForRetry(token: RetryToken, errorInfo: RetryErrorInfo): Promise<RetryToken> {
+    const retry = token.getRetryCount() + 1;
+    if (errorInfo.errorType === "CLIENT_ERROR" || retry >= AWS_CALL_ATTEMPTS) {
+      throw new Error("no retry left");
+    }
+    const delay = retryDelayMs(retry);
+    const code = (errorInfo.error as { code?: string; name?: string } | undefined)?.code
+      ?? errorInfo.error?.name ?? errorInfo.errorType;
+    process.stderr.write(`AWS call failed (${code}); retrying in ${delay / 1000} s, attempt ${retry + 1} of ${AWS_CALL_ATTEMPTS}\n`);
+    return { getRetryCount: () => retry, getRetryDelay: () => delay };
+  },
+  recordSuccess(): void {},
+};
 
 export interface AwsCallerIdentity {
   account: string;
@@ -46,12 +88,13 @@ export async function awsClientOptions(
   profile?: string,
 ): Promise<AwsClientOptions> {
   const selected = requestedProfile(profile);
-  if (selected === undefined) return { region };
+  if (selected === undefined) return { region, retryStrategy: networkTolerantRetryStrategy };
 
   const { fromIni } = await import("@aws-sdk/credential-provider-ini");
   const resolve = fromIni({ profile: selected });
   return {
     region,
+    retryStrategy: networkTolerantRetryStrategy,
     credentials: async () => {
       try {
         return await resolve();
