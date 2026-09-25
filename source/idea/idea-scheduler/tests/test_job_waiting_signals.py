@@ -3,7 +3,7 @@ Test Cases for the job waiting signals
 
 The signals answer "why is my job waiting": which provisioning attempt the job is on, and
 which queue limit is holding it. They must never carry a queue position, a start-time
-estimate, or a cluster-wide threshold.
+estimate, or an invented start time.
 """
 
 import datetime
@@ -385,3 +385,113 @@ def test_apply_waiting_signals_names_no_limit_for_a_held_job(context, job_cache)
     # the attempt count is still reported: it is what the cap was reached on
     assert job.provisioning_attempt == 3
     assert job.max_provisioning_attempts == 3
+
+
+def test_status_reason_reports_capacity_and_queue_usage(context, job_cache):
+    context.queue_profiles = MockQueueProfiles(
+        MockProvisioningQueue(
+            blocked=True,
+            limit_info=LimitCheckResult(
+                limit_type='max_provisioned_instances',
+                queue_current=12,
+                queue_threshold=20,
+            ),
+        )
+    )
+    job = mock_job()
+    job.params.nodes = 2
+    job.params.instance_types = ['c5.large']
+    apply_waiting_signals(context, [job])
+    assert (
+        job.status_reason == 'Waiting for 2 instances of c5.large, queue limit 12/20.'
+    )
+
+
+@pytest.mark.parametrize(
+    'state,error,expected',
+    [
+        (SocaJobState.QUEUED, 'Capacity unavailable.', 'Capacity unavailable.'),
+        (
+            SocaJobState.QUEUED,
+            'Image architecture does not match.',
+            'Image architecture does not match.',
+        ),
+        (
+            SocaJobState.HELD,
+            'Last error: Capacity unavailable. Use qdel to delete.',
+            'Held after attempt 3 of 3: Capacity unavailable.',
+        ),
+    ],
+)
+def test_status_reason_uses_recorded_error(context, job_cache, state, error, expected):
+    context.queue_profiles = MockQueueProfiles()
+    job = mock_job(state=state)
+    job.error_message = error
+    job.reason_class = 'retries_exhausted' if state == SocaJobState.HELD else None
+    for _ in range(3):
+        job_cache.increment_job_provisioning_retry(job_id=job.job_id)
+    apply_waiting_signals(context, [job])
+    assert job.status_reason == expected
+
+
+def test_deletion_metadata_survives_cache_sync(context, job_cache):
+    from ideascheduler.app.provisioning.lifecycle_events import SYSTEM_DELETION
+
+    job = mock_job()
+    job_cache.sync([job])
+    job_cache.set_job_provisioning_error(
+        job.job_id, SYSTEM_DELETION, 'Deleted because the owner is disabled.'
+    )
+    job_cache.sync([job])
+    recorded = job_cache.get_job(job.job_id)
+    assert recorded.disposition == 'deleted'
+    assert recorded.reason_class == 'access'
+    assert recorded.status_reason == 'Deleted because the owner is disabled.'
+
+
+def test_deleted_job_record_survives_a_poll_race(context, job_cache):
+    from ideascheduler.app.provisioning.lifecycle_events import SYSTEM_DELETION
+
+    job = mock_job()
+    job_cache.sync([job])
+    job_cache.delete_jobs([job.job_id])
+    job_cache.record_deleted_job(
+        job, SYSTEM_DELETION, 'Deleted because the owner is disabled.'
+    )
+    recorded = job_cache.get_job(job.job_id)
+    assert recorded.disposition == 'deleted'
+    assert recorded.reason_class == 'access'
+    assert recorded.status_reason == recorded.error_message
+
+
+def test_cleared_error_does_not_leave_a_stale_status_reason(context, job_cache):
+    from ideadatamodel import errorcodes
+
+    context.queue_profiles = MockQueueProfiles()
+    job = mock_job()
+    job.error_message = 'Capacity unavailable.'
+    job_cache.sync([job])
+    job_cache.set_job_provisioning_error(
+        job.job_id, errorcodes.CAPACITY_UNAVAILABLE, job.error_message
+    )
+    job_cache.clear_job_provisioning_error(job.job_id)
+    current = job_cache.get_job(job.job_id)
+    apply_waiting_signals(context, [current])
+    assert current.error_message is None
+    assert current.status_reason == 'Waiting for requested capacity.'
+
+
+@pytest.mark.parametrize(
+    'reason,error,expected',
+    [
+        (None, None, 'Job held'),
+        ('Held for maintenance.', None, 'Held for maintenance.'),
+        (None, 'Held by request.', 'Held by request.'),
+    ],
+)
+def test_manual_hold_preserves_explanation(context, job_cache, reason, error, expected):
+    job = mock_job(state=SocaJobState.HELD)
+    job.status_reason = reason
+    job.error_message = error
+    apply_waiting_signals(context, [job])
+    assert job.status_reason == expected

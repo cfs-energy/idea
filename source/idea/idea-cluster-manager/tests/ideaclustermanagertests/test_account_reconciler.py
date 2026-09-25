@@ -813,6 +813,35 @@ def test_manual_run_reads_current_settings_and_saves_report_without_delaying_per
     assert PREFIX + 'last_completed' not in context._config.db.values
 
 
+@pytest.mark.parametrize('dry_run', [True, False])
+def test_manual_modes_run_with_scheduling_disabled_and_preserve_checkpoint(dry_run):
+    service, context = build(
+        {
+            PREFIX + 'enabled': False,
+            PREFIX + 'max_disable_fraction': 1,
+            PREFIX + 'last_completed': 123,
+        },
+        records={'user0': None},
+        users=[
+            User(username='cluster-admin', enabled=True),
+            User(username='user0', enabled=True),
+        ],
+    )
+
+    report = service.run_once(dry_run=dry_run)
+
+    assert report['dry_run'] is dry_run
+    assert report['would_disable'] == 1
+    assert report['disabled'] == int(not dry_run)
+    assert context.accounts.disable_user.call_count == int(not dry_run)
+    assert context._config.db.values[PREFIX + 'last_completed'] == 123
+    assert context._config.db.values[PREFIX + 'last_run']['report'] == {
+        **report,
+        'truncated': False,
+    }
+    assert all(row.get('username') != 'cluster-admin' for row in report['changes'])
+
+
 def test_worker_wait_is_interrupted_by_save_and_stop():
     from threading import Event
 

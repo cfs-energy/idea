@@ -10,12 +10,15 @@
 #  and limitations under the License.
 
 from abc import abstractmethod
-from typing import Dict
+from typing import Dict, Optional, Tuple
 
 
 class BaseTask:
     @abstractmethod
     def get_name(self) -> str: ...
+
+    def entity_ref(self, payload: Dict) -> Optional[Tuple[str, str]]:
+        return None
 
     @abstractmethod
     def invoke(self, payload: Dict): ...

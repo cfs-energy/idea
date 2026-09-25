@@ -210,6 +210,8 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
         self.storage_metrics = StorageMetricsService(context=self.context)
         self.context.storage_metrics = self.storage_metrics
 
+        self.context.token_service.initialize_api_tokens()
+
         self.context.personal_costs_store = PersonalCostsStore(self.context)
         self.context.personal_costs_store.initialize()
         self.personal_costs = PersonalCostsCollector(

@@ -18,11 +18,13 @@ import {AUTH_LOGIN_CHALLENGE, AUTH_PASSWORD_RESET_REQUIRED, UNAUTHORIZED_ACCESS}
 import Utils from "../common/utils";
 import {JwtTokenClaims} from "../common/token-utils";
 import {IdeaClients} from "../client";
+import ReportingClient from "../client/reporting-client";
 import AppLogger from "../common/app-logger";
 
 export interface AuthServiceProps {
     localStorage: LocalStorageService,
-    clients: IdeaClients
+    clients: IdeaClients,
+    reporting: ReportingClient
 }
 
 const KEY_CHALLENGE_NAME = 'challenge-name'
@@ -33,6 +35,66 @@ const KEY_FORGOT_PASSWORD_USERNAME = 'forgot-password-username'
 class AuthService {
     private readonly props: AuthServiceProps
     private claims: JwtTokenClaims | null
+    private sessionVersion = 0
+    private reportingVersion = 0
+    private reportingAllowed = false
+    private reportingResolved = false
+    private reportingIdentity = ''
+    private reportingPending?: Promise<void>
+    private reportingListeners = new Set<() => void>()
+
+    canReadReporting(): boolean {
+        return this.reportingResolved && this.reportingAllowed
+    }
+
+    isReportingResolved(): boolean {
+        return this.reportingResolved
+    }
+
+    subscribeReporting(listener: () => void): () => void {
+        this.reportingListeners.add(listener)
+        return () => this.reportingListeners.delete(listener)
+    }
+
+    private notifyReporting() {
+        this.reportingListeners.forEach(listener => listener())
+    }
+
+    private clearReporting() {
+        this.reportingVersion++
+        this.reportingAllowed = false
+        this.reportingResolved = false
+        this.reportingIdentity = ''
+        this.reportingPending = undefined
+        this.notifyReporting()
+    }
+
+    private async acceptClaims(claims: JwtTokenClaims, session: number): Promise<boolean> {
+        if (session !== this.sessionVersion) return false
+        this.claims = claims
+        const identity = JSON.stringify([claims.username, claims.issued_at, claims.expires_at, claims.groups])
+        if (identity === this.reportingIdentity) {
+            await this.reportingPending
+            return session === this.sessionVersion
+        }
+        this.clearReporting()
+        this.reportingIdentity = identity
+        const version = this.reportingVersion
+        this.reportingPending = this.props.reporting.getCapabilities().then(result => {
+            if (session === this.sessionVersion && version === this.reportingVersion) {
+                this.reportingAllowed = result.can_read_reporting === true
+            }
+        }).catch(() => {
+            if (session === this.sessionVersion && version === this.reportingVersion) this.reportingAllowed = false
+        }).finally(() => {
+            if (session === this.sessionVersion && version === this.reportingVersion) {
+                this.reportingResolved = true
+                this.notifyReporting()
+            }
+        })
+        await this.reportingPending
+        return session === this.sessionVersion
+    }
 
     private onLogin?: () => Promise<boolean>
     private onLogout?: () => Promise<boolean>
@@ -65,6 +127,10 @@ class AuthService {
      * @param password
      */
     login(username: string, password: string): Promise<boolean> {
+        this.clearReporting()
+        this.claims = null
+        const session = ++this.sessionVersion
+        this.activeIsLoggedInPromise = null
         return this.props.clients.auth().initiateAuth({
             auth_flow: 'USER_PASSWORD_AUTH',
             username: username,
@@ -76,8 +142,8 @@ class AuthService {
                     errorCode: AUTH_LOGIN_CHALLENGE
                 })
             } else {
-                return this.props.clients.auth().getClaims().then(claims => {
-                    this.claims = claims
+                return this.props.clients.auth().getClaims().then(async claims => {
+                    if (!await this.acceptClaims(claims, session)) return false
                     if (this.onLogin) {
                         return this.onLogin()
                     } else {
@@ -86,6 +152,7 @@ class AuthService {
                 })
             }
         }).catch(error => {
+            if (session === this.sessionVersion) this.clearReporting()
             if (error.errorCode === AUTH_PASSWORD_RESET_REQUIRED) {
                 this.props.localStorage.setItem(KEY_FORGOT_PASSWORD_USERNAME, username)
             }
@@ -100,14 +167,17 @@ class AuthService {
      * @param authorization_code
      */
     login_using_sso_auth_code(authorization_code: string): Promise<boolean> {
+        this.clearSession()
+        const session = this.sessionVersion
         return this.props.clients.auth().initiateAuth({
             auth_flow: 'SSO_AUTH',
             authorization_code: authorization_code
-        }).then(_ => {
-            return true
-        }).catch(error => {
-            throw error
-        })
+        }).then(() => this.props.clients.auth().getClaims())
+            .then(claims => this.acceptClaims(claims, session))
+            .catch(error => {
+                if (session === this.sessionVersion) this.clearReporting()
+                throw error
+            })
     }
 
     respondToAuthChallenge(newPassword: string): Promise<boolean> {
@@ -212,7 +282,13 @@ class AuthService {
     }
 
     getAccessToken(): Promise<string> {
-        return this.props.clients.auth().getAccessToken()
+        return this.props.clients.auth().getAccessToken().then(async token => {
+            await this.isLoggedIn()
+            return token
+        }).catch(error => {
+            this.clearReporting()
+            throw error
+        })
     }
 
     debug() {
@@ -282,20 +358,20 @@ class AuthService {
             return this.activeIsLoggedInPromise
         }
 
+        const session = this.sessionVersion
         this.logger.debug('Creating new isLoggedIn promise.')
         this.activeIsLoggedInPromise = this.props.clients.auth().isLoggedIn().then(status => {
+            if (session !== this.sessionVersion) return false
             this.logger.debug(`Auth service reported login status: ${status}`)
 
             // if already logged in do, nothing
             if (status) {
                 this.logger.debug('User is already logged in. Fetching claims.')
-                return this.props.clients.auth().getClaims().then(claims => {
-                    this.claims = claims
-                    this.logger.debug('Claims fetched successfully.')
-                    return true
-                })
+                return this.props.clients.auth().getClaims().then(claims => this.acceptClaims(claims, session))
             }
 
+            this.claims = null
+            this.clearReporting()
             if (typeof window.idea.app.sso === 'undefined' || !window.idea.app.sso) {
                 this.logger.debug('SSO is not defined or not enabled.')
                 return false
@@ -314,15 +390,7 @@ class AuthService {
                             // this also prevents re-triggering SSO auth flow after the user has logged out manually.
                             window.idea.app.sso_auth_code = null
                             this.logger.debug(`Login using SSO auth code was ${status ? 'successful' : 'unsuccessful'}.`)
-                            if (status) {
-                                return this.props.clients.auth().getClaims().then(claims => {
-                                    this.claims = claims
-                                    this.logger.debug('Claims fetched successfully after SSO login.')
-                                    return true
-                                })
-                            } else {
-                                return false
-                            }
+                            return status
                         })
                     } else {
                         this.logger.debug('SSO auth status is not SUCCESS or no SSO auth code is available. Redirecting to login page.')
@@ -336,22 +404,35 @@ class AuthService {
             }
             this.logger.debug('SSO is not enabled.')
             return false
+        }).catch(error => {
+            if (session === this.sessionVersion) {
+                this.claims = null
+                this.clearReporting()
+            }
+            throw error
         }).finally(() => {
             this.logger.debug('isLoggedIn promise settled. Clearing active isLoggedIn promise.')
-            this.activeIsLoggedInPromise = null
+            if (session === this.sessionVersion) this.activeIsLoggedInPromise = null
         })
 
         return this.activeIsLoggedInPromise
     }
 
 
+    clearSession() {
+        this.sessionVersion++
+        this.claims = null
+        this.activeIsLoggedInPromise = null
+        this.clearReporting()
+    }
+
     logout() {
+        this.clearSession()
+        const session = this.sessionVersion
         return this.props.clients.auth()
             .logout()
-            .then(() => {
-                this.claims = null
-            })
             .finally(() => {
+                if (session !== this.sessionVersion) return false
                 if (this.onLogout) {
                     return this.onLogout().finally()
                 } else {
@@ -361,13 +442,14 @@ class AuthService {
     }
 
     getUser(): Promise<User> {
-        return this.props.clients.auth().isLoggedIn().then(status => {
+        return this.isLoggedIn().then(status => {
             if (status) {
                 return this.props.clients.auth().getUser().then(result => {
                     return result!.user!
                 })
             } else {
                 this.claims = null
+                this.clearReporting()
                 throw new IdeaException({
                     errorCode: UNAUTHORIZED_ACCESS
                 })

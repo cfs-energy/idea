@@ -12,6 +12,12 @@
  */
 
 import {
+    CreateApiTokenRequest,
+    CreateApiTokenResult,
+    ListApiTokensRequest,
+    ListApiTokensResult,
+    DeleteApiTokenRequest,
+    DeleteApiTokenResult,
     InitiateAuthRequest,
     InitiateAuthResult,
     RespondToAuthChallengeRequest,
@@ -56,6 +62,18 @@ export interface AuthClientProps extends IdeaBaseClientProps {
  * Auth Client
  */
 class AuthClient extends IdeaBaseClient<AuthClientProps>{
+
+    createApiToken(req: CreateApiTokenRequest): Promise<CreateApiTokenResult> {
+        return this.apiInvoker.invoke_alt('Auth.CreateApiToken', req)
+    }
+
+    listApiTokens(req: ListApiTokensRequest = {}): Promise<ListApiTokensResult> {
+        return this.apiInvoker.invoke_alt('Auth.ListApiTokens', req)
+    }
+
+    deleteApiToken(req: DeleteApiTokenRequest): Promise<DeleteApiTokenResult> {
+        return this.apiInvoker.invoke_alt('Auth.DeleteApiToken', req)
+    }
 
     getModuleInfo(): Promise<GetModuleInfoRequest> {
         return this.apiInvoker.invoke_alt<GetModuleInfoRequest, GetModuleInfoResult>(

@@ -553,6 +553,7 @@ class MyCostsService:
         for row in rows:
             created_on = Utils.get_value_as_int('created_on', row, 0)
             deleted_on = Utils.get_value_as_int('deleted_on', row, 0)
+            stopped_on = Utils.get_value_as_int('stopped_on', row, 0)
             # the desktop has to have existed during the window to have cost anything
             if deleted_on < start_ms or (created_on > 0 and created_on > end_ms):
                 continue
@@ -570,7 +571,15 @@ class MyCostsService:
                         'state': 'DELETED',
                         'created_on': created_on,
                         'updated_on': deleted_on,
-                        'stopped_on': Utils.get_value_as_int('stopped_on', row, 0),
+                        'stopped_on': stopped_on,
+                        'stop_time_estimated': Utils.get_value_as_bool(
+                            'stop_time_estimated', row, False
+                        )
+                        or (
+                            created_on > 0
+                            and created_on < start_ms
+                            and stopped_on == deleted_on
+                        ),
                         'server': {
                             'instance_type': Utils.get_value_as_string(
                                 'instance_type', row
@@ -899,7 +908,9 @@ class MyCostsService:
 
         stopped_on = Utils.get_value_as_int('stopped_on', source, 0)
         if stopped_on > 0:
-            return stopped_on, False
+            return stopped_on, Utils.get_value_as_bool(
+                'stop_time_estimated', source, False
+            )
 
         # older sessions stopped before the stop time was recorded. the cleanup notice
         # carries a real ec2 stop time for some of them; either way it is a guess.

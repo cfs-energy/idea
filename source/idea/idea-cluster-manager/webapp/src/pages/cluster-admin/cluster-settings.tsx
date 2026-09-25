@@ -11,14 +11,13 @@
  * and limitations under the License.
  */
 
-import MetricsHistorySettings from "./metrics-history-settings";
 import {SettingsSection, SettingsSource} from './settings-sections';
 
 import AccountReconcileSettings from "./account-reconcile-settings";
-import React, {Component, RefObject} from "react";
+import React, {Component} from "react";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import {IdeaAppLayoutProps} from "../../components/app-layout";
-import {Alert, Box, Button, ColumnLayout, Container, FormField, Header, Input, SpaceBetween, Table, Textarea, Toggle} from "@cloudscape-design/components";
+import {Alert, Box, Button, ColumnLayout, Container, FormField, Header, Input, KeyValuePairs, SpaceBetween, Table, Textarea, Toggle} from "@cloudscape-design/components";
 import moment from "moment";
 import {KeyValue, KeyValueGroup} from "../../components/key-value";
 import {AppContext} from "../../common";
@@ -29,12 +28,11 @@ import {Constants} from "../../common/constants";
 import {SharedStorageFileSystem} from "../../common/shared-storage-utils";
 import {withRouter} from "../../navigation/navigation-utils";
 import ConfigUtils from "../../common/config-utils";
-import {SimpleSettingsButton} from "../../components/simple-settings";
-import IdeaConfirm from "../../components/modals";
-import {SocaUserInputParamMetadata} from "../../client/data-model";
 
 export interface ClusterSettingsProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
     renderSections: (source: SettingsSource) => React.ReactNode
+    activeEditor?: string | null
+    onEditingChange?: (editor: string | null) => void
 
 }
 
@@ -46,20 +44,12 @@ export interface ClusterSettingsState {
     analytics: any
     metrics: any
     clusterManager: any
+    desktopSettings: any
 
     sharedStorageTableItems: any
     selectedFileSystem: SharedStorageFileSystem[]
 
-    bedrockEnabled: boolean
-    bedrockModelIds: string[]
-    bedrockModelIdInput: string
-    bedrockError: string | null
-    bedrockUpdating: boolean
-    bedrockProvisionerReady: boolean
-    bedrockPassRoleReady: boolean
-    bedrockUsageLoggingManaged: boolean
-    bedrockModelIdPendingRemoval: string | null
-
+    maintenanceEditing: boolean
     maintenanceEnabled: boolean
     maintenanceMessage: string
     maintenanceEndsAt: string
@@ -69,24 +59,11 @@ export interface ClusterSettingsState {
     settingsErrors: string[]
 }
 
-const BEDROCK_ENABLED_SETTING: SocaUserInputParamMetadata = {
-    name: 'enabled',
-    title: 'Enable Amazon Bedrock',
-    description: 'When disabled, no project can be granted model access and nothing is provisioned. Enabling also requires a redeploy of the cluster-manager and virtual-desktop-controller modules, which create the IAM permissions boundary, the invocation log group and its delivery role.',
-    param_type: 'confirm',
-    data_type: 'bool',
-    validate: {
-        required: true
-    }
-}
-
 class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsState> {
 
-    removeBedrockModelConfirm: RefObject<IdeaConfirm | null>
 
     constructor(props: ClusterSettingsProps) {
         super(props);
-        this.removeBedrockModelConfirm = React.createRef()
         this.state = {
             cluster: {},
             identityProvider: {},
@@ -95,22 +72,12 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
             analytics: {},
             metrics: {},
             clusterManager: {},
+            desktopSettings: {},
 
             sharedStorageTableItems: [],
             selectedFileSystem: [],
 
-            bedrockEnabled: false,
-            bedrockModelIds: [],
-            bedrockModelIdInput: '',
-            bedrockError: null,
-            bedrockUpdating: false,
-            // assumed ready until the settings load, so the notice cannot flash
-            // on a page that has not read the module settings yet.
-            bedrockProvisionerReady: true,
-            bedrockPassRoleReady: true,
-            bedrockUsageLoggingManaged: true,
-            bedrockModelIdPendingRemoval: null,
-
+            maintenanceEditing: false,
             maintenanceEnabled: false,
             maintenanceMessage: '',
             maintenanceEndsAt: '',
@@ -118,6 +85,15 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
             maintenanceError: null,
             maintenanceSaved: false,
             settingsErrors: []
+        }
+    }
+
+    componentDidUpdate(previous: ClusterSettingsProps) {
+        if (previous.activeEditor === 'appearance:Maintenance notice' && this.props.activeEditor !== previous.activeEditor && this.state.maintenanceEditing) {
+            this.setState({maintenanceEditing: false, maintenanceError: null,
+                maintenanceEnabled: Utils.asBoolean(dot.pick('maintenance.enabled', this.state.clusterManager)),
+                maintenanceMessage: Utils.asString(dot.pick('maintenance.message', this.state.clusterManager)),
+                maintenanceEndsAt: Utils.asString(dot.pick('maintenance.ends_at', this.state.clusterManager))});
         }
     }
 
@@ -163,7 +139,6 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
             })
             const sharedStorageTableItems = this.getSharedStorageTableItems(result(3))
             const clusterManager = result(5)
-            const modelIds = dot.pick('bedrock.model_ids', clusterManager)
             this.setState({
                 cluster: result(0),
                 identityProvider: result(1),
@@ -171,18 +146,10 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                 sharedStorage: result(3),
                 analytics: result(4),
                 clusterManager: clusterManager,
+                desktopSettings: result(6),
                 metrics: (clusterSettingsService.isMetricsEnabled()) ? result(7) : {},
                 sharedStorageTableItems: sharedStorageTableItems,
                 selectedFileSystem: sharedStorageTableItems.slice(0, 1),
-                bedrockEnabled: Utils.asBoolean(dot.pick('bedrock.enabled', clusterManager), false),
-                bedrockModelIds: Array.isArray(modelIds) ? modelIds : [],
-                // the stack writes this key only when the module is deployed with
-                // bedrock on, the same gate that grants the provisioner permissions.
-                bedrockProvisionerReady: !Utils.isEmpty(dot.pick('bedrock.invocation_log_role_arn', clusterManager)),
-                // the desktop controller gets iam:PassRole for project roles at deploy time, so the setting
-                // alone does not let a desktop launch under its project role; the vdc stack writes this key under the same gate.
-                bedrockPassRoleReady: !clusterSettingsService.isVirtualDesktopDeployed() || !Utils.isEmpty(dot.pick('bedrock.project_pass_role_arn', result(6))),
-                bedrockUsageLoggingManaged: Utils.asBoolean(dot.pick('bedrock.invocation_logging.manage_configuration', clusterManager), true),
                 maintenanceEnabled: Utils.asBoolean(dot.pick('maintenance.enabled', clusterManager), false),
                 maintenanceMessage: Utils.asString(dot.pick('maintenance.message', clusterManager)),
                 maintenanceEndsAt: Utils.asString(dot.pick('maintenance.ends_at', clusterManager)),
@@ -206,106 +173,10 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
 
     // the module settings write is a full replacement of the addressed path, so
     // the catalog is always sent as the complete model id list.
-    updateBedrockSetting = (settingPath: string, value: any, onSuccess: () => void): Promise<boolean> => {
-        const clusterSettingsService = AppContext.get().getClusterSettingsService()
-        const moduleId = Utils.asString(clusterSettingsService.getModuleId(Constants.MODULE_CLUSTER_MANAGER), Constants.MODULE_CLUSTER_MANAGER)
-        const settings: any = {}
-        dot.str(settingPath, value, settings)
-        this.setState({
-            bedrockUpdating: true,
-            bedrockError: null
-        })
-        return AppContext.get().client().clusterSettings().updateModuleSettings({
-            module_id: moduleId,
-            settings: settings
-        }).then(result => {
-            if (!Utils.asBoolean(result.success, false)) {
-                this.setState({
-                    bedrockUpdating: false,
-                    bedrockError: `Failed to update: ${settingPath}`
-                })
-                return false
-            }
-            this.setState({
-                bedrockUpdating: false
-            }, onSuccess)
-            this.props.onFlashbarChange({
-                items: [
-                    {
-                        type: 'success',
-                        content: 'Bedrock settings updated. Changes will appear on refresh after a few seconds.',
-                        dismissible: true
-                    }
-                ]
-            })
-            return true
-        }).catch(error => {
-            this.setState({
-                bedrockUpdating: false,
-                bedrockError: error?.message ?? `${error}`
-            })
-            return false
-        })
-    }
-
-    addBedrockModel = () => {
-        const modelId = this.state.bedrockModelIdInput.trim()
-        if (Utils.isEmpty(modelId)) {
-            this.setState({
-                bedrockError: 'Enter a model id.'
-            })
-            return
-        }
-        if (/\s/.test(modelId)) {
-            this.setState({
-                bedrockError: 'Model id cannot contain white spaces.'
-            })
-            return
-        }
-        if (this.state.bedrockModelIds.includes(modelId)) {
-            this.setState({
-                bedrockError: `Model id is already in the catalog: ${modelId}`
-            })
-            return
-        }
-        const modelIds = [...this.state.bedrockModelIds, modelId]
-        this.updateBedrockSetting('bedrock.model_ids', modelIds, () => {
-            this.setState({
-                bedrockModelIds: modelIds,
-                bedrockModelIdInput: ''
-            })
-        })
-    }
-
-    removeBedrockModel = (modelId: string) => {
-        const modelIds = this.state.bedrockModelIds.filter((value) => value !== modelId)
-        this.updateBedrockSetting('bedrock.model_ids', modelIds, () => {
-            this.setState({
-                bedrockModelIds: modelIds
-            })
-        })
-    }
-
-    buildRemoveBedrockModelConfirm() {
-        const modelId = this.state.bedrockModelIdPendingRemoval
-        return (
-            <IdeaConfirm ref={this.removeBedrockModelConfirm}
-                         title="Remove model from catalog"
-                         confirmLabel="Remove model"
-                         onConfirm={() => {
-                             if (modelId != null) {
-                                 this.removeBedrockModel(modelId)
-                             }
-                         }}>
-                Every project that lists <Box variant="strong">{modelId}</Box> is reconciled as soon as this is saved: access to the model is revoked and its members
-                can no longer invoke it. Those projects keep it in their model list, flagged as not in the cluster catalog.
-            </IdeaConfirm>
-        )
-    }
-
     // All three keys are written together, so the banner can never appear carrying the previous
     // window's message and end time.
     saveMaintenance = () => {
+        if (this.state.maintenanceUpdating) return
         const message = this.state.maintenanceMessage.trim()
         const endsAt = this.state.maintenanceEndsAt.trim()
 
@@ -340,10 +211,13 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                 })
                 return
             }
+            this.props.onEditingChange?.(null);
             this.setState({
                 maintenanceUpdating: false,
                 maintenanceMessage: message,
                 maintenanceEndsAt: endsAt,
+                maintenanceEditing: false,
+                clusterManager: {...this.state.clusterManager, maintenance: {enabled: this.state.maintenanceEnabled, message, ends_at: endsAt}},
                 maintenanceSaved: true
             })
         }).catch(error => {
@@ -357,42 +231,47 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
     buildMaintenanceSettings() {
         return (
             <SpaceBetween size={"l"}>
-                <Container header={<Header variant={"h2"}
-                                           description={"A warning banner on every portal page, including the sign-in page. While it is on, the scheduler also refuses new job submissions with the same message."}>Maintenance Window</Header>}>
+                <Container header={<Header variant={"h2"} actions={this.state.maintenanceEditing ? <SpaceBetween direction="horizontal" size="xs">
+                    <Button disabled={this.state.maintenanceUpdating} onClick={() => {this.props.onEditingChange?.(null); this.setState({maintenanceEditing: false, maintenanceError: null,
+                        maintenanceEnabled: Utils.asBoolean(dot.pick('maintenance.enabled', this.state.clusterManager)),
+                        maintenanceMessage: Utils.asString(dot.pick('maintenance.message', this.state.clusterManager)),
+                        maintenanceEndsAt: Utils.asString(dot.pick('maintenance.ends_at', this.state.clusterManager))});}}>Cancel</Button>
+                    <Button variant="primary" loading={this.state.maintenanceUpdating} disabled={this.state.maintenanceUpdating} onClick={this.saveMaintenance}>Save</Button>
+                </SpaceBetween> : <Button disabled={Boolean(this.props.activeEditor && this.props.activeEditor !== 'appearance:Maintenance notice')} onClick={() => {this.props.onEditingChange?.('appearance:Maintenance notice'); this.setState({maintenanceEditing: true, maintenanceSaved: false});}}>Edit</Button>}
+                                           description={"A warning banner on every portal page, including the sign-in page. While it is on, the scheduler also refuses new job submissions with the same message."}>Maintenance notice</Header>}>
                     <SpaceBetween size={"m"}>
                         {this.state.maintenanceError && <Alert type="error" dismissible={true} onDismiss={() => this.setState({maintenanceError: null})}>{this.state.maintenanceError}</Alert>}
                         {this.state.maintenanceSaved && <Alert type="success" dismissible={true} onDismiss={() => this.setState({maintenanceSaved: false})}>
-                            Saved. Open portal pages pick the change up within a minute, and the scheduler within about half a minute.
+                            Maintenance notice saved.
                         </Alert>}
-                        <Toggle checked={this.state.maintenanceEnabled}
+                        {this.state.maintenanceEditing ? <SpaceBetween size="m"><div id="setting-cluster-manager.maintenance.enabled"><Toggle checked={this.state.maintenanceEnabled}
                                 disabled={this.state.maintenanceUpdating}
                                 onChange={(event) => this.setState({maintenanceEnabled: event.detail.checked})}>
-                            Show the maintenance banner and refuse job submissions
-                        </Toggle>
-                        <FormField label="Message"
-                                   description="Plain text, shown to every user. Saved changes reach open portal pages within a minute and the scheduler within about half a minute.">
+                            Maintenance notice
+                        </Toggle></div>
+                        <div id="setting-cluster-manager.maintenance.message"><FormField label="Message"
+                                   description="Plain text, shown to every user.">
                             <Textarea value={this.state.maintenanceMessage}
                                       rows={3}
                                       disabled={this.state.maintenanceUpdating}
                                       placeholder="The HPC scheduler is closed for a cluster upgrade. Running desktops are unaffected."
                                       onChange={(event) => this.setState({maintenanceMessage: event.detail.value})}/>
-                        </FormField>
-                        <FormField label="End time - optional"
+                        </FormField></div>
+                        <div id="setting-cluster-manager.maintenance.ends_at"><FormField label="End time - optional"
                                    description="ISO 8601, for example 2026-09-15T18:00:00Z. A value with no offset is read as UTC, and each user sees it in their own timezone. Leave empty to show no end time. This does not automatically reopen submissions.">
                             <Input value={this.state.maintenanceEndsAt}
                                    disabled={this.state.maintenanceUpdating}
                                    placeholder="2026-09-15T18:00:00Z"
                                    onChange={(event) => this.setState({maintenanceEndsAt: event.detail.value})}/>
-                        </FormField>
-                        <Box>
-                            <Button variant={"primary"}
-                                    loading={this.state.maintenanceUpdating}
-                                    onClick={this.saveMaintenance}>Save</Button>
-                        </Box>
+                        </FormField></div>
+                        </SpaceBetween> : <KeyValuePairs columns={1} items={[
+                            {label: 'Maintenance notice', value: <span id="setting-cluster-manager.maintenance.enabled">{this.state.maintenanceEnabled ? 'On' : 'Off'}</span>},
+                            {label: 'Message', value: <span id="setting-cluster-manager.maintenance.message">{this.state.maintenanceMessage || 'Not set'}</span>},
+                            {label: 'End time - optional', value: <span id="setting-cluster-manager.maintenance.ends_at">{this.state.maintenanceEndsAt || 'Not set'}</span>},
+                        ]}/>}
+                        <p>This does not automatically reopen submissions.</p>
                         <Alert type="info">
-                            On a container cluster the portal and desktops stay up through an upgrade; only job submission
-                            pauses for about a minute while the scheduler swaps. Turn the banner on for a host-to-container
-                            move or any planned outage, and off again afterwards.
+                            Turn this notice off when maintenance is complete. The end time is informational.
                         </Alert>
                     </SpaceBetween>
                 </Container>
@@ -400,102 +279,6 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
         )
     }
 
-    buildBedrockSettings() {
-        return (
-            <SpaceBetween size={"l"}>
-                {this.buildRemoveBedrockModelConfirm()}
-                {this.state.bedrockEnabled && !this.state.bedrockProvisionerReady &&
-                    <Alert type="warning" header="Bedrock is enabled, but the cluster-manager module has not been redeployed">
-                        The module is granted the permissions to create project roles and inference profiles when it is deployed, so turning this setting on does not
-                        provision anything on its own. Projects with Bedrock enabled stay unprovisioned until the cluster-manager module is redeployed. Redeploy it,
-                        then update one of those projects to retry.
-                    </Alert>}
-                {this.state.bedrockEnabled && !this.state.bedrockPassRoleReady &&
-                    <Alert type="warning" header="Bedrock is enabled, but the virtual-desktop-controller module has not been redeployed">
-                        A desktop in a Bedrock project runs under that project's own IAM role, and the controller is allowed to pass that role only when this module is
-                        deployed with Bedrock enabled. Until it is redeployed, every virtual desktop launch in a project with Bedrock enabled is refused.
-                    </Alert>}
-                {this.state.bedrockEnabled && this.state.bedrockProvisionerReady && !this.state.bedrockUsageLoggingManaged &&
-                    <Alert type="info" header="IDEA is not managing Bedrock model invocation logging">
-                        Usage is aggregated from Amazon Bedrock model invocation logging, which is one configuration per AWS account and region.
-                        <Box variant="strong"> invocation_logging.manage_configuration</Box> is false, so IDEA does not set it. Until logging for this account and region delivers
-                        to <Box variant="strong">{dot.pick('bedrock.invocation_log_group_name', this.state.clusterManager)}</Box>, every project reports no usage whether or not
-                        models were invoked. Either configure model invocation logging with that log group as its destination, or set
-                        manage_configuration to true and let IDEA adopt it when no other configuration exists.
-                    </Alert>}
-                <Container header={<Header variant={"h2"} description={"Model access for projects. Models approved here can be granted to individual projects on the Projects page."}>Amazon Bedrock</Header>}>
-                    <ColumnLayout variant={"text-grid"} columns={2}>
-                        <KeyValue title="Status" value={
-                            <SpaceBetween size={"xs"} direction={"horizontal"}>
-                                <EnabledDisabledStatusIndicator enabled={this.state.bedrockEnabled}/>
-                                <SimpleSettingsButton
-                                    title="Enable Amazon Bedrock"
-                                    settingConfig={BEDROCK_ENABLED_SETTING}
-                                    currentValue={this.state.bedrockEnabled}
-                                    disabled={this.state.bedrockUpdating}
-                                    onSave={(newValue) => {
-                                        const enabled = Utils.asBoolean(newValue, false)
-                                        return this.updateBedrockSetting('bedrock.enabled', enabled, () => {
-                                            this.setState({
-                                                bedrockEnabled: enabled
-                                            })
-                                        })
-                                    }}/>
-                            </SpaceBetween>
-                        } type={"react-node"}/>
-                        <KeyValue title="Approved Models" value={`${this.state.bedrockModelIds.length}`}/>
-                    </ColumnLayout>
-                </Container>
-                <Container header={<Header variant={"h2"}
-                                           counter={`(${this.state.bedrockModelIds.length})`}
-                                           description={"Removing a model here revokes it from every project that lists it, as soon as the change is saved. Those projects keep the model in their list, flagged as not in the cluster catalog."}>Model Catalog</Header>}>
-                    <SpaceBetween size={"m"}>
-                        <Alert type="warning" header="Approving a model commits this AWS account">
-                            In commercial regions model access is on by default: the first invocation of a marketplace-listed model subscribes this account to that
-                            model automatically, and denying the Marketplace subscribe permission does not prevent it. Add a model only when the account owner accepts
-                            its terms and pricing. In AWS GovCloud, model access is a manual per-account step and pricing runs about 1.2x the commercial rate.
-                        </Alert>
-                        {this.state.bedrockError && <Alert type="error" dismissible={true} onDismiss={() => this.setState({bedrockError: null})}>{this.state.bedrockError}</Alert>}
-                        <FormField label="Model Id"
-                                   description="Enter a foundation model id or an inference profile id. Ids are not validated against the account."
-                                   secondaryControl={<Button iconName="add-plus" disabled={this.state.bedrockUpdating} onClick={this.addBedrockModel}>Add Model</Button>}>
-                            <Input value={this.state.bedrockModelIdInput}
-                                   placeholder="vendor.model-name"
-                                   disabled={this.state.bedrockUpdating}
-                                   onChange={(event) => this.setState({bedrockModelIdInput: event.detail.value})}/>
-                        </FormField>
-                        <Table items={this.state.bedrockModelIds}
-                               columnDefinitions={[
-                                   {
-                                       id: 'model_id',
-                                       header: 'Model Id',
-                                       cell: (modelId) => <span><CopyToClipBoard text={modelId} feedback={`${modelId} copied`}/> {modelId}</span>
-                                   },
-                                   {
-                                       id: 'actions',
-                                       header: '',
-                                       cell: (modelId) => <Button variant={"inline-icon"}
-                                                                  iconName="remove"
-                                                                  ariaLabel={`Remove ${modelId}`}
-                                                                  disabled={this.state.bedrockUpdating}
-                                                                  onClick={() => this.setState({
-                                                                      bedrockModelIdPendingRemoval: modelId
-                                                                  }, () => {
-                                                                      this.removeBedrockModelConfirm.current?.show()
-                                                                  })}/>
-                                   }
-                               ]}
-                               empty={
-                                   <Box textAlign="center" color="inherit">
-                                       <Box variant="strong">No models</Box>
-                                       <Box variant="p" color="inherit">No models are approved for this cluster.</Box>
-                                   </Box>
-                               }/>
-                    </SpaceBetween>
-                </Container>
-            </SpaceBetween>
-        )
-    }
 
     render() {
 
@@ -564,14 +347,14 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                 content: (
                     <SpaceBetween size="m">
                         <Container header={<Header variant={"h2"}>General Settings</Header>}>
-                            <ColumnLayout variant={"text-grid"} columns={3}>
+                            <ColumnLayout variant={"text-grid"} columns={2} minColumnWidth={280}><SpaceBetween size="m">
                                 <KeyValue title="Cluster Name" value={dot.pick('cluster_name', this.state.cluster)}/>
                                 <KeyValue title="S3 Bucket" value={dot.pick('cluster_s3_bucket', this.state.cluster)}/>
                                 <KeyValue title="Administrator Username" value={dot.pick('administrator_username', this.state.cluster)}/>
-                                <KeyValue title="Administrator Email" value={dot.pick('administrator_email', this.state.cluster)} clipboard={true}/>
+                                </SpaceBetween><SpaceBetween size="m"><KeyValue title="Administrator Email" value={dot.pick('administrator_email', this.state.cluster)} clipboard={true}/>
                                 <KeyValue title="Cluster Home Directory" value={dot.pick('home_dir', this.state.cluster)} clipboard={true}/>
                                 <KeyValue title="Default Encoding" value={dot.pick('encoding', this.state.cluster)}/>
-                            </ColumnLayout>
+                            </SpaceBetween></ColumnLayout>
                         </Container>
                     </SpaceBetween>
                 )
@@ -582,56 +365,56 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                 content: (
                     <SpaceBetween size={"l"}>
                         <Container header={<Header variant={"h2"}>VPC</Header>}>
-                            <ColumnLayout variant={"text-grid"} columns={3}>
+                            <ColumnLayout variant={"text-grid"} columns={2} minColumnWidth={280}><SpaceBetween size="m">
                                 <KeyValue title="VPC Id" value={dot.pick('network.vpc_id', this.state.cluster)} clipboard={true}/>
                                 <KeyValue title="Private Subnets" value={dot.pick('network.private_subnets', this.state.cluster)} clipboard={true}/>
                                 <KeyValue title="Public Subnets" value={dot.pick('network.public_subnets', this.state.cluster)} clipboard={true}/>
-                                <KeyValue title="Cluster Prefix List Id" value={dot.pick('network.cluster_prefix_list_id', this.state.cluster)} clipboard={true}/>
+                                </SpaceBetween><SpaceBetween size="m"><KeyValue title="Cluster Prefix List Id" value={dot.pick('network.cluster_prefix_list_id', this.state.cluster)} clipboard={true}/>
                                 <KeyValue title="Existing VPC?" value={dot.pick('network.use_existing_vpc', this.state.cluster)} type={"boolean"}/>
-                            </ColumnLayout>
+                            </SpaceBetween></ColumnLayout>
                         </Container>
                         <Container header={<Header variant={"h2"}>Security Groups</Header>}>
-                            <ColumnLayout variant={"text-grid"} columns={3}>
+                            <ColumnLayout variant={"text-grid"} columns={2} minColumnWidth={280}><SpaceBetween size="m">
                                 <KeyValue title="Bastion Host" value={dot.pick('network.security_groups.bastion-host', this.state.cluster)} clipboard={true} type={"ec2:security-group-id"}/>
                                 <KeyValue title="External Load Balancer" value={dot.pick('network.security_groups.external-load-balancer', this.state.cluster)} clipboard={true} type={"ec2:security-group-id"}/>
-                                <KeyValue title="Internal Load Balancer" value={dot.pick('network.security_groups.internal-load-balancer', this.state.cluster)} clipboard={true} type={"ec2:security-group-id"}/>
+                                </SpaceBetween><SpaceBetween size="m"><KeyValue title="Internal Load Balancer" value={dot.pick('network.security_groups.internal-load-balancer', this.state.cluster)} clipboard={true} type={"ec2:security-group-id"}/>
                                 <KeyValue title="Default Security Group" value={dot.pick('network.security_groups.cluster', this.state.cluster)} clipboard={true} type={"ec2:security-group-id"}/>
-                            </ColumnLayout>
+                            </SpaceBetween></ColumnLayout>
                         </Container>
                         <Container header={<Header variant={"h2"}>External Load Balancer</Header>}>
                             <SpaceBetween size={"m"}>
-                                <ColumnLayout variant={"text-grid"} columns={2}>
+                                <ColumnLayout variant={"text-grid"} columns={2} minColumnWidth={280}><SpaceBetween size="m">
                                     <KeyValue title="Load Balancer DNS Name" value={ConfigUtils.getExternalAlbDnsName(this.state.cluster)} clipboard={true}/>
                                     <KeyValue title="Custom DNS Name" value={ConfigUtils.getExternalAlbCustomDnsName(this.state.cluster)} clipboard={true}/>
-                                    <KeyValue title="Load Balancer ARN" value={ConfigUtils.getExternalAlbArn(this.state.cluster)} clipboard={true}/>
+                                    </SpaceBetween><SpaceBetween size="m"><KeyValue title="Load Balancer ARN" value={ConfigUtils.getExternalAlbArn(this.state.cluster)} clipboard={true}/>
                                     <KeyValue title="Deploy in Public Subnets?" value={dot.pick('load_balancers.external_alb.public', this.state.cluster)} type={"boolean"}/>
-                                </ColumnLayout>
+                                </SpaceBetween></ColumnLayout>
                                 <Box>
                                     <h3>SSL/TLS Settings</h3>
-                                    <ColumnLayout variant={"text-grid"} columns={2}>
+                                    <ColumnLayout variant={"text-grid"} columns={2} minColumnWidth={280}><SpaceBetween size="m">
                                         <KeyValue title="Certificates" value={isExternalAlbCertSelfSigned() ? 'Self-Signed' : 'ACM'}/>
                                         {isExternalAlbCertSelfSigned() && <KeyValue title="Certificate Secret ARN" value={ConfigUtils.getExternalAlbCertificateSecretArn(this.state.cluster)} clipboard={true}/>}
-                                        {isExternalAlbCertSelfSigned() && <KeyValue title="Certificate Private Key Secret ARN" value={ConfigUtils.getExternalAlbPrivateKeySecretArn(this.state.cluster)} clipboard={true}/>}
+                                        </SpaceBetween><SpaceBetween size="m">{isExternalAlbCertSelfSigned() && <KeyValue title="Certificate Private Key Secret ARN" value={ConfigUtils.getExternalAlbPrivateKeySecretArn(this.state.cluster)} clipboard={true}/>}
                                         <KeyValue title="ACM Certificate ARN" value={ConfigUtils.getExternalAlbAcmCertificateArn(this.state.cluster)} clipboard={true}/>
-                                    </ColumnLayout>
+                                    </SpaceBetween></ColumnLayout>
                                 </Box>
                             </SpaceBetween>
                         </Container>
                         <Container header={<Header variant={"h2"}>Internal Load Balancer</Header>}>
                             <SpaceBetween size={"m"}>
-                                <ColumnLayout variant={"text-grid"} columns={2}>
+                                <ColumnLayout variant={"text-grid"} columns={2} minColumnWidth={280}><SpaceBetween size="m">
                                     <KeyValue title="Load Balancer DNS Name" value={ConfigUtils.getInternalAlbDnsName(this.state.cluster)} clipboard={true}/>
                                     <KeyValue title="Custom DNS Name" value={ConfigUtils.getInternalAlbCustomDnsName(this.state.cluster)} clipboard={true}/>
-                                    <KeyValue title="Load Balancer ARN" value={ConfigUtils.getInternalAlbArn(this.state.cluster)} clipboard={true}/>
-                                </ColumnLayout>
+                                    </SpaceBetween><SpaceBetween size="m"><KeyValue title="Load Balancer ARN" value={ConfigUtils.getInternalAlbArn(this.state.cluster)} clipboard={true}/>
+                                </SpaceBetween></ColumnLayout>
                                 <Box>
                                     <h3>SSL/TLS Settings</h3>
-                                    <ColumnLayout variant={"text-grid"} columns={2}>
+                                    <ColumnLayout variant={"text-grid"} columns={2} minColumnWidth={280}><SpaceBetween size="m">
                                         <KeyValue title="Certificates" value="Self-Signed"/>
                                         <KeyValue title="Certificate Secret ARN" value={ConfigUtils.getInternalAlbCertificateSecretArn(this.state.cluster)} clipboard={true}/>
-                                        <KeyValue title="Certificate Private Key Secret ARN" value={ConfigUtils.getInternalAlbPrivateKeySecretArn(this.state.cluster)} clipboard={true}/>
+                                        </SpaceBetween><SpaceBetween size="m"><KeyValue title="Certificate Private Key Secret ARN" value={ConfigUtils.getInternalAlbPrivateKeySecretArn(this.state.cluster)} clipboard={true}/>
                                         <KeyValue title="ACM Certificate ARN" value={ConfigUtils.getInternalAlbAcmCertificateArn(this.state.cluster)} clipboard={true}/>
-                                    </ColumnLayout>
+                                    </SpaceBetween></ColumnLayout>
                                 </Box>
                             </SpaceBetween>
                         </Container>
@@ -715,7 +498,7 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                                 <p>Select a file system above to view additional details.</p>
                             </ColumnLayout>}
 
-                            {this.state.selectedFileSystem.length > 0 && <ColumnLayout variant={"text-grid"} columns={1}>
+                            {this.state.selectedFileSystem.length > 0 && <ColumnLayout variant={"text-grid"} columns={2} minColumnWidth={280}><SpaceBetween size="m">
                                 <KeyValueGroup title={"General"}>
                                     <KeyValue title="Name" value={getSelectedFileSystem()?.getName()} clipboard={true}/>
                                     <KeyValue title="Title" value={getSelectedFileSystem()?.getTitle()} clipboard={true}/>
@@ -737,7 +520,7 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                                     {getSelectedFileSystem()?.isFsxLustre() && <KeyValue title="FSx for Lustre: Version" value={getSelectedFileSystem()?.getLustreVersion()}/>}
                                 </KeyValueGroup>
 
-                                {getSelectedFileSystem()?.isFsxNetAppOntap() && <KeyValueGroup title={"Storage Virtual Machine"}>
+                                </SpaceBetween><SpaceBetween size="m">{getSelectedFileSystem()?.isFsxNetAppOntap() && <KeyValueGroup title={"Storage Virtual Machine"}>
                                     <KeyValue title="Storage Virtual Machine Id" value={getSelectedFileSystem()?.getSvmId()} clipboard={true}/>
                                     <KeyValue title="SMB DNS" value={getSelectedFileSystem()?.getSvmSmbDns()} clipboard={true}/>
                                     <KeyValue title="NFS DNS" value={getSelectedFileSystem()?.getSvmNfsDns()} clipboard={true}/>
@@ -751,7 +534,7 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                                     {getSelectedFileSystem()?.isFsxNetAppOntap() && <KeyValue title="Security Style" value={getSelectedFileSystem()?.getVolumeSecurityStyle()} clipboard={true}/>}
                                 </KeyValueGroup>}
 
-                            </ColumnLayout>}
+                            </SpaceBetween></ColumnLayout>}
                         </Container>
                     </SpaceBetween>
                 )
@@ -762,14 +545,14 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                 content: (
                     <SpaceBetween size={"l"}>
                         <Container header={<Header variant={"h2"}>Identity Provider</Header>}>
-                            <ColumnLayout variant={"text-grid"} columns={3}>
+                            <ColumnLayout variant={"text-grid"} columns={2} minColumnWidth={280}><SpaceBetween size="m">
                                 <KeyValue title="Provider Name" value={dot.pick('provider', this.state.identityProvider)}/>
                                 <KeyValue title="User Pool Id" value={dot.pick('cognito.user_pool_id', this.state.identityProvider)} clipboard={true} type={"cognito:user-pool-id"}/>
                                 <KeyValue title="Administrators Group Name" value={dot.pick('cognito.administrators_group_name', this.state.identityProvider)} clipboard={true}/>
-                                <KeyValue title="Managers Group Name" value={dot.pick('cognito.managers_group_name', this.state.identityProvider)} clipboard={true}/>
+                                </SpaceBetween><SpaceBetween size="m"><KeyValue title="Managers Group Name" value={dot.pick('cognito.managers_group_name', this.state.identityProvider)} clipboard={true}/>
                                 <KeyValue title="Domain URL" value={dot.pick('cognito.domain_url', this.state.identityProvider)} clipboard={true}/>
                                 <KeyValue title="Provider URL" value={dot.pick('cognito.provider_url', this.state.identityProvider)} clipboard={true}/>
-                            </ColumnLayout>
+                            </SpaceBetween></ColumnLayout>
                         </Container>
                         <Container header={<Header variant={"h2"}>Single Sign-On</Header>}>
                             <ColumnLayout variant={"text-grid"} columns={3}>
@@ -785,46 +568,46 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                 content: (
                     <SpaceBetween size={"l"}>
                         <Container header={<Header variant={"h2"}>Directory Service</Header>}>
-                            <ColumnLayout variant={"text-grid"} columns={2}>
+                            <ColumnLayout variant={"text-grid"} columns={2} minColumnWidth={280}><SpaceBetween size="m">
                                 <KeyValue title="Provider" value={Utils.getDirectoryServiceTitle(dot.pick('provider', this.state.directoryservice))}/>
                                 <KeyValue title="Automation Directory" value={dot.pick('automation_dir', this.state.directoryservice)} clipboard={true}/>
-                                <KeyValue title="Root Username Secret ARN" value={dot.pick('root_username_secret_arn', this.state.directoryservice)} clipboard={true}/>
+                                </SpaceBetween><SpaceBetween size="m"><KeyValue title="Root Username Secret ARN" value={dot.pick('root_username_secret_arn', this.state.directoryservice)} clipboard={true}/>
                                 <KeyValue title="Root Password Secret ARN" value={dot.pick('root_password_secret_arn', this.state.directoryservice)} clipboard={true}/>
-                            </ColumnLayout>
+                            </SpaceBetween></ColumnLayout>
                         </Container>
                         {isDirectoryServiceOpenLDAP() && <Container header={<Header variant={"h2"}>OpenLDAP Settings</Header>}>
                             <SpaceBetween size={"m"}>
-                                <ColumnLayout variant={"text-grid"} columns={3}>
+                                <ColumnLayout variant={"text-grid"} columns={2} minColumnWidth={280}><SpaceBetween size="m">
                                     <KeyValue title="Name" value={dot.pick('name', this.state.directoryservice)} clipboard={true}/>
                                     <KeyValue title="LDAP Base" value={dot.pick('ldap_base', this.state.directoryservice)} clipboard={true}/>
-                                    <KeyValue title="LDAP Connection URI" value={dot.pick('ldap_connection_uri', this.state.directoryservice)} clipboard={true}/>
-                                </ColumnLayout>
+                                    </SpaceBetween><SpaceBetween size="m"><KeyValue title="LDAP Connection URI" value={dot.pick('ldap_connection_uri', this.state.directoryservice)} clipboard={true}/>
+                                </SpaceBetween></ColumnLayout>
                                 <Box>
                                     <h3>EC2 Instance Details</h3>
-                                    <ColumnLayout variant={"text-grid"} columns={3}>
+                                    <ColumnLayout variant={"text-grid"} columns={2} minColumnWidth={280}><SpaceBetween size="m">
                                         <KeyValue title="Hostname" value={dot.pick('hostname', this.state.directoryservice)} clipboard={true}/>
                                         <KeyValue title="Private IP" value={dot.pick('private_ip', this.state.directoryservice)} clipboard={true}/>
                                         <KeyValue title="Instance Id" value={dot.pick('instance_id', this.state.directoryservice)} clipboard={true} type={"ec2:instance-id"}/>
                                         <KeyValue title="Instance Type" value={dot.pick('instance_type', this.state.directoryservice)}/>
                                         <KeyValue title="Security Group Id" value={dot.pick('security_group_id', this.state.directoryservice)} clipboard={true} type={"ec2:security-group-id"}/>
-                                        <KeyValue title="Base OS" value={Utils.getOsTitle(dot.pick('base_os', this.state.directoryservice))}/>
-                                        <KeyValue title="CloudWatch Logs Enabled" value={<EnabledDisabledStatusIndicator enabled={Utils.asBoolean(dot.pick('cloudwatch_logs.enabled', this.state.directoryservice), false)}/>} type={"react-node"}/>
+                                        </SpaceBetween><SpaceBetween size="m"><KeyValue title="Base OS" value={Utils.getOsTitle(dot.pick('base_os', this.state.directoryservice))}/>
+                                        <KeyValue title="CloudWatch Logs" value={<EnabledDisabledStatusIndicator enabled={Utils.asBoolean(dot.pick('cloudwatch_logs.enabled', this.state.directoryservice), false)}/>} type={"react-node"}/>
                                         <KeyValue title="Is Public?" value={dot.pick('public', this.state.directoryservice)} type={"boolean"}/>
                                         <KeyValue title="Public IP" value={dot.pick('public_ip', this.state.directoryservice)}/>
-                                    </ColumnLayout>
+                                    </SpaceBetween></ColumnLayout>
                                 </Box>
                             </SpaceBetween>
                         </Container>}
                         {isDirectoryServiceActiveDirectory() && <Container header={<Header variant={"h2"}>Microsoft AD Settings</Header>}>
-                            <ColumnLayout variant={"text-grid"} columns={2}>
+                            <ColumnLayout variant={"text-grid"} columns={2} minColumnWidth={280}><SpaceBetween size="m">
                                 <KeyValue title="Directory Id" value={dot.pick('directory_id', this.state.directoryservice)}/>
                                 <KeyValue title="Short Name (NETBIOS)" value={dot.pick('ad_short_name', this.state.directoryservice)}/>
                                 <KeyValue title="Edition" value={dot.pick('ad_edition', this.state.directoryservice)}/>
                                 <KeyValue title="Domain Name" value={dot.pick('name', this.state.directoryservice)} clipboard={true}/>
-                                <KeyValue title="Password Max Age" value={dot.pick('password_max_age', this.state.directoryservice)} suffix={"days"}/>
+                                </SpaceBetween><SpaceBetween size="m"><KeyValue title="Password Max Age" value={dot.pick('password_max_age', this.state.directoryservice)} suffix={"days"}/>
                                 <KeyValue title="AD Automation SQS Queue Url" value={dot.pick('ad_automation.sqs_queue_url', this.state.directoryservice)} clipboard={true}/>
                                 <KeyValue title="AD Automation DynamoDB Table Name" value={`${AppContext.get().auth().getClusterName()}.ad-automation`} clipboard={true}/>
-                            </ColumnLayout>
+                            </SpaceBetween></ColumnLayout>
                         </Container>}
                     </SpaceBetween>
                 )
@@ -835,21 +618,21 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                 content: (
                     <SpaceBetween size={"l"}>
                         <Container header={<Header variant={"h2"}>OpenSearch Settings</Header>}>
-                            <ColumnLayout variant={"text-grid"} columns={2}>
+                            <ColumnLayout variant={"text-grid"} columns={2} minColumnWidth={280}><SpaceBetween size="m">
                                 <KeyValue title="Domain Name" value={dot.pick('opensearch.domain_name', this.state.analytics)} clipboard={true}/>
                                 <KeyValue title="Domain ARN" value={dot.pick('opensearch.domain_arn', this.state.analytics)} clipboard={true}/>
                                 <KeyValue title="Domain Endpoint" value={dot.pick('opensearch.domain_endpoint', this.state.analytics)} clipboard={true}/>
-                                <KeyValue title="Dashboard URL" value={getOpenSearchDashboardUrl()} type={"external-link"} clipboard={true}/>
+                                </SpaceBetween><SpaceBetween size="m"><KeyValue title="Dashboard URL" value={getOpenSearchDashboardUrl()} type={"external-link"} clipboard={true}/>
                                 <KeyValue title="Existing OpenSearch Service Domain?" value={dot.pick('opensearch.use_existing', this.state.analytics)} type={"boolean"}/>
-                            </ColumnLayout>
+                            </SpaceBetween></ColumnLayout>
                         </Container>
                         <Container header={<Header variant={"h2"}>Kinesis Settings</Header>}>
-                            <ColumnLayout variant={"text-grid"} columns={2}>
+                            <ColumnLayout variant={"text-grid"} columns={2} minColumnWidth={280}><SpaceBetween size="m">
                                 <KeyValue title="Stream Name" value={dot.pick('kinesis.stream_name', this.state.analytics)} clipboard={true}/>
                                 <KeyValue title="Stream ARN" value={dot.pick('kinesis.stream_arn', this.state.analytics)} clipboard={true}/>
-                                <KeyValue title="Stream Mode" value={dot.pick('kinesis.stream_mode', this.state.analytics)}/>
+                                </SpaceBetween><SpaceBetween size="m"><KeyValue title="Stream Mode" value={dot.pick('kinesis.stream_mode', this.state.analytics)}/>
                                 <KeyValue title="Shard Count" value={dot.pick('kinesis.shard_count', this.state.analytics)}/>
-                            </ColumnLayout>
+                            </SpaceBetween></ColumnLayout>
                         </Container>
                     </SpaceBetween>
                 )
@@ -859,45 +642,44 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                 id: 'metrics',
                 content: (
                     <SpaceBetween size={"l"}>
-                        <MetricsHistorySettings active={true}/>
                         <Container header={<Header variant={"h2"}>Metrics</Header>}>
-                            <ColumnLayout variant={"text-grid"} columns={3}>
+                            <ColumnLayout variant={"text-grid"} columns={2} minColumnWidth={280}><SpaceBetween size="m">
                                 <KeyValue title="Status" value={<EnabledDisabledStatusIndicator enabled={isMetricsEnabled()}/>} type={"react-node"}/>
-                                <KeyValue title="Provider Name" value={dot.pick('provider', this.state.metrics)}/>
-                            </ColumnLayout>
+                                </SpaceBetween><SpaceBetween size="m"><KeyValue title="Provider Name" value={dot.pick('provider', this.state.metrics)}/>
+                            </SpaceBetween></ColumnLayout>
                         </Container>
                         {isMetricsProviderCloudWatch() && <Container header={<Header variant={"h2"}>CloudWatch Metrics</Header>}>
                             <SpaceBetween size={"m"}>
-                                <ColumnLayout variant={"text-grid"} columns={3}>
+                                <ColumnLayout variant={"text-grid"} columns={2} minColumnWidth={280}><SpaceBetween size="m">
                                     <KeyValue title="Metrics Collection Interval" value={dot.pick('cloudwatch.metrics_collection_interval', this.state.metrics)} suffix={"seconds"}/>
-                                    <KeyValue title="Force Flush Interval" value={dot.pick('cloudwatch.force_flush_interval', this.state.metrics)} suffix={"seconds"}/>
-                                </ColumnLayout>
+                                    </SpaceBetween><SpaceBetween size="m"><KeyValue title="Force Flush Interval" value={dot.pick('cloudwatch.force_flush_interval', this.state.metrics)} suffix={"seconds"}/>
+                                </SpaceBetween></ColumnLayout>
                                 <Box>
                                     <h4>CloudWatch Dashboard</h4>
-                                    <ColumnLayout variant={"text-grid"} columns={2}>
+                                    <ColumnLayout variant={"text-grid"} columns={2} minColumnWidth={280}><SpaceBetween size="m">
                                         <KeyValue title="Dashboard ARN" value={dot.pick('cloudwatch.dashboard_arn', this.state.metrics)} clipboard={true}/>
-                                        <KeyValue title="Dashboard Name" value={dot.pick('cloudwatch.dashboard_name', this.state.metrics)} clipboard={true}/>
-                                    </ColumnLayout>
+                                        </SpaceBetween><SpaceBetween size="m"><KeyValue title="Dashboard Name" value={dot.pick('cloudwatch.dashboard_name', this.state.metrics)} clipboard={true}/>
+                                    </SpaceBetween></ColumnLayout>
                                 </Box>
                             </SpaceBetween>
                         </Container>}
                         {isMetricsProviderAmazonManagedPrometheus() && <Container header={<Header variant={"h2"}>Amazon Managed Prometheus</Header>}>
                             <SpaceBetween size={"m"}>
-                                <ColumnLayout variant={"text-grid"} columns={3}>
+                                <ColumnLayout variant={"text-grid"} columns={2} minColumnWidth={280}><SpaceBetween size="m">
                                     <KeyValue title="Workspace Name" value={dot.pick('amazon_managed_prometheus.workspace_name', this.state.metrics)}/>
                                     <KeyValue title="Workspace ID" value={dot.pick('amazon_managed_prometheus.workspace_id', this.state.metrics)}/>
                                     <KeyValue title="Workspace ARN" value={dot.pick('amazon_managed_prometheus.workspace_arn', this.state.metrics)}/>
-                                    <KeyValue title="Remote Write Url" value={dot.pick('prometheus.remote_write.url', this.state.metrics)}/>
+                                    </SpaceBetween><SpaceBetween size="m"><KeyValue title="Remote Write Url" value={dot.pick('prometheus.remote_write.url', this.state.metrics)}/>
                                     <KeyValue title="Remote Read Url" value={dot.pick('prometheus.remote_read.url', this.state.metrics)}/>
-                                </ColumnLayout>
+                                </SpaceBetween></ColumnLayout>
                             </SpaceBetween>
                         </Container>}
                         {isMetricsProviderPrometheus() && <Container header={<Header variant={"h2"}>Custom Prometheus</Header>}>
                             <SpaceBetween size={"m"}>
-                                <ColumnLayout variant={"text-grid"} columns={3}>
+                                <ColumnLayout variant={"text-grid"} columns={2} minColumnWidth={280}><SpaceBetween size="m">
                                     <KeyValue title="Remote Write Url" value={dot.pick('prometheus.remote_write.url', this.state.metrics)}/>
-                                    <KeyValue title="Remote Read Url" value={dot.pick('prometheus.remote_read.url', this.state.metrics)}/>
-                                </ColumnLayout>
+                                    </SpaceBetween><SpaceBetween size="m"><KeyValue title="Remote Read Url" value={dot.pick('prometheus.remote_read.url', this.state.metrics)}/>
+                                </SpaceBetween></ColumnLayout>
                             </SpaceBetween>
                         </Container>}
                     </SpaceBetween>
@@ -911,23 +693,18 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
             {
                 label: 'Account reconciliation',
                 id: 'account-reconciliation',
-                content: <AccountReconcileSettings active={true} identityProvider={this.state.identityProvider} mode="policy"/>
-            },
-            {
-                label: 'Bedrock',
-                id: 'bedrock',
-                content: this.buildBedrockSettings()
+                content: <AccountReconcileSettings active={true} identityProvider={this.state.identityProvider} mode="policy" highlightedKey={this.props.searchParams.get('key')} editDisabled={Boolean(this.props.activeEditor && this.props.activeEditor !== 'sign-in:Account synchronization')} onEditingChange={editing => this.props.onEditingChange?.(editing ? 'sign-in:Account synchronization' : null)}/>
             },
             {
                 label: 'CloudWatch Logs',
                 id: 'cloudwatch-logs',
                 content: (
                     <Container header={<Header variant={"h2"}>CloudWatch Logs</Header>}>
-                        <ColumnLayout variant={"text-grid"} columns={3}>
+                        <ColumnLayout variant={"text-grid"} columns={2} minColumnWidth={280}><SpaceBetween size="m">
                             <KeyValue title="Status" value={<EnabledDisabledStatusIndicator enabled={Utils.asBoolean(dot.pick('cloudwatch_logs.enabled', this.state.cluster), false)}/>} type={"react-node"}/>
                             <KeyValue title="Force Flush Interval" value={dot.pick('cloudwatch_logs.force_flush_interval', this.state.cluster)} suffix={"seconds"}/>
-                            <KeyValue title="Log Retention" value={dot.pick('cloudwatch_logs.retention_in_days', this.state.cluster)} suffix={"days"}/>
-                        </ColumnLayout>
+                            </SpaceBetween><SpaceBetween size="m"><KeyValue title="Log Retention" value={dot.pick('cloudwatch_logs.retention_in_days', this.state.cluster)} suffix={"days"}/>
+                        </SpaceBetween></ColumnLayout>
                     </Container>
                 )
             },
@@ -936,13 +713,13 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                 id: 'ses',
                 content: (
                     <Container header={<Header variant={"h2"}>Simple Email Service (SES)</Header>}>
-                        <ColumnLayout variant={"text-grid"} columns={3}>
+                        <ColumnLayout variant={"text-grid"} columns={2} minColumnWidth={280}><SpaceBetween size="m">
                             <KeyValue title="Status" value={<EnabledDisabledStatusIndicator enabled={Utils.asBoolean(dot.pick('ses.enabled', this.state.cluster), false)}/>} type={"react-node"}/>
                             <KeyValue title="AWS Account ID" value={dot.pick('ses.account_id', this.state.cluster)} clipboard={true}/>
                             <KeyValue title="AWS Region" value={dot.pick('ses.region', this.state.cluster)}/>
-                            <KeyValue title="Sender Email" value={dot.pick('ses.sender_email', this.state.cluster)} clipboard={true}/>
+                            </SpaceBetween><SpaceBetween size="m"><KeyValue title="Sender Email" value={dot.pick('ses.sender_email', this.state.cluster)} clipboard={true}/>
                             <KeyValue title="Max Sending Rate" value={dot.pick('ses.max_sending_rate', this.state.cluster)} suffix={" / second"}/>
-                        </ColumnLayout>
+                        </SpaceBetween></ColumnLayout>
                     </Container>
                 )
             },
@@ -951,10 +728,10 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                 id: 'ec2',
                 content: (
                     <Container header={<Header variant={"h2"}>EC2</Header>}>
-                        <ColumnLayout variant={"text-grid"} columns={1}>
+                        <ColumnLayout variant={"text-grid"} columns={2} minColumnWidth={280}><SpaceBetween size="m">
                             <KeyValue title="SSH Key Pair" value={dot.pick('network.ssh_key_pair', this.state.cluster)} clipboard={true}/>
-                            <KeyValue title="Custom EC2 Managed Policy ARNs" value={dot.pick('iam.ec2_managed_policy_arns', this.state.cluster)} clipboard={true}/>
-                        </ColumnLayout>
+                            </SpaceBetween><SpaceBetween size="m"><KeyValue title="Custom EC2 Managed Policy ARNs" value={dot.pick('iam.ec2_managed_policy_arns', this.state.cluster)} clipboard={true}/>
+                        </SpaceBetween></ColumnLayout>
                     </Container>
                 )
             },
@@ -964,21 +741,21 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                 content: (
                     <SpaceBetween size={"l"}>
                         <Container header={<Header variant={"h2"}>AWS Backup</Header>}>
-                            <ColumnLayout variant={"text-grid"} columns={2}>
+                            <ColumnLayout variant={"text-grid"} columns={2} minColumnWidth={280}>
                                 <KeyValue title="Status" value={<EnabledDisabledStatusIndicator enabled={isBackupEnabled()}/>} type={"react-node"}/>
                             </ColumnLayout>
                         </Container>
                         {isBackupEnabled() && <Container header={<Header variant={"h2"}>Backup Vault</Header>}>
-                            <ColumnLayout variant={"text-grid"} columns={2}>
+                            <ColumnLayout variant={"text-grid"} columns={2} minColumnWidth={280}><SpaceBetween size="m">
                                 <KeyValue title="ARN" value={dot.pick('backups.backup_vault.arn', this.state.cluster)} clipboard={true}/>
-                                <KeyValue title="KMS Key Id (CMK)" value={dot.pick('backups.backup_vault.kms_key_id', this.state.cluster)} clipboard={true}/>
-                            </ColumnLayout>
+                                </SpaceBetween><SpaceBetween size="m"><KeyValue title="KMS Key Id (CMK)" value={dot.pick('backups.backup_vault.kms_key_id', this.state.cluster)} clipboard={true}/>
+                            </SpaceBetween></ColumnLayout>
                         </Container>}
                         {isBackupEnabled() && <Container header={<Header variant={"h2"}>Backup Plan</Header>}>
-                            <ColumnLayout variant={"text-grid"} columns={2}>
+                            <ColumnLayout variant={"text-grid"} columns={2} minColumnWidth={280}><SpaceBetween size="m">
                                 <KeyValue title="ARN" value={dot.pick('backups.backup_plan.arn', this.state.cluster)} clipboard={true}/>
-                                <KeyValue title="Selection" value={dot.pick('backups.backup_plan.selection.tags', this.state.cluster)}/>
-                            </ColumnLayout>
+                                </SpaceBetween><SpaceBetween size="m"><KeyValue title="Selection" value={dot.pick('backups.backup_plan.selection.tags', this.state.cluster)}/>
+                            </SpaceBetween></ColumnLayout>
                         </Container>}
                     </SpaceBetween>
                 )
@@ -989,11 +766,11 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                 content: (
                     <SpaceBetween size={"l"}>
                         <Container header={<Header variant={"h2"}>Private Hosted Zone</Header>}>
-                            <ColumnLayout variant={"text-grid"} columns={2}>
+                            <ColumnLayout variant={"text-grid"} columns={2} minColumnWidth={280}><SpaceBetween size="m">
                                 <KeyValue title="Hosted Zone Name" value={dot.pick('route53.private_hosted_zone_name', this.state.cluster)} clipboard={true}/>
                                 <KeyValue title="Hosted Zone ID" value={dot.pick('route53.private_hosted_zone_id', this.state.cluster)} clipboard={true}/>
-                                <KeyValue title="Hosted Zone ARN" value={dot.pick('route53.private_hosted_zone_arn', this.state.cluster)} clipboard={true}/>
-                            </ColumnLayout>
+                                </SpaceBetween><SpaceBetween size="m"><KeyValue title="Hosted Zone ARN" value={dot.pick('route53.private_hosted_zone_arn', this.state.cluster)} clipboard={true}/>
+                            </SpaceBetween></ColumnLayout>
                         </Container>
                     </SpaceBetween>
                 )
@@ -1003,19 +780,18 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                 id: 'aws-account',
                 content: (
                     <Container header={<Header variant={"h2"}>AWS Account Settings</Header>}>
-                        <ColumnLayout variant={"text-grid"} columns={3}>
+                        <ColumnLayout variant={"text-grid"} columns={2} minColumnWidth={280}><SpaceBetween size="m">
                             <KeyValue title="AWS Account ID" value={dot.pick('aws.account_id', this.state.cluster)} clipboard={true}/>
                             <KeyValue title="AWS Region" value={dot.pick('aws.region', this.state.cluster)} clipboard={true}/>
                             <KeyValue title="Pricing API Region" value={dot.pick('aws.pricing_region', this.state.cluster)} clipboard={true}/>
-                            <KeyValue title="AWS Partition" value={dot.pick('aws.partition', this.state.cluster)}/>
+                            </SpaceBetween><SpaceBetween size="m"><KeyValue title="AWS Partition" value={dot.pick('aws.partition', this.state.cluster)}/>
                             <KeyValue title="AWS DNS Suffix" value={dot.pick('aws.dns_suffix', this.state.cluster)}/>
-                        </ColumnLayout>
+                        </SpaceBetween></ColumnLayout>
                     </Container>
                 )
             }
         ];
-        return <>{this.props.renderSections({sections, values: {cluster: this.state.cluster, 'cluster-manager': this.state.clusterManager, 'shared-storage': this.state.sharedStorage}, errors: this.state.settingsErrors})}
-        </>
+        return this.props.renderSections({sections, values: {cluster: this.state.cluster, 'cluster-manager': this.state.clusterManager, 'shared-storage': this.state.sharedStorage, 'virtual-desktop-controller': this.state.desktopSettings}, errors: this.state.settingsErrors})
     }
 }
 

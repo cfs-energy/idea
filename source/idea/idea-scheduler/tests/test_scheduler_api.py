@@ -429,6 +429,9 @@ class _FakeJobCache:
     def __init__(self, job: SocaJob):
         self._job = job
 
+    def get_job_provisioning_retry_count(self, job_id):
+        return 0
+
     def get_job(self, _job_id):
         return self._job
 

@@ -1,5 +1,7 @@
 # FAQ
 
+New clusters use the container control plane only. Move an existing host-based control plane with `upgrade-cluster --drain`; follow the [container upgrade guide](../first-time-users/cluster-operations/update-idea-cluster/move-to-containers.md).
+
 ## Cluster Management
 
 <details>

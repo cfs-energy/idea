@@ -25,6 +25,13 @@ from pydantic import Field
 import jwt
 from jwt import PyJWKClient
 import requests
+import hashlib
+import secrets
+import re
+import time
+from collections import OrderedDict
+from boto3.dynamodb.conditions import Key
+from botocore.exceptions import ClientError
 from threading import RLock
 from enum import Enum
 
@@ -74,6 +81,7 @@ class ApiAuthorization(SocaBaseModel):
     )  # list of all groups user is part of
     scopes: Optional[List[str]] = Field(default=None)  # list of allowed oauth scopes
     invocation_source: Optional[str] = Field(default=None)
+    token_id: Optional[str] = Field(default=None)
 
 
 class TokenService(TokenServiceProtocol):
@@ -103,8 +111,200 @@ class TokenService(TokenServiceProtocol):
         self._refresh_token_grant: Optional[AuthResult] = None
         self._refresh_token_lock = RLock()
 
+        self._api_token_cache = OrderedDict()
+        self._api_token_lock = RLock()
+
         self._sso_client_id: Optional[str] = None
         self._sso_client_secret: Optional[str] = None
+
+    def api_tokens_table(self):
+        return (
+            self._context.aws()
+            .dynamodb_table()
+            .Table(f'{self._context.cluster_name()}.cluster-manager.api-tokens')
+        )
+
+    def initialize_api_tokens(self):
+        name = self.api_tokens_table().name
+        if not self._context.aws_util().dynamodb_check_table_exists(name, True):
+            self._context.aws_util().dynamodb_create_table(
+                create_table_request={
+                    'TableName': name,
+                    'AttributeDefinitions': [
+                        {'AttributeName': key, 'AttributeType': 'S'}
+                        for key in ('token_id', 'token_hash', 'username')
+                    ],
+                    'KeySchema': [{'AttributeName': 'token_id', 'KeyType': 'HASH'}],
+                    'GlobalSecondaryIndexes': [
+                        {
+                            'IndexName': key,
+                            'KeySchema': [{'AttributeName': key, 'KeyType': 'HASH'}],
+                            'Projection': {'ProjectionType': 'ALL'},
+                        }
+                        for key in ('token_hash', 'username')
+                    ],
+                    'BillingMode': 'PAY_PER_REQUEST',
+                },
+                wait=True,
+            )
+
+    def create_api_token(self, username, request):
+        from ideadatamodel import CreateApiTokenResult
+
+        if not username:
+            raise exceptions.unauthorized_access()
+        if not request.name.strip():
+            raise exceptions.invalid_params('name is required')
+        user = (
+            self._context.aws()
+            .dynamodb_table()
+            .Table(f'{self._context.cluster_name()}.accounts.users')
+            .get_item(Key={'username': username}, ConsistentRead=True)
+            .get('Item')
+        )
+        if not user or not user.get('enabled') or user.get('created_on') is None:
+            raise exceptions.unauthorized_access()
+        token = 'idea_' + secrets.token_urlsafe(32)
+        now = int(time.time())
+        row = dict(
+            token_id=secrets.token_hex(16),
+            username=username,
+            owner_created_on=user['created_on'],
+            name=request.name.strip(),
+            token_hash=hashlib.sha256(token.encode()).hexdigest(),
+            created_on=now,
+            expires_on=now + request.expires_in_days * 86400,
+            last_used_on=None,
+        )
+        self.api_tokens_table().put_item(
+            Item=row, ConditionExpression='attribute_not_exists(token_id)'
+        )
+        return CreateApiTokenResult(
+            token=token, token_id=row['token_id'], expires_on=row['expires_on']
+        )
+
+    def list_api_tokens(self, username):
+        from ideadatamodel import ApiToken, ListApiTokensResult
+
+        request = {
+            'IndexName': 'username',
+            'KeyConditionExpression': Key('username').eq(username),
+        }
+        rows = []
+        while True:
+            page = self.api_tokens_table().query(**request)
+            rows.extend(ApiToken(**row) for row in page.get('Items', []))
+            if not page.get('LastEvaluatedKey'):
+                break
+            request['ExclusiveStartKey'] = page['LastEvaluatedKey']
+        return ListApiTokensResult(listing=rows)
+
+    def delete_api_token(self, token_id, username, administrator=False):
+        table = self.api_tokens_table()
+        row = table.get_item(Key={'token_id': token_id}, ConsistentRead=True).get(
+            'Item'
+        )
+        if not row or (row['username'] != username and not administrator):
+            raise exceptions.unauthorized_access()
+        table.delete_item(Key={'token_id': token_id})
+        with self._api_token_lock:
+            self._api_token_cache.pop(row['token_hash'], None)
+
+    def decode_api_token(self, token):
+        if not re.fullmatch(r'idea_[A-Za-z0-9_-]{43}', token):
+            raise exceptions.unauthorized_access()
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        table = self.api_tokens_table()
+        with self._api_token_lock:
+            now = time.monotonic()
+            cached = self._api_token_cache.get(token_hash)
+            if cached is not None and now < cached[0]:
+                row = cached[1]
+            else:
+                matches = table.query(
+                    IndexName='token_hash',
+                    KeyConditionExpression=Key('token_hash').eq(token_hash),
+                ).get('Items', [])
+                row = None
+                if matches:
+                    row = table.get_item(
+                        Key={'token_id': matches[0]['token_id']}, ConsistentRead=True
+                    ).get('Item')
+                    if row and not secrets.compare_digest(
+                        row['token_hash'], token_hash
+                    ):
+                        row = None
+                self._api_token_cache[token_hash] = (now + 60, row)
+                self._api_token_cache.move_to_end(token_hash)
+                while len(self._api_token_cache) > 1024:
+                    self._api_token_cache.popitem(last=False)
+        now = int(time.time())
+        if not row:
+            raise exceptions.unauthorized_access()
+        if row['expires_on'] <= now:
+            raise exceptions.soca_exception(
+                errorcodes.AUTH_TOKEN_EXPIRED, 'Token Expired'
+            )
+
+        username = row['username']
+        user = (
+            self._context.aws()
+            .dynamodb_table()
+            .Table(f'{self._context.cluster_name()}.accounts.users')
+            .get_item(Key={'username': username}, ConsistentRead=True)
+            .get('Item')
+        )
+        if (
+            not user
+            or not user.get('enabled')
+            or row.get('owner_created_on') is None
+            or row['owner_created_on'] != user.get('created_on')
+        ):
+            raise exceptions.unauthorized_access()
+        request = {
+            'UserPoolId': self._context.config().get_string(
+                'identity-provider.cognito.user_pool_id', required=True
+            ),
+            'Username': username,
+        }
+        groups = []
+        try:
+            while True:
+                page = (
+                    self._context.aws()
+                    .cognito_idp()
+                    .admin_list_groups_for_user(**request)
+                )
+                groups.extend(group['GroupName'] for group in page.get('Groups', []))
+                if not page.get('NextToken'):
+                    break
+                request['NextToken'] = page['NextToken']
+        except ClientError as error:
+            if error.response['Error']['Code'] == 'UserNotFoundException':
+                raise exceptions.unauthorized_access()
+            raise
+
+        if (row.get('last_used_on') or 0) <= now - 60:
+            try:
+                table.update_item(
+                    Key={'token_id': row['token_id']},
+                    UpdateExpression='SET last_used_on = :now',
+                    ConditionExpression='attribute_exists(token_id) AND (attribute_not_exists(last_used_on) OR last_used_on = :empty OR last_used_on <= :cutoff)',
+                    ExpressionAttributeValues={
+                        ':now': now,
+                        ':cutoff': now - 60,
+                        ':empty': None,
+                    },
+                )
+            except ClientError as error:
+                if error.response['Error']['Code'] != 'ConditionalCheckFailedException':
+                    raise
+            row['last_used_on'] = now
+        return {
+            'username': username,
+            'cognito:groups': groups,
+            'api_token_id': row['token_id'],
+        }
 
     @staticmethod
     def validate_options(options: TokenServiceOptions):
@@ -293,6 +493,9 @@ class TokenService(TokenServiceProtocol):
             if Utils.is_empty(token):
                 raise exceptions.unauthorized_access()
 
+            if token.startswith('idea_'):
+                return self.decode_api_token(token)
+
             signing_key = self._jwk.get_signing_key_from_jwt(token)
             decoded_token = jwt.decode(
                 token,
@@ -357,6 +560,7 @@ class TokenService(TokenServiceProtocol):
             scopes=scopes,
             groups=groups,
             client_id=client_id,
+            token_id=Utils.get_value_as_string('api_token_id', decoded_token),
         )
 
     def is_scope_authorized(

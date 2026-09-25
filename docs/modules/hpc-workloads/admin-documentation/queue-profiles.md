@@ -272,6 +272,10 @@ Associated Job Resource: [#scratch\_iops](../user-documentation/supported-ec2-pa
 
 ### Metrics
 
+### Reclaim unavailable job nodes
+
+The scheduler reclaims job nodes that remain **down** or **unknown** past `scheduler.job_provisioning.node_unavailable_timeout_seconds`, which defaults to 1800 seconds. Use the timeout to allow normal bootstrap and brief network interruptions without retaining unusable capacity indefinitely. Nodes marked `keep_forever` are exempt and require manual cleanup.
+
 #### Enable System Metrics?
 
 Select whether or not you want to enable system metrics collection

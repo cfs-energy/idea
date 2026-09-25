@@ -25,7 +25,15 @@ def delete_queued_job(context, job):
     # Re-read PBS because the queued snapshot may predate dispatch.
     current = context.scheduler.get_job(job.job_id)
     if current is not None and current.state in QUEUED_STATES:
+        from ideascheduler.app.provisioning.lifecycle_events import SYSTEM_DELETION
+
+        context.job_cache.sync(jobs=[current])
         context.scheduler.delete_job(job.job_id)
+        context.job_cache.record_deleted_job(
+            job=current,
+            error_code=SYSTEM_DELETION,
+            message='Deleted by the system because the job owner is disabled or no longer exists.',
+        )
         queue = context.queue_profiles.get_provisioning_queue(
             queue_profile_name=job.queue_type
         )

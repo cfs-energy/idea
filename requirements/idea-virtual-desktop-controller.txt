@@ -93,6 +93,8 @@ orjson==3.12.0
     # via -r idea-sdk.in
 pathspec==1.1.1
     # via mypy
+prettytable==3.18.0
+    # via -r idea-virtual-desktop-controller.in
 prometheus-client==0.26.0
     # via -r idea-sdk.in
 prompt-toolkit==3.0.53
@@ -197,7 +199,9 @@ uvloop==0.22.1
 validators==0.35.0
     # via -r idea-sdk.in
 wcwidth==0.8.2
-    # via prompt-toolkit
+    # via
+    #   prettytable
+    #   prompt-toolkit
 websockets==17.0.1
     # via sanic
 

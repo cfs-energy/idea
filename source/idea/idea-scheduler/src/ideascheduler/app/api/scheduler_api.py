@@ -629,6 +629,7 @@ class SchedulerAPI(BaseAPI):
         if job.owner != username and not context.is_authorized(elevated_access=True):
             raise exceptions.unauthorized_access()
 
+        apply_waiting_signals(context=self.context, jobs=[job])
         return context.success(GetJobResult(job=job))
 
     def _resolve_completed_job(
@@ -707,8 +708,15 @@ class SchedulerAPI(BaseAPI):
         if job.owner != username:
             raise exceptions.unauthorized_access()
 
-        self.context.scheduler.delete_job(job.job_id)
+        from ideascheduler.app.provisioning.lifecycle_events import OWNER_CANCELLATION
 
+        self.context.job_cache.sync(jobs=[job])
+        self.context.scheduler.delete_job(job.job_id)
+        self.context.job_cache.record_deleted_job(
+            job=job,
+            error_code=OWNER_CANCELLATION,
+            message='Cancelled by the owner.',
+        )
         context.success(DeleteJobResult())
 
     def invoke(self, context: ApiInvocationContext):

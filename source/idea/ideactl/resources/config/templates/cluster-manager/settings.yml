@@ -24,7 +24,7 @@ server:
   web_resources_context_path: /
 
 web_portal:
-  title: 'Integrated Digital Engineering on AWS'
+  title: 'IDEA'
   logo: ~
   subtitle: ~
   copyright_text: 'Copyright {year} Amazon Inc. or its affiliates. All Rights Reserved.'

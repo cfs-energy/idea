@@ -26,6 +26,7 @@ import {
 } from '@aws-sdk/client-dynamodb';
 
 import { ClusterConfigDb, ClusterConfigDbError, type ConfigEntry } from '../../src/config/cluster-config-db.ts';
+import { compareUpgradeDrift, type CurrentConfigRow } from '../../src/config/upgrade-drift.ts';
 import { optionalFixtures, requiredService } from '../support/fixtures.ts';
 
 const JAR = path.join(os.homedir(), '.idea/lib/dynamodb-local/DynamoDBLocal.jar');
@@ -973,3 +974,54 @@ describe('ClusterConfigDb write side', () => {
     },
   );
 });
+
+describe('cost settings synchronization', () => {
+  for (const region of ['us-east-2', 'us-west-2', 'us-gov-west-1', 'us-gov-east-1']) {
+    test(region, async () => {
+      const db = await open(nextCluster());
+      const defaults: ConfigEntry[] = [
+        { key: 'cluster.aws.region', value: region },
+        { key: 'cluster-manager.metrics.cost.enabled', value: false },
+        { key: 'cluster-manager.metrics.cost.lookback_days', value: 3 },
+        { key: 'cluster-manager.metrics.cost.interval_hours', value: 6 },
+        { key: 'cluster-manager.web_portal.cost_ticker.enabled', value: false },
+        { key: 'scheduler.cost_estimation.ebs_gp3_storage', value: 0.08 },
+        { key: 'scheduler.cost_estimation.ebs_io1_storage', value: 0.125 },
+        { key: 'scheduler.cost_estimation.provisioned_iops', value: 0.065 },
+        { key: 'scheduler.cost_estimation.default_fsx_lustre_size', value: 1200 },
+        { key: 'scheduler.cost_estimation.ec2_boot_penalty_seconds', value: 300 },
+        { key: 'scheduler.cost_estimation.fsx_lustre', value: 0.000194 },
+      ];
+      await db.syncClusterSettingsInDb(defaults.slice(0, -1));
+      await db.setConfigEntry('scheduler.cost_estimation.provisioned_iops', 0.075);
+      await db.setConfigEntry('cluster-manager.metrics.cost.enabled', true);
+      const before = await settings(db);
+      await db.syncClusterSettingsInDb(defaults);
+      const added = await settings(db);
+      assert.deepEqual(added.values['scheduler.cost_estimation.provisioned_iops'], { N: '0.075' });
+      assert.deepEqual(added.values['cluster-manager.metrics.cost.enabled'], { BOOL: true });
+      assert.deepEqual(added.values['scheduler.cost_estimation.fsx_lustre'], { N: '0.000194' });
+      for (const key of Object.keys(before.values)) {
+        assert.deepEqual(added.values[key], before.values[key], key);
+        assert.equal(added.versions[key], before.versions[key], key);
+      }
+      await db.syncClusterSettingsInDb(defaults, true);
+      const overwritten = await settings(db);
+      assert.deepEqual(overwritten.values['scheduler.cost_estimation.provisioned_iops'], { N: '0.065' });
+      assert.deepEqual(overwritten.values['cluster-manager.metrics.cost.enabled'], { BOOL: false });
+      for (const { key } of defaults) assert.equal(overwritten.versions[key], added.versions[key]! + 1, key);
+    });
+  }
+});
+
+for (const source of ['cli', 'template'] as const) {
+  test(`sync stamps explicit ${source} provenance`, async () => {
+    const db = await open(nextCluster());
+    const key = 'global-settings.gpu_settings.fail_on_missing_driver';
+    await db.syncClusterSettingsInDb([{key, value: false}], true, source);
+    const row = await db.getConfigEntry(key) as unknown as CurrentConfigRow;
+    assert.equal(row.source, source);
+    const report = compareUpgradeDrift({current: [row], generated: [{key, value: true}], replaceGlobalSettings: true});
+    assert.deepEqual(report.changedRowsDifferingFromGenerated, source === 'cli' ? [key] : []);
+  });
+}

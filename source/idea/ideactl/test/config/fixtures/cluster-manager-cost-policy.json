@@ -5,6 +5,10 @@
     "pricing:GetProducts",
     "ce:GetCostAndUsage"
   ],
+  "storageReadActions": [
+    "fsx:DescribeFileSystems",
+    "elasticfilesystem:DescribeFileSystems"
+  ],
   "outboxDelete": {
     "Action": "s3:DeleteObject",
     "Effect": "Allow",

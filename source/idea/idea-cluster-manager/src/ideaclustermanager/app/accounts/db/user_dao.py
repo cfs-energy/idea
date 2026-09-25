@@ -51,6 +51,7 @@ class UserDAO:
     def convert_from_db(self, user: Dict) -> User:
         user_entry = User(
             **{
+                'last_task_failure': Utils.get_value_as_dict('last_task_failure', user),
                 'username': Utils.get_value_as_string('username', user),
                 'email': Utils.get_value_as_string('email', user),
                 'uid': Utils.get_value_as_int('uid', user),
@@ -66,6 +67,7 @@ class UserDAO:
                 'created_on': Utils.get_value_as_int('created_on', user),
                 'updated_on': Utils.get_value_as_int('updated_on', user),
                 'landing_page': Utils.get_value_as_string('landing_page', user),
+                'instance_type_exceptions': user.get('instance_type_exceptions'),
             }
         )
 
@@ -104,6 +106,8 @@ class UserDAO:
             db_user['additional_groups'] = user.additional_groups
         if user.landing_page is not None:
             db_user['landing_page'] = user.landing_page
+        if user.instance_type_exceptions is not None:
+            db_user['instance_type_exceptions'] = user.instance_type_exceptions
 
         return db_user
 
@@ -175,7 +179,7 @@ class UserDAO:
         if Utils.is_not_empty(cursor):
             last_evaluated_key = Utils.from_json(Utils.base64_decode(cursor))
         if last_evaluated_key is not None:
-            scan_request['LastEvaluatedKey'] = last_evaluated_key
+            scan_request['ExclusiveStartKey'] = last_evaluated_key
 
         scan_filter = None
         if Utils.is_not_empty(request.filters):

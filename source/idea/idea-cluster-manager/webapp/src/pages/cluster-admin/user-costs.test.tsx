@@ -13,6 +13,8 @@ const LISTING = {
     ai_unavailable: false,
     jobs_unavailable: false,
     desktops_unavailable: false,
+    storage_disabled: false,
+    storage_data_available: true,
     listing: [
         {
             username: 'bob',
@@ -223,7 +225,83 @@ describe('admin user costs page', () => {
         stub(context, {...LISTING, listing: []}, ALICE_SUMMARY);
         renderPage();
 
-        expect(await screen.findByText('No measured costs', {}, {timeout: 10000})).toBeInTheDocument();
+        expect(await screen.findByText('No costs recorded', {}, {timeout: 10000})).toBeInTheDocument();
+        expect(screen.getByText('No costs were recorded for the enabled sources in this measurement window.')).toBeInTheDocument();
+    });
+
+    it('shows setup for zero users and removes both disabled storage columns', async () => {
+        const context = initTestAppContext();
+        stub(context, {
+            ...LISTING,
+            listing: [],
+            storage_disabled: true,
+            storage_data_available: false,
+            storage_configuration_status: 'disabled',
+            storage_configuration_reason: 'metrics_disabled'
+        }, ALICE_SUMMARY);
+        renderPage();
+
+        expect(await screen.findByText('Storage costs are not enabled', {}, {timeout: 10000})).toBeInTheDocument();
+        expect(screen.getByText('Enable storage metrics and configure ONTAP credentials to collect storage usage for cost estimates.')).toBeInTheDocument();
+        expect(screen.getByRole('link', {name: 'Set up storage costs'})).toHaveAttribute(
+            'href', '#/cluster/settings/cost-collection?key=cluster-manager.metrics.storage.enabled'
+        );
+        expect(screen.queryByRole('columnheader', {name: 'Storage'})).not.toBeInTheDocument();
+        expect(screen.queryByRole('columnheader', {name: 'Storage GB'})).not.toBeInTheDocument();
+        expect(screen.getByRole('columnheader', {name: 'AI cost'})).toBeVisible();
+        expect(screen.getByRole('columnheader', {name: 'Jobs'})).toBeVisible();
+    });
+
+    it('labels subtotals when disabled without erasing historical amounts', async () => {
+        const context = initTestAppContext();
+        stub(context, {
+            ...LISTING,
+            storage_disabled: true,
+            storage_configuration_status: 'disabled',
+            storage_configuration_reason: 'metrics_disabled',
+            listing: [{...LISTING.listing[0], storage_cost: 7.5, total_cost: 115, total_cost_excludes_storage: true}]
+        }, ALICE_SUMMARY);
+        renderPage();
+
+        expect(await screen.findByText('$115.00 (excludes storage)', {}, {timeout: 10000})).toBeInTheDocument();
+        expect(screen.queryByText('$7.50')).not.toBeInTheDocument();
+    });
+
+    it('shows enabled storage waiting for its first data', async () => {
+        const context = initTestAppContext();
+        stub(context, {...LISTING, listing: [], storage_data_available: false}, ALICE_SUMMARY);
+        renderPage();
+
+        expect(await screen.findByText('Storage collection is enabled. Costs will appear after usage is collected and the cost data is refreshed.')).toBeInTheDocument();
+    });
+
+    it('shows storage read failures as unavailable', async () => {
+        const context = initTestAppContext();
+        stub(context, {...LISTING, listing: [], storage_unavailable: true, storage_data_available: false}, ALICE_SUMMARY);
+        renderPage();
+
+        expect(await screen.findByText('Storage costs could not be loaded. Try again.', {}, {timeout: 10000})).toBeInTheDocument();
+    });
+
+    it('renders a measured storage zero as zero', async () => {
+        const context = initTestAppContext();
+        stub(context, {...LISTING, listing: [userRow('zero', 0)], storage_data_available: true}, ALICE_SUMMARY);
+        renderPage();
+
+        expect(await screen.findByText('0.00 GB', {}, {timeout: 10000})).toBeInTheDocument();
+    });
+
+    it.each([
+        [{storage_configuration_status: 'not_configured', storage_configuration_reason: 'missing_credentials'}, 'Complete storage cost setup', 'Set the metrics username and password secret ARN for each ONTAP file system.'],
+        [{storage_configuration_status: 'unsupported', storage_configuration_reason: 'unsupported_provider', storage_metrics_provider: 'custom'}, 'Storage costs are not enabled', 'Storage metrics require CloudWatch or DogStatsD. The configured provider is custom.'],
+        [{storage_configuration_status: 'not_configured', storage_configuration_reason: 'efs_only', storage_has_efs: true}, 'ONTAP storage metrics are unavailable', 'EFS storage continues to use the existing measured-storage cost path in user cost details.'],
+    ])('shows the contextual storage state %o', async (state, heading, message) => {
+        const context = initTestAppContext();
+        stub(context, {...LISTING, listing: [], storage_disabled: true, storage_data_available: false, ...state}, ALICE_SUMMARY);
+        renderPage();
+
+        expect(await screen.findByText(heading, {}, {timeout: 10000})).toBeInTheDocument();
+        expect(screen.getByText(message, {exact: false})).toBeInTheDocument();
     });
 
     it('narrows the table to users matching the typed name', async () => {

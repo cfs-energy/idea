@@ -71,12 +71,15 @@ class FakeEcs:
 
 
 def setup_api():
-    app = Mock()
+    from ideaclustermanagertests.test_cluster_settings_scoping import scoped_invocation
+
+    app, invocation = scoped_invocation('administrator')
+    app.cluster_name.return_value = 'configured'
     app.config().get_string.return_value = 'configured'
     ecs = FakeEcs()
     app.aws().get_client.return_value = ecs
     api = ClusterSettingsAPI(app)
-    invocation = Mock(namespace='ClusterSettings.ListClusterServices')
+    invocation.namespace = 'ClusterSettings.ListClusterServices'
     invocation.is_administrator.return_value = True
     return api, invocation, ecs
 

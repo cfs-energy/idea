@@ -1,5 +1,7 @@
 # Virtual Desktop Images (Software Stacks)
 
+New clusters use the container control plane only. Move an existing host-based control plane with `upgrade-cluster --drain`; follow the [container upgrade guide](../../../first-time-users/cluster-operations/update-idea-cluster/move-to-containers.md).
+
 A Software Stack is an Amazon Machine Image (AMI - pronounced [Ay-Em-i](https://twitter.com/Werner/status/1182530158026055681)) with your applications pre-installed and configured for your users. Users can then provision their virtual desktops easily with all the software pre-loaded and ready to be used.
 
 <figure><img src="../../../.gitbook/assets/mods_vdi_admin_stack_list.webp" alt=""><figcaption><p>List all AMI available to the users</p></figcaption></figure>
@@ -117,6 +119,8 @@ To set allowed instance types for a Software Stack:
 
 This setting will override the global instance type restrictions and only show the specified instance types to users when they select this Software Stack during session creation.
 
+To grant an individual user additional instance types without changing the global or Software Stack allow list, open **Cluster Management** > **Users**, select the user, and choose **Actions** > **Set virtual desktop instance types**. These exceptions remain subject to the global deny list; save an empty selection to clear them.
+
 ### Use your new Virtual Desktop Software Stack
 
 Once created, the Software Stack will be visible to all users who belong to the associated project(s). Refer to [create-a-virtual-desktop-linux-windows.md](../user-documentation/create-a-virtual-desktop-linux-windows.md "mention") to learn how to launch your desktop with the new image
@@ -124,6 +128,12 @@ Once created, the Software Stack will be visible to all users who belong to the 
 ## Two images on a base stack
 
 A base software stack (`ss-base-<os>-<arch>-base`) records `ami_id`, the image desktops launch from, and `base_ami_id`, the stock image the next build starts from. Refresh Base Stack AMIs (the portal action and `ideactl update-base-stacks`) always advances `base_ami_id` and changes `ami_id` only while it is still a stock image; once a build has repointed the stack, the built image stays until a rebuild or an explicit change. Custom AMIs shows both and offers Use built image to return to the last completed build.
+
+Controller startup restores a missing base software-stack record. The **Desktop images** page lists every supported operating-system and architecture combination even when its base stack is missing or disabled, so you can build or restore it instead of losing the option from the page.
+
+The default desktop family allow list includes `g7`, and the bootstrap recognizes both `g7` and `g7e` for NVIDIA drivers. Add `g7e` to an allow list or grant it as a user exception before users can select it. The global deny list always takes precedence.
+
+On Red Hat Enterprise Linux and Rocky Linux desktops, bootstrap selects the kernel it installed before rebooting. If the desktop returns on the older image kernel, bootstrap records the boot-kernel mismatch and exits immediately without another retry. The session remains in provisioning until the timeout sweep marks it **ERROR** and terminates the host.
 
 ## Build a desktop image
 
@@ -141,3 +151,5 @@ ideactl build-desktop-image \
 The build takes 20 to 30 minutes. With `--update-stack`, the matching `ss-base-<os>-<arch>-base` software stack is pointed at the new image and the search index is rebuilt, so the next desktop from that stack uses it immediately; without the flag, update the stack's Instance AMI yourself.
 
 The instance profile, security groups, subnet and key pair default to the cluster's DCV host settings and can be overridden with the corresponding options. Built images carry no session or user state. Rebuild after changing DCV versions or GPU driver settings, or when the stock base AMI moves.
+
+The virtual desktop controller command entry point includes its table-formatting dependency. If an image-building or stack-management command still fails during import, verify that the controller is running this release before troubleshooting its arguments.

@@ -200,7 +200,9 @@ export async function configGenerate(deps: Deps, options: GenerateOptions): Prom
       })
     : loadPreparedValues(options.valuesFile as string);
 
-  requireContainerShapeDecision(deps, values, options.regenerate === true);
+  if (options.regenerate !== true && !Object.hasOwn(values, 'enable_ecs')) {
+    values['enable_ecs'] = true;
+  }
 
   const clusterName = String(values['cluster_name'] ?? '');
   const awsRegion = String(values['aws_region'] ?? '');
@@ -232,37 +234,6 @@ export async function configGenerate(deps: Deps, options: GenerateOptions): Prom
   deps.out('generating config from templates ...');
   generateConfigFromTemplates(values, join(regionDir, 'config'));
   return values;
-}
-
-/**
- * Stops a new cluster whose values file says nothing about the control-plane shape.
- *
- * The installer writes `enable_ecs`, so a file with no key came from somewhere else: written by
- * hand, carried over from before the container control plane, or copied from another cluster.
- * Generating from it produces a module set with no container module, which is the host shape, and
- * the host shape no longer builds because the per-module release archives a control-plane host
- * downloads are not produced any more. The failure would land partway through a deploy with
- * nothing pointing at the missing key, so it is named here instead, before anything is created.
- *
- * `--regenerate` is the existing-cluster path. That cluster's shape is whatever it already has, so
- * a missing key there is the correct answer and not a question. An explicit `false` is a recorded
- * decision rather than an omission, and is left alone: the migration stages exactly that value.
- */
-function requireContainerShapeDecision(
-  deps: Deps,
-  values: Readonly<Record<string, unknown>>,
-  regenerate: boolean,
-): void {
-  if (regenerate || Object.hasOwn(values, 'enable_ecs')) return;
-  deps.err(
-    'enable_ecs is missing from the values file. A new cluster runs its control plane as container ' +
-      'tasks, and that is the only supported shape: without this key the generated module set has no ' +
-      'container module, and a control plane on instances cannot be built because its per-module ' +
-      'release archives are no longer produced.',
-  );
-  deps.err('Add `enable_ecs: true` to the values file, or run `config generate` with no --values-file to let the installer write it.');
-  deps.err('Regenerating the configuration of a cluster that already exists is a different command: pass --regenerate.');
-  throw new ExitWithCode(1);
 }
 
 /** Loads a supplied values file without involving the interactive installer flow. */
@@ -304,7 +275,7 @@ export interface UpdateOptions {
 }
 
 /** `config update`: the local `config/` tree becomes the cluster settings table. */
-export async function configUpdate(deps: Deps, options: UpdateOptions): Promise<void> {
+export async function configUpdate(deps: Deps, options: UpdateOptions, source: 'cli' | 'template' = 'cli'): Promise<void> {
   let configDir: string;
   if (!isEmpty(options.configDir)) {
     configDir = join(options.configDir as string, 'config');
@@ -373,7 +344,7 @@ export async function configUpdate(deps: Deps, options: UpdateOptions): Promise<
   await writer.syncModulesInDb(
     readModulesFromFiles(configDir).map((module) => ({ ...module, id: module.id, name: module.name, type: module.type })),
   );
-  await writer.syncClusterSettingsInDb(entries, options.overwrite === true);
+  await writer.syncClusterSettingsInDb(entries, options.overwrite === true, source);
 }
 
 function lookupLocal(config: Record<string, unknown>, key: string): unknown {

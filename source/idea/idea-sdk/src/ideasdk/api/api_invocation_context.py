@@ -167,6 +167,34 @@ class ApiInvocationContext(ApiInvocationContextProtocol):
             ApiAuthorizationType.MANAGER,
         )
 
+    def can_read_reporting(self) -> bool:
+        """Allow reporting for authenticated humans with the reporting capability."""
+        if (
+            not self.has_access_token()
+            or self._token_service is None
+            or self.is_unix_domain_socket_invocation()
+        ):
+            return False
+        try:
+            authorization = self.get_authorization()
+        except exceptions.SocaException as error:
+            if error.error_code in (
+                errorcodes.UNAUTHORIZED_ACCESS,
+                errorcodes.AUTH_TOKEN_EXPIRED,
+            ):
+                return False
+            raise
+        if not self.is_authenticated_user():
+            return False
+        module_administrators_inherit_reporting = False
+        return (
+            authorization.type
+            in (ApiAuthorizationType.ADMINISTRATOR, ApiAuthorizationType.MANAGER)
+            or (module_administrators_inherit_reporting and self.is_manager())
+            or self._group_name_helper.get_cluster_operations_leads_group()
+            in (authorization.groups or [])
+        )
+
     def is_authenticated_app(self) -> bool:
         """
         allow any request as long as the token is issued to a valid app
@@ -448,16 +476,20 @@ class ApiInvocationContext(ApiInvocationContextProtocol):
     # begin: audit logging methods
 
     def is_payload_tracing_enabled(self) -> bool:
+        if self.namespace == 'Auth.CreateApiToken':
+            return False
         return self._context.config().get_bool(
             'cluster.logging.audit_logs.enable_payload_tracing', default=False
         )
 
     def get_log_tag(self) -> str:
         client_id = None
+        token_id = None
 
         try:
             authorization = self.get_authorization()
             client_id = authorization.client_id
+            token_id = authorization.token_id
             authorization_type = authorization.type
             if authorization_type == ApiAuthorizationType.APP:
                 actor = 'app'
@@ -479,7 +511,9 @@ class ApiInvocationContext(ApiInvocationContextProtocol):
         if 'actor' in enabled_tags:
             tags.append(f'actor:{actor}')
 
-        if 'auth_type' in enabled_tags:
+        if token_id:
+            tags.append(f'auth:TOKEN:{token_id}')
+        elif 'auth_type' in enabled_tags:
             tags.append(f'auth:{authorization_type}')
 
         if 'client_id' in enabled_tags and Utils.is_not_empty(client_id):

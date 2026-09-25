@@ -537,17 +537,75 @@ def test_billing_reads_daily_pages_once_and_selects_actual_dates(setup, monkeypa
     calc._workers.shutdown()
 
 
+def test_default_quota_rule_persists_zero_for_absent_users(setup):
+    context, store, _ = setup
+    now = arrow.get('2026-09-02T12:00:00Z')
+    snapshot = dict(
+        measured_at=now.timestamp(),
+        users={'user-a': 10},
+        complete=True,
+        zero_when_absent=True,
+        filesystem_id='fs-test',
+        total_bytes=10,
+    )
+    context.storage_metrics = SimpleNamespace(
+        usage_by_filesystem=lambda: {'fs-test': snapshot}
+    )
+    calc = DailyCostsCalculator(context, store)
+    calc.capture_storage(['user-a', 'USER-B'], now)
+    stored = store.get(SYSTEM, 'share:2026-09-02:fs-test')
+    assert stored['users'] == {'user-a': 10, 'user-b': 0}
+    assert snapshot['users'] == {'user-a': 10}
+    calc._workers.shutdown()
+
+
+@pytest.mark.parametrize('exchange_rate,expected', [(0.9, 27.0), (None, None)])
+def test_storage_day_uses_cluster_currency(setup, monkeypatch, exchange_rate, expected):
+    context, store, _ = setup
+    monkeypatch.setattr('ideadatamodel.locale.get_currency_code', lambda: 'EUR')
+    context.config().get_float = lambda key, default=None: exchange_rate
+    context.config().get_config = lambda *args, **kwargs: {
+        'data': {'provider': 'efs', 'efs': {'file_system_id': 'fs-test'}}
+    }
+    monkeypatch.setattr(
+        'ideaclustermanager.app.costs.personal_costs_collector.daily_storage_rate',
+        lambda *args, **kwargs: 120,
+    )
+    start = arrow.get('2026-09-02')
+    store.put_source(
+        SYSTEM,
+        'share:2026-09-02:fs-test',
+        {
+            'users': {'user-a': 100, 'user-b': 300},
+            'total_bytes': 400,
+            'complete': True,
+            'measured_at': start.timestamp(),
+        },
+    )
+    calc = DailyCostsCalculator(context, store)
+    try:
+        result = calc.storage_day('user-a', start, start.shift(days=1))
+        assert result.cost == expected
+        assert result.status == (
+            'unavailable' if expected is None else 'estimated_share'
+        )
+    finally:
+        calc._workers.shutdown()
+
+
 def test_shared_storage_prices_only_the_dated_complete_share(setup, monkeypatch):
     context, store, _ = setup
     context.config().get_config = lambda *args, **kwargs: {
         'data': {
             'provider': 'efs',
             'efs': {'file_system_id': 'fs-test'},
-            'costs': {'name_tag': 'storage'},
         }
     }
     calc = DailyCostsCalculator(context, store)
-    monkeypatch.setattr(calc, '_billing', lambda *args: {('storage',): 20})
+    rate = Mock(return_value=20)
+    monkeypatch.setattr(
+        'ideaclustermanager.app.costs.personal_costs_collector.daily_storage_rate', rate
+    )
     start = arrow.get('2026-09-02')
     store.put_source(
         SYSTEM,
@@ -555,6 +613,9 @@ def test_shared_storage_prices_only_the_dated_complete_share(setup, monkeypatch)
         {
             'users': {'user-a': 10, 'user-b': 30},
             'total_bytes': 100,
+            'capacity_pool_bytes': 9000,
+            'filesystem_id': 'fs-test',
+            'complete': True,
             'measured_at': start.timestamp(),
         },
     )
@@ -568,6 +629,12 @@ def test_shared_storage_prices_only_the_dated_complete_share(setup, monkeypatch)
         ).cost
         is None
     )
+    assert result.source_as_of == start.isoformat()
+    assert rate.call_args_list[0].kwargs['capacity_pool_bytes'] == 9000
+    rate.return_value = None
+    unavailable = calc.storage_day('user-a', start, start.shift(days=1))
+    assert unavailable.cost is None and unavailable.status == 'unavailable'
+    assert unavailable.coverage.missing_prices == 1
     calc._workers.shutdown()
 
 
@@ -710,11 +777,12 @@ def test_storage_day_tolerates_entries_without_a_costs_block(setup, monkeypatch)
     calc = DailyCostsCalculator(context, store)
     seen = []
     monkeypatch.setattr(
-        calc, '_billing', lambda start, end, filters, groups: seen.append(filters) or {}
+        'ideaclustermanager.app.costs.personal_costs_collector.daily_storage_rate',
+        lambda *args, **kwargs: seen.append(args) or None,
     )
     line = calc.storage_day('user-a', arrow.get('2026-09-02'), arrow.get('2026-09-03'))
     assert 'costs' not in (line.reason or '')
-    assert seen, 'billing must be reached once the entry parses'
+    assert seen, 'pricing must be reached once the entry parses'
     calc._workers.shutdown()
 
 

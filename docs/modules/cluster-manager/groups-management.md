@@ -24,3 +24,7 @@ Groups can have multiple scopes:
 
 1. Select the group you want to disable
 2. Click "**Actions**" > "**Disable Group**"
+
+### Review background task failures
+
+The **Status** column shows an error indicator when a terminal background task fails for a group. Read the task name, failure message, and time, correct the cause, then repeat the action. The indicator clears when the same task succeeds.

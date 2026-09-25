@@ -73,7 +73,12 @@ class AnalyticsService(SocaService, AnalyticsServiceProtocol):
                 timeout=self.MAX_WAIT_TIME_MS / 1000
             )
             self._buffer_size_limit_reached_condition.release()
-            self._post_entries_to_kinesis()
+            try:
+                self._post_entries_to_kinesis()
+            except Exception:
+                self._logger.exception(
+                    f'Failed to post {len(self._buffer)} buffered analytics entries'
+                )
 
     def _post_entries_to_kinesis(self):
         with self._buffer_lock:

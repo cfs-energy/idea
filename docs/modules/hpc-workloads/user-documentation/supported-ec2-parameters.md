@@ -62,6 +62,10 @@ Pre-requisites
 You can specify multiple instances type using "+" sign. When using more than 1 instance type, AWS will prioritize the capacity based on the order (eg: launch c5.large first and switch to m5.large if AWS can't provision c5.large anymore)
 {% endhint %}
 
+{% hint style="warning" %}
+Do not mix AMD and NVIDIA GPU families in one fallback list. The job is rejected at submission and the message names both vendors. Use fallback types from one GPU vendor.
+{% endhint %}
+
 #### **nodes**
 
 * Description:The number of EC2 instance to provision
@@ -145,7 +149,7 @@ Some instance types are On-Demand only, the HPC families among them. A spot requ
   * `-l subnet_id=2`: IDEA will provision capacity in 2 private subnets chosen randomly
 
 {% hint style="info" %}
-If you specify more than 1 subnet and have `placement_group` set to True, IDEA will automatically provision capacity and placement group on the first subnet from the list
+For a multi-node job with a placement group, IDEA uses one Availability Zone and selects one compatible subnet from the list. A single-node job keeps every configured subnet available even when placement groups are enabled.
 {% endhint %}
 
 Administrators can set `cluster.network.preferred_subnet_id` in the cluster configuration. Jobs that

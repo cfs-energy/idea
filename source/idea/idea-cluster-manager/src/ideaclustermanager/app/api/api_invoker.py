@@ -39,6 +39,7 @@ from ideaclustermanager.app.api.auth_api import AuthAPI
 from ideaclustermanager.app.api.email_templates_api import EmailTemplatesAPI
 from ideaclustermanager.app.api.my_costs_api import MyCostsAPI
 from ideaclustermanager.app.api.costs_api import CostsAPI
+from ideaclustermanager.app.api.reporting_api import ReportingAPI
 
 from typing import Optional, Dict
 
@@ -56,6 +57,7 @@ class ClusterManagerApiInvoker(ApiInvokerProtocol):
         self.email_templates_api = EmailTemplatesAPI(context)
         self.my_costs_api = MyCostsAPI(context)
         self.costs_api = CostsAPI(context)
+        self.reporting_api = ReportingAPI(context)
         self.max_listings_for_logging = 10
         self.auto_truncate_responses = {
             'Accounts.ListUsers': ListUsersResult,
@@ -70,6 +72,11 @@ class ClusterManagerApiInvoker(ApiInvokerProtocol):
         self, context: ApiInvocationContext
     ) -> Optional[Dict]:
         namespace = context.namespace
+
+        if namespace.startswith('Reporting.'):
+            request = context.get_request(deep_copy=True)
+            request['payload'] = {'redacted': True}
+            return request
 
         if namespace == 'Auth.InitiateAuth':
             request = context.get_request(deep_copy=True)
@@ -123,6 +130,10 @@ class ClusterManagerApiInvoker(ApiInvokerProtocol):
     def get_response_logging_payload(
         self, context: ApiInvocationContext
     ) -> Optional[Dict]:
+        if context.namespace.startswith('Reporting.'):
+            response = context.get_response(deep_copy=True)
+            response['payload'] = {'redacted': True}
+            return response
         if not context.is_success():
             return None
 
@@ -211,3 +222,5 @@ class ClusterManagerApiInvoker(ApiInvokerProtocol):
             self.my_costs_api.invoke(context)
         elif namespace.startswith('Costs.'):
             self.costs_api.invoke(context)
+        elif namespace.startswith('Reporting.'):
+            self.reporting_api.invoke(context)

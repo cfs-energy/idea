@@ -3,6 +3,7 @@ unit tests for the reason a virtual desktop request could not be satisfied
 """
 
 from typing import Any, Dict, List, Optional
+from types import SimpleNamespace
 
 import pytest
 from botocore.exceptions import ClientError
@@ -16,6 +17,7 @@ from ideadatamodel import (
     VirtualDesktopServer,
     VirtualDesktopSession,
     VirtualDesktopSoftwareStack,
+    User,
     exceptions,
 )
 from ideavirtualdesktopcontroller.app.virtual_desktop_controller_utils import (
@@ -121,16 +123,19 @@ class MockClusterConfig:
 
 
 class MockAccountsClient:
-    @staticmethod
-    def get_user(_request):
-        return None
+    def __init__(self, users: Optional[Dict[str, User]] = None):
+        self.users = users or {}
+
+    def get_user(self, request):
+        user = self.users.get(request.username)
+        return SimpleNamespace(user=user) if user is not None else None
 
 
 class MockContext:
-    def __init__(self, values: Dict[str, Any]):
+    def __init__(self, values: Dict[str, Any], users: Optional[Dict[str, User]] = None):
         self._config = MockClusterConfig(values)
         self._cache = MockCache()
-        self.accounts_client = MockAccountsClient()
+        self.accounts_client = MockAccountsClient(users)
 
     def config(self) -> MockClusterConfig:
         return self._config
@@ -173,10 +178,12 @@ class FailingEC2Client:
         )
 
 
-def build_controller_utils(values: Dict[str, Any]) -> VirtualDesktopControllerUtils:
+def build_controller_utils(
+    values: Dict[str, Any], users: Optional[Dict[str, User]] = None
+) -> VirtualDesktopControllerUtils:
     # __init__ builds every AWS client, none of which these tests need
     utils = object.__new__(VirtualDesktopControllerUtils)
-    utils.context = MockContext(values)
+    utils.context = MockContext(values, users)
     utils.INSTANCE_TYPES_NAMES_LIST_CACHE_KEY = 'aws.ec2.all-instance-types-names-list'
     utils.INSTANCE_INFO_CACHE_KEY = 'aws.ec2.all-instance-types-data'
     utils._logger = _NullLogger()
@@ -204,16 +211,13 @@ def build_software_stack(
     min_ram_gib: int = 4,
     architecture: VirtualDesktopArchitecture = VirtualDesktopArchitecture.X86_64,
     gpu: VirtualDesktopGPU = VirtualDesktopGPU.NO_GPU,
-    base_os: str = 'amazonlinux2023',
-    allowed_instance_types: Optional[List[str]] = None,
 ) -> VirtualDesktopSoftwareStack:
     return VirtualDesktopSoftwareStack(
         stack_id='ss-test',
-        base_os=base_os,
+        base_os='amazonlinux2023',
         min_ram=SocaMemory(value=min_ram_gib, unit=SocaMemoryUnit.GiB),
         architecture=architecture,
         gpu=gpu,
-        allowed_instance_types=allowed_instance_types,
     )
 
 
@@ -468,6 +472,73 @@ def test_allowed_size_has_no_rejection_reason():
             software_stack=build_software_stack(),
         )
         is None
+    )
+
+
+def test_user_exception_allows_a_size_outside_the_global_allow_list():
+    username = 'exception-user'
+    utils = build_controller_utils(
+        {CONFIG_ALLOW_KEY: ['t3'], CONFIG_DENY_KEY: []},
+        {username: User(username=username, instance_type_exceptions=['m6a.48xlarge'])},
+    )
+    listed = utils.get_valid_instance_types(
+        hibernation_support=False,
+        software_stack=build_software_stack(),
+        username=username,
+    )
+
+    assert 'm6a.48xlarge' in [item['InstanceType'] for item in listed]
+    assert (
+        utils.get_instance_type_rejection_reason(
+            instance_type_name='m6a.48xlarge',
+            hibernation_support=False,
+            software_stack=build_software_stack(),
+            username=username,
+        )
+        is None
+    )
+
+
+def test_deny_list_wins_over_a_user_exception():
+    username = 'exception-user'
+    utils = build_controller_utils(
+        {CONFIG_ALLOW_KEY: ['t3'], CONFIG_DENY_KEY: ['m6a.48xlarge']},
+        {username: User(username=username, instance_type_exceptions=['m6a.48xlarge'])},
+    )
+
+    assert (
+        utils.get_instance_type_rejection_reason(
+            instance_type_name='m6a.48xlarge',
+            hibernation_support=False,
+            software_stack=build_software_stack(),
+            username=username,
+        )
+        is not None
+    )
+
+
+def test_user_without_an_exception_is_refused():
+    exception_username = 'exception-user'
+    standard_username = 'standard-user'
+    utils = build_controller_utils(
+        {CONFIG_ALLOW_KEY: ['t3'], CONFIG_DENY_KEY: []},
+        {
+            exception_username: User(
+                username=exception_username,
+                instance_type_exceptions=['m6a.48xlarge'],
+            ),
+            standard_username: User(username=standard_username),
+        },
+    )
+
+    assert (
+        utils.get_instance_type_rejection_reason(
+            instance_type_name='m6a.48xlarge',
+            hibernation_support=False,
+            software_stack=build_software_stack(),
+            username=standard_username,
+        )
+        is not None
     )
 
 

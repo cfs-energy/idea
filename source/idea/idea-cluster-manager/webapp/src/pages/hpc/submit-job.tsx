@@ -11,10 +11,12 @@
  * and limitations under the License.
  */
 
+import {buildBudgetUsage} from '../../components/job-budget-usage';
 import React, {Component, RefObject} from "react";
 import {v4 as uuid} from "uuid";
 
 import IdeaForm from "../../components/form";
+import IdeaConfirm from "../../components/modals";
 import {
     Alert,
     Box,
@@ -24,7 +26,7 @@ import {
     Form,
     FormField, Grid,
     Header, Link,
-    Modal, PieChart,
+    Modal,
     Select, SelectProps,
     SpaceBetween, StatusIndicator, Table, Tabs, TextFilter, Tiles
 } from "@cloudscape-design/components";
@@ -87,8 +89,6 @@ export interface SubmitJobState {
     activeTab: string
 
     jobSizeEstimate?: JobSizeEstimate
-    showJobSizeConfirmModal: boolean
-
     errorMessage: string
     submitJobLoading: boolean
     dryRunLoading: boolean
@@ -115,6 +115,7 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
 
     jobSubmissionForm: RefObject<IdeaForm | null>
     saveJobTemplateForm: RefObject<IdeaForm | null>
+    jobSizeConfirmModal: RefObject<IdeaConfirm | null>
     instanceTypeOptionsCacheKey: string | null
     instanceTypeOptionsCache: SocaInstanceTypeOptions[]
     jobSizeEstimateTimeout: any | null = null
@@ -123,6 +124,7 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
         super(props);
         this.jobSubmissionForm = React.createRef()
         this.saveJobTemplateForm = React.createRef()
+        this.jobSizeConfirmModal = React.createRef()
         this.instanceTypeOptionsCacheKey = null
         this.instanceTypeOptionsCache = []
         this.state = {
@@ -148,8 +150,6 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
             showApplicationSelectModal: false,
             activeTab: 'submit-job',
 
-            showJobSizeConfirmModal: false,
-
             errorMessage: '',
             submitJobLoading: false,
             dryRunLoading: false,
@@ -171,6 +171,10 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
 
     getJobSubmissionForm(): IdeaForm {
         return this.jobSubmissionForm.current!
+    }
+
+    getJobSizeConfirmModal(): IdeaConfirm {
+        return this.jobSizeConfirmModal.current!
     }
 
     getSaveJobTemplateForm(): IdeaForm {
@@ -794,36 +798,17 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
 
     buildJobSizeConfirmModal() {
         const jobSizeEstimate = this.state.jobSizeEstimate
-        const onCancel = () => {
-            this.setState({
-                showJobSizeConfirmModal: false
-            })
-        }
         return (
-            <Modal visible={this.state.showJobSizeConfirmModal}
-                   size="medium"
-                   onDismiss={onCancel}
-                   header="Confirm Job Size"
-                   footer={
-                       <Box float="right">
-                           <SpaceBetween size="xs" direction="horizontal">
-                               <Button variant="normal" onClick={onCancel}>Cancel</Button>
-                               <Button variant="primary" onClick={() => {
-                                   this.setState({
-                                       showJobSizeConfirmModal: false
-                                   }, () => {
-                                       this.runSubmitJob()
-                                   })
-                               }}>Submit Job</Button>
-                           </SpaceBetween>
-                       </Box>
-                   }>
+            <IdeaConfirm ref={this.jobSizeConfirmModal}
+                         title="Confirm Job Size"
+                         confirmLabel="Submit Job"
+                         onConfirm={this.runSubmitJob}>
                 <Alert type="warning">
                     This job will provision <strong>{jobSizeEstimate?.nodeCount}</strong> x <strong>{jobSizeEstimate?.instanceType}</strong> EC2
                     instances ({jobSizeEstimate?.cpusPerInstance} cpus per node). The node count is computed from the requested cpus.
                     Cancel and reduce cpus if this is not what you intended.
                 </Alert>
-            </Modal>
+            </IdeaConfirm>
         )
     }
 
@@ -863,8 +848,9 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
             this.updateJobSizeEstimate().then(jobSizeEstimate => {
                 if (jobSizeEstimate && jobSizeEstimate.nodeCount >= JOB_SIZE_CONFIRM_NODE_COUNT) {
                     this.setState({
-                        showJobSizeConfirmModal: true,
                         submitJobLoading: false
+                    }, () => {
+                        this.getJobSizeConfirmModal().show()
                     })
                 } else {
                     this.runSubmitJob()
@@ -1046,95 +1032,7 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                     </Box>
                 }
 
-                return (
-                    <Container>
-                        <Grid gridDefinition={[{ colspan: { default: 12, xxs: 12 } }]}>
-                            <div className="budget-summary-container">
-                                <Header variant="h2">Budget Overview</Header>
-                                <Box padding={{ top: 'l' }}>
-                                    <Grid gridDefinition={[
-                                        { colspan: { default: 7, xxs: 12 } },
-                                        { colspan: { default: 5, xxs: 12 } }
-                                    ]}>
-                                        <div>
-                                            <SpaceBetween size="l">
-                                                <Container
-                                                    header={<Header variant="h3">Budget Details</Header>}
-                                                >
-                                                    <ColumnLayout columns={2} variant="text-grid">
-                                                        <div>
-                                                            <Box variant="awsui-key-label">Budget Name</Box>
-                                                            <div>{budget.budget_name}</div>
-                                                        </div>
-                                                        <div>
-                                                            <Box variant="awsui-key-label">Budget Limit</Box>
-                                                            <div>{Utils.getFormattedAmount(budget.budget_limit)}</div>
-                                                        </div>
-                                                        <div>
-                                                            <Box variant="awsui-key-label">Actual Spend</Box>
-                                                            <div>{Utils.getFormattedAmount(budget.actual_spend)}</div>
-                                                        </div>
-                                                        <div>
-                                                            <Box variant="awsui-key-label">Forecasted Spend</Box>
-                                                            <div>{Utils.getFormattedAmount(budget.forecasted_spend)}</div>
-                                                        </div>
-                                                        <div>
-                                                            <Box variant="awsui-key-label">Remaining Budget</Box>
-                                                            <div>
-                                                                {Utils.getFormattedAmount({
-                                                                    amount: Math.max(0, (budget.budget_limit?.amount || 0) - (budget.forecasted_spend?.amount || 0)),
-                                                                    unit: budget.budget_limit?.unit
-                                                                })}
-                                                            </div>
-                                                        </div>
-                                                        <div>
-                                                            {budget.job_usage_percent !== undefined && (
-                                                                <>
-                                                                    <Box variant="awsui-key-label">Job Budget Impact</Box>
-                                                                    <div>{budget.job_usage_percent.toFixed(2)}%</div>
-                                                                </>
-                                                            )}
-                                                        </div>
-                                                    </ColumnLayout>
-                                                </Container>
-                                            </SpaceBetween>
-                                        </div>
-                                        <div>
-                                            <Container
-                                                header={<Header variant="h3">Budget Allocation</Header>}
-                                            >
-                                                <PieChart
-                                                    hideFilter={true}
-                                                    data={[
-                                                        {
-                                                            title: "Actual Spend",
-                                                            value: Number((budget.actual_spend?.amount || 0).toFixed(2)),
-                                                            lastUpdate: new Date().toISOString()
-                                                        },
-                                                        {
-                                                            title: "Forecasted Additional Spend",
-                                                            value: Number(Math.max(0, (budget.forecasted_spend?.amount || 0) - (budget.actual_spend?.amount || 0)).toFixed(2)),
-                                                            lastUpdate: new Date().toISOString()
-                                                        },
-                                                        {
-                                                            title: "Remaining Budget",
-                                                            value: Number(Math.max(0, (budget.budget_limit?.amount || 0) - (budget.forecasted_spend?.amount || 0)).toFixed(2)),
-                                                            lastUpdate: new Date().toISOString()
-                                                        }
-                                                    ]}
-                                                    segmentDescription={(datum, sum) => {
-                                                        const percentage = (datum.value / sum * 100).toFixed(1);
-                                                        return `${datum.title}: ${Utils.getFormattedAmount({ amount: datum.value, unit: budget.budget_limit?.unit })} (${percentage}%)`;
-                                                    }}
-                                                />
-                                            </Container>
-                                        </div>
-                                    </Grid>
-                                </Box>
-                            </div>
-                        </Grid>
-                    </Container>
-                )
+                return buildBudgetUsage(budget)
             } else {
                 return <Box color="text-body-secondary">
                     Budgets are not enabled for project: <strong>{this.state.selectedProject?.label}</strong>

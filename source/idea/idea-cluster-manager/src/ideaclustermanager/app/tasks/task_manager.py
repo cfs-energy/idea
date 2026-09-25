@@ -10,6 +10,9 @@
 #  and limitations under the License.
 import os
 import faulthandler
+from datetime import datetime, timezone
+
+from botocore.exceptions import ClientError
 from concurrent.futures import ThreadPoolExecutor
 
 from ideasdk.context import SocaContext
@@ -130,7 +133,7 @@ class TaskManager(SocaService):
             max_workers=self._max_workers, thread_name_prefix='task-executor'
         )
 
-    def _task_expired(self):
+    def _task_expired(self, task, payload, receive_count):
         # Python cannot safely cancel a running thread. The supervisor must replace the
         # process; leaving the receipt unacknowledged preserves FIFO retry ordering.
         try:
@@ -138,11 +141,34 @@ class TaskManager(SocaService):
                 2, b'Task deadline exceeded; terminating worker process for restart\n'
             )
             faulthandler.dump_traceback(all_threads=True)
+            if (
+                task is not None
+                and receive_count >= constants.SQS_MAX_RECEIVE_COUNT_CLUSTER_TASKS
+            ):
+                # Bound the write even if credentials or the database client hang.
+                writer = threading.Thread(
+                    target=self._update_task_failure,
+                    args=(task, payload, TimeoutError('Task deadline exceeded')),
+                    daemon=True,
+                )
+                writer.start()
+                writer.join(timeout=2)
         finally:
             os._exit(1)
 
     def _execute_with_deadline(self, message):
-        timer = threading.Timer(self._task_timeout, self._task_expired)
+        try:
+            body = Utils.from_json(message.get('Body', ''))
+            task = self.tasks.get(body.get('name'))
+            payload = body.get('payload')
+            receive_count = int(
+                message.get('Attributes', {}).get('ApproximateReceiveCount', '1')
+            )
+        except (ValueError, TypeError, AttributeError):
+            task, payload, receive_count = None, None, 1
+        timer = threading.Timer(
+            self._task_timeout, self._task_expired, args=(task, payload, receive_count)
+        )
         timer.daemon = True
         timer.start()
         try:
@@ -195,10 +221,60 @@ class TaskManager(SocaService):
             'cluster-manager.task_queue_url', required=True
         )
 
+    def _update_task_failure(self, task, payload, error=None):
+        try:
+            entity = task.entity_ref(payload)
+            if entity is None:
+                return
+            kind, entity_id = entity
+            if kind == 'user':
+                table = self.context.accounts.user_dao.table
+                key = 'username'
+            elif kind == 'group':
+                table = self.context.accounts.group_dao.table
+                key = 'group_name'
+            elif kind == 'project':
+                table = self.context.projects.projects_dao.table
+                key = 'project_id'
+            else:
+                return
+
+            names = {'#key': key, '#failure': 'last_task_failure'}
+            if error is not None:
+                table.update_item(
+                    Key={key: entity_id},
+                    UpdateExpression='SET #failure = :failure',
+                    ConditionExpression='attribute_exists(#key)',
+                    ExpressionAttributeNames=names,
+                    ExpressionAttributeValues={
+                        ':failure': {
+                            'task': task.get_name(),
+                            'message': str(error)[:200],
+                            'at': datetime.now(timezone.utc).isoformat(),
+                        }
+                    },
+                )
+            else:
+                # Only the task that failed can clear its marker.
+                table.update_item(
+                    Key={key: entity_id},
+                    UpdateExpression='REMOVE #failure',
+                    ConditionExpression='attribute_exists(#key) AND #failure.#task = :task',
+                    ExpressionAttributeNames={**names, '#task': 'task'},
+                    ExpressionAttributeValues={':task': task.get_name()},
+                )
+        except ClientError as error:
+            if error.response['Error']['Code'] != 'ConditionalCheckFailedException':
+                self.logger.exception('failed to update task failure marker')
+        except Exception:
+            self.logger.exception('failed to update task failure marker')
+
     def execute_task(self, sqs_message: Dict):
         task_name = None
         task_payload = None
         receipt_handle = None
+        task = None
+        task_succeeded = False
         try:
             _task_start = Utils.current_time_ms()
             message_body = Utils.get_value_as_string('Body', sqs_message)
@@ -227,6 +303,8 @@ class TaskManager(SocaService):
             if self._discard_deleted_user(task_name, task_payload, receipt_handle):
                 return
             task.invoke(task_payload)
+            task_succeeded = True
+            self._update_task_failure(task, task_payload)
             _task_end = Utils.current_time_ms()
             _task_duration = int(_task_end - _task_start)
             self.logger.info(
@@ -242,6 +320,8 @@ class TaskManager(SocaService):
             self.logger.warning(
                 f'failed to execute task due to LDAP exists error: {task_name} - {task_payload} - {e}'
             )
+            if task is not None:
+                self._update_task_failure(task, task_payload, e)
             # Still remove the task from the queue in this case
             self.context.aws().sqs().delete_message(
                 QueueUrl=self.get_task_queue_url(), ReceiptHandle=receipt_handle
@@ -251,6 +331,15 @@ class TaskManager(SocaService):
             if self._discard_deleted_user(task_name, task_payload, receipt_handle):
                 return
             self.logger.exception(f'failed to execute task: {task_name} - {e}')
+            receive_count = int(
+                sqs_message.get('Attributes', {}).get('ApproximateReceiveCount', '1')
+            )
+            if (
+                task is not None
+                and not task_succeeded
+                and receive_count >= constants.SQS_MAX_RECEIVE_COUNT_CLUSTER_TASKS
+            ):
+                self._update_task_failure(task, task_payload, e)
 
     def task_queue_listener(self):
         while not self.exit.is_set():

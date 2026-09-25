@@ -40,6 +40,7 @@ PROJECT_ID = 'a1b2c3d4-0000-4000-8000-000000000001'
 
 # the value fail_gpu_drivers writes when the driver install produced nothing usable
 GPU_DRIVER_INSTALL_FAILED = 'gpu-driver-install-failed'
+KERNEL_BOOT_MISMATCH = 'kernel-boot-mismatch'
 
 
 def client_error(error_code: str, operation: str) -> ClientError:
@@ -244,6 +245,18 @@ def test_an_unrecognised_bootstrap_status_is_reported_as_itself():
 
     assert utils.fail_stuck_provisioning_session(session, 1800) is True
     assert 'something-new-failed' in session.failure_reason
+
+
+def test_a_kernel_boot_mismatch_reports_the_image_boot_configuration():
+    ec2_client = FakeEc2Client(tags=[a_bootstrap_status_tag(KERNEL_BOOT_MISMATCH)])
+    utils = build_utils(FakeSessionDB(), ec2_client, FakeServerUtils())
+    session = a_session()
+
+    assert utils.fail_stuck_provisioning_session(session, 1800) is True
+    assert (
+        'did not boot the kernel installed during bootstrap' in session.failure_reason
+    )
+    assert 'software stack image boot configuration' in session.failure_reason
 
 
 def test_the_host_is_released_after_the_reason_is_recorded():

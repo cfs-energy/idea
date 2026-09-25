@@ -22,3 +22,5 @@ Administrators have one collapsible **Administration** section. It groups tasks 
 Breadcrumbs start with the destination, followed by the selected tab where applicable. Detail pages add their own final breadcrumb. **Settings** keeps a single breadcrumb and groups its content on one searchable page. See [Settings](../cluster-operations/settings.md) for the groups and save controls.
 
 Custom images builds and adopts both job and desktop images at `/soca/custom-amis`. Desktop images manages the desktop catalog and project access.
+
+For status reasons, completion dispositions, and cost details in **My jobs**, see [Job status and costs](../jobs.md).

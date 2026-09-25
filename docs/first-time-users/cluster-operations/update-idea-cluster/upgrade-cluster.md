@@ -1,5 +1,7 @@
 # Full IDEA Upgrade (idea-admin.sh upgrade-cluster)
 
+New clusters use the container control plane only. Move an existing host-based control plane with `upgrade-cluster --drain`; follow the [container upgrade guide](move-to-containers.md). There is no separate migration command.
+
 ## Full Cluster Upgrade
 
 ### Overview
@@ -26,7 +28,7 @@ holds the previous release's generated defaults in many rows (GPU driver version
 lists, DCV package URLs), which the preview lists as differing from generated configuration,
 so a historical run needs `--accept-config-drift` after reviewing that preview. An operator
 pointing `ecs.image` at a private registry before the run (partitions without a public
-registry) keeps that row; the run registers the container module around it. With `enable_ecs: true`, the bastion instance is retired into an SSH service on the shared host pool; no bastion replacement override is needed. Public clusters receive fixed Elastic IPs on a dedicated NLB, and SSH host keys persist in Secrets Manager. The cutover changes the address and fingerprint once; later task replacements preserve both. Private clusters use an internal NLB. Existing SSH sessions must reconnect after task replacement. With containers disabled, AMI and instance-type moves still replace the host bastion and require `--allow-replacement bastionhostinstance`. The scheduler's old periodic-check interval
+registry) keeps that row; the run registers the container module around it. Set `enable_ecs: true` before converting an existing host-based cluster. The bastion instance is retired into an SSH service on the shared host pool; no bastion replacement override is needed. Public clusters receive fixed Elastic IPs on a dedicated NLB, and SSH host keys persist in Secrets Manager. The cutover changes the address and fingerprint once; later task replacements preserve both. Private clusters use an internal NLB. Existing SSH sessions must reconnect after task replacement. The scheduler's old periodic-check interval
 is copied to the reconciler interval only if the latter is absent. Conflicts are reported and
 preserved, and the old key remains for older running code. Existing lists keep their custom values.
 Before success, settings and deployed module versions are read back. Rows a stack published before
@@ -63,18 +65,9 @@ each scheduler module's `compute_node_ami` names an image built from **Administr
 release image, which is kept and reported. An older built image is replaced, and can be rebuilt
 from **Custom images** after the upgrade.
 
-### Module Host Instance Type
+### Container Host Instance Type
 
-New clusters run the module hosts on `m7i.large`, which replaces the `m6i.large` default. It is
-offered in all 28 of the 29 regions in `region_ami_config.yml` that can be checked, which is why it
-is preferred over the newer `m8i.large`; the twenty-ninth, me-south-1, is an opt-in region that
-could not be queried. An upgrade moves a host whose stored instance type is still `m6i.large` onto
-the new type, after one check that the region offers it, and leaves any other stored value alone
-regardless of whether you explicitly chose `m6i.large` or inherited it as a default. The setting is what the launch template renders, so a moved host
-runs the new type when its instance is next replaced rather than during the upgrade.
-
-If you install into a region that does not offer `m7i.large`, pick an instance type that region does
-offer, such as `m6i.large`, and the upgrade keeps `m6i.large` only while `m7i.large` is unavailable (or its availability cannot be read).
+New clusters and converted host-based clusters run control-plane tasks on the shared container host pool. The default is `m7g.large`, configured by `ecs.hosts.instance_type`. Confirm that the type is available in every selected Availability Zone before installing or converting a cluster. Recheck capacity after changing task sizes, task counts, or the metrics agent.
 
 ### Analytics Data Node Instance Type
 
@@ -89,6 +82,14 @@ The instance type is part of the domain cluster configuration, so changing it up
 place rather than replacing it. OpenSearch Service applies the change as a blue/green deployment:
 it brings up the new nodes, migrates the shards and retires the old nodes. This typically takes tens
 of minutes and the domain stays available throughout, with no downtime and no data loss.
+
+If an OpenSearch service software update is available or pending, the upgrade keeps the current data-node type and prints the update that must finish first. Apply that service update, wait for it to complete, then run `upgrade-cluster` again to apply the instance-type change.
+
+### Pre-deploy protection and stack cleanup
+
+Before deployment, the change-set check refuses removal of a VPC, subnet, internet or NAT gateway, route, route table, or Elastic IP. Treat the refusal as a network-preservation stop: review why the template no longer contains the resource before allowing any change.
+
+Stack cleanup can continue after a failed or rolled-back deployment. `upgrade-cluster` waits up to four hours for cleanup to finish before continuing or reporting the timeout. A stack whose only change is its cluster-settings resource is still updated: that resource records the module version and publishes the module's settings.
 
 ### Rolling Service Updates
 
@@ -187,8 +188,8 @@ If no modules are specified, all modules will be upgraded automatically.
 * `--force-build-bootstrap`: Re-build bootstrap package even if directory exists
 * `--rollback/--no-rollback`: Enable/disable stack rollback on failure (default: true)
 * `--optimize-deployment`: Deploy applicable stacks in parallel to speed up the process
-* `--force`: Skip phase confirmation prompts; differing overwritten rows still require explicit drift acceptance
-* `--accept-config-drift`: Accept overwriting rows that differ from generated configuration, after reviewing `./idea-admin.sh config preview-upgrade`; separate from `--force`
+* `--force`: Skip phase confirmation prompts; overwritten operator or unknown-source rows that differ from generated configuration still require drift acceptance
+* `--accept-config-drift`: Accept overwriting differing operator or unknown-source rows after reviewing `./idea-admin.sh config preview-upgrade`; release image moves and template default updates do not need this flag
 * `--skip-global-settings-update`: Skip the global settings update if you've already done it
 * `--module-set`: Name of the module set to use (default: default)
 * `--deployment-id`: UUID to identify the deployment
@@ -265,6 +266,26 @@ The simplest way to upgrade all infrastructure components:
   --aws-profile default
 ```
 
+#### Release Images and Template Defaults
+
+When `ecs.image` names this partition's release repository at an older release tag, the upgrade
+moves it to the tool's release tag and prints the move. It does not count that move as drift or
+require a manual image setting. Private registry images, digests, build tags and newer tags stay
+unchanged and remain visible in the preview.
+
+Global settings last written by the settings sync have `source=template`. Changed defaults are
+listed as "Template defaults updated" and rewritten without drift acceptance. The add-only sync
+still preserves existing non-global settings. CLI edits stamp `source=cli`, API edits stamp
+`source=api`, and stack writes use `source=stack`. Differing operator or unknown-source rows that
+the upgrade would overwrite still require confirmation or `--accept-config-drift`; `--force`
+alone does not accept them.
+
+The 26.09.4 sync did not set a source marker: new rows had none, and existing markers were retained.
+The first upgrade therefore still asks about differing legacy defaults, since their last writer
+cannot be established. Review and accept those rows once. The sync then stamps its writes as
+`template`, so subsequent template default changes proceed without drift acceptance. Existing
+`stack` markers are not treated as proof that a row was never edited.
+
 #### Unattended Upgrade After Drift Review
 
 Review `./idea-admin.sh config preview-upgrade --cluster-name <CLUSTER_NAME> --aws-region <REGION>` first.
@@ -275,8 +296,8 @@ IDEA_ADMIN_NO_TTY=true ./idea-admin.sh upgrade-cluster \
   --cluster-name <CLUSTER_NAME> --aws-region <REGION> --force --accept-config-drift
 ```
 
-With `--force` alone, differing overwritten rows stop the upgrade even if the cutover gate has
-already closed submission. Reconcile those rows or explicitly accept the reviewed drift and retry.
+With `--force` alone, differing overwritten operator or unknown-source rows stop the upgrade
+before settings changes or the cutover gate. Reconcile those rows or explicitly accept the reviewed drift and retry.
 
 #### Full Upgrade with Explicit Base OS
 

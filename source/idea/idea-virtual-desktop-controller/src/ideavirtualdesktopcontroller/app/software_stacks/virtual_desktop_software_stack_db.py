@@ -108,7 +108,7 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
                 },
                 wait=True,
             )
-            self._create_base_software_stacks()
+        self._create_base_software_stacks()
 
     @property
     def _table(self):
@@ -117,8 +117,7 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
         return self._table_obj
 
     def _create_base_software_stacks(self):
-        with open(self.BASE_STACKS_CONFIG_FILE, 'r') as f:
-            base_stacks_config = yaml.safe_load(f)
+        base_stacks_config = self.get_base_software_stack_config()
 
         if Utils.is_empty(base_stacks_config):
             self._logger.error(
@@ -300,6 +299,10 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
                                 launch_tenancy=VirtualDesktopTenancy.DEFAULT,
                             )
                         )
+
+    def get_base_software_stack_config(self) -> dict:
+        with open(self.BASE_STACKS_CONFIG_FILE, 'r') as f:
+            return yaml.safe_load(f)
 
     @property
     def table_name(self) -> str:

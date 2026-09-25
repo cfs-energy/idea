@@ -32,16 +32,18 @@ from ideaclustermanager.app.costs.monthly_costs_service import (
 )
 from ideaclustermanager.app.costs.my_costs_service import MyCostsService
 from ideaclustermanager.app.costs.personal_costs_store import SYSTEM
-from ideaclustermanager.app.metrics.cost_metrics_service import STORAGE_SERVICES
+from ideaclustermanager.app.costs.storage_rates import daily_storage_rate
 from ideaclustermanager.app.metrics.storage_metrics_service import normalize_user
 from ideasdk.filesystem.filesystem_helper import FileSystemHelper
 from ideaclustermanager.app.filesystem.storage_usage import walk_home
 
 FACETS = ('jobs', 'desktops', 'desktop_disks', 'shared_storage', 'ai')
 STORAGE_NOTE = (
-    "Daily file-system spend × the user's dated byte share. Only complete measurements "
-    'of the same file system with an attributable allocation pool qualify. Home-folder '
-    'bytes alone cannot allocate the whole bill. Historical days without evidence are missing.'
+    'Rate estimate × dated byte share: provisioned SSD, throughput, IOPS above the '
+    'included 3 per GB, and capacity-pool bytes; EFS by storage class, excluding '
+    'throughput and requests. With a default user quota rule, users without files '
+    'count as zero. Unattributed quota bytes remain unassigned. Historical days '
+    'without a dated share are missing.'
 )
 DISKS_NOTE = (
     'Owned provisioned size × GB-month rate × calendar-month fraction, including stopped '
@@ -73,6 +75,7 @@ class DailyCostsCalculator(MonthlyCostsService):
 
     def begin(self):
         self._run_reads.clear()
+        self._reads.pop(('storage-rates',), None)
         self._reported = set()
         self._inventory_all = None
         self._inventory_as_of = None
@@ -561,7 +564,12 @@ class DailyCostsCalculator(MonthlyCostsService):
         # Persist evidence by its actual measurement date, never by the requested month.
         for fs_id, snapshot in snapshots.items():
             measured = arrow.get(snapshot.get('measured_at', 0))
-            users = snapshot.get('users', {})
+            snapshot = dict(snapshot)
+            users = dict(snapshot.get('users', {}))
+            if snapshot.get('zero_when_absent'):
+                for username in usernames:
+                    users.setdefault(normalize_user(username, None), 0)
+            snapshot['users'] = users
             complete = (
                 snapshot.get('complete') is True
                 and snapshot.get('filesystem_id') == fs_id
@@ -625,7 +633,7 @@ class DailyCostsCalculator(MonthlyCostsService):
         entries = self.context.config().get_config('shared-storage', default={}) or {}
         filesystems = {}
         missing_mapping = False
-        for name, entry in entries.items():
+        for entry in entries.values():
             if not hasattr(entry, 'get'):
                 continue
             provider = entry.get('provider', None)
@@ -638,43 +646,43 @@ class DailyCostsCalculator(MonthlyCostsService):
                 continue
             fs_id = (entry.get(provider, None) or {}).get('file_system_id', None)
             if fs_id:
-                filesystems.setdefault(fs_id, set()).add(
-                    (entry.get('costs', None) or {}).get(
-                        'name_tag', f'{self.context.cluster_name()}-{name}'
-                    )
-                )
+                filesystems[fs_id] = provider
             else:
                 missing_mapping = True
         if not filesystems:
             return self._line(0, missing_mapping)
-        spend = self._billing(
-            start,
-            end,
-            [{'Dimensions': {'Key': 'SERVICE', 'Values': STORAGE_SERVICES}}],
-            [{'Type': 'TAG', 'Key': 'Name'}],
-        )
+        cache = self._remember(('storage-rates',), dict)
         amounts, dates = [], []
-        for fs_id, tags in filesystems.items():
+        missing_prices = 0
+        for fs_id, provider in filesystems.items():
             snapshot = self.store.resolve_source(
                 SYSTEM,
                 self.store.get(SYSTEM, f'share:{start.format("YYYY-MM-DD")}:{fs_id}'),
             )
             used = (snapshot or {}).get('users', {}).get(normalize_user(username, None))
-            if (
-                snapshot
-                and used is not None
-                and spend is not None
-                and all((tag,) in spend for tag in tags)
-            ):
-                amounts.append(
-                    sum(spend[(tag,)] for tag in tags) * used / snapshot['total_bytes']
-                )
+            daily = daily_storage_rate(
+                self.context,
+                provider,
+                fs_id,
+                start,
+                capacity_pool_bytes=(snapshot or {}).get('capacity_pool_bytes', 0),
+                cache=cache,
+            )
+            missing_prices += daily is None
+            if snapshot and used is not None and daily is not None:
+                try:
+                    amount = self._convert(daily * used / snapshot['total_bytes'])
+                except ValueError as error:
+                    self._report('shared_storage', error)
+                    continue
+                amounts.append(amount)
                 dates.append(arrow.get(snapshot['measured_at']).isoformat())
         result = self._line(
             sum(amounts),
             not amounts,
             missing_mapping or len(amounts) != len(filesystems),
             STORAGE_NOTE,
+            missing_prices=missing_prices,
         )
         if amounts and result.status == 'ready':
             result.status = 'estimated_share'

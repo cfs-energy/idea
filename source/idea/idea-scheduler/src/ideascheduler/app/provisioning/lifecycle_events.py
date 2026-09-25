@@ -57,10 +57,15 @@ REASON_CLASS_CLOUDFORMATION = 'cloudformation'
 REASON_CLASS_STACK_TIMEOUT = 'stack_timeout'
 REASON_CLASS_RETRIES_EXHAUSTED = 'retries_exhausted'
 REASON_CLASS_UNKNOWN = 'unknown'
+SYSTEM_DELETION = 'JOB_DELETED_DISABLED_OWNER'
+OWNER_CANCELLATION = 'JOB_CANCELLED_BY_OWNER'
 
 # maps provisioning error codes to a stable reason class, so consumers do not
 # need to track the full (and growing) set of error codes.
 ERROR_CODE_REASON_CLASSES = {
+    SYSTEM_DELETION: REASON_CLASS_ACCESS,
+    OWNER_CANCELLATION: 'cancelled',
+    errorcodes.INVALID_PARAMS: 'invalid_request',
     errorcodes.BUDGET_NOT_FOUND: REASON_CLASS_BUDGET,
     errorcodes.BUDGETS_PROJECT_IS_REQUIRED: REASON_CLASS_BUDGET,
     errorcodes.BUDGETS_USER_NOT_CONFIGURED: REASON_CLASS_BUDGET,
@@ -226,6 +231,8 @@ class ProvisioningLifecycleEvents:
         this function is called directly to label the record of a job that never ran, and
         that record must say 'held' rather than 'deleted'.
         """
+        if job.disposition is not None:
+            return job.disposition
         if job.state == SocaJobState.HELD:
             return DISPOSITION_HELD
         if not job.is_provisioned() or job.start_time is None:
@@ -454,6 +461,8 @@ class ProvisioningLifecycleEvents:
         payload['attempt_number'] = attempt_number
         payload['disposition'] = disposition
         payload['exit_status'] = job.exit_status
+        payload['reason_class'] = job.reason_class or REASON_CLASS_UNKNOWN
+        payload['message'] = job.status_reason or job.error_message
         payload['queue_time'] = self._isoformat(job.queue_time)
         payload['provisioning_time'] = self._isoformat(job.provisioning_time)
         payload['start_time'] = self._isoformat(job.start_time)

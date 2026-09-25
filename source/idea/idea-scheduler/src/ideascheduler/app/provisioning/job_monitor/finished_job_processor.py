@@ -249,6 +249,16 @@ class ProcessFinishedJob:
             log_msg += f' Job: {self.get_job_as_json()}'
         self._logger.info(log_msg)
 
+    def apply_disposition(self):
+        self.job.disposition = ProvisioningLifecycleEvents.get_disposition(self.job)
+        if self.job.disposition == 'deleted' and self.job.reason_class != 'access':
+            self.job.reason_class = 'cancelled'
+            self.job.status_reason = 'Cancelled by the owner.'
+        elif self.job.disposition == 'held':
+            self.job.reason_class = self.job.reason_class or 'retries_exhausted'
+        self.job.reason_class = self.job.reason_class or 'unknown'
+        self.job.status_reason = self.job.status_reason or self.job.error_message
+
     def invoke_unprovisioned(self) -> Optional[SocaJob]:
         """
         record a job that never got capacity, so the failure survives the job cache.
@@ -259,7 +269,8 @@ class ProcessFinishedJob:
         try:
             # read the disposition before the state is rewritten, so a job parked at the
             # provisioning retry cap still reports 'held' rather than 'deleted'.
-            disposition = ProvisioningLifecycleEvents.get_disposition(self.job)
+            self.apply_disposition()
+            disposition = self.job.disposition
 
             self.job.state = SocaJobState.FINISHED
             self.job.total_time_secs = 0
@@ -293,8 +304,11 @@ class ProcessFinishedJob:
             )
             return None
 
-    def invoke(self) -> SocaJob:
+    def invoke(self) -> Optional[SocaJob]:
         try:
+            self.apply_disposition()
+            if self.job.start_time is None and self.job.end_time is None:
+                self.job.end_time = arrow.utcnow().datetime
             self.apply_job_execution_context()
 
             self.compute_and_apply_estimated_costs()
@@ -311,7 +325,8 @@ class ProcessFinishedJob:
 
             self.send_email_notification()
 
-            self.publish_to_finished_jobs_db()
+            if not self.publish_to_finished_jobs_db():
+                return None
 
             return self.job
 
@@ -353,14 +368,13 @@ class FinishedJobProcessor:
 
     def _process_finished_jobs(self, jobs: List[SocaJob]):
         if len(jobs) == 0:
-            return
+            return []
 
         finished_job_ids = []
-        provisioning_errors: Dict[str, str] = {}
+        cached_jobs: Dict[str, SocaJob] = {}
         for job in jobs:
             finished_job_ids.append(job.job_id)
-            if Utils.is_not_empty(job.error_message):
-                provisioning_errors[job.job_id] = job.error_message
+            cached_jobs[job.job_id] = job
 
         finished_jobs = self._context.scheduler.list_jobs(
             job_ids=finished_job_ids, job_state=SocaJobState.FINISHED
@@ -368,14 +382,26 @@ class FinishedJobProcessor:
 
         metrics_batch = JobCompletionBatch(self._context)
         jobs_to_index = []
+        returned_ids = {job.job_id for job in finished_jobs}
+        finished_jobs.extend(job for job in jobs if job.job_id not in returned_ids)
         for finished_job in finished_jobs:
             try:
-                # the provisioning error row is deleted with the job cache entry before this
-                # runs; re-attach it so the reason lands on the finished record too.
-                if Utils.is_empty(finished_job.error_message):
-                    finished_job.error_message = provisioning_errors.get(
-                        finished_job.job_id
-                    )
+                # Preserve the reason alongside the scheduler's execution timestamps.
+                cached = cached_jobs[finished_job.job_id]
+                stored = self._context.job_cache.get_completed_job_by_uid(
+                    cached.job_uid
+                )
+                if stored is not None:
+                    jobs_to_index.append(stored)
+                    continue
+                for field in (
+                    'error_message',
+                    'status_reason',
+                    'disposition',
+                    'reason_class',
+                ):
+                    if getattr(cached, field) is not None:
+                        setattr(finished_job, field, getattr(cached, field))
                 job_to_index = ProcessFinishedJob(
                     context=self._context,
                     logger=self._logger,
@@ -395,19 +421,18 @@ class FinishedJobProcessor:
         except Exception as error:
             self._logger.exception(f'failed to publish completion metrics: {error}')
         try:
-            self._context.document_store.add_jobs(jobs=jobs_to_index)
+            indexed = self._context.document_store.add_jobs(jobs=jobs_to_index)
+            if indexed is False and self._context.document_store.is_enabled():
+                return []
         except Exception as e:
             self._logger.exception(f'failed to publish jobs to opensearch: {e}')
+            return []
+        return [job.job_id for job in jobs_to_index]
 
     @staticmethod
     def should_record_unprovisioned(job: SocaJob) -> bool:
-        """
-        a job that never got capacity is recorded when the platform stopped trying,
-        which is the retry cap holding it. gating on error_message instead would record
-        every deletion of a job still being worked on: that row is written on transient
-        waits too and is cleared only by a successful provision.
-        """
-        return job.state == SocaJobState.HELD
+        """Retain every job that has left the active scheduler queue."""
+        return True
 
     def _process_unprovisioned_jobs(self, jobs: List[SocaJob]):
         """
@@ -418,6 +443,10 @@ class FinishedJobProcessor:
         jobs_to_index = []
         for job in jobs:
             try:
+                stored = self._context.job_cache.get_completed_job_by_uid(job.job_uid)
+                if stored is not None:
+                    jobs_to_index.append(stored)
+                    continue
                 job_to_index = ProcessFinishedJob(
                     context=self._context,
                     logger=self._logger,
@@ -437,11 +466,15 @@ class FinishedJobProcessor:
         except Exception as error:
             self._logger.exception(f'failed to publish completion metrics: {error}')
         try:
-            self._context.document_store.add_jobs(jobs=jobs_to_index)
+            indexed = self._context.document_store.add_jobs(jobs=jobs_to_index)
+            if indexed is False and self._context.document_store.is_enabled():
+                return []
         except Exception as e:
             self._logger.exception(
                 f'failed to publish unprovisioned jobs to opensearch: {e}'
             )
+            return []
+        return [job.job_id for job in jobs_to_index]
 
     def _poll_finished_jobs(self):
         while not self._exit.is_set():
@@ -464,11 +497,9 @@ class FinishedJobProcessor:
                     self._logger.error(f'Failed to get active job IDs from PBS: {e}')
                     continue
 
-                jobs_deleted = 0
                 jobs_finished = 0
                 jobs_recorded = 0
 
-                jobs_ids_to_delete = []
                 finished_jobs = []
                 unprovisioned_jobs = []
 
@@ -495,54 +526,41 @@ class FinishedJobProcessor:
                             )
                             continue
 
-                        # can't re-read this from the scheduler once it's gone: record only
-                        # jobs held at the retry cap (already reported 'held'); others were owner-deleted mid-wait.
+                        # Jobs absent from PBS still need a terminal record.
                         if not completed_job.is_provisioned():
-                            jobs_ids_to_delete.append(completed_job.job_id)
-                            if self.should_record_unprovisioned(completed_job):
-                                unprovisioned_jobs.append(completed_job)
-                                jobs_recorded += 1
-                                continue
-                            lifecycle_events = self._context.lifecycle_events
-                            if lifecycle_events is not None:
-                                lifecycle_events.job_disposition(
-                                    job=completed_job,
-                                    attempt_number=lifecycle_events.attempts_consumed(
-                                        job=completed_job
-                                    ),
+                            if completed_job.state == SocaJobState.HELD:
+                                from ideascheduler.app.api.job_waiting_signals import (
+                                    apply_waiting_signals,
                                 )
-                            jobs_deleted += 1
+
+                                apply_waiting_signals(self._context, [completed_job])
+                            unprovisioned_jobs.append(completed_job)
+                            jobs_recorded += 1
                             continue
 
                         if completed_job.state != SocaJobState.FINISHED:
                             completed_job.state = SocaJobState.FINISHED
                         finished_jobs.append(completed_job)
-                        jobs_ids_to_delete.append(completed_job.job_id)
                         jobs_finished += 1
 
                     except Exception as e:
                         self._logger.exception(f'failed to process finished job: {e}')
 
-                if len(jobs_ids_to_delete) > 0:
-                    try:
-                        self._logger.debug(
-                            f'FinishedJobProcessor: Deleting {len(jobs_ids_to_delete)} jobs from cache'
-                        )
-                        self._context.job_cache.delete_jobs(job_ids=jobs_ids_to_delete)
-                    except Exception as e:
-                        self._logger.error(f'Failed to delete jobs from cache: {e}')
-
-                if jobs_deleted + jobs_finished + jobs_recorded > 0:
+                if jobs_finished + jobs_recorded > 0:
                     self._logger.info(
                         f'finished_jobs: {jobs_finished}, active jobs: {len(active_job_ids)}, '
-                        f'deleted jobs: {jobs_deleted}, unprovisioned jobs recorded: {jobs_recorded}'
+                        f'unprovisioned jobs recorded: {jobs_recorded}'
                     )
 
-                if len(unprovisioned_jobs) > 0:
-                    self._process_unprovisioned_jobs(unprovisioned_jobs)
-
-                if len(finished_jobs) > 0:
-                    self._process_finished_jobs(finished_jobs)
+                recorded_ids = []
+                if unprovisioned_jobs:
+                    recorded_ids.extend(
+                        self._process_unprovisioned_jobs(unprovisioned_jobs)
+                    )
+                if finished_jobs:
+                    recorded_ids.extend(self._process_finished_jobs(finished_jobs))
+                if recorded_ids:
+                    self._context.job_cache.delete_jobs(job_ids=recorded_ids)
 
                 self._logger.debug(
                     'FinishedJobProcessor: Processing cycle completed successfully'

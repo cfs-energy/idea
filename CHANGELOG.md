@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
+## [Unreleased]
+
+* **Shared storage costs**: estimate daily costs from storage rates without cost-allocation tags, retain complete ONTAP quota shares and tier footprints, and count absent users as zero when a default user quota rule exists. Historical days without dated shares remain missing; a process that has not collected every target keeps the saved usage snapshot.
+* **Host Node.js**: desktops and compute hosts install Node 26.8.2 with npm 11.19.1, matching the control-plane toolchain.
+* **Background tasks**: terminal task failures show with their message and time on users, groups and projects, and clear when the same task succeeds.
+* **Virtual desktop instance types**: administrators can grant per-user instance type exceptions without changing the global allow list; the deny list still takes precedence.
+* **Network-preserving upgrades**: pre-deploy checks refuse removal of VPCs, subnets, gateways, routes, route tables and Elastic IPs.
+* **Desktop images**: controller startup restores missing base software stacks, and the image page lists every supported OS and architecture for building even when its stack is missing or disabled.
+* **API tokens**: users can create expiring, revocable automation tokens with live user permissions, hashed storage, and account-page management.
+* **Job visibility**: show scheduler status reasons and retained completion dispositions, preserve system deletions and owner cancellations, display completed-job savings and budget impact, distinguish unavailable pricing, and show blocked queue usage.
+* **Settings**: the administrator Settings page consolidates 267 cards into 32 across 12 groups with curated labels, one badge per card, a single schedule table and a single notification table, merged AI access settings, read-only install-time values and package pins, and Costs by user explains how to enable storage costs; reconciliation preview and apply run on demand even when scheduling is off; the API refuses read-only and hidden rows, and group names and IAM policy rows accept administrators only.
+* **Reporting**: an additive operations-lead role (administrators and managers included) unlocks a read-only Reporting section with period tiles, per-user and per-project tables and CSV export built from stored cost, job and desktop records.
+* **GPU desktops**: add g7 and g7e driver mappings and refresh the default desktop instance-family allow list.
+* **Container control plane only**: new deployments require the container control plane, the inactive `migrate` command is removed, and container bastions no longer publish unused host bootstrap packages; existing host clusters continue to upgrade with `upgrade-cluster --drain`.
+
+### **🐛 Bug Fixes**
+* **Routine upgrades**: advance release repository images automatically and update template-marked defaults without drift acceptance; CLI and API edits retain review protection.
+* **Upgrade stack cleanup**: `upgrade-cluster` waits up to four hours for stack cleanup.
+* **Scheduler node cleanup**: job nodes that remain down or unknown beyond the configured timeout are reclaimed once they hold no jobs; keep-forever nodes without idle termination remain exempt.
+* **Desktop kernel boot selection**: Rocky Linux and Red Hat family desktop hosts boot the kernel installed during bootstrap instead of returning to an older image default; a host that still comes back on the old kernel stops after one reboot and reports a clear session error.
+* **Stopped desktop costs**: deleting a legacy stopped desktop no longer bills its inactive time as running, and uncertain historical stop times are marked as estimates.
+* **OpenSearch upgrades**: `upgrade-cluster` keeps the current analytics data node type while a service software update is available or pending, and names the update to apply first.
+* **Controller commands**: the virtual desktop controller installs PrettyTable so its command entry point loads.
+* **Timestamps**: the SDK's current time and epoch conversions are true UTC on hosts with a non-UTC timezone, so idle stops and log timestamps no longer drift.
+* **Analytics**: one failed delivery no longer stops the buffer flush loop; the failure is logged with the entry count and the next flush retries.
+* **Job placement**: single-node jobs never carry a placement group, so they keep every configured subnet; multi-node placement groups collapse to one Availability Zone.
+* **GPU fallback lists**: a job whose instance types mix AMD and NVIDIA GPUs is rejected at submission with both vendors named.
+* **Idle badge**: desktops show the idle-stop badge only on days whose schedule runs the idle check.
+* **Bedrock usage reconciliation**: usage rows keep their attribution mapping and survive a partial project teardown; deletion is limited to projects resolvable in the same run.
+* **Submit job**: the large-job confirmation uses the shared confirm dialog; test fakes drop write-only recorders and unused options.
+
 ## [26.09.4] - 2026-09-24
 
 * **Cost header**: administrators can enable a compact cached WTD, MTD, QTD or YTD personal cost total beside the signed-in user's name, with its as-of time and a link to My costs.

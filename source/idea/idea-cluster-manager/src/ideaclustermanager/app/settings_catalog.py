@@ -9,9 +9,14 @@ precedence when a value also has live readers; saving never runs a deployment.
 import ast
 import math
 import re
+from collections.abc import Mapping
 from copy import deepcopy
 
 from ideadatamodel import exceptions
+from ideasdk.utils.group_name_helper import (
+    DEFAULT_OPERATIONS_LEADS_GROUP_NAME,
+    GroupNameHelper,
+)
 
 # key, storage type, effect, group, advanced, uncertain restart classification.
 # Constructors of per-request image builders and directory helpers read refreshed
@@ -639,7 +644,7 @@ _ROWS = [
     (
         'cluster-manager.metrics.cost.enabled',
         'boolean',
-        'runtime',
+        'restart',
         'cost-collection',
         False,
         False,
@@ -687,7 +692,7 @@ _ROWS = [
     (
         'cluster-manager.metrics.storage.enabled',
         'boolean',
-        'runtime',
+        'restart',
         'cost-collection',
         False,
         False,
@@ -1640,6 +1645,22 @@ _ROWS = [
     ),
     (
         'global-settings.gpu_settings.nvidia_public_driver_versions.g6f',
+        'string',
+        'deployment',
+        'software',
+        True,
+        False,
+    ),
+    (
+        'global-settings.gpu_settings.nvidia_public_driver_versions.g7',
+        'string',
+        'deployment',
+        'software',
+        True,
+        False,
+    ),
+    (
+        'global-settings.gpu_settings.nvidia_public_driver_versions.g7e',
         'string',
         'deployment',
         'software',
@@ -2887,6 +2908,14 @@ _ROWS = [
         False,
     ),
     (
+        'identity-provider.cognito.operations_leads_group_name',
+        'string',
+        'runtime',
+        'sign-in',
+        False,
+        False,
+    ),
+    (
         'identity-provider.cognito.removal_policy',
         'string',
         'deployment',
@@ -3111,7 +3140,7 @@ _ROWS = [
     ),
     (
         'scheduler.cost_estimation.provisioned_iops',
-        'integer',
+        'number',
         'runtime',
         'cost-collection',
         True,
@@ -3315,6 +3344,14 @@ _ROWS = [
     ),
     (
         'scheduler.job_provisioning.node_housekeeping_interval_seconds',
+        'integer',
+        'runtime',
+        'job-placement',
+        True,
+        False,
+    ),
+    (
+        'scheduler.job_provisioning.node_unavailable_timeout_seconds',
         'integer',
         'runtime',
         'job-placement',
@@ -5437,6 +5474,436 @@ _ROWS = [
 
 
 _EFFECTS = {'runtime', 'restart', 'deployment'}
+SETTINGS_GROUPS = {
+    'general': 'General',
+    'desktops': 'Desktops',
+    'jobs': 'Jobs',
+    'ai-access': 'AI access',
+    'notifications': 'Notifications',
+    'users-and-sign-in': 'Users and sign-in',
+    'costs': 'Costs',
+    'network': 'Network',
+    'storage': 'Storage',
+    'backup': 'Backup',
+    'monitoring': 'Monitoring',
+    'deployment': 'Deployment',
+}
+ADVANCED_SETTINGS_LABEL = 'Advanced settings'
+MODEL_ID_LABEL = 'Model ID'
+OPERATIONS_LEADS_GROUP_DEFAULT = DEFAULT_OPERATIONS_LEADS_GROUP_NAME
+DESTINATION_SECTIONS = (
+    'AD automation',
+    'Account synchronization',
+    'Amazon Bedrock',
+    'Analytics',
+    'Backup policy',
+    'Collection',
+    'Cost estimation',
+    'Cost header',
+    'Dashboard link',
+    'Desktop placement',
+    'Desktop policy',
+    'Desktop schedule',
+    'Directory connection',
+    'Directory mapping',
+    'Email delivery',
+    'Email templates',
+    'Encryption and access',
+    'Fair-share scheduling',
+    'File systems',
+    'GPU policy',
+    'History backfill',
+    'Installed deployment',
+    'Job limits and placement',
+    'Load balancers and certificates',
+    'Logs',
+    'Maintenance notice',
+    'Metrics',
+    'Network and connectivity',
+    'Notifications',
+    'Portal',
+    'Regional defaults',
+    'Resource tags',
+    'Scratch storage',
+    'Sign-in',
+    'Stopped desktop cleanup',
+    'Storage measurement',
+)
+_DESTINATION_GROUPS = {
+    'AD automation': 'users-and-sign-in',
+    'Account synchronization': 'users-and-sign-in',
+    'Amazon Bedrock': 'ai-access',
+    'Analytics': 'monitoring',
+    'Backup policy': 'backup',
+    'Collection': 'costs',
+    'Cost estimation': 'costs',
+    'Cost header': 'general',
+    'Dashboard link': 'general',
+    'GPU policy': 'general',
+    'History backfill': 'costs',
+    'Desktop placement': 'desktops',
+    'Desktop policy': 'desktops',
+    'Desktop schedule': 'desktops',
+    'Directory connection': 'users-and-sign-in',
+    'Directory mapping': 'users-and-sign-in',
+    'Email delivery': 'notifications',
+    'Email templates': 'notifications',
+    'Encryption and access': 'network',
+    'Fair-share scheduling': 'jobs',
+    'File systems': 'storage',
+    'Installed deployment': 'deployment',
+    'Job limits and placement': 'jobs',
+    'Load balancers and certificates': 'network',
+    'Logs': 'monitoring',
+    'Maintenance notice': 'general',
+    'Metrics': 'monitoring',
+    'Network and connectivity': 'network',
+    'Notifications': 'notifications',
+    'Portal': 'general',
+    'Regional defaults': 'general',
+    'Resource tags': 'deployment',
+    'Scratch storage': 'jobs',
+    'Sign-in': 'users-and-sign-in',
+    'Stopped desktop cleanup': 'desktops',
+    'Storage measurement': 'costs',
+}
+_GROUP_SECTIONS = {
+    'account-synchronization': 'Account synchronization',
+    'ai-access': 'Amazon Bedrock',
+    'appearance': 'Portal',
+    'backup': 'Backup policy',
+    'cost-collection': 'Collection',
+    'desktop-lifecycle': 'Desktop policy',
+    'email': 'Notifications',
+    'job-placement': 'Job limits and placement',
+    'mail': 'Email delivery',
+    'maintenance': 'Maintenance notice',
+    'monitoring': 'Analytics',
+    'network': 'Installed deployment',
+    'resource-tags': 'Resource tags',
+    'sign-in': 'Sign-in',
+    'software': 'Installed deployment',
+    'storage': 'File systems',
+}
+_SECTIONS = {
+    'virtual-desktop-controller.server.tls_key_file': 'Load balancers and certificates',
+    'virtual-desktop-controller.server.tls_certificate_file': 'Load balancers and certificates',
+    'virtual-desktop-controller.server.enable_tls': 'Load balancers and certificates',
+    'scheduler.server.tls_key_file': 'Load balancers and certificates',
+    'scheduler.server.tls_certificate_file': 'Load balancers and certificates',
+    'scheduler.server.enable_tls': 'Load balancers and certificates',
+    'cluster-manager.server.tls_key_file': 'Load balancers and certificates',
+    'cluster-manager.server.tls_certificate_file': 'Load balancers and certificates',
+    'cluster-manager.server.enable_tls': 'Load balancers and certificates',
+    'analytics': 'Analytics',
+    'cluster.administrator_email': 'Regional defaults',
+    'cluster.encoding': 'Regional defaults',
+    'cluster.locale': 'Regional defaults',
+    'cluster.timezone': 'Regional defaults',
+    'cluster.aws.pricing_region': 'Cost estimation',
+    'cluster.backups': 'Backup policy',
+    'cluster.cloudwatch_logs': 'Logs',
+    'cluster.dynamodb': 'Encryption and access',
+    'cluster.ebs': 'Encryption and access',
+    'cluster.iam': 'Encryption and access',
+    'cluster.kms': 'Encryption and access',
+    'cluster.load_balancers': 'Load balancers and certificates',
+    'cluster.logging': 'Logs',
+    'cluster.network': 'Network and connectivity',
+    'cluster.secretsmanager': 'Encryption and access',
+    'cluster.sns': 'Encryption and access',
+    'cluster.sqs': 'Encryption and access',
+    'cluster-manager.cloudwatch_logs': 'Logs',
+    'cluster-manager.metrics.cost': 'Collection',
+    'cluster-manager.metrics.storage': 'Storage measurement',
+    'cluster-manager.web_portal': 'Portal',
+    'cluster-manager.web_portal.cost_ticker': 'Cost header',
+    'cluster-manager.web_portal.custom_dashboard': 'Dashboard link',
+    'directoryservice.ad_automation': 'AD automation',
+    'directoryservice.cloudwatch_logs': 'Logs',
+    'directoryservice.computers': 'Directory mapping',
+    'directoryservice.group_mapping': 'Directory mapping',
+    'directoryservice.groups': 'Directory mapping',
+    'directoryservice.sssd': 'Directory mapping',
+    'directoryservice.sudoers': 'Directory mapping',
+    'directoryservice.users': 'Directory mapping',
+    'directoryservice': 'Directory connection',
+    'global-settings.custom_tags': 'Resource tags',
+    'global-settings.gpu_settings.instance_families': 'GPU policy',
+    'global-settings.gpu_settings.fail_on_missing_driver': 'GPU policy',
+    'identity-provider': 'Sign-in',
+    'metrics': 'Metrics',
+    'scheduler.bedrock': 'Amazon Bedrock',
+    'scheduler.cloudwatch_logs': 'Logs',
+    'scheduler.cost_estimation': 'Cost estimation',
+    'scheduler.fair_share': 'Fair-share scheduling',
+    'scheduler.job_provisioning.queue_mode.fair_share': 'Fair-share scheduling',
+    'scheduler.logging': 'Logs',
+    'scheduler.notifications': 'Notifications',
+    'scheduler.opensearch': 'Analytics',
+    'scheduler.provisioning_lifecycle_events': 'Logs',
+    'scheduler.scratch_storage': 'Scratch storage',
+    'scheduler': 'Job limits and placement',
+    'shared-storage.apps.fsx_netapp_ontap.metrics': 'Storage measurement',
+    'shared-storage.data.fsx_netapp_ontap.metrics': 'Storage measurement',
+    'shared-storage': 'File systems',
+    'virtual-desktop-controller.bedrock': 'Amazon Bedrock',
+    'virtual-desktop-controller.cloudwatch_logs': 'Logs',
+    'virtual-desktop-controller.controller.enforce_project_budgets': 'Desktop policy',
+    'virtual-desktop-controller.dcv_connection_gateway.certificate': 'Load balancers and certificates',
+    'virtual-desktop-controller.dcv_session.instance_types': 'Desktop placement',
+    'virtual-desktop-controller.dcv_session.network': 'Desktop placement',
+    'virtual-desktop-controller.dcv_session.notifications': 'Notifications',
+    'virtual-desktop-controller.dcv_session.schedule': 'Desktop schedule',
+    'virtual-desktop-controller.dcv_session.stopped_session_cleanup': 'Stopped desktop cleanup',
+    'virtual-desktop-controller.dcv_session.working_hours': 'Desktop schedule',
+    'virtual-desktop-controller.dcv_session': 'Desktop policy',
+    'virtual-desktop-controller.server.usb_remotization': 'Desktop policy',
+    'virtual-desktop-controller.logging': 'Logs',
+    'virtual-desktop-controller.notifications': 'Notifications',
+    'virtual-desktop-controller.vdi_host_backup': 'Backup policy',
+    'virtual-desktop-controller': 'Installed deployment',
+}
+_ACRONYMS = {
+    'ad': 'AD',
+    'alb': 'ALB',
+    'ami': 'AMI',
+    'api': 'API',
+    'arn': 'ARN',
+    'arns': 'ARNs',
+    'aws': 'AWS',
+    'az': 'AZ',
+    'azs': 'AZs',
+    'cidr': 'CIDR',
+    'cloudwatch': 'CloudWatch',
+    'cpu': 'CPU',
+    'dcv': 'DCV',
+    'dns': 'DNS',
+    'dynamodb': 'DynamoDB',
+    'ebs': 'EBS',
+    'ec2': 'EC2',
+    'efa': 'EFA',
+    'efs': 'EFS',
+    'fsx': 'FSx',
+    'lustre': 'Lustre',
+    'gpu': 'GPU',
+    'http': 'HTTP',
+    'https': 'HTTPS',
+    'iam': 'IAM',
+    'id': 'ID',
+    'ids': 'IDs',
+    'imds': 'IMDS',
+    'iops': 'IOPS',
+    'kms': 'KMS',
+    'ldap': 'LDAP',
+    'nat': 'NAT',
+    'netapp': 'NetApp',
+    'nlb': 'NLB',
+    'oauth2': 'OAuth 2',
+    'ontap': 'ONTAP',
+    'opensearch': 'OpenSearch',
+    'os': 'OS',
+    'ou': 'OU',
+    'quic': 'QUIC',
+    'ses': 'SES',
+    'secretsmanager': 'Secrets Manager',
+    'sns': 'SNS',
+    'sqs': 'SQS',
+    'ssh': 'SSH',
+    'ssl': 'SSL',
+    'sssd': 'SSSD',
+    'tls': 'TLS',
+    'ttl': 'TTL',
+    'uri': 'URI',
+    'url': 'URL',
+    'usb': 'USB',
+    'vdi': 'VDI',
+    'vpc': 'VPC',
+    'waf': 'WAF',
+}
+_UNITS = {
+    'seconds': 'seconds',
+    'minutes': 'minutes',
+    'hours': 'hours',
+    'days': 'days',
+    'percent': '%',
+}
+_LABELS = {
+    'scheduler.scratch_storage.ebs.mount_point': 'EBS scratch mount path',
+    'scheduler.scratch_storage.fsx_lustre.mount_point': 'Lustre scratch mount path',
+    'scheduler.scratch_storage.instance_store.mount_point': 'Instance store scratch mount path',
+    'analytics.opensearch.node_to_node_encryption': 'OpenSearch node-to-node encryption',
+    'cluster.load_balancers.external_alb.access_logs': 'External ALB access logs',
+    'cluster.load_balancers.internal_alb.access_logs': 'Internal ALB access logs',
+    'cluster.load_balancers.external_alb.public': 'Public external ALB',
+    'cluster.load_balancers.external_alb.certificates.provided': 'Use a provided ALB certificate',
+    'cluster.load_balancers.external_alb.waf.logging.drop_allow_actions': 'Exclude allowed requests from firewall logs',
+    'virtual-desktop-controller.dcv_connection_gateway.certificate.provided': 'Use a provided desktop gateway certificate',
+    'virtual-desktop-controller.external_nlb.access_logs': 'Desktop NLB access logs',
+    'directoryservice.root_credentials_provided': 'Use provided directory credentials',
+    'scheduler.job_provisioning.service_quotas': 'Check service quotas for jobs',
+    'virtual-desktop-controller.dcv_session.network.randomize_subnets': 'Randomize desktop subnets',
+    'virtual-desktop-controller.dcv_session.network.subnet_autoretry': 'Retry desktop subnet placement',
+    'virtual-desktop-controller.dcv_session.first_boot_dnf_update': 'Update desktop packages at first boot',
+    'cluster-manager.server.tls_certificate_file': 'Cluster manager TLS certificate path',
+    'cluster-manager.server.tls_key_file': 'Cluster manager TLS private key path',
+    'scheduler.server.tls_certificate_file': 'Scheduler TLS certificate path',
+    'scheduler.server.tls_key_file': 'Scheduler TLS private key path',
+    'virtual-desktop-controller.server.tls_certificate_file': 'Desktop TLS certificate path',
+    'virtual-desktop-controller.server.tls_key_file': 'Desktop TLS private key path',
+    'cluster-manager.ec2.autoscaling.public': 'Cluster manager public access',
+    'cluster-manager.ec2.autoscaling.new_instances_protected_from_scale_in': 'Cluster manager scale-in protection',
+    'virtual-desktop-controller.controller.autoscaling.public': 'Desktop controller public access',
+    'virtual-desktop-controller.controller.autoscaling.new_instances_protected_from_scale_in': 'Desktop controller scale-in protection',
+    'virtual-desktop-controller.dcv_broker.autoscaling.public': 'Desktop broker public access',
+    'virtual-desktop-controller.dcv_broker.autoscaling.new_instances_protected_from_scale_in': 'Desktop broker scale-in protection',
+    'virtual-desktop-controller.dcv_connection_gateway.autoscaling.public': 'Desktop gateway public access',
+    'virtual-desktop-controller.dcv_connection_gateway.autoscaling.new_instances_protected_from_scale_in': 'Desktop gateway scale-in protection',
+    'cluster.administrator_email': 'Initial administrator email',
+    'cluster-manager.web_portal.logo': 'Logo URL',
+    'cluster-manager.accounts.reconcile.enabled': 'Account synchronization',
+    'cluster-manager.bedrock.enabled': 'Amazon Bedrock',
+    'scheduler.bedrock.enabled': 'Bedrock for jobs',
+    'virtual-desktop-controller.bedrock.enabled': 'Bedrock for desktops',
+    'cluster-manager.bedrock.budgets.enabled': 'Budget enforcement',
+    'cluster-manager.bedrock.usage.enabled': 'Bedrock usage collection',
+    'cluster-manager.maintenance.enabled': 'Maintenance notice',
+    'cluster-manager.metrics.cost.enabled': 'Cost collection',
+    'cluster-manager.metrics.cost.by_account': 'Costs by linked account',
+    'cluster-manager.metrics.cost.module_tag': 'Module tag key',
+    'cluster-manager.metrics.cost.project_tag': 'Project tag key',
+    'cluster-manager.metrics.cost.owner_tag': 'Owner tag key',
+    'cluster-manager.metrics.cost.lookback_days': 'Lookback (days)',
+    'cluster-manager.metrics.cost.interval_hours': 'Interval (hours)',
+    'cluster-manager.metrics.storage.enabled': 'Storage measurement',
+    'cluster-manager.metrics.storage.verify_tls': 'Verify storage TLS certificates',
+    'cluster-manager.notifications.email.enabled': 'Portal email notifications',
+    'scheduler.notifications.enabled': 'Job notifications',
+    'cluster.ses.enabled': 'Amazon SES delivery',
+    'cluster-manager.web_portal.cost_ticker.enabled': 'Cost header',
+    'cluster-manager.web_portal.custom_dashboard.enabled': 'Dashboard link',
+    'cluster.backups.enabled': 'Cluster backups',
+    'virtual-desktop-controller.vdi_host_backup.enabled': 'Desktop backups',
+    'cluster.load_balancers.external_alb.waf.enabled': 'Web application firewall',
+    'cluster.load_balancers.external_alb.waf.bot_control.enabled': 'Bot protection',
+    'cluster.network.vpc_interface_endpoints.logs.enabled': 'CloudWatch Logs endpoint',
+    'cluster.network.vpc_interface_endpoints.monitoring.enabled': 'CloudWatch monitoring endpoint',
+    'scheduler.provisioning_lifecycle_events.enabled': 'Job provisioning events',
+    'virtual-desktop-controller.dcv_session.stopped_session_cleanup.enabled': 'Stopped desktop cleanup',
+    'virtual-desktop-controller.dcv_broker.dynamodb_table.autoscaling.enabled': 'Broker table autoscaling',
+    'analytics.opensearch.logging.app_log_enabled': 'OpenSearch application logs',
+    'analytics.opensearch.logging.slow_index_log_enabled': 'Slow indexing logs',
+    'analytics.opensearch.logging.slow_search_log_enabled': 'Slow search logs',
+    'scheduler.efa.multi_rail_enabled': 'EFA multi-rail',
+    'scheduler.cost_estimation.default_fsx_lustre_size': 'Default Lustre capacity (GB)',
+    'scheduler.cost_estimation.ebs_gp3_storage': 'EBS gp3 storage (USD/GB-month)',
+    'scheduler.cost_estimation.ebs_io1_storage': 'EBS io1 storage (USD/GB-month)',
+    'scheduler.cost_estimation.provisioned_iops': 'io1 provisioned IOPS (USD/IOPS-month)',
+    'scheduler.cost_estimation.fsx_lustre': 'FSx for Lustre (USD/GB-hour)',
+    'virtual-desktop-controller.server.usb_remotization': 'USB device forwarding',
+    'global-settings.gpu_settings.instance_families': 'GPU instance families',
+    'global-settings.gpu_settings.fail_on_missing_driver': 'Require a GPU driver',
+    'cluster.iam.compute_node_iam_policy_arns': 'Compute node IAM policy ARNs',
+    'cluster.backups.enable_restore': 'Backup restore',
+    'cluster.logging.audit_logs.enable_payload_tracing': 'Audit payload tracing',
+    'cluster-manager.accounts.reconcile.reenable': 'Restore synchronized accounts',
+    'cluster-manager.accounts.reconcile.check_cognito': 'Check Cognito accounts',
+    'cluster-manager.accounts.reconcile.dry_run': 'Preview account changes',
+    'virtual-desktop-controller.dcv_session.stopped_session_cleanup.dry_run': 'Preview desktop cleanup',
+    'analytics.opensearch.use_existing': 'Use an existing OpenSearch domain',
+    'directoryservice.use_existing': 'Use an existing directory',
+    'directoryservice.public': 'Public directory access',
+    'scheduler.public': 'Public scheduler access',
+    'cluster-manager.bedrock.invocation_logging.manage_configuration': 'Manage Bedrock invocation logging',
+    'cluster-manager.bedrock.invocation_logging.include_request_response_data': 'Log Bedrock requests and responses',
+    'virtual-desktop-controller.dcv_broker.dynamodb_table.on_demand': 'Broker table on-demand capacity',
+    'cluster-manager.ec2.autoscaling.enable_detailed_monitoring': 'Cluster manager detailed monitoring',
+    'cluster-manager.server.enable_http': 'Cluster manager HTTP',
+    'cluster-manager.server.enable_metrics': 'Cluster manager metrics',
+    'cluster-manager.server.enable_tls': 'Cluster manager TLS',
+    'cluster-manager.server.enable_unix_socket': 'Cluster manager Unix socket',
+    'directoryservice.ec2.enable_detailed_monitoring': 'Directory detailed monitoring',
+    'directoryservice.ec2.enable_termination_protection': 'Directory termination protection',
+    'scheduler.ec2.enable_detailed_monitoring': 'Scheduler detailed monitoring',
+    'scheduler.ec2.enable_termination_protection': 'Scheduler termination protection',
+    'scheduler.server.enable_http': 'Scheduler HTTP',
+    'scheduler.server.enable_metrics': 'Scheduler metrics',
+    'scheduler.server.enable_tls': 'Scheduler TLS',
+    'scheduler.server.enable_unix_socket': 'Scheduler Unix socket',
+    'virtual-desktop-controller.controller.autoscaling.enabled_detailed_monitoring': 'Desktop controller detailed monitoring',
+    'virtual-desktop-controller.dcv_broker.autoscaling.enabled_detailed_monitoring': 'Desktop broker detailed monitoring',
+    'virtual-desktop-controller.dcv_connection_gateway.autoscaling.enabled_detailed_monitoring': 'Desktop gateway detailed monitoring',
+    'virtual-desktop-controller.server.enable_http': 'Desktop HTTP',
+    'virtual-desktop-controller.server.enable_metrics': 'Desktop metrics',
+    'virtual-desktop-controller.server.enable_tls': 'Desktop TLS',
+    'virtual-desktop-controller.server.enable_unix_socket': 'Desktop Unix socket',
+    'analytics.kinesis.kms_key_id': 'Kinesis KMS key ID',
+    'analytics.opensearch.kms_key_id': 'OpenSearch KMS key ID',
+    'cluster.backups.backup_vault.kms_key_id': 'Backup vault KMS key ID',
+    'cluster.dynamodb.kms_key_id': 'DynamoDB KMS key ID',
+    'cluster.ebs.kms_key_id': 'EBS KMS key ID',
+    'cluster.secretsmanager.kms_key_id': 'Secrets Manager KMS key ID',
+    'cluster.sns.kms_key_id': 'SNS KMS key ID',
+    'cluster.sqs.kms_key_id': 'SQS KMS key ID',
+    'cluster-manager.bedrock.model_ids': 'Approved models',
+    'cluster.network.vpc_cidr_block': 'VPC CIDR',
+    'directoryservice.ad_automation.enable_root_password_reset': 'Rotate service account password',
+    'directoryservice.ad_edition': 'AD edition',
+    'directoryservice.ad_short_name': 'AD short name (NetBIOS)',
+    'directoryservice.computers.ou': 'Computer OU',
+    'directoryservice.groups.ou': 'Group OU',
+    'directoryservice.ldap_base': 'LDAP base DN',
+    'directoryservice.ldap_connection_uri': 'LDAP connection URI',
+    'directoryservice.ldap_options': 'LDAP options',
+    'directoryservice.name': 'Directory domain',
+    'directoryservice.password_max_age': 'Maximum password age (days)',
+    'directoryservice.root_password_secret_arn': 'Service account password secret ARN',
+    'directoryservice.root_username_secret_arn': 'Service account username secret ARN',
+    'directoryservice.sssd.ldap_id_mapping': 'SSSD LDAP ID mapping',
+    'directoryservice.sudoers.group_name': 'Sudo group',
+    'directoryservice.sudoers.ou': 'Sudo group OU',
+    'directoryservice.tls_certificate_secret_arn': 'TLS certificate secret ARN',
+    'directoryservice.tls_private_key_secret_arn': 'TLS private key secret ARN',
+    'directoryservice.users.ou': 'User OU',
+    'scheduler.job_provisioning.max_nodes_per_job': 'Maximum nodes per job',
+    'scheduler.job_provisioning.max_provisioning_retries': 'Maximum provisioning retries',
+    'scheduler.opensearch.jobs.index_suffix': 'Node index suffix',
+    'scheduler.opensearch.jobs_index.suffix': 'Job index suffix',
+    'virtual-desktop-controller.controller.enforce_project_budgets': 'Block desktops for projects over budget',
+    'virtual-desktop-controller.dcv_session.cpu_utilization_threshold': 'Idle CPU threshold (%)',
+}
+_CLOUDWATCH_LOG_LABELS = {
+    'cluster.cloudwatch_logs.enabled': 'Cluster CloudWatch Logs',
+    'cluster-manager.cloudwatch_logs.enabled': 'Cluster manager CloudWatch Logs',
+    'directoryservice.cloudwatch_logs.enabled': 'Directory CloudWatch Logs',
+    'scheduler.cloudwatch_logs.enabled': 'Scheduler CloudWatch Logs',
+    'virtual-desktop-controller.cloudwatch_logs.enabled': 'Desktop CloudWatch Logs',
+}
+SCHEDULE_LABELS = {
+    'NO_SCHEDULE': 'No schedule',
+    'WORKING_HOURS': 'Working hours',
+    'STOP_ON_IDLE': 'Stop when idle',
+    'START_ALL_DAY': 'Run all day',
+    'CUSTOM_SCHEDULE': 'Custom hours',
+}
+NOTIFICATION_LABELS = {
+    'cleanup_warning': 'Cleanup warning',
+    'creating': 'Desktop creating',
+    'deleted': 'Desktop deleted',
+    'deleting': 'Desktop deleting',
+    'error': 'Desktop error',
+    'initializing': 'Desktop initializing',
+    'provisioning': 'Desktop provisioning',
+    'ready': 'Desktop ready',
+    'resuming': 'Desktop resuming',
+    'session-permission-expired': 'Session permission expired',
+    'session-permission-updated': 'Session permission updated',
+    'session-shared': 'Session shared',
+    'stopped': 'Desktop stopped',
+    'stopping': 'Desktop stopping',
+    'job_started': 'Job started',
+    'job_completed': 'Job completed',
+}
 _CHOICES = {
     'metadata_http_tokens': ['required', 'optional'],
     'volume_type': ['gp2', 'gp3', 'io1', 'io2', 'standard'],
@@ -5491,11 +5958,23 @@ _KEY_CHOICES = {
     'cluster-manager.bedrock.budgets.action': ['block', 'warn'],
 }
 _DESCRIPTIONS = {
-    'cluster-manager.web_portal.cost_ticker.enabled': 'Show each signed-in user a cached cost total in the portal header.',
+    'cluster.administrator_email': 'Email used when creating the initial administrator account.',
+    'cluster.aws.pricing_region': "unused; job estimates price the cluster's own region",
+    'cluster-manager.metrics.cost.enabled': 'Collect Cost Explorer daily totals in the commercial AWS partition with the dogstatsd metrics provider. Other partitions and providers do not support this collection.',
+    'cluster-manager.metrics.cost.by_account': "Split cost metrics by linked AWS account; only a payer account that can see other accounts' spend needs this.",
+    'cluster-manager.metrics.cost.lookback_days': "Trailing full days of Cost Explorer data re-read on each run. Re-reading replaces each day's totals; it does not add them again or limit displayed history.",
+    'cluster-manager.metrics.cost.interval_hours': 'Hours between collection runs.',
+    'scheduler.cost_estimation.fsx_lustre': 'USD per GB-hour for job scratch storage. Fetch assumes SCRATCH_2/SSD and divides the monthly price by 730 hours as an estimation convention.',
+    'scheduler.cost_estimation.provisioned_iops': 'USD per provisioned io1 IOPS-month; fractional rates are preserved.',
+    'global-settings.gpu_settings.instance_families': 'GPU families used by host bootstrap and job placement checks.',
+    'virtual-desktop-controller.dcv_session.provisioning_timeout_seconds': 'Maximum desktop provisioning time in seconds. A desktop that exceeds this limit is marked failed and its host is terminated; zero disables the timeout.',
+    'scheduler.job_provisioning.stack_provisioning_timeout_seconds': 'Maximum compute stack provisioning time in seconds. A timeout fails provisioning and deletes the stack, terminating its hosts; queued jobs may retry within their retry limit.',
+    'cluster-manager.web_portal.cost_ticker.enabled': 'Show a cached cost total for the signed-in user in the portal header.',
     'cluster-manager.web_portal.cost_ticker.period': 'Calendar period shown by the portal cost header.',
     'cluster-manager.web_portal.default_landing_page': 'Destination opened after sign-in and from the portal root.',
     'cluster-manager.web_portal.title': 'Title displayed in the portal header.',
     'cluster-manager.web_portal.logo': 'URL of the image displayed in the portal header.',
+    'cluster-manager.web_portal.custom_dashboard.enabled': 'Embed a dashboard in the portal and show its navigation link. The dashboard must permit the portal to frame it.',
     'cluster-manager.web_portal.custom_dashboard.url': 'URL of the dashboard embedded in the portal; it must allow framing.',
     'cluster-manager.maintenance.message': 'Plain-text notice shown to users and when new jobs are blocked.',
     'scheduler.job_provisioning.max_nodes_per_job': 'Maximum nodes per job; zero removes the limit and queue overrides take precedence.',
@@ -5504,22 +5983,321 @@ _DESCRIPTIONS = {
     'virtual-desktop-controller.server.usb_remotization': 'USB device rules used when configuring new desktop hosts.',
     'global-settings.custom_tags': 'Resource tags as Key=tag,Value=value strings; project tags can override these.',
     'cluster.network.preferred_subnet_id': 'Preferred subnet for new jobs and desktops; leave empty for normal placement.',
+    'directoryservice.ad_edition': 'Edition used when provisioning AWS Managed Microsoft AD.',
+    'directoryservice.ad_short_name': 'NetBIOS name for the AD domain.',
+    'directoryservice.ldap_base': 'Base distinguished name used for directory searches.',
+    'directoryservice.name': 'DNS domain name of the directory.',
+    'identity-provider.cognito.operations_leads_group_name': 'Cluster group granted read-only reporting access.',
+}
+_DEFAULTS = {
+    'identity-provider.cognito.administrators_group_name': 'administrators-cluster-group',
+    'identity-provider.cognito.managers_group_name': 'managers-cluster-group',
+    'identity-provider.cognito.operations_leads_group_name': OPERATIONS_LEADS_GROUP_DEFAULT,
 }
 
 
+def _committed_group_names(config):
+    """Read related group names from the store that receives settings updates."""
+    return {
+        key: config.db.cluster_settings_table.get_item(
+            Key={'key': key}, ConsistentRead=True
+        )
+        .get('Item', {})
+        .get('value', default)
+        for key, default in _DEFAULTS.items()
+    }
+
+
+_HIDDEN_PREFIXES = (
+    'cluster-manager.cache',
+    'cluster-manager.endpoints',
+    'cluster-manager.server',
+    'cluster-manager.task_manager',
+    'global-settings.package_config',
+    'global-settings.gpu_settings.amd',
+    'global-settings.gpu_settings.nvidia',
+    'global-settings.gpu_settings.nvidia_public_driver_versions',
+    'scheduler.cache',
+    'scheduler.endpoints',
+    'scheduler.server',
+    'scheduler.logging',
+    'virtual-desktop-controller.cache',
+    'virtual-desktop-controller.controller.endpoints',
+    'virtual-desktop-controller.controller.request_handler_threads',
+    'virtual-desktop-controller.dcv_broker',
+    'virtual-desktop-controller.events',
+    'virtual-desktop-controller.instance_storage',
+    'virtual-desktop-controller.logging',
+    'virtual-desktop-controller.server',
+    'analytics.opensearch.endpoints',
+    'cluster-manager.ec2.autoscaling',
+    'virtual-desktop-controller.controller.autoscaling',
+    'virtual-desktop-controller.dcv_broker.autoscaling',
+    'virtual-desktop-controller.dcv_broker.dynamodb_table.autoscaling',
+    'virtual-desktop-controller.dcv_connection_gateway.autoscaling',
+    'scheduler.fair_share',
+)
+_HIDDEN_KEYS = {
+    'cluster.aws.pricing_region',
+    'cluster.aws.fsx_lustre_version',
+    'analytics.opensearch.domain_vpc_endpoint_url',
+    'scheduler.retain_dns_record',
+    'scheduler.use_stable_server_name',
+    'cluster-manager.web_portal.copyright_text',
+    'cluster-manager.web_portal.default_log_level',
+    'scheduler.provider',
+    'virtual-desktop-controller.dcv_session.first_boot_dnf_update',
+    'virtual-desktop-controller.dcv_session.metadata_http_tokens',
+    'virtual-desktop-controller.dcv_session.validation_timeout_minutes',
+}
+_HIDDEN_JOB_PROVISIONING_LEAVES = {
+    'batch_provisioning_wait_interval_seconds',
+    'dry_run_cache_ttl_seconds',
+    'finished_job_processing_interval_seconds',
+    'job_provisioning_interval_seconds',
+    'job_reconciler_interval_seconds',
+    'job_reconciler_queued_retry_interval_seconds',
+    'job_reconciler_queued_window_seconds',
+    'job_submission_queue_interval_seconds',
+    'license_availability_check_timeout_seconds',
+    'node_housekeeping_interval_seconds',
+    'node_unavailable_timeout_seconds',
+}
+_READ_ONLY_PREFIXES = (
+    'cluster-manager.cache',
+    'cluster-manager.endpoints',
+    'cluster-manager.server',
+    'cluster-manager.task_manager',
+    'directoryservice.ec2',
+    'global-settings.gpu_settings.amd',
+    'global-settings.gpu_settings.nvidia',
+    'global-settings.gpu_settings.nvidia_public_driver_versions',
+    'global-settings.package_config',
+    'scheduler.cache',
+    'scheduler.endpoints',
+    'scheduler.logging',
+    'scheduler.server',
+    'virtual-desktop-controller.cache',
+    'virtual-desktop-controller.controller.endpoints',
+    'virtual-desktop-controller.controller.request_handler_threads',
+    'virtual-desktop-controller.dcv_broker',
+    'virtual-desktop-controller.events',
+    'virtual-desktop-controller.external_nlb',
+    'virtual-desktop-controller.instance_storage',
+    'virtual-desktop-controller.logging',
+    'virtual-desktop-controller.server',
+)
+_READ_ONLY_KEYS = {
+    'analytics.kinesis.kms_key_id',
+    'analytics.kinesis.removal_policy',
+    'analytics.opensearch.default_number_of_shards',
+    'analytics.opensearch.domain_vpc_endpoint_url',
+    'analytics.opensearch.ebs_volume_size',
+    'analytics.opensearch.endpoints.external.path_patterns',
+    'analytics.opensearch.endpoints.external.priority',
+    'analytics.opensearch.kms_key_id',
+    'analytics.opensearch.node_to_node_encryption',
+    'analytics.opensearch.removal_policy',
+    'analytics.opensearch.use_existing',
+    'cluster.aws.fsx_lustre_version',
+    'cluster.backups.backup_vault.kms_key_id',
+    'cluster.backups.backup_vault.removal_policy',
+    'cluster.encoding',
+    'cluster.load_balancers.external_alb.public',
+    'cluster.network.client_ip',
+    'cluster.network.max_azs',
+    'cluster.network.nat_gateways',
+    'cluster.network.private_subnets',
+    'cluster.network.public_subnets',
+    'cluster.network.subnet_config.isolated.cidr_mask',
+    'cluster.network.subnet_config.private.cidr_mask',
+    'cluster.network.subnet_config.public.cidr_mask',
+    'cluster.network.vpc_cidr_block',
+    'cluster.network.vpc_flow_logs_removal_policy',
+    'directoryservice.ad_edition',
+    'directoryservice.ad_short_name',
+    'directoryservice.base_os',
+    'directoryservice.instance_ami',
+    'directoryservice.instance_type',
+    'directoryservice.ldap_base',
+    'directoryservice.name',
+    'directoryservice.provider',
+    'directoryservice.public',
+    'directoryservice.root_credentials_provided',
+    'directoryservice.use_existing',
+    'directoryservice.volume_size',
+    'directoryservice.volume_type',
+    'identity-provider.cognito.removal_policy',
+    'identity-provider.provider',
+    'scheduler.base_os',
+    'scheduler.ec2.enable_detailed_monitoring',
+    'scheduler.ec2.enable_termination_protection',
+    'scheduler.ec2.metadata_http_tokens',
+    'scheduler.instance_ami',
+    'scheduler.instance_type',
+    'scheduler.opensearch.jobs.number_of_shards',
+    'scheduler.opensearch.nodes.number_of_shards',
+    'scheduler.public',
+    'scheduler.volume_size',
+    'scheduler.volume_type',
+    'virtual-desktop-controller.instance_storage',
+    'virtual-desktop-controller.volume_type',
+}
+_EDITABLE_READ_ONLY_EXCEPTIONS = {
+    'analytics.opensearch.data_node_instance_type',
+    'analytics.opensearch.data_nodes',
+    'analytics.opensearch.default_number_of_replicas',
+    'global-settings.gpu_settings.fail_on_missing_driver',
+    'global-settings.gpu_settings.instance_families',
+    'virtual-desktop-controller.server.usb_remotization',
+}
+_IMMUTABLE_STORAGE_LEAVES = {
+    'deployment_type',
+    'drive_cache_type',
+    'encrypted',
+    'kms_key_id',
+    'performance_mode',
+    'provider',
+    'removal_policy',
+    'scope',
+    'storage_type',
+}
+_PRIVILEGED_GROUP_KEYS = tuple(_DEFAULTS)
+
+
 def _words(value):
-    return value.replace('_', ' ').replace('-', ' ').capitalize()
+    tokens = [token for token in re.split(r'[_\s-]+', value) if token]
+    unit = None
+    if len(tokens) >= 2 and tokens[-2:] == ['in', 'mibps']:
+        tokens = tokens[:-2]
+        unit = 'MiB/s'
+    elif tokens and tokens[-1] in _UNITS:
+        unit = _UNITS[tokens.pop()]
+    words = [_ACRONYMS.get(token.lower(), token.lower()) for token in tokens]
+    text = ' '.join(words)
+    if text and words[0] not in _ACRONYMS.values():
+        text = text[0].upper() + text[1:]
+    if unit:
+        text = f'{text} ({unit})'
+    return text
+
+
+def _matches_prefix(key, prefix):
+    return key == prefix or key.startswith(f'{prefix}.')
+
+
+def _mapped_value(mapping, key):
+    matches = [
+        value for prefix, value in mapping.items() if _matches_prefix(key, prefix)
+    ]
+    if not matches:
+        return None
+    prefix = max(
+        (prefix for prefix in mapping if _matches_prefix(key, prefix)), key=len
+    )
+    return mapping[prefix]
+
+
+def _label(key, leaf):
+    if key in _LABELS:
+        return _LABELS[key]
+    if key in _CLOUDWATCH_LOG_LABELS:
+        return _CLOUDWATCH_LOG_LABELS[key]
+    schedule = re.search(r'\.schedule\.([^.]+)\.([^.]+)$', key)
+    if schedule:
+        day, field = schedule.groups()
+        suffix = {
+            'type': 'schedule',
+            'start_up_time': 'start time',
+            'shut_down_time': 'stop time',
+        }[field]
+        return f'{day.capitalize()} {suffix}'
+    notification = re.search(
+        r'\.notifications\.([^.]+)\.(enabled|email_template)$', key
+    )
+    if notification:
+        event, field = notification.groups()
+        if event in NOTIFICATION_LABELS:
+            label = NOTIFICATION_LABELS[event]
+            return label if field == 'enabled' else f'{label} email template'
+    if key == 'scheduler.notifications.job_started.email_template':
+        return NOTIFICATION_LABELS['job_started']
+    if key == 'scheduler.notifications.job_completed.email_template':
+        return NOTIFICATION_LABELS['job_completed']
+    label = _words(leaf)
+    if key.startswith('shared-storage.'):
+        parts = key.split('.')
+        provider = _words(parts[2]) if len(parts) > 3 else ''
+        return f'{parts[1]} {provider} {label}'.replace('  ', ' ')
+    rule = re.search(r'\.rules\.([^.]+)\.', key)
+    if rule:
+        consumer = 'Cluster' if key.startswith('cluster.') else 'Desktop'
+        return f'{consumer} {rule.group(1)}: {label}'
+    return label
+
+
+def _is_hidden(key, leaf):
+    if (
+        key in _EDITABLE_READ_ONLY_EXCEPTIONS
+        or leaf
+        in (
+            'tls_certificate_file',
+            'tls_key_file',
+            'ssl_policy',
+            'session_token_validity',
+        )
+        or leaf == 'enable_tls'
+    ):
+        return False
+    return (
+        key in _HIDDEN_KEYS
+        or any(_matches_prefix(key, prefix) for prefix in _HIDDEN_PREFIXES)
+        or (
+            key.startswith('scheduler.job_provisioning.')
+            and leaf in _HIDDEN_JOB_PROVISIONING_LEAVES
+        )
+    )
+
+
+def _is_read_only(key, leaf, hidden):
+    if key == 'cluster.aws.pricing_region':
+        return True
+    if hidden or key in _EDITABLE_READ_ONLY_EXCEPTIONS:
+        return False
+    return (
+        key in _READ_ONLY_KEYS
+        or any(_matches_prefix(key, prefix) for prefix in _READ_ONLY_PREFIXES)
+        or leaf == 'removal_policy'
+        or (key.startswith('shared-storage.') and leaf in _IMMUTABLE_STORAGE_LEAVES)
+    )
 
 
 def _definition(row):
-    key, value_type, effect, group, advanced, uncertain = row
-    # Mail delivery belongs with notifications, and package/driver knobs are
-    # deployment details rather than a frequently used administrator workflow.
-    group = {'mail': 'email', 'software': 'deployment'}.get(group, group)
+    key, value_type, effect, source_group, advanced, _ = row
     module, path = key.split('.', 1)
     leaf = path.split('.')[-1]
-    section = ' / '.join(_words(part) for part in path.split('.')[:-1]) or 'General'
-    label = _words(leaf)
+    section = _mapped_value(_SECTIONS, key) or _GROUP_SECTIONS[source_group]
+    group = _DESTINATION_GROUPS[section]
+    label = _label(key, leaf)
+    hidden = _is_hidden(key, leaf)
+    read_only = _is_read_only(key, leaf, hidden)
+    if key in (
+        'scheduler.job_provisioning.max_nodes_per_job',
+        'scheduler.job_provisioning.max_provisioning_retries',
+    ):
+        advanced = False
+    if (
+        key.startswith('scheduler.cost_estimation.')
+        or key == 'cluster-manager.metrics.cost.interval_hours'
+    ):
+        advanced = False
+    if key in (
+        'cluster-manager.metrics.cost.by_account',
+        'cluster-manager.metrics.storage.verify_tls',
+    ):
+        advanced = True
+    if key == 'cluster.aws.pricing_region' or read_only:
+        advanced = True
     validation = {'required': False}
     choices = _KEY_CHOICES.get(key, _CHOICES.get(leaf))
     if '.schedule.' in key and leaf == 'type':
@@ -5584,20 +6362,21 @@ def _definition(row):
         validation['pattern'] = r'^https?://[^\s]+$'
     if leaf in ('mount_dir', 'mount_point'):
         validation['pattern'] = r'^/[^\x00]*$'
+    if key in _PRIVILEGED_GROUP_KEYS:
+        validation['pattern'] = r'^[A-Za-z0-9][A-Za-z0-9_-]*$'
     if leaf == 'provider' or key in (
         'cluster-manager.web_portal.title',
         'cluster.timezone',
         'cluster.locale',
+        *_PRIVILEGED_GROUP_KEYS,
     ):
         validation['required'] = True
-    description = _DESCRIPTIONS.get(
-        key, f'{label} for {section.lower()} in {module.replace("-", " ")}.'
-    )
-    if value_type == 'secret':
+    description = _DESCRIPTIONS.get(key, '')
+    if hidden and not description:
+        description = 'Internal configuration or installation metadata; retained for CLI validation and search.'
+    if value_type == 'secret' and not description:
         description = 'Reference to a Secrets Manager secret; the secret value is never stored here.'
-    if uncertain:
-        description += ' Restart is the conservative classification; no live refresh could be confirmed.'
-    return dict(
+    definition = dict(
         key=key,
         module=module,
         path=path,
@@ -5610,7 +6389,12 @@ def _definition(row):
         validation=validation,
         advanced=advanced,
         effect=effect,
+        read_only=read_only,
+        hidden=hidden,
     )
+    if key in _DEFAULTS:
+        definition['default'] = _DEFAULTS[key]
+    return definition
 
 
 CATALOG = tuple(_definition(row) for row in _ROWS)
@@ -5619,17 +6403,37 @@ MODULES = frozenset(item['module'] for item in CATALOG)
 
 def settings_catalog(storage_names=None, backup_rules=None):
     """Expand reviewed storage fields for existing attachments, never accept arbitrary keys."""
+    storage_providers = storage_names if isinstance(storage_names, Mapping) else None
+    names = set(storage_names or ())
+
+    def storage_item_applies(item, name):
+        if storage_providers is None:
+            return True
+        provider = storage_providers.get(name)
+        path = item['path'].split('.')
+        if len(path) < 2:
+            return True
+        expected_provider = {
+            'efs': 'efs',
+            'fsx_lustre': 'fsx_lustre',
+            'fsx_netapp_ontap': 'fsx_netapp_ontap',
+        }.get(path[1])
+        return expected_provider is None or provider == expected_provider
+
     result = [
         item
         for item in CATALOG
         if storage_names is None
         or item['module'] != 'shared-storage'
-        or item['path'].split('.')[0] in storage_names
+        or (
+            item['path'].split('.')[0] in names
+            and storage_item_applies(item, item['path'].split('.')[0])
+        )
     ]
     templates = [
         item for item in CATALOG if item['key'].startswith('shared-storage.data.')
     ]
-    for name in sorted(set(storage_names or ()) - {'apps', 'data'}):
+    for name in sorted(names - {'apps', 'data'}):
         if not re.fullmatch(r'[A-Za-z0-9_-]+', name):
             continue
         for template in templates:
@@ -5638,8 +6442,9 @@ def settings_catalog(storage_names=None, backup_rules=None):
                 'shared-storage.data.', f'shared-storage.{name}.', 1
             )
             item['path'] = item['path'].replace('data.', f'{name}.', 1)
-            item['section'] = item['section'].replace('Data', _words(name), 1)
-            result.append(item)
+            item['label'] = _label(item['key'], item['path'].split('.')[-1])
+            if storage_item_applies(item, name):
+                result.append(item)
     for prefix, names in (backup_rules or {}).items():
         templates = [
             item for item in CATALOG if item['key'].startswith(f'{prefix}.default.')
@@ -5655,7 +6460,7 @@ def settings_catalog(storage_names=None, backup_rules=None):
                 item['path'] = item['path'].replace(
                     '.rules.default.', f'.rules.{name}.', 1
                 )
-                item['section'] = item['section'].replace('Default', _words(name))
+                item['label'] = _label(item['key'], item['path'].split('.')[-1])
                 result.append(item)
     return result
 
@@ -5740,7 +6545,9 @@ def coerce_value(setting, value):
     return value
 
 
-def coerce_settings(module, settings, catalog=CATALOG):
+def coerce_settings(
+    module, settings, catalog=CATALOG, *, config=None, module_ids=MODULES
+):
     """Validate the entire update before any writes and return values plus effects."""
     definitions = {item['path']: item for item in catalog if item['module'] == module}
     effects = {}
@@ -5756,6 +6563,12 @@ def coerce_settings(module, settings, catalog=CATALOG):
                 )
             path = f'{prefix}.{name}' if prefix else name
             if path in definitions:
+                if definitions[path]['read_only'] or (
+                    definitions[path]['hidden'] and '.autoscaling.' not in f'.{path}.'
+                ):
+                    # hidden rows are not on the settings page; the service capacity
+                    # blocks are edited from the services page, the rest nowhere.
+                    raise exceptions.invalid_params(f'{module}.{path} is not editable')
                 result[name] = coerce_value(definitions[path], value)
                 effects[path] = definitions[path]['effect']
             elif isinstance(value, dict) and value:
@@ -5766,4 +6579,34 @@ def coerce_settings(module, settings, catalog=CATALOG):
                 )
         return result
 
-    return visit(settings), effects
+    values = visit(settings)
+    if module == 'identity-provider':
+        cognito = values.get('cognito', {})
+        names = (
+            _committed_group_names(config) if config is not None else dict(_DEFAULTS)
+        )
+        names.update(
+            {
+                key: cognito[key.rsplit('.', 1)[-1]]
+                for key in _DEFAULTS
+                if key.rsplit('.', 1)[-1] in cognito
+            }
+        )
+        GroupNameHelper.validate_operations_leads_group_name(
+            group_name=names['identity-provider.cognito.operations_leads_group_name'],
+            administrators_group_name=names[
+                'identity-provider.cognito.administrators_group_name'
+            ],
+            managers_group_name=names['identity-provider.cognito.managers_group_name'],
+            module_ids=module_ids,
+        )
+        GroupNameHelper.validate_operations_leads_group_name(
+            group_name=names['identity-provider.cognito.administrators_group_name'],
+            administrators_group_name=names[
+                'identity-provider.cognito.managers_group_name'
+            ],
+            managers_group_name=names[
+                'identity-provider.cognito.operations_leads_group_name'
+            ],
+        )
+    return values, effects

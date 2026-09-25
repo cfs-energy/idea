@@ -577,7 +577,7 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
         STOPPING is absent because the instance is still winding down and still costing.
         """
         if session.state in STOP_TIME_STATES:
-            if session.stopped_on is None:
+            if session.stopped_on is None and session.cleanup_warning_stop_time is None:
                 # a datetime, not an epoch int: the converter calls to_milliseconds
                 # on it and an int raises on the very next write
                 session.stopped_on = DateTimeUtils.current_datetime()

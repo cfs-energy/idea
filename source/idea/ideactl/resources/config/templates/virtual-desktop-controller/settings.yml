@@ -181,13 +181,17 @@ dcv_session:
   instance_types:
     allow: # Supports both instance families and types. E.g. specify t3 for family and t3.large for instance type
       - t3
-      - g4dn
       - g4ad
-      - g5
+      - g6
+      - g6e
+      - g7
+      - c8i
       - m6a
       - m6g
       - m7i
       - m8g
+      - m8i
+      - r8g
     deny: [] # Supports both instance families and types. E.g. specify t3 for family and t3.large for instance type
   quic_support: {{ dcv_session_quic_support | lower }}
 

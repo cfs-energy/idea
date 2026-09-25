@@ -44,8 +44,9 @@ user@host:~$ qsub job_submit.que
 3323.ip-10-10-10-28
 ```
 
-If your qsub command succeed, you will receive an id for your job (3323 in this example). To get more information about this job, run `qstat -f 3323` (or `qstat -f 3323 -x` is the job is already terminated).\
-Your job will start as soon as resources are available (usually within 5 minutes after job submission)
+If the command succeeds, it returns a job ID. Open **My jobs**, select the job, and read **Status Reason** and the details. Completed jobs remain available with their final disposition. Your job starts as soon as resources are available, usually within five minutes.
+
+The portal asks for confirmation before submitting a large job. Review the calculated node count and choose **Submit Job** only when it matches your request.
 
 ### List your job <a href="#delete-a-job-from-the-queue" id="delete-a-job-from-the-queue"></a>
 

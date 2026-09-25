@@ -205,7 +205,10 @@ export interface UpgradeCloudFormationApi {
 }
 
 export interface UpgradeOpenSearchApi {
-  describeDomain(input: { awsRegion: string; domainName?: string }): Promise<{ engineVersion?: string }>;
+  describeDomain(input: { awsRegion: string; domainName?: string }): Promise<{
+    engineVersion?: string;
+    serviceSoftwareOptions?: { newVersion?: string; updateAvailable?: boolean; updateStatus?: string };
+  }>;
   listInstanceTypeDetails(input: { awsRegion: string; engineVersion?: string }): Promise<string[]>;
 }
 
@@ -732,7 +735,7 @@ async function announceHeldModuleSets(
     awsRegion: options.awsRegion,
     awsProfile: options.awsProfile,
   });
-  await writer.syncClusterSettingsInDb(held, false);
+  await writer.syncClusterSettingsInDb(held, false, 'template');
 }
 
 // Global rows are rewritten in place so a running application never sees a missing row; the rows
@@ -790,7 +793,7 @@ async function backupAndUpdateGlobalSettings(deps: UpgradeDeps, options: Upgrade
   // Update rows in place. Running applications resolve module sets and global settings on
   // requests; deleting the prefix exposes missing configuration even when the rewrite succeeds.
   // Retain obsolete rows for old tasks and scoped upgrades that leave some modules untouched.
-  await writer.syncClusterSettingsInDb(heldModuleSetEntries(entries, portalReady).kept, true);
+  await writer.syncClusterSettingsInDb(heldModuleSetEntries(entries, portalReady).kept, true, 'template');
   return configDir;
 }
 
@@ -805,7 +808,7 @@ async function migrateReconcilerIntervals(deps: UpgradeDeps, options: UpgradeCom
     const current = settings.find((row) => row["key"] === `${prefix}job_reconciler_interval_seconds`);
     if (old === undefined) continue;
     if (current === undefined) {
-      await writer.syncClusterSettingsInDb([{ key: `${prefix}job_reconciler_interval_seconds`, value: old["value"] }], false);
+      await writer.syncClusterSettingsInDb([{ key: `${prefix}job_reconciler_interval_seconds`, value: old["value"] }], false, 'template');
     } else if (JSON.stringify(old["value"]) !== JSON.stringify(current["value"])) {
       deps.out(`warning: conflicting reconciler intervals for ${module.module_id}; keeping the new value ${JSON.stringify(current["value"])} and old value ${JSON.stringify(old["value"])}`);
     }
@@ -829,7 +832,7 @@ async function syncFullConfiguration(
   await writer.syncModulesInDb(
     readModulesFromFiles(configDir).map((module) => ({ id: module.id, name: module.name, type: module.type })),
   );
-  await writer.syncClusterSettingsInDb(heldModuleSetEntries(convertConfigToKeyValuePairs(configDir), await clusterManagerReady(deps, options, modules)).kept, false);
+  await writer.syncClusterSettingsInDb(heldModuleSetEntries(convertConfigToKeyValuePairs(configDir), await clusterManagerReady(deps, options, modules)).kept, false, 'template');
 }
 
 export function buildAmiUpdateEntries(
@@ -925,6 +928,11 @@ async function planOpenSearchDataNodeInstanceType(
       awsRegion: options.awsRegion,
       domainName: typeof domainName === "string" ? domainName : undefined,
     });
+    const update = domain.serviceSoftwareOptions;
+    if (update?.updateAvailable !== false || update.updateStatus !== "COMPLETED") {
+      deps.out(`Apply and complete OpenSearch service software update ${update?.newVersion ?? "(version unavailable)"} before changing the analytics data node instance type (status ${update?.updateStatus ?? "unavailable"}). Keeping analytics data node instance type ${current}.`);
+      return [];
+    }
     const offered = await deps.openSearch.listInstanceTypeDetails({ awsRegion: options.awsRegion, engineVersion: domain.engineVersion });
     if (!offered.includes(OPENSEARCH_DATA_NODE_INSTANCE_TYPE)) {
       deps.out(`${OPENSEARCH_DATA_NODE_INSTANCE_TYPE} is not offered for ${domain.engineVersion ?? ""} in this region. Keeping analytics data node instance type ${current}.`);
@@ -1001,7 +1009,8 @@ export function planEcsImageFollowsRelease(
 ): ConfigEntry[] {
   const rows = new Map(current.map((entry) => [entry.key, entry.value]));
   const image = rows.get("ecs.image");
-  const repository = rows.get("ecs.image_repositories.aws");
+  const partition = rows.get("cluster.aws.partition") ?? "aws";
+  const repository = rows.get(`ecs.image_repositories.${String(partition)}`);
   if (typeof image !== "string" || typeof repository !== "string" || repository === "") return [];
   if (!image.startsWith(`${repository}:`)) return [];
   const tag = image.slice(repository.length + 1);
@@ -1286,8 +1295,7 @@ async function defaultDeployment(deps: Deps, options: UpgradeDeploymentOptions):
 }
 
 /**
- * Stop where a value the upgrade overwrites differs from what the generator would produce, and
- * nowhere else. An upgrade whose rows all match proceeds without asking: a question asked on every
+ * Stop for differing overwritten rows unless they are template defaults or planned release images. An upgrade whose rows all match proceeds without asking: a question asked on every
  * run is a question nobody reads. `--force` skips confirmations; it does not accept losing an edit,
  * so accepting these rows in an unattended run needs the flag that says only that.
  */
@@ -1735,9 +1743,9 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
           for (const module of modules) if (!expectedModules.has(module.id)) expectedModules.set(module.id, { module_id: module.id, name: module.name, type: module.type });
           await writer.syncModulesInDb(modules);
         },
-        async syncClusterSettingsInDb(entries, overwrite) {
+        async syncClusterSettingsInDb(entries, overwrite, source) {
           for (const entry of entries) if (overwrite || !expected.has(entry.key)) expected.set(entry.key, entry.value);
-          await writer.syncClusterSettingsInDb(entries, overwrite);
+          await writer.syncClusterSettingsInDb(entries, overwrite, source);
         },
         async setConfigEntry(key, value) { expected.set(key, value); await writer.setConfigEntry(key, value); },
         async deleteConfigEntries(prefix) {
@@ -1877,7 +1885,7 @@ export function registerUpgradeCommands(program: Command, deps: UpgradeDeps): vo
     .option("--force", "Skip all confirmation prompts.")
     .option(
       "--accept-config-drift",
-      "Overwrite configuration rows whose value differs from generated configuration. Not covered by --force.",
+      "Accept differing operator or unknown-source rows this upgrade overwrites. Not covered by --force.",
     )
     .option(
       "--allow-replacement <logical-id>",
@@ -2166,7 +2174,15 @@ export function createLiveUpgradeDeps(deps: Deps): UpgradeDeps {
         const result = await new OpenSearchClient(await awsClientOptions(input.awsRegion)).send(
           new DescribeDomainCommand({ DomainName: input.domainName }),
         );
-        return { engineVersion: result.DomainStatus?.EngineVersion };
+        const serviceSoftware = result.DomainStatus?.ServiceSoftwareOptions;
+        return {
+          engineVersion: result.DomainStatus?.EngineVersion,
+          serviceSoftwareOptions: serviceSoftware === undefined ? undefined : {
+            newVersion: serviceSoftware.NewVersion,
+            updateAvailable: serviceSoftware.UpdateAvailable,
+            updateStatus: serviceSoftware.UpdateStatus,
+          },
+        };
       },
       async listInstanceTypeDetails(input) {
         const { ListInstanceTypeDetailsCommand, OpenSearchClient } = await import("@aws-sdk/client-opensearch");

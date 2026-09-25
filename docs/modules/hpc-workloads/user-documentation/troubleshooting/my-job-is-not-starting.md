@@ -46,14 +46,7 @@ at submission rather than queued.
 
 ## 3 - Verify if the capacity is being provisioned
 
-&#x20;Verify if the capacity associated to the job is being provisioned by running the following command:
-
-```
-qstat -f <job_id> | grep select
-```
-
-* If `compute_node` value is set to `tbd` : Jobs is not eligible to run for the reasons mentioned above.&#x20;
-* If `compute_node` value is set to `compute_node=idea-<CLUSTER>-compute-ondemand-<JOB_ID>`: In this case IDEA has triggered CloudFormation and the capacity is being provisioned
+Open **My jobs > Active**, select the job, and inspect **Status Reason** and **Compute Stack**. A named queue limit or capacity wait means the job is still eligible but blocked. A provisioning stack in the details means capacity creation has started. A held disposition means automatic retries have stopped.
 
 {% hint style="info" %}
 You can login to AWS Console and navigate to the CloudFormation console to verify the CloudFormation stack associated to your job is in `CREATE_COMPLETE` state. If not, verify any potential errors via the `Events` tab.

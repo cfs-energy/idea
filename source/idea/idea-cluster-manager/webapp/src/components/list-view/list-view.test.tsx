@@ -3,6 +3,8 @@ import {render, screen, waitFor} from '@testing-library/react';
 import {vi} from 'vitest';
 import IdeaListView, {MIN_AUTO_REFRESH_INTERVAL_SECONDS} from './list-view';
 import {initTestAppContext} from '../../test-support';
+import {USER_TABLE_COLUMN_DEFINITIONS} from '../../pages/user-management/users';
+import createWrapper from '@cloudscape-design/components/test-utils/dom';
 
 const COLUMNS = [
     {
@@ -98,5 +100,37 @@ describe('list view refresh affordances', () => {
         } finally {
             vi.useRealTimers();
         }
+    });
+});
+
+
+describe('users table task status', () => {
+    it('renders a terminal failure with its message and time', async () => {
+        initTestAppContext();
+        const at = '2026-01-01T12:00:00+00:00';
+        renderListView({
+            title: 'Users',
+            columnDefinitions: USER_TABLE_COLUMN_DEFINITIONS,
+            onFetchRecords: () => Promise.resolve({listing: [{
+                username: 'user',
+                enabled: true,
+                last_task_failure: {task: 'accounts.sync-user', message: 'Directory unavailable', at}
+            }]})
+        });
+        const message = await screen.findByText(`accounts.sync-user: Directory unavailable (${new Date(at).toLocaleString()})`);
+        const indicator = createWrapper(message.closest('td')!).findStatusIndicator();
+        expect(indicator).not.toBeNull();
+        expect(screen.getByRole('img', {name: 'Error'})).toBeInTheDocument();
+        expect(screen.queryByText('Enabled')).not.toBeInTheDocument();
+    });
+
+    it('keeps the enabled status when there is no failure', async () => {
+        initTestAppContext();
+        renderListView({
+            title: 'Users',
+            columnDefinitions: USER_TABLE_COLUMN_DEFINITIONS,
+            onFetchRecords: () => Promise.resolve({listing: [{username: 'user', enabled: true}]})
+        });
+        expect(await screen.findByText('Enabled')).toBeInTheDocument();
     });
 });

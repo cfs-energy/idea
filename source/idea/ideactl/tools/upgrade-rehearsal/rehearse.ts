@@ -48,38 +48,6 @@ const RETAIN_HOSTS_KEY = "ecs.retain_existing_hosts";
 /** The modules whose migration splits into a routed step and a legacy-removed step. */
 const ROUTED_MODULES = ["cluster-manager", "vdc", "scheduler"] as const;
 
-/**
- * Settings keys the live migration executor actually writes, read from its source.
- *
- * The two "undriven" findings below used to fire unconditionally: the harness proved the stack could
- * express an intermediate shape, then asserted nothing drove it, without ever checking. Once the
- * executor started writing those rows the findings stayed red and said something untrue, which is
- * the same class of defect as a check that cannot fail, just pointing the other way.
- *
- * This scans for a write of each key rather than importing the executor, because the executor pulls
- * in cloud clients the rehearsal deliberately never loads. It is brittle toward red: renaming a key
- * or dropping a write brings the finding back, which is the safe direction for a gate.
- */
-function executorWrittenKeys(): ReadonlySet<string> {
-  const source = join(PKG, "src/cli/live-migrate-adapters.ts");
-  if (!existsSync(source)) return new Set();
-  const text = readFileSync(source, "utf8");
-  const constants = new Map<string, string>();
-  for (const match of text.matchAll(/const\s+([A-Z0-9_]+)\s*=\s*"([^"]+)"/g)) {
-    constants.set(match[1] as string, match[2] as string);
-  }
-  const written = new Set<string>();
-  for (const match of text.matchAll(/\{\s*key:\s*([A-Za-z0-9_]+|"[^"]+")\s*,\s*value:/g)) {
-    const token = match[1] as string;
-    if (token.startsWith('"')) written.add(token.slice(1, -1));
-    else {
-      const resolved = constants.get(token);
-      if (resolved !== undefined) written.add(resolved);
-    }
-  }
-  return written;
-}
-
 const STAGE_NAMES = [
   "PREFLIGHT_PASSED",
   "OPERATION_STARTED",
@@ -981,19 +949,18 @@ export async function rehearseUpgrade(options: RehearseOptions = {}): Promise<Up
       ],
     });
     const generatedSchedulerDesired = generatedByKey.get(SCHEDULER_DESIRED_KEY);
-    // The captured settings will not carry the seed, because the seed is written during the run
-    // rather than generated. So an absent row is only a gap when nothing in the run writes it.
-    if (settings.get(SCHEDULER_DESIRED_KEY) !== 0 && !executorWrittenKeys().has(SCHEDULER_DESIRED_KEY)) {
+    // State restoration is modeled locally; the supported upgrade drains jobs instead.
+    if (settings.get(SCHEDULER_DESIRED_KEY) !== 0) {
       findings.push({
         stage: 10,
         code: "SCHEDULER_DESIRED_STAGE_GAP",
-        severity: "BLOCKING",
-        summary: "the container scheduler starts during ECS staging, before its state is restored",
+        severity: "OBSERVED",
+        summary: "the rehearsal stages the scheduler at zero before modeling state restoration",
         evidence: [
           `the generated ${SCHEDULER_DESIRED_KEY} is ${String(generatedSchedulerDesired)}`,
           "ECS_STAGED runs before PBS_STATE_SEEDED, so a task started here has no restored state",
           "the activation sync is add-only, so a row seeded to 0 at CONFIGURATION_STAGED would survive it",
-          "no step in the migration path seeds that row",
+          "the supported upgrade drains the host scheduler before deploying containers",
         ],
       });
       settings.set(SCHEDULER_DESIRED_KEY, 0);
@@ -1308,7 +1275,6 @@ export async function rehearseUpgrade(options: RehearseOptions = {}): Promise<Up
         retainStageProblem === undefined
           ? `the retain-only synthesis with ${RETAIN_DNS_KEY}=true kept ${retained.kept} record(s), ${retained.retain} with DeletionPolicy Retain`
           : `the retain-only synthesis failed: ${retainStageProblem}`,
-        `no step in the migration path sets ${RETAIN_DNS_KEY}`,
       ];
       if (retained.retain === 0 || retained.retain !== retained.kept) {
         findings.push({
@@ -1316,14 +1282,6 @@ export async function rehearseUpgrade(options: RehearseOptions = {}): Promise<Up
           code: "DNS_RETAIN_STAGE_MISSING",
           severity: "BLOCKING",
           summary: "the retain-only scheduler template does not retain the DNS record",
-          evidence,
-        });
-      } else if (!executorWrittenKeys().has(RETAIN_DNS_KEY)) {
-        findings.push({
-          stage: 8,
-          code: "DNS_RETAIN_STAGE_UNDRIVEN",
-          severity: "BLOCKING",
-          summary: `the retain-only scheduler shape works, but nothing sets ${RETAIN_DNS_KEY}`,
           evidence,
         });
       }
@@ -1373,7 +1331,6 @@ export async function rehearseUpgrade(options: RehearseOptions = {}): Promise<Up
           ? `the routed synthesis with ${RETAIN_HOSTS_KEY}=true kept ${routedHosts.size} of ${oldHosts.length} ${check.hostType} resource(s) and changed ${routedEndpointChanges} endpoint custom resource(s)`
           : `the routed synthesis with ${RETAIN_HOSTS_KEY}=true failed: ${routedProblem}`,
         `stage ${check.stage + 1} removes the hosts the routed template keeps`,
-        `no step in the migration path sets ${RETAIN_HOSTS_KEY}`,
       ];
       if (routedProblem !== undefined || lostInRouted.length > 0 || routedEndpointChanges === 0) {
         findings.push({
@@ -1381,14 +1338,6 @@ export async function rehearseUpgrade(options: RehearseOptions = {}): Promise<Up
           code: "ROUTE_STAGE_MISSING",
           severity: "BLOCKING",
           summary: `${check.moduleId} has no template that routes the endpoints and keeps the hosts`,
-          evidence,
-        });
-      } else if (!executorWrittenKeys().has(RETAIN_HOSTS_KEY)) {
-        findings.push({
-          stage: check.stage,
-          code: "ROUTE_STAGE_UNDRIVEN",
-          severity: "BLOCKING",
-          summary: `the routed ${check.moduleId} shape works, but nothing sets ${RETAIN_HOSTS_KEY}`,
           evidence,
         });
       }
@@ -1487,20 +1436,8 @@ export async function rehearseUpgrade(options: RehearseOptions = {}): Promise<Up
       realClusterProofs: realClusterProofs(),
       localShims: [
         `The activation boundary is modeled here: ${CONTAINER_FLAG_KEY}, ${STABLE_NAME_KEY} and the image are set by this harness, not by a migration step.`,
-        // These two lines used to end "no migration step sets it", which stopped being true once the
-        // executor began writing both rows. A shim declaration that describes the harness is useful;
-        // one that asserts something about the code under test goes stale silently, so each now
-        // reports what it found rather than a fixed claim.
-        `The retain-only scheduler stage is modeled here by setting ${RETAIN_DNS_KEY}; ${
-          executorWrittenKeys().has(RETAIN_DNS_KEY)
-            ? "a migration step sets the same row on a real run"
-            : "no migration step sets it"
-        }.`,
-        `The routed stage of each application module is modeled here by setting ${RETAIN_HOSTS_KEY}; ${
-          executorWrittenKeys().has(RETAIN_HOSTS_KEY)
-            ? "a migration step sets the same row on a real run"
-            : "no migration step sets it"
-        }.`,
+        `The retain-only scheduler stage is modeled here by setting ${RETAIN_DNS_KEY}; upgrade-cluster retains DNS through a policy-only stack update.`,
+        `The routed stage is modeled here by setting ${RETAIN_HOSTS_KEY}; upgrade-cluster drains the scheduler before the combined cutover.`,
         "The staged ECS synthesis uses scheduler desired count 0, then a second synthesis raises it to 1.",
         "The release image is a local example.invalid reference because no release digest is captured.",
         "Stack output tokens become shape-valid local identifiers after each synthesis.",

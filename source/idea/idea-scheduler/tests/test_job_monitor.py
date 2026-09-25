@@ -457,3 +457,17 @@ def test_job_reconciler_isolates_a_failing_queue(monitor, fake_context):
     monitor._job_reconciler()
 
     assert fake_context.provisioning_queue.put_job_ids == ['930']
+
+
+def test_disabled_owner_is_deleted_with_a_reason(monitor, fake_context):
+    job = make_job('902')
+    fake_context.accounts_client.get_user.return_value.user.enabled = False
+    fake_context.scheduler.get_job = Mock(return_value=job)
+    fake_context.scheduler.delete_job = Mock()
+    fake_context.job_cache.record_deleted_job = Mock()
+    monitor._submit_to_provisioning_queue([job])
+    fake_context.scheduler.delete_job.assert_called_once_with('902')
+    saved = fake_context.job_cache.record_deleted_job.call_args.kwargs
+    assert saved['error_code'] == 'JOB_DELETED_DISABLED_OWNER'
+    assert 'owner is disabled' in saved['message']
+    assert fake_context.provisioning_queue.put_job_ids == []

@@ -30,7 +30,7 @@ from ideadatamodel import (
 from ideasdk.aws.ec2_price_list import get_ec2_price_list
 from ideaclustermanager.app.costs.my_costs_service import MyCostsService, SESSION_FIELDS
 from ideaclustermanager.app.filesystem.storage_usage import StorageUsageService
-from ideaclustermanager.app.metrics.cost_metrics_service import STORAGE_SERVICES
+from ideaclustermanager.app.costs.storage_rates import daily_storage_rate
 from ideaclustermanager.app.metrics.storage_metrics_service import normalize_user
 
 CACHE_SECONDS = 3600
@@ -43,7 +43,10 @@ DISKS_NOTE = (
     'extra IOPS and throughput are excluded.'
 )
 STORAGE_NOTE = (
-    "Each file system's billed spend × your share of its measured used bytes. "
+    "Each file system's daily rate estimate × your share of measured bytes. "
+    'ONTAP includes provisioned SSD, throughput, IOPS above 3 per GB and capacity-pool '
+    'bytes; EFS includes storage classes, excluding throughput and requests. '
+    'With a default user quota rule, users without files count as zero. '
     'Complete home-folder measurements are used when volume usage is absent. '
     'The latest usage share is also used for last month.'
 )
@@ -691,23 +694,15 @@ class MonthlyCostsService(MyCostsService):
                 fs_id = (entry.get(provider) or {}).get('file_system_id')
                 if not fs_id:
                     continue
-                filesystem = filesystems.setdefault(fs_id, dict(names=[], tags=set()))
-                filesystem['names'].append(name)
-                filesystem['tags'].add(
-                    (entry.get('costs') or {}).get(
-                        'name_tag', f'{self.context.cluster_name()}-{name}'
-                    )
+                filesystem = filesystems.setdefault(
+                    fs_id, dict(names=[], provider=provider)
                 )
+                filesystem['names'].append(name)
             if not filesystems:
                 return [], False
             collector = getattr(self.context, 'storage_metrics', None)
             snapshots = collector.usage_by_filesystem() if collector else {}
-            spend = self._billing(
-                start,
-                end,
-                [{'Dimensions': {'Key': 'SERVICE', 'Values': STORAGE_SERVICES}}],
-                [{'Type': 'TAG', 'Key': 'Name'}],
-            )
+            cache = self._remember(('storage-rates',), dict)
             rows = []
             for fs_id, filesystem in filesystems.items():
                 snapshot = snapshots.get(fs_id)
@@ -724,15 +719,40 @@ class MonthlyCostsService(MyCostsService):
                         else None
                     )
                 users = (snapshot or {}).get('users', {})
-                used = users.get(normalize_user(username, None))
-                total = sum(users.values())
+                used = users.get(
+                    normalize_user(username, None),
+                    0 if (snapshot or {}).get('zero_when_absent') else None,
+                )
+                total = (snapshot or {}).get('total_bytes', sum(users.values()))
                 share = used / total if used is not None and total > 0 else None
-                amounts = [
-                    spend[(tag,)]
-                    for tag in filesystem['tags']
-                    if spend is not None and (tag,) in spend
-                ]
-                cost = sum(amounts) * share if amounts and share is not None else None
+                amount = 0
+                cursor = start
+                while cursor < end:
+                    daily = daily_storage_rate(
+                        self.context,
+                        filesystem['provider'],
+                        fs_id,
+                        cursor,
+                        capacity_pool_bytes=(snapshot or {}).get(
+                            'capacity_pool_bytes', 0
+                        ),
+                        cache=cache,
+                    )
+                    if daily is None:
+                        amount = None
+                        break
+                    next_day = cursor.floor('day').shift(days=1)
+                    segment_end = min(next_day, end)
+                    amount += daily * (segment_end - cursor).total_seconds() / 86400
+                    cursor = segment_end
+                cost = (
+                    amount * share if amount is not None and share is not None else None
+                )
+                if cost is not None:
+                    try:
+                        cost = self._convert(cost)
+                    except ValueError:
+                        cost = None
                 rows.append(
                     MyCostsStorageShare(
                         filesystem=', '.join(filesystem['names']),

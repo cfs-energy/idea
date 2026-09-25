@@ -287,7 +287,10 @@ function phase3Deps(): UpgradeDeps {
     },
     openSearch: {
       async describeDomain() {
-        return { engineVersion: "OpenSearch_2.19" };
+        return {
+          engineVersion: "OpenSearch_2.19",
+          serviceSoftwareOptions: { updateAvailable: false, updateStatus: "COMPLETED" },
+        };
       },
       async listInstanceTypeDetails() {
         return ["m7g.large.search"];
@@ -758,7 +761,7 @@ test("upgrade settings sync matches the analysis prediction for every edit class
   // Rewritten in place now, so the row keeps its identity and its version only grows.
   const rewritten = after.get("global-settings.same");
   assert.ok((rewritten?.version ?? 0) >= 1);
-  assert.equal(rewritten?.source, undefined);
+  assert.equal(rewritten?.source, "template");
 
   const locale = after.get("cluster.locale");
   assert.equal(locale?.value, "en_US.UTF-8");

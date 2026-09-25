@@ -24,6 +24,9 @@ from ideavirtualdesktopcontroller.app.software_stacks.desktop_images import (
     base_stack_id,
     parse_base_stack_id,
 )
+from ideavirtualdesktopcontroller.app.software_stacks.virtual_desktop_software_stack_db import (
+    VirtualDesktopSoftwareStackDB,
+)
 
 SELF_ACCOUNT = '111111111111'
 RESF = '792107900819'
@@ -108,9 +111,20 @@ class FakeConfig:
 
 
 class FakeStackDb:
-    def __init__(self, stacks):
+    def __init__(self, stacks, base_stack_config=None):
         self.stacks = list(stacks)
         self.updated = []
+        self.base_stack_config = base_stack_config or {}
+        if base_stack_config is None:
+            for software_stack in self.stacks:
+                parsed = parse_base_stack_id(software_stack.stack_id)
+                if parsed is not None:
+                    self.base_stack_config.setdefault(parsed[0], {})[
+                        module.EC2_ARCH_TO_STACK[parsed[1]]
+                    ] = {}
+
+    def get_base_software_stack_config(self):
+        return self.base_stack_config
 
     def list_all_from_db(self, request):
         return SocaListingPayload(listing=list(self.stacks))
@@ -157,7 +171,7 @@ def stack(stack_id, base_os, ami_id, base_ami_id=None):
     )
 
 
-def build_service(stacks) -> DesktopImageService:
+def build_service(stacks, base_stack_config=None) -> DesktopImageService:
     service = object.__new__(DesktopImageService)
     context = Mock()
     context.aws.return_value.ec2.return_value = FakeEc2()
@@ -167,7 +181,7 @@ def build_service(stacks) -> DesktopImageService:
     context.module_set.return_value = 'default'
     context.cluster_name.return_value = 'idea-test'
     service.context = context
-    service._software_stack_db = FakeStackDb(stacks)
+    service._software_stack_db = FakeStackDb(stacks, base_stack_config)
     service._software_stack_utils = Mock()
     service._logger = Mock()
     service.records = FakeRecords()
@@ -184,6 +198,23 @@ def test_base_stack_ids_round_trip():
     assert parse_base_stack_id('ss-base-rocky9-x86-64-dcv') is None
     assert parse_base_stack_id('my-custom-stack') is None
     assert base_stack_id('rocky9', 'x86_64') == 'ss-base-rocky9-x86-64-base'
+
+
+@pytest.mark.parametrize('table_exists', [True, False])
+def test_initialize_merges_base_stacks_for_existing_and_new_tables(table_exists):
+    db = object.__new__(VirtualDesktopSoftwareStackDB)
+    db.context = Mock()
+    db.context.aws_util.return_value.dynamodb_check_table_exists.return_value = (
+        table_exists
+    )
+    db._create_base_software_stacks = Mock()
+
+    db.initialize()
+
+    db._create_base_software_stacks.assert_called_once_with()
+    assert db.context.aws_util.return_value.dynamodb_create_table.call_count == (
+        0 if table_exists else 1
+    )
 
 
 def test_rows_classify_base_stacks_and_count_custom_stacks_on_the_image():
@@ -217,6 +248,27 @@ def test_rows_classify_base_stacks_and_count_custom_stacks_on_the_image():
     ]
     assert rows['ss-base-amazonlinux2023-x86-64-base'].state == 'stock'
     assert rows['ss-base-rhel9-x86-64-base'].state == 'missing'
+
+
+def test_rows_include_configured_stacks_that_are_missing_or_disabled():
+    disabled = stack('ss-base-rocky9-x86-64-base', 'rocky9', 'ami-rocky9stock00001')
+    disabled.enabled = False
+    service = build_service(
+        [disabled],
+        {
+            'rocky8': {'arm64': {}},
+            'rocky9': {'x86-64': {}},
+        },
+    )
+
+    rows = {row.stack_id: row for row in service.list_images()}
+
+    assert set(rows) == {
+        'ss-base-rocky8-arm64-base',
+        'ss-base-rocky9-x86-64-base',
+    }
+    assert rows['ss-base-rocky8-arm64-base'].state == 'none'
+    assert rows['ss-base-rocky9-x86-64-base'].state == 'stock'
 
 
 def test_the_last_build_record_rides_along():

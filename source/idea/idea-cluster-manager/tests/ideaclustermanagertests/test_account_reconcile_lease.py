@@ -94,7 +94,17 @@ def lease_worker(path, connection, pause):
         context.accounts.list_users.side_effect = inventory
     try:
         report = service.run_once(dry_run=False)
-        connection.send((report, context.accounts.disable_user.call_count))
+        connection.send(
+            (
+                report,
+                context.accounts.disable_user.call_count,
+                context._config.db.values[
+                    'cluster-manager.accounts.reconcile.last_run'
+                ]['report'],
+                'cluster-manager.accounts.reconcile.last_completed'
+                in context._config.db.values,
+            )
+        )
     except RuntimeError:
         connection.send(('lease-lost', context.accounts.disable_user.call_count))
     finally:
@@ -117,8 +127,10 @@ def test_expired_worker_cannot_apply_after_another_process_acquires(tmp_path):
         assert old_parent.recv() == 'paused'
         new.start()
         assert new_parent.poll(15)
-        report, count = new_parent.recv()
+        report, count, persisted, completed = new_parent.recv()
         assert report['disabled'] == count == 1
+        assert persisted == {**report, 'truncated': False}
+        assert completed is False
         old_parent.send('resume')
         assert old_parent.poll(15)
         assert old_parent.recv() == ('lease-lost', 0)

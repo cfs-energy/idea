@@ -136,6 +136,7 @@ class VirtualDesktopUtilsAPI(VirtualDesktopAPI):
             session.hibernation_enabled,
             session.software_stack,
             self.controller_utils.get_gpu_manufacturer(session.server.instance_type),
+            username=context.get_username(),
         )
         context.success(
             ListAllowedInstanceTypesResponse(listing=allowed_instance_types)
@@ -153,6 +154,7 @@ class VirtualDesktopUtilsAPI(VirtualDesktopAPI):
             hibernation_enabled,
             request.software_stack,
             None,
+            username=context.get_username(),
         )
         context.success(
             ListAllowedInstanceTypesResponse(listing=allowed_instance_types)

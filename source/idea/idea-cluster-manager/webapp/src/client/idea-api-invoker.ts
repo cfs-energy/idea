@@ -127,7 +127,7 @@ export class IdeaApiInvoker {
             }
         }
 
-        if(this.logger.isTrace()) {
+        if(this.logger.isTrace() && request.header?.namespace !== 'Auth.CreateApiToken') {
             this.logger.trace(`(res) ${JSON.stringify(response, null, 2)}`)
         }
 

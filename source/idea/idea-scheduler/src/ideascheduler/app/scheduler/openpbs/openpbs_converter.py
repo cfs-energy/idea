@@ -55,6 +55,8 @@ class OpenPBSConverter:
                 result.add(SocaComputeNodeState.BUSY)
             elif _token == 'down':
                 result.add(SocaComputeNodeState.DOWN)
+            elif _token == 'unknown':
+                result.add(SocaComputeNodeState.UNKNOWN)
             elif _token == 'free':
                 result.add(SocaComputeNodeState.FREE)
             elif _token == 'offline':
@@ -92,6 +94,8 @@ class OpenPBSConverter:
             return 'busy'
         elif state == SocaComputeNodeState.DOWN:
             return 'down'
+        elif state == SocaComputeNodeState.UNKNOWN:
+            return 'unknown'
         elif state == SocaComputeNodeState.FREE:
             return 'free'
         elif state == SocaComputeNodeState.OFFLINE:

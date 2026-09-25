@@ -113,6 +113,7 @@ scheduler:
       on_demand_allocation_strategy: prioritized
     max_provisioning_retries: 3
     node_housekeeping_interval_seconds: 60
+    node_unavailable_timeout_seconds: 1800
     placement_group:
       strategy: cluster
     spot_fleet_request:
@@ -687,6 +688,8 @@ global-settings:
       - g6
       - g6e
       - g6f
+      - g7
+      - g7e
       - gr6
       - g4dn
       - g4ad
@@ -703,6 +706,8 @@ global-settings:
       g6: *production_version
       g6e: *production_version
       g6f: *production_version
+      g7: *production_version
+      g7e: *production_version
       gr6: *production_version
       p3: *production_version
       p4d: *production_version

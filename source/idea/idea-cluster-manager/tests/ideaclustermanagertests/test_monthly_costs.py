@@ -37,7 +37,6 @@ class Config:
             'data': {
                 'provider': 'efs',
                 'efs': {'file_system_id': 'fs-test'},
-                'costs': {'name_tag': 'storage-test'},
             }
         }
 
@@ -54,7 +53,7 @@ class Config:
 class Billing:
     def __init__(self):
         self.calls = []
-        self.groups = [('Name$storage-test', '120')]
+        self.groups = []
 
     def get_cost_and_usage(self, **request):
         self.calls.append(request.copy())
@@ -170,9 +169,18 @@ def service(monkeypatch):
         module_id=lambda: 'cluster-manager',
         storage_metrics=SimpleNamespace(usage_by_filesystem=lambda: snapshot),
     )
+    rate = Mock(return_value=8)
+    monkeypatch.setattr(
+        'ideaclustermanager.app.costs.monthly_costs_service.daily_storage_rate', rate
+    )
     result = MonthlyCostsService(context)
     result.fakes = SimpleNamespace(
-        config=config, billing=billing, ec2=ec2, pricing=pricing, snapshot=snapshot
+        config=config,
+        billing=billing,
+        ec2=ec2,
+        pricing=pricing,
+        snapshot=snapshot,
+        rate=rate,
     )
     yield result
     result._workers.shutdown(wait=True)
@@ -190,19 +198,37 @@ def test_storage_shares_and_missing_user(service):
     assert (
         absent[0].cost is None and absent[0].status == 'no_usage_data' and missing_user
     )
-    assert len(service.fakes.billing.calls) == 1
-    request = service.fakes.billing.calls[0]
-    assert request['Filter']['And'] == [
-        {'Tags': {'Key': 'idea:ClusterName', 'Values': ['test']}},
-        {
-            'Dimensions': {
-                'Key': 'SERVICE',
-                'Values': ['Amazon FSx', 'Amazon Elastic File System'],
-            }
-        },
-    ]
-    assert request['GroupBy'] == [{'Type': 'TAG', 'Key': 'Name'}]
-    assert request['TimePeriod'] == {'Start': '2026-09-01', 'End': '2026-09-16'}
+    assert service.fakes.billing.calls == []
+    assert service.fakes.rate.call_args.args[1:3] == ('efs', 'fs-test')
+    assert service.fakes.rate.call_args.kwargs['capacity_pool_bytes'] == 0
+
+
+@pytest.mark.parametrize('exchange_rate,expected', [(0.9, 27.0), (None, None)])
+def test_storage_share_uses_cluster_currency(
+    service, monkeypatch, exchange_rate, expected
+):
+    monkeypatch.setattr(locale, 'get_currency_code', lambda: 'EUR')
+    service.fakes.config.get_float = lambda key, default=None: exchange_rate
+    rows, unavailable = service._storage('user-a', START, END)
+    assert rows[0].cost == expected
+    assert unavailable is (expected is None)
+    assert rows[0].status == ('unavailable' if expected is None else 'ready')
+
+
+def test_storage_default_quota_rule_and_missing_rate(service):
+    service.fakes.snapshot['fs-test']['zero_when_absent'] = True
+    rows, unavailable = service._storage('user-absent', START, END)
+    assert not unavailable and rows[0].cost == 0 and rows[0].used_bytes == 0
+    service.fakes.rate.return_value = None
+    rows, unavailable = service._storage('user-a', START, END)
+    assert unavailable and rows[0].cost is None and rows[0].status == 'unavailable'
+
+
+def test_storage_uses_snapshot_denominator_and_capacity_pool(service):
+    service.fakes.snapshot['fs-test'].update(total_bytes=1000, capacity_pool_bytes=9000)
+    rows, unavailable = service._storage('user-a', START, END)
+    assert not unavailable and rows[0].cost == 12
+    assert service.fakes.rate.call_args.kwargs['capacity_pool_bytes'] == 9000
 
 
 def test_storage_without_any_usage_is_not_zero(service, monkeypatch):
@@ -501,7 +527,6 @@ def test_real_config_tree_with_no_optional_billing_settings(service):
     service.fakes.config.entries = ConfigFactory.from_dict(
         {'data': {'provider': 'efs', 'efs': {'file_system_id': 'fs-test'}}}
     )
-    service.fakes.billing.groups = [('Name$test-data', '120')]
     rows, unavailable = service._storage('user-a', START, END)
     assert not unavailable and rows[0].cost == 30
 

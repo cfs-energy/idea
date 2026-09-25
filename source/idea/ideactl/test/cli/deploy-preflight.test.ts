@@ -41,7 +41,7 @@ function deps(errors: string[]): Deps {
       if (input.TableName === `${CLUSTER}.modules`) {
         return { Items: [{ module_id: "ecs", name: "ecs", type: "stack" }] };
       }
-      return { Items: [] };
+      return { Items: [{ key: "ecs.enabled", value: true }] };
     },
     async configWriter() {
       throw new Error("a refused pre-flight must not write settings");
@@ -89,4 +89,49 @@ test("an all-module deploy runs the trunking pre-flight and refuses", async () =
     errors[2],
     "aws ecs put-account-setting-default --name awsvpcTrunking --value enabled --region us-east-2 --profile sample-profile",
   );
+});
+
+for (const enabled of [undefined, false]) {
+  test(`new host deployment refuses before mutation with container setting=${enabled}`, async () => {
+    const errors: string[] = [];
+    const effects = deps(errors);
+    effects.scan = async ({ TableName }) => ({ Items: TableName.endsWith(".modules")
+      ? [{ module_id: "scheduler", name: "scheduler", type: "app", status: "deployed" }]
+      : enabled === undefined ? [] : [{ key: "ecs.enabled", value: enabled }] });
+    effects.cfn.describeStack = async () => {
+      throw Object.assign(new Error("Stack does not exist"), { name: "ValidationError" });
+    };
+    await assert.rejects(runDeploy(effects, ["all"], {
+      clusterName: CLUSTER, awsRegion: REGION, moduleSet: "default", upgrade: true,
+    }), { name: "ExitWithCode" });
+    assert.deepEqual(errors, ["New host-shaped deployments are no longer supported. An existing host cluster upgrades with upgrade-cluster."]);
+  });
+}
+
+test("an existing host stack passes the new deployment guard", async () => {
+  const errors: string[] = [];
+  const effects = deps(errors);
+  effects.scan = async ({ TableName }) => ({ Items: TableName.endsWith(".modules")
+    ? [{ module_id: "scheduler", name: "scheduler", type: "app", status: "deployed" }]
+    : [] });
+  let reads = 0;
+  effects.cfn.describeStack = async () => { reads += 1; return { StackStatus: "CREATE_COMPLETE" }; };
+  await assert.rejects(runDeploy(effects, ["all"], {
+    clusterName: CLUSTER, awsRegion: REGION, moduleSet: "default",
+  }), { name: "ExitWithCode" });
+  assert.equal(reads, 1);
+  assert.deepEqual(errors, []);
+});
+
+test("a stack lookup failure is not treated as a missing host cluster", async () => {
+  const errors: string[] = [];
+  const effects = deps(errors);
+  effects.scan = async ({ TableName }) => ({ Items: TableName.endsWith(".modules")
+    ? [{ module_id: "scheduler", name: "scheduler", type: "app" }] : [] });
+  const failure = new Error("Access denied");
+  effects.cfn.describeStack = async () => { throw failure; };
+  await assert.rejects(runDeploy(effects, ["all"], {
+    clusterName: CLUSTER, awsRegion: REGION, moduleSet: "default",
+  }), (error) => error === failure);
+  assert.deepEqual(errors, []);
 });

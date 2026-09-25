@@ -971,7 +971,7 @@ def test_job_builder_subnet_id_multiple_placement_group_enabled_should_fail(cont
     result = build_and_validate(
         context=context,
         params={
-            'nodes': 1,
+            'nodes': 2,
             'cpus': 1,
             'instance_type': 'c5.large',
             'subnet_id': 'subnet-custom1+subnet-custom2',
@@ -1028,9 +1028,32 @@ def test_job_builder_subnet_id_lustre_enabled(context):
 
 def test_job_builder_placement_group_valid(context):
     """
-    placement group enabled
+    placement group enabled for a multi-node job
     in this scenario, one of the subnet ids configured in cluster settings should be randomly picked, not all.
     """
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': 2,
+            'cpus': 1,
+            'instance_type': 'c5.large',
+            'spot': 'true',
+            'placement_group': 'true',
+        },
+    )
+    assert result.success is True
+    assert result.job_params.enable_placement_group is True
+    assert result.job_params.subnet_ids is not None
+    assert len(result.job_params.subnet_ids) == 1
+
+
+def test_job_builder_single_node_placement_group_uses_multiple_subnets(context):
+    """
+    a single-node job drops a requested placement group (a cluster placement group
+    cannot span availability zones) and keeps every configured subnet.
+    """
+    private_subnets = context.config().get_list('cluster.network.private_subnets', [])
+    assert len(private_subnets) > 1
     result = build_and_validate(
         context=context,
         params={
@@ -1041,9 +1064,8 @@ def test_job_builder_placement_group_valid(context):
         },
     )
     assert result.success is True
-    assert result.job_params.enable_placement_group is True
-    assert result.job_params.subnet_ids is not None
-    assert len(result.job_params.subnet_ids) == 1
+    assert result.job_params.enable_placement_group is False
+    assert result.job_params.subnet_ids == private_subnets
 
 
 def test_job_builder_security_groups_from_cluster_settings(context):
@@ -1287,7 +1309,7 @@ def test_job_builder_placement_group_invalid_instance_type(context):
     result = build_and_validate(
         context=context,
         params={
-            'nodes': 1,
+            'nodes': 2,
             'cpus': 1,
             'instance_type': 't3.micro',
             'placement_group': 'true',
@@ -1765,6 +1787,46 @@ def test_job_builder_instance_types_all_gpu_valid(context):
     assert result.job_params.instance_types == ['g4dn.xlarge', 'g5.xlarge']
 
 
+def test_job_builder_instance_types_mixed_gpu_vendor_invalid(context, monkeypatch):
+    """
+    GPU instance types from different vendors require different drivers
+    """
+    aws_util = context.aws_util()
+    all_instance_types = aws_util.get_all_instance_types()
+    is_instance_type_valid = aws_util.is_instance_type_valid
+    monkeypatch.setattr(
+        aws_util,
+        'get_all_instance_types',
+        lambda: all_instance_types | {'g4ad.xlarge'},
+    )
+    monkeypatch.setattr(
+        aws_util,
+        'is_instance_type_valid',
+        lambda instance_type: instance_type == 'g4ad.xlarge'
+        or is_instance_type_valid(instance_type),
+    )
+
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 1, 'cpus': 1, 'instance_type': 'g4ad.xlarge+g5.xlarge'},
+    )
+    assert result.success is False
+    messages = [
+        entry.message
+        for entry in result.validation_result.results
+        if entry.message is not None
+    ]
+    assert any(
+        'mix AMD and NVIDIA GPU instance families' in message for message in messages
+    )
+    assert any(
+        'AMD: [g4ad.xlarge]' in message
+        and 'NVIDIA: [g5.xlarge]' in message
+        and '(g4ad.xlarge)' in message
+        for message in messages
+    )
+
+
 def test_job_builder_instance_types_all_non_gpu_valid(context):
     """
     all requested instance types are non-GPU families
@@ -1799,9 +1861,7 @@ def test_job_builder_instance_types_mixed_gpu_queue_default_invalid(context):
         params={'nodes': 1, 'cpus': 1},
         queue_profile=HpcQueueProfile(
             name='mock-queue-profile',
-            default_job_params=SocaJobParams(
-                instance_types=['c5.large', 'g4dn.xlarge']
-            ),
+            default_job_params=SocaJobParams(instance_types=['c5.large', 'g7.xlarge']),
         ),
     )
     assert result.success is False
@@ -1815,9 +1875,9 @@ def test_job_builder_instance_types_mixed_gpu_queue_default_invalid(context):
     )
 
 
-def test_job_builder_instance_types_all_gpu_queue_default_valid(context):
+def test_job_builder_instance_types_mixed_gpu_vendor_queue_default_invalid(context):
     """
-    queue profile default instance types are all GPU families
+    queue profile default GPU instance types from different vendors require different drivers
     """
     result = build_and_validate(
         context=context,
@@ -1825,12 +1885,39 @@ def test_job_builder_instance_types_all_gpu_queue_default_valid(context):
         queue_profile=HpcQueueProfile(
             name='mock-queue-profile',
             default_job_params=SocaJobParams(
-                instance_types=['g4dn.xlarge', 'g5.xlarge']
+                instance_types=['g4ad.xlarge', 'g5.xlarge']
             ),
         ),
     )
-    assert result.success is True
-    assert result.job_params.instance_types == ['g4dn.xlarge', 'g5.xlarge']
+    assert result.success is False
+    messages = [
+        entry.message
+        for entry in result.validation_result.results
+        if entry.message is not None
+    ]
+    assert any(
+        'queue profile default instance types' in message
+        and 'mix AMD and NVIDIA GPU instance families' in message
+        and '(g4ad.xlarge)' in message
+        for message in messages
+    )
+
+
+def test_job_builder_instance_types_all_gpu_queue_default_valid(context):
+    """
+    queue profile default instance types are all GPU families
+    """
+    builder = SocaJobBuilder(
+        context=context,
+        params={'nodes': 1, 'cpus': 1},
+        queue_profile=HpcQueueProfile(
+            name='mock-queue-profile',
+            default_job_params=SocaJobParams(
+                instance_types=['g7.xlarge', 'g7e.48xlarge']
+            ),
+        ),
+    )
+    assert builder.validate().is_valid()
 
 
 def get_nodes_validation_entry(
@@ -2430,7 +2517,7 @@ def test_job_builder_preferred_subnet_id_unknown_subnet_ignored(context):
 
 def test_job_builder_preferred_subnet_id_placement_group_single_subnet(context):
     """
-    placement group still collapses to a single subnet, and it is the preferred one.
+    a multi-node placement group still collapses to the preferred subnet.
     """
     private_subnets = context.config().get_list('cluster.network.private_subnets', [])
     preferred = private_subnets[-1]
@@ -2439,9 +2526,10 @@ def test_job_builder_preferred_subnet_id_placement_group_single_subnet(context):
         result = build_and_validate(
             context=context,
             params={
-                'nodes': 1,
+                'nodes': 2,
                 'cpus': 1,
                 'instance_type': 'c5.large',
+                'spot': 'true',
                 'placement_group': 'true',
             },
         )
@@ -2515,9 +2603,10 @@ EFA_JOB = {
     'efa_support': 'true',
 }
 PLACEMENT_GROUP_JOB = {
-    'nodes': 1,
+    'nodes': 2,
     'cpus': 1,
     'instance_type': 'c5.large',
+    'spot': 'true',
     'placement_group': 'true',
 }
 

@@ -9,6 +9,7 @@ import test from "node:test";
 
 import { Command } from "commander";
 import { CreateTagsCommand, DeleteTagsCommand, DescribeInstancesCommand, EC2Client } from "@aws-sdk/client-ec2";
+import { DescribeDomainCommand, OpenSearchClient } from "@aws-sdk/client-opensearch";
 import { ideaVersion } from "../../src/version.ts";
 import { DATADOG_AGENT_IMAGE } from "../../src/config/datadog-agent.ts";
 import type { ConfigWriter, Deps } from "../../src/cli/cdk-invoker.ts";
@@ -24,6 +25,7 @@ import {
   planEcsImageFollowsRelease,
   returnBorrowedHosts,
 } from "../../src/cli/commands/upgrade.ts";
+import { change } from "../support/deploy-harness.ts";
 
 const fixture = join(import.meta.dirname, "../stacks/ecs-values.yml");
 const fixtureValues = readFileSync(fixture, "utf8").replace(/^enable_ecs:.*\n/m, "")
@@ -81,13 +83,14 @@ function replay(): Replay {
         }
       }
     },
-    async syncClusterSettingsInDb(entries, overwrite) {
+    async syncClusterSettingsInDb(entries, overwrite, source) {
+      assert.equal(source, "template");
       events.push(`sync:${overwrite === true}:${entries[0]?.key ?? ""}`);
       const table = rows[`${clusterName}.cluster-settings`]!;
       for (const entry of entries) {
         const index = table.findIndex((row) => row["key"] === entry.key);
-        if (index < 0) table.push({ ...entry });
-        else if (overwrite === true) table[index] = { ...entry };
+        if (index < 0) table.push({ ...entry, source });
+        else if (overwrite === true) table[index] = { ...entry, source };
       }
       const announced = entries
         .map((entry) => entry.key.match(/^global-settings\.module_sets\.default\.([^.]+)\.module_id$/)?.[1])
@@ -204,7 +207,7 @@ function replay(): Replay {
     },
     openSearch: {
       async describeDomain() {
-        return { engineVersion: "OpenSearch_2.0" };
+        return { engineVersion: "OpenSearch_2.0", serviceSoftwareOptions: { updateAvailable: false, updateStatus: "COMPLETED" } };
       },
       async listInstanceTypeDetails() {
         return ["m7g.large.search"];
@@ -517,6 +520,28 @@ test("Phase 3 refreshes paired AMI keys, preserves a newer built compute image, 
   });
 });
 
+for (const serviceSoftwareOptions of [
+  { newVersion: "R20260901-P1", updateAvailable: true, updateStatus: "ELIGIBLE" },
+  { newVersion: "R20260901-P1", updateAvailable: false, updateStatus: "PENDING_UPDATE" },
+  { newVersion: "R20260901-P1", updateAvailable: false, updateStatus: "IN_PROGRESS" },
+  undefined,
+]) {
+  test(`OpenSearch software status ${serviceSoftwareOptions?.updateStatus ?? "unavailable"} keeps the data node instance type unchanged`, async () => {
+    await withFixture(async ({ deps, events }) => {
+      deps.openSearch.describeDomain = async () => ({ engineVersion: "OpenSearch_2.0", serviceSoftwareOptions });
+      let instanceTypesRead = false;
+      deps.openSearch.listInstanceTypeDetails = async () => {
+        instanceTypesRead = true;
+        return ["m7g.large.search"];
+      };
+      await upgradeCluster(deps, { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true });
+      assert.equal(instanceTypesRead, false);
+      assert.ok(!events.includes("set:analytics.opensearch.data_node_instance_type=m7g.large.search"));
+      assert.ok(events.includes(`Apply and complete OpenSearch service software update ${serviceSoftwareOptions?.newVersion ?? "(version unavailable)"} before changing the analytics data node instance type (status ${serviceSoftwareOptions?.updateStatus ?? "unavailable"}). Keeping analytics data node instance type m5.large.search.`));
+    });
+  });
+}
+
 test("Phase 4 clears protection, deploys, restores live instances, then saves values", async () => {
   await withFixture(async ({ deps, events }) => {
     await upgradeCluster(deps, { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true });
@@ -806,6 +831,41 @@ test("default upgrade deployment refuses a Replacement change set", async () => 
   });
 });
 
+test("default upgrade deployment executes a settings-only stack change, which stamps the module version", async () => {
+  await withFixture(async ({ deps, events, rows }) => {
+    const previousCdkBin = process.env.IDEA_CDK_BIN;
+    process.env.IDEA_CDK_BIN = "/opt/idea/lib/idea-cdk/node_modules/aws-cdk/bin/cdk";
+    // The row keeps the previous version until the cluster-settings custom resource runs.
+    rows[`${clusterName}.modules`] = [{ ...moduleRow("analytics", "analytics"), version: "26.09.4" }];
+    let executions = 0;
+    deps.cfn.describeChangeSet = async () => ({
+      Status: "CREATE_COMPLETE",
+      Changes: [change("Modify", "analyticsclustersettings", "Custom::ClusterSettings", "False")],
+    });
+    deps.cfn.executeChangeSet = async () => {
+      executions += 1;
+      (rows[`${clusterName}.modules`] as Array<Record<string, unknown>>)[0].version = ideaVersion();
+    };
+    try {
+      const { withDefaultUpgradeDeployment } = await import("../../src/cli/commands/upgrade.ts");
+      await upgradeCluster(withDefaultUpgradeDeployment(deps), {
+        clusterName,
+        awsRegion,
+        baseOs: "amazonlinux2023",
+        moduleSet: "default",
+        force: true,
+        acceptConfigDrift: true,
+        modules: ["analytics"],
+      });
+      assert.equal(executions, 1);
+      assert.ok(!events.some((event) => event.includes("skipping")));
+    } finally {
+      if (previousCdkBin === undefined) delete process.env.IDEA_CDK_BIN;
+      else process.env.IDEA_CDK_BIN = previousCdkBin;
+    }
+  });
+});
+
 test("declining the global-settings prompt leaves Phase 1 applied and stops before Phase 2", async () => {
   await withFixture(async ({ deps, events }) => {
     const answers = ["Yes", "no"];
@@ -937,7 +997,8 @@ test("the cutover gate closes submission, refuses a nonempty scheduler, and rest
 });
 
 test("--drain closes submission, waits for the host scheduler to empty, upgrades, then reopens", async () => {
-  await withFixture(async ({ deps, events }) => {
+  await withFixture(async ({ deps, events, rows }) => {
+    assert.ok(!rows[`${clusterName}.cluster-settings`]!.some((row) => row["key"] === "ecs.enabled" && row["value"] === true));
     enableContainers();
     trunkingEnabled(deps);
     jobsOnHost(deps, events, [{ queued: 1, running: 1, other: 0 }, { queued: 0, running: 1, other: 0 }, { queued: 0, running: 0, other: 0 }]);
@@ -1021,6 +1082,22 @@ test("live protection markers use EC2 tags and paginate the scoped survivor quer
     { Filters, NextToken: "next" },
     { Resources: ["i-first"], Tags: [{ Key: key }] },
   ]);
+});
+
+test("the live OpenSearch adapter reads service software update availability and status", async (t) => {
+  t.mock.method(OpenSearchClient.prototype, "send", async (command: DescribeDomainCommand) => {
+    assert.equal(command.input.DomainName, undefined);
+    return {
+      DomainStatus: {
+        EngineVersion: "OpenSearch_2.0",
+        ServiceSoftwareOptions: { NewVersion: "R20260901-P1", UpdateAvailable: true, UpdateStatus: "ELIGIBLE" },
+      },
+    };
+  });
+  assert.deepEqual(await createLiveUpgradeDeps(replay().deps).openSearch.describeDomain({ awsRegion }), {
+    engineVersion: "OpenSearch_2.0",
+    serviceSoftwareOptions: { newVersion: "R20260901-P1", updateAvailable: true, updateStatus: "ELIGIBLE" },
+  });
 });
 
 test("a failed marker deletion can be retried after protection is restored", async () => {
@@ -1458,12 +1535,12 @@ for (const point of ["global-write", "full-sync", "phase3", "deployment"]) {
         const writer = await originalWriter(input);
         return {
           ...writer,
-          async syncClusterSettingsInDb(entries, overwrite) {
+          async syncClusterSettingsInDb(entries, overwrite, source) {
             if (!failed && ((point === "global-write" && overwrite) || (point === "full-sync" && !overwrite))) {
               failed = true;
               throw new Error("injected interruption");
             }
-            await writer.syncClusterSettingsInDb(entries, overwrite);
+            await writer.syncClusterSettingsInDb(entries, overwrite, source);
           },
           async setConfigEntry(key, value) {
             if (!failed && point === "phase3" && key === "scheduler.instance_ami") {
@@ -1887,4 +1964,86 @@ test("return-hosts does nothing at the group minimum or without container settin
   const noContainers = hostReturnDeps({ minSize: 3, instances: ["i-a", "i-b", "i-c", "i-d"] }, true);
   await returnBorrowedHosts(noContainers.deps, { clusterName: "cluster", awsRegion: "us-east-1" }, []);
   assert.deepEqual(noContainers.calls, []);
+});
+
+async function routineReleaseFixture(state: Replay): Promise<Map<string, unknown>> {
+  enableContainers();
+  const { deps, rows } = state;
+  rows[`${clusterName}.modules`]!.push({ ...moduleRow("ecs", "ecs"), type: "stack" });
+  deps.ecsAccountSettings = { async listAccountSettings() { return [{ name: "awsvpcTrunking", value: "enabled" }]; } };
+  const preview = await prepareUpgradeDriftInput(deps, containerOptions);
+  const generated = new Map(preview.generated.map((entry) => [entry.key, entry.value]));
+  for (const row of rows[`${clusterName}.cluster-settings`]!) {
+    if (generated.has(String(row["key"]))) row["value"] = generated.get(String(row["key"]));
+  }
+  return generated;
+}
+
+test("routine release moves the release image without accepting drift and preserves a private image", async () => {
+  for (const privateImage of [false, true]) {
+    await withFixture(async (state) => {
+      const generated = await routineReleaseFixture(state);
+      const { deps, rows, events } = state;
+      const repository = generated.get("ecs.image_repositories.aws");
+      const image = privateImage ? "private.example/control-plane:custom" : `${repository}:26.09.0`;
+      rows[`${clusterName}.cluster-settings`]!.push(
+        setting("ecs.image_repositories.aws", repository),
+        { ...setting("ecs.image", image), source: privateImage ? "cli" : "stack" },
+      );
+      await upgradeCluster(deps, { ...containerOptions, acceptConfigDrift: false });
+      assert.ok(events.includes("deploy"));
+      const stored = rows[`${clusterName}.cluster-settings`]!.find((row) => row["key"] === "ecs.image");
+      assert.equal(stored?.["value"], privateImage ? image : `${repository}:${ideaVersion()}`);
+      assert.equal(events.some((event) => event.startsWith("ecs.image moves from")), !privateImage);
+      assert.ok(events.some((event) => event.includes(privateImage ? "PRESERVE_DRIFT" : "release image updated")));
+      assert.ok(!events.some((event) => event.startsWith("err:") && event.includes("configuration row(s)")));
+    });
+  }
+});
+
+test("template defaults update silently; operator and legacy markers still require review", async () => {
+  const defaults = [
+    { key: "global-settings.gpu_settings.instance_families", value: ["g4dn", "g5"] },
+    { key: "global-settings.package_config.nodejs.version", value: "22.15.0" },
+    { key: "global-settings.package_config.nodejs.npm_version", value: "10.9.2" },
+  ];
+  for (const source of ["template", "cli", "api", "stack", undefined]) {
+    await withFixture(async (state) => {
+      const generated = await routineReleaseFixture(state);
+      const { deps, rows, events } = state;
+      rows[`${clusterName}.cluster-settings`]!.push(...defaults.map((entry) => ({ ...entry, source })));
+      const run = () => upgradeCluster(deps, { ...containerOptions, acceptConfigDrift: false });
+      if (source !== "template") {
+        await assert.rejects(run(), (error: unknown) => error instanceof Error && error.name === "ExitWithCode");
+        assert.ok(!events.includes("deploy"));
+        assert.ok(!events.some((event) => event.startsWith("set:") || event.startsWith("sync:")));
+        await upgradeCluster(deps, containerOptions);
+      } else {
+        await run();
+        assert.ok(events.some((event) => event.includes("Template defaults updated:")));
+        assert.ok(!events.some((event) => event.includes("--accept-config-drift:")));
+      }
+      for (const { key } of defaults) {
+        const row = rows[`${clusterName}.cluster-settings`]!.find((row) => row["key"] === key);
+        assert.deepEqual(row?.["value"], generated.get(key));
+        assert.equal(row?.["source"], "template");
+      }
+      assert.ok(events.includes("deploy"));
+    });
+  }
+});
+
+
+test("release image planning uses the cluster partition's repository", () => {
+  const repository = "registry.example/control-plane";
+  const rows = [
+    { key: "cluster.aws.partition", value: "aws-us-gov" },
+    { key: "ecs.image_repositories.aws", value: "public.example/control-plane" },
+    { key: "ecs.image_repositories.aws-us-gov", value: repository },
+    { key: "ecs.image", value: `${repository}:26.09.3` },
+  ];
+  assert.deepEqual(planEcsImageFollowsRelease(rows, "26.09.4"), [
+    { key: "ecs.image", value: `${repository}:26.09.4` },
+  ]);
+  assert.deepEqual(planEcsImageFollowsRelease(rows.filter((row) => row.key !== "ecs.image_repositories.aws-us-gov"), "26.09.4"), []);
 });

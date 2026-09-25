@@ -52,7 +52,7 @@ To disable a project:
 
 ### Add AWS tags
 
-You can assign custom AWS tags to your project(s). IDEA will automatically try to tag all resources created while using this project. This includes ephemeral filesystems, virtual desktops or compute nodes. You can flag these tags as "Cost Allocation Tags" to get detailed budget information via AWS CostExplorer.
+You can assign custom AWS tags to projects. IDEA applies them to resources created for the project, including ephemeral file systems, virtual desktops, and compute nodes. To use a tag in Cost Explorer or a tag-filtered budget, activate its key under **Billing > Cost allocation tags**.
 
 To add custom tags :
 
@@ -129,6 +129,8 @@ The reconcile is queued as a task, not run inline, so a save returns before its 
 Turning Bedrock off, for the cluster or for one project, tears down what was provisioned for it. Disabling a project does the same.
 
 #### Where errors show
+
+The **Status** column shows an error indicator when a terminal background task fails for a project. It includes the task name, failure message, and time. Correct the cause and repeat the project action; the indicator clears when the same task succeeds.
 
 Two maps are recorded on the project record and returned by the Projects API to administrators:
 

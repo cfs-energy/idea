@@ -135,6 +135,7 @@ class ProjectBedrockBudget(SocaBaseModel):
 
 
 class Project(SocaBaseModel):
+    last_task_failure: Optional[Dict[str, str]] = Field(default=None)
     project_id: Optional[str] = Field(default=None)
     name: Optional[str] = Field(default=None)
     title: Optional[str] = Field(default=None)

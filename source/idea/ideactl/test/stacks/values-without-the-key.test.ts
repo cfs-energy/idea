@@ -1,19 +1,7 @@
-/**
- * A values file with no control-plane shape key is refused before anything is created.
- *
- * The installer writes the key, so a file without one was written by hand, carried over from
- * before the container control plane, or copied between clusters. Generating from it silently
- * produces the host shape, which no longer builds, and the failure lands partway through a deploy
- * with nothing pointing at the missing key.
- *
- * The refusal lives on the command rather than in the generator on purpose, and this file pins
- * both halves: the generator still produces what the reference implementation produced for a
- * values file with no key, which is what the captured-cluster comparison depends on, and the
- * command stops a new install that would use it.
- */
+/** New configurations default to containers; regeneration preserves the recorded shape. */
 
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
@@ -50,7 +38,7 @@ function valuesFileWithoutKey(): string {
   return file;
 }
 
-/** Inert effects: `configGenerate` reaches no AWS call before the refusal. */
+/** Inert configuration generation effects. */
 function deps(): Deps & { errors: string[] } {
   const errors: string[] = [];
   return {
@@ -81,18 +69,25 @@ function deps(): Deps & { errors: string[] } {
 }
 
 describe("a values file that does not say which control plane to build", () => {
-  it("stops a new install and names the key", async () => {
+  it("defaults a new install to containers", async () => {
     const effects = deps();
-    await assert.rejects(
-      configGenerate(effects, {
-        valuesFile: valuesFileWithoutKey(),
-        configDir: temp("ideactl-no-key-out-"),
-        force: true,
-      }),
-    );
-    const printed = effects.errors.join("\n");
-    assert.match(printed, /enable_ecs/);
-    assert.match(printed, /--regenerate/);
+    const configDir = temp("ideactl-no-key-out-");
+    const values = await configGenerate(effects, {
+      valuesFile: valuesFileWithoutKey(), configDir, force: true,
+    });
+    assert.equal(values["enable_ecs"], true);
+    assert.equal(loadValuesFile(join(configDir, "values.yml"))["enable_ecs"], true);
+    assert.equal(flattenConfigDir(join(configDir, "config"))["ecs.enabled"], true);
+    assert.deepEqual(effects.errors, []);
+  });
+
+  it("preserves an explicit host value from an existing values file", async () => {
+    const file = valuesFileWithoutKey();
+    writeFileSync(file, `${readFileSync(file, "utf8")}\nenable_ecs: false\n`);
+    const configDir = temp("ideactl-host-values-");
+    const values = await configGenerate(deps(), { valuesFile: file, configDir, force: true });
+    assert.equal(values["enable_ecs"], false);
+    assert.equal(flattenConfigDir(join(configDir, "config"))["ecs.enabled"], undefined);
   });
 
   it("lets an existing cluster regenerate what it already has", async () => {
@@ -109,9 +104,7 @@ describe("a values file that does not say which control plane to build", () => {
   });
 
   it("leaves the generator itself producing no container module for such a file", () => {
-    // The captured-cluster comparison generates straight from a values file with no key and
-    // expects exactly what the implementation being replaced produced. A refusal here would take
-    // that gate red, which is why it is on the command instead.
+    // Historical replay uses the generator directly.
     const values = loadValuesFile(join(import.meta.dirname, "./ecs-values.yml"));
     delete values.enable_ecs;
     const dir = temp("ideactl-no-key-generator-");

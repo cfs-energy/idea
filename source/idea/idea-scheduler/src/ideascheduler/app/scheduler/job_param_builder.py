@@ -1208,7 +1208,7 @@ class InstanceTypesParamBuilder(BaseParamBuilder):
         self, instance_types: Optional[List[str]], from_queue_default: bool = False
     ) -> bool:
         """
-        Reject instance type lists that mix GPU and non-GPU families.
+        Reject instance type lists that mix GPU and non-GPU families or GPU vendors.
 
         GPU drivers are installed by the compute node bootstrap, which is rendered for
         instance_types[0] only (cloudformation_stack_builder). Any other family in the list may be
@@ -1243,23 +1243,51 @@ class InstanceTypesParamBuilder(BaseParamBuilder):
             else:
                 non_gpu_instance_types.append(instance_type)
 
-        if len(gpu_instance_types) == 0 or len(non_gpu_instance_types) == 0:
-            return True
-
         source = (
             'The queue profile default instance types'
             if from_queue_default
             else 'The requested instance types'
         )
+        if len(gpu_instance_types) > 0 and len(non_gpu_instance_types) > 0:
+            self.add_validation_entry(
+                param=constants.JOB_PARAM_INSTANCE_TYPES,
+                message=f'{source} mix GPU and non-GPU instance families. '
+                f'GPU: [{", ".join(gpu_instance_types)}], '
+                f'non-GPU: [{", ".join(non_gpu_instance_types)}]. '
+                f'GPU drivers are installed based on the first instance type in the list '
+                f'({instance_types[0]}), so a compute node launched from any other family in the list '
+                f'can come up without the GPU drivers it needs. Submit GPU and non-GPU instance types '
+                f'as separate jobs.',
+            )
+            return False
+
+        if len(gpu_instance_types) == 0:
+            return True
+
+        nvidia_public_driver_versions = self.soca_context.config().get_config(
+            'global-settings.gpu_settings.nvidia_public_driver_versions', default={}
+        )
+        nvidia_gpu_instance_types = []
+        amd_gpu_instance_types = []
+        for instance_type in gpu_instance_types:
+            instance_family = instance_type.split('.')[0]
+            if instance_family in nvidia_public_driver_versions:
+                nvidia_gpu_instance_types.append(instance_type)
+            else:
+                amd_gpu_instance_types.append(instance_type)
+
+        if len(nvidia_gpu_instance_types) == 0 or len(amd_gpu_instance_types) == 0:
+            return True
+
         self.add_validation_entry(
             param=constants.JOB_PARAM_INSTANCE_TYPES,
-            message=f'{source} mix GPU and non-GPU instance families. '
-            f'GPU: [{", ".join(gpu_instance_types)}], '
-            f'non-GPU: [{", ".join(non_gpu_instance_types)}]. '
+            message=f'{source} mix AMD and NVIDIA GPU instance families. '
+            f'AMD: [{", ".join(amd_gpu_instance_types)}], '
+            f'NVIDIA: [{", ".join(nvidia_gpu_instance_types)}]. '
             f'GPU drivers are installed based on the first instance type in the list '
-            f'({instance_types[0]}), so a compute node launched from any other family in the list '
-            f'can come up without the GPU drivers it needs. Submit GPU and non-GPU instance types '
-            f'as separate jobs.',
+            f'({instance_types[0]}), so a compute node launched from the other vendor can come up '
+            f'without the GPU drivers it needs. Submit AMD and NVIDIA GPU instance types as '
+            f'separate jobs.',
         )
         return False
 
@@ -2989,6 +3017,16 @@ class EnablePlacementGroupParamBuilder(BaseParamBuilder):
             self.soca_context.logger().info(
                 f'User explicitly set placement group: {enable_placement_group}'
             )
+        if (
+            enable_placement_group
+            and self.context.get_builder(constants.JOB_PARAM_NODES).get() == 1
+        ):
+            # one node gains nothing from a placement group, and the group would
+            # pin the job to a single subnet. the subnet builder reads this too.
+            self.soca_context.logger().info(
+                'Placement group disabled - single node job (nodes=1)'
+            )
+            return False
         return enable_placement_group
 
     def apply(self):
