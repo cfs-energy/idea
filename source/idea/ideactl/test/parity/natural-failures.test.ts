@@ -684,10 +684,7 @@ test("a re-run after a partial base-OS rewrite refuses with an actionable messag
 });
 
 test("GAP: upgrade-cluster offers no way to resume a failed run", async () => {
-  // src/config/upgrade-state.ts holds a durable operation record with boundary and module
-  // markers, a conditional-write lock and snapshot retention. Only the migrate driver uses it.
-  // upgrade-cluster has no record, so a re-run starts at Phase 1 with a fresh deployment ID and
-  // no statement of what the previous run completed.
+  // A retry starts with a fresh deployment ID and no durable progress record.
   const program = new Command("ideactl");
   registerUpgradeCommands(program, upgradeReplay({ protectedInstances: new Set(), settings: AL2023_SETTINGS }).deps);
   const command = program.commands.find((candidate) => candidate.name() === "upgrade-cluster");

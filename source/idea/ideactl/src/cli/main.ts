@@ -39,7 +39,6 @@ import {
 import { registerDeleteClusterCommands } from './commands/delete-cluster.ts';
 import { registerDeployCommands, runBootstrap, runDeploy } from './commands/deploy.ts';
 import { registerReplaceCommands } from './commands/replace.ts';
-import { registerMigrateCommands } from './commands/migrate.ts';
 import { checkClusterStatus, connectionInfo, liveHttpStatus, modulesTable, registerStatusCommands } from './commands/status.ts';
 import { createLiveUpgradeDeps, liveEcsAccountSettings, registerUpgradeCommands } from './commands/upgrade.ts';
 import { registerRemainingOperatorCommands } from './commands/utils.ts';
@@ -49,7 +48,6 @@ import {
   formatAwsIdentity,
 } from "./aws-client-options.ts";
 import { DeploymentHelper } from './deployment-helper.ts';
-import { createLiveMigrateDeps } from "./live-migrate-adapters.ts";
 import { createLiveDeleteClusterDeps, createLiveRemainingOperatorDeps } from "./live-operator-adapters.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -388,7 +386,7 @@ export async function quickSetup(deps: Deps, options: QuickSetupOptions): Promis
       awsProfile,
       moduleSet: options.moduleSet,
       force: options.force,
-    });
+    }, 'template');
   }
 
   const settings = await scanSettings(deps, clusterName);
@@ -560,7 +558,6 @@ const program = new Command('ideactl')
   registerReplaceCommands(program, deps);
   registerStatusCommands(program, deps);
   registerUpgradeCommands(program, createLiveUpgradeDeps(deps));
-  registerMigrateCommands(program, createLiveMigrateDeps(deps, environmentRegion));
   registerDeleteClusterCommands(program, createLiveDeleteClusterDeps(deps));
   registerRemainingOperatorCommands(program, createLiveRemainingOperatorDeps(deps));
 

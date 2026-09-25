@@ -24,3 +24,7 @@ Select your project and click **Action** > **Edit Project** to update your proje
 ### Delete Project
 
 Select your project and click **Action** > **Delete Project** to delete your project.
+
+### Background task failures
+
+An error in **Status** shows the failed task, message, and time. Correct the cause and repeat the action. The error clears when the same task succeeds.

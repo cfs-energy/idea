@@ -11,7 +11,7 @@
  *   - `sync_cluster_settings_in_db` skips any key that already exists unless `overwrite`, and
  *     never deletes; deletion is only ever `delete_config_entries(prefix)`, a full scan plus
  *     `startsWith`;
- *   - every write is `SET #value=:value ADD #version :version` with `:version = 1`, so `version`
+ *   - every write stamps its source and uses `ADD #version :version` with `:version = 1`, so `version`
  *     is a per-key write counter that starts at 1 and increments, not a release version;
  *   - values keep their JSON types on the way in: bool -> BOOL, number -> N (as a string), string
  *     -> S, list -> L (an empty list stays an empty `L`, it is NOT a NULL), null -> NULL, object
@@ -241,23 +241,23 @@ export class ClusterConfigDb {
     return result.Item as ModuleInfo | undefined;
   }
 
-  /** `SET #value=:value ADD #version :version`. `version` counts writes; it never resets. */
-  async setConfigEntry(key: string, value: unknown): Promise<void> {
+  /** Write value and last writer atomically; version counts writes. */
+  async setConfigEntry(key: string, value: unknown, source: 'cli' | 'template' = 'cli'): Promise<void> {
     this.logger(`updating config: ${key} = ${String(value)}`);
     await this.doc.send(
       new UpdateCommand({
         TableName: this.clusterSettingsTableName,
         Key: { key },
-        UpdateExpression: 'SET #value=:value ADD #version :version',
-        ExpressionAttributeNames: { '#value': 'value', '#version': 'version' },
+        UpdateExpression: 'SET #value=:value, #source=:source ADD #version :version',
+        ExpressionAttributeNames: { '#value': 'value', '#version': 'version', '#source': 'source' },
         // Python has no `undefined`; a missing value is Python's None, i.e. NULL.
-        ExpressionAttributeValues: { ':value': value === undefined ? null : value, ':version': 1 },
+        ExpressionAttributeValues: { ':value': value === undefined ? null : value, ':version': 1, ':source': source },
       }),
     );
   }
 
   /** Add-only unless `overwrite`. Never deletes, never touches keys absent from `entries`. */
-  async syncClusterSettingsInDb(entries: ConfigEntry[], overwrite = false): Promise<void> {
+  async syncClusterSettingsInDb(entries: ConfigEntry[], overwrite = false, source: 'cli' | 'template' = 'template'): Promise<void> {
     this.logger(`sync config entries to db. overwrite: ${overwrite}`);
     for (const entry of entries) {
       if (!overwrite) {
@@ -267,7 +267,7 @@ export class ClusterConfigDb {
           continue;
         }
       }
-      await this.setConfigEntry(entry.key, entry.value);
+      await this.setConfigEntry(entry.key, entry.value, source);
     }
   }
 

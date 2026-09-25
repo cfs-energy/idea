@@ -44,7 +44,7 @@ import arrow
 import botocore.exceptions
 import re
 import threading
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 # sts assumed-role arn. for instance profile credentials the role session name is
 # the ec2 instance id, which is what ties an invocation to a session or job owner.
@@ -92,9 +92,14 @@ def _new_counters() -> Dict[str, int]:
     return {'invocations': 0, 'input_tokens': 0, 'output_tokens': 0}
 
 
-def _add_counters(target: Dict[str, int], source: Dict[str, int]):
+def _add_counters(target: Dict, source: Dict):
     for key in ('invocations', 'input_tokens', 'output_tokens'):
         target[key] += Utils.get_as_int(source.get(key), 0)
+    if source.get('attribution_mappings'):
+        target['attribution_mappings'] = sorted(
+            set(target.get('attribution_mappings', []))
+            | set(source['attribution_mappings'])
+        )
 
 
 def _row_counters(row: Dict) -> Dict[str, int]:
@@ -399,10 +404,18 @@ class BedrockUsageService(SocaService):
                 'updated but not reconciled: a partial answer cannot establish that a '
                 'stored row is stale.'
             )
+        indexed_mappings = {}
+        for role, project in role_index.items():
+            indexed_mappings.setdefault(project.project_id, set()).add(f'role:{role}')
+        for profile, (project, _) in profile_index.items():
+            indexed_mappings.setdefault(project.project_id, set()).add(
+                f'profile:{profile}'
+            )
         self.store(
             projects,
             aggregates,
             days,
+            indexed_mappings=indexed_mappings,
             job_aggregates=job_aggregates,
             reconcile=not truncated,
         )
@@ -507,12 +520,14 @@ class BedrockUsageService(SocaService):
 
             raw_model_id = Utils.get_as_string(row.get('model_id'), '')
             project = role_index.get(role_name.lower())
+            mappings = [f'role:{role_name.lower()}'] if project is not None else []
             model_id = None
             profile_entry = profile_index.get(raw_model_id.lower())
             if profile_entry is not None:
                 if project is None:
                     project = profile_entry[0]
                 model_id = profile_entry[1]
+                mappings.append(f'profile:{raw_model_id.lower()}')
             if project is None:
                 skipped += 1
                 continue
@@ -539,14 +554,15 @@ class BedrockUsageService(SocaService):
                         'invocations': Utils.get_as_int(row.get('invocations'), 0),
                         'input_tokens': Utils.get_as_int(row.get('input_tokens'), 0),
                         'output_tokens': Utils.get_as_int(row.get('output_tokens'), 0),
+                        'attribution_mappings': mappings,
                     },
                 )
             )
 
         owners = self.resolve_instance_owners(sorted(instance_ids))
 
-        aggregates: Dict[str, Dict[Tuple[str, str, str], Dict[str, int]]] = {}
-        job_aggregates: Dict[str, Dict[Tuple[str, str, str], Dict[str, int]]] = {}
+        aggregates: Dict[str, Dict[Tuple[str, str, str], Dict]] = {}
+        job_aggregates: Dict[str, Dict[Tuple[str, str, str], Dict]] = {}
         for project_id, usage_date, model_id, instance_id, counters in parsed:
             attribution = owners.get(instance_id) or ('', '')
             username = attribution[0] or UNATTRIBUTED_USER
@@ -647,9 +663,10 @@ class BedrockUsageService(SocaService):
     def store(
         self,
         projects: List[Project],
-        aggregates: Dict[str, Dict[Tuple[str, str, str], Dict[str, int]]],
+        aggregates: Dict[str, Dict[Tuple[str, str, str], Dict]],
         days: List[str],
-        job_aggregates: Dict[str, Dict[Tuple[str, str, str], Dict[str, int]]] = None,
+        indexed_mappings: Dict[str, Set[str]],
+        job_aggregates: Dict[str, Dict[Tuple[str, str, str], Dict]] = None,
         reconcile: bool = True,
     ):
         periods = sorted({day[:7] for day in days})
@@ -668,6 +685,17 @@ class BedrockUsageService(SocaService):
         for project in projects:
             project_id = project.project_id
             desired = aggregates.get(project_id, {})
+            available = indexed_mappings.get(project_id, set())
+            existing = self.usage_dao.query_day_rows(
+                project_id, days[0], days[-1]
+            ) + self.usage_dao.query_day_job_rows(project_id, days[0], days[-1])
+            # Missing or unknown provenance cannot justify replacing stored usage.
+            protected = {
+                row['usage_id']
+                for row in existing
+                if not row.get('attribution_mappings')
+                or not set(row['attribution_mappings']).issubset(available)
+            }
 
             rows = []
             desired_keys = set()
@@ -685,6 +713,7 @@ class BedrockUsageService(SocaService):
                         'period': usage_date[:7],
                         'job_id': job_id,
                         'model_id': model_id,
+                        'attribution_mappings': counters['attribution_mappings'],
                         'invocations': counters['invocations'],
                         'input_tokens': counters['input_tokens'],
                         'output_tokens': counters['output_tokens'],
@@ -706,6 +735,7 @@ class BedrockUsageService(SocaService):
                         'period': usage_date[:7],
                         'username': username,
                         'model_id': model_id,
+                        'attribution_mappings': counters['attribution_mappings'],
                         'invocations': counters['invocations'],
                         'input_tokens': counters['input_tokens'],
                         'output_tokens': counters['output_tokens'],
@@ -716,16 +746,18 @@ class BedrockUsageService(SocaService):
                     }
                 )
 
-            self.usage_dao.put_rows(rows)
+            self.usage_dao.put_rows(
+                [row for row in rows if row['usage_id'] not in protected]
+            )
 
+            # Legacy rows without mapping provenance remain until expired.
             if reconcile and len(days_with_data) > 0:
-                existing = self.usage_dao.query_day_rows(
-                    project_id, days[0], days[-1]
-                ) + self.usage_dao.query_day_job_rows(project_id, days[0], days[-1])
                 stale = {
                     Utils.get_value_as_string('usage_id', row)
                     for row in existing
                     if Utils.get_value_as_string('usage_date', row) in days_with_data
+                    and row.get('attribution_mappings')
+                    and row['usage_id'] not in protected
                 } - desired_keys
                 self.usage_dao.delete_rows(project_id, stale)
 

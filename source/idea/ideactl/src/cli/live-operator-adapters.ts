@@ -863,7 +863,7 @@ export function createLiveRemainingOperatorDeps(deps: Deps): RemainingOperatorCo
             awsProfile: options.awsProfile,
           });
           await writer.deleteConfigEntries(input.deletePrefix);
-          await writer.syncClusterSettingsInDb(input.entries, true);
+          await writer.syncClusterSettingsInDb(input.entries, true, 'template');
         },
         async exportConfig(input) {
           const [settings, modules] = await Promise.all([

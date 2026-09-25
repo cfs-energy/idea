@@ -38,7 +38,7 @@ class DateTimeUtils:
 
     @staticmethod
     def to_datetime(current_time_in_ms: int):
-        return DateTimeUtils.localize(datetime.fromtimestamp(current_time_in_ms))
+        return datetime.fromtimestamp(current_time_in_ms / 1000, tz=utc)
 
     @staticmethod
     def to_minutes(hours: int = None, seconds: int = None, millis: int = None):
@@ -67,7 +67,7 @@ class DateTimeUtils:
 
     @staticmethod
     def current_datetime():
-        return DateTimeUtils.localize(datetime.now())
+        return datetime.now(utc)
 
     @staticmethod
     def current_datetime_iso():

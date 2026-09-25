@@ -200,6 +200,21 @@ function set_kernel_version() {
     return 0
   fi
 
+  # A second pass on the old kernel means the boot loader did not honor the requested kernel.
+  if [[ -f ${BOOTSTRAP_DIR}/reboot_history.log ]] && grep -Fq "kernel version change to ${target_version}" ${BOOTSTRAP_DIR}/reboot_history.log; then
+    log_error "Kernel ${target_version} was installed, but the host is still running ${current_kernel} after reboot."
+    echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
+    local AWS
+    local AWS_INSTANCE_ID
+    AWS=$(command -v aws)
+    AWS_INSTANCE_ID=$(instance_id)
+    $AWS ec2 create-tags \
+        --resources "${AWS_INSTANCE_ID}" \
+        --region "{{ context.aws_region }}" \
+        --tags "Key=idea:BootstrapStatus,Value=kernel-boot-mismatch" || log_warning "unable to tag ${AWS_INSTANCE_ID} with idea:BootstrapStatus=kernel-boot-mismatch"
+    exit 1
+  fi
+
   # Check if target kernel is already installed
   local kernel_installed=false
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
@@ -233,24 +248,23 @@ function set_kernel_version() {
   # Apply holds to prevent unwanted upgrades
   apply_kernel_holds
 
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
   # Set default boot kernel
   if [[ -f /etc/default/grub ]]; then
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
     # Select by title because a positional entry changes as kernels are added or removed.
     # The exact ABI keeps the boot choice aligned with the installed Lustre module.
     sed -i "s/^GRUB_DEFAULT=.*/GRUB_DEFAULT=\"Advanced options for Ubuntu>Ubuntu, with Linux ${TARGET_KERNEL_ABI}\"/" /etc/default/grub
     update-grub
-{% elif context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
-    # For other RHEL-based systems, set GRUB_DEFAULT to 0 to boot the latest (target) kernel
-    sed -i 's/^GRUB_DEFAULT=.*/GRUB_DEFAULT=0/' /etc/default/grub
-    {% if context.base_os in ('amazonlinux2023',) %}
-    grub2-mkconfig -o /boot/grub2/grub.cfg
-    {% elif context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
-    grub2-mkconfig -o /etc/grub2.cfg
-    {% endif %}
-{% endif %}
     log_info "Updated GRUB to boot kernel ${target_version} by default"
   fi
+{% elif context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+  local target_kernel
+  target_kernel=$(find /boot -maxdepth 1 -type f -name "vmlinuz-*${target_base}*" -print | sort -V | tail -1)
+  if [[ -n "${target_kernel}" ]]; then
+    grubby --set-default "${target_kernel}" || log_warning "Unable to make ${target_kernel} the default boot kernel"
+    log_info "Updated GRUB to boot ${target_kernel} by default"
+  fi
+{% endif %}
 
   # Only reboot if we're not already running the target kernel
   if [[ "$current_kernel" != *"$target_base"* ]]; then

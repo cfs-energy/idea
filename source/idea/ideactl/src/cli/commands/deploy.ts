@@ -60,6 +60,31 @@ export function asBoolFlag(value: string | boolean | undefined, defaultValue: bo
 
 export async function runDeploy(deps: Deps, modules: readonly string[], options: DeployCommandOptions): Promise<void> {
   const { allModules, moduleIds } = resolveRequestedModules(modules);
+  const config = await ClusterConfig.fromDynamoDb(options.clusterName, options.awsRegion, {
+    moduleSet: options.moduleSet,
+    scan: deps.scan,
+  });
+  if (config.get('ecs.enabled') !== true) {
+    let existing = false;
+    for (const module of config.modules()) {
+      if (module.type === 'config') continue;
+      try {
+        const stack = await deps.cfn.describeStack(module.stack_name ?? `${options.clusterName}-${module.module_id}`);
+        if (stack.StackStatus && !['DELETE_COMPLETE', 'REVIEW_IN_PROGRESS'].includes(stack.StackStatus)) {
+          existing = true;
+          break;
+        }
+      } catch (error) {
+        if (!(error instanceof Error && error.name === 'ValidationError' && error.message.includes('does not exist'))) {
+          throw error;
+        }
+      }
+    }
+    if (!existing) {
+      deps.err('New host-shaped deployments are no longer supported. An existing host cluster upgrades with upgrade-cluster.');
+      throw new ExitWithCode(1);
+    }
+  }
   const helper = await DeploymentHelper.open({
     clusterName: options.clusterName,
     awsRegion: options.awsRegion,

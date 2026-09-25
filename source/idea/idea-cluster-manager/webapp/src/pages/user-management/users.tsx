@@ -21,7 +21,8 @@ import {GetParamChoicesRequest, GetParamChoicesResult, SocaFilter, SocaUserInput
 import {AccountsClient} from "../../client";
 import Utils from "../../common/utils";
 import IdeaConfirm from "../../components/modals";
-import {StatusIndicator, Box} from "@cloudscape-design/components";
+import {StatusIndicator, Box, Button, FormField, Modal, Multiselect, SpaceBetween} from "@cloudscape-design/components";
+import {MultiselectProps} from "@cloudscape-design/components/multiselect";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import IdeaAppLayout, {IdeaAppLayoutProps} from "../../components/app-layout";
 import {withRouter} from "../../navigation/navigation-utils";
@@ -37,6 +38,11 @@ export interface UsersState {
     // the create user form does not have any dynamic options and hence not required.
     showAddUserToGroupForm: boolean
     showRemoveUserFromGroupForm: boolean
+    showInstanceTypeExceptionsModal: boolean
+    instanceTypeExceptionOptions: ReadonlyArray<MultiselectProps.Option>
+    selectedInstanceTypeExceptions: ReadonlyArray<MultiselectProps.Option>
+    loadingInstanceTypeExceptions: boolean
+    savingInstanceTypeExceptions: boolean
 }
 
 export const USER_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<User>[] = [
@@ -77,7 +83,10 @@ export const USER_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<User>[] 
     {
         id: 'enabled',
         header: 'Status',
-        cell: e => (e.enabled) ? <StatusIndicator type="success">Enabled</StatusIndicator> :
+        cell: e => e.last_task_failure ?
+            <StatusIndicator type="error" iconAriaLabel="Error">
+                {e.last_task_failure.task}: {e.last_task_failure.message} ({new Date(e.last_task_failure.at).toLocaleString()})
+            </StatusIndicator> : (e.enabled) ? <StatusIndicator type="success">Enabled</StatusIndicator> :
             <StatusIndicator type="stopped">Disabled</StatusIndicator>,
         sortingComparator: (a, b) => {
             const valueA = a.enabled ? 1 : 0;
@@ -143,7 +152,12 @@ class Users extends Component<UsersProps, UsersState> {
         this.state = {
             userSelected: false,
             showAddUserToGroupForm: false,
-            showRemoveUserFromGroupForm: false
+            showRemoveUserFromGroupForm: false,
+            showInstanceTypeExceptionsModal: false,
+            instanceTypeExceptionOptions: [],
+            selectedInstanceTypeExceptions: [],
+            loadingInstanceTypeExceptions: false,
+            savingInstanceTypeExceptions: false
         }
     }
 
@@ -684,6 +698,88 @@ class Users extends Component<UsersProps, UsersState> {
         )
     }
 
+    showInstanceTypeExceptionsModal() {
+        const selected = (this.getSelectedUser()?.instance_type_exceptions || []).map(instanceType => ({
+            label: instanceType,
+            value: instanceType
+        }))
+        this.setState({
+            showInstanceTypeExceptionsModal: true,
+            selectedInstanceTypeExceptions: selected,
+            loadingInstanceTypeExceptions: true
+        })
+        AppContext.get().getClusterSettingsService().getInstanceTypes().then(instanceTypes => {
+            const options = instanceTypes
+                .map(instanceType => instanceType.InstanceType)
+                .filter(instanceType => Utils.isNotEmpty(instanceType))
+                .sort()
+                .map(instanceType => ({label: instanceType, value: instanceType}))
+            this.setState({
+                instanceTypeExceptionOptions: options,
+                loadingInstanceTypeExceptions: false
+            })
+        }).catch(error => {
+            this.setState({loadingInstanceTypeExceptions: false})
+            this.setFlashMessage(`Failed to load instance types: ${error.message}`, 'error')
+        })
+    }
+
+    saveInstanceTypeExceptions() {
+        const username = this.getSelectedUser()!.username!
+        const instanceTypeExceptions = this.state.selectedInstanceTypeExceptions
+            .map(option => option.value)
+            .filter((value): value is string => value !== undefined)
+        this.setState({savingInstanceTypeExceptions: true})
+        this.authAdmin().modifyUser({
+            user: {
+                username: username,
+                instance_type_exceptions: instanceTypeExceptions
+            }
+        }).then(_ => {
+            this.setState({
+                showInstanceTypeExceptionsModal: false,
+                savingInstanceTypeExceptions: false
+            })
+            this.getListing().fetchRecords()
+            this.setFlashMessage(`Instance type exceptions for ${username} were saved.`, 'success')
+        }).catch(error => {
+            this.setState({savingInstanceTypeExceptions: false})
+            this.setFlashMessage(`Failed to save instance type exceptions: ${error.message}`, 'error')
+        })
+    }
+
+    buildInstanceTypeExceptionsModal() {
+        return <Modal
+            visible={this.state.showInstanceTypeExceptionsModal}
+            header="Virtual desktop instance type exceptions"
+            closeAriaLabel="Close"
+            onDismiss={() => this.setState({showInstanceTypeExceptionsModal: false})}
+            footer={
+                <Box float="right">
+                    <SpaceBetween direction="horizontal" size="xs">
+                        <Button onClick={() => this.setState({showInstanceTypeExceptionsModal: false})}>Cancel</Button>
+                        <Button
+                            variant="primary"
+                            loading={this.state.savingInstanceTypeExceptions}
+                            onClick={() => this.saveInstanceTypeExceptions()}>Save</Button>
+                    </SpaceBetween>
+                </Box>
+            }>
+            <FormField
+                label="Instance types"
+                description="These instance types are available to this user in addition to the global allow list.">
+                <Multiselect
+                    selectedOptions={this.state.selectedInstanceTypeExceptions}
+                    options={this.state.instanceTypeExceptionOptions}
+                    statusType={this.state.loadingInstanceTypeExceptions ? 'loading' : 'finished'}
+                    loadingText="Loading instance types"
+                    placeholder="Choose instance types"
+                    onChange={({detail}) => this.setState({selectedInstanceTypeExceptions: detail.selectedOptions})}
+                />
+            </FormField>
+        </Modal>
+    }
+
     setFlashMessage(message: string, type: 'success' | 'info' | 'error') {
         this.props.onFlashbarChange({
             items: [
@@ -783,6 +879,13 @@ class Users extends Component<UsersProps, UsersState> {
                         onClick: () => {
                             this.getResetPasswordConfirmModal().show()
                         }
+                    },
+                    {
+                        id: 'set-instance-type-exceptions',
+                        text: 'Set virtual desktop instance types',
+                        onClick: () => {
+                            this.showInstanceTypeExceptionsModal()
+                        }
                     }
                 ]}
                 showPaginator={true}
@@ -865,6 +968,7 @@ class Users extends Component<UsersProps, UsersState> {
                         {this.buildToggleAdminUserConfirmModal()}
                         {this.buildToggleUserEnabledConfirmModal()}
                         {this.buildResetPasswordConfirmModal()}
+                        {this.buildInstanceTypeExceptionsModal()}
                         {this.buildListing()}
                     </div>
                 }

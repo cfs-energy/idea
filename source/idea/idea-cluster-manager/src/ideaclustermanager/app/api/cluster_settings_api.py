@@ -13,6 +13,8 @@ import math
 import re
 import time
 
+from ideaclustermanager.app.costs.pricing_rates import fetch_pricing_rates
+
 from ideaclustermanager.app.settings_catalog import (
     MODULES,
     coerce_settings,
@@ -28,8 +30,10 @@ import ideaclustermanager
 from ideaclustermanager.app.metrics.cost_metrics_backfill import CostMetricsBackfill
 
 from ideasdk.api import ApiInvocationContext, BaseAPI
+from ideasdk.auth import ApiAuthorizationType
 from ideadatamodel.cluster_settings import (
     DescribeSettingsCatalogResult,
+    FetchPricingRatesRequest,
     ListClusterModulesResult,
     ListClusterServicesResult,
     ClusterService,
@@ -115,6 +119,92 @@ class ClusterSettingsAPI(BaseAPI):
         # app (client-credentials) tokens are authorized by module scope, users by elevation
         return f'{self.context.module_id()}/{access}'
 
+    def module_administrator(self, context, module_name):
+        # Only human module administrators inherit this capability. App tokens
+        # continue through the explicit cluster-manager read/write scope checks.
+        authorization = context.get_authorization()
+        if authorization.type != ApiAuthorizationType.USER:
+            return False
+        config = self.context.config()
+        if not config.is_module_enabled(module_name):
+            return False
+        module_id = config.get_module_id(module_name)
+        group = self.context.accounts.group_name_helper.get_module_administrators_group(
+            module_id=module_id
+        )
+        return group in (authorization.groups or [])
+
+    def service_capabilities(self, context):
+        global_access = context.is_administrator() or (
+            context.get_authorization().type == ApiAuthorizationType.MANAGER
+        )
+        scoped_app = (
+            context.get_authorization().type == ApiAuthorizationType.APP
+            and context.is_authorized(
+                elevated_access=True, scopes=[self._scope('read')]
+            )
+        )
+        deployed = {
+            module['name']
+            for module in self.context.get_cluster_modules()
+            if module.get('status') == 'deployed'
+        }
+        return {
+            name
+            for name in (
+                constants.MODULE_CLUSTER_MANAGER,
+                constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER,
+                constants.MODULE_SCHEDULER,
+            )
+            if (name == constants.MODULE_CLUSTER_MANAGER or name in deployed)
+            and (
+                global_access or scoped_app or self.module_administrator(context, name)
+            )
+        }
+
+    def service_module(self, name):
+        prefix = f'{self.context.cluster_name()}-'
+        identity = name[len(prefix) :] if name.startswith(prefix) else name
+        config = self.context.config()
+        # Keep registered identities even when a module is no longer deployed,
+        # so its remaining services cannot fall through to the control plane.
+        modules = {
+            module['module_id']: module['name']
+            for module in self.context.get_cluster_modules()
+        }
+        for module in (
+            constants.MODULE_CLUSTER_MANAGER,
+            constants.MODULE_SCHEDULER,
+            constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER,
+        ):
+            if config.is_module_enabled(module):
+                modules[config.get_module_id(module)] = module
+        for module_id, module in modules.items():
+            if identity == module_id:
+                return (
+                    module
+                    if module
+                    in (
+                        constants.MODULE_SCHEDULER,
+                        constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER,
+                    )
+                    else constants.MODULE_CLUSTER_MANAGER
+                )
+            if module == constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER and identity in {
+                f'{module_id}-{component}'
+                for component in ('controller', 'broker', 'gateway')
+            }:
+                return module
+        if identity in (
+            'virtual-desktop-controller',
+            'dcv-broker',
+            'dcv-connection-gateway',
+        ):
+            return constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER
+        if identity == 'scheduler':
+            return constants.MODULE_SCHEDULER
+        return constants.MODULE_CLUSTER_MANAGER
+
     def list_cluster_modules(self, context: ApiInvocationContext):
         cluster_modules = self.context.get_cluster_modules()
         context.success(ListClusterModulesResult(listing=cluster_modules))
@@ -140,8 +230,17 @@ class ClusterSettingsAPI(BaseAPI):
             reconcile.setdefault('okta', {}).update(fresh.pop('okta'))
             reconcile.update(fresh)
 
-        if not context.is_authorized(
+        elevated = context.is_authorized(
             elevated_access=True, scopes=[self._scope('read')]
+        )
+        if self.get_module_name(module_id) == 'ecs' and self.service_capabilities(
+            context
+        ):
+            capability = {'container_enabled': bool(settings.get('cluster_name'))}
+            settings = {**settings, **capability} if elevated else capability
+        elif not elevated and not (
+            self.get_module_name(module_id) == constants.MODULE_SCHEDULER
+            and self.module_administrator(context, constants.MODULE_SCHEDULER)
         ):
             settings = self.build_user_module_settings(
                 module_name=self.get_module_name(module_id), settings=settings
@@ -201,13 +300,13 @@ class ClusterSettingsAPI(BaseAPI):
         storage = self.context.config().get_config('shared-storage', required=False)
         values = storage.as_plain_ordered_dict() if storage is not None else {}
         names = (
-            [
-                name
+            {
+                name: value['provider']
                 for name, value in values.items()
                 if isinstance(value, dict) and value.get('provider')
-            ]
+            }
             if isinstance(values, dict)
-            else []
+            else {}
         )
         rules = {}
         for prefix in (
@@ -220,11 +319,27 @@ class ClusterSettingsAPI(BaseAPI):
         return settings_catalog(names, rules)
 
     def describe_settings_catalog(self, context):
-        if not context.is_authorized(
+        elevated = context.is_authorized(
             elevated_access=True, scopes=[self._scope('read')]
+        )
+        if not elevated and not self.module_administrator(
+            context, constants.MODULE_SCHEDULER
         ):
             raise exceptions.unauthorized_access()
-        context.success(DescribeSettingsCatalogResult(settings=self.settings_catalog()))
+        catalog = self.settings_catalog()
+        if not elevated:
+            catalog = [
+                item for item in catalog if item['module'] == constants.MODULE_SCHEDULER
+            ]
+        context.success(DescribeSettingsCatalogResult(settings=catalog))
+
+    def fetch_pricing_rates(self, context):
+        if not context.is_authorized(
+            elevated_access=True, scopes=[self._scope('read')]
+        ) and not self.module_administrator(context, constants.MODULE_SCHEDULER):
+            raise exceptions.unauthorized_access()
+        request = context.get_request_payload_as(FetchPricingRatesRequest)
+        context.success(fetch_pricing_rates(self.context, request.region))
 
     def get_allowed_settings_for_module(self, module_id: str) -> List[str]:
         """
@@ -367,12 +482,14 @@ class ClusterSettingsAPI(BaseAPI):
                 config_entries.append({'key': path_prefix, 'value': value})
 
     def update_module_settings(self, context: ApiInvocationContext):
+        request = context.get_request_payload_as(UpdateModuleSettingsRequest)
         if not context.is_authorized(
             elevated_access=True, scopes=[self._scope('write')]
+        ) and not (
+            self.get_module_name(request.module_id) == constants.MODULE_SCHEDULER
+            and self.module_administrator(context, constants.MODULE_SCHEDULER)
         ):
             raise exceptions.unauthorized_access()
-
-        request = context.get_request_payload_as(UpdateModuleSettingsRequest)
 
         module_id = request.module_id
         if Utils.is_empty(module_id):
@@ -381,12 +498,28 @@ class ClusterSettingsAPI(BaseAPI):
         if not isinstance(request.settings, dict):
             raise exceptions.invalid_params('settings must be an object')
 
+        # Who is an administrator, and what the nodes may do, is decided by administrators only.
+        admin_only = {'identity-provider': 'cognito', 'cluster': 'iam'}
+        module_name = self.catalog_module_name(module_id)
+        if (
+            module_name in admin_only
+            and admin_only[module_name] in request.settings
+            and not context.is_administrator()
+        ):
+            raise exceptions.unauthorized_access()
+
         # Reject unknown paths, then normalize every value before validating related fields.
         self.validate_settings_allowed(module_id, request.settings)
         request.settings, effects = coerce_settings(
             self.catalog_module_name(module_id),
             request.settings,
             self.settings_catalog(),
+            config=self.context.config(),
+            module_ids=(
+                module['module_id'] for module in self.context.get_cluster_modules()
+            )
+            if self.catalog_module_name(module_id) == 'identity-provider'
+            else (),
         )
         if (
             'reconcile' in request.settings.get('accounts', {})
@@ -394,6 +527,7 @@ class ClusterSettingsAPI(BaseAPI):
         ):
             raise exceptions.unauthorized_access()
 
+        self.validate_schedule_and_templates(module_id, request.settings)
         self.validate_bedrock_settings(module_id, request.settings)
         self.validate_reconcile_settings(module_id, request.settings)
 
@@ -404,18 +538,116 @@ class ClusterSettingsAPI(BaseAPI):
         # Update settings in database
         cluster_config = self.context.config()
         cluster_config.db.sync_cluster_settings_in_db(
-            config_entries=config_entries, overwrite=True
+            config_entries=config_entries, overwrite=True, source='api'
         )
 
         self.reconcile_bedrock_projects(module_id, request.settings)
 
         if 'reconcile' in request.settings.get('accounts', {}):
             cluster_config.db.set_config_entry(
-                f'{module_id}.accounts.reconcile.last_saved', int(time.time())
+                f'{module_id}.accounts.reconcile.last_saved',
+                int(time.time()),
+                source='api',
             )
             self.context.accounts.reconciler.settings_changed()
 
         context.success(UpdateModuleSettingsResult(success=True, effects=effects))
+
+    def validate_schedule_and_templates(self, module_id: str, settings: dict) -> None:
+        module = self.catalog_module_name(module_id)
+        config = self.context.config()
+
+        def effective(path, source_module_id=module_id):
+            node = settings if source_module_id == module_id else {}
+            for part in path.split('.'):
+                if not isinstance(node, dict) or part not in node:
+                    entry = config.db.cluster_settings_table.get_item(
+                        Key={'key': f'{source_module_id}.{path}'}, ConsistentRead=True
+                    ).get('Item', {})
+                    return entry.get('value')
+                node = node[part]
+            return node
+
+        def validate_range(prefix):
+            start = effective(f'{prefix}.start_up_time')
+            stop = effective(f'{prefix}.shut_down_time')
+            if (
+                not all(
+                    isinstance(value, str)
+                    and re.fullmatch(r'([01]\d|2[0-3]):[0-5]\d', value)
+                    for value in (start, stop)
+                )
+                or start >= stop
+            ):
+                raise exceptions.invalid_params(
+                    f'{prefix}: both HH:mm times are required, with start before stop on the same day'
+                )
+
+        session = settings.get('dcv_session', {})
+        if module == constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER and (
+            'working_hours' in session or 'schedule' in session
+        ):
+            validate_range('dcv_session.working_hours')
+            for day in (
+                'monday',
+                'tuesday',
+                'wednesday',
+                'thursday',
+                'friday',
+                'saturday',
+                'sunday',
+            ):
+                prefix = f'dcv_session.schedule.{day}'
+                if effective(f'{prefix}.type') == 'CUSTOM_SCHEDULE':
+                    validate_range(prefix)
+
+        catalog = self.settings_catalog()
+        email_enabled = (
+            module == constants.MODULE_CLUSTER_MANAGER
+            and settings.get('notifications', {}).get('email', {}).get('enabled')
+            is True
+        )
+        for item in catalog:
+            path = item['path']
+            if (item['module'] != module and not email_enabled) or not path.endswith(
+                '.email_template'
+            ):
+                continue
+            source_module_id = (
+                module_id
+                if item['module'] == module
+                else config.get_module_id(item['module'])
+            )
+            if not source_module_id:
+                continue
+            prefix = path.rsplit('.', 1)[0]
+            parent = settings
+            for part in prefix.split('.'):
+                parent = parent.get(part, {}) if isinstance(parent, dict) else {}
+            master_changed = (
+                module == constants.MODULE_SCHEDULER
+                and 'enabled' in settings.get('notifications', {})
+            )
+            if not parent and not master_changed and not email_enabled:
+                continue
+            enabled_path = (
+                'notifications.enabled'
+                if item['module'] == constants.MODULE_SCHEDULER
+                else f'{prefix}.enabled'
+            )
+            if not effective(enabled_path, source_module_id):
+                continue
+            name = effective(path, source_module_id)
+            if (
+                not isinstance(name, str)
+                or not name
+                or not self.context.email_templates.email_templates_dao.get_email_template(
+                    name
+                )
+            ):
+                raise exceptions.invalid_params(
+                    f'{path}: enabled notifications require an existing email template'
+                )
 
     def validate_reconcile_settings(self, module_id: str, settings: dict) -> None:
         if module_id != self.context.config().get_module_id(
@@ -577,7 +809,8 @@ class ClusterSettingsAPI(BaseAPI):
         context.success(ListClusterHostsResult(listing=result))
 
     def list_cluster_services(self, context: ApiInvocationContext):
-        if not context.is_administrator():
+        capabilities = self.service_capabilities(context)
+        if not capabilities:
             raise exceptions.unauthorized_access()
         result = ListClusterServicesResult()
         cluster = self.context.config().get_string('ecs.cluster_name', required=False)
@@ -617,6 +850,8 @@ class ClusterSettingsAPI(BaseAPI):
                         'Some services could not be read. Refresh to try again.'
                     )
                 for service in response.get('services', []):
+                    if self.service_module(service['serviceName']) not in capabilities:
+                        continue
                     primary = next(
                         (
                             d
@@ -751,6 +986,8 @@ class ClusterSettingsAPI(BaseAPI):
             self.list_cluster_modules(context)
         elif namespace == 'ClusterSettings.DescribeSettingsCatalog':
             self.describe_settings_catalog(context)
+        elif namespace == 'ClusterSettings.FetchPricingRates':
+            self.fetch_pricing_rates(context)
         elif namespace == 'ClusterSettings.GetModuleSettings':
             self.get_module_settings(context)
         elif namespace == 'ClusterSettings.UpdateModuleSettings':

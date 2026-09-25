@@ -11,6 +11,10 @@
 
 from ideasdk.api import BaseAPI, ApiInvocationContext
 from ideadatamodel.auth import (
+    CreateApiTokenRequest,
+    ListApiTokensRequest,
+    DeleteApiTokenRequest,
+    DeleteApiTokenResult,
     GetUserResult,
     UpdateMyPreferencesRequest,
     UpdateMyPreferencesResult,
@@ -45,6 +49,32 @@ from ideaclustermanager.app.accounts.user_home_directory import UserHomeDirector
 class AuthAPI(BaseAPI):
     def __init__(self, context: ideaclustermanager.AppContext):
         self.context = context
+
+    def create_api_token(self, context: ApiInvocationContext):
+        if not context.is_authenticated_user():
+            raise exceptions.unauthorized_access()
+        request = context.get_request_payload_as(CreateApiTokenRequest)
+        context.success(
+            self.context.token_service.create_api_token(context.get_username(), request)
+        )
+
+    def list_api_tokens(self, context: ApiInvocationContext):
+        if not context.is_authenticated_user():
+            raise exceptions.unauthorized_access()
+        request = context.get_request_payload_as(ListApiTokensRequest)
+        username = request.username or context.get_username()
+        if username != context.get_username() and not context.is_administrator():
+            raise exceptions.unauthorized_access()
+        context.success(self.context.token_service.list_api_tokens(username))
+
+    def delete_api_token(self, context: ApiInvocationContext):
+        if not context.is_authenticated_user():
+            raise exceptions.unauthorized_access()
+        request = context.get_request_payload_as(DeleteApiTokenRequest)
+        self.context.token_service.delete_api_token(
+            request.token_id, context.get_username(), context.is_administrator()
+        )
+        context.success(DeleteApiTokenResult())
 
     def initiate_auth(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(InitiateAuthRequest)
@@ -171,6 +201,17 @@ class AuthAPI(BaseAPI):
             raise exceptions.unauthorized_access()
         request = context.get_request_payload_as(ListUsersInGroupRequest)
         result = self.context.accounts.list_users_in_group(request)
+        if not context.is_administrator():
+            result = result.model_copy(
+                update={
+                    'listing': [
+                        user
+                        if user.username == context.get_username()
+                        else user.model_copy(update={'instance_type_exceptions': None})
+                        for user in result.listing or []
+                    ]
+                }
+            )
         context.success(result)
 
     def update_my_preferences(self, context: ApiInvocationContext):
@@ -185,7 +226,13 @@ class AuthAPI(BaseAPI):
 
     def invoke(self, context: ApiInvocationContext):
         namespace = context.namespace
-        if namespace == 'Auth.GlobalSignOut':
+        if namespace == 'Auth.CreateApiToken':
+            self.create_api_token(context)
+        elif namespace == 'Auth.ListApiTokens':
+            self.list_api_tokens(context)
+        elif namespace == 'Auth.DeleteApiToken':
+            self.delete_api_token(context)
+        elif namespace == 'Auth.GlobalSignOut':
             self.global_sign_out(context)
         elif namespace == 'Auth.UpdateMyPreferences':
             self.update_my_preferences(context)

@@ -52,6 +52,18 @@ describe('idea api invoker', () => {
         expect(result.job.job_id).toBe('101');
     });
 
+    it('keeps created API tokens out of trace logs', async () => {
+        const token = `idea_${'a'.repeat(43)}`;
+        const invoker = buildInvoker((message, transfer) => {
+            transfer[0].postMessage({response: {success: true, payload: {token}}});
+        });
+        vi.spyOn(invoker.logger, 'isTrace').mockReturnValue(true);
+        const trace = vi.spyOn(invoker.logger, 'trace').mockImplementation(() => {});
+        const result: any = await invoker.invoke_alt('Auth.CreateApiToken', {name: 'automation', expires_in_days: 30});
+        expect(result.token).toBe(token);
+        expect(JSON.stringify(trace.mock.calls)).not.toContain(token);
+    });
+
     it('honors a caller-supplied timeout instead of the hardcoded default', async () => {
         vi.useFakeTimers();
         const invoker = buildInvoker(() => {}, 5000);

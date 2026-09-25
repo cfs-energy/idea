@@ -1,5 +1,7 @@
 # Users Management
 
+New clusters use the container control plane only. Move an existing host-based control plane with `upgrade-cluster --drain`; follow the [container upgrade guide](../../first-time-users/cluster-operations/update-idea-cluster/move-to-containers.md).
+
 To manage IDEA users, navigate to "**Administration**" > "**People and access**" > "**Users**"
 
 <figure><img src="../../.gitbook/assets/mods_cm_users_portal.webp" alt=""><figcaption><p>Users portal</p></figcaption></figure>
@@ -67,6 +69,14 @@ Force Change Password: User will be required to change his/her password after th
 {% hint style="info" %}
 You cannot reset the password of a user if his/her confirmation status is not "Confirmed"
 {% endhint %}
+
+### Review background task failures
+
+The **Status** column shows an error indicator when a terminal background task fails for a user. Read the task name, failure message, and time, correct the cause, then repeat the action. The indicator clears when the same task succeeds.
+
+### Grant personal desktop instance types
+
+Select a user, then choose **Actions > Set virtual desktop instance types**. Select the extra instance types this user may launch without changing the global or software-stack allow list. The global deny list still takes precedence. Save an empty selection to remove all personal exceptions.
 
 ### Add a batch of users
 

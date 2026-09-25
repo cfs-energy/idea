@@ -43,7 +43,6 @@ class MockScheduler:
         self.held_jobs = []
         self.reset_jobs: List[str] = []
         self.job_attributes: Dict[str, Dict] = {}
-        self.comments: Dict[str, str] = {}
         self.live_jobs: Dict[str, SocaJob] = {}
 
     def hold_job(self, job_id: str) -> bool:
@@ -59,7 +58,6 @@ class MockScheduler:
         return True
 
     def set_job_comment(self, job_id: str, comment: str) -> bool:
-        self.comments[job_id] = comment
         return True
 
     def get_job(self, job_id: str) -> Optional[SocaJob]:
@@ -268,11 +266,8 @@ def test_track_failed_jobs_counts_failures_and_holds(
 
 
 class MockJobMonitor:
-    def __init__(self):
-        self.modified_jobs: List[str] = []
-
     def job_modified(self, job: SocaJob):
-        self.modified_jobs.append(job.job_id)
+        pass
 
 
 class MockCloudFormation:
@@ -284,7 +279,6 @@ class MockCloudFormation:
 
     def __init__(self):
         self.stacks: Dict[str, CloudFormationStack] = {}
-        self.delete_requests: List[str] = []
 
     def put(self, compute_stack: str, stack_id: str, stack_status: str):
         self.stacks[compute_stack] = CloudFormationStack(
@@ -300,7 +294,7 @@ class MockCloudFormation:
         return self.stacks.get(stack_name)
 
     def delete(self, stack_name: str):
-        self.delete_requests.append(stack_name)
+        pass
 
 
 @pytest.fixture()

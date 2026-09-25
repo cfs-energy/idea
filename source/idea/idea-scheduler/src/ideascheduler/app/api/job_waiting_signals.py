@@ -1,20 +1,3 @@
-"""
-waiting signals for a job that has not started yet.
-
-two facts the platform already knows and never showed the owner: which provisioning
-attempt the job is on, and which queue limit is holding it. neither is a queue position
-or a start-time estimate - the data for those does not exist, because PBS models a fixed
-node pool while IDEA creates nodes on demand.
-
-elapsed queue time is deliberately not here: the client already holds queue_time and
-start_time and derives the wait from them, so adding a server-computed copy would put two
-numbers for the same thing on one page.
-
-the signals are per-job and per-request. they are attached to the SocaJob returned by the
-owner-scoped active jobs listing and are never persisted; the blocking limit is reported
-as a type only, because its threshold and current usage are cluster-wide values.
-"""
-
 from typing import List, Optional
 
 import ideascheduler
@@ -65,27 +48,23 @@ def get_provisioning_attempt(
     return attempt
 
 
+def get_blocking_limit_info(context: 'ideascheduler.AppContext', job: SocaJob):
+    try:
+        queue = context.queue_profiles.get_provisioning_queue(
+            queue_profile_name=job.queue_type
+        )
+        if queue is not None and queue.is_queue_blocked_by_limits():
+            return queue.get_limit_info()
+    except Exception:
+        return None
+    return None
+
+
 def get_blocking_limit_type(
     context: 'ideascheduler.AppContext', job: SocaJob
 ) -> Optional[str]:
-    """
-    the limit type holding the job's queue profile, or None. type only - the threshold
-    and the current usage describe the whole queue, not this owner.
-    """
-    try:
-        provisioning_queue = context.queue_profiles.get_provisioning_queue(
-            queue_profile_name=job.queue_type
-        )
-    except Exception:  # noqa - a deleted or renamed queue profile must not fail the read
-        return None
-    if provisioning_queue is None:
-        return None
-    if not provisioning_queue.is_queue_blocked_by_limits():
-        return None
-    limit_info = provisioning_queue.get_limit_info()
-    if limit_info is None:
-        return None
-    return limit_info.limit_type
+    info = get_blocking_limit_info(context, job)
+    return info.limit_type if info is not None else None
 
 
 def apply_waiting_signals(
@@ -102,7 +81,9 @@ def apply_waiting_signals(
     for job in jobs:
         if job is None:
             continue
-        if not is_awaiting_provisioning(job=job):
+        if not is_awaiting_provisioning(job=job) or job.state == SocaJobState.FINISHED:
+            if job.error_message and not job.status_reason:
+                job.status_reason = job.error_message
             continue
 
         failed_attempts = context.job_cache.get_job_provisioning_retry_count(
@@ -116,6 +97,58 @@ def apply_waiting_signals(
         if job.state == SocaJobState.HELD:
             # a held job is not queued behind a limit. provisioning stopped retrying it,
             # so naming a queue limit would point at the wrong thing.
+            job.status_reason = build_status_reason(job)
             continue
 
-        job.blocking_limit_type = get_blocking_limit_type(context=context, job=job)
+        limit_info = get_blocking_limit_info(context, job)
+        job.blocking_limit_type = (
+            limit_info.limit_type if limit_info is not None else None
+        )
+        job.status_reason = build_status_reason(job, limit_info)
+
+
+def build_status_reason(job: SocaJob, limit_info=None) -> Optional[str]:
+    if job.disposition == 'deleted':
+        return job.status_reason or 'Cancelled by the owner.'
+    if job.state == SocaJobState.HELD:
+        if job.reason_class != 'retries_exhausted':
+            return job.status_reason or job.error_message or 'Job held'
+        attempt = job.provisioning_attempt
+        cap = job.max_provisioning_attempts
+        prefix = (
+            f'Held after attempt {attempt} of {cap}' if attempt and cap else 'Job held'
+        )
+        error = (job.error_message or 'provisioning stopped').split('Last error: ')[-1]
+        error = error.split(' Use qdel')[0].rstrip('. ')
+        return f'{prefix}: {error}.'
+    if limit_info is not None:
+        types = (
+            ', '.join(job.params.instance_types or [])
+            if job.params
+            else 'requested capacity'
+        )
+        nodes = job.desired_nodes()
+        limits = []
+        if (
+            limit_info.queue_current is not None
+            and limit_info.queue_threshold is not None
+        ):
+            limits.append(
+                f'queue limit {limit_info.queue_current}/{limit_info.queue_threshold}'
+            )
+        if (
+            limit_info.group_current is not None
+            and limit_info.group_threshold is not None
+        ):
+            limits.append(
+                f'group limit {limit_info.group_current}/{limit_info.group_threshold}'
+            )
+        suffix = ', ' + ', '.join(limits) if limits else ''
+        return (
+            f'Waiting for {nodes} instances of {types or "requested capacity"}{suffix}.'
+        )
+    if job.error_message:
+        return job.error_message
+    if job.state in (SocaJobState.QUEUED, SocaJobState.WAITING):
+        return 'Waiting for requested capacity.'
+    return None

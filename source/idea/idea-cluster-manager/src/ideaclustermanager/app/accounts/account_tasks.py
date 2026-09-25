@@ -38,6 +38,9 @@ class SyncGroupInDirectoryServiceTask(BaseTask):
     def get_name(self) -> str:
         return 'accounts.sync-group'
 
+    def entity_ref(self, payload: Dict):
+        return 'group', payload['group_name']
+
     def invoke(self, payload: Dict):
         group_name = payload['group_name']
         group = self.context.accounts.group_dao.get_group(group_name)
@@ -73,6 +76,9 @@ class GroupMembershipUpdatedTask(BaseTask):
 
     def get_name(self) -> str:
         return 'accounts.group-membership-updated'
+
+    def entity_ref(self, payload: Dict):
+        return 'user', payload['username']
 
     def invoke(self, payload: Dict):
         group_name = payload['group_name']
@@ -133,6 +139,9 @@ class SyncUserInDirectoryServiceTask(BaseTask):
     def get_name(self) -> str:
         return 'accounts.sync-user'
 
+    def entity_ref(self, payload: Dict):
+        return 'user', payload['username']
+
     def invoke(self, payload: Dict):
         username = payload['username']
         user = self.context.accounts.user_dao.get_user(username)
@@ -191,6 +200,9 @@ class SyncPasswordInDirectoryServiceTask(BaseTask):
     def get_name(self) -> str:
         return 'accounts.sync-password'
 
+    def entity_ref(self, payload: Dict):
+        return 'user', payload['username']
+
     def invoke(self, payload: Dict):
         username = payload['username']
         password_file = payload['password_file']
@@ -220,6 +232,9 @@ class CreateUserHomeDirectoryTask(BaseTask):
 
     def get_name(self) -> str:
         return 'accounts.create-home-directory'
+
+    def entity_ref(self, payload: Dict):
+        return 'user', payload['username']
 
     def invoke(self, payload: Dict):
         username = payload['username']

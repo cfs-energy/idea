@@ -1,5 +1,7 @@
 # IDEA CLI utility
 
+New clusters use the container control plane only. Move an existing host-based control plane with `upgrade-cluster --drain`; follow the [container upgrade guide](../first-time-users/cluster-operations/update-idea-cluster/move-to-containers.md).
+
 Download the matching archive from the [GitHub release](https://github.com/cfs-energy/idea/releases) (replace `<VERSION>` with the release version):
 
 | Operator platform | Release file |

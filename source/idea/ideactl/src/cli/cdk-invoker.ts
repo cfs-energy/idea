@@ -39,7 +39,7 @@ import {
 import { ideaVersion } from '../version.ts';
 
 /** Modules the container stack runs as tasks, which therefore need no host packages. */
-const CONTAINER_SERVED_MODULES = ['cluster-manager', 'scheduler', 'virtual-desktop-controller'];
+const CONTAINER_SERVED_MODULES = ['cluster-manager', 'scheduler', 'virtual-desktop-controller', 'bastion-host'];
 
 // ---------------------------------------------------------------------------------------------
 // host filesystem layout (`app_props.py`)
@@ -218,7 +218,7 @@ export interface S3Api {
 /** `ClusterConfigDb`, structurally, so a test can record writes without DynamoDB. */
 export interface ConfigWriter {
   syncModulesInDb(modules: ModuleSpec[]): Promise<void>;
-  syncClusterSettingsInDb(entries: ConfigEntry[], overwrite?: boolean): Promise<void>;
+  syncClusterSettingsInDb(entries: ConfigEntry[], overwrite?: boolean, source?: 'cli' | 'template'): Promise<void>;
   setConfigEntry(key: string, value: unknown): Promise<void>;
   deleteConfigEntries(configKeyPrefix: string): Promise<void>;
 }
@@ -360,7 +360,7 @@ export interface ChangeSetVerdict {
   refusals: ChangeSetFinding[];
   /** Findings an allow entry let through. Every one of these is printed. */
   allowed: Array<ChangeSetFinding & { allowedBy: string }>;
-  /** True when CloudFormation reports the change set holds no changes. */
+  /** True when the change set needs no execution. */
   empty: boolean;
 }
 
@@ -461,11 +461,12 @@ export function evaluateChangeSet(
   allowReplacementOfType: ReadonlyMap<string, string> = new Map(),
   retainedByPolicy: ReadonlySet<string> = new Set(),
 ): ChangeSetVerdict {
+  const changes = description.Changes ?? [];
   const verdict: ChangeSetVerdict = { refusals: [], allowed: [], empty: isEmptyChangeSet(description) };
   const explicit = new Set(allowReplacement);
-  const allChanges = (description.Changes ?? []).flatMap((change) => (change.ResourceChange === undefined ? [] : [change.ResourceChange]));
+  const allChanges = changes.flatMap((change) => (change.ResourceChange === undefined ? [] : [change.ResourceChange]));
 
-  for (const change of description.Changes ?? []) {
+  for (const change of changes) {
     const resourceChange = change.ResourceChange;
     if (resourceChange === undefined) continue;
     const logicalId = resourceChange.LogicalResourceId ?? '<unknown>';
@@ -578,6 +579,7 @@ export class ExitWithCode extends Error {
 
 const STACK_STATUS_OK = new Set(['CREATE_COMPLETE', 'UPDATE_COMPLETE', 'IMPORT_COMPLETE']);
 const STACK_STATUS_IN_PROGRESS = /_IN_PROGRESS$/;
+const STACK_WAIT_TIMEOUT_MS = 4 * 60 * 60_000;
 
 // ---------------------------------------------------------------------------------------------
 // the invoker
@@ -867,10 +869,17 @@ export class CdkInvoker {
   }
 
   private async waitForStack(): Promise<StackDescription> {
+    const startedAt = this.deps.now();
     for (;;) {
       const stack = await this.deps.cfn.describeStack(this.stackName);
       const status = stack.StackStatus ?? '';
       if (STACK_STATUS_IN_PROGRESS.test(status)) {
+        if (this.deps.now() - startedAt >= STACK_WAIT_TIMEOUT_MS) {
+          throw new ExitWithCode(
+            1,
+            `Stack ${this.stackName} was still ${status} after ${STACK_WAIT_TIMEOUT_MS / 60_000} minutes. No further modules were deployed. Open the stack events in CloudFormation, resolve the resource that is still changing, then re-run the same deploy.`,
+          );
+        }
         await this.deps.sleep(this.pollIntervalMs);
         continue;
       }
@@ -966,6 +975,7 @@ export class CdkInvoker {
   private runsAsContainerTasks(config: ClusterConfig): boolean {
     if (!CONTAINER_SERVED_MODULES.includes(this.moduleName)) return false;
     if (!config.getBool('ecs.enabled', false)) return false;
+    if (this.moduleName === 'bastion-host') return true;
     return !config.getBool('ecs.retain_existing_hosts', false);
   }
 

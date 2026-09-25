@@ -9,6 +9,7 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
+from ideascheduler.app.api.job_waiting_signals import apply_waiting_signals
 from ideadatamodel import exceptions, errorcodes, SocaPaginator
 from ideadatamodel.scheduler import (
     ListNodesRequest,
@@ -213,6 +214,7 @@ class SchedulerAdminAPI(BaseAPI):
         page_start = payload.page_start
 
         entries = self.context.job_cache.list_jobs(_limit=page_size, _offset=page_start)
+        apply_waiting_signals(context=self.context, jobs=entries)
         total = self.context.job_cache.get_count()
 
         context.success(

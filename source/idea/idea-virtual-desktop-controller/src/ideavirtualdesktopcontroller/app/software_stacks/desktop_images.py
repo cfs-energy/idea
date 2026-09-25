@@ -104,7 +104,19 @@ class DesktopImageService:
 
     def _supported_base_stacks(self):
         """([(stack, (base_os, architecture))...], {ami_id: custom stack count})"""
-        base_stacks = []
+        stack_config = self._software_stack_db.get_base_software_stack_config() or {}
+        configured = {
+            (base_os, STACK_ARCH_TO_EC2[arch_key])
+            for base_os in BUILD_SUPPORTED_BASE_OS
+            for arch_key in (stack_config.get(base_os) or {})
+            if arch_key in STACK_ARCH_TO_EC2
+        }
+        base_stacks = {
+            pair: VirtualDesktopSoftwareStack(
+                base_os=pair[0], stack_id=base_stack_id(*pair)
+            )
+            for pair in configured
+        }
         sharing: Dict[str, int] = {}
         for stack in self._all_stacks():
             parsed = parse_base_stack_id(stack.stack_id)
@@ -112,9 +124,9 @@ class DesktopImageService:
                 if Utils.is_not_empty(stack.ami_id):
                     sharing[stack.ami_id] = sharing.get(stack.ami_id, 0) + 1
                 continue
-            if parsed[0] in BUILD_SUPPORTED_BASE_OS:
-                base_stacks.append((stack, parsed))
-        return base_stacks, sharing
+            if parsed in configured:
+                base_stacks[parsed] = stack
+        return [(stack, pair) for pair, stack in base_stacks.items()], sharing
 
     def list_images(self) -> List[ImageInventoryRow]:
         base_stacks, sharing = self._supported_base_stacks()

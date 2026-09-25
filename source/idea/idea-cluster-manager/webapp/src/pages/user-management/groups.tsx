@@ -378,7 +378,10 @@ class Groups extends Component<GroupsProps, GroupsState> {
                     {
                         id: 'enabled',
                         header: 'Status',
-                        cell: e => (e.enabled) ? <StatusIndicator type="success">Enabled</StatusIndicator> :
+                        cell: e => e.last_task_failure ?
+                            <StatusIndicator type="error" iconAriaLabel="Error">
+                                {e.last_task_failure.task}: {e.last_task_failure.message} ({new Date(e.last_task_failure.at).toLocaleString()})
+                            </StatusIndicator> : (e.enabled) ? <StatusIndicator type="success">Enabled</StatusIndicator> :
                             <StatusIndicator type="stopped">Disabled</StatusIndicator>,
                         sortingComparator: (a, b) => {
                             const valueA = a.enabled ? 1 : 0;

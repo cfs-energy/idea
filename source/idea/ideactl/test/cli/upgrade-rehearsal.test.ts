@@ -154,9 +154,7 @@ test(
     // row is ever absent while an application may read it.
     assert.doesNotMatch(result.stdout, /FINDING RISK TRANSIENT_ABSENCE /);
     assert.match(result.stdout, /^SYNC global_delete=0 /m);
-    // The routed step keeps the hosts and a migration step sets the input that selects it, so
-    // neither the missing shape nor the undriven shape is reported any more.
-    assert.doesNotMatch(result.stdout, /FINDING BLOCKING ROUTE_STAGE_UNDRIVEN /);
+    // The rehearsal still verifies the retained-host template shape.
     assert.doesNotMatch(result.stdout, /FINDING BLOCKING ROUTE_STAGE_MISSING /);
     assert.match(result.stdout, /^REAL_CLUSTER_ONLY stages=/m);
     assert.match(result.stdout, /^RESULT blocking_findings=0\b/m);

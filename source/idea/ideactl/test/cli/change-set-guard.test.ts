@@ -90,6 +90,14 @@ describe('evaluateChangeSet', () => {
       'AWS::SQS::Queue',
       'AWS::SNS::Topic',
       'AWS::Logs::LogGroup',
+      'AWS::EC2::VPC',
+      'AWS::EC2::Subnet',
+      'AWS::EC2::NatGateway',
+      'AWS::EC2::RouteTable',
+      'AWS::EC2::EIP',
+      'AWS::EC2::InternetGateway',
+      'AWS::EC2::VPCGatewayAttachment',
+      'AWS::EC2::Route',
     ];
     for (const resourceType of samples) {
       const verdict = evaluateChangeSet({ Changes: [change('Remove', 'someresource', resourceType)] });
@@ -293,8 +301,9 @@ describe('isStatefulType', () => {
   it('is false for an undefined type and for a stateless one', () => {
     assert.equal(isStatefulType(undefined), false);
     assert.equal(isStatefulType('AWS::AutoScaling::AutoScalingGroup'), false);
-    // An instance is replaced by an ordinary upgrade and is deliberately not in the set.
-    assert.equal(isStatefulType('AWS::EC2::Instance'), false);
+    for (const resourceType of ['AWS::EC2::Instance', 'AWS::EC2::NetworkInterface', 'AWS::EC2::SecurityGroup']) {
+      assert.equal(isStatefulType(resourceType), false, resourceType);
+    }
   });
 });
 
@@ -314,7 +323,7 @@ describe('CdkInvoker.deployThroughChangeSet', () => {
     home.restore();
   });
 
-  const invokerFor = (options: FakeDepsOptions, allowReplacement: string[] = []) => {
+  const invokerFor = (options: FakeDepsOptions, allowReplacement: string[] = [], pollIntervalMs?: number) => {
     const deps = fakeDeps(options);
     const invoker = new CdkInvoker({
       clusterName: CLUSTER,
@@ -324,6 +333,7 @@ describe('CdkInvoker.deployThroughChangeSet', () => {
       moduleSet: 'default',
       deploymentId: 'deployment-1',
       allowReplacement,
+      pollIntervalMs,
       deps,
     });
     return { deps, invoker };
@@ -438,6 +448,32 @@ describe('CdkInvoker.deployThroughChangeSet', () => {
     assert.ok(deps.stdout.some((line) => line.endsWith('no changes')));
   });
 
+  it('executes a change set that only updates cluster settings: that resource stamps the module version', async () => {
+    const { deps, invoker } = invokerFor({
+      changeSet: {
+        Status: 'CREATE_COMPLETE',
+        Changes: [change('Modify', 'analyticsclustersettings', 'Custom::ClusterSettings', 'False')],
+      },
+    });
+    const verdict = await invoker.deployThroughChangeSet();
+    assert.equal(verdict.empty, false);
+    assert.equal(deps.executed.length, 1);
+  });
+
+  it('executes a change set that updates cluster settings and another resource', async () => {
+    const { deps, invoker } = invokerFor({
+      changeSet: {
+        Status: 'CREATE_COMPLETE',
+        Changes: [
+          change('Modify', 'analyticsclustersettings', 'Custom::ClusterSettings', 'False'),
+          change('Modify', 'analyticsfunction', 'AWS::Lambda::Function', 'False'),
+        ],
+      },
+    });
+    await invoker.deployThroughChangeSet();
+    assert.equal(deps.executed.length, 1);
+  });
+
   it('fails without executing when the change set could not be created', async () => {
     const deps = fakeDeps({ spawnExitCodes: [1] });
     const invoker = new CdkInvoker({
@@ -497,5 +533,26 @@ describe('CdkInvoker.deployThroughChangeSet', () => {
       stack: { StackStatus: 'UPDATE_ROLLBACK_COMPLETE', StackStatusReason: 'resource failed' },
     });
     await assert.rejects(() => invoker.deployThroughChangeSet(), /UPDATE_ROLLBACK_COMPLETE/);
+  });
+
+  it('waits through update cleanup until the stack completes', async () => {
+    const { deps, invoker } = invokerFor({ changeSet: BENIGN_CHANGE_SET });
+    const statuses = ['UPDATE_COMPLETE_CLEANUP_IN_PROGRESS', 'UPDATE_COMPLETE_CLEANUP_IN_PROGRESS', 'UPDATE_COMPLETE'];
+    deps.cfn.describeStack = async () => ({ StackStatus: statuses.shift() });
+    await invoker.deployThroughChangeSet();
+    assert.deepEqual(deps.sleeps, [15_000, 15_000]);
+  });
+
+  it('stops waiting for an in-progress stack after four hours', async () => {
+    const { deps, invoker } = invokerFor(
+      { changeSet: BENIGN_CHANGE_SET, stack: { StackStatus: 'UPDATE_COMPLETE_CLEANUP_IN_PROGRESS' } },
+      [],
+      60 * 60_000,
+    );
+    await assert.rejects(
+      () => invoker.deployThroughChangeSet(),
+      /still UPDATE_COMPLETE_CLEANUP_IN_PROGRESS after 240 minutes/,
+    );
+    assert.deepEqual(deps.sleeps, [60 * 60_000, 60 * 60_000, 60 * 60_000, 60 * 60_000]);
   });
 });

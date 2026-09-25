@@ -55,6 +55,19 @@ def test_build_writes_the_first_boot_skip_markers():
     assert 'System upgrade completed' in rendered
 
 
+def test_rocky9_kernel_reboot_selects_the_installed_kernel_once():
+    rendered = render('_templates/linux/set_kernel.jinja2', base_os='rocky9')
+    retry_check = 'grep -Fq "kernel version change to ${target_version}"'
+
+    assert 'grubby --set-default "${target_kernel}"' in rendered
+    assert 'GRUB_DEFAULT=0' not in rendered
+    assert 'Key=idea:BootstrapStatus,Value=kernel-boot-mismatch' in rendered
+    assert rendered.index(retry_check) < rendered.index(
+        '# Check if target kernel is already installed'
+    )
+    assert rendered.index('grubby --set-default') < rendered.index('      reboot')
+
+
 def test_build_post_reboot_installs_dcv_but_never_registers():
     rendered = render('dcv-host-ami-builder/dcv_host_ami_builder_post_reboot.sh.jinja2')
     assert 'AmiBuilderStatus,Value=complete' in rendered

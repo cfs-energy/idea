@@ -19,7 +19,7 @@ import ClusterSettingsService from "../service/cluster-settings-service";
 import Utils from "./utils";
 import {Constants} from "./constants";
 import {IdeaAuthenticationContext} from "./authentication-context";
-import {IdeaClients} from "../client";
+import {IdeaClients, ReportingClient} from "../client";
 import AppLogger from "./app-logger";
 
 export interface AppContextProps {
@@ -55,6 +55,7 @@ class AppContext {
     private readonly clients: IdeaClients
     private readonly localStorageService: LocalStorageService
     private readonly authContext?: IdeaAuthenticationContext
+    private readonly reportingClient: ReportingClient
     private readonly authService: AuthService
     private readonly jobTemplatesService: JobTemplatesService
     private readonly clusterSettingsService: ClusterSettingsService
@@ -108,9 +109,28 @@ class AppContext {
             serviceWorkerRegistration: props.serviceWorkerRegistration
         })
 
+        this.reportingClient = new ReportingClient({
+            ...this.clients.auth().props,
+            name: 'reporting-client'
+        })
+
         this.authService = new AuthService({
+            reporting: this.reportingClient,
             localStorage: this.localStorageService,
             clients: this.clients
+        })
+
+        new Set([...this.clients.getClients(), this.clients.scheduler(), this.clients.virtualDesktopAdmin(), this.reportingClient]).forEach(client => {
+            const invoke = client.apiInvoker.invoke.bind(client.apiInvoker)
+            client.apiInvoker.invoke = async (request, isPublic = false) => {
+                if (!isPublic && request.header?.namespace !== 'Reporting.GetCapabilities') {
+                    const loggedIn = await this.authService.isLoggedIn()
+                    if (!loggedIn || (request.header?.namespace.startsWith('Reporting.') && !this.authService.canReadReporting())) {
+                        throw new IdeaException({errorCode: 'UNAUTHORIZED_ACCESS', message: 'Access denied'})
+                    }
+                }
+                return invoke(request, isPublic)
+            }
         })
 
         this.clusterSettingsService = new ClusterSettingsService({
@@ -276,9 +296,13 @@ class AppContext {
     setHooks(onLogin: () => Promise<boolean>, onLogout: () => Promise<boolean>) {
         this.onLogin = onLogin
         this.onLogout = onLogout
-        this.authService.setHooks(onLogin, onLogout)
-        this.clients.getClients().forEach(client => {
-            client.setHooks(onLogin, onLogout)
+        const clearAndLogout = () => {
+            this.authService.clearSession()
+            return onLogout()
+        }
+        this.authService.setHooks(onLogin, clearAndLogout)
+        new Set([...this.clients.getClients(), this.clients.scheduler(), this.clients.virtualDesktopAdmin(), this.reportingClient]).forEach(client => {
+            client.setHooks(onLogin, clearAndLogout)
         })
     }
 
@@ -344,6 +368,10 @@ class AppContext {
 
     client(): IdeaClients {
         return this.clients
+    }
+
+    reporting(): ReportingClient {
+        return this.reportingClient
     }
 
     auth(): AuthService {

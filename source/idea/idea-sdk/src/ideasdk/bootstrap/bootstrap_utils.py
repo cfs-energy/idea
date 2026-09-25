@@ -105,10 +105,6 @@ class BootstrapUtils:
                     base_os=bootstrap_context.base_os,
                     namespace=metrics_namespace,
                     node_exporter=True,
-                    app_exporter=node_type == constants.NODE_TYPE_APP,
                 ),
             ).build()
-            exporters = ['node_exporter']
-            if node_type == constants.NODE_TYPE_APP:
-                exporters.append('app_exporter')
-            bootstrap_context.vars.prometheus_exporters = exporters
+            bootstrap_context.vars.prometheus_exporters = ['node_exporter']

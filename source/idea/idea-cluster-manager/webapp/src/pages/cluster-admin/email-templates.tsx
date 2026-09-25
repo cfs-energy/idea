@@ -156,7 +156,7 @@ class EmailTemplates extends Component<EmailTemplatesProps, EmailTemplatesState>
                               createOrUpdate = (request: any) => this.emailTemplates().createEmailTemplate(request)
                           }
                           createOrUpdate({
-                              template: values
+                              template: {...values, template_type: 'jinja2'}
                           }).then(() => {
                               this.setState({
                                   emailTemplateSelected: false
@@ -175,7 +175,7 @@ class EmailTemplates extends Component<EmailTemplatesProps, EmailTemplatesState>
                           {
                               name: 'title',
                               title: 'Title',
-                              description: 'Enter a user friendly email template title',
+                              description: 'A title for the template.',
                               data_type: 'str',
                               param_type: 'text',
                               validate: {
@@ -185,8 +185,8 @@ class EmailTemplates extends Component<EmailTemplatesProps, EmailTemplatesState>
                           {
                               name: 'name',
                               title: 'Template Name',
-                              description: 'Enter name for the email template',
-                              help_text: 'Name cannot contain white spaces or special characters and should be between 3 an 32 characters',
+                              description: 'A unique template name.',
+                              help_text: 'Use 3–32 lowercase letters, digits, dots, underscores or hyphens.',
                               data_type: 'str',
                               param_type: 'text',
                               readonly: isUpdate,
@@ -198,7 +198,8 @@ class EmailTemplates extends Component<EmailTemplatesProps, EmailTemplatesState>
                           {
                               name: 'template_type',
                               title: 'Type',
-                              description: 'Select a template type',
+                              readonly: true,
+                              description: 'Templates use Jinja2.',
                               data_type: 'str',
                               param_type: 'select',
                               choices: [
@@ -243,7 +244,7 @@ class EmailTemplates extends Component<EmailTemplatesProps, EmailTemplatesState>
             <IdeaListView
                 ref={this.listing}
                 title="Email Templates"
-                description="Email Templates Management"
+                description="Create and edit notification templates."
                 selectionType="single"
                 preferencesKey={'email-templates'}
                 showPreferences={false}

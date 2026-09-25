@@ -14,6 +14,7 @@ Test Cases for AccountsService
 """
 
 from ideaclustermanager import AppContext
+from ideaclustermanager.app.accounts.db.user_dao import UserDAO
 from ideadatamodel import exceptions, errorcodes, User, ListUsersRequest
 
 import botocore.exceptions
@@ -23,6 +24,28 @@ from typing import Optional
 
 class AccountsTestContext:
     crud_user: Optional[User]
+
+
+def test_user_instance_type_exceptions_are_serialized():
+    stored = UserDAO.convert_to_db(
+        User(
+            username='desktop-user',
+            instance_type_exceptions=['m6a.large', 'g5.xlarge'],
+        )
+    )
+    assert stored['instance_type_exceptions'] == ['m6a.large', 'g5.xlarge']
+
+    dao = object.__new__(UserDAO)
+    assert dao.convert_from_db(stored).instance_type_exceptions == [
+        'm6a.large',
+        'g5.xlarge',
+    ]
+    assert (
+        UserDAO.convert_to_db(
+            User(username='desktop-user', instance_type_exceptions=[])
+        )['instance_type_exceptions']
+        == []
+    )
 
 
 def test_accounts_create_user_missing_username_should_fail(context: AppContext):
@@ -165,6 +188,7 @@ def test_accounts_crud_modify_user(context: AppContext):
         uid=6000,
         gid=6000,
         login_shell='/bin/csh',
+        instance_type_exceptions=['m6a.large'],
     )
     context.accounts.modify_user(user=modify_user, email_verified=True)
 
@@ -174,6 +198,15 @@ def test_accounts_crud_modify_user(context: AppContext):
     assert user.uid == modify_user.uid
     assert user.gid == modify_user.gid
     assert user.login_shell == modify_user.login_shell
+    assert user.instance_type_exceptions == modify_user.instance_type_exceptions
+
+    context.accounts.modify_user(
+        user=User(username=crud_user.username, instance_type_exceptions=[])
+    )
+    assert (
+        context.accounts.get_user(username=crud_user.username).instance_type_exceptions
+        == []
+    )
 
 
 def test_accounts_crud_disable_user(context: AppContext):
@@ -399,3 +432,283 @@ def test_accounts_create_user_pool_failure_after_create_deletes_pool_user(
 
     assert deleted == ['poolfailuser']
     assert context.accounts.user_dao.get_user('poolfailuser') is None
+
+
+@pytest.mark.parametrize('administrator', [False, True])
+def test_group_listing_redacts_other_user_instance_type_exceptions(administrator):
+    from unittest.mock import Mock
+    from ideadatamodel import ListUsersInGroupRequest, ListUsersInGroupResult
+    from ideaclustermanager.app.api.auth_api import AuthAPI
+
+    users = [
+        User(username=username, instance_type_exceptions=['m6a.large'])
+        for username in ['user-a', 'user-b']
+    ]
+    invocation = Mock()
+    invocation.namespace = 'Auth.ListUsersInGroup'
+    invocation.is_authenticated.return_value = True
+    invocation.is_administrator.return_value = administrator
+    invocation.get_username.return_value = 'user-a'
+    invocation.get_request_payload_as.return_value = ListUsersInGroupRequest(
+        group_names=['group-a']
+    )
+    api = AuthAPI.__new__(AuthAPI)
+    api.context = Mock()
+    api.context.accounts.list_users_in_group.return_value = ListUsersInGroupResult(
+        listing=users
+    )
+    api.invoke(invocation)
+    listing = invocation.success.call_args.args[0].listing
+    assert listing[0].instance_type_exceptions == ['m6a.large']
+    assert listing[1].instance_type_exceptions == (
+        ['m6a.large'] if administrator else None
+    )
+    assert users[1].instance_type_exceptions == ['m6a.large']
+
+
+@pytest.fixture
+def reporting_accounts():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from ideaclustermanager.app.accounts.accounts_service import AccountsService
+    from ideaclustermanager.app.accounts.db.group_dao import GroupDAO
+    from ideadatamodel import constants
+    from ideasdk.config.soca_config import SocaConfig
+    from ideasdk.utils import GroupNameHelper
+
+    config = SocaConfig(
+        {
+            'identity-provider': {
+                'cognito': {
+                    'administrators_group_name': 'administrators',
+                    'managers_group_name': 'managers',
+                }
+            },
+            'directoryservice': {'provider': 'openldap'},
+            'cluster': {
+                'administrator_username': 'admin-user',
+                'administrator_email': 'admin@example.invalid',
+            },
+        }
+    )
+    context = SimpleNamespace(
+        config=lambda: config,
+        get_cluster_modules=lambda: [
+            {
+                'module_id': constants.MODULE_CLUSTER_MANAGER,
+                'name': constants.MODULE_CLUSTER_MANAGER,
+                'type': constants.MODULE_TYPE_APP,
+            }
+        ],
+    )
+    accounts = object.__new__(AccountsService)
+    accounts.context = context
+    accounts.group_name_helper = GroupNameHelper(context)
+    accounts.logger = Mock()
+    accounts.ldap_client = Mock()
+    accounts.ldap_client.is_readonly.return_value = False
+    accounts.ldap_client.get_group.return_value = {'gid': 1400}
+    accounts.group_dao = Mock()
+    groups = {}
+    accounts.group_dao.get_group.side_effect = groups.get
+    accounts.group_dao.create_group.side_effect = lambda group: groups.update(
+        {group['group_name']: group}
+    )
+    accounts.group_dao.convert_to_db.side_effect = GroupDAO.convert_to_db
+    accounts.group_dao.convert_from_db.side_effect = GroupDAO.convert_from_db
+    accounts.user_dao = Mock()
+    accounts.user_dao.get_user.return_value = {'username': 'admin-user'}
+    accounts.sequence_config_dao = Mock()
+    accounts.sequence_config_dao.next_gid.side_effect = iter(range(2000, 2100))
+    accounts.task_manager = Mock()
+    accounts.user_pool = Mock()
+    accounts.group_members_dao = Mock()
+    return accounts, groups
+
+
+@pytest.mark.parametrize('readonly', [False, True])
+@pytest.mark.parametrize(
+    'configured', [None, 'report-readers', 'report-readers-cluster-group']
+)
+@pytest.mark.parametrize('upgrade', [False, True])
+def test_operations_group_boot_is_idempotent(
+    reporting_accounts, readonly, configured, upgrade
+):
+    from ideadatamodel import constants
+
+    accounts, groups = reporting_accounts
+    config = accounts.context.config()
+    if configured is not None:
+        config.put('identity-provider.cognito.operations_leads_group_name', configured)
+    name = accounts.group_name_helper.get_cluster_operations_leads_group()
+    assert name == (
+        'report-readers-cluster-group'
+        if configured
+        else 'operations-leads-cluster-group'
+    )
+    config.put(f'directoryservice.group_mapping.{name}', 'directory-report-readers')
+    accounts.ldap_client.is_readonly.return_value = readonly
+    if upgrade:
+        accounts.create_defaults()
+        del groups[name]
+        accounts.group_dao.create_group.reset_mock()
+        accounts.task_manager.send.reset_mock()
+    accounts.create_defaults()
+    group = dict(groups[name])
+    assert group['group_type'] == constants.GROUP_TYPE_CLUSTER
+    assert group['enabled']
+    if readonly:
+        assert group['ds_name'] == 'directory-report-readers'
+        assert group['gid'] == 1400
+        accounts.ldap_client.get_group.assert_any_call(
+            group_name='directory-report-readers'
+        )
+        accounts.sequence_config_dao.next_gid.assert_not_called()
+    else:
+        assert 'ds_name' not in group
+        assert group['gid'] >= 2000
+        accounts.ldap_client.get_group.assert_not_called()
+    if upgrade:
+        accounts.group_dao.create_group.assert_called_once()
+    syncs = [
+        call
+        for call in accounts.task_manager.send.call_args_list
+        if call.kwargs['payload'] == {'group_name': name}
+    ]
+    assert len(syncs) == 1
+    assert syncs[0].kwargs['task_name'] == 'accounts.sync-group'
+    accounts.group_dao.create_group.reset_mock()
+    accounts.task_manager.send.reset_mock()
+    accounts.create_defaults()
+    assert groups[name] == group
+    accounts.group_dao.create_group.assert_not_called()
+    accounts.task_manager.send.assert_not_called()
+
+
+@pytest.mark.parametrize('directory_group', [None, {}])
+def test_readonly_operations_group_requires_directory_gid(
+    reporting_accounts, directory_group
+):
+    accounts, groups = reporting_accounts
+    accounts.create_defaults()
+    name = accounts.group_name_helper.get_cluster_operations_leads_group()
+    del groups[name]
+    accounts.ldap_client.is_readonly.return_value = True
+    accounts.ldap_client.get_group.return_value = directory_group
+    accounts.create_defaults()
+    assert name not in groups
+    status = accounts.operations_leads_configuration_status
+    assert status['status'] == 'configuration_required'
+    assert status['group_name'] == name
+    assert name in status['reason']
+    assert 'gidNumber' in status['reason']
+    accounts.logger.warning.assert_called_with(status['reason'])
+
+    from ideasdk.api import ApiInvocationContext
+    from ideasdk.auth import ApiAuthorization, ApiAuthorizationType
+    from unittest.mock import Mock
+
+    invocation = object.__new__(ApiInvocationContext)
+    invocation._group_name_helper = accounts.group_name_helper
+    invocation._token_service = Mock()
+    invocation.has_access_token = lambda: True
+    invocation.is_unix_domain_socket_invocation = lambda: False
+    invocation.get_authorization = lambda: ApiAuthorization(
+        type=ApiAuthorizationType.USER, groups=[]
+    )
+    assert invocation.can_read_reporting() is False
+
+    accounts.context.config().put(
+        f'directoryservice.group_mapping.{name}', 'directory-report-readers'
+    )
+    accounts.ldap_client.get_group.return_value = {'gid': 1400}
+    accounts.create_defaults()
+    assert groups[name]['gid'] == 1400
+    assert groups[name]['ds_name'] == 'directory-report-readers'
+    assert accounts.operations_leads_configuration_status['status'] == 'ready'
+    accounts.group_dao.create_group.reset_mock()
+    accounts.create_defaults()
+    accounts.group_dao.create_group.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    'group_name',
+    [
+        'administrators',
+        'administrators-cluster-group',
+        'managers',
+        'managers-cluster-group',
+        'cluster-manager-administrators-module-group',
+        'cluster-manager-administrators-module-group-cluster-group',
+    ],
+)
+def test_operations_group_rejects_privileged_collisions_before_provisioning(
+    reporting_accounts, group_name
+):
+    accounts, _ = reporting_accounts
+    accounts.context.config().put(
+        'identity-provider.cognito.operations_leads_group_name', group_name
+    )
+    with pytest.raises(exceptions.SocaException, match='privileged group'):
+        accounts.create_defaults()
+    accounts.group_dao.create_group.assert_not_called()
+    accounts.task_manager.send.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    'privileged_key', ['administrators_group_name', 'managers_group_name']
+)
+def test_operations_group_rejects_custom_privileged_names(
+    reporting_accounts, privileged_key
+):
+    accounts, _ = reporting_accounts
+    config = accounts.context.config()
+    config.put(f'identity-provider.cognito.{privileged_key}', 'shared-readers')
+    config.put(
+        'identity-provider.cognito.operations_leads_group_name',
+        'shared-readers-cluster-group',
+    )
+    with pytest.raises(exceptions.SocaException, match='privileged group'):
+        accounts.create_defaults()
+
+
+def test_operations_membership_synchronizes_without_removing_other_groups(
+    reporting_accounts,
+):
+    accounts, _ = reporting_accounts
+    accounts.create_defaults()
+    name = accounts.group_name_helper.get_cluster_operations_leads_group()
+    existing_groups = ['managers-cluster-group', 'cluster-manager-users-module-group']
+    user = {
+        'username': 'reporting-user',
+        'enabled': True,
+        'sudo': False,
+        'additional_groups': list(existing_groups),
+    }
+    accounts.user_dao.get_user.return_value = user
+    accounts.user_dao.update_user.side_effect = user.update
+    accounts.add_users_to_group([user['username']], name)
+    accounts.add_users_to_group([user['username']], name)
+    assert user['additional_groups'] == existing_groups + [name]
+    assert user['sudo'] is False
+    accounts.user_pool.admin_add_user_to_group.assert_called_with(
+        username=user['username'], group_name=name
+    )
+    accounts.group_members_dao.create_membership.assert_called_with(
+        name, user['username']
+    )
+    accounts.remove_users_from_group([user['username']], name)
+    assert user['additional_groups'] == existing_groups
+    assert user['sudo'] is False
+    accounts.user_pool.admin_remove_user_from_group.assert_called_once_with(
+        username=user['username'], group_name=name
+    )
+    accounts.group_members_dao.delete_membership.assert_called_once_with(
+        name, user['username']
+    )
+    assert [
+        call.kwargs['payload']['operation']
+        for call in accounts.task_manager.send.call_args_list
+        if call.kwargs['task_name'] == 'accounts.group-membership-updated'
+    ] == ['add', 'add', 'remove']

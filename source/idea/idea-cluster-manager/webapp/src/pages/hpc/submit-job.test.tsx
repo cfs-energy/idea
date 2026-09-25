@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import SubmitJob from './submit-job';
@@ -106,6 +106,64 @@ describe('submit job page', () => {
 
         expect(await screen.findByText('Job Submission Failed')).toBeInTheDocument();
         expect(await screen.findByText(/qsub: Queue is not enabled/)).toBeInTheDocument();
+    });
+
+    it('confirms a large job before submitting it', async () => {
+        const context = initTestAppContext();
+        const scheduler = context.client().scheduler();
+        vi.spyOn(scheduler, 'getUserApplications').mockResolvedValue({
+            applications: [{
+                ...APPLICATION,
+                form_template: {
+                    sections: [{
+                        name: 'job-params',
+                        params: [
+                            { name: 'job_name', title: 'Job Name', param_type: 'text', data_type: 'str', default: 'test-job' },
+                            { name: 'instance_type', title: 'Instance Type', param_type: 'text', data_type: 'str', default: 'c5.large' },
+                            { name: 'cpus', title: 'CPUs', param_type: 'text', data_type: 'int', default: 20 }
+                        ]
+                    }]
+                }
+            }]
+        } as any);
+        vi.spyOn(scheduler, 'getInstanceTypeOptions').mockResolvedValue(INSTANCE_TYPE_OPTIONS as any);
+        const submitJob = vi.spyOn(scheduler, 'submitJob').mockResolvedValue({ accepted: true } as any);
+
+        const user = userEvent.setup();
+        renderSubmitJob();
+
+        await screen.findByText('Job Name');
+        const submitButton = (await screen.findAllByRole('button', { name: /^Submit Job$/ }))[0];
+        await waitFor(() => expect(submitButton).not.toBeDisabled());
+        await user.click(submitButton);
+
+        let dialog = await screen.findByRole('dialog', { name: 'Confirm Job Size' });
+        await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+        expect(submitJob).not.toHaveBeenCalled();
+
+        await user.click(submitButton);
+        dialog = await screen.findByRole('dialog', { name: 'Confirm Job Size' });
+        await user.click(within(dialog).getByRole('button', { name: 'Submit Job' }));
+        await waitFor(() => expect(submitJob).toHaveBeenCalledTimes(1));
+    });
+
+    it('shows an architecture validation rejection before a job is queued', async () => {
+        const context = initTestAppContext();
+        const scheduler = context.client().scheduler();
+        vi.spyOn(scheduler, 'getUserApplications').mockResolvedValue({ applications: [APPLICATION] } as any);
+        vi.spyOn(scheduler, 'getInstanceTypeOptions').mockResolvedValue(INSTANCE_TYPE_OPTIONS as any);
+        vi.spyOn(scheduler, 'submitJob').mockResolvedValue({
+            accepted: false,
+            validations: {results: [{error_code: 'INVALID_PARAMS', message: 'Requested instances run arm64, but the image is x86_64.'}]}
+        });
+        const user = userEvent.setup();
+        renderSubmitJob();
+        await screen.findByText('Job Name');
+        const submit = (await screen.findAllByRole('button', {name: /^Submit Job$/}))[0];
+        await waitFor(() => expect(submit).not.toBeDisabled());
+        await user.click(submit);
+        expect(await screen.findByText('Requested instances run arm64, but the image is x86_64.')).toBeInTheDocument();
+        expect(screen.queryByText('Job Submitted Successfully')).toBeNull();
     });
 
     // a hung scheduler api answers with a timeout rather than an application listing. reported

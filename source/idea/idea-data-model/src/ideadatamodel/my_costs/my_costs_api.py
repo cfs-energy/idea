@@ -26,7 +26,7 @@ __all__ = (
 
 from ideadatamodel import SocaPayload, SocaBaseModel
 
-from typing import Optional, List
+from typing import Optional, List, Literal
 from pydantic import Field, model_serializer
 
 
@@ -166,7 +166,9 @@ class UserCosts(SocaBaseModel):
     job_cost_unavailable: Optional[bool] = Field(default=None)
     storage_cost: Optional[float] = Field(default=None)
     storage_gb: Optional[float] = Field(default=None)
+    storage_cost_period: Optional[str] = Field(default=None)
     total_cost: Optional[float] = Field(default=None)
+    total_cost_excludes_storage: bool = Field(default=False)
 
 
 # Costs.ListUserCosts
@@ -186,6 +188,14 @@ class ListUserCostsResult(SocaPayload):
     jobs_unavailable: Optional[bool] = Field(default=None)
     desktops_unavailable: Optional[bool] = Field(default=None)
     storage_unavailable: Optional[bool] = Field(default=None)
+    storage_disabled: bool = Field(default=False)
+    storage_configuration_status: Optional[
+        Literal['disabled', 'not_configured', 'unsupported', 'enabled']
+    ] = Field(default=None)
+    storage_configuration_reason: Optional[str] = Field(default=None)
+    storage_metrics_provider: Optional[str] = Field(default=None)
+    storage_has_efs: Optional[bool] = Field(default=None)
+    storage_data_available: Optional[bool] = Field(default=None)
 
 
 # Costs.GetUserSummary

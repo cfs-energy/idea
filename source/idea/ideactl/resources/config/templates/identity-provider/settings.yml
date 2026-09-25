@@ -13,6 +13,7 @@ provider: "{{identity_provider}}"
 cognito:
   administrators_group_name: administrators-cluster-group
   managers_group_name: managers-cluster-group
+  operations_leads_group_name: operations-leads-cluster-group
   removal_policy: "DESTROY" # RETAIN will preserve the user pool even if you delete the stack.
   advanced_security_mode: "OFF"  # Allowed values: AUDIT, ENFORCED, OFF - Depending on regional ability. See https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-cognito-userpool-userpooladdons.html
                                  # NOTE: Setting this to "AUDIT" or "ENFORCED" requires Cognito Plus feature plan. See https://docs.aws.amazon.com/cognito/latest/developerguide/feature-plans-features-plus.html

@@ -105,6 +105,7 @@ export interface CostSectionsProps {
     onRetry?: () => void
     /** Empty state wording: "You have not" reads wrong on another user's page. */
     subject?: 'self' | 'user'
+    historicalStorageNotice?: boolean
 }
 
 /**
@@ -119,7 +120,7 @@ export const showAiSection = (summary: GetMyCostsSummaryResult | null, loading: 
     return (ai?.total_tokens ?? 0) > 0 || (ai?.invocations ?? 0) > 0
 }
 
-const CostSections: React.FC<CostSectionsProps> = ({summary, loading, error, onRetry, subject = 'self'}) => {
+const CostSections: React.FC<CostSectionsProps> = ({summary, loading, error, onRetry, subject = 'self', historicalStorageNotice = false}) => {
 
     const [expandedAi, setExpandedAi] = useState<AiRow[]>([])
 
@@ -294,6 +295,9 @@ const CostSections: React.FC<CostSectionsProps> = ({summary, loading, error, onR
 
     return (
         <SpaceBetween size="l">
+            {historicalStorageNotice && <Box color="text-body-secondary">
+                The monthly total retains storage costs already recorded for its displayed period. A missing or unavailable storage amount is not $0.00.
+            </Box>}
             <section id="cost-ai" tabIndex={-1} aria-label="AI cost details">
                 {showAiSection(summary, loading) ? renderAi() : <Box>No AI usage in this period.</Box>}
             </section>

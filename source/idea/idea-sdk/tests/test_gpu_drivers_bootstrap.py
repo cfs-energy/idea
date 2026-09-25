@@ -37,17 +37,13 @@ def build_bootstrap_context(
 
 def render_gpu_drivers(
     config,
-    base_os: str = 'amazonlinux2023',
     instance_type: str = 'c5.large',
-    node_type: str = 'compute',
 ) -> str:
     env = Jinja2Utils.env_using_file_system_loader(IDEA_BOOTSTRAP_DIR)
     template = env.get_template(GPU_DRIVERS_TEMPLATE)
     return template.render(
-        context=build_bootstrap_context(
-            config, base_os=base_os, instance_type=instance_type
-        ),
-        node_type=node_type,
+        context=build_bootstrap_context(config, instance_type=instance_type),
+        node_type='compute',
     )
 
 
@@ -283,6 +279,18 @@ def extract_case_arm_families(rendered: str) -> set:
     return families
 
 
+def extract_case_arm(rendered: str, family: str) -> str:
+    import re
+
+    match = re.search(
+        rf'^    {re.escape(family)}\)$(.*?)^      ;;$',
+        rendered,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert match is not None
+    return match.group(1)
+
+
 def test_gpu_family_lockstep_invariant(context):
     """
     every family in gpu_settings.instance_families must have a case arm in
@@ -317,6 +325,28 @@ def test_gpu_family_lockstep_invariant(context):
     ) - {'ltsb_version', 'production_version'}
     assert fixture_families == real_families
     assert fixture_nvidia == real_nvidia
+
+
+def test_g7_driver_mappings(context):
+    config = context.config()
+    rendered = render_gpu_drivers(config, instance_type='g7.xlarge')
+
+    g7_arm = extract_case_arm(rendered, 'g7')
+    assert 'install_nvidia_public_drivers' in g7_arm
+    assert 'install_nvidia_grid_drivers' not in g7_arm
+
+    g7e_arm = extract_case_arm(rendered, 'g7e')
+    assert 'install_nvidia_grid_drivers' in g7e_arm
+    assert 'install_nvidia_public_drivers' in g7e_arm
+
+    gpu_settings = load_real_gpu_settings()
+    production_version = gpu_settings['nvidia_public_driver_versions'][
+        'production_version'
+    ]
+    assert str(production_version).startswith('580.')
+    assert gpu_settings['nvidia_public_driver_versions']['g7'] == production_version
+    assert gpu_settings['nvidia_public_driver_versions']['g7e'] == production_version
+    assert gpu_settings['nvidia']['linux']['s3_bucket_path'].endswith('/latest/')
 
 
 RUNNING_KERNEL = '6.12.55-74.119.amzn2023.x86_64'

@@ -82,7 +82,7 @@ cost_estimation:
   # Update EBS rate for your region
   # EBS Formulas: https://aws.amazon.com/ebs/pricing/
   ebs_gp3_storage: 0.08 # $ per gb per month
-  ebs_io1_storage: 0.125 # IOPS per month
+  ebs_io1_storage: 0.125 # USD per GB-month
   provisioned_iops: 0.065 # IOPS per month
   fsx_lustre: 0.000194 # GB per hour
 
@@ -110,6 +110,9 @@ job_provisioning:
   # housekeeping cycles ensure new ec2 instances (nodes) join the cluster and old nodes are deleted.
   # additionally, custom metrics are published at below frequency for cluster monitoring
   node_housekeeping_interval_seconds: 60
+
+  # terminate job nodes that remain unavailable to the scheduler for this duration.
+  node_unavailable_timeout_seconds: 1800
 
   # the interval that job monitor waits before fetching new jobs queued from scheduler.
   job_submission_queue_interval_seconds: 1

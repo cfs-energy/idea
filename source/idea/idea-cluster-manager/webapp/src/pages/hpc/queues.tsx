@@ -20,7 +20,7 @@ import {HpcQueueProfile} from '../../client/data-model'
 import IdeaSplitPanel from "../../components/split-panel";
 import {TableProps} from "@cloudscape-design/components/table";
 import Utils from "../../common/utils";
-import {ColumnLayout, StatusIndicator, Tabs} from "@cloudscape-design/components";
+import {Box, ColumnLayout, SpaceBetween, StatusIndicator, Tabs} from "@cloudscape-design/components";
 import {KeyValue, KeyValueGroup} from "../../components/key-value";
 import {QueueUtils} from "./hpc-utils";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
@@ -95,7 +95,13 @@ export const HPC_QUEUE_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<Hpc
             const status = queue.status!
             if (status === 'active') return <StatusIndicator type="success">Active</StatusIndicator>
             if (status === 'idle') return <StatusIndicator type="pending">Idle</StatusIndicator>
-            return <StatusIndicator type="error">Blocked</StatusIndicator>
+            return <SpaceBetween size="xxs">
+                <StatusIndicator type="error">Blocked</StatusIndicator>
+                <Box>Queued jobs: {queue.queue_size ?? '-'}</Box>
+                <Box>Limit: {queue.limit_info?.limit_type ?? '-'}</Box>
+                <Box>Queue threshold / current: {queue.limit_info?.queue_threshold ?? '-'} / {queue.limit_info?.queue_current ?? '-'}</Box>
+                {queue.limit_info?.group_threshold != null && <Box>Group threshold / current: {queue.limit_info.group_threshold} / {queue.limit_info.group_current ?? '-'}</Box>}
+            </SpaceBetween>
         },
         sortingComparator: (a, b) => {
             // Status priority: active (highest), idle, blocked (lowest)

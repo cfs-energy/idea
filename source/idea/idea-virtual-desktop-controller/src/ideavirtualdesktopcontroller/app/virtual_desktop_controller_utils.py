@@ -78,11 +78,12 @@ PASS_PROJECT_ROLE_FAILURE_MESSAGE = 'This desktop runs under the IAM role of its
 # desktop never came up outlives a host that never became reachable.
 BOOTSTRAP_STATUS_TAG = 'idea:BootstrapStatus'
 
-# every value fail_gpu_drivers in idea-bootstrap can write.
+# every failure status idea-bootstrap can write.
 BOOTSTRAP_STATUS_MESSAGES = {
     'gpu-driver-install-failed': 'The GPU driver failed to install on the host for this desktop, so it never became usable. The host has been released. Ask an administrator to check the GPU driver bootstrap log for this instance type.',
     'gpu-driver-mapping-missing': 'The host for this desktop has GPU hardware that IDEA has no driver for, so it never became usable. The host has been released. Choose a different instance type, or ask an administrator.',
     'gpu-kernel-devel-missing': 'No kernel headers were available on the host for this desktop, so the GPU driver could not be built and the desktop never became usable. The host has been released. Ask an administrator to check the software stack image.',
+    'kernel-boot-mismatch': 'The host for this desktop did not boot the kernel installed during bootstrap, so the desktop never became usable. The host has been released. Ask an administrator to check the software stack image boot configuration.',
 }
 
 BOOTSTRAP_STATUS_DEFAULT_MESSAGE = 'The host for this desktop stopped its own bootstrap with status "{bootstrap_status}", so the desktop never became usable. The host has been released. Ask an administrator to check the bootstrap log for this instance.'
@@ -1232,7 +1233,9 @@ class VirtualDesktopControllerUtils:
         return VirtualDesktopGPU.NO_GPU
 
     def _get_instance_type_allow_deny(
-        self, software_stack: VirtualDesktopSoftwareStack = None
+        self,
+        software_stack: VirtualDesktopSoftwareStack = None,
+        username: str = None,
     ) -> Dict[str, set]:
         # a software stack's own allow list wins over the cluster-wide one. entries without a
         # dot are families, entries with a dot are exact instance types.
@@ -1266,6 +1269,16 @@ class VirtualDesktopControllerUtils:
                 allow_deny['allowed_names'].add(instance_type)
             else:
                 allow_deny['allowed_families'].add(instance_type)
+        if Utils.is_not_empty(username):
+            response = self.context.accounts_client.get_user(
+                GetUserRequest(username=username)
+            )
+            if response is not None and response.user is not None:
+                allow_deny['allowed_names'].update(
+                    Utils.get_as_list(
+                        response.user.instance_type_exceptions, default=[]
+                    )
+                )
         for instance_type in denied_instance_types:
             if '.' in instance_type:
                 allow_deny['denied_names'].add(instance_type)
@@ -1374,6 +1387,7 @@ class VirtualDesktopControllerUtils:
         hibernation_support: bool,
         software_stack: VirtualDesktopSoftwareStack = None,
         gpu: VirtualDesktopGPU = None,
+        username: str = None,
     ) -> Optional[str]:
         """
         the same filter get_valid_instance_types applies, asked about one requested size.
@@ -1386,7 +1400,7 @@ class VirtualDesktopControllerUtils:
         return self._instance_type_rejection_reason(
             instance_type_name=instance_type_name,
             instance_info=instance_info,
-            allow_deny=self._get_instance_type_allow_deny(software_stack),
+            allow_deny=self._get_instance_type_allow_deny(software_stack, username),
             hibernation_support=hibernation_support,
             software_stack=software_stack,
             gpu=gpu,
@@ -1397,6 +1411,7 @@ class VirtualDesktopControllerUtils:
         hibernation_support: bool,
         software_stack: VirtualDesktopSoftwareStack = None,
         gpu: VirtualDesktopGPU = None,
+        username: str = None,
     ) -> List[Dict]:
         instance_types_names = (
             self.context.cache()
@@ -1422,7 +1437,7 @@ class VirtualDesktopControllerUtils:
         valid_instance_types = []
         valid_instance_types_names = []
 
-        allow_deny = self._get_instance_type_allow_deny(software_stack)
+        allow_deny = self._get_instance_type_allow_deny(software_stack, username)
 
         if self._logger.isEnabledFor(logging.DEBUG):
             self._logger.debug(

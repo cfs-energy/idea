@@ -143,3 +143,85 @@ def test_sweep_failure_does_not_skip_queue_adoption():
     monitor._reconcile_queue.assert_called_once_with(
         queue='normal', log_tag='job-reconciler'
     )
+
+
+def test_disabled_owner_snapshot_and_reason_survive_deletion():
+    ctx = context()
+    job = SocaJob(job_id='1', owner='user', state=SocaJobState.QUEUED)
+    ctx.scheduler.list_jobs.return_value = [job]
+    ctx.scheduler.get_job.return_value = job
+
+    def deleted(job_id):
+        ctx.job_cache.sync.assert_called_once_with(jobs=[job])
+        ctx.job_cache.record_deleted_job.assert_not_called()
+
+    ctx.scheduler.delete_job.side_effect = deleted
+    sweep_disabled_jobs(ctx)
+    ctx.scheduler.delete_job.assert_called_once_with('1')
+    recorded = ctx.job_cache.record_deleted_job.call_args.kwargs
+    assert recorded['job'] is job
+    assert recorded['error_code'] == 'JOB_DELETED_DISABLED_OWNER'
+    assert 'owner is disabled' in recorded['message']
+
+
+def test_failed_deletion_does_not_record_a_terminal_reason():
+    ctx = context()
+    job = SocaJob(job_id='1', owner='user', state=SocaJobState.QUEUED)
+    ctx.scheduler.list_jobs.return_value = [job]
+    ctx.scheduler.get_job.return_value = job
+    ctx.scheduler.delete_job.side_effect = RuntimeError('scheduler unavailable')
+    sweep_disabled_jobs(ctx)
+    ctx.job_cache.record_deleted_job.assert_not_called()
+    assert job.disposition is None
+
+
+def test_qsub_receives_validation_error_without_queueing():
+    from ideadatamodel import (
+        JobValidationResult,
+        JobValidationResultEntry,
+        SubmitJobResult,
+    )
+
+    api = OpenPBSAPI.__new__(OpenPBSAPI)
+    api.context = context(True)
+    api.context.is_ready.return_value = True
+    hook = Mock()
+    hook.job.owner = 'user'
+    hook.is_valid.return_value = False
+    hook.job_validation_result = JobValidationResult(
+        results=[
+            JobValidationResultEntry(
+                error_code='INVALID_PARAMS',
+                message='Requested instances run arm64, but the image is x86_64.',
+            )
+        ]
+    )
+    hook.incidentals_validation_result = JobValidationResult(results=[])
+    hook.job_submission_result = SubmitJobResult(validations=hook.job_validation_result)
+    api.hook_validate_job(hook)
+    result = hook.api_context.success.call_args.args[0]
+    assert result.accept is False
+    assert (
+        'Requested instances run arm64, but the image is x86_64.'
+        in result.formatted_user_message
+    )
+    assert hook.job_submission_result.accepted is False
+    api.context.job_monitor.job_queued.assert_not_called()
+    hook.check_incidentals.assert_not_called()
+
+
+def test_provisioner_records_disabled_owner_deletion():
+    from ideascheduler.app.provisioning.job_provisioner.job_provisioner import (
+        JobProvisioner,
+    )
+
+    provisioner = JobProvisioner.__new__(JobProvisioner)
+    provisioner._context = context()
+    provisioner._logger = Mock()
+    job = SocaJob(job_id='1', owner='user', state=SocaJobState.QUEUED)
+    provisioner._context.scheduler.get_job.return_value = job
+    assert provisioner._is_job_provisionable(job) is False
+    provisioner._context.scheduler.delete_job.assert_called_once_with('1')
+    saved = provisioner._context.job_cache.record_deleted_job.call_args.kwargs
+    assert saved['error_code'] == 'JOB_DELETED_DISABLED_OWNER'
+    assert 'owner is disabled' in saved['message']

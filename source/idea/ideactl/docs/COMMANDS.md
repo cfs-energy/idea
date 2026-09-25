@@ -373,6 +373,8 @@ Render the CDK toolkit template and run `cdk bootstrap` for the cluster.
 
 ## `deploy`
 
+New host-shaped deployments are no longer supported; existing host clusters upgrade with `upgrade-cluster`.
+
 Deploy module stacks. `all` may be the only module id and means every undeployed module (or every module with `--upgrade`).
 
 **Usage:** `ideactl deploy [options] <modules...>`
@@ -537,7 +539,7 @@ Upgrade an existing cluster: refuse a cluster with any deployed module below 25.
 
 With `enable_ecs: true`, the bastion moves into a service in its existing module stack. Its address and SSH fingerprint change once, then persist across task replacements. The cutover and later task revisions need no bastion replacement override.
 
-**Reads:** cluster tables, `values.yml`, AMI maps, EC2 images and instance types, OpenSearch instance types, eVDI software-stack tables, and the host scheduler's PBS job inventory over Systems Manager when a scheduler cutover is pending. **Changes:** `values.yml`, a `config.golden.<timestamp>/` copy, DynamoDB settings, instance termination protection (cleared then restored), module stacks, and an upload of `values.yml` to the cluster bucket. When the run moves the scheduler from a host to a container, it closes submission before reading the host's inventory, including when that inventory is empty. A non-empty inventory without `--drain` restores the previous maintenance state and refuses deployment; `--drain` waits for it to empty. `--skip-drain-check` skips the inventory read but still closes submission for the whole run. **Exit codes:** 1 on the release floor refusal, EOL refusal, missing AMI, unsupported instance type, or configuration rows the run would overwrite whose value differs from generated configuration without `--accept-config-drift`; 0 if a confirmation is declined. A change set that would replace or remove a stateful resource (a historical run with containers disabled replaces the bastion instance through its AMI and instance-type moves) is refused unless that logical id is passed to `--allow-replacement`.
+**Reads:** cluster tables, `values.yml`, AMI maps, EC2 images and instance types, OpenSearch instance types, eVDI software-stack tables, and the host scheduler's PBS job inventory over Systems Manager when a scheduler cutover is pending. **Changes:** `values.yml`, a `config.golden.<timestamp>/` copy, DynamoDB settings, instance termination protection (cleared then restored), module stacks, and an upload of `values.yml` to the cluster bucket. When the run moves the scheduler from a host to a container, it closes submission before reading the host's inventory, including when that inventory is empty. A non-empty inventory without `--drain` restores the previous maintenance state and refuses deployment; `--drain` waits for it to empty. `--skip-drain-check` skips the inventory read but still closes submission for the whole run. **Exit codes:** 1 on the release floor refusal, EOL refusal, missing AMI, unsupported instance type, or differing operator or unknown-source configuration rows the run would overwrite without `--accept-config-drift`; 0 if a confirmation is declined. A change set that would replace or remove a stateful resource (a historical run with containers disabled replaces the bastion instance through its AMI and instance-type moves) is refused unless that logical id is passed to `--allow-replacement`.
 
 The cutover gate and Phase 0 DNS retention apply when the scheduler is in scope (explicitly or
 through all modules), ECS will be enabled at synthesis (`enable_ecs: true` in `values.yml`, or an
@@ -557,30 +559,7 @@ deployment. A scoped run that excludes cluster-manager does not publish them.
 
 **Example:** `ideactl upgrade-cluster --cluster-name sample-cluster --aws-region us-east-2 --base-os amazonlinux2023 --force`
 
-`awsvpcTrunking` is checked whenever the run reaches the `ecs` module, which includes an all-module upgrade of a cluster that has it. `--disable-eol-stacks-in-use` disables in-use EOL eVDI stacks instead of refusing. The drift preview stops the run only where a row it overwrites differs from generated configuration, names those rows, and asks; `--force` skips the other confirmations but does not accept those rows, which is what `--accept-config-drift` is for.
-
-## `migrate`
-
-The supported path to the container control plane is `upgrade-cluster` with `enable_ecs: true` in `values.yml`. The `migrate` executor is incomplete. It refuses new and resumed runs before any mutation when any execution capability is missing, with one message naming all missing capabilities.
-
-**Usage:** `ideactl migrate [options]`
-
-| Flag | Value | Default | Required |
-| --- | --- | --- | --- |
-| `--cluster-name <cluster-name>` | yes | none | yes |
-| `--aws-region <aws-region>` | yes | none | yes |
-| `--aws-profile <aws-profile>` | yes | none | no |
-| `--state-bucket <state-bucket>` | yes | none | yes |
-| `--target-base-os <target-base-os>` | yes | none | no |
-| `--image-digest <image-digest>` | yes | none | no |
-| `--module-set <module-set>` | yes | `"default"` | no |
-| `--selected-module <module-id>` | yes, repeatable | none | no |
-| `--deployment-id <deployment-id>` | yes | none | no |
-| `--resume <deployment-id>` | yes | none | no |
-| `--accept-template-comparison <fingerprint>` | yes | none | no |
-| `--accept-drift <fingerprint>` | yes | none | no |
-
-**Changes:** none while capabilities are missing, including no operation record, maintenance setting, or admission change. **Exit codes:** 1 on refusal. Template or drift acceptance does not bypass this gate.
+`awsvpcTrunking` is checked whenever the run reaches the `ecs` module, which includes an all-module upgrade of a cluster that has it. `--disable-eol-stacks-in-use` disables in-use EOL eVDI stacks instead of refusing. The drift preview asks before overwriting differing operator or unknown-source rows; `--force` skips other confirmations, while `--accept-config-drift` accepts these reviewed overwrites. An older release tag in this partition's release repository moves to the tool's release tag automatically and is reported without drift acceptance. Private images remain unchanged and visible in the preview. Global rows stamped `source=template` by settings sync are listed as "Template defaults updated" and rewritten without acceptance. CLI and API edits stamp `cli` and `api`; stack writes stamp `stack`. The 26.09.4 sync set no marker and retained existing markers, so differing legacy defaults still require review on the first upgrade. Once rewritten and stamped `template`, later template default changes need no drift acceptance.
 
 ## `delete-cluster`
 

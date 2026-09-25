@@ -15,11 +15,12 @@ from pydantic import Field
 
 from ideadatamodel import SocaBaseModel
 
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime
 
 
 class User(SocaBaseModel):
+    last_task_failure: Optional[Dict[str, str]] = Field(default=None)
     username: Optional[str] = Field(default=None)
     password: Optional[str] = Field(default=None)
     email: Optional[str] = Field(default=None)
@@ -38,9 +39,11 @@ class User(SocaBaseModel):
     created_on: Optional[datetime] = Field(default=None)
     updated_on: Optional[datetime] = Field(default=None)
     landing_page: Optional[str] = Field(default=None)
+    instance_type_exceptions: Optional[List[str]] = Field(default=None)
 
 
 class Group(SocaBaseModel):
+    last_task_failure: Optional[Dict[str, str]] = Field(default=None)
     title: Optional[str] = Field(default=None)
     description: Optional[str] = Field(default=None)
     name: Optional[str] = Field(default=None)

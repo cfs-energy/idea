@@ -1173,7 +1173,13 @@ def test_a_session_indexed_under_two_generations_is_counted_once():
 
 
 def history_row(
-    session_id, owner, created_on, stopped_on, deleted_on, instance_type='m5.large'
+    session_id,
+    owner,
+    created_on,
+    stopped_on,
+    deleted_on,
+    instance_type='m5.large',
+    stop_time_estimated=False,
 ):
     return {
         'owner': owner,
@@ -1184,6 +1190,7 @@ def history_row(
         'project_id': 'project-1',
         'created_on': created_on,
         'stopped_on': stopped_on,
+        'stop_time_estimated': stop_time_estimated,
         'deleted_on': deleted_on,
     }
 
@@ -1208,6 +1215,54 @@ def test_a_terminated_desktop_is_costed_from_its_history_record():
     assert session.hours == pytest.approx(2.0, abs=0.01)
     assert session.cost == pytest.approx(0.2, abs=0.01)
     assert session.stop_time_estimated is None
+
+
+def test_an_estimated_history_stop_is_reported_as_estimated():
+    now = arrow.utcnow()
+    created = now.shift(hours=-8).int_timestamp * 1000
+    stopped = now.shift(hours=-4).int_timestamp * 1000
+    deleted = now.shift(hours=-1).int_timestamp * 1000
+    start_ms = now.shift(hours=-5).int_timestamp * 1000
+    end_ms = now.int_timestamp * 1000
+
+    service, _ = build_service(
+        os_responses={'user_sessions': {'hits': {'hits': []}}},
+        prices={'m5.large': 0.1},
+        history_rows=[
+            history_row(
+                'sess-1',
+                USER,
+                created,
+                stopped,
+                deleted,
+                stop_time_estimated=True,
+            )
+        ],
+    )
+    hits = service._history_hits(USER, start_ms, end_ms)
+    session = service._sessions_from(hits, start_ms, end_ms)[0]
+
+    assert session.hours == pytest.approx(1.0, abs=0.01)
+    assert session.stop_time_estimated is True
+
+
+def test_a_legacy_history_deletion_time_is_reported_as_estimated():
+    now = arrow.utcnow()
+    created = now.shift(hours=-8).int_timestamp * 1000
+    deleted = now.shift(hours=-1).int_timestamp * 1000
+    start_ms = now.shift(hours=-5).int_timestamp * 1000
+    end_ms = now.int_timestamp * 1000
+
+    service, _ = build_service(
+        os_responses={'user_sessions': {'hits': {'hits': []}}},
+        prices={'m5.large': 0.1},
+        history_rows=[history_row('sess-1', USER, created, deleted, deleted)],
+    )
+    hits = service._history_hits(USER, start_ms, end_ms)
+    session = service._sessions_from(hits, start_ms, end_ms)[0]
+
+    assert session.hours == pytest.approx(4.0, abs=0.01)
+    assert session.stop_time_estimated is True
 
 
 def test_a_desktop_deleted_before_the_window_is_left_out_of_history():

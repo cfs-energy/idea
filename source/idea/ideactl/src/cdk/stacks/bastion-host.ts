@@ -48,7 +48,7 @@ export function ec2BlockDeviceName(baseOs: string): string {
 
 export class BastionHostStack extends IdeaBaseStack {
   readonly cluster: ExistingSocaCluster;
-  readonly bootstrapPackageUri: string;
+  readonly bootstrapPackageUri!: string;
   bastionHostRole!: Role;
   bastionHostInstanceProfile!: InstanceProfile;
   ec2Instance!: ec2.CfnInstance;
@@ -64,13 +64,13 @@ export class BastionHostStack extends IdeaBaseStack {
       env: props.env,
     });
 
-    this.bootstrapPackageUri = this.getBootstrapPackageUri();
     this.cluster = new ExistingSocaCluster(this.context, this.stack);
 
     if (this.context.config.getBool('ecs.enabled', false)) {
       this.buildContainer();
       return;
     }
+    this.bootstrapPackageUri = this.getBootstrapPackageUri();
     this.buildIamRoles();
     this.buildEc2Instance();
     this.buildRoute53RecordSet();

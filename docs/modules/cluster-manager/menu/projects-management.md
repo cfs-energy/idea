@@ -54,7 +54,7 @@ To disable a project:
 
 ### Add AWS tags
 
-You can assign custom AWS tags to your project(s). IDEA will automatically try to tag all resources created while using this project. This includes ephemeral filesystems, virtual desktops or compute nodes. You can flag these tags as "Cost Allocation Tags" to get detailed budget information via AWS CostExplorer.
+You can assign custom AWS tags to projects. IDEA applies them to resources created for the project, including ephemeral file systems, virtual desktops, and compute nodes. To use a tag in Cost Explorer or a tag-filtered budget, activate its key under **Billing > Cost allocation tags**.
 
 To add custom tags :
 

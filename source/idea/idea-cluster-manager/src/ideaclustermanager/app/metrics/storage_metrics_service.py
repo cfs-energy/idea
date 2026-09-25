@@ -248,6 +248,7 @@ class StorageMetricsService(SocaService):
         self.logger = context.logger('storage-metrics')
         self._provider_warning_logged = False
         self._quota_reports = {}
+        self._volumes = {}
         self._quota_lock = threading.Lock()
         self._exit = threading.Event()
         self._thread = threading.Thread(
@@ -289,16 +290,76 @@ class StorageMetricsService(SocaService):
         )
         with self._quota_lock:
             reports = dict(self._quota_reports)
+            volumes = dict(self._volumes)
+        targets = {}
         for target in self.targets():
+            endpoint = (
+                target.endpoint.lower()
+                .removeprefix('https://')
+                .removeprefix('http://')
+                .rstrip('/')
+            )
+            retained = targets.get(endpoint)
+            if retained is None or (
+                target.name in reports
+                and (
+                    retained.name not in reports
+                    or reports[target.name][0] > reports[retained.name][0]
+                )
+            ):
+                targets[endpoint] = target
+        merged = {}
+        for endpoint, target in targets.items():
+            fs_id = fs_id_from_host(endpoint)
+            snapshot = merged.setdefault(
+                fs_id,
+                dict(
+                    filesystem_id=fs_id,
+                    measured_at=0,
+                    users={},
+                    total_bytes=0,
+                    complete=True,
+                    zero_when_absent=True,
+                    capacity_pool_bytes=0,
+                    ssd_bytes=0,
+                    allocation_pool='Quota bytes; unattributed rows remain unassigned',
+                ),
+            )
             if target.name not in reports:
+                snapshot['complete'] = False
+                snapshot['zero_when_absent'] = False
                 continue
             measured_at, records = reports[target.name]
-            users = {}
-            for (_, _, _, user), (used, _) in user_usage(records).items():
-                users[user] = users.get(user, 0) + used
-            snapshots[fs_id_from_host(target.endpoint)] = dict(
-                measured_at=measured_at, users=users
+            snapshot['measured_at'] = (
+                min(snapshot['measured_at'], measured_at)
+                if snapshot['measured_at']
+                else measured_at
             )
+            for (_, _, _, user), (used, _) in user_usage(records).items():
+                snapshot['users'][user] = snapshot['users'].get(user, 0) + used
+                snapshot['total_bytes'] += used
+            snapshot['zero_when_absent'] &= any(
+                record.get('type') == 'user'
+                and record.get('users')
+                and record['users'][0].get('name') == '*'
+                for record in records
+            )
+            snapshot['capacity_pool_bytes'] += sum(
+                volume.get('space', {}).get('capacity_tier_footprint', 0)
+                for volume in volumes.get(target.name, [])
+            )
+            snapshot['ssd_bytes'] += sum(
+                volume.get('space', {}).get('performance_tier_footprint', 0)
+                for volume in volumes.get(target.name, [])
+            )
+        # A process that has not collected every target yet keeps the saved snapshot.
+        snapshots.update(
+            {
+                fs_id: snapshot
+                for fs_id, snapshot in merged.items()
+                if snapshot['complete'] or fs_id not in snapshots
+            }
+        )
         return snapshots
 
     def has_ontap_storage(self) -> bool:
@@ -309,6 +370,66 @@ class StorageMetricsService(SocaService):
             Utils.get_value_as_string('provider', entry) == PROVIDER
             for entry in shared_storage.values()
             if isinstance(entry, dict) or hasattr(entry, 'get')
+        )
+
+    def configuration_status(self) -> Dict[str, object]:
+        """Describe readiness from settings without reading a secret or contacting storage."""
+        config = self.context.config()
+        provider = config.get_string('metrics.provider')
+        shared_storage = config.get_config('shared-storage', default={}) or {}
+        entries = [
+            (name, entry)
+            for name, entry in shared_storage.items()
+            if isinstance(entry, dict) or hasattr(entry, 'get')
+        ]
+        has_efs = any(
+            Utils.get_value_as_string('provider', entry) == 'efs'
+            for _, entry in entries
+        )
+        ontap = [
+            name
+            for name, entry in entries
+            if Utils.get_value_as_string('provider', entry) == PROVIDER
+        ]
+        if not ontap:
+            return dict(
+                status='not_configured',
+                reason='efs_only' if has_efs else 'no_ontap',
+                provider=provider,
+                has_efs=has_efs,
+            )
+        if not config.get_bool(self._config_key('enabled'), False):
+            return dict(
+                status='disabled',
+                reason='metrics_disabled',
+                provider=provider,
+                has_efs=has_efs,
+            )
+        if provider not in ('dogstatsd', 'cloudwatch'):
+            return dict(
+                status='unsupported',
+                reason='unsupported_provider',
+                provider=provider,
+                has_efs=has_efs,
+            )
+        for name in ontap:
+            prefix = f'shared-storage.{name}.{PROVIDER}'
+            if any(
+                Utils.is_empty(config.get_string(key))
+                for key in (
+                    f'{prefix}.metrics.username',
+                    f'{prefix}.metrics.password_secret_arn',
+                    f'{prefix}.svm.management_dns',
+                )
+            ):
+                return dict(
+                    status='not_configured',
+                    reason='missing_credentials',
+                    provider=provider,
+                    has_efs=has_efs,
+                )
+        return dict(
+            status='enabled', reason='configured', provider=provider, has_efs=has_efs
         )
 
     def service_id(self) -> str:
@@ -352,14 +473,16 @@ class StorageMetricsService(SocaService):
                 continue
             prefix = f'shared-storage.{name}.{PROVIDER}'
             username = config.get_string(f'{prefix}.metrics.username')
+            password_key = f'{prefix}.metrics.password_secret_arn'
+            password_secret_arn = config.get_string(password_key)
             endpoint = config.get_string(f'{prefix}.svm.management_dns')
-            if Utils.is_empty(username) or Utils.is_empty(endpoint):
+            if (
+                Utils.is_empty(username)
+                or Utils.is_empty(password_secret_arn)
+                or Utils.is_empty(endpoint)
+            ):
                 continue
-            found.append(
-                StorageTarget(
-                    name, endpoint, username, f'{prefix}.metrics.password_secret_arn'
-                )
-            )
+            found.append(StorageTarget(name, endpoint, username, password_key))
         return found
 
     def start(self):
@@ -397,6 +520,10 @@ class StorageMetricsService(SocaService):
                 self.context, self._config_key('outbox'), historical=False
             )
             outbox.replay()
+            targets = self.targets()
+            if not targets:
+                self.logger.warning('no configured storage metrics targets. skip.')
+                return
             # A replica's settings cache can lag behind the previous lock holder.
             # A consistent read avoids repeating collection while saved metrics remain retryable.
             entry = (
@@ -417,7 +544,7 @@ class StorageMetricsService(SocaService):
             )
             metrics = StorageMetrics(outbox)
             succeeded = True
-            for target in self.targets():
+            for target in targets:
                 try:
                     password = self.context.config().get_secret(target.password_key)
                     if Utils.is_empty(password):
@@ -435,6 +562,7 @@ class StorageMetricsService(SocaService):
                     volumes = client.volumes()
                     reports = client.quota_reports()
                     with self._quota_lock:
+                        self._volumes[target.name] = volumes
                         self._quota_reports[target.name] = (
                             arrow.utcnow().timestamp(),
                             reports,

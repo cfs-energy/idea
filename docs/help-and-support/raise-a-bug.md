@@ -14,7 +14,7 @@ Search the [open issues](https://github.com/cfs-energy/idea/issues) first; the p
 * **Where it happened:** the web portal, the cluster manager, the scheduler, virtual desktops, the installer or an upgrade; the base OS of the host or desktop involved; the AWS region and partition.
 * **Steps to reproduce**, what you expected, and what happened instead.
 * **The exact error text:** the message on screen for the portal, the full command output for `idea-admin.sh`.
-* **Logs from the module host** for the minutes around the failure: `/opt/idea/app/logs/application.log`. For an installer or upgrade failure, add the CloudFormation stack status and the failed resource's status reason.
+* **Application logs** for the minutes around the failure: use the container service log stream, or `/opt/idea/app/logs/application.log` on an older host-based control plane. For an installer or upgrade failure, add the CloudFormation stack status and the failed resource's status reason.
 * **Screenshots** for anything visual.
 * Whether you changed IDEA from the published release, and if so what.
 

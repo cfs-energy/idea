@@ -972,6 +972,11 @@ class AccountsService:
         if user.gid is not None:
             user_updates['gid'] = user.gid
 
+        if user.instance_type_exceptions is not None:
+            user_updates['instance_type_exceptions'] = sorted(
+                set(user.instance_type_exceptions)
+            )
+
         updated_user = self.user_dao.update_user(user_updates)
 
         self.task_manager.send(
@@ -1109,6 +1114,10 @@ class AccountsService:
         # delete user's group from db
         self.logger.info(f'{log_tag} deleting group: {group_name}')
         self.delete_group(group_name=group_name, force=True)
+
+        if self.token_service is not None:
+            for token in self.token_service.list_api_tokens(username).listing:
+                self.token_service.delete_api_token(token.token_id, username)
 
         # delete user from db
         self.logger.info(f'{log_tag} delete user in ddb')
@@ -1353,7 +1362,48 @@ class AccountsService:
 
         return existing_gid
 
+    def provision_operations_leads_group(self, group_name):
+        if self.group_dao.get_group(group_name) is None:
+            ds_name = None
+            gid = None
+            if self.ldap_client.is_readonly():
+                ds_name = self._get_ds_group_name(group_name)
+                try:
+                    gid = self._get_gid_from_existing_ldap_group(ds_name)
+                except exceptions.SocaException:
+                    reason = (
+                        f'Operations leads group {group_name} is not configured: '
+                        f'create directory group {ds_name} with a POSIX gidNumber, '
+                        f'set directoryservice.group_mapping.{group_name} to that group, '
+                        'then restart cluster-manager to retry provisioning. '
+                        'Operations leads reporting access remains unavailable.'
+                    )
+                    self.operations_leads_configuration_status = dict(
+                        status='configuration_required',
+                        group_name=group_name,
+                        directory_group=ds_name,
+                        reason=reason,
+                    )
+                    self.logger.warning(reason)
+                    return
+            self.create_group(
+                group=Group(
+                    title='Operations leads (read-only reporting)',
+                    name=group_name,
+                    ds_name=ds_name,
+                    gid=gid,
+                    group_type=constants.GROUP_TYPE_CLUSTER,
+                )
+            )
+        self.operations_leads_configuration_status = dict(
+            status='ready',
+            group_name=group_name,
+        )
+
     def create_defaults(self):
+        operations_leads_group_name = (
+            self.group_name_helper.get_cluster_operations_leads_group()
+        )
         ds_provider = self.context.config().get_string(
             'directoryservice.provider', required=True
         )
@@ -1468,6 +1518,8 @@ class AccountsService:
                     group_type=constants.GROUP_TYPE_CLUSTER,
                 )
             )
+
+        self.provision_operations_leads_group(operations_leads_group_name)
 
         # for all "app" modules in the cluster, create the module users and module administrators group to enable fine-grained access
         # if an application module is added at a later point in time, a cluster-manager restart should fix the issue.

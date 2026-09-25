@@ -11,6 +11,7 @@
  * and limitations under the License.
  */
 
+import {buildBudgetUsage} from '../../components/job-budget-usage';
 import React, {Component, RefObject} from "react";
 
 import IdeaListView from "../../components/list-view";
@@ -19,7 +20,7 @@ import {DeleteJobRequest, DeleteJobResult, SocaJob} from "../../client/data-mode
 import {AppContext} from "../../common";
 import {SchedulerAdminClient, SchedulerClient} from "../../client"
 import IdeaSplitPanel from "../../components/split-panel";
-import {Box, ColumnLayout, Popover, StatusIndicator, Table, Tabs} from "@cloudscape-design/components";
+import {Box, ColumnLayout, Container, Header, SpaceBetween, StatusIndicator, Table, Tabs} from "@cloudscape-design/components";
 import {KeyValue, KeyValueGroup} from "../../components/key-value";
 import IdeaConfirm from "../../components/modals";
 import Utils from "../../common/utils";
@@ -36,6 +37,50 @@ export function JobWaitingSignals(props: { job: SocaJob, now?: Date }) {
         return null
     }
     return <Box variant="small" color="text-body-secondary">{signals.join(' \u00b7 ')}</Box>
+}
+
+export function JobStatus({job}: {job: SocaJob}) {
+    const disposition = job.disposition ?? (job.start_time ? (job.exit_status ? 'failed' : 'ran') : 'deleted')
+    const label = job.state === 'finished' ? disposition[0].toUpperCase() + disposition.slice(1)
+        : job.state === 'held' ? 'Held'
+        : job.state === 'running' ? 'Running'
+        : job.state === 'exit' ? `Exit (${job.exit_status})`
+        : job.params?.compute_stack === 'tbd' ? 'Queued' : 'Provisioning'
+    const type = label === 'Held' || label === 'Failed' ? 'error'
+        : label === 'Deleted' ? 'stopped' : label === 'Ran' || label === 'Running' ? 'success' : 'pending'
+    return <SpaceBetween size="xxs">
+        <StatusIndicator type={type}>{label}</StatusIndicator>
+        {(job.status_reason || job.error_message) && <Box variant="small">{job.status_reason || job.error_message}</Box>}
+        <JobWaitingSignals job={job}/>
+    </SpaceBetween>
+}
+
+export function JobBudgetImpact({job}: {job: SocaJob}) {
+    if (!job.estimated_bom_cost || job.estimated_bom_cost.price_unavailable) {
+        return <Box>Price not available</Box>
+    }
+    return buildBudgetUsage(job.estimated_budget_usage!)
+}
+
+export function JobCosts({job}: {job: SocaJob}) {
+    const cost = job.estimated_bom_cost
+    const columns: TableProps.ColumnDefinition<NonNullable<NonNullable<SocaJob['estimated_bom_cost']>['line_items']>[number]>[] = [
+        {id: 'title', header: 'Item', cell: item => item.title},
+        {id: 'qty', header: 'Qty', cell: item => item.quantity},
+        {id: 'unit', header: 'Unit', cell: item => item.unit},
+        {id: 'unit-price', header: 'Unit Price', cell: item => Utils.getFormattedAmount(item.unit_price)},
+        {id: 'total-price', header: 'Total Price', cell: item => Utils.getFormattedAmount(item.total_price)}
+    ]
+    return <SpaceBetween size="m">
+        <Table items={cost?.line_items ?? []} columnDefinitions={columns}/>
+        {Boolean(cost?.savings?.length) && <Container header={<Header variant="h3">Estimated savings: {cost?.price_unavailable ? 'Price not available' : Utils.getFormattedAmount(cost?.savings_total)}</Header>}>
+            <Table items={cost?.savings ?? []} columnDefinitions={columns}/>
+        </Container>}
+        <ColumnLayout columns={2}>
+            <Box variant="h3">Estimated Total Cost</Box>
+            <Box variant="h3" textAlign="right">{!cost || cost.price_unavailable ? 'Price not available' : Utils.getFormattedAmount(cost.total)}</Box>
+        </ColumnLayout>
+    </SpaceBetween>
 }
 
 export const JOB_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<SocaJob>[] = [
@@ -72,66 +117,7 @@ export const JOB_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<SocaJob>[
     {
         id: 'status',
         header: 'Status',
-        cell: job => {
-            if (job.state === 'finished' && Utils.isEmpty(job.start_time)) {
-                // terminal but never executed: "Finished" reads the same as a clean exit 0, so with
-                // no recorded reason it is reported as stopped by its owner rather than as an error.
-                if (Utils.isEmpty(job.error_message)) {
-                    return <StatusIndicator type="stopped">Did not run</StatusIndicator>
-                }
-                return <Popover
-                    dismissAriaLabel="Close"
-                    header="Job did not run"
-                    content={job.error_message}
-                >
-                    <StatusIndicator type="error" colorOverride="red">Did not run</StatusIndicator>
-                </Popover>
-            }
-            if (job.state === 'held') {
-                // checked before compute_stack: a job held before any capacity existed
-                // still reports 'tbd' and would otherwise render as Queued.
-                return <>
-                    <StatusIndicator type="error" colorOverride="red">({job.comment})</StatusIndicator>
-                    <JobWaitingSignals job={job}/>
-                </>
-            }
-            if (job.params?.compute_stack === 'tbd') {
-                if (Utils.isEmpty(job.error_message)) {
-                    return <>
-                        <StatusIndicator type="pending">Queued</StatusIndicator>
-                        <JobWaitingSignals job={job}/>
-                    </>
-                } else {
-                    return <>
-                        <Box color="text-status-error">
-                            <Popover
-                                dismissAriaLabel="Close"
-                                header="Job cannot be provisioned currently ..."
-                                content={job.error_message}
-                            >
-                                <StatusIndicator type="info">
-                                    Queued
-                                </StatusIndicator>
-                            </Popover>
-                        </Box>
-                        <JobWaitingSignals job={job}/>
-                    </>
-                }
-            } else if (job.params?.compute_stack !== 'tbd') {
-                if (job.state === 'queued') {
-                    return <>
-                        <StatusIndicator type="in-progress" colorOverride="blue">Provisioning</StatusIndicator>
-                        <JobWaitingSignals job={job}/>
-                    </>
-                } else if (job.state === 'running') {
-                    return <StatusIndicator type="success">Running</StatusIndicator>
-                } else if (job.state === 'exit') {
-                    return <StatusIndicator type="error" colorOverride="red">Exit ({job.exit_status})</StatusIndicator>
-                } else {
-                    return <StatusIndicator type="success" colorOverride="grey">Finished</StatusIndicator>
-                }
-            }
-        },
+        cell: job => <JobStatus job={job}/>,
         sortingField: 'state'
     },
     {
@@ -195,7 +181,10 @@ export function JobInfo(props: JobInfoProps) {
             {/* a job that never started has no run time; 0 seconds would read as "less than 1 min" */}
             <KeyValue title="Total Time"
                       value={Utils.isEmpty(job.start_time) ? '-' : formatDurationMinutes(jobUtil.getTotalTimeSeconds())}/>
-            <KeyValue title="Comment" value={job.comment} clipboard={true}/>
+            {job.status_reason && <KeyValue title="Status Reason" value={job.status_reason}/>}
+            {job.disposition && <KeyValue title="Disposition" value={job.disposition}/>}
+            {job.reason_class && <KeyValue title="Reason Class" value={job.reason_class}/>}
+            {job.state !== 'held' && <KeyValue title="Comment" value={job.comment} clipboard={true}/>}
             {Utils.isNotEmpty(job.error_message) &&
                 <KeyValue title="Error Message" type="react-node" value={
                     <StatusIndicator type="error">{job.error_message}</StatusIndicator>
@@ -672,47 +661,13 @@ class Jobs extends Component<JobsProps, JobsState> {
                         {
                             label: 'Estimated Costs',
                             id: 'estimated-costs',
-                            content: (
-                                <ColumnLayout columns={1}>
-                                    <Table items={(selected().estimated_bom_cost) ? selected().estimated_bom_cost!.line_items! : []}
-                                           columnDefinitions={[
-                                               {
-                                                   id: 'title',
-                                                   header: 'Item',
-                                                   cell: item => item.title
-                                               },
-                                               {
-                                                   id: 'qty',
-                                                   header: 'Qty',
-                                                   cell: item => item.quantity
-                                               },
-                                               {
-                                                   id: 'unit',
-                                                   header: 'Unit',
-                                                   cell: item => item.unit
-                                               },
-                                               {
-                                                   id: 'unit-price',
-                                                   header: 'Unit Price',
-                                                   cell: item => Utils.getFormattedAmount(item.unit_price)
-                                               },
-                                               {
-                                                   id: 'total-price',
-                                                   header: 'Total Price',
-                                                   cell: item => Utils.getFormattedAmount(item.total_price)
-                                               }
-                                           ]}/>
-                                    <ColumnLayout columns={2}>
-                                        <Box textAlign="left">
-                                            <h3>Estimated Total Cost</h3>
-                                        </Box>
-                                        <Box textAlign="right">
-                                            <h3>{Utils.getFormattedAmount(selected().estimated_bom_cost?.total)}</h3>
-                                        </Box>
-                                    </ColumnLayout>
-                                </ColumnLayout>
-                            )
-                        }
+                            content: <JobCosts job={selected()}/>
+                        },
+                        ...(selected().state === 'finished' && selected().estimated_budget_usage ? [{
+                            label: 'Budget impact',
+                            id: 'budget-impact',
+                            content: <JobBudgetImpact job={selected()}/>
+                        }] : [])
                     ]}
                 />
             </IdeaSplitPanel>)

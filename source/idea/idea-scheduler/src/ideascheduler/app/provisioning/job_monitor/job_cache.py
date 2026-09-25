@@ -18,6 +18,11 @@ from ideadatamodel import (
     SocaCapacityType,
 )
 from ideascheduler.app.app_protocols import JobCacheProtocol
+from ideascheduler.app.provisioning.lifecycle_events import (
+    ProvisioningLifecycleEvents,
+    SYSTEM_DELETION,
+    OWNER_CANCELLATION,
+)
 from ideasdk.utils import Utils
 from ideasdk.utils.error_redaction import AWS_IDENTIFIERS
 
@@ -553,6 +558,14 @@ class JobsDB:
                 error = self.db[JOB_PROVISIONING_ERRORS].find_one(job_id=job.job_id)
                 error_message = Utils.get_value_as_string('message', error)
                 job.error_message = error_message
+                if error_message is not None:
+                    error_code = Utils.get_value_as_string('error_code', error)
+                    job.reason_class = ProvisioningLifecycleEvents.get_reason_class(
+                        error_code
+                    )
+                    if error_code in (SYSTEM_DELETION, OWNER_CANCELLATION):
+                        job.disposition = 'deleted'
+                        job.status_reason = error_message
         return job
 
     def set_job_provisioning_error(
@@ -707,6 +720,18 @@ class JobCache(JobCacheProtocol):
 
     def add_finished_job(self, job: SocaJob):
         self._jobs_db.add_finished_job(job)
+
+    def record_deleted_job(self, job: SocaJob, error_code: str, message: str):
+        job.disposition = 'deleted'
+        job.reason_class = ProvisioningLifecycleEvents.get_reason_class(error_code)
+        job.error_message = message
+        job.status_reason = message
+        with self._jobs_db._db_lock:
+            with self._jobs_db.db:
+                self._jobs_db.set_job_provisioning_error(
+                    job.job_id, error_code, message
+                )
+                self._jobs_db.add(job)
 
     def get_jobs_table(self) -> dataset.Table:
         return self._jobs_db.db[JOBS_TABLE]

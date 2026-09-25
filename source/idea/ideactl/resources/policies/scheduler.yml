@@ -1,5 +1,24 @@
 Version: '2012-10-17'
 Statement:
+  - Effect: Allow
+    Action:
+      - dynamodb:GetItem
+    Resource: '{{ context.arns.get_ddb_table_arn("accounts.users") }}'
+
+  - Effect: Allow
+    Action:
+      - dynamodb:GetItem
+      - dynamodb:Query
+      - dynamodb:UpdateItem
+    Resource:
+      - '{{ context.arns.get_ddb_table_arn("cluster-manager.api-tokens") }}'
+      - '{{ context.arns.get_ddb_table_arn("cluster-manager.api-tokens") }}/index/*'
+
+  - Effect: Allow
+    Action:
+      - cognito-idp:AdminListGroupsForUser
+    Resource: '{{ context.arns.user_pool_arn }}'
+
   - Action:
       - pricing:GetProducts
       - budgets:ViewBudget

@@ -32,6 +32,9 @@ class ProjectEnabledTask(BaseTask):
     def get_name(self) -> str:
         return 'projects.project-enabled'
 
+    def entity_ref(self, payload: Dict):
+        return 'project', payload['project_id']
+
     def invoke(self, payload: Dict):
         project_id = payload['project_id']
         self.context.projects.user_projects_dao.project_enabled(project_id=project_id)
@@ -45,6 +48,9 @@ class ProjectDisabledTask(BaseTask):
     def get_name(self) -> str:
         return 'projects.project-disabled'
 
+    def entity_ref(self, payload: Dict):
+        return 'project', payload['project_id']
+
     def invoke(self, payload: Dict):
         project_id = payload['project_id']
         self.context.projects.user_projects_dao.project_disabled(project_id=project_id)
@@ -57,6 +63,9 @@ class ProjectBedrockReconcileTask(BaseTask):
 
     def get_name(self) -> str:
         return 'projects.bedrock-reconcile'
+
+    def entity_ref(self, payload: Dict):
+        return 'project', payload['project_id']
 
     def invoke(self, payload: Dict):
         project_id = payload['project_id']
@@ -73,6 +82,9 @@ class ProjectGroupsUpdatedTask(BaseTask):
 
     def get_name(self) -> str:
         return 'projects.project-groups-updated'
+
+    def entity_ref(self, payload: Dict):
+        return 'project', payload['project_id']
 
     def invoke(self, payload: Dict):
         project_id = payload['project_id']

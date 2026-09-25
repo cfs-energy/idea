@@ -495,6 +495,7 @@ class TestReconcileSettingsValidation(unittest.TestCase):
                 },
             ],
             overwrite=True,
+            source='api',
         )
         invocation.success.assert_called_once()
         self.api.context.accounts.reconciler.settings_changed.assert_called_once()
@@ -579,3 +580,277 @@ def test_partial_okta_edit_reads_committed_partner():
         call.kwargs['ConsistentRead']
         for call in config.db.cluster_settings_table.get_item.call_args_list
     )
+
+
+def test_operations_group_template_matches_upgrade_default():
+    from pathlib import Path
+
+    from jinja2 import Template
+    import yaml
+    from ideasdk.utils.group_name_helper import DEFAULT_OPERATIONS_LEADS_GROUP_NAME
+
+    template = (
+        Path(__file__).resolve().parents[3]
+        / 'ideactl/resources/config/templates/identity-provider/settings.yml'
+    )
+    settings = yaml.safe_load(
+        Template(template.read_text()).render(identity_provider='cognito-idp')
+    )
+    assert (
+        settings['cognito']['operations_leads_group_name']
+        == DEFAULT_OPERATIONS_LEADS_GROUP_NAME
+    )
+
+
+@pytest.fixture
+def operations_group_catalog_entry():
+    from ideaclustermanager.app.settings_catalog import CATALOG
+
+    entries = [
+        entry
+        for entry in CATALOG
+        if entry['key'] == 'identity-provider.cognito.operations_leads_group_name'
+    ]
+    assert len(entries) == 1, 'operations leads catalog integration is required'
+    return entries[0]
+
+
+def test_operations_group_catalog_matches_default(operations_group_catalog_entry):
+    from ideasdk.utils.group_name_helper import DEFAULT_OPERATIONS_LEADS_GROUP_NAME
+
+    assert (
+        operations_group_catalog_entry['default'] == DEFAULT_OPERATIONS_LEADS_GROUP_NAME
+    )
+    assert operations_group_catalog_entry['value_type'] == 'string'
+
+
+@pytest.mark.parametrize(
+    'group_name', ['report-readers', 'report-readers-cluster-group']
+)
+def test_operations_group_catalog_accepts_custom_names(
+    operations_group_catalog_entry, group_name
+):
+    from ideaclustermanager.app.settings_catalog import coerce_settings
+
+    settings, _ = coerce_settings(
+        'identity-provider',
+        {
+            'cognito': {
+                'operations_leads_group_name': group_name,
+            }
+        },
+    )
+    assert settings['cognito']['operations_leads_group_name'] in (
+        group_name,
+        'report-readers-cluster-group',
+    )
+
+
+@pytest.mark.parametrize(
+    'privileged_name,operations_name',
+    [
+        ('administrators_group_name', 'privileged-readers'),
+        ('administrators_group_name', 'privileged-readers-cluster-group'),
+        ('managers_group_name', 'privileged-readers'),
+        ('managers_group_name', 'privileged-readers-cluster-group'),
+    ],
+)
+def test_operations_group_catalog_rejects_normalized_collisions(
+    operations_group_catalog_entry,
+    privileged_name,
+    operations_name,
+):
+    from ideaclustermanager.app.settings_catalog import coerce_settings
+
+    with pytest.raises(exceptions.SocaException, match='privileged group'):
+        coerce_settings(
+            'identity-provider',
+            {
+                'cognito': {
+                    privileged_name: 'privileged-readers',
+                    'operations_leads_group_name': operations_name,
+                }
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    'group_name',
+    [
+        'cluster-manager-administrators-module-group',
+        'cluster-manager-administrators-module-group-cluster-group',
+    ],
+)
+def test_operations_group_catalog_rejects_module_admin_collisions(
+    operations_group_catalog_entry,
+    group_name,
+):
+    from ideaclustermanager.app.settings_catalog import coerce_settings
+
+    with pytest.raises(exceptions.SocaException, match='privileged group'):
+        coerce_settings(
+            'identity-provider',
+            {
+                'cognito': {
+                    'operations_leads_group_name': group_name,
+                }
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    'saved_key,updated_key',
+    [
+        ('administrators_group_name', 'operations_leads_group_name'),
+        ('managers_group_name', 'operations_leads_group_name'),
+        ('operations_leads_group_name', 'administrators_group_name'),
+        ('operations_leads_group_name', 'managers_group_name'),
+    ],
+)
+def test_partial_group_edit_rejects_saved_privileged_collision(saved_key, updated_key):
+    api = bedrock_settings_api()
+    config = api.context.config()
+    config.db = Mock()
+    config.db.cluster_settings_table.get_item.side_effect = (
+        lambda Key, ConsistentRead: (
+            {'Item': {'value': 'custom-readers'}}
+            if Key['key'] == f'identity-provider.cognito.{saved_key}'
+            else {}
+        )
+    )
+    api.context.get_cluster_modules = lambda: [{'module_id': 'compute'}]
+    with pytest.raises(exceptions.SocaException, match='privileged group'):
+        api.update_module_settings(
+            FakeApiInvocationContext(
+                UpdateModuleSettingsRequest(
+                    module_id='identity-provider',
+                    settings={'cognito': {updated_key: 'custom-readers-cluster-group'}},
+                )
+            )
+        )
+
+
+def test_sequential_group_saves_validate_against_committed_settings():
+    api = bedrock_settings_api()
+    config = api.context.config()
+    committed = {}
+    config.db = Mock()
+
+    def read(Key, ConsistentRead):
+        assert ConsistentRead is True
+        value = committed.get(Key['key'])
+        return {'Item': {'value': value}} if value is not None else {}
+
+    def write(config_entries, overwrite, source):
+        assert overwrite is True
+        assert source == 'api'
+        committed.update({entry['key']: entry['value'] for entry in config_entries})
+
+    config.db.cluster_settings_table.get_item.side_effect = read
+    config.db.sync_cluster_settings_in_db.side_effect = write
+    api.context.get_cluster_modules = lambda: [{'module_id': 'compute'}]
+
+    def save(key):
+        invocation = Mock()
+        invocation.is_authorized.return_value = True
+        invocation.is_administrator.return_value = True
+        invocation.get_request_payload_as.return_value = UpdateModuleSettingsRequest(
+            module_id='identity-provider',
+            settings={'cognito': {key: 'custom-readers'}},
+        )
+        api.update_module_settings(invocation)
+
+    save('administrators_group_name')
+    assert 'identity-provider.cognito.administrators_group_name' not in config.values
+    with pytest.raises(exceptions.SocaException, match='privileged group'):
+        save('operations_leads_group_name')
+    config.db.sync_cluster_settings_in_db.assert_called_once()
+
+
+def test_partial_group_edit_rejects_actual_module_id_collision():
+    api = bedrock_settings_api()
+    api.context.config().db = Mock()
+    api.context.config().db.cluster_settings_table.get_item.return_value = {}
+    api.context.get_cluster_modules = lambda: [{'module_id': 'compute'}]
+    with pytest.raises(exceptions.SocaException, match='privileged group'):
+        api.update_module_settings(
+            FakeApiInvocationContext(
+                UpdateModuleSettingsRequest(
+                    module_id='identity-provider',
+                    settings={
+                        'cognito': {
+                            'operations_leads_group_name': 'compute-administrators-module-group'
+                        }
+                    },
+                )
+            )
+        )
+
+
+def test_settings_api_stamps_source_with_the_value_and_version():
+    from ideasdk.config.cluster_config_db import ClusterConfigDB
+
+    api = bedrock_settings_api()
+    db = ClusterConfigDB.__new__(ClusterConfigDB)
+    db.log_info = Mock()
+    db.cluster_settings_table = Mock()
+    db.cluster_settings_table.get_item.return_value = {
+        'Item': {'value': 30, 'source': 'template', 'version': 1}
+    }
+    api.context.config().db = db
+    api.context.accounts = Mock()
+    invocation = Mock()
+    invocation.get_request_payload_as.return_value = UpdateModuleSettingsRequest(
+        module_id='cluster-manager',
+        settings={'accounts': {'reconcile': {'interval_minutes': 60}}},
+    )
+    api.update_module_settings(invocation)
+    writes = db.cluster_settings_table.update_item.call_args_list
+    settings_write = next(
+        call.kwargs
+        for call in writes
+        if call.kwargs['Key']['key'].endswith('.interval_minutes')
+    )
+    assert settings_write['UpdateExpression'] == (
+        'SET #value=:value, #source=:source ADD #version :version'
+    )
+    assert settings_write['ExpressionAttributeNames']['#source'] == 'source'
+    assert settings_write['ExpressionAttributeValues'] == {
+        ':value': 60,
+        ':version': 1,
+        ':source': 'api',
+    }
+    invocation.success.assert_called_once()
+
+
+def test_fractional_io1_rate_survives_api_save():
+    api = bedrock_settings_api()
+    config = api.context.config()
+    config.db = Mock()
+    invocation = Mock()
+    invocation.get_request_payload_as.return_value = UpdateModuleSettingsRequest(
+        module_id='scheduler',
+        settings={'cost_estimation': {'provisioned_iops': '0.065'}},
+    )
+    api.update_module_settings(invocation)
+    entries = config.db.sync_cluster_settings_in_db.call_args.kwargs['config_entries']
+    assert entries == [
+        {'key': 'scheduler.cost_estimation.provisioned_iops', 'value': 0.065}
+    ]
+    assert type(entries[0]['value']) is float
+    assert invocation.success.call_args.args[0].effects == {
+        'cost_estimation.provisioned_iops': 'runtime'
+    }
+
+
+@pytest.mark.parametrize('value', [-0.065, float('nan'), float('inf'), True])
+def test_invalid_io1_rate_does_not_write(value):
+    api = bedrock_settings_api()
+    api.context.config().db = Mock()
+    invocation = Mock()
+    invocation.get_request_payload_as.return_value = UpdateModuleSettingsRequest(
+        module_id='scheduler', settings={'cost_estimation': {'provisioned_iops': value}}
+    )
+    with pytest.raises(exceptions.SocaException):
+        api.update_module_settings(invocation)
+    api.context.config().db.sync_cluster_settings_in_db.assert_not_called()

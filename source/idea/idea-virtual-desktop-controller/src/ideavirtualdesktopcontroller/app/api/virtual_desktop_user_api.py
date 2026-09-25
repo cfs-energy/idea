@@ -158,8 +158,32 @@ class VirtualDesktopUserAPI(VirtualDesktopAPI):
         message, is_valid = self._validate_owner(session.owner, context)
         if not is_valid:
             session.failure_reason = message
+            return session, False
 
-        return session, is_valid
+        session.owner = context.get_username()
+        if Utils.is_empty(session.server) or Utils.is_empty(
+            session.server.instance_type
+        ):
+            return session, True
+
+        current_session = self.session_db.get_from_db(
+            idea_session_id=session.idea_session_id,
+            idea_session_owner=session.owner,
+        )
+        if Utils.is_empty(current_session):
+            return session, True
+
+        failure_reason = self.controller_utils.get_instance_type_rejection_reason(
+            instance_type_name=session.server.instance_type,
+            hibernation_support=current_session.hibernation_enabled,
+            software_stack=current_session.software_stack,
+            username=session.owner,
+        )
+        if Utils.is_not_empty(failure_reason):
+            session.failure_reason = failure_reason
+            return session, False
+
+        return session, True
 
     def _validate_create_session_request(
         self, session: VirtualDesktopSession, context: ApiInvocationContext

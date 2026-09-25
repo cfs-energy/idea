@@ -26,6 +26,7 @@ import { after, before, describe, test } from 'node:test';
 
 import { buildApp } from '../../src/cdk/app.ts';
 import { buildStack } from '../../src/cdk/stacks/cluster.ts';
+import { isStatefulType } from '../../src/cdk/stateful.ts';
 import { requireCapture } from '../support/fixtures.ts';
 import { withRetainedCertificates } from '../support/retained-certificates.ts';
 import { withRetainedStateful } from '../support/retain-stateful.ts';
@@ -214,11 +215,14 @@ describe('cluster stack', () => {
     // its teardown behaviour is unchanged.
     assert.equal(synthResources.ideadev27privatehostedzone741B171D.DeletionPolicy, undefined);
     assert.equal(synthResources.ideadev27privatehostedzone741B171D.UpdateReplacePolicy, 'Retain');
-    // The network holds nothing, so nothing is added to it.
+    // Network resources survive replacement, while the custom resource stays unchanged.
     for (const id of ['vpcA2121C38', 'vpcpublicSubnet1EIP909BE2D3', 'clusterprefixlist']) {
       assert.equal(synthResources[id].DeletionPolicy, undefined, id);
-      assert.equal(synthResources[id].UpdateReplacePolicy, undefined, id);
+      const retained = isStatefulType(synthResources[id].Type as string);
+      assert.equal(synthResources[id].UpdateReplacePolicy, retained ? 'Retain' : undefined, id);
     }
+    assert.equal(synthResources.vpcA2121C38.UpdateReplacePolicy, 'Retain');
+    assert.equal(synthResources.clusterprefixlist.UpdateReplacePolicy, undefined);
   });
 
   test('the external https listener keeps the live default action', () => {

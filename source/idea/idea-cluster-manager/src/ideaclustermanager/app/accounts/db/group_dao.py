@@ -53,6 +53,9 @@ class GroupDAO:
     def convert_from_db(group: Dict) -> Group:
         return Group(
             **{
+                'last_task_failure': Utils.get_value_as_dict(
+                    'last_task_failure', group
+                ),
                 'name': Utils.get_value_as_string('group_name', group),
                 'ds_name': Utils.get_value_as_string('ds_name', group),
                 'gid': Utils.get_value_as_int('gid', group),

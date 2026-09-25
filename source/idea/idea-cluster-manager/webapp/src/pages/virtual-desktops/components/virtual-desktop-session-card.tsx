@@ -202,6 +202,37 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
             || Utils.isNotEmpty(schedule?.sunday);
     }
 
+    scheduleSamplesIdle = (): boolean => {
+        const day = moment().tz(AppContext.get().getClusterSettingsService().getClusterTimeZone()).day()
+        let schedule
+        switch (day) {
+            case 0:
+                schedule = this.props.session.schedule?.sunday
+                break
+            case 1:
+                schedule = this.props.session.schedule?.monday
+                break
+            case 2:
+                schedule = this.props.session.schedule?.tuesday
+                break
+            case 3:
+                schedule = this.props.session.schedule?.wednesday
+                break
+            case 4:
+                schedule = this.props.session.schedule?.thursday
+                break
+            case 5:
+                schedule = this.props.session.schedule?.friday
+                break
+            case 6:
+                schedule = this.props.session.schedule?.saturday
+                break
+        }
+        return schedule?.schedule_type === 'WORKING_HOURS'
+            || schedule?.schedule_type === 'CUSTOM_SCHEDULE'
+            || schedule?.schedule_type === 'STOP_ON_IDLE'
+    }
+
     buildHeader() {
         return <SpaceBetween size="xs" direction="vertical">
             <div>
@@ -222,7 +253,7 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
                 <Badge color="blue">{this.props.session.server?.instance_type}</Badge>
                 {this.hasSchedule() &&
                     <Box variant="small" color="text-body-secondary"><FontAwesomeIcon icon={faClock}/>{' '}{<VirtualDesktopScheduleDescription session={this.props.session}/>}</Box>}
-                {this.getIdleAutoStopOverride() > 0 &&
+                {this.hasSchedule() && this.scheduleSamplesIdle() && this.getIdleAutoStopOverride() > 0 &&
                     <Box variant="small" color="text-body-secondary"><FontAwesomeIcon icon={faHourglassHalf}/>{' '}Stops after {this.getIdleAutoStopOverride()} min idle</Box>}
                 {this.props.projectAiAccessPending &&
                     <StatusIndicator type="warning">This desktop cannot use the project's AI models yet. {this.canStart()

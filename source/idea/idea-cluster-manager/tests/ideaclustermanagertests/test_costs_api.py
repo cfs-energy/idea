@@ -91,6 +91,15 @@ def build_costs_api():
     api = CostsAPI(context=FakeAppContext())
     service = RecordingService()
     api.my_costs = service
+    api.context.storage_metrics = Mock()
+    api.context.storage_metrics.configuration_status.return_value = {
+        'status': 'enabled',
+        'reason': 'configured',
+        'provider': 'cloudwatch',
+        'has_efs': False,
+    }
+    api.context.storage_metrics.is_enabled.return_value = True
+    api.context.storage_metrics.targets.return_value = [object()]
     return api, service
 
 
@@ -181,7 +190,143 @@ def test_list_user_costs_adds_cached_shared_storage_to_each_row():
     row = context.response_payload.listing[0]
     assert row.storage_cost == 2.5
     assert row.storage_gb == 3.0
+    assert row.storage_cost_period == '2026-09-01 through 2026-09-22'
     assert row.total_cost == 6.5
+    assert row.total_cost_excludes_storage is False
+    assert context.response_payload.storage_data_available is True
+
+
+@pytest.mark.parametrize('enabled,targets', [(False, [object()]), (True, [])])
+def test_disabled_storage_skips_reads_even_for_an_empty_listing(enabled, targets):
+    api, _ = build_costs_api()
+    api.my_costs.list_user_costs = lambda: ListUserCostsResult(listing=[])
+    api.context.storage_metrics.is_enabled.return_value = enabled
+    api.context.storage_metrics.targets.return_value = targets
+    api.monthly_costs = Mock()
+    context = FakeApiInvocationContext('Costs.ListUserCosts', 'admin', elevated=True)
+
+    api.invoke(context)
+
+    assert context.response_payload.storage_disabled is True
+    assert context.response_payload.storage_unavailable is False
+    api.monthly_costs.get_costs.assert_not_called()
+
+
+def test_disabled_storage_preserves_history_and_labels_the_current_subtotal():
+    api, _ = build_costs_api()
+    historical = UserCosts(username='user-a', storage_cost=3.0, total_cost=7.0)
+    api.my_costs.list_user_costs = lambda: ListUserCostsResult(listing=[historical])
+    api.context.storage_metrics.is_enabled.return_value = False
+    api.monthly_costs = Mock()
+    context = FakeApiInvocationContext('Costs.ListUserCosts', 'admin', elevated=True)
+
+    api.invoke(context)
+
+    row = context.response_payload.listing[0]
+    assert row.storage_cost == 3.0
+    assert row.total_cost == 7.0
+    assert row.total_cost_excludes_storage is True
+    api.monthly_costs.get_costs.assert_not_called()
+
+
+def test_enabled_storage_without_collected_data_is_not_a_read_failure():
+    api, _ = build_costs_api()
+    api.my_costs.list_user_costs = lambda: ListUserCostsResult(
+        listing=[UserCosts(username='user-a', total_cost=4.0)]
+    )
+    api.monthly_costs = Mock()
+    api.monthly_costs.get_costs.return_value = GetMyCostsResult(
+        currency='USD', state='collecting'
+    )
+    context = FakeApiInvocationContext('Costs.ListUserCosts', 'admin', elevated=True)
+
+    api.invoke(context)
+
+    row = context.response_payload.listing[0]
+    assert context.response_payload.storage_unavailable is False
+    assert context.response_payload.storage_data_available is False
+    assert row.storage_cost is None
+    assert row.total_cost_excludes_storage is True
+
+
+def test_no_usage_data_is_missing_not_measured_zero():
+    api, _ = build_costs_api()
+    api.my_costs.list_user_costs = lambda: ListUserCostsResult(
+        listing=[UserCosts(username='user-a', total_cost=4.0)]
+    )
+    api.monthly_costs = Mock()
+    api.monthly_costs.get_costs.return_value = GetMyCostsResult(
+        currency='USD',
+        state='ready',
+        current=MyCostsMonth(
+            start_date='2026-09-01',
+            end_date='2026-09-22',
+            incomplete=True,
+            jobs=MyCostsAmount(status='ready'),
+            desktops=MyCostsAmount(status='ready'),
+            desktop_disks=MyCostsAmount(status='ready'),
+            shared_storage=MyCostsAmount(cost=None, status='no_usage_data'),
+            ai=MyCostsAmount(status='ready'),
+        ),
+    )
+    context = FakeApiInvocationContext('Costs.ListUserCosts', 'admin', elevated=True)
+
+    api.invoke(context)
+
+    row = context.response_payload.listing[0]
+    assert context.response_payload.storage_data_available is False
+    assert context.response_payload.storage_unavailable is False
+    assert row.storage_cost is None
+    assert row.total_cost_excludes_storage is True
+
+
+def test_storage_read_failure_is_unavailable_not_zero():
+    api, _ = build_costs_api()
+    api.my_costs.list_user_costs = lambda: ListUserCostsResult(
+        listing=[UserCosts(username='user-a', total_cost=4.0)]
+    )
+    api.monthly_costs = Mock()
+    api.monthly_costs.get_costs.side_effect = RuntimeError('read failed')
+    context = FakeApiInvocationContext('Costs.ListUserCosts', 'admin', elevated=True)
+
+    api.invoke(context)
+
+    row = context.response_payload.listing[0]
+    assert context.response_payload.storage_unavailable is True
+    assert row.storage_cost is None
+    assert row.total_cost == 4.0
+    assert row.total_cost_excludes_storage is True
+
+
+def test_measured_storage_zero_remains_a_known_zero():
+    api, _ = build_costs_api()
+    api.my_costs.list_user_costs = lambda: ListUserCostsResult(
+        listing=[UserCosts(username='user-a', total_cost=4.0)]
+    )
+    api.monthly_costs = Mock()
+    api.monthly_costs.get_costs.return_value = GetMyCostsResult(
+        currency='USD',
+        state='ready',
+        current=MyCostsMonth(
+            start_date='2026-09-01',
+            end_date='2026-09-22',
+            incomplete=False,
+            jobs=MyCostsAmount(status='ready'),
+            desktops=MyCostsAmount(status='ready'),
+            desktop_disks=MyCostsAmount(status='ready'),
+            shared_storage=MyCostsAmount(cost=0.0, status='ready'),
+            ai=MyCostsAmount(status='ready'),
+        ),
+    )
+    context = FakeApiInvocationContext('Costs.ListUserCosts', 'admin', elevated=True)
+
+    api.invoke(context)
+
+    row = context.response_payload.listing[0]
+    assert row.storage_cost == 0.0
+    assert row.storage_gb == 0.0
+    assert row.total_cost == 4.0
+    assert row.total_cost_excludes_storage is False
 
 
 def test_get_user_costs_uses_the_personal_billboard_service_for_the_named_user():
@@ -270,3 +415,47 @@ def test_monthly_costs_requires_authorized_membership():
                 'MyCosts.GetCosts', 'user-a', authorized_user=False
             )
         )
+
+
+@pytest.mark.parametrize('amount', [2.5, 0.0, None])
+def test_collector_storage_estimate_is_available_when_amount_is_known(amount):
+    api, _ = build_costs_api()
+    api.my_costs.list_user_costs = lambda: ListUserCostsResult(
+        listing=[UserCosts(username='user-a', total_cost=4.0)]
+    )
+    api.monthly_costs = Mock()
+    api.monthly_costs.get_costs.return_value = GetMyCostsResult.model_validate(
+        {
+            'currency': 'USD',
+            'timezone': 'UTC',
+            'state': 'ready',
+            'current': {
+                'start_date': '2026-09-01',
+                'end_date': '2026-09-02',
+                **{
+                    facet: {'status': 'ready', 'cost': 0}
+                    for facet in ('jobs', 'desktops', 'desktop_disks', 'ai')
+                },
+                'shared_storage': {
+                    'cost': amount,
+                    'status': 'estimated_share',
+                    'source_as_of': '2026-09-01T00:00:00+00:00',
+                    'daily': [
+                        {
+                            'date': '2026-09-01',
+                            'day': 1,
+                            'amount': amount,
+                            'status': 'estimated_share',
+                        }
+                    ],
+                },
+            },
+        }
+    )
+    context = FakeApiInvocationContext('Costs.ListUserCosts', 'admin', elevated=True)
+    api.invoke(context)
+    row = context.response_payload.listing[0]
+    assert context.response_payload.storage_data_available is (amount is not None)
+    assert row.storage_cost == amount
+    assert row.total_cost == 4.0 + (amount or 0)
+    assert row.total_cost_excludes_storage is (amount is None)

@@ -696,6 +696,9 @@ class SocaJob(SocaBaseModel):
     exit_status: Optional[int] = Field(default=None, strict=False)
     provisioned: Optional[bool] = Field(default=None)
     error_message: Optional[str] = Field(default=None)
+    status_reason: Optional[str] = Field(default=None)
+    disposition: Optional[str] = Field(default=None)
+    reason_class: Optional[str] = Field(default=None)
     # waiting signals: computed per request on the active-jobs read path, never persisted
     # with the job. elapsed queue time isn't here - the client derives it from queue_time/start_time.
     provisioning_attempt: Optional[int] = Field(default=None)
@@ -1230,6 +1233,7 @@ class SocaJob(SocaBaseModel):
 class SocaComputeNodeState(str, Enum):
     BUSY = 'busy'
     DOWN = 'down'
+    UNKNOWN = 'unknown'
     FREE = 'free'
     OFFLINE = 'offline'
     JOB_BUSY = 'job-busy'

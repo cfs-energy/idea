@@ -1,5 +1,6 @@
+import {buildBudgetUsage} from '../../components/job-budget-usage';
 import {render, screen} from '@testing-library/react';
-import {JobInfo, JobWaitingSignals} from './jobs';
+import {JobInfo, JobWaitingSignals, JobStatus, JobCosts, JobBudgetImpact} from './jobs';
 import {SocaJob} from '../../client/data-model';
 import {initTestAppContext} from '../../test-support';
 
@@ -156,5 +157,62 @@ describe('job waiting signals', () => {
         render(<JobInfo job={{job_id: '2347', state: 'running', start_time: '2026-08-19T11:00:00Z'}} now={NOW}/>);
         expect(screen.queryByText('Provisioning Attempt')).toBeNull();
         expect(screen.queryByText('Blocking Queue Limit')).toBeNull();
+    });
+});
+
+describe('job status and costs', () => {
+    beforeEach(() => initTestAppContext());
+
+    it('shows the scheduler reason for a held job without a command prompt', () => {
+        render(<JobStatus job={{state: 'held', status_reason: 'Held after attempt 3 of 3: Capacity unavailable.', comment: 'See qstat -f'}}/>);
+        expect(screen.getByText('Held after attempt 3 of 3: Capacity unavailable.')).toBeInTheDocument();
+        expect(screen.queryByText(/qstat/)).toBeNull();
+    });
+
+    it.each(['ran', 'failed', 'held', 'deleted'] as const)('shows the %s disposition', disposition => {
+        render(<JobStatus job={{state: 'finished', disposition, status_reason: 'Recorded outcome.'}}/>);
+        expect(screen.getByText(disposition[0].toUpperCase() + disposition.slice(1))).toBeInTheDocument();
+        expect(screen.getByText('Recorded outcome.')).toBeInTheDocument();
+    });
+
+    it('shows the status reason and disposition in detail', () => {
+        render(<JobInfo job={{state: 'finished', disposition: 'deleted', status_reason: 'Cancelled by the owner.'}} now={NOW}/>);
+        expect(valueOf('Status Reason')).toBe('Cancelled by the owner.');
+        expect(valueOf('Disposition')).toBe('deleted');
+    });
+
+    it('does not show an incomplete cost total as a price', () => {
+        render(<JobCosts job={{estimated_bom_cost: {price_unavailable: true, total: {amount: 123.45}}}}/>);
+        expect(screen.getByText('Price not available')).toBeInTheDocument();
+        expect(screen.queryByText(/123.45/)).toBeNull();
+    });
+
+    it('shows recorded savings and the estimated total', () => {
+        render(<JobCosts job={{estimated_bom_cost: {total: {amount: 12}, savings_total: {amount: 3}, savings: [{title: 'Spot savings', total_price: {amount: 3}}]}}}/>);
+        expect(screen.getByText(/Estimated savings:/)).toBeInTheDocument();
+        expect(screen.getByText('Spot savings')).toBeInTheDocument();
+        expect(screen.getByText(/12.00/)).toBeInTheDocument();
+    });
+
+    it('shows recorded budget usage with the shared budget display', () => {
+        render(buildBudgetUsage({budget_name: 'Compute budget', budget_limit: {amount: 100}, actual_spend: {amount: 20}, forecasted_spend: {amount: 30}, job_usage_percent: 4}));
+        expect(screen.getByText('Compute budget')).toBeInTheDocument();
+        expect(screen.getByText('4.00%')).toBeInTheDocument();
+    });
+});
+
+
+describe('job budget impact', () => {
+    beforeEach(() => initTestAppContext());
+
+    it.each([undefined, {price_unavailable: true}])('hides budget percentages without a price: %j', cost => {
+        render(<JobBudgetImpact job={{estimated_bom_cost: cost, estimated_budget_usage: {job_usage_percent: 4}}}/>);
+        expect(screen.getByText('Price not available')).toBeInTheDocument();
+        expect(screen.queryByText('4.00%')).toBeNull();
+    });
+
+    it('shows budget percentages with an available price', () => {
+        render(<JobBudgetImpact job={{estimated_bom_cost: {total: {amount: 4}}, estimated_budget_usage: {job_usage_percent: 4}}}/>);
+        expect(screen.getByText('4.00%')).toBeInTheDocument();
     });
 });

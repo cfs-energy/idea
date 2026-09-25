@@ -23,6 +23,7 @@ import {
   renderTable,
   scanSettings,
 } from '../../src/cli/commands/config.ts';
+import { compareUpgradeDrift } from '../../src/config/upgrade-drift.ts';
 import { VALUES_FILE_S3_KEY, clusterRegionDir } from '../../src/cli/cdk-invoker.ts';
 import { fakeDeps, moduleRow, withTempIdeaHome } from '../support/deploy-harness.ts';
 import { requireCapture } from '../support/fixtures.ts';
@@ -370,6 +371,22 @@ describe('config update', () => {
     assert.deepEqual(deps.writes.map((write) => write.op), ['syncModulesInDb', 'syncClusterSettingsInDb']);
     assert.equal((deps.writes[1]?.payload as { overwrite: boolean }).overwrite, true);
     rmSync(root, { recursive: true, force: true });
+  });
+
+  it('operator file overwrite retains provenance for the next drift approval', async () => {
+    const root = writeConfigTree(CLUSTER, REGION);
+    const deps = fakeDeps();
+    let source: string | undefined;
+    const writer = await deps.configWriter({clusterName: CLUSTER, awsRegion: REGION});
+    writer.syncClusterSettingsInDb = async (_entries, _overwrite, suppliedSource) => { source = suppliedSource; };
+    deps.configWriter = async () => writer;
+    try {
+      await configUpdate(deps, {clusterName: CLUSTER, awsRegion: REGION, moduleSet: 'default', configDir: root, force: true, overwrite: true});
+      assert.equal(source, 'cli');
+      const key = 'global-settings.gpu_settings.fail_on_missing_driver';
+      const report = compareUpgradeDrift({current: [{key, value: false, source}], generated: [{key, value: true}], replaceGlobalSettings: true});
+      assert.deepEqual(report.changedRowsDifferingFromGenerated, [key]);
+    } finally { rmSync(root, {recursive: true, force: true}); }
   });
 
   it('refuses a config tree belonging to another cluster or region', async () => {

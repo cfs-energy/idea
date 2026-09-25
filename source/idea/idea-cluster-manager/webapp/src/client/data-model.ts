@@ -89,6 +89,7 @@ export type SocaSortOrder = "asc" | "desc";
 export type SocaComputeNodeState =
   | "busy"
   | "down"
+  | "unknown"
   | "free"
   | "offline"
   | "job-busy"
@@ -114,6 +115,9 @@ export interface AddSudoUserResult {
   user?: User;
 }
 export interface User {
+  last_task_failure?: {
+    [k: string]: string;
+  };
   username?: string;
   password?: string;
   email?: string;
@@ -132,12 +136,21 @@ export interface User {
   created_on?: string;
   updated_on?: string;
   landing_page?: string;
+  instance_type_exceptions?: string[];
 }
 export interface AddUserToGroupRequest {
   usernames?: string[];
   group_name?: string;
 }
 export interface AddUserToGroupResult {}
+export interface ApiToken {
+  token_id: string;
+  username: string;
+  name: string;
+  created_on: number;
+  expires_on: number;
+  last_used_on?: number;
+}
 export interface AuthResult {
   access_token?: string;
   id_token?: string;
@@ -254,6 +267,9 @@ export interface VirtualDesktopSoftwareStack {
   allowed_instance_types?: string[];
 }
 export interface Project {
+  last_task_failure?: {
+    [k: string]: string;
+  };
   project_id?: string;
   name?: string;
   title?: string;
@@ -453,6 +469,15 @@ export interface ConfirmForgotPasswordRequest {
   password?: string;
 }
 export interface ConfirmForgotPasswordResult {}
+export interface CreateApiTokenRequest {
+  name: string;
+  expires_in_days: number;
+}
+export interface CreateApiTokenResult {
+  token: string;
+  token_id: string;
+  expires_on: number;
+}
 export interface CreateEmailTemplateRequest {
   template?: EmailTemplate;
 }
@@ -478,6 +503,9 @@ export interface CreateGroupRequest {
   group?: Group;
 }
 export interface Group {
+  last_task_failure?: {
+    [k: string]: string;
+  };
   title?: string;
   description?: string;
   name?: string;
@@ -840,6 +868,10 @@ export interface CreateUserResult {
   user?: User;
 }
 export interface DecodedToken {}
+export interface DeleteApiTokenRequest {
+  token_id: string;
+}
+export interface DeleteApiTokenResult {}
 export interface DeleteEmailTemplateRequest {
   name?: string;
 }
@@ -937,6 +969,8 @@ export interface SettingDefinition {
   choices?: string[];
   validation: SettingValidation;
   advanced: boolean;
+  read_only?: boolean;
+  hidden?: boolean;
   effect: "runtime" | "restart" | "deployment";
 }
 export interface SettingValidation {
@@ -990,6 +1024,20 @@ export interface EnableUserRequest {
 }
 export interface EnableUserResult {
   user?: User;
+}
+export interface FetchPricingRatesRequest {
+  region: string;
+}
+export interface FetchPricingRatesResult {
+  region: string;
+  as_of: string;
+  rates?: {
+    [k: string]: number;
+  };
+  unavailable?: {
+    [k: string]: string;
+  };
+  assumptions?: string[];
 }
 export interface FileData {
   owner?: string;
@@ -1102,6 +1150,9 @@ export interface SocaJob {
   exit_status?: number;
   provisioned?: boolean;
   error_message?: string;
+  status_reason?: string;
+  disposition?: string;
+  reason_class?: string;
   provisioning_attempt?: number;
   max_provisioning_attempts?: number;
   blocking_limit_type?: string;
@@ -1662,6 +1713,12 @@ export interface ListAllowedInstanceTypesResponse {
   listing: (SocaBaseModel | unknown)[];
   filters?: SocaFilter[];
 }
+export interface ListApiTokensRequest {
+  username?: string;
+}
+export interface ListApiTokensResult {
+  listing?: ApiToken[];
+}
 export interface ListBedrockUsageRequest {
   paginator?: SocaPaginator;
   sort_by?: SocaSortBy;
@@ -2035,6 +2092,12 @@ export interface ListUserCostsResult {
   jobs_unavailable?: boolean;
   desktops_unavailable?: boolean;
   storage_unavailable?: boolean;
+  storage_disabled?: boolean;
+  storage_configuration_status?: ("disabled" | "not_configured" | "unsupported" | "enabled") | null;
+  storage_configuration_reason?: string;
+  storage_metrics_provider?: string;
+  storage_has_efs?: boolean;
+  storage_data_available?: boolean;
 }
 /**
  * one user's totals for the admin listing.
@@ -2055,7 +2118,9 @@ export interface UserCosts {
   job_cost_unavailable?: boolean;
   storage_cost?: number;
   storage_gb?: number;
+  storage_cost_period?: string;
   total_cost?: number;
+  total_cost_excludes_storage?: boolean;
 }
 export interface ListUsersInGroupRequest {
   paginator?: SocaPaginator;
