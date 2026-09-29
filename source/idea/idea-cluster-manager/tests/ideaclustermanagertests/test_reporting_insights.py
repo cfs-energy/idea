@@ -480,3 +480,54 @@ def test_missing_job_cost_stays_null_and_excludes_cost_rankings():
     assert result.cost is result.savings is result.wasted_cost is None
     assert result.costliest == result.by_queue == []
     assert len(result.least_efficient) == 1
+
+
+def test_system_users_group_before_ranking_without_affecting_personal_scope():
+    value = data()
+    owners = ['root', 'uid:1001', '1002', 'scientist-a']
+    value['jobs'] = [
+        job(str(i), owner=owner, cost='10') for i, owner in enumerate(owners)
+    ]
+    value['projections'] = {owner: projection('5') for owner in owners}
+    value['storage'] = [
+        dict(
+            date='2024-02-02',
+            filesystem_id='fs-a',
+            complete=True,
+            users={owner: 10 for owner in owners},
+        )
+    ]
+    result = build(value)
+    assert [(r.name, r.cost, r.count) for r in result.jobs.by_user] == [
+        ('System', 30, 3),
+        ('scientist-a', 10, 1),
+    ]
+    assert result.desktops.by_user[0].name == 'System'
+    assert result.desktops.by_user[0].cost == 15
+    assert result.storage.by_user[0].name == 'System'
+    assert result.storage.by_user[0].bytes == 30
+    personal = build(value, 'root')
+    assert personal.jobs.count == 1
+    assert personal.jobs.costliest[0].owner == 'root'
+    assert personal.jobs.costliest[0].requested_cores == 4
+    assert personal.jobs.costliest[0].used_cores == 2
+
+
+def test_storage_total_matches_latest_measured_tiers():
+    value = data()
+    value['storage'] = [
+        dict(
+            date='2024-02-02',
+            filesystem_id='fs-a',
+            complete=True,
+            users={'scientist-a': 10},
+            ssd_bytes=20,
+            capacity_pool_bytes=30,
+        )
+    ]
+    result = build(value)
+    assert (
+        result.storage.used_bytes
+        == sum(row.bytes for row in result.storage.tier_daily)
+        == 50
+    )

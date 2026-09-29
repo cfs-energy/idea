@@ -1,7 +1,7 @@
 import {render, screen, within} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import {csvCell} from './insights-table';
-import {BudgetTable, EfficiencyTiles, JobsTable} from './insights-components';
+import {csvCell, readPreferences, savePreferences} from './insights-table';
+import {BudgetTable, Coaching, EfficiencyTiles, JobsTable, jobHint, MetricTile, mergeJobs} from './insights-components';
 import {exampleJob, insightsFixture} from './insights-fixture';
 import {budgetPresentation} from './reporting-format';
 import MyJobEfficiency from '../home/my-job-efficiency';
@@ -11,7 +11,7 @@ it.each(['ok', 'watch', 'over'] as const)('colors the %s budget bar and shows it
     const {container} = render(<BudgetTable budgets={[{...insightsFixture().budgets[0], status}]} currency="USD"/>);
     expect(screen.getByText(budgetPresentation[status].label)).toBeInTheDocument();
     expect(screen.getByRole('progressbar', {name: 'Project Cedar forecast used'})).toHaveAttribute('value', '90');
-    expect(container.querySelector(`[style*="${budgetPresentation[status].color}"]`)).not.toBeNull();
+    expect(container.querySelector('[style*="background-color"]')).toBeNull();
 });
 it('hides the budget section without budgets and hides missing forecast columns', () => {
     const {rerender} = render(<BudgetTable budgets={[]} currency="USD"/>);
@@ -31,12 +31,12 @@ it('sorts job costs numerically, filters, and paginates at 25 rows', async () =>
     render(<JobsTable title="Costliest jobs" rows={rows} currency="USD" timezone="America/New_York"/>);
     const table = screen.getByRole('table', {name: 'Costliest jobs'});
     expect(within(table).getAllByRole('row')).toHaveLength(26);
-    expect(within(table).getAllByRole('row')[1]).toHaveTextContent('job-29');
+    expect(within(table).getAllByRole('row')[1]).toHaveTextContent('Study 29');
     await userEvent.click(screen.getByRole('button', {name: 'Next page'}));
     expect(within(table).getAllByRole('row')).toHaveLength(6);
     await userEvent.type(screen.getByRole('searchbox', {name: 'Find in Costliest jobs'}), 'Study 28');
     expect(within(table).getAllByRole('row')).toHaveLength(2);
-    expect(within(table).getByText('job-28')).toBeInTheDocument();
+    expect(within(table).getByText('Study 28')).toBeInTheDocument();
 });
 it('uses the scoped client for personal efficiency and shows only its returned budgets', async () => {
     const context = initTestAppContext();
@@ -44,7 +44,7 @@ it('uses the scoped client for personal efficiency and shows only its returned b
     delete fixture.jobs.by_user; delete fixture.desktops.by_user; delete fixture.storage.by_user;
     const get = vi.spyOn(context.client().myCosts(), 'getInsights').mockResolvedValue(fixture);
     render(<MyJobEfficiency timezone="America/New_York" reload={0}/>);
-    expect(await screen.findByText('Used about 14% of requested CPU time')).toBeInTheDocument();
+    expect(await screen.findByText('Requested 36 cores, used about 1. Try ncpus=2. Requested 64 GiB, peak 3 GiB.')).toBeInTheDocument();
     expect(get).toHaveBeenCalledWith({period: 'this_month'});
     expect(screen.queryByRole('columnheader', {name: 'User'})).toBeNull();
     expect(screen.getByText('Project budgets')).toBeInTheDocument();
@@ -54,4 +54,81 @@ it('exports numeric corrections and safely quotes text cells', () => {
     expect(csvCell(-2.5)).toBe('"-2.5"');
     expect(csvCell('Study "A"')).toBe('"Study ""A"""');
     expect(csvCell('=2+2')).toBe('"\'=2+2"');
+});
+
+beforeEach(() => localStorage.clear());
+it.each([
+    [0, 36, 'Requested 36 cores, used less than 1. Try ncpus=1.'],
+    [1, 36, 'Requested 36 cores, used about 1. Try ncpus=2.'],
+    [2.41, 36, 'Requested 36 cores, used about 2.4. Try ncpus=4.'],
+    [17.99, 36, 'Requested 36 cores, used about 18. Try ncpus=23.'],
+    [18, 36, null], [19, 36, null], [null, 36, null], [1, null, null], [0, 0, null]
+])('coaches CPU use %s of %s cores at the strict threshold', (used, requested, hint) => {
+    expect(jobHint({...exampleJob, used_cores: used as number | null, requested_cores: requested as number | null, peak_memory_gib: null})).toBe(hint);
+});
+it('coaches memory only with both values and low use', () => {
+    expect(jobHint({...exampleJob, used_cores: null})).toBe('Requested 64 GiB, peak 3 GiB.');
+    expect(jobHint({...exampleJob, used_cores: null, peak_memory_gib: 32})).toBeNull();
+    expect(jobHint({...exampleJob, used_cores: null, requested_memory_gib: null})).toBeNull();
+    expect(jobHint({...exampleJob, used_cores: null, requested_memory_gib: null, instance_memory_gib: 72, instance_type: 'c5.9xlarge'})).toBe('Peak 3 GiB of 72 GiB on c5.9xlarge. A smaller instance type would do.');
+    expect(jobHint({...exampleJob, used_cores: null, requested_memory_gib: null, instance_memory_gib: 4})).toBeNull();
+});
+it('leads with money and hides coaching without efficiency data', () => {
+    const jobs = {...insightsFixture().jobs, cost: '3.46', wasted_cost: '2.23'};
+    const {rerender} = render(<Coaching jobs={jobs} currency="USD" personal/>);
+    expect(screen.getByText("About $2.23 of $3.46 in job spend paid for cores your jobs didn't use.")).toBeInTheDocument();
+    rerender(<Coaching jobs={jobs} currency="USD"/>);
+    expect(screen.getByText('About $2.23 of $3.46 in job spend this period paid for unused cores.')).toBeInTheDocument();
+    rerender(<Coaching jobs={{...jobs, jobs_with_efficiency: 0}} currency="USD"/>);
+    expect(screen.queryByText(/About/)).toBeNull();
+});
+it('uses a heading for the tile label and ordinary text for its value', () => {
+    render(<MetricTile title="Job spend" value="$3.46" info="Costs for this period."/>);
+    expect(screen.getByRole('heading', {level: 3, name: /Job spend/})).toBeInTheDocument();
+    expect(screen.queryByRole('heading', {name: '$3.46'})).toBeNull();
+});
+it('keeps job columns in coaching order and links to the existing completed-job detail panel', () => {
+    render(<JobsTable title="My finished jobs" rows={[exampleJob]} currency="USD" timezone="UTC" personal/>);
+    expect(screen.getAllByRole('columnheader').map(cell => cell.textContent?.trim())).toEqual(['Job name', 'Cost', 'CPU efficiency', 'Unused core-hours', 'Hint', 'Elapsed hours', 'Queue', 'Instance type', 'Finished']);
+    const link = screen.getByRole('link', {name: exampleJob.name!});
+    expect(link).toHaveAttribute('href', '#/home/completed-jobs?job_id=job-1');
+    expect(link.parentElement).toHaveAttribute('title', exampleJob.name);
+    expect(mergeJobs(insightsFixture().jobs)).toHaveLength(1);
+});
+it('sorts the single job table by unused cores and retains preferences on remount', async () => {
+    const rows = [exampleJob, {...exampleJob, job_id: 'job-2', name: 'Study Elm', cost: '1', wasted_core_hours: 100}];
+    const {unmount} = render(<JobsTable title="Finished jobs" rows={rows} currency="USD" timezone="UTC"/>);
+    await userEvent.click(screen.getByRole('button', {name: 'Sort jobs Highest cost'}));
+    await userEvent.click(screen.getByRole('option', {name: 'Most unused cores'}));
+    expect(screen.getAllByRole('row')[1]).toHaveTextContent('Study Elm');
+    await userEvent.click(screen.getByRole('button', {name: 'Table preferences'}));
+    const dialog = screen.getByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('checkbox', {name: 'Job ID'}));
+    await userEvent.click(within(dialog).getByRole('button', {name: 'Confirm'}));
+    expect(screen.getByRole('columnheader', {name: 'Job ID'})).toBeInTheDocument();
+    unmount();
+    render(<JobsTable title="Finished jobs" rows={rows} currency="USD" timezone="UTC"/>);
+    expect(screen.getByRole('columnheader', {name: 'Job ID'})).toBeInTheDocument();
+    expect(localStorage.getItem('reporting.table.my-jobs')).toBeNull();
+});
+it('tolerates unavailable browser storage', () => {
+    const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {throw new Error('Disabled');});
+    const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {throw new Error('Disabled');});
+    expect(readPreferences('table', [])).toEqual([]);
+    expect(() => savePreferences('table', [])).not.toThrow();
+    get.mockRestore(); set.mockRestore();
+});
+it('shows budget percentage once and states the budget period', () => {
+    render(<BudgetTable budgets={insightsFixture().budgets} currency="USD"/>);
+    expect(screen.getByRole('progressbar')).toHaveAttribute('value', '90');
+    // Cloudscape has separate visual and screen-reader copies; no custom percentage label.
+    expect(screen.getAllByText('90%').every(element => element.tagName !== 'LABEL')).toBe(true);
+    expect(screen.getByText("Spending and forecasts use each project's current budget period.")).toBeInTheDocument();
+});
+it('follows a supplied personal period', async () => {
+    const context = initTestAppContext();
+    const get = vi.spyOn(context.client().myCosts(), 'getInsights').mockResolvedValue(insightsFixture());
+    render(<MyJobEfficiency timezone="UTC" reload={0} period={{period: 'last_month'}}/>);
+    await screen.findByText('My finished jobs');
+    expect(get).toHaveBeenCalledWith({period: 'last_month'});
 });

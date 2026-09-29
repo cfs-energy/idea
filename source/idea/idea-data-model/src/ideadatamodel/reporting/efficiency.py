@@ -92,6 +92,27 @@ def allocation(params):
     )
 
 
+def instance_memory(job):
+    """Memory of one instance a job had to itself, from the provisioned instance types."""
+    # Batch and always-on capacity can share a node between jobs.
+    if job.get('scaling_mode') != 'single-job' or (job.get('params') or {}).get(
+        'keep_forever'
+    ):
+        return None
+    ran = {
+        host.get('instance_type')
+        for host in job.get('execution_hosts') or []
+        if host.get('instance_type')
+    }
+    sizes = {
+        memory_bytes(option.get('memory'))
+        for option in (job.get('provisioning_options') or {}).get('instance_types')
+        or []
+        if not ran or option.get('name') in ran
+    } - {None}
+    return sizes.pop() if len(sizes) == 1 else None
+
+
 def job_efficiency(job):
     if hasattr(job, 'model_dump'):
         job = job.model_dump(mode='json', exclude_none=True)
@@ -129,15 +150,19 @@ def job_efficiency(job):
     peak_memory = max(memories) if memories else None
     if nodes and nodes > 1 and host_memories:
         peak_memory = sum(host_memories) if len(host_memories) == nodes else None
-    memory = (
-        peak_memory / requested_memory
-        if peak_memory is not None and requested_memory
-        else None
-    )
+    # Without a memory request, compare with the memory of the instances the job had.
+    instance = None if requested_memory else instance_memory(job)
+    available = requested_memory or (instance * nodes if instance and nodes else None)
+    memory = peak_memory / available if peak_memory is not None and available else None
     requested_wall = seconds(params.get('walltime'))
     wall = elapsed / requested_wall if elapsed and requested_wall else None
     core_hours = elapsed * cpus / 3600 if elapsed and cpus else None
     return dict(
+        requested_cores=int(cpus) if cpus and float(cpus).is_integer() else None,
+        used_cores=sum(cpu_times) / elapsed if cpu_times and elapsed else None,
+        requested_memory_gib=requested_memory / 1024**3 if requested_memory else None,
+        peak_memory_gib=peak_memory / 1024**3 if peak_memory is not None else None,
+        instance_memory_gib=instance / 1024**3 if instance else None,
         cpu_efficiency_pct=100 * cpu if cpu is not None else None,
         memory_efficiency_pct=100 * memory if memory is not None else None,
         walltime_efficiency_pct=100 * wall if wall is not None else None,

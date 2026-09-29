@@ -21,7 +21,7 @@ it('renders five daily charts and keeps rules and folders collapsed', async () =
     expect(screen.getAllByText('This month: 1 of 2 days without data')).toHaveLength(5);
     expect(usage).not.toHaveBeenCalled();
     expect(screen.getByText('My job efficiency')).toBeInTheDocument();
-    expect(await screen.findByText('Used about 14% of requested CPU time')).toBeInTheDocument();
+    expect(await screen.findByText('Requested 36 cores, used about 1. Try ncpus=2. Requested 64 GiB, peak 3 GiB.')).toBeInTheDocument();
     expect(screen.getByText('Project budgets')).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/\b(coverage|snapshot|allocation|facet|eligible)\b/i);
     await userEvent.click(screen.getByRole('button', {name: 'Storage usage: folders and quotas'}));

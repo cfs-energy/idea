@@ -210,14 +210,17 @@ class Jobs extends Component<JobsProps, JobsState> {
     // the listing clears its selection on every fetch, so the selected job id is
     // tracked here and re-applied against the refreshed listing
     selectedJobId: string | null = null
+    linkedJobId: string | null = null
 
     constructor(props: JobsProps) {
         super(props);
         this.listing = React.createRef()
         this.deleteJobConfirmModal = React.createRef()
+        this.linkedJobId = props.type === 'completed' ? props.searchParams?.get('job_id') ?? null : null
+        this.selectedJobId = this.linkedJobId
         this.state = {
-            splitPanelOpen: false,
-            jobSelected: false
+            splitPanelOpen: !!this.linkedJobId,
+            jobSelected: !!this.linkedJobId
         }
     }
 
@@ -429,11 +432,14 @@ class Jobs extends Component<JobsProps, JobsState> {
                 }}
                 filters={[
                     {
-                        key: 'any'
+                        key: 'any',
+                        value: this.linkedJobId ?? undefined
                     }
                 ]}
                 onFilter={(filters) => {
                     const filterString = Utils.asString(filters[0].value).trim()
+                    if (this.linkedJobId && filterString === this.linkedJobId) return [{key: 'job_id', value: this.linkedJobId}]
+                    this.linkedJobId = null
                     if (Utils.isEmpty(filterString)) {
                         return []
                     } else if (Utils.isPositiveInteger(filterString)) {
@@ -482,7 +488,7 @@ class Jobs extends Component<JobsProps, JobsState> {
                     }
                     const job = listing.find((job) => job.job_id === this.selectedJobId)
                     if (job) {
-                        this.getListing().setSelectedItems([job])
+                        this.getListing().setSelectedItems([job], () => this.setState({jobSelected: true}))
                     } else {
                         this.selectedJobId = null
                         this.setState({
@@ -495,14 +501,14 @@ class Jobs extends Component<JobsProps, JobsState> {
                     if (this.props.scope === 'user') {
                         if (this.props.type === 'active') {
                             return this.scheduler().listActiveJobs({
-                                filters: this.getListing().getFilters(),
+                                filters: this.linkedJobId ? [{key: 'job_id', value: this.linkedJobId}] : this.getListing().getFilters(),
                                 paginator: this.getListing().getPaginator()
                             })
                         } else {
                             return this.scheduler().listCompletedJobs({
-                                filters: this.getListing().getFilters(),
+                                filters: this.linkedJobId ? [{key: 'job_id', value: this.linkedJobId}] : this.getListing().getFilters(),
                                 paginator: this.getListing().getPaginator(),
-                                date_range: {
+                                date_range: this.linkedJobId ? undefined : {
                                     ...this.getListing().getDateRange(),
                                     key: 'queue_time'
                                 }
@@ -511,14 +517,14 @@ class Jobs extends Component<JobsProps, JobsState> {
                     } else {
                         if (this.props.type === 'active') {
                             return this.schedulerAdmin().listActiveJobs({
-                                filters: this.getListing().getFilters(),
+                                filters: this.linkedJobId ? [{key: 'job_id', value: this.linkedJobId}] : this.getListing().getFilters(),
                                 paginator: this.getListing().getPaginator()
                             })
                         } else {
                             return this.schedulerAdmin().listCompletedJobs({
-                                filters: this.getListing().getFilters(),
+                                filters: this.linkedJobId ? [{key: 'job_id', value: this.linkedJobId}] : this.getListing().getFilters(),
                                 paginator: this.getListing().getPaginator(),
-                                date_range: {
+                                date_range: this.linkedJobId ? undefined : {
                                     ...this.getListing().getDateRange(),
                                     key: 'queue_time'
                                 }

@@ -18,7 +18,7 @@ from ideadatamodel import (
     exceptions,
     locale,
 )
-from .reporting_sources import ReportingSources, number, timestamp, subject
+from .reporting_sources import user_label, ReportingSources, number, timestamp, subject
 from .snapshot_store import (
     SnapshotStore,
     FACETS,
@@ -693,6 +693,32 @@ class ReportingService:
             'partial' if difference['spend_total'] is not None else 'unavailable',
             'Signed timing, coverage and billing-basis difference; not consumption or project allocation.',
         )
+        system_rows = [row for key, row in users.items() if user_label(key) == 'System']
+        if system_rows:
+            system = new_row('!system', 'System')
+            for facet in FACETS:
+                system['spend_by_facet'][facet] = known_sum(
+                    row['spend_by_facet'][facet] for row in system_rows
+                )
+            system['spend_total'] = known_sum(row['spend_total'] for row in system_rows)
+            for metric in ACTIVITY:
+                if metric != 'efficiency_pct':
+                    system[metric] = known_sum(row[metric] for row in system_rows)
+            if (
+                system['requested_walltime_hours']
+                and system['elapsed_hours'] is not None
+            ):
+                system['efficiency_pct'] = (
+                    100 * system['elapsed_hours'] / system['requested_walltime_hours']
+                )
+            for metric in system['coverage']:
+                system['coverage'][metric] = combine(
+                    [row['coverage'][metric] for row in system_rows]
+                )
+            users = {
+                key: row for key, row in users.items() if user_label(key) != 'System'
+            }
+            users[system['key']] = system
         tables = dict(
             user=list(users.values()), project=list(projects.values()), facet=facet_rows
         )

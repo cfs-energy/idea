@@ -3,7 +3,7 @@
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import ConfigDict, Field, StrictBool, StrictInt
+from pydantic import ConfigDict, Field, StrictBool, StrictInt, field_serializer
 
 from ideadatamodel import SocaPayload
 
@@ -45,7 +45,24 @@ Column = Literal[
 ]
 
 
-class MetricCoverage(SocaPayload):
+class ReportingWireModel(SocaPayload):
+    @field_serializer('*', mode='wrap', when_used='json')
+    def round_wire_numbers(self, value, handler):
+        def rounded(item):
+            if isinstance(item, Decimal):
+                return item.quantize(Decimal('0.0001'))
+            if isinstance(item, float):
+                return round(item, 2)
+            if isinstance(item, dict):
+                return {key: rounded(value) for key, value in item.items()}
+            if isinstance(item, list):
+                return [rounded(value) for value in item]
+            return item
+
+        return handler(rounded(value))
+
+
+class MetricCoverage(ReportingWireModel):
     model_config = ConfigDict(extra='forbid')
     status: Literal['ready', 'estimated', 'partial', 'unavailable', 'not_applicable']
     reason: str = ''
@@ -59,7 +76,7 @@ class MetricCoverage(SocaPayload):
     freshness_spread_seconds: float | None = None
 
 
-class ReportingRow(SocaPayload):
+class ReportingRow(ReportingWireModel):
     model_config = ConfigDict(extra='forbid', allow_inf_nan=False)
     key: str
     label: str

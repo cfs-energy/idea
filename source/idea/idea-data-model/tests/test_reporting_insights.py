@@ -44,6 +44,11 @@ def job(cpus=4, nodes=1, used=7200):
 def test_single_node_formulas():
     result = job_efficiency(job())
     assert result == dict(
+        requested_cores=4,
+        used_cores=2,
+        requested_memory_gib=8,
+        peak_memory_gib=4,
+        instance_memory_gib=None,
         cpu_efficiency_pct=50,
         memory_efficiency_pct=50,
         walltime_efficiency_pct=50,
@@ -165,7 +170,7 @@ def test_wire_contract_money_nulls_dates_and_strict_request():
         'notes',
     }
     assert set(wire['period']) == {'start', 'end', 'label'}
-    assert wire['jobs']['cost'] == '12.34'
+    assert wire['jobs']['cost'] == '12.3400'
     assert wire['jobs']['wasted_cost'] is None
     assert wire['period']['start'] == '2024-02-01'
     with pytest.raises(ValidationError):
@@ -195,3 +200,137 @@ def test_incomplete_host_memory_does_not_understate_job_usage():
     value['params']['custom_params'] = {'select': '2:ncpus=4:mem=8gib'}
     value['execution_hosts'][0]['execution']['runs'][0]['resources_used']['cpus'] = 4
     assert job_efficiency(value)['memory_efficiency_pct'] is None
+
+
+def test_wire_rounds_money_and_floats_without_changing_calculation_precision():
+    result = ReportingInsights(
+        period=dict(start='2024-02-01', end='2024-02-29', label='February'),
+        currency='USD',
+        updated_at=datetime.now(timezone.utc),
+        jobs=dict(
+            cost=Decimal('1.23456789'),
+            wasted_cost=Decimal('0.00006'),
+            cpu_efficiency_pct=33.333333,
+            wasted_core_hours=1.23456,
+            costliest=[
+                dict(
+                    job_id='1',
+                    owner='scientist-a',
+                    finished_at=datetime.now(timezone.utc),
+                    requested_cores=36,
+                    used_cores=1.23456,
+                    requested_memory_gib=64.12345,
+                    peak_memory_gib=3.45678,
+                    cost=Decimal('2.3456789'),
+                )
+            ],
+        ),
+        budgets=[
+            dict(
+                project='Project Cedar',
+                budget_name='Research',
+                limit=Decimal('1.23456'),
+                spent=Decimal('0.23456'),
+                forecast=Decimal('0.34567'),
+                headroom=Decimal('0.88889'),
+                pct_at_forecast=28.00001,
+                status='ok',
+            )
+        ],
+    )
+    wire = result.model_dump(mode='json')
+    assert wire['jobs']['cost'] == '1.2346'
+    assert wire['jobs']['wasted_cost'] == '0.0001'
+    assert wire['jobs']['cpu_efficiency_pct'] == 33.33
+    row = wire['jobs']['costliest'][0]
+    assert (
+        row['requested_cores'],
+        row['used_cores'],
+        row['requested_memory_gib'],
+        row['peak_memory_gib'],
+    ) == (36, 1.23, 64.12, 3.46)
+    assert row['cost'] == '2.3457'
+    assert wire['budgets'][0]['headroom'] == '0.8889'
+    assert result.jobs.cost == Decimal('1.23456789')
+    assert result.jobs.cpu_efficiency_pct == 33.333333
+
+
+def test_resource_hints_keep_unknown_values_null():
+    result = job_efficiency(dict(params={}, execution_hosts=[]))
+    assert all(
+        result[key] is None
+        for key in (
+            'requested_cores',
+            'used_cores',
+            'requested_memory_gib',
+            'peak_memory_gib',
+        )
+    )
+    result = job_efficiency(job(nodes=2))
+    assert result['requested_cores'] == 8
+    assert result['used_cores'] == 2
+
+
+def test_summary_rows_round_nested_money_and_float_measurements():
+    from ideadatamodel.reporting.reporting_api import ReportingRow, MetricCoverage
+
+    row = ReportingRow(
+        key='scientist-a',
+        label='scientist-a',
+        spend_total=Decimal('1.234567'),
+        spend_by_facet={'jobs': Decimal('1.234567')},
+        coverage={
+            'jobs': MetricCoverage(status='ready', freshness_spread_seconds=1.234567)
+        },
+    )
+    wire = row.model_dump(mode='json')
+    assert wire['spend_total'] == wire['spend_by_facet']['jobs'] == '1.2346'
+    assert wire['coverage']['jobs']['freshness_spread_seconds'] == 1.23
+
+
+def unrequested_on_instance(scaling_mode='single-job', sizes=(16,), ran='c5.2xlarge'):
+    value = job()
+    del value['params']['memory']
+    value['scaling_mode'] = scaling_mode
+    value['execution_hosts'][0]['instance_type'] = ran
+    value['provisioning_options'] = dict(
+        instance_types=[
+            dict(
+                name=f'c5.{i}xlarge' if i else ran,
+                memory=dict(value=gib * 1024, unit='mib'),
+            )
+            for i, gib in enumerate(sizes)
+        ]
+    )
+    return value
+
+
+def test_unrequested_memory_uses_the_dedicated_instance():
+    result = job_efficiency(unrequested_on_instance())
+    assert result['memory_efficiency_pct'] == 25
+    assert result['instance_memory_gib'] == 16
+    assert result['requested_memory_gib'] is None
+
+
+@pytest.mark.parametrize(
+    'value',
+    [
+        unrequested_on_instance(scaling_mode='batch'),
+        unrequested_on_instance(scaling_mode=None),
+        unrequested_on_instance(ran=None, sizes=(16, 32)),
+    ],
+)
+def test_instance_memory_needs_one_dedicated_instance_size(value):
+    if value['execution_hosts'][0]['instance_type'] is None:
+        del value['execution_hosts'][0]['instance_type']
+    result = job_efficiency(value)
+    assert result['memory_efficiency_pct'] is None
+    assert result['instance_memory_gib'] is None
+
+
+def test_memory_request_wins_over_instance_memory():
+    value = unrequested_on_instance()
+    value['params']['memory'] = dict(value=8, unit='gib')
+    result = job_efficiency(value)
+    assert result['memory_efficiency_pct'] == 50
+    assert result['instance_memory_gib'] is None

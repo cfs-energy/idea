@@ -21,7 +21,7 @@ const row = (key = 'scientist-a'): ReportingRow => ({key, label: key, spend_tota
 const summary = (snapshot_id = 'snapshot'): ReportingSummary => ({snapshot_id, expires_at: new Date(Date.now() + 600000).toISOString(), period: {period: 'this_month', start_date: '2020-01-01', end_date: '2020-01-31', start: '2020-01-01T00:00:00Z', end: '2020-02-01T00:00:00Z', provisional: true}, currency: 'USD', timezone: 'Pacific/Honolulu', as_of: '2020-01-01T00:00:00Z', tiles: {total: row('total'), top_project: {...row('top'), label: 'No priced projects', spend_total: null}, job_spend_difference: {...row('difference'), spend_total: '-2.00'}}, coverage: {spend_total: coverage()}, warnings: ['Partial project attribution.']});
 const rows = (listing = [row()], cursor?: string): ReportingRows => ({listing, paginator: {page_size: 50, cursor}, total_rows: 123, coverage: {spend_total: coverage()}, warnings: []});
 let context: ReturnType<typeof initTestAppContext>;
-beforeEach(() => {context = initTestAppContext();});
+beforeEach(() => {localStorage.clear(); context = initTestAppContext();});
 
 function History() {
     const location = useLocation();
@@ -135,13 +135,13 @@ it('resolves an SSO capability and clears it when SSO fails', async () => {
 
 describe('report views', () => {
     it.each([
-        ['overview', 'Daily job cost by project'], ['jobs', 'Costliest jobs'], ['desktops', 'Daily desktop cost by user'],
+        ['overview', 'Daily job cost by project'], ['jobs', 'Finished jobs'], ['desktops', 'Daily desktop cost by user'],
         ['storage', 'Storage by tier'], ['user', 'scientist-a'], ['project', 'scientist-a']
     ])('renders the %s tab with a mocked insights response', async (tab, heading) => {
         open(`/reporting?table=${tab}`);
         expect((await screen.findAllByText(heading)).length).toBeGreaterThan(0);
         expect(context.reporting().getInsights).toHaveBeenCalledWith({period: 'this_month'});
-        expect(screen.getByRole('tab', {name: ({overview: 'Overview', jobs: 'Jobs', desktops: 'Desktops', storage: 'Storage', user: 'By user', project: 'By project'} as Record<string, string>)[tab]})).toHaveAttribute('aria-selected', 'true');
+        expect(screen.getByRole('tab', {name: ({overview: 'Overview', jobs: 'Jobs', desktops: 'Desktops', storage: 'Storage', user: 'Breakdown', project: 'Breakdown'} as Record<string, string>)[tab]})).toHaveAttribute('aria-selected', 'true');
         expect(document.body.textContent).not.toMatch(/\b(facet|projection|index|coverage|eligible|freshness|spread|snapshot|provisional|allocation|v1|recorded label|unavailable)\b/i);
         expect(document.body.textContent).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
     });
@@ -160,7 +160,7 @@ describe('report views', () => {
         expect(context.reporting().getInsights).toHaveBeenCalledWith({period: 'custom', start_date: '2020-01-01', end_date: '2020-01-31'});
         await userEvent.click(screen.getByRole('button', {name: 'Next page'}));
         await waitFor(() => expect(context.reporting().listRows).toHaveBeenLastCalledWith(expect.objectContaining({sort_by: 'job_count', descending: false, paginator: {page_size: 25, cursor: 'opaque+/='}})));
-        await userEvent.click(screen.getByRole('tab', {name: 'By project'}));
+        await userEvent.click(screen.getByRole('button', {name: 'Project'}));
         await waitFor(() => expect(context.reporting().listRows).toHaveBeenLastCalledWith(expect.objectContaining({table: 'project', paginator: {page_size: 25}})));
         expect(context.reporting().getInsights).toHaveBeenCalledTimes(1);
         expect(screen.getByTestId('query')).toHaveTextContent('start_date=2020-01-01');
@@ -174,7 +174,7 @@ describe('report views', () => {
         await userEvent.click(screen.getByText('Recent period'));
         await screen.findByText('Daily job cost by project');
         await act(async () => old.resolve(summary('obsolete')));
-        await userEvent.click(screen.getByRole('tab', {name: 'By user'}));
+        await userEvent.click(screen.getByRole('tab', {name: 'Breakdown'}));
         await waitFor(() => expect(context.reporting().listRows).toHaveBeenCalledWith(expect.objectContaining({snapshot_id: 'recent'})));
         expect(context.reporting().listRows).not.toHaveBeenCalledWith(expect.objectContaining({snapshot_id: 'obsolete'}));
     });
@@ -209,16 +209,18 @@ describe('report views', () => {
         expect(revoke).toHaveBeenCalledWith('blob:report');
         expect(screen.getByText('Downloaded 123 rows across all pages.')).toHaveAttribute('role', 'status');
     });
-    it('keeps rows when an export fails and offers an explicit reload after expiry', async () => {
+    it('silently refreshes an expired export while retaining rows', async () => {
         open();
         await screen.findByText('scientist-a');
-        vi.spyOn(context.reporting(), 'exportCsv').mockRejectedValue({errorCode: 'REPORT_EXPIRED', message: 'Snapshot expired.'});
+        const fresh = deferred<ReportingSummary>();
+        vi.mocked(context.reporting().getSummary).mockReturnValueOnce(fresh.promise);
+        vi.spyOn(context.reporting(), 'exportCsv').mockRejectedValue({errorCode: 'REPORT_EXPIRED'});
         await userEvent.click(screen.getByRole('button', {name: 'Export CSV'}));
-        expect(await screen.findByText('Could not load the report. Reload or choose a shorter period.')).toBeInTheDocument();
+        await waitFor(() => expect(context.reporting().getSummary).toHaveBeenCalledTimes(2));
         expect(screen.getByText('scientist-a')).toBeInTheDocument();
-        expect(screen.getByRole('button', {name: 'Export CSV'})).toBeDisabled();
-        await userEvent.click(screen.getByRole('button', {name: 'Reload'}));
-        await waitFor(() => expect(context.reporting().getInsights).toHaveBeenCalledTimes(2));
+        expect(screen.queryByText(/expired|No costs or activity/)).toBeNull();
+        await act(async () => fresh.resolve(summary('fresh')));
+        await waitFor(() => expect(context.reporting().listRows).toHaveBeenLastCalledWith(expect.objectContaining({snapshot_id: 'fresh'})));
     });
     it('filters the current page and allows column preferences', async () => {
         open();
@@ -234,10 +236,10 @@ describe('report views', () => {
     });
 });
 
-it('expires the displayed report without silently replacing it', async () => {
-    open('/reporting?table=user', {...summary(), expires_at: new Date(Date.now() + 300).toISOString()});
-    expect(await screen.findByText('This report has expired. Reload to see current data or export CSV.')).toBeInTheDocument();
-    expect(screen.getByRole('button', {name: 'Export CSV'})).toBeDisabled();
+it('loads rows without a reload loop when the browser clock is past the expiry time', async () => {
+    open('/reporting?table=user', {...summary(), expires_at: new Date(Date.now() - 60000).toISOString()});
+    expect(await screen.findByText('scientist-a')).toBeInTheDocument();
+    await new Promise(resolve => setTimeout(resolve, 1500));
     expect(context.reporting().getSummary).toHaveBeenCalledTimes(1);
 });
 it('retains the previous page and retries its next cursor after a row error', async () => {
@@ -246,9 +248,55 @@ it('retains the previous page and retries its next cursor after a row error', as
     await screen.findByText('scientist-a');
     vi.mocked(context.reporting().listRows).mockRejectedValueOnce(new Error('Temporary failure')).mockResolvedValueOnce(rows([row('scientist-b')]));
     await userEvent.click(screen.getByRole('button', {name: 'Next page'}));
-    await screen.findByText('Could not load the report. Reload or choose a shorter period.');
+    await screen.findByText("Couldn't load the report. Check your connection and try again.");
     expect(screen.getByText('scientist-a')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', {name: 'Retry rows'}));
+    await userEvent.click(screen.getByRole('button', {name: 'Try again'}));
     expect(await screen.findByText('scientist-b')).toBeInTheDocument();
     expect(context.reporting().listRows).toHaveBeenLastCalledWith(expect.objectContaining({paginator: {page_size: 25, cursor: 'next'}}));
+});
+
+it.each(['REPORT_SNAPSHOT_EXPIRED', 'REPORT_EXPIRED', 'REPORT_SNAPSHOT_NOT_FOUND'])('retains prior rows after %s', async errorCode => {
+    open();
+    vi.mocked(context.reporting().listRows).mockResolvedValueOnce(rows([row()], 'next'));
+    await screen.findByText('scientist-a');
+    const fresh = deferred<ReportingSummary>();
+    vi.mocked(context.reporting().getSummary).mockReturnValueOnce(fresh.promise);
+    vi.mocked(context.reporting().listRows).mockRejectedValueOnce({errorCode});
+    await userEvent.click(screen.getByRole('button', {name: 'Next page'}));
+    await waitFor(() => expect(context.reporting().getSummary).toHaveBeenCalledTimes(2));
+    expect(screen.getByText('scientist-a')).toBeInTheDocument();
+    expect(screen.queryByText(/expired|No costs or activity/)).toBeNull();
+    await act(async () => fresh.resolve(summary('fresh')));
+    await waitFor(() => expect(context.reporting().listRows).toHaveBeenLastCalledWith(expect.objectContaining({snapshot_id: 'fresh', paginator: {page_size: 25}})));
+});
+it('never shows a table empty state while initial rows are pending', async () => {
+    open();
+    const pending = deferred<ReportingRows>();
+    vi.mocked(context.reporting().listRows).mockReturnValueOnce(pending.promise);
+    await screen.findByRole('tab', {name: 'Breakdown'});
+    expect(screen.queryByText('No costs or activity in this period')).toBeNull();
+    await act(async () => pending.resolve(rows([])));
+    expect(await screen.findByText('No costs or activity in this period')).toBeInTheDocument();
+});
+it('keeps Breakdown selection and period in the URL through browser back', async () => {
+    open('/reporting/projects?period=last_month&sort_by=job_count&descending=false');
+    await screen.findByText('scientist-a');
+    expect(screen.getByRole('tab', {name: 'Breakdown'})).toHaveAttribute('aria-selected', 'true');
+    expect(context.reporting().listRows).toHaveBeenLastCalledWith(expect.objectContaining({table: 'project'}));
+    await userEvent.click(screen.getByRole('button', {name: 'User'}));
+    expect(screen.getByTestId('query')).toHaveTextContent('table=breakdown&group=user');
+    expect(screen.getByTestId('query')).toHaveTextContent('period=last_month&sort_by=job_count&descending=false');
+    await userEvent.click(screen.getByRole('button', {name: 'Back'}));
+    await waitFor(() => expect(context.reporting().listRows).toHaveBeenLastCalledWith(expect.objectContaining({table: 'project'})));
+});
+
+it.each([
+    ['REPORT_TOO_LARGE', 'The report is too large to load. Choose a shorter period and try again.'],
+    ['REPORT_TIMEOUT', 'The report took too long to load. Choose a shorter period and try again.'],
+    ['UNAUTHORIZED_ACCESS', 'Reporting access was denied. Ask your administrator for access.']
+])('names the cause and action for %s', async (errorCode, message) => {
+    open();
+    vi.mocked(context.reporting().listRows).mockRejectedValueOnce({errorCode});
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(screen.getByRole('button', {name: 'Try again'})).toBeInTheDocument();
 });

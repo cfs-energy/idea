@@ -51,9 +51,9 @@ class MyCosts extends Component<MyCostsProps, MyCostsState> {
                 <Button loading={this.state.refreshing} onClick={this.refresh}>Refresh</Button>
             </SpaceBetween>}>My costs</Header>}
             contentType="default" content={<SpaceBetween size="l">
+                <MyJobEfficiency timezone={costs?.timezone ?? AppContext.get().getClusterSettingsService().getClusterTimeZone()} reload={this.state.reload}/>
                 <CostsBillboard costs={costs}/>
                 <DailyCostCharts costs={costs}/>
-                <MyJobEfficiency timezone={costs?.timezone ?? AppContext.get().getClusterSettingsService().getClusterTimeZone()} reload={this.state.reload}/>
                 <ExpandableSection headerText="Storage usage: folders and quotas" expanded={this.state.storageOpen}
                     onChange={({detail}) => this.setState({storageOpen: detail.expanded})}>
                     {this.state.storageOpen && <StorageUsage compact/>}

@@ -8,13 +8,16 @@ const days: MyCostsDaily[] = [
     {date: '2024-02-03', day: 3, amount: -2, status: 'partial'},
     {date: '2024-02-29', day: 29, amount: 5, status: 'ready'}
 ];
-it('uses stored amounts, preserves zeros and corrections, and omits unknown days', () => {
-    expect(dailyPoints(days)).toEqual([{x: '1', y: 0}, {x: '3', y: -2}, {x: '29', y: 5}]);
+it('uses stored amounts, preserves zeros and corrections, and fills missing days with zero', () => {
+    expect(dailyPoints(days)).toHaveLength(29);
+    expect(dailyPoints(days)[1]).toEqual({x: new Date('2024-02-02T12:00:00Z'), y: 0});
+    expect(dailyPoints(days)[2].y).toBe(-2);
     expect(missingDays(days)).toBe('2');
     const series = dailySeries(days, [], 'EUR');
     expect(series.map(s => s.title)).toEqual(['Last month', 'This month']);
     expect(series[0].data).toEqual([]);
-    expect(series[1].data).toEqual([{x: '1', y: 0}, {x: '3', y: -2}, {x: '29', y: 5}]);
+    expect(series[1].data).toEqual(dailyPoints(days));
+    expect(series[1].color).not.toBe(series[0].color);
     expect(series[1].valueFormatter(2)).toBe('€2.00');
     expect(series[1]).toHaveProperty('color');
 });

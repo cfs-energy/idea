@@ -12,7 +12,7 @@ from ideadatamodel import ReportingInsights, GetUserProjectsRequest, exceptions,
 from ideadatamodel.reporting.efficiency import job_efficiency
 from ideaclustermanager.app.costs.my_costs_service import MyCostsService
 from .reporting_service import resolve_period, known_sum, selected_money
-from .reporting_sources import ReportingSources, number, timestamp, subject
+from .reporting_sources import ReportingSources, number, timestamp, subject, user_label
 from .snapshot_store import BUILD_SECONDS, TTL_SECONDS, check_deadline
 
 FINISHED = {'finished', 'exit', 'success', 'failed', 'failure', 'cancelled', 'canceled'}
@@ -277,7 +277,7 @@ class InsightsService:
             )
             project = project_name(job, data)
             for key, name in dict(
-                user=job['owner'],
+                user=user_label(job['owner']),
                 project=project,
                 queue=job.get('queue') or 'Unassigned',
                 instance_family=instance.split('.')[0] if instance else 'Unknown',
@@ -358,8 +358,8 @@ class InsightsService:
                     and cost is not None
                     and point.get('status') not in ('unavailable', 'not_applicable')
                 ):
-                    add_group(users, owner, cost, None)
-                    daily.append(dict(date=day, user=owner, cost=cost))
+                    add_group(users, user_label(owner), cost, None)
+                    daily.append(dict(date=day, user=user_label(owner), cost=cost))
         result.desktops.cost = known_sum(v[0] for v in users.values())
         top = {
             name
@@ -462,16 +462,33 @@ class InsightsService:
             cost for values in user_costs.values() for cost in values
         )
         result.storage.used_bytes = sum(used.values()) if used else None
+        grouped_used, grouped_costs = defaultdict(int), defaultdict(list)
+        for owner, value in used.items():
+            grouped_used[user_label(owner)] += value
+            grouped_costs[user_label(owner)].extend(user_costs[owner])
         result.storage.by_user = (
             [
-                dict(name=name, bytes=value, cost=known_sum(user_costs[name]))
+                dict(name=name, bytes=value, cost=known_sum(grouped_costs[name]))
                 for name, value in sorted(
-                    used.items(), key=lambda item: (-item[1], item[0])
+                    grouped_used.items(), key=lambda item: (-item[1], item[0])
                 )[:15]
             ]
             if username is None
             else []
         )
+        if (
+            username is None
+            and latest
+            and all(
+                number(row.get('ssd_bytes')) is not None
+                and number(row.get('capacity_pool_bytes')) is not None
+                for row in latest.values()
+            )
+        ):
+            result.storage.used_bytes = sum(
+                int(number(row['ssd_bytes']) + number(row['capacity_pool_bytes']))
+                for row in latest.values()
+            )
         result.storage.tier_daily = [
             dict(date=day, tier=tier, bytes=value)
             for (day, tier), value in sorted(tiers.items())

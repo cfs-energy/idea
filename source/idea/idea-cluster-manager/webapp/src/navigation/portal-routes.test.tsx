@@ -196,10 +196,10 @@ it.each(['operations only', 'administrator', 'manager', 'module with explicit gr
     vi.spyOn(context.auth(), 'isReportingResolved').mockReturnValue(true);
     vi.spyOn(context.auth(), 'canReadReporting').mockReturnValue(true);
     vi.spyOn(context.reporting(), 'getInsights').mockRejectedValue(new Error('Could not load the report.'));
-    vi.spyOn(context.reporting(), 'getSummary').mockRejectedValue({message: 'Could not load the report. Reload or choose a shorter period.'});
+    vi.spyOn(context.reporting(), 'getSummary').mockRejectedValue({message: "Couldn't load the report. Check your connection and try again."});
     open('/reporting/projects');
     expect(await screen.findByRole('heading', {name: 'Reporting', level: 1})).toBeInTheDocument();
-    expect(await screen.findByText('Could not load the report. Reload or choose a shorter period.')).toBeInTheDocument();
+    expect(await screen.findByText("Couldn't load the report. Check your connection and try again.")).toBeInTheDocument();
     if (role !== 'administrator' && role !== 'manager') expect(screen.queryByText('Administration')).not.toBeInTheDocument();
 });
 

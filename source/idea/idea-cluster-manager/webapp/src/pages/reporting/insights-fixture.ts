@@ -1,7 +1,7 @@
 import {JobRow, ReportingInsights} from '../../client/reporting-model';
 
 export const exampleJob: JobRow = {job_id: 'job-1', name: 'Protein study', owner: 'scientist-a', project: 'Project Cedar', queue: 'compute', instance_type: 'c6i.large', nodes: 1,
-    finished_at: '2026-09-29T20:33:00Z', elapsed_hours: 2.5, cost: '1524.22', cpu_efficiency_pct: 14, memory_efficiency_pct: 60, walltime_efficiency_pct: 80, wasted_core_hours: 12.5};
+    requested_cores: 36, used_cores: 1, requested_memory_gib: 64, peak_memory_gib: 3, finished_at: '2026-09-29T20:33:00Z', elapsed_hours: 2.5, cost: '1524.22', cpu_efficiency_pct: 14, memory_efficiency_pct: 60, walltime_efficiency_pct: 80, wasted_core_hours: 12.5};
 export const insightsFixture = (): ReportingInsights => ({
     period: {start: '2026-09-01', end: '2026-09-29', label: 'This month'}, currency: 'USD', updated_at: '2026-09-29T20:33:00Z',
     jobs: {count: 3, cost: '1524.22', savings: '200.00', cpu_efficiency_pct: 14, cpu_efficiency_weighted_pct: 20, memory_efficiency_pct: 60, walltime_efficiency_pct: 80,

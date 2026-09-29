@@ -538,7 +538,7 @@ def test_summary_publishes_all_tables_with_pinned_bounds_and_decimal_totals(
     )
     assert isinstance(result, ReportingSummary)
     assert result.tiles['total'].spend_total == Decimal('0.50')
-    assert result.model_dump(mode='json')['tiles']['total']['spend_total'] == '0.50'
+    assert result.model_dump(mode='json')['tiles']['total']['spend_total'] == '0.5000'
     metadata = cache.lookup(result.snapshot_id, 'reader', lambda: True)
     assert set(metadata['parts']) == {'user', 'project', 'facet'}
     assert metadata['summary']['period']['end'] == '2024-02-02T00:00:00+00:00'
@@ -919,3 +919,21 @@ def test_timed_out_report_keeps_worker_slot_until_finished(monkeypatch):
     finally:
         release.set()
         service._builds.shutdown(wait=True)
+
+
+def test_breakdown_combines_system_users_without_changing_total_spend():
+    value = data()
+    value['users'] = {
+        name: name for name in ['root', 'uid:1001', '1002', 'scientist-a']
+    }
+    value['projections'] = {
+        name: projection([dict(date='2024-02-01', amount='1', status='ready')])
+        for name in value['users']
+    }
+    tables, tiles, _, _ = ReportingService.build(
+        value, period(), 'USD', 'UTC', time.monotonic() + 30
+    )
+    system = next(row for row in tables['user'] if row['label'] == 'System')
+    assert len(tables['user']) == 2
+    assert system['spend_total'] == 15
+    assert tiles['total']['spend_total'] == 20

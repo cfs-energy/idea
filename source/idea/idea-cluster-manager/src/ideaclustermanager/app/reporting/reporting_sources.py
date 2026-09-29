@@ -35,6 +35,14 @@ def timestamp(value):
         return None
 
 
+def user_label(name):
+    return (
+        'System'
+        if name == 'root' or name.startswith('uid:') or name.isdecimal()
+        else name
+    )
+
+
 def subject(value):
     return isinstance(value, str) and bool(value) and not value.startswith('!')
 

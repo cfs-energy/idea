@@ -41,12 +41,12 @@ export default function ReportingTable({table, data, currency, timezone = 'UTC',
         cell: (row: ReportingRow) => column.id === 'label' ? (row.key === '!unallocated' ? 'No project' : row.label) : <ReportingMetric value={rowValue(row, column.id)} unit={column.unit} currency={currency}/>
     }));
     return <Table<ReportingRow> ariaLabels={{tableLabel: `Reporting by ${table}`}} items={(data?.listing ?? []).filter(row => available.some(column => String(rowValue(row, column.id) ?? '').toLowerCase().includes(filter.toLowerCase())))}
-        columnDefinitions={definitions} columnDisplay={columns.filter(column => available.some(item => item.id === column.id))} trackBy="key"
+        stickyColumns={{first: 1}} columnDefinitions={definitions} columnDisplay={columns.filter(column => available.some(item => item.id === column.id))} trackBy="key"
         loading={loading} loadingText="Loading rows" sortingDisabled={disabled || loading}
         sortingColumn={definitions.find(column => column.id === sortBy)} sortingDescending={descending}
         onSortingChange={({detail}) => onSort(detail.sortingColumn.sortingField as ReportingColumn, detail.isDescending ?? false)}
         filter={<TextFilter filteringText={filter} onChange={({detail}) => setFilter(detail.filteringText)} filteringAriaLabel="Find on this page" filteringPlaceholder="Find on this page"/>}
-        empty={<Box textAlign="center">{filter ? 'No matches on this page' : 'No costs or activity in this period'}</Box>}
+        empty={loading || !data ? null : <Box textAlign="center">{filter ? 'No matches on this page' : 'No costs or activity in this period'}</Box>}
         pagination={<Pagination currentPageIndex={page} pagesCount={page + (data?.paginator.cursor ? 1 : 0)} openEnd={!!data?.paginator.cursor} disabled={disabled || loading}
             onChange={({detail}) => onPage(detail.currentPageIndex)} ariaLabels={{nextPageLabel: 'Next page', previousPageLabel: 'Previous page', pageLabel: page => `Page ${page}`}}/>}
         preferences={<CollectionPreferences title="Reporting preferences" confirmLabel="Confirm" cancelLabel="Cancel" closeAriaLabel="Close preferences" disabled={disabled || loading}

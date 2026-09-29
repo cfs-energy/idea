@@ -5,11 +5,11 @@ from decimal import Decimal
 from typing import Literal
 
 from pydantic import ConfigDict, Field
-from ideadatamodel import SocaPayload, IdeaOpenAPISpecEntry
-from .reporting_api import ReportingPeriodRequest
+from ideadatamodel import IdeaOpenAPISpecEntry
+from .reporting_api import ReportingPeriodRequest, ReportingWireModel
 
 
-class InsightModel(SocaPayload):
+class InsightModel(ReportingWireModel):
     model_config = ConfigDict(extra='forbid', allow_inf_nan=False)
 
 
@@ -34,6 +34,11 @@ class JobRow(InsightModel):
     queue: str | None = None
     instance_type: str | None = None
     nodes: int | None = None
+    requested_cores: int | None = None
+    used_cores: float | None = None
+    requested_memory_gib: float | None = None
+    peak_memory_gib: float | None = None
+    instance_memory_gib: float | None = None
     finished_at: datetime
     elapsed_hours: float | None = None
     cost: Decimal | None = None
