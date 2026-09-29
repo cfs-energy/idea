@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import {MemoryRouter} from 'react-router-dom';
 import MyCosts from './my-costs';
 import {initTestAppContext} from '../../test-support';
+import {insightsFixture} from '../reporting/insights-fixture';
 import {FACETS} from '../../components/cost-charts';
 
 const props: any = {ideaPageId: 'my-costs', toolsOpen: false, tools: null, onToolsChange: () => {}, onPageChange: () => {}, sideNavHeader: {text: 'IDEA', href: '#/'}, sideNavItems: [], onSideNavChange: () => {}, onFlashbarChange: () => {}, flashbarItems: []};
@@ -12,21 +13,24 @@ const month: any = {start_date: '2026-09-01', end_date: '2026-09-02', total: 50,
 afterEach(() => vi.restoreAllMocks());
 it('renders five daily charts and keeps rules and folders collapsed', async () => {
     const context = initTestAppContext();
-    vi.spyOn(context.client().myCosts(), 'getCosts').mockResolvedValue({currency: 'USD', state: 'ready', current: month});
+    vi.spyOn(context.client().myCosts(), 'getInsights').mockResolvedValue(insightsFixture());
+    vi.spyOn(context.client().myCosts(), 'getCosts').mockResolvedValue({currency: 'USD', state: 'ready', timezone: 'America/New_York', current: month});
     const usage = vi.spyOn(context.client().fileBrowser(), 'getStorageUsage').mockResolvedValue({state: 'ready', home: '/home/user-a', folders: []});
     open();
     expect(await screen.findByText('$50.00')).toBeInTheDocument();
     expect(screen.getAllByText('This month: 1 of 2 days without data')).toHaveLength(5);
     expect(usage).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', {name: 'How it is calculated'})).toHaveAttribute('aria-expanded', 'false');
-    await userEvent.click(screen.getByRole('button', {name: 'How it is calculated'}));
-    expect(screen.getAllByText('Stored calculation rule.')).toHaveLength(5);
+    expect(screen.getByText('My job efficiency')).toBeInTheDocument();
+    expect(await screen.findByText('Used about 14% of requested CPU time')).toBeInTheDocument();
+    expect(screen.getByText('Project budgets')).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/\b(coverage|snapshot|allocation|facet|eligible)\b/i);
     await userEvent.click(screen.getByRole('button', {name: 'Storage usage: folders and quotas'}));
     await waitFor(() => expect(usage).toHaveBeenCalledOnce());
 });
 it('acknowledges refresh without clearing the visible generation', async () => {
     const context = initTestAppContext();
-    const snapshot = {currency: 'USD', state: 'ready', current: month};
+    vi.spyOn(context.client().myCosts(), 'getInsights').mockResolvedValue(insightsFixture());
+    const snapshot = {currency: 'USD', state: 'ready', timezone: 'America/New_York', current: month};
     vi.spyOn(context.client().myCosts(), 'getCosts').mockResolvedValue(snapshot);
     const refresh = vi.spyOn(context.client().myCosts(), 'refresh').mockResolvedValue({...snapshot, state: 'refreshing', refresh_pending: true, refresh_acknowledged: true});
     open();
@@ -38,6 +42,7 @@ it('acknowledges refresh without clearing the visible generation', async () => {
 });
 it('shows the collecting ETA on a cold user', async () => {
     const context = initTestAppContext();
+    vi.spyOn(context.client().myCosts(), 'getInsights').mockResolvedValue(insightsFixture());
     vi.spyOn(context.client().myCosts(), 'getCosts').mockResolvedValue({currency: 'USD', state: 'collecting', expected_ready_at: new Date(Date.now() + 300000).toISOString()});
     open();
     expect(await screen.findAllByText('Collecting · about 5 min')).toHaveLength(2);

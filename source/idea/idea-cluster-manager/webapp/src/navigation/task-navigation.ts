@@ -12,7 +12,7 @@ export const PORTAL_TASKS: PortalTask[] = [
     {id: 'files', title: 'Files', views: [view('Files', '/home/file-browser', 'cluster')]},
     {id: 'ssh-access', title: 'SSH access', views: [view('SSH access', '/home/ssh-access', 'cluster')]},
     {id: 'my-costs', title: 'My costs', views: [view('My costs', '/home/my-costs', 'cluster')]},
-    {id: 'reporting', title: 'Reporting', admin: false, views: [view('Overview / By user', '/reporting', 'reporting', false), view('By project', '/reporting/projects', 'reporting', false), view('By facet', '/reporting/facets', 'reporting', false)]},
+    {id: 'reporting', title: 'Reporting', admin: false, views: [view('Overview', '/reporting', 'reporting', false), view('Jobs', '/reporting/jobs', 'reporting', false), view('Desktops', '/reporting/desktops', 'reporting', false), view('Storage', '/reporting/storage', 'reporting', false), view('By user', '/reporting/users', 'reporting', false), view('By project', '/reporting/projects', 'reporting', false)]},
     {id: 'reports', title: 'Reports', views: [view('Reports', '/home/custom-dashboard', 'cluster')]},
     {id: 'manage-desktops', title: 'Manage desktops', admin: true, views: [view('Overview', '/virtual-desktop/dashboard', 'desktop-admin'), view('Sessions', '/virtual-desktop/sessions', 'desktop-admin'), view('Diagnostics', '/virtual-desktop/debug', 'desktop-admin')]},
     {id: 'manage-jobs', title: 'Manage jobs', admin: true, views: [view('Active', '/soca/active-jobs', 'jobs-admin'), view('Completed', '/soca/completed-jobs', 'jobs-admin'), view('Queues', '/soca/queues', 'jobs-admin'), view('Licenses', '/soca/licenses', 'jobs-admin'), view('Nodes', '/soca/active-jobs?view=nodes', 'jobs-admin')]},
@@ -81,7 +81,7 @@ export function resolveTask(pathname: string, search = ''): {task: PortalTask; v
             if (match) return {task, view: match};
         }
     }
-    const alias = pathname === '/dashboard' ? '/home/active-jobs' : pathname === '/cluster/email-templates' ? '/cluster/settings' : pathname;
+    const alias = pathname === '/reporting/facets' ? '/reporting' : pathname === '/dashboard' ? '/home/active-jobs' : pathname === '/cluster/email-templates' ? '/cluster/settings' : pathname;
     for (const task of PORTAL_TASKS) {
         const match = task.views.find(item => !item.path.includes('?') && (
             alias === item.path || (item.path !== '/home' && item.path !== '/reporting' && alias.startsWith(`${item.path}/`))

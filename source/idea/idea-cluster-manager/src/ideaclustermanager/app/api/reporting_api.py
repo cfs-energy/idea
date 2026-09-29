@@ -14,10 +14,14 @@ from ideadatamodel import (
 from ideaclustermanager.app.reporting.reporting_service import ReportingService
 
 
+from ideaclustermanager.app.reporting.insights_service import InsightsService
+
+
 class ReportingAPI(BaseAPI):
     def __init__(self, context):
         self.context = context
         self.service = ReportingService(context)
+        self.insights = InsightsService(context)
         self.service.store.initialize()
 
     @staticmethod
@@ -29,6 +33,7 @@ class ReportingAPI(BaseAPI):
         methods = {
             'Reporting.GetCapabilities': GetReportingCapabilitiesRequest,
             'Reporting.GetSummary': ReportingPeriodRequest,
+            'Reporting.GetInsights': ReportingPeriodRequest,
             'Reporting.ListRows': ListReportingRowsRequest,
             'Reporting.ExportCsv': ExportReportingCsvRequest,
         }
@@ -70,6 +75,8 @@ class ReportingAPI(BaseAPI):
 
         if context.namespace == 'Reporting.GetCapabilities':
             result = GetReportingCapabilitiesResult(can_read_reporting=authorize())
+        elif context.namespace == 'Reporting.GetInsights':
+            result = self.insights.get_insights(request, authorize)
         elif context.namespace == 'Reporting.GetSummary':
             result = self.service.get_summary(actor, request, authorize)
         elif context.namespace == 'Reporting.ListRows':

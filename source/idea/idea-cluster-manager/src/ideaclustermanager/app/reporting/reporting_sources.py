@@ -134,7 +134,8 @@ class ReportingSources:
                     break
         return dict(head=head, costs=None, state='unavailable')
 
-    def read(self, period, deadline):
+    def read(self, period, deadline, username=None, insights=False):
+        scope_username = username
         result = dict(
             users={},
             projects={},
@@ -169,6 +170,8 @@ class ReportingSources:
                 )
             ),
         )
+        if username is not None:
+            users = [row for row in users if row.get('username') == username]
         result['users'] = {
             row['username']: row.get('username')
             for row in users
@@ -182,6 +185,7 @@ class ReportingSources:
                 )
             ),
         )
+        result['project_records'] = projects
         result['projects'] = {
             row['project_id']: row.get('title') or row.get('name') or row['project_id']
             for row in projects
@@ -194,7 +198,9 @@ class ReportingSources:
             lambda: [
                 row
                 for row in self.scan(self.context.personal_costs_store.table, deadline)
-                if row.get('record') == 'head' and subject(row.get('subject'))
+                if row.get('record') == 'head'
+                and subject(row.get('subject'))
+                and (scope_username is None or row.get('subject') == scope_username)
             ],
         )
         for row in heads:
@@ -232,7 +238,12 @@ class ReportingSources:
                         index,
                         {
                             'bool': {
-                                'filter': [
+                                'filter': (
+                                    [{'term': {'owner.raw': scope_username}}]
+                                    if scope_username
+                                    else []
+                                )
+                                + [
                                     {
                                         'range': {
                                             'end_time': {
@@ -247,6 +258,10 @@ class ReportingSources:
                         deadline,
                         fields=[
                             'job_uid',
+                            'job_id',
+                            'name',
+                            'queue',
+                            'execution_hosts',
                             'owner',
                             'state',
                             'start_time',
@@ -294,12 +309,29 @@ class ReportingSources:
         else:
             result['coverage']['desktops'] = 'not_applicable'
             result['coverage']['desktop_history'] = 'not_applicable'
-        for hit in result['jobs'] + result['desktops']:
+        for hit in [] if insights else result['jobs'] + result['desktops']:
             owner = hit.get('_source', {}).get('owner')
             if subject(owner):
                 result['users'].setdefault(owner, owner)
                 result['projections'].setdefault(
                     owner, dict(costs=None, head=None, state='collecting')
                 )
+        if insights:
+
+            def storage():
+                store = self.context.personal_costs_store
+                from ideaclustermanager.app.costs.personal_costs_store import SYSTEM
+
+                rows = []
+                for row in store.records(SYSTEM, 'share:'):
+                    check_deadline(deadline)
+                    day = row['record'].split(':')[1]
+                    if period.start_date <= day <= period.end_date:
+                        value = store.resolve_source(SYSTEM, json.loads(row['payload']))
+                        if value:
+                            rows.append(dict(value, date=day))
+                return rows
+
+            result['storage'] = optional('storage', storage)
         check_deadline(deadline)
         return result

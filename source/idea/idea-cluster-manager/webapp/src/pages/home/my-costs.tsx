@@ -1,18 +1,20 @@
 import React, {Component} from 'react';
-import {Box, Button, ExpandableSection, Header, SpaceBetween} from '@cloudscape-design/components';
+import {Button, ExpandableSection, Header, SpaceBetween} from '@cloudscape-design/components';
 import {GetMyCostsResult} from '../../client/data-model';
 import {IdeaSideNavigationProps} from '../../components/side-navigation';
 import IdeaAppLayout, {IdeaAppLayoutProps} from '../../components/app-layout';
+import {AppContext} from '../../common';
 import {withRouter} from '../../navigation/navigation-utils';
 import {CostsBillboard} from '../../components/monthly-costs';
 import {DailyCostCharts, FACETS} from '../../components/cost-charts';
 import {personalCostsCache} from '../../client/personal-costs-cache';
 import StorageUsage from './storage-usage';
+import MyJobEfficiency from './my-job-efficiency';
 
 export interface MyCostsProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {}
-interface MyCostsState { costs: GetMyCostsResult | null; storageOpen: boolean; refreshing: boolean; acknowledged: boolean }
+interface MyCostsState { costs: GetMyCostsResult | null; storageOpen: boolean; refreshing: boolean; acknowledged: boolean; reload: number }
 class MyCosts extends Component<MyCostsProps, MyCostsState> {
-    state: MyCostsState = {costs: null, storageOpen: false, refreshing: false, acknowledged: false};
+    state: MyCostsState = {costs: null, storageOpen: false, refreshing: false, acknowledged: false, reload: 0};
     private unsubscribe?: () => void;
     private disposed = false;
     private anchorHandled = false;
@@ -30,12 +32,12 @@ class MyCosts extends Component<MyCostsProps, MyCostsState> {
     }
     componentWillUnmount() { this.disposed = true; this.unsubscribe?.(); }
     refresh = async () => {
-        this.setState({refreshing: true});
+        this.setState(state => ({refreshing: true, reload: state.reload + 1}));
         try {
             const result = await personalCostsCache().refresh();
             if (!this.disposed) this.setState({acknowledged: result.refresh_acknowledged === true});
         } catch (error: any) {
-            if (!this.disposed) this.props.onFlashbarChange({items: [{type: 'error', content: error?.message || 'Refresh unavailable', dismissible: true}]});
+            if (!this.disposed) this.props.onFlashbarChange({items: [{type: 'error', content: 'Could not refresh costs. Try Refresh again.', dismissible: true}]});
         } finally {
             if (!this.disposed) this.setState({refreshing: false});
         }
@@ -44,40 +46,17 @@ class MyCosts extends Component<MyCostsProps, MyCostsState> {
         const costs = this.state.costs;
         return <IdeaAppLayout {...this.props}
             breadcrumbItems={[{text: 'IDEA', href: '#/'}, {text: 'Home', href: '#/'}, {text: 'My costs', href: ''}]}
-            header={<Header variant="h1" actions={<SpaceBetween direction="horizontal" size="s">
+            header={<Header variant="h1" description="Estimated costs and resource use" actions={<SpaceBetween direction="horizontal" size="s">
                 <span role="status">{this.state.acknowledged ? 'Refresh requested' : ''}</span>
                 <Button loading={this.state.refreshing} onClick={this.refresh}>Refresh</Button>
             </SpaceBetween>}>My costs</Header>}
             contentType="default" content={<SpaceBetween size="l">
                 <CostsBillboard costs={costs}/>
                 <DailyCostCharts costs={costs}/>
+                <MyJobEfficiency timezone={costs?.timezone ?? AppContext.get().getClusterSettingsService().getClusterTimeZone()} reload={this.state.reload}/>
                 <ExpandableSection headerText="Storage usage: folders and quotas" expanded={this.state.storageOpen}
                     onChange={({detail}) => this.setState({storageOpen: detail.expanded})}>
                     {this.state.storageOpen && <StorageUsage compact/>}
-                </ExpandableSection>
-                <ExpandableSection headerText="How it is calculated">
-                    <SpaceBetween size="m">
-                        <Box>Estimates use the cluster currency and timezone ({costs?.timezone || 'UTC'}). Last month is a full calendar month; this month ends at the snapshot time. Known costs include only available amounts. Unknown days are omitted; a measured zero is shown as zero. These estimates are not the bill.</Box>
-                        {FACETS.map(({key, label}) => <div key={key}>
-                            <Box variant="h3">{label}</Box>
-                            <Box>{costs?.current?.[key]?.note || {
-                                jobs: 'Completed-job compute only; running jobs, disks and scratch storage are excluded.',
-                                desktops: 'Recorded runtime × instance rate; inferred stop and restart intervals may be incomplete.',
-                                desktop_disks: 'Provisioned size × GB-month rate × calendar-month fraction, including stopped and retained disks. Dated inventory starts when collection starts; unobserved disks, snapshots and extra IOPS or throughput are excluded.',
-                                shared_storage: "Daily billed spend × a dated byte share from complete measurements of the same file system and allocation pool. No historical share is inferred from today's folders.",
-                                ai: "Daily project spend apportioned by the user's share of project tokens that day. Missing billing or a missing token denominator remains unknown."
-                            }[key]}</Box>
-                            {(['current', 'previous'] as const).map((period, index) => {
-                                const line = costs?.[period]?.[key];
-                                return <Box key={period} variant="small">{index === 0 ? 'This month' : 'Last month'}: {line?.reason || line?.status || 'Collecting'}
-                                    {' · Source: '}{line?.source_as_of ? new Date(line.source_as_of).toLocaleString() : '--'}
-                                    {' · Missing days: '}{line?.coverage?.missing_days ?? '--'}
-                                    {' · Missing prices: '}{line?.coverage?.missing_prices ?? '--'}
-                                    {' · Inferred intervals: '}{line?.coverage?.inferred_intervals ?? '--'}</Box>;
-                            })}
-                        </div>)}
-                        <Box>Collection runs every 15 minutes. Refresh requests are checked each minute and keep the visible snapshot. Billing is cached for six hours and may arrive later. Folder scans are separate, cached for one hour, exclude symbolic links and can be partial. Unreadable users, stale measurements, a zero denominator or an inseparable storage allocation pool cannot establish a cost share.</Box>
-                    </SpaceBetween>
                 </ExpandableSection>
             </SpaceBetween>}/>;
     }

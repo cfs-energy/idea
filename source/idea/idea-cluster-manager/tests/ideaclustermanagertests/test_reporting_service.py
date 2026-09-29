@@ -441,6 +441,10 @@ def test_opensearch_scroll_is_consistent_and_cleared_after_large_read():
     }
     assert set(body['_source']) == {
         'job_uid',
+        'job_id',
+        'name',
+        'queue',
+        'execution_hosts',
         'owner',
         'state',
         'start_time',

@@ -73,6 +73,7 @@ def cluster_manager(_, output_file=None, server_url=None):
         OPEN_API_SPEC_ENTRIES_PROJECTS,
         OPEN_API_SPEC_ENTRIES_CLUSTER_SETTINGS,
         OPEN_API_SPEC_ENTRIES_FILE_BROWSER,
+        OPEN_API_SPEC_ENTRIES_REPORTING_INSIGHTS,
     )
 
     spec_entries = []
@@ -81,6 +82,7 @@ def cluster_manager(_, output_file=None, server_url=None):
     spec_entries += OPEN_API_SPEC_ENTRIES_PROJECTS
     spec_entries += OPEN_API_SPEC_ENTRIES_CLUSTER_SETTINGS
     spec_entries += OPEN_API_SPEC_ENTRIES_FILE_BROWSER
+    spec_entries += OPEN_API_SPEC_ENTRIES_REPORTING_INSIGHTS
 
     api_doc_file = os.path.join(
         idea.props.cluster_manager_project_dir, 'resources', 'api', 'api_doc.yml'

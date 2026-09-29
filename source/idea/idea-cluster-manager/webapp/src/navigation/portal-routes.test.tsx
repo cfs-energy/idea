@@ -171,30 +171,35 @@ it('denies an admin route before its page mounts for a plain user', async () => 
 it.each(['/reporting', '/reporting/projects', '/reporting/facets'])('denies %s without requesting reporting data', async path => {
     vi.spyOn(context.auth(), 'isReportingResolved').mockReturnValue(true);
     vi.spyOn(context.auth(), 'canReadReporting').mockReturnValue(false);
+    const insights = vi.spyOn(context.reporting(), 'getInsights');
     const summary = vi.spyOn(context.reporting(), 'getSummary');
     const rows = vi.spyOn(context.reporting(), 'listRows');
     open(path);
     expect(await screen.findByRole('alert')).toHaveTextContent('Access denied');
     expect(summary).not.toHaveBeenCalled();
+    expect(insights).not.toHaveBeenCalled();
     expect(rows).not.toHaveBeenCalled();
 });
 
 it('waits for Reporting capability resolution before mounting a direct view', async () => {
     vi.spyOn(context.auth(), 'isReportingResolved').mockReturnValue(false);
+    const insights = vi.spyOn(context.reporting(), 'getInsights');
     const summary = vi.spyOn(context.reporting(), 'getSummary');
     open('/reporting/projects');
     expect(await screen.findByText('Checking Reporting access')).toBeInTheDocument();
     expect(summary).not.toHaveBeenCalled();
+    expect(insights).not.toHaveBeenCalled();
 });
 
 it.each(['operations only', 'administrator', 'manager', 'module with explicit grant', 'custom group grant'])('opens Reporting for %s without adding administrative access', async role => {
     vi.spyOn(context.auth(), 'isModuleAdmin').mockReturnValue(role === 'administrator' || role === 'manager');
     vi.spyOn(context.auth(), 'isReportingResolved').mockReturnValue(true);
     vi.spyOn(context.auth(), 'canReadReporting').mockReturnValue(true);
-    vi.spyOn(context.reporting(), 'getSummary').mockRejectedValue({message: 'No source response.'});
+    vi.spyOn(context.reporting(), 'getInsights').mockRejectedValue(new Error('Could not load the report.'));
+    vi.spyOn(context.reporting(), 'getSummary').mockRejectedValue({message: 'Could not load the report. Reload or choose a shorter period.'});
     open('/reporting/projects');
     expect(await screen.findByRole('heading', {name: 'Reporting', level: 1})).toBeInTheDocument();
-    expect(await screen.findByText('No source response.')).toBeInTheDocument();
+    expect(await screen.findByText('Could not load the report. Reload or choose a shorter period.')).toBeInTheDocument();
     if (role !== 'administrator' && role !== 'manager') expect(screen.queryByText('Administration')).not.toBeInTheDocument();
 });
 

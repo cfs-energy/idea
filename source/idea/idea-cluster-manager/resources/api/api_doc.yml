@@ -2,6 +2,10 @@ spec:
   title: 'IDEA / Cluster Manager API'
   description: 'All APIs served by Cluster Manager'
   tags:
+    - name: Reporting
+      description: Reporting APIs **(Reporting Access)**
+    - name: MyCosts
+      description: Personal Cost APIs **(Authenticated Access)**
     - name: Accounts
       description: Account Management APIs **(Elevated Access)**
     - name: Auth

@@ -319,3 +319,15 @@ def test_finished_job_processor_publishes_one_counter_per_second(context, monkey
     counts = [point for point in recorder.entries if point['MetricName'] == 'job.count']
     assert len(counts) == 1
     assert counts[0]['Value'] == 2
+
+
+def test_cpu_efficiency_normalizes_select_chunks():
+    job = _job(cpu_time_secs=14400)
+    job.params.custom_params = {'select': '2:ncpus=4+1:ncpus=8'}
+    assert JobCompletionMetrics.cpu_efficiency(job) == 0.25
+
+
+def test_cpu_efficiency_multiplies_cpu_request_by_nodes():
+    job = _job(cpu_time_secs=14400)
+    job.params.nodes = 2
+    assert JobCompletionMetrics.cpu_efficiency(job) == 0.5
