@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
-## [Unreleased]
+## [26.09.5] - 2026-09-29
 
 * **Shared storage costs**: estimate daily costs from storage rates without cost-allocation tags, retain complete ONTAP quota shares and tier footprints, and count absent users as zero when a default user quota rule exists. Historical days without dated shares remain missing; a process that has not collected every target keeps the saved usage snapshot. Storage prices are matched to exactly one product with the expected unit (EFS Infrequent Access and Archive list request products next to the storage product, One Zone file systems use their own classes), a second-generation ONTAP capacity pool is priced with the pool product the price list publishes under the first-generation name, and the stored month carries each file system's measured bytes so the administrator's Costs by user shows storage GB. Storage rates match exactly one price per unit (EFS Infrequent Access, Archive and One Zone classes), a second-generation ONTAP capacity pool prices with its published pool product, and the stored month carries each file system's share so Costs by user shows storage GB.
 * **Host Node.js**: desktops and compute hosts install Node 26.8.2 with npm 11.19.1, matching the control-plane toolchain.
