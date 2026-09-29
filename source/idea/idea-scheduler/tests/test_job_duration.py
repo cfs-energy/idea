@@ -214,12 +214,8 @@ def test_pbs_terminated_job_before_start_has_no_end_time(context):
     assert job.end_time is None
 
 
-def test_finished_job_no_end_time_measured_to_now_not_walltime():
-    """
-    finished job with a start time but no derivable end time (missing/unparsable
-    mtime, clock skew, non-F qstat state): measure to now, never the requested
-    walltime
-    """
+def test_finished_job_without_end_time_leaves_duration_unavailable():
+    """A finished job needs an end time to measure its duration."""
     job = SocaJob(
         job_id='14906',
         start_time=arrow.utcnow().shift(hours=-2).datetime,
@@ -229,9 +225,7 @@ def test_finished_job_no_end_time_measured_to_now_not_walltime():
     processor = build_finished_job_processor(job=job)
     processor.apply_job_execution_context()
 
-    assert job.total_time_secs is not None
-    assert 7100 <= job.total_time_secs <= 7300
-    assert job.get_total_time_seconds() != 96 * 60 * 60
+    assert job.total_time_secs is None
 
 
 class MockMetrics:

@@ -1,6 +1,6 @@
-import {render, screen, waitFor} from '@testing-library/react';
+import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import MetricsHistorySettings from './metrics-history-settings';
+import {MetricsHistorySettings} from './metrics-history-settings';
 import {initTestAppContext} from '../../test-support';
 import {MetricsBackfillStatus} from '../../client/metrics-backfill';
 
@@ -17,7 +17,7 @@ function setup() {
     return {context, jobs, cost, runJobs, runCost, ...render(<MetricsHistorySettings active/>)};
 }
 
-describe('metrics history settings', () => {
+describe('operations metrics history', () => {
     afterEach(() => vi.restoreAllMocks());
 
     it('reads both statuses on open, shows counts, and starts both with the selected defaults', async () => {
@@ -82,7 +82,9 @@ describe('metrics history settings', () => {
         rerender(<MetricsHistorySettings active={false}/>);
         rerender(<MetricsHistorySettings active/>);
         await waitFor(() => expect(screen.getByRole('button', {name: 'Run cost'})).toBeEnabled());
-        expect(screen.getByRole('button', {name: 'Run jobs'})).toBeDisabled();
+        expect(screen.queryByRole('button', {name: 'Run jobs'})).not.toBeInTheDocument();
+        expect(screen.queryByText(/Jobs:/)).not.toBeInTheDocument();
+        expect(screen.queryByRole('textbox', {name: 'Start date (UTC)'})).not.toBeInTheDocument();
         await userEvent.click(screen.getByRole('button', {name: 'Run cost'}));
         expect(runCost).toHaveBeenCalledOnce();
         expect(jobs).not.toHaveBeenCalled();
@@ -97,4 +99,94 @@ describe('metrics history settings', () => {
         await screen.findByText(/Cost rows: interrupted/);
         expect(screen.getByRole('button', {name: 'Run cost'})).toBeEnabled();
     });
+});
+
+
+it('does not render the operation or read statuses without authorization', () => {
+    const context = initTestAppContext();
+    vi.spyOn(context.auth(), 'isModuleAdmin').mockReturnValue(false);
+    const jobs = vi.spyOn(context.client().schedulerAdmin(), 'getJobMetricsBackfill');
+    const cost = vi.spyOn(context.client().clusterSettings(), 'getCostMetricsBackfill');
+    render(<MetricsHistorySettings active/>);
+    expect(screen.queryByRole('heading', {name: 'History backfill'})).not.toBeInTheDocument();
+    expect(jobs).not.toHaveBeenCalled();
+    expect(cost).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+});
+
+
+it('shows only job history to a deployed jobs administrator', async () => {
+    const {context, rerender, cost} = setup();
+    await screen.findByText(/Jobs: completed/);
+    vi.mocked(context.auth().isModuleAdmin).mockImplementation(module => module === 'scheduler');
+    cost.mockClear();
+    rerender(<MetricsHistorySettings active={false}/>);
+    rerender(<MetricsHistorySettings active/>);
+    await screen.findByText(/Jobs: completed/);
+    expect(screen.queryByRole('button', {name: 'Run cost'})).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', {name: 'Advanced'})).not.toBeInTheDocument();
+    expect(screen.queryByText(/Cost rows:/)).not.toBeInTheDocument();
+    expect(cost).not.toHaveBeenCalled();
+    expect(screen.getAllByRole('heading', {name: 'History backfill'})).toHaveLength(1);
+    expect(document.querySelectorAll('#backfill-history')).toHaveLength(1);
+    vi.restoreAllMocks();
+});
+
+it('polls every ten seconds only while active and stops on unmount', async () => {
+    vi.useFakeTimers();
+    try {
+        const {jobs, cost, rerender, unmount} = setup();
+        await act(async () => {});
+        expect(jobs).toHaveBeenCalledOnce();
+        await act(async () => { vi.advanceTimersByTime(10000); });
+        expect(jobs).toHaveBeenCalledTimes(2);
+        expect(cost).toHaveBeenCalledTimes(2);
+        rerender(<MetricsHistorySettings active={false}/>);
+        expect(screen.queryByText('History backfill')).not.toBeInTheDocument();
+        await act(async () => { vi.advanceTimersByTime(30000); });
+        expect(jobs).toHaveBeenCalledTimes(2);
+        rerender(<MetricsHistorySettings active/>);
+        await act(async () => {});
+        expect(jobs).toHaveBeenCalledTimes(3);
+        unmount();
+        await act(async () => { vi.advanceTimersByTime(30000); });
+        expect(jobs).toHaveBeenCalledTimes(3);
+        expect(cost).toHaveBeenCalledTimes(3);
+    } finally { vi.useRealTimers(); vi.restoreAllMocks(); }
+});
+
+it.each(['read', 'run'])('ignores stale %s responses after deactivation', async operation => {
+    const {cost, runCost, rerender} = setup();
+    await screen.findByText(/Cost rows: completed/);
+    let resolve!: (value: MetricsBackfillStatus) => void;
+    const pending = new Promise<MetricsBackfillStatus>(done => { resolve = done; });
+    if (operation === 'read') {
+        cost.mockReturnValueOnce(pending);
+        rerender(<MetricsHistorySettings active={false}/>);
+        rerender(<MetricsHistorySettings active/>);
+    } else {
+        runCost.mockReturnValueOnce(pending);
+        fireEvent.click(screen.getByRole('button', {name: 'Run cost'}));
+    }
+    rerender(<MetricsHistorySettings active={false}/>);
+    rerender(<MetricsHistorySettings active/>);
+    await screen.findByText(/Cost rows: completed/);
+    await act(async () => { resolve({...status, state: 'running'}); });
+    expect(screen.getByText(/Cost rows: completed/)).toBeVisible();
+    expect(screen.getByRole('button', {name: 'Run cost'})).toBeEnabled();
+    vi.restoreAllMocks();
+});
+
+it('disables both operations while their jobs are running', async () => {
+    const {jobs, cost, rerender} = setup();
+    await screen.findByText(/Cost rows: completed/);
+    jobs.mockResolvedValue({...status, state: 'running'});
+    cost.mockResolvedValue({...status, state: 'running'});
+    rerender(<MetricsHistorySettings active={false}/>);
+    rerender(<MetricsHistorySettings active/>);
+    await screen.findByText(/Cost rows: running/);
+    await userEvent.type(screen.getByRole('textbox', {name: 'Start date (UTC)'}), '2026-09-01');
+    expect(screen.getByRole('button', {name: 'Run jobs'})).toBeDisabled();
+    expect(screen.getByRole('button', {name: 'Run cost'})).toBeDisabled();
+    vi.restoreAllMocks();
 });

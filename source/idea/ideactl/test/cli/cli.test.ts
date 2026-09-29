@@ -98,6 +98,7 @@ const EXPECTED_OPTIONS: Array<{ path: string[]; options: string[] }> = [
       '--module-set',
       '--no-rollback',
       '--optimize-deployment',
+      '--refresh-hosts',
       '--rollback',
       '--termination-protection',
       '--upgrade',

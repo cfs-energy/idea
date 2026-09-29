@@ -1,7 +1,6 @@
 """
-The controller host does not ship the cli-only packages (prettytable), so the app must
-never import a cli module. A service that reaches into the cli package fails at import
-with `No module named 'prettytable'`.
+App code must not import cli modules. The controller cli imports prettytable, so its
+entry point is also smoke-tested with the controller dependencies.
 """
 
 import pathlib
@@ -37,6 +36,27 @@ def test_admin_api_and_image_services_import_without_prettytable():
         'import ideavirtualdesktopcontroller.app.software_stacks.virtual_desktop_software_stack_utils\n'
         'print("ok")\n'
     )
+    result = subprocess.run(
+        [sys.executable, '-c', script], capture_output=True, text=True, timeout=120
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == 'ok'
+
+
+def test_cli_main_imports_with_controller_dependencies():
+    requirements = pathlib.Path(__file__).resolve().parents[4] / 'requirements'
+    assert (
+        'prettytable'
+        in (requirements / 'idea-virtual-desktop-controller.in')
+        .read_text()
+        .splitlines()
+    )
+    assert re.search(
+        r'^prettytable==\d+\.\d+\.\d+$',
+        (requirements / 'idea-virtual-desktop-controller.txt').read_text(),
+        re.M,
+    )
+    script = 'import ideavirtualdesktopcontroller.cli.cli_main\nprint("ok")\n'
     result = subprocess.run(
         [sys.executable, '-c', script], capture_output=True, text=True, timeout=120
     )

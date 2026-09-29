@@ -1,26 +1,26 @@
-"""
-Test Cases for NodeHouseKeepingSession's idle-overrun logging gate
-
-_can_terminate() logs an info line once a node is overdue for idle termination by more
-than 5 minutes, repeating every 5 minutes after that. The gate is built from
-Utils.minutes(seconds=...), called both positionally and by keyword at different call
-sites in the same method - a fragile mix that these tests pin down.
-"""
+"""Test cases for idle and unavailable node termination."""
 
 import logging
 
 import arrow
 
-from ideadatamodel import EC2Instance, SocaComputeNode, constants
+from ideadatamodel import (
+    EC2Instance,
+    SocaAnyPayload,
+    SocaComputeNode,
+    SocaComputeNodeState,
+    constants,
+)
 from ideascheduler.app.provisioning.node_monitor.node_house_keeper import (
     NodeHouseKeepingSession,
 )
+from ideascheduler.app.scheduler.openpbs.openpbs_converter import OpenPBSConverter
 from ideascheduler.app.scheduler.openpbs.openpbs_qselect import OpenPBSQSelect
 
 LOG_TAG = 'test_node_house_keeper'
 
 
-def build_instance(terminate_when_idle: int) -> EC2Instance:
+def build_instance(terminate_when_idle: int, keep_forever: bool = False) -> EC2Instance:
     return EC2Instance(
         {
             'InstanceId': 'i-0123456789abcdef0',
@@ -36,6 +36,10 @@ def build_instance(terminate_when_idle: int) -> EC2Instance:
                 {
                     'Key': constants.IDEA_TAG_TERMINATE_WHEN_IDLE,
                     'Value': str(terminate_when_idle),
+                },
+                {
+                    'Key': constants.IDEA_TAG_KEEP_FOREVER,
+                    'Value': str(keep_forever).lower(),
                 },
             ],
         }
@@ -119,3 +123,113 @@ def test_overdue_log_gate_pending_jobs_skips_termination(context, caplog, monkey
 
     assert result is False
     assert 'but is not deleted yet' not in caplog.text
+
+
+def test_openpbs_converter_preserves_unknown_node_state():
+    states = OpenPBSConverter.to_soca_compute_node_state('down,unknown')
+
+    assert set(states) == {SocaComputeNodeState.DOWN, SocaComputeNodeState.UNKNOWN}
+
+
+def test_unavailable_node_is_reclaimed_after_timeout(context, caplog):
+    context.config().pop(
+        'scheduler.job_provisioning.node_unavailable_timeout_seconds', default=None
+    )
+    node = build_node(last_used_time=None)
+    node.states = [SocaComputeNodeState.DOWN, SocaComputeNodeState.UNKNOWN]
+    node.last_state_changed_time = arrow.utcnow().shift(minutes=-31).datetime
+    session = NodeHouseKeepingSession(
+        context=context, logger=logging.getLogger(LOG_TAG)
+    )
+
+    with caplog.at_level(logging.INFO, logger=LOG_TAG):
+        result = session._can_terminate(instance=build_instance(3), node=node)
+
+    assert result is True
+    assert 'scheduler reported node state down,unknown' in caplog.text
+
+
+def test_unavailable_node_is_retained_before_timeout(context):
+    context.config().put(
+        'scheduler.job_provisioning.node_unavailable_timeout_seconds', 3600
+    )
+    node = build_node(last_used_time=None)
+    node.states = [SocaComputeNodeState.STALE_UNKNOWN]
+    node.last_state_changed_time = arrow.utcnow().shift(minutes=-29).datetime
+    session = NodeHouseKeepingSession(
+        context=context, logger=logging.getLogger(LOG_TAG)
+    )
+
+    assert session._can_terminate(instance=build_instance(3), node=node) is False
+
+
+def test_unavailable_keep_forever_node_is_retained(context):
+    node = build_node(last_used_time=None)
+    node.states = [SocaComputeNodeState.DOWN]
+    node.last_state_changed_time = arrow.utcnow().shift(days=-1).datetime
+    session = NodeHouseKeepingSession(
+        context=context, logger=logging.getLogger(LOG_TAG)
+    )
+
+    assert (
+        session._can_terminate(instance=build_instance(0, keep_forever=True), node=node)
+        is False
+    )
+
+
+def test_unavailable_node_with_jobs_is_never_a_candidate(context, monkeypatch):
+    node = SocaComputeNode(
+        host='ip-10-0-0-1',
+        states=[SocaComputeNodeState.DOWN, SocaComputeNodeState.JOB_BUSY],
+        cluster_name=context.cluster_name(),
+        queue_type='compute',
+        instance_id='i-0123456789abcdef0',
+        compute_stack='compute-stack',
+        jobs=['1034'],
+    )
+    scheduler = SocaAnyPayload()
+    scheduler.list_nodes = lambda: [node]
+    context.scheduler = scheduler
+    instance_cache = SocaAnyPayload()
+    instance_cache.get_instance = lambda **_: build_instance(3)
+    context.instance_cache = instance_cache
+    session = NodeHouseKeepingSession(
+        context=context, logger=logging.getLogger(LOG_TAG)
+    )
+    monkeypatch.setattr(session, '_publish_node_metrics', lambda **_: None)
+    monkeypatch.setattr(session, '_publish_instance_metrics', lambda **_: None)
+    checked = []
+    monkeypatch.setattr(
+        session,
+        '_can_terminate',
+        lambda **kwargs: checked.append(kwargs['node']) or False,
+    )
+
+    session.pass1_identify_potential_candidates_for_deletion()
+
+    assert checked == []
+
+
+def test_keep_forever_batch_node_still_terminates_when_idle(context, monkeypatch):
+    monkeypatch.setattr(OpenPBSQSelect, 'get_count', lambda self: 0)
+    node = build_node(last_used_time=arrow.utcnow().shift(minutes=-20).datetime)
+    session = NodeHouseKeepingSession(
+        context=context, logger=logging.getLogger(LOG_TAG)
+    )
+
+    assert (
+        session._can_terminate(instance=build_instance(5, keep_forever=True), node=node)
+        is True
+    )
+
+
+def test_keep_forever_node_without_idle_termination_is_retained(context):
+    node = build_node(last_used_time=arrow.utcnow().shift(days=-1).datetime)
+    session = NodeHouseKeepingSession(
+        context=context, logger=logging.getLogger(LOG_TAG)
+    )
+
+    assert (
+        session._can_terminate(instance=build_instance(0, keep_forever=True), node=node)
+        is False
+    )

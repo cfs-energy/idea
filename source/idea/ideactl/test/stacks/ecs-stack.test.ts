@@ -461,6 +461,29 @@ test("records every command-execution session to a group this stack creates or a
   assert.ok(!JSON.stringify(resources).includes("ecs:ExecuteCommand"), "no template grants ecs:ExecuteCommand");
 });
 
+test("mounts ONTAP over NFSv4.1 by default", () => {
+  const resources = resourcesOf(synth(false, {
+    "storage.home.provider": "fsx_netapp_ontap",
+    "storage.home.mount_dir": "/home",
+    "storage.home.scope": ["cluster"],
+    "storage.home.fsx_netapp_ontap.svm.nfs_dns": "svm-0123456789abcdef0.fs-0123456789abcdef0.fsx.us-east-2.amazonaws.com",
+    "storage.home.fsx_netapp_ontap.volume.volume_path": "/profiles/Users/User_Home_Folders",
+    "storage.zfs.provider": "fsx_openzfs",
+    "storage.zfs.mount_dir": "/zfs",
+    "storage.zfs.scope": ["cluster"],
+    "storage.zfs.fsx_openzfs.dns": "fs-0123456789abcdef2.fsx.us-east-2.amazonaws.com",
+    "storage.zfs.fsx_openzfs.volume_path": "/fsx/vol",
+  }));
+  const launchTemplate = findResource(resources, "AWS::EC2::LaunchTemplate", () => true);
+  const launchData = record(record(launchTemplate["Properties"], "launch template properties")["LaunchTemplateData"], "launch data");
+  const userData = JSON.stringify(launchData["UserData"]);
+  assert.ok(
+    userData.includes("svm-0123456789abcdef0.fs-0123456789abcdef0.fsx.us-east-2.amazonaws.com:/profiles/Users/User_Home_Folders /home/ nfs4 nfsvers=4.1,"),
+    "ONTAP uses the NFSv4.1 default",
+  );
+  assert.ok(userData.includes("fs-0123456789abcdef2.fsx.us-east-2.amazonaws.com:/fsx/vol /zfs/ nfs4 nfsvers=4.1,"), "other NFS providers keep the NFSv4.1 default");
+});
+
 test("mounts the control plane's shared storage on the hosts as the host bootstrap did, before the cluster join", () => {
   const options = "nfs4 nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport 0 0";
   const resources = resourcesOf(synth(false, {
@@ -562,4 +585,107 @@ for (const [scope, modules, expected] of [
 
 test("refuses a fixed pool without a spare host for distinct-instance surges", () => {
   assert.throws(() => synth(false, {"ecs.hosts.min": 3, "ecs.hosts.max": 3}), /ecs.hosts.max must exceed ecs.hosts.min.*spare host/);
+});
+
+function directoryResources(provider: string): Record<string, Json> {
+  return resourcesOf(synth(false, {
+    "directoryservice.provider": provider,
+    "directoryservice.name": "directory.example.invalid",
+    "directoryservice.ad_automation.sqs_queue_url": `https://sqs.${REGION}.amazonaws.com/${ACCOUNT}/automation.fifo`,
+    "directoryservice.tls_certificate_secret_arn": syntheticArn("secretsmanager", "secret:certificate"),
+  }));
+}
+
+function hostUserData(resources: Record<string, Json>): string {
+  const launch = findResource(resources, "AWS::EC2::LaunchTemplate", () => true);
+  const data = record(record(launch["Properties"], "properties")["LaunchTemplateData"], "launch data");
+  const encoded = record(data["UserData"], "user data")["Fn::Base64"];
+  if (typeof encoded === "string") return encoded;
+  const parts = record(encoded, "join")["Fn::Join"] as [string, unknown[]];
+  return parts[1].map(part => typeof part === "string" ? part : JSON.stringify(part)).join("");
+}
+
+for (const provider of ["activedirectory", "aws_managed_activedirectory", "openldap"]) {
+  test(`joins ${provider} hosts after ECS registration without blocking cloud init`, () => {
+    const userData = hostUserData(directoryResources(provider));
+    assert.match(userData, /dnf install -y sssd sssd-ad sssd-ldap sssd-tools adcli realmd krb5-workstation authselect oddjob oddjob-mkhomedir jq awscli/);
+    assert.match(userData, /dnf install -y nfs-utils openldap-clients openssl which/);
+    assert.match(userData, /After=ecs.service network-online.target/);
+    assert.match(userData, /Type=oneshot\nRemainAfterExit=yes/);
+    assert.match(userData, /TimeoutStartSec=2h/);
+    assert.match(userData, /systemctl start --no-block idea-directory-join.service/);
+    assert.ok(userData.indexOf("ECS_CLUSTER=") < userData.indexOf("dnf install -y sssd"));
+    assert.match(userData, /aws s3 cp .*idea\/bootstrap\/bootstrap-ecs-.*tar.gz/);
+    assert.match(userData, /bash .*ecs-host\/directory_join.sh/);
+    assert.match(userData, /SECONDS < 7200/);
+    assert.match(userData, /sleep 30/);
+    assert.match(userData, /nfsidmap -c/);
+    assert.match(userData, /localhost:51678\/v1\/metadata/);
+    assert.match(userData, /ContainerInstanceArn/);
+    assert.match(userData, /aws ecs put-attributes --cluster/);
+    assert.match(userData, /name=idea.directory,value=joined,targetId=/);
+    assert.match(userData, /directory-joined/);
+    if (provider !== "openldap") assert.match(userData, /adcli testjoin/);
+  });
+
+  test(`grants ${provider} hosts directory permissions`, () => {
+    const resources = directoryResources(provider);
+    const roleId = byType(resources, "AWS::IAM::Role").find(([id]) => id.startsWith("ecshostrole"))![0];
+    const policy = findResource(resources, "AWS::IAM::Policy", r => JSON.stringify(r["Properties"]).includes(roleId));
+    const body = JSON.stringify(policy);
+    assert.match(body, /s3:GetObject/);
+    assert.match(body, /idea\/bootstrap\/\*/);
+    assert.match(body, /ecs:PutAttributes/);
+    assert.match(body, /ecs-cluster|ecscluster/);
+    assert.match(body, /:container-instance\//);
+    if (provider === "openldap") {
+      assert.doesNotMatch(body, /sqs:SendMessage|dynamodb:GetItem/);
+      assert.equal(byType(resources, "AWS::Events::Rule").length, 0);
+    } else {
+      assert.match(body, /sqs:SendMessage/);
+      assert.match(body, /automation.fifo/);
+      assert.match(body, /dynamodb:GetItem/);
+      assert.ok(body.includes(`${CLUSTER}.ad-automation`));
+    }
+  });
+}
+
+test("AD host termination deletes the computer through the automation queue", () => {
+  const resources = directoryResources("activedirectory");
+  const rule = findResource(resources, "AWS::Events::Rule", () => true);
+  const props = record(rule["Properties"], "rule");
+  const pattern = record(props["EventPattern"], "pattern");
+  assert.deepEqual(pattern["source"], ["aws.autoscaling"]);
+  assert.deepEqual(pattern["detail-type"], ["EC2 Instance Terminate Successful", "EC2 Instance-terminate Lifecycle Action"]);
+  const asg = byType(resources, "AWS::AutoScaling::AutoScalingGroup")[0][0];
+  assert.deepEqual(record(pattern["detail"], "detail")["AutoScalingGroupName"], [{ Ref: asg }]);
+  const target = (props["Targets"] as Json[])[0];
+  assert.deepEqual(target["SqsParameters"], { MessageGroupId: "ADAutomation.DeleteComputer" });
+  const transformer = record(target["InputTransformer"], "transformer");
+  assert.deepEqual(transformer["InputPathsMap"], { instance: "$.detail.EC2InstanceId" });
+  assert.equal(transformer["InputTemplate"], '{"header":{"namespace":"ADAutomation.DeleteComputer"},"payload":{"instance_id":<instance>}}');
+  assert.match(JSON.stringify(target["Arn"]), /automation.fifo/);
+});
+
+test("hosts without a directory provider have no join service or directory grants", () => {
+  const resources = resourcesOf(synth());
+  assert.doesNotMatch(hostUserData(resources), /idea-directory-join/);
+  assert.equal(byType(resources, "AWS::Events::Rule").length, 0);
+  assert.doesNotMatch(JSON.stringify(resources), /ecs:PutAttributes|sqs:SendMessage|dynamodb:GetItem/);
+});
+
+test("AD hosts can send to a queue encrypted with a configured customer key", () => {
+  const resources = resourcesOf(synth(false, {
+    "directoryservice.provider": "activedirectory",
+    "directoryservice.name": "example.invalid",
+    "directoryservice.ad_automation.sqs_queue_url": `https://sqs.${REGION}.amazonaws.com/${ACCOUNT}/automation.fifo`,
+    "cluster.sqs.kms_key_id": "synthetic-key",
+  }));
+  const roleId = byType(resources, "AWS::IAM::Role").find(([id]) => id.startsWith("ecshostrole"))![0];
+  const policy = findResource(resources, "AWS::IAM::Policy", r => JSON.stringify(r["Properties"]).includes(roleId));
+  const body = JSON.stringify(policy);
+  assert.match(body, /kms:GenerateDataKey/);
+  assert.match(body, /kms:Decrypt/);
+  assert.match(body, /key\/synthetic-key/);
+  assert.match(body, /kms:ViaService/);
 });

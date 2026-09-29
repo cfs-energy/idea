@@ -9,6 +9,15 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 __all__ = (
+    'RepairHomeOwnershipRequest',
+    'RepairHomeOwnershipResult',
+    'ApiToken',
+    'CreateApiTokenRequest',
+    'CreateApiTokenResult',
+    'ListApiTokensRequest',
+    'ListApiTokensResult',
+    'DeleteApiTokenRequest',
+    'DeleteApiTokenResult',
     'CreateUserRequest',
     'CreateUserResult',
     'GetUserRequest',
@@ -72,12 +81,65 @@ __all__ = (
     'OPEN_API_SPEC_ENTRIES_AUTH',
 )
 
-from pydantic import Field
+from pydantic import Field, StrictBool
 
 from ideadatamodel.api import SocaPayload, SocaListingPayload, IdeaOpenAPISpecEntry
 from ideadatamodel.auth.auth_model import User, Group, AuthResult
 
 from typing import Optional, List, Dict
+
+
+class RepairHomeOwnershipRequest(SocaPayload):
+    username: str = Field(min_length=1)
+    dry_run: StrictBool = True
+
+
+class RepairHomeOwnershipResult(SocaPayload):
+    username: str
+    dry_run: bool
+    changed: int = 0
+    skipped: int = 0
+    failed: int = 0
+    paths: List[str] = Field(default_factory=list)
+    stale_uid: Optional[int] = None
+    queued: bool = False
+    task_name: Optional[str] = None
+
+
+class ApiToken(SocaPayload):
+    token_id: str
+    username: str
+    name: str
+    created_on: int
+    expires_on: int
+    last_used_on: Optional[int] = None
+
+
+class CreateApiTokenRequest(SocaPayload):
+    name: str = Field(min_length=1, max_length=128)
+    expires_in_days: int = Field(ge=1, le=365, strict=True)
+
+
+class CreateApiTokenResult(SocaPayload):
+    token: str
+    token_id: str
+    expires_on: int
+
+
+class ListApiTokensRequest(SocaPayload):
+    username: Optional[str] = None
+
+
+class ListApiTokensResult(SocaPayload):
+    listing: List[ApiToken] = Field(default_factory=list)
+
+
+class DeleteApiTokenRequest(SocaPayload):
+    token_id: str = Field(min_length=1)
+
+
+class DeleteApiTokenResult(SocaPayload):
+    pass
 
 
 # CreateUser
@@ -438,6 +500,34 @@ class GetUserPrivateKeyResult(SocaPayload):
 
 
 OPEN_API_SPEC_ENTRIES_AUTH = [
+    IdeaOpenAPISpecEntry(
+        namespace='Accounts.RepairHomeOwnership',
+        request=RepairHomeOwnershipRequest,
+        result=RepairHomeOwnershipResult,
+        is_listing=False,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='Auth.CreateApiToken',
+        request=CreateApiTokenRequest,
+        result=CreateApiTokenResult,
+        is_listing=False,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='Auth.ListApiTokens',
+        request=ListApiTokensRequest,
+        result=ListApiTokensResult,
+        is_listing=False,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='Auth.DeleteApiToken',
+        request=DeleteApiTokenRequest,
+        result=DeleteApiTokenResult,
+        is_listing=False,
+        is_public=False,
+    ),
     IdeaOpenAPISpecEntry(
         namespace='Accounts.CreateUser',
         request=CreateUserRequest,

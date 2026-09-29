@@ -11,6 +11,7 @@ from ideadatamodel import (
     ListUsersRequest,
     GetMyCostsResult,
     MyCostsMonth,
+    MyCostsStorageShare,
     MyCostsAmount,
     MyCostsDaily,
     MyCostsCoverage,
@@ -32,16 +33,17 @@ from ideaclustermanager.app.costs.monthly_costs_service import (
 )
 from ideaclustermanager.app.costs.my_costs_service import MyCostsService
 from ideaclustermanager.app.costs.personal_costs_store import SYSTEM
-from ideaclustermanager.app.metrics.cost_metrics_service import STORAGE_SERVICES
+from ideaclustermanager.app.costs.storage_rates import daily_storage_rate
 from ideaclustermanager.app.metrics.storage_metrics_service import normalize_user
 from ideasdk.filesystem.filesystem_helper import FileSystemHelper
 from ideaclustermanager.app.filesystem.storage_usage import walk_home
 
 FACETS = ('jobs', 'desktops', 'desktop_disks', 'shared_storage', 'ai')
 STORAGE_NOTE = (
-    "Daily file-system spend × the user's dated byte share. Only complete measurements "
-    'of the same file system with an attributable allocation pool qualify. Home-folder '
-    'bytes alone cannot allocate the whole bill. Historical days without evidence are missing.'
+    'Rate estimate × dated byte share: provisioned SSD, throughput, IOPS above the '
+    'included 3 per GB, and capacity-pool bytes. With a default user quota rule, users without files '
+    'count as zero. Unattributed quota bytes remain unassigned. Historical days '
+    'without a dated share are missing.'
 )
 DISKS_NOTE = (
     'Owned provisioned size × GB-month rate × calendar-month fraction, including stopped '
@@ -73,6 +75,7 @@ class DailyCostsCalculator(MonthlyCostsService):
 
     def begin(self):
         self._run_reads.clear()
+        self._reads.pop(('storage-rates',), None)
         self._reported = set()
         self._inventory_all = None
         self._inventory_as_of = None
@@ -426,7 +429,7 @@ class DailyCostsCalculator(MonthlyCostsService):
         else:
             self.logger.exception(f'Personal facet {facet} source unavailable')
 
-    def day(self, username, start, end):
+    def day(self, username, start, end, storage=None):
         lines = {}
         for facet in FACETS:
             self._used_sources = set()
@@ -464,7 +467,9 @@ class DailyCostsCalculator(MonthlyCostsService):
                 elif facet == 'desktop_disks':
                     lines[facet] = self.disk_day(username, start, end)
                 elif facet == 'shared_storage':
-                    lines[facet] = self.storage_day(username, start, end)
+                    lines[facet] = self.storage_day(
+                        username, start, end, storage=storage
+                    )
                 else:
                     value = self._ai(
                         username, start.format('YYYY-MM-DD'), start.format('YYYY-MM-DD')
@@ -559,13 +564,24 @@ class DailyCostsCalculator(MonthlyCostsService):
                                 allocation_pool='Home directories; other filesystem bytes remain unassigned',
                             )
         # Persist evidence by its actual measurement date, never by the requested month.
+        providers = {
+            (entry.get(entry.get('provider', None), None) or {}).get(
+                'file_system_id', None
+            ): entry.get('provider', None)
+            for entry in entries.values()
+            if hasattr(entry, 'get')
+        }
         for fs_id, snapshot in snapshots.items():
             measured = arrow.get(snapshot.get('measured_at', 0))
-            users = snapshot.get('users', {})
+            snapshot = dict(snapshot)
+            users = dict(snapshot.get('users', {}))
+            if snapshot.get('zero_when_absent'):
+                for username in usernames:
+                    users.setdefault(normalize_user(username, None), 0)
+            snapshot['users'] = users
             complete = (
                 snapshot.get('complete') is True
                 and snapshot.get('filesystem_id') == fs_id
-                and all(normalize_user(u, None) in users for u in usernames)
                 and 0 <= (now - measured).total_seconds() <= 86400
             )
             denominator = snapshot.get('total_bytes', 0)
@@ -575,9 +591,27 @@ class DailyCostsCalculator(MonthlyCostsService):
                 and all(value >= 0 for value in users.values())
                 and sum(users.values()) <= denominator
             ):
+                day = measured.to(now.tzinfo).floor('day')
+                record = f'share:{day.format("YYYY-MM-DD")}:{fs_id}'
+                previous = (
+                    self.store.resolve_source(SYSTEM, self.store.get(SYSTEM, record))
+                    if day < now.floor('day')
+                    else None
+                )
+                rate = (previous or {}).get('daily_rate')
+                if rate is None:
+                    rate = daily_storage_rate(
+                        self.context,
+                        providers.get(fs_id, 'fsx_netapp_ontap'),
+                        fs_id,
+                        day,
+                        capacity_pool_bytes=snapshot.get('capacity_pool_bytes', 0),
+                        cache=self._remember(('storage-rates',), dict),
+                    )
+                snapshot['daily_rate'] = rate
                 self.store.put_source(
                     SYSTEM,
-                    f'share:{measured.to(now.tzinfo).format("YYYY-MM-DD")}:{fs_id}',
+                    record,
                     snapshot,
                 )
 
@@ -621,10 +655,11 @@ class DailyCostsCalculator(MonthlyCostsService):
         except (OSError, ValueError):
             return False
 
-    def storage_day(self, username, start, end):
+    def storage_day(self, username, start, end, storage=None):
         entries = self.context.config().get_config('shared-storage', default={}) or {}
         filesystems = {}
         missing_mapping = False
+        excluded = []
         for name, entry in entries.items():
             if not hasattr(entry, 'get'):
                 continue
@@ -636,48 +671,86 @@ class DailyCostsCalculator(MonthlyCostsService):
                 'fsx_windows_file_server',
             ):
                 continue
+            if provider != 'fsx_netapp_ontap':
+                excluded.append(name)
+                continue
             fs_id = (entry.get(provider, None) or {}).get('file_system_id', None)
             if fs_id:
-                filesystems.setdefault(fs_id, set()).add(
-                    (entry.get('costs', None) or {}).get(
-                        'name_tag', f'{self.context.cluster_name()}-{name}'
-                    )
+                filesystem = filesystems.setdefault(
+                    fs_id, dict(provider=provider, names=[])
                 )
+                filesystem['names'].append(name)
             else:
                 missing_mapping = True
+        reason = STORAGE_NOTE
+        if excluded:
+            reason += (
+                ' Excluded without per-user quota measurements: '
+                + ', '.join(sorted(excluded))
+                + '.'
+            )
         if not filesystems:
-            return self._line(0, missing_mapping)
-        spend = self._billing(
-            start,
-            end,
-            [{'Dimensions': {'Key': 'SERVICE', 'Values': STORAGE_SERVICES}}],
-            [{'Type': 'TAG', 'Key': 'Name'}],
-        )
+            return self._line(0, missing_mapping, reason=reason)
+        cache = self._remember(('storage-rates',), dict)
         amounts, dates = [], []
-        for fs_id, tags in filesystems.items():
+        missing_prices = 0
+        complete = not missing_mapping
+        missing_usage = False
+        for fs_id, filesystem in filesystems.items():
             snapshot = self.store.resolve_source(
                 SYSTEM,
                 self.store.get(SYSTEM, f'share:{start.format("YYYY-MM-DD")}:{fs_id}'),
             )
             used = (snapshot or {}).get('users', {}).get(normalize_user(username, None))
-            if (
-                snapshot
-                and used is not None
-                and spend is not None
-                and all((tag,) in spend for tag in tags)
-            ):
-                amounts.append(
-                    sum(spend[(tag,)] for tag in tags) * used / snapshot['total_bytes']
+            complete &= (snapshot or {}).get('complete') is True
+            missing_usage |= used is None
+            daily = (snapshot or {}).get('daily_rate')
+            if daily is None:
+                daily = daily_storage_rate(
+                    self.context,
+                    filesystem['provider'],
+                    fs_id,
+                    start,
+                    capacity_pool_bytes=(snapshot or {}).get('capacity_pool_bytes', 0),
+                    cache=cache,
                 )
-                dates.append(arrow.get(snapshot['measured_at']).isoformat())
+            missing_prices += daily is None
+            total = (snapshot or {}).get('total_bytes', 0)
+            share = used / total if used is not None and total > 0 else None
+            amount = None
+            if share is not None and daily is not None:
+                try:
+                    amount = self._convert(daily * share)
+                except ValueError as error:
+                    self._report('shared_storage', error)
+                if amount is not None:
+                    amounts.append(amount)
+                    dates.append(arrow.get(snapshot['measured_at']).isoformat())
+            if storage is not None:
+                storage.setdefault(fs_id, []).append(
+                    MyCostsStorageShare(
+                        filesystem=', '.join(filesystem['names']),
+                        used_bytes=used,
+                        share=share,
+                        measured_at=(snapshot or {}).get('measured_at'),
+                        cost=amount,
+                        status='no_usage_data'
+                        if share is None
+                        else ('unavailable' if amount is None else 'estimated_share'),
+                        note=STORAGE_NOTE,
+                    )
+                )
         result = self._line(
             sum(amounts),
             not amounts,
             missing_mapping or len(amounts) != len(filesystems),
-            STORAGE_NOTE,
+            reason,
+            missing_prices=missing_prices,
         )
         if amounts and result.status == 'ready':
             result.status = 'estimated_share'
+        elif not amounts and complete and missing_usage and not missing_prices:
+            result.status = 'partial'
         result.source_as_of = (
             min(dates, key=lambda value: arrow.get(value).float_timestamp)
             if dates
@@ -688,9 +761,12 @@ class DailyCostsCalculator(MonthlyCostsService):
     def month(self, username, start, end):
         daily = {facet: [] for facet in FACETS}
         metadata = {facet: [] for facet in FACETS}
+        storage = {}
         cursor = start
         while cursor < end:
-            lines = self.day(username, cursor, min(cursor.shift(days=1), end))
+            lines = self.day(
+                username, cursor, min(cursor.shift(days=1), end), storage=storage
+            )
             for facet, line in lines.items():
                 daily[facet].append(
                     MyCostsDaily(
@@ -748,6 +824,35 @@ class DailyCostsCalculator(MonthlyCostsService):
                     ),
                 ),
             )
+        shares = []
+        for rows in storage.values():
+            measured = [row for row in rows if row.measured_at is not None]
+            if not measured:
+                continue
+            latest = max(measured, key=lambda row: row.measured_at)
+            known_costs = [row.cost for row in rows if row.cost is not None]
+            cost = round(sum(known_costs), 4) if known_costs else None
+            shares.append(
+                latest.model_copy(
+                    update=dict(
+                        cost=cost,
+                        amount=cost,
+                        status='unavailable'
+                        if cost is None
+                        else (
+                            'partial'
+                            if len(known_costs) != len(daily['shared_storage'])
+                            else 'estimated_share'
+                        ),
+                        source_as_of=arrow.get(latest.measured_at).isoformat(),
+                        coverage=MyCostsCoverage(
+                            known_days=len(known_costs),
+                            missing_days=len(daily['shared_storage'])
+                            - len(known_costs),
+                        ),
+                    )
+                )
+            )
         known = [line.cost for line in facets.values() if line.cost is not None]
         return MyCostsMonth(
             start_date=start.format('YYYY-MM-DD'),
@@ -758,6 +863,7 @@ class DailyCostsCalculator(MonthlyCostsService):
             incomplete=any(
                 line.status in ('partial', 'unavailable') for line in facets.values()
             ),
+            storage=shares,
             **facets,
         )
 

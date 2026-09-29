@@ -303,6 +303,9 @@ def test_finished_job_processor_publishes_one_counter_per_second(context, monkey
     monkeypatch.setattr(context, 'scheduler', scheduler)
     scheduler.list_jobs.return_value = jobs
     monkeypatch.setattr(context, 'document_store', Mock())
+    monkeypatch.setattr(
+        context, 'job_cache', Mock(get_completed_job_by_uid=Mock(return_value=None))
+    )
 
     def finish(process):
         JobCompletionMetrics(process._metrics_context, process.job).publish()

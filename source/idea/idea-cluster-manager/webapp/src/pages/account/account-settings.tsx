@@ -11,6 +11,7 @@
  * and limitations under the License.
  */
 
+import ApiTokens from './api-tokens'
 import React, {Component, RefObject} from "react";
 
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
@@ -511,6 +512,7 @@ class AccountSettings extends Component<AccountSettingsProps, AccountSettingsSta
                                     ]}
                                 />
                             </Container>
+                            <ApiTokens/>
                         </ColumnLayout>
                     </div>
                 }/>

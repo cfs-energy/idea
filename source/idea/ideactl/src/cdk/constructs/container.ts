@@ -534,6 +534,7 @@ export interface ServiceInput {
   readonly cloudMapOptions?: ecs.CloudMapOptions;
   /** False only for the scheduler, whose single task must not be spread. */
   readonly distinctInstances?: boolean;
+  readonly placementConstraints?: ecs.PlacementConstraint[];
   /**
    * The task role, its inline policy, the execution role, and every endpoint custom resource that
    * attaches one of this service's target groups to a listener. A service may not name a target
@@ -565,8 +566,10 @@ export function buildEc2Service(scope: ContainerScope, input: ServiceInput): ecs
     // At a floor of 100 a two-task distinct-instance service needs a third host with the task's
     // memory free, and a rollout that finds none waits until the stack times out.
     minHealthyPercent: input.singleWriter === true ? 0 : Math.floor(100 * (input.desiredCount - 1) / input.desiredCount),
-    placementConstraints:
-      input.distinctInstances === false ? undefined : [ecs.PlacementConstraint.distinctInstances()],
+    placementConstraints: [
+      ...(input.distinctInstances === false ? [] : [ecs.PlacementConstraint.distinctInstances()]),
+      ...(input.placementConstraints ?? []),
+    ],
     // Spread replicas across zones, then pack by memory: random placement fragments the hosts so a
     // large task finds no hole and the host group cannot shrink back to its minimum.
     placementStrategies: [

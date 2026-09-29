@@ -59,7 +59,10 @@ const PROJECT_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<Project>[] =
     {
         id: 'enabled',
         header: 'Status',
-        cell: project => (project.enabled) ? <StatusIndicator type="success">Enabled</StatusIndicator> :
+        cell: project => project.last_task_failure ?
+            <StatusIndicator type="error" iconAriaLabel="Error">
+                {project.last_task_failure.task}: {project.last_task_failure.message} ({new Date(project.last_task_failure.at).toLocaleString()})
+            </StatusIndicator> : (project.enabled) ? <StatusIndicator type="success">Enabled</StatusIndicator> :
             <StatusIndicator type="stopped">Disabled</StatusIndicator>,
         sortingComparator: (a, b) => {
             const valueA = a.enabled ? 1 : 0;

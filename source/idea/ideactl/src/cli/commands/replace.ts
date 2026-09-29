@@ -199,7 +199,7 @@ export async function runReplace(deps: Deps, componentName: string, options: Rep
 export function registerReplaceCommands(program: Command, deps: Deps): void {
   program
     .command('replace')
-    .description('replace one stateful component, deliberately. Upgrade and migrate never do this.')
+    .description('replace one stateful component, deliberately. Upgrade never does this.')
     .requiredOption('--cluster-name <cluster-name>', 'Cluster Name')
     .requiredOption('--aws-region <aws-region>', 'AWS Region')
     .option('--aws-profile <aws-profile>', 'AWS Profile Name')

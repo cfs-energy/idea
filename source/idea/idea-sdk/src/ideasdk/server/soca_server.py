@@ -484,10 +484,6 @@ class ApiInvocationHandler:
             header['request_id'] = request_id
 
     def get_token(self, http_request) -> Optional[Dict]:
-        token = Utils.get_value_as_list('token', http_request.args)
-        if Utils.is_not_empty(token):
-            return {'token_type': 'Bearer', 'token': Utils.get_first(token)}
-
         return self.server.get_authorization_header(http_request)
 
     def is_authenticated_request(self, http_request) -> bool:

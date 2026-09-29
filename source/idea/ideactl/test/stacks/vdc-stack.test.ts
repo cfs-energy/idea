@@ -384,6 +384,20 @@ describe('vdc stack, dev27', () => {
     ]);
   });
 
+  test('the controller may write only its seeded-release settings row', async () => {
+    const { template } = await synthVdc();
+    const writes = Object.values(template.Resources as Json)
+      .filter((resource) => (resource as Json).Type === 'AWS::IAM::Policy')
+      .flatMap((resource) => (resource as Json).Properties.PolicyDocument.Statement as Json[])
+      .filter((statement) => [statement.Action].flat().includes('dynamodb:UpdateItem') && statement.Condition !== undefined);
+    assert.equal(writes.length, 1);
+    assert.deepEqual(writes[0].Condition, {
+      'ForAllValues:StringEquals': { 'dynamodb:LeadingKeys': [`${MODULE_ID}.software_stacks.base_stacks_seeded_release`] },
+    });
+    assert.match(String(writes[0].Resource), new RegExp(`:table/${CLUSTER}\\.cluster-settings$`));
+    assert.deepEqual([writes[0].Action].flat(), ['dynamodb:UpdateItem']);
+  });
+
   test('the cluster settings hold every key the module reads back, in order', async () => {
     const { template } = await synthVdc();
     const settings = (template.Resources as Json).ideadev27vdcsettings as Json;

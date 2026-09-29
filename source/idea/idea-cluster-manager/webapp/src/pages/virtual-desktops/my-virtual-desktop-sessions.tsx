@@ -86,6 +86,21 @@ export interface MyVirtualDesktopSessionsState {
     softwareStacks: { [k: string]: VirtualDesktopSoftwareStack }
 }
 
+/**
+ * The next table contents. A complete listing replaces the table, a partial one updates the rows it
+ * names; in both, a local copy newer than the server's copy is kept.
+ */
+export function mergeSessions(current: Map<string, VirtualDesktopSession>, incoming: VirtualDesktopSession[], complete: boolean): Map<string, VirtualDesktopSession> {
+    const next = new Map<string, VirtualDesktopSession>(complete ? [] : current.entries())
+    incoming.forEach(session => {
+        const id = session.idea_session_id!
+        const local = current.get(id)
+        const localIsNewer = local !== undefined && local.updated_on !== undefined && session.updated_on !== undefined && local.updated_on > session.updated_on
+        next.set(id, localIsNewer ? local : session)
+    })
+    return next
+}
+
 class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, MyVirtualDesktopSessionsState> {
 
     createSessionForm: RefObject<VirtualDesktopCreateSessionForm | null>
@@ -245,7 +260,7 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
                 page_size: 100
             }
         }).then(result => {
-            return this.setSessions(result?.listing, this.state.osFilter)
+            return this.setSessions(result?.listing, true)
         }).catch(error => {
             this.props.onFlashbarChange({
                 items: [
@@ -353,69 +368,20 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
         }
     }
 
-    setSessions = (sessions: VirtualDesktopSession[] | undefined, os_filter: string | undefined = OS_FILTER_ALL_ID): Promise<boolean> => {
+    /**
+     * `complete` means `sessions` is the server's whole listing: anything it no longer lists is gone
+     * (terminated, or filtered out) and leaves the table. An action result is a partial update and
+     * only replaces the sessions it names.
+     */
+    setSessions = (sessions: VirtualDesktopSession[] | undefined, complete: boolean = false): Promise<boolean> => {
         if (sessions === undefined) {
             return new Promise((resolve) => {
                 resolve(true)
             })
         }
-
-        let currentSessionsInState = new Map<string, VirtualDesktopSession>(this.state.sessions.entries())
-        let sessionsToShowInState = new Map<string, VirtualDesktopSession>()
-        let sessionsThatMightHaveBeenTerminated = new Map<string, VirtualDesktopSession>(this.state.sessions.entries())
-        sessions.forEach(session => {
-            // this session is definitely not terminated yet
-            sessionsThatMightHaveBeenTerminated.delete(session.idea_session_id!)
-
-            let currentSessionInState = currentSessionsInState.get(session.idea_session_id!)
-            if (currentSessionInState === undefined) {
-                // we have no such session in our list. This is new session. We should show it.
-                sessionsToShowInState.set(session.idea_session_id!, session)
-                return
-            }
-
-            // we have a local copy of the said session. Should we replace/this session object ?
-            if (currentSessionInState.updated_on === undefined || session.updated_on === undefined) {
-                // we have no information about updated on for the session. Let's replace it. We can do better though.
-                sessionsToShowInState.set(session.idea_session_id!, session)
-                return
-            }
-
-            if (currentSessionInState.updated_on <= session.updated_on) {
-                // the local copy that we have is outdated. We need to replace
-                sessionsToShowInState.set(session.idea_session_id!, session)
-                return
-            }
-
-            // the local copy is more recent. Need to use that
-            sessionsToShowInState.set(session.idea_session_id!, currentSessionInState)
-        })
-
-        sessionsThatMightHaveBeenTerminated.forEach((session: VirtualDesktopSession, _: string) => {
-            // this is a list of sessions that we suspect might have been terminated
-            if (Utils.isNotEmpty(os_filter) && os_filter !== OS_FILTER_ALL_ID && session.base_os !== undefined) {
-                // there is an OS filter that is applied.
-                // Any session that doesn't match the OS filter in our local copy also needs to be hidden.
-                let os_filters: VirtualDesktopBaseOS[] = ['windows', 'windows2019', 'windows2022', 'windows2025']
-
-                if (os_filter === OS_FILTER_LINUX_ID) {
-                    os_filters = ['amazonlinux2', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9', 'ubuntu2204', 'ubuntu2404']
-                }
-
-                if (!(os_filters?.includes(session?.base_os))) {
-                    // this session does not pass the OS filter.
-                    return
-                }
-            }
-            if (!(session.state === 'DELETED' || session.state === 'DELETING')) {
-                // this session was NOT on path to termination. So we can assume that it was NOT terminated.
-                sessionsToShowInState.set(session.idea_session_id!, session)
-            }
-        })
-
         return new Promise<boolean>((resolve) => {
             this.setState({
-                sessions: sessionsToShowInState
+                sessions: mergeSessions(this.state.sessions, sessions, complete)
             }, () => {
                 resolve(true)
             })

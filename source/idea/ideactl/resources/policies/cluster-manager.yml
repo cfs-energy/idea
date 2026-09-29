@@ -9,8 +9,25 @@ Statement:
       - ec2:DescribeNetworkInterfaces
       - ec2:DescribeInstances
       - ec2:DescribeInstanceTypes
+      - fsx:DescribeFileSystems
+      - elasticfilesystem:DescribeFileSystems
       - pricing:GetProducts
       - budgets:ViewBudget
+      - logs:PutRetentionPolicy
+    {% if context.config.get_bool(context.module_id + '.bedrock.enabled', False) %}
+      - bedrock:ListInferenceProfiles
+      - bedrock:GetModelInvocationLoggingConfiguration
+      - bedrock:PutModelInvocationLoggingConfiguration
+      - logs:GetQueryResults
+      - logs:StopQuery
+    {% endif %}
+    {% if context.config.get_bool(context.module_id + '.bedrock.enabled', False) or context.config.get_bool(context.module_id + '.metrics.cost.enabled', False) %}
+      - ce:GetCostAndUsage
+    {% endif %}
+    {% if context.config.get_bool(context.module_id + '.metrics.cost.enabled', False) %}
+      - ce:GetTags
+      - ce:GetDimensionValues
+    {% endif %}
     Resource: '*'
     Effect: Allow
 
@@ -62,6 +79,9 @@ Statement:
     Resource:
       - '{{ context.arns.get_ddb_table_arn("cluster-settings") }}'
       - '{{ context.arns.get_ddb_table_arn("cluster-manager.personal-costs") }}'
+      - '{{ context.arns.get_ddb_table_arn("cluster-manager.reporting-snapshots") }}'
+      - '{{ context.arns.get_ddb_table_arn("cluster-manager.api-tokens") }}'
+      - '{{ context.arns.get_ddb_table_arn("cluster-manager.api-tokens") }}/index/*'
       - '{{ context.arns.get_ddb_table_arn("cluster-settings/stream/*") }}'
       - '{{ context.arns.get_ddb_table_arn("modules") }}'
       - '{{ context.arns.get_ddb_table_arn("email-templates") }}'
@@ -131,11 +151,6 @@ Statement:
       - '{{ context.arns.get_sqs_arn(context.config.get_module_id("directoryservice") + "-ad-automation.fifo") }}'
     Effect: Allow
     Sid: ClusterManagerSQSQueues
-
-  - Action:
-      - logs:PutRetentionPolicy
-    Resource: '*'
-    Effect: Allow
 
   - Action:
       - kinesis:PutRecord
@@ -277,25 +292,10 @@ Statement:
       - '{{ context.arns.bedrock_system_inference_profile_arn }}'
     Effect: Allow
 
-  # ListInferenceProfiles has no resource types, so this filters the account wide listing to the named profiles.
-  # GetFoundationModel below resolves whether a model id needs on demand throughput or a system profile.
-  - Action:
-      - bedrock:ListInferenceProfiles
-    Resource: '*'
-    Effect: Allow
-
   - Action:
       - bedrock:GetFoundationModel
     Resource:
       - '{{ context.arns.bedrock_foundation_model_arn }}'
-    Effect: Allow
-
-  # invocation logging is one configuration per account and region; idea only sets it if unset.
-  # no delete action is granted, so it cannot be removed with these credentials.
-  - Action:
-      - bedrock:GetModelInvocationLoggingConfiguration
-      - bedrock:PutModelInvocationLoggingConfiguration
-    Resource: '*'
     Effect: Allow
 
   # scoped to the one delivery role name (trailing wildcard covers the region suffix the Role construct appends); can only be passed to bedrock.
@@ -313,13 +313,6 @@ Statement:
     Resource:
       - '{{ context.arns.bedrock_invocation_log_group_arn }}'
       - '{{ context.arns.bedrock_invocation_log_group_arn }}:*'
-    Effect: Allow
-
-  # GetQueryResults and StopQuery have no resource types.
-  - Action:
-      - logs:GetQueryResults
-      - logs:StopQuery
-    Resource: '*'
     Effect: Allow
 
   # the cost pages read desktops that no longer exist from the record the virtual
@@ -347,24 +340,7 @@ Statement:
       - '{{ context.arns.get_ddb_table_arn("bedrock.instances") }}'
     Effect: Allow
 
-  # Read only, and the one action needed to report how much of a project's spend was
-  # Bedrock. Cost Explorer has no resource types and no GovCloud endpoint.
-  - Action:
-      - ce:GetCostAndUsage
-    Resource: '*'
-    Effect: Allow
     {% endif %}
-
-  {% if context.config.get_bool(context.module_id + '.metrics.cost.enabled', False) %}
-  # Read only: the cost metrics publish the account's spend by tag, service and usage type.
-  - Action:
-      - ce:GetCostAndUsage
-      - ce:GetTags
-      - ce:GetDimensionValues
-    Resource: '*'
-    Effect: Allow
-    Sid: CostMetricsCostExplorer
-  {% endif %}
 
 {% include '_templates/custom-kms-key.yml' %}
 

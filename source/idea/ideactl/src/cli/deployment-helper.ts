@@ -7,6 +7,8 @@
  * module metadata table in `config/cluster-config.ts`, so there is one copy of them.
  */
 
+import { refreshHostPool, waitForDirectoryJoin } from "./host-pool.ts";
+
 import { ClusterConfig, GeneralException, MODULE_METADATA, isEmpty, type ModuleInfo } from '../config/cluster-config.ts';
 import { buildBootstrapContext } from './bootstrap-context.ts';
 import { CdkInvoker, ExitWithCode, type ConfigWriter, type Deps } from './cdk-invoker.ts';
@@ -48,6 +50,8 @@ export function deploymentPriority(moduleName: string): number {
 }
 
 export interface DeploymentHelperOptions {
+  refreshHosts?: boolean;
+  hostPoolRerunCommand?: string;
   clusterName: string;
   awsRegion: string;
   moduleSet: string;
@@ -311,7 +315,9 @@ export class DeploymentHelper {
       allowReplacementOfType: this.options.allowReplacementOfType,
       deps: this.deps,
     });
+    if (moduleInfo.name === "bastion-host") await waitForDirectoryJoin(this.deps, this.options);
     await invoker.invoke({ forceBuildBootstrap: this.options.forceBuildBootstrap });
+    if (moduleInfo.name === "ecs") await refreshHostPool(this.deps, this.options);
     if (moduleInfo.name === MODULE_NAME_CLUSTER) await this.mergeClientIps();
   }
 

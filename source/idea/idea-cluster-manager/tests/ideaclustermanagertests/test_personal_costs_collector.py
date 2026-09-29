@@ -345,7 +345,7 @@ def test_daily_shape_missing_zero_negative_and_reconciliation(
     context, store, _ = setup
     calc = DailyCostsCalculator(context, store)
 
-    def day(user, lower, upper):
+    def day(user, lower, upper, storage=None):
         value = None if lower.day == 2 else (-1 if lower.day == 3 else 0)
         return {f: calc._line(value, value is None) for f in FACETS}
 
@@ -385,7 +385,7 @@ def test_real_day_reuses_compute_rules_and_never_backfills_inventory(
     calc._workers.shutdown()
 
 
-def test_shares_require_complete_same_filesystem_all_users_and_dated_evidence(setup):
+def test_shares_require_complete_same_filesystem_and_dated_evidence(setup):
     context, store, _ = setup
     now = arrow.get('2026-09-02T12:00:00Z')
     snapshot = dict(
@@ -402,7 +402,6 @@ def test_shares_require_complete_same_filesystem_all_users_and_dated_evidence(se
     for invalid in (
         {'complete': False},
         {'filesystem_id': 'fs-other'},
-        {'users': {'user-a': 10}},
         {'total_bytes': 0},
         {'measured_at': now.shift(days=-2).timestamp()},
     ):
@@ -537,17 +536,78 @@ def test_billing_reads_daily_pages_once_and_selects_actual_dates(setup, monkeypa
     calc._workers.shutdown()
 
 
+def test_default_quota_rule_persists_zero_for_absent_users(setup):
+    context, store, _ = setup
+    now = arrow.get('2026-09-02T12:00:00Z')
+    snapshot = dict(
+        measured_at=now.timestamp(),
+        users={'user-a': 10},
+        complete=True,
+        zero_when_absent=True,
+        filesystem_id='fs-test',
+        total_bytes=10,
+    )
+    context.storage_metrics = SimpleNamespace(
+        usage_by_filesystem=lambda: {'fs-test': snapshot}
+    )
+    calc = DailyCostsCalculator(context, store)
+    calc.capture_storage(['user-a', 'USER-B'], now)
+    stored = store.get(SYSTEM, 'share:2026-09-02:fs-test')
+    assert stored['users'] == {'user-a': 10, 'user-b': 0}
+    assert snapshot['users'] == {'user-a': 10}
+    calc._workers.shutdown()
+
+
+@pytest.mark.parametrize('exchange_rate,expected', [(0.9, 27.0), (None, None)])
+def test_storage_day_uses_cluster_currency(setup, monkeypatch, exchange_rate, expected):
+    context, store, _ = setup
+    monkeypatch.setattr('ideadatamodel.locale.get_currency_code', lambda: 'EUR')
+    context.config().get_float = lambda key, default=None: exchange_rate
+    context.config().get_config = lambda *args, **kwargs: {
+        'data': {
+            'provider': 'fsx_netapp_ontap',
+            'fsx_netapp_ontap': {'file_system_id': 'fs-test'},
+        }
+    }
+    monkeypatch.setattr(
+        'ideaclustermanager.app.costs.personal_costs_collector.daily_storage_rate',
+        lambda *args, **kwargs: 120,
+    )
+    start = arrow.get('2026-09-02')
+    store.put_source(
+        SYSTEM,
+        'share:2026-09-02:fs-test',
+        {
+            'users': {'user-a': 100, 'user-b': 300},
+            'total_bytes': 400,
+            'complete': True,
+            'measured_at': start.timestamp(),
+        },
+    )
+    calc = DailyCostsCalculator(context, store)
+    try:
+        result = calc.storage_day('user-a', start, start.shift(days=1))
+        assert result.cost == expected
+        assert result.status == (
+            'unavailable' if expected is None else 'estimated_share'
+        )
+    finally:
+        calc._workers.shutdown()
+
+
 def test_shared_storage_prices_only_the_dated_complete_share(setup, monkeypatch):
     context, store, _ = setup
     context.config().get_config = lambda *args, **kwargs: {
         'data': {
-            'provider': 'efs',
-            'efs': {'file_system_id': 'fs-test'},
-            'costs': {'name_tag': 'storage'},
+            'provider': 'fsx_netapp_ontap',
+            'fsx_netapp_ontap': {'file_system_id': 'fs-test'},
         }
     }
     calc = DailyCostsCalculator(context, store)
-    monkeypatch.setattr(calc, '_billing', lambda *args: {('storage',): 20})
+    rate = Mock(return_value=20)
+    monkeypatch.setattr(
+        'ideaclustermanager.app.costs.personal_costs_collector.daily_storage_rate', rate
+    )
     start = arrow.get('2026-09-02')
     store.put_source(
         SYSTEM,
@@ -555,6 +615,9 @@ def test_shared_storage_prices_only_the_dated_complete_share(setup, monkeypatch)
         {
             'users': {'user-a': 10, 'user-b': 30},
             'total_bytes': 100,
+            'capacity_pool_bytes': 9000,
+            'filesystem_id': 'fs-test',
+            'complete': True,
             'measured_at': start.timestamp(),
         },
     )
@@ -568,6 +631,12 @@ def test_shared_storage_prices_only_the_dated_complete_share(setup, monkeypatch)
         ).cost
         is None
     )
+    assert result.source_as_of == start.isoformat()
+    assert rate.call_args_list[0].kwargs['capacity_pool_bytes'] == 9000
+    rate.return_value = None
+    unavailable = calc.storage_day('user-a', start, start.shift(days=1))
+    assert unavailable.cost is None and unavailable.status == 'unavailable'
+    assert unavailable.coverage.missing_prices == 1
     calc._workers.shutdown()
 
 
@@ -710,11 +779,12 @@ def test_storage_day_tolerates_entries_without_a_costs_block(setup, monkeypatch)
     calc = DailyCostsCalculator(context, store)
     seen = []
     monkeypatch.setattr(
-        calc, '_billing', lambda start, end, filters, groups: seen.append(filters) or {}
+        'ideaclustermanager.app.costs.personal_costs_collector.daily_storage_rate',
+        lambda *args, **kwargs: seen.append(args) or None,
     )
     line = calc.storage_day('user-a', arrow.get('2026-09-02'), arrow.get('2026-09-03'))
     assert 'costs' not in (line.reason or '')
-    assert seen, 'billing must be reached once the entry parses'
+    assert seen, 'pricing must be reached once the entry parses'
     calc._workers.shutdown()
 
 
@@ -744,3 +814,269 @@ def test_facet_failures_log_once_per_run_and_keep_authored_reasons(
     assert first['ai'].reason == 'AI spend has no token denominator'
     assert first['jobs'].reason == 'Source unavailable.'
     calc._workers.shutdown()
+
+
+@pytest.mark.parametrize('rate', [20, None])
+def test_stored_month_carries_latest_storage_shares(setup, monkeypatch, rate):
+    context, store, _ = setup
+    context.config().get_config = lambda *args, **kwargs: {
+        'data': {
+            'provider': 'fsx_netapp_ontap',
+            'fsx_netapp_ontap': {'file_system_id': 'fs-test'},
+        },
+        'shared': {
+            'provider': 'fsx_netapp_ontap',
+            'fsx_netapp_ontap': {'file_system_id': 'fs-test'},
+        },
+        'archive': {
+            'provider': 'fsx_netapp_ontap',
+            'fsx_netapp_ontap': {'file_system_id': 'fs-other'},
+        },
+    }
+    monkeypatch.setattr(
+        'ideaclustermanager.app.costs.personal_costs_collector.daily_storage_rate',
+        lambda *args, **kwargs: rate,
+    )
+    start = arrow.get('2026-09-01')
+    for day, used in [(0, 2), (1, 3)]:
+        observed = start.shift(days=day)
+        for fs_id in ('fs-test', 'fs-other'):
+            if fs_id == 'fs-other' and day == 1:
+                continue
+            store.put_source(
+                SYSTEM,
+                f'share:{observed.format("YYYY-MM-DD")}:{fs_id}',
+                {
+                    'users': {'user-a': used * 1024**3, 'user-b': 0},
+                    'total_bytes': 10 * 1024**3,
+                    'complete': True,
+                    'measured_at': observed.timestamp(),
+                },
+            )
+    calc = DailyCostsCalculator(context, store)
+    calc._compute_jobs = lambda *args: MyCostsJobs(cost=0)
+    calc._desktops = lambda *args: MyCostsDesktops(cost=0)
+    calc.disk_day = lambda *args: calc._line(0, False)
+    calc._ai = lambda *args: MyCostsAi(cost=0)
+    try:
+        result = calc.month('user-a', start, start.shift(days=3))
+        store.publish(
+            'user-a',
+            GetMyCostsResult(currency='USD', state='ready', current=result),
+            GetMyCostsSummaryResult(username='user-a'),
+        )
+        stored = StoredPersonalCostsService(context).get_costs('user-a').current
+        assert len(stored.storage) == 2
+        assert {item.filesystem for item in stored.storage} == {
+            'data, shared',
+            'archive',
+        }
+        for item in stored.storage:
+            latest_day = 1 if item.filesystem == 'data, shared' else 0
+            assert item.used_bytes == (2 + latest_day) * 1024**3
+            assert item.share == pytest.approx((2 + latest_day) / 10)
+            assert item.measured_at == start.shift(days=latest_day).timestamp()
+            assert item.cost == (
+                (10 if latest_day else 4) if rate is not None else None
+            )
+            assert item.status == ('partial' if rate is not None else 'unavailable')
+        assert stored.shared_storage.cost == (14 if rate is not None else None)
+        other = calc.month('user-b', start, start.shift(days=2))
+        assert all(item.used_bytes == 0 and item.share == 0 for item in other.storage)
+        assert calc.month('user-a', start.shift(months=-1), start).storage == []
+    finally:
+        calc._workers.shutdown()
+
+
+@pytest.mark.parametrize('captured_day', ['2026-08-19', '2026-09-19'])
+@pytest.mark.parametrize('changed_field', ['capacity', 'throughput'])
+def test_captured_storage_rate_survives_configuration_change(
+    setup, monkeypatch, captured_day, changed_field
+):
+    context, store, _ = setup
+    context.config().get_config = lambda *args, **kwargs: {
+        'home': {
+            'provider': 'fsx_netapp_ontap',
+            'fsx_netapp_ontap': {'file_system_id': 'fs-test'},
+        }
+    }
+    filesystem = {
+        'StorageCapacity': 100,
+        'OntapConfiguration': {
+            'DeploymentType': 'SINGLE_AZ_1',
+            'ThroughputCapacity': 50,
+        },
+    }
+    context.aws().aws_partition = lambda: 'aws'
+    context.aws().aws_region = lambda: 'us-east-2'
+    fsx = Mock()
+    fsx.describe_file_systems.return_value = {'FileSystems': [filesystem]}
+    context.aws().fsx = lambda: fsx
+    context.aws().pricing = lambda: None
+    monkeypatch.setattr(
+        'ideaclustermanager.app.costs.storage_rates.lookup_price',
+        lambda *args: (1, None, None),
+    )
+    start = arrow.get(captured_day)
+    snapshot = dict(
+        measured_at=start.shift(hours=12).timestamp(),
+        users={'user-a': 25},
+        complete=True,
+        filesystem_id='fs-test',
+        total_bytes=100,
+    )
+    context.storage_metrics = SimpleNamespace(
+        usage_by_filesystem=lambda: {'fs-test': snapshot}
+    )
+    calc = DailyCostsCalculator(context, store)
+    try:
+        calc.capture_storage(['user-a'], start.shift(hours=13))
+        before = calc.storage_day('user-a', start, start.shift(days=1))
+        if changed_field == 'capacity':
+            filesystem['StorageCapacity'] *= 2
+        else:
+            filesystem['OntapConfiguration']['ThroughputCapacity'] *= 2
+        calc.begin()
+        calc.capture_storage(['user-a'], start.shift(days=1, hours=1))
+        after = calc.storage_day('user-a', start, start.shift(days=1))
+        assert after.cost == before.cost
+        record = store.get(SYSTEM, f'share:{captured_day}:fs-test')
+        assert record['daily_rate'] == pytest.approx(
+            150 / (31 if start.month == 8 else 30)
+        )
+        fsx.describe_file_systems.assert_called_once()
+    finally:
+        calc._workers.shutdown()
+
+
+def test_complete_snapshot_keeps_users_without_default_quota(setup, monkeypatch):
+    context, store, _ = setup
+    start = arrow.get('2026-09-02')
+    context.config().get_config = lambda *args, **kwargs: {
+        name: {
+            'provider': 'fsx_netapp_ontap',
+            'fsx_netapp_ontap': {'file_system_id': fs_id},
+        }
+        for name, fs_id in [('home', 'fs-test'), ('shared', 'fs-other')]
+    }
+    snapshots = {
+        fs_id: dict(
+            measured_at=start.timestamp(),
+            users=users,
+            complete=True,
+            zero_when_absent=False,
+            filesystem_id=fs_id,
+            total_bytes=100,
+        )
+        for fs_id, users in [
+            ('fs-test', {'user-a': 10}),
+            ('fs-other', {'user-a': 10, 'user-b': 20}),
+        ]
+    }
+    context.storage_metrics = SimpleNamespace(usage_by_filesystem=lambda: snapshots)
+    monkeypatch.setattr(
+        'ideaclustermanager.app.costs.personal_costs_collector.daily_storage_rate',
+        lambda *args, **kwargs: 20,
+    )
+    calc = DailyCostsCalculator(context, store)
+    try:
+        calc.capture_storage(['user-a', 'user-b'], start.shift(hours=1))
+        record = store.get(SYSTEM, 'share:2026-09-02:fs-test')
+        assert record is not None and 'user-b' not in record['users']
+        assert calc.storage_day('user-a', start, start.shift(days=1)).cost == 4
+        storage = {}
+        result = calc.storage_day('user-b', start, start.shift(days=1), storage)
+        assert result.cost == 4 and result.status == 'partial'
+        assert storage['fs-test'][0].status == 'no_usage_data'
+        assert storage['fs-test'][0].used_bytes is None
+    finally:
+        calc._workers.shutdown()
+
+
+@pytest.mark.parametrize('with_ontap', [True, False])
+def test_storage_excludes_providers_without_user_shares(setup, monkeypatch, with_ontap):
+    context, store, _ = setup
+    entries = {
+        name: {'provider': provider, provider: {'file_system_id': 'fs-' + name}}
+        for name, provider in [
+            ('apps', 'efs'),
+            ('scratch', 'fsx_lustre'),
+            ('shared', 'fsx_windows_file_server'),
+        ]
+    }
+    if with_ontap:
+        entries['home'] = {
+            'provider': 'fsx_netapp_ontap',
+            'fsx_netapp_ontap': {'file_system_id': 'fs-test'},
+        }
+    context.config().get_config = lambda *args, **kwargs: entries
+    start = arrow.get('2026-09-02')
+    store.put_source(
+        SYSTEM,
+        'share:2026-09-02:fs-test',
+        {
+            'users': {'user-a': 10},
+            'total_bytes': 100,
+            'complete': True,
+            'measured_at': start.timestamp(),
+        },
+    )
+    rate = Mock(return_value=20)
+    monkeypatch.setattr(
+        'ideaclustermanager.app.costs.personal_costs_collector.daily_storage_rate', rate
+    )
+    calc = DailyCostsCalculator(context, store)
+    try:
+        storage = {}
+        result = calc.storage_day('user-a', start, start.shift(days=1), storage)
+        assert result.status == ('estimated_share' if with_ontap else 'ready')
+        assert result.cost == (2 if with_ontap else 0)
+        assert result.coverage.missing_prices == 0
+        assert set(storage) == ({'fs-test'} if with_ontap else set())
+        assert rate.call_count == int(with_ontap)
+        assert 'excluded' in result.reason.lower()
+        assert all(name in result.reason for name in ('apps', 'scratch', 'shared'))
+    finally:
+        calc._workers.shutdown()
+
+
+@pytest.mark.parametrize(
+    'stored_rate,expected,calls', [(0, 0, 0), (8, 2, 0), (None, 5, 1)]
+)
+def test_storage_rate_fallback_preserves_stored_zero(
+    setup, monkeypatch, stored_rate, expected, calls
+):
+    context, store, _ = setup
+    context.config().get_config = lambda *args, **kwargs: {
+        'home': {
+            'provider': 'fsx_netapp_ontap',
+            'fsx_netapp_ontap': {'file_system_id': 'fs-test'},
+        }
+    }
+    start = arrow.get('2026-09-02')
+    store.put_source(
+        SYSTEM,
+        'share:2026-09-02:fs-test',
+        {
+            'users': {'user-a': 25},
+            'total_bytes': 100,
+            'daily_rate': stored_rate,
+            'complete': True,
+            'measured_at': start.timestamp(),
+        },
+    )
+    rate = Mock(return_value=20)
+    monkeypatch.setattr(
+        'ideaclustermanager.app.costs.personal_costs_collector.daily_storage_rate', rate
+    )
+    calc = DailyCostsCalculator(context, store)
+    try:
+        result = calc.storage_day('user-a', start, start.shift(days=1))
+        assert result.cost == expected and result.status == 'estimated_share'
+        assert rate.call_count == calls
+        storage = {}
+        absent = calc.storage_day('user-b', start, start.shift(days=1), storage)
+        assert absent.cost is None and absent.status == 'partial'
+        assert storage['fs-test'][0].status == 'no_usage_data'
+    finally:
+        calc._workers.shutdown()

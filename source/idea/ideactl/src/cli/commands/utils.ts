@@ -7,6 +7,7 @@ import { Command } from "commander";
 import { ClusterConfig, ClusterConfigError, isEmpty } from "../../config/cluster-config.ts";
 import { convertConfigToKeyValuePairs, generateConfigFromTemplates } from "../../config/generator.ts";
 import { loadValuesFile } from "../../config/values.ts";
+import { GATEWAY_ENDPOINTS, INTERFACE_ENDPOINTS, configVpcEndpoints, needsVpcEndpoints } from "../../config/vpc-endpoints.ts";
 import { clusterConfigDir, valuesFilePath } from "../cdk-invoker.ts";
 import { renderTable } from "./config.ts";
 import { registerDirectoryServiceCommands, type DirectoryServiceDeps, type DirectoryServiceDepsFactory } from "./directoryservice.ts";
@@ -44,8 +45,6 @@ export const IDEA_SERVICES: Readonly<Record<string, ServiceInfo>> = {
   sts: { title: "AWS Security Token Service (STS)", required: true }, vpc: { title: "Amazon Virtual Private Cloud (VPC)", required: true },
 };
 
-const GATEWAY_ENDPOINTS = ["s3", "dynamodb"];
-const INTERFACE_ENDPOINTS = ["application-autoscaling", "autoscaling", "cloudformation", "ec2", "ec2messages", "ebs", "elasticfilesystem", "elasticfilesystem-fips", "elasticloadbalancing", "logs", "monitoring", "secretsmanager", "sns", "sqs", "events", "ssm", "ssmmessages", "fsx", "fsx-fips", "backup", "grafana", "acm-pca", "kinesis-streams"];
 
 export interface UtilsApi {
   getParametersByPath(input: { Path: string; NextToken?: string }): Promise<{ Parameters?: Array<{ Value?: string }>; NextToken?: string }>;
@@ -132,7 +131,7 @@ export async function awsServiceAvailability(deps: UtilsDeps, regions: readonly 
 export async function vpcEndpointServiceInfo(deps: UtilsDeps, region: string): Promise<string> {
   const suffixTokens = (await deps.dnsSuffix()).split(".").reverse();
   const domain = suffixTokens.join(".");
-  const requested = [...GATEWAY_ENDPOINTS, ...INTERFACE_ENDPOINTS].map((shortName) => `${domain}.${region}.${shortName}`);
+  const requested = [...GATEWAY_ENDPOINTS, ...Object.keys(INTERFACE_ENDPOINTS)].map((shortName) => `${domain}.${region}.${shortName}`);
   const details = (await deps.api.describeVpcEndpointServices()).ServiceDetails ?? [];
   const rows: string[][] = [];
   for (const serviceName of requested) {
@@ -240,7 +239,9 @@ export async function backupUpdateGlobalSettings(
   cpSync(configDir, backupDir, { recursive: true });
   const valuesPath = valuesFilePath(options.clusterName, options.awsRegion);
   const values = loadValuesFile(valuesPath);
-  generateConfigFromTemplates(values, configDir);
+  // The whole config directory is rewritten, so the endpoint lists come from the cluster itself.
+  const vpcEndpoints = needsVpcEndpoints(values) ? configVpcEndpoints((key) => deps.config.get(key, null)) : undefined;
+  generateConfigFromTemplates(values, configDir, { vpcEndpoints });
   const entries = convertConfigToKeyValuePairs(configDir, "global-settings");
   await deps.syncGlobalSettings({ deletePrefix: "global-settings.", entries });
   deps.out("Global settings backup and update completed successfully");

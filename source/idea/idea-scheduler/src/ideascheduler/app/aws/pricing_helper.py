@@ -107,7 +107,7 @@ class PricingHelper:
 
     @property
     def scratch_storage_iops_unit_price(self) -> float:
-        return self.config().get_int('scheduler.cost_estimation.provisioned_iops')
+        return self.config().get_float('scheduler.cost_estimation.provisioned_iops')
 
     @property
     def scratch_storage_iops_quantity(self) -> float:
@@ -258,7 +258,7 @@ class PricingHelper:
                 title=f'Scratch: FSx for Lustre ({self.fsx_lustre_size})',
                 service='aws.fsx',
                 product='scratch_storage=lustre',
-                unit='GB-month',
+                unit='GB-hour',
                 quantity=fsx_lustre_quantity,
                 unit_price=fsx_lustre_unit_price,
             )

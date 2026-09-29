@@ -220,7 +220,7 @@ test("ECS prerequisite runs before deployment and refuses disabled trunking", as
       if (input.TableName === `${CLUSTER}.modules`) {
         return { Items: [{ module_id: "ecs", name: "ecs", type: "stack" }] };
       }
-      return { Items: [] };
+      return { Items: [{ key: "ecs.enabled", value: true }] };
     },
     async configWriter() {
       throw new Error("not reached");

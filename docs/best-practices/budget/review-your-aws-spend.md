@@ -29,6 +29,8 @@ IDEA cannot do this for you, and nothing fails loudly when it has not been done.
 are active, `idea:` tags do not appear in AWS Cost Explorer and a budget filtered on them reads as no
 spend, which looks the same as a project that has not spent anything.
 
+This activation is for Cost Explorer and tag-filtered budgets. Personal and by-user shared-storage estimates use storage rates and dated usage shares; they do not require storage cost-allocation tags.
+
 Tag keys can take up to 24 hours to appear on the cost allocation tags page, and up to another 24
 hours to activate after that. Activation is not retroactive: costs incurred before the key was
 active are not attributed to it unless the management account requests a backfill.

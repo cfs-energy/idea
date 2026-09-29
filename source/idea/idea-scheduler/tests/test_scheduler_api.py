@@ -429,6 +429,9 @@ class _FakeJobCache:
     def __init__(self, job: SocaJob):
         self._job = job
 
+    def get_job_provisioning_retry_count(self, job_id):
+        return 0
+
     def get_job(self, _job_id):
         return self._job
 
@@ -837,3 +840,23 @@ def test_list_active_jobs_always_filters_on_the_token_username(context, monkeypa
 
     assert job_cache.list_kwargs['owner'] == 'jane-doe'
     assert job_cache.count_kwargs['owner'] == 'jane-doe'
+
+
+def test_owner_delete_records_owner_reason(scheduler_api, context, monkeypatch):
+    from unittest.mock import Mock
+    from ideascheduler.app.provisioning.lifecycle_events import OWNER_CANCELLATION
+
+    job = SocaJob(job_id='42', owner=CONTEXT_USER)
+    scheduler = Mock(get_job=Mock(return_value=job))
+    cache = Mock()
+    monkeypatch.setattr(context, 'scheduler', scheduler)
+    monkeypatch.setattr(context, 'job_cache', cache)
+    invocation = build_invocation_context(
+        context, {'job_id': '42'}, 'Scheduler.DeleteJob'
+    )
+    scheduler_api.delete_job(invocation)
+    cache.record_deleted_job.assert_called_once_with(
+        job=job,
+        error_code=OWNER_CANCELLATION,
+        message='Cancelled by the owner.',
+    )

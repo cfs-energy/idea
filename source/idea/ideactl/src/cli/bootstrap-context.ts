@@ -153,6 +153,18 @@ function hostRole(input: BootstrapContextInput): HostRole {
   const moduleLogGroup = `/${clusterName}/${input.moduleId}`;
   const moduleMetrics = `${clusterName}/${input.moduleId}`;
 
+  if (input.moduleName === "ecs") {
+    return {
+      baseOs: input.baseOs,
+      instanceType: input.instanceType,
+      metricsNamespace: moduleMetrics,
+      nodeType: "infra",
+      enableLogging: false,
+      logFiles: [],
+      vars: {},
+    };
+  }
+
   if (input.moduleName === "directoryservice") {
     const name = `${moduleLogGroup}/openldap-server`;
     return {

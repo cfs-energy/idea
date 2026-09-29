@@ -28,6 +28,11 @@ export const UPGRADE_DRIFT_ACTIONS = [
 export type UpgradeDriftAction = (typeof UPGRADE_DRIFT_ACTIONS)[number];
 export type UpgradeDriftEffect = "ADD" | "CHANGE" | "DELETE" | "PRESERVE";
 
+/** A row last written from the portal (`api`) or the command line (`cli`) belongs to the operator. */
+export function isOperatorSource(source: unknown): boolean {
+  return source === "api" || source === "cli";
+}
+
 /** One current table row, including the metadata the preview is allowed to print. */
 export interface CurrentConfigRow extends ConfigEntry {
   source?: string;
@@ -73,6 +78,7 @@ export interface UpgradeDriftFinding {
   source?: string;
   version?: number;
   differsFromGenerated: boolean;
+  routineUpdate?: "template default" | "release image";
 }
 
 /** Findings are sorted by action and then key for deterministic terminal output. */
@@ -247,6 +253,10 @@ export function compareUpgradeDrift(input: UpgradeDriftInput): UpgradeDriftRepor
       } else if (currentRow !== undefined && generatedRow !== undefined && /^global-settings\.module_sets\.[^.]+\.[^.]+\.module_id$/.test(key)) {
         const result = addOnlyFinding(key, currentRow, generatedRow);
         if (result !== undefined) findings.set(key, result);
+      } else if (currentRow !== undefined && generatedRow !== undefined && isOperatorSource(currentRow.source)) {
+        // The operator's row wins over the template: preserved, so it is never listed as overwritten.
+        const result = addOnlyFinding(key, currentRow, generatedRow);
+        if (result !== undefined) findings.set(key, result);
       } else if (currentRow !== undefined && generatedRow !== undefined) {
         const typeChanged = dynamoValueType(currentRow.value) !== dynamoValueType(generatedRow.value);
         const valueChanged = !isDeepStrictEqual(currentRow.value, generatedRow.value);
@@ -257,7 +267,10 @@ export function compareUpgradeDrift(input: UpgradeDriftInput): UpgradeDriftRepor
             : "GLOBAL_REWRITE_SAME";
         findings.set(
           key,
-          finding(action, "CHANGE", key, currentRow, generatedRow, generatedRow, true),
+          {
+            ...finding(action, "CHANGE", key, currentRow, generatedRow, generatedRow, true),
+            routineUpdate: valueChanged && currentRow.source === "template" ? "template default" : undefined,
+          },
         );
       }
     }
@@ -286,15 +299,19 @@ export function compareUpgradeDrift(input: UpgradeDriftInput): UpgradeDriftRepor
   for (const [key, target] of phase3) {
     findings.set(
       key,
-      finding(
-        "PHASE3_OVERWRITE",
-        current.has(key) ? "CHANGE" : "ADD",
-        key,
-        current.get(key),
-        generated.get(key),
-        target,
-        true,
-      ),
+      {
+        ...finding(
+          "PHASE3_OVERWRITE",
+          current.has(key) ? "CHANGE" : "ADD",
+          key,
+          current.get(key),
+          generated.get(key),
+          target,
+          true,
+        ),
+        // Only the release repository planner adds an image write to Phase 3.
+        routineUpdate: key === "ecs.image" ? "release image" : undefined,
+      },
     );
   }
 
@@ -361,7 +378,7 @@ export function compareUpgradeDrift(input: UpgradeDriftInput): UpgradeDriftRepor
     findings: sorted,
     totals,
     changedRowsDifferingFromGenerated: sorted
-      .filter((row) => row.effect === "CHANGE" && row.differsFromGenerated)
+      .filter((row) => row.effect === "CHANGE" && row.differsFromGenerated && row.routineUpdate === undefined)
       .map((row) => row.key),
   };
 }
@@ -384,9 +401,11 @@ export function renderUpgradeDrift(report: UpgradeDriftReport): string {
         `source=${row.source ?? "-"}`,
         `version=${row.version ?? "-"}`,
       ].join(", ");
-      const marker = row.effect === "CHANGE" && row.differsFromGenerated
-        ? " [differs from generated configuration]"
-        : "";
+      const marker = row.routineUpdate !== undefined
+        ? ` [${row.routineUpdate} updated]`
+        : row.effect === "CHANGE" && row.differsFromGenerated
+          ? " [differs from generated configuration]"
+          : "";
       lines.push(`    ${row.key} (${metadata})${marker}`);
     }
   }
@@ -399,6 +418,8 @@ export function renderUpgradeDrift(report: UpgradeDriftReport): string {
         : report.changedRowsDifferingFromGenerated.join(", ")
     }`,
   );
-  lines.push("  Values are hidden. The source marker does not identify the last writer.");
+  const templates = report.findings.filter((row) => row.routineUpdate === "template default");
+  if (templates.length > 0) lines.push(`  Template defaults updated: ${templates.map((row) => row.key).join(", ")}`);
+  lines.push("  Values are hidden. New writes identify their source; legacy or missing markers do not reliably identify the last writer.");
   return lines.join("\n");
 }

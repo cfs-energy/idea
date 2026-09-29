@@ -15,6 +15,10 @@ UsePAM yes
 PermitRootLogin no
 PubkeyAuthentication yes
 AuthorizedKeysFile .ssh/authorized_keys
+# The container host joins the directory, so NFSv4 owner names resolve to the account ids the
+# accounts service wrote and this check holds. (An unjoined host maps every owner to nobody and
+# would refuse each authorized_keys file.)
+StrictModes yes
 PasswordAuthentication yes
 PermitUserEnvironment no
 UseDNS no

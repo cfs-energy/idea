@@ -17,6 +17,11 @@ from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_history_d
 )
 
 import arrow
+import pathlib
+from datetime import timedelta
+from unittest.mock import Mock
+
+import pytest
 
 
 class FakeTable:
@@ -62,13 +67,14 @@ def build_db(raises=False):
     return db
 
 
-def build_session(state, stopped_on=None, created_on=None):
+def build_session(state, stopped_on=None, created_on=None, updated_on=None):
     return VirtualDesktopSession(
         idea_session_id='sess-1',
         owner='user-a',
         name='my-desktop',
         state=state,
         created_on=created_on,
+        updated_on=updated_on,
         stopped_on=stopped_on,
         server=VirtualDesktopServer(instance_type='m5.large'),
         project=Project(project_id='project-1', name='project-a'),
@@ -108,6 +114,22 @@ def test_a_desktop_terminated_while_running_is_recorded_at_the_deletion():
     entry = db._table_obj.items[0]
     assert entry['stopped_on'] == deleted_on
     assert entry['deleted_on'] == deleted_on
+
+
+def test_a_legacy_stopped_desktop_uses_its_last_update_as_an_estimate():
+    now = arrow.utcnow()
+    updated_at = now.shift(days=-4).floor('second').datetime
+    db = build_db()
+
+    db.record_termination(
+        build_session(VirtualDesktopSessionState.STOPPED, updated_on=updated_at),
+        deleted_on=now.int_timestamp * 1000,
+    )
+
+    entry = db._table_obj.items[0]
+    assert entry['stopped_on'] == int(updated_at.timestamp() * 1000)
+    assert entry['stop_time_estimated'] is True
+    assert entry['deleted_on'] > entry['stopped_on']
 
 
 def test_the_record_carries_what_pricing_needs():
@@ -162,3 +184,81 @@ def test_the_record_is_written_on_the_one_path_every_deletion_takes():
     source = inspect.getsource(module.VirtualDesktopSessionDB.delete)
     assert 'record_termination' in source
     assert source.index('record_termination') < source.index('delete_item')
+
+
+@pytest.mark.parametrize('previous_stop', ['missing', 'recorded', 'already-warned'])
+def test_cleanup_warning_deletion_and_pricing_preserve_stop_time(
+    monkeypatch, previous_stop
+):
+    from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_db import (
+        VirtualDesktopSessionDB,
+    )
+    from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_utils import (
+        VirtualDesktopSessionUtils,
+    )
+
+    monkeypatch.syspath_prepend(
+        str(
+            pathlib.Path(__file__).resolve().parents[2] / 'idea-cluster-manager' / 'src'
+        )
+    )
+    from ideaclustermanager.app.costs.my_costs_service import MyCostsService
+
+    now = arrow.utcnow().floor('second')
+    stopped = now.shift(days=-60).datetime
+    created = now.shift(days=-61).datetime
+    session = build_session(
+        VirtualDesktopSessionState.STOPPED,
+        created_on=created,
+        updated_on=stopped,
+        stopped_on=stopped if previous_stop == 'recorded' else None,
+    )
+    history = build_db()
+    db = VirtualDesktopSessionDB.__new__(VirtualDesktopSessionDB)
+    db._table_obj = Mock()
+    db._server_db = Mock()
+    db._software_stack_db = Mock()
+    db._schedule_db = Mock()
+    from ideadatamodel import VirtualDesktopSoftwareStack
+
+    session.software_stack = VirtualDesktopSoftwareStack()
+    db._table.update_item.return_value = {'Attributes': {}}
+    db._table.delete_item.return_value = {
+        'Attributes': {
+            'owner': session.owner,
+            'idea_session_id': session.idea_session_id,
+        }
+    }
+    db._history_db = history
+    db.trigger_update_event = Mock()
+    db.trigger_delete_event = Mock()
+    db.convert_db_dict_to_session_object = Mock(return_value=session)
+    utils = VirtualDesktopSessionUtils.__new__(VirtualDesktopSessionUtils)
+    utils.context = Mock()
+    utils.context.config().get_bool.return_value = False
+    utils._logger = Mock()
+    utils._session_db = db
+    if previous_stop == 'already-warned':
+        session.cleanup_warning_stop_time = stopped
+        session.stopped_on = now.shift(days=-7).datetime
+    else:
+        utils._warn_owner(session, stopped, timedelta(days=60), now.datetime, False)
+        assert session.stopped_on == (stopped if previous_stop == 'recorded' else None)
+    db.delete(session)
+    entry = history._table_obj.items[0]
+    assert entry['stopped_on'] == int(stopped.timestamp() * 1000)
+    assert entry['stop_time_estimated'] is (previous_stop != 'recorded')
+    pricing = MyCostsService.__new__(MyCostsService)
+    pricing._ondemand_price = Mock(return_value=1)
+    priced = pricing._desktop_session(
+        {
+            **entry,
+            'state': 'DELETED',
+            'server': {'instance_type': entry['instance_type']},
+        },
+        int(created.timestamp() * 1000),
+        now.int_timestamp * 1000,
+    )
+    assert priced.hours == 24
+    assert priced.cost == 24
+    assert bool(priced.stop_time_estimated) is (previous_stop != 'recorded')

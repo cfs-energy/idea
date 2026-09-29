@@ -11,3 +11,4 @@
 
 from .cluster_settings_model import *
 from .cluster_settings_api import *
+from .cluster_settings_api import FetchPricingRatesRequest, FetchPricingRatesResult

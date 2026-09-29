@@ -10,8 +10,11 @@
 #  and limitations under the License.
 
 from ideaclustermanager.app.accounts.account_reconciler import ReconcileUsersRequest
+from ideaclustermanager.app.accounts.user_home_directory import UserHomeDirectory
 from ideasdk.api import BaseAPI, ApiInvocationContext
 from ideadatamodel.auth import (
+    RepairHomeOwnershipRequest,
+    RepairHomeOwnershipResult,
     CreateUserRequest,
     CreateUserResult,
     GetUserRequest,
@@ -52,7 +55,7 @@ from ideadatamodel.auth import (
     GlobalSignOutResult,
 )
 from ideadatamodel import exceptions
-from ideasdk.utils import Utils
+from ideasdk.utils import Utils, GroupNameHelper
 
 import ideaclustermanager
 
@@ -65,6 +68,10 @@ class AccountsAPI(BaseAPI):
         self.SCOPE_READ = f'{self.context.module_id()}/read'
 
         self.acl = {
+            'Accounts.RepairHomeOwnership': {
+                'scope': self.SCOPE_WRITE,
+                'method': self.repair_home_ownership,
+            },
             'Accounts.ReconcileUsers': {
                 'scope': self.SCOPE_WRITE,
                 'method': self.reconcile_users,
@@ -151,8 +158,7 @@ class AccountsAPI(BaseAPI):
         return self.context.token_service
 
     def is_applicable(self, context: ApiInvocationContext, scope: str) -> bool:
-        access_token = context.access_token
-        decoded_token = self.token_service.decode_token(access_token)
+        decoded_token = context.get_decoded_token()
 
         groups = Utils.get_value_as_list('cognito:groups', decoded_token)
         if (
@@ -165,6 +171,28 @@ class AccountsAPI(BaseAPI):
         if Utils.is_empty(token_scope):
             return False
         return scope in token_scope.split(' ')
+
+    def repair_home_ownership(self, context: ApiInvocationContext):
+        if not context.is_administrator():
+            raise exceptions.unauthorized_access()
+        request = context.get_request_payload_as(RepairHomeOwnershipRequest)
+        user = self.context.accounts.get_user(request.username)
+        home = UserHomeDirectory(self.context, user)
+        home.validate_ownership()
+        if request.dry_run:
+            context.success(home.repair_ownership(dry_run=True))
+            return
+        task_name = 'accounts.repair-home-ownership'
+        self.context.accounts.task_manager.send(
+            task_name=task_name,
+            payload={'username': user.username, 'dry_run': False},
+            message_group_id=user.username,
+        )
+        context.success(
+            RepairHomeOwnershipResult(
+                username=user.username, dry_run=False, queued=True, task_name=task_name
+            )
+        )
 
     def reconcile_users(self, context: ApiInvocationContext):
         if not context.is_administrator():
@@ -269,13 +297,25 @@ class AccountsAPI(BaseAPI):
         result = self.context.accounts.list_groups(request)
         context.success(result)
 
+    def check_group_membership_authorization(self, context, group_name):
+        names = GroupNameHelper(self.context)
+        privileged = {
+            names.get_cluster_administrators_group(),
+            names.get_cluster_managers_group(),
+            names.get_cluster_operations_leads_group(),
+        }
+        if group_name in privileged and not context.is_administrator():
+            raise exceptions.unauthorized_access()
+
     def add_user_to_group(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(AddUserToGroupRequest)
+        self.check_group_membership_authorization(context, request.group_name)
         self.context.accounts.add_users_to_group(request.usernames, request.group_name)
         context.success(AddUserToGroupResult())
 
     def remove_user_from_group(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(RemoveUserFromGroupRequest)
+        self.check_group_membership_authorization(context, request.group_name)
         self.context.accounts.remove_users_from_group(
             request.usernames, request.group_name
         )

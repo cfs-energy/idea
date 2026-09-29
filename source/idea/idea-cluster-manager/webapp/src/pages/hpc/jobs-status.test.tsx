@@ -1,4 +1,4 @@
-import {fireEvent, render, screen} from '@testing-library/react';
+import {render, screen} from '@testing-library/react';
 import {JOB_TABLE_COLUMN_DEFINITIONS} from './jobs';
 import {SocaJob} from '../../client/data-model';
 import {initTestAppContext} from '../../test-support';
@@ -15,16 +15,16 @@ describe('job status column', () => {
     });
 
     it('separates a job that never ran from a clean run', () => {
-        // stack was created and then failed: provisioned, terminal, no exit status.
-        // this used to render as "Finished", identical to an exit 0
+        // A legacy terminal record with no disposition or start time uses the
+        // deleted fallback rather than looking like a successful run.
         const job: SocaJob = {
             job_id: '2345',
             state: 'finished',
             params: {compute_stack: 'idea-compute-node-2345'}
         };
         renderStatus(job);
-        expect(screen.getByText('Did not run')).toBeInTheDocument();
-        expect(screen.queryByText('Finished')).toBeNull();
+        expect(screen.getByText('Deleted')).toBeInTheDocument();
+        expect(screen.queryByText('Ran')).toBeNull();
     });
 
     it('offers the reason on a job that never ran', () => {
@@ -36,11 +36,11 @@ describe('job status column', () => {
         };
         renderStatus(job);
         expect(screen.queryByText('Queued')).toBeNull();
-        fireEvent.click(screen.getByText('Did not run'));
+        expect(screen.getByText('Deleted')).toBeInTheDocument();
         expect(screen.getByText(ERROR_MESSAGE)).toBeInTheDocument();
     });
 
-    it('still reports a completed run as finished', () => {
+    it('still reports a completed run as ran', () => {
         const job: SocaJob = {
             job_id: '2347',
             state: 'finished',
@@ -50,8 +50,8 @@ describe('job status column', () => {
             params: {compute_stack: 'idea-compute-node-2347'}
         };
         renderStatus(job);
-        expect(screen.getByText('Finished')).toBeInTheDocument();
-        expect(screen.queryByText('Did not run')).toBeNull();
+        expect(screen.getByText('Ran')).toBeInTheDocument();
+        expect(screen.queryByText('Deleted')).toBeNull();
     });
 
     it('leaves an active job waiting for capacity as queued', () => {
@@ -62,12 +62,12 @@ describe('job status column', () => {
         };
         renderStatus(job);
         expect(screen.getByText('Queued')).toBeInTheDocument();
-        expect(screen.queryByText('Did not run')).toBeNull();
+        expect(screen.queryByText('Deleted')).toBeNull();
     });
 
     it('does not report a deliberate deletion as an error', () => {
         // qdel after the stack was built: terminal, never started, and nothing failed.
-        // the red treatment is reserved for records that carry a reason
+        // The red treatment is reserved for failed and held dispositions.
         const markupFor = (job: SocaJob): string => {
             const {container, unmount} = renderStatus(job);
             const markup = container.innerHTML;
@@ -75,19 +75,21 @@ describe('job status column', () => {
             return markup;
         };
 
-        const reasoned = markupFor({
+        const failed = markupFor({
             job_id: '2350',
             state: 'finished',
+            disposition: 'failed',
             error_message: ERROR_MESSAGE,
             params: {compute_stack: 'idea-compute-node-2350'}
         });
         const deleted = markupFor({
             job_id: '2351',
             state: 'finished',
+            disposition: 'deleted',
             params: {compute_stack: 'idea-compute-node-2351'}
         });
 
-        expect(reasoned).toContain('error');
+        expect(failed).toContain('error');
         expect(deleted).not.toContain('error');
     });
 
@@ -97,6 +99,7 @@ describe('job status column', () => {
             job_id: '2351',
             state: 'held',
             comment: 'IDEA: provisioning failed 3 times - job held',
+            status_reason: 'Held after attempt 3 of 3: provisioning failed 3 times.',
             provisioning_attempt: 3,
             max_provisioning_attempts: 3,
             queue_time: '2026-08-19T09:00:00Z',
@@ -104,7 +107,7 @@ describe('job status column', () => {
         };
         renderStatus(job);
         expect(screen.queryByText('Queued')).toBeNull();
-        expect(screen.getByText(/provisioning failed 3 times/)).toBeInTheDocument();
+        expect(screen.getByText(/Held after attempt 3 of 3: provisioning failed 3 times/)).toBeInTheDocument();
         expect(screen.getByText(/held after 3 of 3 attempts/)).toBeInTheDocument();
     });
 

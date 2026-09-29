@@ -30,3 +30,11 @@ Select your user and click **Actions** > **Add User to Group** to add user to th
 ### Remove user from group
 
 Select your user and click **Actions** > **Remove User from Group** to remove group membership for this user.
+
+### Background task failures
+
+An error in **Status** shows the failed task, message, and time. Correct the cause and repeat the action. The error clears when the same task succeeds.
+
+### Virtual desktop instance type exceptions
+
+Select a user and choose **Actions > Set virtual desktop instance types** to grant extra desktop types without changing the global allow list. The deny list still wins. Save an empty selection to clear the exceptions.

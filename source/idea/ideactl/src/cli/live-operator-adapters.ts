@@ -5,6 +5,8 @@
  * reads and every SDK client use the profile selected for that action.
  */
 
+import type { ContainerHostsApi, ContainerHost } from "./commands/upgrade.ts";
+
 import { spawn } from "node:child_process";
 import { basename, dirname, join } from "node:path";
 
@@ -863,7 +865,7 @@ export function createLiveRemainingOperatorDeps(deps: Deps): RemainingOperatorCo
             awsProfile: options.awsProfile,
           });
           await writer.deleteConfigEntries(input.deletePrefix);
-          await writer.syncClusterSettingsInDb(input.entries, true);
+          await writer.syncClusterSettingsInDb(input.entries, true, 'template');
         },
         async exportConfig(input) {
           const [settings, modules] = await Promise.all([
@@ -910,4 +912,122 @@ export function createLiveRemainingOperatorDeps(deps: Deps): RemainingOperatorCo
       err: deps.err,
     }),
   };
+}
+
+export function liveContainerHosts(): ContainerHostsApi {
+  const containerHosts: ContainerHostsApi = {
+    async hostGroup(input) {
+      const { DescribeCapacityProvidersCommand, ECSClient } = await import("@aws-sdk/client-ecs");
+      const { AutoScalingClient, DescribeAutoScalingGroupsCommand } = await import("@aws-sdk/client-auto-scaling");
+      const providers = await new ECSClient(await awsClientOptions(input.awsRegion, input.awsProfile)).send(
+        new DescribeCapacityProvidersCommand({ capacityProviders: [input.capacityProvider] }),
+      );
+      const arn = providers.capacityProviders?.[0]?.autoScalingGroupProvider?.autoScalingGroupArn;
+      if (arn === undefined) throw new GeneralException(`capacity provider ${input.capacityProvider} has no host group`);
+      const name = arn.slice(arn.lastIndexOf("/") + 1);
+      const groups = await new AutoScalingClient(await awsClientOptions(input.awsRegion, input.awsProfile)).send(
+        new DescribeAutoScalingGroupsCommand({ AutoScalingGroupNames: [name] }),
+      );
+      const group = groups.AutoScalingGroups?.[0];
+      if (group === undefined) throw new GeneralException(`host group ${name} was not found`);
+      return {
+        name,
+        minSize: group.MinSize ?? 0,
+        desiredCapacity: group.DesiredCapacity ?? 0,
+        instanceIds: (group.Instances ?? []).filter((i) => i.LifecycleState === "InService").map((i) => i.InstanceId ?? "").filter(Boolean),
+      };
+    },
+    async launchTemplateVersions(input) {
+      const { AutoScalingClient, DescribeAutoScalingGroupsCommand } = await import("@aws-sdk/client-auto-scaling");
+      const { EC2Client, DescribeLaunchTemplateVersionsCommand } = await import("@aws-sdk/client-ec2");
+      const options = await awsClientOptions(input.awsRegion, input.awsProfile);
+      const groups = await new AutoScalingClient(options).send(new DescribeAutoScalingGroupsCommand({ AutoScalingGroupNames: [input.name] }));
+      const group = groups.AutoScalingGroups?.[0];
+      const template = group?.LaunchTemplate ?? group?.MixedInstancesPolicy?.LaunchTemplate?.LaunchTemplateSpecification;
+      if (!template) throw new GeneralException(`Host group ${input.name} has no launch template`);
+      const described = await new EC2Client(options).send(new DescribeLaunchTemplateVersionsCommand({
+        LaunchTemplateId: template.LaunchTemplateId, LaunchTemplateName: template.LaunchTemplateId ? undefined : template.LaunchTemplateName,
+        Versions: [template.Version ?? "$Default"],
+      }));
+      const current = described.LaunchTemplateVersions?.[0];
+      if (!current?.LaunchTemplateId || current.VersionNumber === undefined) throw new GeneralException(`Cannot resolve launch template for host group ${input.name}`);
+      return {
+        current: { id: current.LaunchTemplateId, version: String(current.VersionNumber) },
+        instances: (group?.Instances ?? []).map((host) => ({ instanceId: host.InstanceId ?? "", id: host.LaunchTemplate?.LaunchTemplateId, version: host.LaunchTemplate?.Version })),
+      };
+    },
+    async startInstanceRefresh(input) {
+      const { AutoScalingClient, StartInstanceRefreshCommand } = await import("@aws-sdk/client-auto-scaling");
+      const result = await new AutoScalingClient(await awsClientOptions(input.awsRegion, input.awsProfile)).send(
+        new StartInstanceRefreshCommand({ AutoScalingGroupName: input.name, Preferences: input.preferences }),
+      );
+      if (!result.InstanceRefreshId) throw new GeneralException(`Host group ${input.name} returned no instance refresh id`);
+      return result.InstanceRefreshId;
+    },
+    async describeInstanceRefresh(input) {
+      const { AutoScalingClient, DescribeInstanceRefreshesCommand } = await import("@aws-sdk/client-auto-scaling");
+      const result = await new AutoScalingClient(await awsClientOptions(input.awsRegion, input.awsProfile)).send(
+        new DescribeInstanceRefreshesCommand({ AutoScalingGroupName: input.name, InstanceRefreshIds: [input.id] }),
+      );
+      const refresh = result.InstanceRefreshes?.[0];
+      if (!refresh?.Status) throw new GeneralException(`Instance refresh ${input.id} for host group ${input.name} was not found`);
+      return { status: refresh.Status, percentageComplete: refresh.PercentageComplete, reason: refresh.StatusReason };
+    },
+    async containerInstances(input) {
+      const { DescribeContainerInstancesCommand, ECSClient, ListContainerInstancesCommand } = await import("@aws-sdk/client-ecs");
+      const client = new ECSClient(await awsClientOptions(input.awsRegion, input.awsProfile));
+      const arns = new Set<string>();
+      for (const status of ["ACTIVE", "DRAINING"] as const) {
+        let nextToken: string | undefined;
+        do {
+          const page = await client.send(new ListContainerInstancesCommand({ cluster: input.cluster, status, nextToken }));
+          for (const arn of page.containerInstanceArns ?? []) arns.add(arn);
+          nextToken = page.nextToken;
+        } while (nextToken);
+      }
+      const ids = [...arns];
+      const hosts: ContainerHost[] = [];
+      for (let index = 0; index < ids.length; index += 100) {
+        const described = await client.send(new DescribeContainerInstancesCommand({ cluster: input.cluster, containerInstances: ids.slice(index, index + 100) }));
+        if (described.failures?.length) throw new GeneralException(`Cannot describe container instances: ${described.failures.map((failure) => `${failure.arn}: ${failure.reason}`).join(", ")}`);
+        hosts.push(...(described.containerInstances ?? []).map((host) => ({
+          arn: host.containerInstanceArn ?? "", instanceId: host.ec2InstanceId ?? "", status: host.status ?? "",
+          runningTasks: host.runningTasksCount ?? 0, registeredAt: host.registeredAt?.toISOString(),
+          attributes: Object.fromEntries((host.attributes ?? []).flatMap((attribute) => attribute.name ? [[attribute.name, attribute.value ?? ""]] : [])),
+        })));
+      }
+      return hosts;
+    },
+    async drain(input) {
+      const { ECSClient, UpdateContainerInstancesStateCommand } = await import("@aws-sdk/client-ecs");
+      await new ECSClient(await awsClientOptions(input.awsRegion, input.awsProfile)).send(
+        new UpdateContainerInstancesStateCommand({ cluster: input.cluster, containerInstances: [input.arn], status: "DRAINING" }),
+      );
+    },
+    async activate(input) {
+      const { ECSClient, UpdateContainerInstancesStateCommand } = await import("@aws-sdk/client-ecs");
+      await new ECSClient(await awsClientOptions(input.awsRegion, input.awsProfile)).send(
+        new UpdateContainerInstancesStateCommand({ cluster: input.cluster, containerInstances: [input.arn], status: "ACTIVE" }),
+      );
+    },
+    async waitUntilEmpty(input) {
+      const { DescribeContainerInstancesCommand, ECSClient } = await import("@aws-sdk/client-ecs");
+      const client = new ECSClient(await awsClientOptions(input.awsRegion, input.awsProfile));
+      const deadline = Date.now() + input.timeoutMs;
+      do {
+        const described = await client.send(new DescribeContainerInstancesCommand({ cluster: input.cluster, containerInstances: [input.arn] }));
+        const host = described.containerInstances?.[0];
+        if ((host?.runningTasksCount ?? 0) === 0 && (host?.pendingTasksCount ?? 0) === 0) return true;
+        await new Promise((resolve) => setTimeout(resolve, 15_000));
+      } while (Date.now() < deadline);
+      return false;
+    },
+    async release(input) {
+      const { AutoScalingClient, SetDesiredCapacityCommand, SetInstanceProtectionCommand } = await import("@aws-sdk/client-auto-scaling");
+      const client = new AutoScalingClient(await awsClientOptions(input.awsRegion, input.awsProfile));
+      await client.send(new SetInstanceProtectionCommand({ AutoScalingGroupName: input.name, InstanceIds: [input.instanceId], ProtectedFromScaleIn: false }));
+      await client.send(new SetDesiredCapacityCommand({ AutoScalingGroupName: input.name, DesiredCapacity: input.desiredCapacity, HonorCooldown: false }));
+    },
+  };
+  return containerHosts;
 }

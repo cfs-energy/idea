@@ -12,6 +12,8 @@ import { basename, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { CdkInvoker, DEPLOYABLE_MODULE_NAMES, type CdkInvokerOptions, type Deps } from '../../src/cli/cdk-invoker.ts';
+import { buildBootstrapContext } from "../../src/cli/bootstrap-context.ts";
+import { BOOTSTRAP_SOURCE } from "../stacks/bootstrap-oracle-context.ts";
 import { fakeDeps, moduleRow, withTempIdeaHome } from '../support/deploy-harness.ts';
 
 const CDK = '/opt/idea/lib/idea-cdk/node_modules/aws-cdk/bin/cdk';
@@ -403,4 +405,32 @@ describe('CdkInvoker.invoke', () => {
   it('DEPLOYABLE_MODULE_NAMES includes ecs', () => {
     assert.ok(DEPLOYABLE_MODULE_NAMES.has('ecs'));
   });
+});
+
+it("publishes the ECS host package with the AL2023 bootstrap context", async () => {
+  const deps = fakeDeps({
+    tables: {
+      [`${CLUSTER}.modules`]: [moduleRow("ecs", "ecs", "stack")],
+      [`${CLUSTER}.cluster-settings`]: Object.entries({
+        "cluster.cluster_name": CLUSTER,
+        "cluster.cluster_s3_bucket": "sample-bucket",
+        "cluster.home_dir": "/apps",
+        "cluster.aws.region": REGION,
+        "ecs.enabled": true,
+        "ecs.hosts.instance_type": "m7i.large",
+        "directoryservice.provider": "activedirectory",
+        "directoryservice.name": "example.invalid",
+        "directoryservice.sudoers.group_name": "Administrators",
+        "directoryservice.ad_automation.sqs_queue_url": "https://queue.example.invalid/automation.fifo",
+        "shared-storage.data.mount_dir": "/data",
+      }).map(([key, value]) => ({ key, value })),
+    },
+    bootstrapContext: buildBootstrapContext,
+  });
+  deps.bootstrapSourceDir = BOOTSTRAP_SOURCE;
+  const cdk = await CdkInvoker.open({ clusterName: CLUSTER, awsRegion: REGION, moduleId: "ecs", moduleSet: "default", deps });
+  await cdk.invoke();
+  const uploaded = [...deps.puts.keys()].find(key => key.startsWith("sample-bucket/idea/bootstrap/bootstrap-ecs-"));
+  assert.ok(uploaded);
+  assert.ok(deps.spawns[0]?.includes(`bootstrap_package_uri=s3://${uploaded}`));
 });

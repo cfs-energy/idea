@@ -476,3 +476,27 @@ test("an archive named by content keeps its name while the rendered tree is unch
     rmSync(workDirectory, { recursive: true, force: true });
   }
 });
+
+for (const provider of ["openldap", "activedirectory", "aws_managed_activedirectory"]) {
+  test(`builds the ECS host directory package for ${provider}`, () => {
+    const directory = mkdtempSync(join(tmpdir(), "ecs-bootstrap-"));
+    try {
+      const plans = bootstrapPackagePlans("ecs", "ecs", "deployment", provider);
+      assert.deepEqual(plans, [{ basename: "bootstrap-ecs-deployment", components: ["common", "ecs-host"], contextParameter: "bootstrap_package_uri" }]);
+      const context = templateContext() as Record<string, any>;
+      const getString = context.config.get_string;
+      context.config.get_string = (key: string, ...args: unknown[]) => key === "directoryservice.provider" ? provider : getString(key, ...args);
+      const archive = readTarContents(new BootstrapPackageBuilder({ sourceDirectory: BOOTSTRAP_SOURCE, targetPackageBasename: plans[0].basename, components: plans[0].components, context, tmpDir: directory }).build());
+      assert.deepEqual([...archive.keys()], ["./", "./common/", "./common/bootstrap_common.sh", "./ecs-host/", "./ecs-host/directory_join.sh"]);
+      const script = archive.get("./ecs-host/directory_join.sh")!;
+      assert.match(script, /source \/etc\/environment/);
+      assert.match(script, /source "\$\{SCRIPT_DIR\}\/..\/common\/bootstrap_common.sh"/);
+      assert.match(script, provider === "openldap" ? /ldap_id_use_start_tls = True/ : /ADAutomation.PresetComputer/);
+      execFileSync("bash", ["-n"], { input: script });
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+}
+
+test("ECS without a directory provider has no bootstrap package", () => {
+  assert.deepEqual(bootstrapPackagePlans("ecs", "ecs", "deployment"), []);
+});

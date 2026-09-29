@@ -87,3 +87,26 @@ def test_the_image_listing_carries_the_compute_os_and_the_supported_set():
     assert invocation.payload.compute_node_os == 'amazonlinux2023'
     assert 'rocky9' in invocation.payload.supported_base_os
     assert invocation.payload.listing == []
+
+
+def test_admin_delete_records_reason_before_deleting():
+    from unittest.mock import call
+    from ideadatamodel.scheduler import DeleteJobRequest, SocaJob
+
+    context = Mock()
+    context.module_id.return_value = 'scheduler'
+    job = SocaJob(job_id='42')
+    context.scheduler.get_job.return_value = job
+    invocation = Mock()
+    invocation.get_request_payload_as.return_value = DeleteJobRequest(job_id='42')
+
+    SchedulerAdminAPI(context).delete_job(invocation)
+
+    calls = context.mock_calls
+    record = call.job_cache.record_deleted_job(
+        job=job,
+        error_code='JOB_DELETED_BY_ADMINISTRATOR',
+        message='Deleted by an administrator.',
+    )
+    assert record in calls
+    assert calls.index(record) < calls.index(call.scheduler.delete_job('42'))

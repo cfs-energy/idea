@@ -181,6 +181,7 @@ pluggy==1.6.0
 prettytable==3.18.0
     # via
     #   -r idea-scheduler.in
+    #   -r idea-virtual-desktop-controller.in
     #   ldappool
 prometheus-client==0.26.0
     # via -r idea-sdk.in

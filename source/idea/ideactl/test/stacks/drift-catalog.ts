@@ -22,6 +22,8 @@ export interface OperatorEdit {
   key: string;
   operatorValue: unknown;
   predictedSurvive: boolean;
+  /** How the row was written: the command line (`cli`, the default) or a release that stamped nothing (`none`). */
+  source?: "cli" | "none";
   /**
    * When false, the key is absent before the upgrade so Phase 2b can ADD it.
    * Default is to write the operator value onto the seeded table.
@@ -78,11 +80,11 @@ export const GENERATED: ConfigEntry[] = [
 export const EDITS: OperatorEdit[] = [
   {
     id: "global-custom-tags",
-    editClass: "GLOBAL_CHANGE",
+    editClass: "PRESERVE_DRIFT",
     key: "global-settings.custom_tags",
     operatorValue: ["Key=Owner,Value=ops"],
-    predictedSurvive: false,
-    note: "Wholesale prefix delete. Generated empty list wins.",
+    predictedSurvive: true,
+    note: "Operator row (cli marker). The template overwrite keeps it.",
   },
   {
     id: "global-version-string",
@@ -90,7 +92,8 @@ export const EDITS: OperatorEdit[] = [
     key: "global-settings.package_config.dcv.version",
     operatorValue: "2024.0",
     predictedSurvive: false,
-    note: "Wholesale prefix delete. Regenerated package version wins.",
+    source: "none",
+    note: "Row with no marker (written before markers existed). Regenerated package version wins.",
   },
   {
     id: "global-type-change",
@@ -98,7 +101,8 @@ export const EDITS: OperatorEdit[] = [
     key: "global-settings.type_value",
     operatorValue: "1",
     predictedSurvive: false,
-    note: "Prefix rewrite recreates the row with the generated number type.",
+    source: "none",
+    note: "Unmarked row. Prefix rewrite recreates it with the generated number type.",
   },
   {
     id: "global-operator-only",
@@ -114,7 +118,8 @@ export const EDITS: OperatorEdit[] = [
     key: "global-settings.same",
     operatorValue: [],
     predictedSurvive: true,
-    note: "Value matches generated, so it comes back. Version restarts at 1.",
+    source: "none",
+    note: "Unmarked row whose value matches generated, so it comes back. Version restarts at 1.",
   },
   {
     id: "generated-missing",

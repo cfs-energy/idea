@@ -18,6 +18,12 @@ from ideadatamodel import (
     SocaCapacityType,
 )
 from ideascheduler.app.app_protocols import JobCacheProtocol
+from ideascheduler.app.provisioning.lifecycle_events import (
+    ProvisioningLifecycleEvents,
+    SYSTEM_DELETION,
+    OWNER_CANCELLATION,
+    ADMINISTRATOR_DELETION,
+)
 from ideasdk.utils import Utils
 from ideasdk.utils.error_redaction import AWS_IDENTIFIERS
 
@@ -163,6 +169,16 @@ class JobsDB:
                             f'CREATE TABLE IF NOT EXISTS {table} (id INTEGER PRIMARY KEY AUTOINCREMENT)'
                         )
 
+                cursor.execute(f'PRAGMA table_info({FINISHED_JOBS_TABLE})')
+                if 'indexed' not in {column[1] for column in cursor.fetchall()}:
+                    # records written before the marker existed were indexed as they were
+                    # recorded; only records written from now on wait for the index.
+                    cursor.execute(
+                        f'ALTER TABLE {FINISHED_JOBS_TABLE} '
+                        'ADD COLUMN indexed BOOLEAN NOT NULL DEFAULT 0'
+                    )
+                    cursor.execute(f'UPDATE {FINISHED_JOBS_TABLE} SET indexed = 1')
+
                 conn.commit()
                 self._logger.info('All tables created successfully')
 
@@ -267,6 +283,7 @@ class JobsDB:
                     self.db[JOBS_TABLE].create_index(['queue'], name='ix_jobs_queue')
 
                 # finished jobs indices
+                self.db[FINISHED_JOBS_TABLE].create_index(['indexed'])
                 # job_id is not unique here: it's reused once the scheduler host is replaced,
                 # so several finished jobs can share one. job_uid is the identity stored under.
                 if not self.db[FINISHED_JOBS_TABLE].has_index(
@@ -410,8 +427,21 @@ class JobsDB:
                         'queue_profile': job.queue_type,
                         'project': job.project,
                         'job_data': Utils.to_json(job),
+                        'indexed': False,
                     },
                     keys=keys,
+                )
+
+    def mark_job_indexed(self, job: SocaJob):
+        key = (
+            {'job_uid': job.job_uid}
+            if Utils.is_not_empty(job.job_uid)
+            else {'job_id': job.job_id, 'job_uid': job.job_uid}
+        )
+        with self._db_lock:
+            with self.db as tx:
+                tx[FINISHED_JOBS_TABLE].update(
+                    row={**key, 'indexed': True}, keys=list(key)
                 )
 
     def get_finished_job(self, job_id: str) -> Optional[SocaJob]:
@@ -553,6 +583,18 @@ class JobsDB:
                 error = self.db[JOB_PROVISIONING_ERRORS].find_one(job_id=job.job_id)
                 error_message = Utils.get_value_as_string('message', error)
                 job.error_message = error_message
+                if error_message is not None:
+                    error_code = Utils.get_value_as_string('error_code', error)
+                    job.reason_class = ProvisioningLifecycleEvents.get_reason_class(
+                        error_code
+                    )
+                    if error_code in (
+                        SYSTEM_DELETION,
+                        OWNER_CANCELLATION,
+                        ADMINISTRATOR_DELETION,
+                    ):
+                        job.disposition = 'deleted'
+                        job.status_reason = error_message
         return job
 
     def set_job_provisioning_error(
@@ -707,6 +749,27 @@ class JobCache(JobCacheProtocol):
 
     def add_finished_job(self, job: SocaJob):
         self._jobs_db.add_finished_job(job)
+
+    def list_pending_index_jobs(self, limit: int = 500) -> List[SocaJob]:
+        # oldest first, bounded: one cycle never replays a whole outage at once
+        return self._jobs_db.query_finished_jobs(
+            indexed=False, _limit=limit, order_by='id'
+        )
+
+    def mark_job_indexed(self, job: SocaJob):
+        self._jobs_db.mark_job_indexed(job)
+
+    def record_deleted_job(self, job: SocaJob, error_code: str, message: str):
+        job.disposition = 'deleted'
+        job.reason_class = ProvisioningLifecycleEvents.get_reason_class(error_code)
+        job.error_message = message
+        job.status_reason = message
+        with self._jobs_db._db_lock:
+            with self._jobs_db.db:
+                self._jobs_db.set_job_provisioning_error(
+                    job.job_id, error_code, message
+                )
+                self._jobs_db.add(job)
 
     def get_jobs_table(self) -> dataset.Table:
         return self._jobs_db.db[JOBS_TABLE]

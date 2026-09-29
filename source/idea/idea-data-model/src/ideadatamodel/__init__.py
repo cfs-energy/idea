@@ -26,4 +26,5 @@ from .analytics import *
 from .email_templates import *
 from .notifications import *
 from .my_costs import *
+from .reporting import *
 from .exceptions import *

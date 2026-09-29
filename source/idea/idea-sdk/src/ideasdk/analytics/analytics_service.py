@@ -67,22 +67,42 @@ class AnalyticsService(SocaService, AnalyticsServiceProtocol):
         self._buffer_processing_thread.start()
 
     def _process_buffer(self):
+        retry_delay = 0
         while not self._exit.is_set():
-            self._buffer_size_limit_reached_condition.acquire()
-            self._buffer_size_limit_reached_condition.wait(
-                timeout=self.MAX_WAIT_TIME_MS / 1000
-            )
-            self._buffer_size_limit_reached_condition.release()
-            self._post_entries_to_kinesis()
+            if retry_delay:
+                if self._exit.wait(retry_delay):
+                    break
+            else:
+                with self._buffer_size_limit_reached_condition:
+                    self._buffer_size_limit_reached_condition.wait(
+                        timeout=self.MAX_WAIT_TIME_MS / 1000
+                    )
+            if self._exit.is_set():
+                break
+            try:
+                delivered = self._post_entries_to_kinesis()
+            except Exception:
+                delivered = False
+                self._logger.exception(
+                    f'Failed to post {len(self._buffer)} buffered analytics entries'
+                )
+            retry_delay = 0 if delivered else min(retry_delay * 2 or 1, 60)
 
     def _post_entries_to_kinesis(self):
         with self._buffer_lock:
-            records = []
-            if Utils.is_empty(self._buffer):
-                return
+            entries, self._buffer = self._buffer, []
+        if not entries:
+            return True
 
-            for entry in self._buffer:
-                records.append(
+        failed = []
+        offset = 0
+        try:
+            stream_name = self.context.config().get_string(
+                'analytics.kinesis.stream_name', required=True
+            )
+            while offset < len(entries):
+                chunk = entries[offset : offset + 500]
+                records = [
                     {
                         'Data': Utils.to_bytes(
                             Utils.to_json(
@@ -97,38 +117,30 @@ class AnalyticsService(SocaService, AnalyticsServiceProtocol):
                         ),
                         'PartitionKey': entry.entry_id,
                     }
+                    for entry in chunk
+                ]
+                response = (
+                    self.context.aws()
+                    .kinesis()
+                    .put_records(Records=records, StreamName=stream_name)
                 )
-
-            stream_name = self.context.config().get_string(
-                'analytics.kinesis.stream_name', required=True
-            )
-            self._logger.info(
-                f'posting {len(records)} record(s) to analytics stream...'
-            )
-            response = (
-                self.context.aws()
-                .kinesis()
-                .put_records(Records=records, StreamName=stream_name)
-            )
-            # Handle failure/success from Kinesis response
-            failed_record_count = response.get('FailedRecordCount', 0)
-            if failed_record_count > 0:
-                self._logger.warning(
-                    f'Failed to post {failed_record_count} out of {len(records)} records to Kinesis stream'
-                )
-                # Log details of failed records for debugging
-                records_list = response.get('Records', [])
-                for i, record_response in enumerate(records_list):
-                    if 'ErrorCode' in record_response:
-                        self._logger.error(
-                            f'Record {i} failed with error: {record_response.get("ErrorCode")} - {record_response.get("ErrorMessage", "Unknown error")}'
-                        )
-            else:
-                self._logger.debug(
-                    f'Successfully posted all {len(records)} records to Kinesis stream'
-                )
-
-            self._buffer = []
+                if response.get('FailedRecordCount', 0):
+                    results = response.get('Records', [])
+                    failed.extend(
+                        entry
+                        for index, entry in enumerate(chunk)
+                        if index >= len(results) or 'ErrorCode' in results[index]
+                    )
+                    self._logger.warning(
+                        f'Failed to post {response["FailedRecordCount"]} '
+                        f'out of {len(chunk)} records to Kinesis stream'
+                    )
+                offset += len(chunk)
+        finally:
+            # Preserve failed and unsent entries ahead of concurrent additions.
+            with self._buffer_lock:
+                self._buffer = failed + entries[offset:] + self._buffer
+        return not failed
 
     def _enforce_buffer_processing(self):
         try:

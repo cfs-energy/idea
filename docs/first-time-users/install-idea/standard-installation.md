@@ -1,5 +1,7 @@
 # Standard Installation
 
+New clusters use the container control plane only. The installer does not offer a host-based control plane. To update an existing host-based cluster, do not run a fresh install; use `upgrade-cluster --drain` and follow the [container upgrade guide](../cluster-operations/update-idea-cluster/move-to-containers.md).
+
 Download the matching archive from the [GitHub release](https://github.com/cfs-energy/idea/releases) (replace `<VERSION>` with the release version):
 
 | Operator platform | Release file |
@@ -161,7 +163,7 @@ cluster-manager     identity-provider   vdc
 In this example, we will show you how to update the following parameters:
 
 * vdc.dcv\_session.allowed\_sessions\_per\_user: Number of virtual desktops per user (default to 5)
-* vdc.dcv\_session.instance\_types.allow: Control what type of EC2 instance can be provisioned as virtual desktops by the end users (default to t3, g4dn, g4ad, m6a and m6g).
+* vdc.dcv\_session.instance\_types.allow: Control which EC2 families users can provision for virtual desktops. The default is `t3`, `g4ad`, `g6`, `g6e`, `g7`, `c8i`, `m6a`, `m6g`, `m7i`, `m8g`, `m8i`, and `r8g`. The `g7e` family has a driver mapping but is not in the default allow list.
 
 The screen below (generated during `idea-admin.sh quick-setup` ) reports the default values for both sessions
 

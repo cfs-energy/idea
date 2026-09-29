@@ -6,7 +6,7 @@ with it, so one row is written here first and the desktop can still be costed. N
 else reads this table, and it holds terminated desktops only.
 """
 
-from ideadatamodel import VirtualDesktopSession
+from ideadatamodel import VirtualDesktopSession, VirtualDesktopSessionState
 from ideasdk.utils import Utils
 
 from datetime import datetime
@@ -96,9 +96,21 @@ class VirtualDesktopSessionHistoryDB:
         if deleted_on is None:
             deleted_on = Utils.current_time_ms()
         stopped_on = to_epoch_ms(session.stopped_on)
+        stop_time_estimated = False
+        warning_stop = to_epoch_ms(session.cleanup_warning_stop_time)
+        # Older warning writes stamped stopped_on with the warning date.
+        if warning_stop is not None and (
+            stopped_on is None or warning_stop < stopped_on
+        ):
+            stopped_on = warning_stop
+            stop_time_estimated = True
         if stopped_on is None:
-            # terminated straight from running: it stopped costing at the deletion
-            stopped_on = deleted_on
+            if session.state == VirtualDesktopSessionState.STOPPED:
+                stopped_on = to_epoch_ms(session.updated_on)
+                stop_time_estimated = True
+            else:
+                # terminated straight from running: it stopped costing at the deletion
+                stopped_on = deleted_on
         server = session.server
         project = session.project
         return {
@@ -110,6 +122,7 @@ class VirtualDesktopSessionHistoryDB:
             'project_id': None if project is None else project.project_id,
             'created_on': to_epoch_ms(session.created_on),
             'stopped_on': stopped_on,
+            'stop_time_estimated': stop_time_estimated,
             'deleted_on': deleted_on,
             'hibernation_enabled': session.hibernation_enabled,
             'ttl': Utils.current_time() + (self.get_retention_days() * 86400),

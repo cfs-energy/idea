@@ -2,6 +2,8 @@
 
 Once your job is submitted ( [submit-a-job.md](submit-a-job.md "mention")), you can access the job information via "**My jobs**", in either the "**Active**" or "**Completed**" view (depending whether your job is running or not).
 
+The status cell and job details show the scheduler's `status_reason`, including capacity waits, provisioning errors, and the attempt count and last error when a job is held.
+
 ## Active Jobs
 
 Active jobs will list all the jobs currently active in the job queue. Select one job ID to get further details about it such as the execution hosts, scheduler metadata ...
@@ -31,3 +33,5 @@ As a regular user, you can only see your jobs. As an admin, you can view everyon
 <figure><img src="../../../.gitbook/assets/mods_hpc_control_completed.webp" alt=""><figcaption><p>List of all completed jobs</p></figcaption></figure>
 
 Similarly to [#active-jobs](control-my-jobs.md#active-jobs "mention"), you can expand the details section to review your job information (start/end time, execution host(s) etc ...)
+
+Completed jobs retain a **Ran**, **Failed**, **Held**, or **Deleted** disposition, including jobs cancelled before starting and jobs deleted because their owner is disabled. The recorded reason explains the outcome. **Estimated Costs** shows elapsed-runtime estimates and savings; missing pricing reads **Price not available**. **Budget impact** shows recorded budget usage when available. See [Job status and costs](../../../first-time-users/jobs.md).

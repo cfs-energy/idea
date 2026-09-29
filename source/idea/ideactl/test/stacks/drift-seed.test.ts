@@ -287,7 +287,10 @@ function phase3Deps(): UpgradeDeps {
     },
     openSearch: {
       async describeDomain() {
-        return { engineVersion: "OpenSearch_2.19" };
+        return {
+          engineVersion: "OpenSearch_2.19",
+          serviceSoftwareOptions: { updateAvailable: false, updateStatus: "COMPLETED" },
+        };
       },
       async listInstanceTypeDetails() {
         return ["m7g.large.search"];
@@ -616,6 +619,17 @@ test("upgrade settings sync matches the analysis prediction for every edit class
 
   for (const edit of EDITS) {
     if (edit.seed === false) continue;
+    if (edit.source === "none") {
+      // A row a release wrote before markers existed: value only, no source attribute.
+      await doc.send(new UpdateCommand({
+        TableName: db.clusterSettingsTableName,
+        Key: { key: edit.key },
+        UpdateExpression: "SET #value = :value",
+        ExpressionAttributeNames: { "#value": "value" },
+        ExpressionAttributeValues: { ":value": edit.operatorValue },
+      }));
+      continue;
+    }
     await db.setConfigEntry(edit.key, edit.operatorValue);
   }
 
@@ -758,7 +772,7 @@ test("upgrade settings sync matches the analysis prediction for every edit class
   // Rewritten in place now, so the row keeps its identity and its version only grows.
   const rewritten = after.get("global-settings.same");
   assert.ok((rewritten?.version ?? 0) >= 1);
-  assert.equal(rewritten?.source, undefined);
+  assert.equal(rewritten?.source, "template");
 
   const locale = after.get("cluster.locale");
   assert.equal(locale?.value, "en_US.UTF-8");
@@ -768,7 +782,9 @@ test("upgrade settings sync matches the analysis prediction for every edit class
   assert.equal(rewrittenOs?.value, BASE_OS);
   assert.equal(rewrittenOs?.version, 2);
 
-  assert.deepEqual(after.get("global-settings.custom_tags")?.value, []);
+  // The operator wrote this row (cli marker), so the template overwrite keeps it.
+  assert.deepEqual(after.get("global-settings.custom_tags")?.value, ["Key=Owner,Value=ops"]);
+  assert.equal(after.get("global-settings.custom_tags")?.source, "cli");
   assert.equal(after.has("global-settings.operator_only"), false);
   assert.equal(after.get("scheduler.instance_ami")?.value, RELEASE_AMI);
   assert.equal(after.get("scheduler.compute_node_ami")?.value, BUILT_AMI);

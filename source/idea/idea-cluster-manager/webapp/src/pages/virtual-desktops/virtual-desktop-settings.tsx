@@ -28,9 +28,8 @@ import {Constants} from "../../common/constants";
 import {withRouter} from "../../navigation/navigation-utils";
 import ConfigUtils from "../../common/config-utils";
 import { SimpleSettingsButton } from "../../components/simple-settings";
-import {SocaUserInputParamMetadata, VirtualDesktopWeekSchedule} from "../../client/data-model";
+import {SocaUserInputParamMetadata} from "../../client/data-model";
 import VirtualDesktopUtilsClient from "../../client/virtual-desktop-utils-client";
-import DefaultScheduleModal from "./components/default-schedule-modal";
 
 export interface VirtualDesktopSettingsProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
     renderSections: (source: SettingsSource) => React.ReactNode
@@ -47,12 +46,10 @@ export interface VirtualDesktopSettingsState {
 class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, VirtualDesktopSettingsState> {
 
     generalSettingsForm: RefObject<IdeaForm | null>
-    defaultScheduleModal: RefObject<DefaultScheduleModal | null>
 
     constructor(props: VirtualDesktopSettingsProps) {
         super(props);
         this.generalSettingsForm = React.createRef()
-        this.defaultScheduleModal = React.createRef()
         this.state = {
             vdcModuleInfo: {},
             vdcSettings: {},
@@ -417,108 +414,6 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
         );
     };
 
-    // Show default schedule modal
-    showDefaultScheduleModal = () => {
-        const currentDefaultSchedule: VirtualDesktopWeekSchedule = {
-            monday: {
-                schedule_type: dot.pick('dcv_session.schedule.monday.type', this.state.vdcSettings) || 'STOP_ON_IDLE',
-                start_up_time: dot.pick('dcv_session.schedule.monday.start_up_time', this.state.vdcSettings),
-                shut_down_time: dot.pick('dcv_session.schedule.monday.shut_down_time', this.state.vdcSettings)
-            },
-            tuesday: {
-                schedule_type: dot.pick('dcv_session.schedule.tuesday.type', this.state.vdcSettings) || 'STOP_ON_IDLE',
-                start_up_time: dot.pick('dcv_session.schedule.tuesday.start_up_time', this.state.vdcSettings),
-                shut_down_time: dot.pick('dcv_session.schedule.tuesday.shut_down_time', this.state.vdcSettings)
-            },
-            wednesday: {
-                schedule_type: dot.pick('dcv_session.schedule.wednesday.type', this.state.vdcSettings) || 'STOP_ON_IDLE',
-                start_up_time: dot.pick('dcv_session.schedule.wednesday.start_up_time', this.state.vdcSettings),
-                shut_down_time: dot.pick('dcv_session.schedule.wednesday.shut_down_time', this.state.vdcSettings)
-            },
-            thursday: {
-                schedule_type: dot.pick('dcv_session.schedule.thursday.type', this.state.vdcSettings) || 'STOP_ON_IDLE',
-                start_up_time: dot.pick('dcv_session.schedule.thursday.start_up_time', this.state.vdcSettings),
-                shut_down_time: dot.pick('dcv_session.schedule.thursday.shut_down_time', this.state.vdcSettings)
-            },
-            friday: {
-                schedule_type: dot.pick('dcv_session.schedule.friday.type', this.state.vdcSettings) || 'STOP_ON_IDLE',
-                start_up_time: dot.pick('dcv_session.schedule.friday.start_up_time', this.state.vdcSettings),
-                shut_down_time: dot.pick('dcv_session.schedule.friday.shut_down_time', this.state.vdcSettings)
-            },
-            saturday: {
-                schedule_type: dot.pick('dcv_session.schedule.saturday.type', this.state.vdcSettings) || 'STOP_ON_IDLE',
-                start_up_time: dot.pick('dcv_session.schedule.saturday.start_up_time', this.state.vdcSettings),
-                shut_down_time: dot.pick('dcv_session.schedule.saturday.shut_down_time', this.state.vdcSettings)
-            },
-            sunday: {
-                schedule_type: dot.pick('dcv_session.schedule.sunday.type', this.state.vdcSettings) || 'STOP_ON_IDLE',
-                start_up_time: dot.pick('dcv_session.schedule.sunday.start_up_time', this.state.vdcSettings),
-                shut_down_time: dot.pick('dcv_session.schedule.sunday.shut_down_time', this.state.vdcSettings)
-            }
-        };
-
-        this.defaultScheduleModal.current?.showDefaultSchedule(currentDefaultSchedule);
-    };
-
-    // Update default schedule settings
-    updateDefaultSchedule = async (defaultSchedule: VirtualDesktopWeekSchedule): Promise<boolean> => {
-        try {
-            // Convert the week schedule to nested settings object for API call
-            const settings: any = {
-                dcv_session: {
-                    schedule: {}
-                }
-            };
-
-            const daysOfWeek = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
-
-            daysOfWeek.forEach(day => {
-                const daySchedule = defaultSchedule[day as keyof VirtualDesktopWeekSchedule];
-                if (daySchedule) {
-                    settings.dcv_session.schedule[day] = {
-                        type: daySchedule.schedule_type
-                    };
-
-                    if (daySchedule.schedule_type === 'CUSTOM_SCHEDULE') {
-                        settings.dcv_session.schedule[day].start_up_time = daySchedule.start_up_time;
-                        settings.dcv_session.schedule[day].shut_down_time = daySchedule.shut_down_time;
-                    } else {
-                        // Clear custom times for non-custom schedules
-                        settings.dcv_session.schedule[day].start_up_time = null;
-                        settings.dcv_session.schedule[day].shut_down_time = null;
-                    }
-                }
-            });
-
-            // Call the cluster settings API to update the settings
-            await AppContext.get().client().clusterSettings().updateModuleSettings({
-                module_id: 'vdc',
-                settings: settings
-            });
-
-            // Refresh the settings to reflect the changes
-            const updatedSettings = await AppContext.get().getClusterSettingsService().getVirtualDesktopSettings();
-            this.setState({
-                vdcSettings: updatedSettings
-            });
-
-            // Show success message
-            this.props.onFlashbarChange({
-                items: [{
-                    type: 'success',
-                    content: 'Default schedule updated successfully. Changes will appear on refresh after a few seconds.',
-                    dismissible: true
-                }]
-            });
-
-            return true;
-        } catch (error) {
-            console.error('Failed to update default schedule:', error);
-            this.defaultScheduleModal.current?.setErrorMessage('Failed to update default schedule. Please try again.');
-            return false;
-        }
-    };
-
     // Single method to update any setting
     updateSetting = async (settingPath: string, newValue: any): Promise<boolean> => {
         try {
@@ -715,42 +610,6 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
                 )
             },
             {
-                label: 'Schedule',
-                id: 'schedule',
-                content: (
-                    <SpaceBetween size={"m"}>
-                        <Container header={<Header variant={"h2"} description={"Default schedule applied to all sessions"} actions={
-                            <Button variant="primary" onClick={() => this.showDefaultScheduleModal()}>
-                                Edit Default Schedules
-                            </Button>
-                        }>Default Schedule</Header>}>
-                            <ColumnLayout variant={"text-grid"} columns={3}>
-                                <KeyValue title="Monday"
-                                          value={Utils.getScheduleTypeDisplay(dot.pick('dcv_session.schedule.monday.type', this.state.vdcSettings), dot.pick('dcv_session.working_hours.start_up_time', this.state.vdcSettings), dot.pick('dcv_session.working_hours.shut_down_time', this.state.vdcSettings), dot.pick('dcv_session.schedule.monday.start_up_time', this.state.vdcSettings), dot.pick('dcv_session.schedule.monday.shut_down_time', this.state.vdcSettings))}/>
-                                <KeyValue title="Tuesday"
-                                          value={Utils.getScheduleTypeDisplay(dot.pick('dcv_session.schedule.tuesday.type', this.state.vdcSettings), dot.pick('dcv_session.working_hours.start_up_time', this.state.vdcSettings), dot.pick('dcv_session.working_hours.shut_down_time', this.state.vdcSettings), dot.pick('dcv_session.schedule.tuesday.start_up_time', this.state.vdcSettings), dot.pick('dcv_session.schedule.tuesday.shut_down_time', this.state.vdcSettings))}/>
-                                <KeyValue title="Wednesday"
-                                          value={Utils.getScheduleTypeDisplay(dot.pick('dcv_session.schedule.wednesday.type', this.state.vdcSettings), dot.pick('dcv_session.working_hours.start_up_time', this.state.vdcSettings), dot.pick('dcv_session.working_hours.shut_down_time', this.state.vdcSettings), dot.pick('dcv_session.schedule.wednesday.start_up_time', this.state.vdcSettings), dot.pick('dcv_session.schedule.wednesday.shut_down_time', this.state.vdcSettings))}/>
-                                <KeyValue title="Thursday"
-                                          value={Utils.getScheduleTypeDisplay(dot.pick('dcv_session.schedule.thursday.type', this.state.vdcSettings), dot.pick('dcv_session.working_hours.start_up_time', this.state.vdcSettings), dot.pick('dcv_session.working_hours.shut_down_time', this.state.vdcSettings), dot.pick('dcv_session.schedule.thursday.start_up_time', this.state.vdcSettings), dot.pick('dcv_session.schedule.thursday.shut_down_time', this.state.vdcSettings))}/>
-                                <KeyValue title="Friday"
-                                          value={Utils.getScheduleTypeDisplay(dot.pick('dcv_session.schedule.friday.type', this.state.vdcSettings), dot.pick('dcv_session.working_hours.start_up_time', this.state.vdcSettings), dot.pick('dcv_session.working_hours.shut_down_time', this.state.vdcSettings), dot.pick('dcv_session.schedule.friday.start_up_time', this.state.vdcSettings), dot.pick('dcv_session.schedule.friday.shut_down_time', this.state.vdcSettings))}/>
-                                <KeyValue title="Saturday"
-                                          value={Utils.getScheduleTypeDisplay(dot.pick('dcv_session.schedule.saturday.type', this.state.vdcSettings), dot.pick('dcv_session.working_hours.start_up_time', this.state.vdcSettings), dot.pick('dcv_session.working_hours.shut_down_time', this.state.vdcSettings), dot.pick('dcv_session.schedule.saturday.start_up_time', this.state.vdcSettings), dot.pick('dcv_session.schedule.saturday.shut_down_time', this.state.vdcSettings))}/>
-                                <KeyValue title="Sunday"
-                                          value={Utils.getScheduleTypeDisplay(dot.pick('dcv_session.schedule.sunday.type', this.state.vdcSettings), dot.pick('dcv_session.working_hours.start_up_time', this.state.vdcSettings), dot.pick('dcv_session.working_hours.shut_down_time', this.state.vdcSettings), dot.pick('dcv_session.schedule.sunday.start_up_time', this.state.vdcSettings), dot.pick('dcv_session.schedule.sunday.shut_down_time', this.state.vdcSettings))}/>
-                            </ColumnLayout>
-                        </Container>
-                        <Container header={<Header variant={"h2"}>Working Hours</Header>}>
-                            <ColumnLayout variant={"text-grid"} columns={3}>
-                                {this.createEditableSetting('working_hours_start')}
-                                {this.createEditableSetting('working_hours_end')}
-                            </ColumnLayout>
-                        </Container>
-                    </SpaceBetween>
-                )
-            },
-            {
                 label: 'Server',
                 id: 'server',
                 content: (
@@ -902,9 +761,7 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
                 )
             }
         ];
-        return <>{this.props.renderSections({sections, values: {cluster: this.state.clusterSettings, 'virtual-desktop-controller': this.state.vdcSettings}, errors: this.state.settingsErrors})}
-            <DefaultScheduleModal ref={this.defaultScheduleModal} onScheduleChange={this.updateDefaultSchedule}/>
-        </>
+        return this.props.renderSections({sections, values: {cluster: this.state.clusterSettings, 'virtual-desktop-controller': this.state.vdcSettings}, errors: this.state.settingsErrors})
     }
 }
 

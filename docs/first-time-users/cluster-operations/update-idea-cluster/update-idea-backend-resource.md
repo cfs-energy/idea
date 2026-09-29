@@ -1,5 +1,7 @@
 # Update IDEA backend resource (idea-admin.sh deploy)
 
+New clusters use the container control plane only. Move an existing host-based control plane with `upgrade-cluster --drain`; follow the [container upgrade guide](move-to-containers.md).
+
 ## Update IDEA backend resource
 
 {% hint style="info" %}

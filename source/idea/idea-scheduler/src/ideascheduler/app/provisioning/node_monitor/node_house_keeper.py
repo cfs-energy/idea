@@ -50,6 +50,11 @@ InfoTuple = Tuple[QueueType, LogInfo]
 # a stack younger than this is still coming up normally: an unfulfilled launch is only
 # worth reporting to the job owner once the stack has had time to produce a node.
 CAPACITY_FAILURE_REASON_MIN_STACK_AGE_SECS = 300
+UNAVAILABLE_NODE_STATES = (
+    SocaComputeNodeState.DOWN,
+    SocaComputeNodeState.UNKNOWN,
+    SocaComputeNodeState.STALE_UNKNOWN,
+)
 
 
 class NodeHouseKeepingSession:
@@ -254,6 +259,31 @@ class NodeHouseKeepingSession:
         if not instance.is_valid_idea_compute_node():
             return False
 
+        if instance.soca_keep_forever and instance.soca_terminate_when_idle == 0:
+            return False
+
+        if node.has_state(*UNAVAILABLE_NODE_STATES):
+            state_changed = node.last_state_changed_time
+            if state_changed is None:
+                return False
+
+            unavailable_timeout_secs = self._context.config().get_int(
+                'scheduler.job_provisioning.node_unavailable_timeout_seconds',
+                default=1800,
+            )
+            unavailable_secs = int(
+                (arrow.utcnow() - arrow.get(state_changed)).total_seconds()
+            )
+            if unavailable_secs < unavailable_timeout_secs:
+                return False
+
+            states = ','.join(sorted(state.value for state in node.states))
+            self._logger.info(
+                f'{self.log_tag(instance)} scheduler reported node state {states} for '
+                f'{unavailable_secs} seconds. adding as candidate for deletion.'
+            )
+            return True
+
         if instance.is_soca_ephemeral_capacity:
             job = self._context.job_cache.get_job(job_id=instance.soca_job_id)
             if job is not None and job.state in (
@@ -273,9 +303,6 @@ class NodeHouseKeepingSession:
                 self._logger.debug(
                     f'{self.log_tag(instance)} can terminate - job {instance.soca_job_id} not in cache'
                 )
-
-        if instance.soca_keep_forever and instance.soca_terminate_when_idle == 0:
-            return False
 
         terminate_when_idle = instance.soca_terminate_when_idle
         if terminate_when_idle > 0:
@@ -390,12 +417,18 @@ class NodeHouseKeepingSession:
 
             self._publish_node_metrics(node=node)
 
-            if node.has_state(SocaComputeNodeState.BUSY, SocaComputeNodeState.JOB_BUSY):
+            unavailable = node.has_state(*UNAVAILABLE_NODE_STATES)
+
+            if not unavailable and node.has_state(
+                SocaComputeNodeState.BUSY, SocaComputeNodeState.JOB_BUSY
+            ):
                 continue
 
             # scheduler returns the state as free, even if 1 of 8 is available.
             # and returns BUSY only when all cores are full
-            # check if any jobs are running on the node and then mark for deletion
+            # check if any jobs are running on the node and then mark for deletion.
+            # a node the scheduler cannot reach keeps its jobs until they finish or
+            # are requeued, so it is not reclaimed underneath them.
             if Utils.is_not_empty(node.jobs):
                 continue
 
@@ -549,7 +582,7 @@ class NodeHouseKeepingSession:
                     continue
                 if node.has_state(
                     SocaComputeNodeState.BUSY, SocaComputeNodeState.JOB_BUSY
-                ):
+                ) and not node.has_state(*UNAVAILABLE_NODE_STATES):
                     continue
                 offline_hosts[instance.instance_id] = self._registered_host(
                     node=node, fallback=instance.node_host
@@ -565,7 +598,7 @@ class NodeHouseKeepingSession:
                     continue
                 if node.has_state(
                     SocaComputeNodeState.BUSY, SocaComputeNodeState.JOB_BUSY
-                ):
+                ) and not node.has_state(*UNAVAILABLE_NODE_STATES):
                     continue
                 offline_hosts[instance.instance_id] = self._registered_host(
                     node=node, fallback=instance.node_host

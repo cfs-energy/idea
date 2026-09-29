@@ -10,6 +10,9 @@
 #  and limitations under the License.
 
 __all__ = (
+    'FetchPricingRatesRequest',
+    'FetchPricingRatesResult',
+    'PricingRateKey',
     'DescribeSettingsCatalogRequest',
     'DescribeSettingsCatalogResult',
     'SettingDefinition',
@@ -33,8 +36,27 @@ __all__ = (
 
 from ideadatamodel import SocaPayload, SocaListingPayload, IdeaOpenAPISpecEntry
 
-from typing import Optional, List, Any, Dict, Literal
+from typing import Optional, List, Any, Dict, Literal, Annotated
 from pydantic import Field
+
+
+PricingRateKey = Literal[
+    'ebs_gp3_storage', 'ebs_io1_storage', 'provisioned_iops', 'fsx_lustre'
+]
+
+
+class FetchPricingRatesRequest(SocaPayload):
+    region: str = Field(min_length=1, max_length=64)
+
+
+class FetchPricingRatesResult(SocaPayload):
+    region: str
+    as_of: str
+    rates: Dict[PricingRateKey, Annotated[float, Field(ge=0, allow_inf_nan=False)]] = (
+        Field(default_factory=dict)
+    )
+    unavailable: Dict[PricingRateKey, str] = Field(default_factory=dict)
+    assumptions: List[str] = Field(default_factory=list)
 
 
 class SettingValidation(SocaPayload):
@@ -58,6 +80,8 @@ class SettingDefinition(SocaPayload):
     choices: List[str] = Field(default_factory=list)
     validation: SettingValidation
     advanced: bool
+    read_only: bool = False
+    hidden: bool = False
     effect: Literal['runtime', 'restart', 'deployment']
 
 
@@ -149,6 +173,13 @@ class DescribeInstanceTypesResult(SocaPayload):
 
 
 OPEN_API_SPEC_ENTRIES_CLUSTER_SETTINGS = [
+    IdeaOpenAPISpecEntry(
+        namespace='ClusterSettings.FetchPricingRates',
+        request=FetchPricingRatesRequest,
+        result=FetchPricingRatesResult,
+        is_listing=False,
+        is_public=False,
+    ),
     IdeaOpenAPISpecEntry(
         namespace='ClusterSettings.ListClusterServices',
         request=ListClusterServicesRequest,

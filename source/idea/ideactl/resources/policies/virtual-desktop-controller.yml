@@ -1,5 +1,24 @@
 Version: '2012-10-17'
 Statement:
+  - Effect: Allow
+    Action:
+      - dynamodb:GetItem
+    Resource: '{{ context.arns.get_ddb_table_arn("accounts.users") }}'
+
+  - Effect: Allow
+    Action:
+      - dynamodb:GetItem
+      - dynamodb:Query
+      - dynamodb:UpdateItem
+    Resource:
+      - '{{ context.arns.get_ddb_table_arn("cluster-manager.api-tokens") }}'
+      - '{{ context.arns.get_ddb_table_arn("cluster-manager.api-tokens") }}/index/*'
+
+  - Effect: Allow
+    Action:
+      - cognito-idp:AdminListGroupsForUser
+    Resource: '{{ context.arns.user_pool_arn }}'
+
   - Action:
       - events:PutTargets
       - events:PutRule
@@ -92,6 +111,17 @@ Statement:
       - dynamodb:ListStreams
     Resource:
       {{ context.utils.to_yaml(context.arns.cluster_config_ddb_arn) | indent(6) }}
+    Effect: Allow
+
+  # The controller records the release whose base software stacks it seeded; that one settings row is
+  # the only cluster-settings write the controller makes.
+  - Action:
+      - dynamodb:UpdateItem
+    Resource: '{{ context.arns.get_ddb_table_arn("cluster-settings") }}'
+    Condition:
+      ForAllValues:StringEquals:
+        dynamodb:LeadingKeys:
+          - '{{ context.config.get_module_id("virtual-desktop-controller") }}.software_stacks.base_stacks_seeded_release'
     Effect: Allow
 
   - Action:

@@ -221,7 +221,7 @@ class SocaCliContext(SocaContext):
         self, tag: str = None, message: Optional[Union[str, Dict]] = None
     ) -> str:
         if Utils.is_not_empty(tag):
-            log = f'[{arrow.now()}] ({tag}) '
+            log = f'[{arrow.utcnow()}] ({tag}) '
         else:
             log = ''
         if message is not None:

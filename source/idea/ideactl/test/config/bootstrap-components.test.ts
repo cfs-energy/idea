@@ -22,6 +22,17 @@ import {
 } from "./bootstrap-helpers.ts";
 
 const cases = componentCases();
+const settingsTemplates = join(import.meta.dirname, "..", "..", "resources", "config", "templates");
+
+test("the shipped desktop allow list uses current instance families", () => {
+  const settings = readFileSync(join(settingsTemplates, "virtual-desktop-controller", "settings.yml"), "utf8");
+  const match = /^  instance_types:\n    allow:.*\n((?:      - [^\n]+\n)+)    deny:/mu.exec(settings);
+  assert.ok(match !== null, "desktop instance type allow list is missing");
+  assert.deepEqual(
+    match[1].trim().split("\n").map((line) => line.replace(/^\s*- /u, "")),
+    ["t3", "g4ad", "g6", "g6e", "g7", "c8i", "m6a", "m6g", "m7i", "m8g", "m8i", "r8g"],
+  );
+});
 
 for (const baseOs of ["amazonlinux2023", "rhel8", "rhel9", "rocky8", "rocky9", "ubuntu2204", "ubuntu2404"]) {
   test(`Linux desktop bootstrap keeps Kerberos tickets in files for Online Accounts on ${baseOs}`, () => {

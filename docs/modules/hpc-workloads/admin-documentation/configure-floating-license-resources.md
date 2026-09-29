@@ -1,5 +1,7 @@
 # Configure Floating License resources
 
+New clusters use the container control plane only. Move an existing host-based control plane with `upgrade-cluster --drain`; follow the [container upgrade guide](../../../first-time-users/cluster-operations/update-idea-cluster/move-to-containers.md).
+
 In this page, we will see how IDEA manages job and capacity provisioning based on license availabilities.
 
 {% hint style="info" %}

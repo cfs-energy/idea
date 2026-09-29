@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { HashRouter, MemoryRouter, Route, Routes } from 'react-router-dom';
 import { vi } from 'vitest';
 import App from './App';
@@ -9,6 +9,8 @@ import HpcCustomAmis from './pages/hpc/hpc-custom-amis';
 import FileBrowser from './pages/home/file-browser';
 import MyVirtualDesktopSessions from './pages/virtual-desktops/my-virtual-desktop-sessions';
 import PieOrDonutChart from './components/charts/pie-or-donut-chart';
+import ClusterStatus from './pages/cluster-admin/cluster-status';
+import {SettingsGroups} from './pages/cluster-admin/portal-settings';
 import Projects from './pages/cluster-admin/projects';
 import SubmitJob from './pages/hpc/submit-job';
 import VirtualDesktopSessionDetail from './pages/virtual-desktops/virtual-desktop-session-detail';
@@ -43,6 +45,48 @@ function stubVirtualDesktopSettings(context: AppContext) {
 }
 
 describe('page dom fingerprints', () => {
+    it('costs history backfill', async () => {
+        const context = initTestAppContext();
+        vi.spyOn(context.auth(), 'isModuleAdmin').mockReturnValue(true);
+        vi.spyOn(context.getClusterSettingsService(), 'isSchedulerDeployed').mockReturnValue(true);
+        vi.spyOn(context.getClusterSettingsService(), 'getModuleSettings').mockResolvedValue({});
+        vi.spyOn(context.client().clusterSettings(), 'describeSettingsCatalog').mockResolvedValue({settings: []});
+        const status = {state: 'completed' as const, jobs_scanned: 0, points_built: 0, points_sent: 0, points_skipped: 0, errors: 0, dry_run: true, started_at: null, finished_at: null, last_error: null};
+        vi.spyOn(context.client().clusterSettings(), 'getCostMetricsBackfill').mockResolvedValue(status);
+        vi.spyOn(context.client().schedulerAdmin(), 'getJobMetricsBackfill').mockResolvedValue(status);
+        const {container} = render(<MemoryRouter initialEntries={['/cluster/settings/cost-collection?operation=backfill-history']}><SettingsGroups pageProps={pageProps}/></MemoryRouter>);
+        expect(await screen.findByRole('heading', {name: 'History backfill'})).toBeVisible();
+        await screen.findByText(/Jobs: completed/);
+        expect(container.querySelectorAll('#backfill-history')).toHaveLength(1);
+        expect(screen.getAllByRole('heading', {name: 'History backfill'})).toHaveLength(1);
+        const operation = container.querySelector('#backfill-history')!;
+        operation.querySelectorAll('input').forEach(input => {if (input.value.match(/^\d{4}\//)) input.setAttribute('value', 'YYYY/MM/DD');});
+        expect(fingerprint(operation)).toMatchSnapshot();
+    });
+
+    it.each(['health', 'inactive settings'])('does not mount or poll history from %s', async page => {
+        vi.useFakeTimers();
+        try {
+            const context = initTestAppContext();
+            vi.spyOn(context.auth(), 'isModuleAdmin').mockReturnValue(true);
+            vi.spyOn(context.getClusterSettingsService(), 'isSchedulerDeployed').mockReturnValue(true);
+            vi.spyOn(context.getClusterSettingsService(), 'getModuleSettings').mockResolvedValue({});
+            vi.spyOn(context.client().clusterSettings(), 'listClusterModules').mockResolvedValue({listing: []});
+            vi.spyOn(context.client().clusterSettings(), 'listClusterHosts').mockResolvedValue({listing: []});
+            vi.spyOn(context.client().clusterSettings(), 'describeSettingsCatalog').mockResolvedValue({settings: []});
+            const cost = vi.spyOn(context.client().clusterSettings(), 'getCostMetricsBackfill');
+            const jobs = vi.spyOn(context.client().schedulerAdmin(), 'getJobMetricsBackfill');
+            const {container, unmount} = render(<MemoryRouter initialEntries={[page === 'health' ? '/cluster/status' : '/cluster/settings/appearance']}>
+                {page === 'health' ? <ClusterStatus {...pageProps}/> : <SettingsGroups pageProps={pageProps}/>}
+            </MemoryRouter>);
+            await act(async () => { vi.advanceTimersByTime(30000); });
+            expect(container.querySelector('#backfill-history')).toBeNull();
+            expect(cost).not.toHaveBeenCalled();
+            expect(jobs).not.toHaveBeenCalled();
+            unmount();
+        } finally { vi.useRealTimers(); vi.restoreAllMocks(); }
+    });
+
     it('custom images', async () => {
         const context = initTestAppContext();
         vi.spyOn(context.auth(), 'isModuleAdmin').mockReturnValue(true);

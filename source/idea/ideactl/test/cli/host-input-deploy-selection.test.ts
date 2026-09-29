@@ -35,6 +35,7 @@ const MODULE_NAME_BY_STACK_FILE: Record<string, string> = {
   "bastion-host.ts": "bastion-host",
   "cluster.ts": "cluster",
   "cluster-manager.ts": "cluster-manager",
+  "directoryservice.ts": "directoryservice",
   "scheduler.ts": "scheduler",
   "vdc.ts": "virtual-desktop-controller",
 };
@@ -93,7 +94,7 @@ test("every stack that reads a container input is a known one", () => {
   // A new reader that this file does not know about would not be covered by the selection tests
   // below, so discovering one takes this red rather than passing silently.
   const files = readerStackFiles();
-  assert.deepEqual(files, ["bastion-host.ts", "cluster-manager.ts", "scheduler.ts", "vdc.ts"]);
+  assert.deepEqual(files, ["bastion-host.ts", "cluster-manager.ts", "directoryservice.ts", "scheduler.ts", "vdc.ts"]);
   for (const file of files) {
     assert.ok(MODULE_NAME_BY_STACK_FILE[file] !== undefined, `${file} has no module name mapping`);
   }
@@ -185,8 +186,12 @@ test("the helper the upgrade command opens selects every reader from the cluster
   for (const moduleId of [...readerModuleIds(), "ecs"]) {
     assert.ok(order.includes(moduleId), `${moduleId} was not in the live upgrade order`);
   }
-  // The container module publishes the target groups the readers consume, so it goes first.
+  // Directory queues precede the hosts; task services consume the ECS outputs.
   for (const moduleId of readerModuleIds()) {
-    assert.ok(order.indexOf("ecs") < order.indexOf(moduleId), `ecs did not precede ${moduleId}`);
+    if (moduleId === "directoryservice") {
+      assert.ok(order.indexOf(moduleId) < order.indexOf("ecs"), "directoryservice did not precede ecs");
+    } else {
+      assert.ok(order.indexOf("ecs") < order.indexOf(moduleId), `ecs did not precede ${moduleId}`);
+    }
   }
 });

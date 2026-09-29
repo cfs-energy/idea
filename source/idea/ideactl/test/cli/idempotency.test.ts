@@ -30,14 +30,6 @@ import { runDeploy } from "../../src/cli/commands/deploy.ts";
 import { ExitWithCode } from "../../src/cli/cdk-invoker.ts";
 import { ClusterConfig, type ModuleInfo, type ScanPage } from "../../src/config/cluster-config.ts";
 import type { ConfigEntry, ModuleSpec } from "../../src/config/cluster-config-db.ts";
-import {
-  UpgradeStateConflictError,
-  UpgradeStateJournal,
-  type UpgradePlan,
-  type UpgradeStateObjectApi,
-  type UpgradeStateWriteCondition,
-  type VersionedUpgradeStateObject,
-} from "../../src/config/upgrade-state.ts";
 
 const CLUSTER = "sample-cluster";
 const REGION = "us-east-2";
@@ -568,62 +560,4 @@ test("delete-backups converges while the vault remains and discovery returns no 
 
   assert.equal(points.size, 0);
   assert.equal(deletes, 2);
-});
-
-/** Atomic current-object implementation used to exercise concurrent lease acquisition. */
-class MemoryStateObjects implements UpgradeStateObjectApi {
-  private object: VersionedUpgradeStateObject | undefined;
-  private revision = 0;
-
-  async getObject(): Promise<VersionedUpgradeStateObject | undefined> {
-    return this.object === undefined ? undefined : { ...this.object };
-  }
-
-  async putObject(input: {
-    bucket: string;
-    key: string;
-    body: string;
-    condition: UpgradeStateWriteCondition;
-  }): Promise<{ revision: string } | undefined> {
-    const matches = input.condition.kind === "absent"
-      ? this.object === undefined
-      : this.object?.revision === input.condition.revision;
-    if (!matches) return undefined;
-    this.revision += 1;
-    const revision = `revision-${this.revision}`;
-    this.object = { body: input.body, revision };
-    return { revision };
-  }
-}
-
-test("the durable upgrade record admits exactly one concurrent starter", async () => {
-  const api = new MemoryStateObjects();
-  const plan = (deploymentId: string): UpgradePlan => ({
-    clusterName: CLUSTER,
-    awsRegion: REGION,
-    targetVersion: "26.09.0",
-    targetBaseOs: "amazonlinux2023",
-    moduleSet: MODULE_SET,
-    selectedModules: ["cluster"],
-    deploymentId,
-  });
-
-  const results = await Promise.allSettled([
-    UpgradeStateJournal.start(
-      api,
-      { bucket: "sample-bucket" },
-      plan("00000000-0000-4000-8000-000000000001"),
-      { holderId: "operator-1", now: () => 1, leaseMs: 60_000 },
-    ),
-    UpgradeStateJournal.start(
-      api,
-      { bucket: "sample-bucket" },
-      plan("00000000-0000-4000-8000-000000000002"),
-      { holderId: "operator-2", now: () => 1, leaseMs: 60_000 },
-    ),
-  ]);
-
-  assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
-  const rejected = results.find((result) => result.status === "rejected");
-  assert.ok(rejected?.status === "rejected" && rejected.reason instanceof UpgradeStateConflictError);
 });
