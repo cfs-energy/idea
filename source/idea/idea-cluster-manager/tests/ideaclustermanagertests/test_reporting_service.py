@@ -451,6 +451,8 @@ def test_opensearch_scroll_is_consistent_and_cleared_after_large_read():
         'end_time',
         'total_time_secs',
         'params',
+        'scaling_mode',
+        'provisioning_options',
         'estimated_bom_cost',
         'project_id',
         'project',
