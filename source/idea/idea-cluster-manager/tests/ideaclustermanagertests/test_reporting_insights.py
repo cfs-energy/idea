@@ -463,9 +463,13 @@ def test_sources_fetch_retained_storage_and_scope_job_query():
     )
     query = sources.search.call_args.args[1]
     assert {'term': {'owner.raw': 'user-a'}} in query['bool']['filter']
-    assert {'params', 'execution_hosts', 'estimated_bom_cost'} <= set(
-        sources.search.call_args.kwargs['fields']
-    )
+    assert {
+        'params',
+        'execution_hosts',
+        'estimated_bom_cost',
+        'scaling_mode',
+        'provisioning_options',
+    } <= set(sources.search.call_args.kwargs['fields'])
     assert result['storage'] == [
         dict(date='2024-02-01', filesystem_id='fs-a', total_bytes=100)
     ]

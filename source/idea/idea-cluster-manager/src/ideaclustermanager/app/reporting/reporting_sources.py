@@ -276,6 +276,8 @@ class ReportingSources:
                             'end_time',
                             'total_time_secs',
                             'params',
+                            'scaling_mode',
+                            'provisioning_options',
                             'estimated_bom_cost',
                             'project_id',
                             'project',
