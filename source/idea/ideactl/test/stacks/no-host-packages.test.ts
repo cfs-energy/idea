@@ -11,6 +11,8 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 
+import { BastionHostStack } from "../../src/cdk/stacks/bastion-host.ts";
+import { synthBastion, cleanupWorkdirs } from "../support/ecs-harness.ts";
 import { CdkInvoker } from "../../src/cli/cdk-invoker.ts";
 import { fakeDeps, moduleRow, withTempIdeaHome } from "../support/deploy-harness.ts";
 
@@ -27,13 +29,14 @@ after(() => {
   if (previousCdkBin === undefined) delete process.env.IDEA_CDK_BIN;
   else process.env.IDEA_CDK_BIN = previousCdkBin;
   home.restore();
+  cleanupWorkdirs();
 });
 
-function tables(settings: ReadonlyArray<{ key: string; value: unknown }>): Record<string, unknown[]> {
+function tables(settings: ReadonlyArray<{ key: string; value: unknown }>, moduleName: string): Record<string, unknown[]> {
   return {
     [`${CLUSTER}.modules`]: [
       moduleRow("cluster", "cluster", "stack", "deployed"),
-      moduleRow("scheduler", "scheduler", "app", "not-deployed"),
+      moduleRow(moduleName, moduleName, "app", "not-deployed"),
       moduleRow("ecs", "ecs", "stack", "deployed"),
     ],
     [`${CLUSTER}.cluster-settings`]: [
@@ -44,15 +47,15 @@ function tables(settings: ReadonlyArray<{ key: string; value: unknown }>): Recor
   };
 }
 
-function open(settings: ReadonlyArray<{ key: string; value: unknown }>): Promise<{
+function open(settings: ReadonlyArray<{ key: string; value: unknown }>, moduleName = "scheduler"): Promise<{
   invoker: CdkInvoker;
   deps: ReturnType<typeof fakeDeps>;
 }> {
-  const deps = fakeDeps({ tables: tables(settings) as never });
+  const deps = fakeDeps({ tables: tables(settings, moduleName) as never });
   return CdkInvoker.open({
     clusterName: CLUSTER,
     awsRegion: REGION,
-    moduleId: "scheduler",
+    moduleId: moduleName,
     moduleSet: "default",
     deps,
   }).then((invoker) => ({ invoker, deps }));
@@ -81,3 +84,21 @@ describe("a module that runs as container tasks", () => {
     assert.deepEqual(deps.spawns, []);
   });
 });
+
+for (const retainHosts of [false, true]) {
+  it(`container bastion skips bootstrap publishing and lookup with retained hosts=${retainHosts}`, async () => {
+    const { invoker, deps } = await open([
+      { key: "ecs.enabled", value: true },
+      { key: "ecs.retain_existing_hosts", value: retainHosts },
+    ], "bastion-host");
+    await invoker.invoke();
+    assert.equal(deps.puts.size, 0);
+    assert.equal(deps.spawns.length, 1);
+    class NoBootstrapLookup extends BastionHostStack {
+      override getBootstrapPackageUri(): string {
+        throw new Error("container synthesis must not read a bootstrap URI");
+      }
+    }
+    assert.doesNotThrow(() => synthBastion({ "ecs.retain_existing_hosts": retainHosts }, NoBootstrapLookup));
+  });
+}

@@ -165,6 +165,8 @@ auth_provider = ad
 chpass_provider = ad
 cache_credentials = true
 krb5_store_password_if_offline = true
+# a container has no persistent kernel keyring for the user; a file cache works everywhere
+krb5_ccname_template = FILE:/tmp/krb5cc_%U_XXXXXX
 default_shell = /bin/bash
 ldap_id_mapping = {env['IDEA_AD_ID_MAPPING']}
 use_fully_qualified_names = false
@@ -181,6 +183,12 @@ homedir_substring = {data}/home
         sudoers = root / 'etc/sudoers.d/idea-directory'
         sudoers.write_text(f'%{group} ALL=(ALL:ALL) ALL\n')
         sudoers.chmod(0o440)
+        # every Kerberos client in the container, not only sssd, uses a file cache
+        ccache = root / 'etc/krb5.conf.d/idea-ccache.conf'
+        ccache.parent.mkdir(parents=True, exist_ok=True)
+        ccache.write_text(
+            '[libdefaults]\ndefault_ccache_name = FILE:/tmp/krb5cc_%{uid}\n'
+        )
     path = root / 'etc/sssd/sssd.conf'
     path.write_text(config)
     path.chmod(0o600)

@@ -44,6 +44,16 @@ export const STATEFUL_TYPE_PREFIXES: readonly string[] = [
   'AWS::SQS::',
   'AWS::SNS::',
   'AWS::Logs::',
+  // Only the named network resources are included from EC2. Instances, network interfaces and
+  // security groups are replaced routinely and must not be retained.
+  'AWS::EC2::VPC',
+  'AWS::EC2::Subnet',
+  'AWS::EC2::NatGateway',
+  'AWS::EC2::RouteTable',
+  'AWS::EC2::EIP',
+  'AWS::EC2::InternetGateway',
+  'AWS::EC2::VPCGatewayAttachment',
+  'AWS::EC2::Route',
   // A vault holds recovery points, and a plan or selection that stops existing stops producing
   // them.
   'AWS::Backup::',
@@ -56,7 +66,8 @@ export const STATEFUL_TYPE_PREFIXES: readonly string[] = [
   'AWS::KMS::Key',
 ];
 
+/** An entry ending in `::` covers a namespace; any other entry names one exact type. */
 export function isStatefulType(resourceType: string | undefined): boolean {
   if (resourceType === undefined) return false;
-  return STATEFUL_TYPE_PREFIXES.some((prefix) => resourceType.startsWith(prefix));
+  return STATEFUL_TYPE_PREFIXES.some((entry) => (entry.endsWith('::') ? resourceType.startsWith(entry) : resourceType === entry));
 }

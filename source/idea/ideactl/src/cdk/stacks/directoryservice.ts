@@ -18,6 +18,7 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as route53 from 'aws-cdk-lib/aws-route53';
 import type * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
+import * as iam from 'aws-cdk-lib/aws-iam';
 
 import type { StackBuildProps } from '../app.ts';
 import { IdeaBaseStack } from '../base-stack.ts';
@@ -375,6 +376,7 @@ export class DirectoryServiceStack extends IdeaBaseStack {
       fifo: true,
       contentBasedDeduplication: true,
       encryptionMasterKey: kmsKeyId,
+      encryption: this.context.config.getBool("ecs.enabled", false) ? sqs.QueueEncryption.SQS_MANAGED : undefined,
       visibilityTimeout: Duration.seconds(SQS_VISIBILITY_TIMEOUT_AD_AUTOMATION),
       deadLetterQueue: {
         maxReceiveCount: SQS_MAX_RECEIVE_COUNT_AD_AUTOMATION,
@@ -387,6 +389,12 @@ export class DirectoryServiceStack extends IdeaBaseStack {
         }),
       },
     });
+    this.adAutomationSqsQueue.addToResourcePolicy(new iam.PolicyStatement({
+      principals: [new iam.ServicePrincipal('events.amazonaws.com')],
+      actions: ['sqs:SendMessage'],
+      resources: [this.adAutomationSqsQueue.queueArn],
+      conditions: { StringEquals: { 'aws:SourceAccount': this.stack.account } },
+    }));
     // Both queues use `Name=<cluster>-<moduleId>`.
     this.addCommonTags(this.adAutomationSqsQueue);
     this.addCommonTags((this.adAutomationSqsQueue.deadLetterQueue as sqs.DeadLetterQueue).queue);

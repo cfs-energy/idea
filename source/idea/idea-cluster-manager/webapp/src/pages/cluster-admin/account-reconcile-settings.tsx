@@ -1,5 +1,5 @@
 import React, {useEffect, useState} from 'react';
-import {Alert, Button, Checkbox, Container, ExpandableSection, FormField, Header, Input, Link, SpaceBetween, Table, Toggle} from '@cloudscape-design/components';
+import {Alert, Button, Checkbox, ColumnLayout, Container, ExpandableSection, FormField, Header, Input, Link, Modal, SpaceBetween, Table, Toggle} from '@cloudscape-design/components';
 import {AppContext} from '../../common';
 import {Constants} from '../../common/constants';
 import {ReconcileReport} from '../../client/accounts-client';
@@ -8,7 +8,7 @@ const defaults = {enabled: false, interval_minutes: 60, dry_run: true, reenable:
 const flags = {dry_run: 'Periodic dry run', reenable: 'Re-enable restored users', check_cognito: 'Check Cognito'};
 const timestamp = (value: number) => new Date(Number(value) * 1000).toLocaleString();
 
-export default function AccountReconcileSettings({active, identityProvider, mode = 'all'}: {active: boolean; identityProvider: any; mode?: 'policy' | 'runs' | 'all'}) {
+export default function AccountReconcileSettings({active, identityProvider, mode = 'all', editDisabled = false, onEditingChange, highlightedKey}: {highlightedKey?: string | null; editDisabled?: boolean; onEditingChange?: (editing: boolean) => void; active: boolean; identityProvider: any; mode?: 'policy' | 'runs' | 'all'}) {
     const [values, setValues] = useState(defaults);
     const [stored, setStored] = useState<any>(null);
     const [interval, setInterval] = useState('');
@@ -21,6 +21,7 @@ export default function AccountReconcileSettings({active, identityProvider, mode
     const [loading, setLoading] = useState(true);
     const [saved, setSaved] = useState(false);
     const [expanded, setExpanded] = useState(false);
+    const [applyModalVisible, setApplyModalVisible] = useState(false);
     const [freshIdentityProvider, setFreshIdentityProvider] = useState<any>(null);
     const provider = freshIdentityProvider ?? identityProvider;
     const providerIsOkta = [provider?.provider, provider?.cognito?.sso_idp_provider_name]
@@ -76,13 +77,18 @@ export default function AccountReconcileSettings({active, identityProvider, mode
         return () => {cancelled = true; window.clearInterval(timer);};
     }, [active, loading, busy, stored]);
 
+    useEffect(() => {
+        if (highlightedKey?.startsWith('cluster-manager.accounts.reconcile.') && highlightedKey !== 'cluster-manager.accounts.reconcile.enabled') setExpanded(true);
+    }, [highlightedKey]);
+
     const write = async (settings: any) => {
+        onEditingChange?.(true);
         setBusy(true); setError(''); setSaved(false);
         try {
             const result = await AppContext.get().client().clusterSettings().updateModuleSettings({module_id: moduleId(), settings: {accounts: {reconcile: settings}}});
             if (!result.success) throw new Error('Failed to update reconciliation settings.');
             showSettings(await fetchSettings());
-            setSaved(true);
+            setSaved(true); if (onEditingChange) setExpanded(false); onEditingChange?.(false);
         } catch (e: any) {setError(e?.message ?? String(e));}
         finally {setBusy(false);}
     };
@@ -121,11 +127,38 @@ export default function AccountReconcileSettings({active, identityProvider, mode
     const nextRun = !stored?.enabled ? 'Off' : stored.last_completed
         ? timestamp(Number(stored.last_completed) + Number(stored.interval_minutes) * 60) : 'Due now';
     const lastRun = stored?.last_run;
+    const freshPreview = lastRun?.report?.dry_run && Number(lastRun.at) > Number(stored?.last_saved ?? 0)
+        ? lastRun.report : null;
     const dirty = stored && (values.dry_run !== stored.dry_run || values.reenable !== stored.reenable || values.check_cognito !== stored.check_cognito
         || interval !== String(stored.interval_minutes) || fraction !== String(stored.max_disable_fraction)
         || values.okta.org_url !== (stored.okta?.org_url ?? '') || values.okta.api_token_secret_arn !== (stored.okta?.api_token_secret_arn ?? '')
         || (!alsoOkta && !providerIsOkta && Boolean(stored.okta?.org_url || stored.okta?.api_token_secret_arn)));
-    return <Container header={<Header variant="h2" description="Keep IDEA user state aligned with the directory. Protected accounts are excluded.">{mode === 'policy' ? 'Account synchronization' : 'Reconciliation runs'}</Header>}>
+    const manualActions = <SpaceBetween direction="horizontal" size="s">
+        <Button disabled={busy || editDisabled} onClick={() => run(true)}>Preview changes</Button>
+        <Button disabled={busy || editDisabled} variant="primary" onClick={() => setApplyModalVisible(true)}>Run reconciliation</Button>
+    </SpaceBetween>;
+    return <>
+    {applyModalVisible && <Modal
+        visible={applyModalVisible}
+        onDismiss={() => !busy && setApplyModalVisible(false)}
+        header="Apply reconciliation now?"
+        footer={<SpaceBetween direction="horizontal" size="xs">
+            <Button disabled={busy || editDisabled} onClick={() => setApplyModalVisible(false)}>Cancel</Button>
+            <Button disabled={busy || editDisabled} variant="primary" onClick={() => {setApplyModalVisible(false); run(false);}}>Apply reconciliation</Button>
+        </SpaceBetween>}>
+        <SpaceBetween size="s">
+            {freshPreview
+                ? <div>The latest dry run would disable {freshPreview.would_disable ?? 0} and re-enable {freshPreview.would_reenable ?? 0} accounts.</div>
+                : <div><div>Run a dry run first to see the changes</div><Button disabled={busy || editDisabled} onClick={() => {setApplyModalVisible(false); run(true);}}>Preview changes</Button></div>}
+            {dirty && <div>Pending changes are not included. This run uses the saved policy.</div>}
+        </SpaceBetween>
+    </Modal>}
+    <Container header={<Header
+        variant="h2"
+        description="Keep IDEA user state aligned with the directory. Protected accounts are excluded."
+        actions={!loading && stored ? manualActions : undefined}>
+        {mode === 'policy' ? 'Account synchronization' : 'Reconciliation runs'}
+    </Header>}>
         <SpaceBetween size="l">
             {error && <Alert type="error">{error}</Alert>}
             {loading && <div>Loading saved reconciliation settings…</div>}
@@ -134,39 +167,39 @@ export default function AccountReconcileSettings({active, identityProvider, mode
             {mode !== 'runs' && <SpaceBetween size="s">
             {saved && <Alert type="success">Reconciliation settings saved. The periodic worker has been notified.</Alert>}
             <div>Last saved: {stored.last_saved ? timestamp(stored.last_saved) : 'Time unavailable for existing settings'}{dirty ? ' - Unsaved advanced changes' : ' - Saved values loaded'}</div>
-            <Toggle checked={Boolean(stored.enabled)} disabled={busy} onChange={e => write({enabled: e.detail.checked})}>Reconciliation on</Toggle>
+            <Toggle checked={Boolean(stored.enabled)} disabled={busy || editDisabled} onChange={e => write({enabled: e.detail.checked})}>Account synchronization</Toggle>
             <div>Changes notify the periodic worker immediately.</div>
-            <div>Next run at: {nextRun}</div>
+            <div>Scheduled runs: {nextRun}</div>
+            {!stored.enabled && <div>Scheduled reconciliation is off. You can still preview or run reconciliation using the saved policy.</div>}
             </SpaceBetween>}
             {mode !== 'policy' && <SpaceBetween size="s">
             <Link href="#/cluster/settings?group=account-synchronization">Edit synchronization policy in Settings</Link>
             <div>Last run at / result: {lastRun ? `${timestamp(lastRun.at)} / ${lastRun.report.refused ? 'Refused' : lastRun.report.errors ? 'Completed with errors' : 'Completed'} (${lastRun.report.dry_run ? 'dry run' : 'apply'})` : stored.last_completed ? `${timestamp(stored.last_completed)} / Result unavailable` : 'No runs recorded'}</div>
-            <SpaceBetween direction="horizontal" size="s">
-                <Button disabled={busy} onClick={() => run(true)}>Run now (dry run)</Button>
-                <Button disabled={busy} onClick={() => run(false)}>Run now (apply)</Button>
-            </SpaceBetween>
             {dirty && <div>Run now uses the saved settings. Save advanced changes to use them.</div>}
             </SpaceBetween>}
-            {mode !== 'runs' && <ExpandableSection headerText="Advanced" expanded={expanded} onChange={e => setExpanded(e.detail.expanded)}>
+            {mode !== 'runs' && <ExpandableSection headerText="Advanced" expanded={expanded} onChange={e => {if (editDisabled) return; setExpanded(e.detail.expanded); onEditingChange?.(e.detail.expanded || Boolean(dirty));}}>
             {expanded && (
             <SpaceBetween size="m">
-            {(Object.keys(flags) as Array<keyof typeof flags>).map(key => <Checkbox key={key} checked={values[key]} disabled={busy} onChange={e => setValues({...values, [key]: e.detail.checked})}>{flags[key]}</Checkbox>)}
-            <FormField label="Interval (minutes)" description="1–1440 minutes between periodic runs."><Input ariaLabel="Interval (minutes)" value={interval} disabled={busy} onChange={e => setInterval(e.detail.value)}/></FormField>
-            <FormField label="Maximum disable fraction" description="0–1; refuse when proposed disables exceed this fraction of eligible enabled users, or read errors exceed this fraction of checked users."><Input ariaLabel="Maximum disable fraction" value={fraction} disabled={busy} onChange={e => setFraction(e.detail.value)}/></FormField>
-            {!providerIsOkta && <Checkbox checked={alsoOkta} disabled={busy} onChange={e => setAlsoOkta(e.detail.checked)}>Also check Okta</Checkbox>}
-            {(providerIsOkta || alsoOkta) && <SpaceBetween size="m">
-            <FormField label="Okta org URL" description="Deployment-approved HTTPS origin; set both Okta fields or leave both empty."><Input ariaLabel="Okta org URL" value={values.okta.org_url ?? ''} disabled={busy} onChange={e => setValues({...values, okta: {...values.okta, org_url: e.detail.value}})}/></FormField>
-            <FormField label="Okta token secret ARN" description="Secrets Manager ARN, never the token. Redeploy cluster-manager IAM permissions after changing it; an encrypted secret may also need a decrypt grant."><Input ariaLabel="Okta token secret ARN" value={values.okta.api_token_secret_arn ?? ''} disabled={busy} onChange={e => setValues({...values, okta: {...values.okta, api_token_secret_arn: e.detail.value}})}/></FormField>
-            </SpaceBetween>}
-            <Button disabled={busy} onClick={save}>Save reconciliation settings</Button>
+            <ColumnLayout columns={2} minColumnWidth={280}><SpaceBetween size="m">
+            {(Object.keys(flags) as Array<keyof typeof flags>).map(key => <Checkbox key={key} checked={values[key]} disabled={busy || editDisabled} onChange={e => setValues({...values, [key]: e.detail.checked})}>{flags[key]}</Checkbox>)}
+            </SpaceBetween><SpaceBetween size="m">
+            <FormField label="Interval (minutes)" description="1–1440 minutes between periodic runs."><Input ariaLabel="Interval (minutes)" value={interval} disabled={busy || editDisabled} onChange={e => setInterval(e.detail.value)}/></FormField>
+            <FormField label="Maximum disable fraction" description="0–1; refuse when proposed disables exceed this fraction of eligible enabled users, or read errors exceed this fraction of checked users."><Input ariaLabel="Maximum disable fraction" value={fraction} disabled={busy || editDisabled} onChange={e => setFraction(e.detail.value)}/></FormField>
+            </SpaceBetween></ColumnLayout>
+            {!providerIsOkta && <Checkbox checked={alsoOkta} disabled={busy || editDisabled} onChange={e => setAlsoOkta(e.detail.checked)}>Also check Okta</Checkbox>}
+            {(providerIsOkta || alsoOkta) && <ColumnLayout columns={2} minColumnWidth={280}>
+            <FormField label="Okta org URL" description="Deployment-approved HTTPS origin; set both Okta fields or leave both empty."><Input ariaLabel="Okta org URL" value={values.okta.org_url ?? ''} disabled={busy || editDisabled} onChange={e => setValues({...values, okta: {...values.okta, org_url: e.detail.value}})}/></FormField>
+            <FormField label="Okta token secret ARN" description="Secrets Manager ARN, never the token. Redeploy cluster-manager IAM permissions after changing it; an encrypted secret may also need a decrypt grant."><Input ariaLabel="Okta token secret ARN" value={values.okta.api_token_secret_arn ?? ''} disabled={busy || editDisabled} onChange={e => setValues({...values, okta: {...values.okta, api_token_secret_arn: e.detail.value}})}/></FormField>
+            </ColumnLayout>}
+            <SpaceBetween direction="horizontal" size="xs"><Button ariaLabel="Cancel reconciliation changes" disabled={busy || editDisabled} onClick={() => {showSettings(stored); setError(''); setExpanded(false); onEditingChange?.(false);}}>Cancel</Button><Button disabled={busy || editDisabled} onClick={save}>Save reconciliation settings</Button></SpaceBetween>
             </SpaceBetween>
             )}
             </ExpandableSection>}
             </SpaceBetween>}
-            {mode === 'policy' && <Link href="#/cluster/users?view=reconciliation">Run now and reports in People and access</Link>}
+            {mode === 'policy' && <Link href="#/cluster/reconciliation-runs">View reconciliation history</Link>}
             {mode !== 'policy' && report && <SpaceBetween size="m">
                 {Boolean(report.refused) && <Alert type="warning" header="Reconciliation refused">{report.reason}. Proposed disables: {report.would_disable ?? 0} of {report.eligible_enabled ?? 0} eligible enabled users; cap: {report.max_disable_fraction ?? 0}.
-                    {report.reason === 'max_disable_fraction exceeded' && <Button disabled={busy} onClick={() => run(reportDryRun, true)}>Proceed anyway</Button>}
+                    {report.reason === 'max_disable_fraction exceeded' && <Button disabled={busy || editDisabled} onClick={() => run(reportDryRun, true)}>Proceed anyway</Button>}
                 </Alert>}
                 <Table header={<Header variant="h3">{reportDryRun ? 'Dry-run report' : 'Applied-run report'}</Header>} items={[
                     {label: 'Checked', count: report.checked}, {label: 'Would disable', count: report.would_disable ?? 0},
@@ -182,5 +215,6 @@ export default function AccountReconcileSettings({active, identityProvider, mode
                 ]}/>
             </SpaceBetween>}
         </SpaceBetween>
-    </Container>;
+    </Container>
+    </>;
 }

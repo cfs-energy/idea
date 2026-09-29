@@ -88,10 +88,14 @@ A node that fails the client install still joins the scheduler as healthy, and t
 
 Driver selection keys off the EC2 instance family, not `base_os`, with one AMD exception.
 
-* **NVIDIA** (`p2`, `p3`, `p4d`, `p4de`, `p5`, `p5e`, `p5en`, `p6-b200`, `p6e-gb200`, `g2`, `g3`, `g3s`, `g4dn`, `g5`, `g5g`, `g6`, `g6e`, `g6f`, `gr6`): supported on every accepted `base_os`.
+* **NVIDIA** (`p2`, `p3`, `p4d`, `p4de`, `p5`, `p5e`, `p5en`, `p6-b200`, `p6e-gb200`, `g2`, `g3`, `g3s`, `g4dn`, `g5`, `g5g`, `g6`, `g6e`, `g6f`, `g7`, `g7e`, `gr6`): supported on every accepted `base_os`.
 * **AMD** (`g4ad`): `rocky8` and `rocky9` only. Any other `base_os` fails the install rather than skipping silently.
 
 A family outside both lists is not recognized as a GPU instance. The bootstrap logs a warning and skips the driver install regardless of `base_os`. If the node has GPU hardware anyway, `global-settings.gpu_settings.fail_on_missing_driver` decides whether the bootstrap aborts or continues.
+
+## Host JavaScript runtime
+
+No current bootstrap path, including the compute-node and virtual-desktop-host paths, includes the Node.js template, so the configured Node.js and npm versions are not guaranteed host installations. The template itself would use NVM under the root account to install and select the configured Node.js version. It reads the configured npm version but does not install it.
 
 ## EPEL and extra-repo bootstrap
 

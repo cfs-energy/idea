@@ -14,7 +14,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { App, Aws, Fn } from "aws-cdk-lib";
 
-import { buildApp, type StackBuilder } from "../../src/cdk/app.ts";
+import { buildApp, type StackBuilder, type StackBuildProps } from "../../src/cdk/app.ts";
 import { makeContext } from "../../src/cdk/constructs/base.ts";
 import { ClusterConfig } from "../../src/config/cluster-config.ts";
 import { BastionHostStack } from "../../src/cdk/stacks/bastion-host.ts";
@@ -379,7 +379,7 @@ export function onlyOne(entries: Array<[string, Json]>, what: string): [string, 
 }
 
 /** Bastion synthesis uses public synthetic settings and never loads a capture. */
-export function synthBastion(overrides: Record<string, unknown> = {}, stackType = BastionHostStack): Json {
+export function synthBastion(overrides: Record<string, unknown> = {}, stackType: new (props: StackBuildProps) => unknown = BastionHostStack, moduleName = "bastion-host"): Json {
   const config = ecsSettings(false);
   const values: Record<string, unknown> = {
     "ecs.enabled": true,
@@ -411,9 +411,9 @@ export function synthBastion(overrides: Record<string, unknown> = {}, stackType 
   ] });
   const app = new App({ context, outdir: workdir("ideactl-bastion-synthetic-") });
   new stackType({
-    app, ctx: makeContext({ awsRegion: REGION, config, moduleId: "bastion-host", releaseVersion: ideaVersion(), synthReads: SYNTH_READS }),
+    app, ctx: makeContext({ awsRegion: REGION, config, moduleId: moduleName, releaseVersion: ideaVersion(), synthReads: SYNTH_READS }),
     deploymentId: "synthetic-deployment", env: { account: ACCOUNT, region: REGION },
-    moduleName: "bastion-host", terminationProtection: true,
+    moduleName, terminationProtection: true,
   });
-  return app.synth().getStackByName(`${ECS_CLUSTER}-bastion-host`).template as Json;
+  return app.synth().getStackByName(`${ECS_CLUSTER}-${moduleName}`).template as Json;
 }

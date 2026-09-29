@@ -1,11 +1,11 @@
 import {AppContext} from '../../common';
-import {render, screen} from '@testing-library/react';
+import {render, screen, waitFor} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {MemoryRouter} from 'react-router-dom';
 import ClusterSettings from './portal-settings';
 import {initTestAppContext} from '../../test-support';
 
-const CATALOG_WARNING = 'Approving a model commits this AWS account';
+const CATALOG_WARNING = 'Review model terms and pricing';
 const REDEPLOY_NOTICE = 'Bedrock is enabled, but the cluster-manager module has not been redeployed';
 const VDC_REDEPLOY_NOTICE = 'Bedrock is enabled, but the virtual-desktop-controller module has not been redeployed';
 const LOG_ROLE_ARN = 'arn:aws:iam::111122223333:role/idea-test-bedrock-invocation-logging-us-east-2';
@@ -17,9 +17,9 @@ vi.mock('./email-templates', () => ({default: () => <div>Email templates</div>})
 
 const renderClusterSettings = () => {
     const context = AppContext.get();
-    vi.spyOn(context.client().clusterSettings(), 'describeSettingsCatalog').mockResolvedValue({settings: []});
+    vi.spyOn(context.client().clusterSettings(), 'describeSettingsCatalog').mockResolvedValue({settings: ['enabled', 'model_ids'].map(path => ({key: `cluster-manager.bedrock.${path}`, module: 'cluster-manager', path: `bedrock.${path}`, group: 'ai-access', section: 'Amazon Bedrock', label: path === 'enabled' ? 'Amazon Bedrock' : 'Approved models', description: '', value_type: path === 'enabled' ? 'boolean' : 'list', advanced: false, effect: 'runtime', validation: {}}))});
     if (!vi.isMockFunction(context.getClusterSettingsService().getModuleId)) vi.spyOn(context.getClusterSettingsService(), 'getModuleId').mockReturnValue('cluster-manager');
-    if (!vi.isMockFunction(context.client().clusterSettings().getModuleSettings)) vi.spyOn(context.client().clusterSettings(), 'getModuleSettings').mockResolvedValue({settings: {}});
+    if (!vi.isMockFunction(context.client().clusterSettings().getModuleSettings)) vi.spyOn(context.client().clusterSettings(), 'getModuleSettings').mockImplementation(async () => ({settings: await context.getClusterSettingsService().getModuleSettings('cluster-manager')}));
     vi.spyOn(context.auth(), 'isModuleAdmin').mockImplementation(module => module === 'cluster-manager');
     render(
         <MemoryRouter>
@@ -54,11 +54,12 @@ describe('cluster settings bedrock catalog', () => {
             }
         });
         renderClusterSettings();
-        await userEvent.click(await screen.findByRole('link', {name: 'AI access and spending'}));
+        await userEvent.click(await screen.findByRole('link', {name: 'AI access'}));
         expect(await screen.findByText('vendor.model-a')).toBeInTheDocument();
         expect(await screen.findByText('vendor.model-b')).toBeInTheDocument();
+        await userEvent.click(await screen.findByRole('button', {name: 'Edit'}));
         expect(await screen.findByText(CATALOG_WARNING)).toBeInTheDocument();
-        expect(await screen.findByRole('button', {name: 'Add Model'})).toBeInTheDocument();
+        expect(await screen.findByRole('button', {name: 'Add model'})).toBeInTheDocument();
     });
 
     it('sends the whole catalog when a model is added', async () => {
@@ -73,9 +74,11 @@ describe('cluster settings bedrock catalog', () => {
         const updateModuleSettings = vi.spyOn(context.client().clusterSettings(), 'updateModuleSettings')
             .mockResolvedValue({success: true});
         renderClusterSettings();
-        await userEvent.click(await screen.findByRole('link', {name: 'AI access and spending'}));
+        await userEvent.click(await screen.findByRole('link', {name: 'AI access'}));
+        await userEvent.click(await screen.findByRole('button', {name: 'Edit'}));
         await userEvent.type(await screen.findByPlaceholderText('vendor.model-name'), 'vendor.model-b');
-        await userEvent.click(await screen.findByRole('button', {name: 'Add Model'}));
+        await userEvent.click(await screen.findByRole('button', {name: 'Add model'}));
+        await userEvent.click(screen.getByRole('button', {name: 'Save'}));
         expect(updateModuleSettings).toHaveBeenCalledWith({
             module_id: 'cluster-manager',
             settings: {
@@ -95,7 +98,7 @@ describe('cluster settings bedrock catalog', () => {
             }
         });
         renderClusterSettings();
-        await userEvent.click(await screen.findByRole('link', {name: 'AI access and spending'}));
+        await userEvent.click(await screen.findByRole('link', {name: 'AI access'}));
         expect(await screen.findByText(REDEPLOY_NOTICE)).toBeInTheDocument();
     });
 
@@ -109,7 +112,7 @@ describe('cluster settings bedrock catalog', () => {
             }
         });
         renderClusterSettings();
-        await userEvent.click(await screen.findByRole('link', {name: 'AI access and spending'}));
+        await userEvent.click(await screen.findByRole('link', {name: 'AI access'}));
         expect(await screen.findByText('vendor.model-a')).toBeInTheDocument();
         expect(screen.queryByText(REDEPLOY_NOTICE)).not.toBeInTheDocument();
     });
@@ -128,7 +131,7 @@ describe('cluster settings bedrock catalog', () => {
             dcv_session: {}
         });
         renderClusterSettings();
-        await userEvent.click(await screen.findByRole('link', {name: 'AI access and spending'}));
+        await userEvent.click(await screen.findByRole('link', {name: 'AI access'}));
         expect(await screen.findByText(VDC_REDEPLOY_NOTICE)).toBeInTheDocument();
         expect(screen.queryByText(REDEPLOY_NOTICE)).not.toBeInTheDocument();
     });
@@ -149,7 +152,7 @@ describe('cluster settings bedrock catalog', () => {
             }
         });
         renderClusterSettings();
-        await userEvent.click(await screen.findByRole('link', {name: 'AI access and spending'}));
+        await userEvent.click(await screen.findByRole('link', {name: 'AI access'}));
         expect(await screen.findByText('vendor.model-a')).toBeInTheDocument();
         expect(screen.queryByText(VDC_REDEPLOY_NOTICE)).not.toBeInTheDocument();
     });
@@ -168,7 +171,7 @@ describe('cluster settings bedrock catalog', () => {
             }
         });
         renderClusterSettings();
-        await userEvent.click(await screen.findByRole('link', {name: 'AI access and spending'}));
+        await userEvent.click(await screen.findByRole('link', {name: 'AI access'}));
         expect(await screen.findByText(LOGGING_NOTICE)).toBeInTheDocument();
         expect(await screen.findByText(LOG_GROUP_NAME)).toBeInTheDocument();
     });
@@ -187,7 +190,7 @@ describe('cluster settings bedrock catalog', () => {
             }
         });
         renderClusterSettings();
-        await userEvent.click(await screen.findByRole('link', {name: 'AI access and spending'}));
+        await userEvent.click(await screen.findByRole('link', {name: 'AI access'}));
         expect(await screen.findByText('vendor.model-a')).toBeInTheDocument();
         expect(screen.queryByText(LOGGING_NOTICE)).not.toBeInTheDocument();
     });
@@ -201,7 +204,8 @@ describe('cluster settings bedrock catalog', () => {
             }
         });
         renderClusterSettings();
-        await userEvent.click(await screen.findByRole('link', {name: 'AI access and spending'}));
+        await userEvent.click(await screen.findByRole('link', {name: 'AI access'}));
+        await userEvent.click(await screen.findByRole('button', {name: 'Edit'}));
         expect(await screen.findByText(CATALOG_WARNING)).toBeInTheDocument();
         expect(screen.queryByText(REDEPLOY_NOTICE)).not.toBeInTheDocument();
     });
@@ -217,8 +221,9 @@ describe('cluster settings bedrock catalog', () => {
         const updateModuleSettings = vi.spyOn(context.client().clusterSettings(), 'updateModuleSettings')
             .mockResolvedValue({success: true});
         renderClusterSettings();
-        await userEvent.click(await screen.findByRole('link', {name: 'AI access and spending'}));
-        await userEvent.click(await screen.findByRole('button', {name: 'Add Model'}));
+        await userEvent.click(await screen.findByRole('link', {name: 'AI access'}));
+        await userEvent.click(await screen.findByRole('button', {name: 'Edit'}));
+        await userEvent.click(await screen.findByRole('button', {name: 'Add model'}));
         expect(await screen.findByText('Enter a model id.')).toBeInTheDocument();
         expect(updateModuleSettings).not.toHaveBeenCalled();
     });
@@ -235,11 +240,11 @@ describe('account reconciliation mount', () => {
             accounts: {reconcile: {enabled: true, interval_minutes: 15, dry_run: false, reenable: false, max_disable_fraction: 0.1, check_cognito: true}}
         }});
         renderClusterSettings();
-        await userEvent.click(await screen.findByRole('link', {name: 'Account synchronization'}));
-        expect(await screen.findByRole('checkbox', {name: 'Reconciliation on'})).toBeChecked();
+        await userEvent.click(await screen.findByRole('link', {name: 'Users and sign-in'}));
+        expect(await screen.findByRole('checkbox', {name: 'Account synchronization'})).toBeChecked();
         expect(read).toHaveBeenCalledWith({module_id: 'cluster-manager'});
         expect(screen.queryByRole('button', {name: 'Run now (apply)'})).not.toBeInTheDocument();
-        expect(screen.getByRole('link', {name: 'Run now and reports in People and access'})).toHaveAttribute('href', '#/cluster/users?view=reconciliation');
+        expect(screen.getByRole('link', {name: 'View reconciliation history'})).toHaveAttribute('href', '#/cluster/reconciliation-runs');
     });
 });
 
@@ -264,4 +269,52 @@ describe('settings read states', () => {
         expect(await screen.findByText('Some settings could not be loaded')).toBeInTheDocument();
         expect(screen.getByText('Could not read shared storage settings.')).toBeInTheDocument();
     });
+});
+
+it('stages model revocation and cancels without writing', async () => {
+    const context = initTestAppContext();
+    vi.spyOn(context.getClusterSettingsService(), 'getModuleSettings').mockResolvedValue({bedrock: {enabled: true, model_ids: ['vendor.model']}});
+    const update = vi.spyOn(context.client().clusterSettings(), 'updateModuleSettings').mockResolvedValue({success: true});
+    renderClusterSettings();
+    await userEvent.click(await screen.findByRole('link', {name: 'AI access'}));
+    await userEvent.click(await screen.findByRole('button', {name: 'Edit'}));
+    await userEvent.click(screen.getByRole('button', {name: 'Remove vendor.model'}));
+    expect(screen.getByText(/Every project that lists vendor.model loses access/)).toBeVisible();
+    await userEvent.click(screen.getByRole('button', {name: 'Remove model'}));
+    expect(update).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', {name: 'Cancel'}));
+    expect(screen.getByText('vendor.model')).toBeVisible();
+    expect(update).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+});
+
+it('keeps the maintenance end time informational and discards a cancelled notice', async () => {
+    const context = initTestAppContext();
+    vi.spyOn(context.getClusterSettingsService(), 'getModuleSettings').mockResolvedValue({maintenance: {enabled: false, message: 'Saved notice', ends_at: ''}});
+    const update = vi.spyOn(context.client().clusterSettings(), 'updateModuleSettings').mockResolvedValue({success: true});
+    renderClusterSettings();
+    await userEvent.click(await screen.findByRole('link', {name: 'General'}));
+    expect(await screen.findByText('Turn this notice off when maintenance is complete. The end time is informational.')).toBeVisible();
+    expect(screen.getByText('This does not automatically reopen submissions.')).toBeVisible();
+    await userEvent.click(screen.getByRole('button', {name: 'Edit'}));
+    await userEvent.clear(screen.getByRole('textbox', {name: 'Message'}));
+    await userEvent.type(screen.getByRole('textbox', {name: 'Message'}), 'Draft notice');
+    await userEvent.click(screen.getByRole('button', {name: 'Cancel'}));
+    expect(screen.getByText('Saved notice')).toBeVisible();
+    expect(screen.queryByText('Draft notice')).not.toBeInTheDocument();
+    expect(update).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+});
+
+it('keeps the maintenance message full width with an accessible feature toggle', async () => {
+    const context = initTestAppContext();
+    vi.spyOn(context.getClusterSettingsService(), 'getModuleSettings').mockResolvedValue({maintenance: {enabled: false, message: 'Saved notice', ends_at: ''}});
+    renderClusterSettings();
+    await userEvent.click(await screen.findByRole('link', {name: 'General'}));
+    await userEvent.click(await screen.findByRole('button', {name: 'Edit'}));
+    expect(screen.getByRole('checkbox', {name: 'Maintenance notice'})).toBeVisible();
+    expect(screen.getByRole('textbox', {name: 'Message'}).tagName).toBe('TEXTAREA');
+    expect(screen.getAllByRole('textbox').map(node => node.getAttribute('placeholder'))).toContain('2026-09-15T18:00:00Z');
+    expect(screen.queryByRole('checkbox', {name: /^Enable(?:d)?$/})).toBeNull();
 });

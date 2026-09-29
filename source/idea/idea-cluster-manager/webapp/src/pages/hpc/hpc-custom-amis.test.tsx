@@ -62,6 +62,22 @@ describe('custom amis page', () => {
         expect(compute).not.toHaveBeenCalled();
     });
 
+    it('shows a build action for every desktop image row', async () => {
+        const context = initTestAppContext();
+        vi.spyOn(context.auth(), 'isModuleAdmin').mockImplementation(module => module === 'virtual-desktop-controller');
+        vi.spyOn(context.getClusterSettingsService(), 'isVirtualDesktopDeployed').mockReturnValue(true);
+        vi.spyOn(context.client().virtualDesktopAdmin(), 'listDesktopImages').mockResolvedValue({listing: [
+            {base_os: 'rocky8', architecture: 'x86_64', stack_id: 'ss-base-rocky8-x86-64-base', state: 'none', referenced_by: []},
+            {base_os: 'rocky9', architecture: 'x86_64', stack_id: 'ss-base-rocky9-x86-64-base', state: 'stock', referenced_by: []}
+        ]});
+
+        renderPage(() => {}, true);
+
+        expect(await screen.findByText('rocky8')).toBeInTheDocument();
+        expect(screen.getByText('rocky9')).toBeInTheDocument();
+        expect(screen.getAllByRole('button', {name: 'Build'})).toHaveLength(2);
+    });
+
     it('build dialog sends both drivers by default', async () => {
         const context = primeContext();
         const build = vi.spyOn(context.client().schedulerAdmin(), 'buildComputeImage')

@@ -1,27 +1,33 @@
-import React, {useCallback, useEffect, useState} from 'react';
+import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {Alert, Box, Button, Header, Popover, SpaceBetween, StatusIndicator, Table} from '@cloudscape-design/components';
 import {AppContext} from '../../common';
 import {ClusterService, ListClusterServicesResult} from '../../client/data-model';
 import moment from 'moment';
+import {hasAccess} from '../../navigation/task-navigation';
 
 export async function hasContainerControlPlane(): Promise<boolean> {
     const settings = AppContext.get().getClusterSettingsService();
     if (!settings.getModuleId('ecs')) return false;
-    return Boolean((await settings.getModuleSettings('ecs'))?.cluster_name);
+    return Boolean((await settings.getModuleSettings('ecs'))?.container_enabled);
 }
 
 const time = (value?: string) => value ? new Date(value).toLocaleString() : 'Not available';
 export const imageTag = (image: string) => image.includes('@sha256:') ? 'digest…' : image.split('/').pop()!.split(':')[1] || 'latest';
 export const serviceRole = (name: string): string => {
-    const value = name.toLowerCase();
-    if (value.includes('broker')) return 'broker';
-    if (value.includes('controller')) return 'controller';
-    if (value.includes('gateway')) return 'gateway';
-    if (value.includes('bastion')) return 'bastion';
-    if (value.includes('cluster-manager') || value.includes('cluster_manager')) return 'cluster manager';
-    if (value.includes('scheduler')) return 'scheduler';
-    if (value.includes('monitor') || value.includes('agent')) return 'monitoring agent';
-    return name;
+    const context = AppContext.get();
+    const prefix = `${context.auth().getClusterName()}-`;
+    const identity = name.startsWith(prefix) ? name.slice(prefix.length) : name;
+    const settings = context.getClusterSettingsService();
+    for (const [module, role] of [['cluster-manager', 'cluster manager'], ['scheduler', 'scheduler'], ['bastion-host', 'bastion']]) {
+        if (identity === settings.getModuleId(module)) return role;
+    }
+    const desktop = settings.getModuleId('virtual-desktop-controller');
+    for (const component of ['controller', 'broker', 'gateway']) {
+        if (desktop && identity === `${desktop}-${component}`) return component;
+    }
+    // Component identities used by older deployments; compare whole identities.
+    const legacy: Record<string, string> = {'virtual-desktop-controller': 'controller', 'dcv-broker': 'broker', 'dcv-connection-gateway': 'gateway', bastion: 'bastion'};
+    return legacy[identity] ?? identity;
 };
 const statusType = (state?: string): 'success' | 'in-progress' | 'error' | 'info' => {
     if (state === 'COMPLETED') return 'success';
@@ -44,25 +50,43 @@ const Tasks = ({row}: {row: ClusterService}) => row.tasks?.length ? <Popover dis
     {`${row.tasks.length} ${row.tasks.length === 1 ? 'task' : 'tasks'}`}
 </Popover> : <>No running tasks</>;
 
-export default function ClusterServices({desktop}: {desktop: boolean}) {
+const isDatadog = (row: ClusterService) => /(?:^datadog-service$|(?:^|[-_])datadogservice(?:service)?[a-f0-9]{8}-[a-z0-9]+$)/i.test(row.name)
+    || (Boolean(row.images?.length) && (row.images ?? []).every(image => /^(?:(?:public\.ecr\.aws|gcr\.io|docker\.io|index\.docker\.io)\/)?datadog\/agent(?=[:@]|$)/i.test(image)));
+
+export default function ClusterServices(_props: {desktop?: boolean}) {
     const [result, setResult] = useState<ListClusterServicesResult>({listing: [], errors: []});
     const [loading, setLoading] = useState(true);
+    const generation = useRef(0);
     const refresh = useCallback(async () => {
+        const current = ++generation.current;
         setLoading(true);
         try {
-            setResult(await AppContext.get().client().clusterSettings().listClusterServices({}));
+            const response = await AppContext.get().client().clusterSettings().listClusterServices({});
+            if (current === generation.current) setResult(response);
         } catch {
-            setResult({listing: [], errors: ['Could not load services. Refresh to try again.']});
-        } finally { setLoading(false); }
+            if (current === generation.current) setResult({listing: [], errors: ['Could not load services. Refresh to try again.']});
+        } finally { if (current === generation.current) setLoading(false); }
     }, []);
-    useEffect(() => { void refresh(); }, [refresh]);
-    const priority = (row: ClusterService) => (desktop ? /desktop|vdc|dcv|broker|gateway/i : /scheduler/i).test(row.name) ? 0 : 1;
-    const rows = [...(result.listing ?? [])].sort((a, b) => priority(a) - priority(b) || a.name.localeCompare(b.name));
+    useEffect(() => { void refresh(); return () => { ++generation.current; }; }, [refresh]);
+    const context = AppContext.get();
+    const groups = [
+        {title: 'Control plane', access: hasAccess(context, 'cluster-admin'), rows: [] as ClusterService[]},
+        {title: 'Desktop services', access: hasAccess(context, 'desktop-admin'), rows: [] as ClusterService[]},
+        {title: 'Job service', access: hasAccess(context, 'jobs-admin'), rows: [] as ClusterService[]},
+    ];
+    for (const row of result.listing ?? []) {
+        if (isDatadog(row)) continue;
+        const role = serviceRole(row.name);
+        const group = ['broker', 'controller', 'gateway'].includes(role) ? 1 : role === 'scheduler' ? 2 : 0;
+        groups[group].rows.push(row);
+    }
     return <SpaceBetween size="m">
         {(result.errors ?? []).map((error, index) => <Alert type="error" key={index}>{error}</Alert>)}
-        <Table<ClusterService> items={rows} loading={loading} loadingText="Loading services" trackBy="name"
+        <Header actions={<Button onClick={refresh} disabled={loading} iconName="refresh">Refresh</Button>}>Live services</Header>
+        {groups.filter(group => group.access).map(group => <Table<ClusterService> key={group.title}
+            items={group.rows.sort((a, b) => a.name.localeCompare(b.name))} loading={loading} loadingText="Loading services" trackBy="name"
             wrapLines={false}
-            header={<Header actions={<Button onClick={refresh} disabled={loading} iconName="refresh">Refresh</Button>}>Live control-plane services</Header>}
+            header={<Header variant="h2">{group.title}</Header>}
             empty="No services found."
             columnDefinitions={[
                 {id: 'name', header: 'Service', cell: row => <ServiceName row={row}/>, width: 180},
@@ -72,6 +96,6 @@ export default function ClusterServices({desktop}: {desktop: boolean}) {
                 {id: 'images', header: 'Image tag', cell: row => <Images images={row.images}/>, width: 140},
                 {id: 'rollout', header: 'Rollout', cell: row => <SpaceBetween size="xxs"><StatusIndicator type={statusType(row.rollout_state)}>{statusLabel(row.rollout_state)}</StatusIndicator><Box variant="small">{row.updated_at ? moment(row.updated_at).fromNow() : 'Update time unavailable'}</Box></SpaceBetween>, width: 180},
                 {id: 'tasks', header: 'Running tasks', cell: row => <Tasks row={row}/>, width: 140},
-            ]}/>
+            ]}/>)}
     </SpaceBetween>;
 }

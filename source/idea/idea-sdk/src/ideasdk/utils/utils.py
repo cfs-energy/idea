@@ -518,7 +518,7 @@ class Utils:
     @staticmethod
     def file_system_friendly_timestamp() -> str:
         # noinspection StrFormat
-        return arrow.now().format('YYYY-MM-DD-HHmmss.SSS')
+        return arrow.utcnow().format('YYYY-MM-DD-HHmmss.SSS')
 
     @staticmethod
     def from_win_timestamp(win_timestamp: int) -> float:

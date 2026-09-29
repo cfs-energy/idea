@@ -3,6 +3,9 @@
  * sequence. Each external operation is injected so callers can replay it.
  */
 
+import { liveContainerHosts } from "../live-operator-adapters.ts";
+import { refreshHostsCommand } from "../host-pool.ts";
+
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,6 +24,7 @@ import {
 import { loadRegionAmiConfig, resolveRegionAmi, type RegionsConfig } from "../../config/region-ami.ts";
 import {
   compareUpgradeDrift,
+  isOperatorSource,
   renderUpgradeDrift,
   type CurrentConfigRow,
   type StackSettingsPlan,
@@ -28,6 +32,7 @@ import {
   type UpgradeDriftReport,
 } from "../../config/upgrade-drift.ts";
 import { loadValuesFile } from "../../config/values.ts";
+import { vpcEndpointsFor } from "../../config/vpc-endpoints.ts";
 import {
   buildTree,
   toYaml,
@@ -205,7 +210,10 @@ export interface UpgradeCloudFormationApi {
 }
 
 export interface UpgradeOpenSearchApi {
-  describeDomain(input: { awsRegion: string; domainName?: string }): Promise<{ engineVersion?: string }>;
+  describeDomain(input: { awsRegion: string; domainName?: string }): Promise<{
+    engineVersion?: string;
+    serviceSoftwareOptions?: { newVersion?: string; updateAvailable?: boolean; updateStatus?: string };
+  }>;
   listInstanceTypeDetails(input: { awsRegion: string; engineVersion?: string }): Promise<string[]>;
 }
 
@@ -215,6 +223,8 @@ export interface EolSoftwareStackApi {
 }
 
 export interface UpgradeDeploymentOptions {
+  refreshHosts?: boolean;
+  hostPoolRerunCommand?: string;
   clusterName: string;
   awsRegion: string;
   awsProfile?: string;
@@ -242,6 +252,7 @@ export interface SchedulerJobsApi {
 }
 
 export interface ContainerHost {
+  attributes?: Record<string, string>;
   arn: string;
   instanceId: string;
   status: string;
@@ -251,15 +262,25 @@ export interface ContainerHost {
 
 /** The container host group behind a cluster's capacity provider. */
 export interface ContainerHostsApi {
-  hostGroup(input: { awsRegion: string; capacityProvider: string }): Promise<{ name: string; minSize: number; desiredCapacity: number; instanceIds: string[] }>;
-  containerInstances(input: { awsRegion: string; cluster: string }): Promise<ContainerHost[]>;
-  drain(input: { awsRegion: string; cluster: string; arn: string }): Promise<void>;
+  launchTemplateVersions(input: { awsRegion: string; awsProfile?: string; name: string }): Promise<{
+    current: { id: string; version: string };
+    instances: Array<{ instanceId: string; id?: string; version?: string }>;
+  }>;
+  startInstanceRefresh(input: { awsRegion: string; awsProfile?: string; name: string; preferences: {
+    MinHealthyPercentage: number; MaxHealthyPercentage?: number; InstanceWarmup: number; ScaleInProtectedInstances: "Refresh" | "Ignore" | "Wait";
+  } }): Promise<string>;
+  describeInstanceRefresh(input: { awsRegion: string; awsProfile?: string; name: string; id: string }): Promise<{
+    status: string; percentageComplete?: number; reason?: string;
+  }>;
+  hostGroup(input: { awsRegion: string; awsProfile?: string; capacityProvider: string }): Promise<{ name: string; minSize: number; desiredCapacity: number; instanceIds: string[] }>;
+  containerInstances(input: { awsRegion: string; awsProfile?: string; cluster: string }): Promise<ContainerHost[]>;
+  drain(input: { awsRegion: string; awsProfile?: string; cluster: string; arn: string }): Promise<void>;
   /** Put a host back in service after a drain that could not empty it. */
-  activate(input: { awsRegion: string; cluster: string; arn: string }): Promise<void>;
+  activate(input: { awsRegion: string; awsProfile?: string; cluster: string; arn: string }): Promise<void>;
   /** Poll until the host runs no tasks; false when the wait runs out. */
-  waitUntilEmpty(input: { awsRegion: string; cluster: string; arn: string; timeoutMs: number }): Promise<boolean>;
+  waitUntilEmpty(input: { awsRegion: string; awsProfile?: string; cluster: string; arn: string; timeoutMs: number }): Promise<boolean>;
   /** Clear scale-in protection on the empty host and shrink the group so it is the one removed. */
-  release(input: { awsRegion: string; name: string; instanceId: string; desiredCapacity: number }): Promise<void>;
+  release(input: { awsRegion: string; awsProfile?: string; name: string; instanceId: string; desiredCapacity: number }): Promise<void>;
 }
 
 export interface UpgradeDeps extends ConfigDriftPreviewDeps {
@@ -276,6 +297,7 @@ export interface UpgradeDeps extends ConfigDriftPreviewDeps {
 }
 
 export interface UpgradeCommandOptions {
+  refreshHosts?: boolean;
   clusterName: string;
   awsRegion: string;
   awsProfile?: string;
@@ -355,7 +377,7 @@ function settingString(rows: readonly Record<string, unknown>[], key: string): s
  */
 export async function returnBorrowedHosts(
   deps: UpgradeDeps,
-  options: Pick<UpgradeCommandOptions, "clusterName" | "awsRegion">,
+  options: Pick<UpgradeCommandOptions, "clusterName" | "awsRegion" | "awsProfile">,
   rows?: readonly Record<string, unknown>[],
 ): Promise<void> {
   const hostsApi = deps.containerHosts;
@@ -364,27 +386,27 @@ export async function returnBorrowedHosts(
   const cluster = settingString(settings, "ecs.cluster_name");
   const capacityProvider = settingString(settings, "ecs.capacity_provider");
   if (cluster === undefined || capacityProvider === undefined) return;
-  const group = await hostsApi.hostGroup({ awsRegion: options.awsRegion, capacityProvider });
+  const group = await hostsApi.hostGroup({ awsRegion: options.awsRegion, awsProfile: options.awsProfile, capacityProvider });
   const extra = group.instanceIds.length - group.minSize;
   if (extra <= 0) {
     deps.out(`Host group ${group.name} holds ${group.instanceIds.length} hosts at its minimum; nothing to return`);
     return;
   }
-  const hosts = (await hostsApi.containerInstances({ awsRegion: options.awsRegion, cluster }))
+  const hosts = (await hostsApi.containerInstances({ awsRegion: options.awsRegion, awsProfile: options.awsProfile, cluster }))
     .filter((host) => host.status === "ACTIVE" && group.instanceIds.includes(host.instanceId))
     .sort((a, b) => (b.registeredAt ?? "").localeCompare(a.registeredAt ?? "") || a.runningTasks - b.runningTasks);
   let desired = group.instanceIds.length;
   for (const host of hosts.slice(0, extra)) {
     deps.out(`Returning borrowed host ${host.instanceId} (${host.runningTasks} tasks): draining`);
-    await hostsApi.drain({ awsRegion: options.awsRegion, cluster, arn: host.arn });
-    const empty = await hostsApi.waitUntilEmpty({ awsRegion: options.awsRegion, cluster, arn: host.arn, timeoutMs: 15 * 60_000 });
+    await hostsApi.drain({ awsRegion: options.awsRegion, awsProfile: options.awsProfile, cluster, arn: host.arn });
+    const empty = await hostsApi.waitUntilEmpty({ awsRegion: options.awsRegion, awsProfile: options.awsProfile, cluster, arn: host.arn, timeoutMs: 15 * 60_000 });
     if (!empty) {
-      await hostsApi.activate({ awsRegion: options.awsRegion, cluster, arn: host.arn });
+      await hostsApi.activate({ awsRegion: options.awsRegion, awsProfile: options.awsProfile, cluster, arn: host.arn });
       deps.out(`warning: ${host.instanceId} still ran tasks after 15 minutes and is back in service; its tasks found no room elsewhere. Run return-hosts later.`);
       return;
     }
     desired -= 1;
-    await hostsApi.release({ awsRegion: options.awsRegion, name: group.name, instanceId: host.instanceId, desiredCapacity: desired });
+    await hostsApi.release({ awsRegion: options.awsRegion, awsProfile: options.awsProfile, name: group.name, instanceId: host.instanceId, desiredCapacity: desired });
     deps.out(`Returned ${host.instanceId}; host group ${group.name} desired capacity is now ${desired}`);
   }
 }
@@ -732,7 +754,7 @@ async function announceHeldModuleSets(
     awsRegion: options.awsRegion,
     awsProfile: options.awsProfile,
   });
-  await writer.syncClusterSettingsInDb(held, false);
+  await writer.syncClusterSettingsInDb(held, false, 'template');
 }
 
 // Global rows are rewritten in place so a running application never sees a missing row; the rows
@@ -765,7 +787,8 @@ async function backupAndUpdateGlobalSettings(deps: UpgradeDeps, options: Upgrade
   cpSync(configDir, golden, { recursive: true });
   deps.out(`Backup created successfully at ${golden}`);
 
-  generateConfigFromTemplates(loadValuesFile(join(regionDir, "values.yml")), configDir);
+  const values = loadValuesFile(join(regionDir, "values.yml"));
+  generateConfigFromTemplates(values, configDir, { vpcEndpoints: await vpcEndpointsFor(deps, values, options.awsProfile) });
   const writer = await deps.configWriter({
     clusterName: options.clusterName,
     awsRegion: options.awsRegion,
@@ -787,10 +810,16 @@ async function backupAndUpdateGlobalSettings(deps: UpgradeDeps, options: Upgrade
   const savedOwners = asRecord(settings.find((entry) => entry["key"] === "cluster.upgrade_module_set_owners")?.["value"]);
   const owners = { ...savedOwners, ...Object.fromEntries(settings.filter((entry) => valueAsString(entry["key"]).startsWith("global-settings.module_sets.") && valueAsString(entry["key"]).endsWith(".cluster-manager.module_id")).map((entry) => [String(entry["key"]), entry["value"]])) };
   await writer.setConfigEntry("cluster.upgrade_module_set_owners", owners);
+  // A row written from the portal or the command line is the operator's: it keeps its value and
+  // its marker. The template refreshes only rows it wrote itself or rows with no marker.
+  const operatorRows = new Map(settings.filter((row) => isOperatorSource(row["source"])).map((row) => [String(row["key"]), row["value"]]));
+  const kept = entries.filter((entry) => operatorRows.has(entry.key) && !isDeepStrictEqual(operatorRows.get(entry.key), entry.value)).map((entry) => entry.key);
+  if (kept.length > 0) deps.out(`Operator values kept: ${kept.join(", ")}`);
+  const refreshed = entries.filter((entry) => !operatorRows.has(entry.key));
   // Update rows in place. Running applications resolve module sets and global settings on
   // requests; deleting the prefix exposes missing configuration even when the rewrite succeeds.
   // Retain obsolete rows for old tasks and scoped upgrades that leave some modules untouched.
-  await writer.syncClusterSettingsInDb(heldModuleSetEntries(entries, portalReady).kept, true);
+  await writer.syncClusterSettingsInDb(heldModuleSetEntries(refreshed, portalReady).kept, true, 'template');
   return configDir;
 }
 
@@ -805,7 +834,7 @@ async function migrateReconcilerIntervals(deps: UpgradeDeps, options: UpgradeCom
     const current = settings.find((row) => row["key"] === `${prefix}job_reconciler_interval_seconds`);
     if (old === undefined) continue;
     if (current === undefined) {
-      await writer.syncClusterSettingsInDb([{ key: `${prefix}job_reconciler_interval_seconds`, value: old["value"] }], false);
+      await writer.syncClusterSettingsInDb([{ key: `${prefix}job_reconciler_interval_seconds`, value: old["value"] }], false, 'template');
     } else if (JSON.stringify(old["value"]) !== JSON.stringify(current["value"])) {
       deps.out(`warning: conflicting reconciler intervals for ${module.module_id}; keeping the new value ${JSON.stringify(current["value"])} and old value ${JSON.stringify(old["value"])}`);
     }
@@ -829,7 +858,7 @@ async function syncFullConfiguration(
   await writer.syncModulesInDb(
     readModulesFromFiles(configDir).map((module) => ({ id: module.id, name: module.name, type: module.type })),
   );
-  await writer.syncClusterSettingsInDb(heldModuleSetEntries(convertConfigToKeyValuePairs(configDir), await clusterManagerReady(deps, options, modules)).kept, false);
+  await writer.syncClusterSettingsInDb(heldModuleSetEntries(convertConfigToKeyValuePairs(configDir), await clusterManagerReady(deps, options, modules)).kept, false, 'template');
 }
 
 export function buildAmiUpdateEntries(
@@ -925,6 +954,11 @@ async function planOpenSearchDataNodeInstanceType(
       awsRegion: options.awsRegion,
       domainName: typeof domainName === "string" ? domainName : undefined,
     });
+    const update = domain.serviceSoftwareOptions;
+    if (update?.updateAvailable !== false || update.updateStatus !== "COMPLETED") {
+      deps.out(`Apply and complete OpenSearch service software update ${update?.newVersion ?? "(version unavailable)"} before changing the analytics data node instance type (status ${update?.updateStatus ?? "unavailable"}). Keeping analytics data node instance type ${current}.`);
+      return [];
+    }
     const offered = await deps.openSearch.listInstanceTypeDetails({ awsRegion: options.awsRegion, engineVersion: domain.engineVersion });
     if (!offered.includes(OPENSEARCH_DATA_NODE_INSTANCE_TYPE)) {
       deps.out(`${OPENSEARCH_DATA_NODE_INSTANCE_TYPE} is not offered for ${domain.engineVersion ?? ""} in this region. Keeping analytics data node instance type ${current}.`);
@@ -1001,7 +1035,8 @@ export function planEcsImageFollowsRelease(
 ): ConfigEntry[] {
   const rows = new Map(current.map((entry) => [entry.key, entry.value]));
   const image = rows.get("ecs.image");
-  const repository = rows.get("ecs.image_repositories.aws");
+  const partition = rows.get("cluster.aws.partition") ?? "aws";
+  const repository = rows.get(`ecs.image_repositories.${String(partition)}`);
   if (typeof image !== "string" || typeof repository !== "string" || repository === "") return [];
   if (!image.startsWith(`${repository}:`)) return [];
   const tag = image.slice(repository.length + 1);
@@ -1076,7 +1111,7 @@ async function generatedPreviewEntries(
 
     const values = { ...loadValuesFile(sourceValuesPath), base_os: baseOs };
     const configDir = join(root, "config");
-    generateConfigFromTemplates(values, configDir);
+    generateConfigFromTemplates(values, configDir, { vpcEndpoints: await vpcEndpointsFor(deps, values, options.awsProfile) });
     return convertConfigToKeyValuePairs(configDir);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -1273,6 +1308,8 @@ async function defaultDeployment(deps: Deps, options: UpgradeDeploymentOptions):
     terminationProtection: options.terminationProtection,
     deploymentId: options.deploymentId,
     upgrade: true,
+    refreshHosts: options.refreshHosts,
+    hostPoolRerunCommand: options.hostPoolRerunCommand,
     moduleSet: options.moduleSet,
     allModules: options.allModules,
     forceBuildBootstrap: options.forceBuildBootstrap,
@@ -1286,8 +1323,7 @@ async function defaultDeployment(deps: Deps, options: UpgradeDeploymentOptions):
 }
 
 /**
- * Stop where a value the upgrade overwrites differs from what the generator would produce, and
- * nowhere else. An upgrade whose rows all match proceeds without asking: a question asked on every
+ * Stop for differing overwritten rows unless they are template defaults or planned release images. An upgrade whose rows all match proceeds without asking: a question asked on every
  * run is a question nobody reads. `--force` skips confirmations; it does not accept losing an edit,
  * so accepting these rows in an unattended run needs the flag that says only that.
  */
@@ -1735,9 +1771,9 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
           for (const module of modules) if (!expectedModules.has(module.id)) expectedModules.set(module.id, { module_id: module.id, name: module.name, type: module.type });
           await writer.syncModulesInDb(modules);
         },
-        async syncClusterSettingsInDb(entries, overwrite) {
+        async syncClusterSettingsInDb(entries, overwrite, source) {
           for (const entry of entries) if (overwrite || !expected.has(entry.key)) expected.set(entry.key, entry.value);
-          await writer.syncClusterSettingsInDb(entries, overwrite);
+          await writer.syncClusterSettingsInDb(entries, overwrite, source);
         },
         async setConfigEntry(key, value) { expected.set(key, value); await writer.setConfigEntry(key, value); },
         async deleteConfigEntries(prefix) {
@@ -1778,7 +1814,8 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
     }
     if (syncFullConfig) {
       if (options.skipGlobalSettingsUpdate === true) {
-        generateConfigFromTemplates(loadValuesFile(valuesFilePath(options.clusterName, options.awsRegion)), configDir);
+        const values = loadValuesFile(valuesFilePath(options.clusterName, options.awsRegion));
+        generateConfigFromTemplates(values, configDir, { vpcEndpoints: await vpcEndpointsFor(deps, values, options.awsProfile) });
       }
       deps.out("Phase 2b: Sync full configuration without overwrite");
       await syncFullConfiguration(deps, options, configDir, modulesBefore);
@@ -1806,6 +1843,8 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
       deps.out(`warning: pre-upgrade termination-protection sweep failed: ${(error as Error).message}. Verify replaced instances are terminated after the upgrade.`);
     }
     const deployment: UpgradeDeploymentOptions = {
+      refreshHosts: options.refreshHosts,
+      hostPoolRerunCommand: refreshHostsCommand("upgrade-cluster", options, options.modules),
       clusterName: options.clusterName,
       awsRegion: options.awsRegion,
       awsProfile: options.awsProfile,
@@ -1866,6 +1905,7 @@ export function registerUpgradeCommands(program: Command, deps: UpgradeDeps): vo
     .requiredOption("--aws-region <aws-region>", "AWS Region")
     .option("--aws-profile <aws-profile>", "AWS Profile Name")
     .option("--termination-protection <termination-protection>", "Set termination protection to true or false. Default: true", "true")
+    .option("--refresh-hosts", "Replace outdated ECS hosts and wait for directory join before deploying further modules.")
     .option("--keep-borrowed-hosts", "Leave a container host the upgrade added beyond the host group minimum in service.")
     .option("--deployment-id <deployment-id>", "A UUID to identify the deployment.")
     .option("--base-os <base-os>", "Base OS to upgrade to.")
@@ -1877,7 +1917,7 @@ export function registerUpgradeCommands(program: Command, deps: UpgradeDeps): vo
     .option("--force", "Skip all confirmation prompts.")
     .option(
       "--accept-config-drift",
-      "Overwrite configuration rows whose value differs from generated configuration. Not covered by --force.",
+      "Accept differing operator or unknown-source rows this upgrade overwrites. Not covered by --force.",
     )
     .option(
       "--allow-replacement <logical-id>",
@@ -1969,73 +2009,7 @@ export function liveSchedulerJobs(sleep: (ms: number) => Promise<void>): Schedul
 
 export function createLiveUpgradeDeps(deps: Deps): UpgradeDeps {
   const ecsAccountSettings = liveEcsAccountSettings();
-  const containerHosts: ContainerHostsApi = {
-    async hostGroup(input) {
-      const { DescribeCapacityProvidersCommand, ECSClient } = await import("@aws-sdk/client-ecs");
-      const { AutoScalingClient, DescribeAutoScalingGroupsCommand } = await import("@aws-sdk/client-auto-scaling");
-      const providers = await new ECSClient(await awsClientOptions(input.awsRegion)).send(
-        new DescribeCapacityProvidersCommand({ capacityProviders: [input.capacityProvider] }),
-      );
-      const arn = providers.capacityProviders?.[0]?.autoScalingGroupProvider?.autoScalingGroupArn;
-      if (arn === undefined) throw new GeneralException(`capacity provider ${input.capacityProvider} has no host group`);
-      const name = arn.slice(arn.lastIndexOf("/") + 1);
-      const groups = await new AutoScalingClient(await awsClientOptions(input.awsRegion)).send(
-        new DescribeAutoScalingGroupsCommand({ AutoScalingGroupNames: [name] }),
-      );
-      const group = groups.AutoScalingGroups?.[0];
-      if (group === undefined) throw new GeneralException(`host group ${name} was not found`);
-      return {
-        name,
-        minSize: group.MinSize ?? 0,
-        desiredCapacity: group.DesiredCapacity ?? 0,
-        instanceIds: (group.Instances ?? []).filter((i) => i.LifecycleState === "InService").map((i) => i.InstanceId ?? "").filter(Boolean),
-      };
-    },
-    async containerInstances(input) {
-      const { DescribeContainerInstancesCommand, ECSClient, ListContainerInstancesCommand } = await import("@aws-sdk/client-ecs");
-      const client = new ECSClient(await awsClientOptions(input.awsRegion));
-      const arns = (await client.send(new ListContainerInstancesCommand({ cluster: input.cluster }))).containerInstanceArns ?? [];
-      if (arns.length === 0) return [];
-      const described = await client.send(new DescribeContainerInstancesCommand({ cluster: input.cluster, containerInstances: arns }));
-      return (described.containerInstances ?? []).map((host) => ({
-        arn: host.containerInstanceArn ?? "",
-        instanceId: host.ec2InstanceId ?? "",
-        status: host.status ?? "",
-        runningTasks: host.runningTasksCount ?? 0,
-        registeredAt: host.registeredAt?.toISOString(),
-      }));
-    },
-    async drain(input) {
-      const { ECSClient, UpdateContainerInstancesStateCommand } = await import("@aws-sdk/client-ecs");
-      await new ECSClient(await awsClientOptions(input.awsRegion)).send(
-        new UpdateContainerInstancesStateCommand({ cluster: input.cluster, containerInstances: [input.arn], status: "DRAINING" }),
-      );
-    },
-    async activate(input) {
-      const { ECSClient, UpdateContainerInstancesStateCommand } = await import("@aws-sdk/client-ecs");
-      await new ECSClient(await awsClientOptions(input.awsRegion)).send(
-        new UpdateContainerInstancesStateCommand({ cluster: input.cluster, containerInstances: [input.arn], status: "ACTIVE" }),
-      );
-    },
-    async waitUntilEmpty(input) {
-      const { DescribeContainerInstancesCommand, ECSClient } = await import("@aws-sdk/client-ecs");
-      const client = new ECSClient(await awsClientOptions(input.awsRegion));
-      const deadline = Date.now() + input.timeoutMs;
-      do {
-        const described = await client.send(new DescribeContainerInstancesCommand({ cluster: input.cluster, containerInstances: [input.arn] }));
-        const host = described.containerInstances?.[0];
-        if ((host?.runningTasksCount ?? 0) === 0 && (host?.pendingTasksCount ?? 0) === 0) return true;
-        await new Promise((resolve) => setTimeout(resolve, 15_000));
-      } while (Date.now() < deadline);
-      return false;
-    },
-    async release(input) {
-      const { AutoScalingClient, SetDesiredCapacityCommand, SetInstanceProtectionCommand } = await import("@aws-sdk/client-auto-scaling");
-      const client = new AutoScalingClient(await awsClientOptions(input.awsRegion));
-      await client.send(new SetInstanceProtectionCommand({ AutoScalingGroupName: input.name, InstanceIds: [input.instanceId], ProtectedFromScaleIn: false }));
-      await client.send(new SetDesiredCapacityCommand({ AutoScalingGroupName: input.name, DesiredCapacity: input.desiredCapacity, HonorCooldown: false }));
-    },
-  };
+  const containerHosts = deps.containerHosts ?? liveContainerHosts();
   const ec2: UpgradeEc2Api = {
     async describeImages(input) {
       const { DescribeImagesCommand, EC2Client } = await import("@aws-sdk/client-ec2");
@@ -2166,7 +2140,15 @@ export function createLiveUpgradeDeps(deps: Deps): UpgradeDeps {
         const result = await new OpenSearchClient(await awsClientOptions(input.awsRegion)).send(
           new DescribeDomainCommand({ DomainName: input.domainName }),
         );
-        return { engineVersion: result.DomainStatus?.EngineVersion };
+        const serviceSoftware = result.DomainStatus?.ServiceSoftwareOptions;
+        return {
+          engineVersion: result.DomainStatus?.EngineVersion,
+          serviceSoftwareOptions: serviceSoftware === undefined ? undefined : {
+            newVersion: serviceSoftware.NewVersion,
+            updateAvailable: serviceSoftware.UpdateAvailable,
+            updateStatus: serviceSoftware.UpdateStatus,
+          },
+        };
       },
       async listInstanceTypeDetails(input) {
         const { ListInstanceTypeDetailsCommand, OpenSearchClient } = await import("@aws-sdk/client-opensearch");
@@ -2205,7 +2187,7 @@ export function createLiveUpgradeDeps(deps: Deps): UpgradeDeps {
         );
       },
     },
-    deploy: (options) => defaultDeployment(deps, options),
+    deploy: (options) => defaultDeployment({ ...deps, containerHosts }, options),
   };
 }
 

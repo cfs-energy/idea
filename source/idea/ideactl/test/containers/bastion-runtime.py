@@ -158,6 +158,12 @@ class Directory(unittest.TestCase):
             self.assertEqual(join.kwargs['input'], 'one-time-password')
             self.assertNotIn('one-time-password', ' '.join(join.args[0]))
             config = (root / 'etc/sssd/sssd.conf').read_text()
+            # a container has no persistent kernel keyring, so password logins need a file cache
+            self.assertIn('krb5_ccname_template = FILE:/tmp/krb5cc_%U_XXXXXX', config)
+            self.assertEqual(
+                (root / 'etc/krb5.conf.d/idea-ccache.conf').read_text(),
+                '[libdefaults]\ndefault_ccache_name = FILE:/tmp/krb5cc_%{uid}\n',
+            )
             self.assertIn('access_provider = ad', config)
             self.assertIn('ldap_id_mapping = false', config)
             self.assertIn('fallback_homedir = /data/home/%u', config)
@@ -247,3 +253,14 @@ class TaskIdentity(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class SshdConfig(unittest.TestCase):
+    def test_strict_modes_stay_on_over_numeric_home_ownership(self):
+        # the host pool mounts the homes over NFSv3 (numeric owners), so the ownership check holds
+        text = (ROOT / 'deployment/ecr/idea-control-plane/roles/bastion.sh').read_text()
+        block = text.split("cat > /etc/ssh/sshd_config <<'EOF'")[1].split('\nEOF')[0]
+        self.assertIn('StrictModes yes', block)
+        self.assertNotIn('StrictModes no', block)
+        self.assertIn('PubkeyAuthentication yes', block)
+        self.assertIn('AuthorizedKeysFile .ssh/authorized_keys', block)

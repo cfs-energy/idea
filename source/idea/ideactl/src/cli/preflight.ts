@@ -62,7 +62,7 @@ export interface ConfigurationDriftEvidence {
   acceptedReportHash?: string;
 }
 
-const MIGRATION_COMMANDS = ["upgrade-cluster", "migrate"] as const;
+const MIGRATION_COMMANDS = ["upgrade-cluster"] as const;
 const ECS_COMMANDS = ["deploy", ...MIGRATION_COMMANDS] as const;
 
 /** Reject empty identifiers before they enter operator-facing output. */

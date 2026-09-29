@@ -9,7 +9,7 @@ const report = {dry_run: true, checked: 4, would_disable: 2, would_reenable: 1, 
 describe('account reconciliation settings', () => {
     afterEach(() => vi.restoreAllMocks());
 
-    const setup = async (settings: any = {}, identityProvider: any = {}) => {
+    const setup = async (settings: any = {}, identityProvider: any = {}, mode: 'policy' | 'runs' | 'all' = 'all') => {
         const context = initTestAppContext();
         vi.spyOn(context.getClusterSettingsService(), 'getModuleId').mockImplementation(name => name === 'cluster-manager' ? 'cluster-manager' : null);
         let stored = {...savedValues, ...settings};
@@ -19,20 +19,20 @@ describe('account reconciliation settings', () => {
             return {success: true};
         });
         const run = vi.spyOn(context.client().accounts(), 'reconcileUsers').mockResolvedValue(report);
-        const view = render(<AccountReconcileSettings active identityProvider={identityProvider}/>);
-        await screen.findByRole('checkbox', {name: 'Reconciliation on'});
+        const view = render(<AccountReconcileSettings active identityProvider={identityProvider} mode={mode}/>);
+        await screen.findByRole('checkbox', {name: 'Account synchronization'});
         return {context, read, save, run, ...view};
     };
     const advanced = () => userEvent.click(screen.getByRole('button', {name: 'Advanced'}));
 
     it('shows saved state, schedule and two run buttons with advanced collapsed', async () => {
         await setup({last_run: {at: 1700000000, report: {...report, refused: 0}}});
-        expect(screen.getByRole('checkbox', {name: 'Reconciliation on'})).toBeChecked();
+        expect(screen.getByRole('checkbox', {name: 'Account synchronization'})).toBeChecked();
         expect(screen.getAllByRole('checkbox')).toHaveLength(1);
-        expect(screen.getByRole('button', {name: 'Run now (dry run)'})).toBeEnabled();
-        expect(screen.getByRole('button', {name: 'Run now (apply)'})).toBeEnabled();
+        expect(screen.getByRole('button', {name: 'Preview changes'})).toBeEnabled();
+        expect(screen.getByRole('button', {name: 'Run reconciliation'})).toBeEnabled();
         expect(screen.getByText(/Last saved:.*Saved values loaded/)).toBeInTheDocument();
-        expect(screen.getByText(`Next run at: ${new Date(1700000900 * 1000).toLocaleString()}`)).toBeInTheDocument();
+        expect(screen.getByText(`Scheduled runs: ${new Date(1700000900 * 1000).toLocaleString()}`)).toBeInTheDocument();
         expect(screen.getByText(/Last run at \/ result:.*Completed \(dry run\)/)).toBeInTheDocument();
         expect(screen.queryByRole('textbox', {name: 'Interval (minutes)'})).not.toBeInTheDocument();
         await advanced();
@@ -46,10 +46,64 @@ describe('account reconciliation settings', () => {
 
     it('saves the main switch immediately without submitting hidden fields', async () => {
         const {save} = await setup();
-        await userEvent.click(screen.getByRole('checkbox', {name: 'Reconciliation on'}));
+        await userEvent.click(screen.getByRole('checkbox', {name: 'Account synchronization'}));
         expect(save).toHaveBeenCalledWith({module_id: 'cluster-manager', settings: {accounts: {reconcile: {enabled: false}}}});
         expect(await screen.findByText(/Reconciliation settings saved/)).toBeInTheDocument();
-        expect(screen.getByText('Next run at: Off')).toBeInTheDocument();
+        expect(screen.getByText('Scheduled runs: Off')).toBeInTheDocument();
+        expect(screen.getByText('Scheduled reconciliation is off. You can still preview or run reconciliation using the saved policy.')).toBeInTheDocument();
+    });
+
+    it('keeps both manual actions available while scheduling is off and confirms apply', async () => {
+        const {run} = await setup({enabled: false});
+        await userEvent.click(screen.getByRole('button', {name: 'Preview changes'}));
+        expect(run).toHaveBeenLastCalledWith({dry_run: true, override_max_disable_fraction: false});
+
+        await userEvent.click(screen.getByRole('button', {name: 'Run reconciliation'}));
+        expect(screen.getByRole('dialog', {name: 'Apply reconciliation now?'})).toBeInTheDocument();
+        await userEvent.click(screen.getByRole('button', {name: 'Cancel'}));
+        expect(run).toHaveBeenCalledTimes(1);
+
+        await userEvent.click(screen.getByRole('button', {name: 'Run reconciliation'}));
+        await userEvent.click(screen.getByRole('button', {name: 'Apply reconciliation'}));
+        expect(run).toHaveBeenLastCalledWith({dry_run: false, override_max_disable_fraction: false});
+    });
+
+    it('shows both actions in the Settings policy header without adding report tables', async () => {
+        await setup({enabled: false}, {}, 'policy');
+        expect(screen.getByRole('heading', {name: 'Account synchronization'})).toBeInTheDocument();
+        expect(screen.getByRole('button', {name: 'Preview changes'})).toBeEnabled();
+        expect(screen.getByRole('button', {name: 'Run reconciliation'})).toBeEnabled();
+        expect(screen.getByRole('link', {name: 'View reconciliation history'})).toHaveAttribute(
+            'href', '#/cluster/reconciliation-runs'
+        );
+        expect(screen.queryByRole('table')).not.toBeInTheDocument();
+    });
+
+    it('uses preview counts only when they are newer than the saved policy', async () => {
+        const stale = {at: 1700000000, report: {...report, dry_run: true}};
+        await setup({last_saved: 1700000100, last_run: stale});
+        await userEvent.click(screen.getByRole('button', {name: 'Run reconciliation'}));
+        expect(screen.getByText('Run a dry run first to see the changes')).toBeInTheDocument();
+        expect(screen.queryByText(/latest dry run would disable/)).not.toBeInTheDocument();
+    });
+
+    it('shows fresh dry-run counts in the apply confirmation', async () => {
+        const fresh = {at: 1700000200, report: {...report, dry_run: true}};
+        await setup({last_saved: 1700000100, last_run: fresh});
+        await userEvent.click(screen.getByRole('button', {name: 'Run reconciliation'}));
+        expect(screen.getByText('The latest dry run would disable 2 and re-enable 1 accounts.')).toBeInTheDocument();
+        expect(screen.queryByText('Run a dry run first to see the changes')).not.toBeInTheDocument();
+    });
+
+    it('warns that unsaved policy edits are not applied by a manual run', async () => {
+        const {run} = await setup();
+        await advanced();
+        await userEvent.clear(screen.getByRole('textbox', {name: 'Interval (minutes)'}));
+        await userEvent.type(screen.getByRole('textbox', {name: 'Interval (minutes)'}), '30');
+        await userEvent.click(screen.getByRole('button', {name: 'Run reconciliation'}));
+        expect(screen.getByText('Pending changes are not included. This run uses the saved policy.')).toBeInTheDocument();
+        await userEvent.click(screen.getByRole('button', {name: 'Apply reconciliation'}));
+        expect(run).toHaveBeenCalledWith({dry_run: false, override_max_disable_fraction: false});
     });
 
     it('reads again on reopening and disables editing after a failed read', async () => {
@@ -57,15 +111,15 @@ describe('account reconciliation settings', () => {
         read.mockResolvedValueOnce({settings: {accounts: {reconcile: {...savedValues, enabled: false, interval_minutes: 120}}}});
         rerender(<AccountReconcileSettings active={false} identityProvider={{}}/>);
         rerender(<AccountReconcileSettings active identityProvider={{}}/>);
-        expect(await screen.findByRole('checkbox', {name: 'Reconciliation on'})).not.toBeChecked();
+        expect(await screen.findByRole('checkbox', {name: 'Account synchronization'})).not.toBeChecked();
         await advanced();
         expect(screen.getByRole('textbox', {name: 'Interval (minutes)'})).toHaveValue('120');
         read.mockRejectedValueOnce(new Error('Settings unavailable'));
         rerender(<AccountReconcileSettings active={false} identityProvider={{}}/>);
         rerender(<AccountReconcileSettings active identityProvider={{}}/>);
         expect(await screen.findByText('Settings unavailable')).toBeInTheDocument();
-        expect(screen.queryByRole('button', {name: 'Run now (apply)'})).not.toBeInTheDocument();
-        expect(screen.queryByRole('checkbox', {name: 'Reconciliation on'})).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', {name: 'Run reconciliation'})).not.toBeInTheDocument();
+        expect(screen.queryByRole('checkbox', {name: 'Account synchronization'})).not.toBeInTheDocument();
     });
 
     it('saves advanced values without sending checkpoint rows', async () => {
@@ -134,7 +188,7 @@ describe('account reconciliation settings', () => {
             : {accounts: {reconcile: savedValues}}}));
         rerender(<AccountReconcileSettings active={false} identityProvider={{}}/>);
         rerender(<AccountReconcileSettings active identityProvider={{}}/>);
-        await screen.findByRole('checkbox', {name: 'Reconciliation on'});
+        await screen.findByRole('checkbox', {name: 'Account synchronization'});
         await advanced();
         expect(screen.getByRole('textbox', {name: 'Okta org URL'})).toBeInTheDocument();
         expect(read).toHaveBeenCalledWith({module_id: 'identity-provider'});
@@ -143,7 +197,12 @@ describe('account reconciliation settings', () => {
     it.each([true, false])('retains the refused mode %s when overriding', async dryRun => {
         const {run} = await setup();
         run.mockResolvedValueOnce({...report, dry_run: dryRun}).mockResolvedValueOnce({...report, dry_run: dryRun, refused: 0});
-        await userEvent.click(screen.getByRole('button', {name: `Run now (${dryRun ? 'dry run' : 'apply'})`}));
+        if (dryRun) {
+            await userEvent.click(screen.getByRole('button', {name: 'Preview changes'}));
+        } else {
+            await userEvent.click(screen.getByRole('button', {name: 'Run reconciliation'}));
+            await userEvent.click(screen.getByRole('button', {name: 'Apply reconciliation'}));
+        }
         expect(run).toHaveBeenLastCalledWith({dry_run: dryRun, override_max_disable_fraction: false});
         expect(await screen.findByText('Reconciliation refused')).toBeInTheDocument();
         expect(screen.getByText(/Proposed disables: 2 of 4/)).toBeInTheDocument();
@@ -155,7 +214,8 @@ describe('account reconciliation settings', () => {
     it.each(['upstream error fraction exceeded', 'directory unreachable'])('does not offer an override for %s', async reason => {
         const {run} = await setup();
         run.mockResolvedValue({...report, errors: 1, reason});
-        await userEvent.click(screen.getByRole('button', {name: 'Run now (apply)'}));
+        await userEvent.click(screen.getByRole('button', {name: 'Run reconciliation'}));
+        await userEvent.click(screen.getByRole('button', {name: 'Apply reconciliation'}));
         expect(await screen.findByText('Reconciliation refused')).toBeInTheDocument();
         expect(screen.queryByRole('button', {name: 'Proceed anyway'})).not.toBeInTheDocument();
     });
@@ -175,14 +235,45 @@ describe('account reconciliation settings', () => {
         expect(screen.getByRole('textbox', {name: 'Interval (minutes)'})).toHaveValue('40');
     });
 
+    it('disables both manual actions only while a request is active', async () => {
+        const {run} = await setup({enabled: false});
+        let finish: (value: any) => void = () => {};
+        run.mockReturnValueOnce(new Promise(resolve => {finish = resolve;}));
+        await userEvent.click(screen.getByRole('button', {name: 'Preview changes'}));
+        expect(screen.getByRole('button', {name: 'Preview changes'})).toBeDisabled();
+        expect(screen.getByRole('button', {name: 'Run reconciliation'})).toBeDisabled();
+        await act(async () => finish({...report, refused: 0}));
+        await waitFor(() => expect(screen.getByRole('button', {name: 'Preview changes'})).toBeEnabled());
+        expect(screen.getByRole('button', {name: 'Run reconciliation'})).toBeEnabled();
+    });
+
     it('shows save and run failures', async () => {
         const {save, run} = await setup();
         save.mockResolvedValue({success: false});
-        await userEvent.click(screen.getByRole('checkbox', {name: 'Reconciliation on'}));
+        await userEvent.click(screen.getByRole('checkbox', {name: 'Account synchronization'}));
         expect(await screen.findByText('Failed to update reconciliation settings.')).toBeInTheDocument();
-        expect(screen.getByRole('checkbox', {name: 'Reconciliation on'})).toBeChecked();
+        expect(screen.getByRole('checkbox', {name: 'Account synchronization'})).toBeChecked();
         run.mockRejectedValue(new Error('Run unavailable'));
-        await userEvent.click(screen.getByRole('button', {name: 'Run now (dry run)'}));
+        await userEvent.click(screen.getByRole('button', {name: 'Preview changes'}));
         expect(await screen.findByText('Run unavailable')).toBeInTheDocument();
     });
+});
+
+it('keeps advanced field order and cancels drafts without writing', async () => {
+    const context = initTestAppContext();
+    vi.spyOn(context.getClusterSettingsService(), 'getModuleId').mockReturnValue('cluster-manager');
+    vi.spyOn(context.client().clusterSettings(), 'getModuleSettings').mockResolvedValue({settings: {accounts: {reconcile: savedValues}}});
+    const save = vi.spyOn(context.client().clusterSettings(), 'updateModuleSettings');
+    const editing = vi.fn();
+    render(<AccountReconcileSettings active identityProvider={{}} mode="policy" onEditingChange={editing}/>);
+    await screen.findByRole('checkbox', {name: 'Account synchronization'});
+    await userEvent.click(screen.getByRole('button', {name: 'Advanced'}));
+    expect(screen.getByRole('checkbox', {name: 'Periodic dry run'}).compareDocumentPosition(screen.getByRole('textbox', {name: 'Interval (minutes)'})) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await userEvent.clear(screen.getByRole('textbox', {name: 'Interval (minutes)'}));
+    await userEvent.type(screen.getByRole('textbox', {name: 'Interval (minutes)'}), '30');
+    await userEvent.click(screen.getByRole('button', {name: 'Cancel reconciliation changes'}));
+    expect(editing).toHaveBeenLastCalledWith(false);
+    expect(save).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole('button', {name: 'Advanced'}));
+    expect(screen.getByRole('textbox', {name: 'Interval (minutes)'})).toHaveValue('15');
 });

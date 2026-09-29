@@ -172,3 +172,13 @@ describe("COMMANDS.md matches --help option for option", () => {
     });
   }
 });
+
+it("deploy and upgrade help describe explicit host refresh consent", () => {
+  const program = buildProgram(stubDeps());
+  for (const name of ["deploy", "upgrade-cluster"]) {
+    const command = program.commands.find((entry) => entry.name() === name);
+    const option = command?.options.find((entry) => entry.long === "--refresh-hosts");
+    assert.ok(option, `${name} offers --refresh-hosts`);
+    assert.match(option.description, /Replace outdated ECS hosts.*directory join/);
+  }
+});

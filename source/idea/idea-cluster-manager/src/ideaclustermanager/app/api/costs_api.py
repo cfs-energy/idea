@@ -42,6 +42,30 @@ class CostsAPI(BaseAPI):
 
     def list_user_costs(self, context: ApiInvocationContext):
         result = self.my_costs.list_user_costs()
+        storage_metrics = getattr(self.context, 'storage_metrics', None)
+        configuration = (
+            storage_metrics.configuration_status()
+            if storage_metrics is not None
+            else dict(status='disabled', reason='metrics_disabled')
+        )
+        storage_disabled = (
+            storage_metrics is None
+            or not storage_metrics.is_enabled()
+            or not storage_metrics.targets()
+        )
+        result.storage_disabled = storage_disabled
+        result.storage_configuration_status = configuration.get('status')
+        result.storage_configuration_reason = configuration.get('reason')
+        result.storage_metrics_provider = configuration.get('provider')
+        result.storage_has_efs = configuration.get('has_efs')
+        result.storage_data_available = False
+        if storage_disabled:
+            for row in result.listing or []:
+                row.total_cost_excludes_storage = True
+            result.storage_unavailable = False
+            context.success(result)
+            return
+
         storage_unavailable = False
         for row in result.listing or []:
             try:
@@ -51,15 +75,23 @@ class CostsAPI(BaseAPI):
                     f'failed to read stored costs for {row.username}: {e}'
                 )
                 storage_unavailable = True
+                row.total_cost_excludes_storage = True
                 continue
             month = costs.current
-            if month is None or month.shared_storage.status == 'unavailable':
-                storage_unavailable = True
+            if (
+                month is None
+                or month.shared_storage.status
+                not in ('ready', 'partial', 'estimated_share')
+                or month.shared_storage.cost is None
+            ):
+                row.total_cost_excludes_storage = True
                 continue
+            result.storage_data_available = True
             row.storage_cost = month.shared_storage.cost
             row.storage_gb = round(
                 sum(item.used_bytes or 0 for item in month.storage) / (1024**3), 2
             )
+            row.storage_cost_period = f'{month.start_date} through {month.end_date}'
             row.total_cost = round((row.total_cost or 0) + (row.storage_cost or 0), 2)
         result.storage_unavailable = storage_unavailable
         context.success(result)

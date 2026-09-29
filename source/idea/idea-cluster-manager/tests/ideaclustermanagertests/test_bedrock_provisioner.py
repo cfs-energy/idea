@@ -537,18 +537,16 @@ class FakeContext:
         return FakeLogger()
 
 
-def db_project(enabled=True, bedrock_enabled=True, model_ids=None, bedrock=None):
-    if bedrock is None:
-        bedrock = {
-            'enabled': bedrock_enabled,
-            'model_ids': CATALOG if model_ids is None else model_ids,
-        }
+def db_project(enabled=True, model_ids=None):
     return {
         'project_id': PROJECT_ID,
         'name': 'research',
         'title': 'Research',
         'enabled': enabled,
-        'bedrock': bedrock,
+        'bedrock': {
+            'enabled': True,
+            'model_ids': CATALOG if model_ids is None else model_ids,
+        },
         'tags': {'idea:CostCenter': 'cc-1'},
         'created_on': 1,
         'updated_on': 1,
@@ -1751,7 +1749,6 @@ class TwoProjectDAO(FakeProjectsDAO):
     def __init__(self, projects):
         self.projects = {project['project_id']: project for project in projects}
         self.updates = []
-        self.log = []
 
     def get_project_by_id(self, project_id):
         stored = self.projects.get(project_id)
@@ -1841,14 +1838,15 @@ def test_a_non_denial_client_error_is_recorded_and_still_raised():
 
 
 def test_a_recorded_reconcile_error_survives_a_project_update():
-    stored = db_project(
-        bedrock={
+    stored = {
+        **db_project(),
+        'bedrock': {
             'enabled': True,
             'model_ids': CATALOG,
             'reconcile_error': 'AccessDenied on CreateRole',
             'reconcile_error_on': 1756000000000,
-        }
-    )
+        },
+    }
     project = ProjectsDAO.convert_from_db(stored)
 
     assert project.bedrock.reconcile_error == 'AccessDenied on CreateRole'

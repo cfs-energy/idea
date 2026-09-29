@@ -14,6 +14,7 @@
 import { Aws, CustomResource, Duration, RemovalPolicy } from "aws-cdk-lib";
 import type { StackBuildProps } from "../app.ts";
 import { IdeaBaseStack } from "../base-stack.ts";
+import { kmsKeyArn } from "../constructs/base.ts";
 import { CustomResourceProvider, LOG_RETENTION_DAYS } from "../constructs/common.ts";
 import {
   DOGSTATSD_SOCKET,
@@ -30,6 +31,8 @@ import * as autoscaling from "aws-cdk-lib/aws-autoscaling";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as ecs from "aws-cdk-lib/aws-ecs";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as events from "aws-cdk-lib/aws-events";
+import { directoryJoinCommands } from "../directory-join.ts";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as servicediscovery from "aws-cdk-lib/aws-servicediscovery";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
@@ -132,6 +135,7 @@ export class EcsStack extends IdeaBaseStack {
     });
     this.ecsCluster.addAsgCapacityProvider(this.capacityProvider);
     this.releaseScaleInProtectionOnDelete();
+    this.buildDirectoryCleanup();
 
     this.ensureApplicationLogGroups();
     this.buildDatadogService();
@@ -276,7 +280,70 @@ export class EcsStack extends IdeaBaseStack {
     for (const policyArn of this.getEc2InstanceManagedPolicies()) {
       role.addManagedPolicy(iam.ManagedPolicy.fromManagedPolicyArn(this.stack, `ecs-host-policy-${policyArn}`, policyArn));
     }
+    if (this.directoryProvider() !== undefined) {
+      role.addToPolicy(new iam.PolicyStatement({
+        actions: ["s3:GetObject"],
+        resources: [`arn:${Aws.PARTITION}:s3:::${this.requiredString("cluster.cluster_s3_bucket")}/idea/bootstrap/*`],
+      }));
+      // PutAttributes acts on the container instance, not the cluster.
+      role.addToPolicy(new iam.PolicyStatement({
+        actions: ["ecs:PutAttributes"],
+        resources: [`arn:${Aws.PARTITION}:ecs:${Aws.REGION}:${Aws.ACCOUNT_ID}:container-instance/${this.ecsCluster.clusterName}/*`],
+        conditions: { ArnEquals: { "ecs:cluster": this.ecsCluster.clusterArn } },
+      }));
+      if (this.directoryProvider() === "openldap") {
+        const certificateArn = this.requiredString("directoryservice.tls_certificate_secret_arn");
+        role.addToPolicy(new iam.PolicyStatement({ actions: ["secretsmanager:GetSecretValue"], resources: [certificateArn] }));
+        grantInjectedSecret(this.containerScope, role, certificateArn);
+      } else {
+        role.addToPolicy(new iam.PolicyStatement({ actions: ["sqs:SendMessage"], resources: [this.automationQueueArn()] }));
+        const queueKey = this.context.config.getString("cluster.sqs.kms_key_id");
+        if (queueKey) {
+          role.addToPolicy(new iam.PolicyStatement({
+            actions: ["kms:Decrypt", "kms:GenerateDataKey"],
+            resources: [kmsKeyArn(this.context, queueKey)],
+            conditions: { StringEquals: { "kms:ViaService": `sqs.${this.stack.region}.${this.stack.urlSuffix}` } },
+          }));
+        }
+        role.addToPolicy(new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem"],
+          resources: [this.stack.formatArn({ service: "dynamodb", resource: "table", resourceName: `${this.clusterName}.ad-automation` })],
+        }));
+      }
+    }
     return role;
+  }
+
+  private directoryProvider(): string | undefined {
+    const provider = this.context.config.getString("directoryservice.provider");
+    return ["openldap", "activedirectory", "aws_managed_activedirectory"].includes(provider ?? "") ? provider : undefined;
+  }
+
+  private automationQueueArn(): string {
+    const url = new URL(this.requiredString("directoryservice.ad_automation.sqs_queue_url"));
+    const [account, name] = url.pathname.slice(1).split("/");
+    return this.stack.formatArn({ service: "sqs", region: url.hostname.split(".")[1], account, resource: name });
+  }
+
+  private buildDirectoryCleanup(): void {
+    const provider = this.directoryProvider();
+    if (provider === undefined || provider === "openldap") return;
+    new events.CfnRule(this.stack, "directory-computer-cleanup", {
+      eventPattern: {
+        source: ["aws.autoscaling"],
+        "detail-type": ["EC2 Instance Terminate Successful", "EC2 Instance-terminate Lifecycle Action"],
+        detail: { AutoScalingGroupName: [this.hostAutoScalingGroup.autoScalingGroupName] },
+      },
+      targets: [{
+        id: "delete-computer",
+        arn: this.automationQueueArn(),
+        sqsParameters: { messageGroupId: "ADAutomation.DeleteComputer" },
+        inputTransformer: {
+          inputPathsMap: { instance: "$.detail.EC2InstanceId" },
+          inputTemplate: '{"header":{"namespace":"ADAutomation.DeleteComputer"},"payload":{"instance_id":<instance>}}',
+        },
+      }],
+    });
   }
 
   /**
@@ -361,6 +428,15 @@ export class EcsStack extends IdeaBaseStack {
       `printf '[Resolve]\\nDomains=%s\\n' "${Aws.REGION}.compute.internal" > /etc/systemd/resolved.conf.d/idea-search-domain.conf`,
       "systemctl restart systemd-resolved",
     );
+    const provider = this.directoryProvider();
+    if (provider !== undefined) {
+      const packageUri = this.stack.node.tryGetContext("bootstrap_package_uri") as string | undefined
+        ?? `s3://${this.requiredString("cluster.cluster_s3_bucket")}/idea/bootstrap/bootstrap-${this.moduleId}-${this.deploymentId}.tar.gz`;
+      userData.addCommands(...directoryJoinCommands({
+        packageUri, provider, clusterName: this.clusterName, ecsClusterName: this.ecsCluster.clusterName,
+        region: this.stack.region, domain: this.context.config.getString("directoryservice.name"),
+      }));
+    }
     const launchTemplate = new ec2.LaunchTemplate(this.stack, "ecs-host-launch-template", {
       blockDevices: [
         {

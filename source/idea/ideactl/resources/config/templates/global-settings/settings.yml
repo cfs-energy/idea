@@ -385,9 +385,9 @@ package_config:
   # Keep version/nvm_version aligned with software_versions.yml, which pins the
   # same toolchain for the installer container and CI.
   nodejs:
-    version: "22.23.2"
+    version: "26.8.2"
     nvm_version: "0.40.7"
-    npm_version: "10.9.8"
+    npm_version: "11.19.1"
     url: "https://raw.githubusercontent.com/nvm-sh/nvm/"
   openmpi:
     version: "5.0.7"
@@ -645,6 +645,8 @@ gpu_settings:
   - g6
   - g6e
   - g6f
+  - g7
+  - g7e
   - gr6
   - g4dn
   - g4ad
@@ -661,6 +663,8 @@ gpu_settings:
     g6: *production_version
     g6e: *production_version
     g6f: *production_version
+    g7: *production_version
+    g7e: *production_version
     gr6: *production_version
     p3: *production_version
     p4d: *production_version

@@ -229,7 +229,16 @@ def test_metrics_have_all_families_on_both_providers(provider):
     service.run_once()
     assert {entry['MetricName'] for entry in context.published()} == {
         f'accounts.reconcile.{name}'
-        for name in ('checked', 'disabled', 'reenabled', 'missing', 'errors', 'refused')
+        for name in (
+            'checked',
+            'disabled',
+            'reenabled',
+            'missing',
+            'errors',
+            'refused',
+            'homes_converged',
+            'trees_queued',
+        )
     }
 
 
@@ -813,6 +822,35 @@ def test_manual_run_reads_current_settings_and_saves_report_without_delaying_per
     assert PREFIX + 'last_completed' not in context._config.db.values
 
 
+@pytest.mark.parametrize('dry_run', [True, False])
+def test_manual_modes_run_with_scheduling_disabled_and_preserve_checkpoint(dry_run):
+    service, context = build(
+        {
+            PREFIX + 'enabled': False,
+            PREFIX + 'max_disable_fraction': 1,
+            PREFIX + 'last_completed': 123,
+        },
+        records={'user0': None},
+        users=[
+            User(username='cluster-admin', enabled=True),
+            User(username='user0', enabled=True),
+        ],
+    )
+
+    report = service.run_once(dry_run=dry_run)
+
+    assert report['dry_run'] is dry_run
+    assert report['would_disable'] == 1
+    assert report['disabled'] == int(not dry_run)
+    assert context.accounts.disable_user.call_count == int(not dry_run)
+    assert context._config.db.values[PREFIX + 'last_completed'] == 123
+    assert context._config.db.values[PREFIX + 'last_run']['report'] == {
+        **report,
+        'truncated': False,
+    }
+    assert all(row.get('username') != 'cluster-admin' for row in report['changes'])
+
+
 def test_worker_wait_is_interrupted_by_save_and_stop():
     from threading import Event
 
@@ -867,3 +905,177 @@ def test_http_failure_reports_status_without_message():
         'credential', response=response
     )
     assert service.run_once()['changes'][0]['error'] == 'HTTPError (HTTP 403)'
+
+
+@pytest.mark.parametrize('dry_run', [True, False])
+@pytest.mark.parametrize('home_stale', [True, False])
+def test_reconcile_home_login_paths_and_tree_handoff(
+    monkeypatch, tmp_path, dry_run, home_stale
+):
+    from ideaclustermanagertests.test_user_home_directory import ownership_tree
+    from ideaclustermanager.app.accounts.account_tasks import RepairHomeOwnershipTask
+
+    helper, owners, changes = ownership_tree(monkeypatch, tmp_path)
+    helper.user.enabled = True
+    if not home_stale:
+        owners[helper.home_dir] = (12001, 12002)
+    service, context = build(records={}, users=[helper.user])
+    context.accounts.task_manager = Mock()
+    context.accounts.get_user.return_value = helper.user
+    report = service.run_once(dry_run=dry_run)
+    login_paths = {
+        helper.home_dir,
+        helper.ssh_dir,
+        *(
+            str(tmp_path / 'home/.ssh' / name)
+            for name in ('authorized_keys', 'id_rsa', 'id_rsa.pub')
+        ),
+    }
+    expected = login_paths if home_stale else login_paths - {helper.home_dir}
+    assert set(changes) == (set() if dry_run else expected)
+    assert report['homes_converged'] == (0 if dry_run else 1)
+    assert report['trees_queued'] == int(home_stale and not dry_run)
+    assert report['home_changes'][0]['queued'] == bool(home_stale and not dry_run)
+    assert (
+        context.published('accounts.reconcile.homes_converged')[0]['Value']
+        == report['homes_converged']
+    )
+    if home_stale and not dry_run:
+        queued = context.accounts.task_manager.send.call_args.kwargs
+        assert queued['task_name'] == 'accounts.repair-home-ownership'
+        RepairHomeOwnershipTask(context).invoke(queued['payload'])
+        assert owners[str(tmp_path / 'home/nested/data')] == (12001, 12002)
+        assert owners[str(tmp_path / 'home/shared')] == (13001, 13002)
+    else:
+        context.accounts.task_manager.send.assert_not_called()
+    if not dry_run:
+        changes.clear()
+        second = service.run_once(dry_run=False)
+        assert second['homes_converged'] == 0
+        assert second['trees_queued'] == 0
+        assert changes == []
+
+
+@pytest.mark.parametrize('enabled,protected', [(False, False), (True, True)])
+def test_home_convergence_includes_protected_enabled_accounts(
+    monkeypatch, tmp_path, enabled, protected
+):
+    from ideaclustermanagertests.test_user_home_directory import ownership_tree
+
+    helper, owners, changes = ownership_tree(monkeypatch, tmp_path)
+    helper.user.enabled = enabled
+    service, context = build(records={}, users=[helper.user])
+    context.accounts.is_cluster_administrator.side_effect = lambda username: protected
+    service.run_once(dry_run=False)
+    assert bool(changes) == enabled
+
+
+def test_home_convergence_stops_on_lease_loss(monkeypatch, tmp_path):
+    from ideaclustermanagertests.test_user_home_directory import ownership_tree
+
+    helper, owners, changes = ownership_tree(monkeypatch, tmp_path)
+    helper.user.enabled = True
+    service, context = build(records={}, users=[helper.user])
+    context._lock.assert_held = Mock(side_effect=RuntimeError('lease lost'))
+    report = service._reconcile(dry_run=False)
+    assert changes == []
+    context.accounts.task_manager.send.assert_not_called()
+    assert report['refused'] == 1
+
+
+def test_home_tree_enqueue_failure_keeps_snapshot_for_next_pass(monkeypatch, tmp_path):
+    from ideaclustermanagertests.test_user_home_directory import ownership_tree
+    from ideaclustermanager.app.accounts.account_tasks import RepairHomeOwnershipTask
+
+    helper, owners, changes = ownership_tree(monkeypatch, tmp_path)
+    helper.user.enabled = True
+    service, context = build(records={}, users=[helper.user])
+    metadata = {}
+    context.accounts.user_dao.get_user.side_effect = lambda username: dict(metadata)
+    context.accounts.user_dao.update_user.side_effect = lambda values: metadata.update(
+        values
+    )
+    context.accounts.task_manager.send.side_effect = RuntimeError('queue unavailable')
+    first = service.run_once(dry_run=False)
+    assert first['errors'] == 1
+    assert owners[helper.home_dir] == (12001, 12002)
+    assert metadata['home_ownership_stale_uid'] == 11001
+    context.accounts.task_manager.send.side_effect = None
+    second = service.run_once(dry_run=False)
+    assert second['trees_queued'] == 1
+    payload = context.accounts.task_manager.send.call_args.kwargs['payload']
+    context.accounts.get_user.return_value = helper.user
+    RepairHomeOwnershipTask(context).invoke(payload)
+    assert owners[str(tmp_path / 'home/nested/data')] == (12001, 12002)
+    assert metadata['home_ownership_stale_uid'] is None
+
+
+def test_home_convergence_checks_lease_between_path_writes(monkeypatch, tmp_path):
+    from ideaclustermanagertests.test_user_home_directory import ownership_tree
+
+    helper, owners, changes = ownership_tree(monkeypatch, tmp_path)
+    helper.user.enabled = True
+    service, context = build(records={}, users=[helper.user])
+
+    def assert_held(key):
+        if changes:
+            raise RuntimeError('lease lost')
+
+    context._lock.assert_held = assert_held
+    report = service._reconcile(dry_run=False)
+    assert changes == [helper.home_dir]
+    assert report['refused'] == 1
+    context.accounts.task_manager.send.assert_not_called()
+
+
+@pytest.mark.parametrize('dry_run', [True, False])
+def test_home_modes_and_gid_converge_without_tree_repair(
+    monkeypatch, tmp_path, dry_run
+):
+    from ideaclustermanagertests.test_user_home_directory import ownership_tree
+
+    helper, owners, changes = ownership_tree(monkeypatch, tmp_path)
+    helper.user.enabled = True
+    for path in owners:
+        owners[path] = (12001, 11002)
+    service, context = build(records={}, users=[helper.user])
+    paths = {tmp_path / 'home': 0o710, tmp_path / 'home/.ssh': 0o700}
+    paths.update(
+        {
+            tmp_path / 'home/.ssh' / name: mode
+            for name, mode in (
+                ('authorized_keys', 0o600),
+                ('id_rsa', 0o600),
+                ('id_rsa.pub', 0o644),
+            )
+        }
+    )
+    for path in paths:
+        path.chmod(0o777)
+    report = service.run_once(dry_run=dry_run)
+    assert report['would_homes_converge'] == 1
+    assert report['would_trees_queue'] == 0
+    assert report['trees_queued'] == 0
+    context.accounts.task_manager.send.assert_not_called()
+    if dry_run:
+        assert changes == []
+        context.accounts.user_dao.update_user.assert_not_called()
+    for path, mode in paths.items():
+        assert path.stat().st_mode & 0o777 == (0o777 if dry_run else mode)
+        assert owners[str(path)] == (12001, 11002 if dry_run else 12002)
+
+
+def test_home_reconcile_uses_current_account_ids(monkeypatch, tmp_path):
+    from ideaclustermanagertests.test_user_home_directory import ownership_tree
+
+    helper, owners, changes = ownership_tree(monkeypatch, tmp_path)
+    helper.user.enabled = False
+    service, context = build(records={}, users=[helper.user])
+    context.accounts.user_dao.get_user.return_value = {
+        'enabled': True,
+        'uid': 14001,
+        'gid': 14002,
+    }
+    report = service.run_once(dry_run=False)
+    assert report['homes_converged'] == 1
+    assert all(owners[path] == (14001, 14002) for path in changes)

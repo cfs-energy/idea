@@ -23,8 +23,10 @@ import ClusterSettingsClient from "./cluster-settings-client";
 import ProjectsClient from "./projects-client";
 import EmailTemplatesClient from "./email-templates-client";
 import IdeaClients from "./clients";
+import ReportingClient from "./reporting-client";
 
 export {
+    ReportingClient,
     IdeaApiInvoker,
     AuthClient,
     AccountsClient,

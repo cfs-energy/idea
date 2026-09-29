@@ -7,6 +7,8 @@
  * the live `Deps` (the only place in the CLI that constructs an AWS client).
  */
 
+import { liveContainerHosts } from "./live-operator-adapters.ts";
+
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -39,7 +41,6 @@ import {
 import { registerDeleteClusterCommands } from './commands/delete-cluster.ts';
 import { registerDeployCommands, runBootstrap, runDeploy } from './commands/deploy.ts';
 import { registerReplaceCommands } from './commands/replace.ts';
-import { registerMigrateCommands } from './commands/migrate.ts';
 import { checkClusterStatus, connectionInfo, liveHttpStatus, modulesTable, registerStatusCommands } from './commands/status.ts';
 import { createLiveUpgradeDeps, liveEcsAccountSettings, registerUpgradeCommands } from './commands/upgrade.ts';
 import { registerRemainingOperatorCommands } from './commands/utils.ts';
@@ -49,7 +50,6 @@ import {
   formatAwsIdentity,
 } from "./aws-client-options.ts";
 import { DeploymentHelper } from './deployment-helper.ts';
-import { createLiveMigrateDeps } from "./live-migrate-adapters.ts";
 import { createLiveDeleteClusterDeps, createLiveRemainingOperatorDeps } from "./live-operator-adapters.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -138,13 +138,22 @@ export function liveDeps(): Deps {
     return doc.send(new ScanCommand(input));
   };
 
+  const scanIn = (target: { awsRegion: string; awsProfile?: string }) => async (input: { TableName: string; ExclusiveStartKey?: Record<string, unknown> }): Promise<ScanPage> => {
+    const { DynamoDBClient } = await import('@aws-sdk/client-dynamodb');
+    const { DynamoDBDocumentClient, ScanCommand } = await import('@aws-sdk/lib-dynamodb');
+    const doc = DynamoDBDocumentClient.from(new DynamoDBClient(await awsClientOptions(target.awsRegion, target.awsProfile)));
+    return doc.send(new ScanCommand(input));
+  };
+
   return {
     spawn: liveSpawn,
     scan,
+    scanIn,
     // `deploy` and `quick-setup` run the container pre-flight as soon as the deployment includes
     // the container module, so the reader it needs belongs in the live dependency set rather than
     // only in the upgrade command group's.
     ecsAccountSettings: liveEcsAccountSettings(),
+    containerHosts: liveContainerHosts(),
     cfn: {
       async describeChangeSet(input) {
         const { CloudFormationClient, DescribeChangeSetCommand } = await import('@aws-sdk/client-cloudformation');
@@ -205,6 +214,22 @@ export function liveDeps(): Deps {
         createDatabase: options.createDatabase,
         logger: (message) => console.log(message),
       });
+    },
+    vpcEndpointServices: {
+      async serviceNames(input) {
+        const { DescribeVpcEndpointServicesCommand, EC2Client } = await import('@aws-sdk/client-ec2');
+        const client = new EC2Client(await awsClientOptions(input.awsRegion, input.awsProfile));
+        const names: string[] = [];
+        let token: string | undefined;
+        do {
+          const page = await client.send(new DescribeVpcEndpointServicesCommand({
+            Filters: [{ Name: 'service-type', Values: [input.serviceType] }], NextToken: token,
+          }));
+          names.push(...(page.ServiceNames ?? []));
+          token = page.NextToken;
+        } while (token);
+        return names;
+      },
     },
     prefixList: {
       async getManagedPrefixListEntries(input) {
@@ -388,7 +413,7 @@ export async function quickSetup(deps: Deps, options: QuickSetupOptions): Promis
       awsProfile,
       moduleSet: options.moduleSet,
       force: options.force,
-    });
+    }, 'template');
   }
 
   const settings = await scanSettings(deps, clusterName);
@@ -560,7 +585,6 @@ const program = new Command('ideactl')
   registerReplaceCommands(program, deps);
   registerStatusCommands(program, deps);
   registerUpgradeCommands(program, createLiveUpgradeDeps(deps));
-  registerMigrateCommands(program, createLiveMigrateDeps(deps, environmentRegion));
   registerDeleteClusterCommands(program, createLiveDeleteClusterDeps(deps));
   registerRemainingOperatorCommands(program, createLiveRemainingOperatorDeps(deps));
 

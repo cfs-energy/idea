@@ -10,11 +10,12 @@
 #  and limitations under the License.
 
 from ideasdk.context import SocaContext
-from ideadatamodel.auth import User
+from ideadatamodel.auth import User, RepairHomeOwnershipResult
 from ideasdk.utils import Utils
 from ideadatamodel import exceptions
 
 import os
+import stat
 import shutil
 import subprocess
 from cryptography.hazmat.primitives import serialization as crypto_serialization
@@ -44,15 +45,160 @@ class UserHomeDirectory:
         # Account IDs are authoritative and work without NSS/SSSD in containers.
         os.chown(path, self.user.uid, self.user.gid)
 
+    def validate_ownership(self):
+        if (
+            self.user.uid is None
+            or self.user.gid is None
+            or self.user.uid <= 0
+            or self.user.gid <= 0
+        ):
+            raise exceptions.invalid_params(
+                'Home directory requires positive uid and gid'
+            )
+        if (
+            not self.home_dir
+            or not os.path.isabs(self.home_dir)
+            or os.path.normpath(self.home_dir) == '/'
+        ):
+            raise exceptions.invalid_params(
+                'Home directory requires an absolute non-root path'
+            )
+
+    def _ownership_summary(self, result):
+        self._logger.info(
+            f'home ownership: username={self.user.username} dry_run={result.dry_run} '
+            f'stale_uid={result.stale_uid} uid={self.user.uid} gid={self.user.gid} '
+            f'changed={result.changed} skipped={result.skipped} failed={result.failed}'
+        )
+
+    def repair_ownership(self, dry_run=False, stale_uid=None):
+        self.validate_ownership()
+        result = RepairHomeOwnershipResult(username=self.user.username, dry_run=dry_run)
+        try:
+            home = os.lstat(self.home_dir)
+        except OSError:
+            result.failed = 1
+            self._ownership_summary(result)
+            return result
+        result.stale_uid = home.st_uid if stale_uid is None else stale_uid
+
+        def visit(path, info=None):
+            try:
+                info = info if info is not None else os.lstat(path)
+                if stat.S_ISDIR(info.st_mode):
+                    with os.scandir(path) as entries:
+                        for entry in entries:
+                            visit(entry.path)
+                if info.st_uid != result.stale_uid or (info.st_uid, info.st_gid) == (
+                    self.user.uid,
+                    self.user.gid,
+                ):
+                    result.skipped += 1
+                    return
+                # Keep the stale home owner until a complete traversal succeeds.
+                if path == self.home_dir and result.failed:
+                    result.skipped += 1
+                    return
+                if not dry_run:
+                    os.lchown(path, self.user.uid, self.user.gid)
+                result.changed += 1
+                if len(result.paths) < 20:
+                    result.paths.append(path)
+            except OSError as error:
+                result.failed += 1
+                self._logger.warning(
+                    f'home ownership failed: {path}: {type(error).__name__}'
+                )
+
+        visit(self.home_dir, home)
+        self._ownership_summary(result)
+        return result
+
+    def converge_login_paths(
+        self,
+        dry_run=False,
+        assert_lease=None,
+        include_home=True,
+        remember_stale_uid=None,
+    ):
+        self.validate_ownership()
+        result = RepairHomeOwnershipResult(username=self.user.username, dry_run=dry_run)
+        paths = [(self.home_dir, 0o710), (self.ssh_dir, 0o700)]
+        paths.extend(
+            (os.path.join(self.ssh_dir, name), mode)
+            for name, mode in (
+                ('authorized_keys', 0o600),
+                ('id_rsa', 0o600),
+                ('id_rsa.pub', 0o644),
+            )
+        )
+        for path, mode in paths:
+            try:
+                info = os.lstat(path)
+            except FileNotFoundError:
+                result.skipped += 1
+                if path in (self.home_dir, self.ssh_dir):
+                    break
+                continue
+            except OSError as error:
+                result.failed += 1
+                self._logger.warning(
+                    f'home ownership failed: {path}: {type(error).__name__}'
+                )
+                if path in (self.home_dir, self.ssh_dir):
+                    break
+                continue
+            if path == self.home_dir:
+                result.stale_uid = info.st_uid
+                if not dry_run and info.st_uid != self.user.uid and remember_stale_uid:
+                    remember_stale_uid(info.st_uid)
+            is_link = stat.S_ISLNK(info.st_mode)
+            owner_changed = (info.st_uid, info.st_gid) != (self.user.uid, self.user.gid)
+            mode_changed = not is_link and stat.S_IMODE(info.st_mode) != mode
+            if path != self.home_dir or include_home:
+                if owner_changed or mode_changed:
+                    self._logger.info(
+                        f'home login path: {path} uid={self.user.uid} gid={self.user.gid} mode={mode:o} dry_run={dry_run}'
+                    )
+                    try:
+                        if not dry_run:
+                            if owner_changed:
+                                if assert_lease:
+                                    assert_lease()
+                                os.lchown(path, self.user.uid, self.user.gid)
+                            if mode_changed:
+                                if assert_lease:
+                                    assert_lease()
+                                os.chmod(path, mode, follow_symlinks=False)
+                        result.changed += 1
+                        result.paths.append(path)
+                    except OSError as error:
+                        result.failed += 1
+                        self._logger.warning(
+                            f'home ownership failed: {path}: {type(error).__name__}'
+                        )
+                else:
+                    result.skipped += 1
+            if path in (self.home_dir, self.ssh_dir) and not stat.S_ISDIR(info.st_mode):
+                break
+        return result
+
     def initialize_ssh_dir(self):
-        os.makedirs(self.ssh_dir, exist_ok=True)
-        os.chmod(self.ssh_dir, 0o700)
-        self.own_path(self.ssh_dir)
+        self.validate_ownership()
+        if os.path.lexists(self.ssh_dir):
+            result = self.converge_login_paths(include_home=False)
+            if result.failed:
+                raise exceptions.general_exception('SSH ownership convergence failed')
+            if not stat.S_ISDIR(os.lstat(self.ssh_dir).st_mode):
+                return
+        else:
+            os.makedirs(self.ssh_dir, exist_ok=True)
+            os.chmod(self.ssh_dir, 0o700)
+            self.own_path(self.ssh_dir)
 
         id_rsa_file = os.path.join(self.ssh_dir, 'id_rsa')
 
-        # if an existing id_rsa file already exists, return
-        if Utils.is_file(id_rsa_file):
+        if os.path.lexists(id_rsa_file):
             return
 
         key = rsa.generate_private_key(
@@ -76,12 +222,13 @@ class UserHomeDirectory:
         id_rsa_pub_file = os.path.join(self.ssh_dir, 'id_rsa.pub')
         with open(id_rsa_pub_file, 'w') as f:
             f.write(Utils.from_bytes(public_key))
+        os.chmod(id_rsa_pub_file, 0o644)
         self.own_path(id_rsa_pub_file)
 
         authorized_keys_file = os.path.join(self.ssh_dir, 'authorized_keys')
         with open(authorized_keys_file, 'w') as f:
             f.write(Utils.from_bytes(public_key))
-        os.chmod(id_rsa_file, 0o600)
+        os.chmod(authorized_keys_file, 0o600)
         self.own_path(authorized_keys_file)
 
     def initialize_home_dir(self):
@@ -103,15 +250,7 @@ class UserHomeDirectory:
             self.own_path(dest_file)
 
     def initialize(self):
-        if (
-            self.user.uid is None
-            or self.user.gid is None
-            or self.user.uid <= 0
-            or self.user.gid <= 0
-        ):
-            raise exceptions.invalid_params(
-                'Home directory requires positive uid and gid'
-            )
+        self.validate_ownership()
 
         self.initialize_home_dir()
         self.initialize_ssh_dir()

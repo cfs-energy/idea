@@ -710,28 +710,14 @@ class VirtualDesktopAPI(BaseAPI):
             session.failure_reason = 'missing session.server.instance_type'
             return session, False
 
-        is_instance_type_valid = False
-        allowed_instance_types = self.controller_utils.get_valid_instance_types(
-            session.hibernation_enabled, session.software_stack
+        failure_reason = self.controller_utils.get_instance_type_rejection_reason(
+            instance_type_name=session.server.instance_type,
+            hibernation_support=session.hibernation_enabled,
+            software_stack=session.software_stack,
+            username=session.owner,
         )
-        for allowed_instance_type in allowed_instance_types:
-            is_instance_type_valid = (
-                session.server.instance_type
-                == Utils.get_value_as_string('InstanceType', allowed_instance_type, '')
-            )
-            if is_instance_type_valid:
-                break
-
-        if not is_instance_type_valid:
-            # tell the user which rule the requested size failed, not just that it failed.
-            session.failure_reason = (
-                self.controller_utils.get_instance_type_rejection_reason(
-                    instance_type_name=session.server.instance_type,
-                    hibernation_support=session.hibernation_enabled,
-                    software_stack=session.software_stack,
-                )
-                or f'{session.server.instance_type} is not available for virtual desktops in this cluster.'
-            )
+        if Utils.is_not_empty(failure_reason):
+            session.failure_reason = failure_reason
             return session, False
 
         # Technical Validation for Hibernation.

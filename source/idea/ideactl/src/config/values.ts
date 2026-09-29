@@ -217,7 +217,7 @@ function getString(key: string, obj: UserValues, def: string | null = null): str
  * `ModelUtils.get_as_bool`: `bool`, then `int` truthiness, then the recognised strings. A `float`
  * matches neither `isinstance` test and falls through to the default.
  */
-function getBool(key: string, obj: UserValues, def: boolean): boolean {
+export function getBool(key: string, obj: UserValues, def: boolean): boolean {
   if (!valueExists(key, obj)) return def;
   const value = obj[key];
   if (typeof value === 'boolean') return value;

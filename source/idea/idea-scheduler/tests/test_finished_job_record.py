@@ -47,6 +47,7 @@ LOGGER = logging.getLogger('test_finished_job_record')
 class FakeJobCache:
     def __init__(self):
         self.finished_jobs: List[SocaJob] = []
+        self.pending_jobs: List[SocaJob] = []
 
     @staticmethod
     def get_job_execution_hosts(job_id: str) -> Optional[List[SocaJobExecutionHost]]:
@@ -55,8 +56,18 @@ class FakeJobCache:
     def delete_job_execution_hosts(self, job_id: str):
         pass
 
+    def get_completed_job_by_uid(self, job_uid):
+        return next((job for job in self.finished_jobs if job.job_uid == job_uid), None)
+
     def add_finished_job(self, job: SocaJob):
         self.finished_jobs.append(job)
+        self.pending_jobs.append(job)
+
+    def list_pending_index_jobs(self):
+        return list(self.pending_jobs)
+
+    def mark_job_indexed(self, job):
+        self.pending_jobs.remove(job)
 
 
 class FakeLifecycleEvents:
@@ -78,6 +89,9 @@ class FakeLifecycleEvents:
 
 
 class FakeDocumentStore:
+    def is_enabled(self):
+        return True
+
     def __init__(self):
         self.indexed: List[SocaJob] = []
 
@@ -196,7 +210,6 @@ def make_job(**kwargs) -> SocaJob:
         'owner': 'mockuser',
         'project': 'default',
         'queue': 'normal',
-        'queue_type': 'compute',
         'params': SocaJobParams(walltime=WALLTIME, nodes=1, cpus=1),
     }
     attributes.update(kwargs)
@@ -208,13 +221,11 @@ def make_job(**kwargs) -> SocaJob:
 
 def test_disposition_unprovisioned_without_error_is_deleted():
     """
-    qdel of a normal queued job: nothing went wrong, so there is nothing to explain and
-    no record is created.
+    Owner cancellation leaves a record even without a provisioning error.
     """
     job = make_job(provisioned=False)
 
     assert ProvisioningLifecycleEvents.get_disposition(job) == DISPOSITION_DELETED
-    assert FinishedJobProcessor.should_record_unprovisioned(job) is False
 
 
 @pytest.mark.parametrize('error', [QUEUE_LIMIT_ERROR, PROVISIONING_ERROR])
@@ -227,7 +238,6 @@ def test_disposition_unprovisioned_with_a_wait_error_is_still_deleted(error):
     job = make_job(provisioned=False, error_message=error)
 
     assert ProvisioningLifecycleEvents.get_disposition(job) == DISPOSITION_DELETED
-    assert FinishedJobProcessor.should_record_unprovisioned(job) is False
 
 
 def test_disposition_held_at_retry_cap():
@@ -240,7 +250,6 @@ def test_disposition_held_at_retry_cap():
     )
 
     assert ProvisioningLifecycleEvents.get_disposition(job) == DISPOSITION_HELD
-    assert FinishedJobProcessor.should_record_unprovisioned(job) is True
 
 
 # --------------------------------------------------------- path 1: never provisioned
@@ -329,6 +338,7 @@ def test_unprovisioned_jobs_are_indexed(fake_context, pricing_spy):
     build_poller(fake_context)._process_unprovisioned_jobs([job])
 
     assert fake_context.job_cache.finished_jobs == [job]
+    build_poller(fake_context)._index_pending_jobs()
     assert fake_context.document_store.indexed == [job]
 
 
@@ -351,6 +361,7 @@ def test_unprovisioned_job_write_failure_is_not_indexed(fake_context, pricing_sp
     build_poller(fake_context)._process_unprovisioned_jobs([job])
 
     assert fake_context.job_cache.finished_jobs == []
+    build_poller(fake_context)._index_pending_jobs()
     assert fake_context.document_store.indexed == []
 
 
@@ -431,6 +442,7 @@ def test_clean_run_is_still_priced_from_elapsed_time(fake_context, pricing_spy):
     assert pricing_spy.calls == [('14906', 7200)]
     assert job.estimated_bom_cost is not None
     assert fake_context.job_cache.finished_jobs == [job]
+    build_poller(fake_context)._index_pending_jobs()
     assert fake_context.document_store.indexed == [job]
     assert fake_context.lifecycle_events.dispositions == [('14906', DISPOSITION_RAN)]
     assert fake_context.job_notifications.completed == ['14906']
@@ -460,26 +472,16 @@ def test_clean_run_error_message_stays_unset(fake_context, pricing_spy):
 
 
 @pytest.mark.parametrize('error', [None, QUEUE_LIMIT_ERROR])
-def test_user_deleted_unprovisioned_job_creates_no_record(
-    fake_context, pricing_spy, error
-):
-    """
-    qdel of a job that was still waiting for capacity, whether or not a queue limit was
-    recorded against it: no finished-jobs row, no index entry, no charge.
-    """
+def test_user_deleted_unprovisioned_job_keeps_record(fake_context, pricing_spy, error):
     job = make_job(provisioned=False, error_message=error)
-
-    assert FinishedJobProcessor.should_record_unprovisioned(job) is False
-
-    # the poller emits the disposition and drops the job; nothing else runs
-    fake_context.lifecycle_events.job_disposition(job=job)
-
-    assert fake_context.job_cache.finished_jobs == []
-    assert fake_context.document_store.indexed == []
+    build_poller(fake_context)._process_unprovisioned_jobs([job])
+    assert fake_context.job_cache.finished_jobs == [job]
+    build_poller(fake_context)._index_pending_jobs()
+    assert fake_context.document_store.indexed == [job]
+    assert job.disposition == 'deleted'
+    assert job.reason_class == 'cancelled'
+    assert job.status_reason == 'Cancelled by the owner.'
     assert pricing_spy.calls == []
-    assert fake_context.lifecycle_events.dispositions == [
-        ('14906', DISPOSITION_DELETED)
-    ]
 
 
 def test_user_deleted_job_after_provisioning_is_not_priced(fake_context, pricing_spy):
@@ -632,3 +634,391 @@ def test_unmeasurable_run_time_is_not_priced_at_walltime(fake_context, pricing_s
     assert job.estimated_bom_cost is None
     # the record itself survives, without a figure
     assert fake_context.job_cache.finished_jobs == [job]
+
+
+def test_system_deletion_keeps_reason_and_disposition(fake_context, pricing_spy):
+    job = make_job(
+        state=SocaJobState.HELD,
+        provisioned=False,
+        disposition='deleted',
+        reason_class='access',
+        error_message='Deleted because the owner is disabled.',
+    )
+    build_poller(fake_context)._process_unprovisioned_jobs([job])
+    assert fake_context.job_cache.finished_jobs == [job]
+    assert job.state == SocaJobState.FINISHED
+    assert job.disposition == 'deleted'
+    assert job.reason_class == 'access'
+    assert job.status_reason == job.error_message
+    assert pricing_spy.calls == []
+
+
+def test_missing_scheduler_history_keeps_cached_job(fake_context, pricing_spy):
+    job = make_job(provisioned=True, state=SocaJobState.FINISHED)
+    build_poller(fake_context)._process_finished_jobs([job])
+    assert fake_context.job_cache.finished_jobs == [job]
+    build_poller(fake_context)._index_pending_jobs()
+    assert fake_context.document_store.indexed == [job]
+    assert job.disposition == 'deleted'
+    assert job.end_time is not None
+    assert pricing_spy.calls == []
+
+
+@pytest.mark.parametrize('write_fails', [False, True])
+def test_poll_retains_cache_until_record_is_written(
+    fake_context, monkeypatch, write_fails
+):
+    from threading import Event
+    from unittest.mock import Mock
+
+    class CycleExit(Event):
+        def wait(self, timeout=None):
+            self.set()
+
+    job = make_job(state=SocaJobState.QUEUED, provisioned=False)
+    cache = fake_context.job_cache
+    cache.get_jobs_table = Mock()
+    cache.get_jobs_table.return_value.all.return_value = [{'job_id': job.job_id}]
+    cache.convert_db_entry_to_job = Mock(return_value=job)
+    cache.delete_jobs = Mock()
+    if write_fails:
+        cache.add_finished_job = Mock(side_effect=RuntimeError('store unavailable'))
+    fake_context.config = lambda: Mock()
+    scheduler = Mock()
+    scheduler.list_jobs_ids.return_value = []
+    monkeypatch.setattr(
+        finished_job_processor, 'OpenPBSQSelect', lambda context: scheduler
+    )
+    poller = build_poller(fake_context)
+    poller._exit = CycleExit()
+    poller._poll_finished_jobs()
+    if write_fails:
+        cache.delete_jobs.assert_not_called()
+    else:
+        cache.delete_jobs.assert_called_once_with(job_ids=[job.job_id])
+        assert cache.finished_jobs[0].disposition == 'deleted'
+
+
+@pytest.mark.parametrize('raises', [False, True])
+def test_index_failure_leaves_completed_record_for_retry(fake_context, raises):
+    from unittest.mock import Mock
+
+    fake_context.document_store.is_enabled = Mock(return_value=True)
+    fake_context.document_store.add_jobs = Mock(return_value=False)
+    if raises:
+        fake_context.document_store.add_jobs.side_effect = RuntimeError(
+            'index unavailable'
+        )
+    job = make_job(provisioned=False, state=SocaJobState.QUEUED)
+    poller = build_poller(fake_context)
+    assert poller._process_unprovisioned_jobs([job]) == [job.job_id]
+    poller._index_pending_jobs()
+    assert fake_context.job_cache.list_pending_index_jobs() == [job]
+    assert fake_context.job_cache.finished_jobs == [job]
+
+
+@pytest.mark.parametrize('provisioned', [False, True])
+@pytest.mark.parametrize('raises', [False, True])
+def test_index_retry_reuses_finished_record(
+    fake_context, pricing_spy, provisioned, raises
+):
+    from unittest.mock import Mock
+
+    cache = fake_context.job_cache
+    cache.get_job_execution_hosts = Mock(
+        side_effect=[[SocaJobExecutionHost(host='host-a')], []]
+    )
+    cache.delete_job_execution_hosts = Mock()
+    fake_context.document_store.is_enabled = Mock(return_value=True)
+    fake_context.document_store.add_jobs = Mock(
+        side_effect=[RuntimeError('index unavailable') if raises else False, True]
+    )
+    job = make_job(
+        job_uid='job-a',
+        provisioned=provisioned,
+        state=SocaJobState.FINISHED,
+        start_time=arrow.utcnow().shift(minutes=-2).datetime if provisioned else None,
+        end_time=arrow.utcnow().datetime,
+    )
+    poller = build_poller(fake_context)
+    process = (
+        poller._process_finished_jobs
+        if provisioned
+        else poller._process_unprovisioned_jobs
+    )
+    assert process([job.model_copy(deep=True)]) == [job.job_id]
+    poller._index_pending_jobs()
+    record = cache.finished_jobs[0].model_dump()
+    poller._index_pending_jobs()
+    assert cache.list_pending_index_jobs() == []
+    assert len(cache.finished_jobs) == 1
+    assert cache.finished_jobs[0].model_dump() == record
+    assert (
+        fake_context.document_store.add_jobs.call_args.kwargs['jobs'][0].model_dump()
+        == record
+    )
+    assert fake_context.job_notifications.completed == (
+        [job.job_id] if provisioned else []
+    )
+    assert len(pricing_spy.calls) == int(provisioned)
+    assert len(fake_context.lifecycle_events.dispositions) == 1
+    assert cache.get_job_execution_hosts.call_count == int(provisioned)
+
+
+@pytest.fixture()
+def currency(monkeypatch):
+    from ideadatamodel import locale
+
+    monkeypatch.setattr(locale, 'get_currency_code', lambda: 'USD')
+
+
+@pytest.mark.parametrize('explicit_cost', [False, True])
+def test_budget_estimate_requires_available_price(explicit_cost, currency):
+    from unittest.mock import Mock
+    from ideadatamodel import SocaAmount
+    from ideascheduler.app.aws import AwsBudgetsHelper
+
+    cost = SocaJobEstimatedBOMCost(
+        price_unavailable=True,
+        line_items_total=SocaAmount(amount=4),
+        total=SocaAmount(amount=4),
+    )
+    job = make_job(estimated_bom_cost=None if explicit_cost else cost)
+    project = Mock()
+    project.budget.budget_name = 'budget'
+    helper = AwsBudgetsHelper(Mock(), job=job, project=project)
+    helper.get_budget = Mock()
+    helper.get_budget.return_value.budget_limit = SocaAmount(amount=100)
+    helper.get_budget.return_value.actual_spend = SocaAmount(amount=20)
+    helper.get_budget.return_value.forecasted_spend = SocaAmount(amount=30)
+    assert helper.compute_budget_usage(bom_cost=cost if explicit_cost else None) is None
+    helper.get_budget.assert_not_called()
+
+
+@pytest.mark.parametrize('provisioned', [False, True])
+@pytest.mark.parametrize('raises', [False, True])
+def test_index_outage_releases_cache_and_retries_after_restart(
+    fake_context, pricing_spy, monkeypatch, tmp_path, provisioned, raises
+):
+    from threading import Event
+    from unittest.mock import Mock
+    from test_job_cache import FakeSchedulerContext
+    from ideascheduler.app.provisioning.job_monitor.job_cache import JobCache
+
+    class CycleExit(Event):
+        def wait(self, timeout=None):
+            self.set()
+
+    db_context = FakeSchedulerContext(str(tmp_path))
+    cache = JobCache(db_context)
+    fake_context.job_cache = cache
+    job = make_job(
+        job_uid='finished-job', provisioned=provisioned, state=SocaJobState.QUEUED
+    )
+    cache.sync([job])
+    fake_context.config = lambda: Mock()
+    monkeypatch.setattr(
+        finished_job_processor,
+        'OpenPBSQSelect',
+        lambda context: Mock(list_jobs_ids=Mock(return_value=[])),
+    )
+    store = fake_context.document_store
+    store.is_enabled = Mock(return_value=True)
+    store.add_jobs = Mock(return_value=False)
+    if raises:
+        store.add_jobs.side_effect = RuntimeError('index unavailable')
+    poller = build_poller(fake_context)
+    poller._exit = CycleExit()
+    poller._poll_finished_jobs()
+
+    assert cache.get_job(job.job_id) is None
+    record = cache.get_completed_job_by_uid(job.job_uid).model_dump()
+    assert [job.job_uid for job in cache.list_pending_index_jobs()] == [job.job_uid]
+    notifications = list(fake_context.job_notifications.completed)
+    dispositions = list(fake_context.lifecycle_events.dispositions)
+    cache.get_connection().close()
+
+    fake_context.job_cache = JobCache(db_context)
+    store.add_jobs = Mock(return_value=True)
+    poller = build_poller(fake_context)
+    poller._exit = CycleExit()
+    poller._poll_finished_jobs()
+
+    assert fake_context.job_cache.list_pending_index_jobs() == []
+    store.add_jobs.assert_called_once()
+    assert store.add_jobs.call_args.kwargs['jobs'][0].model_dump() == record
+    assert fake_context.job_notifications.completed == notifications
+    assert fake_context.lifecycle_events.dispositions == dispositions
+
+
+def test_an_index_outage_ends_the_single_writes_after_three_failures(
+    fake_context, monkeypatch, tmp_path
+):
+    from threading import Event
+    from unittest.mock import Mock
+    from test_job_cache import FakeSchedulerContext
+    from ideascheduler.app.provisioning.job_monitor.job_cache import JobCache
+
+    class CycleExit(Event):
+        def wait(self, timeout=None):
+            self.set()
+
+    cache = JobCache(FakeSchedulerContext(str(tmp_path)))
+    fake_context.job_cache = cache
+    jobs = [
+        make_job(job_id=str(i), job_uid=f'finished-{i}', state=SocaJobState.QUEUED)
+        for i in range(10)
+    ]
+    cache.sync(jobs)
+    fake_context.config = lambda: Mock()
+    monkeypatch.setattr(
+        finished_job_processor,
+        'OpenPBSQSelect',
+        lambda context: Mock(list_jobs_ids=Mock(return_value=[])),
+    )
+    fake_context.document_store.is_enabled = Mock(return_value=True)
+    fake_context.document_store.add_jobs = Mock(return_value=False)
+    poller = build_poller(fake_context)
+    poller._exit = CycleExit()
+    poller._poll_finished_jobs()
+
+    # one batch, then three single writes, then the cycle gives up
+    assert fake_context.document_store.add_jobs.call_count == 4
+    assert len(cache.list_pending_index_jobs()) == 10
+    assert cache.get_job('0') is None  # the active cache is released regardless
+
+
+@pytest.mark.parametrize('raises', [False, True])
+def test_poisoned_document_does_not_block_other_finished_jobs(
+    fake_context, monkeypatch, tmp_path, caplog, raises
+):
+    from threading import Event
+    from unittest.mock import Mock
+    from test_job_cache import FakeSchedulerContext
+    from ideascheduler.app.provisioning.job_monitor.job_cache import JobCache
+
+    class CycleExit(Event):
+        def wait(self, timeout=None):
+            self.set()
+
+    cache = JobCache(FakeSchedulerContext(str(tmp_path)))
+    fake_context.job_cache = cache
+    jobs = [
+        make_job(job_id=str(i), job_uid=f'finished-{i}', state=SocaJobState.QUEUED)
+        for i in range(3)
+    ]
+    cache.sync(jobs)
+    fake_context.config = lambda: Mock()
+    monkeypatch.setattr(
+        finished_job_processor,
+        'OpenPBSQSelect',
+        lambda context: Mock(list_jobs_ids=Mock(return_value=[])),
+    )
+    accepted = set()
+    caplog.set_level(logging.WARNING, logger=LOGGER.name)
+
+    def index(jobs):
+        if any(job.job_id == '1' for job in jobs):
+            if raises:
+                raise ValueError('invalid document')
+            return False
+        accepted.update(job.job_id for job in jobs)
+        return True
+
+    fake_context.document_store.is_enabled = Mock(return_value=True)
+    fake_context.document_store.add_jobs = Mock(side_effect=index)
+    poller = build_poller(fake_context)
+    poller._exit = CycleExit()
+    poller._poll_finished_jobs()
+
+    assert cache.list_jobs() == []
+    assert accepted == {'0', '2'}
+    assert [job.job_id for job in cache.list_pending_index_jobs()] == ['1']
+    assert len([r for r in caplog.records if 'pending' in r.message]) == 1
+    fake_context.document_store.add_jobs.reset_mock()
+    poller._exit = CycleExit()
+    poller._poll_finished_jobs()
+    fake_context.document_store.add_jobs.assert_called_once()
+    assert (
+        fake_context.document_store.add_jobs.call_args.kwargs['jobs'][0].job_id == '1'
+    )
+
+
+@pytest.mark.parametrize(
+    'reason_class,message',
+    [
+        ('administrator', 'Deleted by an administrator.'),
+        ('cancelled', 'Cancelled by the owner.'),
+    ],
+)
+def test_apply_disposition_preserves_recorded_deletion_reason(
+    fake_context, reason_class, message
+):
+    job = make_job(
+        disposition='deleted', reason_class=reason_class, status_reason=message
+    )
+    build_processor(fake_context, job).apply_disposition()
+    assert job.reason_class == reason_class
+    assert job.status_reason == message
+
+
+@pytest.mark.parametrize('provisioned', [False, True])
+def test_sqlite_failure_defers_completion_side_effects(
+    fake_context, pricing_spy, monkeypatch, provisioned
+):
+    import sqlite3
+    from unittest.mock import Mock
+
+    cache = fake_context.job_cache
+    write = cache.add_finished_job
+    cache.add_finished_job = Mock(side_effect=sqlite3.OperationalError('unavailable'))
+    fake_context.metrics = Mock()
+    export = Mock()
+    monkeypatch.setattr(ProcessFinishedJob, 'publish_to_job_export_log', export)
+    job = make_job(provisioned=provisioned, state=SocaJobState.FINISHED)
+    poller = build_poller(fake_context)
+    process = (
+        poller._process_finished_jobs
+        if provisioned
+        else poller._process_unprovisioned_jobs
+    )
+    for _ in range(2):
+        assert process([job.model_copy(deep=True)]) == []
+    assert fake_context.job_notifications.completed == []
+    assert fake_context.lifecycle_events.dispositions == []
+    fake_context.metrics.jobs_finished.assert_not_called()
+    export.assert_not_called()
+
+    cache.add_finished_job = write
+    for _ in range(2):
+        assert process([job.model_copy(deep=True)]) == [job.job_id]
+    assert fake_context.job_notifications.completed == (
+        [job.job_id] if provisioned else []
+    )
+    assert len(fake_context.lifecycle_events.dispositions) == 1
+    fake_context.metrics.jobs_finished.assert_called_once()
+    export.assert_called_once()
+
+
+@pytest.mark.parametrize('scheduler_returns_job', [False, True])
+@pytest.mark.parametrize('has_cached_end', [False, True])
+def test_cached_completion_never_prices_to_now(
+    fake_context, pricing_spy, scheduler_returns_job, has_cached_end
+):
+    start = arrow.get('2026-08-01T00:00:00Z')
+    cached = make_job(
+        provisioned=True,
+        state=SocaJobState.FINISHED,
+        start_time=start.datetime,
+        end_time=start.shift(seconds=120).datetime if has_cached_end else None,
+    )
+    if scheduler_returns_job:
+        fake_context.scheduler.jobs_by_id[cached.job_id] = cached.model_copy(
+            update={'end_time': None}
+        )
+    build_poller(fake_context)._process_finished_jobs([cached])
+    recorded = fake_context.job_cache.finished_jobs[0]
+    assert recorded.total_time_secs == (120 if has_cached_end else None)
+    assert pricing_spy.calls == ([(cached.job_id, 120)] if has_cached_end else [])
+    if not has_cached_end:
+        assert recorded.estimated_bom_cost is None

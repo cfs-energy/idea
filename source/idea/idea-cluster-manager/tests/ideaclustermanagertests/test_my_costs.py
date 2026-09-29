@@ -1173,7 +1173,13 @@ def test_a_session_indexed_under_two_generations_is_counted_once():
 
 
 def history_row(
-    session_id, owner, created_on, stopped_on, deleted_on, instance_type='m5.large'
+    session_id,
+    owner,
+    created_on,
+    stopped_on,
+    deleted_on,
+    instance_type='m5.large',
+    stop_time_estimated=False,
 ):
     return {
         'owner': owner,
@@ -1184,6 +1190,7 @@ def history_row(
         'project_id': 'project-1',
         'created_on': created_on,
         'stopped_on': stopped_on,
+        'stop_time_estimated': stop_time_estimated,
         'deleted_on': deleted_on,
     }
 
@@ -1208,6 +1215,54 @@ def test_a_terminated_desktop_is_costed_from_its_history_record():
     assert session.hours == pytest.approx(2.0, abs=0.01)
     assert session.cost == pytest.approx(0.2, abs=0.01)
     assert session.stop_time_estimated is None
+
+
+def test_an_estimated_history_stop_is_reported_as_estimated():
+    now = arrow.utcnow()
+    created = now.shift(hours=-8).int_timestamp * 1000
+    stopped = now.shift(hours=-4).int_timestamp * 1000
+    deleted = now.shift(hours=-1).int_timestamp * 1000
+    start_ms = now.shift(hours=-5).int_timestamp * 1000
+    end_ms = now.int_timestamp * 1000
+
+    service, _ = build_service(
+        os_responses={'user_sessions': {'hits': {'hits': []}}},
+        prices={'m5.large': 0.1},
+        history_rows=[
+            history_row(
+                'sess-1',
+                USER,
+                created,
+                stopped,
+                deleted,
+                stop_time_estimated=True,
+            )
+        ],
+    )
+    hits = service._history_hits(USER, start_ms, end_ms)
+    session = service._sessions_from(hits, start_ms, end_ms)[0]
+
+    assert session.hours == pytest.approx(1.0, abs=0.01)
+    assert session.stop_time_estimated is True
+
+
+def test_a_legacy_history_deletion_time_is_reported_as_estimated():
+    now = arrow.utcnow()
+    created = now.shift(hours=-8).int_timestamp * 1000
+    deleted = now.shift(hours=-1).int_timestamp * 1000
+    start_ms = now.shift(hours=-5).int_timestamp * 1000
+    end_ms = now.int_timestamp * 1000
+
+    service, _ = build_service(
+        os_responses={'user_sessions': {'hits': {'hits': []}}},
+        prices={'m5.large': 0.1},
+        history_rows=[history_row('sess-1', USER, created, deleted, deleted)],
+    )
+    hits = service._history_hits(USER, start_ms, end_ms)
+    session = service._sessions_from(hits, start_ms, end_ms)[0]
+
+    assert session.hours == pytest.approx(4.0, abs=0.01)
+    assert session.stop_time_estimated is True
 
 
 def test_a_desktop_deleted_before_the_window_is_left_out_of_history():
@@ -1295,3 +1350,50 @@ def test_a_history_read_that_fails_leaves_the_live_desktops_alone():
 
     assert desktops.session_count == 1
     assert desktops.sessions[0].name == 'sess-live'
+
+
+@pytest.mark.parametrize('real_stop_hours', [24, None, 96])
+def test_cleanup_warning_live_cost_matches_controller_history(real_stop_hours):
+    import importlib.util
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    path = (
+        Path(__file__).resolve().parents[3]
+        / 'idea-virtual-desktop-controller/src/ideavirtualdesktopcontroller/app/sessions'
+        / 'virtual_desktop_session_history_db.py'
+    )
+    spec = importlib.util.spec_from_file_location('session_history_regression', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    created = arrow.get('2026-09-01').int_timestamp * 1000
+    warning = created + 72 * 3600000
+    real_stop = (
+        created + real_stop_hours * 3600000 if real_stop_hours is not None else None
+    )
+    deleted = created + 120 * 3600000
+    hit = session_hit(
+        'session-test',
+        'STOPPED',
+        'm5.large',
+        created,
+        warning,
+        stopped_on=warning,
+        cleanup_warning_stop_time=real_stop,
+    )
+    session = SimpleNamespace(
+        **dict(hit['_source'], owner=USER, project=None, hibernation_enabled=False)
+    )
+    session.cleanup_warning_stop_time = real_stop
+    session.server = SimpleNamespace(instance_type='m5.large')
+    history = module.VirtualDesktopSessionHistoryDB(None, logger=object())
+    history.get_retention_days = lambda: 400
+    row = history.build_entry(session, deleted_on=deleted)
+    service, _ = build_service(prices={'m5.large': 0.1}, history_rows=[row])
+    live = service._sessions_from([hit], created, deleted)[0]
+    saved = service._sessions_from(
+        service._history_hits(USER, created, deleted), created, deleted
+    )[0]
+    assert live.hours == saved.hours == min(real_stop_hours or 72, 72)
+    assert live.cost == saved.cost
+    assert live.stop_time_estimated == saved.stop_time_estimated

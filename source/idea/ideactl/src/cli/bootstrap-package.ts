@@ -154,6 +154,11 @@ export function bootstrapPackagePlans(
   directoryServiceProvider?: string,
 ): BootstrapPackagePlan[] {
   const names = bootstrapPackageBasenames(moduleId, deploymentId);
+  if (moduleName === "ecs") {
+    return ["openldap", "activedirectory", "aws_managed_activedirectory"].includes(directoryServiceProvider ?? "")
+      ? [{ basename: names.standard, components: ["common", "ecs-host"], contextParameter: "bootstrap_package_uri" }]
+      : [];
+  }
   if (moduleName === "directoryservice") {
     // Only OpenLDAP creates a directoryservice host. The AD providers deploy the stack with no package.
     return directoryServiceProvider === "openldap"
@@ -433,6 +438,19 @@ export class BootstrapPackageBuilder {
       }
     }
 
+    if (this.options.components.includes("ecs-host")) {
+      const directory = join(targetDirectory, "ecs-host");
+      mkdirSync(directory, { recursive: true });
+      const preamble = [
+        "#!/bin/bash",
+        "source /etc/environment",
+        "if [[ -f /etc/profile.d/proxy.sh ]]; then source /etc/profile.d/proxy.sh; fi",
+        'SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )',
+        'source "${SCRIPT_DIR}/../common/bootstrap_common.sh"',
+      ].join("\n");
+      const body = renderTemplate(environment, "_templates/linux/join_directoryservice.jinja2", { context: this.options.context });
+      writeFileSync(join(directory, "directory_join.sh"), `${preamble}\n${body}\n`);
+    }
     return this.archive(targetDirectory);
   }
 

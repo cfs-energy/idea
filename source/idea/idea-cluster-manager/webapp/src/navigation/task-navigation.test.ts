@@ -80,3 +80,65 @@ describe('portal navigation', () => {
         expect(resolveTask('/home/script-workbench')?.view.tab).toBe(false);
     });
 });
+
+describe('Reporting navigation capability', () => {
+    it.each([
+        ['operations only', false, true],
+        ['ordinary', false, false],
+        ['cluster administrator', true, true],
+        ['cluster manager', true, true],
+        ['module administrator', true, false],
+        ['module administrator with operations', true, true],
+        ['custom group capability', false, true]
+    ])('%s keeps existing rights and uses the server grant', (_role, admin, allowed) => {
+        const ctx = context(admin as boolean);
+        const previousAdmin = IdeaSideNavItems(ctx).find(item => item.type === 'section' && item.text === 'Administration');
+        vi.spyOn(ctx.auth(), 'canReadReporting').mockReturnValue(allowed as boolean);
+        const items = IdeaSideNavItems(ctx);
+        expect(items.some(item => item.type === 'section' && item.text === 'Reporting')).toBe(allowed);
+        expect(items.find(item => item.type === 'section' && item.text === 'Administration')).toEqual(previousAdmin);
+        expect(permittedViews(PORTAL_TASKS.find(task => task.id === 'reporting')!, ctx)).toHaveLength(allowed ? 3 : 0);
+    });
+    it('keeps Reporting independent from the custom Reports feature', () => {
+        const ctx = context();
+        vi.spyOn(ctx.auth(), 'canReadReporting').mockReturnValue(true);
+        ctx.getClusterSettingsService().customDashboard = {enabled: false, url: '', title: ''};
+        expect(IdeaSideNavItems(ctx)).toContainEqual(expect.objectContaining({text: 'Reporting'}));
+        expect(IdeaSideNavItems(ctx)).not.toContainEqual(expect.objectContaining({text: 'Reports'}));
+        ctx.getClusterSettingsService().customDashboard = {enabled: true, url: 'https://example.org', title: 'Dashboard'};
+        expect(IdeaSideNavItems(ctx)).toContainEqual(expect.objectContaining({text: 'Reports'}));
+        expect(PORTAL_TASKS.find(task => task.id === 'reporting')?.admin).toBe(false);
+    });
+    it.each([['/reporting', 'Overview / By user'], ['/reporting/projects', 'By project'], ['/reporting/facets', 'By facet']])('resolves %s', (path, label) => {
+        expect(resolveTask(path)?.view.label).toBe(label);
+        expect(resolveTask(path)?.task.id).toBe('reporting');
+    });
+});
+
+describe('Operations and Costs ownership', () => {
+    it('owns Health, Services and reconciliation in Operations', () => {
+        const task = PORTAL_TASKS.find(item => item.id === 'operations')!;
+        expect(task.views.map(item => item.label)).toEqual(['Health', 'Services', 'Reconciliation runs']);
+        expect(PORTAL_TASKS.find(item => item.id === 'people-access')!.views.map(item => item.label)).not.toContain('Reconciliation runs');
+        expect(resolveTask('/cluster/services')?.task.id).toBe('operations');
+        expect(resolveTask('/cluster/reconciliation-runs')?.view.label).toBe('Reconciliation runs');
+    });
+    it.each(['cluster-manager', 'virtual-desktop-controller', 'scheduler'])('admits %s administrators to Services', module => {
+        const ctx = context();
+        vi.mocked(ctx.auth().isModuleAdmin).mockImplementation(name => name === module);
+        expect(permittedViews(PORTAL_TASKS.find(item => item.id === 'operations')!, ctx).some(item => item.label === 'Services')).toBe(true);
+        if (module === 'scheduler') vi.mocked(ctx.getClusterSettingsService().isSchedulerDeployed).mockReturnValue(false);
+        if (module === 'virtual-desktop-controller') vi.mocked(ctx.getClusterSettingsService().isVirtualDesktopDeployed).mockReturnValue(false);
+        expect(permittedViews(PORTAL_TASKS.find(item => item.id === 'operations')!, ctx).some(item => item.label === 'Services')).toBe(module === 'cluster-manager');
+    });
+    it('resolves only the historical service tabs as Operations', () => {
+        expect(resolveTask('/virtual-desktop/settings', '?tab=controller')?.view.label).toBe('Services');
+        expect(resolveTask('/soca/settings', '?tab=general')?.view.label).toBe('Services');
+        expect(resolveTask('/virtual-desktop/settings', '?tab=general')?.task.id).toBe('settings');
+        expect(resolveTask('/virtual-desktop/settings', '?tab=broker')?.task.id).toBe('settings');
+        expect(resolveTask('/soca/settings', '?tab=cloudwatch-logs')?.task.id).toBe('settings');
+        expect(resolveTask('/cluster/status', '?operation=backfill-history')?.task.id).toBe('settings');
+        expect(resolveTask('/cluster/settings/costs')?.task.id).toBe('settings');
+        expect(resolveTask('/soca/settings/cost-collection')?.task.id).toBe('settings');
+    });
+});

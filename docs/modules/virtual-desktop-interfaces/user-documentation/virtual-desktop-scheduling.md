@@ -20,6 +20,8 @@ Simply click the dropdown menu to chose your schedule for that day using the dif
 
 You can at any moment review whether or not you have a schedule configured for the current day on your virtual desktop by checking the settings bar of your session (note: schedule are unique to each desktop)
 
+The **Idle stop** badge appears only on a day whose schedule runs the idle check. Its absence on another day does not change that day's explicit start or stop times.
+
 <figure><img src="../../../.gitbook/assets/mods_vdi_user_schedule_verify.webp" alt=""><figcaption><p>Verify if a schedule is applicable by checking the settings bar</p></figcaption></figure>
 
 To create/edit a schedule, click "**Actions**" > "**Schedule**". This will open a new modal where you will be able to choose the schedule for any given day:
@@ -29,5 +31,7 @@ To create/edit a schedule, click "**Actions**" > "**Schedule**". This will open 
 {% hint style="info" %}
 Schedule is re-evaluated every 30 minutes
 {% endhint %}
+
+Idle-stop comparisons and their log timestamps use UTC internally, so a non-UTC host timezone does not shift the decision. The schedule itself still uses the configured cluster timezone.
 
 If your administrator allows it, the same modal also shows a **Stop On Idle after (minutes)** field above the weekly schedule. This overrides `virtual-desktop-controller.dcv_session.idle_autostop_delay` for this desktop only; set it to `0` to fall back to that cluster default. The value you can request is capped by `virtual-desktop-controller.dcv_session.idle_autostop_delay_max`, 240 minutes out of the box, and lowering that cap later also clamps any override you already saved. A cap of `0` turns per-session overrides off, and the field does not appear.

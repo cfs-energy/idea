@@ -37,6 +37,17 @@ it('adds no service permissions without container settings', () => {
   assert.deepEqual(policy(false), []);
 });
 
+it('allows storage rate inventory reads on all file systems', () => {
+  const statements = policy(false, {}, true);
+  for (const action of ['fsx:DescribeFileSystems', 'elasticfilesystem:DescribeFileSystems']) {
+    const statement = statements.find(s => s.Action.includes(action));
+    assert.ok(statement, `missing storage inventory read: ${action}`);
+    assert.equal(statement.Resource, '*');
+    assert.equal(statement.Condition, undefined);
+    assert.equal((statement as {Effect?: string}).Effect, 'Allow');
+  }
+});
+
 it('stays within the role inline policy limit with every conditional block enabled', t => {
   const statements = policy(true, {
     'directoryservice.provider': 'aws_managed_activedirectory',

@@ -9,6 +9,7 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
+from ideascheduler.app.api.job_waiting_signals import apply_waiting_signals
 from ideadatamodel import exceptions, errorcodes, SocaPaginator
 from ideadatamodel.scheduler import (
     ListNodesRequest,
@@ -55,6 +56,7 @@ from ideadatamodel.scheduler import (
 from ideasdk.api import BaseAPI, ApiInvocationContext
 from ideasdk.utils import Utils
 from ideascheduler.app.metrics.job_metrics_backfill import JobMetricsBackfill
+from ideascheduler.app.provisioning.lifecycle_events import ADMINISTRATOR_DELETION
 
 import ideascheduler
 
@@ -213,6 +215,7 @@ class SchedulerAdminAPI(BaseAPI):
         page_start = payload.page_start
 
         entries = self.context.job_cache.list_jobs(_limit=page_size, _offset=page_start)
+        apply_waiting_signals(context=self.context, jobs=entries)
         total = self.context.job_cache.get_count()
 
         context.success(
@@ -545,6 +548,11 @@ class SchedulerAdminAPI(BaseAPI):
                 errorcodes.JOB_NOT_FOUND, f'Job not found for Job Id: {request.job_id}'
             )
 
+        self.context.job_cache.record_deleted_job(
+            job=job,
+            error_code=ADMINISTRATOR_DELETION,
+            message='Deleted by an administrator.',
+        )
         self.context.scheduler.delete_job(job.job_id)
 
         context.success(DeleteJobResult())

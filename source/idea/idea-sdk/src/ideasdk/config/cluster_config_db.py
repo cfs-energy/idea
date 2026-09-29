@@ -246,7 +246,7 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
                 raise e
 
     def sync_cluster_settings_in_db(
-        self, config_entries: List[Dict], overwrite: bool = False
+        self, config_entries: List[Dict], overwrite: bool = False, source: str = 'sdk'
     ):
         self.log_info(f'sync config entries to db. overwrite: {overwrite}')
 
@@ -261,7 +261,7 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
                     self.log_info(f'entry already exists for key: {key}, skip.')
                     continue
 
-            self.set_config_entry(key, value)
+            self.set_config_entry(key, value, source=source)
 
     def sync_modules_in_db(self, modules: List[Dict]):
         """
@@ -473,7 +473,7 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
                 f'no config entries found matching config prefix: {config_key_prefix}'
             )
 
-    def set_config_entry(self, key: str, value: Any):
+    def set_config_entry(self, key: str, value: Any, source: str = 'sdk'):
         self.log_info(f'updating config: {key} = {value}')
 
         # ddb does not support float. convert Decimal before updating ...
@@ -486,9 +486,17 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
 
         self.cluster_settings_table.update_item(
             Key={'key': key},
-            UpdateExpression='SET #value=:value ADD #version :version',
-            ExpressionAttributeNames={'#value': 'value', '#version': 'version'},
-            ExpressionAttributeValues={':value': value, ':version': 1},
+            UpdateExpression='SET #value=:value, #source=:source ADD #version :version',
+            ExpressionAttributeNames={
+                '#value': 'value',
+                '#version': 'version',
+                '#source': 'source',
+            },
+            ExpressionAttributeValues={
+                ':value': value,
+                ':version': 1,
+                ':source': source,
+            },
         )
 
     def get_cluster_s3_bucket(self) -> str:

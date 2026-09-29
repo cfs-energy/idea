@@ -13,6 +13,8 @@
 
 import {MetricsBackfillStatus} from './metrics-backfill';
 import {
+    FetchPricingRatesRequest,
+    FetchPricingRatesResult,
     ListClusterServicesRequest,
     ListClusterServicesResult,
     DescribeSettingsCatalogResult,
@@ -32,6 +34,10 @@ export interface ClusterSettingsClientProps extends IdeaBaseClientProps {
 }
 
 class ClusterSettingsClient extends IdeaBaseClient<ClusterSettingsClientProps> {
+    fetchPricingRates(request: FetchPricingRatesRequest): Promise<FetchPricingRatesResult> {
+        return this.apiInvoker.invoke_alt('ClusterSettings.FetchPricingRates', request);
+    }
+
     describeSettingsCatalog(): Promise<DescribeSettingsCatalogResult> {
         return this.apiInvoker.invoke_alt('ClusterSettings.DescribeSettingsCatalog', {});
     }

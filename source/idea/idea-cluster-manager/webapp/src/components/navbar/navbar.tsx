@@ -15,12 +15,13 @@ import {IdeaSideNavHeader} from '../../navigation/side-nav-items';
 import {applyDensity, applyMode, Density, Mode} from "@cloudscape-design/global-styles";
 import React, {Component, RefObject} from 'react'
 
-import {TopNavigation} from "@cloudscape-design/components";
+import {Button, Popover, TopNavigation} from "@cloudscape-design/components";
 import {AppContext} from "../../common";
 import Utils from "../../common/utils";
 import IdeaForm from "../form";
 import {personalCostsCache} from '../../client/personal-costs-cache';
 import {GetCostTickerResult} from '../../client/data-model';
+import './navbar.scss';
 
 export interface IdeaNavbarProps {
     logo?: IdeaNavbarLogo
@@ -85,30 +86,13 @@ class IdeaNavbar extends Component<IdeaNavbarProps, IdeaNavbarState> {
     private unsubscribeCosts?: () => void
     private tickerPoll?: ReturnType<typeof setInterval>
     private tickerRetry?: ReturnType<typeof setTimeout>
-    private tooltipTimer?: ReturnType<typeof setTimeout>
 
     componentWillUnmount() {
         this.disposed = true
         this.unsubscribeCosts?.()
         clearInterval(this.tickerPoll)
         clearTimeout(this.tickerRetry)
-        clearTimeout(this.tooltipTimer)
         document.removeEventListener('visibilitychange', this.onVisibilityChange)
-    }
-
-    componentDidUpdate() {
-        clearTimeout(this.tooltipTimer)
-        this.tooltipTimer = setTimeout(this.applyTickerTooltip, 0)
-    }
-
-    applyTickerTooltip = () => {
-        const ticker = this.state.ticker
-        if (!ticker?.enabled || ticker.total == null) return
-        const control = Array.from(document.querySelectorAll('[aria-label]'))
-            .find(element => element.getAttribute('aria-label')?.startsWith(`${ticker.period} cost as of`))
-        if (control) {
-            control.setAttribute('title', `As of ${ticker.as_of ? new Date(ticker.as_of).toLocaleString() : 'the latest calculation'}`)
-        }
     }
 
     onVisibilityChange = () => {
@@ -127,8 +111,9 @@ class IdeaNavbar extends Component<IdeaNavbarProps, IdeaNavbarState> {
                 this.setState({ticker})
                 if (ticker.enabled && ticker.period === 'MTD' && !this.unsubscribeCosts) {
                     this.unsubscribeCosts = personalCostsCache().subscribe(costs => {
-                        if (costs.current) this.setState({ticker: {...ticker, total: costs.current.total,
-                            currency: costs.currency, incomplete: costs.current.incomplete, as_of: costs.refreshed_at}})
+                        if (!this.disposed && costs.current) this.setState(previous => ({ticker: previous.ticker?.enabled && previous.ticker.period === 'MTD'
+                            ? {...previous.ticker, total: costs.current!.total, currency: costs.currency,
+                                incomplete: costs.current!.incomplete, as_of: costs.refreshed_at} : previous.ticker}))
                     })
                 }
                 if (ticker.enabled && ticker.total == null) {
@@ -260,12 +245,8 @@ class IdeaNavbar extends Component<IdeaNavbarProps, IdeaNavbarState> {
         }
 
         const ticker = this.state.ticker
-        const tickerUtility = ticker?.enabled && ticker.total != null && ticker.currency && ticker.period ? [{
-            type: 'button' as const,
-            text: `${ticker.incomplete === false ? 'Estimated costs' : 'Known costs'} · ${new Intl.NumberFormat(undefined, {style: 'currency', currency: ticker.currency}).format(ticker.total)} · ${ticker.period}`,
-            href: '#/home/my-costs',
-            ariaLabel: `${ticker.period} cost as of ${ticker.as_of ? new Date(ticker.as_of).toLocaleString() : 'the latest calculation'}. Open My costs`
-        }] : []
+        const showTicker = ticker?.enabled && ticker.total != null && ticker.currency && ticker.period
+        const asOf = ticker?.as_of ? new Date(ticker.as_of).toLocaleString() : 'the latest calculation'
 
         let hasNotifications = false
         const getNotifications = () => {
@@ -291,10 +272,7 @@ class IdeaNavbar extends Component<IdeaNavbarProps, IdeaNavbarState> {
             return notifications
         }
 
-        return (
-            (<div>
-                {this.buildPreferencesForm()}
-                <TopNavigation
+        const navigation = <TopNavigation
                     identity={{
                         href: IdeaSideNavHeader(AppContext.get()).href,
                         title: getTitle(),
@@ -316,7 +294,13 @@ class IdeaNavbar extends Component<IdeaNavbarProps, IdeaNavbarState> {
                             },
                             items: getNotifications()
                         },
-                        ...tickerUtility,
+                        ...(showTicker ? [{
+                            type: 'button' as const,
+                            text: `${new Intl.NumberFormat(undefined, {style: 'currency', currency: ticker.currency}).format(ticker.total!)} · ${ticker.period}`,
+                            href: '#/home/my-costs',
+                            iconName: ticker.incomplete !== false ? 'status-info' as const : undefined,
+                            ariaLabel: `${ticker.period} cost as of ${asOf}${ticker.incomplete !== false ? '. Some costs are still estimates' : ''}. Open My costs`
+                        }] : []),
                         {
                             type: "menu-dropdown",
                             text: getUsername(),
@@ -377,8 +361,12 @@ class IdeaNavbar extends Component<IdeaNavbarProps, IdeaNavbarState> {
                         overflowMenuBackIconAriaLabel: "Back",
                         overflowMenuDismissIconAriaLabel: "Close menu"
                     }}/>
-            </div>)
 
+        return (
+            <div>
+                {this.buildPreferencesForm()}
+                {navigation}
+            </div>
         )
     }
 

@@ -127,6 +127,77 @@ describe('my virtual desktop sessions', () => {
     });
 });
 
+async function renderSessionWithSchedule(scheduleType: 'START_ALL_DAY' | 'WORKING_HOURS') {
+    const context = initTestAppContext();
+
+    const clusterSettings = context.getClusterSettingsService();
+    vi.spyOn(clusterSettings, 'getDirectoryServiceSettings').mockResolvedValue({ provider: 'openldap' });
+    vi.spyOn(clusterSettings, 'getVirtualDesktopSettings').mockResolvedValue({
+        dcv_session: {
+            idle_autostop_delay_max: 60,
+            max_root_volume_memory: { value: 500, unit: 'gb' },
+            working_hours: { start_up_time: '09:00', shut_down_time: '17:00' }
+        }
+    });
+
+    const projects = context.client().projects();
+    vi.spyOn(projects, 'getUserProjects').mockResolvedValue({ projects: [] } as any);
+    vi.spyOn(projects, 'getProject').mockResolvedValue({ project: undefined } as any);
+
+    const daySchedule = { schedule_type: scheduleType };
+    const virtualDesktop = context.client().virtualDesktop();
+    vi.spyOn(virtualDesktop, 'listSessions').mockResolvedValue({
+        listing: [{
+            ...STOPPED_SESSION,
+            idle_autostop_delay: 30,
+            schedule: {
+                monday: daySchedule,
+                tuesday: daySchedule,
+                wednesday: daySchedule,
+                thursday: daySchedule,
+                friday: daySchedule,
+                saturday: daySchedule,
+                sunday: daySchedule
+            }
+        }]
+    } as any);
+
+    render(
+        <MemoryRouter>
+            <MyVirtualDesktopSessions
+                ideaPageId="my-virtual-desktop-sessions"
+                toolsOpen={false}
+                tools={null}
+                onToolsChange={() => {}}
+                onPageChange={() => {}}
+                sideNavHeader={{ text: 'IDEA', href: '#/' }}
+                sideNavItems={[]}
+                onSideNavChange={() => {}}
+                onFlashbarChange={() => {}}
+                flashbarItems={[]}
+            />
+        </MemoryRouter>
+    );
+
+    await screen.findByText('my-desktop', {}, { timeout: 10000 });
+}
+
+describe('my virtual desktop sessions idle badge', () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it('hides the idle badge when today starts all day', async () => {
+        await renderSessionWithSchedule('START_ALL_DAY');
+        expect(screen.queryByText('Stops after 30 min idle')).not.toBeInTheDocument();
+    });
+
+    it('shows the idle badge during working hours', async () => {
+        await renderSessionWithSchedule('WORKING_HOURS');
+        expect(screen.getByText('Stops after 30 min idle')).toBeInTheDocument();
+    });
+});
+
 /** Renders the page with desktops in one Bedrock project, each named with the instance profile the
  * controller recorded against it. */
 async function renderSessionsInBedrockProject(recordedInstanceProfileArns: (string | undefined)[]) {

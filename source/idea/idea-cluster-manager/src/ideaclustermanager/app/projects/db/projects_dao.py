@@ -113,6 +113,7 @@ class ProjectsDAO:
         updated_on = Utils.get_value_as_int('updated_on', project)
 
         return Project(
+            last_task_failure=Utils.get_value_as_dict('last_task_failure', project),
             project_id=project_id,
             title=title,
             name=name,
@@ -268,7 +269,7 @@ class ProjectsDAO:
         if Utils.is_not_empty(cursor):
             last_evaluated_key = Utils.from_json(Utils.base64_decode(cursor))
         if last_evaluated_key is not None:
-            scan_request['LastEvaluatedKey'] = last_evaluated_key
+            scan_request['ExclusiveStartKey'] = last_evaluated_key
 
         scan_filter = None
         if Utils.is_not_empty(request.filters):

@@ -150,7 +150,7 @@ class AwsBudgetsHelper:
         if bom_cost is None:
             bom_cost = self._job.estimated_bom_cost
 
-        if bom_cost is None:
+        if bom_cost is None or bom_cost.price_unavailable:
             return None
 
         budget = self.get_budget()

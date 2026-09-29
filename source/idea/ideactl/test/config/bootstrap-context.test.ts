@@ -24,6 +24,7 @@ import {
 import { renderedTreeId } from "../../src/cli/bootstrap-package.ts";
 import { bootstrapSourceDir, type Deps } from "../../src/cli/cdk-invoker.ts";
 import { DeploymentHelper } from "../../src/cli/deployment-helper.ts";
+import { fakeContainerHosts } from "../support/host-pool-harness.ts";
 import { ClusterConfig, type ModuleInfo } from "../../src/config/cluster-config.ts";
 import { ideaVersion } from "../../src/version.ts";
 
@@ -180,7 +181,11 @@ function harness(
     [`${CLUSTER}.cluster-settings`]: settings(),
     [`${CLUSTER}.modules`]: moduleRows(moduleId, moduleName),
   };
+  const hosts = fakeContainerHosts();
+  hosts.state.old = false;
+  hosts.state.joined = true;
   const deps: Deps = {
+    containerHosts: hosts.api,
     spawn: async (argv) => {
       spawns.push(argv);
       return 0;

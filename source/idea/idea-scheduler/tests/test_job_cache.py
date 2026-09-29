@@ -215,3 +215,75 @@ def test_get_active_license_count_binds_license_name(job_cache):
 
     assert job_cache.get_active_license_count(license_name=license_name) == 7
     assert job_cache.get_active_license_count(license_name="x' or '1'='1") == 0
+
+
+def test_admin_deletion_reason_survives_cached_scheduler_refresh(job_cache):
+    from ideascheduler.app.provisioning.lifecycle_events import ADMINISTRATOR_DELETION
+    from ideascheduler.app.api.job_waiting_signals import build_status_reason
+
+    job = build_job('42')
+    job_cache.record_deleted_job(
+        job, ADMINISTRATOR_DELETION, 'Deleted by an administrator.'
+    )
+    job_cache.sync([build_job('42')])
+    stored = job_cache.get_job('42')
+    assert stored.disposition == 'deleted'
+    assert stored.reason_class == 'administrator'
+    assert stored.status_reason == 'Deleted by an administrator.'
+    assert build_status_reason(stored) == 'Deleted by an administrator.'
+
+
+def test_existing_completed_records_count_as_indexed_and_new_ones_wait(tmp_path):
+    """
+    a database from an earlier release has no index marker. its records were indexed as
+    they were recorded, so the migration must not queue the whole history for a replay;
+    only records written after the migration wait for the index.
+    """
+    from ideasdk.utils import Utils
+
+    db_dir = tmp_path / 'db'
+    db_dir.mkdir()
+    old = build_job('42')
+    with sqlite3.connect(db_dir / 'job-cache-v3.db') as connection:
+        connection.execute(
+            'CREATE TABLE finished_jobs (id INTEGER PRIMARY KEY, job_uid TEXT, job_data TEXT)'
+        )
+        connection.execute(
+            'INSERT INTO finished_jobs (job_uid, job_data) VALUES (?, ?)',
+            (old.job_uid, Utils.to_json(old)),
+        )
+    context = FakeSchedulerContext(str(tmp_path))
+    cache = JobCache(context)
+    assert cache.list_pending_index_jobs() == []
+    new = build_job('43')
+    cache.add_finished_job(new)
+    assert [j.job_uid for j in cache.list_pending_index_jobs()] == [new.job_uid]
+    cache.mark_job_indexed(new)
+    cache.get_connection().close()
+    reopened = JobCache(context)
+    assert reopened.list_pending_index_jobs() == []
+    assert reopened.get_completed_job_by_uid(old.job_uid).job_id == old.job_id
+
+
+def test_pending_index_listing_is_bounded_and_oldest_first(job_cache):
+    for number in range(1, 8):
+        job_cache.add_finished_job(build_job(str(number), job_uid=f'uid-{number}'))
+    assert [j.job_uid for j in job_cache.list_pending_index_jobs(limit=3)] == [
+        'uid-1',
+        'uid-2',
+        'uid-3',
+    ]
+
+
+@pytest.mark.parametrize('job_uid', [None, '', 'uid-first'])
+@pytest.mark.parametrize('mark_first', [False, True])
+def test_index_marker_tracks_completed_record_identity(job_cache, job_uid, mark_first):
+    first = build_job('42')
+    first.job_uid = job_uid
+    second = build_job('42', job_uid='uid-second')
+    job_cache.add_finished_job(first)
+    job_cache.add_finished_job(second)
+    job_cache.mark_job_indexed(first if mark_first else second)
+    assert [j.job_uid for j in job_cache.list_pending_index_jobs()] == [
+        second.job_uid if mark_first else first.job_uid
+    ]

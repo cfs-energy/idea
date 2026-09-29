@@ -320,11 +320,8 @@ class FakeAws:
 
 
 class FakeServiceRegistry:
-    def __init__(self):
-        self.services = []
-
     def register(self, service):
-        self.services.append(service)
+        pass
 
 
 class FakeDistributedLock:
@@ -390,10 +387,8 @@ class FakeContext:
 class FakeProjectsDAO:
     def __init__(self, projects):
         self.projects = projects
-        self.calls = []
 
     def list_projects(self, request):
-        self.calls.append(('list_projects', request.cursor))
         return ListProjectsResult(
             listing=list(self.projects), paginator=SocaPaginator(cursor=None)
         )
@@ -457,7 +452,6 @@ def build_service(
     owners=None,
     jobs=None,
     projects=None,
-    bedrock=None,
     status='Complete',
 ):
     config = FakeConfig({**CONFIG_VALUES, **(config_values or {})})
@@ -465,9 +459,7 @@ def build_service(
     ec2 = FakeEc2(
         owners=owners if owners is not None else {INSTANCE_ONE: 'alice'}, jobs=jobs
     )
-    context = FakeContext(
-        config, FakeAws(bedrock=bedrock or FakeBedrock(), logs=logs, ec2=ec2)
-    )
+    context = FakeContext(config, FakeAws(bedrock=FakeBedrock(), logs=logs, ec2=ec2))
 
     usage_dao = BedrockUsageDAO(context)
     usage_dao.table = FakeTable(['project_id', 'usage_id'])
@@ -763,6 +755,107 @@ def test_recompute_removes_rows_that_left_the_window():
     assert f'day#{TODAY}#bob#{MODEL_A}' not in rows
     assert f'user#{PERIOD}#bob' not in rows
     assert rows[f'project#{PERIOD}']['total_tokens'] == 15
+
+
+@pytest.mark.parametrize(
+    'keep_role,keep_profile', [(False, False), (True, False), (False, True)]
+)
+@pytest.mark.parametrize('unchanged_invocation', [False, True])
+@pytest.mark.parametrize('profile_attributed', [False, True])
+def test_only_indexed_projects_reconcile_empty_usage(
+    keep_role, keep_profile, unchanged_invocation, profile_attributed
+):
+    project = build_project()
+    project_two = build_project(
+        project_id=PROJECT_ID_2, role_arn=f'{ROLE_ARN}-other', profiles={}
+    )
+    invocation = insights_row(
+        caller_arn(role_name='unmapped-role') if profile_attributed else caller_arn(),
+        PROFILE_A if profile_attributed else MODEL_A,
+        TODAY,
+        10,
+        5,
+        1,
+    )
+    service, _, logs, _, usage_dao = build_service(
+        projects=[project, project_two],
+        results=[invocation],
+        owners={INSTANCE_ONE: 'user-one'},
+        jobs={INSTANCE_ONE: '4242'},
+    )
+    service.aggregate()
+    stored_keys = set(usage_dao.table.items)
+    assert len(stored_keys) == 5
+
+    if not keep_role:
+        project.bedrock.role_arn = None
+    if not keep_profile:
+        project.bedrock.inference_profile_arns = {}
+    logs.results = [
+        insights_row(
+            caller_arn(role_name=f'{ROLE_NAME}-other'), MODEL_A, TODAY, 20, 5, 2
+        )
+    ]
+    if unchanged_invocation:
+        logs.results.append(invocation)
+    service.aggregate()
+
+    remaining_keys = {key for key in usage_dao.table.items if key[0] == PROJECT_ID}
+    mapping_present = keep_profile if profile_attributed else keep_role
+    preserved = unchanged_invocation or not mapping_present
+    assert remaining_keys == (stored_keys if preserved else set())
+    if preserved:
+        assert all(
+            usage_dao.table.items[key]['total_tokens'] == 15 for key in stored_keys
+        )
+    assert (
+        usage_dao.table.items[(PROJECT_ID_2, build_project_key(PERIOD))]['total_tokens']
+        == 25
+    )
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+def test_partial_mapping_loss_preserves_mixed_attribution_counters(legacy):
+    project = build_project()
+    invocations = [
+        insights_row(caller_arn(), MODEL_A, TODAY, 10, 5, 1),
+        insights_row(caller_arn(role_name='unmapped-role'), PROFILE_A, TODAY, 20, 5, 2),
+    ]
+    service, _, _, _, usage_dao = build_service(
+        projects=[project],
+        results=invocations,
+        owners={INSTANCE_ONE: 'user-one'},
+        jobs={INSTANCE_ONE: '4242'},
+    )
+    service.aggregate()
+    stored_keys = set(usage_dao.table.items)
+    if legacy:
+        for row in usage_dao.table.items.values():
+            row.pop('attribution_mappings', None)
+    project.bedrock.role_arn = None
+    service.aggregate()
+    assert set(usage_dao.table.items) == stored_keys
+    assert all(row['total_tokens'] == 40 for row in usage_dao.table.items.values())
+    assert all(row['invocations'] == 3 for row in usage_dao.table.items.values())
+
+
+def test_legacy_rows_without_mapping_provenance_are_preserved():
+    service, _, logs, _, usage_dao = build_service(
+        results=[insights_row(caller_arn(), MODEL_A, TODAY, 10, 5, 1)],
+        owners={INSTANCE_ONE: 'user-one'},
+        jobs={INSTANCE_ONE: '4242'},
+    )
+    service.aggregate()
+    stored_keys = set(usage_dao.table.items)
+    for row in usage_dao.table.items.values():
+        row.pop('attribution_mappings', None)
+    logs.results = [insights_row(caller_arn(), MODEL_B, TODAY, 20, 5, 2)]
+    service.aggregate()
+    assert stored_keys <= set(usage_dao.table.items)
+    assert (
+        usage_dao.table.items[(PROJECT_ID, build_project_key(PERIOD))]['total_tokens']
+        == 40
+    )
 
 
 def test_an_empty_query_leaves_stored_usage_alone():

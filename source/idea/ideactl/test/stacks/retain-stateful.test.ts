@@ -43,6 +43,14 @@ const STATEFUL_TYPES = [
   'AWS::Cognito::UserPoolGroup',
   'AWS::Cognito::UserPoolResourceServer',
   'AWS::DirectoryService::MicrosoftAD',
+  'AWS::EC2::EIP',
+  'AWS::EC2::InternetGateway',
+  'AWS::EC2::NatGateway',
+  'AWS::EC2::Route',
+  'AWS::EC2::RouteTable',
+  'AWS::EC2::Subnet',
+  'AWS::EC2::VPC',
+  'AWS::EC2::VPCGatewayAttachment',
   'AWS::EFS::FileSystem',
   'AWS::EFS::MountTarget',
   'AWS::FSx::FileSystem',
@@ -72,9 +80,8 @@ const STATELESS_TYPES = [
   'AWS::AutoScaling::AutoScalingGroup',
   'AWS::EC2::Instance',
   'AWS::EC2::LaunchTemplate',
+  'AWS::EC2::NetworkInterface',
   'AWS::EC2::SecurityGroup',
-  'AWS::EC2::Subnet',
-  'AWS::EC2::VPC',
   'AWS::ElasticLoadBalancingV2::Listener',
   'AWS::ElasticLoadBalancingV2::LoadBalancer',
   'AWS::ElasticLoadBalancingV2::TargetGroup',
@@ -115,6 +122,22 @@ describe('the stateful classification', () => {
   test('the change-set guard and the synthesis use one predicate', () => {
     // Not "both agree on this sample": the same function, so they cannot come to disagree.
     assert.equal(guardIsStatefulType, isStatefulType);
+  });
+
+  test('a named network type does not cover its associations and endpoints', () => {
+    for (const type of ['AWS::EC2::VPC', 'AWS::EC2::Subnet', 'AWS::EC2::EIP', 'AWS::EC2::RouteTable']) {
+      assert.equal(isStatefulType(type), true, type);
+    }
+    for (const type of [
+      'AWS::EC2::VPCEndpoint',
+      'AWS::EC2::VPCEndpointService',
+      'AWS::EC2::SubnetRouteTableAssociation',
+      'AWS::EC2::SubnetNetworkAclAssociation',
+      'AWS::EC2::EIPAssociation',
+      'AWS::EC2::RouteTableAssociation',
+    ]) {
+      assert.equal(isStatefulType(type), false, type);
+    }
   });
 
   test('an unknown type is not stateful', () => {

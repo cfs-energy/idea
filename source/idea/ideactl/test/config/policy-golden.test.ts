@@ -280,6 +280,7 @@ function varsFor(entry: Attribution, template: Template, cluster: string): Recor
 // Release additions live in test fixtures; captured deployment documents stay immutable.
 const COST_POLICY = JSON.parse(readFileSync(new URL('./fixtures/cluster-manager-cost-policy.json', import.meta.url), 'utf-8')) as {
   requiredReadActions: string[];
+  storageReadActions: string[];
   outboxDelete: { Action: string; Effect: string; Resource: string };
 };
 
@@ -291,6 +292,10 @@ function expectedPolicy(templateName: string, captured: unknown): unknown {
     assert.ok(document.Statement.some(statement => actions(statement).includes(action)
       && statement.Effect === 'Allow' && statement.Resource === '*'), `cost read permission missing: ${action}`);
   }
+  const inventory = document.Statement.find(statement => actions(statement).includes('ec2:DescribeInstanceTypes'));
+  assert.ok(inventory && inventory.Effect === 'Allow' && inventory.Resource === '*');
+  inventory.Action = actions(inventory).filter(action => !COST_POLICY.storageReadActions.includes(action));
+  inventory.Action.splice(inventory.Action.indexOf('ec2:DescribeInstanceTypes') + 1, 0, ...COST_POLICY.storageReadActions);
   if (!document.Statement.some(statement => actions(statement).includes(COST_POLICY.outboxDelete.Action))) {
     const storageIndex = document.Statement.findIndex(statement => actions(statement).includes('s3:PutObject'));
     assert.ok(storageIndex >= 0, 'cluster object write statement is required');

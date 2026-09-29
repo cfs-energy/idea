@@ -1,5 +1,7 @@
 # Update a module's code (idea-admin.sh deploy)
 
+New clusters use the container control plane only. Move an existing host-based control plane with `upgrade-cluster --drain`; follow the [container upgrade guide](move-to-containers.md).
+
 {% hint style="info" %}
 Use this when you have changed the code of one module (a new API, a fixed function) and want it running on your cluster without a full upgrade. Configuration-only changes go through [update-idea-configuration.md](update-idea-configuration.md "mention").
 {% endhint %}

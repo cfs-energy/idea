@@ -660,29 +660,6 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
         };
     }
 
-    // Filter instance types based on software stack allowed_instance_types
-    filterInstanceTypesByAllowedInstanceTypes(instanceTypes: any[], allowedInstanceTypes: string[] | undefined): any[] {
-        if (!allowedInstanceTypes || allowedInstanceTypes.length === 0) {
-            return instanceTypes;
-        }
-
-        return instanceTypes.filter(instance => {
-            const instanceType = instance.InstanceType;
-            const instanceFamily = instanceType.split('.')[0];
-
-            // Check if instance type or family is in the allowed list
-            return allowedInstanceTypes.some(allowedType => {
-                if (allowedType.includes('.')) {
-                    // Exact instance type match
-                    return allowedType === instanceType;
-                } else {
-                    // Instance family match
-                    return allowedType === instanceFamily;
-                }
-            });
-        });
-    }
-
     // Filter g4ad instance types based on OS compatibility
     filterG4adInstanceTypes(instanceTypes: any[], baseOs: string): any[] {
         const g4adCompatibleOS = ['windows2019', 'windows2022', 'rocky8', 'rocky9'];
@@ -828,13 +805,8 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
                                     hibernation_support: this.getForm()?.getValue('hibernate_instance'),
                                     software_stack: selectedSoftwareStack
                                 }).then(result => {
-                                    // Filter by allowed_instance_types if present in software stack
-                                    const filteredResults = selectedSoftwareStack?.allowed_instance_types
-                                        ? this.filterInstanceTypesByAllowedInstanceTypes(result.listing, selectedSoftwareStack.allowed_instance_types)
-                                        : result.listing;
-
                                     // Filter g4ad instance types based on OS compatibility
-                                    const g4adFilteredResults = this.filterG4adInstanceTypes(filteredResults, event.value);
+                                    const g4adFilteredResults = this.filterG4adInstanceTypes(result.listing, event.value);
 
                                     // Store instance types info for future reference
                                     this.instanceTypesInfo = this.generateInstanceTypeReverseIndex(result.listing)
@@ -895,13 +867,8 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
                                     hibernation_support: this.getForm()?.getValue('hibernate_instance'),
                                     software_stack: softwareStack
                                 }).then(result => {
-                                    // Filter by allowed_instance_types if present in software stack
-                                    const filteredResults = softwareStack?.allowed_instance_types
-                                        ? this.filterInstanceTypesByAllowedInstanceTypes(result.listing, softwareStack.allowed_instance_types)
-                                        : result.listing;
-
                                     // Filter g4ad instance types based on OS compatibility
-                                    const g4adFilteredResults = baseOs ? this.filterG4adInstanceTypes(filteredResults, baseOs) : filteredResults;
+                                    const g4adFilteredResults = baseOs ? this.filterG4adInstanceTypes(result.listing, baseOs) : result.listing;
 
                                     // Store instance types info for future reference
                                     this.instanceTypesInfo = this.generateInstanceTypeReverseIndex(result.listing)
@@ -995,13 +962,8 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
                                     hibernation_support: event.value,
                                     software_stack: softwareStack
                                 }).then(result => {
-                                    // Filter by allowed_instance_types if present in software stack
-                                    const filteredResults = softwareStack?.allowed_instance_types
-                                        ? this.filterInstanceTypesByAllowedInstanceTypes(result.listing, softwareStack.allowed_instance_types)
-                                        : result.listing;
-
                                     // Filter g4ad instance types based on OS compatibility
-                                    const g4adFilteredResults = baseOs ? this.filterG4adInstanceTypes(filteredResults, baseOs) : filteredResults;
+                                    const g4adFilteredResults = baseOs ? this.filterG4adInstanceTypes(result.listing, baseOs) : result.listing;
 
                                     // Update instance types info
                                     this.instanceTypesInfo = this.generateInstanceTypeReverseIndex(result.listing)

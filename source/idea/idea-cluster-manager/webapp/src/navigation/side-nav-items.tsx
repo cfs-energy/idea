@@ -23,6 +23,10 @@ export const IdeaSideNavItems = (context: AppContext): SideNavigationProps.Item[
         if (!views.length) continue;
         if (task.id === 'ssh-access' && !context.getClusterSettingsService().isBastionHostDeployed()) continue;
         if (task.id === 'reports' && !context.getClusterSettingsService().isCustomDashboardEnabled()) continue;
+        if (task.id === 'reporting') {
+            user.push({type: 'section', text: task.title, defaultExpanded: true, items: views.map(view => ({type: 'link', text: view.label, href: `#${view.path}`}))});
+            continue;
+        }
         (task.admin ? admin : user).push({type: 'link', text: task.title, href: `#${views[0].path}`});
     }
     if (admin.length) user.push({type: 'section', text: 'Administration', defaultExpanded: true, items: admin});

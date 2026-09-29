@@ -5,6 +5,8 @@
  * per-module CDK invocation live in `deployment-helper.ts` and `cdk-invoker.ts`.
  */
 
+import { refreshHostsCommand } from "../host-pool.ts";
+
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -18,6 +20,7 @@ import { DeploymentHelper } from '../deployment-helper.ts';
 import { checkAwsvpcTrunking } from './upgrade.ts';
 
 export interface DeployCommandOptions {
+  refreshHosts?: boolean;
   clusterName: string;
   awsRegion: string;
   awsProfile?: string;
@@ -60,6 +63,31 @@ export function asBoolFlag(value: string | boolean | undefined, defaultValue: bo
 
 export async function runDeploy(deps: Deps, modules: readonly string[], options: DeployCommandOptions): Promise<void> {
   const { allModules, moduleIds } = resolveRequestedModules(modules);
+  const config = await ClusterConfig.fromDynamoDb(options.clusterName, options.awsRegion, {
+    moduleSet: options.moduleSet,
+    scan: deps.scan,
+  });
+  if (config.get('ecs.enabled') !== true) {
+    let existing = false;
+    for (const module of config.modules()) {
+      if (module.type === 'config') continue;
+      try {
+        const stack = await deps.cfn.describeStack(module.stack_name ?? `${options.clusterName}-${module.module_id}`);
+        if (stack.StackStatus && !['DELETE_COMPLETE', 'REVIEW_IN_PROGRESS'].includes(stack.StackStatus)) {
+          existing = true;
+          break;
+        }
+      } catch (error) {
+        if (!(error instanceof Error && error.name === 'ValidationError' && error.message.includes('does not exist'))) {
+          throw error;
+        }
+      }
+    }
+    if (!existing) {
+      deps.err('New host-shaped deployments are no longer supported. An existing host cluster upgrades with upgrade-cluster.');
+      throw new ExitWithCode(1);
+    }
+  }
   const helper = await DeploymentHelper.open({
     clusterName: options.clusterName,
     awsRegion: options.awsRegion,
@@ -68,6 +96,8 @@ export async function runDeploy(deps: Deps, modules: readonly string[], options:
     terminationProtection: asBoolFlag(options.terminationProtection, true),
     deploymentId: options.deploymentId,
     upgrade: options.upgrade === true,
+    refreshHosts: options.refreshHosts,
+    hostPoolRerunCommand: refreshHostsCommand("deploy", options, modules),
     allModules,
     forceBuildBootstrap: options.forceBuildBootstrap === true,
     optimizeDeployment: options.optimizeDeployment === true,
@@ -199,6 +229,7 @@ export function registerDeployCommands(program: Command, deps: Deps): void {
     .option('--aws-profile <aws-profile>', 'AWS Profile Name')
     .option('--termination-protection <termination-protection>', 'Set termination protection to true or false. Default: true', 'true')
     .option('--deployment-id <deployment-id>', 'A UUID to identify the deployment.')
+    .option('--refresh-hosts', 'Replace outdated ECS hosts and wait for directory join before deploying further modules.')
     .option('--upgrade', 'Upgrade the module by re-running the CDK stack if the module has already been deployed.')
     .option(
       '--force-build-bootstrap',

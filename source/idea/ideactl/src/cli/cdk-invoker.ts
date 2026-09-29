@@ -16,6 +16,8 @@
  *    `--allow-replacement <logicalId>` is the only override and every override is printed.
  */
 
+import type { ContainerHostsApi } from "./commands/upgrade.ts";
+
 import { spawn as spawnProcess, spawnSync } from 'node:child_process';
 import { retryDelayMs } from './aws-client-options.ts';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -25,6 +27,7 @@ import { fileURLToPath } from 'node:url';
 
 import { STATEFUL_TYPE_PREFIXES, isStatefulType } from '../cdk/stateful.ts';
 import { ClusterConfig, GeneralException, type ModuleInfo, type TableScanner } from '../config/cluster-config.ts';
+import type { VpcEndpointServices } from '../config/vpc-endpoints.ts';
 import type { ConfigEntry, ModuleSpec } from '../config/cluster-config-db.ts';
 import type { CertificateDeps } from './certificates.ts';
 import type { PrefixListApi } from './commands/utils.ts';
@@ -39,7 +42,7 @@ import {
 import { ideaVersion } from '../version.ts';
 
 /** Modules the container stack runs as tasks, which therefore need no host packages. */
-const CONTAINER_SERVED_MODULES = ['cluster-manager', 'scheduler', 'virtual-desktop-controller'];
+const CONTAINER_SERVED_MODULES = ['cluster-manager', 'scheduler', 'virtual-desktop-controller', 'bastion-host'];
 
 // ---------------------------------------------------------------------------------------------
 // host filesystem layout (`app_props.py`)
@@ -218,7 +221,7 @@ export interface S3Api {
 /** `ClusterConfigDb`, structurally, so a test can record writes without DynamoDB. */
 export interface ConfigWriter {
   syncModulesInDb(modules: ModuleSpec[]): Promise<void>;
-  syncClusterSettingsInDb(entries: ConfigEntry[], overwrite?: boolean): Promise<void>;
+  syncClusterSettingsInDb(entries: ConfigEntry[], overwrite?: boolean, source?: 'cli' | 'template'): Promise<void>;
   setConfigEntry(key: string, value: unknown): Promise<void>;
   deleteConfigEntries(configKeyPrefix: string): Promise<void>;
 }
@@ -243,6 +246,7 @@ export interface PromptChoice {
  * command path needs credentials, a network, or a real CDK CLI.
  */
 export interface Deps {
+  containerHosts?: ContainerHostsApi;
   spawn: Spawn;
   cfn: CloudFormationApi;
   s3: S3Api;
@@ -294,6 +298,10 @@ export interface Deps {
    * deploy merges the configured client addresses into it once the list id is readable.
    */
   prefixList?: PrefixListApi;
+  /** A settings scan pinned to a region and profile other than the environment's. */
+  scanIn?: (input: { awsRegion: string; awsProfile?: string }) => TableScanner;
+  /** The endpoint services a region offers, for a new VPC with `use_vpc_endpoints`. */
+  vpcEndpointServices?: VpcEndpointServices;
   /**
    * Secrets Manager, ACM and `openssl`, for the self-signed certificates the deploy generates
    * before the stacks that read their ARNs synthesize.
@@ -360,7 +368,7 @@ export interface ChangeSetVerdict {
   refusals: ChangeSetFinding[];
   /** Findings an allow entry let through. Every one of these is printed. */
   allowed: Array<ChangeSetFinding & { allowedBy: string }>;
-  /** True when CloudFormation reports the change set holds no changes. */
+  /** True when the change set needs no execution. */
   empty: boolean;
 }
 
@@ -461,11 +469,12 @@ export function evaluateChangeSet(
   allowReplacementOfType: ReadonlyMap<string, string> = new Map(),
   retainedByPolicy: ReadonlySet<string> = new Set(),
 ): ChangeSetVerdict {
+  const changes = description.Changes ?? [];
   const verdict: ChangeSetVerdict = { refusals: [], allowed: [], empty: isEmptyChangeSet(description) };
   const explicit = new Set(allowReplacement);
-  const allChanges = (description.Changes ?? []).flatMap((change) => (change.ResourceChange === undefined ? [] : [change.ResourceChange]));
+  const allChanges = changes.flatMap((change) => (change.ResourceChange === undefined ? [] : [change.ResourceChange]));
 
-  for (const change of description.Changes ?? []) {
+  for (const change of changes) {
     const resourceChange = change.ResourceChange;
     if (resourceChange === undefined) continue;
     const logicalId = resourceChange.LogicalResourceId ?? '<unknown>';
@@ -578,6 +587,8 @@ export class ExitWithCode extends Error {
 
 const STACK_STATUS_OK = new Set(['CREATE_COMPLETE', 'UPDATE_COMPLETE', 'IMPORT_COMPLETE']);
 const STACK_STATUS_IN_PROGRESS = /_IN_PROGRESS$/;
+const STACK_WAIT_TIMEOUT_MS = 4 * 60 * 60_000;
+const STACK_WAIT_REPORT_MS = 5 * 60_000;
 
 // ---------------------------------------------------------------------------------------------
 // the invoker
@@ -867,10 +878,31 @@ export class CdkInvoker {
   }
 
   private async waitForStack(): Promise<StackDescription> {
+    const startedAt = this.deps.now();
+    let reportedAt = startedAt;
     for (;;) {
       const stack = await this.deps.cfn.describeStack(this.stackName);
       const status = stack.StackStatus ?? '';
       if (STACK_STATUS_IN_PROGRESS.test(status)) {
+        const waited = this.deps.now() - startedAt;
+        if (waited >= STACK_WAIT_TIMEOUT_MS) {
+          if (status === 'UPDATE_COMPLETE_CLEANUP_IN_PROGRESS') {
+            // The update is complete and the outputs are final; CloudFormation is still deleting the
+            // resources the update replaced. That cleanup does not block the next module.
+            this.deps.out(
+              `warning: ${this.stackName} is still cleaning up replaced resources after ${STACK_WAIT_TIMEOUT_MS / 60_000} minutes; the update itself is complete and the deploy continues. Check the stack events if the cleanup does not finish.`,
+            );
+            return stack;
+          }
+          throw new ExitWithCode(
+            1,
+            `Stack ${this.stackName} was still ${status} after ${STACK_WAIT_TIMEOUT_MS / 60_000} minutes. No further modules were deployed. Open the stack events in CloudFormation, resolve the resource that is still changing, then re-run the same deploy.`,
+          );
+        }
+        if (this.deps.now() - reportedAt >= STACK_WAIT_REPORT_MS) {
+          reportedAt = this.deps.now();
+          this.deps.out(`${this.stackName}: still ${status} after ${Math.round(waited / 60_000)} minutes`);
+        }
         await this.deps.sleep(this.pollIntervalMs);
         continue;
       }
@@ -928,7 +960,7 @@ export class CdkInvoker {
    */
   private async publishPackages(config: ClusterConfig, forceBuildBootstrap: boolean): Promise<Record<string, string>> {
     if (this.runsAsContainerTasks(config)) return {};
-    const provider = this.moduleName === 'directoryservice' ? config.getString('directoryservice.provider') : undefined;
+    const provider = config.getString('directoryservice.provider');
     const plans = bootstrapPackagePlans(this.moduleName, this.moduleId, this.deploymentId, provider);
     const releaseNames = releasePackageNames(this.moduleName, ideaVersion());
     if (plans.length === 0 && releaseNames.length === 0) return {};
@@ -966,6 +998,7 @@ export class CdkInvoker {
   private runsAsContainerTasks(config: ClusterConfig): boolean {
     if (!CONTAINER_SERVED_MODULES.includes(this.moduleName)) return false;
     if (!config.getBool('ecs.enabled', false)) return false;
+    if (this.moduleName === 'bastion-host') return true;
     return !config.getBool('ecs.retain_existing_hosts', false);
   }
 
@@ -984,7 +1017,7 @@ export class CdkInvoker {
         `Cannot build the bootstrap package for module ${this.moduleId} on this cluster. This build cannot deploy host modules that need a bootstrap archive. Deploy stack-only modules, or use a release that includes bootstrap-package support.`,
       );
     }
-    const baseOs = config.getString(this.baseOsKey(), undefined, { required: true }) as string;
+    const baseOs = this.moduleName === 'ecs' ? 'amazonlinux2023' : config.getString(this.baseOsKey(), undefined, { required: true }) as string;
     const instanceType = config.getString(this.instanceTypeKey(), undefined, { required: true }) as string;
     const context = buildContext({
       moduleName: this.moduleName,
@@ -1022,6 +1055,7 @@ export class CdkInvoker {
   }
 
   private instanceTypeKey(): string {
+    if (this.moduleName === 'ecs') return 'ecs.hosts.instance_type';
     if (this.moduleName === 'cluster-manager') return `${this.moduleId}.ec2.autoscaling.instance_type`;
     if (this.moduleName === 'virtual-desktop-controller') return `${this.moduleId}.controller.autoscaling.instance_type`;
     return `${this.moduleId}.instance_type`;

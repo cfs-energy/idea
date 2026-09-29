@@ -42,6 +42,7 @@ from ideaclustermanager.app.accounts.ad_automation_agent import ADAutomationAgen
 from ideaclustermanager.app.accounts.account_tasks import (
     SyncUserInDirectoryServiceTask,
     CreateUserHomeDirectoryTask,
+    RepairHomeOwnershipTask,
     SyncGroupInDirectoryServiceTask,
     SyncPasswordInDirectoryServiceTask,
     GroupMembershipUpdatedTask,
@@ -170,6 +171,7 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
                 SyncUserInDirectoryServiceTask(self.context),
                 SyncGroupInDirectoryServiceTask(self.context),
                 CreateUserHomeDirectoryTask(self.context),
+                RepairHomeOwnershipTask(self.context),
                 SyncPasswordInDirectoryServiceTask(self.context),
                 GroupMembershipUpdatedTask(self.context),
                 ProjectEnabledTask(self.context),
@@ -209,6 +211,8 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
         self.cost_metrics = CostMetricsService(context=self.context)
         self.storage_metrics = StorageMetricsService(context=self.context)
         self.context.storage_metrics = self.storage_metrics
+
+        self.context.token_service.initialize_api_tokens()
 
         self.context.personal_costs_store = PersonalCostsStore(self.context)
         self.context.personal_costs_store.initialize()

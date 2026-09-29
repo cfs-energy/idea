@@ -1,5 +1,7 @@
 # Custom AMIs
 
+New clusters use the container control plane only. Move an existing host-based control plane with `upgrade-cluster --drain`; follow the [container upgrade guide](../../../first-time-users/cluster-operations/update-idea-cluster/move-to-containers.md).
+
 Administration > Images and applications > Job images lists the images your cluster launches from and lets an administrator build new ones from the portal. Use it to see which operating systems have a built image and which still launch from a stock vendor image.
 
 ## What the page shows

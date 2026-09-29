@@ -30,12 +30,11 @@ PRIVATE_DNS_NAME = 'ip-10-0-79-226.us-east-2.compute.internal'
 
 
 def build_instance(
-    instance_id: str = 'i-0123456789abcdef0',
     private_ip=PRIVATE_IP,
     private_dns_name=PRIVATE_DNS_NAME,
 ) -> EC2Instance:
     data = {
-        'InstanceId': instance_id,
+        'InstanceId': 'i-0123456789abcdef0',
         'InstanceType': 'c5.large',
         'LaunchTime': '2026-01-01T00:00:00+00:00',
         'Tags': [

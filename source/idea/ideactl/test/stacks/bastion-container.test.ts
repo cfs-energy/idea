@@ -141,3 +141,8 @@ test('the container bastion publishes no boolean and never its own public flag',
   assert.equal(published['public'], undefined);
   for (const [key, value] of Object.entries(published)) assert.notEqual(typeof value, 'boolean', key);
 });
+
+test("bastion placement requires a joined directory client on the host", () => {
+  const [, service] = one(resourcesOf(synthBastion()), "AWS::ECS::Service");
+  assert.ok(service.Properties.PlacementConstraints.some((constraint: any) => constraint.Type === "memberOf" && constraint.Expression === "attribute:idea.directory == joined"));
+});
