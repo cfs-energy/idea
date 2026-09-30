@@ -2,7 +2,7 @@ import {createContext, ReactNode, useContext, useMemo} from 'react';
 import {AreaChart, BarChart, Box, Button, ColumnLayout, Container, Grid, Header, Link, LineChart, Popover, ProgressBar, Spinner, SpaceBetween, StatusIndicator} from '@cloudscape-design/components';
 import {JobRow, Ranked, ReportingBudget, ReportingCoverage, ReportingInsights, ReportingNumber, ReportingSummary} from '../../client/reporting-model';
 import {budgetPresentation, bytes, palette, calendarDays, cappedSeries, colorByName, rankedColors, date, efficiencyLabel, efficiencyStatus, hours, measuredTierPoints, metricInfo, money, NamedPoint, numeric, percent} from './reporting-format';
-import InsightsTable, {InsightColumn, ReportLoading} from './insights-table';
+import InsightsTable, {InsightColumn, ReportLoading, ReportUser} from './insights-table';
 
 export const Missing = () => <span role="img" aria-label="No data">—</span>;
 export function InfoTitle({title, children}: {title: string; children: ReactNode}) {
@@ -18,7 +18,7 @@ const metricDefinitions = {
     memory_efficiency_pct: "Peak memory used as a share of memory requested, or of the instance's memory when a job on its own instance didn't request any.",
     walltime_efficiency_pct: 'Elapsed time as a share of requested time.',
     wasted_core_hours: 'Requested cores multiplied by elapsed hours, minus CPU hours used.',
-    wasted_cost: 'Job cost multiplied by the share of requested core time not used, measured against the cores requested, not the instance’s vCPUs.'
+    wasted_cost: 'Job cost multiplied by the share of requested core time not used, measured against the cores requested, not the instance's vCPUs.'
 };
 type EfficiencyKey = 'cpu_efficiency_pct' | 'memory_efficiency_pct' | 'walltime_efficiency_pct' | 'wasted_core_hours' | 'wasted_cost';
 export function EfficiencyTiles({jobs, currency, weightedInfo = false, only}: {weightedInfo?: boolean; jobs: ReportingInsights['jobs']; currency: string; only?: EfficiencyKey[]}) {
@@ -110,17 +110,18 @@ export function DailyChart({title, points, currency, timezone, storage = false, 
         ? <LineChart {...common} yDomain={[0, niceMax(Math.max(1, ...measured.map(point => point.value)))]} series={series.map(series => ({...series, type: 'line', valueFormatter: format}))}/>
         : <AreaChart {...common} detailTotalFormatter={format} series={series.map(series => ({...series, type: 'area', valueFormatter: format}))}/>}</Container>;
 }
-export function InsightTab(props: {loading?: boolean; tab: string; insights: ReportingInsights; summary: ReportingSummary; timezone: string}) {
+export function InsightTab(props: {username?: string; loading?: boolean; tab: string; insights: ReportingInsights; summary: ReportingSummary; timezone: string}) {
     const data = props.insights;
     const ranks = useMemo(() => rankedColors([
         ...[data.jobs.by_user ?? [], data.jobs.by_project, data.jobs.by_queue, data.jobs.by_instance_family, data.desktops.by_user ?? [], data.desktops.by_project].flat().map(row => ({name: row.name, value: Number(row.cost)})),
         ...data.storage.tier_daily.map(row => ({name: row.tier === 'ssd' ? 'SSD' : 'Capacity pool', value: row.bytes})),
         ...['Other', 'User', 'Project', 'Queue', 'Instance family'].map(name => ({name, value: 0}))
     ]), [data]);
-    return <ReportLoading.Provider value={props.loading ?? false}><ChartColors.Provider value={ranks}><InsightView {...props}/></ChartColors.Provider></ReportLoading.Provider>;
+    return <ReportLoading.Provider value={props.loading ?? false}><ChartColors.Provider value={ranks}><ReportUser.Provider value={props.username ?? ''}><InsightView {...props}/></ReportUser.Provider></ChartColors.Provider></ReportLoading.Provider>;
 }
 function InsightView({tab, insights: data, summary, timezone}: {tab: string; insights: ReportingInsights; summary: ReportingSummary; timezone: string}) {
     const currency = data.currency;
+    const username = useContext(ReportUser);
     const costs = [data.jobs.cost, data.desktops.cost, data.storage.cost].filter(value => value != null);
     const total = costs.length ? costs.reduce<number>((sum, value) => sum + Number(value), 0) : null;
     const tile = (title: string, value: ReportingNumber | null | undefined, details?: ReportingCoverage, definition?: string, children?: ReactNode) => value == null ? null : <MetricTile title={title} value={money(value, currency)} info={metricInfo(details, timezone, definition)}>{children}</MetricTile>;
@@ -135,7 +136,7 @@ function InsightView({tab, insights: data, summary, timezone}: {tab: string; ins
         </ColumnLayout>
         <EfficiencyTiles jobs={data.jobs} currency={currency} only={['cpu_efficiency_pct', 'wasted_core_hours', 'wasted_cost']}/>
         <DailyChart period={data.period} title="Daily job cost by project" points={data.jobs.daily_by_project.map(row => ({name: row.project, x: row.date, value: Number(row.cost)}))} currency={currency} timezone={timezone} empty="No jobs finished in this period"/>
-        <CostBars title="Spend by user" rows={data.jobs.by_user ?? []} info="Finished job costs for the top 15 users." currency={currency} entity="User"/>
+        {!username && <CostBars title="Spend by user" rows={data.jobs.by_user ?? []} info="Finished job costs for the top 15 users." currency={currency} entity="User"/>}
         <BudgetTable budgets={data.budgets} currency={currency}/>
     </SpaceBetween>;
     if (tab === 'jobs') return <SpaceBetween size="l">
@@ -149,18 +150,18 @@ function InsightView({tab, insights: data, summary, timezone}: {tab: string; ins
     </SpaceBetween>;
     if (tab === 'desktops') return <SpaceBetween size="l">
         <ColumnLayout columns={2}>{tile('Desktop spend', data.desktops.cost)}<MetricTile title="Desktop hours" value={data.desktops.hours == null ? null : hours(data.desktops.hours)} info="Time between desktop creation and stopping within this period."/></ColumnLayout>
-        <DailyChart period={data.period} title="Daily desktop cost by user" points={data.desktops.daily_top_users.map(row => ({name: row.user, x: row.date, value: Number(row.cost)}))} currency={currency} timezone={timezone} empty="No desktop costs in this period"/>
-        <CostBars title="Desktop cost by user" rows={data.desktops.by_user ?? []} currency={currency} entity="User"/>
+        <DailyChart period={data.period} title={username ? "Daily desktop cost" : "Daily desktop cost by user"} points={data.desktops.daily_top_users.map(row => ({name: row.user, x: row.date, value: Number(row.cost)}))} currency={currency} timezone={timezone} empty="No desktop costs in this period"/>
+        {!username && <CostBars title="Desktop cost by user" rows={data.desktops.by_user ?? []} currency={currency} entity="User"/>}
         <CostBars title="Desktop cost by project" rows={data.desktops.by_project} currency={currency} entity="Project"/>
     </SpaceBetween>;
     return <SpaceBetween size="l">
         <ColumnLayout columns={2}>{tile('Storage spend', data.storage.cost)}<MetricTile title="Stored data" value={data.storage.used_bytes == null ? null : bytes(data.storage.used_bytes)} info="Most recent measured storage use in this period."/></ColumnLayout>
-        <CostBars title="Stored data by user" rows={(data.storage.by_user ?? []).map(row => ({name: row.name, cost: row.bytes / 2 ** 30, count: null, share_pct: 0}))} currency={currency} entity="User" storage/>
-        <InsightsTable title="Storage by user" rows={(data.storage.by_user ?? []).filter(row => row.bytes > 0)} defaultSort="bytes" empty="No storage measurements in this period" columns={[
+        {!username && <CostBars title="Stored data by user" rows={(data.storage.by_user ?? []).map(row => ({name: row.name, cost: row.bytes / 2 ** 30, count: null, share_pct: 0}))} currency={currency} entity="User" storage/>}
+        {!username && <InsightsTable title="Storage by user" rows={(data.storage.by_user ?? []).filter(row => row.bytes > 0)} defaultSort="bytes" empty="No storage measurements in this period" columns={[
             {id: 'name', label: 'User', header: 'User', value: row => row.name, cell: row => row.name},
             {id: 'bytes', label: 'Stored data', header: 'Stored data', value: row => row.bytes, cell: row => bytes(row.bytes)},
             {id: 'cost', label: 'Cost', header: 'Cost', value: row => numeric(row.cost), cell: row => row.cost == null ? <Missing/> : money(row.cost, currency)}
-        ]}/>
-        <DailyChart period={data.period} title="Storage by tier" points={data.storage.tier_daily.map(row => ({name: row.tier === 'ssd' ? 'SSD' : 'Capacity pool', x: row.date, value: row.bytes / 2 ** 30}))} currency={currency} timezone={timezone} storage empty="No storage measurements in this period"/>
+        ]}/>}
+        {!username && <DailyChart period={data.period} title="Storage by tier" points={data.storage.tier_daily.map(row => ({name: row.tier === 'ssd' ? 'SSD' : 'Capacity pool', x: row.date, value: row.bytes / 2 ** 30}))} currency={currency} timezone={timezone} storage empty="No storage measurements in this period"/>}
     </SpaceBetween>;
 }

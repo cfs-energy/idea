@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import ConfigDict, Field
 from ideadatamodel import IdeaOpenAPISpecEntry
-from .reporting_api import ReportingPeriodRequest, ReportingWireModel
+from .reporting_api import ReportingPeriodRequest, ReportingUsername, ReportingWireModel
 
 
 class InsightModel(ReportingWireModel):
@@ -129,7 +129,10 @@ class ReportingInsights(InsightModel):
     notes: list[str] = Field(default_factory=list, max_length=3)
 
 
-GetReportingInsightsRequest = ReportingPeriodRequest
+class GetReportingInsightsRequest(ReportingPeriodRequest):
+    username: ReportingUsername | None = None
+
+
 GetReportingInsightsResult = ReportingInsights
 GetMyCostsInsightsRequest = ReportingPeriodRequest
 GetMyCostsInsightsResult = ReportingInsights
@@ -137,10 +140,13 @@ GetMyCostsInsightsResult = ReportingInsights
 OPEN_API_SPEC_ENTRIES_REPORTING_INSIGHTS = [
     IdeaOpenAPISpecEntry(
         namespace=namespace,
-        request=ReportingPeriodRequest,
+        request=request,
         result=ReportingInsights,
         is_listing=False,
         is_public=False,
     )
-    for namespace in ('Reporting.GetInsights', 'MyCosts.GetInsights')
+    for namespace, request in (
+        ('Reporting.GetInsights', GetReportingInsightsRequest),
+        ('MyCosts.GetInsights', GetMyCostsInsightsRequest),
+    )
 ]

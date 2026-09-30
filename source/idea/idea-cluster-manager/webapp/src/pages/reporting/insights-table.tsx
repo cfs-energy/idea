@@ -3,6 +3,7 @@ import {useCollection} from '@cloudscape-design/collection-hooks';
 import {Box, Button, CollectionPreferences, Header, Pagination, Table, TableProps, TextFilter, Select, SpaceBetween} from '@cloudscape-design/components';
 
 export const ReportLoading = createContext(false);
+export const ReportUser = createContext('');
 
 export interface InsightColumn<T> extends TableProps.ColumnDefinition<T> {
     id: string;
@@ -24,6 +25,7 @@ export function savePreferences(key: string, value: unknown) {
 }
 export default function InsightsTable<T>({title, rows, columns, empty, defaultSort, hidden = [], tableId = title, description, jobSort = false}: {title: string; rows: T[]; columns: InsightColumn<T>[]; empty: string; defaultSort?: string; hidden?: string[]; tableId?: string; description?: ReactNode; jobSort?: boolean}) {
     const loading = useContext(ReportLoading);
+    const username = useContext(ReportUser);
     const key = `reporting.table.${tableId}`;
     const defaults = columns.map(column => ({id: column.id, visible: !hidden.includes(column.id)}));
     const [display, setDisplay] = useState(() => readPreferences(key, defaults));
@@ -41,7 +43,7 @@ export default function InsightsTable<T>({title, rows, columns, empty, defaultSo
     return <Table {...collectionProps} loading={loading && !rows.length} loadingText="Loading rows" stickyColumns={{first: 1}} items={items} columnDefinitions={definitions} columnDisplay={display.filter(column => available.some(item => item.id === column.id))}
         ariaLabels={{tableLabel: title}} header={<Header variant="h2" description={description} counter={`(${rows.length})`} actions={<Button disabled={!rows.length} onClick={() => {
             const selected = display.filter(column => column.visible).flatMap(column => available.filter(item => item.id === column.id));
-            downloadCsv(`${title.toLowerCase().replaceAll(' ', '-')}.csv`, [selected.map(column => csvCell(column.label)).join(','), ...allPageItems.map(row => selected.map(column => csvCell(column.value(row))).join(','))].join('\r\n'));
+            downloadCsv(`${title.toLowerCase().replaceAll(' ', '-')}${username ? `-${encodeURIComponent(username)}` : ''}.csv`, [selected.map(column => csvCell(column.label)).join(','), ...allPageItems.map(row => selected.map(column => csvCell(column.value(row))).join(','))].join('\r\n'));
         }}>Export CSV</Button>}>{title}</Header>}
         filter={<SpaceBetween size="s" direction="horizontal">{jobSort && <Select ariaLabel="Sort jobs" options={[{label: 'Highest cost', value: 'cost'}, {label: 'Most unused cores', value: 'wasted_core_hours'}]}
             selectedOption={{label: collectionProps.sortingColumn?.sortingField === 'wasted_core_hours' ? 'Most unused cores' : 'Highest cost', value: collectionProps.sortingColumn?.sortingField ?? 'cost'}}

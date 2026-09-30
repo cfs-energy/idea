@@ -373,3 +373,90 @@ it('reports a cancelled export when the selection changes during the request', a
     await act(async () => pending.resolve({filename: 'report.csv', content_type: 'text/csv;charset=utf-8', content: '', row_count: 0, as_of: null}));
     expect(screen.getByRole('status', {name: 'CSV download status'})).toHaveTextContent('CSV download cancelled because the report selection changed. Try again.');
 });
+
+
+describe('Reporting user filter', () => {
+    beforeEach(() => {
+        vi.stubGlobal('URL', Object.assign(URL, {createObjectURL: vi.fn().mockReturnValue('blob:report'), revokeObjectURL: vi.fn()}));
+    });
+    it('restores the URL user across tabs and reloads and clears to all users', async () => {
+        const view = open('/reporting?user=scientist-a&period=last_month');
+        await screen.findByText(/in job spend this period/);
+        expect(context.reporting().getInsights).toHaveBeenCalledWith({period: 'last_month', username: 'scientist-a'});
+        expect(screen.getByText(/· scientist-a · Updated/)).toBeInTheDocument();
+        expect(screen.queryByText('Spend by user')).not.toBeInTheDocument();
+        await userEvent.click(screen.getByRole('tab', {name: 'Desktops'}));
+        expect(screen.getByTestId('query')).toHaveTextContent('/reporting/desktops?user=scientist-a&period=last_month&table=desktops');
+        expect(screen.queryByText('Desktop cost by user')).not.toBeInTheDocument();
+        await userEvent.click(screen.getByRole('tab', {name: 'Storage'}));
+        expect(screen.queryByText('Stored data by user')).not.toBeInTheDocument();
+        const path = screen.getByTestId('query').textContent!;
+        view.unmount();
+        open(path);
+        await screen.findByRole('heading', {name: /Stored data/});
+        expect(screen.getByRole('button', {name: /^User /})).toHaveTextContent('scientist-a');
+        await userEvent.click(screen.getByRole('button', {name: 'Reload'}));
+        await waitFor(() => expect(context.reporting().getInsights).toHaveBeenCalledWith({period: 'last_month', username: 'scientist-a'}));
+        await userEvent.click(screen.getByRole('button', {name: 'Clear filter'}));
+        await screen.findByText('Stored data by user');
+        expect(screen.getByTestId('query')).not.toHaveTextContent('user=');
+        expect(screen.getByRole('button', {name: /^User /})).toHaveTextContent('All users');
+        expect(context.reporting().getInsights).toHaveBeenLastCalledWith({period: 'last_month'});
+    });
+    it('sorts and filters options and hides stale numbers while changing users', async () => {
+        open('/reporting');
+        const unfiltered = insightsFixture();
+        unfiltered.jobs.by_user = ['user-z', 'System', 'user-a', 'Other'].map(name => ({name, cost: '10', count: 1, share_pct: 25}));
+        unfiltered.desktops.by_user = unfiltered.storage.by_user = [];
+        const pending = deferred<ReturnType<typeof insightsFixture>>();
+        vi.mocked(context.reporting().getInsights).mockImplementation(request => request.username ? pending.promise : Promise.resolve(unfiltered));
+        await screen.findByText('Spend by user');
+        await userEvent.click(screen.getByRole('button', {name: 'Reload'}));
+        await waitFor(() => expect(screen.queryByText('Loading report')).not.toBeInTheDocument());
+        await userEvent.click(screen.getByRole('button', {name: /^User /}));
+        expect(screen.getAllByRole('option').map(option => option.textContent)).toEqual(['All users', 'user-a', 'user-z']);
+        await userEvent.type(screen.getByPlaceholderText('Find users'), 'user-a');
+        expect(screen.queryByRole('option', {name: 'user-z'})).not.toBeInTheDocument();
+        await userEvent.click(screen.getByRole('option', {name: 'user-a'}));
+        expect(screen.getByTestId('query')).toHaveTextContent('user=user-a');
+        expect(screen.queryByText(/in job spend this period/)).not.toBeInTheDocument();
+        expect(screen.queryByText('Total spend')).not.toBeInTheDocument();
+        expect(context.reporting().getInsights).toHaveBeenCalledWith({period: 'this_month', username: 'user-a'});
+        await userEvent.click(screen.getByRole('button', {name: /^User /}));
+        await userEvent.click(screen.getByRole('option', {name: 'All users'}));
+        await screen.findByText('Spend by user');
+        const obsolete = insightsFixture(); obsolete.jobs.cost = '999999';
+        await act(async () => pending.resolve(obsolete));
+        expect(screen.getByTestId('query')).not.toHaveTextContent('user=');
+        expect(document.body.textContent).not.toContain('999,999');
+    });
+    it('finds the selected Breakdown row beyond the first page and scopes exports', async () => {
+        open('/reporting/projects?user=user-b');
+        vi.mocked(context.reporting().listRows).mockResolvedValueOnce(rows([row('user-a')], 'next')).mockResolvedValueOnce(rows([row('user-b')]));
+        const csv = vi.spyOn(context.reporting(), 'exportCsv').mockResolvedValue({filename: 'report-user-b.csv', content_type: 'text/csv;charset=utf-8', content: 'user-b', row_count: 1, as_of: null});
+        const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+        await screen.findByRole('cell', {name: 'user-b'});
+        expect(screen.queryByRole('cell', {name: 'user-a'})).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', {name: 'Project'})).not.toBeInTheDocument();
+        expect(context.reporting().listRows).toHaveBeenLastCalledWith(expect.objectContaining({table: 'user', paginator: {page_size: 200, cursor: 'next'}}));
+        await userEvent.click(screen.getByRole('button', {name: 'Export CSV'}));
+        await screen.findByText('Downloaded 1 rows across all pages.');
+        expect(csv).toHaveBeenCalledWith(expect.objectContaining({table: 'user', username: 'user-b'}));
+        expect((click.mock.instances.at(-1) as HTMLAnchorElement).download).toBe('report-user-b.csv');
+    });
+    it('shows an empty Breakdown for an unknown user after checking every page', async () => {
+        open('/reporting/users?user=unknown-user');
+        vi.mocked(context.reporting().listRows).mockResolvedValueOnce(rows([row('user-a')], 'next')).mockResolvedValueOnce(rows([row('user-b')]));
+        await screen.findByText('No costs or activity in this period');
+        expect(context.reporting().listRows).toHaveBeenCalledTimes(2);
+        expect(screen.queryByRole('cell', {name: 'user-a'})).not.toBeInTheDocument();
+        expect(screen.queryByRole('cell', {name: 'user-b'})).not.toBeInTheDocument();
+    });
+    it('includes the filter in insights table CSV filenames', async () => {
+        open('/reporting/jobs?user=scientist-a');
+        const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+        await screen.findByRole('heading', {name: 'Top jobs (1)'});
+        await userEvent.click(screen.getByRole('button', {name: 'Export CSV'}));
+        expect((click.mock.instances.at(-1) as HTMLAnchorElement).download).toBe('top-jobs-scientist-a.csv');
+    });
+});

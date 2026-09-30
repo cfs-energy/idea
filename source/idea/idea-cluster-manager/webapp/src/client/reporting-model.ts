@@ -39,6 +39,7 @@ export interface ReportingSummaryRequest {
     end_date?: string;
 }
 export type ReportingPeriodRequest = ReportingSummaryRequest;
+export type ReportingInsightsRequest = ReportingPeriodRequest & {username?: string};
 export interface Ranked {
     name: string;
     cost: string;
@@ -140,7 +141,7 @@ export interface ReportingRows {
     coverage: MetricCoverage;
     warnings: string[];
 }
-export type ReportingExportRequest = Omit<ReportingRowsRequest, 'paginator'> & {columns: ReportingColumn[]};
+export type ReportingExportRequest = Omit<ReportingRowsRequest, 'paginator'> & {columns: ReportingColumn[]; username?: string};
 export interface ReportingCsv {
     filename: string;
     content_type: 'text/csv;charset=utf-8';

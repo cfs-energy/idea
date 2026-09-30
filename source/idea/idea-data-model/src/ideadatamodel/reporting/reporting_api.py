@@ -1,7 +1,7 @@
 """Immutable reporting read contract. Money is serialized as decimal strings."""
 
 from decimal import Decimal
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import ConfigDict, Field, StrictBool, StrictInt, field_serializer
 
@@ -25,6 +25,9 @@ __all__ = (
 Facet = Literal['jobs', 'desktops', 'desktop_disks', 'shared_storage', 'ai']
 Table = Literal['user', 'project', 'facet']
 Period = Literal['this_month', 'last_month', 'last_30_days', 'custom']
+ReportingUsername = Annotated[
+    str, Field(min_length=3, max_length=20, pattern=r'^[a-z0-9]+(?:[_.-]?[a-z0-9]+)*$')
+]
 Column = Literal[
     'key',
     'label',
@@ -158,6 +161,7 @@ class ListReportingRowsResult(SocaPayload):
 
 class ExportReportingCsvRequest(SocaPayload):
     model_config = ConfigDict(extra='forbid')
+    username: ReportingUsername | None = None
     snapshot_id: str = Field(min_length=1, max_length=128)
     table: Table
     sort_by: Column = 'spend_total'

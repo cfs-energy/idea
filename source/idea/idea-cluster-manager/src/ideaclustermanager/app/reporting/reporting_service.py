@@ -802,11 +802,21 @@ class ReportingService:
 
     def export(self, actor, request, authorize):
         metadata = self.store.lookup(request.snapshot_id, actor, authorize)
+        if request.username is not None and request.table != 'user':
+            raise exceptions.invalid_params(
+                'User-filtered exports require the user table'
+            )
         rows = sort_rows(
             self.store.rows(request.snapshot_id, metadata, request.table),
             request.sort_by,
             request.descending,
         )
+        if request.username is not None:
+            rows = [row for row in rows if row['key'] == request.username]
         result = export_csv(metadata['summary'], rows, request.table, request.columns)
+        if request.username is not None:
+            result.filename = (
+                result.filename.removesuffix('.csv') + f'-{request.username}.csv'
+            )
         self.store.check_expiry(metadata)
         return result

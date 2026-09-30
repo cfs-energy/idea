@@ -116,3 +116,38 @@ def test_csv_size_columns_and_expiry_fail_explicitly(monkeypatch):
             lambda: True,
         )
     assert error.value.error_code == 'REPORT_EXPIRED'
+
+
+@pytest.mark.parametrize(
+    'username,expected', [('user-b', ['user-b']), ('unknown-user', [])]
+)
+def test_filtered_export_contains_only_selected_user(username, expected):
+    cache = store()
+    result = cache.publish(
+        'reader',
+        summary(),
+        dict(
+            user=[new_row('user-a', 'user-a'), new_row('user-b', 'user-b')],
+            project=[],
+            facet=[],
+        ),
+        time.monotonic() + 30,
+    )
+    service = ReportingService(SimpleNamespace(), store=cache)
+    request = ExportReportingCsvRequest(
+        snapshot_id=result['snapshot_id'],
+        table='user',
+        columns=['label'],
+        username=username,
+    )
+    exported = service.export('reader', request, lambda: True)
+    content = list(csv.DictReader(io.StringIO(exported.content.lstrip('\ufeff'))))
+    assert [row['label'] for row in content] == expected
+    assert exported.row_count == len(expected)
+    assert exported.filename == f'reporting-user-2024-01-01-2024-01-31-{username}.csv'
+    with pytest.raises(exceptions.SocaException):
+        service.export('reader', request, lambda: False)
+    request.table = 'project'
+    with pytest.raises(exceptions.SocaException) as error:
+        service.export('reader', request, lambda: True)
+    assert error.value.error_code == 'INVALID_PARAMS'

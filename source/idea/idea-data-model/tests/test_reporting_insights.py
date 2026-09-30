@@ -387,3 +387,48 @@ def test_job_wide_cpu_total_is_not_summed_across_hosts():
     # The same job-wide total repeated on each host end event counts once.
     assert result['used_cores'] == 2
     assert result['cpu_efficiency_pct'] == 25
+
+
+@pytest.mark.parametrize(
+    'username',
+    [
+        '',
+        'ab',
+        'a' * 21,
+        'User-a',
+        'user a',
+        '_user',
+        'user-',
+        'user..a',
+        'user/-a',
+        123,
+    ],
+)
+def test_reporting_username_validation(username):
+    from ideadatamodel import GetReportingInsightsRequest, ExportReportingCsvRequest
+
+    with pytest.raises(ValidationError):
+        GetReportingInsightsRequest(period='this_month', username=username)
+    with pytest.raises(ValidationError):
+        ExportReportingCsvRequest(
+            snapshot_id='snapshot', table='user', columns=['label'], username=username
+        )
+
+
+def test_only_reporting_insights_accepts_username():
+    from ideadatamodel import GetReportingInsightsRequest, GetMyCostsInsightsRequest
+    from ideadatamodel.reporting.insights import (
+        OPEN_API_SPEC_ENTRIES_REPORTING_INSIGHTS,
+    )
+
+    for username in (None, 'user-a', 'user.name', 'user_1'):
+        assert (
+            GetReportingInsightsRequest(period='this_month', username=username).username
+            == username
+        )
+    with pytest.raises(ValidationError):
+        GetMyCostsInsightsRequest(period='this_month', username='user-a')
+    assert [entry.request for entry in OPEN_API_SPEC_ENTRIES_REPORTING_INSIGHTS] == [
+        GetReportingInsightsRequest,
+        GetMyCostsInsightsRequest,
+    ]

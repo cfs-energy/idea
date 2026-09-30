@@ -6,6 +6,7 @@ from ideasdk.api import BaseAPI
 from ideadatamodel import (
     GetReportingCapabilitiesRequest,
     GetReportingCapabilitiesResult,
+    GetReportingInsightsRequest,
     ReportingPeriodRequest,
     ListReportingRowsRequest,
     ExportReportingCsvRequest,
@@ -33,7 +34,7 @@ class ReportingAPI(BaseAPI):
         methods = {
             'Reporting.GetCapabilities': GetReportingCapabilitiesRequest,
             'Reporting.GetSummary': ReportingPeriodRequest,
-            'Reporting.GetInsights': ReportingPeriodRequest,
+            'Reporting.GetInsights': GetReportingInsightsRequest,
             'Reporting.ListRows': ListReportingRowsRequest,
             'Reporting.ExportCsv': ExportReportingCsvRequest,
         }
@@ -76,11 +77,20 @@ class ReportingAPI(BaseAPI):
         if context.namespace == 'Reporting.GetCapabilities':
             result = GetReportingCapabilitiesResult(can_read_reporting=authorize())
         elif context.namespace == 'Reporting.GetInsights':
-            result = self.insights.get_insights(request, authorize)
+            result = self.insights.get_insights(
+                request, authorize, username=request.username
+            )
         elif context.namespace == 'Reporting.GetSummary':
             result = self.service.get_summary(actor, request, authorize)
         elif context.namespace == 'Reporting.ListRows':
             result = self.service.list_rows(actor, request, authorize)
         else:
             result = self.service.export(actor, request, authorize)
-        context.success(result.model_dump(mode='json', exclude_none=False))
+        payload = result.model_dump(mode='json', exclude_none=False)
+        if (
+            context.namespace == 'Reporting.GetInsights'
+            and request.username is not None
+        ):
+            for section in ('jobs', 'desktops', 'storage'):
+                payload[section].pop('by_user', None)
+        context.success(payload)

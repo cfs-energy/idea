@@ -326,8 +326,17 @@ def test_api_auth_and_identity(personal):
         api.invoke(call)
     call.is_authenticated_user = lambda: True
     call.request_payload['username'] = 'user-b'
-    with pytest.raises(exceptions.SocaException):
+    if personal:
+        with pytest.raises(exceptions.SocaException):
+            api.invoke(call)
+    else:
         api.invoke(call)
+        assert api.insights.get_insights.call_args.kwargs['username'] == 'user-b'
+        payload = call.success.call_args.args[0]
+        assert all(
+            'by_user' not in payload[section]
+            for section in ('jobs', 'desktops', 'storage')
+        )
 
 
 def test_reporting_denies_non_reporting_user():
@@ -540,10 +549,16 @@ def test_storage_total_matches_latest_measured_tiers():
 @pytest.mark.parametrize('spent,limit', [(100, 100), (101, 100), (0, 0)])
 @pytest.mark.parametrize('forecast', [None, 0, 90])
 def test_actual_budget_limit_is_over_without_forecast_support(spent, limit, forecast):
-    row = budget_row('project-a', dict(
-        budget_name='budget-a', budget_limit=dict(amount=limit),
-        actual_spend=dict(amount=spent), forecasted_spend=dict(amount=forecast),
-    ), 'USD')
+    row = budget_row(
+        'project-a',
+        dict(
+            budget_name='budget-a',
+            budget_limit=dict(amount=limit),
+            actual_spend=dict(amount=spent),
+            forecasted_spend=dict(amount=forecast),
+        ),
+        'USD',
+    )
     assert row['status'] == 'over'
 
 
@@ -572,7 +587,9 @@ def test_insights_builds_do_not_hold_the_cache_lock(stage):
         first = pool.submit(service.get_insights, request(), lambda: True, 'user-a')
         try:
             assert entered.wait(5)
-            second = pool.submit(service.get_insights, request(), lambda: True, 'user-b')
+            second = pool.submit(
+                service.get_insights, request(), lambda: True, 'user-b'
+            )
             assert second.result(timeout=2).jobs.count == 1
         finally:
             release.set()
@@ -616,15 +633,24 @@ def test_sources_scope_projection_desktop_and_history_reads(username):
 
     context = Mock()
     context.config().is_module_enabled.return_value = True
-    context.accounts.list_users.return_value = SimpleNamespace(listing=[], paginator=None)
-    context.projects.list_projects.return_value = SimpleNamespace(listing=[], paginator=None)
-    head = dict(subject='user-a', record='head', payload=json.dumps({'parts': {'costs': 0}}))
+    context.accounts.list_users.return_value = SimpleNamespace(
+        listing=[], paginator=None
+    )
+    context.projects.list_projects.return_value = SimpleNamespace(
+        listing=[], paginator=None
+    )
+    head = dict(
+        subject='user-a', record='head', payload=json.dumps({'parts': {'costs': 0}})
+    )
     context.personal_costs_store.records.return_value = [head]
     context.personal_costs_store.table.scan.return_value = {'Items': [head]}
     history = context.aws().dynamodb_table().Table.return_value
     read = history.query if username else history.scan
     read.side_effect = [
-        {'Items': [{'owner': 'user-a'}], 'LastEvaluatedKey': {'owner': 'user-a', 'session_id': '1'}},
+        {
+            'Items': [{'owner': 'user-a'}],
+            'LastEvaluatedKey': {'owner': 'user-a', 'session_id': '1'},
+        },
         {'Items': [{'owner': 'user-a'}]},
     ]
     sources = ReportingSources(context)
@@ -640,9 +666,64 @@ def test_sources_scope_projection_desktop_and_history_reads(username):
         context.personal_costs_store.records.assert_called_once_with(username, 'head')
         context.personal_costs_store.table.scan.assert_not_called()
         history.scan.assert_not_called()
-        assert read.call_args.kwargs['KeyConditionExpression'] == Key('owner').eq(username)
+        assert read.call_args.kwargs['KeyConditionExpression'] == Key('owner').eq(
+            username
+        )
         assert {'term': {'owner.raw': username}} in query['bool']['filter']
     else:
         context.personal_costs_store.records.assert_not_called()
         history.query.assert_not_called()
         assert query == {'match_all': {}}
+
+
+@pytest.mark.parametrize('allowed', [False, True])
+def test_reporting_filter_uses_shared_capability_and_scoped_cache(allowed):
+    context, sources = Mock(), Mock()
+    context.config().get_string.return_value = 'UTC'
+    context.projects.get_user_projects.return_value = SimpleNamespace(projects=[])
+    sources.read.return_value = dict(
+        data(),
+        projections={
+            'user-a': projection('5'),
+            'user-b': projection('10'),
+        },
+    )
+    api = ReportingAPI.__new__(ReportingAPI)
+    api.insights = InsightsService(context, sources)
+    call = invocation(
+        'Reporting.GetInsights',
+        allowed=allowed,
+        payload=dict(request().model_dump(), username='user-a'),
+    )
+    call.is_administrator = Mock(side_effect=AssertionError('Secondary role decision'))
+    call.is_manager = Mock(side_effect=AssertionError('Secondary role decision'))
+    if not allowed:
+        with pytest.raises(exceptions.SocaException) as error:
+            api.invoke(call)
+        assert error.value.error_code == 'UNAUTHORIZED_ACCESS'
+        sources.read.assert_not_called()
+        return
+    for username, cost, count in [
+        ('user-a', '10.0000', 1),
+        ('user-b', '30.0000', 2),
+        ('user-a', '10.0000', 2),
+        (None, '40.0000', 3),
+        ('unknown-user', None, 4),
+    ]:
+        call.request_payload['username'] = username
+        api.invoke(call)
+        payload = call.success.call_args.args[0]
+        assert payload['jobs']['cost'] == cost
+        assert sources.read.call_count == count
+        assert all(
+            ('by_user' in payload[section]) == (username is None)
+            for section in ('jobs', 'desktops', 'storage')
+        )
+    assert payload['jobs']['count'] == 0
+    assert payload['jobs']['costliest'] == payload['budgets'] == []
+    assert payload['desktops']['cost'] is payload['storage']['cost'] is None
+    assert sources.read.call_args.kwargs['username'] == 'unknown-user'
+    call.can_read_reporting.return_value = False
+    with pytest.raises(exceptions.SocaException):
+        api.invoke(call)
+    assert sources.read.call_count == 4
