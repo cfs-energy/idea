@@ -18,7 +18,7 @@ const metricDefinitions = {
     memory_efficiency_pct: "Peak memory used as a share of memory requested, or of the instance's memory when a job on its own instance didn't request any.",
     walltime_efficiency_pct: 'Elapsed time as a share of requested time.',
     wasted_core_hours: 'Requested cores multiplied by elapsed hours, minus CPU hours used.',
-    wasted_cost: 'Job cost multiplied by the share of requested core time not used, measured against the cores requested, not the instance's vCPUs.'
+    wasted_cost: "Job cost multiplied by the share of requested core time not used, measured against the cores requested, not the instance's vCPUs."
 };
 type EfficiencyKey = 'cpu_efficiency_pct' | 'memory_efficiency_pct' | 'walltime_efficiency_pct' | 'wasted_core_hours' | 'wasted_cost';
 export function EfficiencyTiles({jobs, currency, weightedInfo = false, only}: {weightedInfo?: boolean; jobs: ReportingInsights['jobs']; currency: string; only?: EfficiencyKey[]}) {

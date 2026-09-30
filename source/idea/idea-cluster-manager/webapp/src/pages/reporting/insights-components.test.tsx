@@ -152,7 +152,7 @@ it.each([
 it('defines unused cost against requested cores', async () => {
     render(<EfficiencyTiles jobs={insightsFixture().jobs} currency="USD"/>);
     await userEvent.click(screen.getByRole('button', {name: 'About Cost of unused core-hours'}));
-    expect(screen.getByText('Job cost multiplied by the share of requested core time not used, measured against the cores requested, not the instance’s vCPUs.')).toBeInTheDocument();
+    expect(screen.getByText("Job cost multiplied by the share of requested core time not used, measured against the cores requested, not the instance's vCPUs.")).toBeInTheDocument();
 });
 it('counts the distinct top jobs rather than all finished jobs', async () => {
     const context = initTestAppContext();
