@@ -13,7 +13,7 @@
 from ideasdk.service import SocaService
 from ideasdk.context import SocaContext
 from ideasdk.utils import Utils
-from ideadatamodel import exceptions, errorcodes
+from ideadatamodel import constants, exceptions, errorcodes
 
 from ideaclustermanager.app.accounts.ldapclient.active_directory_client import (
     ActiveDirectoryClient,
@@ -32,6 +32,7 @@ import arrow
 import ldap  # noqa
 import time
 import random
+import re
 
 DEFAULT_MAX_MESSAGES = 1
 DEFAULT_WAIT_INTERVAL_SECONDS = 20
@@ -63,6 +64,7 @@ class ADAutomationAgent(SocaService):
         self.ad_automation_dao = ADAutomationDAO(context=self.context)
         self.ad_automation_dao.initialize()
 
+        self._reset_disabled_logged = False
         self._stop_event = Event()
         self._automation_thread = Thread(
             name='ad-automation-thread', target=self.automation_loop
@@ -70,7 +72,28 @@ class ADAutomationAgent(SocaService):
 
     def is_password_expired(self) -> bool:
         root_username = self.ldap_client.ldap_root_username
-        user = self.ldap_client.get_user(root_username, trace=False)
+        try:
+            user = self.ldap_client.get_user(root_username, trace=False)
+        except ldap.INVALID_CREDENTIALS as e:
+            if (
+                self.ldap_client.ds_provider
+                != constants.DIRECTORYSERVICE_AWS_MANAGED_ACTIVE_DIRECTORY
+            ):
+                raise
+            details = e.args[0] if e.args and isinstance(e.args[0], dict) else {}
+            match = re.search(
+                r'\bdata\s+([0-9a-f]+)\b', str(details.get('info', '')), re.I
+            )
+            code = match.group(1).lower() if match else 'unknown'
+            if code in {'532', '773'}:
+                self.logger.warning(
+                    f'AD admin password expired or requires reset (data {code}).'
+                )
+                return True
+            self.logger.error(
+                f'AD admin credentials rejected (data {code}); password will not be reset. Check the root credential secret.'
+            )
+            raise
         if user is None:
             raise exceptions.soca_exception(
                 error_code=errorcodes.GENERAL_ERROR,
@@ -101,19 +124,39 @@ class ADAutomationAgent(SocaService):
         check and reset password for AD admin user
         """
 
+        if not self.context.config().get_bool(
+            'directoryservice.ad_automation.enable_root_password_reset', default=False
+        ):
+            if not self._reset_disabled_logged:
+                self.logger.warning(
+                    'AD admin password reset is disabled by directoryservice.ad_automation.enable_root_password_reset; no automatic reset will be attempted.'
+                )
+                self._reset_disabled_logged = True
+            return
+
+        managed_ad = (
+            self.ldap_client.ds_provider
+            == constants.DIRECTORYSERVICE_AWS_MANAGED_ACTIVE_DIRECTORY
+        )
+        if managed_ad:
+            self.ldap_client.refresh_root_username_password()
         if not self.is_password_expired():
             return
 
+        lock_acquired = False
         try:
             # sleep for a random interval to prevent race condition
             time.sleep(random.randint(1, 30))
 
             self.logger.info('acquiring lock to reset ds credentials ...')
             self.context.distributed_lock().acquire(key=AD_RESET_PASSWORD_LOCK_KEY)
+            lock_acquired = True
 
             self.logger.info('reset ds credentials lock acquired.')
 
             # check again, where other node may have acquired the lock and already performed the update.
+            if managed_ad:
+                self.ldap_client.refresh_root_username_password()
             if not self.is_password_expired():
                 self.logger.info(
                     'ds credentials already reset. re-sync ds credentials from secrets manager ...'
@@ -146,29 +189,29 @@ class ADAutomationAgent(SocaService):
                             current_retry, max_retries, backoff_in_seconds
                         )
                         current_retry += 1
+                        if current_retry == max_retries:
+                            raise
                         time.sleep(interval)
                     else:
                         raise e
 
             # update root password secret
             self.ldap_client.update_root_password(new_password)
+            if managed_ad:
+                self.ldap_client.refresh_root_username_password()
             self.logger.info('ds credentials updated.')
 
         finally:
-            self.context.distributed_lock().release(key=AD_RESET_PASSWORD_LOCK_KEY)
-            self.logger.info('reset ds credentials lock released.')
+            if lock_acquired:
+                self.context.distributed_lock().release(key=AD_RESET_PASSWORD_LOCK_KEY)
+                self.logger.info('reset ds credentials lock released.')
 
     def automation_loop(self):
         while not self._stop_event.is_set():
             admin_user_ok = False
 
             try:
-                enable_root_password_reset = self.context.config().get_bool(
-                    'directoryservice.ad_automation.enable_root_password_reset',
-                    default=False,
-                )
-                if enable_root_password_reset:
-                    self.check_and_reset_admin_password()
+                self.check_and_reset_admin_password()
                 admin_user_ok = True
 
                 visibility_timeout = self.context.config().get_int(

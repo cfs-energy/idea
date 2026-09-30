@@ -73,12 +73,25 @@ def build_ldap_client(context: SocaContext, logger=None) -> AbstractLDAPClientTy
         ldap_connection_uri = context.config().get_string(
             'directoryservice.ldap_connection_uri', required=True
         )
-        ds_root_username = context.config().get_secret(
-            'directoryservice.root_username_secret_arn', required=True
-        )
-        ds_root_password = context.config().get_secret(
-            'directoryservice.root_password_secret_arn', required=True
-        )
+        if ds_provider == constants.DIRECTORYSERVICE_AWS_MANAGED_ACTIVE_DIRECTORY:
+            # Keep secret references so refresh and password rotation reach Secrets Manager.
+            root_credentials = {
+                'root_username_secret_arn': context.config().get_string(
+                    'directoryservice.root_username_secret_arn', required=True
+                ),
+                'root_password_secret_arn': context.config().get_string(
+                    'directoryservice.root_password_secret_arn', required=True
+                ),
+            }
+        else:
+            root_credentials = {
+                'root_username': context.config().get_secret(
+                    'directoryservice.root_username_secret_arn', required=True
+                ),
+                'root_password': context.config().get_secret(
+                    'directoryservice.root_password_secret_arn', required=True
+                ),
+            }
         password_max_age = context.config().get_int(
             'directoryservice.password_max_age', required=True
         )
@@ -88,11 +101,10 @@ def build_ldap_client(context: SocaContext, logger=None) -> AbstractLDAPClientTy
             options=LdapClientOptions(
                 uri=ldap_connection_uri,
                 domain_name=domain_name,
-                root_username=ds_root_username,
-                root_password=ds_root_password,
                 ad_netbios=ad_netbios,
                 directory_id=directory_id,
                 password_max_age=password_max_age,
+                **root_credentials,
             ),
             logger=logger,
         )
