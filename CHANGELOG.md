@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
-## [26.10.0] - 2026-09-30
+## [26.10.0] - 2026-10-01
 
 * **Reporting and My costs**: job efficiency leads both pages: the spend that paid for unused cores, CPU, memory and walltime efficiency, unused core-hours and their cost, and per-job hints to lower a core or memory request. Memory is measured against the request, or against the job's own instance when it requested none (single-job capacity with one instance size only). Reporting readers can filter every view and export to one user. Reporting's total and spend tiles use recorded costs including desktop disks and AI, so they match My costs. One job table sorts by cost or unused cores, a Breakdown view switches between users and projects, daily cost is a stacked area chart, system accounts group as System, and expired reports refetch from the server's error instead of the browser clock. Money is rounded to four places and other numbers to two in the API.
 * **Landing page**: the Home dashboard is removed and My costs is the default landing page; a personal landing-page preference, then the cluster default, still wins, and a saved Home preference opens My costs. My costs is the Reporting view scoped to the signed-in user, and the header cost ticker opens it.
