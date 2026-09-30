@@ -1634,6 +1634,20 @@ for (const suffix of ["metrics.cost.last_collected", "metrics.storage.last_colle
   });
 }
 
+test("completion lets the desktop controller record its seeded release during the upgrade", async () => {
+  await withFixture(async ({ deps, rows }) => {
+    rows[`${clusterName}.modules`]!.push(moduleRow("vdc", "virtual-desktop-controller"));
+    const key = "vdc.software_stacks.base_stacks_seeded_release";
+    rows[`${clusterName}.cluster-settings`]!.push(setting(key, "26.09.5"));
+    const deploy = deps.deploy;
+    deps.deploy = async (input) => {
+      await deploy(input);
+      rows[`${clusterName}.cluster-settings`]!.find((row) => row["key"] === key)!["value"] = "26.10.0";
+    };
+    await upgradeCluster(deps, containerOptions);
+  });
+});
+
 for (const reorderArray of [false, true]) {
   test(`completion compares nested maps structurally and arrays in order: ${reorderArray}`, async () => {
     await withFixture(async ({ deps, rows }) => {
