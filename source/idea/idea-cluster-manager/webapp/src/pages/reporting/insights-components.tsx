@@ -1,6 +1,6 @@
 import {createContext, ReactNode, useContext, useMemo} from 'react';
 import {AreaChart, BarChart, Box, Button, ColumnLayout, Container, Grid, Header, Link, LineChart, Popover, ProgressBar, Spinner, SpaceBetween, StatusIndicator} from '@cloudscape-design/components';
-import {JobRow, Ranked, ReportingBudget, ReportingCoverage, ReportingInsights, ReportingNumber, ReportingSummary} from '../../client/reporting-model';
+import {JobRow, Ranked, ReportingBudget, ReportingCoverage, ReportingInsights, ReportingNumber, ReportingRow, ReportingSummary} from '../../client/reporting-model';
 import {budgetPresentation, bytes, palette, calendarDays, cappedSeries, colorByName, rankedColors, date, efficiencyLabel, efficiencyStatus, hours, measuredTierPoints, metricInfo, money, NamedPoint, numeric, percent} from './reporting-format';
 import InsightsTable, {InsightColumn, ReportLoading, ReportUser} from './insights-table';
 
@@ -46,7 +46,7 @@ export function BudgetTable({budgets, currency}: {budgets: ReportingBudget[]; cu
 }
 export function Coaching({jobs, currency, personal = false}: {jobs: ReportingInsights['jobs']; currency: string; personal?: boolean}) {
     if (!jobs.jobs_with_efficiency || jobs.wasted_cost == null || jobs.cost == null) return null;
-    return <Box>{personal ? `About ${money(jobs.wasted_cost, currency)} of ${money(jobs.cost, currency)} in job spend paid for cores your jobs didn't use.` : `About ${money(jobs.wasted_cost, currency)} of ${money(jobs.cost, currency)} in job spend this period paid for unused cores.`}</Box>;
+    return <Box>{personal ? `About ${money(jobs.wasted_cost, currency)} of ${money(jobs.cost, currency)} on your finished jobs paid for cores your jobs didn't use.` : `About ${money(jobs.wasted_cost, currency)} of ${money(jobs.cost, currency)} spent on finished jobs paid for unused cores.`}</Box>;
 }
 const gib = (value: number) => new Intl.NumberFormat('en-US', {maximumFractionDigits: value < 10 ? 1 : 0}).format(value);
 export function jobHint(job: JobRow) {
@@ -117,6 +117,7 @@ interface InsightTabProps {
     tab: string;
     insights: ReportingInsights;
     summary?: ReportingSummary;
+    userRow?: ReportingRow;
     timezone: string;
     overviewTiles?: ReactNode;
     overviewExtra?: ReactNode;
@@ -131,22 +132,35 @@ export function InsightTab(props: InsightTabProps) {
     ]), [data]);
     return <ReportLoading.Provider value={props.loading ?? false}><ChartColors.Provider value={ranks}><ReportUser.Provider value={props.username ?? ''}><InsightView {...props}/></ReportUser.Provider></ChartColors.Provider></ReportLoading.Provider>;
 }
-function InsightView({tab, insights: data, summary, timezone, personal = false, overviewTiles, overviewExtra, storageExtra}: InsightTabProps) {
+function InsightView({tab, insights: data, summary, userRow, timezone, personal = false, overviewTiles, overviewExtra, storageExtra}: InsightTabProps) {
     const currency = data.currency;
     const username = useContext(ReportUser);
     const scoped = personal || !!username;
+    const spend = username ? userRow : summary?.tiles.total;
     const costs = [data.jobs.cost, data.desktops.cost, data.storage.cost].filter(value => value != null);
     const total = costs.length ? costs.reduce<number>((sum, value) => sum + Number(value), 0) : null;
     const tile = (title: string, value: ReportingNumber | null | undefined, details?: ReportingCoverage, definition?: string, children?: ReactNode) => value == null ? null : <MetricTile title={title} value={money(value, currency)} info={metricInfo(details, timezone, definition)}>{children}</MetricTile>;
     if (tab === 'overview') return <SpaceBetween size="l">
         <Coaching jobs={data.jobs} currency={currency} personal={personal}/>
-        {overviewTiles ?? <ColumnLayout columns={4}>
+        {overviewTiles ?? (personal ? <ColumnLayout columns={4}>
             {tile('Total spend', total, summary?.coverage.spend_total, 'Adds the available job, desktop and storage costs for this period.')}
             {tile('Job spend', data.jobs.cost, summary?.coverage.jobs, 'Adds the costs of jobs that finished in this period. Reserved prices are compared with on-demand prices for the same job resources.',
                 Number(data.jobs.savings) > 0 && <Box color="text-body-secondary">{money(data.jobs.savings!, currency)} less than on-demand</Box>)}
             {tile('Desktop spend', data.desktops.cost, summary?.coverage.desktops, 'Desktop hours multiplied by instance prices.')}
             {tile('Storage spend', data.storage.cost, summary?.coverage.shared_storage, 'Storage cost based on measured use.')}
-        </ColumnLayout>}
+        </ColumnLayout> : !spend ? <StatusIndicator type="loading">Loading spend</StatusIndicator> : <ColumnLayout columns={4}>
+            {tile('Total spend', spend.spend_total, spend.coverage.spend_total ?? summary?.coverage.spend_total, 'All recorded costs for this period: jobs, desktops, desktop disks, storage and AI.')}
+            {([
+                ['jobs', 'Job spend', 'Recorded job costs for this period. Reserved prices are compared with on-demand prices for the same job resources.'],
+                ['desktops', 'Desktop spend', 'Desktop hours multiplied by instance prices.'],
+                ['desktop_disks', 'Desktop disk spend', 'Recorded desktop disk costs for this period.'],
+                ['shared_storage', 'Storage spend', 'Storage cost based on measured use.'],
+                ['ai', 'AI spend', 'Recorded AI costs for this period.']
+            ] as const).filter(([key]) => spend.spend_by_facet[key] != null && Number(spend.spend_by_facet[key]) !== 0).map(([key, title, definition]) => <MetricTile key={key} title={title}
+                value={money(spend.spend_by_facet[key], currency)} info={metricInfo(spend.coverage[key] ?? summary?.coverage[key], timezone, definition)}>
+                {key === 'jobs' && Number(data.jobs.savings) > 0 && <Box color="text-body-secondary">{money(data.jobs.savings!, currency)} less than on-demand</Box>}
+            </MetricTile>)}
+        </ColumnLayout>)}
         {overviewExtra}
         <EfficiencyTiles jobs={data.jobs} currency={currency} only={['cpu_efficiency_pct', 'wasted_core_hours', 'wasted_cost']}/>
         <DailyChart period={data.period} title="Daily job cost by project" points={data.jobs.daily_by_project.map(row => ({name: row.project, x: row.date, value: Number(row.cost)}))} currency={currency} timezone={timezone} empty="No jobs finished in this period"/>

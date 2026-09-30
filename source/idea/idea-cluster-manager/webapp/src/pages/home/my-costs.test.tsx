@@ -41,7 +41,7 @@ it('uses the personal client and shared overview with all monthly service totals
     expect(screen.queryByText('User', {exact: true})).toBeNull();
     expect(screen.queryByText('Breakdown', {exact: true})).toBeNull();
     expect(screen.queryByText('Spend by user')).toBeNull();
-    expect(screen.getByText("About $120.00 of $1,524.22 in job spend paid for cores your jobs didn't use.")).toBeInTheDocument();
+    expect(screen.getByText("About $120.00 of $1,524.22 on your finished jobs paid for cores your jobs didn't use.")).toBeInTheDocument();
     expect(screen.getByText('Daily job cost by project')).toBeInTheDocument();
     expect(screen.getByText('Project budgets')).toBeInTheDocument();
     for (const [title, value] of [['Total spend', '$150.00'], ['Job spend', '$10.00'], ['Desktop spend', '$20.00'], ['Desktop disks', '$30.00'], ['Storage spend', '$40.00'], ['AI', '$50.00']]) {

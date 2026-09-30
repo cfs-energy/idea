@@ -63,9 +63,9 @@ it('coaches memory only with both values and low use', () => {
 it('leads with money and hides coaching without efficiency data', () => {
     const jobs = {...insightsFixture().jobs, cost: '3.46', wasted_cost: '2.23'};
     const {rerender} = render(<Coaching jobs={jobs} currency="USD" personal/>);
-    expect(screen.getByText("About $2.23 of $3.46 in job spend paid for cores your jobs didn't use.")).toBeInTheDocument();
+    expect(screen.getByText("About $2.23 of $3.46 on your finished jobs paid for cores your jobs didn't use.")).toBeInTheDocument();
     rerender(<Coaching jobs={jobs} currency="USD"/>);
-    expect(screen.getByText('About $2.23 of $3.46 in job spend this period paid for unused cores.')).toBeInTheDocument();
+    expect(screen.getByText('About $2.23 of $3.46 spent on finished jobs paid for unused cores.')).toBeInTheDocument();
     rerender(<Coaching jobs={{...jobs, jobs_with_efficiency: 0}} currency="USD"/>);
     expect(screen.queryByText(/About/)).toBeNull();
 });

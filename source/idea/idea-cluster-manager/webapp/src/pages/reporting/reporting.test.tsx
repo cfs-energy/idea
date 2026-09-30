@@ -134,6 +134,34 @@ it('resolves an SSO capability and clears it when SSO fails', async () => {
 
 
 describe('report views', () => {
+    it.each(['315.00', '319.25'])('uses the recorded total %s and all five spend facets', async total => {
+        const result = summary();
+        result.tiles.total = {...row('total'), spend_total: total, spend_by_facet: {jobs: '101', desktops: '202', desktop_disks: '3', shared_storage: '4', ai: '5'}};
+        result.coverage.ai = {...coverage('partial'), missing_days: 2};
+        open('/reporting', result);
+        await screen.findByText(`$${total}`);
+        for (const [title, value] of [['Job spend', '$101.00'], ['Desktop spend', '$202.00'], ['Desktop disk spend', '$3.00'], ['Storage spend', '$4.00'], ['AI spend', '$5.00']]) {
+            expect(screen.getByRole('heading', {name: title})).toBeInTheDocument();
+            expect(screen.getByText(value)).toBeInTheDocument();
+        }
+        expect(screen.getByText(/less than on-demand/)).toBeInTheDocument();
+        expect(screen.getByText('About $120.00 of $1,524.22 spent on finished jobs paid for unused cores.')).toBeInTheDocument();
+        expect(context.reporting().listRows).not.toHaveBeenCalled();
+        await userEvent.click(screen.getByRole('button', {name: 'About Total spend'}));
+        expect(screen.getByText(/All recorded costs for this period: jobs, desktops, desktop disks, storage and AI\./)).toBeInTheDocument();
+        await userEvent.click(screen.getByRole('button', {name: 'About AI spend'}));
+        expect(screen.getByText(/Missing 2 days and 0 records\./)).toBeInTheDocument();
+    });
+    it('hides zero and missing spend facets, retains negative costs and keeps a zero total', async () => {
+        const result = summary();
+        result.tiles.total.spend_by_facet = {jobs: 0, desktops: '0.00', desktop_disks: null, shared_storage: '-5'};
+        open('/reporting', result);
+        expect((await screen.findAllByText('$0.00')).length).toBeGreaterThan(0);
+        expect(screen.getByRole('heading', {name: 'Total spend'})).toBeInTheDocument();
+        expect(screen.getByRole('heading', {name: 'Storage spend'})).toBeInTheDocument();
+        expect(screen.getByText('-$5.00')).toBeInTheDocument();
+        for (const title of ['Job spend', 'Desktop spend', 'Desktop disk spend', 'AI spend']) expect(screen.queryByRole('heading', {name: title})).not.toBeInTheDocument();
+    });
     it.each([
         ['overview', 'Daily job cost by project'], ['jobs', 'Top jobs'], ['desktops', 'Daily desktop cost by user'],
         ['storage', 'Storage by tier'], ['user', 'scientist-a'], ['project', 'scientist-a']
@@ -379,9 +407,42 @@ describe('Reporting user filter', () => {
     beforeEach(() => {
         vi.stubGlobal('URL', Object.assign(URL, {createObjectURL: vi.fn().mockReturnValue('blob:report'), revokeObjectURL: vi.fn()}));
     });
+    it('loads the selected Overview user across pages without showing the cluster total', async () => {
+        const result = summary();
+        result.tiles.total.spend_total = '9876';
+        const pending = deferred<ReportingRows>();
+        open('/reporting?user=user-b', result);
+        vi.mocked(context.reporting().listRows).mockResolvedValueOnce(rows([row('user-a')], 'next')).mockReturnValueOnce(pending.promise);
+        await screen.findByText('Loading spend');
+        expect(screen.queryByText('$9,876.00')).not.toBeInTheDocument();
+        expect(screen.queryByRole('heading', {name: 'Total spend'})).not.toBeInTheDocument();
+        await waitFor(() => expect(context.reporting().listRows).toHaveBeenLastCalledWith(expect.objectContaining({table: 'user', paginator: {page_size: 200, cursor: 'next'}})));
+        await act(async () => pending.resolve(rows([{...row('user-b'), spend_total: '15', spend_by_facet: {jobs: '1', desktops: '2', desktop_disks: '3', shared_storage: '4', ai: '5'}, coverage: {jobs: {...coverage('partial'), missing_records: 4}}}])));
+        expect(screen.getByText('$15.00')).toBeInTheDocument();
+        for (const value of ['$1.00', '$2.00', '$3.00', '$4.00', '$5.00']) expect(screen.getByText(value)).toBeInTheDocument();
+        expect(screen.queryByText('Loading spend')).not.toBeInTheDocument();
+        expect(screen.queryByText('$9,876.00')).not.toBeInTheDocument();
+        await userEvent.click(screen.getByRole('button', {name: 'About Job spend'}));
+        expect(screen.getByText(/Missing 0 days and 4 records\./)).toBeInTheDocument();
+        await userEvent.click(screen.getByRole('button', {name: 'Clear filter'}));
+        await screen.findByText('$9,876.00');
+        expect(screen.queryByText('$15.00')).not.toBeInTheDocument();
+    });
+    it.each(['missing', 'failed'])('never substitutes the cluster total for a %s user row', async state => {
+        const result = summary();
+        result.tiles.total.spend_total = '9876';
+        open('/reporting?user=unknown-user', result);
+        if (state === 'failed') vi.mocked(context.reporting().listRows).mockRejectedValue(new Error('Source unavailable'));
+        else vi.mocked(context.reporting().listRows).mockResolvedValue(rows([]));
+        await screen.findByText('Loading spend');
+        await waitFor(() => expect(context.reporting().listRows).toHaveBeenCalled());
+        if (state === 'failed') await screen.findByText("Couldn't load the report. Check your connection and try again.");
+        expect(screen.queryByText('$9,876.00')).not.toBeInTheDocument();
+        expect(screen.queryByRole('heading', {name: 'Total spend'})).not.toBeInTheDocument();
+    });
     it('restores the URL user across tabs and reloads and clears to all users', async () => {
         const view = open('/reporting?user=scientist-a&period=last_month');
-        await screen.findByText(/in job spend this period/);
+        await screen.findByText(/spent on finished jobs/);
         expect(context.reporting().getInsights).toHaveBeenCalledWith({period: 'last_month', username: 'scientist-a'});
         expect(screen.getByText(/· scientist-a · Updated/)).toBeInTheDocument();
         expect(screen.queryByText('Spend by user')).not.toBeInTheDocument();
@@ -419,7 +480,7 @@ describe('Reporting user filter', () => {
         expect(screen.queryByRole('option', {name: 'user-z'})).not.toBeInTheDocument();
         await userEvent.click(screen.getByRole('option', {name: 'user-a'}));
         expect(screen.getByTestId('query')).toHaveTextContent('user=user-a');
-        expect(screen.queryByText(/in job spend this period/)).not.toBeInTheDocument();
+        expect(screen.queryByText(/spent on finished jobs/)).not.toBeInTheDocument();
         expect(screen.queryByText('Total spend')).not.toBeInTheDocument();
         expect(context.reporting().getInsights).toHaveBeenCalledWith({period: 'this_month', username: 'user-a'});
         await userEvent.click(screen.getByRole('button', {name: /^User /}));

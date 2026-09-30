@@ -41,7 +41,7 @@ it('uses a line chart from zero with distinct storage ticks', () => {
 });
 it('preserves entity colors across tabs and uses the same stored value for a tile and ranking', () => {
     const data = insightsFixture();
-    const props = {insights: data, summary: {coverage: {}} as ReportingSummary, timezone: 'UTC'};
+    const props = {insights: data, summary: {tiles: {}, coverage: {}} as ReportingSummary, timezone: 'UTC'};
     const {rerender} = render(<InsightTab {...props} tab="overview"/>);
     const projectColor = charts.area.mock.calls[0][0].series[0].color;
     rerender(<InsightTab {...props} tab="desktops"/>);

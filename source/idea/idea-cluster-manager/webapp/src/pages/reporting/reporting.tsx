@@ -32,6 +32,7 @@ export function ReportingContent() {
     const tab = ['user', 'project'].includes(selectedTab) ? 'breakdown' : selectedTab;
     const table: TableKind = !username && (query.get('group') === 'project' || (!query.has('group') && selectedTab === 'project')) ? 'project' : 'user';
     const tableVisible = tab === 'breakdown';
+    const rowsNeeded = tableVisible || (tab === 'overview' && !!username);
     const sortBy = (!tableVisible ? 'spend_total' : REPORTING_COLUMNS.find(column => column.id === query.get('sort_by'))?.id ?? 'spend_total') as ReportingColumn;
     const descending = !tableVisible || query.get('descending') !== 'false';
     const [snapshot, setSnapshot] = useState<{key: string; data: ReportingSummary; insights: ReportingInsights; users: string[]}>();
@@ -108,7 +109,7 @@ export function ReportingContent() {
     }, [client, allowed, periodKey, username, reload, validation]);
 
     useEffect(() => {
-        if (!allowed || !summary || !tableVisible || expired || validation) {setRowsBusy(false); return;}
+        if (!allowed || !summary || !rowsNeeded || expired || validation) {setRowsBusy(false); return;}
         let current = true;
         setRowsBusy(true);
         setRowError('');
@@ -133,7 +134,7 @@ export function ReportingContent() {
             }).catch(error => {if (current) setRowError(errorText(error, summary.snapshot_id));})
             .finally(() => {if (current) setRowsBusy(false);});
         return () => {current = false;};
-    }, [client, allowed, summary, tableVisible, table, expired, validation, rowKey, page, cursor, retryRows]);
+    }, [client, allowed, summary, rowsNeeded, table, expired, validation, rowKey, page, cursor, retryRows]);
 
     const changePeriod = (value: ReportingSummaryRequest) => {
         const next = new URLSearchParams(query);
@@ -212,7 +213,7 @@ export function ReportingContent() {
                     onPage={page => setPaging(previous => ({...previous, page}))}
                     onSort={(column, descending) => {const next = new URLSearchParams(query); next.set('sort_by', column); next.set('descending', String(descending)); setQuery(next);}}
                     onPreferences={(pageSize, columns) => {setPageSize(pageSize); setColumns(columns); savePreferences(`reporting.breakdown.${table}`, {pageSize, columns});}}/>
-                    : <InsightTab username={username} loading={summaryBusy} tab={tab} insights={insights} summary={summary} timezone={summary.timezone}/>}
+                    : <InsightTab username={username} userRow={data?.listing.find(row => row.key === username)} loading={summaryBusy} tab={tab} insights={insights} summary={summary} timezone={summary.timezone}/>}
             </SpaceBetween>}
             <div role="status" aria-label="CSV download status" aria-live="polite">{exportStatus}</div>
         </SpaceBetween>
