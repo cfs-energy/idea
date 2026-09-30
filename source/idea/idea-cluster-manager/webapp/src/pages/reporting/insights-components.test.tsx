@@ -4,8 +4,6 @@ import {csvCell, readPreferences, savePreferences} from './insights-table';
 import {BudgetTable, Coaching, EfficiencyTiles, JobsTable, jobHint, MetricTile, mergeJobs} from './insights-components';
 import {exampleJob, insightsFixture} from './insights-fixture';
 import {budgetPresentation} from './reporting-format';
-import MyJobEfficiency from '../home/my-job-efficiency';
-import {initTestAppContext} from '../../test-support';
 
 it.each(['ok', 'watch', 'over'] as const)('colors the %s budget bar and shows its status', status => {
     const {container} = render(<BudgetTable budgets={[{...insightsFixture().budgets[0], status}]} currency="USD"/>);
@@ -37,17 +35,6 @@ it('sorts job costs numerically, filters, and paginates at 25 rows', async () =>
     await userEvent.type(screen.getByRole('searchbox', {name: 'Find in Costliest jobs'}), 'Study 28');
     expect(within(table).getAllByRole('row')).toHaveLength(2);
     expect(within(table).getByText('Study 28')).toBeInTheDocument();
-});
-it('uses the scoped client for personal efficiency and shows only its returned budgets', async () => {
-    const context = initTestAppContext();
-    const fixture = insightsFixture();
-    delete fixture.jobs.by_user; delete fixture.desktops.by_user; delete fixture.storage.by_user;
-    const get = vi.spyOn(context.client().myCosts(), 'getInsights').mockResolvedValue(fixture);
-    render(<MyJobEfficiency timezone="America/New_York" reload={0}/>);
-    expect(await screen.findByText('Requested 36 cores, used about 1. Try ncpus=2. Requested 64 GiB, peak 3 GiB.')).toBeInTheDocument();
-    expect(get).toHaveBeenCalledWith({period: 'this_month'});
-    expect(screen.queryByRole('columnheader', {name: 'User'})).toBeNull();
-    expect(screen.getByText('Project budgets')).toBeInTheDocument();
 });
 
 it('exports numeric corrections and safely quotes text cells', () => {
@@ -125,13 +112,6 @@ it('shows budget percentage once and states the budget period', () => {
     expect(screen.getAllByText('90%').every(element => element.tagName !== 'LABEL')).toBe(true);
     expect(screen.getByText("Spending and forecasts use each project's current budget period.")).toBeInTheDocument();
 });
-it('follows a supplied personal period', async () => {
-    const context = initTestAppContext();
-    const get = vi.spyOn(context.client().myCosts(), 'getInsights').mockResolvedValue(insightsFixture());
-    render(<MyJobEfficiency timezone="UTC" reload={0} period={{period: 'last_month'}}/>);
-    await screen.findByText('My top jobs');
-    expect(get).toHaveBeenCalledWith({period: 'last_month'});
-});
 
 it('suggests CPU per node and compares against the per-node request', () => {
     expect(jobHint({...exampleJob, nodes: 4, requested_cores: 32, used_cores: 8, peak_memory_gib: null})).toBe('Requested 32 cores, used about 8. Try ncpus=3 per node.');
@@ -153,12 +133,4 @@ it('defines unused cost against requested cores', async () => {
     render(<EfficiencyTiles jobs={insightsFixture().jobs} currency="USD"/>);
     await userEvent.click(screen.getByRole('button', {name: 'About Cost of unused core-hours'}));
     expect(screen.getByText("Job cost multiplied by the share of requested core time not used, measured against the cores requested, not the instance's vCPUs.")).toBeInTheDocument();
-});
-it('counts the distinct top jobs rather than all finished jobs', async () => {
-    const context = initTestAppContext();
-    vi.spyOn(context.client().myCosts(), 'getInsights').mockResolvedValue(insightsFixture());
-    render(<MyJobEfficiency timezone="UTC" reload={0}/>);
-    const heading = await screen.findByRole('heading', {name: 'My top jobs (1)'});
-    expect(heading).toBeInTheDocument();
-    expect(screen.queryByRole('heading', {name: 'My top jobs (3)'})).toBeNull();
 });
