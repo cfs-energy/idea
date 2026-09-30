@@ -68,6 +68,17 @@ describe('account settings my projects models', () => {
         expect(screen.queryByText('AI Models')).toBeNull();
         expect(screen.queryByText('vendor.model-a')).toBeNull();
     });
+
+    it('shows a stored home preference as My costs and omits Home from landing options', async () => {
+        const context = initTestAppContext();
+        stubAccountPage(context, {});
+        vi.mocked(context.auth().getUser).mockResolvedValue({username: 'user-a', landing_page: 'home'});
+        renderAccountSettings();
+        await userEvent.click(await screen.findByRole('button', {name: /Landing page/}));
+        expect(screen.getByRole('option', {name: 'My costs', selected: true})).toBeInTheDocument();
+        expect(screen.getByRole('option', {name: 'Cluster default'})).toBeInTheDocument();
+        expect(screen.queryByRole('option', {name: 'Home'})).not.toBeInTheDocument();
+    });
 });
 
 

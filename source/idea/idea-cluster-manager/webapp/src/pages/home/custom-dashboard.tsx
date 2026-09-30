@@ -93,10 +93,6 @@ class CustomDashboard extends Component<CustomDashboardProps, CustomDashboardSta
                         href: '#/'
                     },
                     {
-                        text: 'Home',
-                        href: '#/'
-                    },
-                    {
                         text: title,
                         href: ''
                     }

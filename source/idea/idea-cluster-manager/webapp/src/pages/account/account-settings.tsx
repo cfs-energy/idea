@@ -74,7 +74,6 @@ const MY_PROJECTS_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<Project>
 
 const LANDING_OPTIONS = [
     {label: 'Cluster default', value: ''},
-    {label: 'Home', value: 'home'},
     {label: 'My jobs', value: 'my-jobs'},
     {label: 'My desktops', value: 'my-desktops'},
     {label: 'Files', value: 'files'},
@@ -471,7 +470,7 @@ class AccountSettings extends Component<AccountSettingsProps, AccountSettingsSta
                                                     </KeyValueGroup>
                                                     <FormField label="Landing page" description="Choose where the portal opens after sign-in.">
                                                         <Select
-                                                            selectedOption={LANDING_OPTIONS.find(option => option.value === (this.state.user?.landing_page || '')) ?? LANDING_OPTIONS[0]}
+                                                            selectedOption={LANDING_OPTIONS.find(option => option.value === (this.state.user?.landing_page === 'home' ? 'my-costs' : this.state.user?.landing_page || '')) ?? LANDING_OPTIONS[0]}
                                                             onChange={event => this.updateLandingPage(event.detail.selectedOption.value ?? '')}
                                                             options={LANDING_OPTIONS}
                                                             disabled={this.state.savingLandingPage}

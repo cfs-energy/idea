@@ -21,6 +21,12 @@ describe('cost ticker', () => {
     beforeEach(() => vi.useFakeTimers());
     afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
+    it('links the portal identity to the landing route', async () => {
+        const {container} = setup();
+        await act(async () => {});
+        expect(container.querySelector('a[href="#/"] img')).toBeInTheDocument();
+    });
+
     it.each(['MTD', 'WTD', 'QTD', 'YTD'] as const)('shows the amount and %s period without prefixes', async period => {
         setup({...ready, period});
         await act(async () => {});

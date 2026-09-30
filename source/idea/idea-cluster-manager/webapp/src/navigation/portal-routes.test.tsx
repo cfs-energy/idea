@@ -7,7 +7,6 @@ import IdeaAppLayout from '../components/app-layout';
 import {initTestAppContext} from '../test-support';
 
 vi.mock('../components/navbar', () => ({default: () => null}));
-vi.mock('../pages/home', () => ({default: (props: any) => <IdeaAppLayout {...props} content={<p>Home content</p>}/>}));
 vi.mock('../pages/user-management/users', () => ({default: (props: any) => <IdeaAppLayout {...props} content={<p>Users content</p>}/>}));
 vi.mock('../pages/user-management/groups', () => ({default: (props: any) => <IdeaAppLayout {...props} content={<p>Groups content</p>}/>}));
 vi.mock('../pages/hpc/queues', () => ({default: (props: any) => <IdeaAppLayout {...props} content={<p>Queues content</p>}/>}));
@@ -63,6 +62,24 @@ function History() {
     return <><output data-testid="url">{location.pathname}{location.search}</output><button onClick={() => navigate(-1)}>Back</button><button onClick={() => navigate(1)}>Forward</button></>;
 }
 function open(path: string) {return render(<MemoryRouter initialEntries={[path]}><App/><History/></MemoryRouter>);}
+
+describe.each(['/', '/home'])('landing route %s', path => {
+    it.each([
+        [undefined, undefined, '/home/my-costs'],
+        [undefined, 'files', '/home/file-browser'],
+        ['my-jobs', 'files', '/home/active-jobs'],
+        ['home', 'files', '/home/my-costs'],
+        [undefined, 'home', '/home/my-costs'],
+        ['files', 'home', '/home/file-browser'],
+        ['unknown', 'unknown', '/home/my-costs']
+    ])('resolves user=%s and cluster=%s to %s', async (userChoice, clusterChoice, expected) => {
+        vi.spyOn(context.auth(), 'getUser').mockResolvedValue({landing_page: userChoice});
+        vi.spyOn(context.getClusterSettingsService(), 'getModuleSettings').mockResolvedValue({web_portal: {default_landing_page: clusterChoice}});
+        open(path);
+        await waitFor(() => expect(screen.getByTestId('url')).toHaveTextContent(expected));
+        expect(screen.queryByRole('link', {name: 'Home'})).not.toBeInTheDocument();
+    });
+});
 
 it.each([
     ['/dashboard', 'My jobs'],

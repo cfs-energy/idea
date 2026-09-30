@@ -1,7 +1,7 @@
 import React from 'react';
 import {Badge, Box, Button, Container, Header, Popover, SpaceBetween} from '@cloudscape-design/components';
 import {GetMyCostsResult, MyCostsAmount} from '../client/data-model';
-import {FACETS, FacetComparison, facetAmount, money} from './cost-charts';
+import {FACETS, facetAmount, money} from './cost-charts';
 import './monthly-costs.scss';
 import {updated} from '../pages/reporting/reporting-format';
 
@@ -16,10 +16,10 @@ export function costBadge(line: MyCostsAmount | undefined, collecting: boolean) 
     if (line?.status === 'estimated_share') return 'Shared cost';
     return null;
 }
-export const CostsBillboard: React.FC<{costs: GetMyCostsResult | null; home?: boolean}> = ({costs, home = false}) => {
+export const CostsBillboard: React.FC<{costs: GetMyCostsResult | null}> = ({costs}) => {
     const currency = costs?.currency || 'USD';
     const collecting = !costs?.current;
-    return <Container header={<Header variant="h2" actions={home ? <Button href="#/home/my-costs">View My costs</Button> : undefined}>Your costs</Header>}>
+    return <Container header={<Header variant="h2">Your costs</Header>}>
         <SpaceBetween size="s">
             <div className="personal-costs-headline">
                 {(['previous', 'current'] as const).map((period, index) => <div key={period}>
@@ -34,8 +34,8 @@ export const CostsBillboard: React.FC<{costs: GetMyCostsResult | null; home?: bo
                     const previous = costs?.previous?.[key];
                     const badge = costBadge(line, collecting) || costBadge(previous, collecting);
                     return <SpaceBetween key={key} size="xxs">
-                        <Button variant="inline-link" href={home ? `#/home/my-costs?facet=${target}` : undefined}
-                            onClick={home ? undefined : () => {
+                        <Button variant="inline-link"
+                            onClick={() => {
                                 const element = document.getElementById(target);
                                 element?.scrollIntoView?.({behavior: 'smooth', block: 'start'});
                                 element?.focus({preventScroll: true});
@@ -50,7 +50,6 @@ export const CostsBillboard: React.FC<{costs: GetMyCostsResult | null; home?: bo
                     </SpaceBetween>;
                 })}
             </div>
-            {home && <FacetComparison costs={costs}/>}
         </SpaceBetween>
     </Container>;
 };

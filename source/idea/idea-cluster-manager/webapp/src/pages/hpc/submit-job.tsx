@@ -1585,10 +1585,6 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                         href: '#/'
                     },
                     {
-                        text: 'Home',
-                        href: '#/'
-                    },
-                    {
                         text: 'Submit job',
                         href: ''
                     }

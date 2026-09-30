@@ -5930,7 +5930,6 @@ _CHOICES = {
 _KEY_CHOICES = {
     'cluster-manager.web_portal.cost_ticker.period': ['wtd', 'mtd', 'qtd', 'ytd'],
     'cluster-manager.web_portal.default_landing_page': [
-        'home',
         'my-jobs',
         'my-desktops',
         'files',
@@ -6543,6 +6542,8 @@ def coerce_value(setting, value):
             invalid(f'must be at least {rule["minimum"]}')
         if 'maximum' in rule and value > rule['maximum']:
             invalid(f'must be at most {rule["maximum"]}')
+    if key == 'cluster-manager.web_portal.default_landing_page' and value == 'home':
+        value = 'my-costs'
     if kind == 'enum' and value not in setting['choices']:
         invalid('must be one of: ' + ', '.join(setting['choices']))
     if value and 'pattern' in rule and not re.fullmatch(rule['pattern'], value):

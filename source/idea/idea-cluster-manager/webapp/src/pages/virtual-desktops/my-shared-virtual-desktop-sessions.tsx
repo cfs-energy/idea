@@ -338,10 +338,6 @@ class MySharedVirtualDesktopSessions extends Component<MySharedVirtualDesktopPro
                         href: '#/'
                     },
                     {
-                        text: 'Home',
-                        href: '#/'
-                    },
-                    {
                         text: 'My desktops',
                         href: ''
                     }

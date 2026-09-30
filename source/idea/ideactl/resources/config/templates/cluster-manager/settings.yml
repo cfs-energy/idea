@@ -50,8 +50,8 @@ web_portal:
     # valid values: wtd, mtd, qtd, ytd
     period: mtd
 
-  # valid values: home, my-jobs, my-desktops, files, my-costs, reports
-  default_landing_page: home
+  # valid values: my-jobs, my-desktops, files, my-costs, reports
+  default_landing_page: my-costs
 
   # optional external dashboard embedded in the web portal via a sandboxed iframe.
   # the nav entry and page stay hidden unless enabled is true and url is an http(s) url.

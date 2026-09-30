@@ -1413,10 +1413,6 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                         href: '#/'
                     },
                     {
-                        text: 'Home',
-                        href: '#/'
-                    },
-                    {
                         text: 'Files',
                         href: ''
                     }

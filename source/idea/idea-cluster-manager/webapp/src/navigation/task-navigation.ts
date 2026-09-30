@@ -25,7 +25,7 @@ export const PORTAL_TASKS: PortalTask[] = [
 ];
 
 export const LANDING_PATHS: Record<string, string> = {
-    home: '/home',
+    home: '/home/my-costs',
     'my-jobs': '/home/active-jobs',
     'my-desktops': '/home/virtual-desktops',
     files: '/home/file-browser',

@@ -1,4 +1,3 @@
-import {IdeaSideNavHeader} from '../../navigation/side-nav-items';
 /*
  * Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
  *
@@ -274,7 +273,7 @@ class IdeaNavbar extends Component<IdeaNavbarProps, IdeaNavbarState> {
 
         const navigation = <TopNavigation
                     identity={{
-                        href: IdeaSideNavHeader(AppContext.get()).href,
+                        href: '#/',
                         title: getTitle(),
                         logo: {
                             src: getLogo(),

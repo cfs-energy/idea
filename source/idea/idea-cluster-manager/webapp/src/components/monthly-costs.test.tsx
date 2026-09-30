@@ -10,17 +10,15 @@ const month: MyCostsMonth = {start_date: '2026-09-01', end_date: '2026-09-02', t
 const costs: GetMyCostsResult = {state: 'ready', timezone: 'America/New_York', currency: 'EUR', current: month, previous: {...month, total: 10}, refreshed_at: '2026-09-02T12:00:00Z'};
 
 describe('personal costs card', () => {
-    it('shows compact headlines, five tiles and a Home chart without calculation prose', () => {
-        render(<CostsBillboard costs={costs} home/>);
+    it('shows compact headlines and five tiles without calculation prose', () => {
+        render(<CostsBillboard costs={costs}/>);
         expect(screen.getByText('€5.00')).toBeInTheDocument();
         expect(screen.getByText('€10.00')).toBeInTheDocument();
         expect(screen.getAllByText('This month')[0]).toBeInTheDocument();
         expect(screen.getAllByText('Last month')[0]).toBeInTheDocument();
         expect(screen.getByText(/^Updated /)).toBeInTheDocument();
         expect(screen.queryByText('Calculation rule.')).toBeNull();
-        for (const {label, target} of FACETS) expect(screen.getByRole('link', {name: label})).toHaveAttribute('href', `#/home/my-costs?facet=${target}`);
-        expect(screen.getByRole('link', {name: 'View My costs'})).toBeInTheDocument();
-        expect(screen.getByRole('application', {name: 'Costs by service, this month and last month'})).toBeInTheDocument();
+        for (const {label} of FACETS) expect(screen.getByRole('button', {name: label})).toBeInTheDocument();
     });
     it.each([
         [{cost: 1, status: 'ready'}, false, null],

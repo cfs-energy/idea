@@ -1,5 +1,5 @@
 import {render, screen} from '@testing-library/react';
-import {comparisonSeries, facetAmount, DailyCostCharts, dailyPoints, dailySeries, FACETS, missingDays, missingSummary, tickMoney} from './cost-charts';
+import {facetAmount, DailyCostCharts, dailyPoints, dailySeries, FACETS, missingDays, missingSummary, tickMoney} from './cost-charts';
 import {GetMyCostsResult, MyCostsDaily} from '../client/data-model';
 
 const days: MyCostsDaily[] = [
@@ -20,12 +20,6 @@ it('uses stored amounts, preserves zeros and corrections, and fills missing days
     expect(series[1].color).not.toBe(series[0].color);
     expect(series[1].valueFormatter(2)).toBe('€2.00');
     expect(series[1]).toHaveProperty('color');
-});
-it('compares all five facets without converting missing amounts into zeros', () => {
-    const series = comparisonSeries({currency: 'USD', state: 'ready', current: {jobs: {cost: 0}, ai: {cost: -1}} as any});
-    expect(series.map(s => s.title)).toEqual(['Last month', 'This month']);
-    expect(series[0].data).toEqual([]);
-    expect(series[1].data).toEqual([{x: 'Jobs', y: 0}, {x: 'AI', y: -1}]);
 });
 it('renders all five daily charts and missing-day notes from the arrays', () => {
     const month = {start_date: '2024-02-01', end_date: '2024-02-29', ...Object.fromEntries(FACETS.map(f => [f.key, {daily: days}]))};

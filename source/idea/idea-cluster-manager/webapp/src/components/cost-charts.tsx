@@ -1,5 +1,5 @@
 import React from 'react';
-import {BarChart, Box, Container, ExpandableSection, Grid, Header, LineChart, SpaceBetween} from '@cloudscape-design/components';
+import {Box, Container, ExpandableSection, Grid, Header, LineChart, SpaceBetween} from '@cloudscape-design/components';
 import {calendarDays, colorByName, date, money as formatMoney} from '../pages/reporting/reporting-format';
 import InsightsTable from '../pages/reporting/insights-table';
 import {Missing} from '../pages/reporting/insights-components';
@@ -30,21 +30,6 @@ export const tickMoney = (max: number, currency: string) => {
     const digits = max < 0.1 ? 4 : max < 1 ? 3 : 2;
     return (value: number) => new Intl.NumberFormat(undefined, {style: 'currency', currency, minimumFractionDigits: digits, maximumFractionDigits: digits}).format(value);
 };
-export const comparisonSeries = (costs: GetMyCostsResult | null) => ['previous', 'current'].map((period, i) => ({
-    title: i === 0 ? 'Last month' : 'This month', color: colorByName(i === 0 ? 'Last month' : 'This month'), type: 'bar' as const,
-    data: FACETS.flatMap(({key, label}) => {
-        const amount = facetAmount(costs?.[period as 'current' | 'previous']?.[key]);
-        return amount == null ? [] : [{x: label, y: amount}];
-    }), valueFormatter: (value: number) => money(value, costs?.currency || 'USD')
-}));
-export function FacetComparison({costs}: {costs: GetMyCostsResult | null}) {
-    const currency = costs?.currency || 'USD';
-    return <BarChart series={comparisonSeries(costs)} xDomain={FACETS.map(f => f.label)}
-        xScaleType="categorical" yScaleType="linear" xTitle="Service" yTitle={currency}
-        yTickFormatter={value => money(value, currency)} height={120} stackedBars={false}
-        hideFilter={true} hideLegend={false} ariaLabel="Costs by service, this month and last month"
-        statusType="finished" empty={<span>No daily cost data</span>}/>;
-}
 export const missingDays = (days: MyCostsDaily[] = []) => days.filter(d => d.amount == null).map(d => d.day).join(', ');
 export const missingSummary = (days: MyCostsDaily[] = []) => { const n = days.filter(d => d.amount == null).length; return n === 0 ? '' : n === days.length ? `No data for any of the ${days.length} days` : `${n} of ${days.length} days without data`; };
 export function DailyCostCharts({costs}: {costs: GetMyCostsResult | null}) {

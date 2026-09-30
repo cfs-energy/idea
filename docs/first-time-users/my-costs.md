@@ -1,10 +1,8 @@
 # My costs
 
-Open **My costs** from Home or the navigation bar. Costs are estimates in the cluster currency, using calendar months in the cluster timezone.
+The portal opens **My costs** by default. A personal landing-page preference overrides the cluster default; an existing `home` preference opens My costs. The portal title returns to the selected landing page. You can also open **My costs** from the navigation bar. Costs are estimates in the cluster currency, using calendar months in the cluster timezone.
 
-Home shows this month, last month, the snapshot's **As of** time, five cost tiles and a grouped comparison chart. Recent jobs and desktops follow; quick links are last. Each cost tile links to its daily chart on My costs.
-
-My costs shows the same headline and tiles followed by five daily bar charts. Each day places this month beside last month. Last month's amount covers the full month; this month's amount covers the elapsed month. These are not percentage-change comparisons.
+My costs shows monthly totals, cost tiles and daily charts. Each day places this month beside last month. Last month's amount covers the full month; this month's amount covers the elapsed month. These are not percentage-change comparisons.
 
 | Tile | Calculation |
 | --- | --- |
@@ -26,7 +24,7 @@ Open **Storage usage: folders and quotas** to load folder sizes, file ages, byte
 
 The cluster manager creates a dedicated personal-costs table at startup. Its leader collects every user, including users who have never opened the page, at startup and every 15 minutes. It writes immutable generation records before switching the user's head record. Readers keep one generation for the whole response; old records remain available for in-flight reads. The personal costs, summary and ticker APIs read stored records, with no synchronous billing, inventory, pricing or filesystem work. The summary compatibility API retains its trailing 30-day window. The MTD ticker uses the head's stored current-month total; other configured ticker periods have separate stored projections.
 
-**Refresh** writes a deduplicated request for the collector's next minute check. **Refresh requested** acknowledges that request. The current amounts remain visible while collection runs or a request fails. The portal shares a snapshot cache between Home, My costs and the MTD ticker. It checks every 15 seconds while collection is pending, backs off to a minute after two minutes, and ordinarily checks every five minutes while visible. Billing source reads are cached for six hours and disk rates for a day; requesting refresh cannot make upstream billing arrive sooner.
+**Refresh** writes a deduplicated request for the collector's next minute check. **Refresh requested** acknowledges that request. The current amounts remain visible while collection runs or a request fails. The portal shares a snapshot cache between My costs and the MTD ticker. It checks every 15 seconds while collection is pending, backs off to a minute after two minutes, and ordinarily checks every five minutes while visible. Billing source reads are cached for six hours and disk rates for a day; requesting refresh cannot make upstream billing arrive sooner.
 
 A user without a generation sees **Collecting · about N min**. The estimate comes from the next scheduled collection and the last measured run duration, initially 20 minutes. An overdue collector shows **Collecting delayed** with an updated estimate. Missing sources produce explicit unavailable facets, never a fabricated zero.
 

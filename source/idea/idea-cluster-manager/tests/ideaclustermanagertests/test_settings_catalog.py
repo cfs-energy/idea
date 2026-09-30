@@ -28,6 +28,17 @@ from ideaclustermanager.app.api.cluster_settings_api import ClusterSettingsAPI
 BY_KEY = {item['key']: item for item in CATALOG}
 
 
+def test_landing_choices_omit_home_but_accept_the_legacy_value():
+    setting = BY_KEY['cluster-manager.web_portal.default_landing_page']
+    assert 'home' not in setting['choices']
+    assert 'my-costs' in setting['choices']
+    assert coerce_value(setting, 'home') == 'my-costs'
+    for choice in setting['choices']:
+        assert coerce_value(setting, choice) == choice
+    with pytest.raises(exceptions.SocaException):
+        coerce_value(setting, 'unknown')
+
+
 def test_catalog_metadata_and_uniqueness():
     assert len(BY_KEY) == len(CATALOG)
     for item in CATALOG:

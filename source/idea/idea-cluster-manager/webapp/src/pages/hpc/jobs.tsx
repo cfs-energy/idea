@@ -690,10 +690,6 @@ class Jobs extends Component<JobsProps, JobsState> {
                             href: '#/'
                         },
                         {
-                            text: 'Home',
-                            href: '#/'
-                        },
-                        {
                             text: 'Active Jobs',
                             href: '#/home/active-jobs'
                         }
@@ -702,10 +698,6 @@ class Jobs extends Component<JobsProps, JobsState> {
                     return [
                         {
                             text: 'IDEA',
-                            href: '#/'
-                        },
-                        {
-                            text: 'Home',
                             href: '#/'
                         },
                         {

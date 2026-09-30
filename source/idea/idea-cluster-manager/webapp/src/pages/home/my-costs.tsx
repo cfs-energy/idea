@@ -85,7 +85,7 @@ function MyCosts(props: MyCostsProps) {
         }
     };
     const calendarMonth = period.period === 'this_month' || period.period === 'last_month';
-    return <IdeaAppLayout {...props} breadcrumbItems={[{text: 'IDEA', href: '#/'}, {text: 'Home', href: '#/'}, {text: 'My costs', href: ''}]}
+    return <IdeaAppLayout {...props} breadcrumbItems={[{text: 'IDEA', href: '#/'}, {text: 'My costs', href: ''}]}
         header={<Header variant="h1" description="Estimated costs and resource use" actions={<SpaceBetween direction="horizontal" size="s">
             <span role="status">{acknowledged ? 'Refresh requested' : ''}</span>
             <Button loading={refreshing} onClick={refresh}>Refresh</Button>

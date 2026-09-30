@@ -1158,10 +1158,6 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
                         href: '#/'
                     },
                     {
-                        text: 'Home',
-                        href: '#/'
-                    },
-                    {
                         text: 'My desktops',
                         href: ''
                     }
