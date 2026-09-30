@@ -60,7 +60,7 @@ def test_single_node_formulas():
 
 
 def test_multi_node_without_select():
-    value = job(nodes=2)
+    value = job(cpus=8, nodes=2)
     value['execution_hosts'][0]['execution']['runs'][0]['resources_used']['cpus'] = 4
     value['execution_hosts'] *= 2
     result = job_efficiency(value)
@@ -271,7 +271,7 @@ def test_resource_hints_keep_unknown_values_null():
         )
     )
     result = job_efficiency(job(nodes=2))
-    assert result['requested_cores'] == 8
+    assert result['requested_cores'] == 4
     # One job-wide PBS total is a complete measurement for a multi-node job.
     assert result['used_cores'] == 2
 
@@ -345,7 +345,7 @@ def test_memory_request_wins_over_instance_memory():
 def test_multi_node_cpu_requires_complete_local_samples(missing):
     import copy
 
-    value = job(nodes=2)
+    value = job(cpus=8, nodes=2)
     used = value['execution_hosts'][0]['execution']['runs'][0]['resources_used']
     used['cpus'] = 4
     value['execution_hosts'].append(copy.deepcopy(value['execution_hosts'][0]))
@@ -381,7 +381,7 @@ def test_dict_memory_units_ignore_case(unit, factor):
 def test_job_wide_cpu_total_is_not_summed_across_hosts():
     import copy
 
-    value = job(nodes=2)
+    value = job(cpus=8, nodes=2)
     value['execution_hosts'].append(copy.deepcopy(value['execution_hosts'][0]))
     result = job_efficiency(value)
     # The same job-wide total repeated on each host end event counts once.

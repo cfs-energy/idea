@@ -18,9 +18,11 @@ The current day is provisional. Open the information buttons for definitions, mi
 
 Use **Overview**, **Jobs**, **Desktops**, **Storage**, and **Breakdown**.
 
-**Overview** shows **Total spend** and the recorded costs for jobs, desktops, desktop disks, shared storage, and AI. The service amounts add up to the total. Service tiles with zero or unavailable amounts are hidden. A coaching sentence shows how much finished-job spend paid for unused cores when the measurements are available. The page also shows CPU efficiency, unused core-hours, daily job costs by project, and available project budgets. Budgets use each project's current budget period.
+**Overview** shows **Total spend** and the recorded costs for jobs, desktops, desktop disks, shared storage, and AI. The service amounts add up to the total. Service tiles with zero or unavailable amounts are hidden. The coaching sentence and unused-core tiles estimate costs from jobs that finished in the period; Job spend uses recorded job costs for the period. The page also shows CPU efficiency, unused core-hours, daily job costs by project, and available project budgets. Budgets use each project's current budget period.
 
-**Jobs** shows efficiency measures and job costs by queue, project, and instance family. One **Top jobs** table combines up to 50 highest-cost jobs with up to 25 jobs with the most unused core-hours. Choose **Highest cost** or **Most unused cores** to sort it. Open a job name to view its completed-job record. Use **Find rows** to search the table. **Table preferences** controls visible columns and their order.
+**Jobs** shows efficiency measures and job costs by queue, project, and instance family. One **Top jobs** table combines up to 50 highest-cost jobs with up to 25 jobs with the most unused core-hours. Choose **Highest cost** or **Most unused cores** to sort it. Job names link to completed-job records only with scheduler administration access; other Reporting readers see the names as text. Use **Find rows** to search the table. **Table preferences** controls visible columns and their order.
+
+Desktop costs come from stored daily costs; desktop hours are estimated from sessions overlapping the period.
 
 **Desktops** shows recorded desktop spend, estimated desktop hours, daily costs, and costs by project. **Storage** shows recorded shared-storage spend and the most recent measured storage use in the period. With **All users** selected, these tabs also show comparisons by user. Storage also shows measured SSD and capacity-pool use by date when available. Dates missing a measurement for a displayed storage tier are omitted from that chart.
 
@@ -44,7 +46,7 @@ Efficiency measures use jobs that finished in the selected period. Each percenta
 
 Unused core-hours and their cost are measured against the cores requested. They are not measured against all vCPUs on an instance. The memory fallback requires single-job capacity that is not kept running for reuse. It also requires one known instance memory size. For multiple nodes, that size is multiplied by the node count. Missing measurements leave the measure unavailable.
 
-| Efficiency | 70% or more | 40% to below 70% | Below 40% |
+| Efficiency | 70% to 100% | 40% to below 70% | Below 40% |
 | --- | --- | --- | --- |
 | CPU | Well sized | Some cores sat idle | Most cores sat idle |
 | Memory | Well sized | Some memory unused | Most memory unused |
@@ -61,3 +63,7 @@ On **Breakdown**, choose **Export CSV** to download the selected table from the 
 Tables such as **Top jobs** also have **Export CSV**. These exports include all rows matching the table's search in the current sort and visible-column order.
 
 An expired report reloads once automatically. Use **Reload** to request the report again. Use **Try again** after a loading error. A reload can change values when newer records are available. If an export fails, wait for the report to load and choose **Export CSV** again.
+
+The **User** picker includes all users with recorded activity in the period, including users outside the top spenders and users with unpriced jobs. It includes finished jobs, overlapping desktops, measured storage use, and positive recorded costs; inactive accounts and system identities are excluded. The list comes from the Reporting-gated **GetSummary** response, without an additional unfiltered insights request. **ListRows** applies the selected username on the server before pagination. Missing sources show **No users found in available records** rather than claiming there were no users.
+
+Memory above 100% shows **Used more than requested**; walltime above 100% shows **Ran longer than requested**. Both use a warning status. CPU efficiency remains capped at 100%. For jobs without a retained select expression, the CPU request is the job-wide **Resource_List.ncpus** total and is not multiplied by node count again. My costs retains its personal completed-job links and uses recorded calendar-month costs in its spend tiles.

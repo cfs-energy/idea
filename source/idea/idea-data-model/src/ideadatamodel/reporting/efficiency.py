@@ -84,9 +84,9 @@ def allocation(params):
             return None, None, None
     nodes = numeric(params.get('nodes') if params.get('nodes') is not None else 1)
     cpus = numeric(params.get('cpus'))
-    # Resource_List.mem is a job-wide request when no select is retained.
+    # Resource_List.ncpus and mem are job-wide requests when no select is retained.
     return (
-        cpus * nodes if cpus and nodes else None,
+        cpus if cpus and nodes else None,
         memory_bytes(params.get('memory')),
         nodes,
     )

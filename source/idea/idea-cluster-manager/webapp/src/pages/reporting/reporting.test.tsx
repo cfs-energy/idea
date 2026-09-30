@@ -18,7 +18,7 @@ function deferred<T>() {
 }
 const coverage = (status: ReportingCoverage['status'] = 'ready', reason = ''): ReportingCoverage => ({status, reason, source_as_of: '2020-01-01T00:00:00Z', available_start: '2020-01-01', available_end: '2020-01-31', missing_days: 0, missing_records: 0, eligible_count: 2, total_count: 3, freshness_spread_seconds: 10});
 const row = (key = 'scientist-a'): ReportingRow => ({key, label: key, spend_total: '0.00', spend_by_facet: {jobs: '0.00', desktops: null, desktop_disks: null, shared_storage: null, ai: null}, job_count: 0, node_hours: '0', requested_walltime_hours: '2', elapsed_hours: '3', efficiency_pct: '150', desktop_hours: '0', idle_stops: null, coverage: {spend_total: coverage(), job_count: coverage(), desktop_hours: coverage('estimated'), efficiency_pct: coverage('partial', 'Missing requested walltime.')}});
-const summary = (snapshot_id = 'snapshot'): ReportingSummary => ({snapshot_id, expires_at: new Date(Date.now() + 600000).toISOString(), period: {period: 'this_month', start_date: '2020-01-01', end_date: '2020-01-31', start: '2020-01-01T00:00:00Z', end: '2020-02-01T00:00:00Z', provisional: true}, currency: 'USD', timezone: 'Pacific/Honolulu', as_of: '2020-01-01T00:00:00Z', tiles: {total: row('total'), top_project: {...row('top'), label: 'No priced projects', spend_total: null}, job_spend_difference: {...row('difference'), spend_total: '-2.00'}}, coverage: {spend_total: coverage()}, warnings: ['Partial project attribution.']});
+const summary = (snapshot_id = 'snapshot'): ReportingSummary => ({users: ['scientist-a'], snapshot_id, expires_at: new Date(Date.now() + 600000).toISOString(), period: {period: 'this_month', start_date: '2020-01-01', end_date: '2020-01-31', start: '2020-01-01T00:00:00Z', end: '2020-02-01T00:00:00Z', provisional: true}, currency: 'USD', timezone: 'Pacific/Honolulu', as_of: '2020-01-01T00:00:00Z', tiles: {total: row('total'), top_project: {...row('top'), label: 'No priced projects', spend_total: null}, job_spend_difference: {...row('difference'), spend_total: '-2.00'}}, coverage: {spend_total: coverage()}, warnings: ['Partial project attribution.']});
 const rows = (listing = [row()], cursor?: string): ReportingRows => ({listing, paginator: {page_size: 50, cursor}, total_rows: 123, coverage: {spend_total: coverage()}, warnings: []});
 let context: ReturnType<typeof initTestAppContext>;
 beforeEach(() => {localStorage.clear(); context = initTestAppContext();});
@@ -145,7 +145,7 @@ describe('report views', () => {
             expect(screen.getByText(value)).toBeInTheDocument();
         }
         expect(screen.getByText(/less than on-demand/)).toBeInTheDocument();
-        expect(screen.getByText('About $120.00 of $1,524.22 spent on finished jobs paid for unused cores.')).toBeInTheDocument();
+        expect(screen.getByText('About $120.00 of the $1,524.22 estimated for jobs that finished in this period paid for unused cores.')).toBeInTheDocument();
         expect(context.reporting().listRows).not.toHaveBeenCalled();
         await userEvent.click(screen.getByRole('button', {name: 'About Total spend'}));
         expect(screen.getByText(/All recorded costs for this period: jobs, desktops, desktop disks, storage and AI\./)).toBeInTheDocument();
@@ -407,22 +407,23 @@ describe('Reporting user filter', () => {
     beforeEach(() => {
         vi.stubGlobal('URL', Object.assign(URL, {createObjectURL: vi.fn().mockReturnValue('blob:report'), revokeObjectURL: vi.fn()}));
     });
-    it('loads the selected Overview user across pages without showing the cluster total', async () => {
+    it('loads the selected Overview user server-side without showing the cluster total', async () => {
         const result = summary();
         result.tiles.total.spend_total = '9876';
         const pending = deferred<ReportingRows>();
         open('/reporting?user=user-b', result);
-        vi.mocked(context.reporting().listRows).mockResolvedValueOnce(rows([row('user-a')], 'next')).mockReturnValueOnce(pending.promise);
+        vi.mocked(context.reporting().listRows).mockReturnValueOnce(pending.promise);
         await screen.findByText('Loading spend');
         expect(screen.queryByText('$9,876.00')).not.toBeInTheDocument();
         expect(screen.queryByRole('heading', {name: 'Total spend'})).not.toBeInTheDocument();
-        await waitFor(() => expect(context.reporting().listRows).toHaveBeenLastCalledWith(expect.objectContaining({table: 'user', paginator: {page_size: 200, cursor: 'next'}})));
+        await waitFor(() => expect(context.reporting().listRows).toHaveBeenLastCalledWith(expect.objectContaining({table: 'user', username: 'user-b', paginator: {page_size: 25}})));
         await act(async () => pending.resolve(rows([{...row('user-b'), spend_total: '15', spend_by_facet: {jobs: '1', desktops: '2', desktop_disks: '3', shared_storage: '4', ai: '5'}, coverage: {jobs: {...coverage('partial'), missing_records: 4}}}])));
         expect(screen.getByText('$15.00')).toBeInTheDocument();
         for (const value of ['$1.00', '$2.00', '$3.00', '$4.00', '$5.00']) expect(screen.getByText(value)).toBeInTheDocument();
         expect(screen.queryByText('Loading spend')).not.toBeInTheDocument();
         expect(screen.queryByText('$9,876.00')).not.toBeInTheDocument();
         await userEvent.click(screen.getByRole('button', {name: 'About Job spend'}));
+        expect(screen.getByText(/Recorded job costs for this period\./)).toBeInTheDocument();
         expect(screen.getByText(/Missing 0 days and 4 records\./)).toBeInTheDocument();
         await userEvent.click(screen.getByRole('button', {name: 'Clear filter'}));
         await screen.findByText('$9,876.00');
@@ -442,7 +443,7 @@ describe('Reporting user filter', () => {
     });
     it('restores the URL user across tabs and reloads and clears to all users', async () => {
         const view = open('/reporting?user=scientist-a&period=last_month');
-        await screen.findByText(/spent on finished jobs/);
+        await screen.findByText(/estimated for jobs that finished/);
         expect(context.reporting().getInsights).toHaveBeenCalledWith({period: 'last_month', username: 'scientist-a'});
         expect(screen.getByText(/· scientist-a · Updated/)).toBeInTheDocument();
         expect(screen.queryByText('Spend by user')).not.toBeInTheDocument();
@@ -467,7 +468,7 @@ describe('Reporting user filter', () => {
     it('sorts and filters options and hides stale numbers while changing users', async () => {
         open('/reporting');
         const unfiltered = insightsFixture();
-        unfiltered.jobs.by_user = ['user-z', 'System', 'user-a', 'Other'].map(name => ({name, cost: '10', count: 1, share_pct: 25}));
+        vi.mocked(context.reporting().getSummary).mockResolvedValue({...summary(), users: ['user-a', 'user-z']});
         unfiltered.desktops.by_user = unfiltered.storage.by_user = [];
         const pending = deferred<ReturnType<typeof insightsFixture>>();
         vi.mocked(context.reporting().getInsights).mockImplementation(request => request.username ? pending.promise : Promise.resolve(unfiltered));
@@ -480,36 +481,36 @@ describe('Reporting user filter', () => {
         expect(screen.queryByRole('option', {name: 'user-z'})).not.toBeInTheDocument();
         await userEvent.click(screen.getByRole('option', {name: 'user-a'}));
         expect(screen.getByTestId('query')).toHaveTextContent('user=user-a');
-        expect(screen.queryByText(/spent on finished jobs/)).not.toBeInTheDocument();
+        expect(screen.queryByText(/estimated for jobs that finished/)).not.toBeInTheDocument();
         expect(screen.queryByText('Total spend')).not.toBeInTheDocument();
         expect(context.reporting().getInsights).toHaveBeenCalledWith({period: 'this_month', username: 'user-a'});
-        await userEvent.click(screen.getByRole('button', {name: /^User /}));
-        await userEvent.click(screen.getByRole('option', {name: 'All users'}));
+        await userEvent.click(screen.getByRole('button', {name: 'Clear filter'}));
         await screen.findByText('Spend by user');
         const obsolete = insightsFixture(); obsolete.jobs.cost = '999999';
         await act(async () => pending.resolve(obsolete));
         expect(screen.getByTestId('query')).not.toHaveTextContent('user=');
         expect(document.body.textContent).not.toContain('999,999');
     });
-    it('finds the selected Breakdown row beyond the first page and scopes exports', async () => {
+    it('fetches the selected Breakdown row server-side and scopes exports', async () => {
         open('/reporting/projects?user=user-b');
-        vi.mocked(context.reporting().listRows).mockResolvedValueOnce(rows([row('user-a')], 'next')).mockResolvedValueOnce(rows([row('user-b')]));
+        vi.mocked(context.reporting().listRows).mockResolvedValueOnce(rows([row('user-b')]));
         const csv = vi.spyOn(context.reporting(), 'exportCsv').mockResolvedValue({filename: 'report-user-b.csv', content_type: 'text/csv;charset=utf-8', content: 'user-b', row_count: 1, as_of: null});
         const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
         await screen.findByRole('cell', {name: 'user-b'});
         expect(screen.queryByRole('cell', {name: 'user-a'})).not.toBeInTheDocument();
         expect(screen.queryByRole('button', {name: 'Project'})).not.toBeInTheDocument();
-        expect(context.reporting().listRows).toHaveBeenLastCalledWith(expect.objectContaining({table: 'user', paginator: {page_size: 200, cursor: 'next'}}));
+        expect(context.reporting().listRows).toHaveBeenLastCalledWith(expect.objectContaining({table: 'user', username: 'user-b', paginator: {page_size: 25}}));
         await userEvent.click(screen.getByRole('button', {name: 'Export CSV'}));
         await screen.findByText('Downloaded 1 rows across all pages.');
         expect(csv).toHaveBeenCalledWith(expect.objectContaining({table: 'user', username: 'user-b'}));
         expect((click.mock.instances.at(-1) as HTMLAnchorElement).download).toBe('report-user-b.csv');
     });
-    it('shows an empty Breakdown for an unknown user after checking every page', async () => {
+    it('shows an empty Breakdown for an unknown user with one request', async () => {
         open('/reporting/users?user=unknown-user');
-        vi.mocked(context.reporting().listRows).mockResolvedValueOnce(rows([row('user-a')], 'next')).mockResolvedValueOnce(rows([row('user-b')]));
+        vi.mocked(context.reporting().listRows).mockResolvedValueOnce(rows([]));
         await screen.findByText('No costs or activity in this period');
-        expect(context.reporting().listRows).toHaveBeenCalledTimes(2);
+        expect(context.reporting().listRows).toHaveBeenCalledTimes(1);
+        expect(context.reporting().listRows).toHaveBeenCalledWith(expect.objectContaining({username: 'unknown-user'}));
         expect(screen.queryByRole('cell', {name: 'user-a'})).not.toBeInTheDocument();
         expect(screen.queryByRole('cell', {name: 'user-b'})).not.toBeInTheDocument();
     });
@@ -520,4 +521,34 @@ describe('Reporting user filter', () => {
         await userEvent.click(screen.getByRole('button', {name: 'Export CSV'}));
         expect((click.mock.instances.at(-1) as HTMLAnchorElement).download).toBe('top-jobs-scientist-a.csv');
     });
+});
+
+
+it('offers more than 15 activity users including unpriced users without a second insights request', async () => {
+    const users = [...Array.from({length: 20}, (_, i) => `user-${i}`), 'unpriced'];
+    open('/reporting?user=unpriced', {...summary(), users});
+    await screen.findByRole('tab', {name: 'Jobs'});
+    expect(context.reporting().getInsights).toHaveBeenCalledTimes(1);
+    expect(context.reporting().getInsights).toHaveBeenCalledWith({period: 'this_month', username: 'unpriced'});
+    await userEvent.click(screen.getByRole('button', {name: /^User /}));
+    expect(screen.getAllByRole('option')).toHaveLength(22);
+    expect(screen.getByRole('option', {name: 'user-19'})).toBeInTheDocument();
+    expect(screen.getByRole('option', {name: 'unpriced'})).toBeInTheDocument();
+    expect(context.reporting().listRows).toHaveBeenCalledTimes(1);
+    expect(context.reporting().listRows).toHaveBeenCalledWith(expect.objectContaining({username: 'unpriced'}));
+});
+it.each([false, true])('only claims no users when activity sources are complete: %s', async partial => {
+    open('/reporting', {...summary(), users: [], coverage: {source_jobs: coverage(partial ? 'partial' : 'ready')}});
+    await screen.findByRole('tab', {name: 'Jobs'});
+    await userEvent.click(screen.getByRole('button', {name: /^User /}));
+    expect(screen.getByText(partial ? 'No users found in available records' : 'No users in this period')).toBeInTheDocument();
+});
+it.each([[false, true], [true, true], [true, false]])('uses scheduler permission %s and deployment %s for Reporting job links', async (allowed, deployed) => {
+    vi.spyOn(context.getClusterSettingsService(), 'isSchedulerDeployed').mockReturnValue(deployed);
+    vi.spyOn(context.auth(), 'isModuleAdmin').mockImplementation(module => allowed && module === 'scheduler');
+    open('/reporting/jobs');
+    await screen.findByText('Protein study');
+    const link = screen.queryByRole('link', {name: 'Protein study'});
+    if (allowed && deployed) expect(link).toHaveAttribute('href', '#/soca/completed-jobs?job_id=job-1');
+    else expect(link).toBeNull();
 });

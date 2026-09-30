@@ -19,6 +19,20 @@ spec:
     - name: FileBrowser
       description: File Browser APIs **(Authenticated Access)**
   entries:
+    - namespace: Reporting.GetSummary
+      request:
+        examples:
+          - name: Period summary and activity users
+            description: Requires Reporting access. The users response field lists all non-system usernames with finished jobs, overlapping desktops, measured storage use or positive recorded costs in the period, including unpriced activity. It is not an account directory or a ranked list. Source coverage describes unavailable records.
+            value: |
+              {"header": {"namespace": "Reporting.GetSummary"}, "payload": {"period": "this_month"}}
+    - namespace: Reporting.ListRows
+      request:
+        examples:
+          - name: User-filtered rows
+            description: Requires Reporting access and an actor-owned snapshot. Optional username filters the user table before pagination; unknown users return no rows. Project and facet tables reject username. Cursors are bound to the filter.
+            value: |
+              {"header": {"namespace": "Reporting.ListRows"}, "payload": {"snapshot_id": "snapshot", "table": "user", "username": "user-a"}}
     - namespace: Reporting.GetInsights
       request:
         examples:

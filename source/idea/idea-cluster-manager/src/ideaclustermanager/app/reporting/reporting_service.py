@@ -348,7 +348,7 @@ class ReportingService:
             raise exceptions.invalid_params('Invalid reporting currency configuration')
         now = datetime.now(timezone.utc)
         period = resolve_period(request, timezone_name, now)
-        data = self.sources.read(period, deadline)
+        data = self.sources.read(period, deadline, include_storage=True)
         tables, tiles, covers, warnings = self.build(
             data, period, currency, timezone_name, deadline
         )
@@ -358,7 +358,27 @@ class ReportingService:
             if value.get('source_as_of')
             and timestamp(value['source_as_of']) is not None
         ]
+        active_users = {
+            row['key']
+            for row in tables['user']
+            if subject(row['key'])
+            and user_label(row['key']) != 'System'
+            and (
+                row['job_count']
+                or row['coverage']['desktop_hours']['total_count']
+                or row['spend_total']
+            )
+        }
+        for row in data.get('storage', []):
+            check_deadline(deadline)
+            if period.start_date <= row.get('date', '') <= period.end_date:
+                active_users.update(
+                    owner
+                    for owner, size in (row.get('users') or {}).items()
+                    if subject(owner) and user_label(owner) != 'System' and number(size)
+                )
         summary = dict(
+            users=sorted(active_users),
             period=period.model_dump(mode='json'),
             currency=currency,
             timezone=timezone_name,
@@ -773,12 +793,17 @@ class ReportingService:
 
     def list_rows(self, actor, request, authorize):
         metadata = self.store.lookup(request.snapshot_id, actor, authorize)
+        if request.username is not None and request.table != 'user':
+            raise exceptions.invalid_params('User-filtered rows require the user table')
         rows = sort_rows(
             self.store.rows(request.snapshot_id, metadata, request.table),
             request.sort_by,
             request.descending,
         )
+        if request.username is not None:
+            rows = [row for row in rows if row['key'] == request.username]
         binding = dict(
+            username=request.username,
             actor=actor,
             snapshot_id=request.snapshot_id,
             table=request.table,

@@ -1,5 +1,6 @@
 import {useEffect, useRef, useState, useSyncExternalStore} from 'react';
 import {withRouter} from '../../navigation/navigation-utils';
+import {hasAccess} from '../../navigation/task-navigation';
 import {useLocation, useNavigate, useSearchParams} from 'react-router-dom';
 import {Alert, Box, Button, CollectionPreferencesProps, ContentLayout, Header, SpaceBetween, StatusIndicator, Tabs, SegmentedControl, FormField, Select} from '@cloudscape-design/components';
 import {AppContext} from '../../common';
@@ -35,7 +36,7 @@ export function ReportingContent() {
     const rowsNeeded = tableVisible || (tab === 'overview' && !!username);
     const sortBy = (!tableVisible ? 'spend_total' : REPORTING_COLUMNS.find(column => column.id === query.get('sort_by'))?.id ?? 'spend_total') as ReportingColumn;
     const descending = !tableVisible || query.get('descending') !== 'false';
-    const [snapshot, setSnapshot] = useState<{key: string; data: ReportingSummary; insights: ReportingInsights; users: string[]}>();
+    const [snapshot, setSnapshot] = useState<{key: string; data: ReportingSummary; insights: ReportingInsights}>();
     const [summaryBusy, setSummaryBusy] = useState(false);
     const [summaryError, setSummaryError] = useState('');
     const [rowError, setRowError] = useState('');
@@ -94,15 +95,11 @@ export function ReportingContent() {
         setSummaryError('');
         setRowError('');
         setExportError('');
-        Promise.all([client.getSummary(JSON.parse(periodKey)), client.getInsights({...JSON.parse(periodKey), ...(username ? {username} : {})}),
-            username ? client.getInsights(JSON.parse(periodKey)) : Promise.resolve(undefined)]).then(([result, insights, unfiltered]) => {
+        Promise.all([client.getSummary(JSON.parse(periodKey)), client.getInsights({...JSON.parse(periodKey), ...(username ? {username} : {})})]).then(([result, insights]) => {
             if (!current) return;
             setExpiredId('');
             setTimezone(result.timezone);
-            const options = unfiltered ?? insights;
-            const users = Array.from(new Set([options.jobs.by_user, options.desktops.by_user, options.storage.by_user].flatMap(rows => (rows ?? []).map(row => row.name))))
-                .filter(name => name !== 'System' && name !== 'Other').sort((a, b) => a.localeCompare(b));
-            setSnapshot({key: requestKey, data: result, insights, users});
+            setSnapshot({key: requestKey, data: result, insights});
         }).catch(error => {if (current) setSummaryError(errorText(error));})
             .finally(() => {if (current) setSummaryBusy(false);});
         return () => {current = false;};
@@ -113,17 +110,7 @@ export function ReportingContent() {
         let current = true;
         setRowsBusy(true);
         setRowError('');
-        const loadRows = async () => {
-            let next = cursor;
-            do {
-                const result = await client.listRows({snapshot_id: summary.snapshot_id, table, sort_by: sortBy, descending, paginator: {page_size: username ? 200 : effectivePageSize, ...(next ? {cursor: next} : {})}});
-                if (!username || !current) return result;
-                const listing = result.listing.filter(row => row.key === username);
-                next = result.paginator.cursor ?? undefined;
-                if (listing.length || !next) return {...result, listing, total_rows: listing.length, paginator: {page_size: effectivePageSize}};
-            } while (next);
-        };
-        loadRows().then(result => {
+        client.listRows({snapshot_id: summary.snapshot_id, table, sort_by: sortBy, descending, ...(username ? {username} : {}), paginator: {page_size: effectivePageSize, ...(cursor ? {cursor} : {})}}).then(result => {
                 if (!current || !result) return;
                 setRows({key: rowKey, table, page, data: result});
                 setPaging(previous => {
@@ -188,9 +175,9 @@ export function ReportingContent() {
         <SpaceBetween direction="horizontal" size="l">
             <ReportingPeriodPicker value={period} timezone={timezone} onChange={changePeriod}/>
             <FormField label="User">
-                <div style={{width: '24ch'}}><Select filteringType="auto" filteringAriaLabel="Find users" filteringPlaceholder="Find users" empty="No users in this period" noMatch="No matching users"
+                <div style={{width: '24ch'}}><Select filteringType="auto" filteringAriaLabel="Find users" filteringPlaceholder="Find users" disabled={!summary} statusType={summaryBusy ? 'loading' : 'finished'} empty={Object.entries(summary?.coverage ?? {}).some(([key, value]) => key.startsWith('source_') && ['unavailable', 'partial'].includes(value.status)) ? 'No users found in available records' : 'No users in this period'} noMatch="No matching users"
                     selectedOption={{value: username, label: username || 'All users'}}
-                    options={[{value: '', label: 'All users'}, ...(summary ? snapshot?.users ?? [] : []).map(name => ({value: name, label: name}))]}
+                    options={summary?.users.length ? [{value: '', label: 'All users'}, ...summary.users.map(name => ({value: name, label: name}))] : []}
                     onChange={({detail}) => changeUser(detail.selectedOption.value ?? '')}/></div>
             </FormField>
             {username && <Button onClick={() => changeUser('')}>Clear filter</Button>}
@@ -213,7 +200,7 @@ export function ReportingContent() {
                     onPage={page => setPaging(previous => ({...previous, page}))}
                     onSort={(column, descending) => {const next = new URLSearchParams(query); next.set('sort_by', column); next.set('descending', String(descending)); setQuery(next);}}
                     onPreferences={(pageSize, columns) => {setPageSize(pageSize); setColumns(columns); savePreferences(`reporting.breakdown.${table}`, {pageSize, columns});}}/>
-                    : <InsightTab username={username} userRow={data?.listing.find(row => row.key === username)} loading={summaryBusy} tab={tab} insights={insights} summary={summary} timezone={summary.timezone}/>}
+                    : <InsightTab canOpenJobs={hasAccess(context, 'jobs-admin')} username={username} userRow={data?.listing.find(row => row.key === username)} loading={summaryBusy} tab={tab} insights={insights} summary={summary} timezone={summary.timezone}/>}
             </SpaceBetween>}
             <div role="status" aria-label="CSV download status" aria-live="polite">{exportStatus}</div>
         </SpaceBetween>

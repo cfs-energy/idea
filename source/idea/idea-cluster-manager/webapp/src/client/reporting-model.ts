@@ -117,6 +117,7 @@ export interface ReportingInsights {
     notes: string[];
 }
 export interface ReportingSummary {
+    users: string[];
     snapshot_id: string;
     expires_at: string;
     period: {period: ReportingPeriod; start_date: string; end_date: string; start: string; end: string; provisional: boolean};
@@ -128,6 +129,7 @@ export interface ReportingSummary {
     warnings: string[];
 }
 export interface ReportingRowsRequest {
+    username?: string;
     snapshot_id: string;
     table: ReportingTable;
     sort_by: ReportingColumn;

@@ -1,7 +1,7 @@
 import {render, screen, within} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {csvCell, readPreferences, savePreferences} from './insights-table';
-import {BudgetTable, Coaching, EfficiencyTiles, JobsTable, jobHint, MetricTile, mergeJobs} from './insights-components';
+import {BudgetTable, Coaching, EfficiencyTiles, InsightTab, JobsTable, jobHint, MetricTile, mergeJobs} from './insights-components';
 import {exampleJob, insightsFixture} from './insights-fixture';
 import {budgetPresentation} from './reporting-format';
 
@@ -63,9 +63,9 @@ it('coaches memory only with both values and low use', () => {
 it('leads with money and hides coaching without efficiency data', () => {
     const jobs = {...insightsFixture().jobs, cost: '3.46', wasted_cost: '2.23'};
     const {rerender} = render(<Coaching jobs={jobs} currency="USD" personal/>);
-    expect(screen.getByText("About $2.23 of $3.46 on your finished jobs paid for cores your jobs didn't use.")).toBeInTheDocument();
+    expect(screen.getByText("About $2.23 of the $3.46 estimated for your jobs that finished in this period paid for unused cores.")).toBeInTheDocument();
     rerender(<Coaching jobs={jobs} currency="USD"/>);
-    expect(screen.getByText('About $2.23 of $3.46 spent on finished jobs paid for unused cores.')).toBeInTheDocument();
+    expect(screen.getByText('About $2.23 of the $3.46 estimated for jobs that finished in this period paid for unused cores.')).toBeInTheDocument();
     rerender(<Coaching jobs={{...jobs, jobs_with_efficiency: 0}} currency="USD"/>);
     expect(screen.queryByText(/About/)).toBeNull();
 });
@@ -132,5 +132,27 @@ it.each([
 it('defines unused cost against requested cores', async () => {
     render(<EfficiencyTiles jobs={insightsFixture().jobs} currency="USD"/>);
     await userEvent.click(screen.getByRole('button', {name: 'About Cost of unused core-hours'}));
-    expect(screen.getByText("Job cost multiplied by the share of requested core time not used, measured against the cores requested, not the instance's vCPUs.")).toBeInTheDocument();
+    expect(screen.getByText("Estimated from jobs that finished in this period as job cost multiplied by the unused share of requested core time.")).toBeInTheDocument();
+});
+
+
+it.each([false, true])('links Reporting jobs only with scheduler access: %s', canOpenJobs => {
+    render(<JobsTable title="Top jobs" rows={[exampleJob]} currency="USD" timezone="UTC" canOpenJobs={canOpenJobs}/>);
+    expect(screen.getByText(exampleJob.name!)).toBeInTheDocument();
+    const link = screen.queryByRole('link', {name: exampleJob.name!});
+    if (canOpenJobs) expect(link).toHaveAttribute('href', '#/soca/completed-jobs?job_id=job-1');
+    else expect(link).toBeNull();
+});
+it('labels memory and walltime overruns separately', () => {
+    render(<EfficiencyTiles jobs={{...insightsFixture().jobs, memory_efficiency_pct: 150, walltime_efficiency_pct: 101}} currency="USD"/>);
+    expect(screen.getByText('Used more than requested')).toBeInTheDocument();
+    expect(screen.getByText('Ran longer than requested')).toBeInTheDocument();
+});
+
+it('distinguishes stored desktop costs from session hours', async () => {
+    render(<InsightTab tab="desktops" insights={insightsFixture()} timezone="UTC"/>);
+    await userEvent.click(screen.getByRole('button', {name: 'About Desktop spend'}));
+    expect(screen.getByText('Recorded desktop costs from stored daily costs for this period.')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', {name: 'About Desktop hours'}));
+    expect(screen.getByText('Estimated desktop hours from sessions overlapping this period.')).toBeInTheDocument();
 });

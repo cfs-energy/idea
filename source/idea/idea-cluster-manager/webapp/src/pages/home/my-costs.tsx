@@ -32,7 +32,7 @@ function MonthTiles({costs, previous = false}: {costs: GetMyCostsResult | null; 
         {FACETS.filter(({key}) => key !== 'ai' || facetAmount(month?.[key]) == null || Number(facetAmount(month?.[key])) !== 0).map(({key}) => {
             const line = month?.[key];
             const badge = costBadge(line, !costs?.current);
-            return <MetricTile key={key} title={titles[key]} value={money(facetAmount(line), currency)} info={line?.reason || line?.note || 'Uses the available daily costs for this calendar month.'}>
+            return <MetricTile key={key} title={titles[key]} value={money(facetAmount(line), currency)} info={`${key === 'jobs' ? 'Recorded job costs for this calendar month.' : key === 'desktops' ? 'Recorded desktop costs from stored daily costs for this calendar month.' : 'Uses the available daily costs for this calendar month.'} ${line?.reason || line?.note || ''}`}>
                 {badge && badge !== 'Partial' && <Badge>{badge}</Badge>}
             </MetricTile>;
         })}

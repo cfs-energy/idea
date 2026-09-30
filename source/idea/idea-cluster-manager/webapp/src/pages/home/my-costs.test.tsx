@@ -41,7 +41,7 @@ it('uses the personal client and shared overview with all monthly service totals
     expect(screen.queryByText('User', {exact: true})).toBeNull();
     expect(screen.queryByText('Breakdown', {exact: true})).toBeNull();
     expect(screen.queryByText('Spend by user')).toBeNull();
-    expect(screen.getByText("About $120.00 of $1,524.22 on your finished jobs paid for cores your jobs didn't use.")).toBeInTheDocument();
+    expect(screen.getByText("About $120.00 of the $1,524.22 estimated for your jobs that finished in this period paid for unused cores.")).toBeInTheDocument();
     expect(screen.getByText('Daily job cost by project')).toBeInTheDocument();
     expect(screen.getByText('Project budgets')).toBeInTheDocument();
     for (const [title, value] of [['Total spend', '$150.00'], ['Job spend', '$10.00'], ['Desktop spend', '$20.00'], ['Desktop disks', '$30.00'], ['Storage spend', '$40.00'], ['AI', '$50.00']]) {
@@ -52,6 +52,10 @@ it('uses the personal client and shared overview with all monthly service totals
     expect(costs).toHaveBeenCalledWith({});
     expect(reporting).not.toHaveBeenCalled();
     expect(summary).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole('button', {name: 'About Job spend'}));
+    expect(screen.getByText(/Recorded job costs for this calendar month\./)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', {name: 'About Desktop spend'}));
+    expect(screen.getByText(/Recorded desktop costs from stored daily costs for this calendar month\./)).toBeInTheDocument();
 });
 it('uses the shared personal job table, hints, and completed-job links', async () => {
     const {get} = setup();

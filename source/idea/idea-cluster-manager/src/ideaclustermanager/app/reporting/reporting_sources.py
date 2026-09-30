@@ -147,7 +147,9 @@ class ReportingSources:
                     break
         return dict(head=head, costs=None, state='unavailable')
 
-    def read(self, period, deadline, username=None, insights=False):
+    def read(
+        self, period, deadline, username=None, insights=False, include_storage=False
+    ):
         scope_username = username
         result = dict(
             users={},
@@ -344,7 +346,7 @@ class ReportingSources:
                 result['projections'].setdefault(
                     owner, dict(costs=None, head=None, state='collecting')
                 )
-        if insights:
+        if insights or include_storage:
 
             def storage():
                 store = self.context.personal_costs_store
@@ -361,5 +363,10 @@ class ReportingSources:
                 return rows
 
             result['storage'] = optional('storage', storage)
+            if include_storage:
+                for row in result['storage']:
+                    for owner in row.get('users') or {}:
+                        if subject(owner):
+                            result['users'].setdefault(owner, owner)
         check_deadline(deadline)
         return result

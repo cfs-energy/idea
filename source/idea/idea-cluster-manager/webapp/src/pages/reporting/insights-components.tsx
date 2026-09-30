@@ -19,8 +19,8 @@ const metricDefinitions = {
     cpu_efficiency_weighted_pct: "CPU efficiency weighted by each job's requested core-hours.",
     memory_efficiency_pct: "Peak memory used as a share of memory requested, or of the instance's memory when a job on its own instance didn't request any.",
     walltime_efficiency_pct: 'Elapsed time as a share of requested time.',
-    wasted_core_hours: 'Requested cores multiplied by elapsed hours, minus CPU hours used.',
-    wasted_cost: "Job cost multiplied by the share of requested core time not used, measured against the cores requested, not the instance's vCPUs."
+    wasted_core_hours: 'Estimated from jobs that finished in this period as requested cores multiplied by elapsed hours, minus CPU hours used.',
+    wasted_cost: "Estimated from jobs that finished in this period as job cost multiplied by the unused share of requested core time."
 };
 type EfficiencyKey = 'cpu_efficiency_pct' | 'memory_efficiency_pct' | 'walltime_efficiency_pct' | 'wasted_core_hours' | 'wasted_cost';
 export function EfficiencyTiles({jobs, currency, weightedInfo = false, only}: {weightedInfo?: boolean; jobs: ReportingInsights['jobs']; currency: string; only?: EfficiencyKey[]}) {
@@ -48,7 +48,7 @@ export function BudgetTable({budgets, currency}: {budgets: ReportingBudget[]; cu
 }
 export function Coaching({jobs, currency, personal = false}: {jobs: ReportingInsights['jobs']; currency: string; personal?: boolean}) {
     if (!jobs.jobs_with_efficiency || jobs.wasted_cost == null || jobs.cost == null) return null;
-    return <Box>{personal ? `About ${money(jobs.wasted_cost, currency)} of ${money(jobs.cost, currency)} on your finished jobs paid for cores your jobs didn't use.` : `About ${money(jobs.wasted_cost, currency)} of ${money(jobs.cost, currency)} spent on finished jobs paid for unused cores.`}</Box>;
+    return <Box>{personal ? `About ${money(jobs.wasted_cost, currency)} of the ${money(jobs.cost, currency)} estimated for your jobs that finished in this period paid for unused cores.` : `About ${money(jobs.wasted_cost, currency)} of the ${money(jobs.cost, currency)} estimated for jobs that finished in this period paid for unused cores.`}</Box>;
 }
 const gib = (value: number) => new Intl.NumberFormat('en-US', {maximumFractionDigits: value < 10 ? 1 : 0}).format(value);
 export function jobHint(job: JobRow) {
@@ -65,10 +65,10 @@ export function jobHint(job: JobRow) {
 export function mergeJobs(jobs: ReportingInsights['jobs']) {
     return Array.from(new Map([...jobs.costliest, ...jobs.least_efficient].map(job => [job.job_id, job])).values());
 }
-export function JobsTable({title, rows, currency, timezone, personal = false}: {title: string; rows: JobRow[]; currency: string; timezone: string; personal?: boolean}) {
+export function JobsTable({title, rows, currency, timezone, personal = false, canOpenJobs = false}: {title: string; rows: JobRow[]; currency: string; timezone: string; personal?: boolean; canOpenJobs?: boolean}) {
     const columns: InsightColumn<JobRow>[] = [
         {id: 'name', label: 'Job name', header: 'Job name', width: 200, minWidth: 140, value: row => row.name ?? row.job_id,
-            cell: row => <span title={row.name ?? row.job_id}><Link href={`#/${personal ? 'home' : 'soca'}/completed-jobs?job_id=${encodeURIComponent(row.job_id)}`}>{row.name ?? row.job_id}</Link></span>},
+            cell: row => <span title={row.name ?? row.job_id}>{personal || canOpenJobs ? <Link href={`#/${personal ? 'home' : 'soca'}/completed-jobs?job_id=${encodeURIComponent(row.job_id)}`}>{row.name ?? row.job_id}</Link> : row.name ?? row.job_id}</span>},
         {id: 'cost', label: 'Cost', header: 'Cost', value: row => numeric(row.cost), cell: row => row.cost == null ? <Missing/> : money(row.cost, currency)},
         {id: 'cpu_efficiency_pct', label: 'CPU efficiency', header: <InfoTitle title="CPU efficiency">{metricDefinitions.cpu_efficiency_pct}</InfoTitle>, value: row => row.cpu_efficiency_pct,
             cell: row => row.cpu_efficiency_pct == null ? <Missing/> : <StatusIndicator type={efficiencyStatus(row.cpu_efficiency_pct)}>{percent(row.cpu_efficiency_pct)}</StatusIndicator>},
@@ -115,6 +115,7 @@ export function DailyChart({title, points, currency, timezone, storage = false, 
 interface InsightTabProps {
     username?: string;
     personal?: boolean;
+    canOpenJobs?: boolean;
     loading?: boolean;
     tab: string;
     insights: ReportingInsights;
@@ -134,7 +135,7 @@ export function InsightTab(props: InsightTabProps) {
     ]), [data]);
     return <ReportLoading.Provider value={props.loading ?? false}><ChartColors.Provider value={ranks}><ReportUser.Provider value={props.username ?? ''}><InsightView {...props}/></ReportUser.Provider></ChartColors.Provider></ReportLoading.Provider>;
 }
-function InsightView({tab, insights: data, summary, userRow, timezone, personal = false, overviewTiles, overviewExtra, storageExtra}: InsightTabProps) {
+function InsightView({tab, insights: data, summary, userRow, timezone, personal = false, canOpenJobs = false, overviewTiles, overviewExtra, storageExtra}: InsightTabProps) {
     const currency = data.currency;
     const username = useContext(ReportUser);
     const scoped = personal || !!username;
@@ -146,15 +147,15 @@ function InsightView({tab, insights: data, summary, userRow, timezone, personal 
         <Coaching jobs={data.jobs} currency={currency} personal={personal}/>
         {overviewTiles ?? (personal ? <TileRow>
             {tile('Total spend', total, summary?.coverage.spend_total, 'Adds the available job, desktop and storage costs for this period.')}
-            {tile('Job spend', data.jobs.cost, summary?.coverage.jobs, 'Adds the costs of jobs that finished in this period. Reserved prices are compared with on-demand prices for the same job resources.',
+            {tile('Job spend', data.jobs.cost, summary?.coverage.jobs, 'Estimated from jobs that finished in this period.',
                 Number(data.jobs.savings) > 0 && <Box color="text-body-secondary">{money(data.jobs.savings!, currency)} less than on-demand</Box>)}
-            {tile('Desktop spend', data.desktops.cost, summary?.coverage.desktops, 'Desktop hours multiplied by instance prices.')}
+            {tile('Desktop spend', data.desktops.cost, summary?.coverage.desktops, 'Recorded desktop costs from stored daily costs for this period.')}
             {tile('Storage spend', data.storage.cost, summary?.coverage.shared_storage, 'Storage cost based on measured use.')}
         </TileRow> : !spend ? <StatusIndicator type="loading">Loading spend</StatusIndicator> : <TileRow>
             {tile('Total spend', spend.spend_total, spend.coverage.spend_total ?? summary?.coverage.spend_total, 'All recorded costs for this period: jobs, desktops, desktop disks, storage and AI.')}
             {([
-                ['jobs', 'Job spend', 'Recorded job costs for this period. Reserved prices are compared with on-demand prices for the same job resources.'],
-                ['desktops', 'Desktop spend', 'Desktop hours multiplied by instance prices.'],
+                ['jobs', 'Job spend', 'Recorded job costs for this period.'],
+                ['desktops', 'Desktop spend', 'Recorded desktop costs from stored daily costs for this period.'],
                 ['desktop_disks', 'Desktop disk spend', 'Recorded desktop disk costs for this period.'],
                 ['shared_storage', 'Storage spend', 'Storage cost based on measured use.'],
                 ['ai', 'AI spend', 'Recorded AI costs for this period.']
@@ -176,10 +177,10 @@ function InsightView({tab, insights: data, summary, userRow, timezone, personal 
         <CostBars title="Job cost by project" rows={data.jobs.by_project} currency={currency} entity="Project"/>
         <CostBars title="Job cost by instance family" rows={data.jobs.by_instance_family} currency={currency} entity="Instance family"/>
         </Grid>
-        <JobsTable title="Top jobs" rows={mergeJobs(data.jobs)} currency={currency} timezone={timezone} personal={personal}/>
+        <JobsTable title="Top jobs" rows={mergeJobs(data.jobs)} currency={currency} timezone={timezone} personal={personal} canOpenJobs={canOpenJobs}/>
     </SpaceBetween>;
     if (tab === 'desktops') return <SpaceBetween size="l">
-        <ColumnLayout columns={2}>{tile('Desktop spend', data.desktops.cost)}<MetricTile title="Desktop hours" value={data.desktops.hours == null ? null : hours(data.desktops.hours)} info="Time between desktop creation and stopping within this period."/></ColumnLayout>
+        <ColumnLayout columns={2}>{tile('Desktop spend', data.desktops.cost, undefined, 'Recorded desktop costs from stored daily costs for this period.')}<MetricTile title="Desktop hours" value={data.desktops.hours == null ? null : hours(data.desktops.hours)} info="Estimated desktop hours from sessions overlapping this period."/></ColumnLayout>
         <DailyChart period={data.period} title={scoped ? "Daily desktop cost" : "Daily desktop cost by user"} points={data.desktops.daily_top_users.map(row => ({name: personal ? 'Desktops' : row.user, x: row.date, value: Number(row.cost)}))} currency={currency} timezone={timezone} empty="No desktop costs in this period"/>
         {!scoped && <CostBars title="Desktop cost by user" rows={data.desktops.by_user ?? []} currency={currency} entity="User"/>}
         <CostBars title="Desktop cost by project" rows={data.desktops.by_project} currency={currency} entity="Project"/>

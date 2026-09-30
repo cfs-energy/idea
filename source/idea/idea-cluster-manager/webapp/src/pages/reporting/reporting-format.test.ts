@@ -1,4 +1,4 @@
-import {budgetPresentation, bytes, cappedSeries, colorByName, rankedColors, palette, calendarDays, date, efficiencyStatus, hours, measuredTierPoints, money, percent, updated} from './reporting-format';
+import {budgetPresentation, bytes, cappedSeries, colorByName, rankedColors, palette, calendarDays, date, efficiencyLabel, efficiencyStatus, hours, measuredTierPoints, money, percent, updated} from './reporting-format';
 
 describe('human-readable report values', () => {
     it('formats decimal strings, zero and missing numbers', () => {
@@ -59,4 +59,11 @@ it('fills every calendar day, including leap days, with zero money', () => {
     const series = cappedSeries([{name: 'Project Cedar', x: '2024-02-29', value: 2}], undefined, days);
     expect(series[0].data.map(p => p.y)).toEqual([0, 2, 0]);
     expect(hours(254)).toBe('254');
+});
+
+
+it.each([100.01, 150])('warns for efficiency above 100 percent: %s', value => {
+    expect(efficiencyStatus(value)).toBe('warning');
+    expect(efficiencyLabel(value, 'memory_efficiency_pct')).toBe('Used more than requested');
+    expect(efficiencyLabel(value, 'walltime_efficiency_pct')).toBe('Ran longer than requested');
 });

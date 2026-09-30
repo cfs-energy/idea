@@ -124,6 +124,7 @@ class ReportingSummary(SocaPayload):
     tiles: dict[str, ReportingRow]
     coverage: dict[str, MetricCoverage]
     warnings: list[str]
+    users: list[str] = Field(default_factory=list)
 
 
 class GetReportingCapabilitiesRequest(SocaPayload):
@@ -143,6 +144,7 @@ class ReportingPaginator(SocaPayload):
 
 class ListReportingRowsRequest(SocaPayload):
     model_config = ConfigDict(extra='forbid')
+    username: ReportingUsername | None = None
     snapshot_id: str = Field(min_length=1, max_length=128)
     table: Table
     sort_by: Column = 'spend_total'

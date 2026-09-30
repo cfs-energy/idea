@@ -327,7 +327,29 @@ def test_cpu_efficiency_normalizes_select_chunks():
     assert JobCompletionMetrics.cpu_efficiency(job) == 0.25
 
 
-def test_cpu_efficiency_multiplies_cpu_request_by_nodes():
+def test_cpu_efficiency_uses_job_wide_cpu_request_without_select():
     job = _job(cpu_time_secs=14400)
     job.params.nodes = 2
+    assert JobCompletionMetrics.cpu_efficiency(job) == 1
+
+
+@pytest.mark.parametrize('select', [None, '2:ncpus=4'])
+def test_multi_node_resource_list_ncpus_is_job_wide(select):
+    from ideascheduler.app.scheduler.openpbs.openpbs_model import OpenPBSJob
+    from ideadatamodel.reporting.efficiency import job_efficiency
+
+    resources = dict(ncpus='8', nodect='2')
+    if select is not None:
+        resources['select'] = select
+    params = OpenPBSJob(Resource_List=resources).get_soca_job_params()
+    assert int(params['cpus']) == 8
+    assert int(params['nodes']) == 2
+    job = _job(cpu_time_secs=14400)
+    job.params.cpus = int(params['cpus'])
+    job.params.nodes = int(params['nodes'])
+    assert not (job.params.custom_params or {}).get('select')
     assert JobCompletionMetrics.cpu_efficiency(job) == 0.5
+    result = job_efficiency(job)
+    assert result['requested_cores'] == 8
+    assert result['core_hours'] == 8
+    assert result['wasted_core_hours'] == 4
