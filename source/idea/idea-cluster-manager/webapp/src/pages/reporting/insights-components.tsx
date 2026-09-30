@@ -8,6 +8,8 @@ export const Missing = () => <span role="img" aria-label="No data">—</span>;
 export function InfoTitle({title, children}: {title: string; children: ReactNode}) {
     return <span>{title} <span onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}><Popover header={title} content={children} dismissAriaLabel="Close information" triggerType="custom"><Button variant="inline-icon" iconName="status-info" ariaLabel={`About ${title}`}/></Popover></span></span>;
 }
+// Tiles share one row on wide screens and wrap to equal columns on narrow ones.
+export const TileRow = ({children}: {children: ReactNode}) => <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 20}}>{children}</div>;
 export function MetricTile({title, value, info, children}: {title: string; value: ReactNode; info: string; children?: ReactNode}) {
     if (value == null) return null;
     return <Container fitHeight header={<Header variant="h3"><InfoTitle title={title}>{info}</InfoTitle></Header>}><Box fontSize="display-l">{value}</Box>{children}</Container>;
@@ -26,9 +28,9 @@ export function EfficiencyTiles({jobs, currency, weightedInfo = false, only}: {w
         ['cpu_efficiency_pct', 'CPU efficiency'], ['memory_efficiency_pct', 'Memory efficiency'],
         ['walltime_efficiency_pct', 'Walltime efficiency'], ['wasted_core_hours', 'Unused core-hours'], ['wasted_cost', 'Cost of unused core-hours']
     ] as const).filter(([key]) => !only || only.includes(key));
-    return <ColumnLayout columns={3}>{tiles.filter(([key]) => jobs[key] != null).map(([key, title]) => <MetricTile key={key} title={title}
+    return <TileRow>{tiles.filter(([key]) => jobs[key] != null).map(([key, title]) => <MetricTile key={key} title={title}
         value={key === 'wasted_cost' ? money(jobs[key], currency) : key === 'wasted_core_hours' ? hours(jobs[key]) : percent(jobs[key])}
-        info={`${metricDefinitions[key]}${['cpu_efficiency_pct', 'memory_efficiency_pct', 'walltime_efficiency_pct'].includes(key) ? ' Averages jobs with the needed measurements.' : ''}${key === 'cpu_efficiency_pct' ? ` ${weightedInfo && jobs.cpu_efficiency_weighted_pct != null ? `CPU efficiency by core-hours: ${percent(jobs.cpu_efficiency_weighted_pct)}.` : `Uses ${jobs.jobs_with_efficiency} of ${jobs.count} finished jobs.`}` : ''}`}>{key.endsWith('_pct') && <StatusIndicator type={efficiencyStatus(Number(jobs[key]))}>{efficiencyLabel(Number(jobs[key]), key)}</StatusIndicator>}</MetricTile>)}</ColumnLayout>;
+        info={`${metricDefinitions[key]}${['cpu_efficiency_pct', 'memory_efficiency_pct', 'walltime_efficiency_pct'].includes(key) ? ' Averages jobs with the needed measurements.' : ''}${key === 'cpu_efficiency_pct' ? ` ${weightedInfo && jobs.cpu_efficiency_weighted_pct != null ? `CPU efficiency by core-hours: ${percent(jobs.cpu_efficiency_weighted_pct)}.` : `Uses ${jobs.jobs_with_efficiency} of ${jobs.count} finished jobs.`}` : ''}`}>{key.endsWith('_pct') && <StatusIndicator type={efficiencyStatus(Number(jobs[key]))}>{efficiencyLabel(Number(jobs[key]), key)}</StatusIndicator>}</MetricTile>)}</TileRow>;
 }
 export function BudgetTable({budgets, currency}: {budgets: ReportingBudget[]; currency: string}) {
     if (!budgets.length) return null;
@@ -142,13 +144,13 @@ function InsightView({tab, insights: data, summary, userRow, timezone, personal 
     const tile = (title: string, value: ReportingNumber | null | undefined, details?: ReportingCoverage, definition?: string, children?: ReactNode) => value == null ? null : <MetricTile title={title} value={money(value, currency)} info={metricInfo(details, timezone, definition)}>{children}</MetricTile>;
     if (tab === 'overview') return <SpaceBetween size="l">
         <Coaching jobs={data.jobs} currency={currency} personal={personal}/>
-        {overviewTiles ?? (personal ? <ColumnLayout columns={4}>
+        {overviewTiles ?? (personal ? <TileRow>
             {tile('Total spend', total, summary?.coverage.spend_total, 'Adds the available job, desktop and storage costs for this period.')}
             {tile('Job spend', data.jobs.cost, summary?.coverage.jobs, 'Adds the costs of jobs that finished in this period. Reserved prices are compared with on-demand prices for the same job resources.',
                 Number(data.jobs.savings) > 0 && <Box color="text-body-secondary">{money(data.jobs.savings!, currency)} less than on-demand</Box>)}
             {tile('Desktop spend', data.desktops.cost, summary?.coverage.desktops, 'Desktop hours multiplied by instance prices.')}
             {tile('Storage spend', data.storage.cost, summary?.coverage.shared_storage, 'Storage cost based on measured use.')}
-        </ColumnLayout> : !spend ? <StatusIndicator type="loading">Loading spend</StatusIndicator> : <ColumnLayout columns={4}>
+        </TileRow> : !spend ? <StatusIndicator type="loading">Loading spend</StatusIndicator> : <TileRow>
             {tile('Total spend', spend.spend_total, spend.coverage.spend_total ?? summary?.coverage.spend_total, 'All recorded costs for this period: jobs, desktops, desktop disks, storage and AI.')}
             {([
                 ['jobs', 'Job spend', 'Recorded job costs for this period. Reserved prices are compared with on-demand prices for the same job resources.'],
@@ -160,7 +162,7 @@ function InsightView({tab, insights: data, summary, userRow, timezone, personal 
                 value={money(spend.spend_by_facet[key], currency)} info={metricInfo(spend.coverage[key] ?? summary?.coverage[key], timezone, definition)}>
                 {key === 'jobs' && Number(data.jobs.savings) > 0 && <Box color="text-body-secondary">{money(data.jobs.savings!, currency)} less than on-demand</Box>}
             </MetricTile>)}
-        </ColumnLayout>)}
+        </TileRow>)}
         {overviewExtra}
         <EfficiencyTiles jobs={data.jobs} currency={currency} only={['cpu_efficiency_pct', 'wasted_core_hours', 'wasted_cost']}/>
         <DailyChart period={data.period} title="Daily job cost by project" points={data.jobs.daily_by_project.map(row => ({name: row.project, x: row.date, value: Number(row.cost)}))} currency={currency} timezone={timezone} empty="No jobs finished in this period"/>

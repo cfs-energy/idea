@@ -10,7 +10,7 @@ import {withRouter} from '../../navigation/navigation-utils';
 import {collectingLabel, costBadge} from '../../components/monthly-costs';
 import {FACETS, facetAmount} from '../../components/cost-charts';
 import {personalCostsCache} from '../../client/personal-costs-cache';
-import {InfoTitle, InsightTab, MetricTile} from '../reporting/insights-components';
+import {InfoTitle, InsightTab, MetricTile, TileRow} from '../reporting/insights-components';
 import ReportingPeriodPicker, {REPORTING_PERIODS, validateReportingPeriod} from '../reporting/reporting-period-picker';
 import {date, money, updated} from '../reporting/reporting-format';
 import StorageUsage from './storage-usage';
@@ -23,21 +23,20 @@ function MonthTiles({costs, previous = false}: {costs: GetMyCostsResult | null; 
     const month = previous ? costs?.previous : costs?.current;
     const currency = costs?.currency ?? 'USD';
     const currentTotal = costs?.current?.total, previousTotal = costs?.previous?.total;
-    return <ColumnLayout columns={4}>
+    return <TileRow>
         <MetricTile title="Total spend" value={!costs?.current ? collectingLabel(costs) : money(month?.total, currency)} info="Adds the available job, desktop, desktop disk, shared storage and AI costs for the calendar month.">
-            {month?.incomplete && <Badge>Partial</Badge>}
             <Box color="text-body-secondary">{previous ? `This month so far ${money(currentTotal, currency)}` : `Last month ${money(previousTotal, currency)}`}
                 {currentTotal != null && previousTotal != null && <> · {money(Math.abs(currentTotal - previousTotal), currency)} {currentTotal >= previousTotal ? 'more' : 'less'} (this month so far vs full last month)</>}
             </Box>
         </MetricTile>
-        {FACETS.map(({key}) => {
+        {FACETS.filter(({key}) => key !== 'ai' || facetAmount(month?.[key]) == null || Number(facetAmount(month?.[key])) !== 0).map(({key}) => {
             const line = month?.[key];
             const badge = costBadge(line, !costs?.current);
             return <MetricTile key={key} title={titles[key]} value={money(facetAmount(line), currency)} info={line?.reason || line?.note || 'Uses the available daily costs for this calendar month.'}>
-                {badge && <Badge>{badge}</Badge>}
+                {badge && badge !== 'Partial' && <Badge>{badge}</Badge>}
             </MetricTile>;
         })}
-    </ColumnLayout>;
+    </TileRow>;
 }
 function MyCosts(props: MyCostsProps) {
     const context = AppContext.get();
