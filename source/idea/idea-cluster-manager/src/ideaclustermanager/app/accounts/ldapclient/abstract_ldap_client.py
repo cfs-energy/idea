@@ -443,6 +443,40 @@ class AbstractLDAPClient:
 
         self._root_password = password
 
+    def stage_root_password(self, password: str) -> bool:
+        """Store a password as the pending secret version before the directory changes it."""
+        secret_arn = self.options.root_password_secret_arn
+        if Utils.is_empty(secret_arn):
+            return False
+        self.context.aws().secretsmanager().put_secret_value(
+            SecretId=secret_arn, SecretString=password, VersionStages=['AWSPENDING']
+        )
+        return True
+
+    def fetch_pending_root_password(self) -> Optional[str]:
+        secret_arn = self.options.root_password_secret_arn
+        if Utils.is_empty(secret_arn):
+            return None
+        try:
+            result = (
+                self.context.aws()
+                .secretsmanager()
+                .get_secret_value(SecretId=secret_arn, VersionStage='AWSPENDING')
+            )
+        except Exception:  # no pending version, or it cannot be read
+            return None
+        return Utils.get_value_as_string('SecretString', result)
+
+    def root_password_binds(self, password: str) -> bool:
+        """Try a bind as the root user with a candidate password, outside the connection pool."""
+        try:
+            conn = ldap.initialize(self.ldap_uri)
+            conn.bind_s(who=self.ldap_root_bind, cred=password, method=ldap.AUTH_SIMPLE)
+            conn.unbind_ext_s()
+            return True
+        except ldap.INVALID_CREDENTIALS:
+            return False
+
     def refresh_root_username_password(self):
         self._root_username = self.fetch_root_username()
         self._root_password = self.fetch_root_password()

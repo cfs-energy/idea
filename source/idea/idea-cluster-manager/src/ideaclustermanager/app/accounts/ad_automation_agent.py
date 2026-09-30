@@ -70,30 +70,57 @@ class ADAutomationAgent(SocaService):
             name='ad-automation-thread', target=self.automation_loop
         )
 
+    @staticmethod
+    def _bind_error_code(error) -> str:
+        details = (
+            error.args[0] if error.args and isinstance(error.args[0], dict) else {}
+        )
+        match = re.search(r'\bdata\s+([0-9a-f]+)\b', str(details.get('info', '')), re.I)
+        return match.group(1).lower() if match else 'unknown'
+
+    def _recover_root_password(self):
+        """Re-read the secret after a rejected bind; promote a pending password that binds."""
+        # Another task may have reset the password, or a reset may have stored it only as pending.
+        self.ldap_client.refresh_root_username_password()
+        pending = self.ldap_client.fetch_pending_root_password()
+        if (
+            pending
+            and pending != self.ldap_client.ldap_root_password
+            and self.ldap_client.root_password_binds(pending)
+        ):
+            self.logger.warning(
+                'AD admin password was stored only as the pending secret version; promoting it.'
+            )
+            self.ldap_client.update_root_password(pending)
+
     def is_password_expired(self) -> bool:
         root_username = self.ldap_client.ldap_root_username
-        try:
-            user = self.ldap_client.get_user(root_username, trace=False)
-        except ldap.INVALID_CREDENTIALS as e:
-            if (
-                self.ldap_client.ds_provider
-                != constants.DIRECTORYSERVICE_AWS_MANAGED_ACTIVE_DIRECTORY
-            ):
-                raise
-            details = e.args[0] if e.args and isinstance(e.args[0], dict) else {}
-            match = re.search(
-                r'\bdata\s+([0-9a-f]+)\b', str(details.get('info', '')), re.I
-            )
-            code = match.group(1).lower() if match else 'unknown'
-            if code in {'532', '773'}:
-                self.logger.warning(
-                    f'AD admin password expired or requires reset (data {code}).'
+        managed_ad = (
+            self.ldap_client.ds_provider
+            == constants.DIRECTORYSERVICE_AWS_MANAGED_ACTIVE_DIRECTORY
+        )
+        user = None
+        for attempt in range(2):
+            try:
+                user = self.ldap_client.get_user(root_username, trace=False)
+                break
+            except ldap.INVALID_CREDENTIALS as e:
+                if not managed_ad:
+                    raise
+                code = self._bind_error_code(e)
+                if code in {'532', '773'}:
+                    self.logger.warning(
+                        f'AD admin password expired or requires reset (data {code}).'
+                    )
+                    return True
+                if attempt == 0:
+                    self._recover_root_password()
+                    root_username = self.ldap_client.ldap_root_username
+                    continue
+                self.logger.error(
+                    f'AD admin credentials rejected (data {code}); password will not be reset. Check the root credential secret.'
                 )
-                return True
-            self.logger.error(
-                f'AD admin credentials rejected (data {code}); password will not be reset. Check the root credential secret.'
-            )
-            raise
+                raise
         if user is None:
             raise exceptions.soca_exception(
                 error_code=errorcodes.GENERAL_ERROR,
@@ -138,8 +165,7 @@ class ADAutomationAgent(SocaService):
             self.ldap_client.ds_provider
             == constants.DIRECTORYSERVICE_AWS_MANAGED_ACTIVE_DIRECTORY
         )
-        if managed_ad:
-            self.ldap_client.refresh_root_username_password()
+        # Credentials are re-read from Secrets Manager only after a rejected bind.
         if not self.is_password_expired():
             return
 
@@ -166,6 +192,9 @@ class ADAutomationAgent(SocaService):
 
             username = self.ldap_client.ldap_root_username
             new_password = Utils.generate_password(16, 2, 2, 2, 2)
+            # Keep the new password recoverable if the directory changes but the secret write fails.
+            if managed_ad:
+                self.ldap_client.stage_root_password(new_password)
 
             # change password in Managed AD (calls ds.reset_password)
             success = False
