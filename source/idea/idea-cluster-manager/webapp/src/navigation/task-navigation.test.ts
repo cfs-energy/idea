@@ -97,7 +97,7 @@ describe('Reporting navigation capability', () => {
         const items = IdeaSideNavItems(ctx);
         expect(items.some(item => item.type === 'section' && item.text === 'Reporting')).toBe(allowed);
         expect(items.find(item => item.type === 'section' && item.text === 'Administration')).toEqual(previousAdmin);
-        expect(permittedViews(PORTAL_TASKS.find(task => task.id === 'reporting')!, ctx)).toHaveLength(allowed ? 6 : 0);
+        expect(permittedViews(PORTAL_TASKS.find(task => task.id === 'reporting')!, ctx)).toHaveLength(allowed ? 1 : 0);
     });
     it('keeps Reporting independent from the custom Reports feature', () => {
         const ctx = context();
@@ -109,7 +109,7 @@ describe('Reporting navigation capability', () => {
         expect(IdeaSideNavItems(ctx)).toContainEqual(expect.objectContaining({text: 'Reports'}));
         expect(PORTAL_TASKS.find(task => task.id === 'reporting')?.admin).toBe(false);
     });
-    it.each([['/reporting', 'Overview'], ['/reporting/jobs', 'Jobs'], ['/reporting/desktops', 'Desktops'], ['/reporting/storage', 'Storage'], ['/reporting/users', 'By user'], ['/reporting/projects', 'By project'], ['/reporting/facets', 'Overview']])('resolves %s', (path, label) => {
+    it.each([['/reporting', 'Reporting'], ['/reporting/jobs', 'Reporting'], ['/reporting/desktops', 'Reporting'], ['/reporting/storage', 'Reporting'], ['/reporting/users', 'Reporting'], ['/reporting/projects', 'Reporting'], ['/reporting/facets', 'Reporting']])('resolves %s', (path, label) => {
         expect(resolveTask(path)?.view.label).toBe(label);
         expect(resolveTask(path)?.task.id).toBe('reporting');
     });
