@@ -88,7 +88,7 @@ it('uses a heading for the tile label and ordinary text for its value', () => {
     expect(screen.queryByRole('heading', {name: '$3.46'})).toBeNull();
 });
 it('keeps job columns in coaching order and links to the existing completed-job detail panel', () => {
-    render(<JobsTable title="My finished jobs" rows={[exampleJob]} currency="USD" timezone="UTC" personal/>);
+    render(<JobsTable title="My top jobs" rows={[exampleJob]} currency="USD" timezone="UTC" personal/>);
     expect(screen.getAllByRole('columnheader').map(cell => cell.textContent?.trim())).toEqual(['Job name', 'Cost', 'CPU efficiency', 'Unused core-hours', 'Hint', 'Elapsed hours', 'Queue', 'Instance type', 'Finished']);
     const link = screen.getByRole('link', {name: exampleJob.name!});
     expect(link).toHaveAttribute('href', '#/home/completed-jobs?job_id=job-1');
@@ -97,7 +97,7 @@ it('keeps job columns in coaching order and links to the existing completed-job 
 });
 it('sorts the single job table by unused cores and retains preferences on remount', async () => {
     const rows = [exampleJob, {...exampleJob, job_id: 'job-2', name: 'Study Elm', cost: '1', wasted_core_hours: 100}];
-    const {unmount} = render(<JobsTable title="Finished jobs" rows={rows} currency="USD" timezone="UTC"/>);
+    const {unmount} = render(<JobsTable title="Top jobs" rows={rows} currency="USD" timezone="UTC"/>);
     await userEvent.click(screen.getByRole('button', {name: 'Sort jobs Highest cost'}));
     await userEvent.click(screen.getByRole('option', {name: 'Most unused cores'}));
     expect(screen.getAllByRole('row')[1]).toHaveTextContent('Study Elm');
@@ -107,7 +107,7 @@ it('sorts the single job table by unused cores and retains preferences on remoun
     await userEvent.click(within(dialog).getByRole('button', {name: 'Confirm'}));
     expect(screen.getByRole('columnheader', {name: 'Job ID'})).toBeInTheDocument();
     unmount();
-    render(<JobsTable title="Finished jobs" rows={rows} currency="USD" timezone="UTC"/>);
+    render(<JobsTable title="Top jobs" rows={rows} currency="USD" timezone="UTC"/>);
     expect(screen.getByRole('columnheader', {name: 'Job ID'})).toBeInTheDocument();
     expect(localStorage.getItem('reporting.table.my-jobs')).toBeNull();
 });
@@ -129,6 +129,36 @@ it('follows a supplied personal period', async () => {
     const context = initTestAppContext();
     const get = vi.spyOn(context.client().myCosts(), 'getInsights').mockResolvedValue(insightsFixture());
     render(<MyJobEfficiency timezone="UTC" reload={0} period={{period: 'last_month'}}/>);
-    await screen.findByText('My finished jobs');
+    await screen.findByText('My top jobs');
     expect(get).toHaveBeenCalledWith({period: 'last_month'});
+});
+
+it('suggests CPU per node and compares against the per-node request', () => {
+    expect(jobHint({...exampleJob, nodes: 4, requested_cores: 32, used_cores: 8, peak_memory_gib: null})).toBe('Requested 32 cores, used about 8. Try ncpus=3 per node.');
+    expect(jobHint({...exampleJob, nodes: 4, requested_cores: 4, used_cores: 0, peak_memory_gib: null})).toBeNull();
+});
+it('compares peak memory with total instance memory across nodes', () => {
+    expect(jobHint({...exampleJob, nodes: 2, used_cores: null, requested_memory_gib: null, instance_memory_gib: 16, peak_memory_gib: 12})).toBe('Peak 12 GiB of 32 GiB total across 2 nodes on c6i.large. A smaller instance type would do.');
+    expect(jobHint({...exampleJob, nodes: 2, used_cores: null, requested_memory_gib: null, instance_memory_gib: 16, peak_memory_gib: 16})).toBeNull();
+});
+it.each([
+    [70, 'Well sized', 'Well sized', 'Close to requested'],
+    [40, 'Some cores sat idle', 'Some memory unused', 'Finished well early'],
+    [0, 'Most cores sat idle', 'Most memory unused', 'Finished far earlier than requested']
+])('uses metric-specific efficiency labels at %s percent', (value, cpu, memory, walltime) => {
+    render(<EfficiencyTiles jobs={{...insightsFixture().jobs, cpu_efficiency_pct: Number(value), memory_efficiency_pct: Number(value), walltime_efficiency_pct: Number(value)}} currency="USD"/>);
+    for (const label of [cpu, memory, walltime]) expect(screen.getAllByText(label).length).toBeGreaterThan(0);
+});
+it('defines unused cost against requested cores', async () => {
+    render(<EfficiencyTiles jobs={insightsFixture().jobs} currency="USD"/>);
+    await userEvent.click(screen.getByRole('button', {name: 'About Cost of unused core-hours'}));
+    expect(screen.getByText('Job cost multiplied by the share of requested core time not used, measured against the cores requested, not the instance’s vCPUs.')).toBeInTheDocument();
+});
+it('counts the distinct top jobs rather than all finished jobs', async () => {
+    const context = initTestAppContext();
+    vi.spyOn(context.client().myCosts(), 'getInsights').mockResolvedValue(insightsFixture());
+    render(<MyJobEfficiency timezone="UTC" reload={0}/>);
+    const heading = await screen.findByRole('heading', {name: 'My top jobs (1)'});
+    expect(heading).toBeInTheDocument();
+    expect(screen.queryByRole('heading', {name: 'My top jobs (3)'})).toBeNull();
 });

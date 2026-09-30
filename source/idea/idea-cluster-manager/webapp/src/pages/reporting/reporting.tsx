@@ -6,7 +6,7 @@ import {AppContext} from '../../common';
 import IdeaAppLayout, {IdeaAppLayoutProps} from '../../components/app-layout';
 import {ReportingColumn, ReportingInsights, ReportingRows, ReportingSummary, ReportingSummaryRequest, ReportingTable as TableKind} from '../../client/reporting-model';
 import ReportingPeriodPicker, {REPORTING_PERIODS, validateReportingPeriod} from './reporting-period-picker';
-import ReportingTable, {DEFAULT_COLUMNS, REPORTING_COLUMNS, availableColumns} from './reporting-table';
+import ReportingTable, {DEFAULT_COLUMNS, REPORTING_COLUMNS} from './reporting-table';
 import {InfoTitle, InsightTab} from './insights-components';
 import {readPreferences, savePreferences} from './insights-table';
 import {date, updated} from './reporting-format';
@@ -33,8 +33,7 @@ export function ReportingContent() {
     const tableVisible = tab === 'breakdown';
     const sortBy = (!tableVisible ? 'spend_total' : REPORTING_COLUMNS.find(column => column.id === query.get('sort_by'))?.id ?? 'spend_total') as ReportingColumn;
     const descending = !tableVisible || query.get('descending') !== 'false';
-    const [snapshot, setSnapshot] = useState<{key: string; data: ReportingSummary}>();
-    const [insights, setInsights] = useState<ReportingInsights>();
+    const [snapshot, setSnapshot] = useState<{key: string; data: ReportingSummary; insights: ReportingInsights}>();
     const [summaryBusy, setSummaryBusy] = useState(false);
     const [summaryError, setSummaryError] = useState('');
     const [rowError, setRowError] = useState('');
@@ -43,6 +42,8 @@ export function ReportingContent() {
     const [exportBusy, setExportBusy] = useState(false);
     const [expiredId, setExpiredId] = useState('');
     const [reload, setReload] = useState(0);
+    const reloadedSnapshots = useRef(new Set<string>());
+    const requestKey = JSON.stringify([periodKey, reload]);
     const [retryRows, setRetryRows] = useState(0);
     const [pageSize, setPageSize] = useState(25);
     const [columns, setColumns] = useState<CollectionPreferencesProps.ContentDisplayItem[]>(DEFAULT_COLUMNS);
@@ -50,28 +51,33 @@ export function ReportingContent() {
         const saved = readPreferences(`reporting.breakdown.${table}`, {pageSize: 25, columns: DEFAULT_COLUMNS});
         setPageSize(saved.pageSize); setColumns(saved.columns);
     }, [table]);
-    const summary = snapshot?.data;
+    const summary = snapshot?.key === requestKey && !summaryError ? snapshot.data : undefined;
+    const insights = summary ? snapshot?.insights : undefined;
     const [timezone, setTimezone] = useState<string>();
     const validation = validateReportingPeriod(period, timezone);
     const expired = !!summary && expiredId === summary.snapshot_id;
     const effectivePageSize = tableVisible ? pageSize : 25;
-    const rowKey = JSON.stringify([summary?.snapshot_id, table, sortBy, descending, effectivePageSize]);
+    const rowKey = JSON.stringify([requestKey, summary?.snapshot_id, table, sortBy, descending, effectivePageSize]);
     const [paging, setPaging] = useState<{key: string; page: number; cursors: (string | undefined)[]}>({key: '', page: 1, cursors: [undefined]});
     const page = paging.key === rowKey ? paging.page : 1;
     const cursor = paging.key === rowKey ? paging.cursors[page - 1] : undefined;
     const [rows, setRows] = useState<{key: string; table: TableKind; page: number; data: ReportingRows}>();
     const [rowsBusy, setRowsBusy] = useState(false);
-    const data = rows?.table === table ? rows.data : undefined;
+    const data = rows?.key === rowKey && rows.page === page && !rowsBusy && !rowError ? rows.data : undefined;
     const selectionKey = JSON.stringify([periodKey, rowKey, columns, allowed]);
     const activeSelection = useRef(selectionKey);
     activeSelection.current = selectionKey;
     const mounted = useRef(true);
     useEffect(() => {mounted.current = true; return () => {mounted.current = false;};}, []);
 
-    function errorText(error: unknown): string {
+    function errorText(error: unknown, snapshotId?: string): string {
         const result = error as {errorCode?: string; message?: string; payload?: {guidance?: string}};
         if (result.errorCode === 'REPORT_SNAPSHOT_EXPIRED' || result.errorCode === 'REPORT_EXPIRED' || result.errorCode === 'REPORT_SNAPSHOT_NOT_FOUND') {
-            setExpiredId(summary?.snapshot_id ?? ''); setReload(value => value + 1); return '';
+            if (snapshotId && !reloadedSnapshots.current.has(snapshotId)) {
+                reloadedSnapshots.current.add(snapshotId);
+                setExpiredId(snapshotId); setReload(value => value + 1); return '';
+            }
+            return 'The report is no longer available. Reload to try again.';
         }
         if (result.errorCode === 'UNAUTHORIZED_ACCESS') return 'Reporting access was denied. Ask your administrator for access.';
         if (result.errorCode === 'REPORT_TOO_LARGE') return 'The report is too large to load. Choose a shorter period and try again.';
@@ -85,14 +91,12 @@ export function ReportingContent() {
         setSummaryBusy(true);
         setSummaryError('');
         setRowError('');
-        setExportStatus('');
         setExportError('');
         Promise.all([client.getSummary(JSON.parse(periodKey)), client.getInsights(JSON.parse(periodKey))]).then(([result, insights]) => {
             if (!current) return;
             setExpiredId('');
             setTimezone(result.timezone);
-            setInsights(insights);
-            setSnapshot({key: periodKey, data: result});
+            setSnapshot({key: requestKey, data: result, insights});
         }).catch(error => {if (current) setSummaryError(errorText(error));})
             .finally(() => {if (current) setSummaryBusy(false);});
         return () => {current = false;};
@@ -112,7 +116,7 @@ export function ReportingContent() {
                     cursors[page] = result.paginator.cursor ?? undefined;
                     return {key: rowKey, page, cursors};
                 });
-            }).catch(error => {if (current) setRowError(errorText(error));})
+            }).catch(error => {if (current) setRowError(errorText(error, summary.snapshot_id));})
             .finally(() => {if (current) setRowsBusy(false);});
         return () => {current = false;};
     }, [client, allowed, summary, tableVisible, table, expired, validation, rowKey, page, cursor, retryRows]);
@@ -126,12 +130,15 @@ export function ReportingContent() {
         setQuery(next);
     };
     const exportCsv = async () => {
-        if (!summary || expired || exportBusy || summaryBusy || rowsBusy || !allowed) return;
+        if (!summary || expired || exportBusy || summaryBusy || rowsBusy || !allowed || !columns.some(column => column.visible)) {
+            setExportStatus('CSV download is not ready. Wait for the report and select at least one column.'); return;
+        }
         const selected = selectionKey;
         setExportBusy(true); setExportError(''); setExportStatus('');
         try {
-            const result = await client.exportCsv({snapshot_id: summary.snapshot_id, table, sort_by: sortBy, descending, columns: columns.filter(column => column.visible && availableColumns(data).some(item => item.id === column.id)).map(column => column.id as ReportingColumn)});
-            if (!mounted.current || activeSelection.current !== selected || Date.parse(summary.expires_at) <= Date.now()) return;
+            const result = await client.exportCsv({snapshot_id: summary.snapshot_id, table, sort_by: sortBy, descending, columns: columns.filter(column => column.visible && REPORTING_COLUMNS.some(item => item.id === column.id)).map(column => column.id as ReportingColumn)});
+            if (!mounted.current) return;
+            if (activeSelection.current !== selected) {setExportStatus('CSV download cancelled because the report selection changed. Try again.'); return;}
             const url = URL.createObjectURL(new Blob([result.content], {type: result.content_type}));
             const link = document.createElement('a');
             try {
@@ -142,7 +149,10 @@ export function ReportingContent() {
             }
             setExportStatus(`Downloaded ${result.row_count} rows across all pages.`);
         } catch (error) {
-            if (mounted.current && activeSelection.current === selected) setExportError(errorText(error));
+            if (!mounted.current) return;
+            if (activeSelection.current !== selected) {setExportStatus('CSV download cancelled because the report selection changed. Try again.'); return;}
+            setExportError(errorText(error, summary.snapshot_id));
+            setExportStatus('CSV download failed. Reload the report and try again.');
         } finally {
             if (mounted.current) setExportBusy(false);
         }
@@ -153,7 +163,7 @@ export function ReportingContent() {
     const error = validation || summaryError || exportError || rowError;
     return <ContentLayout header={<SpaceBetween size="m"><Header variant="h1" description="Estimated costs and resource use" actions={<SpaceBetween direction="horizontal" size="s">
         <Button onClick={() => setReload(value => value + 1)} disabled={summaryBusy}>Reload</Button>
-        {tableVisible && <Button onClick={exportCsv} loading={exportBusy} disabled={!summary || expired || summaryBusy || rowsBusy || !columns.some(column => column.visible && availableColumns(data).some(item => item.id === column.id))}>Export CSV</Button>}
+        {tableVisible && <Button onClick={exportCsv} loading={exportBusy} disabled={exportBusy}>Export CSV</Button>}
     </SpaceBetween>}>Cost and activity overview</Header>
         <ReportingPeriodPicker value={period} timezone={timezone} onChange={changePeriod}/>
         {summary && insights && <Box>{date(insights.period.start, summary.timezone)} – {date(insights.period.end, summary.timezone)} · {updated(insights.updated_at, summary.timezone)} {insights.notes.length > 0 && <InfoTitle title="Report details">{insights.notes.slice(0, 3).join(' ')}</InfoTitle>}</Box>}

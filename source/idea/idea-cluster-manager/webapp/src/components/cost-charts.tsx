@@ -15,10 +15,10 @@ export const FACETS: {key: keyof Pick<MyCostsMonth, 'jobs' | 'desktops' | 'deskt
 export const facetAmount = (line?: MyCostsAmount): number | null | undefined => line?.amount === undefined ? line?.cost : line.amount;
 export const money = formatMoney;
 export const dailyPoints = (days: MyCostsDaily[] = [], start?: string, end?: string) => {
-    const byDate = new Map(days.map(day => [day.date, day.amount ?? 0]));
+    const byDate = new Map(days.map(day => [day.date, day.amount]));
     const dates = days.map(day => day.date).sort();
     const first = start ?? dates[0], last = end ?? dates.at(-1);
-    return first && last ? calendarDays(first, last).map(day => ({x: new Date(`${day}T12:00:00Z`), y: byDate.get(day) ?? 0})) : [];
+    return first && last ? calendarDays(first, last).flatMap(day => byDate.has(day) && byDate.get(day) == null ? [] : [{x: new Date(`${day}T12:00:00Z`), y: byDate.get(day) ?? 0}]) : [];
 };
 // Last month is complete and comes first; this month is still growing.
 export const dailySeries = (current: MyCostsDaily[] = [], previous: MyCostsDaily[] = [], currency = 'USD', currentPeriod?: MyCostsMonth, previousPeriod?: MyCostsMonth) => [

@@ -6,7 +6,7 @@ import {initTestAppContext} from '../../test-support';
 import {JwtTokenClaims} from '../../common/token-utils';
 import {ReportingCoverage, ReportingRow, ReportingRows, ReportingSummary} from '../../client/reporting-model';
 import {ReportingContent} from './reporting';
-import ReportingTable, {DEFAULT_COLUMNS, availableColumns} from './reporting-table';
+import ReportingTable, {DEFAULT_COLUMNS} from './reporting-table';
 import {insightsFixture} from './insights-fixture';
 import {clusterDate, validateReportingPeriod} from './reporting-period-picker';
 
@@ -135,12 +135,13 @@ it('resolves an SSO capability and clears it when SSO fails', async () => {
 
 describe('report views', () => {
     it.each([
-        ['overview', 'Daily job cost by project'], ['jobs', 'Finished jobs'], ['desktops', 'Daily desktop cost by user'],
+        ['overview', 'Daily job cost by project'], ['jobs', 'Top jobs'], ['desktops', 'Daily desktop cost by user'],
         ['storage', 'Storage by tier'], ['user', 'scientist-a'], ['project', 'scientist-a']
     ])('renders the %s tab with a mocked insights response', async (tab, heading) => {
         open(`/reporting?table=${tab}`);
         expect((await screen.findAllByText(heading)).length).toBeGreaterThan(0);
         expect(context.reporting().getInsights).toHaveBeenCalledWith({period: 'this_month'});
+        if (tab === 'jobs') expect(screen.getByRole('heading', {name: 'Top jobs (1)'})).toBeInTheDocument();
         expect(screen.getByRole('tab', {name: ({overview: 'Overview', jobs: 'Jobs', desktops: 'Desktops', storage: 'Storage', user: 'Breakdown', project: 'Breakdown'} as Record<string, string>)[tab]})).toHaveAttribute('aria-selected', 'true');
         expect(document.body.textContent).not.toMatch(/\b(facet|projection|index|coverage|eligible|freshness|spread|snapshot|provisional|allocation|v1|recorded label|unavailable)\b/i);
         expect(document.body.textContent).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
@@ -194,7 +195,7 @@ describe('report views', () => {
         expect(screen.getByLabelText('No data')).toHaveTextContent('—');
         expect(screen.getAllByText('$0.00').length).toBeGreaterThan(0);
     });
-    it('downloads server CSV unchanged with only visible available columns', async () => {
+    it('downloads server CSV unchanged with all selected columns regardless of the current page', async () => {
         open();
         await screen.findByText('scientist-a');
         const csv = vi.spyOn(context.reporting(), 'exportCsv').mockResolvedValue({filename: 'server.csv', content_type: 'text/csv;charset=utf-8', content: 'server content\r\n', row_count: 123, as_of: null});
@@ -202,14 +203,14 @@ describe('report views', () => {
         vi.stubGlobal('URL', Object.assign(URL, {createObjectURL: create, revokeObjectURL: revoke}));
         const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
         await userEvent.click(screen.getByRole('button', {name: 'Export CSV'}));
-        expect(csv).toHaveBeenCalledWith({snapshot_id: 'snapshot', table: 'user', sort_by: 'spend_total', descending: true, columns: availableColumns(rows()).map(column => column.id)});
+        expect(csv).toHaveBeenCalledWith({snapshot_id: 'snapshot', table: 'user', sort_by: 'spend_total', descending: true, columns: DEFAULT_COLUMNS.filter(column => column.visible).map(column => column.id)});
         expect(click).toHaveBeenCalled();
         const content = await new Promise(resolve => {const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.readAsText(create.mock.calls[0][0]);});
         expect(content).toBe('server content\r\n');
         expect(revoke).toHaveBeenCalledWith('blob:report');
         expect(screen.getByText('Downloaded 123 rows across all pages.')).toHaveAttribute('role', 'status');
     });
-    it('silently refreshes an expired export while retaining rows', async () => {
+    it('refreshes an expired export and hides the old snapshot', async () => {
         open();
         await screen.findByText('scientist-a');
         const fresh = deferred<ReportingSummary>();
@@ -217,8 +218,9 @@ describe('report views', () => {
         vi.spyOn(context.reporting(), 'exportCsv').mockRejectedValue({errorCode: 'REPORT_EXPIRED'});
         await userEvent.click(screen.getByRole('button', {name: 'Export CSV'}));
         await waitFor(() => expect(context.reporting().getSummary).toHaveBeenCalledTimes(2));
-        expect(screen.getByText('scientist-a')).toBeInTheDocument();
+        expect(screen.queryByText('scientist-a')).toBeNull();
         expect(screen.queryByText(/expired|No costs or activity/)).toBeNull();
+        expect(screen.getByRole('status', {name: 'CSV download status'})).toHaveTextContent('CSV download failed. Reload the report and try again.');
         await act(async () => fresh.resolve(summary('fresh')));
         await waitFor(() => expect(context.reporting().listRows).toHaveBeenLastCalledWith(expect.objectContaining({snapshot_id: 'fresh'})));
     });
@@ -242,20 +244,20 @@ it('loads rows without a reload loop when the browser clock is past the expiry t
     await new Promise(resolve => setTimeout(resolve, 1500));
     expect(context.reporting().getSummary).toHaveBeenCalledTimes(1);
 });
-it('retains the previous page and retries its next cursor after a row error', async () => {
+it('hides the previous page and retries its next cursor after a row error', async () => {
     open();
     vi.mocked(context.reporting().listRows).mockResolvedValueOnce(rows([row('scientist-a')], 'next'));
     await screen.findByText('scientist-a');
     vi.mocked(context.reporting().listRows).mockRejectedValueOnce(new Error('Temporary failure')).mockResolvedValueOnce(rows([row('scientist-b')]));
     await userEvent.click(screen.getByRole('button', {name: 'Next page'}));
     await screen.findByText("Couldn't load the report. Check your connection and try again.");
-    expect(screen.getByText('scientist-a')).toBeInTheDocument();
+    expect(screen.queryByText('scientist-a')).toBeNull();
     await userEvent.click(screen.getByRole('button', {name: 'Try again'}));
     expect(await screen.findByText('scientist-b')).toBeInTheDocument();
     expect(context.reporting().listRows).toHaveBeenLastCalledWith(expect.objectContaining({paginator: {page_size: 25, cursor: 'next'}}));
 });
 
-it.each(['REPORT_SNAPSHOT_EXPIRED', 'REPORT_EXPIRED', 'REPORT_SNAPSHOT_NOT_FOUND'])('retains prior rows after %s', async errorCode => {
+it.each(['REPORT_SNAPSHOT_EXPIRED', 'REPORT_EXPIRED', 'REPORT_SNAPSHOT_NOT_FOUND'])('hides prior rows after %s', async errorCode => {
     open();
     vi.mocked(context.reporting().listRows).mockResolvedValueOnce(rows([row()], 'next'));
     await screen.findByText('scientist-a');
@@ -264,7 +266,7 @@ it.each(['REPORT_SNAPSHOT_EXPIRED', 'REPORT_EXPIRED', 'REPORT_SNAPSHOT_NOT_FOUND
     vi.mocked(context.reporting().listRows).mockRejectedValueOnce({errorCode});
     await userEvent.click(screen.getByRole('button', {name: 'Next page'}));
     await waitFor(() => expect(context.reporting().getSummary).toHaveBeenCalledTimes(2));
-    expect(screen.getByText('scientist-a')).toBeInTheDocument();
+    expect(screen.queryByText('scientist-a')).toBeNull();
     expect(screen.queryByText(/expired|No costs or activity/)).toBeNull();
     await act(async () => fresh.resolve(summary('fresh')));
     await waitFor(() => expect(context.reporting().listRows).toHaveBeenLastCalledWith(expect.objectContaining({snapshot_id: 'fresh', paginator: {page_size: 25}})));
@@ -299,4 +301,75 @@ it.each([
     vi.mocked(context.reporting().listRows).mockRejectedValueOnce({errorCode});
     expect(await screen.findByText(message)).toBeInTheDocument();
     expect(screen.getByRole('button', {name: 'Try again'})).toBeInTheDocument();
+});
+
+
+it.each(['overview', 'jobs', 'breakdown'])('hides old %s data while a new period loads and after failure', async tab => {
+    open(`/reporting?table=${tab}`);
+    await screen.findByRole('tab', {name: 'Breakdown'});
+    if (tab === 'breakdown') await screen.findByText('scientist-a');
+    const pending = deferred<ReportingSummary>();
+    vi.mocked(context.reporting().getSummary).mockReturnValueOnce(pending.promise);
+    await userEvent.click(screen.getByText('Previous period'));
+    expect(screen.getByText('Loading report')).toBeInTheDocument();
+    expect(screen.queryByText('scientist-a')).toBeNull();
+    expect(screen.queryByText('Protein study')).toBeNull();
+    expect(screen.queryByText('Daily job cost by project')).toBeNull();
+    expect(screen.queryByText('$1,524.22')).toBeNull();
+    await act(async () => pending.reject(new Error('Read failed')));
+    expect(screen.getByText("Couldn't load the report. Check your connection and try again.")).toBeInTheDocument();
+    expect(screen.queryByText('$1,524.22')).toBeNull();
+    expect(screen.queryByRole('tab', {name: 'Breakdown'})).toBeNull();
+});
+it('hides prior snapshot rows until the new snapshot rows arrive', async () => {
+    open();
+    await screen.findByText('scientist-a');
+    const pending = deferred<ReportingRows>();
+    vi.mocked(context.reporting().getSummary).mockResolvedValueOnce(summary('fresh'));
+    vi.mocked(context.reporting().listRows).mockReturnValueOnce(pending.promise);
+    await userEvent.click(screen.getByRole('button', {name: 'Reload'}));
+    await waitFor(() => expect(context.reporting().listRows).toHaveBeenLastCalledWith(expect.objectContaining({snapshot_id: 'fresh'})));
+    expect(screen.queryByText('scientist-a')).toBeNull();
+    await act(async () => pending.reject(new Error('Read failed')));
+    expect(screen.queryByText('scientist-a')).toBeNull();
+    expect(screen.getByText("Couldn't load the report. Check your connection and try again.")).toBeInTheDocument();
+});
+it.each(['REPORT_SNAPSHOT_EXPIRED', 'REPORT_EXPIRED', 'REPORT_SNAPSHOT_NOT_FOUND'])('automatically reloads each snapshot only once for %s', async errorCode => {
+    open();
+    vi.mocked(context.reporting().listRows).mockRejectedValue({errorCode});
+    await screen.findByText('The report is no longer available. Reload to try again.');
+    expect(context.reporting().getSummary).toHaveBeenCalledTimes(2);
+    expect(context.reporting().listRows).toHaveBeenCalledTimes(2);
+});
+it('downloads selected columns absent from this page even when the browser clock is ahead', async () => {
+    localStorage.setItem('reporting.breakdown.user', JSON.stringify({pageSize: 25, columns: [{id: 'label', visible: true}, {id: 'idle_stops', visible: true}, {id: 'jobs', visible: false}]}));
+    open('/reporting?table=user', {...summary(), expires_at: '2000-01-01T00:00:00Z'});
+    await screen.findByText('scientist-a');
+    const csv = vi.spyOn(context.reporting(), 'exportCsv').mockResolvedValue({filename: 'report.csv', content_type: 'text/csv;charset=utf-8', content: 'label,idle_stops', row_count: 123, as_of: null});
+    vi.stubGlobal('URL', Object.assign(URL, {createObjectURL: vi.fn().mockReturnValue('blob:report'), revokeObjectURL: vi.fn()}));
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    await userEvent.click(screen.getByRole('button', {name: 'Export CSV'}));
+    expect(csv).toHaveBeenCalledWith(expect.objectContaining({columns: ['label', 'idle_stops']}));
+    expect(click).toHaveBeenCalled();
+    expect(screen.getByRole('status', {name: 'CSV download status'})).toHaveTextContent('Downloaded 123 rows across all pages.');
+});
+it('explains why export cannot run while the report is loading', async () => {
+    open();
+    const pending = deferred<ReportingSummary>();
+    vi.mocked(context.reporting().getSummary).mockReturnValueOnce(pending.promise);
+    await screen.findByText('scientist-a');
+    await userEvent.click(screen.getByRole('button', {name: 'Reload'}));
+    await userEvent.click(screen.getByRole('button', {name: 'Export CSV'}));
+    expect(screen.getByRole('status', {name: 'CSV download status'})).toHaveTextContent('CSV download is not ready. Wait for the report and select at least one column.');
+    await act(async () => pending.resolve(summary('fresh')));
+});
+it('reports a cancelled export when the selection changes during the request', async () => {
+    open();
+    await screen.findByText('scientist-a');
+    const pending = deferred<Awaited<ReturnType<ReturnType<typeof context.reporting>['exportCsv']>>>();
+    vi.spyOn(context.reporting(), 'exportCsv').mockReturnValueOnce(pending.promise);
+    await userEvent.click(screen.getByRole('button', {name: 'Export CSV'}));
+    await userEvent.click(screen.getByText('Previous period'));
+    await act(async () => pending.resolve({filename: 'report.csv', content_type: 'text/csv;charset=utf-8', content: '', row_count: 0, as_of: null}));
+    expect(screen.getByRole('status', {name: 'CSV download status'})).toHaveTextContent('CSV download cancelled because the report selection changed. Try again.');
 });

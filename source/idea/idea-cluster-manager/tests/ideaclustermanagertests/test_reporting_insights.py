@@ -535,3 +535,114 @@ def test_storage_total_matches_latest_measured_tiers():
         == sum(row.bytes for row in result.storage.tier_daily)
         == 50
     )
+
+
+@pytest.mark.parametrize('spent,limit', [(100, 100), (101, 100), (0, 0)])
+@pytest.mark.parametrize('forecast', [None, 0, 90])
+def test_actual_budget_limit_is_over_without_forecast_support(spent, limit, forecast):
+    row = budget_row('project-a', dict(
+        budget_name='budget-a', budget_limit=dict(amount=limit),
+        actual_spend=dict(amount=spent), forecasted_spend=dict(amount=forecast),
+    ), 'USD')
+    assert row['status'] == 'over'
+
+
+@pytest.mark.parametrize('stage', ['read', 'build', 'budgets'])
+def test_insights_builds_do_not_hold_the_cache_lock(stage):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    context, sources = Mock(), Mock()
+    context.config().get_string.return_value = 'UTC'
+    context.projects.get_user_projects.return_value = SimpleNamespace(projects=[])
+    sources.read.return_value = data()
+    service = InsightsService(context, sources)
+    entered, release = Event(), Event()
+    target = sources if stage == 'read' else service
+    original = getattr(target, stage)
+
+    def blocked(*args, **kwargs):
+        if not entered.is_set():
+            entered.set()
+            assert release.wait(5)
+        return original(*args, **kwargs)
+
+    setattr(target, stage, blocked)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(service.get_insights, request(), lambda: True, 'user-a')
+        try:
+            assert entered.wait(5)
+            second = pool.submit(service.get_insights, request(), lambda: True, 'user-b')
+            assert second.result(timeout=2).jobs.count == 1
+        finally:
+            release.set()
+        assert first.result(timeout=2).jobs.count == 1
+
+
+@pytest.mark.parametrize('wait', ['membership', 'cache'])
+def test_insights_deadline_includes_membership_and_cache_wait(monkeypatch, wait):
+    context, sources = Mock(), Mock()
+    context.config().get_string.return_value = 'UTC'
+    clock = [0]
+    monkeypatch.setattr(time, 'monotonic', lambda: clock[0])
+
+    def memberships(*args):
+        if wait == 'membership':
+            clock[0] = 1000
+        return SimpleNamespace(projects=[])
+
+    class WaitingLock:
+        def __enter__(self):
+            clock[0] = 1000
+
+        def __exit__(self, *args):
+            pass
+
+    context.projects.get_user_projects.side_effect = memberships
+    service = InsightsService(context, sources)
+    if wait == 'cache':
+        service._lock = WaitingLock()
+    with pytest.raises(exceptions.SocaException) as error:
+        service.get_insights(request(), lambda: True, 'user-a')
+    assert error.value.error_code == 'REPORT_TIMEOUT'
+    sources.read.assert_not_called()
+
+
+@pytest.mark.parametrize('username', ['user-a', None])
+def test_sources_scope_projection_desktop_and_history_reads(username):
+    import json
+    from boto3.dynamodb.conditions import Key
+    from ideaclustermanager.app.reporting.reporting_sources import ReportingSources
+
+    context = Mock()
+    context.config().is_module_enabled.return_value = True
+    context.accounts.list_users.return_value = SimpleNamespace(listing=[], paginator=None)
+    context.projects.list_projects.return_value = SimpleNamespace(listing=[], paginator=None)
+    head = dict(subject='user-a', record='head', payload=json.dumps({'parts': {'costs': 0}}))
+    context.personal_costs_store.records.return_value = [head]
+    context.personal_costs_store.table.scan.return_value = {'Items': [head]}
+    history = context.aws().dynamodb_table().Table.return_value
+    read = history.query if username else history.scan
+    read.side_effect = [
+        {'Items': [{'owner': 'user-a'}], 'LastEvaluatedKey': {'owner': 'user-a', 'session_id': '1'}},
+        {'Items': [{'owner': 'user-a'}]},
+    ]
+    sources = ReportingSources(context)
+    sources.search = Mock(return_value=[])
+    sources.projection = Mock(return_value=projection('5'))
+    result = sources.read(period(), time.monotonic() + 30, username=username)
+    assert result['coverage']['projections'] == 'ready'
+    assert len(result['desktops']) == 2
+    assert read.call_count == 2
+    assert read.call_args.kwargs['ExclusiveStartKey']['session_id'] == '1'
+    query = sources.search.call_args_list[1].args[1]
+    if username:
+        context.personal_costs_store.records.assert_called_once_with(username, 'head')
+        context.personal_costs_store.table.scan.assert_not_called()
+        history.scan.assert_not_called()
+        assert read.call_args.kwargs['KeyConditionExpression'] == Key('owner').eq(username)
+        assert {'term': {'owner.raw': username}} in query['bool']['filter']
+    else:
+        context.personal_costs_store.records.assert_not_called()
+        history.query.assert_not_called()
+        assert query == {'match_all': {}}

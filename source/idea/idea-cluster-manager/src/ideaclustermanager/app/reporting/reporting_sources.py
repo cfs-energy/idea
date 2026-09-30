@@ -5,6 +5,8 @@ import time
 from datetime import datetime
 from decimal import Decimal
 
+from boto3.dynamodb.conditions import Key
+
 from ideadatamodel import (
     ListUsersRequest,
     ListProjectsRequest,
@@ -52,11 +54,14 @@ class ReportingSources:
         self.context = context
 
     @staticmethod
-    def scan(table, deadline):
+    def scan(table, deadline, owner=None):
         request = {'ConsistentRead': True}
+        if owner is not None:
+            request['KeyConditionExpression'] = Key('owner').eq(owner)
+        read = table.scan if owner is None else table.query
         while True:
             check_deadline(deadline)
-            page = table.scan(**request)
+            page = read(**request)
             yield from page.get('Items', [])
             if not page.get('LastEvaluatedKey'):
                 break
@@ -205,7 +210,11 @@ class ReportingSources:
             'projections',
             lambda: [
                 row
-                for row in self.scan(self.context.personal_costs_store.table, deadline)
+                for row in (
+                    self.context.personal_costs_store.records(scope_username, 'head')
+                    if scope_username is not None
+                    else self.scan(self.context.personal_costs_store.table, deadline)
+                )
                 if row.get('record') == 'head'
                 and subject(row.get('subject'))
                 and (scope_username is None or row.get('subject') == scope_username)
@@ -300,7 +309,15 @@ class ReportingSources:
             )
             result['desktops'] = optional(
                 'desktops',
-                lambda: list(self.search(index, {'match_all': {}}, deadline)),
+                lambda: list(
+                    self.search(
+                        index,
+                        {'bool': {'filter': [{'term': {'owner.raw': scope_username}}]}}
+                        if scope_username is not None
+                        else {'match_all': {}},
+                        deadline,
+                    )
+                ),
             )
             module = config.get_module_id(constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER)
             table = (
@@ -311,7 +328,8 @@ class ReportingSources:
                 )
             )
             history = optional(
-                'desktop_history', lambda: list(self.scan(table, deadline))
+                'desktop_history',
+                lambda: list(self.scan(table, deadline, scope_username)),
             )
             result['desktops'].extend(
                 {'_history': True, '_source': row} for row in history

@@ -27,7 +27,7 @@ export default function MyJobEfficiency({timezone, reload, period = {period: 'th
         {data && <ReportLoading.Provider value={busy}><SpaceBetween size="m">
             {timezone && <Box>{updated(data.updated_at, timezone)}</Box>}
             <EfficiencyTiles jobs={data.jobs} currency={data.currency}/>
-            {timezone && <JobsTable title="My finished jobs" rows={mergeJobs(data.jobs)} currency={data.currency} timezone={timezone} personal/>}
+            {timezone && <JobsTable title="My top jobs" rows={mergeJobs(data.jobs)} currency={data.currency} timezone={timezone} personal/>}
             <BudgetTable budgets={data.budgets} currency={data.currency}/>
         </SpaceBetween></ReportLoading.Provider>}
     </SpaceBetween>;

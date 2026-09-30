@@ -60,9 +60,12 @@ def test_single_node_formulas():
 
 
 def test_multi_node_without_select():
-    result = job_efficiency(job(nodes=2))
-    assert result['cpu_efficiency_pct'] == 25
-    assert result['wasted_core_hours'] == 6
+    value = job(nodes=2)
+    value['execution_hosts'][0]['execution']['runs'][0]['resources_used']['cpus'] = 4
+    value['execution_hosts'] *= 2
+    result = job_efficiency(value)
+    assert result['cpu_efficiency_pct'] == 50
+    assert result['wasted_core_hours'] == 4
 
 
 def test_select_heterogeneous_chunks_and_multiple_runs():
@@ -70,12 +73,13 @@ def test_select_heterogeneous_chunks_and_multiple_runs():
     value['params']['custom_params'] = {
         'select': '2:ncpus=4:mem=8gib+1:ncpus=8:mem=16gib'
     }
-    value['execution_hosts'] *= 2
+    value['execution_hosts'][0]['execution']['runs'][0]['resources_used']['cpus'] = 4
+    value['execution_hosts'] *= 3
     result = job_efficiency(value)
     assert result['core_hours'] == 16
-    assert result['cpu_efficiency_pct'] == 25
+    assert result['cpu_efficiency_pct'] == 37.5
     assert result['nodes'] == 3
-    assert result['memory_efficiency_pct'] == 12.5
+    assert result['memory_efficiency_pct'] == 37.5
 
 
 @pytest.mark.parametrize(
@@ -268,6 +272,7 @@ def test_resource_hints_keep_unknown_values_null():
     )
     result = job_efficiency(job(nodes=2))
     assert result['requested_cores'] == 8
+    # One job-wide PBS total is a complete measurement for a multi-node job.
     assert result['used_cores'] == 2
 
 
@@ -334,3 +339,51 @@ def test_memory_request_wins_over_instance_memory():
     result = job_efficiency(value)
     assert result['memory_efficiency_pct'] == 50
     assert result['instance_memory_gib'] is None
+
+
+@pytest.mark.parametrize('missing', ['host', 'cpu'])
+def test_multi_node_cpu_requires_complete_local_samples(missing):
+    import copy
+
+    value = job(nodes=2)
+    used = value['execution_hosts'][0]['execution']['runs'][0]['resources_used']
+    used['cpus'] = 4
+    value['execution_hosts'].append(copy.deepcopy(value['execution_hosts'][0]))
+    if missing == 'host':
+        value['execution_hosts'].pop()
+    else:
+        del value['execution_hosts'][1]['execution']['runs'][0]['resources_used'][
+            'cpu_time_secs'
+        ]
+    result = job_efficiency(value)
+    assert result['cpu_efficiency_pct'] is None
+    assert result['used_cores'] is None
+    assert result['wasted_core_hours'] is None
+    assert result['core_hours'] == 8
+
+
+@pytest.mark.parametrize('location', ['provisioning_options', 'params'])
+def test_always_on_instance_memory_is_not_dedicated(location):
+    value = unrequested_on_instance()
+    value[location]['keep_forever'] = True
+    result = job_efficiency(value)
+    assert result['instance_memory_gib'] is None
+    assert result['memory_efficiency_pct'] is None
+
+
+@pytest.mark.parametrize(
+    'unit,factor', [('GiB', 1024**3), ('GB', 1000**3), ('MiB', 1024**2)]
+)
+def test_dict_memory_units_ignore_case(unit, factor):
+    assert memory_bytes(dict(value=2, unit=unit)) == 2 * factor
+
+
+def test_job_wide_cpu_total_is_not_summed_across_hosts():
+    import copy
+
+    value = job(nodes=2)
+    value['execution_hosts'].append(copy.deepcopy(value['execution_hosts'][0]))
+    result = job_efficiency(value)
+    # The same job-wide total repeated on each host end event counts once.
+    assert result['used_cores'] == 2
+    assert result['cpu_efficiency_pct'] == 25

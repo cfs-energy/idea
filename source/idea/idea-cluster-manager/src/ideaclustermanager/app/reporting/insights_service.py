@@ -82,7 +82,7 @@ def budget_row(project, budget, currency):
         pct_at_forecast=pct,
         headroom=limit - forecast if forecast is not None else None,
         status='over'
-        if pct is not None and pct >= 100
+        if spent >= limit or (pct is not None and pct >= 100)
         else 'watch'
         if pct is not None and pct >= 85
         else 'ok',
@@ -107,6 +107,7 @@ class InsightsService:
         self._lock = RLock()
 
     def get_insights(self, request, authorize, username=None):
+        deadline = time.monotonic() + BUILD_SECONDS
         if not authorize():
             raise exceptions.unauthorized_access()
         zone = self.context.config().get_string('cluster.timezone', required=True)
@@ -129,26 +130,23 @@ class InsightsService:
         )
         key = (username, membership, period.start_date, period.end_date, zone, currency)
         with self._lock:
+            check_deadline(deadline)
             cached = self._cache.get(key)
-            if cached and time.monotonic() < cached[0]:
-                result = cached[1].model_copy(deep=True)
-            else:
-                deadline = time.monotonic() + BUILD_SECONDS
-                data = self.sources.read(
-                    period, deadline, username=username, insights=True
-                )
-                result = self.build(data, period, currency, zone, deadline, username)
-                budget_projects = (
-                    projects
-                    if projects is not None
-                    else data.get('project_records', [])
-                )
-                result.budgets = self.budgets(budget_projects, currency, deadline)
+            result = cached[1] if cached and time.monotonic() < cached[0] else None
+        if result is not None:
+            result = result.model_copy(deep=True)
+        else:
+            data = self.sources.read(period, deadline, username=username, insights=True)
+            result = self.build(data, period, currency, zone, deadline, username)
+            budget_projects = (
+                projects if projects is not None else data.get('project_records', [])
+            )
+            result.budgets = self.budgets(budget_projects, currency, deadline)
+            check_deadline(deadline)
+            cached_result = result.model_copy(deep=True)
+            with self._lock:
                 check_deadline(deadline)
-                self._cache[key] = (
-                    time.monotonic() + TTL_SECONDS,
-                    result.model_copy(deep=True),
-                )
+                self._cache[key] = (time.monotonic() + TTL_SECONDS, cached_result)
                 self._cache.move_to_end(key)
                 while len(self._cache) > 128:
                     self._cache.popitem(last=False)

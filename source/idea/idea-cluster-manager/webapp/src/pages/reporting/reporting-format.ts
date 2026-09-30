@@ -69,4 +69,9 @@ export const budgetPresentation = {
 };
 // Low efficiency is something to act on, not a failure; red stays reserved for over-budget.
 export const efficiencyStatus = (value: number) => value >= 70 ? 'success' : 'warning';
-export const efficiencyLabel = (value: number) => value >= 70 ? 'Well sized' : value >= 40 ? 'Some cores sat idle' : 'Most cores sat idle';
+export const efficiencyLabel = (value: number, metric = 'cpu_efficiency_pct') => {
+    const labels = metric === 'memory_efficiency_pct' ? ['Well sized', 'Some memory unused', 'Most memory unused']
+        : metric === 'walltime_efficiency_pct' ? ['Close to requested', 'Finished well early', 'Finished far earlier than requested']
+        : ['Well sized', 'Some cores sat idle', 'Most cores sat idle'];
+    return labels[value >= 70 ? 0 : value >= 40 ? 1 : 2];
+};

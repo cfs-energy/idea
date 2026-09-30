@@ -44,7 +44,7 @@ def memory_bytes(value):
     for exponent, prefix in enumerate(('k', 'm', 'g', 't'), 1):
         units[prefix + 'b'] = 1000**exponent
         units[prefix + 'ib'] = 1024**exponent
-    factor = units.get(value.get('unit'))
+    factor = units.get(str(value.get('unit')).lower())
     return amount * factor if amount is not None and factor else None
 
 
@@ -95,8 +95,9 @@ def allocation(params):
 def instance_memory(job):
     """Memory of one instance a job had to itself, from the provisioned instance types."""
     # Batch and always-on capacity can share a node between jobs.
-    if job.get('scaling_mode') != 'single-job' or (job.get('params') or {}).get(
-        'keep_forever'
+    options = job.get('provisioning_options') or {}
+    if job.get('scaling_mode') != 'single-job' or options.get(
+        'keep_forever', (job.get('params') or {}).get('keep_forever')
     ):
         return None
     ran = {
@@ -125,23 +126,39 @@ def job_efficiency(job):
         else numeric(job.get('total_time_secs'))
     )
     elapsed = elapsed if elapsed is not None and elapsed > 0 else None
-    cpu_times, memories, host_memories = [], [], []
+    job_cpu_times, local_cpu_times, memories, host_memories = [], [], [], []
+    cpu_hosts = 0
     for host in job.get('execution_hosts') or []:
-        local_memories = []
+        local_memories, host_cpu_times = [], []
         local_scope = True
         for run in (host.get('execution') or {}).get('runs') or []:
             used = run.get('resources_used') or {}
             cpu = numeric(used.get('cpu_time_secs'))
             if cpu is not None:
-                cpu_times.append(cpu)
+                used_cpus = numeric(used.get('cpus'))
+                if used_cpus and cpus and used_cpus < cpus:
+                    host_cpu_times.append(cpu)
+                else:
+                    job_cpu_times.append(cpu)
             mem = memory_bytes(used.get('memory'))
             if mem is not None:
                 memories.append(mem)
                 local_memories.append(mem)
                 used_cpus = numeric(used.get('cpus'))
                 local_scope &= bool(used_cpus and cpus and used_cpus < cpus)
+        if host_cpu_times:
+            cpu_hosts += 1
+            local_cpu_times.extend(host_cpu_times)
         if local_memories and local_scope:
             host_memories.append(max(local_memories))
+    # Job-wide PBS totals can repeat on host end events, so take the largest; host-local
+    # samples add up, but only when every allocated host reported one.
+    if job_cpu_times:
+        cpu_times = [max(job_cpu_times)]
+    elif local_cpu_times and (not nodes or nodes <= 1 or cpu_hosts == nodes):
+        cpu_times = local_cpu_times
+    else:
+        cpu_times = []
     cpu = sum(cpu_times) / (elapsed * cpus) if cpu_times and elapsed and cpus else None
     if cpu is not None:
         cpu = min(cpu, 1) if cpu <= CPU_EFFICIENCY_MAX else None

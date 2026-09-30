@@ -18,7 +18,7 @@ const metricDefinitions = {
     memory_efficiency_pct: "Peak memory used as a share of memory requested, or of the instance's memory when a job on its own instance didn't request any.",
     walltime_efficiency_pct: 'Elapsed time as a share of requested time.',
     wasted_core_hours: 'Requested cores multiplied by elapsed hours, minus CPU hours used.',
-    wasted_cost: 'Job cost multiplied by the share of requested core time not used.'
+    wasted_cost: 'Job cost multiplied by the share of requested core time not used, measured against the cores requested, not the instance’s vCPUs.'
 };
 type EfficiencyKey = 'cpu_efficiency_pct' | 'memory_efficiency_pct' | 'walltime_efficiency_pct' | 'wasted_core_hours' | 'wasted_cost';
 export function EfficiencyTiles({jobs, currency, weightedInfo = false, only}: {weightedInfo?: boolean; jobs: ReportingInsights['jobs']; currency: string; only?: EfficiencyKey[]}) {
@@ -28,7 +28,7 @@ export function EfficiencyTiles({jobs, currency, weightedInfo = false, only}: {w
     ] as const).filter(([key]) => !only || only.includes(key));
     return <ColumnLayout columns={3}>{tiles.filter(([key]) => jobs[key] != null).map(([key, title]) => <MetricTile key={key} title={title}
         value={key === 'wasted_cost' ? money(jobs[key], currency) : key === 'wasted_core_hours' ? hours(jobs[key]) : percent(jobs[key])}
-        info={`${metricDefinitions[key]}${['cpu_efficiency_pct', 'memory_efficiency_pct', 'walltime_efficiency_pct'].includes(key) ? ' Averages jobs with the needed measurements.' : ''}${key === 'cpu_efficiency_pct' ? ` ${weightedInfo && jobs.cpu_efficiency_weighted_pct != null ? `CPU efficiency by core-hours: ${percent(jobs.cpu_efficiency_weighted_pct)}.` : `Uses ${jobs.jobs_with_efficiency} of ${jobs.count} finished jobs.`}` : ''}`}>{key.endsWith('_pct') && <StatusIndicator type={efficiencyStatus(Number(jobs[key]))}>{efficiencyLabel(Number(jobs[key]))}</StatusIndicator>}</MetricTile>)}</ColumnLayout>;
+        info={`${metricDefinitions[key]}${['cpu_efficiency_pct', 'memory_efficiency_pct', 'walltime_efficiency_pct'].includes(key) ? ' Averages jobs with the needed measurements.' : ''}${key === 'cpu_efficiency_pct' ? ` ${weightedInfo && jobs.cpu_efficiency_weighted_pct != null ? `CPU efficiency by core-hours: ${percent(jobs.cpu_efficiency_weighted_pct)}.` : `Uses ${jobs.jobs_with_efficiency} of ${jobs.count} finished jobs.`}` : ''}`}>{key.endsWith('_pct') && <StatusIndicator type={efficiencyStatus(Number(jobs[key]))}>{efficiencyLabel(Number(jobs[key]), key)}</StatusIndicator>}</MetricTile>)}</ColumnLayout>;
 }
 export function BudgetTable({budgets, currency}: {budgets: ReportingBudget[]; currency: string}) {
     if (!budgets.length) return null;
@@ -51,12 +51,13 @@ export function Coaching({jobs, currency, personal = false}: {jobs: ReportingIns
 const gib = (value: number) => new Intl.NumberFormat('en-US', {maximumFractionDigits: value < 10 ? 1 : 0}).format(value);
 export function jobHint(job: JobRow) {
     const hints = [];
+    const nodes = job.nodes ?? 1;
     if (job.requested_cores != null && job.requested_cores > 0 && job.used_cores != null && job.used_cores / job.requested_cores < 0.5)
-        { const suggest = Math.max(1, Math.ceil(job.used_cores * 1.25)); if (suggest < job.requested_cores) hints.push(`Requested ${job.requested_cores} cores, used ${job.used_cores < 1 ? 'less than 1' : `about ${hours(job.used_cores)}`}. Try ncpus=${suggest}.`); }
-    const memory = job.requested_memory_gib ?? job.instance_memory_gib;
+        { const suggest = Math.max(1, Math.ceil(job.used_cores / nodes * 1.25)); if (suggest < job.requested_cores / nodes) hints.push(`Requested ${job.requested_cores} cores, used ${job.used_cores < 1 ? 'less than 1' : `about ${hours(job.used_cores)}`}. Try ncpus=${suggest}${nodes > 1 ? ' per node' : ''}.`); }
+    const memory = job.requested_memory_gib ?? (job.instance_memory_gib != null ? job.instance_memory_gib * nodes : null);
     if (memory != null && job.peak_memory_gib != null && memory > 0 && job.peak_memory_gib / memory < 0.5)
         hints.push(job.requested_memory_gib != null ? `Requested ${gib(memory)} GiB, peak ${gib(job.peak_memory_gib)} GiB.`
-            : `Peak ${gib(job.peak_memory_gib)} GiB of ${gib(memory)} GiB${job.instance_type ? ` on ${job.instance_type}` : ''}. A smaller instance type would do.`);
+            : `Peak ${gib(job.peak_memory_gib)} GiB of ${gib(memory)} GiB${nodes > 1 ? ` total across ${nodes} nodes` : ''}${job.instance_type ? ` on ${job.instance_type}` : ''}. A smaller instance type would do.`);
     return hints.join(' ') || null;
 }
 export function mergeJobs(jobs: ReportingInsights['jobs']) {
@@ -144,7 +145,7 @@ function InsightView({tab, insights: data, summary, timezone}: {tab: string; ins
         <CostBars title="Job cost by project" rows={data.jobs.by_project} currency={currency} entity="Project"/>
         <CostBars title="Job cost by instance family" rows={data.jobs.by_instance_family} currency={currency} entity="Instance family"/>
         </Grid>
-        <JobsTable title="Finished jobs" rows={mergeJobs(data.jobs)} currency={currency} timezone={timezone}/>
+        <JobsTable title="Top jobs" rows={mergeJobs(data.jobs)} currency={currency} timezone={timezone}/>
     </SpaceBetween>;
     if (tab === 'desktops') return <SpaceBetween size="l">
         <ColumnLayout columns={2}>{tile('Desktop spend', data.desktops.cost)}<MetricTile title="Desktop hours" value={data.desktops.hours == null ? null : hours(data.desktops.hours)} info="Time between desktop creation and stopping within this period."/></ColumnLayout>
