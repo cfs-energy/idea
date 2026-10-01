@@ -477,14 +477,28 @@ export async function quickSetup(deps: Deps, options: QuickSetupOptions): Promis
     });
   }
 
-  await checkClusterStatus(deps, {
-    clusterName,
-    awsRegion,
-    awsProfile,
-    wait: true,
-    waitTimeout: 30 * 60,
-    moduleSet: options.moduleSet,
-  });
+  // an internal portal load balancer answers only inside the network, often not where the installer runs
+  if (config.getBool('cluster.load_balancers.external_alb.public', true)) {
+    await checkClusterStatus(deps, {
+      clusterName,
+      awsRegion,
+      awsProfile,
+      wait: true,
+      waitTimeout: 30 * 60,
+      moduleSet: options.moduleSet,
+    });
+  } else {
+    try {
+      await checkClusterStatus(deps, { clusterName, awsRegion, awsProfile, moduleSet: options.moduleSet });
+    } catch (error) {
+      if (!(error instanceof ExitWithCode)) throw error;
+      deps.out(
+        'The portal load balancer is internal, so its endpoints answer only from inside the network. ' +
+          `Run ideactl check-cluster-status --cluster-name ${clusterName} --aws-region ${awsRegion} ` +
+          'from a host that routes to the cluster.',
+      );
+    }
+  }
 
   config = await ClusterConfig.fromDynamoDb(clusterName, awsRegion, {
     moduleSet: options.moduleSet,
