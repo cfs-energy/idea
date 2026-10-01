@@ -72,9 +72,8 @@ async function startSessionAndCaptureFlashbar(resumeSessionsResult: any) {
 
     // the first render in a file pays the cloudscape/ace module load, so allow for it.
     await screen.findByText('my-desktop', {}, { timeout: 10000 });
-    await user.click(await screen.findByRole('button', { name: /Actions/i }));
-    await user.click(await screen.findByText('Virtual Desktop State'));
-    await user.click(await screen.findByText('Start'));
+    // a stopped desktop leads with Start
+    await user.click(await screen.findByRole('button', { name: 'Start' }));
     await waitFor(() => expect(resumeSessions).toHaveBeenCalled());
     return flashbarItems;
 }
@@ -88,6 +87,21 @@ function flashbarText(item: any): string {
 describe('my virtual desktop sessions', () => {
     afterEach(() => {
         vi.restoreAllMocks();
+    });
+
+    it('shows one page heading and keeps every action in the Actions menu', async () => {
+        await renderSessionWithSchedule('START_ALL_DAY', '/home/virtual-desktops');
+        expect(screen.getAllByRole('heading', { name: 'My desktops' })).toHaveLength(1);
+        expect(screen.getByRole('button', { name: 'Launch desktop' })).toBeInTheDocument();
+        const user = userEvent.setup();
+        await user.click(screen.getByRole('button', { name: /Actions/i }));
+        for (const item of ['Connect', 'Session permissions', 'Show info', 'Schedule', 'Update session']) {
+            expect(screen.getAllByText(item).length).toBeGreaterThan(0);
+        }
+        await user.click(screen.getByText('Desktop state'));
+        for (const item of ['Stop', 'Reboot', 'Terminate']) {
+            expect(screen.getByText(item)).toBeInTheDocument();
+        }
     });
 
     it('reports a session action the controller refused', async () => {
@@ -127,7 +141,7 @@ describe('my virtual desktop sessions', () => {
     });
 });
 
-async function renderSessionWithSchedule(scheduleType: 'START_ALL_DAY' | 'WORKING_HOURS') {
+async function renderSessionWithSchedule(scheduleType: 'START_ALL_DAY' | 'WORKING_HOURS', path = '/') {
     const context = initTestAppContext();
 
     const clusterSettings = context.getClusterSettingsService();
@@ -163,7 +177,7 @@ async function renderSessionWithSchedule(scheduleType: 'START_ALL_DAY' | 'WORKIN
     } as any);
 
     render(
-        <MemoryRouter>
+        <MemoryRouter initialEntries={[path]}>
             <MyVirtualDesktopSessions
                 ideaPageId="my-virtual-desktop-sessions"
                 toolsOpen={false}
@@ -187,14 +201,15 @@ describe('my virtual desktop sessions idle badge', () => {
         vi.restoreAllMocks();
     });
 
-    it('hides the idle badge when today starts all day', async () => {
+    it('says always on and no idle stop when today starts all day', async () => {
         await renderSessionWithSchedule('START_ALL_DAY');
-        expect(screen.queryByText('Stops after 30 min idle')).not.toBeInTheDocument();
+        expect(screen.getByText('Always on')).toBeInTheDocument();
+        expect(screen.queryByText(/min idle/)).not.toBeInTheDocument();
     });
 
-    it('shows the idle badge during working hours', async () => {
+    it('says when a working-hours desktop runs and when it stops', async () => {
         await renderSessionWithSchedule('WORKING_HOURS');
-        expect(screen.getByText('Stops after 30 min idle')).toBeInTheDocument();
+        expect(screen.getByText('Runs 09:00–17:00 UTC, then stops after 30 min idle')).toBeInTheDocument();
     });
 });
 

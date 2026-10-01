@@ -26,6 +26,9 @@ __all__ = (
     'BuildComputeImageResult',
     'GetInstanceTypeOptionsRequest',
     'GetInstanceTypeOptionsResult',
+    'QueueSummary',
+    'ListQueuesRequest',
+    'ListQueuesResult',
     'CreateQueueProfileRequest',
     'CreateQueueProfileResult',
     'GetQueueProfileRequest',
@@ -239,6 +242,23 @@ class GetInstanceTypeOptionsRequest(SocaPayload):
 
 class GetInstanceTypeOptionsResult(SocaPayload):
     instance_types: Optional[List[SocaInstanceTypeOptions]] = Field(default=None)
+
+
+# Scheduler.ListQueues
+class QueueSummary(SocaPayload):
+    name: Optional[str] = Field(default=None)
+    queue_profile: Optional[str] = Field(default=None)
+    base_os: Optional[str] = Field(default=None)
+    architecture: Optional[str] = Field(default=None)
+    instance_types: Optional[List[str]] = Field(default=None)
+
+
+class ListQueuesRequest(SocaPayload):
+    pass
+
+
+class ListQueuesResult(SocaPayload):
+    listing: Optional[List[QueueSummary]] = Field(default=None)
 
 
 # Scheduler.SubmitJob
@@ -514,6 +534,13 @@ OPEN_API_SPEC_ENTRIES_SCHEDULER = [
         namespace='Scheduler.GetCompletedJob',
         request=GetJobRequest,
         result=GetJobResult,
+        is_listing=False,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='Scheduler.ListQueues',
+        request=ListQueuesRequest,
+        result=ListQueuesResult,
         is_listing=False,
         is_public=False,
     ),

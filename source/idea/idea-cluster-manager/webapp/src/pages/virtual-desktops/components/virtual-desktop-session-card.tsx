@@ -12,34 +12,29 @@
  */
 
 import {VirtualDesktopClient} from "../../../client";
-import {VirtualDesktopSchedule, VirtualDesktopSession} from "../../../client/data-model";
+import {VirtualDesktopSchedule, VirtualDesktopSession, VirtualDesktopWeekSchedule} from "../../../client/data-model";
 import React, {Component} from "react";
 import Utils from "../../../common/utils";
 import 'moment-timezone';
 import moment from 'moment';
 import {AppContext} from "../../../common";
-import {Badge, Box, Button, ButtonDropdown, ColumnLayout, Popover, SpaceBetween, StatusIndicator} from "@cloudscape-design/components";
+import {Badge, Box, Button, ButtonDropdown, CopyToClipboard, KeyValuePairs, Link, Popover, SpaceBetween, StatusIndicator} from "@cloudscape-design/components";
 import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
 import {
     faClock,
     faDesktop,
-    faDownload,
-    faExternalLinkAlt,
     faGear,
     faImage,
     faInfo,
     faPlay,
-    faQuestionCircle,
     faStop,
     faStopCircle,
     faTrash,
     faPowerOff,
-    faShareFromSquare,
-    faHourglassHalf
+    faShareFromSquare
 } from "@fortawesome/free-solid-svg-icons";
 import VirtualDesktopSessionStatusIndicator from "./virtual-desktop-session-status-indicator";
 import {ButtonDropdownProps} from "@cloudscape-design/components/button-dropdown";
-import {KeyValue} from "../../../components/key-value";
 
 interface VirtualDesktopSessionCardProps {
     virtualDesktopClient: VirtualDesktopClient
@@ -48,6 +43,7 @@ interface VirtualDesktopSessionCardProps {
     session: VirtualDesktopSession
     projectAiAccessPending?: boolean
     idleAutoStopDelayMax?: number
+    workingHours?: WorkingHours
     screenshot?: string
     onDeleteSession?: (session: VirtualDesktopSession) => Promise<boolean>
     onStartSession?: (session: VirtualDesktopSession) => Promise<boolean>
@@ -65,85 +61,87 @@ interface VirtualDesktopSessionCardState {
     view: string
 }
 
-interface VirtualDesktopScheduleDescriptionProps {
-    session: VirtualDesktopSession
+const DAYS: (keyof VirtualDesktopWeekSchedule)[] = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
+
+function todaySchedule(session: VirtualDesktopSession): VirtualDesktopSchedule | undefined {
+    const day = moment().tz(AppContext.get().getClusterSettingsService().getClusterTimeZone()).day()
+    return session.schedule?.[DAYS[day]]
 }
 
-function VirtualDesktopScheduleDescription(props: VirtualDesktopScheduleDescriptionProps) {
-    const day = moment().tz(AppContext.get().getClusterSettingsService().getClusterTimeZone()).day()
-    let schedule
-    switch (day) {
-        case 0:
-            schedule = props.session.schedule?.sunday
-            break
-        case 1:
-            schedule = props.session.schedule?.monday
-            break
-        case 2:
-            schedule = props.session.schedule?.tuesday
-            break
-        case 3:
-            schedule = props.session.schedule?.wednesday
-            break
-        case 4:
-            schedule = props.session.schedule?.thursday
-            break
-        case 5:
-            schedule = props.session.schedule?.friday
-            break
-        case 6:
-            schedule = props.session.schedule?.saturday
-            break
-    }
-    let label = 'No Schedule'
-    if (schedule) {
-        if (schedule.schedule_type === 'WORKING_HOURS') {
-            label = 'Working Hours'
-        } else if (schedule.schedule_type === 'STOP_ON_IDLE') {
-            label = 'Stopped On Idle'
-        } else if (schedule.schedule_type === 'START_ALL_DAY') {
-            label = 'Running All Day'
-        } else if (schedule.schedule_type === 'CUSTOM_SCHEDULE') {
-            label = `Custom Schedule - ${schedule.start_up_time} - ${schedule.shut_down_time}`
-        }
-    }
+export interface WorkingHours {
+    start_up_time?: string
+    shut_down_time?: string
+}
 
-    const getScheduleInfo = (schedule?: VirtualDesktopSchedule) => {
-        if (typeof schedule === 'undefined') {
-            return 'No Schedule'
-        }
-        switch(schedule.schedule_type!) {
-            case 'WORKING_HOURS':
-                return 'Working Hours'
-            case 'START_ALL_DAY':
-                return 'Running all day'
-            case 'STOP_ON_IDLE':
-                return 'Stopped on idle'
-            case 'CUSTOM_SCHEDULE':
-                return `${schedule.start_up_time} - ${schedule.shut_down_time}`
-        }
-        return 'No schedule'
-    }
+/**
+ * What today's schedule will do to the desktop, in plain words. A scheduled stop only happens once
+ * the desktop is idle, so it is never described as a fixed stop time.
+ */
+/** the cluster's timezone abbreviation: schedules run on cluster time, not the viewer's */
+function clusterZone(timezone?: string): string {
+    return timezone ? ` ${moment.tz(timezone).format('z')}` : ''
+}
 
-    return (
-        <Popover
-            dismissAriaLabel="Close"
-            header={`Schedule Info`}
-            content={
-                <ColumnLayout columns={2}>
-                    <KeyValue title={"Sunday"} value={getScheduleInfo(props.session.schedule?.sunday)}/>
-                    <KeyValue title={"Monday"} value={getScheduleInfo(props.session.schedule?.monday)}/>
-                    <KeyValue title={"Tuesday"} value={getScheduleInfo(props.session.schedule?.tuesday)}/>
-                    <KeyValue title={"Wednesday"} value={getScheduleInfo(props.session.schedule?.wednesday)}/>
-                    <KeyValue title={"Thursday"} value={getScheduleInfo(props.session.schedule?.thursday)}/>
-                    <KeyValue title={"Friday"} value={getScheduleInfo(props.session.schedule?.friday)}/>
-                    <KeyValue title={"Saturday"} value={getScheduleInfo(props.session.schedule?.saturday)}/>
-                </ColumnLayout>
+export function describeSchedule(schedule: VirtualDesktopSchedule | undefined, idleMinutes: number, workingHours?: WorkingHours, timezone?: string): string {
+    const whenIdle = idleMinutes > 0 ? `after ${idleMinutes} min idle` : 'when idle'
+    switch (schedule?.schedule_type) {
+        case 'START_ALL_DAY':
+            return 'Always on'
+        case 'STOP_ON_IDLE':
+            return `Stops ${whenIdle}`
+        case 'WORKING_HOURS':
+        case 'CUSTOM_SCHEDULE': {
+            const hours = schedule.schedule_type === 'WORKING_HOURS' && workingHours?.start_up_time ? workingHours : schedule
+            if (!hours.start_up_time || !hours.shut_down_time) {
+                return `Stops ${whenIdle} outside working hours`
             }
-        >
-            <Box variant="small">{label}</Box>
-        </Popover>
-    )
+            return `Runs ${hours.start_up_time}–${hours.shut_down_time}${clusterZone(timezone)}, then stops ${whenIdle}`
+        }
+    }
+    return 'No schedule today'
+}
+
+function describeDay(schedule: VirtualDesktopSchedule | undefined, workingHours?: WorkingHours): string {
+    switch (schedule?.schedule_type) {
+        case 'WORKING_HOURS':
+            return workingHours?.start_up_time ? `Working hours (${workingHours.start_up_time}–${workingHours.shut_down_time})` : 'Working hours'
+        case 'START_ALL_DAY':
+            return 'Always on'
+        case 'STOP_ON_IDLE':
+            return 'Stops when idle'
+        case 'CUSTOM_SCHEDULE':
+            return `${schedule.start_up_time}–${schedule.shut_down_time}`
+    }
+    return 'No schedule'
+}
+
+export interface PrimaryAction {
+    label: string
+    action?: 'connect' | 'start' | 'info'
+}
+
+/** The one button a card leads with: what the user can do next, or what is happening right now. */
+export function primaryAction(session: VirtualDesktopSession, canStart: boolean, infoShown: boolean): PrimaryAction {
+    switch (session.state) {
+        case 'READY':
+            return {label: 'Connect', action: 'connect'}
+        case 'STOPPED':
+            return canStart ? {label: 'Start', action: 'start'} : {label: session.hibernation_enabled ? 'Hibernated' : 'Stopped'}
+        case 'ERROR':
+            return {label: infoShown ? 'Show preview' : 'Show info', action: 'info'}
+        case 'PROVISIONING':
+        case 'CREATING':
+        case 'INITIALIZING':
+            return {label: 'Setting up'}
+        case 'RESUMING':
+            return {label: 'Starting'}
+        case 'STOPPING':
+            return {label: session.hibernation_enabled ? 'Hibernating' : 'Stopping'}
+        case 'DELETING':
+        case 'DELETED':
+            return {label: 'Terminating'}
+    }
+    return {label: 'Unavailable'}
 }
 
 class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps, VirtualDesktopSessionCardState> {
@@ -202,67 +200,61 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
             || Utils.isNotEmpty(schedule?.sunday);
     }
 
-    scheduleSamplesIdle = (): boolean => {
-        const day = moment().tz(AppContext.get().getClusterSettingsService().getClusterTimeZone()).day()
-        let schedule
-        switch (day) {
-            case 0:
-                schedule = this.props.session.schedule?.sunday
-                break
-            case 1:
-                schedule = this.props.session.schedule?.monday
-                break
-            case 2:
-                schedule = this.props.session.schedule?.tuesday
-                break
-            case 3:
-                schedule = this.props.session.schedule?.wednesday
-                break
-            case 4:
-                schedule = this.props.session.schedule?.thursday
-                break
-            case 5:
-                schedule = this.props.session.schedule?.friday
-                break
-            case 6:
-                schedule = this.props.session.schedule?.saturday
-                break
-        }
-        return schedule?.schedule_type === 'WORKING_HOURS'
-            || schedule?.schedule_type === 'CUSTOM_SCHEDULE'
-            || schedule?.schedule_type === 'STOP_ON_IDLE'
+    buildScheduleLine() {
+        const session = this.props.session
+        const days: [string, keyof VirtualDesktopWeekSchedule][] = [['Monday', 'monday'], ['Tuesday', 'tuesday'], ['Wednesday', 'wednesday'], ['Thursday', 'thursday'], ['Friday', 'friday'], ['Saturday', 'saturday'], ['Sunday', 'sunday']]
+        return <Box variant="small" color="text-body-secondary">
+            <Popover
+                dismissAriaLabel="Close"
+                header="Weekly schedule"
+                content={
+                    <KeyValuePairs columns={2} items={days.map(([label, key]) => ({label, value: describeDay(session.schedule?.[key], this.props.workingHours)}))}/>
+                }
+            >
+                {describeSchedule(todaySchedule(session), this.getIdleAutoStopOverride(), this.props.workingHours, AppContext.get().getClusterSettingsService().getClusterTimeZone())}
+            </Popover>
+        </Box>
     }
 
+    onPrimaryAction = (action: PrimaryAction['action']) => {
+        if (action === 'connect') {
+            this.props.onLaunchSession(this.getSession()).finally()
+        } else if (action === 'start') {
+            this.props.onStartSession?.(this.getSession()).finally()
+        } else if (action === 'info') {
+            this.toggleInfo()
+        }
+    }
+
+    toggleInfo = () => this.setState({view: this.state.view === 'info' ? 'preview' : 'info'})
+
     buildHeader() {
+        const session = this.props.session
+        const primary = primaryAction(session, !this.props.isSharedSession && !!this.props.onStartSession, this.state.view === 'info')
+        const details = [Utils.getOsTitle(session.software_stack?.base_os), session.server?.instance_type].filter(Utils.isNotEmpty).join(' · ')
         return <SpaceBetween size="xs" direction="vertical">
-            <div>
-                <Box float="left" variant="h3">
-                    {this.props.session.name}{this.props.isSharedSession && `: ${this.props.session.owner}`}
+            <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px'}}>
+                <Box variant="h3">
+                    {session.name}{this.props.isSharedSession && `: ${session.owner}`}
                 </Box>
-                <Box float="right">
-                    <Button
-                        disabled={!this.canConnect()}
-                        onClick={() => this.props.onLaunchSession(this.getSession()).finally()}
-                        variant="link"><FontAwesomeIcon icon={faExternalLinkAlt}/> Connect</Button>
-                </Box>
+                <Button
+                    variant={primary.action === 'info' ? 'normal' : 'primary'}
+                    disabled={primary.action === undefined}
+                    onClick={() => this.onPrimaryAction(primary.action)}>{primary.label}</Button>
             </div>
-            <SpaceBetween size="s" direction={"horizontal"}>
-                <VirtualDesktopSessionStatusIndicator state={this.props.session.state!} hibernation_enabled={this.props.session.hibernation_enabled!} updated_on={this.props.session.updated_on}/>
-                <Badge color="blue">{this.props.session.project?.title}</Badge>
-                <Badge color="blue">{Utils.getOsTitle(this.props.session.software_stack?.base_os)}</Badge>
-                <Badge color="blue">{this.props.session.server?.instance_type}</Badge>
-                {this.hasSchedule() &&
-                    <Box variant="small" color="text-body-secondary"><FontAwesomeIcon icon={faClock}/>{' '}{<VirtualDesktopScheduleDescription session={this.props.session}/>}</Box>}
-                {this.hasSchedule() && this.scheduleSamplesIdle() && this.getIdleAutoStopOverride() > 0 &&
-                    <Box variant="small" color="text-body-secondary"><FontAwesomeIcon icon={faHourglassHalf}/>{' '}Stops after {this.getIdleAutoStopOverride()} min idle</Box>}
-                {this.props.projectAiAccessPending &&
-                    <StatusIndicator type="warning">This desktop cannot use the project's AI models yet. {this.canStart()
-                        ? 'Start it and it will come up with them.'
-                        : 'It is moved onto them automatically, usually within 30 minutes.'}</StatusIndicator>}
+            <SpaceBetween size="s" direction="horizontal" alignItems="center">
+                <VirtualDesktopSessionStatusIndicator state={session.state!} hibernation_enabled={session.hibernation_enabled!} updated_on={session.updated_on}/>
+                {details && <Box variant="small" color="text-body-secondary">{details}</Box>}
+                {Utils.isNotEmpty(session.project?.title) && <Badge>{session.project?.title}</Badge>}
             </SpaceBetween>
+            {this.hasSchedule() && this.buildScheduleLine()}
+            {this.props.projectAiAccessPending &&
+                <StatusIndicator type="warning">This desktop cannot use the project's AI models yet. {this.canStart()
+                    ? 'Start it and it will come up with them.'
+                    : 'It is moved onto them automatically, usually within 30 minutes.'}</StatusIndicator>}
             {/* the state badge only says "Error", which is not enough to act on */}
-            {this.props.session.state === 'ERROR' && Utils.isNotEmpty(this.props.session.failure_reason) &&
-                <StatusIndicator type="error">{this.props.session.failure_reason}</StatusIndicator>}
+            {session.state === 'ERROR' && Utils.isNotEmpty(session.failure_reason) &&
+                <StatusIndicator type="error">{session.failure_reason}</StatusIndicator>}
         </SpaceBetween>
     }
 
@@ -276,69 +268,58 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
     buildScreenShotImage() {
         const imageUrl = this.getScreenshotImageUrl()
         if (Utils.isEmpty(imageUrl)) {
-            let display_message: string
-            let showSpinner = false
-            switch (this.getSession().state) {
-                case "CREATING":
-                    display_message = 'Your session is being created ...'
-                    break
-                case "INITIALIZING":
-                    display_message = 'Your session is initializing ...'
-                    break
-                case "PROVISIONING":
-                    display_message = 'Your virtual desktop is being provisioned ...'
-                    break
-                case "RESUMING":
-                    display_message = 'Your virtual desktop is resuming ...'
-                    break
-                case "READY":
-                    display_message = 'Loading preview'
-                    showSpinner = true
-                    break
-                default:
-                    display_message = 'No preview available.'
-                    break
+            const session = this.getSession()
+            const placeholders: { [state: string]: string } = {
+                CREATING: 'Creating your desktop',
+                INITIALIZING: 'Initializing your desktop',
+                PROVISIONING: 'Provisioning your desktop',
+                RESUMING: 'Starting',
+                READY: 'Preview not captured yet',
+                STOPPING: session.hibernation_enabled ? 'Hibernating' : 'Stopping',
+                STOPPED: session.hibernation_enabled ? 'Hibernated' : 'Stopped',
+                DELETING: 'Terminating',
+                DELETED: 'Terminating'
             }
-            if (showSpinner) {
-                return <div className="virtual-desktop-placeholder-image">
-                    <StatusIndicator type={"loading"}/>
-                </div>
-            } else {
-                return <div className="virtual-desktop-placeholder-image">
-                    {display_message}
-                </div>
-            }
-        } else {
-            return <div onClick={() => {
-                if (this.canConnect()) {
-                    this.props.onLaunchSession(this.getSession()).finally()
-                }
-            }} style={{
-                cursor: 'pointer',
-                backgroundImage: `url('${imageUrl}')`,
-                backgroundSize: 'cover',
-                width: '100%',
-                height: '300px'
-            }}/>
+            return <div className="virtual-desktop-placeholder-image">
+                {placeholders[session.state ?? ''] ?? 'No preview'}
+            </div>
         }
+        return <div onClick={() => {
+            if (this.canConnect()) {
+                this.props.onLaunchSession(this.getSession()).finally()
+            }
+        }} style={{
+            cursor: 'pointer',
+            backgroundImage: `url('${imageUrl}')`,
+            backgroundSize: 'cover',
+            width: '100%',
+            height: '300px'
+        }}/>
     }
 
     buildSessionInfo() {
+        const session = this.getSession()
+        const copyable = (label: string, value?: string) => ({
+            label,
+            value: Utils.isEmpty(value) ? '-' : <CopyToClipboard variant="inline" textToCopy={value!} copyButtonAriaLabel={`Copy ${label}`} copySuccessText={`${label} copied`} copyErrorText={`Could not copy ${label}`}/>
+        })
+        const text = (label: string, value?: string) => ({label, value: Utils.isEmpty(value) ? '-' : value})
+        const created = session.created_on ? new Date(session.created_on) : undefined
         return (
-            <Box padding={{top: 'xl', bottom: 'xl'}}>
-                <ul>
-                    <li><strong>IDEA Session Id:</strong> {this.getSession().idea_session_id}</li>
-                    <li><strong>DCV Session Id:</strong> {this.getSession().dcv_session_id}</li>
-                    <li><strong>Project:</strong> {this.getSession().project?.title}</li>
-                    <li><strong>Tenancy:</strong> {this.getSession().software_stack?.launch_tenancy}</li>
-                    <li><strong>OS:</strong> {Utils.getOsTitle(this.getSession().software_stack?.base_os)}</li>
-                    <li><strong>Session State:</strong> {this.getSession().state}</li>
-                    <li><strong>Instance Type:</strong> {this.getSession().server?.instance_type}</li>
-                    <li><strong>Private IP:</strong> {this.getSession().server?.private_ip}</li>
-                    <li><strong>Instance AMI:</strong> {this.getSession().software_stack?.ami_id}</li>
-                    <li><strong>Instance Id:</strong> {this.getSession().server?.instance_id}</li>
-                    <li><strong>Created On:</strong> {new Date(this.getSession().created_on!).toLocaleString()}</li>
-                </ul>
+            <Box padding={{vertical: 'm'}}>
+                <KeyValuePairs columns={2} items={[
+                    copyable('Desktop ID', session.idea_session_id),
+                    copyable('DCV session ID', session.dcv_session_id),
+                    text('Project', session.project?.title),
+                    text('State', session.state),
+                    text('Operating system', Utils.getOsTitle(session.software_stack?.base_os)),
+                    text('Instance type', session.server?.instance_type),
+                    copyable('Instance ID', session.server?.instance_id),
+                    copyable('Private IP', session.server?.private_ip),
+                    text('AMI ID', session.software_stack?.ami_id),
+                    text('Tenancy', session.software_stack?.launch_tenancy),
+                    text('Created', created && !isNaN(created.getTime()) ? created.toLocaleString() : undefined)
+                ]}/>
             </Box>
         )
     }
@@ -356,7 +337,7 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
             dropDownItems.push(
                 {
                     id: "session-permissions",
-                    text: "Session Permissions",
+                    text: "Session permissions",
                     disabled: !this.canUpdateSessionPermission(),
                     disabledReason: "Windows sessions support session sharing for active directory only",
                     iconSvg: <FontAwesomeIcon icon={faShareFromSquare} size="xs"/>
@@ -365,7 +346,7 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
 
         dropDownItems.push({
             id: "toggle-info",
-            text: (this.state.view === 'info') ? 'Show Preview' : 'Show Info',
+            text: (this.state.view === 'info') ? 'Show preview' : 'Show info',
             iconSvg: <FontAwesomeIcon icon={(this.state.view === 'info') ? faImage : faInfo} size="xs"/>
         })
 
@@ -377,14 +358,14 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
             })
             dropDownItems.push({
                 id: "update-session",
-                text: "Update Session",
+                text: "Update session",
                 disabled: !this.canUpdateSession(),
-                disabledReason: "Can only update session when it is in the Stopped state.",
+                disabledReason: "Stop the desktop to update it.",
                 iconSvg: <FontAwesomeIcon icon={faGear} size="xs"/>
             })
             dropDownItems.push({
                 id: "states",
-                text: "Virtual Desktop State",
+                text: "Desktop state",
                 items: [
                     {
                         id: "start",
@@ -394,7 +375,7 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
                     },
                     {
                         id: "stop",
-                        text: this.getSession().state === 'STOPPING' ? 'Force Stop' : (this.getSession().hibernation_enabled) ? 'Hibernate' : 'Stop',
+                        text: this.getSession().state === 'STOPPING' ? 'Force stop' : (this.getSession().hibernation_enabled) ? 'Hibernate' : 'Stop',
                         disabled: !this.canStop(),
                         iconSvg: (this.getSession().hibernation_enabled) ? <FontAwesomeIcon icon={faStopCircle} size="xs"/> : <FontAwesomeIcon icon={faStop} size="xs"/>
                     },
@@ -418,18 +399,24 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
 
     buildActions() {
 
-        return <div>
-            <Box float="left">
-                <SpaceBetween size="xxxs" direction="horizontal">
-                    <Button disabled={!this.canDownloadDcvSessionFile()}
-                            onClick={() => this.props.onDownloadDcvSessionFile(this.getSession()).finally()}>
-                        <FontAwesomeIcon icon={faDownload}/> DCV Session File</Button>
-                    <Button variant="normal" onClick={() => this.props.onConnectHelp(this.getSession())}><FontAwesomeIcon
-                        icon={faQuestionCircle}/></Button>
-                </SpaceBetween>
-            </Box>
-            <Box float="right">
-                <SpaceBetween size="xs" direction="horizontal">
+        return <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px'}}>
+            <SpaceBetween size="xs" direction="horizontal" alignItems="center">
+                <Button iconName="download"
+                        disabled={!this.canDownloadDcvSessionFile()}
+                        onClick={() => this.props.onDownloadDcvSessionFile(this.getSession()).finally()}>
+                    DCV client file</Button>
+                <Popover
+                    dismissAriaLabel="Close"
+                    header="DCV client file"
+                    content={<SpaceBetween size="xs">
+                        <Box>Opens this desktop in the Amazon DCV client app instead of the browser. Download the file, then open it with the client.</Box>
+                        <Link onFollow={() => this.props.onConnectHelp(this.getSession())}>Get the client and setup steps</Link>
+                    </SpaceBetween>}
+                >
+                    <Link variant="info" ariaLabel="About the DCV client file">Info</Link>
+                </Popover>
+            </SpaceBetween>
+            <Box>
                     <ButtonDropdown
                         onItemClick={(event) => {
                             if (event.detail.id === 'terminate') {
@@ -451,15 +438,7 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
                                     this.props.onRebootSession(this.getSession()).finally()
                                 }
                             } else if (event.detail.id === 'toggle-info') {
-                                if (this.state.view === 'info') {
-                                    this.setState({
-                                        view: 'preview'
-                                    })
-                                } else {
-                                    this.setState({
-                                        view: 'info'
-                                    })
-                                }
+                                this.toggleInfo()
                             } else if (event.detail.id === 'schedule') {
                                 if (this.props.onShowSchedule) {
                                     this.props.onShowSchedule(this.getSession()).finally()
@@ -479,7 +458,6 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
                     >
                         Actions
                     </ButtonDropdown>
-                </SpaceBetween>
             </Box>
         </div>
     }

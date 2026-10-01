@@ -107,13 +107,21 @@ export function formatFileSize(bytes?: number): string {
     return `${unit === 0 ? value : value.toFixed(1)} ${SIZE_UNITS[unit]}`
 }
 
+// Date and time in the viewer's locale and timezone, one fixed shape for every row.
+const MODIFIED_FORMAT = new Intl.DateTimeFormat(undefined, {
+    year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+})
+
 export function formatModifiedDate(modDate?: string): string {
     if (modDate == null) {
         return ''
     }
     const parsed = new Date(modDate)
-    return Number.isNaN(parsed.getTime()) ? '' : parsed.toLocaleDateString()
+    return Number.isNaN(parsed.getTime()) ? '' : MODIFIED_FORMAT.format(parsed)
 }
+
+/** Folders have no meaningful size of their own. */
+export const NO_SIZE = '\u2013'
 
 function modifiedTime(entry: FileBrowserEntry): number {
     if (entry.modDate == null) {
@@ -157,7 +165,7 @@ const COLUMN_DEFINITIONS: TableProps.ColumnDefinition<FileBrowserEntry>[] = [
         id: 'size',
         header: 'Size',
         sortingComparator: (a, b) => (a.size ?? 0) - (b.size ?? 0),
-        cell: (entry) => (entry.isDir ? '' : formatFileSize(entry.size))
+        cell: (entry) => <Box textAlign="right">{entry.isDir ? NO_SIZE : formatFileSize(entry.size)}</Box>
     }
 ]
 
@@ -297,9 +305,9 @@ function FileBrowserTable(props: FileBrowserTableProps) {
         // select, rather than only what is on screen.
         const total = filteredItemsCount ?? visibleEntries.length
         if (props.selectedEntries.length === 0) {
-            return `${total} item${total === 1 ? '' : 's'}`
+            return `(${total})`
         }
-        return `${props.selectedEntries.length} of ${total} selected`
+        return `(${props.selectedEntries.length}/${total})`
     }
 
     /** Widens a header checkbox event to the whole filtered directory. The header checkbox and a row

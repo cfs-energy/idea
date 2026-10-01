@@ -130,6 +130,16 @@ describe('path bar', () => {
             ]);
         });
 
+        it('starts at Home inside the home directory, and only there', () => {
+            expect(pathSegments('/home/testuser/reports', '/home/testuser/')).toEqual([
+                { name: 'Home', path: '/home/testuser' },
+                { name: 'reports', path: '/home/testuser/reports' }
+            ]);
+            expect(pathSegments('/home/testuser', '/home/testuser')).toEqual([{ name: 'Home', path: '/home/testuser' }]);
+            expect(pathSegments('/home/testuser2', '/home/testuser').map((segment) => segment.name)).toEqual(['root', 'home', 'testuser2']);
+            expect(pathSegments('/data', '/').map((segment) => segment.name)).toEqual(['root', 'data']);
+        });
+
         it('shows nothing but the root at the root', () => {
             expect(pathSegments('/')).toEqual([{ name: 'root', path: '/' }]);
         });

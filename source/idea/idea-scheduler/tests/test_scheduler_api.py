@@ -860,3 +860,42 @@ def test_owner_delete_records_owner_reason(scheduler_api, context, monkeypatch):
         error_code=OWNER_CANCELLATION,
         message='Cancelled by the owner.',
     )
+
+
+def test_list_queues_names_architecture_and_os_per_queue(
+    scheduler_api, context, monkeypatch
+):
+    from types import SimpleNamespace
+    from ideadatamodel import HpcQueueProfile, SocaJobParams
+
+    profiles = [
+        HpcQueueProfile(
+            name='compute',
+            queues=['normal', 'high'],
+            enabled=True,
+            default_job_params=SocaJobParams(instance_types=['c5.large']),
+        ),
+        HpcQueueProfile(
+            name='arm',
+            queues=['arm-normal'],
+            enabled=True,
+            default_job_params=SocaJobParams(
+                instance_types=['hpc7g.16xlarge'], base_os='rhel9'
+            ),
+        ),
+        HpcQueueProfile(name='off', queues=['retired'], enabled=False),
+    ]
+    monkeypatch.setattr(
+        context,
+        'queue_profiles',
+        SimpleNamespace(list_queue_profiles=lambda: profiles),
+        raising=False,
+    )
+    invocation = build_invocation_context(context, {}, 'Scheduler.ListQueues')
+    scheduler_api.list_queues(invocation)
+    listing = invocation.response['payload']['listing']
+    assert [(q['name'], q['architecture'], q['base_os']) for q in listing] == [
+        ('arm-normal', 'arm64', 'rhel9'),
+        ('high', 'x86_64', 'amazonlinux2023'),
+        ('normal', 'x86_64', 'amazonlinux2023'),
+    ]

@@ -1,5 +1,5 @@
 import React, {useCallback, useEffect, useMemo, useRef, useState} from "react";
-import {Button, FormField, Input} from "@cloudscape-design/components";
+import {Button, CopyToClipboard, FormField, Input} from "@cloudscape-design/components";
 import {InputProps} from "@cloudscape-design/components/input";
 import Utils from "../../common/utils";
 
@@ -15,6 +15,8 @@ export interface FileBrowserPathSegment {
 export interface FileBrowserPathProps {
     /** The directory being listed. Absolute. */
     path: string
+    /** The user's home directory, when known. Inside it the trail starts at "Home". */
+    home?: string
     /** An ancestor in the trail was clicked. */
     onNavigate: (path: string) => void
     /** A typed path was submitted. Resolves to null when the directory opened, or to the message to
@@ -28,11 +30,15 @@ const ABSOLUTE_PATH_REQUIRED = 'Enter an absolute path, starting with /.'
 // (filesystem_helper.check_access). Nothing is resolved here: no '..', no '~', no relative paths.
 const NO_PARENT_REFERENCES = 'Paths containing ".." are not accepted. Type the whole path instead.'
 
-/** The path split into everything a user can click, root first. */
-export function pathSegments(path: string): FileBrowserPathSegment[] {
-    const segments: FileBrowserPathSegment[] = [{name: 'root', path: '/'}]
-    let walked = ''
-    path.split('/').forEach((token) => {
+/** The path split into everything a user can click, root first. Inside the home directory the trail
+ * starts at "Home" instead of at root; the real path is still in the field, the tooltip and the copy
+ * button. */
+export function pathSegments(path: string, home?: string): FileBrowserPathSegment[] {
+    const homePath = home == null ? '' : home.replace(/\/+$/, '')
+    const insideHome = homePath.length > 0 && (path === homePath || path.startsWith(`${homePath}/`))
+    const segments: FileBrowserPathSegment[] = insideHome ? [{name: 'Home', path: homePath}] : [{name: 'root', path: '/'}]
+    let walked = insideHome ? homePath : ''
+    path.substring(walked.length).split('/').forEach((token) => {
         if (Utils.isEmpty(token)) {
             return
         }
@@ -84,7 +90,7 @@ function FileBrowserPath(props: FileBrowserPathProps) {
     // submitted path is still in flight.
     const submitting = useRef(false)
 
-    const segments = useMemo(() => pathSegments(props.path), [props.path])
+    const segments = useMemo(() => pathSegments(props.path, props.home), [props.path, props.home])
 
     useEffect(() => {
         if (trailRef.current != null) {
@@ -172,7 +178,7 @@ function FileBrowserPath(props: FileBrowserPathProps) {
             <div className="soca-file-browser-path-trail" ref={trailRef}>
                 <nav aria-label="Current path">
                     {segments.map((segment, index) => (
-                        <span key={segment.path} className="soca-file-browser-path-segment">
+                        <span key={segment.path} className="soca-file-browser-path-segment" title={segment.path}>
                             {index > 0 && <span className="soca-file-browser-path-separator">/</span>}
                             <Button variant="inline-link" onClick={() => props.onNavigate(segment.path)}>
                                 {segment.name}
@@ -196,6 +202,13 @@ function FileBrowserPath(props: FileBrowserPathProps) {
                 >
                     <span className="soca-file-browser-path-edit-label">Edit path</span>
                 </button>
+                <CopyToClipboard
+                    variant="icon"
+                    textToCopy={props.path}
+                    copyButtonAriaLabel="Copy path"
+                    copySuccessText="Path copied"
+                    copyErrorText="Path not copied"
+                />
             </div>
         </div>
     )

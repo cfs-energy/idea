@@ -170,7 +170,7 @@ describe('page dom fingerprints', () => {
         vi.spyOn(context.client().virtualDesktop(), 'listSessions').mockResolvedValue({ listing: [] } as any);
         vi.spyOn(context.client().virtualDesktopUtils(), 'listSupportedOS').mockResolvedValue({ listing: [] } as any);
         const { container } = render(
-            <MemoryRouter>
+            <MemoryRouter initialEntries={['/home/virtual-desktops']}>
                 <MyVirtualDesktopSessions {...pageProps} />
             </MemoryRouter>
         );

@@ -10,15 +10,13 @@ import {
     Header,
     Link,
     SpaceBetween,
-    StatusIndicator,
-    Table, TextContent
+    Table
 } from "@cloudscape-design/components";
 import { v4 as uuid } from "uuid";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faBug, faCheckCircle, faCircleMinus, faMicrochip } from "@fortawesome/free-solid-svg-icons";
 import { Project, SubmitJobResult } from "../../client/data-model";
 import { FileBrowserClient, ProjectsClient, SchedulerClient } from "../../client";
 import { ProjectBedrockModels } from "../../components/common";
+import QueueReference from "./queue-reference";
 import { AppContext } from "../../common";
 import Utils from "../../common/utils";
 import { IdeaSideNavigationProps } from "../../components/side-navigation";
@@ -80,48 +78,16 @@ export interface ScriptWorkbenchState {
     projects: Project[];
 }
 
-interface AvailableVariableProps {
-    name: string
-    required: boolean
-    isReferenced: boolean
-    description?: string
-}
-
-function AvailableVariable(props: AvailableVariableProps) {
-    const getStyle = () => {
-        if (props.isReferenced) {
-            return {
-                color: 'green'
-            }
-        } else {
-            return {
-                color: 'red'
-            }
-        }
-    }
-    const getText = (): string => {
-        let s = '('
-        if (props.required) {
-            s += 'required'
-        } else {
-            s += 'optional'
-        }
-        if (props.description) {
-            s += ', ' + props.description
-        }
-        s += ')'
-        return s
-    }
-    return (
-        <div>
-            <code style={getStyle()}>{props.name}</code>{' '}
-            <Box variant="span"
-                 color="text-body-secondary">
-                {getText()}
-            </Box>
-        </div>
-    )
-}
+/** What the scheduler does with each directive, so the list states what is really required: the
+ * queue profile supplies instance types and nodes when the script leaves them out. Only the project
+ * is required here, so a job is never charged to a project the user did not pick. */
+const DIRECTIVES: { directive: string; meaning: string }[] = [
+    {directive: '#PBS -P <project>', meaning: 'Required. The project the job runs under and is charged to.'},
+    {directive: '#PBS -q <queue>', meaning: "Optional. The cluster's default queue is used if omitted."},
+    {directive: '#PBS -l instance_type=<type>', meaning: "Optional. The queue's default instance types are used if omitted."},
+    {directive: '#PBS -l nodes=<n> or select=<n>', meaning: "Optional. The queue's default is used if omitted."},
+    {directive: '#PBS -N <name>', meaning: 'Optional. The job name.'},
+];
 
 const SAMPLE_PBS_SCRIPT = `#!/bin/bash
 #PBS -N sample_job
@@ -218,7 +184,7 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
     getScriptProject(): Project | undefined {
         const lines = this.state.jobScript.split('\n');
         for (let index = lines.length - 1; index >= 0; index--) {
-            const match = lines[index].match(/^#PBS\s+-P\s+(\S+)/i);
+            const match = lines[index].match(/^#PBS\s+-P\s+(\S+)/);
             if (match !== null) {
                 return this.state.projects.find((project) => project.name === match[1]);
             }
@@ -335,43 +301,9 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
         return value.toFixed(2);
     }
 
-    isVariableReferencedInScript(name: string): boolean {
-        // Check for specific PBS directives
-        if (name === "project_name" || name === "my_project") {
-            // Look for any #PBS -P directive
-            const projectPattern = new RegExp('#PBS\\s+-P\\s+\\S+', 'i');
-            return projectPattern.test(this.state.jobScript);
-        }
-
-        if (name === "job_name") {
-            // Look for any #PBS -N directive
-            const jobNamePattern = new RegExp('#PBS\\s+-N\\s+\\S+', 'i');
-            return jobNamePattern.test(this.state.jobScript);
-        }
-
-        if (name === "instance_type") {
-            // Look for instance_type in PBS resource directive
-            const instanceTypePattern = new RegExp('#PBS\\s+-l\\s+(.*\\s)?instance_type=\\S+', 'i');
-            return instanceTypePattern.test(this.state.jobScript);
-        }
-
-        if (name === "nodes") {
-            // Look for nodes in PBS resource directive (supports two formats)
-            const nodesPattern = new RegExp('#PBS\\s+-l\\s+(.*\\s)?nodes=\\S+', 'i');
-            const selectPattern = new RegExp('#PBS\\s+-l\\s+(.*\\s)?select=\\S+', 'i');
-            return nodesPattern.test(this.state.jobScript) || selectPattern.test(this.state.jobScript);
-        }
-
-        // Generic PBS directive check
-        const pbsPattern = new RegExp(`#PBS\\s+-\\w+\\s+.*${name}.*`, 'i');
-        if (pbsPattern.test(this.state.jobScript)) {
-            return true;
-        }
-
-        // Regular variable check
-        const varPattern1 = new RegExp(`\\$${name}\\b`, 'i');
-        const varPattern2 = new RegExp(`\\${name}=`, 'i');
-        return varPattern1.test(this.state.jobScript) || varPattern2.test(this.state.jobScript);
+    hasProjectDirective(): boolean {
+        // case-sensitive: #PBS -p is the job priority, not the project
+        return /#PBS\s+-P\s+\S+/.test(this.state.jobScript);
     }
 
     onDryRun = () => {
@@ -385,34 +317,16 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
         // Validate form
         if (Utils.isEmpty(this.state.jobScript)) {
             this.setState({
-                errorMessage: "Job script cannot be empty",
+                errorMessage: "Write or paste a job script first.",
             });
             return;
         }
 
-        // Check all required directives
-        const missingDirectives = [];
-
-        if (!this.isVariableReferencedInScript("project_name")) {
-            missingDirectives.push("project (#PBS -P your_project_name)");
-        }
-
-        if (!this.isVariableReferencedInScript("instance_type")) {
-            missingDirectives.push("instance type (#PBS -l instance_type=...)");
-        }
-
-        if (!this.isVariableReferencedInScript("nodes")) {
-            missingDirectives.push("nodes specification (#PBS -l nodes=... or #PBS -l select=...)");
-        }
-
-        // If directives are missing, show all of them
-        if (missingDirectives.length > 0) {
-            const errorMsg = missingDirectives.length === 1
-                ? `The script is missing the required ${missingDirectives[0]} directive`
-                : `The script is missing the following required directives: ${missingDirectives.join(", ")}`;
-
+        // instance type and nodes fall back to the queue profile defaults on the server, so only the
+        // project is required before the script goes to the scheduler
+        if (!this.hasProjectDirective()) {
             this.setState({
-                errorMessage: errorMsg,
+                errorMessage: "Add a #PBS -P <project> line naming the project to run the job under.",
             });
             return;
         }
@@ -444,21 +358,21 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
         // Validate form
         if (Utils.isEmpty(this.state.jobScript)) {
             this.setState({
-                errorMessage: "Job script cannot be empty",
+                errorMessage: "Write or paste a job script first.",
             });
             return;
         }
 
         if (!this.isDryRunSuccessful()) {
             this.setState({
-                errorMessage: "Please run a dry run first and ensure it succeeds",
+                errorMessage: "Check the script before submitting it.",
             });
             return;
         }
 
         if (this.state.scriptModifiedSinceDryRun) {
             this.setState({
-                errorMessage: "The job script has been modified since the last successful dry run. Please run a new dry run before submitting.",
+                errorMessage: "The script changed after it was checked. Check it again before submitting it.",
             });
             return;
         }
@@ -579,409 +493,197 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
     buildScriptModifiedWarning() {
         if (this.state.scriptModifiedSinceDryRun) {
             return (
-                <Alert type="warning" header="Script Modified">
-                    The job script has been modified since the last successful dry run.
-                    Please run a new dry run to validate your changes before submitting the job.
+                <Alert type="warning" header="Script changed after it was checked">
+                    Check it again before submitting it.
                 </Alert>
             );
         }
         return null;
     }
 
-    buildRequiredVariablesSection() {
+    buildDirectivesSection() {
         return (
-            <FormField
-                label="Required PBS Directives"
-                description="The following PBS directives are required in your job script:"
-            >
-                <ul>
-                    <li>
-                        <AvailableVariable
-                            name="#PBS -P project_name"
-                            isReferenced={this.isVariableReferencedInScript("project_name")}
-                            required={true}
-                            description="Project name directive is required"
-                        />
-                    </li>
-                    <li>
-                        <AvailableVariable
-                            name="#PBS -l instance_type"
-                            isReferenced={this.isVariableReferencedInScript("instance_type")}
-                            required={true}
-                            description="Instance type directive is required"
-                        />
-                    </li>
-                    <li>
-                        <AvailableVariable
-                            name="#PBS -l nodes"
-                            isReferenced={this.isVariableReferencedInScript("nodes")}
-                            required={true}
-                            description="Nodes/CPU specification (can also use #PBS -l select=N:ncpus=M format)"
-                        />
-                    </li>
-                    <li>
-                        <AvailableVariable
-                            name="#PBS -N job_name"
-                            isReferenced={this.isVariableReferencedInScript("job_name")}
-                            required={false}
-                            description="Job name directive"
-                        />
-                    </li>
-                </ul>
+            <SpaceBetween size="m">
+            <QueueReference/>
+            <FormField label="Directives">
+                <SpaceBetween size="xxs" direction="vertical">
+                    {DIRECTIVES.map(({directive, meaning}) => (
+                        <div key={directive}>
+                            <Box variant="code">{directive}</Box>{' '}
+                            <Box variant="span" color="text-body-secondary">{meaning}</Box>
+                        </div>
+                    ))}
+                </SpaceBetween>
             </FormField>
+            </SpaceBetween>
+        );
+    }
+
+    buildCostEstimateSection() {
+        const costData = this.state.submitJobResult?.estimated_bom_cost;
+        if (!costData) {
+            return null;
+        }
+        const budget = this.state.submitJobResult?.budget_usage;
+        return (
+            <Container
+                header={<Header description="Based on the walltime in the script (#PBS -l walltime). The actual cost depends on how long the job runs.">Estimated cost</Header>}
+            >
+                <SpaceBetween size="l" direction="vertical">
+                    <ColumnLayout columns={2}>
+                        <div>
+                            <Box variant="awsui-key-label">Total</Box>
+                            <Box variant="h2">
+                                ${this.formatCurrency(costData.line_items_total?.amount || 0)} {costData.line_items_total?.unit || 'USD'}
+                            </Box>
+                        </div>
+                        {budget && (
+                            <div>
+                                <Box variant="awsui-key-label">Budget</Box>
+                                <Box variant="h3">{budget.budget_name || 'N/A'}</Box>
+                                <Box variant="small" color="text-body-secondary">
+                                    ${this.formatCurrency(budget.actual_spend?.amount || 0)} spent of
+                                    ${this.formatCurrency(budget.budget_limit?.amount || 0)} {budget.budget_limit?.unit || 'USD'}
+                                </Box>
+                            </div>
+                        )}
+                    </ColumnLayout>
+
+                    {costData.line_items && costData.line_items.length > 0 && (
+                        <Table
+                            header={<Header variant="h3">By resource</Header>}
+                            columnDefinitions={[
+                                {id: "resource", header: "Resource", cell: (item: any) => item.title, width: 350},
+                                {
+                                    id: "details",
+                                    header: "Quantity",
+                                    cell: (item: any) => {
+                                        const formattedQuantity = Number.isInteger(item.quantity)
+                                            ? item.quantity
+                                            : this.formatCurrency(item.quantity);
+                                        const unitDisplay = item.unit === "per hour" ? "hours" : item.unit;
+                                        return `${formattedQuantity} ${unitDisplay}`;
+                                    },
+                                    width: 140
+                                },
+                                {
+                                    id: "rate",
+                                    header: "Rate",
+                                    cell: (item: any) => {
+                                        const price = this.formatCurrency(item.unit_price?.amount || 0);
+                                        const rateLabel = item.unit === "per hour" ? "/hour" : "";
+                                        return `$${price}${rateLabel}`;
+                                    },
+                                    width: 100
+                                },
+                                {
+                                    id: "cost",
+                                    header: "Cost",
+                                    cell: (item: any) => `$${this.formatCurrency(item.total_price?.amount || 0)}`,
+                                    width: 100
+                                }
+                            ]}
+                            items={costData.line_items}
+                            sortingDisabled
+                            trackBy="title"
+                            variant="embedded"
+                        />
+                    )}
+                </SpaceBetween>
+            </Container>
+        );
+    }
+
+    /** The scheduler's own messages, verbatim: they name the fix (for example the queues that run an
+     * instance type's architecture), so the page adds no advice of its own. */
+    buildServerMessages() {
+        const messages = [
+            ...(this.state.submitJobResult?.validations?.results ?? []),
+            ...(this.state.submitJobResult?.incidentals?.results ?? [])
+        ].map((result) => result.message).filter((message): message is string => Utils.isNotEmpty(message));
+        if (messages.length === 0) {
+            return <Box>The scheduler did not return a reason. Contact your cluster administrator.</Box>;
+        }
+        if (messages.length === 1) {
+            return <Box>{messages[0]}</Box>;
+        }
+        return (
+            <ul>
+                {messages.map((message, index) => <li key={index}>{message}</li>)}
+            </ul>
         );
     }
 
     buildSubmitJobResults() {
-        if (this.isSubmitted()) {
-            const buildCostEstimateSection = () => {
-                if (this.state.submitJobResult?.estimated_bom_cost) {
-                    const costData = this.state.submitJobResult.estimated_bom_cost;
-                    return (
-                        <Container
-                            header={<Header>Cost Estimate</Header>}
-                        >
-                            <SpaceBetween size="l" direction="vertical">
-                                {/* Walltime information alert */}
-                                <Alert type="info">
-                                    This cost estimate is based on the walltime specified in your job script (#PBS -l walltime=HH:MM:SS).
-                                    Actual costs may vary based on job duration and resource utilization.
-                                </Alert>
-
-                                {/* Summary panel with total cost */}
-                                <ColumnLayout columns={2}>
-                                    <div>
-                                        <Box variant="awsui-key-label">Total Estimated Cost</Box>
-                                        <Box variant="h2" color="text-status-info">
-                                            ${this.formatCurrency(costData.line_items_total?.amount || 0)}
-                                        </Box>
-                                        <Box variant="small" color="text-body-secondary">
-                                            {costData.line_items_total?.unit || 'USD'}
-                                        </Box>
-                                    </div>
-
-                                    {this.state.submitJobResult?.budget_usage && (
-                                        <div>
-                                            <Box variant="awsui-key-label">Budget Information</Box>
-                                            <Box variant="h3">
-                                                {this.state.submitJobResult.budget_usage.budget_name || 'N/A'}
-                                            </Box>
-                                            <Box variant="small" color="text-body-secondary">
-                                                Usage: ${this.formatCurrency(this.state.submitJobResult.budget_usage.actual_spend?.amount || 0)} /
-                                                ${this.formatCurrency(this.state.submitJobResult.budget_usage.budget_limit?.amount || 0)} {this.state.submitJobResult.budget_usage.budget_limit?.unit || 'USD'}
-                                            </Box>
-                                        </div>
-                                    )}
-                                </ColumnLayout>
-
-                                {/* Resource cost breakdown */}
-                                {costData.line_items && costData.line_items.length > 0 && (
-                                    <Container
-                                        header={<Header>Resource Breakdown</Header>}
-                                    >
-                                        <Table
-                                            columnDefinitions={[
-                                                {
-                                                    id: "resource",
-                                                    header: "Resource",
-                                                    cell: (item: any) => item.title,
-                                                    width: 350
-                                                },
-                                                {
-                                                    id: "details",
-                                                    header: "Details",
-                                                    cell: (item: any) => {
-                                                        const formattedQuantity = Number.isInteger(item.quantity)
-                                                            ? item.quantity
-                                                            : this.formatCurrency(item.quantity);
-                                                        const unitDisplay = item.unit === "per hour" ? "hours" : item.unit;
-                                                        return `${formattedQuantity} ${unitDisplay}`;
-                                                    },
-                                                    width: 140
-                                                },
-                                                {
-                                                    id: "rate",
-                                                    header: "Rate",
-                                                    cell: (item: any) => {
-                                                        const price = this.formatCurrency(item.unit_price?.amount || 0);
-                                                        const rateLabel = item.unit === "per hour" ? "/hour" : "";
-                                                        return `$${price}${rateLabel}`;
-                                                    },
-                                                    width: 100
-                                                },
-                                                {
-                                                    id: "cost",
-                                                    header: "Cost",
-                                                    cell: (item: any) => `$${this.formatCurrency(item.total_price?.amount || 0)}`,
-                                                    width: 100
-                                                }
-                                            ]}
-                                            items={costData.line_items}
-                                            sortingDisabled
-                                            trackBy="title"
-                                            empty={<Box textAlign="center">No cost data available</Box>}
-                                            footer={
-                                                <Box textAlign="right" variant="strong" padding="s">
-                                                    Total: ${this.formatCurrency(costData.line_items_total?.amount || 0)}
-                                                </Box>
-                                            }
-                                            variant="embedded"
-                                            stickyHeader
-                                        />
-                                    </Container>
-                                )}
-                            </SpaceBetween>
-                        </Container>
-                    );
-                }
-                return null;
-            };
-
-            if (this.state.submitJobResult) {
-                // Successful dry run
-                if (this.isDryRun() && this.isDryRunSuccessful()) {
-                    return (
-                        <ColumnLayout columns={1}>
-                            <Box variant="h3" color="text-status-success">
-                                <FontAwesomeIcon icon={faCheckCircle} /> Dry Run Successful
-                            </Box>
-                            <StatusIndicator type="success">
-                                The job script is valid. You can now submit your job.
-                            </StatusIndicator>
-                            <p>Click the <strong>Submit Job</strong> button to submit your job to the scheduler.</p>
-                            {buildCostEstimateSection()}
-                        </ColumnLayout>
-                    );
-                }
-                // Failed dry run
-                else if (this.isDryRun()) {
-                    return this.buildSubmissionFailureDetails(
-                        "Validation Failed",
-                        "Your job script cannot be submitted due to the following issues:"
-                    );
-                }
-                // Rejected submission: the scheduler returns accepted = false with the
-                // reasons in validations/incidentals.
-                else if (!this.isAccepted()) {
-                    return this.buildSubmissionFailureDetails(
-                        "Job Submission Failed",
-                        "The scheduler did not queue your job for the following reasons:"
-                    );
-                }
-                // Successful job submission
-                else {
-                    return (
-                        <ColumnLayout columns={1}>
-                            <Box variant="h3" color="text-status-success">
-                                <FontAwesomeIcon icon={faCheckCircle} /> Job Submitted Successfully
-                            </Box>
-
-                            {/* Job summary */}
-                            <Container
-                                header={<Header>Job Details</Header>}
-                            >
-                                <SpaceBetween size="l" direction="vertical">
-                                    <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
-                                        <Box variant="h3" color="text-label">Job ID: </Box>
-                                        <Box variant="h3">{this.state.submitJobResult.job?.job_id || 'N/A'}</Box>
-                                        <div style={{ width: "50px" }}></div>
-                                        <Box variant="h3" color="text-label">Job Name: </Box>
-                                        <Box variant="h3">{this.state.submitJobResult.job?.name || 'N/A'}</Box>
-                                    </div>
-
-                                    <Table
-                                        columnDefinitions={[
-                                            {
-                                                id: "property",
-                                                header: "Property",
-                                                cell: (item: any) => item.property,
-                                                width: 200
-                                            },
-                                            {
-                                                id: "value",
-                                                header: "Value",
-                                                cell: (item: any) => item.value,
-                                            }
-                                        ]}
-                                        items={[
-                                            { property: "Project", value: this.state.submitJobResult.job?.project || 'N/A' },
-                                            { property: "Queue", value: this.state.submitJobResult.job?.queue || 'N/A' },
-                                            { property: "Owner", value: this.state.submitJobResult.job?.owner || 'N/A' },
-                                            { property: "Nodes", value: this.state.submitJobResult.job?.params?.nodes || 'N/A' },
-                                            { property: "CPUs", value: this.state.submitJobResult.job?.params?.cpus || 'N/A' },
-                                            { property: "Walltime", value: this.state.submitJobResult.job?.params?.walltime || 'N/A' },
-                                            {
-                                                property: "Instance Type",
-                                                value: this.state.submitJobResult.job?.params?.instance_types?.join(', ') || 'N/A'
-                                            }
-                                        ]}
-                                        sortingDisabled
-                                        trackBy="property"
-                                        empty={<Box textAlign="center">No job details available</Box>}
-                                        variant="embedded"
-                                        stickyHeader
-                                    />
-
-                                    <Button
-                                        variant="primary"
-                                        iconName="external"
-                                        href="#/home/active-jobs"
-                                    >
-                                        View Active Jobs
-                                    </Button>
-                                </SpaceBetween>
-                            </Container>
-
-                            <Alert type="info">
-                                Your job script has been saved at <strong>~/jobs/{this.state.submitJobResult.job?.name ? `${this.state.submitJobResult.job.name}_${this.state.submitJobResult.job?.job_uid}` : this.state.submitJobResult.job?.job_uid}.que</strong> for later review or resubmission.
-                            </Alert>
-
-                            {buildCostEstimateSection()}
-                        </ColumnLayout>
-                    );
-                }
+        const result = this.state.submitJobResult;
+        if (result === undefined) {
+            if (this.hasSubmissionErrors()) {
+                return <Alert type="error">{this.state.errorMessage}</Alert>;
             }
-        } else if (this.hasSubmissionErrors()) {
+            return null;
+        }
+
+        if (this.isDryRun()) {
+            if (!this.isDryRunSuccessful()) {
+                return (
+                    <Alert type="error" header="Fix the script before submitting it">
+                        {this.buildServerMessages()}
+                    </Alert>
+                );
+            }
             return (
-                <Alert type="error" header="Validation Failed">
-                    <SpaceBetween size="s" direction="vertical">
-                        <Box variant="h3" color="text-status-error">
-                            <FontAwesomeIcon icon={faCircleMinus} /> Script Validation Error
-                        </Box>
-                        <Box>{this.state.errorMessage}</Box>
-                        <Box variant="small">
-                            Please review the script requirements and try again.
-                        </Box>
-                    </SpaceBetween>
-                </Alert>
+                <SpaceBetween size="l" direction="vertical">
+                    <Alert type="success" header="Script passed the check">
+                        Submit it to queue the job.
+                    </Alert>
+                    {this.buildCostEstimateSection()}
+                </SpaceBetween>
             );
-        } else {
+        }
+
+        // a rejected submission is returned as a successful API call carrying accepted = false, with
+        // the reasons in validations/incidentals.
+        if (!this.isAccepted()) {
             return (
-                <Alert type="info" header={"Job Submission"}>
-                    <Box variant="div">
-                        <li>Enter your PBS job script in the code editor above or load it from a file.</li>
-                        <li>Click <strong>Dry Run</strong> to validate your job script.</li>
-                        <li>Once validation succeeds, click <strong>Submit Job</strong> to submit your job to the scheduler.</li>
-                        <li><strong>Note:</strong> Any changes to the job script after a successful dry run will require a new dry run before submission.</li>
-                    </Box>
+                <Alert type="error" header="Job submission failed">
+                    {this.buildServerMessages()}
                 </Alert>
             );
         }
-    }
 
-    buildSubmissionFailureDetails(header: string, intro: string) {
+        const job = result.job;
+        const savedAs = job?.name ? `${job.name}_${job.job_uid}` : job?.job_uid;
         return (
             <SpaceBetween size="l" direction="vertical">
-                <Alert type="error" header={header}>
-                    <Box variant="h3">
-                        <FontAwesomeIcon icon={faCircleMinus} /> {intro}
-                    </Box>
+                <Alert
+                    type="success"
+                    header={`Job ${job?.job_id || ''} submitted`}
+                    action={<Button href="#/home/active-jobs">View active jobs</Button>}
+                >
+                    The script is saved as <Box variant="code">~/jobs/{savedAs}.que</Box> for later review or resubmission.
                 </Alert>
-
-                {!this.hasValidationErrors() && !this.hasIncidentalErrors() && (
-                    <Container
-                        header={<Header>Reason</Header>}
-                    >
-                        <Box color="text-status-error">
-                            The scheduler did not return a reason. Contact your cluster administrator.
-                        </Box>
-                    </Container>
-                )}
-
-                {this.state.submitJobResult?.validations?.results && this.state.submitJobResult.validations.results.length > 0 && (
-                    <Container
-                        header={<Header>Script Validation Errors</Header>}
-                    >
-                        <SpaceBetween size="s" direction="vertical">
-                            <Box color="text-status-error">
-                                Please correct the following issues in your job script:
-                            </Box>
-                            <Table
-                                items={this.state.submitJobResult.validations.results.map((result, idx) => ({
-                                    id: idx.toString(),
-                                    message: result.message,
-                                    type: "Validation Error"
-                                }))}
-                                columnDefinitions={[
-                                    {
-                                        id: "type",
-                                        header: "Type",
-                                        cell: item => (
-                                            <StatusIndicator type="error">{item.type}</StatusIndicator>
-                                        ),
-                                        width: 150
-                                    },
-                                    {
-                                        id: "message",
-                                        header: "Message",
-                                        cell: item => item.message
-                                    }
-                                ]}
-                                trackBy="id"
-                                variant="embedded"
-                                empty={<Box textAlign="center">No validation errors</Box>}
-                            />
-                            <Box variant="small">
-                                <Link external href="https://docs.idea-hpc.com/modules/hpc-workloads/user-documentation/submit-a-job">
-                                    Learn more about job submission requirements
-                                </Link>
-                            </Box>
-                        </SpaceBetween>
-                    </Container>
-                )}
-
-                {this.state.submitJobResult?.incidentals?.results && this.state.submitJobResult.incidentals.results.length > 0 && (
-                    <Container
-                        header={<Header>Authorization Errors</Header>}
-                    >
-                        <SpaceBetween size="s" direction="vertical">
-                            <Box color="text-status-error">
-                                You don't have the required permissions:
-                            </Box>
-                            <Table
-                                items={this.state.submitJobResult.incidentals.results.map((result, idx) => ({
-                                    id: idx.toString(),
-                                    error_code: result.error_code || "Error",
-                                    message: result.message
-                                }))}
-                                columnDefinitions={[
-                                    {
-                                        id: "error_code",
-                                        header: "Error Type",
-                                        cell: item => (
-                                            <StatusIndicator type="warning">{item.error_code}</StatusIndicator>
-                                        ),
-                                        width: 150
-                                    },
-                                    {
-                                        id: "message",
-                                        header: "Message",
-                                        cell: item => item.message
-                                    }
-                                ]}
-                                trackBy="id"
-                                variant="embedded"
-                                empty={<Box textAlign="center">No permission errors</Box>}
-                            />
-                            <Box variant="small">
-                                Contact your administrator if you need access to additional projects or queues.
-                            </Box>
-                        </SpaceBetween>
-                    </Container>
-                )}
-
-                <Alert type="info">
-                    <SpaceBetween size="s" direction="vertical">
-                        <div>To resolve these issues:</div>
-                        <ul>
-                            <li>Check your PBS directives for correct syntax</li>
-                            <li>Verify you're using a valid project name</li>
-                            <li>Ensure you have permission to use the specified queue</li>
-                            <li>Verify instance_type and nodes specifications</li>
-                        </ul>
-                        <div>Click <strong>Dry Run</strong> again after making changes.</div>
-                    </SpaceBetween>
-                </Alert>
+                <Container header={<Header>Job details</Header>}>
+                    <Table
+                        columnDefinitions={[
+                            {id: "property", header: "Property", cell: (item: any) => item.property, width: 200},
+                            {id: "value", header: "Value", cell: (item: any) => item.value}
+                        ]}
+                        items={[
+                            {property: "Name", value: job?.name || 'N/A'},
+                            {property: "Project", value: job?.project || 'N/A'},
+                            {property: "Queue", value: job?.queue || 'N/A'},
+                            {property: "Owner", value: job?.owner || 'N/A'},
+                            {property: "Nodes", value: job?.params?.nodes || 'N/A'},
+                            {property: "CPUs", value: job?.params?.cpus || 'N/A'},
+                            {property: "Walltime", value: job?.params?.walltime || 'N/A'},
+                            {property: "Instance type", value: job?.params?.instance_types?.join(', ') || 'N/A'}
+                        ]}
+                        sortingDisabled
+                        trackBy="property"
+                        variant="embedded"
+                    />
+                </Container>
+                {this.buildCostEstimateSection()}
             </SpaceBetween>
         );
     }
@@ -1015,32 +717,24 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
         const content = (
             <Container>
                 <SpaceBetween size="l" direction="vertical">
-                    <TextContent>
-                        <p>This form allows you to create and submit PBS job scripts directly without going through the application interface or using qsub.
-                        You must include all job parameters directly in your script using #PBS directives.</p>
-                        <p>For more information, see:</p>
-                        <ul>
-                            <li>
-                                <Link external href="https://docs.idea-hpc.com/modules/hpc-workloads/user-documentation/submit-a-job">
-                                    PBS Job Submission Documentation
-                                </Link>
-                            </li>
-                            <li>
-                                <Link external href="https://docs.idea-hpc.com/modules/hpc-workloads/user-documentation/supported-ec2-parameters">
-                                    Supported EC2 Parameters
-                                </Link>
-                            </li>
-                        </ul>
-                    </TextContent>
+                    <Box variant="p">
+                        Write or paste a PBS job script with #PBS directives and submit it to a queue. It is checked
+                        before it is submitted. See{' '}
+                        <Link external href="https://docs.idea-hpc.com/modules/hpc-workloads/user-documentation/submit-a-job">
+                            Submitting a job
+                        </Link>{' '}and{' '}
+                        <Link external href="https://docs.idea-hpc.com/modules/hpc-workloads/user-documentation/supported-ec2-parameters">
+                            Supported EC2 parameters
+                        </Link>.
+                    </Box>
 
-                    {this.buildRequiredVariablesSection()}
+                    {this.buildDirectivesSection()}
                     {this.buildProjectAiModelsSection()}
 
                     <FormField
-                        label="PBS Job Script"
+                        label="Job script"
                         description={
                             <SpaceBetween size="xs" direction="vertical">
-                                <span>Enter your PBS job script with #PBS directives. Use this to control instance types, node counts, and other job parameters.</span>
                                 <SpaceBetween size="s" direction="horizontal">
                                     <Button
                                         variant="normal"
@@ -1055,7 +749,7 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
                                         }}
                                         iconName="add-plus"
                                     >
-                                        Insert sample PBS script
+                                        Insert sample script
                                     </Button>
                                     <Button
                                         variant="normal"
@@ -1161,16 +855,16 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
                             onClick={this.onDryRun}
                             disabled={Utils.isEmpty(this.state.jobScript) || (this.isDryRunSuccessful() && !this.state.scriptModifiedSinceDryRun)}
                         >
-                            <FontAwesomeIcon icon={faBug} /> Dry Run
+                            Check script
                         </Button>
-                    <Button
-                        variant="primary"
-                        loading={this.state.submitJobLoading}
-                        onClick={this.onSubmitJob}
+                        <Button
+                            variant="primary"
+                            loading={this.state.submitJobLoading}
+                            onClick={this.onSubmitJob}
                             disabled={!this.canSubmitJob()}
-                    >
-                        <FontAwesomeIcon icon={faMicrochip} /> Submit Job
-                    </Button>
+                        >
+                            Submit job
+                        </Button>
                     </SpaceBetween>
 
                     {this.buildScriptModifiedWarning()}

@@ -171,7 +171,7 @@ describe('job status and costs', () => {
 
     it.each(['ran', 'failed', 'held', 'deleted'] as const)('shows the %s disposition', disposition => {
         render(<JobStatus job={{state: 'finished', disposition, status_reason: 'Recorded outcome.'}}/>);
-        expect(screen.getByText(disposition[0].toUpperCase() + disposition.slice(1))).toBeInTheDocument();
+        expect(screen.getByText({ran: 'Finished', failed: 'Failed', held: 'Held', deleted: 'Deleted'}[disposition])).toBeInTheDocument();
         expect(screen.getByText('Recorded outcome.')).toBeInTheDocument();
     });
 

@@ -46,12 +46,12 @@ async function submitRecordingRequests(result: SubmitJobResult) {
 
     const user = userEvent.setup();
     renderScriptWorkbench();
-    await user.click(await screen.findByRole('button', { name: /Insert sample PBS script/i }));
+    await user.click(await screen.findByRole('button', { name: /Insert sample script/i }));
 
     const submitOnce = async () => {
-        await user.click(await screen.findByRole('button', { name: /Dry Run/i }));
-        await screen.findByText('Dry Run Successful');
-        await user.click(await screen.findByRole('button', { name: /Submit Job/i }));
+        await user.click(await screen.findByRole('button', { name: /Check script/i }));
+        await screen.findByText('Script passed the check');
+        await user.click(await screen.findByRole('button', { name: /Submit job/i }));
     };
 
     await submitOnce();
@@ -70,8 +70,14 @@ async function renderWithProject(bedrock: any) {
     });
     const user = userEvent.setup();
     renderScriptWorkbench();
-    await user.click(await screen.findByRole('button', {name: /Insert sample PBS script/i}));
+    await user.click(await screen.findByRole('button', {name: /Insert sample script/i}));
     return user;
+}
+
+/** The code editor is ace, which jsdom cannot type into; uploading a file sets the script the same way. */
+async function setScript(user: ReturnType<typeof userEvent.setup>, script: string) {
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    await user.upload(input, new File([script], 'job.que', {type: 'text/plain'}));
 }
 
 function renderScriptWorkbench() {
@@ -103,10 +109,10 @@ async function submitRejectedJob(result: SubmitJobResult) {
     const user = userEvent.setup();
     renderScriptWorkbench();
 
-    await user.click(await screen.findByRole('button', { name: /Insert sample PBS script/i }));
-    await user.click(await screen.findByRole('button', { name: /Dry Run/i }));
-    await screen.findByText('Dry Run Successful');
-    await user.click(await screen.findByRole('button', { name: /Submit Job/i }));
+    await user.click(await screen.findByRole('button', { name: /Insert sample script/i }));
+    await user.click(await screen.findByRole('button', { name: /Check script/i }));
+    await screen.findByText('Script passed the check');
+    await user.click(await screen.findByRole('button', { name: /Submit job/i }));
 }
 
 describe('script workbench', () => {
@@ -127,7 +133,7 @@ describe('script workbench', () => {
     it('shows no models section for a project without them', async () => {
         await renderWithProject({enabled: false});
 
-        await screen.findByText(/#PBS -P project_name/);
+        await screen.findByText('#PBS -P <project>');
         // the section itself must be absent, not merely empty: a rendered "--" would still pass an
         // assertion that only looks for the arn.
         expect(screen.queryByText('AI Models')).toBeNull();
@@ -140,14 +146,14 @@ describe('script workbench', () => {
             ])
         );
 
-        expect(await screen.findByText('Job Submission Failed')).toBeInTheDocument();
+        expect(await screen.findByText('Job submission failed')).toBeInTheDocument();
         expect(await screen.findByText('Project budget has been exhausted.')).toBeInTheDocument();
     });
 
     it('reports a rejected job submission that carries no reason', async () => {
         await submitRejectedJob(rejected([]));
 
-        expect(await screen.findByText('Job Submission Failed')).toBeInTheDocument();
+        expect(await screen.findByText('Job submission failed')).toBeInTheDocument();
         expect(
             await screen.findByText('The scheduler did not return a reason. Contact your cluster administrator.')
         ).toBeInTheDocument();
@@ -163,7 +169,7 @@ describe('script workbench', () => {
         // the case the dedupe exists for: the first attempt did not queue a job, so the retry
         // has to carry the same id or it becomes a second job
         const { submitOnce, realRequests } = await submitRecordingRequests(rejected([]));
-        await screen.findByText('Job Submission Failed');
+        await screen.findByText('Job submission failed');
         await submitOnce();
 
         expect(realRequests()).toHaveLength(2);
@@ -182,5 +188,71 @@ describe('script workbench', () => {
         expect(realRequests()[1].client_submission_id).not.toBe(
             realRequests()[0].client_submission_id
         );
+    });
+
+    it('lists the directives without marking optional ones as errors', async () => {
+        initTestAppContext();
+        renderScriptWorkbench();
+
+        expect(await screen.findByText('#PBS -P <project>')).toBeInTheDocument();
+        expect(screen.getByText("Optional. The queue's default instance types are used if omitted.")).toBeInTheDocument();
+        expect(screen.queryByText(/directive is required/)).toBeNull();
+    });
+
+    it('checks a script that leaves instance type and nodes to the queue', async () => {
+        const context = initTestAppContext();
+        const submitJob = vi.spyOn(context.client().scheduler(), 'submitJob').mockResolvedValue(DRY_RUN_ACCEPTED);
+        const user = userEvent.setup();
+        renderScriptWorkbench();
+
+        await setScript(user, '#!/bin/bash\n#PBS -P default\necho hi\n');
+        await user.click(screen.getByRole('button', {name: /Check script/i}));
+
+        expect(await screen.findByText('Script passed the check')).toBeInTheDocument();
+        expect(submitJob).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not read a priority line as the project', async () => {
+        const context = initTestAppContext();
+        const submitJob = vi.spyOn(context.client().scheduler(), 'submitJob');
+        const user = userEvent.setup();
+        renderScriptWorkbench();
+
+        await setScript(user, '#!/bin/bash\n#PBS -p 10\necho hi\n');
+        await user.click(screen.getByRole('button', {name: /Check script/i}));
+
+        expect(await screen.findByText(/Add a #PBS -P <project> line/)).toBeInTheDocument();
+        expect(submitJob).not.toHaveBeenCalled();
+    });
+
+    it('asks for the project before checking a script without one', async () => {
+        const context = initTestAppContext();
+        const submitJob = vi.spyOn(context.client().scheduler(), 'submitJob');
+        const user = userEvent.setup();
+        renderScriptWorkbench();
+
+        await setScript(user, '#!/bin/bash\necho hi\n');
+        await user.click(screen.getByRole('button', {name: /Check script/i}));
+
+        expect(await screen.findByText(/Add a #PBS -P <project> line/)).toBeInTheDocument();
+        expect(submitJob).not.toHaveBeenCalled();
+    });
+
+    it('shows the scheduler check messages verbatim and keeps submit disabled', async () => {
+        const message = 'Instance type c7g.large is arm64, but queue normal runs x86_64. Queues set up for arm64: arm-normal.';
+        const context = initTestAppContext();
+        vi.spyOn(context.client().scheduler(), 'submitJob').mockResolvedValue({
+            ...DRY_RUN_ACCEPTED,
+            validations: {results: [{error_code: 'INVALID_PARAMS', message}]}
+        });
+        const user = userEvent.setup();
+        renderScriptWorkbench();
+
+        await user.click(await screen.findByRole('button', {name: /Insert sample script/i}));
+        await user.click(screen.getByRole('button', {name: /Check script/i}));
+
+        expect(await screen.findByText('Fix the script before submitting it')).toBeInTheDocument();
+        expect(screen.getByText(message)).toBeInTheDocument();
+        expect(screen.getByRole('button', {name: /Submit job/i})).toBeDisabled();
     });
 });

@@ -1106,6 +1106,17 @@ export interface GetHpcLicenseResourceRequest {
 export interface GetHpcLicenseResourceResult {
   license_resource?: HpcLicenseResource;
 }
+export interface QueueSummary {
+  name?: string;
+  queue_profile?: string;
+  base_os?: string;
+  architecture?: string;
+  instance_types?: string[];
+}
+export interface ListQueuesRequest {}
+export interface ListQueuesResult {
+  listing?: QueueSummary[];
+}
 export interface GetInstanceTypeOptionsRequest {
   enable_ht_support?: boolean;
   instance_types?: string[];

@@ -45,6 +45,7 @@ export interface IdeaListViewAction {
 
 export interface IdeaListViewProps<T = any> {
     title?: string
+    empty?: React.ReactNode
     description?: string
     primaryActionDisabled?: boolean
     primaryAction?: IdeaListViewAction
@@ -547,6 +548,7 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
     buildTable() {
         return <IdeaTable
             ref={this.table}
+            empty={this.props.empty}
             header={
                 <Header
                     variant="awsui-h1-sticky"

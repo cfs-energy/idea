@@ -24,7 +24,7 @@ describe('job status column', () => {
         };
         renderStatus(job);
         expect(screen.getByText('Deleted')).toBeInTheDocument();
-        expect(screen.queryByText('Ran')).toBeNull();
+        expect(screen.queryByText('Finished')).toBeNull();
     });
 
     it('offers the reason on a job that never ran', () => {
@@ -40,7 +40,7 @@ describe('job status column', () => {
         expect(screen.getByText(ERROR_MESSAGE)).toBeInTheDocument();
     });
 
-    it('still reports a completed run as ran', () => {
+    it('reports a clean run as finished', () => {
         const job: SocaJob = {
             job_id: '2347',
             state: 'finished',
@@ -50,7 +50,7 @@ describe('job status column', () => {
             params: {compute_stack: 'idea-compute-node-2347'}
         };
         renderStatus(job);
-        expect(screen.getByText('Ran')).toBeInTheDocument();
+        expect(screen.getByText('Finished')).toBeInTheDocument();
         expect(screen.queryByText('Deleted')).toBeNull();
     });
 
@@ -109,6 +109,17 @@ describe('job status column', () => {
         expect(screen.queryByText('Queued')).toBeNull();
         expect(screen.getByText(/Held after attempt 3 of 3: provisioning failed 3 times/)).toBeInTheDocument();
         expect(screen.getByText(/held after 3 of 3 attempts/)).toBeInTheDocument();
+    });
+
+    it('names the exit code of a failed run', () => {
+        renderStatus({
+            job_id: '2352',
+            state: 'finished',
+            exit_status: 137,
+            start_time: '2026-08-19T09:00:00Z',
+            params: {compute_stack: 'idea-compute-node-2352'}
+        });
+        expect(screen.getByText('Failed (exit 137)')).toBeInTheDocument();
     });
 
     it('leaves a running job alone', () => {

@@ -22,6 +22,7 @@ import {useCollection} from '@cloudscape-design/collection-hooks';
 
 export interface IdeaTableProps<T = any> {
     listing: T[]
+    empty?: React.ReactNode
     header: React.ReactNode
     selectedItems?: T[]
     selectionType?: TableProps.SelectionType
@@ -522,9 +523,11 @@ export class IdeaTableClass extends Component<IdeaTableClassProps, IdeaTableStat
                 columnDefinitions={this.props.columnDefinitions!}
                 items={this.props.listing}
                 empty={
-                    <Box textAlign="center" color="inherit">
-                        <Box variant="strong">No records</Box>
-                    </Box>
+                    this.props.empty ?? (
+                        <Box textAlign="center" color="inherit">
+                            <Box variant="strong">No records</Box>
+                        </Box>
+                    )
                 }
             />
         )

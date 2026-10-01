@@ -21,6 +21,9 @@ from ideadatamodel.scheduler import (
     SubmitJobResult,
     GetInstanceTypeOptionsRequest,
     GetInstanceTypeOptionsResult,
+    ListQueuesRequest,
+    ListQueuesResult,
+    QueueSummary,
     GetJobRequest,
     GetJobResult,
     DeleteJobRequest,
@@ -224,6 +227,10 @@ class SchedulerAPI(BaseAPI):
             'Scheduler.GetInstanceTypeOptions': {
                 'scope': self.SCOPE_READ,
                 'method': self.get_instance_type_options,
+            },
+            'Scheduler.ListQueues': {
+                'scope': self.SCOPE_READ,
+                'method': self.list_queues,
             },
         }
 
@@ -579,6 +586,51 @@ class SchedulerAPI(BaseAPI):
             except OSError:
                 pass
 
+    def list_queues(self, context: ApiInvocationContext):
+        """
+        each queue of an enabled queue profile with the processor architecture, operating
+        system and default instance types its jobs launch with, so a user can pick a queue
+        that runs what their job needs.
+        """
+        context.get_request_payload_as(ListQueuesRequest)
+        default_os = self.context.config().get_string(
+            'scheduler.compute_node_os', default=None
+        )
+        aws_util = self.context.aws_util()
+        listing = []
+        for profile in self.context.queue_profiles.list_queue_profiles() or []:
+            if not profile.enabled:
+                continue
+            params = profile.default_job_params
+            instance_types = list((params.instance_types if params else None) or [])
+            architectures = None
+            for instance_type in instance_types:
+                try:
+                    supported = set(
+                        aws_util.get_ec2_instance_type(
+                            instance_type=instance_type
+                        ).processor_info_supported_architectures
+                        or []
+                    )
+                except exceptions.SocaException:
+                    continue
+                architectures = (
+                    supported if architectures is None else architectures & supported
+                )
+            # x86_64 types also report i386, which no queue launches
+            architecture = '/'.join(sorted((architectures or set()) - {'i386'}))
+            for queue in profile.queues or []:
+                listing.append(
+                    QueueSummary(
+                        name=queue,
+                        queue_profile=profile.name,
+                        base_os=(params.base_os if params else None) or default_os,
+                        architecture=architecture or None,
+                        instance_types=instance_types,
+                    )
+                )
+        context.success(ListQueuesResult(listing=sorted(listing, key=lambda q: q.name)))
+
     def get_instance_type_options(self, context: ApiInvocationContext):
         """
         This API is used to get the instance type options during job submission.
@@ -757,3 +809,5 @@ class SchedulerAPI(BaseAPI):
             return self.get_completed_job(context)
         elif namespace == 'Scheduler.GetInstanceTypeOptions':
             return self.get_instance_type_options(context)
+        elif namespace == 'Scheduler.ListQueues':
+            return self.list_queues(context)
