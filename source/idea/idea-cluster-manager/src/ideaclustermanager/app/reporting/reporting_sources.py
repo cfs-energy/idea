@@ -1,6 +1,7 @@
 """Read recorded projections and activity without refreshing any source."""
 
 import json
+import logging
 import time
 from datetime import datetime
 from decimal import Decimal
@@ -197,10 +198,17 @@ class ReportingSources:
             except exceptions.SocaException as error:
                 if error.error_code in ('REPORT_TIMEOUT', 'REPORT_TOO_LARGE'):
                     raise
+                # the report shows the source as missing; the log says why
+                logging.getLogger(__name__).warning(
+                    'report source %s unavailable: %s', name, error
+                )
                 result['coverage'][name] = 'unavailable'
                 result['warnings'].append(f'{name} source unavailable.')
                 return []
             except Exception:
+                logging.getLogger(__name__).warning(
+                    'report source %s unavailable', name, exc_info=True
+                )
                 result['coverage'][name] = 'unavailable'
                 result['warnings'].append(f'{name} source unavailable.')
                 return []

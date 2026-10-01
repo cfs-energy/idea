@@ -1057,3 +1057,25 @@ def test_summary_sources_include_storage_only_users_in_selected_period():
     assert result['users'] == {'storage-only': 'storage-only'}
     assert result['storage'] == [dict(date='2024-02-01', users={'storage-only': 100})]
     assert result['coverage']['storage'] == 'ready'
+
+
+def test_an_unreadable_source_is_logged(caplog):
+    import logging
+
+    def boom(request):
+        raise RuntimeError('opensearch unreachable')
+
+    context = SimpleNamespace(
+        accounts=SimpleNamespace(list_users=boom),
+        projects=SimpleNamespace(
+            list_projects=lambda request: SimpleNamespace(listing=[], paginator=None)
+        ),
+        personal_costs_store=SimpleNamespace(
+            table=Mock(scan=Mock(return_value={'Items': []}))
+        ),
+        config=lambda: SimpleNamespace(is_module_enabled=lambda module: False),
+    )
+    with caplog.at_level(logging.WARNING):
+        result = ReportingSources(context).read(period(), time.monotonic() + 30)
+    assert result['coverage']['accounts'] == 'unavailable'
+    assert 'report source accounts unavailable' in caplog.text
