@@ -1079,3 +1079,22 @@ def test_an_unreadable_source_is_logged(caplog):
         result = ReportingSources(context).read(period(), time.monotonic() + 30)
     assert result['coverage']['accounts'] == 'unavailable'
     assert 'report source accounts unavailable' in caplog.text
+
+
+def test_a_source_not_created_yet_is_empty_not_unavailable():
+    from botocore.exceptions import ClientError
+    from ideaclustermanager.app.reporting.reporting_sources import source_not_created
+
+    missing_table = ClientError(
+        {'Error': {'Code': 'ResourceNotFoundException', 'Message': 'no table'}}, 'Scan'
+    )
+    assert source_not_created(missing_table)
+    assert source_not_created(
+        Exception("NotFoundError(404, 'index_not_found_exception')")
+    )
+    assert not source_not_created(
+        ClientError(
+            {'Error': {'Code': 'AccessDeniedException', 'Message': 'no'}}, 'Scan'
+        )
+    )
+    assert not source_not_created(RuntimeError('opensearch unreachable'))

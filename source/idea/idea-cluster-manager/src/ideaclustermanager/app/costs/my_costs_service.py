@@ -39,6 +39,7 @@ from ideasdk.utils import Utils
 
 from boto3.dynamodb.conditions import Key
 
+from ideaclustermanager.app.reporting.reporting_sources import source_not_created
 from ideaclustermanager.app.projects.bedrock_usage_service import (
     USAGE_WINDOW,
     get_project_window_usage,
@@ -351,7 +352,9 @@ class MyCostsService:
                 },
             )
         except Exception as e:
-            self.logger.warning(f'failed to read jobs for {username}: {e}')
+            # a new cluster has no jobs or sessions index until its first job or desktop
+            if not source_not_created(e):
+                self.logger.warning(f'failed to read jobs for {username}: {e}')
             return MyCostsJobs(is_unavailable=True)
 
         if response is None:
@@ -495,7 +498,11 @@ class MyCostsService:
         try:
             hits = self._desktop_hits(username, start_ms, end_ms)
         except Exception as e:
-            self.logger.warning(f'failed to read desktop sessions for {username}: {e}')
+            # a new cluster has no jobs or sessions index until its first job or desktop
+            if not source_not_created(e):
+                self.logger.warning(
+                    f'failed to read desktop sessions for {username}: {e}'
+                )
             return MyCostsDesktops(is_unavailable=True)
 
         if hits is None:
@@ -864,7 +871,11 @@ class MyCostsService:
                 None, start_ms, end_ms, size=MAX_ADMIN_SESSIONS, all_users=True
             )
         except Exception as e:
-            self.logger.warning(f'failed to read desktop sessions for all users: {e}')
+            # a new cluster has no jobs or sessions index until its first job or desktop
+            if not source_not_created(e):
+                self.logger.warning(
+                    f'failed to read desktop sessions for all users: {e}'
+                )
             return True
 
         if hits is None:

@@ -52,6 +52,16 @@ def subject(value):
     return isinstance(value, str) and bool(value) and not value.startswith('!')
 
 
+def source_not_created(error: Exception) -> bool:
+    """a DynamoDB table or OpenSearch index that does not exist yet"""
+    code = getattr(error, 'response', {}).get('Error', {}).get('Code')
+    if code == 'ResourceNotFoundException':
+        return True
+    return getattr(error, 'error', None) == 'index_not_found_exception' or (
+        'index_not_found_exception' in str(error)
+    )
+
+
 class ReportingSources:
     def __init__(self, context):
         self.context = context
@@ -205,7 +215,12 @@ class ReportingSources:
                 result['coverage'][name] = 'unavailable'
                 result['warnings'].append(f'{name} source unavailable.')
                 return []
-            except Exception:
+            except Exception as error:
+                if source_not_created(error):
+                    # a new cluster has no desktop history table or session index until
+                    # its first desktop: that is no data, not an unreadable source
+                    result['coverage'][name] = 'ready'
+                    return []
                 logging.getLogger(__name__).warning(
                     'report source %s unavailable', name, exc_info=True
                 )
