@@ -1,7 +1,9 @@
-import {JobRow, ReportingInsights} from '../../client/reporting-model';
+import {DesktopRow, JobRow, ReportingInsights} from '../../client/reporting-model';
 
 export const exampleJob: JobRow = {job_id: 'job-1', name: 'Protein study', owner: 'scientist-a', project: 'Project Cedar', queue: 'compute', instance_type: 'c6i.large', nodes: 1,
     requested_cores: 36, used_cores: 1, requested_memory_gib: 64, peak_memory_gib: 3, finished_at: '2026-09-29T20:33:00Z', elapsed_hours: 2.5, cost: '1524.22', cpu_efficiency_pct: 14, memory_efficiency_pct: 60, walltime_efficiency_pct: 80, wasted_core_hours: 12.5};
+export const exampleDesktop: DesktopRow = {idea_session_id: 'session-1', name: 'Design desktop', owner: 'scientist-a', project: 'Project Cedar', instance_type: 'g6.2xlarge',
+    checked_hours: 20, idle_hours: 12, idle_pct: 60, idle_cost: '4.00'};
 export const insightsFixture = (): ReportingInsights => ({
     period: {start: '2026-09-01', end: '2026-09-29', label: 'This month'}, currency: 'USD', updated_at: '2026-09-29T20:33:00Z',
     jobs: {count: 3, cost: '1524.22', savings: '200.00', cpu_efficiency_pct: 14, cpu_efficiency_weighted_pct: 20, memory_efficiency_pct: 60, walltime_efficiency_pct: 80,
@@ -9,7 +11,9 @@ export const insightsFixture = (): ReportingInsights => ({
         by_user: [{name: 'scientist-a', cost: '1524.22', count: 3, share_pct: 100}], by_project: [{name: 'Project Cedar', cost: '1524.22', count: 3, share_pct: 100}],
         by_queue: [{name: 'compute', cost: '1524.22', count: 3, share_pct: 100}], by_instance_family: [{name: 'c6i', cost: '1524.22', count: 3, share_pct: 100}],
         daily_by_project: [{date: '2026-09-29', project: 'Project Cedar', cost: '1524.22'}], costliest: [exampleJob], least_efficient: [exampleJob]},
-    desktops: {cost: '10.00', hours: 3.5, by_user: [{name: 'scientist-a', cost: '10.00', count: null, share_pct: 100}], by_project: [{name: 'Project Cedar', cost: '10.00', count: null, share_pct: 100}], daily_top_users: [{date: '2026-09-29', user: 'scientist-a', cost: '10.00'}]},
+    desktops: {cost: '10.00', hours: 3.5, count: 1, by_user: [{name: 'scientist-a', cost: '10.00', count: null, share_pct: 100}], by_project: [{name: 'Project Cedar', cost: '10.00', count: null, share_pct: 100}], daily_top_users: [{date: '2026-09-29', user: 'scientist-a', cost: '10.00'}],
+        desktops_with_activity: 1, checked_hours: 20, idle_hours: 12, idle_cost: '4.00', idle_by_user: [{name: 'scientist-a', cost: '4.00', count: null, share_pct: 100}],
+        idle_by_project: [{name: 'Project Cedar', cost: '4.00', count: null, share_pct: 100}], least_efficient: [exampleDesktop]},
     storage: {cost: '5.50', used_bytes: 2 ** 40, by_user: [{name: 'scientist-a', bytes: 2 ** 40, cost: '5.50'}], tier_daily: [{date: '2026-09-29', tier: 'ssd', bytes: 2 ** 30}, {date: '2026-09-29', tier: 'capacity_pool', bytes: 2 ** 40}]},
     budgets: [{project: 'Project Cedar', budget_name: 'Research', limit: '2000.00', spent: '1500.00', forecast: '1800.00', pct_at_forecast: 90, headroom: '200.00', status: 'watch'}], notes: []
 });

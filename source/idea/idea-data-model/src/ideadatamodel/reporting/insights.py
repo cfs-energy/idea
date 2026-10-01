@@ -80,12 +80,33 @@ class JobsInsights(InsightModel):
     least_efficient: list[JobRow] = Field(default_factory=list)
 
 
+class DesktopRow(InsightModel):
+    idea_session_id: str
+    name: str | None = None
+    owner: str
+    project: str | None = None
+    instance_type: str | None = None
+    checked_hours: float
+    idle_hours: float
+    idle_pct: float
+    idle_cost: Decimal | None = None
+
+
 class DesktopsInsights(InsightModel):
     cost: Decimal | None = None
     hours: float | None = None
+    count: int = 0
     by_user: list[Ranked] = Field(default_factory=list)
     by_project: list[Ranked] = Field(default_factory=list)
     daily_top_users: list[DailyUserCost] = Field(default_factory=list)
+    # from the idle stop's checks; desktops without checks are left out, never counted as in use
+    desktops_with_activity: int = 0
+    checked_hours: float | None = None
+    idle_hours: float | None = None
+    idle_cost: Decimal | None = None
+    idle_by_user: list[Ranked] = Field(default_factory=list)
+    idle_by_project: list[Ranked] = Field(default_factory=list)
+    least_efficient: list[DesktopRow] = Field(default_factory=list)
 
 
 class StorageUser(InsightModel):

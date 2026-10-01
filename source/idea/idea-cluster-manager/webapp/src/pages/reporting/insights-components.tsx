@@ -1,6 +1,6 @@
 import {createContext, ReactNode, useContext, useMemo} from 'react';
 import {AreaChart, BarChart, Box, Button, ColumnLayout, Container, Grid, Header, Link, LineChart, Popover, ProgressBar, Spinner, SpaceBetween, StatusIndicator} from '@cloudscape-design/components';
-import {JobRow, Ranked, ReportingBudget, ReportingCoverage, ReportingInsights, ReportingNumber, ReportingRow, ReportingSummary} from '../../client/reporting-model';
+import {DesktopRow, JobRow, Ranked, ReportingBudget, ReportingCoverage, ReportingInsights, ReportingNumber, ReportingRow, ReportingSummary} from '../../client/reporting-model';
 import {budgetPresentation, bytes, palette, calendarDays, cappedSeries, colorByName, rankedColors, date, efficiencyLabel, efficiencyStatus, hours, measuredTierPoints, metricInfo, money, NamedPoint, numeric, percent} from './reporting-format';
 import InsightsTable, {InsightColumn, ReportLoading, ReportUser} from './insights-table';
 
@@ -49,6 +49,28 @@ export function BudgetTable({budgets, currency}: {budgets: ReportingBudget[]; cu
 export function Coaching({jobs, currency, personal = false}: {jobs: ReportingInsights['jobs']; currency: string; personal?: boolean}) {
     if (!jobs.jobs_with_efficiency || jobs.wasted_cost == null || jobs.cost == null) return null;
     return <Box>{personal ? `About ${money(jobs.wasted_cost, currency)} of the ${money(jobs.cost, currency)} estimated for your jobs that finished in this period paid for unused cores.` : `About ${money(jobs.wasted_cost, currency)} of the ${money(jobs.cost, currency)} estimated for jobs that finished in this period paid for unused cores.`}</Box>;
+}
+export function DesktopCoaching({desktops, currency, personal = false}: {desktops: ReportingInsights['desktops']; currency: string; personal?: boolean}) {
+    if (!desktops.desktops_with_activity || desktops.idle_cost == null || desktops.cost == null || Number(desktops.idle_cost) > Number(desktops.cost)) return null;
+    return <Box>{`About ${money(desktops.idle_cost, currency)} of the ${money(desktops.cost, currency)} estimated for ${personal ? 'your ' : ''}desktops in this period paid for idle desktop time.`}</Box>;
+}
+const idleDefinition = 'Hours a desktop ran with nobody connected and CPU under the idle stop threshold, from the checks the idle stop makes every 30 minutes.';
+// Each idle episode lasts up to the idle stop delay, so idle for most of the checked time
+// means the delay, not the work, is what keeps the desktop running.
+export function desktopHint(desktop: DesktopRow) {
+    return desktop.checked_hours >= 2 && desktop.idle_pct >= 50 ? `Idle ${hours(desktop.idle_hours)} of ${hours(desktop.checked_hours)} hours checked. Try a shorter idle time before it stops, in its schedule.` : null;
+}
+export function DesktopsTable({rows, currency, personal = false}: {rows: DesktopRow[]; currency: string; personal?: boolean}) {
+    const columns: InsightColumn<DesktopRow>[] = [
+        {id: 'name', label: 'Desktop', header: 'Desktop', width: 200, minWidth: 140, value: row => row.name ?? row.idea_session_id, cell: row => <span title={row.name ?? row.idea_session_id}>{row.name ?? row.idea_session_id}</span>},
+        {id: 'idle_cost', label: 'Cost of idle time', header: 'Cost of idle time', value: row => numeric(row.idle_cost), cell: row => row.idle_cost == null ? <Missing/> : money(row.idle_cost, currency)},
+        {id: 'idle_hours', label: 'Idle hours', header: <InfoTitle title="Idle hours">{idleDefinition}</InfoTitle>, value: row => row.idle_hours, cell: row => hours(row.idle_hours)},
+        {id: 'idle_pct', label: 'Idle share', header: <InfoTitle title="Idle share">Idle hours as a share of the hours the idle stop checked.</InfoTitle>, value: row => row.idle_pct, cell: row => percent(row.idle_pct)},
+        {id: 'hint', label: 'Hint', header: 'Hint', minWidth: 320, value: desktopHint, cell: row => <span title={desktopHint(row) ?? undefined}>{desktopHint(row) ?? <Missing/>}</span>},
+        {id: 'checked_hours', label: 'Hours checked', header: 'Hours checked', value: row => row.checked_hours, cell: row => hours(row.checked_hours)},
+        ...(['instance_type', 'project', 'owner'] as const).map((key, i) => ({id: key, label: ['Instance type', 'Project', 'User'][i], header: ['Instance type', 'Project', 'User'][i], value: (row: DesktopRow) => row[key], cell: (row: DesktopRow) => row[key] ?? <Missing/>}))
+    ];
+    return <InsightsTable title="Idle desktops" tableId={personal ? 'my-desktops' : 'desktops'} rows={rows} columns={columns} hidden={['project', ...(personal ? ['owner'] : [])]} defaultSort="idle_hours" empty="No idle desktop time in this period"/>;
 }
 const gib = (value: number) => new Intl.NumberFormat('en-US', {maximumFractionDigits: value < 10 ? 1 : 0}).format(value);
 export function jobHint(job: JobRow) {
@@ -145,6 +167,7 @@ function InsightView({tab, insights: data, summary, userRow, timezone, personal 
     const tile = (title: string, value: ReportingNumber | null | undefined, details?: ReportingCoverage, definition?: string, children?: ReactNode) => value == null ? null : <MetricTile title={title} value={money(value, currency)} info={metricInfo(details, timezone, definition)}>{children}</MetricTile>;
     if (tab === 'overview') return <SpaceBetween size="l">
         <Coaching jobs={data.jobs} currency={currency} personal={personal}/>
+        <DesktopCoaching desktops={data.desktops} currency={currency} personal={personal}/>
         {overviewTiles ?? (personal ? <TileRow>
             {tile('Total spend', total, summary?.coverage.spend_total, 'Adds the available job, desktop and storage costs for this period.')}
             {tile('Job spend', data.jobs.cost, summary?.coverage.jobs, 'Estimated from jobs that finished in this period.',
@@ -179,11 +202,18 @@ function InsightView({tab, insights: data, summary, userRow, timezone, personal 
         </Grid>
         <JobsTable title="Top jobs" rows={mergeJobs(data.jobs)} currency={currency} timezone={timezone} personal={personal} canOpenJobs={canOpenJobs}/>
     </SpaceBetween>;
+    const idle = data.desktops.desktops_with_activity > 0;
     if (tab === 'desktops') return <SpaceBetween size="l">
-        <ColumnLayout columns={2}>{tile('Desktop spend', data.desktops.cost, undefined, 'Recorded desktop costs from stored daily costs for this period.')}<MetricTile title="Desktop hours" value={data.desktops.hours == null ? null : hours(data.desktops.hours)} info="Estimated desktop hours from sessions overlapping this period."/></ColumnLayout>
+        <DesktopCoaching desktops={data.desktops} currency={currency} personal={personal}/>
+        <TileRow>{tile('Desktop spend', data.desktops.cost, undefined, 'Recorded desktop costs from stored daily costs for this period.')}<MetricTile title="Desktop hours" value={data.desktops.hours == null ? null : hours(data.desktops.hours)} info="Estimated desktop hours from sessions overlapping this period."/>
+            {idle && <MetricTile title="Idle hours" value={hours(data.desktops.idle_hours)} info={`${idleDefinition} Uses ${data.desktops.desktops_with_activity} of ${Math.max(data.desktops.count, data.desktops.desktops_with_activity)} desktops.`}/>}
+            {idle && <MetricTile title="Cost of idle time" value={data.desktops.idle_cost == null ? null : money(data.desktops.idle_cost, currency)} info="Idle hours multiplied by each desktop's on-demand hourly price."/>}</TileRow>
         <DailyChart period={data.period} title={scoped ? "Daily desktop cost" : "Daily desktop cost by user"} points={data.desktops.daily_top_users.map(row => ({name: personal ? 'Desktops' : row.user, x: row.date, value: Number(row.cost)}))} currency={currency} timezone={timezone} empty="No desktop costs in this period"/>
         {!scoped && <CostBars title="Desktop cost by user" rows={data.desktops.by_user ?? []} currency={currency} entity="User"/>}
         <CostBars title="Desktop cost by project" rows={data.desktops.by_project} currency={currency} entity="Project"/>
+        {idle && Number(data.desktops.idle_cost) > 0 && !scoped && <CostBars title="Cost of idle time by user" rows={data.desktops.idle_by_user ?? []} currency={currency} entity="User"/>}
+        {idle && Number(data.desktops.idle_cost) > 0 && <CostBars title="Cost of idle time by project" rows={data.desktops.idle_by_project} currency={currency} entity="Project"/>}
+        {idle && <DesktopsTable rows={data.desktops.least_efficient} currency={currency} personal={personal}/>}
     </SpaceBetween>;
     return <SpaceBetween size="l">
         <ColumnLayout columns={2}>{tile('Storage spend', data.storage.cost)}<MetricTile title="Stored data" value={data.storage.used_bytes == null ? null : bytes(data.storage.used_bytes)} info="Most recent measured storage use in this period."/></ColumnLayout>

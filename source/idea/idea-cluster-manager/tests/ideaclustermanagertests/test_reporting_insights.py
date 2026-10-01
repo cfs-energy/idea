@@ -727,3 +727,159 @@ def test_reporting_filter_uses_shared_capability_and_scoped_cache(allowed):
     with pytest.raises(exceptions.SocaException):
         api.invoke(call)
     assert sources.read.call_count == 4
+
+
+def desktop(identity, owner, instance='g6.xlarge', project='project-a'):
+    return {
+        '_id': identity,
+        '_source': dict(
+            idea_session_id=identity,
+            name=f'Desktop {identity}',
+            owner=owner,
+            project_id=project,
+            state='READY',
+            server=dict(instance_type=instance),
+            created_on='2024-02-01T00:00:00Z',
+            updated_on='2024-02-01T00:00:00Z',
+        ),
+    }
+
+
+def activity(day, **sessions):
+    return dict(
+        date=day,
+        sessions={
+            key: dict(owner=owner, instance_type=instance, checks=checks, idle=idle)
+            for key, (owner, instance, checks, idle) in sessions.items()
+        },
+    )
+
+
+def idle_data():
+    value = data()
+    value['desktops'] = [
+        desktop('a', 'user-a'),
+        desktop('b', 'user-b', instance='t3.unpriced'),
+        desktop('c', 'user-a'),
+    ]
+    value['desktop_activity'] = [
+        activity('2024-02-01', a=('user-a', 'g6.xlarge', 8, 6)),
+        activity(
+            '2024-02-02',
+            a=('user-a', 'g6.xlarge', 4, 0),
+            b=('user-b', 't3.unpriced', 4, 4),
+        ),
+        # outside the period
+        activity('2024-03-01', a=('user-a', 'g6.xlarge', 48, 48)),
+    ]
+    return value
+
+
+def priced_context():
+    context = Mock()
+    context.aws_util().get_ec2_instance_type_unit_price.side_effect = (
+        lambda instance: SimpleNamespace(ondemand=2)
+        if instance == 'g6.xlarge'
+        else None
+    )
+    return context
+
+
+def test_desktop_idle_time_cost_and_rows():
+    result = build(idle_data(), context=priced_context()).desktops
+    # c has no checks: unknown, never counted as in use
+    assert result.desktops_with_activity == 2
+    assert result.count == 3
+    assert result.checked_hours == 8
+    assert result.idle_hours == 5
+    # 3 idle hours of a at 2/hour; b has no price, so its hours count and its cost does not
+    assert result.idle_cost == Decimal('6')
+    assert [(r.name, r.cost) for r in result.idle_by_user] == [('user-a', 6)]
+    assert [(r.name, r.cost) for r in result.idle_by_project] == [('project-a', 6)]
+    rows = {row.idea_session_id: row for row in result.least_efficient}
+    assert rows['a'].checked_hours == 6 and rows['a'].idle_hours == 3
+    assert rows['a'].idle_pct == 50 and rows['a'].name == 'Desktop a'
+    assert rows['b'].idle_cost is None and rows['b'].idle_pct == 100
+    assert 'c' not in rows
+
+
+def test_desktop_idle_scope_hides_other_users():
+    personal = build(idle_data(), 'user-a', context=priced_context()).desktops
+    assert personal.desktops_with_activity == 1
+    assert personal.idle_hours == 3
+    assert personal.idle_by_user == []
+    assert {row.owner for row in personal.least_efficient} == {'user-a'}
+
+
+def test_desktop_idle_absent_without_checks():
+    value = idle_data()
+    value['desktop_activity'] = []
+    result = build(value, context=priced_context())
+    desktops = result.desktops
+    assert desktops.desktops_with_activity == 0
+    assert desktops.idle_hours is desktops.checked_hours is desktops.idle_cost is None
+    assert desktops.least_efficient == desktops.idle_by_project == []
+    wire = result.model_dump(mode='json')['desktops']
+    assert wire['idle_cost'] is None and wire['least_efficient'] == []
+
+
+def test_desktop_idle_wire_shape():
+    wire = build(idle_data(), context=priced_context()).model_dump(mode='json')[
+        'desktops'
+    ]
+    assert wire['idle_cost'] == '6.0000'
+    assert set(wire['least_efficient'][0]) == {
+        'idea_session_id',
+        'name',
+        'owner',
+        'project',
+        'instance_type',
+        'checked_hours',
+        'idle_hours',
+        'idle_pct',
+        'idle_cost',
+    }
+
+
+def test_sources_read_desktop_activity_for_the_period_and_owner_only():
+    import json
+    from ideaclustermanager.app.reporting.reporting_sources import ReportingSources
+
+    context = Mock()
+    context.config().is_module_enabled.return_value = True
+    context.accounts.list_users.return_value = SimpleNamespace(
+        listing=[], paginator=None
+    )
+    context.projects.list_projects.return_value = SimpleNamespace(
+        listing=[], paginator=None
+    )
+    context.aws().dynamodb_table().Table.return_value.query.return_value = {'Items': []}
+    store = context.personal_costs_store
+    sessions = dict(
+        a=dict(owner='user-a', checks=2, idle=1),
+        b=dict(owner='user-b', checks=2, idle=2),
+    )
+
+    def records(subject, first, last=None):
+        if first.startswith('idle:'):
+            return [
+                dict(
+                    record='idle:2024-02-03',
+                    payload=json.dumps(dict(sessions=sessions)),
+                )
+            ]
+        return []
+
+    store.records.side_effect = records
+    store.resolve_source.side_effect = lambda subject, value: value
+    sources = ReportingSources(context)
+    sources.search = Mock(return_value=[])
+    sources.projection = Mock(return_value=projection('5'))
+    result = sources.read(
+        period(), time.monotonic() + 30, username='user-a', insights=True
+    )
+    assert result['coverage']['desktop_activity'] == 'ready'
+    assert result['desktop_activity'] == [
+        dict(date='2024-02-03', sessions=dict(a=sessions['a']))
+    ]
+    store.records.assert_any_call('!collector', 'idle:2024-02-01', 'idle:2024-02-29')

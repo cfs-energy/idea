@@ -118,10 +118,15 @@ class PersonalCostsStore:
             )
         return value
 
-    def records(self, subject, prefix):
+    def records(self, subject, prefix, last=None):
+        """records under a prefix, or between prefix and last inclusive when last is given."""
+        record = (
+            Key('record').begins_with(prefix)
+            if last is None
+            else Key('record').between(prefix, last)
+        )
         request = {
-            'KeyConditionExpression': Key('subject').eq(subject)
-            & Key('record').begins_with(prefix),
+            'KeyConditionExpression': Key('subject').eq(subject) & record,
             'ConsistentRead': True,
         }
         while True:

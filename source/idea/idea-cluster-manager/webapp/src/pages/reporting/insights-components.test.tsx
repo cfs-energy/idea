@@ -1,8 +1,8 @@
 import {render, screen, within} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {csvCell, readPreferences, savePreferences} from './insights-table';
-import {BudgetTable, Coaching, EfficiencyTiles, InsightTab, JobsTable, jobHint, MetricTile, mergeJobs} from './insights-components';
-import {exampleJob, insightsFixture} from './insights-fixture';
+import {BudgetTable, Coaching, DesktopCoaching, desktopHint, EfficiencyTiles, InsightTab, JobsTable, jobHint, MetricTile, mergeJobs} from './insights-components';
+import {exampleDesktop, exampleJob, insightsFixture} from './insights-fixture';
 import {budgetPresentation} from './reporting-format';
 
 it.each(['ok', 'watch', 'over'] as const)('colors the %s budget bar and shows its status', status => {
@@ -155,4 +155,46 @@ it('distinguishes stored desktop costs from session hours', async () => {
     expect(screen.getByText('Recorded desktop costs from stored daily costs for this period.')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', {name: 'About Desktop hours'}));
     expect(screen.getByText('Estimated desktop hours from sessions overlapping this period.')).toBeInTheDocument();
+});
+
+it('leads desktop coaching with money and hides it without idle checks', () => {
+    const desktops = insightsFixture().desktops;
+    const {rerender} = render(<DesktopCoaching desktops={desktops} currency="USD" personal/>);
+    expect(screen.getByText('About $4.00 of the $10.00 estimated for your desktops in this period paid for idle desktop time.')).toBeInTheDocument();
+    rerender(<DesktopCoaching desktops={desktops} currency="USD"/>);
+    expect(screen.getByText('About $4.00 of the $10.00 estimated for desktops in this period paid for idle desktop time.')).toBeInTheDocument();
+    for (const hidden of [{desktops_with_activity: 0}, {idle_cost: null}, {cost: null}, {idle_cost: '11.00'}]) {
+        rerender(<DesktopCoaching desktops={{...desktops, ...hidden}} currency="USD"/>);
+        expect(screen.queryByText(/About/)).toBeNull();
+    }
+});
+it.each([
+    [20, 12, 60, 'Idle 12 of 20 hours checked. Try a shorter idle time before it stops, in its schedule.'],
+    [2, 1, 50, 'Idle 1 of 2 hours checked. Try a shorter idle time before it stops, in its schedule.'],
+    [1.5, 1.5, 100, null], [20, 9.5, 47.5, null]
+])('hints at the idle stop delay for %s checked hours, %s idle', (checked, idle, pct, hint) => {
+    expect(desktopHint({...exampleDesktop, checked_hours: checked, idle_hours: idle, idle_pct: pct})).toBe(hint);
+});
+it('shows idle desktop time, its cost and the idle desktops', async () => {
+    render(<InsightTab tab="desktops" insights={insightsFixture()} timezone="UTC"/>);
+    expect(screen.getByText('About $4.00 of the $10.00 estimated for desktops in this period paid for idle desktop time.')).toBeInTheDocument();
+    expect(screen.getByRole('heading', {level: 3, name: /Idle hours/})).toBeInTheDocument();
+    await userEvent.click(screen.getAllByRole('button', {name: 'About Idle hours'})[0]);
+    expect(screen.getByText('Hours a desktop ran with nobody connected and CPU under the idle stop threshold, from the checks the idle stop makes every 30 minutes. Uses 1 of 1 desktops.')).toBeInTheDocument();
+    const table = screen.getByRole('table', {name: 'Idle desktops'});
+    expect(within(table).getAllByRole('columnheader').map(cell => cell.textContent?.trim())).toEqual(['Desktop', 'Cost of idle time', 'Idle hours', 'Idle share', 'Hint', 'Hours checked', 'Instance type', 'User']);
+    expect(within(table).getByText('Design desktop')).toBeInTheDocument();
+    expect(within(table).getByText('60%')).toBeInTheDocument();
+});
+it('hides idle desktop time without idle checks', () => {
+    const insights = insightsFixture();
+    insights.desktops = {...insights.desktops, desktops_with_activity: 0, checked_hours: null, idle_hours: null, idle_cost: null, idle_by_user: [], idle_by_project: [], least_efficient: []};
+    render(<InsightTab tab="desktops" insights={insights} timezone="UTC"/>);
+    expect(screen.queryByText(/Idle hours|Cost of idle time|idle desktop time/)).toBeNull();
+    expect(screen.queryByRole('table', {name: 'Idle desktops'})).toBeNull();
+    expect(screen.getByText('Desktop hours')).toBeInTheDocument();
+});
+it('shows desktop coaching on the overview and keeps users out of personal idle tables', () => {
+    render(<InsightTab tab="overview" personal insights={insightsFixture()} timezone="UTC"/>);
+    expect(screen.getByText('About $4.00 of the $10.00 estimated for your desktops in this period paid for idle desktop time.')).toBeInTheDocument();
 });

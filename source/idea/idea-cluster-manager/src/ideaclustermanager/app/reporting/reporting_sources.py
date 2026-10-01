@@ -374,6 +374,35 @@ class ReportingSources:
             result['desktops'].extend(
                 {'_history': True, '_source': row} for row in history
             )
+            if insights:
+
+                def activity():
+                    # one stored record per day the collector wrote; never the log groups
+                    store = self.context.personal_costs_store
+                    from ideaclustermanager.app.costs.personal_costs_store import SYSTEM
+                    from ideaclustermanager.app.costs.desktop_activity import (
+                        record_key,
+                    )
+
+                    rows = []
+                    for row in store.records(
+                        SYSTEM,
+                        record_key(period.start_date),
+                        record_key(period.end_date),
+                    ):
+                        check_deadline(deadline)
+                        value = store.resolve_source(SYSTEM, json.loads(row['payload']))
+                        sessions = (value or {}).get('sessions') or {}
+                        if scope_username is not None:
+                            sessions = {
+                                key: entry
+                                for key, entry in sessions.items()
+                                if entry.get('owner') == scope_username
+                            }
+                        rows.append(dict(date=row['record'][5:], sessions=sessions))
+                    return rows
+
+                result['desktop_activity'] = optional('desktop_activity', activity)
         else:
             result['coverage']['desktops'] = 'not_applicable'
             result['coverage']['desktop_history'] = 'not_applicable'
