@@ -5,7 +5,9 @@ import time
 from datetime import datetime
 from decimal import Decimal
 
-from boto3.dynamodb.conditions import Key
+from concurrent.futures import ThreadPoolExecutor
+
+from boto3.dynamodb.conditions import Attr, Key
 
 from ideadatamodel import (
     ListUsersRequest,
@@ -67,6 +69,32 @@ class ReportingSources:
                 break
             request['ExclusiveStartKey'] = page['LastEvaluatedKey']
         check_deadline(deadline)
+
+    @staticmethod
+    def scan_heads(table, deadline, segments=8):
+        """
+        every head record, read in parallel segments. the table is mostly generation and
+        inventory chunks, and one sequential pass over it was most of a report build.
+        """
+
+        def segment(index):
+            request = dict(
+                ConsistentRead=True,
+                Segment=index,
+                TotalSegments=segments,
+                FilterExpression=Attr('record').eq('head'),
+            )
+            rows = []
+            while True:
+                check_deadline(deadline)
+                page = table.scan(**request)
+                rows.extend(page.get('Items', []))
+                if not page.get('LastEvaluatedKey'):
+                    return rows
+                request['ExclusiveStartKey'] = page['LastEvaluatedKey']
+
+        with ThreadPoolExecutor(max_workers=segments) as pool:
+            return [row for rows in pool.map(segment, range(segments)) for row in rows]
 
     @staticmethod
     def listing(read, request_type, deadline):
@@ -215,7 +243,9 @@ class ReportingSources:
                 for row in (
                     self.context.personal_costs_store.records(scope_username, 'head')
                     if scope_username is not None
-                    else self.scan(self.context.personal_costs_store.table, deadline)
+                    else self.scan_heads(
+                        self.context.personal_costs_store.table, deadline
+                    )
                 )
                 if row.get('record') == 'head'
                 and subject(row.get('subject'))

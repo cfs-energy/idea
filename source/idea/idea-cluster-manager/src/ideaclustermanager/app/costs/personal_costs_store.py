@@ -178,7 +178,9 @@ class PersonalCostsStore:
             {row['record'].split(':')[1] for row in rows}, reverse=True
         )
         keep = set(generations[:2]) | {current}
-        cutoff = int((time.time() - 86400) * 1000)
+        # a reader pins a generation for seconds and a report snapshot copies what it reads,
+        # so an hour covers every reader. each refresh writes a generation.
+        cutoff = int((time.time() - 3600) * 1000)
         for row in rows:
             generation = row['record'].split(':')[1]
             if generation not in keep and int(generation.split('-')[0]) < cutoff:
