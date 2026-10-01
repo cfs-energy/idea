@@ -86,18 +86,36 @@ export interface MyVirtualDesktopSessionsState {
     softwareStacks: { [k: string]: VirtualDesktopSoftwareStack }
 }
 
+// the listing is read from the search index, which trails the session table by a few seconds
+const INDEX_LAG_GRACE_MS = 2 * 60 * 1000
+
 /**
  * The next table contents. A complete listing replaces the table, a partial one updates the rows it
- * names; in both, a local copy newer than the server's copy is kept.
+ * names; in both, a local copy newer than the server's copy is kept. Because the listing trails the
+ * session table, a complete listing keeps a session it does not list yet if that session changed
+ * within the grace window (a desktop just created), and drops one the session table already
+ * deleted even while the listing still returns it.
  */
-export function mergeSessions(current: Map<string, VirtualDesktopSession>, incoming: VirtualDesktopSession[], complete: boolean): Map<string, VirtualDesktopSession> {
+export function mergeSessions(current: Map<string, VirtualDesktopSession>, incoming: VirtualDesktopSession[], complete: boolean, now: number = Date.now()): Map<string, VirtualDesktopSession> {
     const next = new Map<string, VirtualDesktopSession>(complete ? [] : current.entries())
     incoming.forEach(session => {
         const id = session.idea_session_id!
         const local = current.get(id)
         const localIsNewer = local !== undefined && local.updated_on !== undefined && session.updated_on !== undefined && local.updated_on > session.updated_on
+        if (complete && localIsNewer && local.state === 'DELETED') {
+            return
+        }
         next.set(id, localIsNewer ? local : session)
     })
+    if (complete) {
+        current.forEach((local, id) => {
+            const changed = Date.parse(local.updated_on ?? local.created_on ?? '')
+            const leaving = local.state === 'DELETING' || local.state === 'DELETED'
+            if (!next.has(id) && !leaving && now - changed < INDEX_LAG_GRACE_MS) {
+                next.set(id, local)
+            }
+        })
+    }
     return next
 }
 
