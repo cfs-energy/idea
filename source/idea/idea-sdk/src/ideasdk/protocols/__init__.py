@@ -325,6 +325,9 @@ class AWSUtilProtocol(SocaBaseProtocol):
     def is_image_missing(self, image_id: str) -> bool: ...
 
     @abstractmethod
+    def get_image_dates(self, image_id: str) -> Optional[Dict[str, str]]: ...
+
+    @abstractmethod
     def is_instance_type_efa_supported(self, instance_type: str) -> bool: ...
 
     @abstractmethod

@@ -642,12 +642,18 @@ class JobProvisioner(SocaService):
         it never affects provisioning. applied records what each job was told within a
         pass: an unchanged comment costs no qalter.
         """
-        comment = JOB_COMMENT_PROVISIONING
+        base = JOB_COMMENT_PROVISIONING
         if attempt is not None:
-            comment = f'{comment} (attempt {attempt})'
+            base = f'{base} (attempt {attempt})'
         if applied is None:
             applied = {}
+        short = 'IDEA: provisioning' + (
+            f' (attempt {attempt})' if attempt is not None else ''
+        )
         for job in jobs:
+            # pbs keeps 128 characters of a comment, the AMI note takes the room it needs
+            note = self._ami_note(job)
+            comment = f'{short}. {note}' if note else base
             if job.is_provisioned() or applied.get(job.job_id) == comment:
                 continue
             try:
@@ -657,6 +663,56 @@ class JobProvisioner(SocaService):
                 applied[job.job_id] = comment
             except Exception as e:
                 self._logger.warning(f'{job.log_tag} failed to set job comment: {e}')
+
+    def _ami_note(self, job: SocaJob) -> str:
+        """
+        a warning, never a rejection: a pinned AMI its owner has deprecated, or one older than
+        the queue default, usually still launches but misses what the default carries.
+        """
+        try:
+            ami = job.params.instance_ami if job.params else None
+            if Utils.is_empty(ami):
+                return ''
+            default_ami = None
+            try:
+                profile = self._context.queue_profiles.get_queue_profile(
+                    queue_name=job.queue
+                )
+                if profile and profile.default_job_params:
+                    default_ami = profile.default_job_params.instance_ami
+            except Exception:  # noqa
+                pass
+            if Utils.is_empty(default_ami):
+                default_ami = self._context.config().get_string(
+                    'scheduler.compute_node_ami'
+                )
+            if ami == default_ami:
+                return ''
+            aws_util = self._context.aws_util()
+            dates = aws_util.get_image_dates(ami)
+            if not dates:
+                return ''
+            if (
+                dates.get('deprecated')
+                and arrow.get(dates['deprecated']) <= arrow.utcnow()
+            ):
+                return f'AMI {ami} is deprecated, drop instance_ami to use the queue default'
+            default_dates = (
+                aws_util.get_image_dates(default_ami) if default_ami else None
+            )
+            if (
+                default_dates
+                and dates.get('created')
+                and default_dates.get('created')
+                and arrow.get(dates['created']) < arrow.get(default_dates['created'])
+            ):
+                return (
+                    f'AMI {ami} ({dates["created"][:10]}) is older than the queue '
+                    f'default ({default_dates["created"][:10]})'
+                )
+        except Exception as e:
+            self._logger.debug(f'{job.log_tag} could not check the AMI age: {e}')
+        return ''
 
     def _is_job_provisionable(self, job: SocaJob) -> bool:
         """

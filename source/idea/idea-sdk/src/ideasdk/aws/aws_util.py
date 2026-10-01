@@ -326,6 +326,40 @@ class AWSUtil(AWSUtilProtocol):
         self._context.cache().long_term().set(key=cache_key, value=architecture)
         return architecture
 
+    def get_image_dates(self, image_id: str) -> Optional[Dict[str, str]]:
+        """
+        CreationDate and DeprecationTime (when set) of an AMI as EC2 reports them, ISO 8601.
+        None when the AMI cannot be described.
+        """
+        if Utils.is_empty(image_id):
+            return None
+        cache_key = f'aws.ec2.image.{image_id}.dates'
+        dates = self._context.cache().long_term().get(key=cache_key)
+        if dates is not None:
+            return dates or None
+        try:
+            images = Utils.get_value_as_list(
+                'Images',
+                self.aws()
+                .ec2()
+                .describe_images(ImageIds=[image_id], IncludeDeprecated=True),
+                [],
+            )
+        except botocore.exceptions.ClientError as e:
+            self._logger.debug(f'could not describe image: {image_id} - {e}')
+            images = []
+        if len(images) == 0:
+            self._context.cache().long_term().set(
+                key=cache_key, value={}, ttl=UNKNOWN_IMAGE_ARCHITECTURE_TTL_SECS
+            )
+            return None
+        dates = {
+            'created': Utils.get_value_as_string('CreationDate', images[0]),
+            'deprecated': Utils.get_value_as_string('DeprecationTime', images[0]),
+        }
+        self._context.cache().long_term().set(key=cache_key, value=dates)
+        return dates
+
     def is_image_missing(self, image_id: str) -> bool:
         """
         True only when EC2 says the AMI does not exist or is not visible to this account.
