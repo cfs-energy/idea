@@ -1611,6 +1611,70 @@ def test_job_builder_base_os_default_ami_mismatch_invalid(context):
     assert result.success is False
 
 
+def _queue_profiles(*profiles):
+    from types import SimpleNamespace
+    from ideadatamodel import HpcQueueProfile, SocaJobParams
+
+    return SimpleNamespace(
+        list_queue_profiles=lambda: [
+            HpcQueueProfile(
+                name=name,
+                queues=[name],
+                enabled=True,
+                default_job_params=SocaJobParams(**defaults),
+            )
+            for name, defaults in profiles
+        ]
+    )
+
+
+def _messages(result):
+    return [e.message for e in result.validation_result.results if e.message]
+
+
+def test_job_builder_architecture_mismatch_names_a_queue_that_fits(
+    context, monkeypatch
+):
+    """
+    an arm64 instance type on an x86_64 queue points at the queue set up for arm64
+    """
+    monkeypatch.setattr(
+        context,
+        'queue_profiles',
+        _queue_profiles(
+            ('normal', {'instance_types': ['c5.large']}),
+            ('arm-normal', {'instance_types': ['hpc7g.16xlarge']}),
+        ),
+        raising=False,
+    )
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 1, 'cpus': 1, 'instance_type': 'hpc7g.16xlarge'},
+    )
+    assert result.success is False
+    assert any(
+        m.endswith('Queues set up for arm64: arm-normal.') for m in _messages(result)
+    )
+
+
+def test_job_builder_base_os_mismatch_names_a_queue_that_fits(context, monkeypatch):
+    """
+    a base_os the queue default AMI is not built for points at the queue that runs it
+    """
+    monkeypatch.setattr(
+        context,
+        'queue_profiles',
+        _queue_profiles(('rhel', {'base_os': 'rhel9'})),
+        raising=False,
+    )
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 1, 'cpus': 1, 'instance_type': 't3.micro', 'base_os': 'rhel9'},
+    )
+    assert result.success is False
+    assert any(m.endswith('Queues set up for rhel9: rhel.') for m in _messages(result))
+
+
 def test_job_builder_base_os_matches_default_os_valid(context):
     """
     base_os matches the cluster default compute node os - the default AMI applies

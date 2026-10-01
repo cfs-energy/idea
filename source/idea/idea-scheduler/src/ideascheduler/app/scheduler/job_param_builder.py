@@ -357,6 +357,33 @@ class JobParamsBuilderContextProtocol(ABC):
         return None
 
 
+def queues_where(soca_context, fits) -> List[str]:
+    """
+    names of the queues whose enabled queue profile default satisfies `fits`, so a rejected
+    job can be pointed at a queue that runs it. a hint only, it never fails validation.
+    """
+    try:
+        profiles = soca_context.queue_profiles.list_queue_profiles()
+    except Exception:  # noqa
+        return []
+    names = set()
+    for profile in profiles or []:
+        if not profile.enabled or profile.default_job_params is None:
+            continue
+        try:
+            if fits(profile.default_job_params):
+                names.update(profile.queues or [])
+        except Exception:  # noqa
+            continue
+    return sorted(names)
+
+
+def queue_hint(queues: List[str], what: str) -> str:
+    if not queues:
+        return ''
+    return f' Queues set up for {what}: {", ".join(queues)}.'
+
+
 class BaseParamBuilder(ParamBuilderProtocol, ABC):
     def __init__(self, context: JobParamsBuilderContextProtocol, job_param: str):
         self.context = context
@@ -1103,7 +1130,14 @@ class InstanceAmiParamBuilder(BaseParamBuilder):
             message=f'base_os: ({base_os}) does not match the operating system '
             f'({default_ami_os}) of the default AMI: ({self.default()}). '
             f'Specify instance_ami with an AMI built for {base_os} when '
-            f'overriding base_os.',
+            f'overriding base_os.'
+            + queue_hint(
+                queues_where(
+                    self.context.soca_context,
+                    lambda defaults: defaults.base_os == base_os,
+                ),
+                base_os,
+            ),
         )
         return False
 
@@ -1417,7 +1451,20 @@ class InstanceTypesParamBuilder(BaseParamBuilder):
             f'{"/".join(sorted(common_architectures))}, but instance_ami: ({instance_ami}) is '
             f'{image_architecture}. Specify an instance_ami built for '
             f'{"/".join(sorted(common_architectures))}, or request '
-            f'{image_architecture} instance types.',
+            f'{image_architecture} instance types.'
+            + queue_hint(
+                queues_where(
+                    self.soca_context,
+                    lambda defaults: common_architectures
+                    & set.intersection(
+                        *[
+                            self._get_supported_architectures(instance_type=t)
+                            for t in defaults.instance_types
+                        ]
+                    ),
+                ),
+                '/'.join(sorted(common_architectures)),
+            ),
         )
         return False
 
