@@ -962,6 +962,8 @@ class InstanceAmiParamBuilder(BaseParamBuilder):
         instance_ami = self.get()
 
         if instance_ami is None:
+            if not self._validate_ami_exists(self.default(), from_queue_default=True):
+                return False
             return self._validate_base_os_default_ami()
 
         if self.is_restricted_parameter():
@@ -974,7 +976,39 @@ class InstanceAmiParamBuilder(BaseParamBuilder):
             )
             return False
 
+        if not self._validate_ami_exists(instance_ami, from_queue_default=False):
+            return False
+
         return self._validate_requested_ami_base_os(instance_ami=instance_ami)
+
+    def _validate_ami_exists(
+        self, instance_ami: Optional[str], from_queue_default: bool
+    ) -> bool:
+        """
+        reject an AMI that EC2 says does not exist or is not shared with this account, a
+        launch from it fails every time and the job would wait for a node that never comes.
+        an AMI that cannot be described for any other reason is allowed.
+        """
+        aws_util = self.context.soca_context.aws_util()
+        if Utils.is_empty(instance_ami) or not aws_util.is_image_missing(instance_ami):
+            return True
+
+        if from_queue_default:
+            message = (
+                f'The default instance_ami for this queue ({instance_ami}) does not exist in '
+                f'this region or is not shared with this account. Ask your cluster '
+                f'administrator to update the queue profile AMI.'
+            )
+        else:
+            message = (
+                f'instance_ami: ({instance_ami}) does not exist in this region or is not '
+                f'shared with this account, it may have been deregistered. Remove '
+                f'instance_ami to use the queue default, or specify an AMI that exists.'
+            )
+        self.add_validation_entry(
+            param=constants.JOB_PARAM_INSTANCE_AMI, message=message
+        )
+        return False
 
     def _known_ami_base_os(self) -> Dict[str, str]:
         """

@@ -50,6 +50,15 @@ INVALID_INSTANCE_PROFILE_CACHE_TTL_SECS = 60
 INVALID_S3_BUCKET_HAS_ACCESS_TTL_SECS = 60
 CLOUD_FORMATION_STACK_TTL_SECS = 60
 UNKNOWN_IMAGE_ARCHITECTURE_TTL_SECS = 60
+# EC2 answers these when the AMI does not exist or is not shared with this account,
+# the only describe failures that mean a launch from it can never succeed.
+MISSING_IMAGE_ERROR_CODES = (
+    'InvalidAMIID.NotFound',
+    'InvalidAMIID.Unavailable',
+    'InvalidAMIID.Malformed',
+)
+# cached in place of an architecture for an AMI EC2 says does not exist
+MISSING_IMAGE = 'missing'
 COST_EXPLORER_CACHE_TTL_SECS = 6 * 60 * 60
 # cached in place of an answer, so a cost explorer that cannot be read is not asked
 # again on every project read. any request to it is billed.
@@ -282,18 +291,31 @@ class AWSUtil(AWSUtilProtocol):
         cache_key = f'aws.ec2.image.{image_id}.architecture'
         architecture = self._context.cache().long_term().get(key=cache_key)
         if architecture is not None:
-            return architecture if architecture != '' else None
+            return architecture if architecture not in ('', MISSING_IMAGE) else None
 
         try:
             describe_result = self.aws().ec2().describe_images(ImageIds=[image_id])
             images = Utils.get_value_as_list('Images', describe_result, [])
             if len(images) > 0:
                 architecture = Utils.get_value_as_string('Architecture', images[0])
+            else:
+                architecture = MISSING_IMAGE
         except botocore.exceptions.ClientError as e:
             self._logger.debug(
                 f'could not describe image: {image_id} to resolve architecture - {e}'
             )
-            architecture = None
+            if e.response.get('Error', {}).get('Code') in MISSING_IMAGE_ERROR_CODES:
+                architecture = MISSING_IMAGE
+            else:
+                architecture = None
+
+        if architecture == MISSING_IMAGE:
+            self._context.cache().long_term().set(
+                key=cache_key,
+                value=MISSING_IMAGE,
+                ttl=UNKNOWN_IMAGE_ARCHITECTURE_TTL_SECS,
+            )
+            return None
 
         if Utils.is_empty(architecture):
             self._context.cache().long_term().set(
@@ -303,6 +325,17 @@ class AWSUtil(AWSUtilProtocol):
 
         self._context.cache().long_term().set(key=cache_key, value=architecture)
         return architecture
+
+    def is_image_missing(self, image_id: str) -> bool:
+        """
+        True only when EC2 says the AMI does not exist or is not visible to this account.
+        any other describe failure is an unknown, and returns False.
+        """
+        if Utils.is_empty(image_id):
+            return False
+        self.get_image_architecture(image_id=image_id)
+        cache_key = f'aws.ec2.image.{image_id}.architecture'
+        return self._context.cache().long_term().get(key=cache_key) == MISSING_IMAGE
 
     def get_instance_efa_max_interfaces_supported(self, instance_type: str) -> int:
         ec2_instance_type = self.get_ec2_instance_type(instance_type=instance_type)

@@ -322,6 +322,9 @@ class AWSUtilProtocol(SocaBaseProtocol):
     def get_image_architecture(self, image_id: str) -> Optional[str]: ...
 
     @abstractmethod
+    def is_image_missing(self, image_id: str) -> bool: ...
+
+    @abstractmethod
     def is_instance_type_efa_supported(self, instance_type: str) -> bool: ...
 
     @abstractmethod

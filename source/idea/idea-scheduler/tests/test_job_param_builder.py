@@ -2384,6 +2384,65 @@ def test_job_builder_instance_types_architecture_check_skipped_when_ami_not_desc
     assert result.job_params.instance_types == ['hpc7g.16xlarge']
 
 
+def _raise_image_not_found(**_):
+    raise ClientError(
+        {'Error': {'Code': 'InvalidAMIID.NotFound', 'Message': 'not found'}},
+        'DescribeImages',
+    )
+
+
+def test_job_builder_instance_ami_missing_invalid(context, monkeypatch):
+    """
+    a pinned AMI that EC2 says does not exist (deregistered, or never shared) is rejected
+    at submit instead of leaving the job waiting for a node that never launches
+    """
+    monkeypatch.setattr(context.aws().ec2(), 'describe_images', _raise_image_not_found)
+
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': 1,
+            'cpus': 1,
+            'instance_type': 'c5.large',
+            'instance_ami': 'ami-deregistered0000',
+        },
+    )
+    assert result.success is False
+    messages = [
+        entry.message
+        for entry in result.validation_result.results
+        if entry.message is not None
+    ]
+    assert any(
+        'ami-deregistered0000) does not exist' in message
+        and 'Remove instance_ami' in message
+        for message in messages
+    )
+
+
+def test_job_builder_default_ami_missing_invalid(context, monkeypatch):
+    """
+    a default AMI that no longer exists is rejected too, and points at the administrator
+    """
+    monkeypatch.setattr(context.aws().ec2(), 'describe_images', _raise_image_not_found)
+
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 1, 'cpus': 1, 'instance_type': 'c5.large'},
+    )
+    assert result.success is False
+    messages = [
+        entry.message
+        for entry in result.validation_result.results
+        if entry.message is not None
+    ]
+    assert any(
+        'default instance_ami for this queue' in message
+        and 'cluster administrator' in message
+        for message in messages
+    )
+
+
 def test_job_builder_instance_types_mixed_architecture_queue_default_invalid(context):
     """
     a queue profile default list that mixes architectures is rejected for jobs that do not
