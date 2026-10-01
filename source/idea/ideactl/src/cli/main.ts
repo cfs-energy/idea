@@ -667,11 +667,24 @@ function flagValue(argv: string[], flag: string): string | undefined {
   return value;
 }
 
+/** --cluster-name, or the cluster_name in --values-file (quick-setup names the cluster there) */
+function clusterNameArg(argv: string[]): string | undefined {
+  const named = flagValue(argv, '--cluster-name');
+  if (named !== undefined) return named;
+  const valuesFile = flagValue(argv, '--values-file');
+  if (valuesFile === undefined) return undefined;
+  try {
+    return readFileSync(valuesFile, 'utf8').match(/^cluster_name:\s*['"]?([\w-]+)/m)?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
 function formatUninitialisedCluster(error: Error, argv: string[]): string {
   if (error.message.includes('Create them with ideactl config update')) return error.message;
   const cluster =
     error.message.match(/cluster:\s*(\S+)/)?.[1] ??
-    flagValue(argv, '--cluster-name') ??
+    clusterNameArg(argv) ??
     'the cluster';
   const region =
     flagValue(argv, '--aws-region') ?? process.env.AWS_DEFAULT_REGION ?? process.env.AWS_REGION ?? '';
@@ -688,7 +701,7 @@ function formatUninitialisedCluster(error: Error, argv: string[]): string {
 }
 
 function formatMissingTables(argv: string[]): string {
-  const cluster = flagValue(argv, '--cluster-name') ?? '<cluster>';
+  const cluster = clusterNameArg(argv) ?? '<cluster>';
   const region =
     flagValue(argv, '--aws-region') ?? process.env.AWS_DEFAULT_REGION ?? process.env.AWS_REGION ?? '<region>';
   return (
@@ -700,7 +713,7 @@ function formatMissingTables(argv: string[]): string {
 
 function formatConfigKeyNotFound(error: ConfigKeyNotFound, argv: string[]): string {
   const key = error.message.match(/, key:\s*(.+)$/)?.[1] ?? error.message;
-  const cluster = flagValue(argv, '--cluster-name') ?? '<cluster>';
+  const cluster = clusterNameArg(argv) ?? '<cluster>';
   const region = flagValue(argv, '--aws-region') ?? '<region>';
   return (
     `Configuration key ${key} is missing for this cluster. Show nearby keys with ideactl config show ` +
