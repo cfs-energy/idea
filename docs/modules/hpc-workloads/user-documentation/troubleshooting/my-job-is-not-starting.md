@@ -4,7 +4,7 @@ Jobs can stay in the Q state for extended period of time because of license rest
 
 ## 1 - Start with the job status in the web portal
 
-Open **Home > Active Jobs** and select the job. A job that has not started yet reports:
+Open **My jobs > Active** and select the job. A job that has not started yet reports:
 
 * how long it has been waiting
 * which provisioning attempt it is on, out of `scheduler.job_provisioning.max_provisioning_retries`

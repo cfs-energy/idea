@@ -125,10 +125,6 @@ class SSHAccess extends Component<SSHAccessProps, SSHAccessState> {
                         href: '#'
                     },
                     {
-                        text: 'Home',
-                        href: '#'
-                    },
-                    {
                         text: 'SSH access',
                         href: ''
                     }

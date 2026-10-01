@@ -140,7 +140,7 @@ Subtitle can be customized by running the below command:
 
 <summary>How to embed an external dashboard in the Web Portal</summary>
 
-The Web Portal can render an external dashboard URL in a sandboxed iframe as an extra entry under **Home**. It is disabled by default.
+The Web Portal can render an external dashboard URL in a sandboxed iframe as the **Reports** navigation entry. It is disabled by default.
 
 ```bash
 ./idea-admin.sh config \

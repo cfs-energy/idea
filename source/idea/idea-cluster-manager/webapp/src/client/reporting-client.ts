@@ -1,7 +1,10 @@
 import IdeaBaseClient, {IdeaBaseClientProps} from './base-client';
-import {ReportingCsv, ReportingExportRequest, ReportingRows, ReportingRowsRequest, ReportingSummary, ReportingSummaryRequest} from './reporting-model';
+import {ReportingCsv, ReportingExportRequest, ReportingInsights, ReportingInsightsRequest, ReportingRows, ReportingRowsRequest, ReportingSummary, ReportingSummaryRequest} from './reporting-model';
 
 export default class ReportingClient extends IdeaBaseClient<IdeaBaseClientProps> {
+    getInsights(request: ReportingInsightsRequest): Promise<ReportingInsights> {
+        return this.apiInvoker.invoke_alt('Reporting.GetInsights', request);
+    }
     getCapabilities(): Promise<{can_read_reporting: boolean}> {
         return this.apiInvoker.invoke_alt('Reporting.GetCapabilities', {});
     }

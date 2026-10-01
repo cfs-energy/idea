@@ -116,3 +116,93 @@ def test_csv_size_columns_and_expiry_fail_explicitly(monkeypatch):
             lambda: True,
         )
     assert error.value.error_code == 'REPORT_EXPIRED'
+
+
+@pytest.mark.parametrize(
+    'username,expected', [('user-b', ['user-b']), ('unknown-user', [])]
+)
+def test_filtered_export_contains_only_selected_user(username, expected):
+    cache = store()
+    result = cache.publish(
+        'reader',
+        summary(),
+        dict(
+            user=[new_row('user-a', 'user-a'), new_row('user-b', 'user-b')],
+            project=[],
+            facet=[],
+        ),
+        time.monotonic() + 30,
+    )
+    service = ReportingService(SimpleNamespace(), store=cache)
+    request = ExportReportingCsvRequest(
+        snapshot_id=result['snapshot_id'],
+        table='user',
+        columns=['label'],
+        username=username,
+    )
+    exported = service.export('reader', request, lambda: True)
+    content = list(csv.DictReader(io.StringIO(exported.content.lstrip('\ufeff'))))
+    assert [row['label'] for row in content] == expected
+    assert exported.row_count == len(expected)
+    assert exported.filename == f'reporting-user-2024-01-01-2024-01-31-{username}.csv'
+    with pytest.raises(exceptions.SocaException):
+        service.export('reader', request, lambda: False)
+    request.table = 'project'
+    with pytest.raises(exceptions.SocaException) as error:
+        service.export('reader', request, lambda: True)
+    assert error.value.error_code == 'INVALID_PARAMS'
+
+
+def test_rows_filter_on_server_and_bind_cursor_to_username():
+    cache = store()
+    published = cache.publish(
+        'reader',
+        summary(),
+        dict(
+            user=[new_row(f'user-{i:03}', f'user-{i:03}') for i in range(251)],
+            project=[],
+            facet=[],
+        ),
+        time.monotonic() + 30,
+    )
+    service = ReportingService(SimpleNamespace(), store=cache)
+    request = dict(snapshot_id=published['snapshot_id'], table='user')
+    page = service.list_rows(
+        'reader', ListReportingRowsRequest(**request, username='user-250'), lambda: True
+    )
+    assert [row.key for row in page.listing] == ['user-250']
+    assert page.total_rows == 1
+    assert page.paginator.cursor is None
+    missing = service.list_rows(
+        'reader', ListReportingRowsRequest(**request, username='unknown'), lambda: True
+    )
+    assert missing.total_rows == 0 and not missing.listing
+    unfiltered = service.list_rows(
+        'reader', ListReportingRowsRequest(**request), lambda: True
+    )
+    with pytest.raises(exceptions.SocaException):
+        service.list_rows(
+            'reader',
+            ListReportingRowsRequest(
+                **request,
+                username='user-250',
+                paginator=dict(cursor=unfiltered.paginator.cursor),
+            ),
+            lambda: True,
+        )
+    for table in ('project', 'facet'):
+        with pytest.raises(exceptions.SocaException):
+            service.list_rows(
+                'reader',
+                ListReportingRowsRequest(
+                    **dict(request, table=table), username='user-250'
+                ),
+                lambda: True,
+            )
+    for actor, allowed in [('another-reader', True), ('reader', False)]:
+        with pytest.raises(exceptions.SocaException):
+            service.list_rows(
+                actor,
+                ListReportingRowsRequest(**request, username='user-250'),
+                lambda: allowed,
+            )

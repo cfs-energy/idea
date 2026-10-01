@@ -7,7 +7,6 @@ import IdeaAppLayout from '../components/app-layout';
 import {initTestAppContext} from '../test-support';
 
 vi.mock('../components/navbar', () => ({default: () => null}));
-vi.mock('../pages/home', () => ({default: (props: any) => <IdeaAppLayout {...props} content={<p>Home content</p>}/>}));
 vi.mock('../pages/user-management/users', () => ({default: (props: any) => <IdeaAppLayout {...props} content={<p>Users content</p>}/>}));
 vi.mock('../pages/user-management/groups', () => ({default: (props: any) => <IdeaAppLayout {...props} content={<p>Groups content</p>}/>}));
 vi.mock('../pages/hpc/queues', () => ({default: (props: any) => <IdeaAppLayout {...props} content={<p>Queues content</p>}/>}));
@@ -63,6 +62,24 @@ function History() {
     return <><output data-testid="url">{location.pathname}{location.search}</output><button onClick={() => navigate(-1)}>Back</button><button onClick={() => navigate(1)}>Forward</button></>;
 }
 function open(path: string) {return render(<MemoryRouter initialEntries={[path]}><App/><History/></MemoryRouter>);}
+
+describe.each(['/', '/home'])('landing route %s', path => {
+    it.each([
+        [undefined, undefined, '/home/my-costs'],
+        [undefined, 'files', '/home/file-browser'],
+        ['my-jobs', 'files', '/home/active-jobs'],
+        ['home', 'files', '/home/my-costs'],
+        [undefined, 'home', '/home/my-costs'],
+        ['files', 'home', '/home/file-browser'],
+        ['unknown', 'unknown', '/home/my-costs']
+    ])('resolves user=%s and cluster=%s to %s', async (userChoice, clusterChoice, expected) => {
+        vi.spyOn(context.auth(), 'getUser').mockResolvedValue({landing_page: userChoice});
+        vi.spyOn(context.getClusterSettingsService(), 'getModuleSettings').mockResolvedValue({web_portal: {default_landing_page: clusterChoice}});
+        open(path);
+        await waitFor(() => expect(screen.getByTestId('url')).toHaveTextContent(expected));
+        expect(screen.queryByRole('link', {name: 'Home'})).not.toBeInTheDocument();
+    });
+});
 
 it.each([
     ['/dashboard', 'My jobs'],
@@ -171,30 +188,35 @@ it('denies an admin route before its page mounts for a plain user', async () => 
 it.each(['/reporting', '/reporting/projects', '/reporting/facets'])('denies %s without requesting reporting data', async path => {
     vi.spyOn(context.auth(), 'isReportingResolved').mockReturnValue(true);
     vi.spyOn(context.auth(), 'canReadReporting').mockReturnValue(false);
+    const insights = vi.spyOn(context.reporting(), 'getInsights');
     const summary = vi.spyOn(context.reporting(), 'getSummary');
     const rows = vi.spyOn(context.reporting(), 'listRows');
     open(path);
     expect(await screen.findByRole('alert')).toHaveTextContent('Access denied');
     expect(summary).not.toHaveBeenCalled();
+    expect(insights).not.toHaveBeenCalled();
     expect(rows).not.toHaveBeenCalled();
 });
 
 it('waits for Reporting capability resolution before mounting a direct view', async () => {
     vi.spyOn(context.auth(), 'isReportingResolved').mockReturnValue(false);
+    const insights = vi.spyOn(context.reporting(), 'getInsights');
     const summary = vi.spyOn(context.reporting(), 'getSummary');
     open('/reporting/projects');
     expect(await screen.findByText('Checking Reporting access')).toBeInTheDocument();
     expect(summary).not.toHaveBeenCalled();
+    expect(insights).not.toHaveBeenCalled();
 });
 
 it.each(['operations only', 'administrator', 'manager', 'module with explicit grant', 'custom group grant'])('opens Reporting for %s without adding administrative access', async role => {
     vi.spyOn(context.auth(), 'isModuleAdmin').mockReturnValue(role === 'administrator' || role === 'manager');
     vi.spyOn(context.auth(), 'isReportingResolved').mockReturnValue(true);
     vi.spyOn(context.auth(), 'canReadReporting').mockReturnValue(true);
-    vi.spyOn(context.reporting(), 'getSummary').mockRejectedValue({message: 'No source response.'});
+    vi.spyOn(context.reporting(), 'getInsights').mockRejectedValue(new Error('Could not load the report.'));
+    vi.spyOn(context.reporting(), 'getSummary').mockRejectedValue({message: "Couldn't load the report. Check your connection and try again."});
     open('/reporting/projects');
     expect(await screen.findByRole('heading', {name: 'Reporting', level: 1})).toBeInTheDocument();
-    expect(await screen.findByText('No source response.')).toBeInTheDocument();
+    expect(await screen.findByText("Couldn't load the report. Check your connection and try again.")).toBeInTheDocument();
     if (role !== 'administrator' && role !== 'manager') expect(screen.queryByText('Administration')).not.toBeInTheDocument();
 });
 

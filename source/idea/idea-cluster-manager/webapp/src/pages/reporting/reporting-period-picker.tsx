@@ -31,9 +31,9 @@ export default function ReportingPeriodPicker({value, timezone, onChange}: {
 }) {
     const range: DateRangePickerProps.Value | null = value.start_date && value.end_date ? {type: 'absolute', startDate: value.start_date, endDate: value.end_date} : null;
     return <SpaceBetween size="s">
-        <FormField label="Reporting period" description={timezone ? `Calendar dates in ${timezone}. Custom end date is inclusive; up to 366 days. Historical coverage may be incomplete.` : 'The server determines calendar dates and available history.'}>
-            <Select selectedOption={REPORTING_PERIODS.find(option => option.value === value.period)!} options={REPORTING_PERIODS}
-                onChange={({detail}) => onChange({period: detail.selectedOption.value as ReportingPeriod})}/>
+        <FormField label="Reporting period" description={timezone ? `Dates in ${timezone}; choose up to 366 days, including the end date.` : 'Choose the period to explore.'}>
+            <div style={{width: '18ch'}}><Select selectedOption={REPORTING_PERIODS.find(option => option.value === value.period)!} options={REPORTING_PERIODS}
+                onChange={({detail}) => onChange({period: detail.selectedOption.value as ReportingPeriod})}/></div>
         </FormField>
         {value.period === 'custom' && <FormField label="Custom dates" errorText={validateReportingPeriod(value, timezone)}>
             <DateRangePicker dateOnly rangeSelectorMode="absolute-only" relativeOptions={[]} value={range} ariaLabel="Custom reporting dates"

@@ -2,6 +2,10 @@ spec:
   title: 'IDEA / Cluster Manager API'
   description: 'All APIs served by Cluster Manager'
   tags:
+    - name: Reporting
+      description: Reporting APIs **(Reporting Access)**
+    - name: MyCosts
+      description: Personal Cost APIs **(Authenticated Access)**
     - name: Accounts
       description: Account Management APIs **(Elevated Access)**
     - name: Auth
@@ -15,6 +19,34 @@ spec:
     - name: FileBrowser
       description: File Browser APIs **(Authenticated Access)**
   entries:
+    - namespace: Reporting.GetSummary
+      request:
+        examples:
+          - name: Period summary and activity users
+            description: Requires Reporting access. The users response field lists all non-system usernames with finished jobs, overlapping desktops, measured storage use or positive recorded costs in the period, including unpriced activity. It is not an account directory or a ranked list. Source coverage describes unavailable records.
+            value: |
+              {"header": {"namespace": "Reporting.GetSummary"}, "payload": {"period": "this_month"}}
+    - namespace: Reporting.ListRows
+      request:
+        examples:
+          - name: User-filtered rows
+            description: Requires Reporting access and an actor-owned snapshot. Optional username filters the user table before pagination; unknown users return no rows. Project and facet tables reject username. Cursors are bound to the filter.
+            value: |
+              {"header": {"namespace": "Reporting.ListRows"}, "payload": {"snapshot_id": "snapshot", "table": "user", "username": "user-a"}}
+    - namespace: Reporting.GetInsights
+      request:
+        examples:
+          - name: User-filtered insights
+            description: Optional username scopes insights to that user. Requires Reporting access. Unknown users return an empty report; filtered responses omit by_user rankings.
+            value: |
+              {"header": {"namespace": "Reporting.GetInsights"}, "payload": {"period": "this_month", "username": "user-a"}}
+    - namespace: Reporting.ExportCsv
+      request:
+        examples:
+          - name: User-filtered export
+            description: Optional username filters the user table and is included in the filename. User-filtered project exports are not supported.
+            value: |
+              {"header": {"namespace": "Reporting.ExportCsv"}, "payload": {"snapshot_id": "snapshot", "table": "user", "columns": ["label", "spend_total"], "username": "user-a"}}
     - namespace: Auth.InitiateAuth
       request:
         examples:

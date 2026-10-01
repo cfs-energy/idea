@@ -441,12 +441,18 @@ def test_opensearch_scroll_is_consistent_and_cleared_after_large_read():
     }
     assert set(body['_source']) == {
         'job_uid',
+        'job_id',
+        'name',
+        'queue',
+        'execution_hosts',
         'owner',
         'state',
         'start_time',
         'end_time',
         'total_time_secs',
         'params',
+        'scaling_mode',
+        'provisioning_options',
         'estimated_bom_cost',
         'project_id',
         'project',
@@ -523,7 +529,9 @@ def test_summary_publishes_all_tables_with_pinned_bounds_and_decimal_totals(
         config=lambda: SimpleNamespace(get_string=lambda *args, **kwargs: 'UTC')
     )
     service = ReportingService(
-        context, store=cache, sources=SimpleNamespace(read=lambda *args: value)
+        context,
+        store=cache,
+        sources=SimpleNamespace(read=lambda *args, **kwargs: value),
     )
     result = service.get_summary(
         'reader',
@@ -534,7 +542,7 @@ def test_summary_publishes_all_tables_with_pinned_bounds_and_decimal_totals(
     )
     assert isinstance(result, ReportingSummary)
     assert result.tiles['total'].spend_total == Decimal('0.50')
-    assert result.model_dump(mode='json')['tiles']['total']['spend_total'] == '0.50'
+    assert result.model_dump(mode='json')['tiles']['total']['spend_total'] == '0.5000'
     metadata = cache.lookup(result.snapshot_id, 'reader', lambda: True)
     assert set(metadata['parts']) == {'user', 'project', 'facet'}
     assert metadata['summary']['period']['end'] == '2024-02-02T00:00:00+00:00'
@@ -662,7 +670,7 @@ def test_build_timeout_bounds_blocked_source_reads_without_publication(monkeypat
     monkeypatch.setattr(locale, 'get_currency_code', lambda: 'USD')
     entered, release = threading.Event(), threading.Event()
 
-    def blocked(*args):
+    def blocked(*args, **kwargs):
         entered.set()
         release.wait(5)
         return data()
@@ -856,7 +864,7 @@ def test_saturated_report_workers_fail_busy_and_recover():
     entered = threading.Barrier(3)
     release = threading.Event()
 
-    def blocked(*args):
+    def blocked(*args, **kwargs):
         entered.wait(timeout=5)
         release.wait(timeout=5)
         return 'done'
@@ -893,7 +901,7 @@ def test_timed_out_report_keeps_worker_slot_until_finished(monkeypatch):
     release = threading.Event()
     entered = threading.Barrier(3)
 
-    def blocked(*args):
+    def blocked(*args, **kwargs):
         entered.wait(timeout=5)
         release.wait(timeout=5)
 
@@ -915,3 +923,137 @@ def test_timed_out_report_keeps_worker_slot_until_finished(monkeypatch):
     finally:
         release.set()
         service._builds.shutdown(wait=True)
+
+
+def test_breakdown_combines_system_users_without_changing_total_spend():
+    value = data()
+    value['users'] = {
+        name: name for name in ['root', 'uid:1001', '1002', 'scientist-a']
+    }
+    value['projections'] = {
+        name: projection([dict(date='2024-02-01', amount='1', status='ready')])
+        for name in value['users']
+    }
+    tables, tiles, _, _ = ReportingService.build(
+        value, period(), 'USD', 'UTC', time.monotonic() + 30
+    )
+    system = next(row for row in tables['user'] if row['label'] == 'System')
+    assert len(tables['user']) == 2
+    assert system['spend_total'] == 15
+    assert tiles['total']['spend_total'] == 20
+
+
+def test_summary_users_include_all_activity_without_spend_rankings(monkeypatch):
+    from ideaclustermanagertests.test_reporting_snapshot_store import store
+    from ideadatamodel import locale
+
+    monkeypatch.setattr(locale, 'get_currency_code', lambda: 'USD')
+    value = data()
+    names = [f'user-{i:02}' for i in range(20)]
+    value['users'] = dict.fromkeys(
+        names
+        + [
+            'inactive',
+            'old-job',
+            'old-desktop',
+            'unpriced',
+            'desktop',
+            'storage',
+            'recorded',
+            'root',
+        ]
+    )
+    value['users'] = {name: name for name in value['users']}
+    value['jobs'] = [job(identity=name, owner=name) for name in names]
+    value['jobs'] += [
+        job(identity='unpriced', owner='unpriced', estimated_bom_cost={}),
+        job(identity='old', owner='old-job', end_time='2024-01-01T00:00:00Z'),
+    ]
+    value['desktops'] = [
+        {
+            '_source': dict(
+                idea_session_id='active',
+                owner='desktop',
+                created_on='2024-02-01T00:00:00Z',
+                stopped_on='2024-02-02T00:00:00Z',
+            )
+        },
+        {
+            '_source': dict(
+                idea_session_id='old',
+                owner='old-desktop',
+                created_on='2024-01-01T00:00:00Z',
+                stopped_on='2024-01-02T00:00:00Z',
+            )
+        },
+    ]
+    value['storage'] = [
+        dict(date='2024-02-01', users={'storage': 100, 'root': 200}),
+        dict(date='2024-01-01', users={'inactive': 100}),
+    ]
+    value['projections']['recorded'] = projection(
+        [dict(date='2024-02-01', amount='1', status='ready')]
+    )
+    value['projections']['inactive'] = projection(
+        [
+            dict(date='2024-01-01', amount='1', status='ready'),
+            dict(date='2024-02-01', amount='0', status='ready'),
+        ]
+    )
+    service = ReportingService(
+        SimpleNamespace(
+            config=lambda: SimpleNamespace(get_string=lambda *args, **kwargs: 'UTC')
+        ),
+        store=store(),
+        sources=SimpleNamespace(read=Mock(return_value=value)),
+    )
+    try:
+        result = service.get_summary(
+            'reader',
+            ReportingPeriodRequest(
+                period='custom', start_date='2024-02-01', end_date='2024-02-29'
+            ),
+            lambda: True,
+        )
+        assert result.users == sorted(
+            names + ['unpriced', 'desktop', 'storage', 'recorded']
+        )
+        assert service.sources.read.call_args.kwargs == {'include_storage': True}
+        assert result.model_dump(mode='json')['users'] == result.users
+    finally:
+        service._builds.shutdown(wait=True)
+
+
+def test_summary_sources_include_storage_only_users_in_selected_period():
+    costs = SimpleNamespace(
+        table=Mock(scan=Mock(return_value={'Items': []})),
+        records=Mock(
+            return_value=[
+                dict(
+                    record='share:2024-02-01:volume',
+                    payload='{"users": {"storage-only": 100}}',
+                ),
+                dict(
+                    record='share:2024-01-01:volume',
+                    payload='{"users": {"old-storage": 100}}',
+                ),
+            ]
+        ),
+        resolve_source=lambda subject, value: value,
+    )
+    context = SimpleNamespace(
+        accounts=SimpleNamespace(
+            list_users=lambda request: SimpleNamespace(listing=[], paginator=None)
+        ),
+        projects=SimpleNamespace(
+            list_projects=lambda request: SimpleNamespace(listing=[], paginator=None)
+        ),
+        personal_costs_store=costs,
+        config=lambda: SimpleNamespace(is_module_enabled=lambda module: False),
+    )
+    result = ReportingSources(context).read(
+        period(), time.monotonic() + 30, include_storage=True
+    )
+    assert result['users'] == {'storage-only': 'storage-only'}
+    assert result['storage'] == [dict(date='2024-02-01', users={'storage-only': 100})]
+    assert result['coverage']['storage'] == 'ready'

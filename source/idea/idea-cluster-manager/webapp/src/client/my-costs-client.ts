@@ -9,11 +9,15 @@ import {
     ListUserCostsResult
 } from './data-model'
 import IdeaBaseClient, {IdeaBaseClientProps} from "./base-client";
+import {ReportingInsights, ReportingPeriodRequest} from './reporting-model';
 
 export interface MyCostsClientProps extends IdeaBaseClientProps {
 }
 
 class MyCostsClient extends IdeaBaseClient<MyCostsClientProps> {
+    getInsights(request: ReportingPeriodRequest): Promise<ReportingInsights> {
+        return this.apiInvoker.invoke_alt('MyCosts.GetInsights', request);
+    }
 
     getCostTicker(req: GetCostTickerRequest = {}): Promise<GetCostTickerResult> {
         return this.apiInvoker.invoke_alt<GetCostTickerRequest, GetCostTickerResult>('MyCosts.GetCostTicker', req)

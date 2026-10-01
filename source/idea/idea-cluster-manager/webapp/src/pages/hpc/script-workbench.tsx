@@ -1007,10 +1007,6 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
                 href: '#/'
             },
             {
-                text: 'Home',
-                href: '#/'
-            },
-            {
                 text: 'Write script',
                 href: '#/home/script-workbench'
             }

@@ -1,5 +1,5 @@
 import {render, screen} from '@testing-library/react';
-import {comparisonSeries, facetAmount, DailyCostCharts, dailyPoints, dailySeries, FACETS, missingDays, missingSummary, tickMoney} from './cost-charts';
+import {facetAmount, DailyCostCharts, dailyPoints, dailySeries, FACETS, missingDays, missingSummary, tickMoney} from './cost-charts';
 import {GetMyCostsResult, MyCostsDaily} from '../client/data-model';
 
 const days: MyCostsDaily[] = [
@@ -8,21 +8,18 @@ const days: MyCostsDaily[] = [
     {date: '2024-02-03', day: 3, amount: -2, status: 'partial'},
     {date: '2024-02-29', day: 29, amount: 5, status: 'ready'}
 ];
-it('uses stored amounts, preserves zeros and corrections, and omits unknown days', () => {
-    expect(dailyPoints(days)).toEqual([{x: '1', y: 0}, {x: '3', y: -2}, {x: '29', y: 5}]);
+it('uses stored amounts, preserves zeros and corrections, and fills missing days with zero', () => {
+    expect(dailyPoints(days)).toHaveLength(28);
+    expect(dailyPoints(days)[1]).toEqual({x: new Date('2024-02-03T12:00:00Z'), y: -2});
+    expect(dailyPoints(days)[1].y).toBe(-2);
     expect(missingDays(days)).toBe('2');
     const series = dailySeries(days, [], 'EUR');
     expect(series.map(s => s.title)).toEqual(['Last month', 'This month']);
     expect(series[0].data).toEqual([]);
-    expect(series[1].data).toEqual([{x: '1', y: 0}, {x: '3', y: -2}, {x: '29', y: 5}]);
+    expect(series[1].data).toEqual(dailyPoints(days));
+    expect(series[1].color).not.toBe(series[0].color);
     expect(series[1].valueFormatter(2)).toBe('€2.00');
-    expect(series[1]).not.toHaveProperty('color');
-});
-it('compares all five facets without converting missing amounts into zeros', () => {
-    const series = comparisonSeries({currency: 'USD', state: 'ready', current: {jobs: {cost: 0}, ai: {cost: -1}} as any});
-    expect(series.map(s => s.title)).toEqual(['Last month', 'This month']);
-    expect(series[0].data).toEqual([]);
-    expect(series[1].data).toEqual([{x: 'Jobs', y: 0}, {x: 'AI', y: -1}]);
+    expect(series[1]).toHaveProperty('color');
 });
 it('renders all five daily charts and missing-day notes from the arrays', () => {
     const month = {start_date: '2024-02-01', end_date: '2024-02-29', ...Object.fromEntries(FACETS.map(f => [f.key, {daily: days}]))};
@@ -50,7 +47,14 @@ it('shows the empty state with its reason instead of a bare axis when a facet ha
     const none = [{date: '2024-02-01', day: 1, status: 'unavailable'}] as MyCostsDaily[];
     const month = {start_date: '2024-02-01', end_date: '2024-02-29', ...Object.fromEntries(FACETS.map(f => [f.key, {daily: f.key === 'shared_storage' ? none : days, reason: f.key === 'shared_storage' ? 'No complete measurement.' : undefined}]))};
     render(<DailyCostCharts costs={{currency: 'USD', state: 'ready', current: month} as GetMyCostsResult}/>);
-    expect(screen.getAllByText('No data this month or last month')).toHaveLength(1);
-    expect(screen.getByText('No complete measurement.')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', {name: 'Shared storage'})).toBeNull();
     expect(screen.getAllByText('This month: 1 of 4 days without data')).toHaveLength(4);
+});
+
+it('omits explicit unknown amounts but fills absent dates with zero', () => {
+    const points = dailyPoints([{date: '2024-02-02', day: 2, amount: null, status: 'unavailable'} as unknown as MyCostsDaily], '2024-02-01', '2024-02-03');
+    expect(points).toEqual([
+        {x: new Date('2024-02-01T12:00:00Z'), y: 0},
+        {x: new Date('2024-02-03T12:00:00Z'), y: 0}
+    ]);
 });

@@ -1,12 +1,16 @@
 import {useEffect, useRef, useState, useSyncExternalStore} from 'react';
 import {withRouter} from '../../navigation/navigation-utils';
+import {hasAccess} from '../../navigation/task-navigation';
 import {useLocation, useNavigate, useSearchParams} from 'react-router-dom';
-import {Alert, Box, Button, CollectionPreferencesProps, ColumnLayout, Container, ContentLayout, Header, SpaceBetween, StatusIndicator, Tabs} from '@cloudscape-design/components';
+import {Alert, Box, Button, CollectionPreferencesProps, ContentLayout, Header, SpaceBetween, StatusIndicator, Tabs, SegmentedControl, FormField, Select} from '@cloudscape-design/components';
 import {AppContext} from '../../common';
 import IdeaAppLayout, {IdeaAppLayoutProps} from '../../components/app-layout';
-import {ReportingColumn, ReportingRows, ReportingSummary, ReportingSummaryRequest, ReportingTable as TableKind} from '../../client/reporting-model';
+import {ReportingColumn, ReportingInsights, ReportingRows, ReportingSummary, ReportingSummaryRequest, ReportingTable as TableKind} from '../../client/reporting-model';
 import ReportingPeriodPicker, {REPORTING_PERIODS, validateReportingPeriod} from './reporting-period-picker';
-import ReportingTable, {DEFAULT_COLUMNS, REPORTING_COLUMNS, ReportingCoverageList, ReportingMetric} from './reporting-table';
+import ReportingTable, {DEFAULT_COLUMNS, REPORTING_COLUMNS} from './reporting-table';
+import {InfoTitle, InsightTab} from './insights-components';
+import {readPreferences, savePreferences} from './insights-table';
+import {date, updated} from './reporting-format';
 
 export function ReportingContent() {
     const context = AppContext.get();
@@ -22,11 +26,17 @@ export function ReportingContent() {
         ...(query.get('period') === 'custom' ? {start_date: query.get('start_date') ?? '', end_date: query.get('end_date') ?? ''} : {})
     };
     const periodKey = JSON.stringify(period);
-    const routeTable = location.pathname.endsWith('/projects') ? 'project' : location.pathname.endsWith('/facets') ? 'facet' : 'user';
-    const table: TableKind = ['user', 'project', 'facet'].includes(query.get('table') ?? '') ? query.get('table') as TableKind : routeTable;
-    const sortBy = (REPORTING_COLUMNS.find(column => column.id === query.get('sort_by'))?.id ?? 'spend_total') as ReportingColumn;
-    const descending = query.get('descending') !== 'false';
-    const [snapshot, setSnapshot] = useState<{key: string; data: ReportingSummary}>();
+    const username = query.get('user') || '';
+    const tabPaths: Record<string, string> = {overview: '/reporting', jobs: '/reporting/jobs', desktops: '/reporting/desktops', storage: '/reporting/storage', user: '/reporting/users', project: '/reporting/projects', breakdown: '/reporting/users'};
+    const routeTab = Object.entries(tabPaths).find(([, path]) => path === location.pathname)?.[0] ?? 'overview';
+    const selectedTab = ['overview', 'jobs', 'desktops', 'storage', 'user', 'project', 'breakdown'].includes(query.get('table') ?? '') ? query.get('table')! : routeTab;
+    const tab = ['user', 'project'].includes(selectedTab) ? 'breakdown' : selectedTab;
+    const table: TableKind = !username && (query.get('group') === 'project' || (!query.has('group') && selectedTab === 'project')) ? 'project' : 'user';
+    const tableVisible = tab === 'breakdown';
+    const rowsNeeded = tableVisible || (tab === 'overview' && !!username);
+    const sortBy = (!tableVisible ? 'spend_total' : REPORTING_COLUMNS.find(column => column.id === query.get('sort_by'))?.id ?? 'spend_total') as ReportingColumn;
+    const descending = !tableVisible || query.get('descending') !== 'false';
+    const [snapshot, setSnapshot] = useState<{key: string; data: ReportingSummary; insights: ReportingInsights}>();
     const [summaryBusy, setSummaryBusy] = useState(false);
     const [summaryError, setSummaryError] = useState('');
     const [rowError, setRowError] = useState('');
@@ -35,30 +45,47 @@ export function ReportingContent() {
     const [exportBusy, setExportBusy] = useState(false);
     const [expiredId, setExpiredId] = useState('');
     const [reload, setReload] = useState(0);
+    const reloadedSnapshots = useRef(new Set<string>());
+    const requestKey = JSON.stringify([periodKey, username, reload]);
     const [retryRows, setRetryRows] = useState(0);
-    const [pageSize, setPageSize] = useState(50);
+    const [pageSize, setPageSize] = useState(25);
     const [columns, setColumns] = useState<CollectionPreferencesProps.ContentDisplayItem[]>(DEFAULT_COLUMNS);
-    const summary = snapshot?.key === periodKey ? snapshot.data : undefined;
+    useEffect(() => {
+        const saved = readPreferences(`reporting.breakdown.${table}`, {pageSize: 25, columns: DEFAULT_COLUMNS});
+        setPageSize(saved.pageSize); setColumns(saved.columns);
+    }, [table]);
+    const summary = snapshot?.key === requestKey && !summaryError ? snapshot.data : undefined;
+    const insights = summary ? snapshot?.insights : undefined;
     const [timezone, setTimezone] = useState<string>();
     const validation = validateReportingPeriod(period, timezone);
-    const expired = !!summary && (expiredId === summary.snapshot_id || Date.parse(summary.expires_at) <= Date.now());
-    const rowKey = JSON.stringify([summary?.snapshot_id, table, sortBy, descending, pageSize]);
+    const expired = !!summary && expiredId === summary.snapshot_id;
+    const effectivePageSize = tableVisible ? pageSize : 25;
+    const rowKey = JSON.stringify([requestKey, summary?.snapshot_id, table, sortBy, descending, effectivePageSize]);
     const [paging, setPaging] = useState<{key: string; page: number; cursors: (string | undefined)[]}>({key: '', page: 1, cursors: [undefined]});
     const page = paging.key === rowKey ? paging.page : 1;
     const cursor = paging.key === rowKey ? paging.cursors[page - 1] : undefined;
-    const [rows, setRows] = useState<{key: string; page: number; data: ReportingRows}>();
+    const [rows, setRows] = useState<{key: string; table: TableKind; page: number; data: ReportingRows}>();
     const [rowsBusy, setRowsBusy] = useState(false);
-    const data = rows?.key === rowKey ? rows.data : undefined;
+    const data = rows?.key === rowKey && rows.page === page && !rowsBusy && !rowError ? rows.data : undefined;
     const selectionKey = JSON.stringify([periodKey, rowKey, columns, allowed]);
     const activeSelection = useRef(selectionKey);
     activeSelection.current = selectionKey;
     const mounted = useRef(true);
     useEffect(() => {mounted.current = true; return () => {mounted.current = false;};}, []);
 
-    function errorText(error: unknown): string {
+    function errorText(error: unknown, snapshotId?: string): string {
         const result = error as {errorCode?: string; message?: string; payload?: {guidance?: string}};
-        if (result.errorCode === 'REPORT_SNAPSHOT_EXPIRED' || result.errorCode === 'REPORT_EXPIRED') setExpiredId(summary?.snapshot_id ?? '');
-        return [result.errorCode, result.message ?? 'Reporting request failed. Retry or select a narrower period.', result.payload?.guidance].filter(Boolean).join(': ');
+        if (result.errorCode === 'REPORT_SNAPSHOT_EXPIRED' || result.errorCode === 'REPORT_EXPIRED' || result.errorCode === 'REPORT_SNAPSHOT_NOT_FOUND') {
+            if (snapshotId && !reloadedSnapshots.current.has(snapshotId)) {
+                reloadedSnapshots.current.add(snapshotId);
+                setExpiredId(snapshotId); setReload(value => value + 1); return '';
+            }
+            return 'The report is no longer available. Reload to try again.';
+        }
+        if (result.errorCode === 'UNAUTHORIZED_ACCESS') return 'Reporting access was denied. Ask your administrator for access.';
+        if (result.errorCode === 'REPORT_TOO_LARGE') return 'The report is too large to load. Choose a shorter period and try again.';
+        if (result.errorCode === 'REPORT_TIMEOUT') return 'The report took too long to load. Choose a shorter period and try again.';
+        return "Couldn't load the report. Check your connection and try again.";
     }
 
     useEffect(() => {
@@ -66,42 +93,35 @@ export function ReportingContent() {
         let current = true;
         setSummaryBusy(true);
         setSummaryError('');
-        setSnapshot(undefined);
-        setExportStatus('');
+        setRowError('');
         setExportError('');
-        client.getSummary(JSON.parse(periodKey)).then(result => {
+        Promise.all([client.getSummary(JSON.parse(periodKey)), client.getInsights({...JSON.parse(periodKey), ...(username ? {username} : {})})]).then(([result, insights]) => {
             if (!current) return;
+            setExpiredId('');
             setTimezone(result.timezone);
-            setSnapshot({key: periodKey, data: result});
+            setSnapshot({key: requestKey, data: result, insights});
         }).catch(error => {if (current) setSummaryError(errorText(error));})
             .finally(() => {if (current) setSummaryBusy(false);});
         return () => {current = false;};
-    }, [client, allowed, periodKey, reload, validation]);
+    }, [client, allowed, periodKey, username, reload, validation]);
 
     useEffect(() => {
-        if (!summary) return;
-        const timeout = setTimeout(() => setExpiredId(summary.snapshot_id), Math.max(0, Date.parse(summary.expires_at) - Date.now()));
-        return () => clearTimeout(timeout);
-    }, [summary]);
-
-    useEffect(() => {
-        if (!allowed || !summary || expired || validation) {setRowsBusy(false); return;}
+        if (!allowed || !summary || !rowsNeeded || expired || validation) {setRowsBusy(false); return;}
         let current = true;
         setRowsBusy(true);
         setRowError('');
-        client.listRows({snapshot_id: summary.snapshot_id, table, sort_by: sortBy, descending, paginator: {page_size: pageSize, ...(cursor ? {cursor} : {})}})
-            .then(result => {
-                if (!current) return;
-                setRows({key: rowKey, page, data: result});
+        client.listRows({snapshot_id: summary.snapshot_id, table, sort_by: sortBy, descending, ...(username ? {username} : {}), paginator: {page_size: effectivePageSize, ...(cursor ? {cursor} : {})}}).then(result => {
+                if (!current || !result) return;
+                setRows({key: rowKey, table, page, data: result});
                 setPaging(previous => {
                     const cursors = previous.key === rowKey ? [...previous.cursors] : [undefined];
                     cursors[page] = result.paginator.cursor ?? undefined;
                     return {key: rowKey, page, cursors};
                 });
-            }).catch(error => {if (current) setRowError(errorText(error));})
+            }).catch(error => {if (current) setRowError(errorText(error, summary.snapshot_id));})
             .finally(() => {if (current) setRowsBusy(false);});
         return () => {current = false;};
-    }, [client, allowed, summary, expired, validation, rowKey, page, cursor, retryRows]);
+    }, [client, allowed, summary, rowsNeeded, table, expired, validation, rowKey, page, cursor, retryRows]);
 
     const changePeriod = (value: ReportingSummaryRequest) => {
         const next = new URLSearchParams(query);
@@ -111,13 +131,21 @@ export function ReportingContent() {
         if (value.end_date) next.set('end_date', value.end_date);
         setQuery(next);
     };
+    const changeUser = (value: string) => {
+        const next = new URLSearchParams(query);
+        if (value) next.set('user', value); else next.delete('user');
+        setQuery(next);
+    };
     const exportCsv = async () => {
-        if (!summary || expired || exportBusy || summaryBusy || rowsBusy || !allowed) return;
+        if (!summary || expired || exportBusy || summaryBusy || rowsBusy || !allowed || !columns.some(column => column.visible)) {
+            setExportStatus('CSV download is not ready. Wait for the report and select at least one column.'); return;
+        }
         const selected = selectionKey;
         setExportBusy(true); setExportError(''); setExportStatus('');
         try {
-            const result = await client.exportCsv({snapshot_id: summary.snapshot_id, table, sort_by: sortBy, descending, columns: columns.filter(column => column.visible).map(column => column.id as ReportingColumn)});
-            if (!mounted.current || activeSelection.current !== selected || Date.parse(summary.expires_at) <= Date.now()) return;
+            const result = await client.exportCsv({snapshot_id: summary.snapshot_id, ...(username ? {username} : {}), table, sort_by: sortBy, descending, columns: columns.filter(column => column.visible && REPORTING_COLUMNS.some(item => item.id === column.id)).map(column => column.id as ReportingColumn)});
+            if (!mounted.current) return;
+            if (activeSelection.current !== selected) {setExportStatus('CSV download cancelled because the report selection changed. Try again.'); return;}
             const url = URL.createObjectURL(new Blob([result.content], {type: result.content_type}));
             const link = document.createElement('a');
             try {
@@ -126,59 +154,54 @@ export function ReportingContent() {
             } finally {
                 link.remove(); URL.revokeObjectURL(url);
             }
-            setExportStatus(`Downloaded ${result.row_count} rows across all pages; source as of ${result.as_of ?? 'unavailable'}.`);
+            setExportStatus(`Downloaded ${result.row_count} rows across all pages.`);
         } catch (error) {
-            if (mounted.current && activeSelection.current === selected) setExportError(errorText(error));
+            if (!mounted.current) return;
+            if (activeSelection.current !== selected) {setExportStatus('CSV download cancelled because the report selection changed. Try again.'); return;}
+            setExportError(errorText(error, summary.snapshot_id));
+            setExportStatus('CSV download failed. Reload the report and try again.');
         } finally {
             if (mounted.current) setExportBusy(false);
         }
     };
 
-    if (!auth.isReportingResolved()) return <StatusIndicator type="loading">Checking Reporting access</StatusIndicator>;
-    if (!allowed) return <Alert type="error">Access denied</Alert>;
-    return <ContentLayout header={<Header variant="h2" actions={<SpaceBetween direction="horizontal" size="s">
-        <Button onClick={() => setReload(value => value + 1)} disabled={summaryBusy}>Reload snapshot</Button>
-        <Button onClick={exportCsv} loading={exportBusy} disabled={!summary || expired || summaryBusy || rowsBusy || !columns.some(column => column.visible)}>Export CSV</Button>
-    </SpaceBetween>}>Cost and activity overview</Header>}>
-        <SpaceBetween size="l">
+    if (!auth.isReportingResolved()) return <StatusIndicator type="loading">Checking access</StatusIndicator>;
+    if (!allowed) return <Alert type="error">Access denied. Ask your administrator for reporting access.</Alert>;
+    const error = validation || summaryError || exportError || rowError;
+    return <ContentLayout header={<SpaceBetween size="m"><Header variant="h1" description="Estimated costs and resource use" actions={<SpaceBetween direction="horizontal" size="s">
+        <Button onClick={() => setReload(value => value + 1)} disabled={summaryBusy}>Reload</Button>
+        {tableVisible && <Button onClick={exportCsv} loading={exportBusy} disabled={exportBusy}>Export CSV</Button>}
+    </SpaceBetween>}>Cost and activity overview</Header>
+        <SpaceBetween direction="horizontal" size="l">
             <ReportingPeriodPicker value={period} timezone={timezone} onChange={changePeriod}/>
-            {validation && <Alert type="error">{validation}</Alert>}
-            {summaryBusy && <StatusIndicator type="loading">Building reporting snapshot</StatusIndicator>}
-            {summaryError && <Alert type="error">{summaryError}</Alert>}
-            {expired && <Alert type="warning">Snapshot expired. Reload explicitly to view current data or export CSV.</Alert>}
-            {summary && <SpaceBetween size="m">
-                <Box>Returned bounds: {summary.period.start_date} through {summary.period.end_date} (inclusive), {summary.timezone}. Oldest source as of: {summary.as_of ?? 'Unavailable'}.</Box>
-                {summary.period.provisional && <Alert type="info">The current day is provisional. Recorded estimates and allocations may change.</Alert>}
-                <ColumnLayout columns={4}>
-                    <Container header={<Header variant="h3">Total spend (recorded estimates/allocations) ({summary.currency})</Header>}><ReportingMetric value={summary.tiles.total?.spend_total} coverage={summary.tiles.total?.coverage.spend_total ?? summary.coverage.spend_total} unit={summary.currency}/></Container>
-                    <Container header={<Header variant="h3">Jobs</Header>}><ReportingMetric value={summary.tiles.total?.job_count} coverage={summary.tiles.total?.coverage.job_count ?? summary.coverage.job_count} unit="jobs"/></Container>
-                    <Container header={<Header variant="h3">Estimated desktop hours</Header>}><ReportingMetric value={summary.tiles.total?.desktop_hours} coverage={summary.tiles.total?.coverage.desktop_hours ?? summary.coverage.desktop_hours} unit="hours"/></Container>
-                    <Container header={<Header variant="h3" description="by recorded job-compute spend; other facets unallocated">Top project</Header>}>
-                        {summary.tiles.top_project?.spend_total != null ? <SpaceBetween size="xs"><Box>{summary.tiles.top_project.label}</Box><ReportingMetric value={summary.tiles.top_project.spend_total} coverage={summary.tiles.top_project.coverage.spend_total} unit={summary.currency}/></SpaceBetween> : <Box>Unavailable: No priced projects.</Box>}
-                    </Container>
-                </ColumnLayout>
-                <Alert type="warning">Totals cover recorded values only; partial subtotals and unavailable facets make totals incomplete. Project desktop, disk, storage and AI spend is unavailable in v1. "Unallocated to project" is separate from missing recorded project "Unassigned"; current membership is never used to allocate spend.</Alert>
-                {summary.warnings.map((warning, index) => <Alert key={index} type="warning">{warning}</Alert>)}
-                {summary.tiles.job_spend_difference && <Container header={<Header variant="h3">Signed job projection/index timing difference</Header>}>
-                    <ReportingMetric value={summary.tiles.job_spend_difference.spend_total} coverage={summary.tiles.job_spend_difference.coverage.spend_total} unit={summary.currency}/>
-                </Container>}
-                <ReportingCoverageList coverage={summary.coverage}/>
-                <Box>Walltime efficiency (elapsed/requested) is duration-weighted and may exceed 100%. It is not CPU/GPU use. Requested and elapsed hours and eligible-job counts describe its coverage. Estimated node-hours = requested nodes × elapsed. Desktop hours estimate creation-to-stop overlap, not exact running time. Idle stops are unavailable and are never inferred. Signed job projection/index timing differences are shown separately when reported.</Box>
-                <Tabs activeTabId={table} onChange={({detail}) => {
+            <FormField label="User">
+                <div style={{width: '24ch'}}><Select filteringType="auto" filteringAriaLabel="Find users" filteringPlaceholder="Find users" disabled={!summary} statusType={summaryBusy ? 'loading' : 'finished'} empty={Object.entries(summary?.coverage ?? {}).some(([key, value]) => key.startsWith('source_') && ['unavailable', 'partial'].includes(value.status)) ? 'No users found in available records' : 'No users in this period'} noMatch="No matching users"
+                    selectedOption={{value: username, label: username || 'All users'}}
+                    options={summary?.users.length ? [{value: '', label: 'All users'}, ...summary.users.map(name => ({value: name, label: name}))] : []}
+                    onChange={({detail}) => changeUser(detail.selectedOption.value ?? '')}/></div>
+            </FormField>
+            {username && <Button onClick={() => changeUser('')}>Clear filter</Button>}
+        </SpaceBetween>
+        {summary && insights && <Box>{date(insights.period.start, summary.timezone)} – {date(insights.period.end, summary.timezone)} · {username && <>{username} · </>}{updated(insights.updated_at, summary.timezone)} {insights.notes.length > 0 && <InfoTitle title="Report details">{insights.notes.slice(0, 3).join(' ')}</InfoTitle>}</Box>}
+    </SpaceBetween>}>
+        <SpaceBetween size="l">
+            {summaryBusy && <StatusIndicator type="loading">Loading report</StatusIndicator>}
+            {error && <Alert type="error" action={<Button onClick={() => rowError ? setRetryRows(value => value + 1) : setReload(value => value + 1)}>Try again</Button>}>{error}</Alert>}
+            {summary && insights && <SpaceBetween size="m">
+                <Tabs activeTabId={tab} onChange={({detail}) => {
                     const next = new URLSearchParams(query); next.set('table', detail.activeTabId);
-                    navigate({pathname: detail.activeTabId === 'project' ? '/reporting/projects' : detail.activeTabId === 'facet' ? '/reporting/facets' : '/reporting', search: next.toString()});
-                }} tabs={[{id: 'user', label: 'Overview / By user'}, {id: 'project', label: 'By project'}, {id: 'facet', label: 'By facet'}]}/>
-                {rowError && <Alert type="error" action={!expired && <Button onClick={() => setRetryRows(value => value + 1)}>Retry rows</Button>}>{rowError}{data && ' Previously loaded rows are retained.'}</Alert>}
-                {data?.warnings.map((warning, index) => <Alert key={index} type="warning">{warning}</Alert>)}
-                {data && <Box>{data.total_rows} recorded rows across all pages.{rows?.page !== page && ' Showing the previous page until the requested page loads.'}</Box>}
-                {data && <ReportingCoverageList coverage={data.coverage}/>}
-                <ReportingTable table={table} data={data} currency={summary.currency} loading={rowsBusy} disabled={expired || summaryBusy || exportBusy}
+                    navigate({pathname: tabPaths[detail.activeTabId], search: next.toString()});
+                }} tabs={[{id: 'overview', label: 'Overview'}, {id: 'jobs', label: 'Jobs'}, {id: 'desktops', label: 'Desktops'}, {id: 'storage', label: 'Storage'}, {id: 'breakdown', label: 'Breakdown'}]}/>
+                {tableVisible && !username && <SegmentedControl label="Breakdown by" selectedId={table} options={[{id: 'user', text: 'User'}, {id: 'project', text: 'Project'}]} onChange={({detail}) => {
+                    const next = new URLSearchParams(query); next.set('table', 'breakdown'); next.set('group', detail.selectedId); setQuery(next);
+                }}/>}
+                {tableVisible ? <ReportingTable key={`${table}:${username}`} table={table} data={data} currency={summary.currency} timezone={summary.timezone} loading={!data?.listing.length && (rowsBusy || summaryBusy || (!data && !rowError))} disabled={expired || summaryBusy || rowsBusy || exportBusy}
                     sortBy={sortBy} descending={descending} page={page} pageSize={pageSize} columns={columns}
                     onPage={page => setPaging(previous => ({...previous, page}))}
                     onSort={(column, descending) => {const next = new URLSearchParams(query); next.set('sort_by', column); next.set('descending', String(descending)); setQuery(next);}}
-                    onPreferences={(pageSize, columns) => {setPageSize(pageSize); setColumns(columns);}}/>
+                    onPreferences={(pageSize, columns) => {setPageSize(pageSize); setColumns(columns); savePreferences(`reporting.breakdown.${table}`, {pageSize, columns});}}/>
+                    : <InsightTab canOpenJobs={hasAccess(context, 'jobs-admin')} username={username} userRow={data?.listing.find(row => row.key === username)} loading={summaryBusy} tab={tab} insights={insights} summary={summary} timezone={summary.timezone}/>}
             </SpaceBetween>}
-            {exportError && <Alert type="error">{exportError} Rows have been retained.</Alert>}
             <div role="status" aria-label="CSV download status" aria-live="polite">{exportStatus}</div>
         </SpaceBetween>
     </ContentLayout>;

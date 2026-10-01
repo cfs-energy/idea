@@ -5,6 +5,8 @@ import time
 from datetime import datetime
 from decimal import Decimal
 
+from boto3.dynamodb.conditions import Key
+
 from ideadatamodel import (
     ListUsersRequest,
     ListProjectsRequest,
@@ -35,6 +37,14 @@ def timestamp(value):
         return None
 
 
+def user_label(name):
+    return (
+        'System'
+        if name == 'root' or name.startswith('uid:') or name.isdecimal()
+        else name
+    )
+
+
 def subject(value):
     return isinstance(value, str) and bool(value) and not value.startswith('!')
 
@@ -44,11 +54,14 @@ class ReportingSources:
         self.context = context
 
     @staticmethod
-    def scan(table, deadline):
+    def scan(table, deadline, owner=None):
         request = {'ConsistentRead': True}
+        if owner is not None:
+            request['KeyConditionExpression'] = Key('owner').eq(owner)
+        read = table.scan if owner is None else table.query
         while True:
             check_deadline(deadline)
-            page = table.scan(**request)
+            page = read(**request)
             yield from page.get('Items', [])
             if not page.get('LastEvaluatedKey'):
                 break
@@ -134,7 +147,10 @@ class ReportingSources:
                     break
         return dict(head=head, costs=None, state='unavailable')
 
-    def read(self, period, deadline):
+    def read(
+        self, period, deadline, username=None, insights=False, include_storage=False
+    ):
+        scope_username = username
         result = dict(
             users={},
             projects={},
@@ -169,6 +185,8 @@ class ReportingSources:
                 )
             ),
         )
+        if username is not None:
+            users = [row for row in users if row.get('username') == username]
         result['users'] = {
             row['username']: row.get('username')
             for row in users
@@ -182,6 +200,7 @@ class ReportingSources:
                 )
             ),
         )
+        result['project_records'] = projects
         result['projects'] = {
             row['project_id']: row.get('title') or row.get('name') or row['project_id']
             for row in projects
@@ -193,8 +212,14 @@ class ReportingSources:
             'projections',
             lambda: [
                 row
-                for row in self.scan(self.context.personal_costs_store.table, deadline)
-                if row.get('record') == 'head' and subject(row.get('subject'))
+                for row in (
+                    self.context.personal_costs_store.records(scope_username, 'head')
+                    if scope_username is not None
+                    else self.scan(self.context.personal_costs_store.table, deadline)
+                )
+                if row.get('record') == 'head'
+                and subject(row.get('subject'))
+                and (scope_username is None or row.get('subject') == scope_username)
             ],
         )
         for row in heads:
@@ -232,7 +257,12 @@ class ReportingSources:
                         index,
                         {
                             'bool': {
-                                'filter': [
+                                'filter': (
+                                    [{'term': {'owner.raw': scope_username}}]
+                                    if scope_username
+                                    else []
+                                )
+                                + [
                                     {
                                         'range': {
                                             'end_time': {
@@ -247,12 +277,18 @@ class ReportingSources:
                         deadline,
                         fields=[
                             'job_uid',
+                            'job_id',
+                            'name',
+                            'queue',
+                            'execution_hosts',
                             'owner',
                             'state',
                             'start_time',
                             'end_time',
                             'total_time_secs',
                             'params',
+                            'scaling_mode',
+                            'provisioning_options',
                             'estimated_bom_cost',
                             'project_id',
                             'project',
@@ -275,7 +311,15 @@ class ReportingSources:
             )
             result['desktops'] = optional(
                 'desktops',
-                lambda: list(self.search(index, {'match_all': {}}, deadline)),
+                lambda: list(
+                    self.search(
+                        index,
+                        {'bool': {'filter': [{'term': {'owner.raw': scope_username}}]}}
+                        if scope_username is not None
+                        else {'match_all': {}},
+                        deadline,
+                    )
+                ),
             )
             module = config.get_module_id(constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER)
             table = (
@@ -286,7 +330,8 @@ class ReportingSources:
                 )
             )
             history = optional(
-                'desktop_history', lambda: list(self.scan(table, deadline))
+                'desktop_history',
+                lambda: list(self.scan(table, deadline, scope_username)),
             )
             result['desktops'].extend(
                 {'_history': True, '_source': row} for row in history
@@ -294,12 +339,34 @@ class ReportingSources:
         else:
             result['coverage']['desktops'] = 'not_applicable'
             result['coverage']['desktop_history'] = 'not_applicable'
-        for hit in result['jobs'] + result['desktops']:
+        for hit in [] if insights else result['jobs'] + result['desktops']:
             owner = hit.get('_source', {}).get('owner')
             if subject(owner):
                 result['users'].setdefault(owner, owner)
                 result['projections'].setdefault(
                     owner, dict(costs=None, head=None, state='collecting')
                 )
+        if insights or include_storage:
+
+            def storage():
+                store = self.context.personal_costs_store
+                from ideaclustermanager.app.costs.personal_costs_store import SYSTEM
+
+                rows = []
+                for row in store.records(SYSTEM, 'share:'):
+                    check_deadline(deadline)
+                    day = row['record'].split(':')[1]
+                    if period.start_date <= day <= period.end_date:
+                        value = store.resolve_source(SYSTEM, json.loads(row['payload']))
+                        if value:
+                            rows.append(dict(value, date=day))
+                return rows
+
+            result['storage'] = optional('storage', storage)
+            if include_storage:
+                for row in result['storage']:
+                    for owner in row.get('users') or {}:
+                        if subject(owner):
+                            result['users'].setdefault(owner, owner)
         check_deadline(deadline)
         return result

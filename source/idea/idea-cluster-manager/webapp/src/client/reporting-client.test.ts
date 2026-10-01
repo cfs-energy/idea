@@ -1,5 +1,6 @@
 import {beforeEach, describe, expect, it, vi} from 'vitest';
 import ReportingClient from './reporting-client';
+import MyCostsClient from './my-costs-client';
 import {ReportingCsv, ReportingExportRequest, ReportingRowsRequest, ReportingSummaryRequest} from './reporting-model';
 
 import {initTestAppData} from '../test-support';
@@ -10,6 +11,7 @@ describe('Reporting RPC', () => {
     const create = () => new ReportingClient({name: 'reporting', baseUrl: 'https://example.org', apiContextPath: '/api'});
     it.each([
         ['getCapabilities', 'Reporting.GetCapabilities', {}],
+        ['getInsights', 'Reporting.GetInsights', {period: 'this_month'} satisfies ReportingSummaryRequest],
         ['getSummary', 'Reporting.GetSummary', {period: 'custom', start_date: '2020-01-01', end_date: '2020-01-31'} satisfies ReportingSummaryRequest],
         ['listRows', 'Reporting.ListRows', {snapshot_id: 'snapshot', table: 'facet', sort_by: 'jobs', descending: false, paginator: {page_size: 50, cursor: 'opaque+/='}} satisfies ReportingRowsRequest],
         ['exportCsv', 'Reporting.ExportCsv', {snapshot_id: 'snapshot', table: 'project', sort_by: 'spend_total', descending: true, columns: ['label', 'jobs']} satisfies ReportingExportRequest]
@@ -30,4 +32,11 @@ describe('Reporting RPC', () => {
         vi.spyOn(client.apiInvoker, 'invoke').mockResolvedValue({success: false, error_code: 'REPORT_TOO_LARGE', message: 'Select a narrower period.'});
         await expect(client.getSummary({period: 'this_month'})).rejects.toMatchObject({errorCode: 'REPORT_TOO_LARGE', message: 'Select a narrower period.'});
     });
+});
+
+it('sends the exact personal insights namespace and period without a username', async () => {
+    const client = new MyCostsClient({name: 'my-costs', baseUrl: 'https://example.org', apiContextPath: '/api'});
+    const invoke = vi.spyOn(client.apiInvoker, 'invoke').mockResolvedValue({success: true, payload: {}});
+    await client.getInsights({period: 'last_30_days'});
+    expect(invoke).toHaveBeenCalledWith({header: {namespace: 'MyCosts.GetInsights', request_id: expect.any(String)}, payload: {period: 'last_30_days'}}, false);
 });

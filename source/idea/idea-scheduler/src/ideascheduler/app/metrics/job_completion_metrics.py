@@ -7,9 +7,7 @@ from ideasdk.metrics.history_backfill import CapturingPublisher
 from typing import Optional
 import time
 
-# used CPU time over allocated CPU time can read slightly over one when hyperthreads
-# are counted; past this it is an accounting error and is not reported at all.
-CPU_EFFICIENCY_MAX = 1.05
+from ideadatamodel.reporting.efficiency import job_efficiency
 
 
 class JobCompletionMetrics(BaseMetrics):
@@ -103,22 +101,8 @@ class JobCompletionMetrics(BaseMetrics):
 
     @classmethod
     def cpu_efficiency(cls, job: SocaJob) -> Optional[float]:
-        cpus = job.params.cpus if job.params else None
-        wall = cls.wall_seconds(job)
-        if not cpus or cpus <= 0 or wall is None:
-            return None
-        used = 0.0
-        for host in job.execution_hosts or []:
-            runs = host.execution.runs if host.execution else None
-            for run in runs or []:
-                if run.resources_used and run.resources_used.cpu_time_secs:
-                    used += run.resources_used.cpu_time_secs
-        if used <= 0:
-            return None
-        efficiency = used / (cpus * wall)
-        if efficiency > CPU_EFFICIENCY_MAX:
-            return None
-        return min(efficiency, 1.0)
+        pct = job_efficiency(job)['cpu_efficiency_pct']
+        return pct / 100 if pct is not None else None
 
     def publish(self):
         job = self.job

@@ -196,11 +196,11 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
         return null
     }
 
-    setSelectedItems(items: any[]) {
+    setSelectedItems(items: any[], onSelected?: () => void) {
         this.table.current?.setSelectedItems(items)
         this.setState({
             selectedItems: items
-        })
+        }, onSelected)
     }
 
     isAnySelected(): boolean {

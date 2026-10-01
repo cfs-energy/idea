@@ -18,7 +18,7 @@ from ideadatamodel import (
     exceptions,
     locale,
 )
-from .reporting_sources import ReportingSources, number, timestamp, subject
+from .reporting_sources import user_label, ReportingSources, number, timestamp, subject
 from .snapshot_store import (
     SnapshotStore,
     FACETS,
@@ -348,7 +348,7 @@ class ReportingService:
             raise exceptions.invalid_params('Invalid reporting currency configuration')
         now = datetime.now(timezone.utc)
         period = resolve_period(request, timezone_name, now)
-        data = self.sources.read(period, deadline)
+        data = self.sources.read(period, deadline, include_storage=True)
         tables, tiles, covers, warnings = self.build(
             data, period, currency, timezone_name, deadline
         )
@@ -358,7 +358,27 @@ class ReportingService:
             if value.get('source_as_of')
             and timestamp(value['source_as_of']) is not None
         ]
+        active_users = {
+            row['key']
+            for row in tables['user']
+            if subject(row['key'])
+            and user_label(row['key']) != 'System'
+            and (
+                row['job_count']
+                or row['coverage']['desktop_hours']['total_count']
+                or row['spend_total']
+            )
+        }
+        for row in data.get('storage', []):
+            check_deadline(deadline)
+            if period.start_date <= row.get('date', '') <= period.end_date:
+                active_users.update(
+                    owner
+                    for owner, size in (row.get('users') or {}).items()
+                    if subject(owner) and user_label(owner) != 'System' and number(size)
+                )
         summary = dict(
+            users=sorted(active_users),
             period=period.model_dump(mode='json'),
             currency=currency,
             timezone=timezone_name,
@@ -693,6 +713,32 @@ class ReportingService:
             'partial' if difference['spend_total'] is not None else 'unavailable',
             'Signed timing, coverage and billing-basis difference; not consumption or project allocation.',
         )
+        system_rows = [row for key, row in users.items() if user_label(key) == 'System']
+        if system_rows:
+            system = new_row('!system', 'System')
+            for facet in FACETS:
+                system['spend_by_facet'][facet] = known_sum(
+                    row['spend_by_facet'][facet] for row in system_rows
+                )
+            system['spend_total'] = known_sum(row['spend_total'] for row in system_rows)
+            for metric in ACTIVITY:
+                if metric != 'efficiency_pct':
+                    system[metric] = known_sum(row[metric] for row in system_rows)
+            if (
+                system['requested_walltime_hours']
+                and system['elapsed_hours'] is not None
+            ):
+                system['efficiency_pct'] = (
+                    100 * system['elapsed_hours'] / system['requested_walltime_hours']
+                )
+            for metric in system['coverage']:
+                system['coverage'][metric] = combine(
+                    [row['coverage'][metric] for row in system_rows]
+                )
+            users = {
+                key: row for key, row in users.items() if user_label(key) != 'System'
+            }
+            users[system['key']] = system
         tables = dict(
             user=list(users.values()), project=list(projects.values()), facet=facet_rows
         )
@@ -747,12 +793,17 @@ class ReportingService:
 
     def list_rows(self, actor, request, authorize):
         metadata = self.store.lookup(request.snapshot_id, actor, authorize)
+        if request.username is not None and request.table != 'user':
+            raise exceptions.invalid_params('User-filtered rows require the user table')
         rows = sort_rows(
             self.store.rows(request.snapshot_id, metadata, request.table),
             request.sort_by,
             request.descending,
         )
+        if request.username is not None:
+            rows = [row for row in rows if row['key'] == request.username]
         binding = dict(
+            username=request.username,
             actor=actor,
             snapshot_id=request.snapshot_id,
             table=request.table,
@@ -776,11 +827,21 @@ class ReportingService:
 
     def export(self, actor, request, authorize):
         metadata = self.store.lookup(request.snapshot_id, actor, authorize)
+        if request.username is not None and request.table != 'user':
+            raise exceptions.invalid_params(
+                'User-filtered exports require the user table'
+            )
         rows = sort_rows(
             self.store.rows(request.snapshot_id, metadata, request.table),
             request.sort_by,
             request.descending,
         )
+        if request.username is not None:
+            rows = [row for row in rows if row['key'] == request.username]
         result = export_csv(metadata['summary'], rows, request.table, request.columns)
+        if request.username is not None:
+            result.filename = (
+                result.filename.removesuffix('.csv') + f'-{request.username}.csv'
+            )
         self.store.check_expiry(metadata)
         return result

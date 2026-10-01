@@ -34,6 +34,11 @@ def test_user_can_store_own_landing_page(accounts):
     assert user.username == 'user-a' and user.landing_page == 'my-costs'
 
 
+def test_legacy_home_preference_remains_readable(accounts):
+    user = accounts.update_my_preferences('user-a', 'home')
+    assert user.landing_page == 'home'
+
+
 def test_invalid_landing_page_is_refused(accounts):
     with pytest.raises(exceptions.SocaException):
         accounts.update_my_preferences('user-a', 'administration')

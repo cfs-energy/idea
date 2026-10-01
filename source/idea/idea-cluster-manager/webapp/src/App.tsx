@@ -15,7 +15,6 @@ import React, {Component} from 'react';
 import './App.scss';
 import {IdeaAuthChallenge, IdeaAuthConfirmForgotPassword, IdeaAuthenticatedRoute, IdeaAuthForgotPassword, IdeaAuthLogin} from "./pages/auth";
 import Reporting from "./pages/reporting/reporting";
-import Home from "./pages/home";
 import {AppContext} from "./common";
 import Users from "./pages/user-management/users";
 import Groups from "./pages/user-management/groups";
@@ -381,18 +380,7 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
 
                 <Route path="/home" element={
                     <IdeaAuthenticatedRoute isLoggedIn={this.state.isLoggedIn}>
-                        <Home
-                            ideaPageId="home"
-                            toolsOpen={this.state.toolsOpen}
-                            tools={this.state.tools}
-                            onToolsChange={this.onToolsChange}
-                            onPageChange={this.onPageChange}
-                            sideNavItems={this.state.sideNavItems}
-                            sideNavHeader={this.state.sideNavHeader}
-                            onSideNavChange={this.onSideNavChange}
-                            onFlashbarChange={this.onFlashbarChange}
-                            flashbarItems={this.state.flashbarItems}
-                        />
+                        <LandingPage/>
                     </IdeaAuthenticatedRoute>
                 }/>
 

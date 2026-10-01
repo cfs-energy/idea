@@ -1610,8 +1610,12 @@ async function verifyUpgradeCompletion(
 ): Promise<void> {
   const current = new Map((await scanAll(deps, `${options.clusterName}.cluster-settings`)).map((row) => [String(row["key"]), row["value"]]));
   const published = new Set(drift.current.filter((row) => row.source === "stack").map((row) => row.key));
-  const checkpoints = new Set(modules.filter((module) => module.name === "cluster-manager").flatMap((module) =>
-    ["metrics.cost.last_collected", "metrics.storage.last_collected", "metrics.storage.usage_snapshot", "accounts.reconcile.last_completed"].map((key) => `${module.module_id}.${key}`)));
+  const checkpoints = new Set([
+    ...modules.filter((module) => module.name === "cluster-manager").flatMap((module) =>
+      ["metrics.cost.last_collected", "metrics.storage.last_collected", "metrics.storage.usage_snapshot", "accounts.reconcile.last_completed"].map((key) => `${module.module_id}.${key}`)),
+    // The desktop controller records the release it seeded base stacks for when it starts on a new version.
+    ...modules.filter((module) => module.name === "virtual-desktop-controller").map((module) => `${module.module_id}.software_stacks.base_stacks_seeded_release`),
+  ]);
   for (const [key, value] of expected) {
     // Application checkpoints can advance while deployment runs; configuration cannot.
     if (!published.has(key) && checkpoints.has(key)) continue;

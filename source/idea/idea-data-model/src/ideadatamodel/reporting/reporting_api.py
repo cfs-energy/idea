@@ -1,9 +1,9 @@
 """Immutable reporting read contract. Money is serialized as decimal strings."""
 
 from decimal import Decimal
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import ConfigDict, Field, StrictBool, StrictInt
+from pydantic import ConfigDict, Field, StrictBool, StrictInt, field_serializer
 
 from ideadatamodel import SocaPayload
 
@@ -25,6 +25,9 @@ __all__ = (
 Facet = Literal['jobs', 'desktops', 'desktop_disks', 'shared_storage', 'ai']
 Table = Literal['user', 'project', 'facet']
 Period = Literal['this_month', 'last_month', 'last_30_days', 'custom']
+ReportingUsername = Annotated[
+    str, Field(min_length=3, max_length=20, pattern=r'^[a-z0-9]+(?:[_.-]?[a-z0-9]+)*$')
+]
 Column = Literal[
     'key',
     'label',
@@ -45,7 +48,24 @@ Column = Literal[
 ]
 
 
-class MetricCoverage(SocaPayload):
+class ReportingWireModel(SocaPayload):
+    @field_serializer('*', mode='wrap', when_used='json')
+    def round_wire_numbers(self, value, handler):
+        def rounded(item):
+            if isinstance(item, Decimal):
+                return item.quantize(Decimal('0.0001'))
+            if isinstance(item, float):
+                return round(item, 2)
+            if isinstance(item, dict):
+                return {key: rounded(value) for key, value in item.items()}
+            if isinstance(item, list):
+                return [rounded(value) for value in item]
+            return item
+
+        return handler(rounded(value))
+
+
+class MetricCoverage(ReportingWireModel):
     model_config = ConfigDict(extra='forbid')
     status: Literal['ready', 'estimated', 'partial', 'unavailable', 'not_applicable']
     reason: str = ''
@@ -59,7 +79,7 @@ class MetricCoverage(SocaPayload):
     freshness_spread_seconds: float | None = None
 
 
-class ReportingRow(SocaPayload):
+class ReportingRow(ReportingWireModel):
     model_config = ConfigDict(extra='forbid', allow_inf_nan=False)
     key: str
     label: str
@@ -104,6 +124,7 @@ class ReportingSummary(SocaPayload):
     tiles: dict[str, ReportingRow]
     coverage: dict[str, MetricCoverage]
     warnings: list[str]
+    users: list[str] = Field(default_factory=list)
 
 
 class GetReportingCapabilitiesRequest(SocaPayload):
@@ -123,6 +144,7 @@ class ReportingPaginator(SocaPayload):
 
 class ListReportingRowsRequest(SocaPayload):
     model_config = ConfigDict(extra='forbid')
+    username: ReportingUsername | None = None
     snapshot_id: str = Field(min_length=1, max_length=128)
     table: Table
     sort_by: Column = 'spend_total'
@@ -141,6 +163,7 @@ class ListReportingRowsResult(SocaPayload):
 
 class ExportReportingCsvRequest(SocaPayload):
     model_config = ConfigDict(extra='forbid')
+    username: ReportingUsername | None = None
     snapshot_id: str = Field(min_length=1, max_length=128)
     table: Table
     sort_by: Column = 'spend_total'

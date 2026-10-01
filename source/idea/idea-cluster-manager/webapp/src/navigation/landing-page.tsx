@@ -5,7 +5,7 @@ import {Constants} from '../common/constants';
 import {LANDING_PATHS} from './task-navigation';
 
 export function resolveLandingPath(userChoice?: string, clusterChoice?: string): string {
-    return LANDING_PATHS[userChoice || ''] ?? LANDING_PATHS[clusterChoice || ''] ?? LANDING_PATHS.home;
+    return LANDING_PATHS[userChoice || ''] ?? LANDING_PATHS[clusterChoice || ''] ?? LANDING_PATHS['my-costs'];
 }
 
 export const LandingPage: React.FC = () => {
@@ -17,7 +17,7 @@ export const LandingPage: React.FC = () => {
             context.getClusterSettingsService().getModuleSettings(Constants.MODULE_CLUSTER_MANAGER)
         ]).then(([user, settings]) => {
             setPath(resolveLandingPath(user.landing_page, settings?.web_portal?.default_landing_page));
-        }).catch(() => setPath(LANDING_PATHS.home));
+        }).catch(() => setPath(LANDING_PATHS['my-costs']));
     }, []);
     return path ? <Navigate to={path} replace/> : null;
 };

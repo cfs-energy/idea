@@ -26,3 +26,19 @@ it('prefers the signed-in user override', async () => {
     open();
     expect(await screen.findByText('/home/my-costs')).toBeInTheDocument();
 });
+
+it('falls back to My costs when landing settings cannot be loaded', async () => {
+    const context = initTestAppContext();
+    vi.spyOn(context.auth(), 'getUser').mockRejectedValue(new Error('Unavailable'));
+    vi.spyOn(context.getClusterSettingsService(), 'getModuleSettings').mockResolvedValue({});
+    open();
+    expect(await screen.findByText('/home/my-costs')).toBeInTheDocument();
+});
+
+it('has no Home breadcrumb pointing to the portal root in any page', () => {
+    const pages = import.meta.glob('../pages/**/*.tsx', {query: '?raw', import: 'default', eager: true});
+    for (const [path, source] of Object.entries(pages)) {
+        if (path.includes('.test.')) continue;
+        expect(source, path).not.toMatch(/\{\s*text:\s*['"]Home['"],\s*href:\s*['"]#\/?['"]/);
+    }
+});
