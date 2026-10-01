@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
+## [26.10.1] - 2026-10-02
+
+* **Job submit checks**: a job is rejected at submit when its AMI does not exist or is not shared with the account, when none of its instance types is offered in its subnets' availability zones, and architecture or base_os rejections name the queues that fit; an AMI or offering that cannot be looked up is still allowed.
+* **Stuck jobs**: a job whose nodes launched but never started it is held with a comment naming the cause and the qrls to retry, instead of retrying silently, and a pinned AMI that is deprecated or older than the queue default is noted in the job comment.
+* **Reporting speed**: the report reads per-user cost heads with a filtered parallel scan, and cost generations are kept for an hour instead of a day, which took a production cost table from 138 MB toward a fraction of that.
+* **Desktop list**: a new desktop no longer disappears and a terminated one no longer lingers until a page reload while the search index catches up.
+* **My desktops**: one primary button per desktop follows its state, the DCV client file is explained, and the schedule line says what will happen in cluster time.
+* **My jobs**: submitted, runtime and cost columns, finished and failed statuses, owner hidden on your own jobs, and Write script as the primary action; the completed jobs CSV export follows the new columns.
+* **Write script**: a queue reference lists each queue's architecture, operating system and default instance types (new Scheduler.ListQueues API), only #PBS -P is required, and check results are shown as the scheduler wrote them.
+* **Files and SSH access**: selection actions move into one Actions menu with dates and times and a Home crumb; SSH access gives one set of terminal steps for Linux, macOS and Windows, file copy commands, how to reach a job's node, and the bastion host name when bastion-host.ssh_hostname is set.
+
 ## [26.10.0] - 2026-10-01
 
 * **Reporting and My costs**: job efficiency leads both pages: the spend that paid for unused cores, CPU, memory and walltime efficiency, unused core-hours and their cost, and per-job hints to lower a core or memory request. Memory is measured against the request, or against the job's own instance when it requested none (single-job capacity with one instance size only). Reporting readers can filter every view and export to one user. Reporting's total and spend tiles use recorded costs including desktop disks and AI, so they match My costs. One job table sorts by cost or unused cores, a Breakdown view switches between users and projects, daily cost is a stacked area chart, system accounts group as System, and expired reports refetch from the server's error instead of the browser clock. Money is rounded to four places and other numbers to two in the API.
