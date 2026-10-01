@@ -28,6 +28,7 @@ Statement:
       - ec2:DescribeImages
       - ec2:DescribeInstanceAttribute
       - ec2:DescribeInstanceTypes
+      - ec2:DescribeInstanceTypeOfferings
       - ec2:DescribeInstanceStatus
       - ec2:DescribeReservedInstances
       - ec2:DescribeSpotInstanceRequests
