@@ -338,3 +338,38 @@ def test_stack_left_for_housekeeper_is_not_counted_twice(
 
     assert result.status is True
     assert job_cache.get_job_provisioning_retry_count(job_id=job.job_id) == 0
+
+
+def test_housekeeper_holds_and_explains_a_job_whose_nodes_never_started_it(
+    context, job_cache, mock_scheduler, mock_job_monitor, deleted_stacks, monkeypatch
+):
+    """
+    a stack that came up but never ran the job (nodes that never joined the scheduler) is
+    deleted, and the job is held with a comment instead of retried silently: a retry
+    launches the same broken nodes again while the job looks like it is simply waiting.
+    """
+    import arrow
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        JobProvisioningUtil, 'check_status', lambda _self: ProvisioningStatus.COMPLETED
+    )
+    monkeypatch.setattr(
+        JobProvisioningUtil,
+        'stack',
+        property(
+            lambda _self: SimpleNamespace(creation_time=arrow.utcnow().shift(hours=-3))
+        ),
+    )
+    job = mock_job(provisioned=True)
+    job_cache.sync(jobs=[job])
+
+    housekeeping_session(context).retry_provisioning_cleanup()
+
+    assert deleted_stacks == [job.get_compute_stack()]
+    assert mock_scheduler.reset_jobs == [job.job_id]
+    assert mock_scheduler.held_jobs == [job.job_id]
+    comment = mock_scheduler.comments[job.job_id]
+    assert comment.startswith('IDEA: held. Nodes launched but the job did not start in')
+    assert comment.endswith(f'qrls {job.job_id} to retry')
+    assert len(comment) <= 128

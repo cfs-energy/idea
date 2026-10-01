@@ -360,6 +360,52 @@ class AWSUtil(AWSUtilProtocol):
         self._context.cache().long_term().set(key=cache_key, value=dates)
         return dates
 
+    def get_subnet_availability_zone(self, subnet_id: str) -> Optional[str]:
+        """the availability zone of a subnet, None when it cannot be described"""
+        cache_key = f'aws.ec2.subnet.{subnet_id}.az'
+        zone = self._context.cache().long_term().get(key=cache_key)
+        if zone is not None:
+            return zone
+        try:
+            subnets = (
+                self.aws().ec2().describe_subnets(SubnetIds=[subnet_id])['Subnets']
+            )
+            zone = subnets[0]['AvailabilityZone'] if subnets else None
+        except Exception as e:  # noqa
+            self._logger.debug(f'could not describe subnet: {subnet_id} - {e}')
+            return None
+        if zone:
+            self._context.cache().long_term().set(key=cache_key, value=zone)
+        return zone
+
+    def get_instance_types_offered(self, availability_zone: str) -> Optional[Set[str]]:
+        """instance types EC2 offers in an availability zone, None when it cannot be read"""
+        cache_key = f'aws.ec2.offerings.{availability_zone}'
+        offered = self._context.cache().long_term().get(key=cache_key)
+        if offered is not None:
+            return set(offered)
+        try:
+            offered = set()
+            request = {
+                'LocationType': 'availability-zone',
+                'Filters': [{'Name': 'location', 'Values': [availability_zone]}],
+            }
+            while True:
+                page = self.aws().ec2().describe_instance_type_offerings(**request)
+                offered.update(
+                    o['InstanceType'] for o in page.get('InstanceTypeOfferings', [])
+                )
+                if not page.get('NextToken'):
+                    break
+                request['NextToken'] = page['NextToken']
+        except Exception as e:  # noqa
+            self._logger.debug(
+                f'could not read instance type offerings in {availability_zone} - {e}'
+            )
+            return None
+        self._context.cache().long_term().set(key=cache_key, value=sorted(offered))
+        return offered
+
     def is_image_missing(self, image_id: str) -> bool:
         """
         True only when EC2 says the AMI does not exist or is not visible to this account.

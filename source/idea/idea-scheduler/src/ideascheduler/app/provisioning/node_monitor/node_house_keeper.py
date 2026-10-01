@@ -1068,6 +1068,23 @@ class NodeHouseKeepingSession:
                 attempt_number=lifecycle_events.attempts_consumed(job=job),
             )
 
+    def _hold_after_stack_timeout(self, job: SocaJob, timeout_secs: int):
+        scheduler = self._context.scheduler
+        try:
+            scheduler.hold_job(job_id=job.job_id)
+            scheduler.set_job_comment(
+                job_id=job.job_id,
+                comment=(
+                    f'IDEA: held. Nodes launched but the job did not start in '
+                    f'{max(1, timeout_secs // 60)} min (check instance_ami). '
+                    f'qrls {job.job_id} to retry'
+                ),
+            )
+        except Exception as e:
+            self._logger.warning(
+                f'{job.log_tag} failed to hold after stack timeout: {e}'
+            )
+
     def retry_provisioning_cleanup(self):
         """
         retry provisioning clean-up
@@ -1213,6 +1230,7 @@ class NodeHouseKeepingSession:
                     continue
 
                 delete_stack = False
+                stack_failure_reason_class = None
                 self._logger.debug(
                     f'{job.log_tag} Evaluating cleanup actions for provisioning status: {provisioning_status}'
                 )
@@ -1312,6 +1330,14 @@ class NodeHouseKeepingSession:
                         f'{job.log_tag} Failed to reset job in scheduler: {reset_error}'
                     )
                     raise  # Re-raise to trigger the outer exception handler
+
+                if stack_failure_reason_class == REASON_CLASS_STACK_TIMEOUT:
+                    # nodes launched but the job never started on them, usually a node that
+                    # never joined the scheduler (a bad instance_ami or bootstrap). a silent
+                    # retry repeats it, so the job is held and its owner told why.
+                    self._hold_after_stack_timeout(
+                        job=job, timeout_secs=stack_provisioning_timeout_secs
+                    )
 
                 if delete_stack:
                     retries_exhausted = provisioning_util.track_provisioning_failure(

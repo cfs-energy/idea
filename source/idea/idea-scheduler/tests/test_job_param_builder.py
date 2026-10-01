@@ -2843,3 +2843,62 @@ def test_queue_default_placement_group_resolves_subnets(context, nodes, queue_su
     else:
         assert len(result.job_params.subnet_ids) == 1
         assert result.job_params.subnet_ids[0] in private_subnets
+
+
+def _zone_offerings(context, monkeypatch, offered):
+    ec2 = context.aws().ec2()
+    monkeypatch.setattr(
+        ec2,
+        'describe_subnets',
+        lambda **kwargs: {
+            'Subnets': [
+                {'SubnetId': s, 'AvailabilityZone': 'us-east-1c'}
+                for s in kwargs['SubnetIds']
+            ]
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        ec2,
+        'describe_instance_type_offerings',
+        lambda **_: {'InstanceTypeOfferings': [{'InstanceType': t} for t in offered]},
+        raising=False,
+    )
+
+
+def test_job_builder_instance_type_not_offered_in_subnet_zone_invalid(
+    context, monkeypatch
+):
+    """
+    an instance type EC2 does not offer in any zone of the job's subnets can never launch,
+    so it is rejected at submit instead of retrying a launch that always fails
+    """
+    _zone_offerings(context, monkeypatch, offered=['c5.large'])
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': 1,
+            'cpus': 1,
+            'instance_type': 't3.micro',
+            'subnet_id': 'subnet-zonec000000001',
+        },
+    )
+    assert result.success is False
+    assert any(
+        't3.micro] are not offered in the availability zones' in m and 'us-east-1c' in m
+        for m in _messages(result)
+    )
+
+
+def test_job_builder_instance_type_offered_in_subnet_zone_valid(context, monkeypatch):
+    _zone_offerings(context, monkeypatch, offered=['c5.large'])
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': 1,
+            'cpus': 1,
+            'instance_type': 'c5.large',
+            'subnet_id': 'subnet-zonec000000002',
+        },
+    )
+    assert result.success is True

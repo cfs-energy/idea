@@ -1177,7 +1177,10 @@ class InstanceTypesParamBuilder(BaseParamBuilder):
             arch_valid = self._validate_architecture_consistency(
                 instance_types=default_instance_types, from_queue_default=True
             )
-            return gpu_valid and arch_valid
+            offered = self._validate_offered_in_subnets(
+                instance_types=default_instance_types, from_queue_default=True
+            )
+            return gpu_valid and arch_valid and offered
 
         if self.is_restricted_parameter():
             return False
@@ -1251,9 +1254,52 @@ class InstanceTypesParamBuilder(BaseParamBuilder):
             arch_valid = self._validate_architecture_consistency(
                 instance_types=instance_types
             )
-            success = gpu_valid and arch_valid
+            offered = self._validate_offered_in_subnets(instance_types=instance_types)
+            success = gpu_valid and arch_valid and offered
 
         return success
+
+    def _validate_offered_in_subnets(
+        self, instance_types: Optional[List[str]], from_queue_default: bool = False
+    ) -> bool:
+        """
+        reject when none of the instance types is offered in any availability zone the job's
+        subnets are in: every launch would fail. a lookup that fails is an unknown and
+        allowed. capacity is not visible up front, so a type short of capacity still passes.
+        """
+        if Utils.is_empty(instance_types):
+            return True
+        subnets_builder = self.context.get_builder(constants.JOB_PARAM_SUBNET_IDS)
+        subnet_ids = subnets_builder.get() or subnets_builder.default()
+        if Utils.is_empty(subnet_ids):
+            return True
+        aws_util = self.soca_context.aws_util()
+        zones = set()
+        for subnet_id in subnet_ids:
+            zone = aws_util.get_subnet_availability_zone(subnet_id)
+            if zone is None:
+                return True
+            zones.add(zone)
+        offered = set()
+        for zone in zones:
+            types = aws_util.get_instance_types_offered(zone)
+            if types is None:
+                return True
+            offered |= types
+        if any(instance_type in offered for instance_type in instance_types):
+            return True
+        source = (
+            'The queue profile default instance types'
+            if from_queue_default
+            else 'The requested instance types'
+        )
+        self.add_validation_entry(
+            param=constants.JOB_PARAM_INSTANCE_TYPES,
+            message=f'{source} [{", ".join(instance_types)}] are not offered in the '
+            f"availability zones of this job's subnets ({', '.join(sorted(zones))}). "
+            f'Request instance types offered there.',
+        )
+        return False
 
     def _is_gpu_instance_type(
         self, instance_type: str, gpu_instance_families: List[str]
