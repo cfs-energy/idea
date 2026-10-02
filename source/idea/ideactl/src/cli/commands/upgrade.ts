@@ -878,37 +878,37 @@ export function buildAmiUpdateEntries(
   return entries;
 }
 
-export function keepBuiltComputeImage(current: InstanceImage | undefined, stock: InstanceImage | undefined): boolean {
-  return (
-    current?.Name?.startsWith(COMPUTE_IMAGE_PREFIX) === true &&
-    typeof current.CreationDate === "string" &&
-    current.CreationDate !== "" &&
-    typeof stock?.CreationDate === "string" &&
-    stock.CreationDate !== "" &&
-    current.CreationDate > stock.CreationDate
-  );
+export function keepBuiltComputeImage(current: InstanceImage | undefined, pinned = false): boolean {
+  return pinned || current?.Name?.startsWith(COMPUTE_IMAGE_PREFIX) === true;
 }
 
 async function computeAmiKeepKeys(
   deps: UpgradeDeps,
   options: Pick<UpgradeCommandOptions, "awsRegion">,
   modules: ModuleInfo[],
-  amiId: string,
   settings: readonly CurrentConfigRow[],
 ): Promise<Set<string>> {
   const kept = new Set<string>();
   for (const scheduler of modules.filter((module) => module.name === "scheduler")) {
     const current = settings.find((entry) => entry.key === `${scheduler.module_id}.compute_node_ami`)?.value;
-    if (typeof current !== "string" || current === "" || current === amiId) continue;
-    try {
-      const images = await deps.ec2.describeImages({ awsRegion: options.awsRegion, imageIds: [current, amiId] });
-      if (!keepBuiltComputeImage(images.find((image) => image.ImageId === current), images.find((image) => image.ImageId === amiId))) continue;
-      deps.out(`keeping built compute image ${current} for ${scheduler.module_id}, newer than the release image ${amiId}`);
-      kept.add(`${scheduler.module_id}.compute_node_os`);
-      kept.add(`${scheduler.module_id}.compute_node_ami`);
-    } catch (error) {
-      deps.out(`warning: could not describe compute image ${current} or release image ${amiId}: ${(error as Error).message}. Compute moves to ${amiId}.`);
+    if (typeof current !== "string" || current === "") continue;
+    const pinned = settings.find((entry) => entry.key === `${scheduler.module_id}.images.default_image_pinned`)?.value === true;
+    let keep = pinned;
+    if (!keep) {
+      try {
+        const images = await deps.ec2.describeImages({ awsRegion: options.awsRegion, imageIds: [current] });
+        const image = images.find((entry) => entry.ImageId === current);
+        // Missing metadata cannot establish that replacing a managed image is safe.
+        keep = image === undefined || keepBuiltComputeImage(image);
+      } catch (error) {
+        deps.out(`warning: could not describe compute image ${current}: ${(error as Error).message}. Keeping it until validated promotion.`);
+        keep = true;
+      }
     }
+    if (!keep) continue;
+    deps.out(`keeping built compute image or pinned default ${current} for ${scheduler.module_id} until validated promotion`);
+    kept.add(`${scheduler.module_id}.compute_node_os`);
+    kept.add(`${scheduler.module_id}.compute_node_ami`);
   }
   return kept;
 }
@@ -984,9 +984,12 @@ export async function planUpgradePhase3Entries(
   baseOs: string,
   releaseVersion: string = ideaVersion(),
 ): Promise<ConfigEntry[]> {
-  const keepKeys = await computeAmiKeepKeys(deps, options, modules, amiId, settings);
+  const keepKeys = await computeAmiKeepKeys(deps, options, modules, settings);
   return [
     ...buildAmiUpdateEntries(amiId, baseOs, modules, keepKeys),
+    ...modules.filter((module) => module.name === "scheduler").map((module) => ({
+      key: `${module.module_id}.images.refresh_requested_release`, value: releaseVersion,
+    })),
     ...await planModuleHostInstanceTypes(deps, options, modules, settings),
     ...await planOpenSearchDataNodeInstanceType(deps, options, modules, settings),
     ...planEcsImageFollowsRelease(settings, releaseVersion),
@@ -1613,6 +1616,11 @@ async function verifyUpgradeCompletion(
   const checkpoints = new Set([
     ...modules.filter((module) => module.name === "cluster-manager").flatMap((module) =>
       ["metrics.cost.last_collected", "metrics.storage.last_collected", "metrics.storage.usage_snapshot", "accounts.reconcile.last_completed"].map((key) => `${module.module_id}.${key}`)),
+    ...modules.filter((module) => module.name === "scheduler").flatMap((module) =>
+      ["images.refresh_requested_release", "images.refreshed_release", "images.image_refresh_last_run_on"].map((key) => `${module.module_id}.${key}`)),
+    // The image pipelines advance their release and monthly checkpoints as soon as the new modules run.
+    ...modules.filter((module) => module.name === "virtual-desktop-controller").flatMap((module) =>
+      ["software_stacks.image_refresh_last_run_on", "software_stacks.images_baked_release"].map((key) => `${module.module_id}.${key}`)),
     // The desktop controller records the release it seeded base stacks for when it starts on a new version.
     ...modules.filter((module) => module.name === "virtual-desktop-controller").map((module) => `${module.module_id}.software_stacks.base_stacks_seeded_release`),
   ]);

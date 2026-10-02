@@ -29,6 +29,11 @@ from ideasdk.aws.stock_amis import trusted_owners
 
 from typing import List, Optional, Dict, Tuple
 import time
+import json
+
+from botocore.exceptions import ClientError
+from ideadatamodel import ImageCheck
+from ideascheduler_meta import __version__
 import os.path
 from pathlib import Path
 import os
@@ -477,8 +482,12 @@ class ComputeNodeAmiBuilder:
                     if instances
                     else None
                 )
+                if ami_builder_status == 'complete':
+                    return
                 if Utils.is_not_empty(ami_builder_status):
-                    break
+                    raise exceptions.general_exception(
+                        f'The compute builder reported {ami_builder_status}; complete is required.'
+                    )
                 if time.time() > deadline:
                     raise exceptions.general_exception(
                         f'builder {instance_id} did not report ready within '
@@ -495,6 +504,10 @@ class ComputeNodeAmiBuilder:
             f'Key={constants.IDEA_TAG_MODULE_NAME},Value={self.context.module_name()}'
         )
         custom_tags.append(f'Key={constants.IDEA_TAG_AMI_BUILDER},Value=true')
+        # promotion tags validated images; IAM scopes that to this cluster's images
+        custom_tags.append(
+            f'Key={constants.IDEA_TAG_CLUSTER_NAME},Value={self.context.cluster_name()}'
+        )
         custom_tags_dict = Utils.convert_custom_tags_to_key_value_pairs(custom_tags)
         tags = []
         for key, value in custom_tags_dict.items():
@@ -588,6 +601,52 @@ class ComputeNodeAmiBuilder:
                 )
             time.sleep(10)
 
+    def read_bake_checks(self, instance_id, progress=None):
+        """Copy the bootstrap's evidence before snapshotting; missing evidence fails."""
+        client = self.context.aws().ssm()
+        result = client.send_command(
+            InstanceIds=[instance_id],
+            DocumentName='AWS-RunShellScript',
+            Parameters={'commands': ['cat /var/lib/idea/image-checks.json']},
+            TimeoutSeconds=120,
+        )
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            try:
+                invocation = client.get_command_invocation(
+                    CommandId=result['Command']['CommandId'],
+                    InstanceId=instance_id,
+                )
+            except ClientError as error:
+                if (
+                    error.response.get('Error', {}).get('Code')
+                    != 'InvocationDoesNotExist'
+                ):
+                    raise
+                time.sleep(2)
+                continue
+            status = invocation.get('Status')
+            if status == 'Success':
+                data = json.loads(invocation.get('StandardOutputContent', ''))
+                checks = [ImageCheck(**item) for item in data.get('checks', [])]
+                if progress is not None:
+                    progress({'checks': checks})
+                if (
+                    data.get('release') != __version__
+                    or not checks
+                    or any(c.ok is not True for c in checks)
+                ):
+                    raise exceptions.general_exception(
+                        'The compute in-bake checks failed or belong to another release.'
+                    )
+                return checks
+            if status not in ('Pending', 'InProgress', 'Delayed'):
+                raise exceptions.general_exception(
+                    f'The compute in-bake checks could not be read: {status}.'
+                )
+            time.sleep(2)
+        raise exceptions.general_exception('Reading compute in-bake checks timed out.')
+
     def terminate_ec2_instance(self, instance_id: str):
         self.context.aws().ec2().terminate_instances(InstanceIds=[instance_id])
 
@@ -627,9 +686,13 @@ class ComputeNodeAmiBuilder:
                 instance_id = self.instance_id
 
             try:
-                if Utils.is_empty(self.instance_id):
-                    self.wait_for_software_packages(instance_id=instance_id)
+                if progress is not None:
+                    progress({'status': 'checking', 'instance_id': instance_id})
+                self.wait_for_software_packages(instance_id=instance_id)
+                self.read_bake_checks(instance_id, progress)
                 image_id = self.create_image(instance_id=instance_id)
+                if progress is not None:
+                    progress({'image_id': image_id})
             except BaseException as e:
                 self.keep_for_inspection(instance_id, e)
                 raise

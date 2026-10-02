@@ -222,6 +222,10 @@ class SchedulerAdminAPI(BaseAPI):
                 'scope': None,
                 'method': self.set_image_pinned,
             },
+            'SchedulerAdmin.GetImageSchedule': {
+                'scope': None,
+                'method': self.get_image_schedule,
+            },
         }
         self._compute_images = None
 
@@ -332,6 +336,8 @@ class SchedulerAdminAPI(BaseAPI):
         queue_profiles = self.context.queue_profiles.list_queue_profiles()
         result = []
         for queue_profile in queue_profiles:
+            if (queue_profile.name or '').startswith('iv-'):
+                continue
             if lite:
                 result.append(
                     HpcQueueProfile(
@@ -589,7 +595,11 @@ class SchedulerAdminAPI(BaseAPI):
         if self._compute_images is None:
             from ideascheduler.app.images.compute_images import ComputeImageService
 
-            self._compute_images = ComputeImageService(self.context)
+            self._compute_images = getattr(self.context, 'compute_image_service', None)
+            if self._compute_images is None:
+                self._compute_images = ComputeImageService(self.context)
+                self.context.compute_image_service = self._compute_images
+                self._compute_images.start()
         return self._compute_images
 
     def list_compute_images(self, context: ApiInvocationContext):
@@ -611,27 +621,78 @@ class SchedulerAdminAPI(BaseAPI):
         record = self.compute_images.build(request, requested_by=context.get_username())
         context.success(BuildComputeImageResult(record=record))
 
-    # image pipeline (Images view, compute rows), filled in by the compute images work
+    def list_image_rows(self, context: ApiInvocationContext):
+        from ideadatamodel import ListImageRowsResponse
 
-    @staticmethod
-    def _image_pipeline_pending(context: ApiInvocationContext, request_type):
-        context.get_request_payload_as(request_type)
-        raise exceptions.soca_exception(
-            error_code=errorcodes.NOT_IMPLEMENTED,
-            message=f'{context.namespace} is not implemented yet',
+        request = context.get_request_payload_as(ListImageRowsRequest)
+        context.success(
+            ListImageRowsResponse(listing=self.compute_images.list_rows(request.filter))
         )
 
-    def list_image_rows(self, context: ApiInvocationContext):
-        self._image_pipeline_pending(context, ListImageRowsRequest)
-
     def refresh_images(self, context: ApiInvocationContext):
-        self._image_pipeline_pending(context, RefreshImagesRequest)
+        from ideadatamodel import RefreshImagesResponse
+
+        request = context.get_request_payload_as(RefreshImagesRequest)
+        context.success(
+            RefreshImagesResponse(
+                results=self.compute_images.refresh_images(
+                    request, context.get_username()
+                )
+            )
+        )
 
     def rollback_image(self, context: ApiInvocationContext):
-        self._image_pipeline_pending(context, RollbackImageRequest)
+        from ideadatamodel import RollbackImageResponse
+
+        request = context.get_request_payload_as(RollbackImageRequest)
+        context.success(
+            RollbackImageResponse(
+                record=self.compute_images.rollback_image(request.row)
+            )
+        )
 
     def set_image_pinned(self, context: ApiInvocationContext):
-        self._image_pipeline_pending(context, SetImagePinnedRequest)
+        from ideadatamodel import SetImagePinnedResponse
+
+        request = context.get_request_payload_as(SetImagePinnedRequest)
+        context.success(
+            SetImagePinnedResponse(
+                record=self.compute_images.set_image_pinned(request.row, request.pinned)
+            )
+        )
+
+    def get_image_schedule(self, context: ApiInvocationContext):
+        """the one schedule both modules run (read-only here), with the compute rows' last run"""
+        from zoneinfo import ZoneInfo
+        from datetime import datetime
+        from ideadatamodel import (
+            GetImageScheduleRequest,
+            GetImageScheduleResponse,
+            ImageRefreshSchedule,
+        )
+
+        context.get_request_payload_as(GetImageScheduleRequest)
+        config = self.context.config()
+        schedule = ImageRefreshSchedule(
+            **dict(
+                config.get_config(
+                    'virtual-desktop-controller.software_stacks.image_refresh_schedule',
+                    default={},
+                )
+                or {}
+            )
+        )
+        last_run_ms = config.get_int(
+            'scheduler.images.image_refresh_last_run_on', default=None
+        )
+        now = datetime.now(ZoneInfo(self.context.cluster_timezone()))
+        context.success(
+            GetImageScheduleResponse(
+                schedule=schedule,
+                last_run_on=Utils.to_datetime(last_run_ms) if last_run_ms else None,
+                next_run_on=schedule.next_run_after(now),
+            )
+        )
 
     def invoke(self, context: ApiInvocationContext):
         namespace = context.namespace

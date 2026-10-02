@@ -62,3 +62,67 @@ def test_wait_for_image_returns_on_available_and_rides_out_a_throttle(monkeypatc
     builder.context.aws().ec2().describe_images.side_effect = describe_images
     monkeypatch.setattr(module.time, 'sleep', lambda seconds: None)
     builder.wait_for_image('ami-ok')
+
+
+@pytest.mark.parametrize('status', ['failed:kernel_default', 'failed', 'ready'])
+def test_builder_requires_exact_complete_status(status):
+    builder = ComputeNodeAmiBuilder.__new__(ComputeNodeAmiBuilder)
+    builder.context = MagicMock()
+    builder.context.aws().ec2().describe_instances.return_value = {
+        'Reservations': [
+            {
+                'Instances': [
+                    {
+                        'InstanceId': 'i-builder',
+                        'Tags': [
+                            {'Key': 'idea:AmiBuilderStatus', 'Value': status},
+                        ],
+                    }
+                ]
+            }
+        ]
+    }
+    with pytest.raises(exceptions.SocaException, match='complete is required'):
+        builder.wait_for_software_packages('i-builder')
+
+
+@pytest.mark.parametrize(
+    'release,checks',
+    [
+        ('old', [{'name': 'kernel_default', 'ok': True}]),
+        (module.__version__, []),
+        (module.__version__, [{'name': 'kernel_default', 'ok': False}]),
+    ],
+)
+def test_in_bake_evidence_rejects_missing_failed_or_wrong_release(release, checks):
+    import json
+
+    builder = ComputeNodeAmiBuilder.__new__(ComputeNodeAmiBuilder)
+    builder.context = MagicMock()
+    builder.context.aws().ssm().get_command_invocation.return_value = {
+        'Status': 'Success',
+        'StandardOutputContent': json.dumps({'release': release, 'checks': checks}),
+    }
+    with pytest.raises(exceptions.SocaException, match='in-bake checks failed'):
+        builder.read_bake_checks('i-builder')
+
+
+def test_in_bake_evidence_is_copied_before_snapshot():
+    import json
+
+    builder = ComputeNodeAmiBuilder.__new__(ComputeNodeAmiBuilder)
+    builder.context = MagicMock()
+    builder.context.aws().ssm().get_command_invocation.return_value = {
+        'Status': 'Success',
+        'StandardOutputContent': json.dumps(
+            {
+                'release': module.__version__,
+                'checks': [{'name': 'kernel_default', 'ok': True, 'seconds': 3}],
+            }
+        ),
+    }
+    progress = MagicMock()
+    checks = builder.read_bake_checks('i-builder', progress)
+    assert checks[0].ok is True
+    assert checks[0].seconds == 3
+    progress.assert_called_once_with({'checks': checks})

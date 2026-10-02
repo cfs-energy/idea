@@ -212,9 +212,11 @@ for (const missingInventory of [false, true]) {
       });
       const result = spawnSync(process.execPath, [join(PKG, "tools/parity/upgrade-dry-run.ts"),
         "--capture", root, "--values", join(root, "values.yml"), "--templates", join(root, "templates"),
+        "--out", join(root, "report.txt"),
         ...(missingInventory ? [] : ["--inventory", join(root, "inventory.json")]),
       ], { cwd: PKG, encoding: "utf8", timeout: 30_000 });
-      const output = result.stdout + result.stderr;
+      // The rehearsal exits explicitly; a large piped stdout can lose its tail.
+      const output = readFileSync(join(root, "report.txt"), "utf8") + result.stderr;
       assert.equal(result.status, missingInventory ? 1 : 0, output);
       if (missingInventory) assert.match(output, /writes=0 deploys=0 stack-updates=0/);
       else {

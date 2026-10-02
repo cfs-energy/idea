@@ -599,7 +599,7 @@ class SchedulerAPI(BaseAPI):
         aws_util = self.context.aws_util()
         listing = []
         for profile in self.context.queue_profiles.list_queue_profiles() or []:
-            if not profile.enabled:
+            if not profile.enabled or (profile.name or '').startswith('iv-'):
                 continue
             params = profile.default_job_params
             instance_types = list((params.instance_types if params else None) or [])

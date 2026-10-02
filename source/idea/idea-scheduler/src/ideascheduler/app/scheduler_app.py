@@ -195,6 +195,8 @@ class SchedulerApp(ideasdk.app.SocaApp):
         self._initialize_image_builds()
 
     def app_stop(self):
+        if getattr(self.context, 'compute_image_service', None) is not None:
+            self.context.compute_image_service.stop()
         if self.instance_monitor is not None:
             self.instance_monitor.stop()
         if self.context.job_monitor is not None:
@@ -209,15 +211,16 @@ class SchedulerApp(ideasdk.app.SocaApp):
             self.context.projects_client.destroy()
 
     def _initialize_image_builds(self):
-        """the records table plus the sweep of builds a restart orphaned; startup never fails over it"""
-        from ideasdk.aws.image_builds import ImageBuildRecordsDB
-        from ideascheduler.app.images.compute_images import image_builds_table_name
+        """Start the compute leader loop without making scheduler startup depend on it."""
+        from ideascheduler.app.images.compute_images import ComputeImageService
 
         try:
-            ImageBuildRecordsDB(
-                self.context, image_builds_table_name(self.context)
-            ).initialize()
+            service = getattr(self.context, 'compute_image_service', None)
+            if service is None:
+                service = ComputeImageService(self.context)
+                self.context.compute_image_service = service
+            service.start()
         except Exception as e:
             self.context.logger('scheduler-app').error(
-                f'image build records could not be initialized at startup: {e}'
+                f'compute image pipeline could not be initialized at startup: {e}'
             )

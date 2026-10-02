@@ -89,6 +89,8 @@ from ideadatamodel.aws import (
     RollbackImageResponse,
     SetImagePinnedRequest,
     SetImagePinnedResponse,
+    GetImageScheduleRequest,
+    GetImageScheduleResponse,
 )
 from ideadatamodel.scheduler.scheduler_model import (
     SocaComputeNodeState,
@@ -756,6 +758,13 @@ OPEN_API_SPEC_ENTRIES_SCHEDULER = [
         namespace='SchedulerAdmin.SetImagePinned',
         request=SetImagePinnedRequest,
         result=SetImagePinnedResponse,
+        is_listing=False,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='SchedulerAdmin.GetImageSchedule',
+        request=GetImageScheduleRequest,
+        result=GetImageScheduleResponse,
         is_listing=False,
         is_public=False,
     ),
