@@ -316,7 +316,8 @@ def test_the_validation_identity_is_created_with_the_request_models():
     )
     context.projects_client.get_project_by_name.side_effect = [
         exceptions.soca_exception(error_code='PROJECT_NOT_FOUND', message='not found'),
-        Project(project_id='p-validate', name='idea-validate'),
+        Project(project_id='p-validate', name='idea-validate', enabled=False),
+        Project(project_id='p-validate', name='idea-validate', enabled=True),
     ]
     sent = []
     tester._invoke_cluster_manager = lambda namespace, payload: sent.append(
@@ -324,7 +325,14 @@ def test_the_validation_identity_is_created_with_the_request_models():
     )
     project = tester.ensure_identity(ImagePipelineSettings())
     assert project.name == 'idea-validate'
-    assert [n for n, _ in sent] == ['Accounts.CreateUser', 'Projects.CreateProject']
+    # CreateProject makes a disabled project; GetUserProjects leaves disabled ones out
+    assert [n for n, _ in sent] == [
+        'Accounts.CreateUser',
+        'Projects.CreateProject',
+        'Projects.EnableProject',
+    ]
+    assert project.enabled is True
+    assert sent[2][1].project_id == 'p-validate'
     assert isinstance(sent[0][1], CreateUserRequest)
     assert isinstance(sent[1][1], CreateProjectRequest)
     for namespace, payload in sent:
@@ -335,3 +343,38 @@ def test_the_validation_identity_is_created_with_the_request_models():
     assert sent[0][1].user.username == 'idea-validate'
     assert sent[0][1].user.sudo is False
     assert sent[1][1].project.enable_budgets is False
+
+
+def test_the_validation_size_is_one_the_cluster_offers():
+    """a cluster whose allow list leaves out the preferred size still gets a test launch"""
+
+    def info(name, vcpus, mib):
+        return {
+            'InstanceType': name,
+            'VCpuInfo': {'DefaultVCpus': vcpus},
+            'MemoryInfo': {'SizeInMiB': mib},
+        }
+
+    offered = [
+        info('t3.medium', 2, 4096),
+        info('m7i.2xlarge', 8, 32768),
+        info('m7i.xlarge', 4, 16384),
+        info('m6a.xlarge', 4, 16384),
+    ]
+    api = FakeApi([VirtualDesktopSessionState.READY])
+    api.controller_utils = Mock()
+    api.controller_utils.get_valid_instance_types.return_value = offered
+    tester, _ = launcher(api, Clock())
+    tester.test_launch(RECORD, STACK, ImagePipelineSettings())
+    assert api.validated[0].server.instance_type == 'm6a.xlarge'
+    kwargs = api.controller_utils.get_valid_instance_types.call_args.kwargs
+    assert kwargs['username'] == 'idea-validate'
+
+    # the preferred size wins when offered
+    offered.append(info('m6i.xlarge', 4, 16384))
+    api = FakeApi([VirtualDesktopSessionState.READY])
+    api.controller_utils = Mock()
+    api.controller_utils.get_valid_instance_types.return_value = offered
+    tester, _ = launcher(api, Clock())
+    tester.test_launch(RECORD, STACK, ImagePipelineSettings())
+    assert api.validated[0].server.instance_type == 'm6i.xlarge'

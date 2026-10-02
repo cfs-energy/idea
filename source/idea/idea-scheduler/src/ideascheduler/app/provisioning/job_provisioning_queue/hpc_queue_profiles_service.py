@@ -142,9 +142,13 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
 
         validation_result = builder.validate()
         if not validation_result.is_valid():
+            reasons = '; '.join(
+                e.message for e in validation_result.results or [] if e.message
+            )
             raise exceptions.soca_exception(
                 error_code=errorcodes.VALIDATION_FAILED,
-                message='Job Parameter validation failed',
+                message='Job Parameter validation failed'
+                + (f': {reasons}' if reasons else ''),
                 ref=validation_result,
             )
 

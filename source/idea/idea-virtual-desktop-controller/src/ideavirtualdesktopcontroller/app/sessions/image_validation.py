@@ -20,6 +20,7 @@ from botocore.exceptions import ClientError
 from ideadatamodel import (
     CreateProjectRequest,
     CreateUserRequest,
+    EnableProjectRequest,
     GetUserRequest,
     ImageBuildRecord,
     ImageCheck,
@@ -320,26 +321,38 @@ class ImageTestLauncher:
                     email_verified=False,
                 ),
             )
+        project = None
         try:
-            return self.context.projects_client.get_project_by_name(project_name)
+            project = self.context.projects_client.get_project_by_name(project_name)
         except Exception as e:
             if 'not found' not in str(e).lower() and 'NOT_FOUND' not in str(e):
                 raise
-        group = GroupNameHelper(self.context).get_user_group(user)
-        self._invoke_cluster_manager(
-            'Projects.CreateProject',
-            CreateProjectRequest(
-                project=Project(
-                    name=project_name,
-                    title='Image validation',
-                    description='hidden: desktops the image pipeline launches to validate new images',
-                    ldap_groups=[group],
-                    enable_budgets=False,
-                )
-            ),
-        )
-        self.context.projects_client.cache.clear()
-        return self.context.projects_client.get_project_by_name(project_name)
+        if project is None:
+            group = GroupNameHelper(self.context).get_user_group(user)
+            self._invoke_cluster_manager(
+                'Projects.CreateProject',
+                CreateProjectRequest(
+                    project=Project(
+                        name=project_name,
+                        title='Image validation',
+                        description='hidden: desktops the image pipeline launches to validate new images',
+                        ldap_groups=[group],
+                        enable_budgets=False,
+                    )
+                ),
+            )
+            self.context.projects_client.cache.clear()
+            project = self.context.projects_client.get_project_by_name(project_name)
+        # CreateProject always creates a disabled project, and a disabled project is
+        # left out of the user's projects, so CreateSession refuses the validation user
+        if not project.enabled:
+            self._invoke_cluster_manager(
+                'Projects.EnableProject',
+                EnableProjectRequest(project_id=project.project_id),
+            )
+            self.context.projects_client.cache.clear()
+            project = self.context.projects_client.get_project_by_name(project_name)
+        return project
 
     def _invoke_cluster_manager(self, namespace: str, payload: SocaBaseModel):
         """
@@ -470,9 +483,7 @@ class ImageTestLauncher:
             hibernation_enabled=False,
             description='image pipeline test launch',
             server=VirtualDesktopServer(
-                instance_type=VALIDATION_INSTANCE_TYPES.get(
-                    (record.architecture, variant), 'm6i.xlarge'
-                ),
+                instance_type=self._instance_type(record, stack, settings, variant),
                 root_volume_size=stack.min_storage,
             ),
         )
@@ -492,6 +503,33 @@ class ImageTestLauncher:
             f'CreateSession accepted {session.idea_session_id}',
             started,
         )
+
+    def _instance_type(self, record, stack, settings, variant) -> str:
+        """
+        the preferred validation size when the cluster offers it to this stack, else the
+        smallest offered size with 4 vCPUs and 16 GiB (or the smallest offered at all):
+        the test launch goes through the same size filter a user's request does
+        """
+        preferred = VALIDATION_INSTANCE_TYPES.get(
+            (record.architecture, variant), 'm6i.xlarge'
+        )
+        utils = getattr(self.api, 'controller_utils', None)
+        if utils is None:
+            return preferred
+        offered = utils.get_valid_instance_types(
+            hibernation_support=False,
+            software_stack=stack,
+            username=settings.validation_user,
+        )
+        if not offered or preferred in {i.get('InstanceType') for i in offered}:
+            return preferred  # nothing offered: CreateSession reports why
+
+        def size(info):
+            vcpus = (info.get('VCpuInfo') or {}).get('DefaultVCpus') or 0
+            mib = (info.get('MemoryInfo') or {}).get('SizeInMiB') or 0
+            return (vcpus < 4 or mib < 16384, vcpus, mib, info.get('InstanceType'))
+
+        return min(offered, key=size)['InstanceType']
 
     def _get(self, session) -> Optional[VirtualDesktopSession]:
         return self.api.session_db.get_from_db(

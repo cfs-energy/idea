@@ -83,6 +83,18 @@ try {
 {% endif %}
     {% include '_templates/windows/cloudwatch_agent.jinja2' %}
     $Installed = $true
+    # Read the installer log now: installing EC2Launch v2 below on an EC2Launch v1 image
+    # (Windows Server 2019) removes the v1 Launch folder this log lives in.
+    $LogErrors = @()
+    if (Test-Path $LogFile) {
+        # Write-ToLog lines are '<date> <time> ERROR: ...'; an INFO line that mentions an
+        # error (or an 'ErrorAction' parameter) is not a failure
+        $LogErrors = @(Select-String -Path $LogFile -CaseSensitive -Pattern '^\S+ \S+ (ERROR|FATAL):' | Select-Object -First 1)
+        $LogDetail = if ($LogErrors) { "bootstrap log line $($LogErrors[0].LineNumber): $($LogErrors[0].Line.Trim())" } else { 'Host installer finished and bootstrap log contains no ERROR/FATAL' }
+    } else {
+        $LogDetail = "the host installer wrote no log at $LogFile"
+    }
+    $CleanLog = (Test-Path $LogFile) -and -not $LogErrors
 
     $FailureCheck = 'ssm'
     Set-Service AmazonSSMAgent -StartupType Automatic
@@ -127,8 +139,7 @@ try {
         if (Test-Path $Path) { throw "Could not remove $Path" }
     }
     $FailureCheck = 'bootstrap'
-    $CleanLog = (Test-Path $LogFile) -and -not (Select-String -Path $LogFile -Pattern '\b(ERROR|FATAL)\b' -Quiet)
-    Add-ImageCheck 'bootstrap' ($Installed -and $CleanLog) 'Host installer finished and bootstrap log contains no ERROR/FATAL'
+    Add-ImageCheck 'bootstrap' ($Installed -and $CleanLog) $LogDetail
     $FailureCheck = 'release'
     [IO.File]::WriteAllText("$State\baked-release", $Release)
     Add-ImageCheck 'release' ((Get-Content "$State\baked-release" -Raw) -eq $Release) 'baked-release matches the running release'

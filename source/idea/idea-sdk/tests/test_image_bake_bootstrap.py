@@ -504,3 +504,71 @@ def test_templates_tolerate_the_builder_environment():
     windows = render('dcv-host-ami-builder-windows/Setup.ps1.jinja2', 'windows2022')
     assert 'throw "Could not remove $Path"' in windows
     assert 'foreach ($Attempt in 1..5)' in windows
+
+
+@pytest.mark.parametrize('has_dbus_dir', [False, True])
+def test_scrub_machine_id_works_with_and_without_var_lib_dbus(tmp_path, has_dbus_dir):
+    """dbus-broker images (EL9 and later, AL2023) have no /var/lib/dbus"""
+    scrub = render('compute-node-ami-builder/image_scrub.sh.jinja2', 'rocky9')
+    start = scrub.index(': > /etc/machine-id')
+    block = scrub[start : scrub.index('rm -f /etc/ssh/ssh_host_*')]
+    root = tmp_path / 'root'
+    (root / 'etc').mkdir(parents=True)
+    (root / 'etc/machine-id').write_text('abc\n')
+    if has_dbus_dir:
+        (root / 'var/lib/dbus').mkdir(parents=True)
+    block = block.replace('/etc/', f'{root}/etc/').replace(
+        '/var/lib/dbus', f'{root}/var/lib/dbus'
+    )
+    result = subprocess.run(['bash', '-ec', block], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert (root / 'etc/machine-id').read_text() == ''
+    link = root / 'var/lib/dbus/machine-id'
+    assert link.is_symlink() == has_dbus_dir
+
+
+def test_a_failed_scrub_names_the_command(tmp_path):
+    scrub = render('compute-node-ami-builder/image_scrub.sh.jinja2', 'rocky9')
+    trap = next(line for line in scrub.splitlines() if line.startswith('trap '))
+    state = tmp_path / 'bake-failed'
+    script = trap.replace('/var/lib/idea/bake-failed', str(state)) + '\nset -e\nfalse --scrub-step\n'
+    result = subprocess.run(['bash', '-c', script], capture_output=True, text=True)
+    assert result.returncode != 0
+    assert state.read_text().strip() == 'scrub: false --scrub-step (exit 1)'
+
+
+@pytest.mark.parametrize('base_os', ['ubuntu2204', 'ubuntu2404'])
+def test_ubuntu_desktop_install_survives_a_snap_store_error(tmp_path, base_os):
+    """the firefox deb's preinst installs the snap once; a store 408 failed the bake"""
+    dcv = render('_templates/linux/dcv_server.jinja2', base_os)
+    apt = dcv.index('apt install -y ubuntu-desktop-minimal')
+    loop = dcv[dcv.rindex('for attempt in', 0, apt) : dcv.rindex('done', 0, apt) + 4]
+    calls = tmp_path / 'calls'
+    stubs = (
+        f'snap() {{ echo "$*" >> {calls}; [[ $(wc -l < {calls}) -ge 3 ]]; }}\n'
+        'sleep() { :; }\nlog_warning() { :; }\nset -e\n'
+    )
+    result = subprocess.run(['bash', '-c', stubs + loop], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert calls.read_text().splitlines() == ['install firefox'] * 3
+
+
+@pytest.mark.parametrize('base_os', WINDOWS)
+def test_windows_log_is_read_before_ec2launch_v2_replaces_v1(base_os):
+    """the v2 installer removes the v1 Launch folder that holds the installer log (2019)"""
+    import re
+
+    setup = render('dcv-host-ami-builder-windows/Setup.ps1.jinja2', base_os)
+    assert setup.index('Select-String -Path $LogFile') < setup.index(
+        'AmazonEC2Launch.msi'
+    )
+    assert "Add-ImageCheck 'bootstrap' ($Installed -and $CleanLog) $LogDetail" in setup
+    pattern = re.search(r"-CaseSensitive -Pattern '([^']+)'", setup).group(1)
+    assert re.search(pattern, '2026-10-02 22:00:01 ERROR: DCV install failed')
+    assert re.search(pattern, '2026-10-02 22:00:01 FATAL: no network')
+    for line in (
+        '2026-10-02 22:00:01 INFO: retrying after error 3010',
+        '2026-10-02 22:00:01 INFO: Set-Service -ErrorAction Stop',
+        '2026-10-02 22:00:01 WARNING: Error : {}',
+    ):
+        assert not re.search(pattern, line), line

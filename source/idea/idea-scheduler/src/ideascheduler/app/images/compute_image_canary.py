@@ -67,6 +67,24 @@ raise SystemExit(0 if all(check['ok'] for check in checks) else 1)
     )
 
 
+def canary_job_params(source, record) -> SocaJobParams:
+    """
+    the hidden queue's defaults: the source profile's, on the candidate image, one small
+    node. gpus is left unset: the job builder refuses gpus=0 (it must be > 0 when given)
+    """
+    params = source.model_copy(deep=True) if source else SocaJobParams()
+    params.base_os, params.instance_ami = record.base_os, record.image_id
+    params.nodes = params.cpus = params.mpiprocs = 1
+    params.gpus = None
+    params.memory = None
+    params.instance_types = [
+        default_builder_instance_type(record.architecture, 'c7i.large')
+    ]
+    params.spot = params.enable_efa_support = False
+    params.compute_stack = params.stack_id = params.job_group = None
+    return params
+
+
 class ComputeImageCanary:
     def __init__(self, context):
         self.context = context
@@ -120,17 +138,9 @@ class ComputeImageCanary:
             max_nodes_per_job=1,
             restricted_parameters=['instance_ami', 'base_os', 'instance_types'],
         )
-        params = candidate.default_job_params or SocaJobParams()
-        params.base_os, params.instance_ami = record.base_os, record.image_id
-        params.nodes = params.cpus = params.mpiprocs = 1
-        params.gpus = 0
-        params.memory = None
-        params.instance_types = [
-            default_builder_instance_type(record.architecture, 'c7i.large')
-        ]
-        params.spot = params.enable_efa_support = False
-        params.compute_stack = params.stack_id = params.job_group = None
-        candidate.default_job_params = params
+        candidate.default_job_params = canary_job_params(
+            candidate.default_job_params, record
+        )
         mounts = []
         storage = self.context.config().get_config('shared-storage', default={}) or {}
         # only what the canary node mounts: the bootstrap's scope rules for the scheduler

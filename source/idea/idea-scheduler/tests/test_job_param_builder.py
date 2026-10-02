@@ -2902,3 +2902,24 @@ def test_job_builder_instance_type_offered_in_subnet_zone_valid(context, monkeyp
         },
     )
     assert result.success is True
+
+
+def test_compute_image_canary_defaults_pass_queue_profile_validation(context):
+    """the hidden validation queue is created through the same job parameter validation"""
+    from ideadatamodel import ImageBuildRecord
+    from ideascheduler.app.images.compute_image_canary import canary_job_params
+
+    source = SocaJobParams(
+        base_os='rocky9',
+        instance_types=['hpc7a.96xlarge'],
+        enable_efa_support=True,
+        enable_placement_group=True,
+    )
+    record = ImageBuildRecord(
+        base_os='rocky9', architecture='x86_64', image_id='ami-0123456789abcdef0'
+    )
+    params = canary_job_params(source, record)
+    assert source.enable_efa_support is True  # the source profile is not changed
+    params.instance_types = ['c5.large']  # the mock region's small x86_64 size
+    result = SocaJobBuilder(context=context, params=Utils.to_dict(params)).validate()
+    assert result.results == [], [e.message for e in result.results]

@@ -1,6 +1,8 @@
 #!/bin/bash
 # Each command is required: the parent publishes a failure if scrub cannot finish.
 set -e
+# the failed check names the command that stopped the scrub
+trap 'rc=$?; echo "scrub: ${BASH_COMMAND} (exit ${rc})" >> /var/lib/idea/bake-failed' ERR
 source /etc/environment
 # Shared by the compute builder (image_kind = 'compute'), which has no DCV.
 {% set compute = image_kind is defined and image_kind == 'compute' %}
@@ -23,7 +25,8 @@ rm -rf /var/lib/sss/db/* /var/lib/sss/mc/* /var/lib/sss/secrets/*
 cloud-init clean --logs --seed
 : > /etc/machine-id
 rm -f /var/lib/dbus/machine-id
-ln -s /etc/machine-id /var/lib/dbus/machine-id
+# dbus-broker hosts (EL9 and later, AL2023) have no /var/lib/dbus; they read /etc/machine-id
+[[ ! -d /var/lib/dbus ]] || ln -s /etc/machine-id /var/lib/dbus/machine-id
 rm -f /etc/ssh/ssh_host_*
 # SSM state stays: the agent is still serving the checks read-back, and its state is
 # keyed by instance id, so a clone registers as itself
