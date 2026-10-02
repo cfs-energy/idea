@@ -22,3 +22,16 @@ it('renders nothing when the queues cannot be read', async () => {
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(container).toBeEmptyDOMElement();
 });
+
+it('starts collapsed and opens when the user expands it', async () => {
+    const {default: userEvent} = await import('@testing-library/user-event');
+    const context = initTestAppContext();
+    vi.spyOn(context.client().scheduler(), 'listQueues').mockResolvedValue({listing: [
+        {name: 'normal', architecture: 'x86_64', base_os: 'rhel9', instance_types: ['c6i.large']},
+    ]});
+    render(<QueueReference/>);
+    const toggle = await screen.findByRole('button', {name: /Queues you can use \(1\)/});
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await userEvent.setup().click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+});

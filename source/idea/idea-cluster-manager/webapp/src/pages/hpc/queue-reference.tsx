@@ -24,7 +24,7 @@ export default function QueueReference() {
         return null;
     }
     return (
-        <ExpandableSection defaultExpanded headerText={`Queues you can use (${queues.length})`}
+        <ExpandableSection headerText={`Queues you can use (${queues.length})`}
                            headerDescription="Set one with #PBS -q. Instance types must match the queue's architecture.">
             <Table variant="embedded" items={queues} trackBy="name" columnDefinitions={[
                 {id: 'name', header: 'Queue', cell: q => <Box variant="code">{q.name}</Box>},
