@@ -358,7 +358,13 @@ JOBS_RESPONSE = {
                     'queue': 'normal',
                     'project': PROJECT_NAME,
                     'end_time': '2026-08-30T10:00:00+00:00',
-                    'estimated_bom_cost': {'total': {'amount': 4.5, 'unit': 'USD'}},
+                    'estimated_bom_cost': {
+                        'line_items': [
+                            {'total_price': {'amount': 4.5, 'unit': 'USD'}},
+                        ],
+                        'line_items_total': {'amount': 4.5, 'unit': 'USD'},
+                        'total': {'amount': 1.5, 'unit': 'USD'},
+                    },
                 }
             }
         ],
@@ -401,6 +407,10 @@ def test_jobs_query_is_scoped_to_the_caller():
     assert index == 'idea-test_scheduler_jobs'
     filters = body['query']['bool']['filter']
     assert {'term': {'owner.raw': USER}} in filters
+    # spend sums the line items, never total (which subtracts a reserved discount)
+    assert body['aggs']['cost'] == {
+        'sum': {'field': 'estimated_bom_cost.line_items_total.amount'}
+    }
 
 
 def test_jobs_unavailable_when_the_scheduler_is_not_deployed():

@@ -170,8 +170,7 @@ function InsightView({tab, insights: data, summary, userRow, timezone, personal 
         <DesktopCoaching desktops={data.desktops} currency={currency} personal={personal}/>
         {overviewTiles ?? (personal ? <TileRow>
             {tile('Total spend', total, summary?.coverage.spend_total, 'Adds the available job, desktop and storage costs for this period.')}
-            {tile('Job spend', data.jobs.cost, summary?.coverage.jobs, 'Estimated from jobs that finished in this period.',
-                Number(data.jobs.savings) > 0 && <Box color="text-body-secondary">{money(data.jobs.savings!, currency)} less than on-demand</Box>)}
+            {tile('Job spend', data.jobs.cost, summary?.coverage.jobs, 'Estimated from jobs that finished in this period, at the on-demand or spot rate each ran at, plus job storage.')}
             {tile('Desktop spend', data.desktops.cost, summary?.coverage.desktops, 'Recorded desktop costs from stored daily costs for this period.')}
             {tile('Storage spend', data.storage.cost, summary?.coverage.shared_storage, 'Storage cost based on measured use.')}
         </TileRow> : !spend ? <StatusIndicator type="loading">Loading spend</StatusIndicator> : <TileRow>
@@ -183,9 +182,7 @@ function InsightView({tab, insights: data, summary, userRow, timezone, personal 
                 ['shared_storage', 'Storage spend', 'Storage cost based on measured use.'],
                 ['ai', 'AI spend', 'Recorded AI costs for this period.']
             ] as const).filter(([key]) => spend.spend_by_facet[key] != null && Number(spend.spend_by_facet[key]) !== 0).map(([key, title, definition]) => <MetricTile key={key} title={title}
-                value={money(spend.spend_by_facet[key], currency)} info={metricInfo(spend.coverage[key] ?? summary?.coverage[key], timezone, definition)}>
-                {key === 'jobs' && Number(data.jobs.savings) > 0 && <Box color="text-body-secondary">{money(data.jobs.savings!, currency)} less than on-demand</Box>}
-            </MetricTile>)}
+                value={money(spend.spend_by_facet[key], currency)} info={metricInfo(spend.coverage[key] ?? summary?.coverage[key], timezone, definition)}/>)}
         </TileRow>)}
         {overviewExtra}
         <EfficiencyTiles jobs={data.jobs} currency={currency} only={['cpu_efficiency_pct', 'wasted_core_hours', 'wasted_cost']}/>

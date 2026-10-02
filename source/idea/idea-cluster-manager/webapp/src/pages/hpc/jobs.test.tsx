@@ -187,11 +187,11 @@ describe('job status and costs', () => {
         expect(screen.queryByText(/123.45/)).toBeNull();
     });
 
-    it('shows recorded savings and the estimated total', () => {
-        render(<JobCosts job={{estimated_bom_cost: {total: {amount: 12}, savings_total: {amount: 3}, savings: [{title: 'Spot savings', total_price: {amount: 3}}]}}}/>);
-        expect(screen.getByText(/Estimated savings:/)).toBeInTheDocument();
-        expect(screen.getByText('Spot savings')).toBeInTheDocument();
-        expect(screen.getByText(/12.00/)).toBeInTheDocument();
+    it('totals the line items and never shows the reserved-instance discount of older records', () => {
+        render(<JobCosts job={{estimated_bom_cost: {line_items_total: {amount: 15}, total: {amount: 12}, savings_total: {amount: 3}, savings: [{title: 'Compute Reserved: [1yr No Upfront]', total_price: {amount: 3}}]}}}/>);
+        expect(screen.getByText(/15.00/)).toBeInTheDocument();
+        expect(screen.queryByText(/12.00/)).toBeNull();
+        expect(screen.queryByText(/savings|Reserved/i)).toBeNull();
     });
 
     it('shows recorded budget usage with the shared budget display', () => {

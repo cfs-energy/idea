@@ -31,8 +31,9 @@ describe('jobs table columns', () => {
     });
 
     it('shows a cost only when the job carries a priced estimate', () => {
-        expect(cellText('completed', 'cost', {estimated_bom_cost: {total: {amount: 12.5, unit: 'USD'}}})).toContain('12.5');
-        expect(cellText('completed', 'cost', {estimated_bom_cost: {price_unavailable: true, total: {amount: 0, unit: 'USD'}}})).toBe('–');
+        // line items, not total: an older record's total subtracts a reserved-instance discount nobody paid
+        expect(cellText('completed', 'cost', {estimated_bom_cost: {line_items_total: {amount: 12.5, unit: 'USD'}, total: {amount: 9.25, unit: 'USD'}}})).toContain('12.5');
+        expect(cellText('completed', 'cost', {estimated_bom_cost: {price_unavailable: true, line_items_total: {amount: 0, unit: 'USD'}}})).toBe('–');
         expect(cellText('completed', 'cost', {})).toBe('–');
     });
 

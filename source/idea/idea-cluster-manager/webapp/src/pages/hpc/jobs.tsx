@@ -20,7 +20,7 @@ import {DeleteJobRequest, DeleteJobResult, SocaJob} from "../../client/data-mode
 import {AppContext} from "../../common";
 import {SchedulerAdminClient, SchedulerClient} from "../../client"
 import IdeaSplitPanel from "../../components/split-panel";
-import {Box, Button, ColumnLayout, Container, Header, SpaceBetween, StatusIndicator, Table, Tabs} from "@cloudscape-design/components";
+import {Box, Button, ColumnLayout, SpaceBetween, StatusIndicator, Table, Tabs} from "@cloudscape-design/components";
 import {KeyValue, KeyValueGroup} from "../../components/key-value";
 import IdeaConfirm from "../../components/modals";
 import Utils from "../../common/utils";
@@ -87,12 +87,9 @@ export function JobCosts({job}: {job: SocaJob}) {
     ]
     return <SpaceBetween size="m">
         <Table items={cost?.line_items ?? []} columnDefinitions={columns}/>
-        {Boolean(cost?.savings?.length) && <Container header={<Header variant="h3">Estimated savings: {cost?.price_unavailable ? 'Price not available' : Utils.getFormattedAmount(cost?.savings_total)}</Header>}>
-            <Table items={cost?.savings ?? []} columnDefinitions={columns}/>
-        </Container>}
         <ColumnLayout columns={2}>
             <Box variant="h3">Estimated Total Cost</Box>
-            <Box variant="h3" textAlign="right">{!cost || cost.price_unavailable ? 'Price not available' : Utils.getFormattedAmount(cost.total)}</Box>
+            <Box variant="h3" textAlign="right">{!cost || cost.price_unavailable ? 'Price not available' : Utils.getFormattedAmount(cost.line_items_total)}</Box>
         </ColumnLayout>
     </SpaceBetween>
 }
@@ -100,7 +97,8 @@ export function JobCosts({job}: {job: SocaJob}) {
 const formatDate = (value?: string) => value ? new Date(value).toLocaleString() : '\u2013'
 const timeOf = (value?: string) => value ? new Date(value).getTime() : 0
 const runtimeSeconds = (job: SocaJob, now: Date = new Date()) => new JobUtils(job).getElapsedSeconds(now)
-const costOf = (job: SocaJob) => job.estimated_bom_cost && !job.estimated_bom_cost.price_unavailable ? job.estimated_bom_cost.total : undefined
+// spend is the line items. total subtracts a hypothetical reserved-instance discount on older records.
+const costOf = (job: SocaJob) => job.estimated_bom_cost && !job.estimated_bom_cost.price_unavailable ? job.estimated_bom_cost.line_items_total : undefined
 
 /** Columns shared by every jobs view. Completed views add cost estimate and exit status (see jobColumns). */
 export const JOB_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<SocaJob>[] = [

@@ -56,8 +56,13 @@ def job(identity='1', owner='user-a', cpus=4, used=7200, cost='10'):
                     execution=dict(runs=[dict(resources_used=dict(cpu_time_secs=used))])
                 )
             ],
+            # a record written before 26.10.1: total subtracts a reserved-instance
+            # discount nobody paid; spend is the line items.
             estimated_bom_cost=dict(
-                total=dict(amount=cost, unit='USD'),
+                line_items=[
+                    dict(service='aws.ec2', total_price=dict(amount=cost, unit='USD'))
+                ],
+                total=dict(amount=str(Decimal(cost) - 2), unit='USD'),
                 savings_total=dict(amount='2', unit='USD'),
             ),
         ),
@@ -86,7 +91,7 @@ def test_mean_weighting_and_waste_cost():
     result = build().jobs
     assert result.count == 2
     assert result.cost == Decimal('40')
-    assert result.savings == Decimal('4')
+    assert result.savings is None
     assert result.cpu_efficiency_pct == 75
     assert result.cpu_efficiency_weighted_pct == 87.5
     assert result.wasted_core_hours == 2
@@ -883,3 +888,15 @@ def test_sources_read_desktop_activity_for_the_period_and_owner_only():
         dict(date='2024-02-03', sessions=dict(a=sessions['a']))
     ]
     store.records.assert_any_call('!collector', 'idle:2024-02-01', 'idle:2024-02-29')
+
+
+def test_insights_job_cost_agrees_with_the_reporting_summary():
+    """the Summary tile and Insights read the same spend for the same jobs"""
+    from ideaclustermanager.app.reporting.reporting_service import job_values
+
+    value = data()
+    value['jobs'][1]['_source']['estimated_bom_cost']['line_items'].append(
+        dict(service='aws.ebs', total_price=dict(amount='1.5', unit='USD'))
+    )
+    summary = sum(job_values(hit['_source'], 'USD')['cost'] for hit in value['jobs'])
+    assert build(value).jobs.cost == summary == Decimal('41.5')

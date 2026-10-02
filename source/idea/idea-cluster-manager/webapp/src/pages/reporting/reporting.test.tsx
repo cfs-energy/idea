@@ -144,7 +144,8 @@ describe('report views', () => {
             expect(screen.getByRole('heading', {name: title})).toBeInTheDocument();
             expect(screen.getByText(value)).toBeInTheDocument();
         }
-        expect(screen.getByText(/less than on-demand/)).toBeInTheDocument();
+        // the stored fixture still carries a reserved-instance 'savings' figure: never shown
+        expect(screen.queryByText(/less than on-demand/)).toBeNull();
         expect(screen.getByText('About $120.00 of the $1,524.22 estimated for jobs that finished in this period paid for unused cores.')).toBeInTheDocument();
         expect(context.reporting().listRows).not.toHaveBeenCalled();
         await userEvent.click(screen.getByRole('button', {name: 'About Total spend'}));

@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from ideadatamodel import ReportingInsights, GetUserProjectsRequest, exceptions, locale
 from ideadatamodel.reporting.efficiency import job_efficiency, DESKTOP_CHECK_HOURS
+from ideadatamodel.reporting.job_cost import job_spend
 from ideaclustermanager.app.costs.my_costs_service import MyCostsService
 from .reporting_service import resolve_period, known_sum, selected_money
 from .reporting_sources import ReportingSources, number, timestamp, subject, user_label
@@ -207,7 +208,6 @@ class InsightsService:
             key: []
             for key in (
                 'cost',
-                'savings',
                 'cpu_efficiency_pct',
                 'memory_efficiency_pct',
                 'walltime_efficiency_pct',
@@ -235,17 +235,7 @@ class InsightsService:
             seen.add(identity)
             jobs.count += 1
             efficiency = job_efficiency(job)
-            bom = job.get('estimated_bom_cost') or {}
-            cost = (
-                amount(bom.get('total'), currency)
-                if not bom.get('price_unavailable')
-                else None
-            )
-            savings = (
-                amount(bom.get('savings_total'), currency)
-                if not bom.get('price_unavailable')
-                else None
-            )
+            cost = job_spend(job.get('estimated_bom_cost'), currency)
             cpu = efficiency['cpu_efficiency_pct']
             if cpu is not None:
                 jobs.jobs_with_efficiency += 1
@@ -254,7 +244,6 @@ class InsightsService:
             values = dict(
                 efficiency,
                 cost=cost,
-                savings=savings,
                 wasted_cost=cost * (1 - Decimal(str(cpu)) / 100)
                 if cost is not None and cpu is not None
                 else None,

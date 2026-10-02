@@ -441,7 +441,9 @@ def test_cache_expires_after_an_hour_and_failures_are_cached(service, monkeypatc
     assert len(calls) == 2
 
 
-def test_job_compute_excludes_disks_and_scratch(service, monkeypatch):
+def test_job_spend_is_line_items_with_job_storage_never_total(service, monkeypatch):
+    # job root and scratch volumes are the job's own; desktop disks are a separate facet
+    # (inventory is desktop hosts only), so nothing is counted twice.
     monkeypatch.setattr(service, '_jobs_index', lambda: 'test-index')
     monkeypatch.setattr(
         service,
@@ -476,7 +478,7 @@ def test_job_compute_excludes_disks_and_scratch(service, monkeypatch):
         },
     )
     jobs = service._compute_jobs('user-a', START, END)
-    assert jobs.cost == 10 and jobs.job_count == 1 and jobs.recent_jobs[0].cost == 10
+    assert jobs.cost == 60 and jobs.job_count == 1 and jobs.recent_jobs[0].cost == 60
 
 
 def test_total_is_marked_partial_when_storage_has_no_usage(service, monkeypatch):

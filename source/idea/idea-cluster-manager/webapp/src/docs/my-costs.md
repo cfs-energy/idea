@@ -24,7 +24,7 @@ The single **Top jobs** table sorts by **Highest cost** or **Most unused cores**
 
 | Tile | Includes |
 | --- | --- |
-| Jobs | Priced completed-job compute records. |
+| Jobs | Priced completed jobs: compute at the on-demand or spot rate charged, plus job storage. |
 | Desktops | Recorded session intervals. Uncertain historical stop times are estimated. Deleting a legacy stopped desktop does not bill its stopped interval as running. |
 | Desktop disks | Observed provisioned storage from collection onward. |
 | Shared storage | Daily storage rates multiplied by dated byte shares. ONTAP includes SSD, throughput, excess IOPS, and capacity-pool bytes. EFS uses storage class. No storage cost-allocation tag is required. |

@@ -447,7 +447,7 @@ class DailyCostsCalculator(MonthlyCostsService):
                             and not value.cost
                         ),
                         bool(missing),
-                        'Completed-job compute; missing prices remain excluded.',
+                        'Completed jobs at the rate charged plus job storage; missing prices remain excluded.',
                         missing,
                     )
                 elif facet == 'desktops':

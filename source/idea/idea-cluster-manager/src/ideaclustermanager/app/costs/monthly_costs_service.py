@@ -27,6 +27,7 @@ from ideadatamodel import (
     SocaAmount,
     ListUsersRequest,
 )
+from ideadatamodel.reporting.job_cost import job_spend
 from ideasdk.aws.ec2_price_list import get_ec2_price_list
 from ideaclustermanager.app.costs.my_costs_service import MyCostsService, SESSION_FIELDS
 from ideaclustermanager.app.filesystem.storage_usage import StorageUsageService
@@ -447,6 +448,7 @@ class MonthlyCostsService(MyCostsService):
                     'estimated_bom_cost',
                 ],
             }
+            currency = locale.get_currency_code()
             rows = []
             groups = {'project': {}, 'queue': {}}
             cost, count, missing = 0.0, 0, 0
@@ -457,21 +459,10 @@ class MonthlyCostsService(MyCostsService):
                 hits = response.get('hits', {}).get('hits', [])
                 for hit in hits:
                     source = hit['_source']
-                    bom = source.get('estimated_bom_cost') or {}
-                    items = bom.get('line_items')
-                    unavailable = items is None or bom.get('price_unavailable', False)
-                    compute = [
-                        item for item in items or [] if item.get('service') == 'aws.ec2'
-                    ]
-                    amount = 0.0
-                    for item in compute:
-                        price = item.get('total_price') or {}
-                        if price.get('amount') is None:
-                            unavailable = True
-                        else:
-                            amount += self._convert(
-                                price['amount'], price.get('unit') or 'USD'
-                            )
+                    spend = job_spend(
+                        source.get('estimated_bom_cost'), currency, self._convert
+                    )
+                    unavailable, amount = spend is None, float(spend or 0)
                     row = self._job(source)
                     row.cost, row.cost_unavailable = round(amount, 4), unavailable
                     if len(rows) < 20:
@@ -499,7 +490,7 @@ class MonthlyCostsService(MyCostsService):
                 by_queue=list(groups['queue'].values()),
             )
         except Exception:
-            self.logger.exception('Job compute costs unavailable')
+            self.logger.exception('Job costs unavailable')
             return MyCostsJobs(is_unavailable=True)
 
     def _inventory(self, username):

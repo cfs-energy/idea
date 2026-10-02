@@ -35,6 +35,7 @@ from ideadatamodel import (
     ListUserCostsResult,
     UserCosts,
 )
+from ideadatamodel.reporting.job_cost import job_spend
 from ideasdk.utils import Utils
 
 from boto3.dynamodb.conditions import Key
@@ -93,7 +94,9 @@ SESSION_FIELDS = [
     'server.instance_type',
 ]
 
-COST_FIELD = 'estimated_bom_cost.total.amount'
+# spend is the sum of the line items, never total: records before 26.10.1 subtract a
+# hypothetical reserved-instance discount from total. same figure as job_spend().
+COST_FIELD = 'estimated_bom_cost.line_items_total.amount'
 # the scheduler sets this when it could not price the instance hours. such a job still
 # carries a real amount, so it cannot be detected from the amount being zero.
 PRICE_UNAVAILABLE_FIELD = 'estimated_bom_cost.price_unavailable'
@@ -410,14 +413,14 @@ class MyCostsService:
     @staticmethod
     def _job(source: Dict) -> MyCostsJob:
         bom = Utils.get_value_as_dict('estimated_bom_cost', source, {})
-        total = Utils.get_value_as_dict('total', bom, {})
+        spend = job_spend(bom)
         return MyCostsJob(
             job_id=Utils.get_value_as_string('job_id', source),
             name=Utils.get_value_as_string('name', source),
             queue=Utils.get_value_as_string('queue', source),
             project=Utils.get_value_as_string('project', source),
             end_time=Utils.get_value_as_string('end_time', source),
-            cost=_round(Utils.get_value_as_float('amount', total, 0.0)),
+            cost=_round(float(spend or 0)),
             # only from the flag: a job cancelled before it ran was priced normally,
             # and its zero is the real answer.
             cost_unavailable=Utils.get_value_as_bool('price_unavailable', bom, False),

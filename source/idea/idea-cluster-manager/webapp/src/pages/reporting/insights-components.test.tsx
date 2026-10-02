@@ -198,3 +198,9 @@ it('shows desktop coaching on the overview and keeps users out of personal idle 
     render(<InsightTab tab="overview" personal insights={insightsFixture()} timezone="UTC"/>);
     expect(screen.getByText('About $4.00 of the $10.00 estimated for your desktops in this period paid for idle desktop time.')).toBeInTheDocument();
 });
+
+it('personal job spend shows no on-demand comparison, even from a snapshot that carries savings', () => {
+    render(<InsightTab tab="overview" insights={{...insightsFixture(), jobs: {...insightsFixture().jobs, savings: '200.00'}}} timezone="UTC" personal/>);
+    expect(screen.getByRole('heading', {name: /Job spend/})).toBeInTheDocument();
+    expect(screen.queryByText(/less than on-demand/)).toBeNull();
+});

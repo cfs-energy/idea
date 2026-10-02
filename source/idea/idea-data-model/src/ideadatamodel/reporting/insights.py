@@ -63,6 +63,8 @@ class DailyUserCost(InsightModel):
 class JobsInsights(InsightModel):
     count: int = 0
     cost: Decimal | None = None
+    # no longer set: it was a hypothetical reserved-instance discount. kept so stored
+    # snapshots, which carry it, still validate.
     savings: Decimal | None = None
     cpu_efficiency_pct: float | None = None
     cpu_efficiency_weighted_pct: float | None = None

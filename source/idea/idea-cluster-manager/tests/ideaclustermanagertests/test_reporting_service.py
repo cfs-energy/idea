@@ -81,11 +81,14 @@ def job(identity='one', **kwargs):
         start_time='2024-02-02T00:00:00+00:00',
         end_time='2024-02-02T02:00:00+00:00',
         params=dict(walltime='01:00:00', nodes=2),
+        # spend is the line items (compute + job storage); total and savings_total are
+        # the pre-26.10.1 reserved-instance figures and must be ignored.
         estimated_bom_cost=dict(
-            total=dict(amount=1000, unit='USD'),
+            total=dict(amount=1, unit='USD'),
+            savings_total=dict(amount=3, unit='USD'),
             line_items=[
-                dict(service='aws.ec2', total_price=dict(amount=4, unit='USD')),
-                dict(service='aws.ebs', total_price=dict(amount=996, unit='USD')),
+                dict(service='aws.ec2', total_price=dict(amount=3, unit='USD')),
+                dict(service='aws.ebs', total_price=dict(amount=1, unit='USD')),
             ],
         ),
     )
@@ -236,7 +239,7 @@ def test_job_identity_never_deduplicates_on_reusable_job_id():
     assert build(value)[0]['user'][0]['job_count'] == 4
 
 
-def test_compute_only_bom_currency_missing_price_and_units():
+def test_bom_line_items_currency_missing_price_and_units():
     value = job()['_source']
     assert job_values(value, 'USD')['cost'] == 4
     assert job_values(value, 'EUR')['cost'] is None
@@ -254,6 +257,8 @@ def test_compute_only_bom_currency_missing_price_and_units():
     )
     assert job_values(value, 'USD')['cost'] == Decimal('2.50')
     value['estimated_bom_cost']['line_items'][0]['unit_price']['unit'] = None
+    assert job_values(value, 'USD')['cost'] == Decimal('2.50')  # unitless = USD
+    value['estimated_bom_cost']['line_items'][0]['unit_price']['unit'] = 'EUR'
     assert job_values(value, 'USD')['cost'] is None
     assert walltime('1-02:30:00') == 95400
     assert walltime('01:99:00') is None
@@ -288,7 +293,7 @@ def test_project_recorded_labels_no_membership_allocation_and_partial_top():
     assert tiles['total']['spend_total'] == 5
     assert tiles['job_spend_difference']['spend_total'] == -7
     assert any(
-        'by recorded job-compute spend; other facets unallocated' in warning
+        'by recorded job spend; other facets unallocated' in warning
         for warning in warnings
     )
 

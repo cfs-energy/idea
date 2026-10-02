@@ -75,3 +75,15 @@ def test_lustre_bom_is_gb_hour_without_changing_existing_rate():
     assert storage.quantity == 1200 * 720
     assert storage.unit_price.amount == 0.000194
     assert storage.total_price.amount == pytest.approx(167.616)
+
+
+def test_on_demand_job_is_charged_on_demand_with_no_reserved_discount():
+    """the account holds no reservations, so the estimate must not subtract one"""
+    bom = helper().compute_estimated_bom_cost()
+    compute = next(item for item in bom.line_items if item.service == 'aws.ec2')
+    assert compute.unit_price.amount == 0.1
+    assert not bom.savings
+    assert bom.total.amount == bom.line_items_total.amount
+    assert bom.line_items_total.amount == pytest.approx(
+        sum(item.total_price.amount for item in bom.line_items)
+    )
