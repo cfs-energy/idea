@@ -44,4 +44,21 @@ describe('VirtualDesktopAdminClient', () => {
 
         expect(invoke_alt).toHaveBeenCalledWith('VirtualDesktopAdmin.UseBuiltDesktopImages', { stack_ids: ['ss-base-a'] })
     })
+
+    it.each([
+        ['listImageRows', 'ListImageRows', { filter: { base_os_family: 'rocky' } }],
+        ['refreshImages', 'RefreshImages', { all: true }],
+        ['rollbackImage', 'RollbackImage', { row: { base_os: 'rocky9', architecture: 'x86_64', variant: 'cpu' } }],
+        ['setImagePinned', 'SetImagePinned', { row: { base_os: 'rocky9', architecture: 'x86_64' }, pinned: true }],
+        ['getImageSchedule', 'GetImageSchedule', {}],
+        ['updateImageSchedule', 'UpdateImageSchedule', { schedule: { enabled: true, day: 'first sunday', hour: 2 } }],
+    ])('%s invokes VirtualDesktopAdmin.%s', async (method, api, req) => {
+        const invoke_alt = vi.fn().mockResolvedValue({})
+        const client = Object.create(VirtualDesktopAdminClient.prototype) as any
+        client.apiInvoker = { invoke_alt }
+
+        await client[method](req)
+
+        expect(invoke_alt).toHaveBeenCalledWith(`VirtualDesktopAdmin.${api}`, req)
+    })
 })

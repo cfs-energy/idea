@@ -92,11 +92,12 @@ describe('page dom fingerprints', () => {
         vi.spyOn(context.auth(), 'isModuleAdmin').mockReturnValue(true);
         vi.spyOn(context.getClusterSettingsService(), 'isSchedulerDeployed').mockReturnValue(true);
         vi.spyOn(context.getClusterSettingsService(), 'isVirtualDesktopDeployed').mockReturnValue(true);
-        vi.spyOn(context.client().schedulerAdmin(), 'listComputeImages').mockResolvedValue({listing: []});
-        vi.spyOn(context.client().virtualDesktopAdmin(), 'listDesktopImages').mockResolvedValue({listing: []});
+        vi.spyOn(context.client().schedulerAdmin(), 'listImageRows').mockResolvedValue({listing: []});
+        vi.spyOn(context.client().virtualDesktopAdmin(), 'listImageRows').mockResolvedValue({listing: []});
+        vi.spyOn(context.client().virtualDesktopAdmin(), 'getImageSchedule').mockResolvedValue({schedule: {enabled: true, day: 'first sunday', hour: 2}});
         const {container} = render(<MemoryRouter><HpcCustomAmis {...pageProps}/></MemoryRouter>);
-        expect(await screen.findByRole('heading', {name: 'Custom images'})).toBeVisible();
-        expect(screen.getByLabelText('Breadcrumbs')).toHaveTextContent('Custom images');
+        expect(await screen.findByRole('heading', {name: 'Images'})).toBeVisible();
+        expect(screen.getByLabelText('Breadcrumbs')).toHaveTextContent('Images');
         await waitFor(() => expect(screen.queryByText('Loading images')).not.toBeInTheDocument());
         expect(fingerprint(container)).toMatchSnapshot();
     });

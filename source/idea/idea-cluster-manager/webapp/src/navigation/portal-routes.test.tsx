@@ -173,8 +173,8 @@ it('allows a desktop-only administrator to open the shared image view', async ()
     vi.spyOn(context.auth(), 'isModuleAdmin').mockImplementation(module => module === 'virtual-desktop-controller');
     open('/soca/custom-amis');
     expect(await screen.findByText('HpcCustomAmis content')).toBeInTheDocument();
-    expect(screen.getByRole('tab', {name: 'Custom images'})).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByLabelText('Breadcrumbs')).toHaveTextContent('Custom images');
+    expect(screen.getByRole('tab', {name: 'Images'})).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByLabelText('Breadcrumbs')).toHaveTextContent('Images');
     expect(screen.queryByText('Destination unavailable')).not.toBeInTheDocument();
 });
 

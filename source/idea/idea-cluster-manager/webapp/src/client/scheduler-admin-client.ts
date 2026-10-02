@@ -66,7 +66,17 @@ import {
     ListComputeImagesRequest,
     ListComputeImagesResult,
     BuildComputeImageRequest,
-    BuildComputeImageResult
+    BuildComputeImageResult,
+    ListImageRowsRequest,
+    ListImageRowsResponse,
+    RefreshImagesRequest,
+    RefreshImagesResponse,
+    RollbackImageRequest,
+    RollbackImageResponse,
+    SetImagePinnedRequest,
+    SetImagePinnedResponse,
+    GetImageScheduleRequest,
+    GetImageScheduleResponse
 } from './data-model'
 import IdeaBaseClient, {IdeaBaseClientProps} from "./base-client";
 
@@ -277,6 +287,41 @@ class SchedulerAdminClient extends IdeaBaseClient<SchedulerAdminClientProps> {
     buildComputeImage(req: BuildComputeImageRequest): Promise<BuildComputeImageResult> {
         return this.apiInvoker.invoke_alt<BuildComputeImageRequest, BuildComputeImageResult>(
             'SchedulerAdmin.BuildComputeImage',
+            req
+        )
+    }
+
+    listImageRows(req: ListImageRowsRequest): Promise<ListImageRowsResponse> {
+        return this.apiInvoker.invoke_alt<ListImageRowsRequest, ListImageRowsResponse>(
+            'SchedulerAdmin.ListImageRows',
+            req
+        )
+    }
+
+    refreshImages(req: RefreshImagesRequest): Promise<RefreshImagesResponse> {
+        return this.apiInvoker.invoke_alt<RefreshImagesRequest, RefreshImagesResponse>(
+            'SchedulerAdmin.RefreshImages',
+            req
+        )
+    }
+
+    rollbackImage(req: RollbackImageRequest): Promise<RollbackImageResponse> {
+        return this.apiInvoker.invoke_alt<RollbackImageRequest, RollbackImageResponse>(
+            'SchedulerAdmin.RollbackImage',
+            req
+        )
+    }
+
+    setImagePinned(req: SetImagePinnedRequest): Promise<SetImagePinnedResponse> {
+        return this.apiInvoker.invoke_alt<SetImagePinnedRequest, SetImagePinnedResponse>(
+            'SchedulerAdmin.SetImagePinned',
+            req
+        )
+    }
+
+    getImageSchedule(req: GetImageScheduleRequest): Promise<GetImageScheduleResponse> {
+        return this.apiInvoker.invoke_alt<GetImageScheduleRequest, GetImageScheduleResponse>(
+            'SchedulerAdmin.GetImageSchedule',
             req
         )
     }
