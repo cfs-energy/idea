@@ -1,0 +1,14 @@
+{% if context.base_os in ('rocky8', 'rocky9') %}
+# Begin: dnf mirror speed
+# Rocky installs from the public mirrorlist (RHEL uses in-region RHUI): download in parallel
+# from the fastest mirror. Runs before the first dnf call; a rerun rewrites, never duplicates.
+for DNF_SETTING in max_parallel_downloads=10 fastestmirror=True; do
+  DNF_KEY="${DNF_SETTING%%=*}"
+  if grep -Eq "^${DNF_KEY}[[:space:]]*=" /etc/dnf/dnf.conf; then
+    sed -i -E "s/^${DNF_KEY}[[:space:]]*=.*/${DNF_SETTING}/" /etc/dnf/dnf.conf
+  else
+    sed -i "/^\[main\]/a ${DNF_SETTING}" /etc/dnf/dnf.conf
+  fi
+done
+# End: dnf mirror speed
+{% endif %}

@@ -88,14 +88,15 @@ ${suffixes.map((suffix, index) => `  *'"${moduleId}.dcv_broker.${suffix}"'*) ech
   *) echo UnexpectedKey >&2; exit 25;;
 esac`);
         stub("chown", "exit 0");
-        stub("dcv-session-manager-broker", 'echo registered >> "$RECORD"');
+        // Like the real CLI, registration only succeeds against a broker that is already running.
+        stub("dcv-session-manager-broker", 'if grep -q launched "$RECORD"; then echo "Jwk url registered."; echo registered >> "$RECORD"; else echo "Connection refused" >&2; exit 1; fi');
         stub("setpriv", 'echo launched >> "$RECORD"');
         const result = spawnSync("bash", [join(images, "idea-control-plane/roles/broker.sh")], {
           encoding: "utf8", timeout: 10_000,
           env: { ...process.env, PATH: `${work}:${process.env.PATH}`, RECORD: record, MODE: mode,
             IDEA_CLUSTER_NAME: "sample-cluster", IDEA_MODULE_ID: moduleId, AWS_DEFAULT_REGION: "us-east-2",
             IDEA_BROKER_DISCOVERY_ADDRESSES: "broker.example.invalid:47500", IDEA_COGNITO_PROVIDER_URL: "https://example.invalid",
-            IDEA_BROKER_CONF_FILE: conf },
+            IDEA_BROKER_CONF_FILE: conf, IDEA_BROKER_REGISTER_INTERVAL: "0.1" },
         });
         const calls = readFileSync(record, "utf8");
         assert.doesNotMatch(calls, /virtual-desktop-controller/);
@@ -110,7 +111,7 @@ esac`);
           const values = mode === "configured" ? configured : [8444, 8445, 8446, 1440, 5, 5];
           const keys = ["client-to-broker-connector-https-port", "agent-to-broker-connector-https-port", "gateway-to-broker-connector-https-port", "connect-session-token-duration-minutes", "dynamodb-table-rcu", "dynamodb-table-wcu"];
           keys.forEach((key, index) => assert.ok(text.includes(`${key} = ${values[index]}\n`), key));
-          assert.match(calls, /launched/);
+          assert.match(calls, /launched\nregistered/);
         }
       } finally { rmSync(work, { recursive: true, force: true }); }
     });

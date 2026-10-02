@@ -101,8 +101,19 @@ EOF
 chown root:dcvsmbroker "${CONF}"
 chmod 640 "${CONF}"
 
-log "registering ${PROVIDER_URL} as the authorization server"
-dcv-session-manager-broker register-auth-server --url "${PROVIDER_URL}/.well-known/jwks.json"
+# register-auth-server talks to a running broker (cli-to-broker-port), so it can only succeed after
+# the exec below; run it in the background until the broker accepts it. Without the registration the
+# broker rejects every controller call ("The provided jwt is not valid") and no desktop leaves provisioning.
+(
+  for _ in $(seq 1 60); do
+    sleep "${IDEA_BROKER_REGISTER_INTERVAL:-5}"
+    if dcv-session-manager-broker register-auth-server --url "${PROVIDER_URL}/.well-known/jwks.json" 2>&1 | grep -q "registered"; then
+      log "registered ${PROVIDER_URL} as the authorization server"
+      exit 0
+    fi
+  done
+  log "ERROR: could not register ${PROVIDER_URL} as the authorization server after 5 minutes"
+) &
 
 log "starting the broker on ${CLIENT_PORT}/${AGENT_PORT}/${GATEWAY_PORT}"
 exec setpriv --reuid=dcvsmbroker --regid=dcvsmbroker --init-groups \

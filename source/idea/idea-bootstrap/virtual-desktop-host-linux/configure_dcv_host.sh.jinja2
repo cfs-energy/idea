@@ -368,7 +368,10 @@ else
   log_info "Found ${BOOTSTRAP_DIR}/idea_system_upgraded.log... skipping system upgrade..."
 fi
 
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{# Not on 24.04: there the renderer switch leaves systemd-networkd with no link to configure,
+   systemd-networkd-wait-online fails, cloud-init (which runs this script) is sent SIGTERM and
+   NetworkManager never brings the interface back, so the host goes dark mid-bootstrap. #}
+{% if context.base_os == 'ubuntu2204' %}
 cp /etc/netplan/50-cloud-init.yaml /etc/netplan/50-cloud-init.yaml.bak
 
 # Create a small Python script

@@ -1,23 +1,43 @@
 # Begin: Kernel Version Management
 
-# kernel series here match what the FSx for Lustre client ships modules for (wildcard = latest in series).
 # rhel10, rocky10, ubuntu2604 are absent: only the eVDI setup includes this template, none has eVDI support.
+function fail_kernel_bootstrap() {
+  local bootstrap_status="${1}"
+  log_error "${2}"
+  echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
+  local AWS
+  local AWS_INSTANCE_ID
+  AWS=$(command -v aws)
+  AWS_INSTANCE_ID=$(instance_id)
+  $AWS ec2 create-tags \
+      --resources "${AWS_INSTANCE_ID}" \
+      --region "{{ context.aws_region }}" \
+      --tags "Key=idea:BootstrapStatus,Value=${bootstrap_status}" || log_warning "unable to tag ${AWS_INSTANCE_ID} with idea:BootstrapStatus=${bootstrap_status}"
+  exit 1
+}
+
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
-# The module metapackage follows the Ubuntu HWE kernel but only recommends its kernel.
-# Resolve its exact ABI so the host boots the kernel that carries the Lustre module.
-# Add the repository here because kernel selection runs before client installation.
+# The host keeps the kernel its image boots. The FSx for Lustre repository publishes a module
+# package per kernel ABI, so the only check is that one exists for the running kernel.
+# Add the repository here because kernel management runs before client installation.
 . /etc/os-release
 wget -q -O - https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-ubuntu-public-key.asc | gpg --dearmor > /usr/share/keyrings/fsx-ubuntu-public-key.gpg
 echo "deb [signed-by=/usr/share/keyrings/fsx-ubuntu-public-key.gpg] https://fsx-lustre-client-repo.s3.amazonaws.com/ubuntu ${VERSION_CODENAME} main" > /etc/apt/sources.list.d/fsxlustreclientrepo.list
 apt-get update -qq
-TARGET_KERNEL_ABI=$(apt-cache depends lustre-client-modules-aws 2>/dev/null | sed -n 's/^ *Depends: lustre-client-modules-//p' | sort -V | tail -1)
-if [[ -z "${TARGET_KERNEL_ABI}" ]]; then
-  log_error "Could not resolve the FSx for Lustre kernel ABI from lustre-client-modules-aws"
-  exit 1
+TARGET_KERNEL_ABI=$(uname -r)
+if [[ -z "$(apt-cache show "lustre-client-modules-${TARGET_KERNEL_ABI}" 2>/dev/null)" ]]; then
+  fail_kernel_bootstrap lustre-module-missing "The FSx for Lustre repository has no lustre-client-modules-${TARGET_KERNEL_ABI} for the running kernel ${TARGET_KERNEL_ABI}."
 fi
 TARGET_KERNEL_VERSION="${TARGET_KERNEL_ABI%-aws}*"
 {% elif context.base_os in ('amazonlinux2023',) %}
-TARGET_KERNEL_VERSION="6.1*"
+# AL2023 builds lustre.ko into every kernel family (kernel, kernel6.12, kernel6.18): the kernel
+# package itself provides kmod-lustre-client, and lustre-client needs nothing else. The host
+# keeps the kernel its image boots; the only check is that it carries the module.
+TARGET_KERNEL_ABI=$(uname -r)
+if ! rpm -q --provides -f "/boot/vmlinuz-${TARGET_KERNEL_ABI}" 2>/dev/null | grep -q '^kmod-lustre-client'; then
+  fail_kernel_bootstrap lustre-module-missing "The running kernel ${TARGET_KERNEL_ABI} does not provide kmod-lustre-client, the FSx for Lustre module."
+fi
+TARGET_KERNEL_VERSION="$(echo "${TARGET_KERNEL_ABI}" | cut -d. -f1-2)*"
 {% elif context.base_os in ('rhel8', 'rocky8') %}
 TARGET_KERNEL_VERSION="4.18.0-553*"
 {% elif context.base_os in ('rhel9', 'rocky9') %}
@@ -61,8 +81,10 @@ function apply_kernel_holds() {
     log_info "Installing dnf-plugin-versionlock for kernel version management"
     dnf install -y dnf-plugin-versionlock >/dev/null 2>&1 || true
   fi
-  # Lock the specific current kernel version
-  dnf versionlock kernel-${current_kernel} kernel-devel-${current_kernel} kernel-headers-${current_kernel} >/dev/null 2>&1 || true
+  # Lock the running kernel under its own package family (kernel, kernel6.12, ...)
+  local kernel_package
+  kernel_package=$(rpm -qf --queryformat '%{NAME}' "/boot/vmlinuz-${current_kernel}" 2>/dev/null) || kernel_package=kernel
+  dnf versionlock ${kernel_package}-${current_kernel} ${kernel_package}-devel-${current_kernel} ${kernel_package}-headers-${current_kernel} >/dev/null 2>&1 || true
 
 {% elif context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
   # Install dnf-plugin-versionlock if not already present
@@ -99,15 +121,9 @@ function remove_unwanted_kernels() {
   fi
 
 {% elif context.base_os in ('amazonlinux2023',) %}
-  # Find all installed kernel packages that don't match our target version
-  PACKAGES_TO_REMOVE=$(rpm -qa kernel kernel-devel kernel-headers | grep -v "${target_base}" | tr '\n' ' ')
-
-  if [[ -n "$PACKAGES_TO_REMOVE" ]]; then
-    log_info "Found non-target kernel packages to remove: $PACKAGES_TO_REMOVE"
-    dnf remove -y $PACKAGES_TO_REMOVE >/dev/null 2>&1 || true
-  else
-    log_info "No non-target kernel packages found to remove"
-  fi
+  # Nothing to remove: the target is the running kernel and kernel-headers here is the
+  # userspace API package glibc-devel depends on, not a second kernel.
+  log_info "Keeping the running kernel ${current_kernel}"
 
 {% elif context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
   # Find all installed kernel packages that don't match our target version
@@ -141,15 +157,6 @@ function install_target_kernel() {
       linux-modules-extra-${TARGET_KERNEL_ABI} \
       linux-headers-${TARGET_KERNEL_ABI} \
       --allow-change-held-packages; then
-    log_info "Target kernel ${target_version} packages installed successfully"
-  else
-    log_error "Failed to install target kernel ${target_version} packages"
-    return 1
-  fi
-
-{% elif context.base_os in ('amazonlinux2023',) %}
-  # AL2023 uses dnf approach
-  if dnf install -y kernel-${TARGET_KERNEL_VERSION} kernel-devel-${TARGET_KERNEL_VERSION} kernel-headers-${TARGET_KERNEL_VERSION}; then
     log_info "Target kernel ${target_version} packages installed successfully"
   else
     log_error "Failed to install target kernel ${target_version} packages"
@@ -193,7 +200,7 @@ function set_kernel_version() {
   log_info "Target kernel version: $target_version"
 
   # Check if we're already running the target kernel series
-  if [[ "$current_kernel" == *"${target_base}."* ]]; then
+  if [[ "$current_kernel" == "${target_base}"[.-]* ]]; then
     log_info "Confirmed running target kernel series $target_base - pinning current version"
     apply_kernel_holds
     remove_unwanted_kernels
@@ -202,27 +209,13 @@ function set_kernel_version() {
 
   # A second pass on the old kernel means the boot loader did not honor the requested kernel.
   if [[ -f ${BOOTSTRAP_DIR}/reboot_history.log ]] && grep -Fq "kernel version change to ${target_version}" ${BOOTSTRAP_DIR}/reboot_history.log; then
-    log_error "Kernel ${target_version} was installed, but the host is still running ${current_kernel} after reboot."
-    echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
-    local AWS
-    local AWS_INSTANCE_ID
-    AWS=$(command -v aws)
-    AWS_INSTANCE_ID=$(instance_id)
-    $AWS ec2 create-tags \
-        --resources "${AWS_INSTANCE_ID}" \
-        --region "{{ context.aws_region }}" \
-        --tags "Key=idea:BootstrapStatus,Value=kernel-boot-mismatch" || log_warning "unable to tag ${AWS_INSTANCE_ID} with idea:BootstrapStatus=kernel-boot-mismatch"
-    exit 1
+    fail_kernel_bootstrap kernel-boot-mismatch "Kernel ${target_version} was installed, but the host is still running ${current_kernel} after reboot."
   fi
 
   # Check if target kernel is already installed
   local kernel_installed=false
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
   if apt list --installed 2>/dev/null | grep -q "linux-image.*${target_base}\."; then
-    kernel_installed=true
-  fi
-{% elif context.base_os in ('amazonlinux2023',) %}
-  if rpm -qa kernel | grep -q "${target_base}\."; then
     kernel_installed=true
   fi
 {% elif context.base_os in ('rhel8', 'rocky8') %}
@@ -240,7 +233,7 @@ function set_kernel_version() {
   # Install target kernel if not already installed
   if [[ "$kernel_installed" != "true" ]]; then
     log_info "Target kernel ${target_version} not installed, installing..."
-    install_target_kernel
+    install_target_kernel || fail_kernel_bootstrap kernel-install-failed "Kernel ${target_version} could not be installed, so the host cannot boot it."
   else
     log_info "Target kernel ${target_version} already installed"
   fi
@@ -257,7 +250,7 @@ function set_kernel_version() {
     update-grub
     log_info "Updated GRUB to boot kernel ${target_version} by default"
   fi
-{% elif context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+{% elif context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
   local target_kernel
   target_kernel=$(find /boot -maxdepth 1 -type f -name "vmlinuz-*${target_base}.*" -print | sort -V | tail -1)
   if [[ -n "${target_kernel}" ]]; then
@@ -267,14 +260,12 @@ function set_kernel_version() {
 {% endif %}
 
   # Only reboot if we're not already running the target kernel
-  if [[ "$current_kernel" != *"${target_base}."* ]]; then
+  if [[ "$current_kernel" != "${target_base}"[.-]* ]]; then
     # Verify target kernel will be available on next boot
-    if ls /boot/vmlinuz-*${target_base}* >/dev/null 2>&1; then
+    if ls /boot/vmlinuz-${target_base}[.-]* >/dev/null 2>&1; then
       log_info "Kernel ${target_version} found in /boot, rebooting to activate"
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
       set_reboot_required "Ubuntu kernel version change to ${target_version}"
-{% elif context.base_os in ('amazonlinux2023',) %}
-      set_reboot_required "Amazon Linux kernel version change to ${target_version}"
 {% elif context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
       set_reboot_required "RHEL kernel version change to ${target_version}"
 {% endif %}

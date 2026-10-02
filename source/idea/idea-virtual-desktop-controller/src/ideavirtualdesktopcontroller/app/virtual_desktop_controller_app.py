@@ -370,6 +370,18 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
                 self.context.logger('virtual-desktop-controller-app').warning(
                     f'Bootstrap refresh sweep failed: {" ".join(str(e).splitlines())}'
                 )
+            # a host that aborted its bootstrap never reports back: fail its desktop within
+            # a minute instead of at the provisioning timeout.
+            try:
+                if (
+                    self._bootstrap_session_utils is not None
+                    and self.context.is_leader()
+                ):
+                    self._bootstrap_session_utils.fail_bootstrap_aborted_sessions()
+            except Exception as e:
+                self.context.logger('virtual-desktop-controller-app').warning(
+                    f'Bootstrap failure sweep failed: {" ".join(str(e).splitlines())}'
+                )
             self._bootstrap_exit.wait(60)
 
     def app_start(self):

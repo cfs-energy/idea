@@ -66,6 +66,8 @@ echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
+{% include '_templates/linux/dnf_mirror_speed.jinja2' %}
+
 {% include '_templates/linux/disable_auto_upgrades.jinja2' %}
 
 {% include '_templates/linux/disable_firewall.jinja2' %}
@@ -75,6 +77,10 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 {% include '_templates/linux/idea_proxy.jinja2' %}
 
 {% include '_templates/linux/rsyslog.jinja2' %}
+
+# Start the CloudWatch agent before kernel management, which may reboot or abort, so the
+# bootstrap log of a host that fails reaches CloudWatch before the host is released.
+{% include '_templates/linux/cloudwatch_agent.jinja2' %}
 
 {% include '_templates/linux/set_kernel.jinja2' %}
 
@@ -108,8 +114,6 @@ if [[ ! -f ${BOOTSTRAP_DIR}/idea_preinstalled_packages.log ]]; then
 else
    log_info "Found ${BOOTSTRAP_DIR}/idea_preinstalled_packages.log... skipping package installation..."
 fi
-
-{% include '_templates/linux/cloudwatch_agent.jinja2' %}
 
 {% if context.is_metrics_provider_prometheus() %}
   {% include '_templates/linux/prometheus.jinja2' %}
