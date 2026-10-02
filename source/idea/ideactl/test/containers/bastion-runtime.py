@@ -251,10 +251,6 @@ class TaskIdentity(unittest.TestCase):
                 identity.verify_bastion_task(self.context(**changes), sender, arn)
 
 
-if __name__ == '__main__':
-    unittest.main()
-
-
 class SshdConfig(unittest.TestCase):
     def test_strict_modes_stay_on_over_numeric_home_ownership(self):
         # the host pool mounts the homes over NFSv3 (numeric owners), so the ownership check holds
@@ -264,3 +260,40 @@ class SshdConfig(unittest.TestCase):
         self.assertNotIn('StrictModes no', block)
         self.assertIn('PubkeyAuthentication yes', block)
         self.assertIn('AuthorizedKeysFile .ssh/authorized_keys', block)
+
+
+class PbsServerSuffix(unittest.TestCase):
+    def run_block(self, resolv):
+        import subprocess
+        import tempfile
+
+        text = (ROOT / 'deployment/ecr/idea-control-plane/roles/bastion.sh').read_text()
+        start = text.index('  PRIVATE_ZONE=')
+        end = text.index('  cat > /etc/pbs.conf <<EOF', start)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'resolv.conf'
+            path.write_text(resolv)
+            block = text[start:end].replace('/etc/resolv.conf', str(path))
+            env = {
+                'IDEA_PBS_SERVER': 'scheduler.idea-test.us-east-1.local',
+                'PATH': '/usr/bin:/bin',
+            }
+            for _ in range(2):  # a restart must not add the zone twice
+                subprocess.run(['bash', '-c', block], env=env, check=True)
+            return path.read_text()
+
+    def test_job_id_suffix_resolves_through_the_private_zone(self):
+        # job ids end in the server's short name (1.scheduler); qdel resolves that suffix
+        out = self.run_block('nameserver 10.0.0.2\nsearch us-east-1.compute.internal\n')
+        self.assertIn(
+            'search idea-test.us-east-1.local us-east-1.compute.internal', out
+        )
+        self.assertEqual(out.count('idea-test.us-east-1.local'), 1)
+
+    def test_a_resolv_conf_without_search_gets_one(self):
+        out = self.run_block('nameserver 10.0.0.2\n')
+        self.assertIn('search idea-test.us-east-1.local', out)
+
+
+if __name__ == '__main__':
+    unittest.main()
