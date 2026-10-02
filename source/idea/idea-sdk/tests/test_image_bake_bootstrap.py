@@ -154,7 +154,13 @@ nvidia-smi() { [[ "$FAIL" != gpu ]]; }
 """
 
 
-def run_checks(tmp_path, fail='', mode='', base_os='amazonlinux2023'):
+def run_checks(
+    tmp_path,
+    fail='',
+    mode='',
+    base_os='amazonlinux2023',
+    stages=('setup', 'packages', 'dcv'),
+):
     state = tmp_path / 'state'
     state.mkdir(exist_ok=True)
     logs = tmp_path / 'logs'
@@ -164,7 +170,7 @@ def run_checks(tmp_path, fail='', mode='', base_os='amazonlinux2023'):
         if fail == 'bootstrap'
         else 'INFO: stages finished\n'
     )
-    for stage in ('setup', 'packages', 'dcv'):
+    for stage in stages:
         (state / f'bake-{stage}.ok').touch()
     (state / 'baked-release').write_text('test-release\n')
     calls = tmp_path / 'calls'
@@ -233,13 +239,21 @@ def test_stage_error_survives_later_success_and_subshell(tmp_path):
         text=True,
     )
     assert result.returncode == 0
-    assert (tmp_path / 'bake-failed').read_text().strip() == 'packages'
+    # the record names the stage, the command and its status
+    assert (tmp_path / 'bake-failed').read_text().strip() == 'packages: false (exit 1)'
     result, report, calls = run_checks(tmp_path)
     # Move the persistent error into the check state and prove it overrides stage OK files.
-    (tmp_path / 'state' / 'bake-failed').touch()
+    (tmp_path / 'state' / 'bake-failed').write_text(
+        'setup: source "$HOME/.cargo/env" (exit 1)\nsetup: make rpm (exit 2)\n'
+    )
     result, report, calls = run_checks(tmp_path)
     assert result.returncode == 1
     assert not report['checks'][0]['ok']
+    # the first failure is the reason the page shows
+    assert (
+        report['checks'][0]['detail']
+        == 'a command failed: setup: source "$HOME/.cargo/env" (exit 1)'
+    )
     assert 'Value=failed:bootstrap' in calls
 
 
@@ -331,3 +345,162 @@ submenu 'Advanced options' --id advanced-id {
         },
     )
     assert result.returncode == expected, result.stderr
+
+
+def run_kernel_check(tmp_path, grub_cfg, running, saved_entry=''):
+    """kernel_ok from the Ubuntu checks against a grub.cfg; (returncode, stdout, stderr)"""
+    script = render('dcv-host-ami-builder/image_checks.sh.jinja2', 'ubuntu2204')
+    function = script[
+        script.index('kernel_ok() {') : script.index('packages_installed() {')
+    ]
+    (tmp_path / 'grub.cfg').write_text(grub_cfg)
+    command = tmp_path / 'grub-editenv'
+    command.write_text('#!/bin/sh\nprintf "saved_entry=%s\\n" "$GRUB_SELECTION"\n')
+    command.chmod(0o755)
+    function = function.replace('/boot/grub', str(tmp_path))
+    result = subprocess.run(
+        [
+            'bash',
+            '-c',
+            'BAKE_PYTHON=$(command -v python3)\nuname() { echo "$RUNNING"; }\n'
+            + function
+            + '\nkernel_ok',
+        ],
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            'PATH': str(tmp_path) + os.pathsep + os.environ['PATH'],
+            'GRUB_SELECTION': saved_entry,
+            'RUNNING': running,
+        },
+    )
+    return result.returncode, result.stdout.strip(), result.stderr.strip()
+
+
+def test_ubuntu_check_reads_the_vendor_grub_layout(tmp_path):
+    # the stock image's grub.cfg: tab-separated "linux<TAB>/boot/vmlinuz-..." and set default="0"
+    grub_cfg = Path(__file__).with_name('fixtures').joinpath('ubuntu2204-grub.cfg')
+    config = grub_cfg.read_text()
+    assert 'linux\t/boot/vmlinuz-' in config
+    assert run_kernel_check(tmp_path, config, '6.8.0-1066-aws') == (0, '', '')
+    code, out, _ = run_kernel_check(tmp_path, config, '6.8.0-1000-aws')
+    assert code == 1
+    assert out == 'running 6.8.0-1000-aws, default boot entry is 6.8.0-1066-aws'
+
+
+@pytest.mark.parametrize(
+    'log,expected',
+    [
+        # package and file names, make's ignored errors and rustup's warning are not failures
+        (
+            'Installing : perl-Error-1:0.17030-2.noarch\n'
+            '-rw-r--r-- root/root 1661 src/error.rs\n'
+            'make[1]: [Makefile:272: libhogweed.so] Error 1 (ignored)\n'
+            'warn: continuing (because the -y flag is set and the error is ignorable)\n'
+            'Failed to enable unit: Unit file chrony.service does not exist.\n',
+            None,
+        ),
+        (
+            'Dependencies resolved.\nError: Transaction test error:\n',
+            'install.log:2:Error: Transaction test error:',
+        ),
+        (
+            "dpkg: error: failed to write status database stanza about 'x'\n",
+            "install.log:1:dpkg: error: failed to write status database stanza about 'x'",
+        ),
+        (
+            'E: Write error - write (28: No space left on device)\n',
+            'install.log:1:E: Write error - write (28: No space left on device)',
+        ),
+        (
+            'make: *** [Makefile:66: rpm-only] Error 1\n',
+            'install.log:1:make: *** [Makefile:66: rpm-only] Error 1',
+        ),
+        (
+            './x.sh: line 3: remove_from_fstab: command not found\n',
+            'install.log:1:./x.sh: line 3: remove_from_fstab: command not found',
+        ),
+        (
+            '[2026-10-02 18:41:16,865] [ERROR] mount failed\n',
+            'install.log:1:[2026-10-02 18:41:16,865] [ERROR] mount failed',
+        ),
+        # xtrace lines quote the literals a template may print later
+        ("+ echo 'Error: never printed'\n", None),
+    ],
+)
+def test_bootstrap_log_scan_matches_fatal_lines_only(tmp_path, log, expected):
+    state = tmp_path / 'state'
+    logs = tmp_path / 'logs'
+    state.mkdir()
+    logs.mkdir()
+    # run_checks writes a clean bootstrap.log of its own; the scan covers every *.log
+    (logs / 'install.log').write_text(log)
+    result, report, _ = run_checks(tmp_path)
+    bootstrap = report['checks'][0]
+    assert bootstrap['name'] == 'bootstrap'
+    if expected is None:
+        assert bootstrap['ok'], bootstrap['detail']
+        assert result.returncode == 0
+    else:
+        assert not bootstrap['ok']
+        assert bootstrap['detail'] == expected
+        assert result.returncode == 1
+
+
+@pytest.mark.parametrize(
+    'failed,detail',
+    [
+        ('kernel', 'running test-kernel, default boot entry is other'),
+        ('dcv', 'package nice-dcv-server is not installed'),
+        ('directory', 'package adcli is not installed'),
+        ('ssm', 'package amazon-ssm-agent is not installed'),
+    ],
+)
+def test_a_failed_check_reports_what_it_found(tmp_path, failed, detail):
+    _, report, _ = run_checks(tmp_path, failed)
+    assert {c['name']: c['detail'] for c in report['checks']}[failed] == detail
+    # passing checks keep their description
+    assert {c['name']: c['detail'] for c in report['checks']}['desktop'] == (
+        'GNOME display manager is installed'
+    )
+
+
+def test_a_missing_stage_marker_names_the_stage(tmp_path):
+    _, report, _ = run_checks(tmp_path, stages=('setup', 'packages'))
+    assert report['checks'][0]['detail'] == 'stage dcv did not finish'
+
+
+def test_templates_tolerate_the_builder_environment():
+    # user data has no HOME; rustup and the efs-utils spec rely on it
+    efs = render('_templates/linux/efs_mount_helper.jinja2', 'rhel9')
+    assert 'export HOME="${HOME:-/root}"' in efs
+    assert efs.index('export HOME=') < efs.index('curl -sSf https://sh.rustup.rs')
+    # files that only RHEL ships, and a cron file AL2023 may not have, are not failures
+    dcv = render('_templates/linux/dcv_server.jinja2', 'rocky9')
+    for name in (
+        '/etc/xdg/autostart/org.gnome.SettingsDaemon.Subscription.desktop',
+        '/lib/systemd/user/org.gnome.SettingsDaemon.Subscription.service',
+    ):
+        assert f'[[ ! -f {name} ]] || sed -i' in dcv
+    assert 'rm -f /etc/cron.d/update-motd' in render(
+        '_templates/linux/disable_motd_update.jinja2', 'amazonlinux2023'
+    )
+    # the compute post-reboot scrub calls remove_from_fstab from the common library
+    common = Path(IDEA_BOOTSTRAP_DIR, 'common/bootstrap_common.sh').read_text()
+    assert 'function remove_from_fstab' in common
+    # the EL package names are not asked of apt
+    pbs = render('_templates/linux/openpbs.jinja2', 'ubuntu2204')
+    assert 'apt install -y $(echo ${OPENPBS_PKGS[*]})' not in pbs
+    assert 'OPENPBS_PKGS_DEB="' in pbs
+    assert '[[ -z "${OPENPBS_PKGS_DEB}" ]] || apt install -y ${OPENPBS_PKGS_DEB}' in pbs
+    for base_os in LINUX:
+        checks = render('dcv-host-ami-builder/image_checks.sh.jinja2', base_os)
+        unit = 'gdm3' if base_os.startswith('ubuntu') else 'gdm'
+        assert 'check desktop ' in checks and f'unit_installed {unit}.service' in checks
+    assert 'check desktop ' not in render(
+        'compute-node-ami-builder/image_checks.sh.jinja2', 'rocky9'
+    )
+    windows = render('dcv-host-ami-builder-windows/Setup.ps1.jinja2', 'windows2022')
+    assert 'throw "Could not remove $Path"' in windows
+    assert 'foreach ($Attempt in 1..5)' in windows

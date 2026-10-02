@@ -118,7 +118,13 @@ try {
         'C:\Program Files\NICE\DCVSessionManagerAgent\conf\tags',
         'C:\IDEA\LocalScripts', 'C:\LOCAL_ADMINS_PASSWORD.txt'
     )) {
-        if (Test-Path $Path) { Remove-Item $Path -Recurse -Force }
+        # Remove-Item -Recurse races its own directory walk on PowerShell 5.1 ("The directory
+        # is not empty") while the stopped services release handles; retry, then name the path.
+        foreach ($Attempt in 1..5) {
+            if (-not (Test-Path $Path)) { break }
+            try { Remove-Item $Path -Recurse -Force -ErrorAction Stop } catch { Start-Sleep -Seconds 3 }
+        }
+        if (Test-Path $Path) { throw "Could not remove $Path" }
     }
     $FailureCheck = 'bootstrap'
     $CleanLog = (Test-Path $LogFile) -and -not (Select-String -Path $LogFile -Pattern '\b(ERROR|FATAL)\b' -Quiet)

@@ -5,6 +5,7 @@ that through keep_for_inspection so the instance is stopped instead of billing f
 
 from unittest.mock import MagicMock
 
+import json
 import pytest
 
 from ideadatamodel import exceptions
@@ -82,8 +83,32 @@ def test_builder_requires_exact_complete_status(status):
             }
         ]
     }
+    # the tag comes back as reported; the checks read decides, with the failing detail
+    assert builder.wait_for_software_packages('i-builder') == status
+    builder.context.aws().ssm().get_command_invocation.return_value = {
+        'Status': 'Success',
+        'StandardOutputContent': json.dumps(
+            {'release': module.__version__, 'checks': [{'name': 'ssm', 'ok': True}]}
+        ),
+    }
     with pytest.raises(exceptions.SocaException, match='complete is required'):
-        builder.wait_for_software_packages('i-builder')
+        builder.read_bake_checks('i-builder', builder_status=status)
+    builder.context.aws().ssm().get_command_invocation.return_value = {
+        'Status': 'Success',
+        'StandardOutputContent': json.dumps(
+            {
+                'release': module.__version__,
+                'checks': [
+                    {'name': 'bootstrap', 'ok': False, 'detail': 'a command failed: x'}
+                ],
+            }
+        ),
+    }
+    with pytest.raises(
+        exceptions.SocaException,
+        match='in-bake check bootstrap failed on builder i-builder: a command failed: x',
+    ):
+        builder.read_bake_checks('i-builder', builder_status=status)
 
 
 @pytest.mark.parametrize(
@@ -103,7 +128,7 @@ def test_in_bake_evidence_rejects_missing_failed_or_wrong_release(release, check
         'Status': 'Success',
         'StandardOutputContent': json.dumps({'release': release, 'checks': checks}),
     }
-    with pytest.raises(exceptions.SocaException, match='in-bake checks failed'):
+    with pytest.raises(exceptions.SocaException, match='in-bake check'):
         builder.read_bake_checks('i-builder')
 
 

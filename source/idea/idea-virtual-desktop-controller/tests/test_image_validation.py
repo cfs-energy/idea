@@ -295,3 +295,43 @@ def test_windows_filesystems_are_the_smb_shares():
         ('data', '/data'),
         ('home', '/home'),
     ]
+
+
+def test_the_validation_identity_is_created_with_the_request_models():
+    """pydantic serializes the envelope; a SocaAnyPayload payload cannot be serialized"""
+    from ideadatamodel import (
+        CreateProjectRequest,
+        CreateUserRequest,
+        SocaEnvelope,
+        SocaHeader,
+        exceptions,
+    )
+    from ideasdk.utils import Utils
+
+    api = FakeApi([VirtualDesktopSessionState.READY])
+    tester, context = launcher(api, Clock())
+    tester.ensure_identity = ImageTestLauncher.ensure_identity.__get__(tester)
+    context.accounts_client.get_user.side_effect = exceptions.soca_exception(
+        error_code='AUTH_USER_NOT_FOUND', message='User not found: idea-validate'
+    )
+    context.projects_client.get_project_by_name.side_effect = [
+        exceptions.soca_exception(error_code='PROJECT_NOT_FOUND', message='not found'),
+        Project(project_id='p-validate', name='idea-validate'),
+    ]
+    sent = []
+    tester._invoke_cluster_manager = lambda namespace, payload: sent.append(
+        (namespace, payload)
+    )
+    project = tester.ensure_identity(ImagePipelineSettings())
+    assert project.name == 'idea-validate'
+    assert [n for n, _ in sent] == ['Accounts.CreateUser', 'Projects.CreateProject']
+    assert isinstance(sent[0][1], CreateUserRequest)
+    assert isinstance(sent[1][1], CreateProjectRequest)
+    for namespace, payload in sent:
+        envelope = SocaEnvelope(
+            header=SocaHeader(namespace=namespace, request_id='r-1'), payload=payload
+        )
+        assert namespace in Utils.to_json(envelope)
+    assert sent[0][1].user.username == 'idea-validate'
+    assert sent[0][1].user.sudo is False
+    assert sent[1][1].project.enable_budgets is False

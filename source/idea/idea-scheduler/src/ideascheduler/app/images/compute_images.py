@@ -42,6 +42,7 @@ from ideadatamodel import (
 from ideasdk.aws.image_builds import (
     BUILD_STATUS_BUILDING,
     COMPUTE_IMAGE_PREFIX,
+    builder_log_link,
     check_builder_instance_type,
     custom_build_architecture,
     is_custom_record,
@@ -571,6 +572,8 @@ class ComputeImageService:
                 )
             for key, value in update.items():
                 setattr(record, key, value)
+            if update.get('instance_id'):
+                record.log_link = builder_log_link(self.context, record.instance_id)
             self._save(record)
 
         try:

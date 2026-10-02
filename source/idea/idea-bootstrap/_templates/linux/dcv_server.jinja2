@@ -82,8 +82,9 @@ ResultActive=no" > /etc/polkit-1/localauthority/50-local.d/repos.pkla
     systemctl restart polkit
    # The next commands remove the "System Not Registered" notification
    # see details in https://access.redhat.com/solutions/6976776
-   sed -i 's,Exec=/usr/libexec/gsd-subman,#Exec=/usr/libexec/gsd-subman,' /etc/xdg/autostart/org.gnome.SettingsDaemon.Subscription.desktop
-   sed -i 's,ExecStart=/usr/libexec/gsd-subman,#ExecStart=/usr/libexec/gsd-subman,' /lib/systemd/user/org.gnome.SettingsDaemon.Subscription.service
+   # the subscription plugin ships on RHEL only
+   [[ ! -f /etc/xdg/autostart/org.gnome.SettingsDaemon.Subscription.desktop ]] || sed -i 's,Exec=/usr/libexec/gsd-subman,#Exec=/usr/libexec/gsd-subman,' /etc/xdg/autostart/org.gnome.SettingsDaemon.Subscription.desktop
+   [[ ! -f /lib/systemd/user/org.gnome.SettingsDaemon.Subscription.service ]] || sed -i 's,ExecStart=/usr/libexec/gsd-subman,#ExecStart=/usr/libexec/gsd-subman,' /lib/systemd/user/org.gnome.SettingsDaemon.Subscription.service
    yum -y remove subscription-manager-cockpit
 {% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
   DEBIAN_FRONTEND=noninteractive apt install -y ubuntu-desktop-minimal dbus-x11 libvdpau1 libxcb-xtest0 libxcb-damage0

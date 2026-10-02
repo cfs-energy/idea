@@ -2,6 +2,9 @@
 
 {% include '_templates/linux/stunnel.jinja2' %}
 
+# user data runs without HOME; rustup installs under it and the efs-utils build sources ~/.cargo/env
+export HOME="${HOME:-/root}"
+
 {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
 
 function install_efs_mount_helper () {

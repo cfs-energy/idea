@@ -43,6 +43,7 @@ from ideadatamodel import (
 from ideasdk.aws.image_builds import (
     IMAGE_BUILD_TAG,
     PIPELINE_IMAGE_TAG,
+    builder_log_link,
     is_custom_record,
     ImageBuildRecordsDB,
     ImageBuildRunner,
@@ -722,6 +723,8 @@ class DesktopImagePipeline:
         def progress(update: Dict):
             for key, value in update.items():
                 setattr(record, key, value)
+            if update.get('instance_id'):
+                record.log_link = builder_log_link(self.context, record.instance_id)
             self._save(record)
 
         def before_snapshot(instance_id: str, status: str):
@@ -735,13 +738,14 @@ class DesktopImagePipeline:
                 raise RowFailed(f'in-bake check results unreadable: {e}')
             record.checks = checks
             self._save(record)
-            if status != AMI_BUILDER_STATUS_COMPLETE:
-                return  # the builder raises with the failing check
             failing = [c for c in checks if not c.ok]
             if failing:
                 raise RowFailed(
-                    f'in-bake check {failing[0].name} failed: {failing[0].detail}'
+                    f'in-bake check {failing[0].name} failed on builder {instance_id}: '
+                    f'{failing[0].detail}'
                 )
+            if status != AMI_BUILDER_STATUS_COMPLETE:
+                return  # the builder raises with the status tag
             if release != self.version:
                 raise RowFailed(
                     f'the builder ran the {release} bootstrap, not {self.version}'
@@ -756,6 +760,7 @@ class DesktopImagePipeline:
                 instance_type=BUILDER_INSTANCE_TYPES.get(
                     (record.architecture, variant)
                 ),
+                ebs_volume_size=self._builder_volume_gb(record),
                 force=True,
                 before_snapshot=before_snapshot,
                 image_tags={PIPELINE_IMAGE_TAG: 'desktop'},
@@ -773,6 +778,22 @@ class DesktopImagePipeline:
         record.image_id = image_id
         record.status = S.TEST_LAUNCHING.value
         self._save(record)
+
+    def _builder_volume_gb(self, record: ImageBuildRecord) -> Optional[int]:
+        """
+        the root size the row's base stacks launch desktops with: the bake needs the same
+        room a desktop has (a GUI does not fit the vendor's default), and a desktop launched
+        from the image needs a root at least as large as the image's
+        """
+        targets = self.targets_for(record.row_key()) or self.targets_for(
+            ImageRowKey(
+                base_os=record.base_os,
+                architecture=record.architecture,
+                variant=ImageVariant.CPU,
+            )
+        )
+        sizes = [int(s.min_storage.int_val()) for s in targets if s.min_storage]
+        return max(sizes) if sizes else None
 
     def _test_launch(self, record: ImageBuildRecord):
         targets = self.targets_for(record.row_key())

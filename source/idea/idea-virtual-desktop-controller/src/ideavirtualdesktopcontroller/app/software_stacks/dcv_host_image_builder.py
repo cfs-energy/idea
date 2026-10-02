@@ -340,12 +340,12 @@ class DcvHostImageBuilder:
                 CloudWatchAgentLogFileOptions(
                     file_path='/root/bootstrap/logs/**.log',
                     log_group_name=cloudwatch_log_group_name,
-                    log_stream_name='bootstrap_{ip_address}',
+                    log_stream_name='bootstrap_{instance_id}',
                 ),
                 CloudWatchAgentLogFileOptions(
                     file_path=f'{ami_dir}/logs/**.log',
                     log_group_name=cloudwatch_log_group_name,
-                    log_stream_name='bootstrap_{ip_address}',
+                    log_stream_name='bootstrap_{instance_id}',
                 ),
             ]
         BootstrapUtils.check_and_attach_cloudwatch_logging_and_metrics(

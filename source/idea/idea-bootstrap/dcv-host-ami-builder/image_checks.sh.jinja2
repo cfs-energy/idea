@@ -9,6 +9,10 @@ BAKE_PYTHON=$(command -v python3 || command -v /usr/libexec/platform-python)
 STATE=/var/lib/idea
 CHECKS=()
 STATUS=complete
+# Lines package managers and build tools print only when an operation failed. Mid-line
+# words are not failures: package names (perl-Error), file names (error.rs), make's
+# "Error 1 (ignored)" or rustup's "the error is ignorable".
+FATAL_LINE='^(\[[^]]*\] )?\[(ERROR|FATAL)\]|^(Error|ERROR|E|FATAL): |^dpkg: error|^make(\[[0-9]+\])?: \*\*\* .*Error [0-9]+$|No space left on device|command not found'
 
 publish() {
   # Keep the exact JSON in the bootstrap_<instance id> CloudWatch stream as well as on disk.
@@ -27,13 +31,16 @@ publish() {
 if [[ ${1:-} == --failed-scrub || ${1:-} == --failed-publish ]]; then
   failed_check=scrub
   [[ $1 != --failed-publish ]] || failed_check=logs
-  "${BAKE_PYTHON}" - "$STATE/image-checks.json" "$failed_check" <<'PYCODE'
+  "${BAKE_PYTHON}" - "$STATE/image-checks.json" "$failed_check" "$(tail -1 "$STATE/bake-failed" 2>/dev/null)" <<'PYCODE'
 import json
 import sys
-path, name = sys.argv[1:]
+path, name, failed = sys.argv[1:]
 with open(path) as src:
     data = json.load(src)
-data['checks'].append(dict(name=name, ok=False, detail='Host scrub or checks publication failed', seconds=0))
+detail = 'Host scrub or checks publication failed'
+if failed:
+    detail += ': ' + failed
+data['checks'].append(dict(name=name, ok=False, detail=detail[:400], seconds=0))
 with open(path, 'w') as out:
     json.dump(data, out)
 PYCODE
@@ -53,34 +60,43 @@ if [[ ${1:-} == --publish ]]; then
 fi
 
 check() {
-  local name=$1 detail=$2 started=$SECONDS ok=true
+  # a check prints why it failed; that line replaces the description in the report
+  local name=$1 detail=$2 started=$SECONDS ok=true reason
   shift 2
-  if ! "$@"; then
+  if ! reason=$("$@" 2>&1); then
     ok=false
     [[ $STATUS != complete ]] || STATUS="failed:$name"
+    reason=$(printf '%s' "$reason" | tr -s '\n\t ' ' ' | tail -c 400)
+    [[ -z "$reason" ]] || detail=$reason
   fi
   CHECKS+=("$name" "$ok" "$detail" "$((SECONDS - started))")
 }
 
 bootstrap_ok() {
-  [[ ${1:-} != --failed-* && ! -f "$STATE/bake-failed" ]] || return 1
-  local stage log found=no result
+  if [[ ${1:-} == --failed-* ]]; then
+    echo "stage ${1#--failed-} exited with an error"
+    return 1
+  fi
+  if [[ -f "$STATE/bake-failed" ]]; then
+    echo "a command failed: $(head -1 "$STATE/bake-failed")"
+    return 1
+  fi
+  local stage log found=no hit
   for stage in setup packages {{ 'drivers' if compute else 'dcv' }}; do
-    [[ -f "$STATE/bake-$stage.ok" ]] || return 1
+    [[ -f "$STATE/bake-$stage.ok" ]] || { echo "stage $stage did not finish"; return 1; }
   done
   # Ignore xtrace source lines, which can contain unexecuted error-message literals.
   for log in "${BOOTSTRAP_DIR}"/logs/*.log "${IDEA_{{ 'COMPUTE_NODE' if compute else 'DCV_HOST' }}_AMI_BUILDER_LOGS_DIR}"/*.log; do
     [[ -f "$log" ]] || continue
     found=yes
-    grep -v '^+' "$log" | grep -Ei '(^|[^[:alnum:]_])(ERROR|FATAL)([^[:alnum:]_]|$)' >/dev/null
-    result=$?
-    [[ $result == 1 ]] || return 1
+    hit=$(grep -En "$FATAL_LINE" "$log" | grep -v '^[0-9]*:+' | head -1)
+    [[ -z "$hit" ]] || { echo "${log##*/}:${hit}"; return 1; }
   done
-  [[ $found == yes ]]
+  [[ $found == yes ]] || { echo "no bootstrap log was written"; return 1; }
 }
 
 kernel_ok() {
-  local default_kernel
+  local default_kernel running
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
   # Resolve the generated GRUB menu, including saved entries and nested menu titles/ids.
   default_kernel=$("${BAKE_PYTHON}" - <<'PY'
@@ -103,6 +119,7 @@ entries, stack, counts = [], [], {(): 0}
 depth = 0
 for line in config.splitlines():
     stripped = line.strip()
+    words = stripped.split()
     if stripped.startswith(('menuentry ', 'submenu ')):
         parts = shlex.split(stripped)
         parent = tuple(item[0] for item in stack)
@@ -115,8 +132,9 @@ for line in config.splitlines():
             elif part.startswith('--id='):
                 ident = part[5:]
         stack.append((index, parts[1], ident, depth))
-    if stripped.startswith(('linux ', 'linuxefi ')):
-        kernel = shlex.split(stripped)[1].rsplit('/', 1)[-1]
+    # grub.cfg separates the command from its arguments with tabs
+    if len(words) > 1 and words[0] in ('linux', 'linuxefi'):
+        kernel = words[1].rsplit('/', 1)[-1]
         entries.append((list(stack), kernel.removeprefix('vmlinuz-')))
     depth += line.count('{') - line.count('}')
     while stack and depth <= stack[-1][3]:
@@ -134,21 +152,26 @@ PY
   default_kernel=$(grubby --default-kernel) || return 1
   default_kernel=${default_kernel##*/vmlinuz-}
 {% endif %}
-  [[ -n "$default_kernel" && "$(uname -r)" == "$default_kernel" ]]
+  running=$(uname -r)
+  [[ -n "$default_kernel" ]] || { echo "could not resolve the default boot kernel"; return 1; }
+  [[ "$running" == "$default_kernel" ]] || { echo "running $running, default boot entry is $default_kernel"; return 1; }
 }
 
 packages_installed() {
   local package
   for package in "$@"; do
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
-    [[ "$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null)" == 'install ok installed' ]] || return 1
+    [[ "$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null)" == 'install ok installed' ]] || { echo "package $package is not installed"; return 1; }
 {% else %}
-    rpm -q "$package" >/dev/null 2>&1 || return 1
+    rpm -q "$package" >/dev/null 2>&1 || { echo "package $package is not installed"; return 1; }
 {% endif %}
   done
 }
 unit_installed() {
-  [[ "$(systemctl show --property=LoadState --value "$1")" == loaded ]]
+  [[ "$(systemctl show --property=LoadState --value "$1")" == loaded ]] || { echo "unit $1 is not loaded"; return 1; }
+}
+unit_enabled() {
+  systemctl is-enabled --quiet "$1" || { echo "unit $1 is not enabled"; return 1; }
 }
 dcv_ok() {
   packages_installed nice-dcv-server nice-dcv-session-manager-agent &&
@@ -156,12 +179,12 @@ dcv_ok() {
 }
 ssm_ok() {
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
-  snap list amazon-ssm-agent >/dev/null &&
+  { snap list amazon-ssm-agent >/dev/null 2>&1 || { echo "snap amazon-ssm-agent is not installed"; return 1; }; } &&
     unit_installed snap.amazon-ssm-agent.amazon-ssm-agent.service &&
-    systemctl is-enabled --quiet snap.amazon-ssm-agent.amazon-ssm-agent.service
+    unit_enabled snap.amazon-ssm-agent.amazon-ssm-agent.service
 {% else %}
   packages_installed amazon-ssm-agent && unit_installed amazon-ssm-agent.service &&
-    systemctl is-enabled --quiet amazon-ssm-agent.service
+    unit_enabled amazon-ssm-agent.service
 {% endif %}
 }
 
@@ -172,6 +195,7 @@ check kernel 'Running kernel equals the default boot kernel' kernel_ok
 check lustre 'Configured Lustre module resolves for the running kernel' modprobe -n lustre
 {% endif %}
 {% if not compute %}
+check desktop 'GNOME display manager is installed' unit_installed {{ 'gdm3' if context.base_os in ('ubuntu2204', 'ubuntu2404') else 'gdm' }}.service
 check dcv 'DCV server and session-manager packages and units are installed' dcv_ok
 {% endif %}
 check directory 'sssd, realmd and adcli packages are installed' packages_installed sssd realmd adcli

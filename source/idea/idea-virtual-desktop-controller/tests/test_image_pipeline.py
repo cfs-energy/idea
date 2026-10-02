@@ -253,6 +253,7 @@ class FakeBuilder:
         base_os,
         ami_name=None,
         instance_type=None,
+        ebs_volume_size=None,
         force=False,
         before_snapshot=None,
         image_tags=None,
@@ -263,6 +264,7 @@ class FakeBuilder:
             {
                 'base_ami': base_ami,
                 'instance_type': instance_type,
+                'ebs_volume_size': ebs_volume_size,
                 'tags': image_tags,
                 'ami_name': ami_name,
             }
@@ -1060,3 +1062,50 @@ def test_a_gpu_row_bakes_on_a_gpu_builder_under_its_own_key():
     assert FakeBuilder.made[0]['ami_name'] == 'idea-dcv-host-rocky9-nvidia'
     assert h.stack_db.updated == ['ss-base-rocky9-x86-64-gpu']
     assert h.row() is None  # the CPU row is untouched
+
+
+def test_the_builder_gets_the_base_stack_root_size_and_the_row_links_its_log_stream():
+    from ideadatamodel import SocaMemory, SocaMemoryUnit
+
+    stack = base_stack('rocky9')
+    stack.min_storage = SocaMemory(value=20, unit=SocaMemoryUnit.GB)
+    h = Harness(stacks=[stack])
+    queue_and_run(h)
+    # the bake has the room a desktop launched from it has
+    assert FakeBuilder.made[0]['ebs_volume_size'] == 20
+    # the page links the bootstrap_<instance id> stream, console-escaped
+    assert h.row().log_link.endswith(
+        '#logsV2:log-groups/log-group/$252Fidea-test$252Fvdc$252Fami-builder/log-events/bootstrap_i-builder'
+    )
+    assert h.row().log_link.startswith('https://us-east-2.console.aws.amazon.com/')
+
+
+def test_a_stack_without_a_size_leaves_the_builder_default():
+    h = Harness()
+    queue_and_run(h)
+    assert FakeBuilder.made[0]['ebs_volume_size'] is None
+
+
+def test_a_failed_in_bake_check_reports_its_detail_and_builder(monkeypatch):
+    h = Harness()
+    FakeBuilder.status = 'failed:bootstrap'
+    monkeypatch.setattr(
+        module,
+        'read_in_bake_checks',
+        lambda *a: (
+            VERSION,
+            [
+                ImageCheck(
+                    name='bootstrap',
+                    ok=False,
+                    detail='a command failed: setup: make rpm (exit 2)',
+                    seconds=0,
+                )
+            ],
+        ),
+    )
+    queue_and_run(h)
+    assert h.row().status == 'failed'
+    assert h.row().error == (
+        'in-bake check bootstrap failed on builder i-builder: a command failed: setup: make rpm (exit 2)'
+    )

@@ -333,12 +333,12 @@ class ComputeNodeAmiBuilder:
                 CloudWatchAgentLogFileOptions(
                     file_path='/root/bootstrap/logs/**.log',
                     log_group_name=cloudwatch_log_group_name,
-                    log_stream_name='bootstrap_{ip_address}',
+                    log_stream_name='bootstrap_{instance_id}',
                 ),
                 CloudWatchAgentLogFileOptions(
                     file_path=f'{ami_dir}/logs/**.log',
                     log_group_name=cloudwatch_log_group_name,
-                    log_stream_name='bootstrap_{ip_address}',
+                    log_stream_name='bootstrap_{instance_id}',
                 ),
             ],
             enable_metrics=False,
@@ -449,11 +449,13 @@ class ComputeNodeAmiBuilder:
         created_instances = Utils.get_value_as_list('Instances', run_instances_result)
         return EC2Instance(data=Utils.get_first(created_instances))
 
-    def wait_for_software_packages(self, instance_id: str):
+    def wait_for_software_packages(self, instance_id: str) -> str:
         """
-        poll until the bootstrap tags the builder idea:AmiBuilderStatus, or give up after
-        BUILDER_READY_TIMEOUT_SECONDS. a failed bootstrap never sets the tag, and the raise
-        routes through keep_for_inspection, so the instance is stopped rather than billed on.
+        poll until the bootstrap tags the builder idea:AmiBuilderStatus and return the tag,
+        or give up after BUILDER_READY_TIMEOUT_SECONDS. a bootstrap that died never sets the
+        tag, and the raise routes through keep_for_inspection, so the instance is stopped
+        rather than billed on. read_bake_checks decides what a tag other than complete means,
+        with the failing check's detail.
         """
         deadline = time.time() + BUILDER_READY_TIMEOUT_SECONDS
         with self.report.spinner('installing software packages ...'):
@@ -482,12 +484,8 @@ class ComputeNodeAmiBuilder:
                     if instances
                     else None
                 )
-                if ami_builder_status == 'complete':
-                    return
                 if Utils.is_not_empty(ami_builder_status):
-                    raise exceptions.general_exception(
-                        f'The compute builder reported {ami_builder_status}; complete is required.'
-                    )
+                    return ami_builder_status.strip()
                 if time.time() > deadline:
                     raise exceptions.general_exception(
                         f'builder {instance_id} did not report ready within '
@@ -601,8 +599,12 @@ class ComputeNodeAmiBuilder:
                 )
             time.sleep(10)
 
-    def read_bake_checks(self, instance_id, progress=None):
-        """Copy the bootstrap's evidence before snapshotting; missing evidence fails."""
+    def read_bake_checks(self, instance_id, progress=None, builder_status='complete'):
+        """
+        Copy the bootstrap's evidence before snapshotting; missing evidence fails.
+        builder_status is the builder's tag: anything but complete fails, naming the
+        failing check's detail.
+        """
         client = self.context.aws().ssm()
         result = client.send_command(
             InstanceIds=[instance_id],
@@ -631,11 +633,17 @@ class ComputeNodeAmiBuilder:
                 checks = [ImageCheck(**item) for item in data.get('checks', [])]
                 if progress is not None:
                     progress({'checks': checks})
-                if (
-                    data.get('release') != __version__
-                    or not checks
-                    or any(c.ok is not True for c in checks)
-                ):
+                failing = [c for c in checks if c.ok is not True]
+                if failing:
+                    raise exceptions.general_exception(
+                        f'in-bake check {failing[0].name} failed on builder {instance_id}: '
+                        f'{failing[0].detail}'
+                    )
+                if builder_status != 'complete':
+                    raise exceptions.general_exception(
+                        f'The compute builder reported {builder_status}; complete is required.'
+                    )
+                if data.get('release') != __version__ or not checks:
                     raise exceptions.general_exception(
                         'The compute in-bake checks failed or belong to another release.'
                     )
@@ -688,8 +696,8 @@ class ComputeNodeAmiBuilder:
             try:
                 if progress is not None:
                     progress({'status': 'checking', 'instance_id': instance_id})
-                self.wait_for_software_packages(instance_id=instance_id)
-                self.read_bake_checks(instance_id, progress)
+                status = self.wait_for_software_packages(instance_id=instance_id)
+                self.read_bake_checks(instance_id, progress, status)
                 image_id = self.create_image(instance_id=instance_id)
                 if progress is not None:
                     progress({'image_id': image_id})

@@ -11,6 +11,7 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
+from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -62,6 +63,26 @@ THROTTLE_CODES = ('Throttling', 'ThrottlingException', 'RequestLimitExceeded')
 # tags the sweep uses to find builder instances it may terminate
 IMAGE_BUILD_TAG = 'idea:ImageBuild'
 STOPPED_AT_TAG = 'idea:ImageBuilderStoppedAt'
+
+
+def builder_log_link(context, instance_id: str) -> str:
+    """
+    CloudWatch console link to the builder's bootstrap_<instance id> stream, which carries
+    the bootstrap log and the in-bake check results. the console escapes path characters
+    as $25xx inside its fragment
+    """
+    region = context.aws().ec2().meta.region_name
+
+    def escape(name: str) -> str:
+        return quote(quote(name, safe=''), safe='').replace('%', '$')
+
+    group = escape(f'/{context.cluster_name()}/{context.module_id()}/ami-builder')
+    stream = escape(f'bootstrap_{instance_id}')
+    return (
+        f'https://{region}.console.aws.amazon.com/cloudwatch/home?region={region}'
+        f'#logsV2:log-groups/log-group/{group}/log-events/{stream}'
+    )
+
 
 # build all starts one builder per base stack. beyond this the rest are skipped with a
 # visible reason rather than launched into an account limit

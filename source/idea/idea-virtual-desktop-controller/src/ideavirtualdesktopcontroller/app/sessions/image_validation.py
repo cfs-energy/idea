@@ -13,17 +13,21 @@ import ssl
 import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from botocore.exceptions import ClientError
 
 from ideadatamodel import (
+    CreateProjectRequest,
+    CreateUserRequest,
     GetUserRequest,
     ImageBuildRecord,
     ImageCheck,
     ImagePipelineSettings,
     ImageVariant,
     Project,
+    SocaBaseModel,
+    User,
     VirtualDesktopServer,
     VirtualDesktopSession,
     VirtualDesktopSessionState,
@@ -309,14 +313,12 @@ class ImageTestLauncher:
                 raise
             self._invoke_cluster_manager(
                 'Accounts.CreateUser',
-                {
-                    'user': {
-                        'username': user,
-                        'email': f'{user}@validation.invalid',
-                        'sudo': False,
-                    },
-                    'email_verified': False,
-                },
+                CreateUserRequest(
+                    user=User(
+                        username=user, email=f'{user}@validation.invalid', sudo=False
+                    ),
+                    email_verified=False,
+                ),
             )
         try:
             return self.context.projects_client.get_project_by_name(project_name)
@@ -326,24 +328,25 @@ class ImageTestLauncher:
         group = GroupNameHelper(self.context).get_user_group(user)
         self._invoke_cluster_manager(
             'Projects.CreateProject',
-            {
-                'project': {
-                    'name': project_name,
-                    'title': 'Image validation',
-                    'description': 'hidden: desktops the image pipeline launches to validate new images',
-                    'ldap_groups': [group],
-                    'enable_budgets': False,
-                }
-            },
+            CreateProjectRequest(
+                project=Project(
+                    name=project_name,
+                    title='Image validation',
+                    description='hidden: desktops the image pipeline launches to validate new images',
+                    ldap_groups=[group],
+                    enable_budgets=False,
+                )
+            ),
         )
         self.context.projects_client.cache.clear()
         return self.context.projects_client.get_project_by_name(project_name)
 
-    def _invoke_cluster_manager(self, namespace: str, payload: Dict):
+    def _invoke_cluster_manager(self, namespace: str, payload: SocaBaseModel):
         """
         a write to the cluster manager. it needs cluster-manager/write on the
         controller's client, which is requested here and nowhere else so a client without
-        it keeps working
+        it keeps working. payload is the namespace's request model: the envelope is
+        serialized by pydantic, which cannot serialize a SocaAnyPayload
         """
         from ideasdk.auth import TokenService, TokenServiceOptions
         from ideasdk.client.soca_client import SocaClient, SocaClientOptions
@@ -383,7 +386,7 @@ class ImageTestLauncher:
         try:
             client.invoke_alt(
                 namespace=namespace,
-                payload=SocaAnyPayload(**payload),
+                payload=payload,
                 result_as=SocaAnyPayload,
                 access_token=token,
             )
