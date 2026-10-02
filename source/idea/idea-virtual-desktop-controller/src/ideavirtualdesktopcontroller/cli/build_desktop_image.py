@@ -6,14 +6,15 @@ raw-table stack repoint) and is the only place prettytable is imported.
 """
 
 from ideasdk.utils import Utils
-from ideadatamodel import (
-    constants,
-    ReIndexSoftwareStacksRequest,
-    ReIndexSoftwareStacksResponse,
+from ideadatamodel import constants
+from ideadatamodel import ImageKind
+from ideasdk.aws.image_builds import (
+    ImageBuildRecordsDB,
+    ImageBuildRunner,
+    custom_build_architecture,
+    new_record,
 )
-from ideasdk.aws.image_builds import ImageBuildRecordsDB, ImageBuildRunner, new_record
 from ideavirtualdesktopcontroller.cli import build_cli_context
-from ideavirtualdesktopcontroller.cli.software_stacks import update_software_stack_ami
 from ideavirtualdesktopcontroller.app.software_stacks.dcv_host_image_builder import (  # noqa: F401  re-exported
     ARCHITECTURE_TO_STACK_KEY,
     BUILD_SUPPORTED_BASE_OS,
@@ -32,57 +33,6 @@ def plan_table(rows) -> PrettyTable:
     for name, value in rows:
         table.add_row([name, value])
     return table
-
-
-def update_base_stack_row(context, builder, image_id: str) -> bool:
-    """
-    point the matching ss-base-<os>-<arch>-base stack row at the new image
-    and rebuild the search index. returns True when the row was updated.
-    """
-    logger = context.logger('build-desktop-image')
-    image = builder.get_image_by_id(image_id=image_id)
-    architecture = Utils.get_value_as_string('Architecture', image)
-    arch_key = ARCHITECTURE_TO_STACK_KEY.get(architecture)
-    if arch_key is None:
-        builder.report.warning(
-            f'unknown image architecture: {architecture}. stack row not updated.'
-        )
-        return False
-    stack_id = f'ss-base-{builder.base_os}-{arch_key}-base'
-    cluster_name = context.config().get_string('cluster.cluster_name', required=True)
-    table_name = f'{cluster_name}.{context.module_id()}.controller.software-stacks'
-    table = context.aws().dynamodb_table().Table(table_name)
-    existing = table.get_item(
-        Key={'base_os': builder.base_os, 'stack_id': stack_id}
-    ).get('Item')
-    if existing is None:
-        builder.report.warning(
-            f'software stack {stack_id} not found in {table_name}. stack row not updated.'
-        )
-        return False
-    if not update_software_stack_ami(
-        table,
-        stack_id,
-        builder.base_os,
-        image_id,
-        logger,
-        base_ami_id=getattr(builder, 'base_ami', None),
-    ):
-        return False
-    builder.report.success(f'{stack_id} now points at {image_id}')
-    try:
-        _ = context.unix_socket_client.invoke_alt(
-            namespace='VirtualDesktopAdmin.ReIndexSoftwareStacks',
-            payload=ReIndexSoftwareStacksRequest(),
-            result_as=ReIndexSoftwareStacksResponse,
-        )
-        builder.report.info('software stack index rebuilt')
-    except Exception as e:
-        builder.report.warning(
-            f'stack row updated but reindex failed ({e}). '
-            f'run: ideactl reindex-software-stacks --reset'
-        )
-    return True
 
 
 def build_records_table(context) -> str:
@@ -123,7 +73,7 @@ def build_records_table(context) -> str:
 @click.option(
     '--update-stack',
     is_flag=True,
-    help='Point the matching ss-base-<os>-<arch>-base software stack at the new image and reindex',
+    help='Refused since 26.10.1: base stacks only move to validated images (Refresh and validate on the Images page)',
 )
 @click.option(
     '--no-terminate',
@@ -156,7 +106,8 @@ def build_desktop_image(
         * launch a temporary EC2 instance from the stock base AMI
         * install packages, system updates, DCV server, session manager agent and GPU drivers
         * snapshot the instance into an AMI named idea-dcv-host-<baseos>-v<version>
-        * optionally point the matching base software stack at the new image (--update-stack)
+        * record it as a custom build; base stacks move only to images the image
+          pipeline validated, so --update-stack is refused
 
     \b
     Desktops launched from the built image only run per-session configuration on
@@ -164,6 +115,12 @@ def build_desktop_image(
     """
     context = build_cli_context()
     context.check_root_access()
+    if kwargs.get('update_stack'):
+        context.error(
+            '--update-stack is refused: a built image repoints base stacks only after it '
+            'passes validation. use Refresh and validate on the Images page'
+        )
+        raise SystemExit(1)
     try:
         security_group_ids_list = []
         if Utils.is_not_empty(security_group_ids):
@@ -189,20 +146,20 @@ def build_desktop_image(
         base_image = builder.get_image_by_id(builder.base_ami) or {}
         record = new_record(
             base_os=builder.base_os,
-            architecture=base_image.get('Architecture', 'x86_64'),
+            architecture=custom_build_architecture(
+                base_image.get('Architecture', 'x86_64')
+            ),
             ami_name=builder.get_ami_full_name(),
             base_ami=builder.base_ami,
             requested_by=f'ideactl ({os.environ.get("SUDO_USER") or os.environ.get("USER") or "root"})',
             update_target=builder.update_stack,
         )
         records = ImageBuildRecordsDB(
-            context, build_records_table(context)
+            context, build_records_table(context), kind=ImageKind.DESKTOP
         ).initialize()
         record = ImageBuildRunner(
             context, records, context.logger('build-desktop-image')
         ).start(record, build=builder.build, blocking=True)
-        if builder.update_stack and Utils.is_not_empty(record.image_id):
-            update_base_stack_row(context, builder, record.image_id)
     except KeyboardInterrupt:
         context.error(
             'AMI builder aborted. You will need to manually terminate the '

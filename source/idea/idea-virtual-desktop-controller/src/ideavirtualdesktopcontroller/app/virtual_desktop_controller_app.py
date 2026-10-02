@@ -149,7 +149,8 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
         self._initialize_image_builds()
 
     def _initialize_image_builds(self):
-        """the records table plus the sweep of builds a restart orphaned; startup never fails over it"""
+        """the records table plus the restart sweep (in-flight rows wait for the leader loop); startup never fails over it"""
+        from ideadatamodel import ImageKind
         from ideasdk.aws.image_builds import ImageBuildRecordsDB
         from ideavirtualdesktopcontroller.app.software_stacks.desktop_images import (
             image_builds_table_name,
@@ -157,7 +158,9 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
 
         try:
             ImageBuildRecordsDB(
-                self.context, image_builds_table_name(self.context)
+                self.context,
+                image_builds_table_name(self.context),
+                kind=ImageKind.DESKTOP,
             ).initialize()
         except Exception as e:
             self.context.logger('virtual-desktop-controller-app').error(
@@ -343,6 +346,7 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
         )
         # Built on first use: the tables the sweep reads are created after this method runs.
         self._bootstrap_session_utils = None
+        self._image_pipeline = None
         self.context.event_queue_monitor_service = EventsQueueMonitoringService(
             context=self.context
         )
@@ -382,7 +386,28 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
                 self.context.logger('virtual-desktop-controller-app').warning(
                     f'Bootstrap failure sweep failed: {" ".join(str(e).splitlines())}'
                 )
+            # desktop image pipeline: resume, triggers (release, monthly), start queued
+            # rows, cleanup. bakes run in their own threads; this never waits on one
+            try:
+                if self.context.is_leader():
+                    self._desktop_image_pipeline().tick()
+            except Exception as e:
+                self.context.logger('virtual-desktop-controller-app').warning(
+                    f'Image pipeline tick failed: {" ".join(str(e).splitlines())}'
+                )
             self._bootstrap_exit.wait(60)
+
+    def _desktop_image_pipeline(self):
+        if self._image_pipeline is None:
+            from ideavirtualdesktopcontroller.app.api.virtual_desktop_admin_api import (
+                VirtualDesktopAdminAPI,
+            )
+            from ideavirtualdesktopcontroller.app.software_stacks.image_pipeline import (
+                pipeline_for,
+            )
+
+            self._image_pipeline = pipeline_for(VirtualDesktopAdminAPI(self.context))
+        return self._image_pipeline
 
     def app_start(self):
         subnet_pin_warning = preferred_subnet_pin_warning(self.context)

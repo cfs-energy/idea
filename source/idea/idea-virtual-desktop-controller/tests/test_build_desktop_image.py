@@ -1,6 +1,7 @@
 """
 ideactl build-desktop-image: option defaulting from cluster config, the eVDI base_os
-whitelist, and the --update-stack row update with its reindex call.
+whitelist, the builder status handshake (only 'complete' is snapshotted) and the stack
+row update gate (ami_id moves only to a validated image).
 """
 
 from unittest.mock import Mock
@@ -11,8 +12,8 @@ from ideadatamodel import exceptions
 from ideavirtualdesktopcontroller.cli.build_desktop_image import (
     ARCHITECTURE_TO_STACK_KEY,
     DcvHostImageBuilder,
-    update_base_stack_row,
 )
+from ideavirtualdesktopcontroller.cli.software_stacks import update_software_stack_ami
 
 CONFIG = {
     'virtual-desktop-controller.dcv_host_instance_profile_arn': 'arn:aws:iam::123456789012:instance-profile/dcv-host',
@@ -106,41 +107,154 @@ def test_unsupported_base_os_is_rejected():
         )
     with pytest.raises(exceptions.SocaException):
         DcvHostImageBuilder(
-            context=fake_context(), base_ami='ami-base', base_os='windows2022'
+            context=fake_context(), base_ami='ami-base', base_os='windows2016'
         )
 
 
-def build_for_row_update(existing_item):
-    builder = DcvHostImageBuilder.__new__(DcvHostImageBuilder)
-    context = fake_context()
+def row_table(item):
     table = Mock()
-    table.get_item.return_value = {'Item': existing_item} if existing_item else {}
-    context.aws().dynamodb_table().Table.return_value = table
-    builder.context = context
-    builder.base_os = 'rocky9'
-    return builder, context, table
+    table.get_item.return_value = {'Item': item}
+    return table
 
 
-def test_update_stack_row_updates_and_reindexes():
-    builder, context, table = build_for_row_update(
-        {'stack_id': 'ss-base-rocky9-x86-64-base'}
+def test_stack_row_moves_ami_only_to_a_validated_image():
+    table = row_table({'ami_id': 'ami-old'})
+    assert (
+        update_software_stack_ami(
+            table,
+            'ss-base-rocky9-x86-64-base',
+            'rocky9',
+            'ami-new',
+            Mock(),
+            base_ami_id='ami-stock',
+            validated={'ami-new'},
+        )
+        == 'ami'
     )
-    assert update_base_stack_row(context, builder, 'ami-new') is True
-    kwargs = table.update_item.call_args.kwargs
-    assert kwargs['Key'] == {
-        'base_os': 'rocky9',
-        'stack_id': 'ss-base-rocky9-x86-64-base',
-    }
-    assert kwargs['ExpressionAttributeValues'][':new_ami_id'] == 'ami-new'
-    invoked = context.unix_socket_client.invoke_alt.call_args.kwargs
-    assert invoked['namespace'] == 'VirtualDesktopAdmin.ReIndexSoftwareStacks'
+    values = table.update_item.call_args.kwargs['ExpressionAttributeValues']
+    assert values[':new_ami_id'] == 'ami-new'
+    assert values[':base_ami_id'] == 'ami-stock'
 
 
-def test_update_stack_row_skips_missing_stack():
-    builder, context, table = build_for_row_update(None)
-    assert update_base_stack_row(context, builder, 'ami-new') is False
+def test_stack_row_refuses_an_unvalidated_build():
+    table = row_table({'ami_id': 'ami-old'})
+    assert (
+        update_software_stack_ami(
+            table,
+            'ss-base-rocky9-x86-64-base',
+            'rocky9',
+            'ami-built',
+            Mock(),
+            base_ami_id='ami-stock',
+        )
+        is False
+    )
     table.update_item.assert_not_called()
-    context.unix_socket_client.invoke_alt.assert_not_called()
+
+
+def test_a_stock_refresh_moves_only_the_base():
+    table = row_table({'ami_id': 'ami-old'})
+    assert (
+        update_software_stack_ami(
+            table,
+            'ss-base-rocky9-x86-64-base',
+            'rocky9',
+            'ami-stock2',
+            Mock(),
+            keep_built=True,
+        )
+        == 'base'
+    )
+    kwargs = table.update_item.call_args.kwargs
+    assert '#ami_id' not in kwargs['ExpressionAttributeNames']
+    assert kwargs['ExpressionAttributeValues'][':base_ami_id'] == 'ami-stock2'
+
+
+def test_a_pinned_stack_row_never_moves_its_ami():
+    table = row_table({'ami_id': 'ami-old', 'image_pinned': True})
+    assert (
+        update_software_stack_ami(
+            table,
+            'ss-base-rocky9-x86-64-base',
+            'rocky9',
+            'ami-new',
+            Mock(),
+            validated={'ami-new'},
+        )
+        is False
+    )
+
+
+def builder_with_status(monkeypatch, windows=False):
+    from unittest.mock import MagicMock
+
+    builder = DcvHostImageBuilder.__new__(DcvHostImageBuilder)
+    builder.context = MagicMock()
+    builder.base_os = 'windows2022' if windows else 'rocky9'
+    seen = []
+    builder.before_snapshot = lambda instance_id, status: seen.append(status)
+    return builder, seen
+
+
+def test_only_complete_is_snapshotted(monkeypatch):
+    builder, seen = builder_with_status(monkeypatch)
+    with pytest.raises(exceptions.SocaException) as exc_info:
+        builder.check_builder_status('i-1', 'failed:lustre_module')
+    assert 'in-bake check lustre_module failed' in exc_info.value.message
+    assert seen == ['failed:lustre_module']
+    builder.check_builder_status('i-1', 'complete')
+    assert seen[-1] == 'complete'
+
+
+def test_a_windows_builder_is_finalized_and_snapshotted_only_once_stopped(monkeypatch):
+    from ideavirtualdesktopcontroller.app.software_stacks import (
+        dcv_host_image_builder as module,
+    )
+
+    builder, _ = builder_with_status(monkeypatch, windows=True)
+    states = iter(['running', 'stopping', 'stopped'])
+    builder.context.aws().ec2().describe_instances.side_effect = lambda **_: {
+        'Reservations': [
+            {
+                'Instances': [
+                    {
+                        'State': {'Name': next(states)},
+                        'Tags': [{'Key': 'idea:AmiBuilderStatus', 'Value': 'complete'}],
+                    }
+                ]
+            }
+        ]
+    }
+    monkeypatch.setattr(module.time, 'sleep', lambda seconds: None)
+    builder.check_builder_status('i-win', 'complete')
+    command = builder.context.aws().ssm().send_command.call_args.kwargs
+    assert command['Parameters']['commands'][0].endswith('Setup.ps1 -Finalize')
+
+
+def test_a_windows_builder_that_fails_while_finalizing_is_not_snapshotted(monkeypatch):
+    from ideavirtualdesktopcontroller.app.software_stacks import (
+        dcv_host_image_builder as module,
+    )
+
+    builder, _ = builder_with_status(monkeypatch, windows=True)
+    builder.context.aws().ec2().describe_instances.return_value = {
+        'Reservations': [
+            {
+                'Instances': [
+                    {
+                        'State': {'Name': 'running'},
+                        'Tags': [
+                            {'Key': 'idea:AmiBuilderStatus', 'Value': 'failed:sysprep'}
+                        ],
+                    }
+                ]
+            }
+        ]
+    }
+    monkeypatch.setattr(module.time, 'sleep', lambda seconds: None)
+    with pytest.raises(exceptions.SocaException) as exc_info:
+        builder.check_builder_status('i-win', 'complete')
+    assert 'failed:sysprep' in exc_info.value.message
 
 
 def test_architecture_map_covers_ec2_values():

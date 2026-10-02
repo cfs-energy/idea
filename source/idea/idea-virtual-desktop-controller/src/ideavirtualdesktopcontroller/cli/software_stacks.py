@@ -679,14 +679,14 @@ def update_software_stack_ami(
     base_ami_id=None,
     ec2_client=None,
     keep_built=False,
+    validated=None,
 ):
     """
-    Update the AMI a software stack row launches from.
-
-    A build passes base_ami_id, the stock image it started from, and both fields move.
-    A stock refresh passes keep_built with an ec2 client: a row that launches from a
-    built image keeps ami_id and only base_ami_id moves, so a refresh cannot undo a
-    build. Returns True when the row was written.
+    Update a software stack row for a new image. ami_id, what desktops launch from,
+    moves only to an image in `validated` (validated_image_ids of the image rows: the
+    promote gate) and never on an image_pinned row. A stock refresh (keep_built) moves
+    base_ami_id only, the base the next bake starts from. Anything else is refused.
+    Returns 'ami', 'base', or False when nothing was written.
     """
     key = {
         software_stacks_constants.SOFTWARE_STACK_DB_HASH_KEY: base_os,
@@ -698,40 +698,42 @@ def update_software_stack_ami(
     }
     values = {':updated_on': Utils.current_time_ms()}
     try:
-        if keep_built and ec2_client is not None:
-            from ideasdk.aws.image_builds import is_built_image
-
-            current = table.get_item(Key=key).get('Item', {})
-            if is_built_image(ec2_client, current.get('ami_id')):
-                logger.info(
-                    f'{stack_id}: base image updated to {new_ami_id}; stack still launches '
-                    f'from built image {current.get("ami_id")}; rebuild to pick up the new base'
-                )
-                values[':base_ami_id'] = new_ami_id
-                table.update_item(
-                    Key=key,
-                    UpdateExpression='SET #base_ami_id = :base_ami_id, #updated_on = :updated_on',
-                    ExpressionAttributeNames=names,
-                    ExpressionAttributeValues=values,
-                )
-                return True
-            base_ami_id = new_ami_id
-        expression = 'SET #ami_id = :new_ami_id, #updated_on = :updated_on'
-        names['#ami_id'] = software_stacks_constants.SOFTWARE_STACK_DB_AMI_ID_KEY
-        values[':new_ami_id'] = new_ami_id
-        if base_ami_id:
-            expression += ', #base_ami_id = :base_ami_id'
-            values[':base_ami_id'] = base_ami_id
-        else:
-            names.pop('#base_ami_id')
-        table.update_item(
-            Key=key,
-            UpdateExpression=expression,
-            ExpressionAttributeNames=names,
-            ExpressionAttributeValues=values,
+        current = table.get_item(Key=key).get('Item', {})
+        if new_ami_id in (validated or ()) and not current.get('image_pinned'):
+            expression = 'SET #ami_id = :new_ami_id, #updated_on = :updated_on'
+            names['#ami_id'] = software_stacks_constants.SOFTWARE_STACK_DB_AMI_ID_KEY
+            values[':new_ami_id'] = new_ami_id
+            if base_ami_id:
+                expression += ', #base_ami_id = :base_ami_id'
+                values[':base_ami_id'] = base_ami_id
+            else:
+                names.pop('#base_ami_id')
+            table.update_item(
+                Key=key,
+                UpdateExpression=expression,
+                ExpressionAttributeNames=names,
+                ExpressionAttributeValues=values,
+            )
+            logger.info(f'{stack_id}: ami_id set to validated image {new_ami_id}')
+            return 'ami'
+        if keep_built:
+            values[':base_ami_id'] = new_ami_id
+            table.update_item(
+                Key=key,
+                UpdateExpression='SET #base_ami_id = :base_ami_id, #updated_on = :updated_on',
+                ExpressionAttributeNames=names,
+                ExpressionAttributeValues=values,
+            )
+            logger.info(
+                f'{stack_id}: base image updated to {new_ami_id}; desktops keep launching '
+                f'from {current.get("ami_id")} until a validated image is promoted'
+            )
+            return 'base'
+        logger.error(
+            f'{stack_id}: not repointed at {new_ami_id}: it has not passed validation. '
+            f'run Refresh and validate on the Images page'
         )
-        logger.info(f'{stack_id}: ami_id set to {new_ami_id}')
-        return True
+        return False
     except Exception as e:
         logger.error(f'{stack_id}: failed to update the AMI: {e}')
         return False
@@ -974,7 +976,12 @@ def update_base_stacks(dry_run, stack_id, force, **kwargs):
                 stats['errors'] += 1
                 continue
 
-            # Check if update is needed (skip this check if --force is used)
+            # Check if update is needed (skip this check if --force is used). a stock
+            # refresh moves the base the next bake starts from, never ami_id
+            current_ami_id = stack.get(
+                software_stacks_constants.SOFTWARE_STACK_DB_BASE_AMI_ID_KEY,
+                current_ami_id,
+            )
             if not force and latest_ami_id == current_ami_id:
                 logger.info(
                     f'Stack {current_stack_id} already has the latest AMI: {current_ami_id}'
@@ -997,9 +1004,11 @@ def update_base_stacks(dry_run, stack_id, force, **kwargs):
                     logger.info(
                         f'Would update {current_stack_id} from {current_ami_id} to {latest_ami_id} (DRY RUN)'
                     )
-                    click.echo(f'Would update: {current_stack_id} ({stack_name})')
-                    click.echo(f'  Current AMI: {current_ami_id}')
-                    click.echo(f'  New AMI: {latest_ami_id}')
+                    click.echo(
+                        f'Would update base image: {current_stack_id} ({stack_name})'
+                    )
+                    click.echo(f'  Current base: {current_ami_id}')
+                    click.echo(f'  New base: {latest_ami_id}')
                 stats['updated'] += 1
             else:
                 # Perform the update
@@ -1013,7 +1022,14 @@ def update_base_stacks(dry_run, stack_id, force, **kwargs):
                     keep_built=True,
                 )
 
-                if success:
+                if success == 'base':
+                    click.echo(
+                        f'Base updated: {current_stack_id} ({stack_name}) -> {latest_ami_id}; '
+                        f'desktops keep launching from their current image until '
+                        f'Refresh and validate promotes a validated one'
+                    )
+                    stats['updated'] += 1
+                elif success:
                     if force and latest_ami_id == current_ami_id:
                         click.echo(
                             f'Force updated: {current_stack_id} ({stack_name}) - FORCED'
@@ -1022,7 +1038,7 @@ def update_base_stacks(dry_run, stack_id, force, **kwargs):
                     else:
                         click.echo(f'Updated: {current_stack_id} ({stack_name})')
                         click.echo(f'  Old AMI: {current_ami_id}')
-                        click.echo(f'  New AMI: {latest_ami_id}')
+                        click.echo(f'  New base: {latest_ami_id}')
                     stats['updated'] += 1
                 else:
                     click.echo(f'Failed to update: {current_stack_id}')

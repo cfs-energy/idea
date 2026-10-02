@@ -228,3 +228,22 @@ def find_latest_stock_ami(
     if pattern is None:
         return None
     return find_latest_ami(ec2_client, pattern, list(DEFAULT_OWNERS), logger, base_os)
+
+
+def resolve_stock_image(
+    ec2_client, base_os: str, architecture: str, logger
+) -> Optional[dict]:
+    """
+    the vendor's newest image for a bake: available, published by the vendor for this
+    region and of the row's architecture (Windows patterns carry no architecture token,
+    so the newest match can be the other one). None when nothing qualifies.
+    """
+    pattern = stock_ami_pattern(base_os, architecture)
+    if pattern is None:
+        return None
+    image = find_latest_image(
+        ec2_client, pattern, list(DEFAULT_OWNERS), logger, base_os
+    )
+    if image is None or image.get('Architecture', architecture) != architecture:
+        return None
+    return image

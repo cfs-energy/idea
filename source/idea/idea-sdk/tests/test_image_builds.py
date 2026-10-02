@@ -475,3 +475,289 @@ def test_aws_errors_keep_their_code_and_a_scrubbed_message():
         sanitize_aws_message('x arn:aws:s3:::b y 111122223333 z')
         == 'x <arn> y <account> z'
     )
+
+
+# 26.10.1 pipeline rows
+
+
+class ConditionTable(FakeTable):
+    """evaluates the condition expressions put_if / claim / update_fields build"""
+
+    @staticmethod
+    def holds(item, expression, names, values):
+        import re
+
+        if not expression:
+            return True
+        python = expression
+        python = re.sub(
+            r'attribute_not_exists\(([#\w]+)\)',
+            lambda m: f'({m.group(1) if m.group(1).startswith("#") else repr(m.group(1)).join(("item.get(", ")"))} is None)',
+            python,
+        )
+        python = re.sub(r'NOT (#\w+) IN \(([^)]*)\)', r'(\1 not in [\2])', python)
+        python = python.replace('<>', '!=').replace(' = ', ' == ')
+        python = python.replace(' AND ', ' and ').replace(' OR ', ' or ')
+        for placeholder, name in names.items():
+            python = python.replace(placeholder, f'item.get({name!r})')
+        for placeholder in sorted(values, key=len, reverse=True):
+            python = python.replace(placeholder, repr(values[placeholder]))
+        return eval(python, {'item': item})
+
+    def put_item(
+        self,
+        Item,
+        ConditionExpression=None,
+        ExpressionAttributeNames=None,
+        ExpressionAttributeValues=None,
+    ):
+        key = (Item['base_os'], Item['architecture'])
+        if not self.holds(
+            self.items.get(key, {}),
+            ConditionExpression,
+            ExpressionAttributeNames or {},
+            ExpressionAttributeValues or {},
+        ):
+            raise ClientError(
+                {'Error': {'Code': 'ConditionalCheckFailedException'}}, 'PutItem'
+            )
+        self.items[key] = dict(Item)
+
+    def update_item(
+        self,
+        Key,
+        UpdateExpression,
+        ExpressionAttributeNames,
+        ExpressionAttributeValues=None,
+        ConditionExpression=None,
+    ):
+        key = (Key['base_os'], Key['architecture'])
+        item = self.items.setdefault(key, dict(Key))
+        values = ExpressionAttributeValues or {}
+        if not self.holds(item, ConditionExpression, ExpressionAttributeNames, values):
+            raise ClientError(
+                {'Error': {'Code': 'ConditionalCheckFailedException'}}, 'UpdateItem'
+            )
+        for part in (
+            UpdateExpression.replace('SET ', '').split(' REMOVE ')[0].split(', ')
+        ):
+            if '=' in part:
+                name, value = (t.strip() for t in part.split('='))
+                item[ExpressionAttributeNames[name]] = values[value]
+        if ' REMOVE ' in f' {UpdateExpression}':
+            for name in UpdateExpression.split('REMOVE ')[1].split(', '):
+                item.pop(ExpressionAttributeNames[name.strip()], None)
+
+
+def pipeline_db() -> ImageBuildRecordsDB:
+    db = ImageBuildRecordsDB(context=Mock(), table_name='t', kind='desktop')
+    db._table_obj = ConditionTable()
+    return db
+
+
+def test_gpu_and_custom_rows_get_their_own_range_keys_and_round_trip():
+    from ideasdk.aws.image_builds import custom_build_architecture, is_custom_record
+
+    db = pipeline_db()
+    stamp = datetime(2026, 10, 2, 12, 0, tzinfo=timezone.utc)
+    db.put(
+        ImageBuildRecord(
+            base_os='rocky9',
+            architecture='x86_64',
+            status='current',
+            image_id='ami-cpu',
+            validated_on=stamp,
+            promoted_on=stamp,
+            retry_after=stamp,
+        )
+    )
+    db.put(
+        ImageBuildRecord(
+            base_os='rocky9', architecture='x86_64', variant='nvidia', status='queued'
+        )
+    )
+    db.put(
+        ImageBuildRecord(
+            base_os='rocky9',
+            architecture=custom_build_architecture('x86_64'),
+            status='complete',
+            image_id='ami-custom',
+        )
+    )
+
+    assert sorted(db._table_obj.items) == [
+        ('rocky9', 'x86_64'),
+        ('rocky9', 'x86_64#custom'),
+        ('rocky9', 'x86_64#nvidia'),
+    ]
+    cpu = db.get('rocky9', 'x86_64')
+    assert (cpu.validated_on, cpu.promoted_on, cpu.retry_after) == (stamp, stamp, stamp)
+    assert db._table_obj.items[('rocky9', 'x86_64')]['validated_on'] == int(
+        stamp.timestamp() * 1000
+    )
+    gpu = db.get('rocky9', 'x86_64', 'nvidia')
+    assert (gpu.architecture, gpu.variant) == ('x86_64', 'nvidia')
+    custom = db.get('rocky9', 'x86_64#custom')
+    assert is_custom_record(custom) and custom.image_id == 'ami-custom'
+    assert cpu.image_id == 'ami-cpu'  # the custom build never touched the managed row
+
+
+def test_legacy_records_load_migrated_and_never_pass_the_gate():
+    from ideasdk.aws.image_builds import ImageNotValidated, promote_gate
+
+    db = pipeline_db()
+    db._table_obj.items[('rocky9', 'x86_64')] = {
+        'base_os': 'rocky9',
+        'architecture': 'x86_64',
+        'status': 'complete',
+        'image_id': 'ami-legacy',
+        'base_ami': 'ami-stock',
+        'update_target': True,
+    }
+    record = db.get('rocky9', 'x86_64')
+    assert (record.status, record.kind, record.variant, record.source_ami) == (
+        'current',
+        'desktop',
+        'cpu',
+        'ami-stock',
+    )
+    assert record.current_image_id == 'ami-legacy'
+    with pytest.raises(ImageNotValidated):
+        promote_gate(record, 'ami-legacy')
+
+
+def test_the_promote_gate_accepts_only_validated_candidates_and_promoted_images():
+    from ideasdk.aws.image_builds import (
+        ImageNotValidated,
+        promote_gate,
+        validated_image_ids,
+    )
+
+    started = datetime(2026, 10, 2, tzinfo=timezone.utc)
+    record = ImageBuildRecord(
+        base_os='rocky9',
+        architecture='x86_64',
+        image_id='ami-cand',
+        started_on=started,
+        current_image_id='ami-cur',
+        previous_image_id='ami-prev',
+    )
+    for image_id in ('ami-cand', 'ami-cur', 'ami-prev', None):
+        with pytest.raises(ImageNotValidated):
+            promote_gate(record, image_id)
+    record.validated_on = started - timedelta(days=1)  # an older run's validation
+    with pytest.raises(ImageNotValidated):
+        promote_gate(record, 'ami-cand')
+    record.validated_on = started + timedelta(hours=1)
+    promote_gate(record, 'ami-cand')
+    record.promoted_on = started
+    promote_gate(record, 'ami-prev')
+    with pytest.raises(ImageNotValidated):
+        promote_gate(record, 'ami-other')
+    assert validated_image_ids([record]) == {'ami-cand', 'ami-cur', 'ami-prev'}
+
+
+def test_put_if_is_the_queue_claim_and_the_host_fence():
+    db = pipeline_db()
+    row = ImageBuildRecord(
+        base_os='rocky9', architecture='x86_64', status='queued', host='a'
+    )
+    in_flight = ['queued', 'building']
+    assert db.put_if(row, {'status': in_flight}) is True
+    assert db.put_if(row, {'status': in_flight}) is False  # already queued
+    row.status = 'building'
+    assert db.put_if(row, {'host': 'b'}) is False
+    assert db.put_if(row, {'host': 'a'}) is True
+    fresh = ImageBuildRecord(base_os='rhel9', architecture='x86_64', host='a')
+    assert db.put_if(fresh, {'host': None}) is True
+
+
+def test_claim_refuses_every_in_flight_status_and_a_pinned_row():
+    db = pipeline_db()
+    for status in (
+        'queued',
+        'checking',
+        'test_launching',
+        'promoting',
+        'waiting_capacity',
+    ):
+        db._table_obj.items[('rocky9', 'x86_64')] = {
+            'base_os': 'rocky9',
+            'architecture': 'x86_64',
+            'status': status,
+        }
+        assert (
+            db.claim(
+                ImageBuildRecord(
+                    base_os='rocky9', architecture='x86_64', status='building'
+                )
+            )
+            is False
+        )
+    db._table_obj.items[('rocky9', 'x86_64')] = {
+        'base_os': 'rocky9',
+        'architecture': 'x86_64',
+        'status': 'current',
+        'pinned': True,
+    }
+    assert (
+        db.claim(
+            ImageBuildRecord(base_os='rocky9', architecture='x86_64', status='queued')
+        )
+        is False
+    )
+    db._table_obj.items[('rocky9', 'x86_64')]['pinned'] = False
+    assert (
+        db.claim(
+            ImageBuildRecord(base_os='rocky9', architecture='x86_64', status='queued')
+        )
+        is True
+    )
+    assert db.get('rocky9', 'x86_64').status == 'queued'
+
+
+def test_update_fields_sets_only_those_attributes_unless_a_job_holds_the_row():
+    db = pipeline_db()
+    db.put(
+        ImageBuildRecord(
+            base_os='rocky9',
+            architecture='x86_64',
+            status='building',
+            instance_id='i-1',
+        )
+    )
+    row = db.get('rocky9', 'x86_64')
+    assert db.update_fields(row, {'pinned': True}) is True
+    assert (
+        db.update_fields(row, {'status': 'pinned'}, unless_status={'building'}) is False
+    )
+    stored = db.get('rocky9', 'x86_64')
+    assert (stored.pinned, stored.status, stored.instance_id) == (
+        True,
+        'building',
+        'i-1',
+    )
+
+
+def test_resume_goes_to_the_test_launch_when_the_image_exists():
+    from ideasdk.aws.image_builds import resume_record
+
+    db = pipeline_db()
+    context = Mock()
+    context.aws().ec2().describe_images.return_value = {
+        'Images': [{'ImageId': 'ami-1', 'State': 'pending'}]
+    }
+    record = resume_record(
+        context,
+        db,
+        ImageBuildRecord(
+            base_os='rocky9',
+            architecture='x86_64',
+            status='building',
+            ami_name='idea-dcv-host-rocky9-v1',
+            instance_id='i-1',
+        ),
+        Mock(),
+    )
+    assert (record.status, record.image_id) == ('test_launching', 'ami-1')
+    context.aws().ec2().stop_instances.assert_not_called()

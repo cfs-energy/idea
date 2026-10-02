@@ -1,7 +1,7 @@
 """
 VirtualDesktopAdmin.GetImageSchedule / UpdateImageSchedule: defaults when the keys are
-absent, validated leaf writes, and the pipeline namespaces registered ahead of their
-implementation fail with NOT_IMPLEMENTED.
+absent, validated leaf writes, and the pipeline namespaces handing off to the desktop
+image pipeline.
 """
 
 from unittest.mock import Mock
@@ -95,8 +95,80 @@ def test_update_rejects_bad_rule_without_writing():
     config.db.set_config_entry.assert_not_called()
 
 
-def test_pending_namespaces_say_not_implemented():
+def test_pipeline_namespaces_hand_off_to_the_pipeline():
+    from ideadatamodel import (
+        ImageRowKey,
+        RefreshImagesRequest,
+        RollbackImageRequest,
+        SetImagePinnedRequest,
+    )
+
     api, _ = make_api()
+    api._image_pipeline = Mock()
+    api._image_pipeline.refresh.return_value = []
+    context = invocation(
+        RefreshImagesRequest(all=True), 'VirtualDesktopAdmin.RefreshImages'
+    )
+    context.get_username.return_value = 'admin'
+    api.refresh_images(context)
+    api._image_pipeline.refresh.assert_called_once()
+    assert context.success.call_args[0][0].results == []
+
     with pytest.raises(exceptions.SocaException) as e:
-        api.refresh_images(invocation(namespace='VirtualDesktopAdmin.RefreshImages'))
-    assert e.value.error_code == errorcodes.NOT_IMPLEMENTED
+        api.rollback_image(
+            invocation(RollbackImageRequest(), 'VirtualDesktopAdmin.RollbackImage')
+        )
+    assert e.value.error_code == errorcodes.INVALID_PARAMS
+    with pytest.raises(exceptions.SocaException):
+        api.set_image_pinned(
+            invocation(
+                SetImagePinnedRequest(row=ImageRowKey(base_os='rocky9')),
+                'VirtualDesktopAdmin.SetImagePinned',
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    'stack_id,ami,validated,expected',
+    [
+        ('ss-base-rocky9-x86-64-abc', 'ami-mine', set(), True),
+        ('ss-base-rocky9-x86-64-abc', 'ami-good', {'ami-good'}, None),
+        ('my-own-stack', 'ami-mine', set(), None),
+    ],
+)
+def test_hand_set_base_stack_image_pins_the_stack(
+    monkeypatch, stack_id, ami, validated, expected
+):
+    # the pipeline never overwrites an admin's own image on a base stack
+    from ideadatamodel import VirtualDesktopSoftwareStack
+    from ideavirtualdesktopcontroller.app.software_stacks import image_pipeline
+
+    api, _ = make_api()
+    old = VirtualDesktopSoftwareStack(
+        stack_id=stack_id, base_os='rocky9', ami_id='ami-old', projects=[]
+    )
+    new = VirtualDesktopSoftwareStack(stack_id=stack_id, base_os='rocky9', ami_id=ami)
+    api._validate_update_software_stack_request = lambda stack: (stack, True)
+    api._logger = Mock()
+    api.software_stack_db = Mock()
+    api.software_stack_db.get.return_value = old
+    api.software_stack_db.update.side_effect = lambda stack: stack
+    api.controller_utils = Mock()
+    api.controller_utils.describe_image_id.return_value = {'ImageId': ami}
+    monkeypatch.setattr(
+        image_pipeline,
+        'pipeline_for',
+        lambda _: Mock(records=Mock(list_all=lambda: [])),
+    )
+    monkeypatch.setattr(
+        'ideasdk.aws.image_builds.validated_image_ids', lambda records: validated
+    )
+    context = invocation(
+        Mock(software_stack=new), 'VirtualDesktopAdmin.UpdateSoftwareStack'
+    )
+
+    api.update_software_stack(context)
+
+    stored = api.software_stack_db.update.call_args.args[0]
+    assert stored.ami_id == ami
+    assert stored.image_pinned is expected

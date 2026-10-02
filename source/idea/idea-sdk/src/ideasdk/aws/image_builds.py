@@ -17,7 +17,15 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from botocore.exceptions import ClientError
 
-from ideadatamodel import ImageBuildRecord, exceptions
+from ideadatamodel import (
+    IMAGE_ROW_IN_FLIGHT,
+    ImageBuildRecord,
+    ImageKind,
+    ImageRowKey,
+    ImageRowStatus,
+    ImageVariant,
+    exceptions,
+)
 from ideasdk.utils import Utils
 
 BUILD_STATUS_BUILDING = 'building'
@@ -73,6 +81,7 @@ BUILDER_INSTANCE_TYPES = {
         'm7i.xlarge',
         'g4dn.xlarge',
         'g5.xlarge',
+        'g4ad.xlarge',
     ),
     'arm64': (
         'c6g.large',
@@ -88,7 +97,89 @@ BUILDER_INSTANCE_TYPES = {
 }
 DEFAULT_ARM64_BUILDER_INSTANCE_TYPE = 'm8g.large'
 
-_RECORD_TIMESTAMPS = ('started_on', 'finished_on')
+_RECORD_TIMESTAMPS = (
+    'started_on',
+    'finished_on',
+    'validated_on',
+    'promoted_on',
+    'retry_after',
+)
+
+# custom (ad hoc) builds share the table with the pipeline rows under their own range
+# key, base_os + 'x86_64#custom', so a custom build can never overwrite a managed row.
+# a custom record keeps that raw key as its architecture; the pipeline skips it
+CUSTOM_BUILD_SUFFIX = '#custom'
+
+# the pipeline tags the images it bakes with this; cleanup only ever deregisters those
+PIPELINE_IMAGE_TAG = 'idea:ImagePipeline'
+
+
+def custom_build_architecture(architecture: Optional[str]) -> str:
+    return f'{architecture or "x86_64"}{CUSTOM_BUILD_SUFFIX}'
+
+
+def is_custom_record(record: ImageBuildRecord) -> bool:
+    return (record.architecture or '').endswith(CUSTOM_BUILD_SUFFIX)
+
+
+# a resumed row whose build cannot be picked up again is retried this many times in all
+MAX_RESUME_ATTEMPTS = 2
+
+
+class ImageNotValidated(Exception):
+    """the promote gate refused an image: it never passed every validation check"""
+
+
+def _candidate_validated(record: ImageBuildRecord) -> bool:
+    if record.validated_on is None or not record.image_id:
+        return False
+    return record.started_on is None or record.validated_on >= record.started_on
+
+
+def promote_gate(record: Optional[ImageBuildRecord], image_id: Optional[str]) -> None:
+    """
+    the one rule every path that repoints a target at an image goes through: the image
+    is the row's candidate and that candidate validated in this run (validated_on), or
+    it is the row's current/previous image put there by a promotion (promoted_on). a
+    legacy or custom record has neither. raises ImageNotValidated with a sentence an
+    admin can act on.
+    """
+    if not image_id:
+        raise ImageNotValidated('no image to promote')
+    if record is None or is_custom_record(record):
+        raise ImageNotValidated(
+            f'{image_id} is not a validated image; only images validated by Refresh and validate can be used'
+        )
+    if image_id == record.image_id and _candidate_validated(record):
+        return
+    if record.promoted_on is not None and image_id in (
+        record.current_image_id,
+        record.previous_image_id,
+    ):
+        return
+    raise ImageNotValidated(
+        f'{image_id} has not passed validation for {record.base_os} '
+        f'{record.architecture}; run Refresh and validate on the Images page'
+    )
+
+
+def validated_image_ids(records: List[ImageBuildRecord]) -> set:
+    """every image promote_gate would accept, across rows"""
+    found = set()
+    for record in records:
+        for image_id in (
+            record.image_id,
+            record.current_image_id,
+            record.previous_image_id,
+        ):
+            if not image_id:
+                continue
+            try:
+                promote_gate(record, image_id)
+                found.add(image_id)
+            except ImageNotValidated:
+                pass
+    return found
 
 
 def build_stamp(image_name: Optional[str]) -> Optional[datetime]:
@@ -272,6 +363,54 @@ def newest_owned_image(ec2_client, name_pattern: str) -> Optional[Dict]:
     return max(images, key=lambda image: image.get('CreationDate', ''))
 
 
+def resume_record(
+    context, records, record: ImageBuildRecord, logger
+) -> ImageBuildRecord:
+    """
+    pick a pipeline row back up after the thread that ran its build died with its
+    process. the candidate image exists (the builder snapshots only after its checks
+    passed): go on to the test launch, which waits for a pending image. otherwise stop
+    the builder and queue the row once more; a second loss fails it.
+    """
+    image = None
+    try:
+        ec2 = context.aws().ec2()
+        if record.image_id:
+            image = describe_images_by_id(ec2, [record.image_id]).get(record.image_id)
+        elif record.ami_name:
+            result = ec2.describe_images(
+                Owners=['self'],
+                Filters=[{'Name': 'name', 'Values': [record.ami_name]}],
+            )
+            image = next(iter(result.get('Images', [])), None)
+    except Exception as e:
+        logger.warning(
+            f'{record.base_os}/{record.architecture}: image lookup on resume failed: {e}'
+        )
+    state = (image or {}).get('State')
+    if image is not None and state in ('available', 'pending'):
+        record.image_id = image['ImageId']
+        record.status = ImageRowStatus.TEST_LAUNCHING.value
+        record.error = None
+    else:
+        if record.instance_id:
+            stop_builder(context, record.instance_id, logger)
+        record.attempts = (record.attempts or 0) + 1
+        if record.attempts < MAX_RESUME_ATTEMPTS:
+            record.status = ImageRowStatus.QUEUED.value
+            record.error = (
+                'the controller restarted during the bake; it is being retried'
+            )
+        else:
+            record.status = ImageRowStatus.FAILED.value
+            record.error = 'the controller restarted during the bake twice; refresh the row to try again'
+            record.finished_on = datetime.now(tz=timezone.utc)
+        record.instance_id = None
+    record.host = socket.gethostname()
+    records.put(record)
+    return record
+
+
 class BuildReporter:
     """
     print through a cli context when there is one, otherwise log, so the AMI builders run
@@ -328,11 +467,16 @@ def new_record(
 
 
 class ImageBuildRecordsDB:
-    """one row per (base_os, architecture): the last build and how it ended"""
+    """
+    one row per (base_os, architecture[#variant]): the last build and how it ended.
+    kind set means the module runs the 26.10.1 pipeline: rows load migrated() onto the
+    row model and a restart resumes in-flight rows instead of failing them.
+    """
 
-    def __init__(self, context, table_name: str):
+    def __init__(self, context, table_name: str, kind: Optional[ImageKind] = None):
         self.context = context
         self.table_name = table_name
+        self.kind = kind
         self._table_obj = None
 
     def initialize(self) -> 'ImageBuildRecordsDB':
@@ -387,14 +531,23 @@ class ImageBuildRecordsDB:
 
     def sweep_orphans(self, logger) -> List[str]:
         """
-        a process restart kills the daemon build threads, so every 'building' record this
-        host owns is failed and its builder stopped. other hosts' records are left alone.
-        builders stopped for over a day are terminated.
+        a process restart kills the daemon build threads. legacy tables fail every
+        'building' record this host owns and stop its builder; a pipeline table (kind
+        set) keeps its in-flight rows for the leader loop to resume. other hosts' records
+        are left alone. builders stopped for over a day are terminated.
         """
         host = socket.gethostname()
         orphaned: List[str] = []
         for record in self.list_all():
-            if record.status != BUILD_STATUS_BUILDING or record.host != host:
+            if record.host != host:
+                continue
+            if self.kind is not None:
+                # the module's leader loop resumes these (resume_record); a restart
+                # alone never fails a pipeline row
+                if record.status in IMAGE_ROW_IN_FLIGHT:
+                    orphaned.append(f'{record.base_os}/{record.architecture}')
+                continue
+            if record.status != BUILD_STATUS_BUILDING:
                 continue
             record.status = BUILD_STATUS_FAILED
             record.error = 'the module restarted during the build'
@@ -404,7 +557,10 @@ class ImageBuildRecordsDB:
             if record.instance_id:
                 stop_builder(self.context, record.instance_id, logger)
         if orphaned:
-            logger.warning(f'builds orphaned by a restart on {host}: {orphaned}')
+            logger.warning(
+                f'builds {"left for the leader to resume" if self.kind else "orphaned"} '
+                f'by a restart on {host}: {orphaned}'
+            )
         terminate_old_stopped_builders(self.context, logger)
         return orphaned
 
@@ -424,10 +580,14 @@ class ImageBuildRecordsDB:
                 value = getattr(record, key)
                 value = int(value.timestamp() * 1000)
             item[key] = value
+        # the table range key carries the variant for GPU rows (ImageRowKey.range_key)
+        item['architecture'] = record.row_key().range_key()
         return item
 
     @staticmethod
-    def from_item(item: Optional[Dict[str, Any]]) -> Optional[ImageBuildRecord]:
+    def from_item(
+        item: Optional[Dict[str, Any]], kind: Optional[ImageKind] = None
+    ) -> Optional[ImageBuildRecord]:
         if not item:
             return None
         data = dict(item)
@@ -435,23 +595,98 @@ class ImageBuildRecordsDB:
             value = data.get(key)
             if isinstance(value, (int, float, Decimal)):
                 data[key] = datetime.fromtimestamp(int(value) / 1000, tz=timezone.utc)
-        return ImageBuildRecord(**data)
+        for check in data.get('checks') or []:
+            if isinstance(check.get('seconds'), Decimal):
+                check['seconds'] = int(check['seconds'])
+        for key in ('attempts',):
+            if isinstance(data.get(key), Decimal):
+                data[key] = int(data[key])
+        if data.get('architecture') and not data['architecture'].endswith(
+            CUSTOM_BUILD_SUFFIX
+        ):
+            architecture, variant = ImageRowKey.split_range_key(data['architecture'])
+            data['architecture'] = architecture
+            if variant != ImageVariant.CPU.value:
+                data['variant'] = variant
+        record = ImageBuildRecord(**data)
+        return record.migrated(kind) if kind is not None else record
+
+    def _load(self, item) -> Optional[ImageBuildRecord]:
+        return self.from_item(item, self.kind)
+
+    @staticmethod
+    def _key(base_os: str, architecture: str, variant=None) -> Dict[str, str]:
+        return {
+            'base_os': base_os,
+            'architecture': ImageRowKey(
+                base_os=base_os, architecture=architecture, variant=variant
+            ).range_key(),
+        }
 
     def put(self, record: ImageBuildRecord) -> ImageBuildRecord:
         self._table.put_item(Item=self.to_item(record))
         return record
 
+    def put_if(self, record: ImageBuildRecord, expected: Dict[str, Any]) -> bool:
+        """
+        write the row only while the stored row still has every expected value (None:
+        attribute absent). the pipeline's guarded writes: queue claims, the promote write
+        and the host fence that stops a previous leader's thread. False when refused.
+        """
+        conditions = []
+        names: Dict[str, str] = {}
+        values: Dict[str, Any] = {}
+        for index, (name, value) in enumerate(expected.items()):
+            names[f'#e{index}'] = name
+            if value is None:
+                conditions.append(f'attribute_not_exists(#e{index})')
+            elif isinstance(value, (list, tuple, set, frozenset)):
+                placeholders = []
+                for position, option in enumerate(sorted(value)):
+                    values[f':e{index}_{position}'] = option
+                    placeholders.append(f':e{index}_{position}')
+                conditions.append(
+                    f'(attribute_not_exists(#e{index}) OR NOT #e{index} IN ({", ".join(placeholders)}))'
+                )
+            else:
+                values[f':e{index}'] = value
+                conditions.append(f'#e{index} = :e{index}')
+        kwargs: Dict[str, Any] = {'Item': self.to_item(record)}
+        if conditions:
+            kwargs['ConditionExpression'] = ' AND '.join(conditions)
+            kwargs['ExpressionAttributeNames'] = names
+            if values:
+                kwargs['ExpressionAttributeValues'] = values
+        try:
+            self._table.put_item(**kwargs)
+            return True
+        except ClientError as e:
+            if (
+                e.response.get('Error', {}).get('Code')
+                == 'ConditionalCheckFailedException'
+            ):
+                return False
+            raise
+
     def claim(self, record: ImageBuildRecord) -> bool:
         """
-        write the 'building' row only when no build holds the key. False means another
-        request already holds it.
+        write the record (its status as given) only when no job holds the key: the
+        stored row is absent, or neither in flight (any IMAGE_ROW_IN_FLIGHT status) nor
+        pinned. False means another request holds it or the row is pinned.
         """
+        in_flight = sorted(IMAGE_ROW_IN_FLIGHT)
+        values = {f':s{i}': status for i, status in enumerate(in_flight)}
+        values[':true'] = True
         try:
             self._table.put_item(
                 Item=self.to_item(record),
-                ConditionExpression='attribute_not_exists(base_os) OR #s <> :building',
-                ExpressionAttributeNames={'#s': 'status'},
-                ExpressionAttributeValues={':building': BUILD_STATUS_BUILDING},
+                ConditionExpression=(
+                    'attribute_not_exists(base_os) OR ('
+                    f'NOT #s IN ({", ".join(values_key for values_key in values if values_key != ":true")}) '
+                    'AND (attribute_not_exists(#p) OR #p <> :true))'
+                ),
+                ExpressionAttributeNames={'#s': 'status', '#p': 'pinned'},
+                ExpressionAttributeValues=values,
             )
             return True
         except ClientError as e:
@@ -462,23 +697,78 @@ class ImageBuildRecordsDB:
                 return False
             raise
 
-    def get(self, base_os: str, architecture: str) -> Optional[ImageBuildRecord]:
-        result = self._table.get_item(
-            Key={'base_os': base_os, 'architecture': architecture or 'x86_64'}
-        )
-        return self.from_item(result.get('Item'))
+    def update_fields(
+        self,
+        record: ImageBuildRecord,
+        fields: Dict[str, Any],
+        unless_status=None,
+    ) -> bool:
+        """
+        set only these attributes of the stored row (None removes one), optionally only
+        while its status is not in unless_status. admin edits (pin) go through here so
+        they never clobber a running job's fields. False when the condition refused it.
+        """
+        key = {
+            'base_os': record.base_os,
+            'architecture': record.row_key().range_key(),
+        }
+        names: Dict[str, str] = {}
+        values: Dict[str, Any] = {}
+        sets, removes = [], []
+        for index, (name, value) in enumerate(fields.items()):
+            names[f'#f{index}'] = name
+            if value is None:
+                removes.append(f'#f{index}')
+            else:
+                values[f':f{index}'] = value
+                sets.append(f'#f{index} = :f{index}')
+        expression = ''
+        if sets:
+            expression += 'SET ' + ', '.join(sets)
+        if removes:
+            expression += ' REMOVE ' + ', '.join(removes)
+        kwargs: Dict[str, Any] = {
+            'Key': key,
+            'UpdateExpression': expression.strip(),
+            'ExpressionAttributeNames': names,
+        }
+        if unless_status:
+            names['#s'] = 'status'
+            placeholders = []
+            for index, status in enumerate(sorted(unless_status)):
+                values[f':u{index}'] = status
+                placeholders.append(f':u{index}')
+            kwargs['ConditionExpression'] = (
+                f'attribute_not_exists(#s) OR NOT #s IN ({", ".join(placeholders)})'
+            )
+        if values:
+            kwargs['ExpressionAttributeValues'] = values
+        try:
+            self._table.update_item(**kwargs)
+            return True
+        except ClientError as e:
+            if (
+                e.response.get('Error', {}).get('Code')
+                == 'ConditionalCheckFailedException'
+            ):
+                return False
+            raise
 
-    def delete(self, base_os: str, architecture: str):
-        self._table.delete_item(
-            Key={'base_os': base_os, 'architecture': architecture or 'x86_64'}
-        )
+    def get(
+        self, base_os: str, architecture: str, variant=None
+    ) -> Optional[ImageBuildRecord]:
+        result = self._table.get_item(Key=self._key(base_os, architecture, variant))
+        return self._load(result.get('Item'))
+
+    def delete(self, base_os: str, architecture: str, variant=None):
+        self._table.delete_item(Key=self._key(base_os, architecture, variant))
 
     def list_all(self) -> List[ImageBuildRecord]:
         records: List[ImageBuildRecord] = []
         kwargs: Dict[str, Any] = {}
         while True:
             result = self._table.scan(**kwargs)
-            records.extend(self.from_item(item) for item in result.get('Items', []))
+            records.extend(self._load(item) for item in result.get('Items', []))
             last_key = result.get('LastEvaluatedKey')
             if not last_key:
                 return records

@@ -31,7 +31,7 @@ from ideasdk.aws.image_builds import (
     unique_build_version,
 )
 from ideasdk.aws.stock_amis import trusted_owners
-from typing import List, Optional, Dict
+from typing import Callable, List, Optional, Dict
 import time
 import os.path
 from pathlib import Path
@@ -40,7 +40,7 @@ import os
 DEFAULT_INSTANCE_TYPE = 'm7i.large'
 DEFAULT_EBS_VOLUME_SIZE_GB = 10
 
-# the eVDI base OS set: EL10 has no DCV packages and windows builds are out of scope
+# the eVDI base OS set: EL10 has no DCV packages
 BUILD_SUPPORTED_BASE_OS = (
     'amazonlinux2023',
     'rhel8',
@@ -49,7 +49,30 @@ BUILD_SUPPORTED_BASE_OS = (
     'rocky9',
     'ubuntu2204',
     'ubuntu2404',
+    'windows2019',
+    'windows2022',
+    'windows2025',
 )
+
+# builder <-> backend handshake (bake contract): the bootstrap tags the builder with this
+# once its in-bake checks ran; only 'complete' may be snapshotted, 'failed:<check>' fails
+AMI_BUILDER_STATUS_TAG = 'idea:AmiBuilderStatus'
+AMI_BUILDER_STATUS_COMPLETE = 'complete'
+
+# the Windows builder component and its two entry points (bootstrap contract): Setup.ps1
+# bakes and tags; Setup.ps1 -Finalize, run over SSM once the checks were read, verifies
+# them and runs sysprep generalize + shutdown last. the component enables Windows bakes
+WINDOWS_BUILDER_COMPONENT = 'dcv-host-ami-builder-windows'
+WINDOWS_BUILDER_COMMANDS = [f'& .\\{WINDOWS_BUILDER_COMPONENT}\\Setup.ps1']
+WINDOWS_FINALIZE_COMMAND = f'& C:\\Users\\Administrator\\IDEA\\bootstrap\\{WINDOWS_BUILDER_COMPONENT}\\Setup.ps1 -Finalize'
+
+# sysprep shuts a Windows builder down after it tagged complete; the snapshot waits for it
+WINDOWS_SYSPREP_STOP_TIMEOUT_SECONDS = 1800
+
+
+def is_windows(base_os: Optional[str]) -> bool:
+    return 'windows' in (base_os or '').lower()
+
 
 ARCHITECTURE_TO_STACK_KEY = {
     'x86_64': 'x86-64',
@@ -84,10 +107,17 @@ class DcvHostImageBuilder:
         overwrite: bool = False,
         update_stack: bool = False,
         progress=None,
+        before_snapshot: Optional[Callable[[str, str], None]] = None,
+        image_tags: Optional[Dict[str, str]] = None,
     ):
         self.context = context
         # called with {"instance_id": ...} once the builder instance exists
         self.progress = progress
+        # called with (instance_id, status tag) once the builder reported, before any
+        # snapshot: the pipeline reads the in-bake check results here
+        self.before_snapshot = before_snapshot
+        # extra tags for the image and its snapshots (the pipeline marks its own)
+        self.image_tags = dict(image_tags or {})
 
         if Utils.is_empty(base_ami) or Utils.is_empty(base_os):
             raise exceptions.invalid_params('base_ami and base_os are required')
@@ -291,12 +321,22 @@ class DcvHostImageBuilder:
         cloudwatch_log_group_name = (
             f'/{self.context.cluster_name()}/{self.context.module_id()}/ami-builder'
         )
-        BootstrapUtils.check_and_attach_cloudwatch_logging_and_metrics(
-            bootstrap_context=bootstrap_context,
-            metrics_namespace=f'{self.context.cluster_name()}/{self.context.module_id()}/ami-builder',
-            node_type=constants.NODE_TYPE_AMI_BUILDER,
-            enable_logging=True,
-            log_files=[
+        windows = is_windows(self.base_os)
+        if windows:
+            log_files = [
+                CloudWatchAgentLogFileOptions(
+                    file_path='C:\\ProgramData\\Amazon\\EC2-Windows\\Launch\\Log\\UserdataExecutionIDEA.log',
+                    log_group_name=cloudwatch_log_group_name,
+                    log_stream_name='bootstrap_{instance_id}',
+                ),
+                CloudWatchAgentLogFileOptions(
+                    file_path='C:\\Users\\Administrator\\IDEA\\bootstrap\\log\\*',
+                    log_group_name=cloudwatch_log_group_name,
+                    log_stream_name='bootstrap_{instance_id}',
+                ),
+            ]
+        else:
+            log_files = [
                 CloudWatchAgentLogFileOptions(
                     file_path='/root/bootstrap/logs/**.log',
                     log_group_name=cloudwatch_log_group_name,
@@ -307,7 +347,13 @@ class DcvHostImageBuilder:
                     log_group_name=cloudwatch_log_group_name,
                     log_stream_name='bootstrap_{ip_address}',
                 ),
-            ],
+            ]
+        BootstrapUtils.check_and_attach_cloudwatch_logging_and_metrics(
+            bootstrap_context=bootstrap_context,
+            metrics_namespace=f'{self.context.cluster_name()}/{self.context.module_id()}/ami-builder',
+            node_type=constants.NODE_TYPE_AMI_BUILDER,
+            enable_logging=True,
+            log_files=log_files,
             enable_metrics=False,
         )
 
@@ -315,7 +361,10 @@ class DcvHostImageBuilder:
             bootstrap_context=bootstrap_context,
             source_directory=self.get_bootstrap_dir(),
             target_package_basename=f'dcv-host-ami-builder-{self.get_ami_full_name()}',
-            components=['dcv-host-ami-builder'],
+            components=(
+                [WINDOWS_BUILDER_COMPONENT] if windows else ['dcv-host-ami-builder']
+            ),
+            base_os=self.base_os,
             tmp_dir=bootstrap_tmp_dir,
             force_build=self.overwrite,
         ).build()
@@ -348,7 +397,11 @@ class DcvHostImageBuilder:
         return BootstrapUserDataBuilder(
             aws_region=self.context.aws().aws_region(),
             bootstrap_package_uri=bootstrap_package_uri,
-            install_commands=['/bin/bash dcv-host-ami-builder/setup.sh'],
+            install_commands=(
+                WINDOWS_BUILDER_COMMANDS
+                if windows
+                else ['/bin/bash dcv-host-ami-builder/setup.sh']
+            ),
             proxy_config=proxy_config,
             base_os=self.base_os,
             substitution_support=False,
@@ -411,11 +464,12 @@ class DcvHostImageBuilder:
         created_instances = Utils.get_value_as_list('Instances', run_instances_result)
         return EC2Instance(data=Utils.get_first(created_instances))
 
-    def wait_for_software_packages(self, instance_id: str):
+    def wait_for_software_packages(self, instance_id: str) -> str:
         """
-        poll until the bootstrap tags the builder idea:AmiBuilderStatus, or give up after
-        BUILDER_READY_TIMEOUT_SECONDS: a bootstrap that died never sets the tag, and the
-        raise routes through keep_for_inspection so the instance is stopped, not billed.
+        poll until the bootstrap tags the builder idea:AmiBuilderStatus and return the tag,
+        or give up after BUILDER_READY_TIMEOUT_SECONDS: a bootstrap that died never sets the
+        tag, and the raise routes through keep_for_inspection so the instance is stopped,
+        not billed. the caller decides what the tag means (only 'complete' is success).
         """
         deadline = time.time() + BUILDER_READY_TIMEOUT_SECONDS
         with self.report.spinner('installing software packages ...'):
@@ -440,12 +494,12 @@ class DcvHostImageBuilder:
                     else []
                 )
                 ami_builder_status = (
-                    EC2Instance(data=instances[0]).get_tag('idea:AmiBuilderStatus')
+                    EC2Instance(data=instances[0]).get_tag(AMI_BUILDER_STATUS_TAG)
                     if instances
                     else None
                 )
                 if Utils.is_not_empty(ami_builder_status):
-                    break
+                    return ami_builder_status.strip()
                 if time.time() > deadline:
                     raise exceptions.general_exception(
                         f'builder {instance_id} did not report ready within '
@@ -461,6 +515,12 @@ class DcvHostImageBuilder:
             f'Key={constants.IDEA_TAG_MODULE_NAME},Value={self.context.module_name()}'
         )
         custom_tags.append(f'Key={constants.IDEA_TAG_AMI_BUILDER},Value=true')
+        # cleanup only ever deregisters images this cluster's builder tagged as its own
+        custom_tags.append(
+            f'Key={constants.IDEA_TAG_CLUSTER_NAME},Value={self.context.cluster_name()}'
+        )
+        for key, value in self.image_tags.items():
+            custom_tags.append(f'Key={key},Value={value}')
         tags = [
             {'Key': key, 'Value': value}
             for key, value in Utils.convert_custom_tags_to_key_value_pairs(
@@ -580,7 +640,8 @@ class DcvHostImageBuilder:
             if progress is not None:
                 progress({'instance_id': instance_id})
             try:
-                self.wait_for_software_packages(instance_id=instance_id)
+                status = self.wait_for_software_packages(instance_id=instance_id)
+                self.check_builder_status(instance_id, status)
                 image_id = self.create_image(instance_id=instance_id)
             except BaseException as e:
                 self.keep_for_inspection(instance_id, e)
@@ -617,6 +678,71 @@ class DcvHostImageBuilder:
                     f'AMI builder ec2 instance: {instance_id} needs to be manually terminated.'
                 )
         return image_id
+
+    def check_builder_status(self, instance_id: str, status: str):
+        """
+        the handshake: hand the reported status to before_snapshot (which reads the check
+        results), then refuse anything but 'complete'. a Windows builder generalizes and
+        shuts itself down after reporting, and is snapshotted only once stopped.
+        """
+        if self.before_snapshot is not None:
+            self.before_snapshot(instance_id, status)
+        if status != AMI_BUILDER_STATUS_COMPLETE:
+            check = status.split(':', 1)[1] if ':' in status else status
+            raise exceptions.general_exception(
+                f'the in-bake check {check} failed on builder {instance_id}; '
+                f'nothing was snapshotted'
+            )
+        if is_windows(self.base_os):
+            self.finalize_windows(instance_id)
+
+    def finalize_windows(self, instance_id: str):
+        """
+        Setup.ps1 -Finalize over SSM, then wait for the generalized builder to stop. a
+        later failed tag or no stop within the deadline fails the build. the SSM result
+        is not awaited: sysprep shuts the instance down under it.
+        """
+        self.context.aws().ssm().send_command(
+            InstanceIds=[instance_id],
+            DocumentName='AWS-RunPowerShellScript',
+            Parameters={'commands': [WINDOWS_FINALIZE_COMMAND]},
+        )
+        self.wait_for_stopped(instance_id)
+
+    def wait_for_stopped(self, instance_id: str):
+        deadline = time.time() + WINDOWS_SYSPREP_STOP_TIMEOUT_SECONDS
+        with self.report.spinner('waiting for sysprep to stop the builder ...'):
+            while True:
+                try:
+                    result = (
+                        self.context.aws()
+                        .ec2()
+                        .describe_instances(InstanceIds=[instance_id])
+                    )
+                    instance = EC2Instance(
+                        data=result['Reservations'][0]['Instances'][0]
+                    )
+                    state = instance.state
+                    status = instance.get_tag(AMI_BUILDER_STATUS_TAG) or ''
+                    if status and status != AMI_BUILDER_STATUS_COMPLETE:
+                        raise exceptions.general_exception(
+                            f'builder {instance_id} reported {status} while finalizing; '
+                            f'nothing was snapshotted'
+                        )
+                except exceptions.SocaException:
+                    raise
+                except Exception as e:
+                    if not is_throttle(e):
+                        raise
+                    state = None
+                if state == 'stopped':
+                    return
+                if time.time() > deadline:
+                    raise exceptions.general_exception(
+                        f'builder {instance_id} did not stop after sysprep within '
+                        f'{WINDOWS_SYSPREP_STOP_TIMEOUT_SECONDS // 60} minutes'
+                    )
+                time.sleep(10)
 
     def keep_for_inspection(self, instance_id: str, error: BaseException):
         """a failed build leaves its builder stopped so the bootstrap logs survive"""

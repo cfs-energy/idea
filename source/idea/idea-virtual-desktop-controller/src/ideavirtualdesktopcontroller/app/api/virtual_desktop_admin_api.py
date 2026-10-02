@@ -867,8 +867,27 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
                 )
                 return
 
+            # an admin's own image on a base stack is never replaced by the image pipeline:
+            # anything it did not validate pins the stack (SetImagePinned-style target pin)
+            if (
+                new_software_stack.image_pinned is None
+                and new_software_stack.ami_id != old_software_stack.ami_id
+                and (old_software_stack.stack_id or '').startswith('ss-base-')
+            ):
+                from ideasdk.aws.image_builds import validated_image_ids
+                from ideavirtualdesktopcontroller.app.software_stacks.image_pipeline import (
+                    pipeline_for,
+                )
+
+                validated = validated_image_ids(pipeline_for(self).records.list_all())
+                if new_software_stack.ami_id not in validated:
+                    old_software_stack.image_pinned = True
+
             # Update the AMI ID if validation passes
             old_software_stack.ami_id = new_software_stack.ami_id
+
+        if new_software_stack.image_pinned is not None:
+            old_software_stack.image_pinned = new_software_stack.image_pinned
 
         # Explicitly handle allowed_instance_types, including empty lists
         # This ensures that when users clear all instance types, the change persists
@@ -1090,28 +1109,55 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
         )
         context.success(UseBuiltDesktopImagesResponse(results=results))
 
-    # image pipeline (Images view). ListImageRows, RefreshImages, RollbackImage and
-    # SetImagePinned are filled in by the desktop pipeline work
-
-    @staticmethod
-    def _image_pipeline_pending(context: ApiInvocationContext, request_type):
-        context.get_request_payload_as(request_type)
-        raise exceptions.soca_exception(
-            error_code=errorcodes.NOT_IMPLEMENTED,
-            message=f'{context.namespace} is not implemented yet',
-        )
+    # image pipeline (Images view): desktop rows. the bakes run in the controller
+    # leader loop; these only list, queue, roll back and pin (image_pipeline.py)
 
     def list_image_rows(self, context: ApiInvocationContext):
-        self._image_pipeline_pending(context, ListImageRowsRequest)
+        from ideavirtualdesktopcontroller.app.software_stacks.image_pipeline import (
+            pipeline_for,
+        )
+        from ideadatamodel import ListImageRowsResponse
+
+        request = context.get_request_payload_as(ListImageRowsRequest)
+        pipeline = pipeline_for(self)
+        pipeline._check_kind(request.filter)
+        context.success(
+            ListImageRowsResponse(listing=pipeline.list_rows(request.filter))
+        )
 
     def refresh_images(self, context: ApiInvocationContext):
-        self._image_pipeline_pending(context, RefreshImagesRequest)
+        from ideavirtualdesktopcontroller.app.software_stacks.image_pipeline import (
+            pipeline_for,
+        )
+        from ideadatamodel import RefreshImagesResponse
+
+        request = context.get_request_payload_as(RefreshImagesRequest)
+        results = pipeline_for(self).refresh(request, context.get_username())
+        context.success(RefreshImagesResponse(results=results))
 
     def rollback_image(self, context: ApiInvocationContext):
-        self._image_pipeline_pending(context, RollbackImageRequest)
+        from ideavirtualdesktopcontroller.app.software_stacks.image_pipeline import (
+            pipeline_for,
+        )
+        from ideadatamodel import RollbackImageResponse
+
+        request = context.get_request_payload_as(RollbackImageRequest)
+        if request.row is None:
+            raise exceptions.invalid_params('row is required')
+        record = pipeline_for(self).rollback(request.row, context.get_username())
+        context.success(RollbackImageResponse(record=record))
 
     def set_image_pinned(self, context: ApiInvocationContext):
-        self._image_pipeline_pending(context, SetImagePinnedRequest)
+        from ideavirtualdesktopcontroller.app.software_stacks.image_pipeline import (
+            pipeline_for,
+        )
+        from ideadatamodel import SetImagePinnedResponse
+
+        request = context.get_request_payload_as(SetImagePinnedRequest)
+        if request.row is None or request.pinned is None:
+            raise exceptions.invalid_params('row and pinned are required')
+        record = pipeline_for(self).set_pinned(request.row, request.pinned)
+        context.success(SetImagePinnedResponse(record=record))
 
     def _image_schedule_next_run(self, schedule: ImageRefreshSchedule):
         from zoneinfo import ZoneInfo
