@@ -55,6 +55,7 @@ const ALL_COMPONENTS = [
   "dcv-broker",
   "dcv-connection-gateway",
   "dcv-host-ami-builder",
+  "dcv-host-ami-builder-windows",
   "openldap-server",
   "scheduler",
   "virtual-desktop-controller",
@@ -117,6 +118,9 @@ for (const component of cases) {
 
       const entryContent = readFileSync(entry, "utf8");
       for (const ref of packageScriptRefs(component.name, entryContent)) {
+        // the image builder inlines Install.ps1 but never passes -ConfigureForEVDI, the only
+        // path that imports Configure.ps1: a baked image carries no desktop identity
+        if (component.name === "dcv-host-ami-builder-windows" && ref.endsWith("/Configure.ps1")) continue;
         assert.equal(existsSync(join(extracted, ref)), true, `${component.name} references missing ${ref}`);
       }
       for (const relative of files.filter((name) => name.startsWith(`${component.name}/`) && name.endsWith(".sh"))) {
@@ -129,7 +133,8 @@ for (const component of cases) {
       const executeBit = isExecutable(entry);
       if (component.name === "common" || component.baseOs.includes("windows")) {
         // Copied files keep the source mode. Rendered jinja2 files take the umask.
-        assert.equal(executeBit, isExecutable(join(BOOTSTRAP_SOURCE, component.entryRelative)));
+        const source = join(BOOTSTRAP_SOURCE, component.entryRelative);
+        assert.equal(executeBit, existsSync(source) ? isExecutable(source) : false);
       } else {
         assert.equal(
           executeBit,
@@ -142,7 +147,8 @@ for (const component of cases) {
         const relative = component.installCommand.slice("/bin/bash ".length);
         assert.equal(existsSync(join(extracted, relative)), true, `install command missing ${relative}`);
       }
-      if (component.installCommand.startsWith("cd ")) {
+      // the image builder ships only Setup.ps1 (Install.ps1 is inlined into it)
+      if (component.installCommand.startsWith("cd ") && component.name !== "dcv-host-ami-builder-windows") {
         assert.equal(existsSync(join(extracted, component.name, "Install.ps1")), true);
         assert.equal(existsSync(join(extracted, component.name, "Configure.ps1")), true);
         assert.equal(existsSync(join(extracted, component.name, "ConfigureDCVHost.ps1")), true);

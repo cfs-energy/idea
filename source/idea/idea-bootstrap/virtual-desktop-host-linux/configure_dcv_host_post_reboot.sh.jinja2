@@ -59,4 +59,7 @@ crontab -l | grep -v "idea-reboot-do-not-edit-or-delete-idea-notif.sh" | crontab
 CONTROLLER_EVENTS_QUEUE_URL="{{ context.config.get_string('virtual-desktop-controller.events_sqs_queue_url', required=True) }}"
 MESSAGE="{{ context.vars.dcv_host_ready_message }}"
 AWS=$(command -v aws)
-$AWS sqs send-message --queue-url ${CONTROLLER_EVENTS_QUEUE_URL} --message-body ${MESSAGE} --region ${AWS_REGION} --message-group-id ${IDEA_SESSION_ID}
+if $AWS sqs send-message --queue-url ${CONTROLLER_EVENTS_QUEUE_URL} --message-body ${MESSAGE} --region ${AWS_REGION} --message-group-id ${IDEA_SESSION_ID}; then
+  # image validation reads this line from the bootstrap_<instance id> CloudWatch stream
+  log_info "IDEA_BOOTSTRAP_COMPLETE release=${IDEA_MODULE_VERSION}"
+fi

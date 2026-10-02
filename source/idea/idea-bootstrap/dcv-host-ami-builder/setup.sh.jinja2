@@ -3,9 +3,15 @@ set -x
 
 {% set path = '/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin' %}
 
-echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
+
+# A new bake never inherits success evidence from its source image.
+if [[ "${1:-}" != crontab ]]; then
+  rm -f /var/lib/idea/bake-*.ok /var/lib/idea/bake-failed /var/lib/idea/baked-release /var/lib/idea/image-checks.json
+fi
+BAKE_STAGE=setup
+source "${SCRIPT_DIR}/image_bake_stage.sh"
 
 echo -e "
 ## [BEGIN] IDEA Environment Configuration - Do Not Delete
@@ -55,6 +61,11 @@ echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
 {% include '_templates/linux/idea_service_account.jinja2' %}
 
 {% include '_templates/linux/aws_ssm.jinja2' %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+systemctl enable --now snap.amazon-ssm-agent.amazon-ssm-agent.service
+{% else %}
+systemctl enable --now amazon-ssm-agent
+{% endif %}
 
 {% include '_templates/linux/epel_repo.jinja2' %}
 
@@ -63,5 +74,6 @@ echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
 {% include '_templates/linux/mount_shared_storage.jinja2' %}
 
 mkdir -p ${IDEA_DCV_HOST_AMI_BUILDER_LOGS_DIR}
+touch /var/lib/idea/bake-setup.ok
 log_info "executing dcv_host_ami_builder.sh ..."
 /bin/bash ${SCRIPT_DIR}/dcv_host_ami_builder.sh >> "${IDEA_DCV_HOST_AMI_BUILDER_LOGS_DIR}/dcv_host_ami_builder_bootstrap.log" 2>&1

@@ -361,11 +361,11 @@ if [[ -f ${IDEA_CLUSTER_HOME}/dcv_host/userdata_customizations.sh ]]; then
   /bin/bash ${IDEA_CLUSTER_HOME}/dcv_host/userdata_customizations.sh >> ${BOOTSTRAP_DIR}/logs/userdata_customizations.log 2>&1
 fi
 
-if [[ ! -f ${BOOTSTRAP_DIR}/idea_system_upgraded.log ]]; then
+if [[ "$(cat /var/lib/idea/baked-release 2>/dev/null)" != "${IDEA_MODULE_VERSION}" ]]; then
+  : # The upgrade include can be empty when first-boot updates are disabled.
   {% include '_templates/linux/system_upgrade.jinja2' %}
-  echo "System upgrade completed at $(date)" >> ${BOOTSTRAP_DIR}/idea_system_upgraded.log
 else
-  log_info "Found ${BOOTSTRAP_DIR}/idea_system_upgraded.log... skipping system upgrade..."
+  log_info "Baked release matches ${IDEA_MODULE_VERSION}; skipping system upgrade"
 fi
 
 {# Not on 24.04: there the renderer switch leaves systemd-networkd with no link to configure,

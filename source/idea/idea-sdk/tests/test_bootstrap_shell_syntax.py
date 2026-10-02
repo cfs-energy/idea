@@ -176,7 +176,8 @@ def packages(base_os: str):
                 'virtual-desktop-host-windows',
                 'virtual-desktop-host-windows',
                 dict(session_vars, session=SocaAnyPayload(type='console')),
-            )
+            ),
+            ('windows image builder', 'dcv-host-ami-builder-windows', {}),
         ]
     ami_vars = dict(ami_dir='/apps/idea-mock/ami', ami_name='sample-ami')
     result = []
@@ -292,9 +293,10 @@ def test_linux_bootstrap_packages_parse(tmp_path, base_os, instance_type):
 @pytest.mark.parametrize('instance_type', ('m7i.large', 'g5.xlarge', 'g4ad.xlarge'))
 @pytest.mark.parametrize('base_os', WINDOWS_BASE_OS)
 def test_windows_bootstrap_package_parses(tmp_path, base_os, instance_type):
-    label, component, variables = packages(base_os)[0]
+    label = 'windows host and image builder'
     scripts = [
         f
+        for _, component, variables in packages(base_os)
         for f in render(tmp_path, base_os, instance_type, component, variables)
         if f.endswith('.ps1')
     ]

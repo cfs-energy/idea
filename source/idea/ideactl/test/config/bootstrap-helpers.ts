@@ -64,7 +64,7 @@ export function componentCases(): ComponentCase[] {
       name,
       baseOs: windows ? "windows2022" : "amazonlinux2023",
       entryRelative: windows
-        ? `${name}/Install.ps1`
+        ? `${name}/${name === "dcv-host-ami-builder-windows" ? "Setup" : "Install"}.ps1`
         : name === "common"
           ? "common/bootstrap_common.sh"
           : `${name}/setup.sh`,
@@ -285,6 +285,9 @@ export function fullContext(): Record<string, unknown> {
       return false;
     },
     is_nvidia_gpu(): boolean {
+      return false;
+    },
+    is_amd_gpu(): boolean {
       return false;
     },
     fail_on_missing_gpu_driver(): boolean {

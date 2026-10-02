@@ -46,13 +46,12 @@ def test_build_setup_has_no_session_state():
     assert 'sqs send-message' not in rendered
 
 
-def test_build_writes_the_first_boot_skip_markers():
+def test_build_records_package_stage_without_stamping_an_unchecked_release():
     rendered = render('dcv-host-ami-builder/dcv_host_ami_builder.sh.jinja2')
-    assert 'idea_preinstalled_packages.log' in rendered
-    assert 'idea_system_upgraded.log' in rendered
-    # both markers are written on success so the session bootstrap skips the work
-    assert 'Package installation completed' in rendered
-    assert 'System upgrade completed' in rendered
+    assert 'touch /var/lib/idea/bake-packages.ok' in rendered
+    assert 'idea_preinstalled_packages.log' not in rendered
+    assert 'idea_system_upgraded.log' not in rendered
+    assert '> /var/lib/idea/baked-release' not in rendered
 
 
 def test_rocky9_kernel_reboot_selects_the_installed_kernel_once():
@@ -70,32 +69,34 @@ def test_rocky9_kernel_reboot_selects_the_installed_kernel_once():
 
 def test_build_post_reboot_installs_dcv_but_never_registers():
     rendered = render('dcv-host-ami-builder/dcv_host_ami_builder_post_reboot.sh.jinja2')
-    assert 'AmiBuilderStatus,Value=complete' in rendered
-    assert 'systemctl disable dcvserver' in rendered
-    assert 'systemctl disable dcv-session-manager-agent' in rendered
+    assert 'image_checks.sh' in rendered
+    assert 'image_scrub.sh' in rendered
     # the session-only actions must not be in the built image path
     assert 'sqs send-message' not in rendered
     assert 'dcv_host_ready_message' not in rendered
     # the markers survive the image clean-up
-    assert 'rm -rf /root/bootstrap/logs' in rendered
+    assert 'rm -rf /root/bootstrap/logs' not in rendered
     assert 'rm -rf /root/bootstrap\n' not in rendered
 
 
 def test_build_post_reboot_scrubs_the_builder_identity():
-    rendered = render('dcv-host-ami-builder/dcv_host_ami_builder_post_reboot.sh.jinja2')
+    rendered = render('dcv-host-ami-builder/image_scrub.sh.jinja2')
     for line in (
-        'rm -rf /var/lib/amazon/ssm/*',
         ': > /etc/machine-id',
         'rm -f /var/lib/dbus/machine-id',
-        'rm -rf /var/lib/cloud/instances/* /var/lib/cloud/instance /var/lib/cloud/data/*',
-        'find /var/log -type f -exec truncate -s 0 {} +',
-        'rm -f /etc/dcv/dcv.key /etc/dcv/dcv.pem',
+        'cloud-init clean --logs --seed',
+        '/etc/dcv/dcv.key /etc/dcv/dcv.pem',
+        'realm leave "$domain"',
+        '/var/lib/sss/db/*',
+        '/etc/ssh/ssh_host_*',
+        '/var/lib/dcv-session-manager-agent/*',
+        '/opt/idea/.services',
     ):
         assert line in rendered, line
-    # the scrub runs before the ready tag, never after it
-    assert rendered.index('rm -rf /var/lib/amazon/ssm/*') < rendered.index(
-        'AmiBuilderStatus,Value=complete'
-    )
+    post = render('dcv-host-ami-builder/dcv_host_ami_builder_post_reboot.sh.jinja2')
+    assert post.index('image_checks.sh') < post.index('image_scrub.sh')
+    assert post.index('image_scrub.sh') < post.index('> /var/lib/idea/baked-release')
+    assert post.index('> /var/lib/idea/baked-release') < post.index('--publish')
 
 
 # set_kernel run against the package state of a stock image, every command it reaches stubbed.

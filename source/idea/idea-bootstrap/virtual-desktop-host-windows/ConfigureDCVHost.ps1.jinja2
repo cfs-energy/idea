@@ -77,7 +77,7 @@ rotation = 'daily'
   $CurrentTimeStamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 
   if (Test-Path -Path "$AgentConfFolder\agent.conf") {
-      Move-Item -Path $AgentConfFolder -Destination "$AgentConfFolder\agent.conf.$CurrentTimeStamp" -Force
+      Move-Item -Path "$AgentConfFolder\agent.conf" -Destination "$AgentConfFolder\agent.conf.$CurrentTimeStamp" -Force
   }
 
   New-Item -Path $AgentConfFolder -Name "agent.conf" -ItemType File -Force -Value "$AgentConfContent"
@@ -87,6 +87,7 @@ rotation = 'daily'
   }
 
   # DCVSessionManagerAgentService is usually disabled on the system. Need to enable it.
+  Set-Service -Name dcvserver -StartupType Automatic
   Set-Service -Name DcvSessionManagerAgentService -StartupType Automatic
 
   # Determine if we have any additional USB remotization configurations

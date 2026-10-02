@@ -1,0 +1,142 @@
+param([switch]$Finalize)
+
+# The backend packages this component and executes Setup.ps1 as detached user data.
+# Reuse the host installer without ConfigureForEVDI: no domain, owner or session identity.
+{% include 'virtual-desktop-host-windows/Install.ps1' %}
+
+$ErrorActionPreference = 'Stop'
+$Region = '{{ context.aws_region }}'
+$env:AWS_DEFAULT_REGION = $Region
+$Release = '{{ context.module_version }}'
+$State = 'C:\ProgramData\IDEA'
+$LogFile = 'C:\ProgramData\Amazon\EC2-Windows\Launch\Log\UserdataExecutionIDEA.log'
+$LogGroup = '/{{ context.cluster_name }}/{{ context.module_id }}/ami-builder'
+$Checks = [System.Collections.Generic.List[object]]::new()
+$FailureCheck = 'bootstrap'
+$Published = $false
+$Installed = $false
+$Started = Get-Date
+
+function Add-ImageCheck([string]$Name, [bool]$Ok, [string]$Detail) {
+    $Checks.Add(@{name=$Name; ok=$Ok; detail=$Detail; seconds=[int]((Get-Date) - $Started).TotalSeconds})
+}
+function Publish-ImageChecks {
+    $Json = @{release=$Release; checks=@($Checks.ToArray())} | ConvertTo-Json -Depth 5 -Compress
+    [IO.File]::WriteAllText("$State\image-checks.json", $Json)
+    $Failed = $Checks | Where-Object { -not $_.ok } | Select-Object -First 1
+    $Status = if ($Failed) { "failed:$($Failed.name)" } else { 'complete' }
+    try {
+        try { New-CWLLogStream -LogGroupName $LogGroup -LogStreamName "bootstrap_$InstanceId" -Region $Region }
+        catch { if ($_.Exception.Message -notmatch 'already exists') { throw } }
+        $Event = New-Object Amazon.CloudWatchLogs.Model.InputLogEvent
+        $Event.Timestamp = [DateTime]::UtcNow
+        $Event.Message = $Json
+        Write-CWLLogEvent -LogGroupName $LogGroup -LogStreamName "bootstrap_$InstanceId" -LogEvent $Event -Region $Region
+    } catch {
+        Add-ImageCheck 'logs' $false 'Unable to publish checks to CloudWatch'
+        $Json = @{release=$Release; checks=@($Checks.ToArray())} | ConvertTo-Json -Depth 5 -Compress
+        [IO.File]::WriteAllText("$State\image-checks.json", $Json)
+        if ($Status -eq 'complete') { $Status = 'failed:logs' }
+    }
+    New-EC2Tag -Resource $InstanceId -Tag @{Key='idea:AmiBuilderStatus'; Value=$Status} -Region $Region
+    if ($Status -ne 'complete') {
+        Remove-Item "$State\baked-release" -Force -ErrorAction SilentlyContinue
+        throw "Image checks failed: $Status"
+    }
+}
+
+New-Item -ItemType Directory -Force -Path $State, 'C:\Users\Administrator\IDEA\bootstrap\log' | Out-Null
+$Token = Invoke-RestMethod -Method PUT -Uri 'http://169.254.169.254/latest/api/token' -Headers @{'X-aws-ec2-metadata-token-ttl-seconds'='600'}
+$InstanceId = Invoke-RestMethod -Uri 'http://169.254.169.254/latest/meta-data/instance-id' -Headers @{'X-aws-ec2-metadata-token'=$Token}
+# The backend invokes this phase over SSM only after it has persisted the checks JSON.
+# This avoids losing the read-back to sysprep shutdown; no extra tag protocol is needed.
+if ($Finalize) {
+    $Saved = Get-Content "$State\image-checks.json" -Raw | ConvertFrom-Json
+    if ($Saved.release -ne $Release -or -not $Saved.checks -or
+        ($Saved.checks | Where-Object { -not $_.ok }) -or
+        (Get-Content "$State\baked-release" -Raw) -ne $Release) {
+        # the backend waits for a stop; a failed tag ends that wait now
+        New-EC2Tag -Resource $InstanceId -Tag @{Key='idea:AmiBuilderStatus'; Value='failed:finalize'} -Region $Region
+        throw 'Refusing to generalize an unchecked image'
+    }
+    foreach ($Check in $Saved.checks) { $Checks.Add($Check) }
+    # Last operation: EC2Launch v2 invokes sysprep /generalize /oobe /shutdown.
+    # https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/sysprep-using-ec2launchv2.html
+    try {
+        & 'C:\Program Files\Amazon\EC2Launch\EC2Launch.exe' sysprep --shutdown=true
+        if ($LASTEXITCODE -ne 0) { throw "EC2Launch sysprep exited $LASTEXITCODE" }
+    } catch {
+        Add-ImageCheck 'sysprep' $false $_.Exception.Message
+        Publish-ImageChecks
+    }
+    exit
+}
+
+try {
+    Remove-Item "$State\baked-release" -Force -ErrorAction SilentlyContinue
+    Install-WindowsEC2Instance -Update -ModuleVersion $Release
+    # GPU packages are part of host configuration, so include the same installers here.
+{% if context.is_nvidia_gpu() %}
+    {% include '_templates/windows/gpu/nvidia_drivers.jinja2' %}
+{% elif context.is_amd_gpu() %}
+    {% include '_templates/windows/gpu/amd_drivers.jinja2' %}
+{% endif %}
+    {% include '_templates/windows/cloudwatch_agent.jinja2' %}
+    $Installed = $true
+
+    $FailureCheck = 'ssm'
+    Set-Service AmazonSSMAgent -StartupType Automatic
+    Start-Service AmazonSSMAgent
+    Add-ImageCheck 'ssm' ((Get-Service AmazonSSMAgent).Status -eq 'Running') 'SSM agent is running and enabled'
+    Add-ImageCheck 'dcv' ([bool](Get-Service dcvserver -ErrorAction SilentlyContinue) -and [bool](Get-Service DcvSessionManagerAgentService -ErrorAction SilentlyContinue)) 'DCV server and session-manager services are installed'
+    Add-ImageCheck 'packages' ((Test-Path 'C:\Program Files\Amazon\AWSCLIV2\aws.exe') -and (Test-Path 'C:\Program Files\7-Zip\7z.exe')) 'Host utilities are installed'
+{% if context.is_gpu_instance_type() %}
+{% set gpu_provider = 'NVIDIA' if context.is_nvidia_gpu() else 'AMD|Advanced Micro Devices' %}
+    $GpuDrivers = @(Get-CimInstance Win32_PnPSignedDriver | Where-Object { $_.DeviceClass -eq 'DISPLAY' -and $_.DriverProviderName -match '{{ gpu_provider }}' })
+    Add-ImageCheck 'gpu' ($GpuDrivers.Count -gt 0) 'GPU display driver is installed'
+{% endif %}
+    $FailureCheck = 'sysprep'
+    $EC2Launch = 'C:\Program Files\Amazon\EC2Launch\EC2Launch.exe'
+    if (-not (Test-Path $EC2Launch)) {
+        $Installer = "$State\AmazonEC2Launch.msi"
+        Invoke-WebRequest 'https://s3.amazonaws.com/amazon-ec2launch-v2/windows/amd64/latest/AmazonEC2Launch.msi' -OutFile $Installer -UseBasicParsing
+        $Process = Start-Process msiexec.exe -ArgumentList "/i `"$Installer`" /quiet /norestart" -Wait -PassThru
+        if ($Process.ExitCode -notin @(0, 3010)) { throw 'EC2Launch v2 installation failed' }
+        Remove-Item $Installer
+    }
+    Add-ImageCheck 'sysprep' (Test-Path $EC2Launch) 'EC2Launch v2 is installed for generalize/shutdown'
+
+    $FailureCheck = 'scrub'
+    # A bake must never carry directory membership into a clone.
+    if ((Get-CimInstance Win32_ComputerSystem).PartOfDomain) { throw 'Builder is joined to a domain' }
+    Stop-Service dcvserver, DcvSessionManagerAgentService
+    Set-Service dcvserver -StartupType Manual
+    Set-Service DcvSessionManagerAgentService -StartupType Disabled
+    foreach ($Path in @(
+        'C:\Windows\system32\config\systemprofile\AppData\Local\NICE\dcv',
+        'C:\ProgramData\NICE\DCVSessionManagerAgent',
+        'C:\Program Files\NICE\DCVSessionManagerAgent\conf\tags',
+        'C:\IDEA\LocalScripts', 'C:\LOCAL_ADMINS_PASSWORD.txt'
+    )) {
+        if (Test-Path $Path) { Remove-Item $Path -Recurse -Force }
+    }
+    $FailureCheck = 'bootstrap'
+    $CleanLog = (Test-Path $LogFile) -and -not (Select-String -Path $LogFile -Pattern '\b(ERROR|FATAL)\b' -Quiet)
+    Add-ImageCheck 'bootstrap' ($Installed -and $CleanLog) 'Host installer finished and bootstrap log contains no ERROR/FATAL'
+    $FailureCheck = 'release'
+    [IO.File]::WriteAllText("$State\baked-release", $Release)
+    Add-ImageCheck 'release' ((Get-Content "$State\baked-release" -Raw) -eq $Release) 'baked-release matches the running release'
+    Publish-ImageChecks
+    $Published = $true
+} catch {
+    Add-ImageCheck $FailureCheck $false $_.Exception.Message
+    throw
+} finally {
+    # Includes that exit nonzero still reach finally; a partial install cannot look complete.
+    if (-not $Published) {
+        if (-not ($Checks | Where-Object { -not $_.ok })) {
+            Add-ImageCheck 'bootstrap' $false 'Installer exited before checks finished'
+        }
+        Publish-ImageChecks
+    }
+}

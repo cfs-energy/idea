@@ -94,7 +94,9 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
 {% include '_templates/linux/instance_storage.jinja2' %}
 
-if [[ ! -f ${BOOTSTRAP_DIR}/idea_preinstalled_packages.log ]]; then
+PACKAGES_INSTALLED=no
+if [[ "$(cat /var/lib/idea/baked-release 2>/dev/null)" != "${IDEA_MODULE_VERSION}" ]]; then
+  PACKAGES_INSTALLED=yes
   {% if context.base_os in ('rhel8', 'rocky8') %}
   #drpm isn't available in rhel9 or rocky9
   yum install -y drpm
@@ -110,9 +112,8 @@ if [[ ! -f ${BOOTSTRAP_DIR}/idea_preinstalled_packages.log ]]; then
 
   {% include '_templates/linux/disable_se_linux.jinja2' %}
 
-  echo "Package installation completed at $(date)" >> ${BOOTSTRAP_DIR}/idea_preinstalled_packages.log
 else
-   log_info "Found ${BOOTSTRAP_DIR}/idea_preinstalled_packages.log... skipping package installation..."
+   log_info "Baked release matches ${IDEA_MODULE_VERSION}; skipping package installation"
 fi
 
 {% if context.is_metrics_provider_prometheus() %}
@@ -177,7 +178,6 @@ crontab -l | grep -v "idea-reboot-do-not-edit-or-delete-idea-notif.sh" | crontab
 
 # Check if reboot is required for any system changes (packages, GPU setup, kernel changes)
 REBOOT_REQUIRED=$(cat ${BOOTSTRAP_DIR}/reboot_required.txt)
-PACKAGES_INSTALLED=$([[ ! -f ${BOOTSTRAP_DIR}/idea_preinstalled_packages.log ]] && echo "yes" || echo "no")
 
 if [[ "${PACKAGES_INSTALLED}" == "yes" ]] || [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
   if [[ "${PACKAGES_INSTALLED}" == "yes" ]]; then

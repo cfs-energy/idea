@@ -29,16 +29,16 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
   {% include '_templates/linux/tag_network_interface.jinja2' %}
 {% endwith %}
 
-if [[ ! -f ${BOOTSTRAP_DIR}/idea_preinstalled_packages.log ]]; then
+# only an image baked and validated for this release skips the package stage
+if [[ "$(cat /var/lib/idea/baked-release 2>/dev/null)" != "${IDEA_MODULE_VERSION}" ]]; then
 
   {% include '_templates/linux/disable_se_linux.jinja2' %}
 
   {% include '_templates/linux/system_packages.jinja2' %}
 
-  echo "Package installation completed at $(date)" >> ${BOOTSTRAP_DIR}/idea_preinstalled_packages.log
 
 else
-   log_info "Found ${BOOTSTRAP_DIR}/idea_preinstalled_packages.log... skipping package installation..."
+   log_info "Baked release matches ${IDEA_MODULE_VERSION}; skipping package installation"
 fi
 
 {% include '_templates/linux/cloudwatch_agent.jinja2' %}

@@ -9,6 +9,9 @@ fi
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
+BAKE_STAGE=packages
+source "${SCRIPT_DIR}/image_bake_stage.sh"
+
 {% set TAGS = [
   {'Key':'idea:ClusterName', 'Value': context.cluster_name },
   {'Key':'idea:ModuleName', 'Value': context.module_name },
@@ -32,7 +35,7 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
 {% include '_templates/linux/set_kernel.jinja2' %}
 
-if [[ ! -f ${BOOTSTRAP_DIR}/idea_preinstalled_packages.log ]]; then
+if [[ ! -f /var/lib/idea/bake-packages.ok ]]; then
   {% if context.base_os in ('rhel8', 'rocky8') %}
   #drpm isn't available in rhel9 or rocky9
   yum install -y drpm
@@ -41,9 +44,8 @@ if [[ ! -f ${BOOTSTRAP_DIR}/idea_preinstalled_packages.log ]]; then
   {% include '_templates/linux/system_packages.jinja2' %}
   {% include '_templates/linux/jq.jinja2' %}
   {% include '_templates/linux/disable_se_linux.jinja2' %}
-  echo "Package installation completed at $(date)" >> ${BOOTSTRAP_DIR}/idea_preinstalled_packages.log
 else
-   log_info "Found ${BOOTSTRAP_DIR}/idea_preinstalled_packages.log... skipping package installation..."
+   log_info "Packages stage already completed for this bake"
 fi
 
 {% include '_templates/linux/cloudwatch_agent.jinja2' %}
@@ -74,17 +76,19 @@ fi
   log_info "GPU InstanceType not detected. Skipping disabling of Nouveau Drivers..."
 {% endif %}
 
-if [[ ! -f ${BOOTSTRAP_DIR}/idea_system_upgraded.log ]]; then
+if [[ ! -f /var/lib/idea/bake-packages.ok ]]; then
+  : # The upgrade include can be empty when first-boot updates are disabled.
   {% include '_templates/linux/system_upgrade.jinja2' %}
-  echo "System upgrade completed at $(date)" >> ${BOOTSTRAP_DIR}/idea_system_upgraded.log
 else
-  log_info "Found ${BOOTSTRAP_DIR}/idea_system_upgraded.log... skipping system upgrade..."
+  log_info "Packages stage already completed for this bake"
 fi
 
+touch /var/lib/idea/bake-packages.ok
+# Install this before any GPU include can reboot the post-reboot stage.
+(crontab -l 2>/dev/null | grep -v dcv_host_ami_builder_post_reboot.sh || true; echo "@reboot /bin/bash ${SCRIPT_DIR}/dcv_host_ami_builder_post_reboot.sh >> ${IDEA_DCV_HOST_AMI_BUILDER_LOGS_DIR}/dcv_host_ami_builder_bootstrap.log 2>&1") | crontab -
 REBOOT_REQUIRED=$(cat /root/bootstrap/reboot_required.txt)
 if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
   log_info "reboot required. dcv_host_ami_builder_post_reboot.sh will be executed after reboot ..."
-  (crontab -l; echo "@reboot /bin/bash ${SCRIPT_DIR}/dcv_host_ami_builder_post_reboot.sh >> ${IDEA_DCV_HOST_AMI_BUILDER_LOGS_DIR}/dcv_host_ami_builder_bootstrap.log 2>&1") | crontab -
   reboot
   exit 0
 else

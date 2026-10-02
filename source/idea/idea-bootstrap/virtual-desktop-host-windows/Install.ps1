@@ -83,9 +83,9 @@ function Wait-ForService {
       # Every supported base_os (2019, 2022, 2025) ships the Indirect Display Driver with
       # DCV 2023.1+, so the Virtual Display Driver is never installed: it conflicts with GPU drivers.
       Start-Job -Name DCVWebReq -ScriptBlock { Invoke-WebRequest -uri https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-server-x64-Release.msi -OutFile C:\Windows\Temp\DCVServer.msi }
-      Wait-Job -Name DCVWebReq
+      Receive-Job -Name DCVWebReq -Wait -AutoRemoveJob -ErrorAction Stop
       $DCVServerInstall = Start-Process "msiexec.exe" -ArgumentList "/I C:\Windows\Temp\DCVServer.msi ADDLOCAL=ALL /quiet /norestart /l*v dcv_install_msi.log " -Wait -PassThru
-      if($DCVServerInstall.ExitCode -ne 0){
+      if($DCVServerInstall.ExitCode -notin @(0, 3010)){
         Write-ToLog -Message "DCV Server install failed with exit code $($DCVServerInstall.ExitCode), see dcv_install_msi.log" -Level 'Error'
         exit 1
       }
@@ -113,9 +113,9 @@ function Wait-ForService {
     if(!$DCVSMInstalled -or $Update){
       # Standard distribution link for NICE DCV Session Manager Agent
       Start-Job -Name SMWebReq -ScriptBlock { Invoke-WebRequest -uri https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent-x64-Release.msi -OutFile C:\Windows\Temp\DCVSMAgent.msi }
-      Wait-Job -Name SMWebReq
+      Receive-Job -Name SMWebReq -Wait -AutoRemoveJob -ErrorAction Stop
       $SMAgentInstall = Start-Process "msiexec.exe" -ArgumentList "/I C:\Windows\Temp\DCVSMAgent.msi /quiet /norestart " -Wait -PassThru
-      if($SMAgentInstall.ExitCode -ne 0){
+      if($SMAgentInstall.ExitCode -notin @(0, 3010)){
         Write-ToLog -Message "DCV Session Manager Agent install failed with exit code $($SMAgentInstall.ExitCode)" -Level 'Error'
         exit 1
       }
@@ -204,8 +204,19 @@ function Install-WindowsEC2Instance {
     Param(
 
       [switch]$ConfigureForEVDI,
-      [switch]$Update
+      [switch]$Update,
+      [string]$ModuleVersion = (& "$PSScriptRoot\ModuleVersion.ps1")
     )
+    # Configuration always runs; only a matching release may skip installation.
+    $BakedRelease = 'C:\ProgramData\IDEA\baked-release'
+    if (-not $Update -and $ModuleVersion -and (Test-Path $BakedRelease) -and
+        (Get-Content $BakedRelease -Raw).Trim() -eq $ModuleVersion) {
+        if ($ConfigureForEVDI) {
+            Import-Module .\Configure.ps1
+            Configure-WindowsEC2Instance
+        }
+        return
+    }
     Write-ToLog -Message "Installing Windows EC2 Instance" -Level 'Info'
     $timestamp = Get-Date -Format 'yyyyMMddTHHmmssffffZ'
     $InstallEVDI = "$env:SystemDrive\Users\Administrator\IDEA\bootstrap\log\InstallEVDI.log.$timestamp"

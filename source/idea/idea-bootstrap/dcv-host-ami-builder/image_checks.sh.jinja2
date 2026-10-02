@@ -1,0 +1,207 @@
+#!/bin/bash
+# Run before scrub; --publish uses the saved result after scrub and release stamping.
+# Shared by the compute builder (image_kind = 'compute'): no DCV, Lustre when its driver is baked.
+{% set compute = image_kind is defined and image_kind == 'compute' %}
+set +x
+source /etc/environment
+# EL8 stock images may expose Python only as platform-python.
+BAKE_PYTHON=$(command -v python3 || command -v /usr/libexec/platform-python)
+STATE=/var/lib/idea
+CHECKS=()
+STATUS=complete
+
+publish() {
+  # Keep the exact JSON in the bootstrap_<instance id> CloudWatch stream as well as on disk.
+  aws logs create-log-stream --region "${AWS_REGION}" \
+    --log-group-name '/{{ context.cluster_name }}/{{ context.module_id }}/ami-builder' \
+    --log-stream-name "bootstrap_${AWS_INSTANCE_ID}" 2>/dev/null || true
+  local events
+  events=$("${BAKE_PYTHON}" -c 'import json,sys,time; print(json.dumps([{"timestamp":int(time.time()*1000),"message":open(sys.argv[1]).read()}]))' "$STATE/image-checks.json") || return 1
+  aws logs put-log-events --region "${AWS_REGION}" \
+    --log-group-name '/{{ context.cluster_name }}/{{ context.module_id }}/ami-builder' \
+    --log-stream-name "bootstrap_${AWS_INSTANCE_ID}" --log-events "$events" || return 1
+  aws ec2 create-tags --resources "${AWS_INSTANCE_ID}" --region "${AWS_REGION}" \
+    --tags "Key=idea:AmiBuilderStatus,Value=${STATUS}"
+}
+
+if [[ ${1:-} == --failed-scrub || ${1:-} == --failed-publish ]]; then
+  failed_check=scrub
+  [[ $1 != --failed-publish ]] || failed_check=logs
+  "${BAKE_PYTHON}" - "$STATE/image-checks.json" "$failed_check" <<'PYCODE'
+import json
+import sys
+path, name = sys.argv[1:]
+with open(path) as src:
+    data = json.load(src)
+data['checks'].append(dict(name=name, ok=False, detail='Host scrub or checks publication failed', seconds=0))
+with open(path, 'w') as out:
+    json.dump(data, out)
+PYCODE
+  STATUS="failed:$failed_check"
+  rm -f "$STATE/baked-release"
+  publish || aws ec2 create-tags --resources "${AWS_INSTANCE_ID}" --region "${AWS_REGION}" \
+    --tags "Key=idea:AmiBuilderStatus,Value=${STATUS}"
+  exit 1
+fi
+
+if [[ ${1:-} == --publish ]]; then
+  STATUS=$("${BAKE_PYTHON}" -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["release"] == sys.argv[2] and d["checks"]; print(next(("failed:"+c["name"] for c in d["checks"] if not c["ok"]), "complete"))' "$STATE/image-checks.json" "${IDEA_MODULE_VERSION}") || exit 1
+  [[ "$(cat "$STATE/baked-release")" == "${IDEA_MODULE_VERSION}" && ! -f "$STATE/bake-failed" ]] || exit 1
+  publish || exit 1
+  [[ $STATUS == complete ]]
+  exit $?
+fi
+
+check() {
+  local name=$1 detail=$2 started=$SECONDS ok=true
+  shift 2
+  if ! "$@"; then
+    ok=false
+    [[ $STATUS != complete ]] || STATUS="failed:$name"
+  fi
+  CHECKS+=("$name" "$ok" "$detail" "$((SECONDS - started))")
+}
+
+bootstrap_ok() {
+  [[ ${1:-} != --failed-* && ! -f "$STATE/bake-failed" ]] || return 1
+  local stage log found=no result
+  for stage in setup packages {{ 'drivers' if compute else 'dcv' }}; do
+    [[ -f "$STATE/bake-$stage.ok" ]] || return 1
+  done
+  # Ignore xtrace source lines, which can contain unexecuted error-message literals.
+  for log in "${BOOTSTRAP_DIR}"/logs/*.log "${IDEA_{{ 'COMPUTE_NODE' if compute else 'DCV_HOST' }}_AMI_BUILDER_LOGS_DIR}"/*.log; do
+    [[ -f "$log" ]] || continue
+    found=yes
+    grep -v '^+' "$log" | grep -Ei '(^|[^[:alnum:]_])(ERROR|FATAL)([^[:alnum:]_]|$)' >/dev/null
+    result=$?
+    [[ $result == 1 ]] || return 1
+  done
+  [[ $found == yes ]]
+}
+
+kernel_ok() {
+  local default_kernel
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+  # Resolve the generated GRUB menu, including saved entries and nested menu titles/ids.
+  default_kernel=$("${BAKE_PYTHON}" - <<'PY'
+import re
+import shlex
+import subprocess
+from pathlib import Path
+
+config = Path('/boot/grub/grub.cfg').read_text()
+settings = dict(line.split('=', 1) for line in subprocess.check_output(
+    ['grub-editenv', '/boot/grub/grubenv', 'list'], text=True).splitlines() if '=' in line)
+defaults = re.findall(r'^\s*set default="([^"]+)"', config, re.M)
+# Stock GRUB selects next_entry first, then saved_entry or the configured literal.
+selection = settings.get('next_entry') or next(
+    (settings.get('saved_entry') if d == '${saved_entry}' else d
+     for d in defaults if d != '${next_entry}'), None)
+if not selection or '$' in selection:
+    raise SystemExit('Cannot resolve default GRUB entry')
+entries, stack, counts = [], [], {(): 0}
+depth = 0
+for line in config.splitlines():
+    stripped = line.strip()
+    if stripped.startswith(('menuentry ', 'submenu ')):
+        parts = shlex.split(stripped)
+        parent = tuple(item[0] for item in stack)
+        index = counts.get(parent, 0)
+        counts[parent] = index + 1
+        ident = ''
+        for i, part in enumerate(parts[:-1]):
+            if part in ('--id', '$menuentry_id_option'):
+                ident = parts[i + 1]
+            elif part.startswith('--id='):
+                ident = part[5:]
+        stack.append((index, parts[1], ident, depth))
+    if stripped.startswith(('linux ', 'linuxefi ')):
+        kernel = shlex.split(stripped)[1].rsplit('/', 1)[-1]
+        entries.append((list(stack), kernel.removeprefix('vmlinuz-')))
+    depth += line.count('{') - line.count('}')
+    while stack and depth <= stack[-1][3]:
+        stack.pop()
+for path, kernel in entries:
+    keys = selection.split('>')
+    if len(keys) == len(path) and all(k in (str(i), title, ident) for k, (i, title, ident, _) in zip(keys, path)):
+        print(kernel)
+        break
+else:
+    raise SystemExit('Default GRUB entry has no kernel')
+PY
+  ) || return 1
+{% else %}
+  default_kernel=$(grubby --default-kernel) || return 1
+  default_kernel=${default_kernel##*/vmlinuz-}
+{% endif %}
+  [[ -n "$default_kernel" && "$(uname -r)" == "$default_kernel" ]]
+}
+
+packages_installed() {
+  local package
+  for package in "$@"; do
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+    [[ "$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null)" == 'install ok installed' ]] || return 1
+{% else %}
+    rpm -q "$package" >/dev/null 2>&1 || return 1
+{% endif %}
+  done
+}
+unit_installed() {
+  [[ "$(systemctl show --property=LoadState --value "$1")" == loaded ]]
+}
+dcv_ok() {
+  packages_installed nice-dcv-server nice-dcv-session-manager-agent &&
+    unit_installed dcvserver.service && unit_installed dcv-session-manager-agent.service
+}
+ssm_ok() {
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+  snap list amazon-ssm-agent >/dev/null &&
+    unit_installed snap.amazon-ssm-agent.amazon-ssm-agent.service &&
+    systemctl is-enabled --quiet snap.amazon-ssm-agent.amazon-ssm-agent.service
+{% else %}
+  packages_installed amazon-ssm-agent && unit_installed amazon-ssm-agent.service &&
+    systemctl is-enabled --quiet amazon-ssm-agent.service
+{% endif %}
+}
+
+mkdir -p "$STATE" || exit 1
+check bootstrap 'All stages succeeded and bootstrap logs are clean' bootstrap_ok "${1:-}"
+check kernel 'Running kernel equals the default boot kernel' kernel_ok
+{% if (compute and 'fsx_lustre' in (context.vars.enabled_drivers or ())) or (not compute and (context.has_storage_provider('fsx_lustre') or context.has_storage_provider('fsx_cache'))) %}
+check lustre 'Configured Lustre module resolves for the running kernel' modprobe -n lustre
+{% endif %}
+{% if not compute %}
+check dcv 'DCV server and session-manager packages and units are installed' dcv_ok
+{% endif %}
+check directory 'sssd, realmd and adcli packages are installed' packages_installed sssd realmd adcli
+check ssm 'SSM agent is installed and enabled' ssm_ok
+{% if context.is_nvidia_gpu() %}
+check gpu 'NVIDIA driver responds' nvidia-smi
+{% elif context.is_amd_gpu() %}
+check gpu 'AMD driver responds' /opt/amdgpu-pro/bin/clinfo
+{% endif %}
+"${BAKE_PYTHON}" - "$STATE/image-checks.json" "${IDEA_MODULE_VERSION}" "${CHECKS[@]}" <<'PY'
+import json
+import os
+import sys
+path, release, *values = sys.argv[1:]
+checks = [dict(name=n, ok=o == 'true', detail=d, seconds=int(s))
+          for n, o, d, s in zip(*[iter(values)] * 4)]
+with open(path + '.tmp', 'w') as out:
+    json.dump(dict(release=release, checks=checks), out)
+os.replace(path + '.tmp', path)
+PY
+if [[ $? != 0 ]]; then
+  aws ec2 create-tags --resources "${AWS_INSTANCE_ID}" --region "${AWS_REGION}" \
+    --tags 'Key=idea:AmiBuilderStatus,Value=failed:bootstrap'
+  exit 1
+fi
+cat "$STATE/image-checks.json"
+if [[ $STATUS != complete ]]; then
+  rm -f "$STATE/baked-release"
+  # A logging failure must not suppress the failure tag.
+  publish || aws ec2 create-tags --resources "${AWS_INSTANCE_ID}" --region "${AWS_REGION}" \
+    --tags "Key=idea:AmiBuilderStatus,Value=${STATUS}"
+  exit 1
+fi

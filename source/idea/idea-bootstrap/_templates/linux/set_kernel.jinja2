@@ -187,8 +187,8 @@ function install_target_kernel() {
 
 function set_kernel_version() {
   # Skip kernel management on captured images that already went through bootstrap
-  if [[ -f ${BOOTSTRAP_DIR}/idea_preinstalled_packages.log ]] || [[ -f ${BOOTSTRAP_DIR}/idea_system_upgraded.log ]]; then
-    log_info "Found existing bootstrap logs - skipping kernel management on captured image"
+  if [[ -n "${IDEA_MODULE_VERSION}" && "$(cat /var/lib/idea/baked-release 2>/dev/null)" == "${IDEA_MODULE_VERSION}" ]]; then
+    log_info "Baked release matches ${IDEA_MODULE_VERSION}; skipping kernel management"
     return 0
   fi
 
