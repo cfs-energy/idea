@@ -338,9 +338,10 @@ describe('scheduler stack branches', () => {
     const statements = withFlag.schedulerpolicyFF65A604.Properties.PolicyDocument.Statement as Json[];
     // The statement's index follows the position of the block in `resources/policies/scheduler.yml`:
     // it sits before the directory-service includes, so it shifts the two AD automation statements
-    // down one rather than landing at the end.
+    // down one rather than landing at the end. The count before it is the template's unconditional
+    // statements plus ClusterUserSync, which the container flag adds.
     const index = statements.findIndex((statement) => statement.Sid === 'SchedulerDnsRecord');
-    assert.equal(index, 26);
+    assert.equal(index, 23);
     assert.deepEqual(statements[index], {
       Action: 'route53:ChangeResourceRecordSets',
       Effect: 'Allow',

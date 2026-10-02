@@ -25,7 +25,7 @@ import type { ClusterConfig } from '../../config/cluster-config.ts';
 import type { StackBuildProps } from '../app.ts';
 import { IdeaBaseStack } from '../base-stack.ts';
 import { IDEA_TAG_CLUSTER_NAME, IDEA_TAG_MODULE_ID, IDEA_TAG_MODULE_NAME, IDEA_TAG_NODE_TYPE } from '../constructs/base.ts';
-import { InstanceProfile, Policy, Role, SQSQueue } from '../constructs/common.ts';
+import { InstanceProfile, ManagedPolicy, Policy, Role, SQSQueue } from '../constructs/common.ts';
 import {
   STREAM_PREFIX_APPLICATION,
   STREAM_PREFIX_OPENPBS,
@@ -98,6 +98,8 @@ export class SchedulerStack extends IdeaBaseStack {
 
   oauth2ClientSecret!: OAuthClientIdAndSecret;
   schedulerRole!: Role;
+  /** Attached to the scheduler host role and to the scheduler task role; see `buildIamRoles`. */
+  schedulerManagedPolicies!: ManagedPolicy[];
   schedulerInstanceProfile!: InstanceProfile;
   computeNodeRole!: Role;
   computeNodeInstanceProfile!: InstanceProfile;
@@ -249,6 +251,25 @@ export class SchedulerStack extends IdeaBaseStack {
       assumedBy: ['ssm', 'ec2'],
       managedPolicies: schedulerPolicyArns,
     });
+    // The inline policies of one role share a 10,240-byte limit, and scheduler.yml next to the task
+    // role's default policy reached it when the image pipeline grants were added. Read-only access
+    // and the image pipeline render into customer-managed policies, each with its own 6,144-character
+    // limit; test/stacks/iam-policy-size.test.ts keeps all three under their limits.
+    this.schedulerManagedPolicies = [
+      new ManagedPolicy(this.context, `${this.moduleId}-read-only-policy`, this.stack, {
+        managedPolicyName: `${this.clusterName}-${this.awsRegion}-${this.moduleId}-read-only`,
+        description: 'Read-only AWS API access for the scheduler',
+        policyTemplateName: 'scheduler-read-only.yml',
+        moduleId: this.moduleId,
+      }),
+      new ManagedPolicy(this.context, `${this.moduleId}-image-pipeline-policy`, this.stack, {
+        managedPolicyName: `${this.clusterName}-${this.awsRegion}-${this.moduleId}-image-pipeline`,
+        description: 'Compute image pipeline permissions for the scheduler',
+        policyTemplateName: 'scheduler-image-pipeline.yml',
+        moduleId: this.moduleId,
+      }),
+    ];
+    for (const policy of this.schedulerManagedPolicies) this.schedulerRole.addManagedPolicy(policy);
     if (this.hostsPresent) {
       this.schedulerInstanceProfile = new InstanceProfile(
         this.context,
@@ -452,6 +473,7 @@ export class SchedulerStack extends IdeaBaseStack {
         spot_fleet_request_role_arn: this.spotFleetRequestRole.roleArn,
       }),
     });
+    for (const policy of this.schedulerManagedPolicies) taskRole.addManagedPolicy(policy);
     const datadogSecretArn = this.context.config.getString('ecs.datadog.api_key_secret_arn');
     if (datadogSecretArn) {
       taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
