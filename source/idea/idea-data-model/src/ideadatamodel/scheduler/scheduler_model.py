@@ -1897,6 +1897,9 @@ class HpcQueueProfile(SocaBaseModel):
     stack_uuid: Optional[str] = Field(default=None)
     queue_management_params: Optional[SocaQueueManagementParams] = Field(default=None)
     default_job_params: Optional[SocaJobParams] = Field(default=None)
+    # the image pipeline never changes default_job_params.instance_ami of a pinned
+    # profile (false when absent)
+    image_pinned: Optional[bool] = Field(default=None)
     created_on: Optional[datetime] = Field(default=None)
     updated_on: Optional[datetime] = Field(default=None)
     # real time params sourced from JobProvisioningQueue

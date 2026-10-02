@@ -77,7 +77,19 @@ __all__ = (
 )
 
 from ideadatamodel import SocaPayload, SocaListingPayload, IdeaOpenAPISpecEntry
-from ideadatamodel.aws import ServiceQuota, ImageBuildRecord, ImageInventoryRow
+from ideadatamodel.aws import (
+    ServiceQuota,
+    ImageBuildRecord,
+    ImageInventoryRow,
+    ListImageRowsRequest,
+    ListImageRowsResponse,
+    RefreshImagesRequest,
+    RefreshImagesResponse,
+    RollbackImageRequest,
+    RollbackImageResponse,
+    SetImagePinnedRequest,
+    SetImagePinnedResponse,
+)
 from ideadatamodel.scheduler.scheduler_model import (
     SocaComputeNodeState,
     SocaComputeNode,
@@ -716,6 +728,34 @@ OPEN_API_SPEC_ENTRIES_SCHEDULER = [
         namespace='SchedulerAdmin.BuildComputeImage',
         request=BuildComputeImageRequest,
         result=BuildComputeImageResult,
+        is_listing=False,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='SchedulerAdmin.ListImageRows',
+        request=ListImageRowsRequest,
+        result=ListImageRowsResponse,
+        is_listing=True,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='SchedulerAdmin.RefreshImages',
+        request=RefreshImagesRequest,
+        result=RefreshImagesResponse,
+        is_listing=False,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='SchedulerAdmin.RollbackImage',
+        request=RollbackImageRequest,
+        result=RollbackImageResponse,
+        is_listing=False,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='SchedulerAdmin.SetImagePinned',
+        request=SetImagePinnedRequest,
+        result=SetImagePinnedResponse,
         is_listing=False,
         is_public=False,
     ),

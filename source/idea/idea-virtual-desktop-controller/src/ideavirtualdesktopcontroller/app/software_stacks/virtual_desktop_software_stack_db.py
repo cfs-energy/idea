@@ -419,6 +419,11 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
                 db_entry,
                 [],
             ),
+            image_pinned=Utils.get_value_as_bool(
+                software_stacks_constants.SOFTWARE_STACK_DB_IMAGE_PINNED_KEY,
+                db_entry,
+                False,
+            ),
         )
 
         for project_id in Utils.get_value_as_list(
@@ -548,6 +553,12 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
             db_dict[
                 software_stacks_constants.SOFTWARE_STACK_DB_ALLOWED_INSTANCE_TYPES_KEY
             ] = software_stack.allowed_instance_types
+
+        # only when set: an update that does not carry the flag keeps the stored one
+        if software_stack.image_pinned is not None:
+            db_dict[software_stacks_constants.SOFTWARE_STACK_DB_IMAGE_PINNED_KEY] = (
+                software_stack.image_pinned
+            )
 
         project_ids = []
         for project in software_stack.projects:

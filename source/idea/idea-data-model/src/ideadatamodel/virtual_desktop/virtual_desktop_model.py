@@ -166,6 +166,8 @@ class VirtualDesktopSoftwareStack(SocaBaseModel):
     pool_asg_name: Optional[str] = Field(default=None)
     launch_tenancy: Optional[VirtualDesktopTenancy] = Field(default=None)
     allowed_instance_types: Optional[List[str]] = Field(default=None)
+    # the image pipeline never repoints a pinned stack (false when absent)
+    image_pinned: Optional[bool] = Field(default=None)
 
 
 class VirtualDesktopServer(SocaBaseModel):

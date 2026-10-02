@@ -107,7 +107,22 @@ from ideadatamodel.virtual_desktop.virtual_desktop_model import (
     VirtualDesktopSessionPermission,
 )
 from pydantic import Field
-from ideadatamodel.aws import ImageBuildRecord, ImageInventoryRow
+from ideadatamodel.aws import (  # noqa: F401  (image pipeline payloads, for the typings)
+    ImageBuildRecord,
+    ImageInventoryRow,
+    ListImageRowsRequest,
+    ListImageRowsResponse,
+    RefreshImagesRequest,
+    RefreshImagesResponse,
+    RollbackImageRequest,
+    RollbackImageResponse,
+    SetImagePinnedRequest,
+    SetImagePinnedResponse,
+    GetImageScheduleRequest,
+    GetImageScheduleResponse,
+    UpdateImageScheduleRequest,
+    UpdateImageScheduleResponse,
+)
 
 # VirtualDesktopAdmin.CreateSession - Request
 # VirtualDesktop.CreateSession - Request

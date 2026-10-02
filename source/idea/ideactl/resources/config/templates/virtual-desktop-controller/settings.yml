@@ -292,6 +292,25 @@ dcv_session:
     admin: admin_profile
     owner: owner_profile
 
+# image pipeline: bake, validate and promote one image per OS / architecture / variant.
+# clusters deployed before these keys existed run on the same defaults (ImagePipelineSettings)
+software_stacks:
+  # the monthly vendor check (rebakes only rows whose vendor base image changed).
+  # the scheduler reads this key for compute rows too. hour is in cluster.timezone
+  image_refresh_schedule:
+    enabled: true
+    day: first sunday # <first|second|third|fourth|last> <weekday>
+    hour: 2
+  image_pipeline:
+    max_concurrent_bakes: 4
+    keep_generations: 2 # current + previous validated; older managed images are removed
+    # seconds from request acceptance to READY for a test launch; slower fails the bake
+    ready_gate_seconds_linux: 300
+    ready_gate_seconds_windows: 480
+    # the service user and hidden project test launches (and compute test jobs) run as
+    validation_user: idea-validate
+    validation_project: idea-validate
+
 # Instance storage configuration for virtual desktop sessions
 instance_storage:
   # Configure mount point for instance store devices (NVMe/SSD)

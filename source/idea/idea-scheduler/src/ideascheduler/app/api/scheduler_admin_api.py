@@ -10,7 +10,15 @@
 #  and limitations under the License.
 
 from ideascheduler.app.api.job_waiting_signals import apply_waiting_signals
-from ideadatamodel import exceptions, errorcodes, SocaPaginator
+from ideadatamodel import (
+    exceptions,
+    errorcodes,
+    SocaPaginator,
+    ListImageRowsRequest,
+    RefreshImagesRequest,
+    RollbackImageRequest,
+    SetImagePinnedRequest,
+)
 from ideadatamodel.scheduler import (
     ListNodesRequest,
     ListJobsRequest,
@@ -197,6 +205,22 @@ class SchedulerAdminAPI(BaseAPI):
             'SchedulerAdmin.BuildComputeImage': {
                 'scope': None,
                 'method': self.build_compute_image,
+            },
+            'SchedulerAdmin.ListImageRows': {
+                'scope': None,
+                'method': self.list_image_rows,
+            },
+            'SchedulerAdmin.RefreshImages': {
+                'scope': None,
+                'method': self.refresh_images,
+            },
+            'SchedulerAdmin.RollbackImage': {
+                'scope': None,
+                'method': self.rollback_image,
+            },
+            'SchedulerAdmin.SetImagePinned': {
+                'scope': None,
+                'method': self.set_image_pinned,
             },
         }
         self._compute_images = None
@@ -586,6 +610,28 @@ class SchedulerAdminAPI(BaseAPI):
         request = context.get_request_payload_as(BuildComputeImageRequest)
         record = self.compute_images.build(request, requested_by=context.get_username())
         context.success(BuildComputeImageResult(record=record))
+
+    # image pipeline (Images view, compute rows), filled in by the compute images work
+
+    @staticmethod
+    def _image_pipeline_pending(context: ApiInvocationContext, request_type):
+        context.get_request_payload_as(request_type)
+        raise exceptions.soca_exception(
+            error_code=errorcodes.NOT_IMPLEMENTED,
+            message=f'{context.namespace} is not implemented yet',
+        )
+
+    def list_image_rows(self, context: ApiInvocationContext):
+        self._image_pipeline_pending(context, ListImageRowsRequest)
+
+    def refresh_images(self, context: ApiInvocationContext):
+        self._image_pipeline_pending(context, RefreshImagesRequest)
+
+    def rollback_image(self, context: ApiInvocationContext):
+        self._image_pipeline_pending(context, RollbackImageRequest)
+
+    def set_image_pinned(self, context: ApiInvocationContext):
+        self._image_pipeline_pending(context, SetImagePinnedRequest)
 
     def invoke(self, context: ApiInvocationContext):
         namespace = context.namespace
