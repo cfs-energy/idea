@@ -33,21 +33,21 @@ import { withRetainedStateful } from '../support/retain-stateful.ts';
 import { withRetirements } from '../support/retirements.ts';
 
 const PKG = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const FIXTURES = join(PKG, 'tools', 'parity', 'fixtures', 'idea-dev27');
+const FIXTURES = join(PKG, 'tools', 'parity', 'fixtures', 'idea-demo1');
 const CONFIG_FILE = join(FIXTURES, 'cluster-settings.json');
 const SYNTH_READS = join(FIXTURES, 'synth-reads.json');
 const CONTEXT_FILE = join(FIXTURES, 'cdk.context.json');
 const PYTHON_MANIFEST = join(FIXTURES, 'python', '_cdk', 'cdk.out.cluster', 'manifest.json');
-const LIVE_TEMPLATE = join(PKG, 'tools', 'parity', 'live', 'idea-dev27-cluster.json');
+const LIVE_TEMPLATE = join(PKG, 'tools', 'parity', 'live', 'idea-demo1-cluster.json');
 
-const CLUSTER = 'idea-dev27';
+const CLUSTER = 'idea-demo1';
 const REGION = 'us-east-2';
 const DEPLOYMENT_ID = '97999f4c-daaa-4813-b8ac-bd7abaedc26b';
 const STACK = `${CLUSTER}-cluster`;
 
 requireCapture(
   [CONFIG_FILE, SYNTH_READS, CONTEXT_FILE, PYTHON_MANIFEST, LIVE_TEMPLATE],
-  "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
+  "node tools/parity/capture.ts --live --cluster idea-demo1 --region us-east-2",
 );
 
 type Json = Record<string, any>;
@@ -155,7 +155,7 @@ describe('cluster stack', () => {
     });
     // the synthesizer: qualifier shake_256(cluster_name)[:5], deploy roles, bootstrap version
     assert.equal(properties.bootstrapStackVersionSsmParameter, expected.bootstrapStackVersionSsmParameter);
-    assert.match(properties.bootstrapStackVersionSsmParameter, /^\/cdk-bootstrap\/6f3b37a775\/version$/);
+    assert.match(properties.bootstrapStackVersionSsmParameter, /^\/cdk-bootstrap\/d98389644e\/version$/);
     assert.equal(properties.requiresBootstrapStackVersion, expected.requiresBootstrapStackVersion);
     assert.equal(properties.assumeRoleArn, expected.assumeRoleArn);
     assert.equal(properties.cloudFormationExecutionRoleArn, expected.cloudFormationExecutionRoleArn);
@@ -200,21 +200,21 @@ describe('cluster stack', () => {
     // and by name, so the assertion above cannot pass on an empty set. The settings resource holds
     // no state of its own and still deletes in both directions; the two certificate resources name
     // secrets a load balancer is serving, so both directions retain.
-    assert.equal(synthResources.ideadev27clustersettings.DeletionPolicy, 'Delete');
-    assert.equal(synthResources.ideadev27clustersettings.UpdateReplacePolicy, 'Delete');
-    for (const id of ['ideadev27clusterexternalcert', 'ideadev27clusterinternalcert']) {
+    assert.equal(synthResources.ideademo1clustersettings.DeletionPolicy, 'Delete');
+    assert.equal(synthResources.ideademo1clustersettings.UpdateReplacePolicy, 'Delete');
+    for (const id of ['ideademo1clusterexternalcert', 'ideademo1clusterinternalcert']) {
       assert.equal(synthResources[id].DeletionPolicy, 'Retain', id);
       assert.equal(synthResources[id].UpdateReplacePolicy, 'Retain', id);
     }
     // The log groups keep the configured teardown behaviour and are never lost to a replacement.
-    for (const id of ['vpcflowlogsgroup4676BF4E', 'ideadev27externalalbwafloggroup46833A61']) {
+    for (const id of ['vpcflowlogsgroup4676BF4E', 'ideademo1externalalbwafloggroupB3C6BD0B']) {
       assert.equal(synthResources[id].DeletionPolicy, 'Delete', id);
       assert.equal(synthResources[id].UpdateReplacePolicy, 'Retain', id);
     }
     // The private hosted zone holds every record in it, so it is retained on a replacement while
     // its teardown behaviour is unchanged.
-    assert.equal(synthResources.ideadev27privatehostedzone741B171D.DeletionPolicy, undefined);
-    assert.equal(synthResources.ideadev27privatehostedzone741B171D.UpdateReplacePolicy, 'Retain');
+    assert.equal(synthResources.ideademo1privatehostedzone9A5F7BB4.DeletionPolicy, undefined);
+    assert.equal(synthResources.ideademo1privatehostedzone9A5F7BB4.UpdateReplacePolicy, 'Retain');
     // Network resources survive replacement, while the custom resource stays unchanged.
     for (const id of ['vpcA2121C38', 'vpcpublicSubnet1EIP909BE2D3', 'clusterprefixlist']) {
       assert.equal(synthResources[id].DeletionPolicy, undefined, id);
@@ -226,13 +226,13 @@ describe('cluster stack', () => {
   });
 
   test('the external https listener keeps the live default action', () => {
-    const listener = (synthesized.template.Resources as Json).ideadev27externalalbhttpslistener792DEC0E;
+    const listener = (synthesized.template.Resources as Json).ideademo1externalalbhttpslistener07300426;
     const action = listener.Properties.DefaultActions[0] as Json;
     assert.equal(action.Type, 'forward', 'a fixed-response here takes the web portal offline');
     const targetGroupArn = action.ForwardConfig.TargetGroups[0].TargetGroupArn as string;
     assert.match(targetGroupArn, /^arn:aws:elasticloadbalancing:/);
     // the same target group the deployed listener points at, read back at synth
-    const liveListener = (live.Resources as Json).ideadev27externalalbhttpslistener792DEC0E;
+    const liveListener = (live.Resources as Json).ideademo1externalalbhttpslistener07300426;
     assert.equal(targetGroupArn, liveListener.Properties.DefaultActions[0].ForwardConfig.TargetGroups[0].TargetGroupArn);
   });
 
@@ -240,9 +240,9 @@ describe('cluster stack', () => {
     // they read `cluster.external_alb.dcv_broker_*_listener_arn`, which nothing writes; the vdc
     // stack sets the real default action out of band and CloudFormation never reverts it
     for (const id of [
-      'ideadev27internalalbdcvbrokerclientlistener7E8DB2BE',
-      'ideadev27internalalbdcvbrokeragentlistener7092853F',
-      'ideadev27internalalbdcvbrokergatewaylistener24355DB3',
+      'ideademo1internalalbdcvbrokerclientlistenerF5FE5211',
+      'ideademo1internalalbdcvbrokeragentlistenerCFDD93B0',
+      'ideademo1internalalbdcvbrokergatewaylistener4AACAFC3',
     ]) {
       const action = (synthesized.template.Resources as Json)[id].Properties.DefaultActions[0] as Json;
       assert.equal(action.Type, 'fixed-response', id);
@@ -259,7 +259,7 @@ describe('cluster stack', () => {
     process.env.IDEA_SYNTH_READS = '/nonexistent-synth-reads.json';
     try {
       const again = await synthCluster();
-      const listener = (again.template.Resources as Json).ideadev27externalalbhttpslistener792DEC0E;
+      const listener = (again.template.Resources as Json).ideademo1externalalbhttpslistener07300426;
       assert.equal(listener.Properties.DefaultActions[0].Type, 'forward');
     } finally {
       process.argv = previousArgv;
@@ -296,8 +296,8 @@ describe('cluster stack', () => {
   });
 
   test('the settings map is written in the deployed order', () => {
-    const settings = (synthesized.template.Resources as Json).ideadev27clustersettings.Properties.settings as Json;
-    const liveSettings = (live.Resources as Json).ideadev27clustersettings.Properties.settings as Json;
+    const settings = (synthesized.template.Resources as Json).ideademo1clustersettings.Properties.settings as Json;
+    const liveSettings = (live.Resources as Json).ideademo1clustersettings.Properties.settings as Json;
     assert.deepEqual(Object.keys(settings), Object.keys(liveSettings));
     assert.equal(settings.deployment_id, DEPLOYMENT_ID);
   });

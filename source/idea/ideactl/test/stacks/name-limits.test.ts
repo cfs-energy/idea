@@ -2,7 +2,7 @@
  * The 64-character switch in `constructs/common.ts`.
  *
  * `Role` and `LambdaFunction` fall back to `build_trimmed_resource_name` once
- * `<cluster>-<name>[-<region>]` passes 64 characters. No captured dev27 resource is long enough to
+ * `<cluster>-<name>[-<region>]` passes 64 characters. No captured demo1 resource is long enough to
  * exercise it (the longest live role name is 60), so the branch is pinned here against the Python
  * formula rather than against a template. A stack with a long module id or component name reaches
  * it, and a construct that silently emitted the untrimmed name would fail CloudFormation at
@@ -21,19 +21,19 @@ import { LambdaFunction, Role } from '../../src/cdk/constructs/common.ts';
 import { harness } from '../support/construct-harness.ts';
 import type { Json } from '../support/construct-harness.ts';
 
-/** Long enough that `idea-dev27-<name>-us-east-2` passes 64 characters. */
+/** Long enough that `idea-demo1-<name>-us-east-2` passes 64 characters. */
 const LONG = 'virtual-desktop-controller-scheduled-event-transformer-role';
 const SHORT = 'vdc-scheduled-event-transformer-role';
 const LONGER = `${LONG}-and-then-some-more-characters-to-cross-the-limit`;
 
 /** `<cluster>-<name>-<region>` for SHORT. Under 64, so Role keeps this form. */
-const SHORT_ROLE_NAME = 'idea-dev27-vdc-scheduled-event-transformer-role-us-east-2';
+const SHORT_ROLE_NAME = 'idea-demo1-vdc-scheduled-event-transformer-role-us-east-2';
 /** Python trim of LONG with the region suffix: `<cluster>-<region>-<name[:10]>-<shake256>`. */
-const LONG_ROLE_NAME = 'idea-dev27-us-east-2-virtual-de-c8430fbb95f06866f7a0adac84bdf4b0';
+const LONG_ROLE_NAME = 'idea-demo1-us-east-2-virtual-de-33494def08300a029ccef83ce35e33df';
 /** `<cluster>-<name>` for SHORT. Under 64, so LambdaFunction keeps this form. */
-const SHORT_FUNCTION_NAME = 'idea-dev27-vdc-scheduled-event-transformer-role';
+const SHORT_FUNCTION_NAME = 'idea-demo1-vdc-scheduled-event-transformer-role';
 /** Python trim of LONGER without a region suffix. */
-const LONG_FUNCTION_NAME = 'idea-dev27-virtual-de-c824121e830522961abdbcccc6d28a0b696785c7af';
+const LONG_FUNCTION_NAME = 'idea-demo1-virtual-de-b70b61a72e9f0b2509bf49d1d6cfbeae9c54e5808b';
 
 describe('Role name', () => {
   const roleName = (name: string): string => {
@@ -51,11 +51,11 @@ describe('Role name', () => {
   });
 
   test('switches to the trimmed form past 64 characters, with the region suffix', () => {
-    assert.ok('idea-dev27-virtual-desktop-controller-scheduled-event-transformer-role-us-east-2'.length > 64);
+    assert.ok('idea-demo1-virtual-desktop-controller-scheduled-event-transformer-role-us-east-2'.length > 64);
     const name = roleName(LONG);
     assert.equal(name, LONG_ROLE_NAME);
     assert.equal(name.length, 64);
-    assert.ok(name.startsWith('idea-dev27-us-east-2-'), name);
+    assert.ok(name.startsWith('idea-demo1-us-east-2-'), name);
   });
 });
 
@@ -78,11 +78,11 @@ describe('Lambda function name', () => {
   });
 
   test('switches to the trimmed form past 64 characters, without a region suffix', () => {
-    assert.ok(`idea-dev27-${LONGER}`.length > 64);
+    assert.ok(`idea-demo1-${LONGER}`.length > 64);
     const name = functionName(LONGER);
     assert.equal(name, LONG_FUNCTION_NAME);
     assert.equal(name.length, 64);
-    assert.ok(name.startsWith('idea-dev27-'), name);
+    assert.ok(name.startsWith('idea-demo1-'), name);
   });
 });
 

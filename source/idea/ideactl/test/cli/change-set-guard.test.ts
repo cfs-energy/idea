@@ -262,8 +262,8 @@ describe('evaluateChangeSet', () => {
 
 describe('the built-in allow list', () => {
   it('covers the analytics dashboard target group, whose Name changes on every synth', () => {
-    const allowed = builtInAllowedReplacements('idea-dev27');
-    assert.equal(allowed.get('ideadev27dashboardtargetgroup'), 'AWS::ElasticLoadBalancingV2::TargetGroup');
+    const allowed = builtInAllowedReplacements('idea-demo1');
+    assert.equal(allowed.get('ideademo1dashboardtargetgroup'), 'AWS::ElasticLoadBalancingV2::TargetGroup');
   });
 
   it('is scoped to that resource type, so a different resource with the same id is still refused', () => {
@@ -491,7 +491,7 @@ describe('CdkInvoker.deployThroughChangeSet', () => {
 
   // A replaced instance's old copy is deleted in the update's cleanup, and a termination-protected
   // one fails that delete while the stack still reports UPDATE_COMPLETE: the instance runs on,
-  // unreferenced and billing. dev27's bastion did exactly this on 2026-09-15.
+  // unreferenced and billing. A deployed bastion has done exactly this.
   it('clears termination protection on a protected instance an accepted replacement deletes, before executing', async () => {
     const replaced = change('Modify', 'clusteropenldapinstance', 'AWS::EC2::Instance', 'True');
     const { deps, invoker } = invokerFor(

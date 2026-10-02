@@ -22,7 +22,7 @@ import {
 
 const PKG = resolve(import.meta.dirname, "../..");
 const REHEARSAL = join(PKG, "tools/upgrade-rehearsal/rehearse.ts");
-const FIXTURE = join(PKG, "tools/parity/fixtures/idea-dev27");
+const FIXTURE = join(PKG, "tools/parity/fixtures/idea-demo1");
 const LIVE = join(PKG, "tools/parity/live");
 
 /** The physical prefix rewrite and add-only pass are classified separately. */
@@ -118,7 +118,7 @@ function capturedFixtureAvailable(): boolean {
     join(FIXTURE, "python/values.yml"),
     join(FIXTURE, "synth-reads.json"),
     join(FIXTURE, "cdk.context.json"),
-    join(LIVE, "idea-dev27-cluster.json"),
+    join(LIVE, "idea-demo1-cluster.json"),
   ].every(existsSync);
 }
 

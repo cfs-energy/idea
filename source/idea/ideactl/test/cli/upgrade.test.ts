@@ -1917,7 +1917,7 @@ test("the image row follows the release only when it names the release repositor
   for (const image of [
     `${repository}:26.09.4`,
     `${repository}:26.10.0`,
-    `${repository}:build-6e82332-dev27`,
+    `${repository}:build-6e82332-demo1`,
     `${repository}@sha256:${"0".repeat(64)}`,
     "private.example/idea-control-plane:26.09.3",
   ]) {

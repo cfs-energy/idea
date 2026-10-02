@@ -24,8 +24,8 @@ const AD_LOGICAL_IDS = [
   'awsmanagedactivedirectoryadminusername',
   'awsmanagedactivedirectoryadminpassword',
   'activedirectory',
-  'ideadev27activedirectory',
-  'ideadev27dnsresolverendpoint',
+  'ideademo1activedirectory',
+  'ideademo1dnsresolverendpoint',
   'activedirectorydnsresolverrule',
   'activedirectorydnsresolverruleassociation',
 ];
@@ -53,7 +53,7 @@ describe('ActiveDirectory + DNS resolver', () => {
     const subnets = resources.activedirectory.Properties.VpcSettings.SubnetIds as string[];
     assert.equal(subnets.length, 2);
     assert.deepEqual(
-      (resources.ideadev27dnsresolverendpoint.Properties.IpAddresses as Json[]).map((entry) => entry.SubnetId),
+      (resources.ideademo1dnsresolverendpoint.Properties.IpAddresses as Json[]).map((entry) => entry.SubnetId),
       subnets,
     );
   });
@@ -164,10 +164,10 @@ describe('UserPool', () => {
     // the deployed pool carries the pre-token-generation trigger the identity-provider stack adds,
     // and the invitation the stack reads back from the existing pool. This construct owns the
     // rest, plus the invitation default used when the stack does not pass one.
-    const expected = structuredClone(live.ideadev27userpoolD5C370B5) as Json;
+    const expected = structuredClone(live.ideademo1userpoolDEB06C35) as Json;
     delete expected.Properties.LambdaConfig;
     delete expected.Properties.AdminCreateUserConfig.InviteMessageTemplate;
-    const actual = structuredClone(resources.ideadev27userpoolD5C370B5) as Json;
+    const actual = structuredClone(resources.ideademo1userpoolDEB06C35) as Json;
     const invite = actual.Properties.AdminCreateUserConfig.InviteMessageTemplate as Json;
     delete actual.Properties.AdminCreateUserConfig.InviteMessageTemplate;
     assert.deepEqual(actual, expected);
@@ -181,12 +181,12 @@ describe('UserPool', () => {
         '                Your temporary password is <b>{####}</b>\n' +
         '                ',
     );
-    assert.deepEqual(resources.ideadev27userpooladministratorsgroup, live.ideadev27userpooladministratorsgroup);
-    assert.deepEqual(resources.ideadev27userpoolmanagersgroup, live.ideadev27userpoolmanagersgroup);
+    assert.deepEqual(resources.ideademo1userpooladministratorsgroup, live.ideademo1userpooladministratorsgroup);
+    assert.deepEqual(resources.ideademo1userpoolmanagersgroup, live.ideademo1userpoolmanagersgroup);
   });
 
   test('the custom attributes keep their declaration order and advanced security stays off', () => {
-    const pool = buildUserPool().ideadev27userpoolD5C370B5;
+    const pool = buildUserPool().ideademo1userpoolDEB06C35;
     assert.deepEqual(
       (pool.Properties.Schema as Json[]).map((entry) => entry.Name),
       ['email', 'cluster_name', 'aws_region', 'password_last_set', 'password_max_age'],
@@ -197,13 +197,13 @@ describe('UserPool', () => {
 
   test('the domain prefix comes from domain_url when it is set', () => {
     const resources = buildUserPool();
-    assert.deepEqual(resources.ideadev27userpooldomain237CD715, live.ideadev27userpooldomain237CD715);
+    assert.deepEqual(resources.ideademo1userpooldomainCBD16087, live.ideademo1userpooldomainCBD16087);
   });
 
   test('an empty domain_url regenerates the prefix on every synth', () => {
     const configFile = configWith({ 'identity-provider.cognito.domain_url': null });
-    const first = buildUserPool(configFile).ideadev27userpooldomain237CD715.Properties.Domain as string;
-    const second = buildUserPool(configFile).ideadev27userpooldomain237CD715.Properties.Domain as string;
+    const first = buildUserPool(configFile).ideademo1userpooldomainCBD16087.Properties.Domain as string;
+    const second = buildUserPool(configFile).ideademo1userpooldomainCBD16087.Properties.Domain as string;
     assert.match(first, new RegExp(`^${CLUSTER}-[0-9a-f-]{36}$`));
     assert.notEqual(first, second);
   });

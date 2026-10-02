@@ -278,7 +278,7 @@ describe("other throw sites (R16, R18, R19, R20)", () => {
 
   it("rejects a target group name longer than 32 characters (R18)", () => {
     assert.throws(
-      () => getTargetGroupName("idea-dev27", "cluster-manager", "a-very-long-identifier"),
+      () => getTargetGroupName("idea-demo1", "cluster-manager", "a-very-long-identifier"),
       /Target group name .+ is longer than 32 characters/,
     );
   });

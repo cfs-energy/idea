@@ -899,7 +899,7 @@ describe('ClusterConfigDb write side', () => {
     async () => {
       const oracle = parseOracle();
       const interruption = oracle.interruption;
-      const clusterName = 'idea-dev27';
+      const clusterName = 'idea-demo1';
       const db = await open(clusterName);
 
       await db.syncModulesInDb(interruption.modules);

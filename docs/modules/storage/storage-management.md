@@ -469,7 +469,7 @@ demo:
     file_system_id: fs-09753a84872d3209b
     svm:
       svm_id: svm-064990494a2dbd4c2
-      smb_dns: IDEA-DEV-SVM1.IDEA.LOCAL
+      smb_dns: IDEA-SVM1.IDEA.LOCAL
       nfs_dns: svm-064990494a2dbd4c2.fs-09753a84872d3209b.fsx.us-east-1.amazonaws.com
       management_dns: svm-064990494a2dbd4c2.fs-09753a84872d3209b.fsx.us-east-1.amazonaws.com
       iscsi_dns: iscsi.svm-064990494a2dbd4c2.fs-09753a84872d3209b.fsx.us-east-1.amazonaws.com
@@ -602,7 +602,7 @@ shared-storage:
         iscsi_dns: iscsi.svm-0132d31f6667399a7.fs-08b38f09448c07cb2.fsx.us-east-1.amazonaws.com
         management_dns: svm-0132d31f6667399a7.fs-08b38f09448c07cb2.fsx.us-east-1.amazonaws.com
         nfs_dns: svm-0132d31f6667399a7.fs-08b38f09448c07cb2.fsx.us-east-1.amazonaws.com
-        smb_dns: IDEA-DEV-SVM1.idea.local
+        smb_dns: IDEA-SVM1.idea.local
         svm_id: svm-0132d31f6667399a7
       use_existing_fs: true
       volume:

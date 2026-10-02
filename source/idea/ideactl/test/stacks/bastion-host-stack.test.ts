@@ -3,7 +3,7 @@
  *
  * The template itself is covered by the parity harness, so these tests carry what a template
  * diff cannot see: the stack-level manifest properties, the deletion and update-replace policy
- * of every resource, the dependency edges, and the config branches dev27 does not exercise.
+ * of every resource, the dependency edges, and the config branches demo1 does not exercise.
  *
  * Fixtures under tools/parity/{fixtures,live} are gitignored; every test that needs them skips
  * when they are absent so the suite still runs without them.
@@ -26,21 +26,21 @@ import { withRetainedStateful } from '../support/retain-stateful.ts';
 import { cacheSetup } from '../support/setup-cache.ts';
 
 const PKG = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const FIXTURES = join(PKG, 'tools', 'parity', 'fixtures', 'idea-dev27');
+const FIXTURES = join(PKG, 'tools', 'parity', 'fixtures', 'idea-demo1');
 const CONFIG_FILE = join(FIXTURES, 'cluster-settings.json');
 const SYNTH_READS = join(FIXTURES, 'synth-reads.json');
 const CONTEXT_FILE = join(FIXTURES, 'cdk.context.json');
 const PYTHON_MANIFEST = join(FIXTURES, 'python', '_cdk', 'cdk.out.bastion-host', 'manifest.json');
-const LIVE_TEMPLATE = join(PKG, 'tools', 'parity', 'live', 'idea-dev27-bastion-host.json');
+const LIVE_TEMPLATE = join(PKG, 'tools', 'parity', 'live', 'idea-demo1-bastion-host.json');
 
-const CLUSTER = 'idea-dev27';
+const CLUSTER = 'idea-demo1';
 const MODULE = 'bastion-host';
 const REGION = 'us-east-2';
 const DEPLOYMENT_ID = '97999f4c-daaa-4813-b8ac-bd7abaedc26b';
 
 requireCapture(
   [CONFIG_FILE, SYNTH_READS, CONTEXT_FILE, LIVE_TEMPLATE, PYTHON_MANIFEST],
-  "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
+  "node tools/parity/capture.ts --live --cluster idea-demo1 --region us-east-2",
 );
 
 type Json = Record<string, any>;
@@ -53,7 +53,7 @@ after(() => {
   for (const workdir of workdirs) rmSync(workdir, { recursive: true, force: true });
 });
 
-/** Copies the dev27 settings scan, replacing the typed value of each named key. */
+/** Copies the demo1 settings scan, replacing the typed value of each named key. */
 function configWith(overrides: Record<string, Json>): string {
   const scan = readJson(CONFIG_FILE);
   const remaining = new Set(Object.keys(overrides));
@@ -194,8 +194,8 @@ function dependsOn(template: Json): Json {
 
 const stackArtifact = (manifest: Json): Json => manifest.artifacts[`${CLUSTER}-${MODULE}`] as Json;
 
-describe('bastion-host stack, dev27 fixtures', () => {
-  test('matches the deployed dev27 template resource for resource', async () => {
+describe('bastion-host stack, demo1 fixtures', () => {
+  test('matches the deployed demo1 template resource for resource', async () => {
     const { template } = await synthBastion();
     // The deployed side carries this branch's retain policy on its stateful resources, the one
     // change to these attributes, itemised in tools/parity/intended-drift.ts.
@@ -226,14 +226,14 @@ describe('bastion-host stack, dev27 fixtures', () => {
 
     // Spelled out, so a change to the live capture cannot quietly relax the assertion:
     // the settings custom resource is the only resource with a policy at all.
-    assert.deepEqual(live.ideadev27bastionhostsettings, {
+    assert.deepEqual(live.ideademo1bastionhostsettings, {
       Type: 'Custom::ClusterSettings',
       DeletionPolicy: 'Delete',
       UpdateReplacePolicy: 'Delete',
     });
     const stateful = ['bastionhostdnsrecordDDBD12D3'];
     for (const [id, policies] of Object.entries(live)) {
-      if (id === 'ideadev27bastionhostsettings') continue;
+      if (id === 'ideademo1bastionhostsettings') continue;
       assert.equal((policies as Json).DeletionPolicy, null, `${id} should have no DeletionPolicy`);
       if (stateful.includes(id)) continue;
       assert.equal((policies as Json).UpdateReplacePolicy, null, `${id} should have no UpdateReplacePolicy`);
@@ -322,7 +322,7 @@ describe('bastion-host stack manifest', () => {
   });
 });
 
-describe('bastion-host stack, config branches dev27 does not deploy', () => {
+describe('bastion-host stack, config branches demo1 does not deploy', () => {
   test('a private bastion drops the public ip setting and lands in a private subnet', async () => {
     const config = configWith({ 'bastion-host.public': { BOOL: false } });
     const resources = deployedResources((await synthBastion(config)).template);
@@ -332,7 +332,7 @@ describe('bastion-host stack, config branches dev27 does not deploy', () => {
       (item: Json) => item.key?.S === 'cluster.network.private_subnets',
     );
     assert.equal(nic.SubnetId, (privateSubnets.value.L as Json[])[0].S);
-    assert.deepEqual(Object.keys(resources.ideadev27bastionhostsettings.Properties.settings), [
+    assert.deepEqual(Object.keys(resources.ideademo1bastionhostsettings.Properties.settings), [
       'deployment_id',
       'private_ip',
       'private_dns_name',

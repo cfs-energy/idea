@@ -5,7 +5,7 @@
  * The parity harness compares the template. These tests cover what a template diff cannot see:
  * the cloud-assembly manifest the CDK CLI deploys from (termination protection, stack tags,
  * environment, the bootstrap qualifier), the removal policy on every stateful resource, and the
- * config branches dev27 does not exercise (QUIC, a provided gateway certificate, GovCloud).
+ * config branches demo1 does not exercise (QUIC, a provided gateway certificate, GovCloud).
  *
  * Fixtures under tools/parity/{fixtures,live} are gitignored; every test that needs them skips
  * when they are absent so the suite still runs without them.
@@ -36,14 +36,14 @@ import { settingsLookup } from '../../tools/parity/intended-drift.ts';
 import { cacheSetup } from '../support/setup-cache.ts';
 
 const PKG = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const FIXTURES = join(PKG, 'tools', 'parity', 'fixtures', 'idea-dev27');
+const FIXTURES = join(PKG, 'tools', 'parity', 'fixtures', 'idea-demo1');
 const CONFIG_FILE = join(FIXTURES, 'cluster-settings.json');
 const SYNTH_READS = join(FIXTURES, 'synth-reads.json');
 const CONTEXT_FILE = join(FIXTURES, 'cdk.context.json');
-const LIVE_TEMPLATE = join(PKG, 'tools', 'parity', 'live', 'idea-dev27-vdc.json');
+const LIVE_TEMPLATE = join(PKG, 'tools', 'parity', 'live', 'idea-demo1-vdc.json');
 const PYTHON_MANIFEST = join(FIXTURES, 'python', '_cdk', 'cdk.out.vdc', 'manifest.json');
 
-const CLUSTER = 'idea-dev27';
+const CLUSTER = 'idea-demo1';
 const REGION = 'us-east-2';
 const MODULE_ID = 'vdc';
 const MODULE_NAME = 'virtual-desktop-controller';
@@ -67,12 +67,12 @@ function pythonVdcOracles(root: string): { cluster: string; template: string }[]
 
 requireCapture(
   [CONFIG_FILE, SYNTH_READS, CONTEXT_FILE, LIVE_TEMPLATE, PYTHON_MANIFEST],
-  "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
+  "node tools/parity/capture.ts --live --cluster idea-demo1 --region us-east-2",
 );
 const PYTHON_ORACLE_ROOT = join(PKG, 'tools', 'parity', 'fixtures');
 const runPythonOracleCoverage = optionalFixtures(
   [PYTHON_ORACLE_ROOT],
-  "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
+  "node tools/parity/capture.ts --live --cluster idea-demo1 --region us-east-2",
 );
 
 type Json = Record<string, any>;
@@ -91,7 +91,7 @@ function scratch(prefix: string): string {
   return workdir;
 }
 
-/** Copies the dev27 settings scan, replacing the typed value of each named key (adding it if absent). */
+/** Copies the demo1 settings scan, replacing the typed value of each named key (adding it if absent). */
 function configWith(overrides: Record<string, Json>): string {
   const scan = readJson(CONFIG_FILE);
   const remaining = new Set(Object.keys(overrides));
@@ -198,7 +198,7 @@ const DELETE_ON_REPLACE = [
   'dcvbrokeragentendpoint',
   'dcvbrokerclientendpoint',
   'dcvbrokergatewayendpoint',
-  'ideadev27vdcsettings',
+  'ideademo1vdcsettings',
   'vdcclientid',
   'vdcclientsecret',
   'virtualdesktopcontrollereventsqueue3DC7EB29',
@@ -208,18 +208,18 @@ const DELETE_ON_REPLACE = [
 ];
 
 /** The defused certificate custom resource, the one thing in this stack retained on delete. */
-const RETAINED_CERTIFICATE = 'ideadev27vdcexternalcertgateway';
+const RETAINED_CERTIFICATE = 'ideademo1vdcexternalcertgateway';
 
 /** Stateful, but on the CloudFormation default: no policy is rendered at all. */
 const NO_REMOVAL_POLICY = [
-  'ideadev27userpoolresourceserver7B2B7736',
-  'ideadev27userpooldcvsessionmanagerresourceserver7E658EA5',
-  'ideadev27userpoolvdcclientC7AFCDDD',
+  'ideademo1userpoolresourceserverF2A5DA79',
+  'ideademo1userpooldcvsessionmanagerresourceserver7B3FDFB9',
+  'ideademo1userpoolvdcclient10C0BE1C',
   'vdcadministratorsgroup',
   'vdcusersgroup',
 ];
 
-describe('vdc stack, dev27', () => {
+describe('vdc stack, demo1', () => {
   test('matches the deployed template resource for resource', async () => {
     const { template } = await synthVdc();
     const synthesized = deployedResources(template);
@@ -272,7 +272,7 @@ describe('vdc stack, dev27', () => {
     // and the parts of it worth naming, so a regression reads as itself
     const properties = artifact.properties as Json;
     assert.equal(properties.terminationProtection, true);
-    assert.equal(properties.bootstrapStackVersionSsmParameter, '/cdk-bootstrap/6f3b37a775/version');
+    assert.equal(properties.bootstrapStackVersionSsmParameter, '/cdk-bootstrap/d98389644e/version');
     assert.deepEqual(properties.tags, {
       'idea:ClusterName': CLUSTER,
       'idea:ModuleId': MODULE_ID,
@@ -409,13 +409,13 @@ describe('vdc stack, dev27', () => {
 
   test('the cluster settings hold every key the module reads back, in order', async () => {
     const { template } = await synthVdc();
-    const settings = (template.Resources as Json).ideadev27vdcsettings as Json;
+    const settings = (template.Resources as Json).ideademo1vdcsettings as Json;
     assert.equal(settings.Properties.module_id, MODULE_ID);
     assert.equal(settings.Properties.settings.deployment_id, DEPLOYMENT_ID);
     assert.deepEqual(
       Object.keys(settings.Properties.settings as Json),
       Object.keys(
-        ((readJson(LIVE_TEMPLATE).Resources as Json).ideadev27vdcsettings as Json).Properties
+        ((readJson(LIVE_TEMPLATE).Resources as Json).ideademo1vdcsettings as Json).Properties
           .settings as Json,
       ),
     );
@@ -428,7 +428,7 @@ describe('vdc stack, dev27', () => {
   });
 });
 
-describe('vdc stack, config branches dev27 does not deploy', () => {
+describe('vdc stack, config branches demo1 does not deploy', () => {
   test('QUIC support renames the gateway target group and opens UDP egress', async () => {
     const { template } = await synthVdc({
       configFile: configWith({ 'vdc.dcv_session.quic_support': { BOOL: true } }),
@@ -438,9 +438,9 @@ describe('vdc stack, config branches dev27 does not deploy', () => {
     const targetGroup = resources.dcvconnectiongatewaytargetgroupnlbEAFF76CA as Json;
     assert.equal(targetGroup.Properties.Protocol, 'TCP_UDP');
     // TUN, not TN: the name changes, which replaces the target group
-    assert.equal(targetGroup.Properties.Name, `${CLUSTER}-gateway-TUN-e8356b3f`);
+    assert.equal(targetGroup.Properties.Name, `${CLUSTER}-gateway-TUN-80993306`);
     assert.equal(
-      (resources.ideadev27vdcexternalnlbdcvconnectiongatewaynlblistenerBF44B455 as Json).Properties
+      (resources.ideademo1vdcexternalnlbdcvconnectiongatewaynlblistenerCD504164 as Json).Properties
         .Protocol,
       'TCP_UDP',
     );
@@ -526,7 +526,7 @@ describe('vdc stack, config branches dev27 does not deploy', () => {
       0,
     );
 
-    const settings = (resources.ideadev27vdcsettings as Json).Properties.settings as Json;
+    const settings = (resources.ideademo1vdcsettings as Json).Properties.settings as Json;
     // pyhocon's `ConfigTree.get_string` lowercases a boolean, so the setting is written as text
     assert.equal(settings['dcv_connection_gateway.certificate.provided'], 'true');
     assert.equal(
@@ -554,7 +554,7 @@ describe('vdc stack, config branches dev27 does not deploy', () => {
     const { template } = await synthVdc({
       configFile: configWith({ 'cluster.aws.partition': { S: 'aws-us-gov' } }),
     });
-    const rule = (template.Resources as Json).ideadev27vdcscheduleruleBCD27E01 as Json;
+    const rule = (template.Resources as Json).ideademo1vdcschedulerule176D52B6 as Json;
     assert.equal(rule.Type, 'AWS::Events::Rule');
     assert.equal(rule.Properties.Tags, undefined);
     assert.equal(rule.Properties.Name, `${CLUSTER}-${MODULE_ID}-schedule-rule`);
@@ -562,7 +562,7 @@ describe('vdc stack, config branches dev27 does not deploy', () => {
     // and the commercial partition keeps them
     const commercial = await synthVdc();
     assert.deepEqual(
-      ((commercial.template.Resources as Json).ideadev27vdcscheduleruleBCD27E01 as Json).Properties
+      ((commercial.template.Resources as Json).ideademo1vdcschedulerule176D52B6 as Json).Properties
         .Tags,
       [
         { Key: 'idea:ClusterName', Value: CLUSTER },
@@ -633,7 +633,7 @@ describe('vdc stack, config branches dev27 does not deploy', () => {
   const GATEWAY_TASK_EXECUTION_ROLE = "dcvconnectiongatewaytaskexecutionroleD6FA88E6";
   /** The host gateway group, which the task ENI joins so it holds the position the host holds. */
   const GATEWAY_SECURITY_GROUP = "vdcgatewaysecuritygroup4695D876";
-  const GATEWAY_NLB_LISTENER = "ideadev27vdcexternalnlbdcvconnectiongatewaynlblistenerBF44B455";
+  const GATEWAY_NLB_LISTENER = "ideademo1vdcexternalnlbdcvconnectiongatewaynlblistenerCD504164";
   /** The self-signed certificate resource this stack has always created for the gateway. */
   // The two rows the deploy tool publishes, which the task reads instead of the resource's
   // attributes. Read from the captured settings so the test cannot pass on a value it invented.
@@ -684,9 +684,9 @@ describe('vdc stack, config branches dev27 does not deploy', () => {
       "gatewayltProfile9C2C4E20",
       "gatewaylt3BC4A74E",
       "gatewayasgASG04E7FFF1",
-      "vdccontrollersecuritygroupfromideadev27vdcbastionhostsecuritygroup3ED16E1C22122FAA1D",
-      "vdcbrokersecuritygroupfromideadev27vdcbastionhostsecuritygroup3ED16E1C2286AD88A1",
-      "vdcgatewaysecuritygroupfromideadev27vdcbastionhostsecuritygroup3ED16E1C2241CA63C7",
+      "vdccontrollersecuritygroupfromideademo1vdcbastionhostsecuritygroup60BF6C16224F13EA7E",
+      "vdcbrokersecuritygroupfromideademo1vdcbastionhostsecuritygroup60BF6C16227C759C66",
+      "vdcgatewaysecuritygroupfromideademo1vdcbastionhostsecuritygroup60BF6C1622031C4CF1",
     ]) {
       assert.ok(resources[id] !== undefined, id);
     }
@@ -712,7 +712,7 @@ describe('vdc stack, config branches dev27 does not deploy', () => {
     // The gateway target group is created here, beside the listener that gives it a load balancer,
     // so the listener forwards to it by reference rather than to an arn a setting carried.
     assert.deepEqual(
-      resources.ideadev27vdcexternalnlbdcvconnectiongatewaynlblistenerBF44B455.Properties.DefaultActions,
+      resources.ideademo1vdcexternalnlbdcvconnectiongatewaynlblistenerCD504164.Properties.DefaultActions,
       [{ TargetGroupArn: { Ref: GATEWAY_TARGET_GROUP }, Type: "forward" }],
     );
   });
@@ -722,7 +722,7 @@ describe('vdc stack, config branches dev27 does not deploy', () => {
     // rows, including its own session-validation events and the broker's. On the first migrated
     // cluster every desktop stayed INITIALIZING because the rows still named the host roles.
     const { template } = await synthVdc({ configFile: configWith(ECS_ENABLED) });
-    const settings = (template.Resources as Json).ideadev27vdcsettings.Properties.settings as Json;
+    const settings = (template.Resources as Json).ideademo1vdcsettings.Properties.settings as Json;
     assert.deepEqual(settings.controller_iam_role_id, { "Fn::GetAtt": ["controllertaskroleF8EB1618", "RoleId"] });
     assert.deepEqual(settings.dcv_broker_role_id, { "Fn::GetAtt": ["dcvbrokertaskrole9460019F", "RoleId"] });
     // The DCV hosts stay instances, so their role does not move.
@@ -752,9 +752,9 @@ describe('vdc stack, config branches dev27 does not deploy', () => {
       "gatewayasgASG04E7FFF1",
       "gatewayasgScalingPolicycpuutilizationscalingpolicy5CE7AF58",
       "dcvconnectiongatewaytargetgroupnlbEAFF76CA",
-      "vdccontrollersecuritygroupfromideadev27vdcbastionhostsecuritygroup3ED16E1C22122FAA1D",
-      "vdcbrokersecuritygroupfromideadev27vdcbastionhostsecuritygroup3ED16E1C2286AD88A1",
-      "vdcgatewaysecuritygroupfromideadev27vdcbastionhostsecuritygroup3ED16E1C2241CA63C7",
+      "vdccontrollersecuritygroupfromideademo1vdcbastionhostsecuritygroup60BF6C16224F13EA7E",
+      "vdcbrokersecuritygroupfromideademo1vdcbastionhostsecuritygroup60BF6C16227C759C66",
+      "vdcgatewaysecuritygroupfromideademo1vdcbastionhostsecuritygroup60BF6C1622031C4CF1",
     ]) {
       assert.equal(resources[id], undefined, id);
     }
@@ -765,7 +765,7 @@ describe('vdc stack, config branches dev27 does not deploy', () => {
     assert.equal(forwardedTargetGroupName(resources, "dcvbrokeragentendpoint"), CONTAINER_TARGET_GROUPS.brokerAgent);
     assert.equal(forwardedTargetGroupName(resources, "dcvbrokergatewayendpoint"), CONTAINER_TARGET_GROUPS.brokerGateway);
     assert.deepEqual(
-      resources.ideadev27vdcexternalnlbdcvconnectiongatewaynlblistenerBF44B455.Properties.DefaultActions,
+      resources.ideademo1vdcexternalnlbdcvconnectiongatewaynlblistenerCD504164.Properties.DefaultActions,
       [{ TargetGroupArn: { Ref: GATEWAY_TARGET_GROUP }, Type: "forward" }],
     );
 
@@ -781,7 +781,7 @@ describe('vdc stack, config branches dev27 does not deploy', () => {
 
     // The three identities are the service names spelled out, not references to the services: each
     // service has to start after this resource, because its application reads these rows at boot.
-    const settings = resources.ideadev27vdcsettings.Properties.settings as Json;
+    const settings = resources.ideademo1vdcsettings.Properties.settings as Json;
     for (const [key, component] of [
       ["controller", "controller"],
       ["dcv_broker", "broker"],
@@ -797,17 +797,17 @@ describe('vdc stack, config branches dev27 does not deploy', () => {
 
     for (const id of [
       "vdcdcvhostsecuritygroup96258805",
-      "vdcdcvhostsecuritygroupfromideadev27vdcbastionhostsecuritygroup3ED16E1C2261FFA718",
+      "vdcdcvhostsecuritygroupfromideademo1vdcbastionhostsecuritygroup60BF6C1622E4AAD831",
       "vdchostrole47D92D67",
       "vdchostinstanceprofile",
-      "ideadev27vdcexternalcertgateway",
-      "ideadev27vdcexternalnlbA82E094E",
+      "ideademo1vdcexternalcertgateway",
+      "ideademo1vdcexternalnlbEB10C452",
       "controllerendpointext",
       "controllerendpointint",
       "dcvbrokerclientendpoint",
       "dcvbrokeragentendpoint",
       "dcvbrokergatewayendpoint",
-      "ideadev27vdcsettings",
+      "ideademo1vdcsettings",
     ]) {
       assert.ok(resources[id] !== undefined, id);
     }

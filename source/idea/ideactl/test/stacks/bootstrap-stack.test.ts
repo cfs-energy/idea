@@ -17,9 +17,9 @@ import {
 import { DEFAULT_STACK_REGISTRY, type StackBuildProps } from "../../src/cdk/app.ts";
 import { requireCapture } from "../support/fixtures.ts";
 
-const LIVE = fileURLToPath(new URL("../../tools/parity/live/idea-dev27-bootstrap.json", import.meta.url));
+const LIVE = fileURLToPath(new URL("../../tools/parity/live/idea-demo1-bootstrap.json", import.meta.url));
 const PYTHON_RENDERED = fileURLToPath(
-  new URL("../../tools/parity/fixtures/idea-dev27/python/_cdk/cdk_toolkit_stack.yml", import.meta.url),
+  new URL("../../tools/parity/fixtures/idea-demo1/python/_cdk/cdk_toolkit_stack.yml", import.meta.url),
 );
 const BOOTSTRAP_SOURCE = fileURLToPath(new URL("../../src/cdk/stacks/bootstrap.ts", import.meta.url));
 const BOOTSTRAP_STACK_TEST = fileURLToPath(new URL("./bootstrap-stack.test.ts", import.meta.url));
@@ -31,7 +31,7 @@ const HYGIENE_SCANNED_FILES = [
 
 requireCapture(
   [LIVE, PYTHON_RENDERED],
-  "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
+  "node tools/parity/capture.ts --live --cluster idea-demo1 --region us-east-2",
 );
 
 /** Compare the exact template sections that form the bootstrap parity gate. */
@@ -100,9 +100,9 @@ describe("elbAccountIdForRegion", () => {
 });
 
 describe("renderBootstrapStack", () => {
-  it("matches the dev27 live CloudFormation template (Parameters/Conditions/Resources/Outputs/Description)", () => {
+  it("matches the demo1 live CloudFormation template (Parameters/Conditions/Resources/Outputs/Description)", () => {
     const rendered = renderBootstrapStack({
-      clusterName: "idea-dev27",
+      clusterName: "idea-demo1",
       awsDnsSuffix: "amazonaws.com",
       awsElbAccountId: elbAccountIdForRegion("us-east-2"),
       inputPermissionsBoundary: "",
@@ -110,9 +110,9 @@ describe("renderBootstrapStack", () => {
     assertLiveBootstrapTemplateEqual(rendered, readFileSync(LIVE, "utf-8"));
   });
 
-  it("matches the rendered dev27 template after parsed-YAML comparison", () => {
+  it("matches the rendered demo1 template after parsed-YAML comparison", () => {
     const rendered = renderBootstrapStack({
-      clusterName: "idea-dev27",
+      clusterName: "idea-demo1",
       awsDnsSuffix: "amazonaws.com",
       awsElbAccountId: elbAccountIdForRegion("us-east-2"),
       inputPermissionsBoundary: "",
@@ -144,7 +144,7 @@ describe("renderBootstrapStack", () => {
 
   it("rendered template equals both bootstrap parity fixtures", () => {
     const rendered = renderBootstrapStack({
-      clusterName: "idea-dev27",
+      clusterName: "idea-demo1",
       awsDnsSuffix: "amazonaws.com",
       awsElbAccountId: elbAccountIdForRegion("us-east-2"),
       inputPermissionsBoundary: "",

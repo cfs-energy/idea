@@ -146,7 +146,7 @@ spec:
                 "payload": {
                   "user": {
                     "username": "demouser",
-                    "email": "demouser@cfs.energy",
+                    "email": "demouser@example.com",
                     "uid": 5010,
                     "gid": 5011,
                     "group_name": "demouserusergroup",

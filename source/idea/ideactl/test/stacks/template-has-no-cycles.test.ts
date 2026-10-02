@@ -31,7 +31,7 @@ import {
 
 requireCapture(
   [CONFIG_FILE, SYNTH_READS_FILE, CONTEXT_FILE],
-  "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
+  "node tools/parity/capture.ts --live --cluster idea-demo1 --region us-east-2",
 );
 
 after(cleanupWorkdirs);

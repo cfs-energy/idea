@@ -31,14 +31,14 @@ import { withRetirements } from '../support/retirements.ts';
 import { NODE_NAG_SUPPRESSION, withNodeHandlers } from '../support/node-handlers.ts';
 
 const PKG = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const FIXTURES = join(PKG, 'tools', 'parity', 'fixtures', 'idea-dev27');
+const FIXTURES = join(PKG, 'tools', 'parity', 'fixtures', 'idea-demo1');
 const CONFIG_FILE = join(FIXTURES, 'cluster-settings.json');
 const SYNTH_READS = join(FIXTURES, 'synth-reads.json');
 const CONTEXT_FILE = join(FIXTURES, 'cdk.context.json');
 const PYTHON_MANIFEST = join(FIXTURES, 'python', '_cdk', 'cdk.out.identity-provider', 'manifest.json');
-const LIVE_TEMPLATE = join(PKG, 'tools', 'parity', 'live', 'idea-dev27-identity-provider.json');
+const LIVE_TEMPLATE = join(PKG, 'tools', 'parity', 'live', 'idea-demo1-identity-provider.json');
 
-const CLUSTER = 'idea-dev27';
+const CLUSTER = 'idea-demo1';
 const MODULE = 'identity-provider';
 const REGION = 'us-east-2';
 const DEPLOYMENT_ID = '97999f4c-daaa-4813-b8ac-bd7abaedc26b';
@@ -46,7 +46,7 @@ const STACK_NAME = `${CLUSTER}-${MODULE}`;
 
 requireCapture(
   [CONFIG_FILE, SYNTH_READS, CONTEXT_FILE, LIVE_TEMPLATE, PYTHON_MANIFEST],
-  "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
+  "node tools/parity/capture.ts --live --cluster idea-demo1 --region us-east-2",
 );
 
 type Json = Record<string, any>;
@@ -64,7 +64,7 @@ after(() => {
   for (const dir of workdirs) rmSync(dir, { recursive: true, force: true });
 });
 
-/** Copies the dev27 settings scan, setting the `S` value of each named key (adding it if absent). */
+/** Copies the demo1 settings scan, setting the `S` value of each named key (adding it if absent). */
 function configWith(overrides: Record<string, string>, drop: string[] = []): string {
   const scan = readJson(CONFIG_FILE);
   const dropped = new Set(drop);
@@ -83,7 +83,7 @@ function configWith(overrides: Record<string, string>, drop: string[] = []): str
   return file;
 }
 
-/** Copies the dev27 synth reads, replacing the invitation template of the dev27 user pool. */
+/** Copies the demo1 synth reads, replacing the invitation template of the demo1 user pool. */
 function synthReadsWith(invitation: { EmailSubject: string; EmailMessage: string } | null): string {
   const reads = readJson(SYNTH_READS);
   const key = userPoolKey(userPoolIdFromConfig());
@@ -227,7 +227,7 @@ function deletionPolicies(template: Json): Record<string, [unknown, unknown]> {
 }
 
 describe('identity-provider stack, cognito-idp provider', () => {
-  test('matches the deployed dev27 template, asset hashes aside', async () => {
+  test('matches the deployed demo1 template, asset hashes aside', async () => {
     const { template } = await synthIdentityProvider();
     // The deployed side carries this branch's retain policy on its stateful resources, the one
     // change to these attributes, itemised in tools/parity/intended-drift.ts.
@@ -248,7 +248,7 @@ describe('identity-provider stack, cognito-idp provider', () => {
     assert.deepEqual(nagSuppressions(template), live);
 
     // Spelled out, so a change to both sides at once still fails.
-    assert.deepEqual(live.ideadev27userpoolD5C370B5, [
+    assert.deepEqual(live.ideademo1userpoolDEB06C35, [
       ['AwsSolutions-COG2', 'Suppress MFA warning. MFA provided by customer IdP/SSO methods.'],
       ['AwsSolutions-COG3', 'suppress advanced security rule 1/to save cost, 2/Not supported in GovCloud'],
     ]);
@@ -260,7 +260,7 @@ describe('identity-provider stack, cognito-idp provider', () => {
     // administrator suppresses it: idea-admin.sh defaults IDEA_ADMIN_ENABLE_CDK_NAG_SCAN to
     // false, so no deploy has ever run the scan. A suppression here would add a rule to a
     // Metadata block the deployed pool does not have.
-    for (const [id, reason] of live.ideadev27userpoolD5C370B5) {
+    for (const [id, reason] of live.ideademo1userpoolDEB06C35) {
       assert.notEqual(id, 'AwsSolutions-COG8', reason);
     }
   });
@@ -273,12 +273,12 @@ describe('identity-provider stack, cognito-idp provider', () => {
     // Spelled out, so a change to both sides at once still fails. The pool still deletes with the
     // stack, and is never lost to a replacement: it holds every account and every enrolment.
     const policies = deletionPolicies(template);
-    assert.deepEqual(policies.ideadev27userpoolD5C370B5, ['Delete', 'Retain']);
-    assert.deepEqual(policies.ideadev27identityprovidersettings, ['Delete', 'Delete']);
+    assert.deepEqual(policies.ideademo1userpoolDEB06C35, ['Delete', 'Retain']);
+    assert.deepEqual(policies.ideademo1identityprovidersettings, ['Delete', 'Delete']);
     for (const id of [
-      'ideadev27userpooldomain237CD715',
-      'ideadev27userpooladministratorsgroup',
-      'ideadev27userpoolmanagersgroup',
+      'ideademo1userpooldomainCBD16087',
+      'ideademo1userpooladministratorsgroup',
+      'ideademo1userpoolmanagersgroup',
     ]) {
       assert.deepEqual(policies[id], [null, 'Retain'], id);
     }
@@ -289,9 +289,9 @@ describe('identity-provider stack, cognito-idp provider', () => {
     const configFile = configWith({ 'identity-provider.cognito.removal_policy': 'RETAIN' });
     const { template } = await synthIdentityProvider({ configFile });
     const policies = deletionPolicies(template);
-    assert.deepEqual(policies.ideadev27userpoolD5C370B5, ['Retain', 'Retain']);
+    assert.deepEqual(policies.ideademo1userpoolDEB06C35, ['Retain', 'Retain']);
     // Only the pool follows the config key: the settings resource keeps the CDK default.
-    assert.deepEqual(policies.ideadev27identityprovidersettings, ['Delete', 'Delete']);
+    assert.deepEqual(policies.ideademo1identityprovidersettings, ['Delete', 'Delete']);
   });
 
   test('the stack manifest matches the one Python deployed from', async () => {
@@ -332,7 +332,7 @@ describe('identity-provider stack, cognito-idp provider', () => {
     const first = await synthIdentityProvider();
     const second = await synthIdentityProvider();
     const domainOf = (t: Json): string =>
-      deployedResources(t).ideadev27userpooldomain237CD715.Properties.Domain as string;
+      deployedResources(t).ideademo1userpooldomainCBD16087.Properties.Domain as string;
 
     assert.equal(domainOf(first.template), prefix);
     assert.equal(domainOf(second.template), prefix);
@@ -347,15 +347,15 @@ describe('identity-provider stack, cognito-idp provider', () => {
       EmailMessage: '<p>An operator edited this in the console: {username} {####}</p>',
     };
     const { template } = await synthIdentityProvider({ synthReadsFile: synthReadsWith(invitation) });
-    const pool = deployedResources(template).ideadev27userpoolD5C370B5;
+    const pool = deployedResources(template).ideademo1userpoolDEB06C35;
     assert.deepEqual(pool.Properties.AdminCreateUserConfig.InviteMessageTemplate, invitation);
 
-    // And the dev27 fixture's own values reach the template unchanged.
-    const fromLive = readJson(LIVE_TEMPLATE).Resources.ideadev27userpoolD5C370B5.Properties
+    // And the demo1 fixture's own values reach the template unchanged.
+    const fromLive = readJson(LIVE_TEMPLATE).Resources.ideademo1userpoolDEB06C35.Properties
       .AdminCreateUserConfig.InviteMessageTemplate as Json;
     const { template: unchanged } = await synthIdentityProvider();
     assert.deepEqual(
-      deployedResources(unchanged).ideadev27userpoolD5C370B5.Properties.AdminCreateUserConfig
+      deployedResources(unchanged).ideademo1userpoolDEB06C35.Properties.AdminCreateUserConfig
         .InviteMessageTemplate,
       fromLive,
     );
@@ -363,7 +363,7 @@ describe('identity-provider stack, cognito-idp provider', () => {
 
   test('the cluster settings carry the four keys downstream modules read', async () => {
     const { template } = await synthIdentityProvider();
-    const settings = deployedResources(template).ideadev27identityprovidersettings;
+    const settings = deployedResources(template).ideademo1identityprovidersettings;
     assert.equal(settings.Type, 'Custom::ClusterSettings');
     assert.deepEqual(Object.keys(settings.Properties.settings), [
       'deployment_id',
@@ -372,16 +372,16 @@ describe('identity-provider stack, cognito-idp provider', () => {
       'cognito.domain_url',
     ]);
     assert.deepEqual(settings.Properties.settings['cognito.user_pool_id'], {
-      Ref: 'ideadev27userpoolD5C370B5',
+      Ref: 'ideademo1userpoolDEB06C35',
     });
     assert.deepEqual(settings.Properties.settings['cognito.domain_url'], {
       'Fn::Join': [
         '',
-        ['https://', { Ref: 'ideadev27userpooldomain237CD715' }, '.auth.us-east-2.amazoncognito.com'],
+        ['https://', { Ref: 'ideademo1userpooldomainCBD16087' }, '.auth.us-east-2.amazoncognito.com'],
       ],
     });
     assert.deepEqual(settings.Properties.settings['cognito.provider_url'], {
-      'Fn::GetAtt': ['ideadev27userpoolD5C370B5', 'ProviderURL'],
+      'Fn::GetAtt': ['ideademo1userpoolDEB06C35', 'ProviderURL'],
     });
   });
 });
@@ -409,7 +409,7 @@ describe('identity-provider stack, synth-time read-back', () => {
     process.env.IDEA_SYNTH_READS_FILE = decoy;
     try {
       const { template } = await synthIdentityProvider({ synthReadsFile: wantedFile });
-      const pool = deployedResources(template).ideadev27userpoolD5C370B5;
+      const pool = deployedResources(template).ideademo1userpoolDEB06C35;
       assert.deepEqual(pool.Properties.AdminCreateUserConfig.InviteMessageTemplate, wanted);
     } finally {
       process.argv = previousArgv;
@@ -431,10 +431,10 @@ describe('identity-provider stack, other branches', () => {
     const albDns = configValue('cluster.load_balancers.external_alb.load_balancer_dns_name') as string;
     const endpoint = `https://${albDns}`;
     const domainOf = (t: Json): string =>
-      deployedResources(t).ideadev27userpooldomain237CD715.Properties.Domain as string;
+      deployedResources(t).ideademo1userpooldomainCBD16087.Properties.Domain as string;
 
     assert.deepEqual(
-      resources.ideadev27userpoolD5C370B5.Properties.AdminCreateUserConfig.InviteMessageTemplate,
+      resources.ideademo1userpoolDEB06C35.Properties.AdminCreateUserConfig.InviteMessageTemplate,
       {
         EmailSubject: `Invitation to Join IDEA Cluster: ${CLUSTER}`,
         EmailMessage: [
@@ -451,7 +451,7 @@ describe('identity-provider stack, other branches', () => {
     );
     assert.match(
       domainOf(first.template),
-      /^idea-dev27-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+      /^idea-demo1-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
     );
     assert.notEqual(domainOf(first.template), domainOf(second.template));
   });
@@ -469,17 +469,17 @@ describe('identity-provider stack, other branches', () => {
     const first = await synthIdentityProvider({ configFile });
     const second = await synthIdentityProvider({ configFile });
     const domainOf = (t: Json): string =>
-      deployedResources(t).ideadev27userpooldomain237CD715.Properties.Domain as string;
+      deployedResources(t).ideademo1userpooldomainCBD16087.Properties.Domain as string;
 
     assert.match(
       domainOf(first.template),
-      /^idea-dev27-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+      /^idea-demo1-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
     );
     assert.notEqual(domainOf(first.template), domainOf(second.template));
     assert.notEqual(domainOf(first.template), stored);
     // The pool itself is untouched: the invitation email still comes from the replayed read.
     assert.equal(
-      deployedResources(first.template).ideadev27userpoolD5C370B5.Properties.AdminCreateUserConfig
+      deployedResources(first.template).ideademo1userpoolDEB06C35.Properties.AdminCreateUserConfig
         .InviteMessageTemplate.EmailSubject,
       readJson(SYNTH_READS)[userPoolKey(userPoolIdFromConfig())].AdminCreateUserConfig
         .InviteMessageTemplate.EmailSubject,
@@ -488,13 +488,13 @@ describe('identity-provider stack, other branches', () => {
 
   test('a FIPS region writes the fips domain url into the cluster settings', async () => {
     const { template } = await synthIdentityProvider({ awsRegion: 'us-gov-west-1' });
-    const settings = deployedResources(template).ideadev27identityprovidersettings;
+    const settings = deployedResources(template).ideademo1identityprovidersettings;
     assert.deepEqual(settings.Properties.settings['cognito.domain_url'], {
       'Fn::Join': [
         '',
         [
           'https://',
-          { Ref: 'ideadev27userpooldomain237CD715' },
+          { Ref: 'ideademo1userpooldomainCBD16087' },
           '.auth-fips.us-gov-west-1.amazoncognito.com',
         ],
       ],

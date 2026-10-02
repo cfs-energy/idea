@@ -31,14 +31,14 @@ import { withRetainedStateful } from '../support/retain-stateful.ts';
 import { cacheSetup } from '../support/setup-cache.ts';
 
 const PKG = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const FIXTURES = join(PKG, 'tools', 'parity', 'fixtures', 'idea-dev27');
+const FIXTURES = join(PKG, 'tools', 'parity', 'fixtures', 'idea-demo1');
 const CONFIG_FILE = join(FIXTURES, 'cluster-settings.json');
 const SYNTH_READS = join(FIXTURES, 'synth-reads.json');
 const CONTEXT_FILE = join(FIXTURES, 'cdk.context.json');
 const PYTHON_MANIFEST = join(FIXTURES, 'python', '_cdk', 'cdk.out.analytics', 'manifest.json');
-const LIVE_TEMPLATE = join(PKG, 'tools', 'parity', 'live', 'idea-dev27-analytics.json');
+const LIVE_TEMPLATE = join(PKG, 'tools', 'parity', 'live', 'idea-demo1-analytics.json');
 
-const CLUSTER = 'idea-dev27';
+const CLUSTER = 'idea-demo1';
 const REGION = 'us-east-2';
 const STACK = `${CLUSTER}-analytics`;
 const DEPLOYMENT_ID = '97999f4c-daaa-4813-b8ac-bd7abaedc26b';
@@ -46,7 +46,7 @@ const DNS_SUFFIX = 'amazonaws.com';
 
 requireCapture(
   [CONFIG_FILE, SYNTH_READS, CONTEXT_FILE, LIVE_TEMPLATE, PYTHON_MANIFEST],
-  "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
+  "node tools/parity/capture.ts --live --cluster idea-demo1 --region us-east-2",
 );
 
 type Json = Record<string, any>;
@@ -70,7 +70,7 @@ function fixtureAccount(): string {
   return (readJson(SYNTH_READS)[CALLER_IDENTITY_KEY] as Json).account as string;
 }
 
-/** Copies the dev27 settings scan, replacing the value of each named key (adding it if absent). */
+/** Copies the demo1 settings scan, replacing the value of each named key (adding it if absent). */
 function configWith(overrides: Record<string, Json>): string {
   const scan = readJson(CONFIG_FILE);
   const remaining = new Set(Object.keys(overrides));
@@ -206,7 +206,7 @@ const resourcesOf = (template: Json): Json =>
 
 const pathOf = (resource: Json): string => resource.Metadata?.['aws:cdk:path'] as string;
 
-describe('analytics stack, dev27 shape', () => {
+describe('analytics stack, demo1 shape', () => {
   test('every deployed resource carries the deletion policies the live stack has', async () => {
     const synth = resourcesOf((await synthAnalytics()).template);
     // The deployed side carries this branch's retain policy, which is the one change to these
@@ -224,7 +224,7 @@ describe('analytics stack, dev27 shape', () => {
   });
 
   test('the stateful resources delete on teardown from config, and never on update-replace', async () => {
-    // DeletionPolicy is `removal_policy` driven: dev27 configures DESTROY, and a cluster
+    // DeletionPolicy is `removal_policy` driven: demo1 configures DESTROY, and a cluster
     // configured RETAIN must get Retain on the same resources. UpdateReplacePolicy is not
     // configurable and is Retain either way, because an update is never the place to lose data.
     const stateful = [
@@ -234,10 +234,10 @@ describe('analytics stack, dev27 shape', () => {
       'analyticsapploggroup7CE00917',
       'analyticsslowindexloggroup2F17F009',
     ];
-    const dev27 = resourcesOf((await synthAnalytics()).template);
+    const demo1 = resourcesOf((await synthAnalytics()).template);
     for (const id of stateful) {
       assert.deepEqual(
-        { id, deletion: dev27[id].DeletionPolicy, update: dev27[id].UpdateReplacePolicy },
+        { id, deletion: demo1[id].DeletionPolicy, update: demo1[id].UpdateReplacePolicy },
         { id, deletion: 'Delete', update: 'Retain' },
       );
     }
@@ -269,7 +269,7 @@ describe('analytics stack, dev27 shape', () => {
       assert.equal(resources[id].DeletionPolicy, undefined, id);
       assert.equal(resources[id].UpdateReplacePolicy, undefined, id);
     }
-    for (const id of ['opensearchprivateips', 'dashboardendpoint', 'ideadev27analyticssettings']) {
+    for (const id of ['opensearchprivateips', 'dashboardendpoint', 'ideademo1analyticssettings']) {
       assert.equal(resources[id].DeletionPolicy, 'Delete', id);
       assert.equal(resources[id].UpdateReplacePolicy, 'Delete', id);
     }
@@ -367,14 +367,14 @@ describe('analytics stack, L2-generated IAM documents', () => {
 
 describe('analytics stack, values regenerated every synth', () => {
   test('the dashboard target group name gets a fresh uuid tail on each synth', async () => {
-    const first = resourcesOf((await synthAnalytics({ fresh: true })).template).ideadev27dashboardtargetgroup.Properties.Name;
-    const second = resourcesOf((await synthAnalytics({ fresh: true })).template).ideadev27dashboardtargetgroup.Properties.Name;
+    const first = resourcesOf((await synthAnalytics({ fresh: true })).template).ideademo1dashboardtargetgroup.Properties.Name;
+    const second = resourcesOf((await synthAnalytics({ fresh: true })).template).ideademo1dashboardtargetgroup.Properties.Name;
     // Reproduced, not fixed: a stable name would leave the deployed target group behind on the
     // first upgrade, and the endpoints lambda expects to be re-pointed.
     assert.notEqual(first, second);
     for (const name of [first, second]) {
       assert.equal(name.length, 32);
-      assert.match(name, /^idea-dev27-dashboard-[0-9a-f]{8}-[0-9a-f]{2}$/);
+      assert.match(name, /^idea-demo1-dashboard-[0-9a-f]{8}-[0-9a-f]{2}$/);
     }
     assert.equal(first.slice(0, 29), second.slice(0, 29));
   });
@@ -389,7 +389,7 @@ describe('analytics stack, values regenerated every synth', () => {
 });
 
 describe('analytics stack, service-linked role branch', () => {
-  test('dev27 has one, so no ServiceLinkedRole is created', async () => {
+  test('demo1 has one, so no ServiceLinkedRole is created', async () => {
     const resources = resourcesOf((await synthAnalytics()).template);
     assert.equal(
       Object.values(resources).filter((r) => (r as Json).Type === 'AWS::IAM::ServiceLinkedRole').length,
@@ -418,7 +418,7 @@ describe('analytics stack, service-linked role branch', () => {
       `/aws-service-role/opensearchservice.${DNS_SUFFIX}`,
     ]);
     const reads = readJson(SYNTH_READS);
-    // dev27 answers the first prefix with one role and the second with none.
+    // demo1 answers the first prefix with one role and the second with none.
     assert.equal((reads[listRolesKey(`/aws-service-role/es.${DNS_SUFFIX}`)] as Json[]).length, 1);
     assert.equal((reads[listRolesKey(`/aws-service-role/opensearchservice.${DNS_SUFFIX}`)] as Json[]).length, 0);
   });
@@ -444,7 +444,7 @@ describe('analytics stack, GovCloud branches', () => {
     // The L2 event source is skipped, so the grant that writes the role's DefaultPolicy never runs.
     assert.equal(resources.analyticssinklambdaroleDefaultPolicy74409E1C, undefined);
     assert.equal(
-      resources.analyticssinklambdaKinesisEventSourceideadev27analyticsanalyticskinesisstreamFC71A7F8D93921B0,
+      resources.analyticssinklambdaKinesisEventSourceideademo1analyticsanalyticskinesisstreamE4FA21FE86898763,
       undefined,
     );
   });
@@ -493,8 +493,8 @@ describe('analytics stack, use-existing branch', () => {
     }
 
     // The node count comes from the live domain, not from analytics.opensearch.data_nodes.
-    assert.equal(resources.ideadev27dashboardtargetgroup.Properties.Targets.length, 2);
-    assert.equal(resources.opensearchprivateips.Properties.DomainName, 'idea-dev27-analytics');
+    assert.equal(resources.ideademo1dashboardtargetgroup.Properties.Targets.length, 2);
+    assert.equal(resources.opensearchprivateips.Properties.DomainName, 'idea-demo1-analytics');
     // The security group and the kinesis half of the stack are unchanged.
     assert.ok(resources.analyticsopensearchsecuritygroupC59C8839 !== undefined);
     assert.ok(resources.analyticskinesisstreamEF4F5950 !== undefined);

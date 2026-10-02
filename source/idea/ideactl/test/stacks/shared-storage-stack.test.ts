@@ -5,7 +5,7 @@
  * template diff cannot see: the CloudFormation assembly manifest (stack tags, termination
  * protection), the deletion/update-replace policy of every resource (the EFS file systems carry a
  * `DeletionPolicy` and no `UpdateReplacePolicy`, which is what keeps an in-place upgrade from
- * replacing them), and the storage branches dev27 does not exercise: an existing file system,
+ * replacing them), and the storage branches demo1 does not exercise: an existing file system,
  * FSx for Lustre, and a provider that provisions nothing.
  *
  * Fixtures under tools/parity/{fixtures,live} are gitignored, and this whole file requires them.
@@ -24,21 +24,21 @@ import { requireCapture } from '../support/fixtures.ts';
 import { withRetainedStateful } from '../support/retain-stateful.ts';
 
 const PKG = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const FIXTURES = join(PKG, 'tools', 'parity', 'fixtures', 'idea-dev27');
+const FIXTURES = join(PKG, 'tools', 'parity', 'fixtures', 'idea-demo1');
 const CONFIG_FILE = join(FIXTURES, 'cluster-settings.json');
 const SYNTH_READS = join(FIXTURES, 'synth-reads.json');
 const CONTEXT_FILE = join(FIXTURES, 'cdk.context.json');
-const LIVE_TEMPLATE = join(PKG, 'tools', 'parity', 'live', 'idea-dev27-shared-storage.json');
+const LIVE_TEMPLATE = join(PKG, 'tools', 'parity', 'live', 'idea-demo1-shared-storage.json');
 const PYTHON_MANIFEST = join(FIXTURES, 'python', '_cdk', 'cdk.out.shared-storage', 'manifest.json');
 
-const CLUSTER = 'idea-dev27';
+const CLUSTER = 'idea-demo1';
 const MODULE_ID = 'shared-storage';
 const REGION = 'us-east-2';
 const DEPLOYMENT_ID = '97999f4c-daaa-4813-b8ac-bd7abaedc26b';
 
 requireCapture(
   [CONFIG_FILE, SYNTH_READS, CONTEXT_FILE, LIVE_TEMPLATE, PYTHON_MANIFEST],
-  "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
+  "node tools/parity/capture.ts --live --cluster idea-demo1 --region us-east-2",
 );
 
 type Json = Record<string, any>;
@@ -52,7 +52,7 @@ after(() => {
 });
 
 /**
- * Copies the dev27 settings scan, replacing (or adding) each named key with the given typed
+ * Copies the demo1 settings scan, replacing (or adding) each named key with the given typed
  * DynamoDB attribute value, and deleting the ones mapped to `null`.
  */
 function configWith(overrides: Record<string, Json | null>): string {
@@ -192,7 +192,7 @@ function settingsOf(template: Json): Json {
 
 const typesOf = (template: Json): string[] => deployed(template).map(([, r]) => r.Type as string).sort();
 
-// --- the branch dev27 deployed: two provisioned EFS file systems -------------------------------
+// --- the branch demo1 deployed: two provisioned EFS file systems -------------------------------
 
 describe('shared-storage stack, two EFS file systems', () => {
   test('every resource carries exactly the live deletion policies', async () => {
@@ -230,7 +230,7 @@ describe('shared-storage stack, two EFS file systems', () => {
 
   test('the cluster settings resource is Delete/Delete', async () => {
     const { template } = await synth();
-    const resource = (template.Resources as Json).ideadev27sharedstoragesettings as Json;
+    const resource = (template.Resources as Json).ideademo1sharedstoragesettings as Json;
     assert.deepEqual([resource.DeletionPolicy, resource.UpdateReplacePolicy], ['Delete', 'Delete']);
   });
 
@@ -347,7 +347,7 @@ describe('shared-storage stack manifest', () => {
   });
 });
 
-// --- branches the dev27 capture does not cover -------------------------------------------------
+// --- branches the demo1 capture does not cover -------------------------------------------------
 
 describe('shared-storage stack, other providers', () => {
   test('an existing file system writes only its dns and provisions nothing', async () => {

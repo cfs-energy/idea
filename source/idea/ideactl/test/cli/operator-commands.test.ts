@@ -15,10 +15,10 @@ import { IntegrationTestFailed, parseIntegrationParams, runIntegrationTests } fr
 import { addPrefixListEntry, awsServiceAvailability, backupUpdateGlobalSettings, prefixListEntries, removePrefixListEntry, type UtilsApi, vpcEndpointServiceInfo } from "../../src/cli/commands/utils.ts";
 import { requireCapture } from "../support/fixtures.ts";
 
-const DEV27_VALUES = join(process.cwd(), "tools", "parity", "fixtures", "idea-dev27", "values.yml");
+const DEMO1_VALUES = join(process.cwd(), "tools", "parity", "fixtures", "idea-demo1", "values.yml");
 requireCapture(
-  [DEV27_VALUES],
-  "node tools/parity/capture.ts --from-raw tools/parity/fixtures/idea-dev27/raw --out tools/parity/fixtures/idea-dev27",
+  [DEMO1_VALUES],
+  "node tools/parity/capture.ts --from-raw tools/parity/fixtures/idea-demo1/raw --out tools/parity/fixtures/idea-demo1",
 );
 
 function config(entries: Record<string, unknown>, modules: ModuleInfo[] = []): ClusterConfig {
@@ -257,7 +257,7 @@ test("support package includes selected local and configuration diagnostics", as
 });
 
 test("global settings backup copies first, regenerates, deletes, then synchronizes", async () => {
-  const fixture = DEV27_VALUES;
+  const fixture = DEMO1_VALUES;
   const root = mkdtempSync(join(tmpdir(), "ideactl-backup-"));
   const original = process.env.IDEA_USER_HOME;
   process.env.IDEA_USER_HOME = root;

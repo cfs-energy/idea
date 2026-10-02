@@ -27,14 +27,14 @@ import { cacheSetup } from '../support/setup-cache.ts';
 import { ECS_SHARED_CAPACITY_VALUES, TARGET_GROUP_HASH } from '../support/ecs-harness.ts';
 
 const PKG = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const FIXTURES = join(PKG, 'tools', 'parity', 'fixtures', 'idea-dev27');
+const FIXTURES = join(PKG, 'tools', 'parity', 'fixtures', 'idea-demo1');
 const CONFIG_FILE = join(FIXTURES, 'cluster-settings.json');
 const SYNTH_READS = join(FIXTURES, 'synth-reads.json');
 const CONTEXT_FILE = join(FIXTURES, 'cdk.context.json');
 const PYTHON_MANIFEST = join(FIXTURES, 'python', '_cdk', 'cdk.out.cluster-manager', 'manifest.json');
-const LIVE_TEMPLATE = join(PKG, 'tools', 'parity', 'live', 'idea-dev27-cluster-manager.json');
+const LIVE_TEMPLATE = join(PKG, 'tools', 'parity', 'live', 'idea-demo1-cluster-manager.json');
 
-const CLUSTER = 'idea-dev27';
+const CLUSTER = 'idea-demo1';
 const REGION = 'us-east-2';
 const MODULE = 'cluster-manager';
 const STACK = `${CLUSTER}-${MODULE}`;
@@ -42,7 +42,7 @@ const DEPLOYMENT_ID = '97999f4c-daaa-4813-b8ac-bd7abaedc26b';
 
 requireCapture(
   [CONFIG_FILE, SYNTH_READS, CONTEXT_FILE, LIVE_TEMPLATE, PYTHON_MANIFEST],
-  "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
+  "node tools/parity/capture.ts --live --cluster idea-demo1 --region us-east-2",
 );
 
 type Json = Record<string, any>;
@@ -64,7 +64,7 @@ after(() => {
   for (const workdir of workdirs) rmSync(workdir, { recursive: true, force: true });
 });
 
-/** Copies the dev27 settings scan, setting each named value (adding it if absent). */
+/** Copies the demo1 settings scan, setting each named value (adding it if absent). */
 function configWith(overrides: Record<string, string | number | boolean | string[]>): string {
   const attribute = (value: string | number | boolean | string[]): Json => {
     if (Array.isArray(value)) return { L: value.map((entry) => ({ S: entry })) };
@@ -197,8 +197,8 @@ describe('cluster-manager stack manifest', () => {
     const { manifest, assets, template } = await synthClusterManager();
     const artifact = manifest.artifacts[STACK];
 
-    // shake_256('idea-dev27').hexdigest(5): the qualifier every bootstrap role name embeds
-    const qualifier = '6f3b37a775';
+    // shake_256('idea-demo1').hexdigest(5): the qualifier every bootstrap role name embeds
+    const qualifier = 'd98389644e';
     assert.equal(artifact.properties.bootstrapStackVersionSsmParameter, `/cdk-bootstrap/${qualifier}/version`);
     assert.equal(artifact.properties.requiresBootstrapStackVersion, 6);
     assert.match(artifact.properties.assumeRoleArn, new RegExp(`role/cdk-${qualifier}-deploy-role-`));
@@ -279,7 +279,7 @@ describe('cluster-manager removal policies', () => {
       'webportalendpoint',
       'externalendpoint',
       'internalendpoint',
-      'ideadev27clustermanagersettings',
+      'ideademo1clustermanagersettings',
     ]) {
       assert.deepEqual(policies[id], ['Delete', 'Delete'], id);
     }
@@ -323,8 +323,8 @@ describe('cluster-manager removal policies', () => {
     // never holds the name the replacement wants.
     for (const id of [
       'clustermanagerjwtsigningsecret',
-      'ideadev27userpoolresourceserver7B2B7736',
-      'ideadev27userpoolclustermanagerclientD645207F',
+      'ideademo1userpoolresourceserverF2A5DA79',
+      'ideademo1userpoolclustermanagerclientC69CFBDE',
       'clustermanageradministratorsgroup',
       'clustermanagerusersgroup',
       'clustertaskssqsqueuePolicy751D36E7',
@@ -385,7 +385,7 @@ describe('cluster-manager branches', () => {
     ]) {
       assert.equal(template.Resources[id], undefined, id);
     }
-    const settings = template.Resources.ideadev27clustermanagersettings.Properties.settings;
+    const settings = template.Resources.ideademo1clustermanagersettings.Properties.settings;
     assert.equal(settings['bedrock.invocation_log_group_name'], undefined);
     assert.equal(settings['bedrock.invocation_log_role_arn'], undefined);
     assert.ok(settings['jwt_signing_secret_arn'] !== undefined);
@@ -438,7 +438,7 @@ describe('cluster-manager branches', () => {
       "clustermanagerlt5189880B",
       "clustermanagerasgASGBD35240A",
       "clustermanagerasgScalingPolicycpuutilizationscalingpolicyF99F846C",
-      "clustermanagersecuritygroupfromideadev27clustermanagerbastionhostsecuritygroup4AA69B082298FB155E",
+      "clustermanagersecuritygroupfromideademo1clustermanagerbastionhostsecuritygroupBA0DB40122B3EADF79",
     ]) {
       assert.ok(resources[id] !== undefined, id);
     }
@@ -461,7 +461,7 @@ describe('cluster-manager branches', () => {
       "webportaltargetgroup",
       "clustermanagerexternaltargetgroup",
       "clustermanagerinternaltargetgroup",
-      "clustermanagersecuritygroupfromideadev27clustermanagerbastionhostsecuritygroup4AA69B082298FB155E",
+      "clustermanagersecuritygroupfromideademo1clustermanagerbastionhostsecuritygroupBA0DB40122B3EADF79",
     ]) {
       assert.equal(resources[id], undefined, id);
     }
@@ -478,7 +478,7 @@ describe('cluster-manager branches', () => {
 
     // The published identity is the service name spelled out, not a reference to the service: the
     // service has to start after this resource, because the application reads its rows at boot.
-    const settings = resources.ideadev27clustermanagersettings.Properties.settings;
+    const settings = resources.ideademo1clustermanagersettings.Properties.settings;
     assert.equal(settings.asg_name, `${CLUSTER}-cluster-manager`);
     assert.match(
       JSON.stringify(settings.asg_arn),
@@ -486,16 +486,16 @@ describe('cluster-manager branches', () => {
     );
 
     for (const id of [
-      "ideadev27userpoolclustermanagerclientD645207F",
+      "ideademo1userpoolclustermanagerclientC69CFBDE",
       "clustermanagerjwtsigningsecret",
       "clustertaskssqsqueue319A7909",
       "notificationssqsqueue60B47557",
       "clustermanagerrole4D8ECACE",
       "clustermanagerpolicyEF9BA73D",
       "clustermanagersecuritygroupDD4A1A52",
-      "clustermanagersecuritygroupfromideadev27clustermanagerexternalloadbalancersecuritygroupEFB1EA8784431FF11675",
+      "clustermanagersecuritygroupfromideademo1clustermanagerexternalloadbalancersecuritygroup226FFA078443861A9FB0",
       "bedrockinvocationloggroup",
-      "ideadev27clustermanagersettings",
+      "ideademo1clustermanagersettings",
     ]) {
       assert.ok(resources[id] !== undefined, id);
     }

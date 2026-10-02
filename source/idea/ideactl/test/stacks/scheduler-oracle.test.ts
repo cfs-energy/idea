@@ -1,7 +1,7 @@
 /**
  * The scheduler oracle gate.
  *
- * The recorded dev27 template stays the oracle. It is compared against a synthesis driven by the
+ * The recorded demo1 template stays the oracle. It is compared against a synthesis driven by the
  * settings it was generated from, and the branch change the recorded template predates is proved
  * as an itemised delta.
  *
@@ -23,16 +23,16 @@ import { requireCapture } from '../support/fixtures.ts';
 
 const PKG = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SYNTH = join(PKG, 'tools', 'parity', 'synth.ts');
-const FIXTURES = join(PKG, 'tools', 'parity', 'fixtures', 'idea-dev27');
+const FIXTURES = join(PKG, 'tools', 'parity', 'fixtures', 'idea-demo1');
 const CONFIG_FILE = join(FIXTURES, 'cluster-settings.json');
-const LIVE_TEMPLATE = join(PKG, 'tools', 'parity', 'live', 'idea-dev27-scheduler.json');
+const LIVE_TEMPLATE = join(PKG, 'tools', 'parity', 'live', 'idea-demo1-scheduler.json');
 
-const CLUSTER = 'idea-dev27';
+const CLUSTER = 'idea-demo1';
 const MODULE_ID = 'scheduler';
 
 requireCapture(
   [CONFIG_FILE, LIVE_TEMPLATE],
-  'node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2',
+  'node tools/parity/capture.ts --live --cluster idea-demo1 --region us-east-2',
 );
 
 // The settings-gated entry on its own, which is what every case below exercises.
@@ -50,7 +50,7 @@ const fullDrift = (): NonNullable<ReturnType<typeof intendedDriftFor>> => {
 const settings = settingsLookup(CONFIG_FILE);
 const setting = (key: string): string => {
   const value = settings(key);
-  assert.ok(value !== undefined, `the dev27 settings have no ${key}`);
+  assert.ok(value !== undefined, `the demo1 settings have no ${key}`);
   return value;
 };
 

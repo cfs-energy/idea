@@ -4,7 +4,7 @@
  * Fixtures under tools/parity/{fixtures,live} are gitignored; every test that needs them skips
  * when they are absent so the suite still runs without them.
  *
- * The deployed dev27 template predates `scheduler.use_stable_server_name` being turned on in the
+ * The deployed demo1 template predates `scheduler.use_stable_server_name` being turned on in the
  * cluster settings, so the resource-for-resource comparison runs with that key set back to false,
  * the state the deployed template was built from. A separate test covers the key as the fixture
  * has it today.
@@ -27,22 +27,22 @@ import { cacheSetup } from '../support/setup-cache.ts';
 import { ECS_SHARED_CAPACITY_VALUES, TARGET_GROUP_HASH } from '../support/ecs-harness.ts';
 
 const PKG = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const FIXTURES = join(PKG, 'tools', 'parity', 'fixtures', 'idea-dev27');
+const FIXTURES = join(PKG, 'tools', 'parity', 'fixtures', 'idea-demo1');
 const CONFIG_FILE = join(FIXTURES, 'cluster-settings.json');
 const SYNTH_READS = join(FIXTURES, 'synth-reads.json');
 const CONTEXT_FILE = join(FIXTURES, 'cdk.context.json');
-const LIVE_TEMPLATE = join(PKG, 'tools', 'parity', 'live', 'idea-dev27-scheduler.json');
+const LIVE_TEMPLATE = join(PKG, 'tools', 'parity', 'live', 'idea-demo1-scheduler.json');
 
-const CLUSTER = 'idea-dev27';
+const CLUSTER = 'idea-demo1';
 const MODULE_ID = 'scheduler';
 const REGION = 'us-east-2';
 const DEPLOYMENT_ID = '97999f4c-daaa-4813-b8ac-bd7abaedc26b';
-/** `shake_256('idea-dev27').hexdigest(5)`, the bootstrap qualifier the synthesizer is built with. */
-const QUALIFIER = '6f3b37a775';
+/** `shake_256('idea-demo1').hexdigest(5)`, the bootstrap qualifier the synthesizer is built with. */
+const QUALIFIER = 'd98389644e';
 
 requireCapture(
   [CONFIG_FILE, SYNTH_READS, CONTEXT_FILE, LIVE_TEMPLATE],
-  "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
+  "node tools/parity/capture.ts --live --cluster idea-demo1 --region us-east-2",
 );
 
 type Json = Record<string, any>;
@@ -55,7 +55,7 @@ after(() => {
   for (const workdir of workdirs) rmSync(workdir, { recursive: true, force: true });
 });
 
-/** Copies the dev27 settings scan, replacing the value of each named key (adding it if absent). */
+/** Copies the demo1 settings scan, replacing the value of each named key (adding it if absent). */
 function configWith(overrides: Record<string, string | number | boolean | string[]>): string {
   const attribute = (value: string | number | boolean | string[]): Json => {
     if (Array.isArray(value)) return { L: value.map((entry) => ({ S: entry })) };
@@ -177,10 +177,10 @@ async function synthScheduler(
   return synthSchedulerUncached(configFile, context);
 }
 
-/** One row out of the dev27 settings scan, so no live identifier is written into this file. */
+/** One row out of the demo1 settings scan, so no live identifier is written into this file. */
 function settingValue(key: string): Json {
   const item = (readJson(CONFIG_FILE).Items as Json[]).find((row) => row.key?.S === key);
-  assert.ok(item !== undefined, `dev27 settings have no ${key}`);
+  assert.ok(item !== undefined, `demo1 settings have no ${key}`);
   return item.value as Json;
 }
 
@@ -193,7 +193,7 @@ const userDataOf = (template: Json): string =>
   template.Resources.schedulerinstance.Properties.UserData['Fn::Base64']['Fn::Sub'] as string;
 
 describe('scheduler stack', () => {
-  test('matches the deployed dev27 template resource for resource', async () => {
+  test('matches the deployed demo1 template resource for resource', async () => {
     const { template } = await synthScheduler(deployedConfig());
     // The deployed side carries this branch's retain policy on its stateful resources, the one
     // change to these attributes, itemised in tools/parity/intended-drift.ts.
@@ -223,14 +223,14 @@ describe('scheduler stack', () => {
     }
     // No teardown policy, and never lost to a replacement.
     for (const id of [
-      'ideadev27userpoolschedulerclient02E3170D',
+      'ideademo1userpoolschedulerclient2A26EA5A',
       'scheduleradministratorsgroup',
       'schedulerusersgroup',
     ]) {
       assert.deepEqual(live[id], { DeletionPolicy: null, UpdateReplacePolicy: 'Retain' }, id);
     }
     // Custom resources hold nothing of their own and still delete in both directions.
-    for (const id of ['externalendpoint', 'internalendpoint', 'ideadev27schedulersettings']) {
+    for (const id of ['externalendpoint', 'internalendpoint', 'ideademo1schedulersettings']) {
       assert.deepEqual(live[id], { DeletionPolicy: 'Delete', UpdateReplacePolicy: 'Delete' }, id);
     }
     for (const id of ['schedulerclientid', 'schedulerclientsecret', 'jobstatusevents0A7392AC', 'jobstatuseventsdlqF3F9DBF4']) {
@@ -269,7 +269,7 @@ describe('scheduler stack', () => {
     // The template asset goes to the cluster bucket under `cdk/`, not to a CDK-owned bucket.
     assert.match(
       artifact.properties.stackTemplateAssetObjectUrl as string,
-      /^s3:\/\/idea-dev27-cluster-us-east-2-\d{12}\/cdk\//,
+      /^s3:\/\/idea-demo1-cluster-us-east-2-\d{12}\/cdk\//,
     );
   });
 
@@ -277,15 +277,15 @@ describe('scheduler stack', () => {
     const { template } = await synthScheduler(deployedConfig());
     // The dependency exists only because Python adds it by hand: CDK infers no edge between them,
     // and without it the client can be created before the scopes it references.
-    assert.deepEqual(template.Resources.ideadev27userpoolschedulerclient02E3170D.DependsOn, [
-      'ideadev27userpoolresourceserver7B2B7736',
+    assert.deepEqual(template.Resources.ideademo1userpoolschedulerclient2A26EA5A.DependsOn, [
+      'ideademo1userpoolresourceserverF2A5DA79',
     ]);
   });
 });
 
 describe('scheduler stack branches', () => {
   test('the configured hostname agrees across the task and published settings', async () => {
-    const hostname = 'batch.idea-dev27.us-east-2.local';
+    const hostname = 'batch.idea-demo1.us-east-2.local';
     const { template } = await synthScheduler(configWith({
       ...ECS_SHARED_CAPACITY_VALUES,
       'scheduler.hostname': hostname,
@@ -298,7 +298,7 @@ describe('scheduler stack branches', () => {
       container.Environment?.some((entry: Json) => entry.Name === 'IDEA_SCHEDULER_DNS_NAME'),
     );
     assert.equal(scheduler?.Environment.find((entry: Json) => entry.Name === 'IDEA_SCHEDULER_DNS_NAME').Value, hostname);
-    assert.equal(template.Resources.ideadev27schedulersettings.Properties.settings.private_dns_name, hostname);
+    assert.equal(template.Resources.ideademo1schedulersettings.Properties.settings.private_dns_name, hostname);
 
     const sidecar = containers.find((container) => container.Name === 'scheduler-openpbs-logs');
     assert.ok(sidecar);
@@ -318,7 +318,7 @@ describe('scheduler stack branches', () => {
   });
 
   test('use_stable_server_name changes those two properties and nothing else', async () => {
-    // The key is on in the dev27 settings today, which is why the deployed template is one deploy
+    // The key is on in the demo1 settings today, which is why the deployed template is one deploy
     // behind. Asserting the two properties it changes is not enough: what has to hold is that the
     // rest of the stack is untouched. The flag-off synth is the same one the first suite compares
     // to the deployed template resource for resource, so pinning the delta here pins the whole
@@ -328,12 +328,12 @@ describe('scheduler stack branches', () => {
     const withFlag = deployedResources(template);
     const withoutFlag = deployedResources(deployed);
 
-    const settings = withFlag.ideadev27schedulersettings.Properties.settings;
-    assert.equal(settings.private_dns_name, 'scheduler.idea-dev27.us-east-2.local');
-    assert.deepEqual(withoutFlag.ideadev27schedulersettings.Properties.settings.private_dns_name, {
+    const settings = withFlag.ideademo1schedulersettings.Properties.settings;
+    assert.equal(settings.private_dns_name, 'scheduler.idea-demo1.us-east-2.local');
+    assert.deepEqual(withoutFlag.ideademo1schedulersettings.Properties.settings.private_dns_name, {
       'Fn::GetAtt': ['schedulerinstance', 'PrivateDnsName'],
     });
-    settings.private_dns_name = withoutFlag.ideadev27schedulersettings.Properties.settings.private_dns_name;
+    settings.private_dns_name = withoutFlag.ideademo1schedulersettings.Properties.settings.private_dns_name;
 
     const statements = withFlag.schedulerpolicyFF65A604.Properties.PolicyDocument.Statement as Json[];
     // The statement's index follows the position of the block in `resources/policies/scheduler.yml`:
@@ -378,7 +378,7 @@ describe('scheduler stack branches', () => {
     const networkInterface = template.Resources.schedulerinstance.Properties.NetworkInterfaces[0];
     assert.equal(networkInterface.AssociatePublicIpAddress, true);
     assert.equal(networkInterface.SubnetId, readList('cluster.network.public_subnets')[0]);
-    assert.deepEqual(template.Resources.ideadev27schedulersettings.Properties.settings.public_ip, {
+    assert.deepEqual(template.Resources.ideademo1schedulersettings.Properties.settings.public_ip, {
       'Fn::GetAtt': ['schedulerinstance', 'PublicIp'],
     });
   });
@@ -392,7 +392,7 @@ describe('scheduler stack branches', () => {
     );
   });
 
-  test('the non-dev27 ec2 settings reach the launch template and the instance', async () => {
+  test('the non-demo1 ec2 settings reach the launch template and the instance', async () => {
     const kmsKeyId = '11111111-2222-3333-4444-555555555555';
     const proxy = 'http://proxy.example.invalid:3128';
     const { template } = await synthScheduler(
@@ -442,9 +442,9 @@ describe('scheduler stack branches', () => {
       ['AlwaysEncrypted', 'ProjectRoleJobStatusEvents'],
     );
     const projectRoleArn = queuePolicy[1]!.Condition.ArnLike['aws:PrincipalArn'] as string;
-    assert.match(projectRoleArn, /:role\/idea\/idea-dev27\/projects\/\*$/);
+    assert.match(projectRoleArn, /:role\/idea\/idea-demo1\/projects\/\*$/);
 
-    const settings = template.Resources.ideadev27schedulersettings.Properties.settings;
+    const settings = template.Resources.ideademo1schedulersettings.Properties.settings;
     assert.equal(settings['bedrock.project_pass_role_arn'], projectRoleArn);
 
     const statements = template.Resources.schedulerpolicyFF65A604.Properties.PolicyDocument
@@ -505,7 +505,7 @@ describe('scheduler stack branches', () => {
       'the task can update its own record on the deploy that turns the flag on',
     );
     assert.equal(
-      template.Resources.ideadev27schedulersettings.Properties.settings.use_stable_server_name,
+      template.Resources.ideademo1schedulersettings.Properties.settings.use_stable_server_name,
       true,
     );
   });
@@ -536,7 +536,7 @@ describe('scheduler stack branches', () => {
       "schedulerltC82E59C0",
       "schedulerinstance",
       "schedulerschedulerinstanceprofile",
-      "schedulersecuritygroupfromideadev27schedulerbastionhostsecuritygroupE705486322D1BB57B7",
+      "schedulersecuritygroupfromideademo1schedulerbastionhostsecuritygroup5BD8E476220CA81B06",
     ]) {
       assert.ok(resources[id] !== undefined, id);
     }
@@ -563,7 +563,7 @@ describe('scheduler stack branches', () => {
       "schedulerdnsrecord4F3D9346",
       "schedulerexternaltargetgroup",
       "schedulerinternaltargetgroup",
-      "schedulersecuritygroupfromideadev27schedulerbastionhostsecuritygroupE705486322D1BB57B7",
+      "schedulersecuritygroupfromideademo1schedulerbastionhostsecuritygroup5BD8E476220CA81B06",
     ]) {
       assert.equal(resources[id], undefined, id);
     }
@@ -586,8 +586,8 @@ describe('scheduler stack branches', () => {
       JSON.stringify(resources.schedulerrole9B80A9F3.Properties.AssumeRolePolicyDocument),
       /ecs-tasks\./,
     );
-    const settings = resources.ideadev27schedulersettings.Properties.settings as Json;
-    assert.equal(settings.private_dns_name, "scheduler.idea-dev27.us-east-2.local");
+    const settings = resources.ideademo1schedulersettings.Properties.settings as Json;
+    assert.equal(settings.private_dns_name, "scheduler.idea-demo1.us-east-2.local");
     // Written, not inherited: the task reads this row to update the record, and the compute node
     // template reads it to build PBS_SERVER from the DNS name instead of a short name.
     assert.equal(settings.use_stable_server_name, true);
@@ -596,7 +596,7 @@ describe('scheduler stack branches', () => {
     assert.equal(settings.public_ip, undefined);
 
     for (const id of [
-      "ideadev27userpoolschedulerclient02E3170D",
+      "ideademo1userpoolschedulerclient2A26EA5A",
       "scheduleradministratorsgroup",
       "schedulerusersgroup",
       "schedulerrole9B80A9F3",
@@ -609,7 +609,7 @@ describe('scheduler stack branches', () => {
       "jobstatusevents0A7392AC",
       "externalendpoint",
       "internalendpoint",
-      "ideadev27schedulersettings",
+      "ideademo1schedulersettings",
     ]) {
       assert.ok(resources[id] !== undefined, id);
     }

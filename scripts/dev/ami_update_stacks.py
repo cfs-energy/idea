@@ -214,7 +214,7 @@ MAX_WORKERS = 10
 def get_ami(
     region: str, ami_type: str, architecture_type: str, ss_id_suffix: str = None
 ) -> Optional[str]:
-    profile = 'gov' if region == 'us-gov-west-1' else 'idea-dev'
+    profile = 'gov' if region == 'us-gov-west-1' else 'idea'
 
     # Construct pattern key
     if ami_type.startswith('windows'):

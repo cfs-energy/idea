@@ -25,7 +25,7 @@ import {
 
 requireCapture(
   [CONFIG_FILE, SYNTH_READS_FILE, CONTEXT_FILE],
-  "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
+  "node tools/parity/capture.ts --live --cluster idea-demo1 --region us-east-2",
 );
 
 after(cleanupWorkdirs);
@@ -171,11 +171,11 @@ describe("container service ordering", () => {
       }
     }
     assert.deepEqual(names.sort(), [
-      "idea-dev27-cluster-manager",
-      "idea-dev27-scheduler",
-      "idea-dev27-vdc-broker",
-      "idea-dev27-vdc-controller",
-      "idea-dev27-vdc-gateway",
+      "idea-demo1-cluster-manager",
+      "idea-demo1-scheduler",
+      "idea-demo1-vdc-broker",
+      "idea-demo1-vdc-controller",
+      "idea-demo1-vdc-gateway",
     ]);
   });
 });

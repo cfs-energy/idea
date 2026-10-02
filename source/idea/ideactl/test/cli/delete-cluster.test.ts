@@ -364,7 +364,7 @@ test("registers both destructive command surfaces", () => {
 
 // The container capacity stack owns the ECS cluster and the Cloud Map namespace the module
 // services live on. Deleted alongside the module stacks it fails on both ("namespace has
-// associated services"), which is what idea-ctr2 did on 2026-09-15; after them it deletes clean.
+// associated services"); after them it deletes clean.
 test("the container capacity stack is deleted after the module stacks and before identity-provider", async () => {
   const { deps, trace } = makeDeps();
   const base = deps.loadConfig;
@@ -386,7 +386,7 @@ test("the container capacity stack is deleted after the module stacks and before
 
 // The container scheduler upserts its own record and its stack retains it, so once the stacks are
 // gone the zone still holds it and Route 53 refuses to delete the zone with the cluster stack:
-// idea-ctr2's teardown stopped there on 2026-09-15. Only the records a service left go; NS and SOA stay.
+// a teardown stops there. Only the records a service left go; NS and SOA stay.
 test("the private hosted zone is emptied of service records right before the cluster stack is deleted", async () => {
   const { deps, trace } = makeDeps();
   await deleteCluster(deps, allOptions());

@@ -65,9 +65,9 @@ describe('AmazonEFS', () => {
       .filter((path) => path.includes('apps-storage-efs'))
       .sort();
     assert.deepEqual(appsPaths, [
-      'idea-dev27-shared-storage/apps-storage-efs/apps-storage-efs-mount-target-1',
-      'idea-dev27-shared-storage/apps-storage-efs/apps-storage-efs-mount-target-2',
-      'idea-dev27-shared-storage/apps-storage-efs/apps-storage-efs-mount-target-3',
+      'idea-demo1-shared-storage/apps-storage-efs/apps-storage-efs-mount-target-1',
+      'idea-demo1-shared-storage/apps-storage-efs/apps-storage-efs-mount-target-2',
+      'idea-demo1-shared-storage/apps-storage-efs/apps-storage-efs-mount-target-3',
     ]);
   });
 
@@ -159,9 +159,9 @@ describe('FSxForLustre', () => {
       PerUnitStorageThroughput: 100,
     });
     assert.deepEqual(fileSystem.Properties.Tags, [
-      { Key: 'idea:BackupPlan', Value: 'idea-dev27-cluster' },
-      { Key: 'idea:ClusterName', Value: 'idea-dev27' },
-      { Key: 'Name', Value: 'idea-dev27-scratch-storage-fsx-lustre' },
+      { Key: 'idea:BackupPlan', Value: 'idea-demo1-cluster' },
+      { Key: 'idea:ClusterName', Value: 'idea-demo1' },
+      { Key: 'Name', Value: 'idea-demo1-scratch-storage-fsx-lustre' },
     ]);
     assert.equal(fileSystem.DeletionPolicy, undefined);
   });

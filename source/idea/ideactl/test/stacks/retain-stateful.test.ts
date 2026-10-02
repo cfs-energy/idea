@@ -193,7 +193,7 @@ describe('the recorded templates', () => {
     'shared-storage',
     'vdc',
   ];
-  const cluster = 'idea-dev27';
+  const cluster = 'idea-demo1';
   const files = stacks.map((stack) => [stack, join(LIVE, `${cluster}-${stack}.json`)] as const);
   const present = files.filter(([, file]) => existsSync(file));
 

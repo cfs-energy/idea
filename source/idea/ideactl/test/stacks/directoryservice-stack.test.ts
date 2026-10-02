@@ -5,7 +5,7 @@
  * template diff cannot see: the CloudFormation assembly manifest (stack tags, termination
  * protection, the bootstrap qualifier the synthesizer derives from the cluster name), the
  * deletion/update-replace policy of every stateful resource, and the three provider branches the
- * dev27 capture does not cover.
+ * demo1 capture does not cover.
  *
  * Fixtures under tools/parity/{fixtures,live} are gitignored, and this whole file requires them.
  */
@@ -23,21 +23,21 @@ import { requireCapture } from '../support/fixtures.ts';
 import { withRetainedStateful } from '../support/retain-stateful.ts';
 
 const PKG = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const FIXTURES = join(PKG, 'tools', 'parity', 'fixtures', 'idea-dev27');
+const FIXTURES = join(PKG, 'tools', 'parity', 'fixtures', 'idea-demo1');
 const CONFIG_FILE = join(FIXTURES, 'cluster-settings.json');
 const SYNTH_READS = join(FIXTURES, 'synth-reads.json');
 const CONTEXT_FILE = join(FIXTURES, 'cdk.context.json');
-const LIVE_TEMPLATE = join(PKG, 'tools', 'parity', 'live', 'idea-dev27-directoryservice.json');
+const LIVE_TEMPLATE = join(PKG, 'tools', 'parity', 'live', 'idea-demo1-directoryservice.json');
 const PYTHON_MANIFEST = join(FIXTURES, 'python', '_cdk', 'cdk.out.directoryservice', 'manifest.json');
 
-const CLUSTER = 'idea-dev27';
+const CLUSTER = 'idea-demo1';
 const MODULE_ID = 'directoryservice';
 const REGION = 'us-east-2';
 const DEPLOYMENT_ID = '97999f4c-daaa-4813-b8ac-bd7abaedc26b';
 
 requireCapture(
   [CONFIG_FILE, SYNTH_READS, CONTEXT_FILE, LIVE_TEMPLATE, PYTHON_MANIFEST],
-  "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
+  "node tools/parity/capture.ts --live --cluster idea-demo1 --region us-east-2",
 );
 
 type Json = Record<string, any>;
@@ -51,7 +51,7 @@ after(() => {
 });
 
 /**
- * Copies the dev27 settings scan, replacing (or adding) each named key with the given typed
+ * Copies the demo1 settings scan, replacing (or adding) each named key with the given typed
  * DynamoDB attribute value, and deleting the ones mapped to `null`.
  */
 function configWith(overrides: Record<string, Json | null>): string {
@@ -171,7 +171,7 @@ function policies(template: Json): Record<string, [unknown, unknown]> {
   );
 }
 
-/** One `S` value from the gitignored dev27 settings scan, so no live identifier is committed. */
+/** One `S` value from the gitignored demo1 settings scan, so no live identifier is committed. */
 function fixtureSetting(key: string): string {
   const item = (readJson(CONFIG_FILE).Items as Json[]).find((i) => i.key?.S === key);
   assert.ok(item, `${key} missing from the settings fixture`);
@@ -232,8 +232,8 @@ function stackArtifactProperties(manifest: Json): Json {
   return (manifest.artifacts as Json)[`${CLUSTER}-${MODULE_ID}`].properties as Json;
 }
 
-const TLS_CERTIFICATE_ARN = 'arn:aws:secretsmanager:us-east-2:123456789012:secret:idea-dev27-directoryservice-certificate-AAAAAA';
-const TLS_PRIVATE_KEY_ARN = 'arn:aws:secretsmanager:us-east-2:123456789012:secret:idea-dev27-directoryservice-private-key-BBBBBB';
+const TLS_CERTIFICATE_ARN = 'arn:aws:secretsmanager:us-east-2:123456789012:secret:idea-demo1-directoryservice-certificate-AAAAAA';
+const TLS_PRIVATE_KEY_ARN = 'arn:aws:secretsmanager:us-east-2:123456789012:secret:idea-demo1-directoryservice-private-key-BBBBBB';
 
 const OPENLDAP_CONFIG: Record<string, Json | null> = {
   'directoryservice.provider': { S: 'openldap' },
@@ -245,7 +245,7 @@ const OPENLDAP_CONFIG: Record<string, Json | null> = {
   'directoryservice.tls_private_key_secret_arn': { S: TLS_PRIVATE_KEY_ARN },
 };
 
-// --- AWS Managed Active Directory (the branch dev27 deployed) ----------------------------------
+// --- AWS Managed Active Directory (the branch demo1 deployed) ----------------------------------
 
 describe('directoryservice stack, aws_managed_activedirectory', () => {
   test('the stateful resources carry exactly the live deletion policies', async () => {
@@ -281,7 +281,7 @@ describe('directoryservice stack, aws_managed_activedirectory', () => {
     for (const id of ['adautomationsqsqueue6E223C51', 'adautomationsqsqueuedlqC8003D97']) {
       assert.deepEqual(pair(id), ['Delete', 'Retain'], id);
     }
-    for (const id of ['ideadev27activedirectory', 'ideadev27directoryservicesettings']) {
+    for (const id of ['ideademo1activedirectory', 'ideademo1directoryservicesettings']) {
       assert.deepEqual(pair(id), ['Delete', 'Delete'], id);
     }
   });
@@ -474,7 +474,7 @@ describe('directoryservice stack, openldap', () => {
       `AWS::EC2::LaunchTemplate ${CLUSTER}-${MODULE_ID}/${MODULE_ID}-lt/Resource`,
       `AWS::EC2::SecurityGroup ${CLUSTER}-${MODULE_ID}/${MODULE_ID}-security-group/Resource`,
       // the bastion ingress rule is a separate resource: the peer is an imported security group
-      `AWS::EC2::SecurityGroupIngress ${CLUSTER}-${MODULE_ID}/${MODULE_ID}-security-group/from ideadev27directoryservicebastionhostsecuritygroup2466957D:22`,
+      `AWS::EC2::SecurityGroupIngress ${CLUSTER}-${MODULE_ID}/${MODULE_ID}-security-group/from ideademo1directoryservicebastionhostsecuritygroup2731BE6E:22`,
       `AWS::IAM::InstanceProfile ${CLUSTER}-${MODULE_ID}/${MODULE_ID}-openldap-instance-profile`,
       `AWS::IAM::Policy ${CLUSTER}-${MODULE_ID}/openldap-server-policy/Resource`,
       `AWS::IAM::Role ${CLUSTER}-${MODULE_ID}/${MODULE_ID}-openldap-role/Resource`,
@@ -535,7 +535,7 @@ describe('directoryservice stack, openldap', () => {
       Key: 'idea:BackupPlan',
       Value: `${CLUSTER}-cluster`,
     });
-    // amazonlinux2023 in the dev27 fixture
+    // amazonlinux2023 in the demo1 fixture
     assert.equal((instance.Properties.BlockDeviceMappings as Json[])[0]?.DeviceName, '/dev/xvda');
     assert.equal(instance.Properties.Monitoring, false);
     assert.equal(instance.Properties.DisableApiTermination, false);

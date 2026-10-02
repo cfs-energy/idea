@@ -9,8 +9,6 @@ jobs submitted via API or directly via qsub both get the same treatment.
 To install this hook:
 > qmgr -c "create hook calculate_ncpus event='queuejob'"
 > qmgr -c "import hook calculate_ncpus application/x-python default ${IDEA_APP_DEPLOY_DIR}/scheduler/resources/openpbs/hooks/calculate_ncpus_hook.py"
-
-Author: @cfsnate
 """
 
 import pbs  # type: ignore[import-unresolved]

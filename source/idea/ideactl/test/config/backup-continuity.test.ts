@@ -293,10 +293,10 @@ describe("backup continuity", () => {
   });
 
   for (const [templateName, resourceId] of [
-    ["idea-dev27-shared-storage.json", "appsstorageefs"],
-    ["idea-dev27-shared-storage.json", "datastorageefs"],
-    ["idea-dev27-scheduler.json", "schedulerinstance"],
-    ["idea-dev27-bastion-host.json", "bastionhostinstance"],
+    ["idea-demo1-shared-storage.json", "appsstorageefs"],
+    ["idea-demo1-shared-storage.json", "datastorageefs"],
+    ["idea-demo1-scheduler.json", "schedulerinstance"],
+    ["idea-demo1-bastion-host.json", "bastionhostinstance"],
   ]) {
     const path = join(liveTemplateDirectory, templateName);
     test(`${templateName}/${resourceId} carries the cluster selector`, { skip: !existsSync(path) }, () => {

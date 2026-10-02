@@ -1,4 +1,4 @@
-// replaySynthReads against the dev27 fixture: the reads that shape a template, and a miss.
+// replaySynthReads against the demo1 fixture: the reads that shape a template, and a miss.
 // Every real identifier is read out of the gitignored fixture at run time, never written here.
 import { deepStrictEqual, match, ok, rejects, strictEqual } from 'node:assert';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -10,8 +10,8 @@ import { AwsProfileCredentialsError } from '../../src/cli/aws-client-options.ts'
 import { requireCapture } from '../support/fixtures.ts';
 
 const PKG = resolve(import.meta.dirname, '../..');
-const FIXTURE = join(PKG, 'tools/parity/fixtures/idea-dev27/synth-reads.json');
-requireCapture([FIXTURE], "node tools/parity/capture.ts --from-raw tools/parity/fixtures/idea-dev27/raw --out tools/parity/fixtures/idea-dev27");
+const FIXTURE = join(PKG, 'tools/parity/fixtures/idea-demo1/synth-reads.json');
+requireCapture([FIXTURE], "node tools/parity/capture.ts --from-raw tools/parity/fixtures/idea-demo1/raw --out tools/parity/fixtures/idea-demo1");
 
 /** The parameters of every captured read of one action, recovered from the keys. */
 function params<T>(service: string, action: string): T[] {

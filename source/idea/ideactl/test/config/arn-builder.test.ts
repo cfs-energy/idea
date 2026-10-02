@@ -7,13 +7,13 @@ import { ArnBuilder } from '../../src/config/arn-builder.ts';
 import { ClusterConfig } from '../../src/config/cluster-config.ts';
 import { requireCapture } from '../support/fixtures.ts';
 
-const RAW = fileURLToPath(new URL('../../tools/parity/fixtures/idea-dev27/raw/', import.meta.url));
+const RAW = fileURLToPath(new URL('../../tools/parity/fixtures/idea-demo1/raw/', import.meta.url));
 const LIVE = fileURLToPath(new URL('../../tools/parity/live/', import.meta.url));
 const SCAN = `${RAW}cluster-settings.scan.json`;
 const MODULES = `${RAW}modules.scan.json`;
 requireCapture(
   [SCAN, MODULES, LIVE],
-  "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
+  "node tools/parity/capture.ts --live --cluster idea-demo1 --region us-east-2",
 );
 
 const PARTITION = 'aws';
@@ -360,9 +360,9 @@ function arnFromSettings(
   });
 }
 
-describe('ArnBuilder against the live dev27 IAM policy documents', () => {
+describe('ArnBuilder against the live demo1 IAM policy documents', () => {
   const settings = ClusterConfig.fromFile(readFileSync(SCAN, 'utf-8'), readFileSync(MODULES, 'utf-8'));
-  const dev27 = new ArnBuilder(settings);
+  const demo1 = new ArnBuilder(settings);
   const live = liveIamPolicyArns();
   const cluster = settings.getString('cluster.cluster_name') as string;
   const region = settings.getString('cluster.aws.region') as string;
@@ -376,37 +376,37 @@ describe('ArnBuilder against the live dev27 IAM policy documents', () => {
   const scalars: Array<[string, () => string, string]> = [
     [
       'getLambdaLogGroupArn()',
-      () => dev27.getLambdaLogGroupArn(),
+      () => demo1.getLambdaLogGroupArn(),
       arnFromSettings(settings, 'logs', `log-group:/aws/lambda/${cluster}*`),
     ],
     [
       'lambdaLogStreamArn',
-      () => dev27.lambdaLogStreamArn,
+      () => demo1.lambdaLogStreamArn,
       arnFromSettings(settings, 'logs', `log-group:/aws/lambda/${cluster}*:log-stream:*`),
     ],
     [
       'getAdAutomationSqsQueueArn()',
-      () => dev27.getAdAutomationSqsQueueArn(),
+      () => demo1.getAdAutomationSqsQueueArn(),
       arnFromSettings(settings, 'sqs', `${cluster}-${directoryServiceId}-ad-automation.fifo`),
     ],
     [
       'getProjectRoleArn()',
-      () => dev27.getProjectRoleArn(),
+      () => demo1.getProjectRoleArn(),
       arnFromSettings(settings, 'iam', `role/idea/${cluster}/projects/*`, undefined, ''),
     ],
     [
       'getProjectPolicyArn()',
-      () => dev27.getProjectPolicyArn(),
+      () => demo1.getProjectPolicyArn(),
       arnFromSettings(settings, 'iam', `policy/idea/${cluster}/projects/*`, undefined, ''),
     ],
     [
       'getProjectInstanceProfileArn()',
-      () => dev27.getProjectInstanceProfileArn(),
+      () => demo1.getProjectInstanceProfileArn(),
       arnFromSettings(settings, 'iam', `instance-profile/idea/${cluster}/projects/*`, undefined, ''),
     ],
     [
       'getProjectPermissionsBoundaryArn()',
-      () => dev27.getProjectPermissionsBoundaryArn(),
+      () => demo1.getProjectPermissionsBoundaryArn(),
       arnFromSettings(
         settings,
         'iam',
@@ -417,7 +417,7 @@ describe('ArnBuilder against the live dev27 IAM policy documents', () => {
     ],
     [
       'getDdbApplicationAutoscalingServiceRoleArn()',
-      () => dev27.getDdbApplicationAutoscalingServiceRoleArn(),
+      () => demo1.getDdbApplicationAutoscalingServiceRoleArn(),
       arnFromSettings(
         settings,
         'iam',
@@ -428,44 +428,44 @@ describe('ArnBuilder against the live dev27 IAM policy documents', () => {
     ],
     [
       'bedrockInvocationLogGroupArn',
-      () => dev27.bedrockInvocationLogGroupArn,
+      () => demo1.bedrockInvocationLogGroupArn,
       arnFromSettings(settings, 'logs', `log-group:/${cluster}/${clusterManagerId}/bedrock-invocations`),
     ],
     [
       'bedrockApplicationInferenceProfileArn',
-      () => dev27.bedrockApplicationInferenceProfileArn,
+      () => demo1.bedrockApplicationInferenceProfileArn,
       arnFromSettings(settings, 'bedrock', 'application-inference-profile/*'),
     ],
     [
       'bedrockSystemInferenceProfileArn',
-      () => dev27.bedrockSystemInferenceProfileArn,
+      () => demo1.bedrockSystemInferenceProfileArn,
       arnFromSettings(settings, 'bedrock', 'inference-profile/*'),
     ],
     [
       'bedrockAnySystemInferenceProfileArn',
-      () => dev27.bedrockAnySystemInferenceProfileArn,
+      () => demo1.bedrockAnySystemInferenceProfileArn,
       arnFromSettings(settings, 'bedrock', 'inference-profile/*', '*', '*'),
     ],
     [
       'bedrockFoundationModelArn',
-      () => dev27.bedrockFoundationModelArn,
+      () => demo1.bedrockFoundationModelArn,
       arnFromSettings(settings, 'bedrock', 'foundation-model/*', '', '*'),
     ],
     [
       'userPoolArn',
-      () => dev27.userPoolArn,
+      () => demo1.userPoolArn,
       arnFromSettings(settings, 'cognito-idp', `userpool/${userPool}`),
     ],
     [
       'getDirectoryServiceArn()',
-      () => dev27.getDirectoryServiceArn(),
+      () => demo1.getDirectoryServiceArn(),
       arnFromSettings(settings, 'ds', `directory/${directory}`),
     ],
-    ['getKinesisArn()', () => dev27.getKinesisArn(), arnFromSettings(settings, 'kinesis', `stream/${cluster}-*`)],
-    ['sesArn', () => dev27.sesArn, arnFromSettings(settings, 'ses', 'identity/*', undefined, '*')],
+    ['getKinesisArn()', () => demo1.getKinesisArn(), arnFromSettings(settings, 'kinesis', `stream/${cluster}-*`)],
+    ['sesArn', () => demo1.sesArn, arnFromSettings(settings, 'ses', 'identity/*', undefined, '*')],
     [
       'getRoute53HostedzoneArn()',
-      () => dev27.getRoute53HostedzoneArn(),
+      () => demo1.getRoute53HostedzoneArn(),
       arnFromSettings(settings, 'route53', 'hostedzone/*', '', ''),
     ],
   ];
@@ -473,7 +473,7 @@ describe('ArnBuilder against the live dev27 IAM policy documents', () => {
   const lists: Array<[string, () => string[], string[]]> = [
     [
       'ec2CommonArns',
-      () => dev27.ec2CommonArns,
+      () => demo1.ec2CommonArns,
       [
         arnFromSettings(settings, 'ec2', 'subnet/*', '*', '*'),
         arnFromSettings(settings, 'ec2', 'key-pair/*', undefined, '*'),
@@ -490,7 +490,7 @@ describe('ArnBuilder against the live dev27 IAM policy documents', () => {
     ],
     [
       's3GlobalArns',
-      () => dev27.s3GlobalArns,
+      () => demo1.s3GlobalArns,
       [
         arnFromSettings(settings, 's3', `dcv-license.${region}/*`, '', ''),
         arnFromSettings(settings, 's3', 'ec2-linux-nvidia-drivers/*', '', ''),
@@ -508,7 +508,7 @@ describe('ArnBuilder against the live dev27 IAM policy documents', () => {
     ],
     [
       'dcvLicenseS3BucketArns',
-      () => dev27.dcvLicenseS3BucketArns,
+      () => demo1.dcvLicenseS3BucketArns,
       [
         arnFromSettings(settings, 's3', 'dcv-license.*/*', '', ''),
         arnFromSettings(settings, 's3', 'dcv-license.*', '', ''),
@@ -516,7 +516,7 @@ describe('ArnBuilder against the live dev27 IAM policy documents', () => {
     ],
     [
       's3BucketArns',
-      () => dev27.s3BucketArns,
+      () => demo1.s3BucketArns,
       [
         arnFromSettings(settings, 's3', `${bucket}/*`, '', ''),
         arnFromSettings(settings, 's3', `${bucket}`, '', ''),
@@ -524,7 +524,7 @@ describe('ArnBuilder against the live dev27 IAM policy documents', () => {
     ],
     [
       'clusterConfigDdbArn',
-      () => dev27.clusterConfigDdbArn,
+      () => demo1.clusterConfigDdbArn,
       [
         arnFromSettings(settings, 'dynamodb', `table/${cluster}.cluster-settings`),
         arnFromSettings(settings, 'dynamodb', `table/${cluster}.cluster-settings/stream/*`),
@@ -533,7 +533,7 @@ describe('ArnBuilder against the live dev27 IAM policy documents', () => {
     ],
     [
       'serviceRoleArns',
-      () => dev27.serviceRoleArns,
+      () => demo1.serviceRoleArns,
       [
         arnFromSettings(settings, 'iam', `role/aws-service-role/s3.data-source.lustre.fsx.${dnsSuffix}/*`, undefined, ''),
         arnFromSettings(settings, 'iam', `role/aws-service-role/autoscaling.${dnsSuffix}/*`, undefined, ''),

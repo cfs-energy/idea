@@ -15,21 +15,21 @@ import { ClusterConfig } from '../../src/config/cluster-config.ts';
 import { renderPolicy, resourcesDir } from '../../src/cdk/policy.ts';
 import { requireCapture } from '../support/fixtures.ts';
 
-const RAW = fileURLToPath(new URL('../../tools/parity/fixtures/idea-dev27/raw/', import.meta.url));
+const RAW = fileURLToPath(new URL('../../tools/parity/fixtures/idea-demo1/raw/', import.meta.url));
 const LIVE = fileURLToPath(new URL('../../tools/parity/live/', import.meta.url));
 const SCAN = `${RAW}cluster-settings.scan.json`;
 const MODULES = `${RAW}modules.scan.json`;
 const CLUSTERS = join(homedir(), '.idea', 'clusters');
 const STACKS = ['analytics', 'bastion-host', 'bootstrap', 'cluster', 'cluster-manager', 'directoryservice', 'identity-provider', 'metrics', 'scheduler', 'shared-storage', 'vdc'];
-const missingDev27Templates = STACKS.filter((stack) => !existsSync(`${LIVE}idea-dev27-${stack}.json`));
+const missingDemo1Templates = STACKS.filter((stack) => !existsSync(`${LIVE}idea-demo1-${stack}.json`));
 requireCapture(
   [
     SCAN,
     MODULES,
-    ...STACKS.map((stack) => `${LIVE}idea-dev27-${stack}.json`),
+    ...STACKS.map((stack) => `${LIVE}idea-demo1-${stack}.json`),
     CLUSTERS,
   ],
-  "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
+  "node tools/parity/capture.ts --live --cluster idea-demo1 --region us-east-2",
 );
 
 // --- attribution ------------------------------------------------------------------------------
@@ -43,8 +43,8 @@ interface Attribution {
   pathPattern?: RegExp;
   /** Bootstrap resource logical ID, used only when construct metadata is absent. */
   resourceId?: string;
-  /** Logical id in the captured dev27 templates; absent iff dev27 does not have the feature on. */
-  dev27Id?: string;
+  /** Logical id in the captured demo1 templates; absent iff demo1 does not have the feature on. */
+  demo1Id?: string;
   /** Policy Jinja template. Exactly one of `template` / `generatedBy` is set. */
   template?: string;
   /** The CDK L2 grant that writes this document instead of a policy template. */
@@ -63,81 +63,81 @@ interface Attribution {
 
 const ATTRIBUTED: Attribution[] = [
   // analytics_stack.py:208, :438
-  { stack: 'analytics', path: 'analytics-sink-lambda-policy/Resource', dev27Id: 'analyticssinklambdapolicyD33AD925', template: 'analytics-sink-lambda.yml' },
-  { stack: 'analytics', path: 'opensearch-private-ips-lambda-policy/Resource', dev27Id: 'opensearchprivateipslambdapolicy2C1A5D98', template: 'custom-resource-opensearch-private-ips.yml' },
+  { stack: 'analytics', path: 'analytics-sink-lambda-policy/Resource', demo1Id: 'analyticssinklambdapolicyD33AD925', template: 'analytics-sink-lambda.yml' },
+  { stack: 'analytics', path: 'opensearch-private-ips-lambda-policy/Resource', demo1Id: 'opensearchprivateipslambdapolicy2C1A5D98', template: 'custom-resource-opensearch-private-ips.yml' },
   {
     stack: 'analytics',
     pathPattern: /^analytics\/ESLogGroupPolicy[0-9a-f]+\/CustomResourcePolicy\/Resource$/,
-    dev27Id: 'analyticsESLogGroupPolicyc8803cad36e6f020d595fd57136b9a57c0a2206865CustomResourcePolicy7D66AE30',
+    demo1Id: 'analyticsESLogGroupPolicyc8803cad36e6f020d595fd57136b9a57c0a2206865CustomResourcePolicy7D66AE30',
     generatedBy: 'opensearch.Domain logging options (analytics_stack.py:358) -> LogGroupResourcePolicy AwsCustomResource',
   },
   {
     stack: 'analytics',
     path: 'analytics/AccessPolicy/CustomResourcePolicy/Resource',
-    dev27Id: 'analyticsAccessPolicyCustomResourcePolicy9ECE5CA0',
+    demo1Id: 'analyticsAccessPolicyCustomResourcePolicy9ECE5CA0',
     generatedBy: 'opensearch.Domain access_policies (constructs/analytics.py:115-123) -> OpenSearchAccessPolicy AwsCustomResource',
   },
   {
     stack: 'analytics',
     path: 'analytics-sink-lambda-role/DefaultPolicy/Resource',
-    dev27Id: 'analyticssinklambdaroleDefaultPolicy74409E1C',
+    demo1Id: 'analyticssinklambdaroleDefaultPolicy74409E1C',
     generatedBy: 'lambda.add_event_source(KinesisEventSource) (analytics_stack.py:271) grants read on the stream',
   },
   // bastion_host_stack.py:96
-  { stack: 'bastion-host', path: 'bastion-host-policy/Resource', dev27Id: 'bastionhostpolicy211766EC', template: 'bastion-host.yml' },
+  { stack: 'bastion-host', path: 'bastion-host-policy/Resource', demo1Id: 'bastionhostpolicy211766EC', template: 'bastion-host.yml' },
   // cluster_manager_stack.py:225, :245, :261, :306, :331 (the last four only when bedrock is on)
-  { stack: 'cluster-manager', path: 'cluster-manager-policy/Resource', dev27Id: 'clustermanagerpolicyEF9BA73D', template: 'cluster-manager.yml', moduleOf: 'cluster-manager' },
-  { stack: 'cluster-manager', path: 'project-role-boundary/Resource', dev27Id: 'projectroleboundaryD13C6967', template: 'project-role-boundary.yml', moduleOf: 'cluster-manager', conditional: true },
-  { stack: 'cluster-manager', path: 'detach-project-boundaries-lambda-policy/Resource', dev27Id: 'detachprojectboundarieslambdapolicy941B0FC6', template: 'custom-resource-detach-project-boundaries.yml', conditional: true },
-  { stack: 'cluster-manager', path: 'ensure-bedrock-log-group-lambda-policy/Resource', dev27Id: 'ensurebedrockloggrouplambdapolicy4449C6A0', template: 'custom-resource-ensure-log-group.yml', conditional: true },
-  { stack: 'cluster-manager', path: 'bedrock-invocation-logging-policy/Resource', dev27Id: 'bedrockinvocationloggingpolicyD7BA525E', template: 'bedrock-invocation-logging.yml', moduleOf: 'cluster-manager', conditional: true },
-  // cluster_stack.py:241, :250, :263, :272 (only when cluster.backups.enabled; dev27 has it off)
+  { stack: 'cluster-manager', path: 'cluster-manager-policy/Resource', demo1Id: 'clustermanagerpolicyEF9BA73D', template: 'cluster-manager.yml', moduleOf: 'cluster-manager' },
+  { stack: 'cluster-manager', path: 'project-role-boundary/Resource', demo1Id: 'projectroleboundaryD13C6967', template: 'project-role-boundary.yml', moduleOf: 'cluster-manager', conditional: true },
+  { stack: 'cluster-manager', path: 'detach-project-boundaries-lambda-policy/Resource', demo1Id: 'detachprojectboundarieslambdapolicy941B0FC6', template: 'custom-resource-detach-project-boundaries.yml', conditional: true },
+  { stack: 'cluster-manager', path: 'ensure-bedrock-log-group-lambda-policy/Resource', demo1Id: 'ensurebedrockloggrouplambdapolicy4449C6A0', template: 'custom-resource-ensure-log-group.yml', conditional: true },
+  { stack: 'cluster-manager', path: 'bedrock-invocation-logging-policy/Resource', demo1Id: 'bedrockinvocationloggingpolicyD7BA525E', template: 'bedrock-invocation-logging.yml', moduleOf: 'cluster-manager', conditional: true },
+  // cluster_stack.py:241, :250, :263, :272 (only when cluster.backups.enabled; demo1 has it off)
   { stack: 'cluster', path: 'backup-create-policy/Resource', template: 'backup-create.yml', conditional: true },
   { stack: 'cluster', path: 'backup-s3-create-policy/Resource', template: 'backup-s3-create.yml', conditional: true },
   { stack: 'cluster', path: 'backup-restore-policy/Resource', template: 'backup-restore.yml', conditional: true },
   { stack: 'cluster', path: 'backup-s3-restore-policy/Resource', template: 'backup-s3-restore.yml', conditional: true },
   // cluster_stack.py:344, :353, :378, :445, :645, :693, :736, :919, :974
-  { stack: 'cluster', path: 'amazon-ssm-managed-instance-core/Resource', dev27Id: 'amazonssmmanagedinstancecore26547C9F', template: 'amazon-ssm-managed-instance-core.yml' },
-  { stack: 'cluster', path: 'cloud-watch-agent-server-policy/Resource', dev27Id: 'cloudwatchagentserverpolicy953A2E64', template: 'cloud-watch-agent-server-policy.yml' },
-  { stack: 'cluster', path: 'LogRetention/Resource', dev27Id: 'LogRetentionDD0A1FA1', template: 'log-retention.yml' },
-  { stack: 'cluster', path: 'update-cluster-prefix-list-policy/Resource', dev27Id: 'updateclusterprefixlistpolicy57E07488', template: 'custom-resource-update-cluster-prefix-list.yml', conditional: true, retired: 'the deploy tool merges the client addresses after the stack deploys' },
-  { stack: 'cluster', path: 'cluster-settings-policy/Resource', dev27Id: 'clustersettingspolicyCB373F35', template: 'custom-resource-update-cluster-settings.yml' },
-  { stack: 'cluster', path: 'solution-metrics-policy/Resource', dev27Id: 'solutionmetricspolicyCF61BD01', template: 'solution-metrics-lambda-function.yml' },
-  { stack: 'cluster', path: 'self-signed-certificate-policy/Resource', dev27Id: 'selfsignedcertificatepolicyADC88D10', template: 'custom-resource-self-signed-certificate.yml' },
-  { stack: 'cluster', path: 'cluster-ec2state-event-transformer-policy/Resource', dev27Id: 'clusterec2stateeventtransformerpolicy0DD48CD6', template: 'ec2state-event-transformer.yml' },
-  { stack: 'cluster', path: 'cluster-endpoints-policy/Resource', dev27Id: 'clusterendpointspolicy8641A368', template: 'custom-resource-cluster-endpoints.yml' },
+  { stack: 'cluster', path: 'amazon-ssm-managed-instance-core/Resource', demo1Id: 'amazonssmmanagedinstancecore26547C9F', template: 'amazon-ssm-managed-instance-core.yml' },
+  { stack: 'cluster', path: 'cloud-watch-agent-server-policy/Resource', demo1Id: 'cloudwatchagentserverpolicy953A2E64', template: 'cloud-watch-agent-server-policy.yml' },
+  { stack: 'cluster', path: 'LogRetention/Resource', demo1Id: 'LogRetentionDD0A1FA1', template: 'log-retention.yml' },
+  { stack: 'cluster', path: 'update-cluster-prefix-list-policy/Resource', demo1Id: 'updateclusterprefixlistpolicy57E07488', template: 'custom-resource-update-cluster-prefix-list.yml', conditional: true, retired: 'the deploy tool merges the client addresses after the stack deploys' },
+  { stack: 'cluster', path: 'cluster-settings-policy/Resource', demo1Id: 'clustersettingspolicyCB373F35', template: 'custom-resource-update-cluster-settings.yml' },
+  { stack: 'cluster', path: 'solution-metrics-policy/Resource', demo1Id: 'solutionmetricspolicyCF61BD01', template: 'solution-metrics-lambda-function.yml' },
+  { stack: 'cluster', path: 'self-signed-certificate-policy/Resource', demo1Id: 'selfsignedcertificatepolicyADC88D10', template: 'custom-resource-self-signed-certificate.yml' },
+  { stack: 'cluster', path: 'cluster-ec2state-event-transformer-policy/Resource', demo1Id: 'clusterec2stateeventtransformerpolicy0DD48CD6', template: 'ec2state-event-transformer.yml' },
+  { stack: 'cluster', path: 'cluster-endpoints-policy/Resource', demo1Id: 'clusterendpointspolicy8641A368', template: 'custom-resource-cluster-endpoints.yml' },
   {
     stack: 'cluster',
     path: 'vpc-flow-logs-role/DefaultPolicy/Resource',
-    dev27Id: 'vpcflowlogsroleDefaultPolicyAAD1B3D4',
+    demo1Id: 'vpcflowlogsroleDefaultPolicyAAD1B3D4',
     generatedBy: 'ec2.FlowLogDestination.to_cloud_watch_logs (constructs/network.py:110) grants the role write on the log group',
   },
   // constructs/directory_service.py:298
-  { stack: 'directoryservice', path: 'get-ad-security-group-id-lambda-policy/Resource', dev27Id: 'getadsecuritygroupidlambdapolicyC8292AF8', template: 'custom-resource-get-ad-security-group.yml' },
+  { stack: 'directoryservice', path: 'get-ad-security-group-id-lambda-policy/Resource', demo1Id: 'getadsecuritygroupidlambdapolicyC8292AF8', template: 'custom-resource-get-ad-security-group.yml' },
   // identity_provider_stack.py:177, :242
-  { stack: 'identity-provider', path: 'id-token-claim-policy/Resource', dev27Id: 'idtokenclaimpolicy3D23F897', template: 'custom_resource_sso_claim_modifier.yml' },
-  { stack: 'identity-provider', path: 'oauth-credentials-policy/Resource', dev27Id: 'oauthcredentialspolicy92D4C6F2', template: 'custom-resource-get-user-pool-client-secret.yml', retired: 'a user pool client returns its own generated secret' },
+  { stack: 'identity-provider', path: 'id-token-claim-policy/Resource', demo1Id: 'idtokenclaimpolicy3D23F897', template: 'custom_resource_sso_claim_modifier.yml' },
+  { stack: 'identity-provider', path: 'oauth-credentials-policy/Resource', demo1Id: 'oauthcredentialspolicy92D4C6F2', template: 'custom-resource-get-user-pool-client-secret.yml', retired: 'a user pool client returns its own generated secret' },
   // scheduler_stack.py:238, :248, :258
-  { stack: 'scheduler', path: 'scheduler-policy/Resource', dev27Id: 'schedulerpolicyFF65A604', template: 'scheduler.yml', moduleOf: 'scheduler', vars: 'scheduler-roles' },
-  { stack: 'scheduler', path: 'compute-node-policy/Resource', dev27Id: 'computenodepolicyBA9B1B50', template: 'compute-node.yml', moduleOf: 'scheduler', vars: 'scheduler-roles' },
-  { stack: 'scheduler', path: 'spot-fleet-policy/Resource', dev27Id: 'spotfleetpolicyC2C65FA8', template: 'spot-fleet-request.yml', moduleOf: 'scheduler', vars: 'scheduler-roles' },
+  { stack: 'scheduler', path: 'scheduler-policy/Resource', demo1Id: 'schedulerpolicyFF65A604', template: 'scheduler.yml', moduleOf: 'scheduler', vars: 'scheduler-roles' },
+  { stack: 'scheduler', path: 'compute-node-policy/Resource', demo1Id: 'computenodepolicyBA9B1B50', template: 'compute-node.yml', moduleOf: 'scheduler', vars: 'scheduler-roles' },
+  { stack: 'scheduler', path: 'spot-fleet-policy/Resource', demo1Id: 'spotfleetpolicyC2C65FA8', template: 'spot-fleet-request.yml', moduleOf: 'scheduler', vars: 'scheduler-roles' },
   // virtual_desktop_controller_stack.py:308, :365, :500, :754
-  { stack: 'vdc', path: '{cluster}-vdc-ssm-commands-sns-topic-role-policy/Resource', dev27Id: 'ideadev27vdcssmcommandssnstopicrolepolicyFB3F8CC2', template: 'controller-ssm-command-pass-role.yml' },
-  { stack: 'vdc', path: 'vdc-scheduled-event-transformer-policy/Resource', dev27Id: 'vdcscheduledeventtransformerpolicyAA1F68E7', template: 'controller-scheduled-event-transformer-lambda.yml' },
-  { stack: 'vdc', path: 'vdc-host-policy/Resource', dev27Id: 'vdchostpolicy897A655B', template: 'virtual-desktop-dcv-host.yml' },
-  { stack: 'vdc', path: '{cluster}-vdc-controller-policy/Resource', dev27Id: 'ideadev27vdccontrollerpolicy798DCB04', template: 'virtual-desktop-controller.yml', vars: 'component-role' },
-  { stack: 'vdc', path: '{cluster}-vdc-broker-policy/Resource', dev27Id: 'ideadev27vdcbrokerpolicy7BA03365', template: 'virtual-desktop-dcv-broker.yml', vars: 'component-role' },
-  { stack: 'vdc', path: '{cluster}-vdc-gateway-policy/Resource', dev27Id: 'ideadev27vdcgatewaypolicy32C2AAA6', template: 'virtual-desktop-dcv-connection-gateway.yml', vars: 'component-role' },
+  { stack: 'vdc', path: '{cluster}-vdc-ssm-commands-sns-topic-role-policy/Resource', demo1Id: 'ideademo1vdcssmcommandssnstopicrolepolicy726437A4', template: 'controller-ssm-command-pass-role.yml' },
+  { stack: 'vdc', path: 'vdc-scheduled-event-transformer-policy/Resource', demo1Id: 'vdcscheduledeventtransformerpolicyAA1F68E7', template: 'controller-scheduled-event-transformer-lambda.yml' },
+  { stack: 'vdc', path: 'vdc-host-policy/Resource', demo1Id: 'vdchostpolicy897A655B', template: 'virtual-desktop-dcv-host.yml' },
+  { stack: 'vdc', path: '{cluster}-vdc-controller-policy/Resource', demo1Id: 'ideademo1vdccontrollerpolicyF192F909', template: 'virtual-desktop-controller.yml', vars: 'component-role' },
+  { stack: 'vdc', path: '{cluster}-vdc-broker-policy/Resource', demo1Id: 'ideademo1vdcbrokerpolicy56B86FB2', template: 'virtual-desktop-dcv-broker.yml', vars: 'component-role' },
+  { stack: 'vdc', path: '{cluster}-vdc-gateway-policy/Resource', demo1Id: 'ideademo1vdcgatewaypolicyA538391B', template: 'virtual-desktop-dcv-connection-gateway.yml', vars: 'component-role' },
   {
     stack: 'vdc',
     path: 'vdc-controller-role/DefaultPolicy/Resource',
-    dev27Id: 'vdccontrollerroleDefaultPolicy5F94E7B2',
+    demo1Id: 'vdccontrollerroleDefaultPolicy5F94E7B2',
     generatedBy: 'two Role.grant_pass_role calls (virtual_desktop_controller_stack.py:311, :507) on the controller role',
   },
   // Bootstrap resources have no construct metadata or policy template.
-  { stack: 'bootstrap', resourceId: 'FilePublishingRoleDefaultPolicy', dev27Id: 'FilePublishingRoleDefaultPolicy', generatedBy: 'CDK bootstrap template: staging bucket + KMS key grants on the file-publishing role' },
-  { stack: 'bootstrap', resourceId: 'ImagePublishingRoleDefaultPolicy', dev27Id: 'ImagePublishingRoleDefaultPolicy', generatedBy: 'CDK bootstrap template: ECR grants on the image-publishing role' },
-  { stack: 'bootstrap', resourceId: 'CdkBootstrapPermissionsBoundaryPolicy', dev27Id: 'CdkBootstrapPermissionsBoundaryPolicy', generatedBy: 'CDK bootstrap template: the example permissions-boundary managed policy' },
+  { stack: 'bootstrap', resourceId: 'FilePublishingRoleDefaultPolicy', demo1Id: 'FilePublishingRoleDefaultPolicy', generatedBy: 'CDK bootstrap template: staging bucket + KMS key grants on the file-publishing role' },
+  { stack: 'bootstrap', resourceId: 'ImagePublishingRoleDefaultPolicy', demo1Id: 'ImagePublishingRoleDefaultPolicy', generatedBy: 'CDK bootstrap template: ECR grants on the image-publishing role' },
+  { stack: 'bootstrap', resourceId: 'CdkBootstrapPermissionsBoundaryPolicy', demo1Id: 'CdkBootstrapPermissionsBoundaryPolicy', generatedBy: 'CDK bootstrap template: the example permissions-boundary managed policy' },
 ];
 
 // --- template access --------------------------------------------------------------------------
@@ -422,7 +422,7 @@ describe('PolicyDocument comparison boundary', () => {
   });
 });
 
-// --- dev27: the deployed templates --------------------------------------------------------------
+// --- demo1: the deployed templates --------------------------------------------------------------
 
 /** Rebuilds a `ClusterConfig` from a dynamodb scan with rows replaced. */
 function configFromScan(scanJson: string, modulesJson: string, overrides: Record<string, unknown>): ClusterConfig {
@@ -437,17 +437,17 @@ function configFromScan(scanJson: string, modulesJson: string, overrides: Record
 }
 
 /** Overrides that match the captured scheduler policy. */
-const DEV27_STALE_ROWS = { 'scheduler.use_stable_server_name': false };
+const DEMO1_STALE_ROWS = { 'scheduler.use_stable_server_name': false };
 
-describe('renderPolicy vs the deployed dev27 templates', () => {
+describe('renderPolicy vs the deployed demo1 templates', () => {
   const templates = new Map<string, Template>();
-  const dev27: Cluster = {
-    name: 'idea-dev27',
-    configFor: () => configFromScan(readFileSync(SCAN, 'utf-8'), readFileSync(MODULES, 'utf-8'), DEV27_STALE_ROWS),
+  const demo1: Cluster = {
+    name: 'idea-demo1',
+    configFor: () => configFromScan(readFileSync(SCAN, 'utf-8'), readFileSync(MODULES, 'utf-8'), DEMO1_STALE_ROWS),
     templateFor: (stack) => {
       if (!templates.has(stack)) {
-        const file = `${LIVE}idea-dev27-${stack}.json`;
-        if (!existsSync(file)) throw new Error(`dev27 fixture is missing captured template: ${file}`);
+        const file = `${LIVE}idea-demo1-${stack}.json`;
+        if (!existsSync(file)) throw new Error(`demo1 fixture is missing captured template: ${file}`);
         templates.set(stack, JSON.parse(readFileSync(file, 'utf-8')) as Template);
       }
       return templates.get(stack);
@@ -455,24 +455,24 @@ describe('renderPolicy vs the deployed dev27 templates', () => {
   };
 
   it('requires all captured stack templates before comparing policies', () => {
-    assert.deepStrictEqual(missingDev27Templates, []);
+    assert.deepStrictEqual(missingDemo1Templates, []);
   });
 
   it('classifies every IAM policy in the ten stacks plus bootstrap, by logical id', () => {
-    const { byLogicalId, rendered, generated } = classifyAllPolicies(dev27, STACKS);
+    const { byLogicalId, rendered, generated } = classifyAllPolicies(demo1, STACKS);
     // The committed list and the captured templates hold the same set of logical ids.
     const live = [...byLogicalId.keys()].sort();
-    const committed = ATTRIBUTED.filter((entry) => entry.dev27Id !== undefined).map((entry) => entry.dev27Id as string).sort();
+    const committed = ATTRIBUTED.filter((entry) => entry.demo1Id !== undefined).map((entry) => entry.demo1Id as string).sort();
     assert.deepStrictEqual(live, committed);
     // Each live resource is claimed by the entry that pins that logical id.
-    const mispinned = [...byLogicalId.entries()].filter(([id, entry]) => entry.dev27Id !== id).map(([id]) => id);
+    const mispinned = [...byLogicalId.entries()].filter(([id, entry]) => entry.demo1Id !== id).map(([id]) => id);
     assert.deepStrictEqual(mispinned, []);
-    console.log(`dev27 IAM policies: ${rendered.length + generated.length}; template-rendered ${rendered.length}; L2-generated ${generated.length}; unclassified 0`);
+    console.log(`demo1 IAM policies: ${rendered.length + generated.length}; template-rendered ${rendered.length}; L2-generated ${generated.length}; unclassified 0`);
   });
 
   it('renders every template-rendered policy identically', () => {
-    const { matched, failed, absent } = compareAll(dev27);
-    console.log(`dev27 matched ${matched.length}/${matched.length + failed.length}; absent (feature off): ${absent.join(', ')}`);
+    const { matched, failed, absent } = compareAll(demo1);
+    console.log(`demo1 matched ${matched.length}/${matched.length + failed.length}; absent (feature off): ${absent.join(', ')}`);
     assert.deepStrictEqual(failed, []);
     assert.equal(
       matched.length + absent.length,

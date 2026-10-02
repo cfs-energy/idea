@@ -1,6 +1,6 @@
 /**
  * The app entry point, IdeaBaseStack and the common constructs, checked against the
- * dev27 fixtures and the live dev27 templates.
+ * demo1 fixtures and the live demo1 templates.
  *
  * Fixtures under tools/parity/{fixtures,live} are gitignored, and this whole file requires them.
  */
@@ -41,14 +41,14 @@ import { NODE_LAMBDA_HANDLER, NODE_RUNTIME } from '../support/node-handlers.ts';
 import { ideaVersion } from '../../src/version.ts';
 
 const PKG = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const FIXTURES = join(PKG, 'tools', 'parity', 'fixtures', 'idea-dev27');
+const FIXTURES = join(PKG, 'tools', 'parity', 'fixtures', 'idea-demo1');
 const LIVE = join(PKG, 'tools', 'parity', 'live');
 const CONFIG_FILE = join(FIXTURES, 'cluster-settings.json');
 const SYNTH_READS = join(FIXTURES, 'synth-reads.json');
 const CONTEXT_FILE = join(FIXTURES, 'cdk.context.json');
 const PYTHON_CDK = join(FIXTURES, 'python', '_cdk');
 
-const CLUSTER = 'idea-dev27';
+const CLUSTER = 'idea-demo1';
 const REGION = 'us-east-2';
 const DEPLOYMENT_ID = '97999f4c-daaa-4813-b8ac-bd7abaedc26b';
 
@@ -58,19 +58,19 @@ requireCapture(
     SYNTH_READS,
     CONTEXT_FILE,
     PYTHON_CDK,
-    join(LIVE, 'idea-dev27-metrics.json'),
-    join(LIVE, 'idea-dev27-cluster.json'),
-    join(LIVE, 'idea-dev27-analytics.json'),
-    join(LIVE, 'idea-dev27-cluster-manager.json'),
+    join(LIVE, 'idea-demo1-metrics.json'),
+    join(LIVE, 'idea-demo1-cluster.json'),
+    join(LIVE, 'idea-demo1-analytics.json'),
+    join(LIVE, 'idea-demo1-cluster-manager.json'),
   ],
-  "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
+  "node tools/parity/capture.ts --live --cluster idea-demo1 --region us-east-2",
 );
 
 const readJson = (path: string): Record<string, any> => JSON.parse(readFileSync(path, 'utf8'));
 
 const workdirs: string[] = [];
 
-/** Synthesizes one stack through `app.ts` with the dev27 fixtures, in a throwaway cwd. */
+/** Synthesizes one stack through `app.ts` with the demo1 fixtures, in a throwaway cwd. */
 async function synth(
   moduleId: string,
   moduleName: string,
@@ -241,7 +241,7 @@ describe('IdeaBaseStack manifest parity', () => {
     assert.equal(artifact.properties.templateFile, `${CLUSTER}-metrics.template.json`);
     assert.equal(artifact.properties.terminationProtection, true);
 
-    // tags, in the documented order: custom tags (none on dev27), then the four IDEA tags
+    // tags, in the documented order: custom tags (none on demo1), then the four IDEA tags
     assert.deepEqual(Object.keys(artifact.properties.tags), [
       'idea:ClusterName',
       'idea:ModuleId',
@@ -258,10 +258,10 @@ describe('IdeaBaseStack manifest parity', () => {
     assert.equal(template.Description, `ModuleId: metrics, Cluster: ${CLUSTER}, Version: ${ideaVersion()}`);
 
     // synthesizer: qualifier shake256(cluster,5), bucketPrefix cdk/, cluster bucket
-    assert.equal(template.Parameters.BootstrapVersion.Default, '/cdk-bootstrap/6f3b37a775/version');
-    assert.equal(artifact.properties.bootstrapStackVersionSsmParameter, '/cdk-bootstrap/6f3b37a775/version');
-    assert.match(artifact.properties.assumeRoleArn, /role\/cdk-6f3b37a775-deploy-role-/);
-    assert.match(artifact.properties.stackTemplateAssetObjectUrl, /^s3:\/\/idea-dev27-cluster-us-east-2-\d+\/cdk\//);
+    assert.equal(template.Parameters.BootstrapVersion.Default, '/cdk-bootstrap/d98389644e/version');
+    assert.equal(artifact.properties.bootstrapStackVersionSsmParameter, '/cdk-bootstrap/d98389644e/version');
+    assert.match(artifact.properties.assumeRoleArn, /role\/cdk-d98389644e-deploy-role-/);
+    assert.match(artifact.properties.stackTemplateAssetObjectUrl, /^s3:\/\/idea-demo1-cluster-us-east-2-\d+\/cdk\//);
   });
 
   test('matches the reference manifest for the same stack', async () => {
@@ -288,8 +288,8 @@ describe('IdeaBaseStack manifest parity', () => {
 
   test('updateClusterSettings reproduces the live Custom::ClusterSettings shape', async () => {
     const { template } = await synth('metrics', 'metrics', buildMinimal);
-    const live = readJson(join(LIVE, 'idea-dev27-metrics.json'));
-    const logicalId = 'ideadev27metricssettings';
+    const live = readJson(join(LIVE, 'idea-demo1-metrics.json'));
+    const logicalId = 'ideademo1metricssettings';
 
     const ours = template.Resources[logicalId];
     const theirs = live.Resources[logicalId];
@@ -367,7 +367,7 @@ class MinimalBareStack extends IdeaBaseStack {}
 describe('common constructs', () => {
   test('cluster-settings trio: live logical ids and DependsOn', async () => {
     const { template } = await synth('cluster', 'cluster', buildClusterSettingsTrio, { nag: false });
-    const live = readJson(join(LIVE, 'idea-dev27-cluster.json')).Resources;
+    const live = readJson(join(LIVE, 'idea-demo1-cluster.json')).Resources;
 
     for (const logicalId of ['clustersettingsrole7B76C95D', 'clustersettingspolicyCB373F35', 'clustersettingsBECB5478']) {
       assert.ok(template.Resources[logicalId], `logical id ${logicalId} reproduced`);
@@ -405,7 +405,7 @@ describe('common constructs', () => {
 
   test('CustomResourceProvider reproduces the policy/role/lambda trio ids and DependsOn', async () => {
     const { template } = await synth('cluster', 'cluster', buildClusterSettingsTrio, { nag: false });
-    const liveAnalytics = readJson(join(LIVE, 'idea-dev27-analytics.json')).Resources;
+    const liveAnalytics = readJson(join(LIVE, 'idea-demo1-analytics.json')).Resources;
 
     const ids = {
       policy: 'opensearchprivateipslambdapolicy2C1A5D98',
@@ -423,7 +423,7 @@ describe('common constructs', () => {
     assert.deepEqual(template.Resources[ids.lambda].DependsOn, [ids.policy, ids.role]);
     assert.equal(
       template.Resources[ids.role].Properties.Description,
-      'Role for Custom::OpensearchPrivateIps for Cluster: idea-dev27',
+      'Role for Custom::OpensearchPrivateIps for Cluster: idea-demo1',
     );
   });
 
@@ -478,7 +478,7 @@ describe('lookupUserPool / buildAccessControlGroups / getEc2InstanceManagedPolic
     const { template } = await synth('cluster-manager', 'cluster-manager', builder, { nag: false });
     // The deployed side carries this branch's retain policy on its stateful resources, the one
     // change to these attributes, itemised in tools/parity/intended-drift.ts.
-    const live = withRetainedStateful(readJson(join(LIVE, 'idea-dev27-cluster-manager.json'))).Resources;
+    const live = withRetainedStateful(readJson(join(LIVE, 'idea-demo1-cluster-manager.json'))).Resources;
 
     // the user pool is imported, not created: the two groups are the only resources
     assert.equal(userPoolNodeId, `${CLUSTER}-user-pool`);
@@ -537,7 +537,7 @@ describe('ExistingSocaCluster', () => {
 
 // --- per-stack imports --------------------------------------------------------------------------
 
-/** The dev27 settings plus the rows dev27 does not carry, so every lookup can be exercised. */
+/** The demo1 settings plus the rows demo1 does not carry, so every lookup can be exercised. */
 function configFileWith(extra: Record<string, string>): string {
   const scan = readJson(CONFIG_FILE) as { Items: Array<Record<string, any>> };
   for (const [key, value] of Object.entries(extra)) {
