@@ -167,7 +167,10 @@ def test_a_good_launch_passes_every_check_and_is_deleted():
 def test_not_ready_within_the_gate_is_a_failure_and_still_cleans_up():
     clock = Clock()
     api = FakeApi([VirtualDesktopSessionState.PROVISIONING])
-    tester, _ = launcher(api, clock)
+    tester, context = launcher(api, clock)
+    context.aws().logs().get_log_events.return_value = {
+        'events': [{'message': '[INFO] Joining the domain...\n'}]
+    }
 
     checks = tester.test_launch(
         RECORD, STACK, ImagePipelineSettings(ready_gate_seconds_linux=300)
@@ -175,6 +178,13 @@ def test_not_ready_within_the_gate_is_a_failure_and_still_cleans_up():
 
     assert checks[-1].name == 'ready_gate' and checks[-1].ok is False
     assert 'not READY within 300 s' in checks[-1].detail
+    # the row says which host and where its bootstrap stopped
+    assert 'host i-desk' in checks[-1].detail
+    assert checks[-1].detail.endswith(
+        'last bootstrap log line: [INFO] Joining the domain...'
+    )
+    kwargs = context.aws().logs().get_log_events.call_args.kwargs
+    assert kwargs['logStreamName'] == 'bootstrap_i-desk'
     api.session_utils.terminate_sessions.assert_called_once()
     api.software_stack_db.delete.assert_called_once()
 

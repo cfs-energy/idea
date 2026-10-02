@@ -440,11 +440,15 @@ class ImageTestLauncher:
             ready = self._wait_ready(session, gate, 'ready_gate')
             checks.append(ready)
             if not ready.ok:
+                self._explain(ready, session)
                 return checks
             session = self._get(session)
             checks.extend(self._host_checks(session, settings, windows, variant))
             checks.append(self._bootstrap_log(session))
-            checks.append(self._reboot(session, gate))
+            rebooted = self._reboot(session, gate)
+            if not rebooted.ok:
+                self._explain(rebooted, session)
+            checks.append(rebooted)
             return checks
         finally:
             self._delete(session, stack)
@@ -561,6 +565,32 @@ class ImageTestLauncher:
             f'not READY within {gate} s (last state {getattr(state, "value", state)})',
             started,
         )
+
+    def _explain(self, failed: ImageCheck, session):
+        """a desktop that never got READY: name its host and the last line its bootstrap logged"""
+        try:
+            current = self._get(session) or session
+            instance_id = getattr(current.server, 'instance_id', None)
+            if not instance_id:
+                return
+            failed.detail = f'{failed.detail}; host {instance_id}'
+            if not dcv_host_cloudwatch_logs_enabled(self.context):
+                return
+            events = (
+                self.context.aws()
+                .logs()
+                .get_log_events(
+                    logGroupName=dcv_host_log_group(self.context),
+                    logStreamName=BOOTSTRAP_LOG_STREAM.format(instance_id=instance_id),
+                    startFromHead=False,
+                    limit=1,
+                )
+                .get('events', [])
+            )
+            last = events[-1]['message'].strip() if events else 'no bootstrap log yet'
+            failed.detail = f'{failed.detail}; last bootstrap log line: {last}'[:500]
+        except Exception as e:
+            self._logger.warning(f'could not read the bootstrap log tail: {e}')
 
     def _host_checks(self, session, settings, windows, variant) -> List[ImageCheck]:
         started = self.clock()
