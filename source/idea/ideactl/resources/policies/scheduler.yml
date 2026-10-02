@@ -329,6 +329,33 @@ Statement:
       - '*'
     Sid: ComputeNodeAmiBuilderPermissions2
 
+  # Compute image promotion marks the image it validated (rollback only returns to marked images).
+  - Effect: Allow
+    Action:
+      - ec2:CreateTags
+    Condition:
+      StringEquals:
+        aws:ResourceTag/idea:ClusterName: '{{ context.cluster_name }}'
+    Resource:
+      - '{{ context.arns.get_arn("ec2", "image/*", aws_account_id="") }}'
+    Sid: ComputeImagePromotionTag
+
+  # The scheduler's only cluster-settings writes: promotion moves the compute default in the same
+  # transaction that checks its pin, and the leader records its release and monthly checkpoints.
+  - Effect: Allow
+    Action:
+      - dynamodb:UpdateItem
+      - dynamodb:ConditionCheckItem
+    Resource: '{{ context.arns.get_ddb_table_arn("cluster-settings") }}'
+    Condition:
+      ForAllValues:StringEquals:
+        dynamodb:LeadingKeys:
+          - '{{ context.module_id }}.compute_node_ami'
+          - '{{ context.module_id }}.images.default_image_pinned'
+          - '{{ context.module_id }}.images.image_refresh_last_run_on'
+          - '{{ context.module_id }}.images.refreshed_release'
+    Sid: ComputeImageSettings
+
 {% if context.config.get_bool('scheduler.use_stable_server_name', default=False) or context.config.get_bool('ecs.enabled', default=False) %}
   # With a stable server name the scheduler owns its own DNS record and points it at
   # whichever host or task is running the server. The container path always has the stable name,

@@ -384,7 +384,7 @@ describe('vdc stack, dev27', () => {
     ]);
   });
 
-  test('the controller may write only its seeded-release settings row', async () => {
+  test('the controller may write only its seeded-release, image pipeline and schedule rows', async () => {
     const { template } = await synthVdc();
     const writes = Object.values(template.Resources as Json)
       .filter((resource) => (resource as Json).Type === 'AWS::IAM::Policy')
@@ -392,7 +392,16 @@ describe('vdc stack, dev27', () => {
       .filter((statement) => [statement.Action].flat().includes('dynamodb:UpdateItem') && statement.Condition !== undefined);
     assert.equal(writes.length, 1);
     assert.deepEqual(writes[0].Condition, {
-      'ForAllValues:StringEquals': { 'dynamodb:LeadingKeys': [`${MODULE_ID}.software_stacks.base_stacks_seeded_release`] },
+      'ForAllValues:StringEquals': {
+        'dynamodb:LeadingKeys': [
+          'base_stacks_seeded_release',
+          'images_baked_release',
+          'image_refresh_last_run_on',
+          'image_refresh_schedule.enabled',
+          'image_refresh_schedule.day',
+          'image_refresh_schedule.hour',
+        ].map((key) => `${MODULE_ID}.software_stacks.${key}`),
+      },
     });
     assert.match(String(writes[0].Resource), new RegExp(`:table/${CLUSTER}\\.cluster-settings$`));
     assert.deepEqual([writes[0].Action].flat(), ['dynamodb:UpdateItem']);

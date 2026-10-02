@@ -7,6 +7,10 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 
 ## [26.10.1] - 2026-10-02
 
+* **Validated images**: desktop and compute images are rebuilt and validated after every upgrade, on a monthly check for newer vendor images, and from Refresh and validate on the Images page, and only an image that passed every check replaces the one in use.
+* **Image rollback and pins**: Roll back returns a row to its previous validated image and holds automatic updates, and a pinned row, software stack or queue profile is never moved.
+* **Windows desktop images**: Windows Server 2019, 2022 and 2025 desktop images are baked, checked and generalized like the Linux ones.
+* **Compute image canary**: a compute image is promoted only after a real job on a hidden queue lands on it, mounts every shared file system and exits cleanly.
 * **Job submit checks**: a job is rejected at submit when its AMI does not exist or is not shared with the account, when none of its instance types is offered in its subnets' availability zones, and architecture or base_os rejections name the queues that fit; an AMI or offering that cannot be looked up is still allowed.
 * **Stuck jobs**: a job whose nodes launched but never started it is held with a comment naming the cause and the qrls to retry, instead of retrying silently, and a pinned AMI that is deprecated or older than the queue default is noted in the job comment.
 * **Reporting speed**: the report reads per-user cost heads with a filtered parallel scan, and cost generations are kept for an hour instead of a day, which took a production cost table from 138 MB toward a fraction of that.

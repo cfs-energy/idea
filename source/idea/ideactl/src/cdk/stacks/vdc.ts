@@ -807,6 +807,9 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
           cognito.OAuthScope.custom(`${this.moduleId}/read`),
           cognito.OAuthScope.custom(`${this.moduleId}/write`),
           cognito.OAuthScope.custom(`${this.context.config.moduleId(MODULE_CLUSTER_MANAGER)}/read`),
+          // image validation creates its service user and hidden project (Accounts.CreateUser,
+          // Projects.CreateProject); the cluster manager has no narrower scope for that
+          cognito.OAuthScope.custom(`${this.context.config.moduleId(MODULE_CLUSTER_MANAGER)}/write`),
           cognito.OAuthScope.custom('dcv-session-manager/sm_scope'),
         ],
       },
