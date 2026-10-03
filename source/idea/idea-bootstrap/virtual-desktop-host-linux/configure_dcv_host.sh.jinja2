@@ -406,7 +406,10 @@ systemctl restart NetworkManager
 {% endif %}
 
 
-{% if context.base_os == 'ubuntu2404' %}
+{# 22.04: NetworkManager now owns the interface, so networkd-wait-online waits its full
+   120 s on every later boot (the reboot below included); NetworkManager-wait-online still
+   gates network-online.target. #}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
 systemctl disable systemd-networkd-wait-online.service
 {% endif %}
 

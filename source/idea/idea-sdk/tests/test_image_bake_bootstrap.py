@@ -784,3 +784,12 @@ def test_desktop_host_keeps_the_baked_usb_module_and_cronie():
         assert 'modinfo eveusb' in text and 'lsmod | grep eveusb' not in text
     setup = render('virtual-desktop-host-linux/setup.sh.jinja2', 'amazonlinux2023')
     assert 'rpm -q cronie >/dev/null 2>&1 || dnf -y install cronie' in setup
+
+
+@pytest.mark.parametrize('base_os', ['ubuntu2204', 'ubuntu2404'])
+def test_ubuntu_desktop_boots_do_not_wait_for_networkd(base_os):
+    # 22.04 hands the interface to NetworkManager; systemd-networkd-wait-online then times
+    # out after 120 s on every later boot, including the bootstrap's own reboot
+    host = render('virtual-desktop-host-linux/configure_dcv_host.sh.jinja2', base_os)
+    disable = host.index('systemctl disable systemd-networkd-wait-online.service')
+    assert disable < host.index('set_reboot_required "Reboot after DCV host')
