@@ -263,7 +263,8 @@ class NodeHouseKeepingSession:
             return False
 
         if node.has_state(*UNAVAILABLE_NODE_STATES):
-            state_changed = node.last_state_changed_time
+            # a mom that never reached the server has no state change time: count from launch
+            state_changed = node.last_state_changed_time or instance.launch_time
             if state_changed is None:
                 return False
 
