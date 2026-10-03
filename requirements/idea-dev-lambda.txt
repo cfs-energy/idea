@@ -28,7 +28,7 @@ requests==2.34.2
     # via opensearch-py
 six==1.17.0
     # via python-dateutil
-urllib3==2.7.0
+urllib3==2.8.0
     # via
     #   opensearch-py
     #   requests

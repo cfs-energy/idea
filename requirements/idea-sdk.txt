@@ -166,7 +166,7 @@ tzdata==2026.3
     # via arrow
 tzlocal==5.4.4
     # via -r idea-sdk.in
-urllib3==2.7.0
+urllib3==2.8.0
     # via
     #   botocore
     #   opensearch-py
