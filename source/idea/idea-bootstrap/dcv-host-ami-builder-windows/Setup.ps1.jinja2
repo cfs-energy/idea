@@ -152,7 +152,9 @@ try {
     # Includes that exit nonzero still reach finally; a partial install cannot look complete.
     if (-not $Published) {
         if (-not ($Checks | Where-Object { -not $_.ok })) {
-            Add-ImageCheck 'bootstrap' $false 'Installer exited before checks finished'
+            # an installer that calls exit logged why: name that line, not just the exit
+            $LastError = if (Test-Path $LogFile) { Select-String -Path $LogFile -CaseSensitive -Pattern '^\S+ \S+ (ERROR|FATAL):' | Select-Object -Last 1 }
+            Add-ImageCheck 'bootstrap' $false ("Installer exited before checks finished" + $(if ($LastError) { ": $($LastError.Line.Trim())" } else { '' }))
         }
         Publish-ImageChecks
     }

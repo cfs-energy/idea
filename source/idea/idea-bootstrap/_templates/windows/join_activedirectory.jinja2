@@ -13,7 +13,6 @@ $AD_SHORT_NAME = "{{ context.config.get_string('directoryservice.ad_short_name',
 
 # Various timers / settings controlling AD Join process
 # These configuration settings impact the AD Join process after the eVDI client is authorized to join Active Directory
-$AD_JOIN_MIN_SLEEP = "{{ context.config.get_int('directoryservice.ad_automation.ad_join_min_sleep', default=30) }}"
 $AD_JOIN_MAX_SLEEP = "{{ context.config.get_int('directoryservice.ad_automation.ad_join_max_sleep', default=31) }}"
 $AD_JOIN_RETRY_COUNT = "{{ context.config.get_int('directoryservice.ad_automation.ad_join_retry_count', default=10) }}"
 
@@ -26,7 +25,7 @@ function Send-ADAutomationSQSMessage
   [OutputType([Boolean])]
   [CmdletBinding()]
   # the name the computer account is created with: Configure passes the IDEA hostname, so
-  # the rename rides on the domain join (Add-Computer -NewName) and one restart applies both
+  # the join renames (Rename-Computer, then Add-Computer JoinWithNewName); one restart applies both
   Param([String] $Hostname = $env:COMPUTERNAME)
 
   $payload = @{ header = @{ namespace = 'ADAutomation.PresetComputer' }; payload = @{ nonce = $AD_AUTHORIZATION_NONCE; instance_id = $AD_AUTHORIZATION_INSTANCE_ID; hostname = $Hostname } } | ConvertTo-Json -Compress
@@ -174,8 +173,14 @@ function Start-ADAutomationWaitForAuthorizationAndJoin
 
     if ($($authorizationEntry.hostname) -ne $env:COMPUTERNAME )
     {
+        # The account was preset under this name. Add-Computer -NewName joins under the
+        # current EC2AMAZ-* name, which has no preset account, so the unsecured join falls
+        # back to authenticating and fails ("NTLM authentication has been disabled" on 2025,
+        # "only allowed for the Primary Domain Controller" on 2019). Rename-Computer without a
+        # restart sets the pending name, and JoinWithNewName joins under it: one restart
+        # applies both.
         Write-ToLog -Message "[Join AD] Joining with cluster-manager supplied hostname: $($authorizationEntry.hostname)"
-        $joinCmd += "-NewName $($authorizationEntry.hostname) "
+        Rename-Computer -NewName $($authorizationEntry.hostname) -Force -WarningAction SilentlyContinue
         $optionsString += ", JoinWithNewName"
     }
 
@@ -186,17 +191,18 @@ function Start-ADAutomationWaitForAuthorizationAndJoin
 
     $attemptNumber = 0
     $joined = $false
-    Write-ToLog -Message "[Join AD] Using AD Join settings of (Min/Max/Attempts): $AD_JOIN_MIN_SLEEP / $AD_JOIN_MAX_SLEEP / $AD_JOIN_RETRY_COUNT"
+    # the join names the domain controller that created the account, so the first attempt
+    # needs no replication delay; a failed attempt retries every 5 s within the same overall
+    # wait the retry settings allowed (a fixed 30 s sleep cost a desktop 30 s per retry)
+    $joinDeadline = (Get-Date).AddSeconds([int]$AD_JOIN_RETRY_COUNT * [int]$AD_JOIN_MAX_SLEEP)
+    Write-ToLog -Message "[Join AD] Retrying a failed join every 5 seconds until $joinDeadline"
 
     # AD Join retry loop
-    # the join names the domain controller that created the account, so the first attempt
-    # needs no replication delay; only a failed attempt waits before the next one
     do {
         $attemptNumber++
         if ($attemptNumber -gt 1) {
-            $sleepBuffer = $(Get-Random -Minimum $AD_JOIN_MIN_SLEEP -Maximum $AD_JOIN_MAX_SLEEP)
-            Write-ToLog -Message "[Join AD] Attempt #$attemptNumber - Delaying $sleepBuffer seconds after the failed attempt"
-            Start-Sleep -Seconds $sleepBuffer
+            Write-ToLog -Message "[Join AD] Attempt #$attemptNumber - retrying in 5 seconds after the failed attempt"
+            Start-Sleep -Seconds 5
         }
         Write-ToLog -Message "[Join AD] Attempt #$attemptNumber - Proceeding with AD join"
 
@@ -217,7 +223,7 @@ function Start-ADAutomationWaitForAuthorizationAndJoin
         }
 
 
-    } While ( ($joined -eq $false) -and ($attemptNumber -lt $AD_JOIN_RETRY_COUNT) )
+    } While ( ($joined -eq $false) -and ((Get-Date) -lt $joinDeadline) )
 
     Write-ToLog -Message "[Join AD] ------====== AD Join Summary ======------"
     Write-ToLog -Message "[Join AD] Attempts - $attemptNumber"

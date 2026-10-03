@@ -786,6 +786,39 @@ def test_desktop_host_keeps_the_baked_usb_module_and_cronie():
     assert 'rpm -q cronie >/dev/null 2>&1 || dnf -y install cronie' in setup
 
 
+def test_windows_join_renames_first_so_the_preset_account_matches():
+    """
+    Add-Computer -NewName joins under the EC2AMAZ-* name, which has no preset account: the
+    unsecured join then fails (NTLM disabled on 2025, PDC-only on 2019). Rename-Computer
+    without a restart sets the pending name that JoinWithNewName joins under.
+    """
+    join = (
+        Path(IDEA_BOOTSTRAP_DIR) / '_templates/windows/join_activedirectory.jinja2'
+    ).read_text()
+    assert '-NewName $($authorizationEntry.hostname) "' not in join
+    rename = join.index('Rename-Computer -NewName $($authorizationEntry.hostname)')
+    assert rename < join.index('Invoke-Expression $joinCmd')
+    assert '$optionsString += ", JoinWithNewName"' in join
+    # a failed join retries on a short bounded poll, not a fixed 30 s sleep
+    assert 'Get-Random -Minimum $AD_JOIN_MIN_SLEEP' not in join
+    assert '((Get-Date) -lt $joinDeadline)' in join
+
+
+def test_windows_installers_download_in_process_and_name_the_failure():
+    """
+    a Start-Job download whose job died left no file and no error; msiexec then exited
+    1619 and the bake only said 'Installer exited before checks finished'
+    """
+    install = (
+        Path(IDEA_BOOTSTRAP_DIR) / 'virtual-desktop-host-windows/Install.ps1'
+    ).read_text()
+    assert 'Start-Job' not in install
+    assert install.count('Save-Installer -Uri https://') == 2
+    setup = render('dcv-host-ami-builder-windows/Setup.ps1.jinja2', 'windows2022')
+    finally_block = setup[setup.rindex('} finally {') :]
+    assert 'Select-String -Path $LogFile' in finally_block
+
+
 @pytest.mark.parametrize('base_os', ['ubuntu2204', 'ubuntu2404'])
 def test_ubuntu_desktop_boots_do_not_wait_for_networkd(base_os):
     # 22.04 hands the interface to NetworkManager; systemd-networkd-wait-online then times

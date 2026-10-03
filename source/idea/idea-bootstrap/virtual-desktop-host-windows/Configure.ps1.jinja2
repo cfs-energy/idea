@@ -69,7 +69,7 @@ function Configure-WindowsEC2Instance {
   $DesktopHostname = Get-IdeaHostname
   # $DesktopHostname = $InstanceId.substring($InstanceId.length - 15, 15).ToUpper()
   {% if context.config.get_string('directoryservice.provider', required=True) in ['aws_managed_activedirectory', 'activedirectory'] %}
-  # The domain join below renames the computer (Add-Computer -NewName), and the restart at
+  # The domain join below renames the computer (Rename-Computer + JoinWithNewName), and the restart at
   # the end applies both: a rename restart first cost every desktop a full extra boot.
   $RenameFirst = $false
   {% else %}
