@@ -367,8 +367,9 @@ function install_amd_gpu_drivers() {
   mkdir -p /root/bootstrap/gpu_drivers
   pushd /root/bootstrap/gpu_drivers
 
-  # Enforce pbs stop to avoid pbs restart during amdgpupro install
-  systemctl stop pbs
+  # Enforce pbs stop to avoid pbs restart during amdgpupro install; an image builder
+  # installs OpenPBS after the drivers, so there may be no unit to stop yet
+  if systemctl cat pbs >/dev/null 2>&1; then systemctl stop pbs; fi
 
   {% if context.base_os in ('rocky8', 'rocky9') %}
     local AMD_RADEON_REPO_BASE_URL="https://repo.radeon.com/amdgpu"

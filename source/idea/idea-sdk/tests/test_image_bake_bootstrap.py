@@ -826,3 +826,29 @@ def test_ubuntu_desktop_boots_do_not_wait_for_networkd(base_os):
     host = render('virtual-desktop-host-linux/configure_dcv_host.sh.jinja2', base_os)
     disable = host.index('systemctl disable systemd-networkd-wait-online.service')
     assert disable < host.index('set_reboot_required "Reboot after DCV host')
+
+
+@pytest.mark.parametrize('cat_rc,expected', [(5, 0), (0, 1)])
+def test_amd_driver_install_stops_pbs_only_when_it_is_installed(tmp_path, cat_rc, expected):
+    """
+    the desktop builder installs OpenPBS after the GPU drivers: stopping a unit that does
+    not exist tripped the ERR trap and marked an otherwise good AMD bake failed. A unit
+    that exists and refuses to stop still fails.
+    """
+    host = render(
+        'dcv-host-ami-builder/dcv_host_ami_builder_post_reboot.sh.jinja2',
+        'rocky9',
+        instance_type='g4ad.xlarge',
+        drivers=('amd',),
+    )
+    line = next(l for l in host.splitlines() if 'systemctl stop pbs' in l)
+    stub = tmp_path / 'systemctl'
+    stub.write_text(f'#!/bin/bash\n[ "$1" = cat ] && exit {cat_rc}\nexit 1\n')
+    stub.chmod(0o755)
+    result = subprocess.run(
+        ['bash', '-eEc', f'trap "exit 9" ERR; {line.strip()}'],
+        env={'PATH': f'{tmp_path}:/usr/bin:/bin'},
+        capture_output=True,
+        text=True,
+    )
+    assert (result.returncode == 0) == (expected == 0), result
