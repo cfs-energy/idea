@@ -46,6 +46,13 @@ else
   log_info "Found pulseaudio-utils pre-installed... skipping installation..."
 fi
 
+{% if context.config.get_string('scheduler.provider') == 'openpbs' %}
+# the desktop's OpenPBS client: compiled here once, configured and started by the host
+# bootstrap. Without it every desktop from the image compiles OpenPBS on first boot.
+{% include '_templates/linux/openpbs.jinja2' %}
+! systemctl is-enabled pbs >/dev/null 2>&1 || systemctl disable pbs
+{% endif %}
+
 # a reboot may be required if GPU drivers were installed
 REBOOT_REQUIRED=$(cat /root/bootstrap/reboot_required.txt)
 if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then

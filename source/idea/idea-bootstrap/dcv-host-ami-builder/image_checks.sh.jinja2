@@ -72,6 +72,10 @@ check() {
   CHECKS+=("$name" "$ok" "$detail" "$((SECONDS - started))")
 }
 
+pbs_ok() {
+  [[ -x /opt/pbs/bin/qstat ]] || { echo "OpenPBS was not installed"; return 1; }
+}
+
 bootstrap_ok() {
   if [[ ${1:-} == --failed-* ]]; then
     echo "stage ${1#--failed-} exited with an error"
@@ -199,6 +203,9 @@ check desktop 'GNOME display manager is installed' unit_installed {{ 'gdm3' if c
 check dcv 'DCV server and session-manager packages and units are installed' dcv_ok
 {% endif %}
 check directory 'sssd, realmd and adcli packages are installed' packages_installed sssd realmd adcli
+{% if context.config.get_string('scheduler.provider') == 'openpbs' %}
+check scheduler 'OpenPBS is installed' pbs_ok
+{% endif %}
 check ssm 'SSM agent is installed and enabled' ssm_ok
 {% if context.is_nvidia_gpu() %}
 check gpu 'NVIDIA driver responds' nvidia-smi

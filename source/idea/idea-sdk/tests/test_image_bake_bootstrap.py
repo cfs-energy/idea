@@ -179,6 +179,12 @@ def run_checks(
     script = script.replace('source /etc/environment', ':').replace(
         '/var/lib/idea', str(state)
     )
+    qstat = tmp_path / 'pbs' / 'qstat'
+    if fail != 'scheduler':
+        qstat.parent.mkdir(exist_ok=True)
+        qstat.write_text('#!/bin/bash\n')
+        qstat.chmod(0o755)
+    script = script.replace('/opt/pbs/bin/qstat', str(qstat))
     path = tmp_path / 'checks.sh'
     path.write_text(STUBS + script)
     result = subprocess.run(
@@ -204,7 +210,8 @@ def run_checks(
 
 
 @pytest.mark.parametrize(
-    'failed', ['bootstrap', 'kernel', 'lustre', 'dcv', 'directory', 'ssm', 'gpu']
+    'failed',
+    ['bootstrap', 'kernel', 'lustre', 'dcv', 'directory', 'scheduler', 'ssm', 'gpu'],
 )
 def test_failed_check_writes_json_and_never_tags_complete(tmp_path, failed):
     result, report, calls = run_checks(tmp_path, failed)
@@ -455,6 +462,7 @@ def test_bootstrap_log_scan_matches_fatal_lines_only(tmp_path, log, expected):
         ('dcv', 'package nice-dcv-server is not installed'),
         ('directory', 'package adcli is not installed'),
         ('ssm', 'package amazon-ssm-agent is not installed'),
+        ('scheduler', 'OpenPBS was not installed'),
     ],
 )
 def test_a_failed_check_reports_what_it_found(tmp_path, failed, detail):
@@ -572,3 +580,40 @@ def test_windows_log_is_read_before_ec2launch_v2_replaces_v1(base_os):
         '2026-10-02 22:00:01 WARNING: Error : {}',
     ):
         assert not re.search(pattern, line), line
+
+
+def test_desktop_bake_installs_openpbs_and_checks_it():
+    """a desktop from the image otherwise compiles OpenPBS on first boot (minutes past the gate)"""
+    post = render('dcv-host-ami-builder/dcv_host_ami_builder_post_reboot.sh.jinja2', 'rocky9')
+    assert 'install_openpbs_' in post
+    assert post.index('install_openpbs_') < post.index('image_checks.sh')
+    assert 'systemctl start pbs' not in post  # the host configures and starts it
+    checks = render('dcv-host-ami-builder/image_checks.sh.jinja2', 'rocky9')
+    assert "check scheduler 'OpenPBS is installed' pbs_ok" in checks
+
+
+@pytest.mark.parametrize('installed', [True, False])
+@pytest.mark.parametrize('base_os', ['rocky9', 'rocky8'])
+def test_openpbs_dependencies_install_only_with_openpbs(tmp_path, installed, base_os):
+    """a baked host (OpenPBS present) must not spend first-boot time on build dependencies"""
+    config = Config()
+    version = config.get_string('global-settings.package_config.openpbs.version')
+    commit = config.get_string('global-settings.package_config.openpbs.commit', default='')
+    script = render('_templates/linux/openpbs_client.jinja2', base_os)
+    script = script[: script.index('# End: Install OpenPBS')]
+    pbs = tmp_path / 'opt/pbs'
+    script = script.replace('/opt/pbs', str(pbs))
+    if installed:
+        (pbs / 'bin').mkdir(parents=True)
+        (pbs / 'bin/qstat').write_text(f'#!/bin/bash\necho "pbs_version = {version}"\n')
+        (pbs / 'bin/qstat').chmod(0o755)
+        (pbs / '.idea_openpbs_commit').write_text(commit)
+    calls = tmp_path / 'calls'
+    stubs = ''.join(
+        f'{cmd}() {{ echo "{cmd} $*" >> {calls}; return 1; }}\n'
+        for cmd in ('yum', 'apt', 'git', 'wget', 'pushd', 'popd', 'mkdir', 'log_info')
+    )
+    stubs = stubs.replace(f'log_info() {{ echo "log_info $*" >> {calls}; return 1; }}', 'log_info() { :; }')
+    subprocess.run(['bash', '-c', stubs + script], capture_output=True, text=True)
+    called = calls.read_text().split('\n') if calls.exists() else []
+    assert any(c.startswith('yum ') for c in called) is (not installed), called
