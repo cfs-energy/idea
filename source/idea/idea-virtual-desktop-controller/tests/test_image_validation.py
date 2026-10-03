@@ -307,6 +307,26 @@ def test_windows_filesystems_are_the_smb_shares():
     ]
 
 
+def test_filesystems_read_from_the_live_config_tree():
+    """the cluster config is a pyhocon tree: a key a filesystem leaves out is not an error"""
+    from ideasdk.config.soca_config import SocaConfig
+
+    config = SocaConfig(
+        {
+            'shared-storage': {
+                'apps': {'provider': 'efs', 'mount_dir': '/apps', 'scope': ['cluster']},
+                'data': {'provider': 'efs', 'mount_dir': '/data'},
+                'deployment_id': 'x',
+            }
+        }
+    )
+    assert shared_filesystems(config, windows=False) == [
+        ('apps', '/apps'),
+        ('data', '/data'),
+    ]
+    assert shared_filesystems(config, windows=True) == []
+
+
 def test_the_validation_identity_is_created_with_the_request_models():
     """pydantic serializes the envelope; a SocaAnyPayload payload cannot be serialized"""
     from ideadatamodel import (

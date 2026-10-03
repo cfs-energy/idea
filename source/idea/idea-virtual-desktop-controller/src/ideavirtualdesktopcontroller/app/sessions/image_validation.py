@@ -190,9 +190,10 @@ def shared_filesystems(config, windows: bool) -> List[Tuple[str, str]]:
     projects, which the validation project is not.
     """
     found = []
-    for name, storage in (
-        config.get_config('shared-storage', default={}) or {}
-    ).items():
+    tree = config.get_config('shared-storage', default={}) or {}
+    # a pyhocon tree's get(key) raises for a missing key; plain dicts take defaults
+    tree = tree.as_plain_ordered_dict() if hasattr(tree, 'as_plain_ordered_dict') else tree
+    for name, storage in tree.items():
         if not isinstance(storage, dict) or 'provider' not in storage:
             continue
         scope = storage.get('scope') or []
