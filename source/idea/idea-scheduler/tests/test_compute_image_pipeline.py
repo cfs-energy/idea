@@ -508,3 +508,113 @@ def test_builder_sweep_reaps_validation_queues_no_row_is_validating(monkeypatch)
     )
     svc.sweep_builders(datetime.now(timezone.utc))
     assert reaped == ['iv-left']
+
+
+def test_sweep_removes_failed_candidates_and_generations_older_than_previous(
+    monkeypatch,
+):
+    """
+    three promotions and a failed canary: only the first generation and the failed
+    candidate go, each with its snapshot; current, previous, an in-flight bake, a queue's
+    image, the scheduler default and an image a node still runs stay
+    """
+    from ideadatamodel import HpcQueueProfile, SocaJobParams
+
+    svc = service()
+    svc.records.put(
+        row(current_image_id='ami-gen3', previous_image_id='ami-gen2')
+    )
+    svc.records.put(
+        row(base_os='rocky8', status='failed', image_id='ami-fail', current_image_id=None)
+    )
+    svc.records.put(
+        row(
+            base_os='rhel9',
+            status='building',
+            ami_name='idea-compute-node-rhel9-baking',
+            current_image_id=None,
+        )
+    )
+    svc.context.queue_profiles.list_queue_profiles.return_value = [
+        HpcQueueProfile(
+            name='normal', default_job_params=SocaJobParams(instance_ami='ami-queue')
+        )
+    ]
+    names = {
+        'ami-gen1': 'g1',
+        'ami-gen2': 'g2',
+        'ami-gen3': 'g3',
+        'ami-fail': 'f',
+        'ami-queue': 'q',
+        'ami-inuse': 'u',
+        'ami-baked': 'rhel9-baking',
+    }
+    images = [
+        {
+            'ImageId': i,
+            'Name': f'idea-compute-node-{n}',
+            'State': 'available',
+            'BlockDeviceMappings': [{'Ebs': {'SnapshotId': 'snap-' + i}}],
+        }
+        for i, n in names.items()
+    ]
+    deregistered, deleted = [], []
+
+    class Ec2:
+        def describe_images(self, **kwargs):
+            for f in kwargs.get('Filters', []):
+                if f['Name'] == 'block-device-mapping.snapshot-id':
+                    snap = f['Values'][0]
+                    return {
+                        'Images': [
+                            i
+                            for i in images
+                            if i['BlockDeviceMappings'][0]['Ebs']['SnapshotId'] == snap
+                        ]
+                    }
+            assert {'Name': 'tag:idea:ImagePipeline', 'Values': ['compute']} in kwargs[
+                'Filters'
+            ]
+            return {'Images': images}
+
+        def describe_instances(self, **kwargs):
+            ids = next(
+                (f['Values'] for f in kwargs.get('Filters', []) if f['Name'] == 'image-id'),
+                [],
+            )
+            running = [{'ImageId': 'ami-inuse'}] if 'ami-inuse' in ids else []
+            return {'Reservations': [{'Instances': running}]}
+
+        def deregister_image(self, ImageId):
+            deregistered.append(ImageId)
+
+        def delete_snapshot(self, SnapshotId):
+            deleted.append(SnapshotId)
+
+    svc.context.aws.return_value.ec2.return_value = Ec2()
+    svc.context.config().values['scheduler.compute_node_ami'] = 'ami-gen3'
+    monkeypatch.setattr(module, 'terminate_old_stopped_builders', lambda *a: [])
+    svc.sweep_builders(datetime.now(timezone.utc))
+    assert sorted(deregistered) == ['ami-fail', 'ami-gen1']
+    assert sorted(deleted) == ['snap-ami-fail', 'snap-ami-gen1']
+
+
+def test_pipeline_compute_images_carry_the_cleanup_tag():
+    from ideascheduler.app.images.compute_node_ami_builder import (
+        ComputeNodeAmiBuilder,
+    )
+
+    builder = ComputeNodeAmiBuilder.__new__(ComputeNodeAmiBuilder)
+    builder.context = Mock()
+    builder.context.config.return_value.get_list.return_value = []
+    builder.context.cluster_name.return_value = 'cluster'
+    builder.image_tags = {'idea:ImagePipeline': 'compute'}
+    builder.base_os, builder.ami_name, builder.ami_version = 'rocky9', 'n', 'v'
+    builder.ebs_volume_size, builder.no_reboot = 20, False
+    builder.context.aws().ec2().create_image.return_value = {'ImageId': 'ami-new'}
+    assert builder.create_image('i-builder') == 'ami-new'
+    specs = builder.context.aws().ec2().create_image.call_args.kwargs[
+        'TagSpecifications'
+    ]
+    for spec in specs:
+        assert {'Key': 'idea:ImagePipeline', 'Value': 'compute'} in spec['Tags']

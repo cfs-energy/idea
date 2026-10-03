@@ -59,6 +59,8 @@ from ideasdk.aws.image_builds import (
     image_state,
     new_record,
     newest_owned_image,
+    PIPELINE_IMAGE_TAG,
+    deregister_unreferenced_images,
 )
 from ideasdk.aws.stock_amis import (
     find_latest_stock_ami,
@@ -610,6 +612,7 @@ class ComputeImageService:
                         base_os=record.base_os,
                         base_ami=source,
                         force=True,
+                        image_tags={PIPELINE_IMAGE_TAG: 'compute'},
                     )
                 else:
                     builder.base_ami = source
@@ -953,6 +956,40 @@ class ComputeImageService:
                 ):
                     stop_builder(self.context, instance['InstanceId'], self._logger)
         terminate_old_stopped_builders(self.context, self._logger)
+        try:
+            self.deregister_unreferenced_images()
+        except Exception:
+            self._logger.exception('Compute image cleanup failed')
+
+    def protected_images(self) -> set:
+        """every image a row, a queue or the scheduler default still names"""
+        protected = set()
+        for record in self.records.list_all():
+            protected.update((record.current_image_id, record.previous_image_id))
+            # a custom build's image is the admin's; an in-flight candidate is the job's
+            if is_custom_record(record) or record.is_in_flight():
+                protected.add(record.image_id)
+        for profile in self.context.queue_profiles.list_queue_profiles():
+            if profile.default_job_params is not None:
+                protected.add(profile.default_job_params.instance_ami)
+        protected.add(
+            self.context.config().get_string('scheduler.compute_node_ami', default=None)
+        )
+        protected.discard(None)
+        return protected
+
+    def deregister_unreferenced_images(self) -> List[str]:
+        """failed candidates and generations older than previous: image and snapshots"""
+        # a bake between CreateImage and recording the id: its image carries the row's name
+        baking = {r.ami_name for r in self.records.list_all() if r.is_in_flight()}
+        return deregister_unreferenced_images(
+            self.context,
+            'compute',
+            COMPUTE_IMAGE_PREFIX,
+            self.protected_images(),
+            baking,
+            self._logger,
+        )
 
     def tick(self, now=None):
         if not self.context.is_leader():

@@ -72,8 +72,11 @@ class ComputeNodeAmiBuilder:
         no_reboot: bool = False,
         overwrite: bool = False,
         progress=None,
+        image_tags: Optional[Dict[str, str]] = None,
     ):
         self.context = context
+        # extra tags on the image and its snapshots (the pipeline marks what it may clean up)
+        self.image_tags = dict(image_tags or {})
         # called with {"instance_id": ...} once the builder instance exists
         self.progress = progress
 
@@ -507,6 +510,7 @@ class ComputeNodeAmiBuilder:
             f'Key={constants.IDEA_TAG_CLUSTER_NAME},Value={self.context.cluster_name()}'
         )
         custom_tags_dict = Utils.convert_custom_tags_to_key_value_pairs(custom_tags)
+        custom_tags_dict.update(getattr(self, 'image_tags', None) or {})
         tags = []
         for key, value in custom_tags_dict.items():
             tags.append({'Key': key, 'Value': value})

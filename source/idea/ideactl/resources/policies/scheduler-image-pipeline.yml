@@ -55,6 +55,20 @@ Statement:
       - '{{ context.arns.get_arn("ec2", "image/*", aws_account_id="") }}'
     Sid: ComputeImagePromotionTag
 
+  # Image cleanup deregisters, and deletes the snapshots of, only this cluster's pipeline images.
+  - Effect: Allow
+    Action:
+      - ec2:DeregisterImage
+      - ec2:DeleteSnapshot
+    Condition:
+      StringEquals:
+        aws:ResourceTag/idea:ClusterName: '{{ context.cluster_name }}'
+        aws:ResourceTag/idea:ImagePipeline: compute
+    Resource:
+      - '{{ context.arns.get_arn("ec2", "image/*", aws_account_id="") }}'
+      - '{{ context.arns.get_arn("ec2", "snapshot/*", aws_account_id="") }}'
+    Sid: ComputeImageCleanup
+
   # The scheduler's only cluster-settings writes: promotion moves the compute default in the same
   # transaction that checks its pin, and the leader records its release and monthly checkpoints.
   - Effect: Allow

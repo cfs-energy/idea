@@ -25,6 +25,7 @@ from ideadatamodel import (
     ImageRowKey,
     ImageRowStatus,
     ImageVariant,
+    constants,
     exceptions,
 )
 from ideasdk.utils import Utils
@@ -266,6 +267,74 @@ def terminate_old_stopped_builders(context, logger) -> List[str]:
     except Exception as e:
         logger.error(f'could not sweep stopped builder instances: {e}')
     return terminated
+
+
+def deregister_unreferenced_images(
+    context, pipeline: str, name_prefix: str, protected: set, baking: set, logger
+) -> List[str]:
+    """
+    deregister this cluster's pipeline images (tagged PIPELINE_IMAGE_TAG=pipeline) that are
+    not protected, not a bake still recording its id (by name), and not used by an instance,
+    then delete each one's snapshots that no other image shares
+    """
+    ec2 = context.aws().ec2()
+    images = ec2.describe_images(
+        Owners=['self'],
+        Filters=[
+            {
+                'Name': f'tag:{constants.IDEA_TAG_CLUSTER_NAME}',
+                'Values': [context.cluster_name()],
+            },
+            {'Name': f'tag:{PIPELINE_IMAGE_TAG}', 'Values': [pipeline]},
+            {'Name': 'name', 'Values': [f'{name_prefix}*']},
+        ],
+    ).get('Images', [])
+    candidates = [
+        i
+        for i in images
+        if i['ImageId'] not in protected
+        and i.get('Name') not in baking
+        and i.get('State', 'available') == 'available'
+    ]
+    if not candidates:
+        return []
+    # anything still running from an image keeps it (hosts launched before a promotion)
+    in_use = set()
+    ids = [i['ImageId'] for i in candidates]
+    for start in range(0, len(ids), 100):
+        result = ec2.describe_instances(
+            Filters=[
+                {'Name': 'image-id', 'Values': ids[start : start + 100]},
+                {
+                    'Name': 'instance-state-name',
+                    'Values': ['pending', 'running', 'stopping', 'stopped'],
+                },
+            ]
+        )
+        for reservation in result.get('Reservations', []):
+            for instance in reservation.get('Instances', []):
+                in_use.add(instance.get('ImageId'))
+    removed = []
+    for image in candidates:
+        if image['ImageId'] in in_use:
+            continue
+        ec2.deregister_image(ImageId=image['ImageId'])
+        removed.append(image['ImageId'])
+        for mapping in image.get('BlockDeviceMappings', []):
+            snapshot = (mapping.get('Ebs') or {}).get('SnapshotId')
+            if not snapshot:
+                continue
+            others = ec2.describe_images(
+                Owners=['self'],
+                Filters=[
+                    {'Name': 'block-device-mapping.snapshot-id', 'Values': [snapshot]}
+                ],
+            ).get('Images', [])
+            if all(o['ImageId'] == image['ImageId'] for o in others):
+                ec2.delete_snapshot(SnapshotId=snapshot)
+    if removed:
+        logger.info(f'deregistered unreferenced {pipeline} images: {removed}')
+    return removed
 
 
 def unique_build_version() -> str:
