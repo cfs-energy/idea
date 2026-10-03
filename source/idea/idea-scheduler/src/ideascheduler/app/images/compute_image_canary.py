@@ -396,10 +396,10 @@ class ComputeImageCanary:
                 except OSError as error:
                     cleanup_errors.append(str(error))
             if cleanup_errors:
-                check(
-                    'compute_cleanup',
-                    False,
-                    'The validation resources could not be cleaned up: '
-                    + '; '.join(cleanup_errors),
+                # cleanup says nothing about the image: the checks above decide the row, and
+                # the leader sweep reaps a validation queue no row is validating
+                self.context.logger('compute-image-canary').warning(
+                    f'validation queue {name} left for the sweep: '
+                    + '; '.join(cleanup_errors)
                 )
         return checks

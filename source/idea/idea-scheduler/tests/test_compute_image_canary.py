@@ -25,7 +25,8 @@ from test_compute_image_pipeline import service, row
 
 
 @pytest.mark.parametrize(
-    'failure', [None, 'ami', 'mount', 'output', 'exit', 'timeout', 'pbs', 'identity']
+    'failure',
+    [None, 'ami', 'mount', 'output', 'exit', 'timeout', 'pbs', 'identity', 'cleanup'],
 )
 def test_canary_uses_validation_identity_and_requires_every_check(monkeypatch, failure):
     svc = service()
@@ -73,6 +74,11 @@ def test_canary_uses_validation_identity_and_requires_every_check(monkeypatch, f
         return profile
 
     context.queue_profiles.create_queue_profile.side_effect = create
+    if failure == 'cleanup':
+        # a queue that cannot be deleted does not fail an image whose checks passed
+        context.queue_profiles.delete_queue_profile.side_effect = (
+            exceptions.soca_exception(module.errorcodes.SCHEDULER_ERROR, 'qmgr failed')
+        )
     token = 'unique-test-output'
     monkeypatch.setattr(module.uuid, 'uuid4', lambda: SimpleNamespace(hex=token))
     monkeypatch.setattr(module.time, 'sleep', lambda _: None)
@@ -139,7 +145,7 @@ def test_canary_uses_validation_identity_and_requires_every_check(monkeypatch, f
         for key, value in update.items():
             setattr(candidate, key, value)
 
-    if failure:
+    if failure and failure != 'cleanup':
         with pytest.raises(exceptions.SocaException):
             ComputeImageCanary(context).validate(candidate, progress)
         assert any(check.ok is False for check in candidate.checks)

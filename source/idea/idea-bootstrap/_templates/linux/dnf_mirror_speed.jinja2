@@ -2,7 +2,9 @@
 # Begin: dnf mirror speed
 # Rocky installs from the public mirrorlist (RHEL uses in-region RHUI): download in parallel
 # from the fastest mirror. Runs before the first dnf call; a rerun rewrites, never duplicates.
-for DNF_SETTING in max_parallel_downloads=10 fastestmirror=True; do
+# minrate: a mirror slower than 512 KiB/s for the 30 s timeout is dropped for the next one
+# (an aarch64 mirror served a 906 MB bake at ~100 KB/s and the builder missed its hour).
+for DNF_SETTING in max_parallel_downloads=10 fastestmirror=True minrate=512k; do
   DNF_KEY="${DNF_SETTING%%=*}"
   if grep -Eq "^${DNF_KEY}[[:space:]]*=" /etc/dnf/dnf.conf; then
     sed -i -E "s/^${DNF_KEY}[[:space:]]*=.*/${DNF_SETTING}/" /etc/dnf/dnf.conf
