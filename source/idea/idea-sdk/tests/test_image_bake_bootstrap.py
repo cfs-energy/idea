@@ -617,3 +617,29 @@ def test_openpbs_dependencies_install_only_with_openpbs(tmp_path, installed, bas
     subprocess.run(['bash', '-c', stubs + script], capture_output=True, text=True)
     called = calls.read_text().split('\n') if calls.exists() else []
     assert any(c.startswith('yum ') for c in called) is (not installed), called
+
+
+def test_ad_authorization_is_polled_quickly_at_first(tmp_path):
+    """the first authorization poll used to sleep 8-40 s even when the agent answered in 2 s"""
+    # the loop has no template expressions; the mock cluster has no directory settings
+    script = (
+        Path(IDEA_BOOTSTRAP_DIR) / '_templates/linux/join_activedirectory.jinja2'
+    ).read_text()
+    start = script.index('function ad_automation_wait_for_authorization_and_join')
+    loop = script[start : script.index('local AUTHORIZATION_STATUS', start)] + '\n}\n'
+    sleeps = tmp_path / 'sleeps'
+    stubs = (
+        'log_info() { :; }\n'
+        f'sleep() {{ echo "$1" >> {sleeps}; }}\n'
+        # called in a subshell, so the count lives in the sleeps file
+        'ad_automation_get_authorization() {\n'
+        f'  [[ $(cat {sleeps} 2>/dev/null | wc -l) -ge 3 ]] && echo \'{{"status":"success"}}\'\n'
+        '  return 0\n}\n'
+    )
+    result = subprocess.run(
+        ['bash', '-c', stubs + loop + 'ad_automation_wait_for_authorization_and_join'],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert sleeps.read_text().split() == ['3', '3', '3']
