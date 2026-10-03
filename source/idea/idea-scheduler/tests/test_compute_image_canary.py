@@ -96,7 +96,11 @@ def test_canary_uses_validation_identity_and_requires_every_check(monkeypatch, f
         )
         done = job.model_copy(deep=True)
         done.exit_status = 1 if failure == 'exit' else 0
-        context.scheduler.get_job.side_effect = [job, done]
+        # plain qstat refuses a finished job (rc 35); only qstat -x returns it
+        context.scheduler.get_job.side_effect = exceptions.soca_exception(
+            module.errorcodes.SCHEDULER_JOB_FINISHED, 'Job has finished, use -x or -H'
+        )
+        context.scheduler.get_finished_job.side_effect = [job, done]
         finished.append(done)
         return SubmitJobResult(accepted=True, job=job)
 
@@ -194,6 +198,68 @@ def test_canary_probe_script_runs_and_deletes_its_file(tmp_path, monkeypatch, ca
     assert evidence['token'] == 'known-output'
     assert evidence['checks'][0]['ok'] is True
     assert list(tmp_path.iterdir()) == []
+
+
+def _probe(tmp_path, monkeypatch, capsys, mounts, home):
+    import os
+    import pwd
+    import time
+
+    monkeypatch.setattr(os.path, 'ismount', lambda path: path in [m for _, m in mounts])
+    monkeypatch.setattr(time, 'sleep', lambda _: None)
+    monkeypatch.setattr(pwd, 'getpwuid', lambda uid: SimpleNamespace(pw_dir=home))
+    script = canary_script('validate-image-test', '/tmp/out', mounts, 'known-output')
+    program = script.split(" - <<'PY'\n", 1)[1].rsplit('PY\n', 1)[0]
+    with pytest.raises(SystemExit) as result:
+        exec(compile(program, '<canary>', 'exec'), {})
+    checks = {c['name']: c for c in json.loads(capsys.readouterr().out)['checks']}
+    return result.value.code, checks
+
+
+def test_canary_probes_as_a_user_home_for_writes_and_reads_admin_filesystems(
+    tmp_path, monkeypatch, capsys
+):
+    """
+    the live failure: the validation user wrote at the top of apps, which only admins may
+    write (Errno 13). A user writes in its home; an admin-owned filesystem is read
+    """
+    apps, data = tmp_path / 'apps', tmp_path / 'data'
+    home = data / 'home' / 'image-test'
+    home.mkdir(parents=True)
+    apps.mkdir()
+    (apps / 'tool').write_text('x')
+    apps.chmod(0o555)
+    data.chmod(0o555)
+    try:
+        code, checks = _probe(
+            tmp_path,
+            monkeypatch,
+            capsys,
+            [('apps', str(apps)), ('data', str(data))],
+            str(home),
+        )
+    finally:
+        apps.chmod(0o755)
+        data.chmod(0o755)
+    assert code == 0, checks
+    assert 'read-only to users' in checks['filesystem:apps']['detail']
+    assert 'write, fsync, read and delete' in checks['filesystem:data']['detail']
+    assert list(home.iterdir()) == []
+
+
+def test_canary_fails_when_the_users_home_is_not_writable(tmp_path, monkeypatch, capsys):
+    data = tmp_path / 'data'
+    home = data / 'home' / 'image-test'
+    home.mkdir(parents=True)
+    home.chmod(0o555)
+    try:
+        code, checks = _probe(
+            tmp_path, monkeypatch, capsys, [('data', str(data))], str(home)
+        )
+    finally:
+        home.chmod(0o755)
+    assert code == 1
+    assert checks['filesystem:data']['ok'] is False
 
 
 def _clock(monkeypatch):

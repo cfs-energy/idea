@@ -32,14 +32,24 @@ EXITING_SECONDS = 60
 
 def canary_script(queue, output, mounts, token):
     """PBS stdout carries structured evidence, not a successful shell exit alone."""
-    program = """import json, os, socket, tempfile, time
+    program = """import json, os, pwd, socket, tempfile, time
 checks = []
+# the job runs as the validation user and probes as any user would: write in its own home
+# when the home is on this filesystem, else at the top when users may write there, else a
+# read (an admin-owned filesystem such as apps is read-only to users by design)
+home = os.path.realpath(pwd.getpwuid(os.getuid()).pw_dir)
 for name, mount in MOUNTS:
     path = None
     try:
         if not os.path.ismount(mount):
             raise RuntimeError('The configured filesystem is not mounted.')
-        with tempfile.NamedTemporaryFile(dir=mount, prefix='.idea-validate-', delete=False) as probe:
+        top = os.path.realpath(mount)
+        where = home if home == top or home.startswith(top + os.sep) else top
+        if where == top and not os.access(top, os.W_OK):
+            os.listdir(top)
+            checks.append(dict(name='filesystem:' + name, ok=True, detail='Mounted filesystem is read-only to users; listing it worked.', seconds=0))
+            continue
+        with tempfile.NamedTemporaryFile(dir=where, prefix='.idea-validate-', delete=False) as probe:
             path = probe.name
             probe.write(TOKEN.encode())
             probe.flush()
@@ -200,6 +210,9 @@ class ComputeImageCanary:
         )
         mounts = []
         storage = self.context.config().get_config('shared-storage', default={}) or {}
+        # a pyhocon tree's get(key) raises for a missing key; plain dicts take defaults
+        if hasattr(storage, 'as_plain_ordered_dict'):
+            storage = storage.as_plain_ordered_dict()
         # only what the canary node mounts: the bootstrap's scope rules for the scheduler
         # module, the validation project and the hidden queue (a list names who gets it)
         scoped = {
@@ -290,9 +303,8 @@ class ComputeImageCanary:
             observed_node = None
             finished = None
             while time.monotonic() < deadline:
-                job = self.context.scheduler.get_job(job_id)
-                if job is None:
-                    job = self.context.scheduler.get_finished_job(job_id)
+                # qstat -x: plain qstat refuses a finished job (rc 35) instead of returning it
+                job = self.context.scheduler.get_finished_job(job_id)
                 if job:
                     # qstat's SocaJob has no execution_hosts outside hook events.
                     # pbsnodes lists the jobs actually running on each registered MOM.
