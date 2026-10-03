@@ -65,6 +65,16 @@ function Configure-WindowsEC2Instance {
   [string]$IMDS_Token = Invoke-RestMethod -Headers @{"X-aws-ec2-metadata-token-ttl-seconds" = "600"} -Method PUT -Uri http://169.254.169.254/latest/api/token
   $InstanceType = Invoke-RestMethod -Headers @{"X-aws-ec2-metadata-token" = $IMDS_Token} -Method GET -Uri http://169.254.169.254/latest/meta-data/instance-type
   $InstanceId = Invoke-RestMethod -Headers @{"X-aws-ec2-metadata-token" = $IMDS_Token} -Method GET -Uri http://169.254.169.254/latest/meta-data/instance-id
+  # EC2Launch v2 records a finished user data run only after its postReady stage, and the
+  # restart at the end of this function can take the agent down first: the next boot
+  # then runs all of the user data again (Windows Server 2019: about 2 minutes and a second
+  # reboot after IDEA_BOOTSTRAP_COMPLETE). Once this instance has finished, a repeat is a no-op.
+  $ConfiguredMarker = "$env:SystemDrive\ProgramData\IDEA\configured-$InstanceId"
+  if (Test-Path $ConfiguredMarker) {
+    Write-ToLog -Message "Instance $InstanceId is already configured; skipping the repeated user data run"
+    Stop-Transcript
+    exit 0
+  }
   # flip below lines if you want to enable/disable computer renaming
   $DesktopHostname = Get-IdeaHostname
   # $DesktopHostname = $InstanceId.substring($InstanceId.length - 15, 15).ToUpper()
@@ -245,6 +255,9 @@ Send-SQSMessage -QueueUrl $VdcRequestQueueURL -MessageBody `$RebootMessage -Mess
   # written before the restart below so the agent ships it first
   Write-ToLog -Message "IDEA_BOOTSTRAP_COMPLETE release={{ context.module_version }}"
   Send-SQSMessage -QueueUrl $VdcRequestQueueURL -MessageBody $Message -MessageGroupId $IDEASessionID
+
+  [IO.Directory]::CreateDirectory((Split-Path $ConfiguredMarker)) | Out-Null
+  [IO.File]::WriteAllText($ConfiguredMarker, "{{ context.module_version }}")
 
   Stop-Transcript
   Restart-Computer -Force

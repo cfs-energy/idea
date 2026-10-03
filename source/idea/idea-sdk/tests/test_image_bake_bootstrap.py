@@ -880,3 +880,25 @@ def test_the_compute_bake_drops_slow_rocky_mirrors_before_its_first_install(base
     setup = render('compute-node-ami-builder/setup.sh.jinja2', base_os, config=Config())
     assert 'minrate=512k' in setup
     assert setup.index('minrate=512k') < setup.index('epel')
+
+
+@pytest.mark.parametrize('base_os', WINDOWS)
+def test_windows_user_data_that_runs_again_after_the_final_restart_is_a_no_op(base_os):
+    """
+    EC2Launch v2 records a finished user data run after its postReady stage; the restart at
+    the end of configuration can take it down first, and 2019 then ran all of the user data
+    again after IDEA_BOOTSTRAP_COMPLETE (a second join, a second restart after READY)
+    """
+    configure = render('virtual-desktop-host-windows/Configure.ps1.jinja2', base_os)
+    body = configure[configure.index('function Configure-WindowsEC2Instance') :]
+    guard = body.index('if (Test-Path $ConfiguredMarker) {')
+    assert body.index('/meta-data/instance-id') < guard
+    # nothing that renames, joins or restarts runs before the guard
+    for step in ('Get-IdeaHostname', 'Rename-Computer', 'Restart-Computer'):
+        assert guard < body.index(step), step
+    assert 'exit 0' in body[guard : guard + 300]
+    # the marker is per instance, so an image made from this desktop still configures
+    assert 'configured-$InstanceId' in body
+    written = body.index('[IO.File]::WriteAllText($ConfiguredMarker')
+    assert body.index('IDEA_BOOTSTRAP_COMPLETE') < written
+    assert written < body.rindex('Restart-Computer -Force')
