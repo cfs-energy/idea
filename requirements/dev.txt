@@ -215,7 +215,7 @@ pygments==2.21.0
     #   rich
 pyhocon==0.3.63
     # via -r idea-sdk.in
-pyjwt==2.13.0
+pyjwt==2.15.0
     # via -r idea-sdk.in
 pylint==4.0.7
     # via -r dev.in
