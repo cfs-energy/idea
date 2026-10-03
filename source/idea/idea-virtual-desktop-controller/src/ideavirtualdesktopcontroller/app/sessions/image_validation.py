@@ -54,6 +54,9 @@ WINDOWS_CHECKS_FILE = 'C:\\ProgramData\\IDEA\\image-checks.json'
 BOOTSTRAP_COMPLETE_SENTINEL = 'IDEA_BOOTSTRAP_COMPLETE'
 BOOTSTRAP_LOG_WAIT_SECONDS = 120
 SSM_TIMEOUT_SECONDS = 180
+# a host that just reached READY can still be rebooting (Windows applies its rename/join
+# with a restart): wait this long for it to run and answer SSM before a check fails
+HOST_ONLINE_SECONDS = 180
 POLL_SECONDS = 15
 GATEWAY_TIMEOUT_SECONDS = 15
 
@@ -125,18 +128,45 @@ def run_ssm(
     script: str,
     timeout: int = SSM_TIMEOUT_SECONDS,
     sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.time,
 ) -> Tuple[str, str, str]:
-    """(status, stdout, stderr) of one script; a command that outlives timeout is 'TimedOut'"""
+    """
+    (status, stdout, stderr) of one script; a command that outlives timeout is 'TimedOut',
+    and a host that is not running and online over SSM within HOST_ONLINE_SECONDS is 'NotOnline'
+    """
     ssm = context.aws().ssm()
-    command = ssm.send_command(
-        InstanceIds=[instance_id],
-        DocumentName='AWS-RunPowerShellScript' if windows else 'AWS-RunShellScript',
-        Parameters={'commands': [script], 'executionTimeout': [str(timeout)]},
-        TimeoutSeconds=max(30, timeout),
-    )
+    online_by = clock() + HOST_ONLINE_SECONDS
+    while True:
+        reason = _not_online(context, ssm, instance_id)
+        if reason is None:
+            try:
+                command = ssm.send_command(
+                    InstanceIds=[instance_id],
+                    DocumentName='AWS-RunPowerShellScript'
+                    if windows
+                    else 'AWS-RunShellScript',
+                    Parameters={
+                        'commands': [script],
+                        'executionTimeout': [str(timeout)],
+                    },
+                    TimeoutSeconds=max(30, timeout),
+                )
+                break
+            except ClientError as e:
+                # a stale Online ping on a host that is rebooting: try again
+                if e.response.get('Error', {}).get('Code') != 'InvalidInstanceId':
+                    raise
+                reason = str(e)
+        if clock() >= online_by:
+            return (
+                'NotOnline',
+                '',
+                f'the host did not come back over SSM within {HOST_ONLINE_SECONDS} s: {reason}',
+            )
+        sleep(10)
     command_id = command['Command']['CommandId']
-    deadline = time.time() + timeout + 30
-    while time.time() < deadline:
+    deadline = clock() + timeout + 30
+    while clock() < deadline:
         sleep(3)
         try:
             result = ssm.get_command_invocation(
@@ -154,6 +184,26 @@ def run_ssm(
                 result.get('StandardErrorContent', ''),
             )
     return 'TimedOut', '', f'no result within {timeout} seconds'
+
+
+def _not_online(context, ssm, instance_id: str) -> Optional[str]:
+    """why SSM cannot reach the host now, or None when it is running and Online"""
+    reservations = (
+        context.aws()
+        .ec2()
+        .describe_instances(InstanceIds=[instance_id])
+        .get('Reservations', [])
+    )
+    states = [
+        (i.get('State') or {}).get('Name') for r in reservations for i in r['Instances']
+    ]
+    if states and states[0] != 'running':
+        return f'instance {states[0]}'
+    info = ssm.describe_instance_information(
+        Filters=[{'Key': 'InstanceIds', 'Values': [instance_id]}]
+    ).get('InstanceInformationList', [])
+    ping = info[0].get('PingStatus') if info else 'not registered'
+    return None if ping == 'Online' else f'SSM agent {ping}'
 
 
 def read_in_bake_checks(
@@ -651,6 +701,7 @@ class ImageTestLauncher:
                 windows,
                 script,
                 sleep=self.sleep,
+                clock=self.clock,
             )
         except Exception as e:
             status, stdout, stderr = 'Failed', '', str(e)

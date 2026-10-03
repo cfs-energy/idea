@@ -29,6 +29,7 @@ from ideavirtualdesktopcontroller.app.sessions.image_validation import (
     ImageTestLauncher,
     linux_host_script,
     parse_check_lines,
+    run_ssm as real_run_ssm,
     shared_filesystems,
 )
 
@@ -111,7 +112,7 @@ STACK = VirtualDesktopSoftwareStack(
 
 @pytest.fixture(autouse=True)
 def fake_ssm_and_gateway(monkeypatch):
-    def run_ssm(context, instance_id, windows, script, timeout=180, sleep=None):
+    def run_ssm(context, instance_id, windows, script, timeout=180, **kwargs):
         return (
             'Success',
             'CHECK|dcv_session|ok|listed\nCHECK|directory_user|ok|resolves\n',
@@ -486,3 +487,66 @@ def test_a_windows_utf16_log_line_is_readable_in_the_row_error():
     assert checks[-1].detail.endswith(
         'last bootstrap log line: 2026-10-03 11:40:06 INFO: [Join AD] waiting for AD authorization'
     )
+
+
+def ssm_context(sends, pings):
+    """a host whose SSM ping goes through pings and whose send_command goes through sends"""
+    context = MagicMock()
+    context.aws().ec2().describe_instances.return_value = {
+        'Reservations': [{'Instances': [{'State': {'Name': 'running'}}]}]
+    }
+    ssm = context.aws().ssm()
+    ssm.describe_instance_information.side_effect = lambda **k: {
+        'InstanceInformationList': [
+            {'PingStatus': pings.pop(0) if len(pings) > 1 else pings[0]}
+        ]
+    }
+    ssm.send_command.side_effect = sends
+    ssm.get_command_invocation.return_value = {
+        'Status': 'Success',
+        'StandardOutputContent': 'CHECK|dcv_session|ok|listed',
+        'StandardErrorContent': '',
+    }
+    return context
+
+
+def invalid_instance():
+    return ClientError(
+        {'Error': {'Code': 'InvalidInstanceId', 'Message': 'not in a valid state'}},
+        'SendCommand',
+    )
+
+
+def test_host_checks_wait_for_a_rebooting_host_to_come_back_over_ssm():
+    clock = Clock()
+    # READY, then the host reboots: a stale Online ping and a refused send, then
+    # ConnectionLost while it boots, then Online again
+    context = ssm_context(
+        [invalid_instance(), {'Command': {'CommandId': 'c-1'}}],
+        ['Online', 'ConnectionLost', 'ConnectionLost', 'Online'],
+    )
+    status, stdout, _ = real_run_ssm(
+        context, 'i-desk', True, 'script', sleep=clock.sleep
+    )
+    assert status == 'Success'
+    assert 'dcv_session' in stdout
+    assert clock.now - 1000.0 <= 60
+
+
+def test_a_host_that_never_comes_back_fails_with_the_reason():
+    clock = Clock()
+    context = ssm_context([], ['ConnectionLost'])
+    status, _, stderr = real_run_ssm(
+        context, 'i-desk', True, 'script', sleep=clock.sleep, clock=clock.time
+    )
+    assert status == 'NotOnline'
+    assert 'did not come back over SSM' in stderr and 'ConnectionLost' in stderr
+    context.aws().ssm().send_command.assert_not_called()
+
+
+def test_a_send_error_other_than_a_rebooting_host_is_not_retried():
+    clock = Clock()
+    denied = ClientError({'Error': {'Code': 'AccessDeniedException'}}, 'SendCommand')
+    context = ssm_context([denied], ['Online'])
+    with pytest.raises(ClientError):
+        real_run_ssm(context, 'i-desk', True, 'x', sleep=clock.sleep, clock=clock.time)
