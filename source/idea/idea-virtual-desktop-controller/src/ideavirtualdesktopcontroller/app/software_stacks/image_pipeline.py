@@ -317,12 +317,23 @@ class DesktopImagePipeline:
         record: ImageBuildRecord,
         trigger: ImageBuildTrigger,
         requested_by: Optional[str] = None,
+        force: bool = False,
     ) -> Tuple[str, str]:
-        """(outcome, message). idempotent: a row already in flight is reported, not queued"""
+        """
+        (outcome, message). idempotent: a row already in flight is reported, not queued.
+        a row baked today (cluster time) is skipped by every trigger unless force is set
+        """
+        from zoneinfo import ZoneInfo
+
         if record.pinned:
             return 'pinned', 'the row is pinned; unpin it to bake'
         if record.is_in_flight():
             return 'in_flight', f'already {record.status}'
+        now = now_utc()
+        if not force and record.baked_today(
+            now, ZoneInfo(self.context.cluster_timezone())
+        ):
+            return 'baked_today', 'already baked today; Force rebake bakes it again'
         reason = self.unsupported_reason(record)
         if reason:
             if record.status != S.UNSUPPORTED.value or record.error != reason:
@@ -338,7 +349,7 @@ class DesktopImagePipeline:
         record.attempts = 0
         record.retry_after = None
         record.error = None
-        record.started_on = now_utc()
+        record.started_on = now
         record.finished_on = None
         record.host = self.host
         expected = {
@@ -393,7 +404,7 @@ class DesktopImagePipeline:
         for record in targets:
             try:
                 outcome, message = self.queue(
-                    record, ImageBuildTrigger.BUTTON, requested_by
+                    record, ImageBuildTrigger.BUTTON, requested_by, bool(request.force)
                 )
             except Exception as e:
                 self._logger.error(f'{row_id(record)}: could not queue: {e}')
@@ -546,6 +557,8 @@ class DesktopImagePipeline:
         if baked == self.version:
             return
         rows = self.seed_rows()
+        # a row baked today waits for tomorrow's tick; the release stays unsettled till then
+        waiting = False
         for record in rows:
             if (
                 record.release != self.version
@@ -553,8 +566,9 @@ class DesktopImagePipeline:
                 and not record.rollback_hold
                 and not record.is_in_flight()
             ):
-                self.queue(record, ImageBuildTrigger.RELEASE)
-        if all(not r.is_in_flight() for r in self.managed()):
+                if self.queue(record, ImageBuildTrigger.RELEASE)[0] == 'baked_today':
+                    waiting = True
+        if not waiting and all(not r.is_in_flight() for r in self.managed()):
             self._set_config(BAKED_RELEASE_KEY, self.version)
             self._logger.info(f'every desktop image row is settled for {self.version}')
 

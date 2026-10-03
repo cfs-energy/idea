@@ -633,6 +633,10 @@ class SchedulerAdminAPI(BaseAPI):
         from ideadatamodel import RefreshImagesResponse
 
         request = context.get_request_payload_as(RefreshImagesRequest)
+        if request.force and not context.is_administrator():
+            raise exceptions.unauthorized_access(
+                'only an administrator can force a rebake'
+            )
         context.success(
             RefreshImagesResponse(
                 results=self.compute_images.refresh_images(

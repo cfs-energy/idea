@@ -385,7 +385,7 @@ def test_a_second_promotion_keeps_the_previous_image():
     FakeBuilder.image_id = 'ami-newer'
     try:
         h.ec2.add_image('ami-newer', name='idea-dcv-host-rocky9-v2')
-        h.pipeline.refresh(RefreshImagesRequest(all=True), 'admin')
+        h.pipeline.refresh(RefreshImagesRequest(all=True, force=True), 'admin')
         h.pipeline.tick(now=T0, blocking=True)
     finally:
         FakeBuilder.image_id = 'ami-new'
@@ -1176,3 +1176,78 @@ def test_the_stack_table_repoint_is_conditional_on_the_old_image_and_no_pin():
         {'Error': {'Code': 'ConditionalCheckFailedException'}}, 'UpdateItem'
     )
     assert db.repoint_image(stack, 'ami-old', 'ami-new') is None
+
+
+# once a day
+
+
+def baked_at(h, when, status='current'):
+    h.records.put(
+        ImageBuildRecord(
+            base_os='rocky9',
+            architecture='x86_64',
+            status=status,
+            release=VERSION,
+            source_ami='ami-stock-rocky9',
+            current_image_id='ami-x',
+            started_on=when,
+        )
+    )
+
+
+@pytest.mark.parametrize('status', ['current', 'failed'])
+def test_a_row_baked_today_is_skipped_until_tomorrow_unless_forced(monkeypatch, status):
+    chicago = ZoneInfo('America/Chicago')
+    h = Harness()
+    baked_at(h, datetime(2026, 10, 3, 0, 30, tzinfo=chicago), status)
+    monkeypatch.setattr(
+        module, 'now_utc', lambda: datetime(2026, 10, 3, 23, 50, tzinfo=chicago)
+    )
+    result = h.pipeline.refresh(RefreshImagesRequest(all=True), 'admin')[0]
+    assert (result.outcome, h.row().status) == ('baked_today', status)
+    assert 'Force rebake' in result.message
+
+    forced = h.pipeline.refresh(RefreshImagesRequest(all=True, force=True), 'admin')
+    assert forced[0].outcome == 'queued' and h.row().status == 'queued'
+
+    h = Harness()
+    baked_at(h, datetime(2026, 10, 3, 0, 30, tzinfo=chicago), status)
+    monkeypatch.setattr(
+        module, 'now_utc', lambda: datetime(2026, 10, 4, 0, 5, tzinfo=chicago)
+    )
+    assert h.pipeline.refresh(RefreshImagesRequest(all=True), 'admin')[0].outcome == (
+        'queued'
+    )
+
+
+def test_the_release_and_monthly_triggers_skip_a_row_baked_today(monkeypatch):
+    chicago = ZoneInfo('America/Chicago')
+    today = datetime(2026, 10, 4, 2, 30, tzinfo=chicago)
+    monkeypatch.setattr(module, 'now_utc', lambda: today)
+    h = monthly_harness(datetime(2026, 9, 6, 2, 5, tzinfo=chicago))
+    monkeypatch.setattr(
+        module,
+        'resolve_stock_image',
+        lambda ec2, base_os, arch, logger: {'ImageId': f'ami-stock-{base_os}-new'},
+    )
+    rocky9 = h.row('rocky9')
+    rocky9.started_on = datetime(2026, 10, 4, 0, 10, tzinfo=chicago)
+    h.records.put(rocky9)
+    h.pipeline.tick(now=today.astimezone(timezone.utc))
+    assert h.row('rocky9').status == 'current'
+    assert h.row('rocky8').status == 'queued' and h.row('rocky8').trigger == 'monthly'
+
+    # a new release waits for the next day for the row baked today, and stays unsettled
+    h = Harness(config={'vdc.software_stacks.images_baked_release': '26.10.0'})
+    baked_at(h, datetime(2026, 10, 4, 0, 10, tzinfo=chicago))
+    stale = h.row()
+    stale.release = '26.10.0'
+    h.records.put(stale)
+    h.pipeline._start = lambda record, blocking: True
+    h.pipeline.tick(now=today.astimezone(timezone.utc))
+    assert h.row().status == 'current'
+    assert h.config.values['vdc.software_stacks.images_baked_release'] == '26.10.0'
+    tomorrow = datetime(2026, 10, 5, 0, 1, tzinfo=chicago)
+    monkeypatch.setattr(module, 'now_utc', lambda: tomorrow)
+    h.pipeline.tick(now=tomorrow.astimezone(timezone.utc))
+    assert h.row().status == 'queued' and h.row().trigger == 'release'

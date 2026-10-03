@@ -157,6 +157,7 @@ def build_service(stacks, base_stack_config=None) -> DesktopImageService:
     context.module_name.return_value = 'virtual-desktop-controller'
     context.module_set.return_value = 'default'
     context.cluster_name.return_value = 'idea-test'
+    context.cluster_timezone.return_value = 'UTC'
     service.context = context
     service._software_stack_db = FakeStackDb(stacks, base_stack_config)
     service._software_stack_utils = Mock()

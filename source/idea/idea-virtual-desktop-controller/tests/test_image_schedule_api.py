@@ -172,3 +172,34 @@ def test_hand_set_base_stack_image_pins_the_stack(
     stored = api.software_stack_db.update.call_args.args[0]
     assert stored.ami_id == ami
     assert stored.image_pinned is expected
+
+
+@pytest.mark.parametrize('administrator', [False, True])
+def test_only_an_administrator_can_force_a_rebake(monkeypatch, administrator):
+    from ideadatamodel import RefreshImagesRequest
+    from ideavirtualdesktopcontroller.app.software_stacks import image_pipeline
+
+    api, _ = make_api()
+    pipeline = Mock()
+    pipeline.refresh.return_value = []
+    monkeypatch.setattr(image_pipeline, 'pipeline_for', lambda _: pipeline)
+    context = invocation(
+        RefreshImagesRequest(all=True, force=True), 'VirtualDesktopAdmin.RefreshImages'
+    )
+    context.is_administrator.return_value = administrator
+    if administrator:
+        api.refresh_images(context)
+        assert pipeline.refresh.call_args.args[0].force is True
+    else:
+        with pytest.raises(exceptions.SocaException) as exc_info:
+            api.refresh_images(context)
+        assert exc_info.value.error_code == errorcodes.UNAUTHORIZED_ACCESS
+        pipeline.refresh.assert_not_called()
+
+    # a manager may still refresh without force
+    context = invocation(
+        RefreshImagesRequest(all=True), 'VirtualDesktopAdmin.RefreshImages'
+    )
+    context.is_administrator.return_value = False
+    api.refresh_images(context)
+    assert pipeline.refresh.called

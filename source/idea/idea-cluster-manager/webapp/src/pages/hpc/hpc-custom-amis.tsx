@@ -171,7 +171,7 @@ export function toRowFilter(filters: Filters, text: string): ImageRowFilter | un
     }
 }
 
-type Refresh = { title: string, count: number, request: { all: true } | { rows: ImageBuildRecord[] } | { filter: ImageRowFilter } }
+type Refresh = { title: string, count: number, force?: boolean, request: { all: true } | { rows: ImageBuildRecord[] } | { filter: ImageRowFilter } }
 
 const options = (values: string[], label: (value: string) => string = value => value): MultiselectProps.Option[] =>
     Array.from(new Set(values)).filter(value => !!value).sort().map(value => ({value, label: label(value)}))
@@ -633,6 +633,8 @@ function HpcCustomAmis(props: HpcCustomAmisProps) {
         return allowed
     }, [context])
     const api = useCallback((kind: ImageKind) => kind === 'desktop' ? clients.virtualDesktopAdmin() : clients.schedulerAdmin(), [clients])
+    // the API takes force only from a cluster administrator (not a manager)
+    const canForce = context.auth().getGroups().includes('administrators-cluster-group')
 
     const [rows, setRows] = useState<ImageBuildRecord[]>([])
     const [errors, setErrors] = useState<string[]>([])
@@ -714,25 +716,33 @@ function HpcCustomAmis(props: HpcCustomAmisProps) {
         })
     }
 
-    const openRefreshRows = (targets: ImageBuildRecord[], title: string) =>
-        setRefresh({title, count: targets.length, request: {rows: targets}})
+    const openRefreshRows = (targets: ImageBuildRecord[], title: string, force = false) =>
+        setRefresh({title, count: targets.length, force, request: {rows: targets}})
+
+    const openForceRebake = (targets: ImageBuildRecord[]) => openRefreshRows(targets, targets.length === 1
+        ? `Force rebake ${targets[0].base_os} ${targets[0].architecture} ${VARIANT_LABEL[variantOf(targets[0])]}`
+        : `Force rebake ${targets.length} selected images`, true)
 
     const submitRefresh = () => {
         if (!refresh) {
             return
         }
         const request = refresh.request
-        const calls: { kind: ImageKind, req: RefreshImagesRequest }[] = 'rows' in request
+        const force = refresh.force ? {force: true} : {}
+        const calls: { kind: ImageKind, req: RefreshImagesRequest }[] = ('rows' in request
             ? kinds.map(kind => ({kind, req: {rows: request.rows.filter(row => row.kind === kind).map(keyOf)}})).filter(call => call.req.rows!.length > 0)
             : 'filter' in request
                 ? kinds.filter(kind => !request.filter.kind || request.filter.kind === kind).map(kind => ({kind, req: {filter: {...request.filter, kind}}}))
-                : kinds.map(kind => ({kind, req: {all: true}}))
+                : kinds.map(kind => ({kind, req: {all: true}})))
+            .map(call => ({kind: call.kind, req: {...call.req, ...force}}))
         setSubmitting(true)
         Promise.allSettled(calls.map(call => api(call.kind).refreshImages(call.req))).then(settled => {
             const results: ImageRefreshResult[] = settled.flatMap(result => result.status === 'fulfilled' ? result.value.results ?? [] : [])
             const failures = settled.flatMap((result, i) => result.status === 'rejected' ? [`${calls[i].kind}: ${result.reason?.message}`] : [])
             const count = (outcome: string) => results.filter(result => result.outcome === outcome).length
-            const skipped = results.length - count('queued') - count('in_flight')
+            const bakedToday = results.filter(result => result.outcome === 'baked_today')
+                .map(result => `${result.row?.base_os} ${result.row?.architecture}`)
+            const skipped = results.length - count('queued') - count('in_flight') - bakedToday.length
             const problems = [
                 ...results.filter(result => result.outcome === 'error' || result.outcome === 'not_found')
                     .map(result => `${result.row?.base_os} ${result.row?.architecture}: ${result.message ?? result.outcome}`),
@@ -741,6 +751,7 @@ function HpcCustomAmis(props: HpcCustomAmisProps) {
             const message = `Queued ${count('queued')}, already in progress ${count('in_flight')}`
                 + (skipped > 0 ? `, skipped ${skipped} (pinned, unsupported or not found)` : '')
                 + '.'
+                + (bakedToday.length > 0 ? ` Already updated today, skipped: ${bakedToday.join(', ')}. An image is baked at most once a day; Force rebake bakes it again.` : '')
                 + (problems.length > 0 ? ` Not started: ${problems.join('; ')}.` : '')
             setRefresh(undefined)
             setSubmitting(false)
@@ -812,6 +823,8 @@ function HpcCustomAmis(props: HpcCustomAmisProps) {
             <SpaceBetween direction="horizontal" size="xs">
                 <Button variant="inline-link" disabled={inFlight || pinned || row.status === 'unsupported'}
                         onClick={() => openRefreshRows([row], `Rebuild ${row.base_os} ${row.architecture} ${VARIANT_LABEL[variantOf(row)]}`)}>Rebuild</Button>
+                {canForce && <Button variant="inline-link" disabled={inFlight || pinned || row.status === 'unsupported'}
+                                     onClick={() => openForceRebake([row])}>Force rebake</Button>}
                 <Button variant="inline-link" disabled={inFlight || !row.previous_image_id} onClick={() => setRollback(row)}>Roll back</Button>
                 <Button variant="inline-link" disabled={inFlight} onClick={() => togglePin(row)}>{pinned ? 'Unpin' : 'Pin'}</Button>
                 <Button variant="inline-link" onClick={() => setDetail(row)}>Details</Button>
@@ -847,7 +860,7 @@ function HpcCustomAmis(props: HpcCustomAmisProps) {
                 <Box float="right">
                     <SpaceBetween direction="horizontal" size="xs">
                         <Button variant="link" onClick={() => setRefresh(undefined)} disabled={submitting}>Cancel</Button>
-                        <Button variant="primary" onClick={submitRefresh} loading={submitting}>Refresh and validate</Button>
+                        <Button variant="primary" onClick={submitRefresh} loading={submitting}>{refresh.force ? 'Force rebake' : 'Refresh and validate'}</Button>
                     </SpaceBetween>
                 </Box>
             }
@@ -859,6 +872,9 @@ function HpcCustomAmis(props: HpcCustomAmisProps) {
                     <li>test-launches a desktop or a job from it;</li>
                     <li>switches new desktops and jobs to it only if every check passes. If a check fails, the image stays on what it has now.</li>
                 </ul>
+                <Box>{refresh.force
+                    ? 'An image is normally baked at most once a day. Force rebake bakes these again even if they were baked today, at the cost of another bake each.'
+                    : 'An image already baked today is skipped; Force rebake bakes it again.'}</Box>
                 <Box>Running desktops and jobs are not touched. Rows already in progress are skipped. Expect roughly {Math.ceil(Math.max(refresh.count, 1) / CONCURRENT_BAKES) * MINUTES_PER_IMAGE} minutes.</Box>
             </SpaceBetween>
         </Modal>
@@ -1022,6 +1038,9 @@ function HpcCustomAmis(props: HpcCustomAmisProps) {
                                                             onClick={() => openRefreshRows(selectedVisible, `Refresh and validate ${selectedVisible.length} selected image${selectedVisible.length === 1 ? '' : 's'}`)}>
                                                         Refresh and validate selected
                                                     </Button>
+                                                    {canForce && <Button disabled={selectedVisible.length === 0} onClick={() => openForceRebake(selectedVisible)}>
+                                                        Force rebake selected
+                                                    </Button>}
                                                     <Button variant="primary" disabled={visible.length === 0} onClick={openRefreshAll}>
                                                         {filtered ? `Refresh and validate shown (${visible.length})` : 'Refresh and validate all'}
                                                     </Button>

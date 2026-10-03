@@ -181,7 +181,7 @@ def test_schedule_rejects_bad_rule():
 def test_defaults_and_pins():
     s = ImagePipelineSettings()
     assert (s.max_concurrent_bakes, s.keep_generations) == (4, 2)
-    assert (s.ready_gate_seconds_linux, s.ready_gate_seconds_windows) == (300, 600)
+    assert (s.ready_gate_seconds_linux, s.ready_gate_seconds_windows) == (600, 900)
     assert s.validation_user == 'idea-validate'
     assert VirtualDesktopSoftwareStack().image_pinned is None
     assert HpcQueueProfile(image_pinned=True).image_pinned is True
@@ -189,3 +189,34 @@ def test_defaults_and_pins():
         RefreshImagesRequest(rows=[ImageRowKey(base_os='rocky9')]).rows[0].base_os
         == 'rocky9'
     )
+
+
+def test_settings_template_carries_the_model_gates():
+    import re
+    from pathlib import Path
+
+    template = (
+        Path(__file__).resolve().parents[2]
+        / 'ideactl/resources/config/templates/virtual-desktop-controller/settings.yml'
+    ).read_text()
+    s = ImagePipelineSettings()
+    for key in ('ready_gate_seconds_linux', 'ready_gate_seconds_windows'):
+        assert re.search(rf'^\s+{key}: (\d+)$', template, re.M).group(1) == str(
+            getattr(s, key)
+        )
+
+
+def test_baked_today_counts_the_cluster_day_of_the_last_start():
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo('America/New_York')
+    # 23:30 local on Oct 3 is 03:30Z on Oct 4
+    row = ImageBuildRecord(started_on=datetime(2026, 10, 4, 3, 30, tzinfo=timezone.utc))
+    assert row.baked_today(datetime(2026, 10, 4, 3, 59, tzinfo=timezone.utc), tz)
+    # next local day (00:10 Oct 4 local)
+    assert not row.baked_today(datetime(2026, 10, 4, 4, 10, tzinfo=timezone.utc), tz)
+    # a naive stored time is UTC; a row never started was never baked
+    naive = ImageBuildRecord(started_on=datetime(2026, 10, 4, 3, 30))
+    assert naive.baked_today(datetime(2026, 10, 4, 3, 59, tzinfo=timezone.utc), tz)
+    assert not ImageBuildRecord().baked_today(datetime.now(timezone.utc), tz)
+    assert RefreshImagesRequest(all=True, force=True).force is True

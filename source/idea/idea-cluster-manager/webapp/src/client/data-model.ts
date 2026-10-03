@@ -2347,6 +2347,7 @@ export interface RefreshImagesRequest {
   all?: boolean;
   rows?: ImageRowKey[];
   filter?: ImageRowFilter;
+  force?: boolean;
 }
 export interface ImageRowKey {
   kind?: ImageKind;

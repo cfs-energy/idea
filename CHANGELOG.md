@@ -8,6 +8,9 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 ## [26.10.1] - 2026-10-02
 
 * **Validated images**: desktop and compute images are rebuilt and validated after every upgrade, on a monthly check for newer vendor images, and from Refresh and validate on the Images page, and only an image that passed every check replaces the one in use.
+* **Once a day per image**: an image already baked today (cluster time) is skipped by the monthly check, the upgrade trigger and Refresh and validate, which lists those rows as already updated today; an administrator can bake them again with Force rebake on a row or a selection.
+* **Test-launch limits**: a test launch must reach Ready within 10 minutes on Linux and 15 minutes on Windows (ready_gate_seconds_linux and ready_gate_seconds_windows).
+* **Rocky compute images**: the compute image bake drops slow Rocky mirrors like the hosts do, instead of running out its hour on one slow mirror.
 * **Image rollback and pins**: Roll back returns a row to its previous validated image and holds automatic updates, and a pinned row, software stack or queue profile is never moved.
 * **Windows desktop images**: Windows Server 2019, 2022 and 2025 desktop images are baked, checked and generalized like the Linux ones.
 * **Compute image canary**: a compute image is promoted only after a real job on a hidden queue lands on it, mounts every shared file system and exits cleanly.

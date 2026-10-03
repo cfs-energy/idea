@@ -13,7 +13,7 @@ from ideadatamodel.base import SocaBaseModel
 from ideadatamodel.api import SocaPayload
 
 from typing import Optional, List
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone, tzinfo
 from enum import Enum
 from pydantic import Field
 
@@ -238,8 +238,8 @@ class ImagePipelineSettings(SocaBaseModel):
 
     max_concurrent_bakes: Optional[int] = Field(default=4)
     keep_generations: Optional[int] = Field(default=2)
-    ready_gate_seconds_linux: Optional[int] = Field(default=300)
-    ready_gate_seconds_windows: Optional[int] = Field(default=600)
+    ready_gate_seconds_linux: Optional[int] = Field(default=600)
+    ready_gate_seconds_windows: Optional[int] = Field(default=900)
     validation_user: Optional[str] = Field(default='idea-validate')
     validation_project: Optional[str] = Field(default='idea-validate')
 
@@ -310,6 +310,19 @@ class ImageBuildRecord(SocaBaseModel):
     def is_in_flight(self) -> bool:
         return self.status in IMAGE_ROW_IN_FLIGHT
 
+    def baked_today(self, now: datetime, tz: tzinfo) -> bool:
+        """
+        a bake started on now's calendar day in tz (the cluster timezone), whatever its
+        outcome. every trigger skips such a row until the next day; only RefreshImages
+        with force (administrators) bakes it again
+        """
+        started = self.started_on
+        if started is None:
+            return False
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        return started.astimezone(tz).date() == now.astimezone(tz).date()
+
     def migrated(self, kind: ImageKind) -> 'ImageBuildRecord':
         """
         a copy on the 26.10.1 row model. legacy status maps through
@@ -368,19 +381,22 @@ class ListImageRowsResponse(SocaPayload):
 # RefreshImages - per-row outcome
 class ImageRefreshResult(SocaPayload):
     row: Optional[ImageRowKey] = Field(default=None)
-    # queued | in_flight (already running; not queued again) | pinned | unsupported
-    # | not_found | error
+    # queued | in_flight (already running; not queued again) | baked_today (already
+    # baked today; force bakes it again) | pinned | unsupported | not_found | error
     outcome: Optional[str] = Field(default=None)
     message: Optional[str] = Field(default=None)
     record: Optional[ImageBuildRecord] = Field(default=None)
 
 
 # RefreshImages - Request: exactly one of all, rows, filter. always trigger=button and
-# always rebakes (the admin asked); the monthly and release triggers skip unchanged rows
+# rebakes unchanged rows too (the admin asked); the monthly and release triggers skip
+# them. a row baked today is skipped (outcome baked_today) unless force is set, and
+# only an administrator may set force
 class RefreshImagesRequest(SocaPayload):
     all: Optional[bool] = Field(default=None)
     rows: Optional[List[ImageRowKey]] = Field(default=None)
     filter: Optional[ImageRowFilter] = Field(default=None)
+    force: Optional[bool] = Field(default=None)
 
 
 # RefreshImages - Response

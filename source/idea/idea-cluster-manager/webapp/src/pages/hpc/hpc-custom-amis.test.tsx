@@ -139,6 +139,61 @@ describe('images page', () => {
             .toHaveBeenCalledWith({rows: [{kind: 'desktop', base_os: 'rocky9', architecture: 'x86_64', variant: 'cpu'}]}));
     });
 
+    it('lists the rows already updated today in the refresh result', async () => {
+        const mocks = prime();
+        mocks.refreshDesktop.mockResolvedValue({results: [
+            {outcome: 'queued'},
+            {outcome: 'baked_today', row: {base_os: 'rocky9', architecture: 'x86_64'}},
+            {outcome: 'pinned'}
+        ]});
+        mocks.refreshCompute.mockResolvedValue({results: [{outcome: 'baked_today', row: {base_os: 'rocky9', architecture: 'arm64'}}]});
+        const flash = renderPage();
+        await screen.findByText('ubuntu2404');
+
+        await userEvent.click(screen.getByRole('button', {name: 'Refresh and validate all'}));
+        expect(await screen.findByText(/An image already baked today is skipped/)).toBeInTheDocument();
+        await userEvent.click(screen.getByRole('button', {name: 'Refresh and validate'}));
+        await vi.waitFor(() => expect(flash).toHaveBeenCalled());
+        expect(mocks.refreshDesktop).toHaveBeenCalledWith({all: true});
+        expect(flash.mock.calls[0][0].items[0].content).toBe('Queued 1, already in progress 0, skipped 1 (pinned, unsupported or not found).'
+            + ' Already updated today, skipped: rocky9 x86_64, rocky9 arm64. An image is baked at most once a day; Force rebake bakes it again.');
+    });
+
+    it('force rebakes a row or a selection after a confirmation, for administrators only', async () => {
+        const mocks = prime();
+        vi.spyOn(mocks.context.auth(), 'getGroups').mockReturnValue(['administrators-cluster-group']);
+        renderPage();
+        await screen.findByText('ubuntu2404');
+
+        await userEvent.click(within(rowOf('ubuntu2404')).getByRole('button', {name: 'Force rebake'}));
+        expect(await screen.findByText(/bakes these again even if they were baked today/)).toBeInTheDocument();
+        expect(mocks.refreshDesktop).not.toHaveBeenCalled();
+        const confirm = screen.getAllByRole('button', {name: 'Force rebake'});
+        await userEvent.click(confirm[confirm.length - 1]);
+        await vi.waitFor(() => expect(mocks.refreshDesktop)
+            .toHaveBeenCalledWith({rows: [{kind: 'desktop', base_os: 'ubuntu2404', architecture: 'x86_64', variant: 'nvidia'}], force: true}));
+
+        mocks.refreshDesktop.mockClear();
+        await userEvent.click(within(rowOf('ubuntu2404')).getByRole('checkbox'));
+        await userEvent.click(within(rowOf('arm64 · CPU')).getByRole('checkbox'));
+        await userEvent.click(screen.getByRole('button', {name: 'Force rebake selected'}));
+        expect(await screen.findByText('Force rebake 2 selected images')).toBeInTheDocument();
+        const again = screen.getAllByRole('button', {name: 'Force rebake'});
+        await userEvent.click(again[again.length - 1]);
+        await vi.waitFor(() => expect(mocks.refreshCompute)
+            .toHaveBeenCalledWith({rows: [{kind: 'compute', base_os: 'rocky9', architecture: 'arm64', variant: 'cpu'}], force: true}));
+        expect(mocks.refreshDesktop).toHaveBeenCalledWith({rows: [{kind: 'desktop', base_os: 'ubuntu2404', architecture: 'x86_64', variant: 'nvidia'}], force: true});
+    });
+
+    it('offers no force rebake to a manager', async () => {
+        const mocks = prime();
+        vi.spyOn(mocks.context.auth(), 'getGroups').mockReturnValue(['managers-cluster-group']);
+        renderPage();
+        await screen.findByText('ubuntu2404');
+        expect(screen.queryByRole('button', {name: 'Force rebake'})).toBeNull();
+        expect(screen.queryByRole('button', {name: 'Force rebake selected'})).toBeNull();
+    });
+
     it('turns the table filters into a row filter only when they fit one', () => {
         const none = {kind: [], family: [], architecture: [], variant: [], status: []};
         expect(toRowFilter({...none, variant: ['nvidia'], status: ['Failed', 'Waiting for capacity']}, ''))

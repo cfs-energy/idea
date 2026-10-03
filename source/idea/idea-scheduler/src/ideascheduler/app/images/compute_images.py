@@ -453,7 +453,11 @@ class ComputeImageService:
                 )
                 continue
             try:
-                results.append(self._enqueue(record, requested_by, 'button'))
+                results.append(
+                    self._enqueue(
+                        record, requested_by, 'button', force=bool(request.force)
+                    )
+                )
             except Exception as error:
                 results.append(
                     ImageRefreshResult(
@@ -464,7 +468,13 @@ class ComputeImageService:
                 )
         return results
 
-    def _enqueue(self, row, requested_by, trigger):
+    def _baked_today(self, row, now=None) -> bool:
+        return row.baked_today(
+            now or datetime.now(timezone.utc),
+            ZoneInfo(self.context.cluster_timezone()),
+        )
+
+    def _enqueue(self, row, requested_by, trigger, force=False):
         key = row.row_key()
         existing = self.records.get(row.base_os, key.range_key())
         current = row.current_image_id
@@ -479,6 +489,13 @@ class ComputeImageService:
             outcome = 'pinned'
         elif row.is_in_flight():
             outcome = 'in_flight'
+        elif not force and self._baked_today(row):
+            return ImageRefreshResult(
+                row=key,
+                outcome='baked_today',
+                record=row,
+                message='Already baked today; Force rebake bakes it again.',
+            )
         elif (
             row.status == 'unsupported'
             or row.base_os not in COMPUTE_BASE_OS
@@ -1045,6 +1062,10 @@ class ComputeImageService:
                     or row.rollback_hold
                     or row.status == 'unsupported'
                 ):
+                    continue
+                if self._baked_today(row, now):
+                    # tomorrow's tick bakes it; the release stays unsettled until then
+                    pending_release = pending_release or release
                     continue
                 try:
                     source = self.default_base_ami(row.base_os, row.architecture)

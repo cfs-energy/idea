@@ -1132,6 +1132,10 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
         from ideadatamodel import RefreshImagesResponse
 
         request = context.get_request_payload_as(RefreshImagesRequest)
+        if request.force and not context.is_administrator():
+            raise exceptions.unauthorized_access(
+                'only an administrator can force a rebake'
+            )
         results = pipeline_for(self).refresh(request, context.get_username())
         context.success(RefreshImagesResponse(results=results))
 

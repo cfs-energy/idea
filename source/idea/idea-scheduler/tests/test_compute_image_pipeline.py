@@ -521,11 +521,14 @@ def test_sweep_removes_failed_candidates_and_generations_older_than_previous(
     from ideadatamodel import HpcQueueProfile, SocaJobParams
 
     svc = service()
+    svc.records.put(row(current_image_id='ami-gen3', previous_image_id='ami-gen2'))
     svc.records.put(
-        row(current_image_id='ami-gen3', previous_image_id='ami-gen2')
-    )
-    svc.records.put(
-        row(base_os='rocky8', status='failed', image_id='ami-fail', current_image_id=None)
+        row(
+            base_os='rocky8',
+            status='failed',
+            image_id='ami-fail',
+            current_image_id=None,
+        )
     )
     svc.records.put(
         row(
@@ -579,7 +582,11 @@ def test_sweep_removes_failed_candidates_and_generations_older_than_previous(
 
         def describe_instances(self, **kwargs):
             ids = next(
-                (f['Values'] for f in kwargs.get('Filters', []) if f['Name'] == 'image-id'),
+                (
+                    f['Values']
+                    for f in kwargs.get('Filters', [])
+                    if f['Name'] == 'image-id'
+                ),
                 [],
             )
             running = [{'ImageId': 'ami-inuse'}] if 'ami-inuse' in ids else []
@@ -613,8 +620,47 @@ def test_pipeline_compute_images_carry_the_cleanup_tag():
     builder.ebs_volume_size, builder.no_reboot = 20, False
     builder.context.aws().ec2().create_image.return_value = {'ImageId': 'ami-new'}
     assert builder.create_image('i-builder') == 'ami-new'
-    specs = builder.context.aws().ec2().create_image.call_args.kwargs[
-        'TagSpecifications'
-    ]
+    specs = (
+        builder.context.aws().ec2().create_image.call_args.kwargs['TagSpecifications']
+    )
     for spec in specs:
         assert {'Key': 'idea:ImagePipeline', 'Value': 'compute'} in spec['Tags']
+
+
+@pytest.mark.parametrize('status', ['current', 'failed'])
+def test_a_row_baked_today_is_skipped_by_the_button_unless_forced(status):
+    from datetime import timedelta
+
+    svc = service()
+    now = datetime.now(timezone.utc)
+    svc.records.put(row(status=status, started_on=now))
+    request = RefreshImagesRequest(rows=[row().row_key()])
+    result = svc.refresh_images(request)[0]
+    assert result.outcome == 'baked_today' and 'Force rebake' in result.message
+    assert svc.records.get('rocky9', 'x86_64').status == status
+    forced = svc.refresh_images(
+        RefreshImagesRequest(rows=[row().row_key()], force=True)
+    )
+    assert forced[0].outcome == 'queued'
+
+    svc = service()
+    svc.records.put(row(status=status, started_on=now - timedelta(days=1)))
+    assert svc.refresh_images(request)[0].outcome == 'queued'
+
+
+def test_the_release_trigger_waits_a_day_for_a_row_baked_today():
+    svc = service()
+    svc.context.config().values[
+        'virtual-desktop-controller.software_stacks.image_refresh_schedule'
+    ] = {'enabled': False}
+    today = datetime(2026, 10, 4, 2, tzinfo=timezone.utc)
+    baked = row(release='old', source_ami='ami-stock', started_on=today)
+    svc.list_rows = lambda: [baked]
+    svc.default_base_ami = Mock(return_value='ami-stock')
+    svc._enqueue = Mock()
+    svc._setting = Mock()
+    svc.tick(today)
+    svc._enqueue.assert_not_called()
+    svc._setting.assert_not_called()  # the release is not marked done
+    svc.tick(datetime(2026, 10, 5, 0, 1, tzinfo=timezone.utc))
+    svc._enqueue.assert_called_once_with(baked, None, 'release')
