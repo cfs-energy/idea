@@ -247,7 +247,9 @@ def test_canary_probes_as_a_user_home_for_writes_and_reads_admin_filesystems(
     assert list(home.iterdir()) == []
 
 
-def test_canary_fails_when_the_users_home_is_not_writable(tmp_path, monkeypatch, capsys):
+def test_canary_fails_when_the_users_home_is_not_writable(
+    tmp_path, monkeypatch, capsys
+):
     data = tmp_path / 'data'
     home = data / 'home' / 'image-test'
     home.mkdir(parents=True)

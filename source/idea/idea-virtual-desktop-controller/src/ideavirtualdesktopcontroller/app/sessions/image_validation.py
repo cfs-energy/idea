@@ -192,7 +192,9 @@ def shared_filesystems(config, windows: bool) -> List[Tuple[str, str]]:
     found = []
     tree = config.get_config('shared-storage', default={}) or {}
     # a pyhocon tree's get(key) raises for a missing key; plain dicts take defaults
-    tree = tree.as_plain_ordered_dict() if hasattr(tree, 'as_plain_ordered_dict') else tree
+    tree = (
+        tree.as_plain_ordered_dict() if hasattr(tree, 'as_plain_ordered_dict') else tree
+    )
     for name, storage in tree.items():
         if not isinstance(storage, dict) or 'provider' not in storage:
             continue
