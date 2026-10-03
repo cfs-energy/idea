@@ -138,6 +138,9 @@ try {
         }
         if (Test-Path $Path) { throw "Could not remove $Path" }
     }
+    # the session manager agent exits at start without its log directory, and nothing
+    # else recreates it: a desktop from the image would never register with the broker
+    New-Item -ItemType Directory 'C:\ProgramData\NICE\DCVSessionManagerAgent\log' -Force | Out-Null
     $FailureCheck = 'bootstrap'
     Add-ImageCheck 'bootstrap' ($Installed -and $CleanLog) $LogDetail
     $FailureCheck = 'release'

@@ -829,7 +829,9 @@ def test_ubuntu_desktop_boots_do_not_wait_for_networkd(base_os):
 
 
 @pytest.mark.parametrize('cat_rc,expected', [(5, 0), (0, 1)])
-def test_amd_driver_install_stops_pbs_only_when_it_is_installed(tmp_path, cat_rc, expected):
+def test_amd_driver_install_stops_pbs_only_when_it_is_installed(
+    tmp_path, cat_rc, expected
+):
     """
     the desktop builder installs OpenPBS after the GPU drivers: stopping a unit that does
     not exist tripped the ERR trap and marked an otherwise good AMD bake failed. A unit
@@ -841,7 +843,7 @@ def test_amd_driver_install_stops_pbs_only_when_it_is_installed(tmp_path, cat_rc
         instance_type='g4ad.xlarge',
         drivers=('amd',),
     )
-    line = next(l for l in host.splitlines() if 'systemctl stop pbs' in l)
+    line = next(x for x in host.splitlines() if 'systemctl stop pbs' in x)
     stub = tmp_path / 'systemctl'
     stub.write_text(f'#!/bin/bash\n[ "$1" = cat ] && exit {cat_rc}\nexit 1\n')
     stub.chmod(0o755)
@@ -852,3 +854,29 @@ def test_amd_driver_install_stops_pbs_only_when_it_is_installed(tmp_path, cat_rc
         text=True,
     )
     assert (result.returncode == 0) == (expected == 0), result
+
+
+@pytest.mark.parametrize('base_os', WINDOWS)
+def test_windows_scrub_leaves_the_session_manager_agent_its_log_directory(base_os):
+    # the agent service exits at start when its log directory is missing, so a scrub
+    # that removes the agent's data directory must recreate the log directory, or every
+    # desktop from the image stays CREATING with no agent registered at the broker
+    setup = render('dcv-host-ami-builder-windows/Setup.ps1.jinja2', base_os)
+    agent_data = "'C:\\ProgramData\\NICE\\DCVSessionManagerAgent',"
+    recreate = (
+        'New-Item -ItemType Directory '
+        "'C:\\ProgramData\\NICE\\DCVSessionManagerAgent\\log' -Force"
+    )
+    assert agent_data in setup
+    assert recreate in setup
+    assert setup.index(agent_data) < setup.index(recreate)
+    assert setup.index(recreate) < setup.index("Add-ImageCheck 'bootstrap'")
+
+
+@pytest.mark.parametrize('base_os', ['rocky8', 'rocky9'])
+def test_the_compute_bake_drops_slow_rocky_mirrors_before_its_first_install(base_os):
+    # the compute builder installs ~930 MB from the public mirrorlist; on one ~130 kB/s
+    # mirror it missed its hour. it gets the same mirror settings as the hosts
+    setup = render('compute-node-ami-builder/setup.sh.jinja2', base_os, config=Config())
+    assert 'minrate=512k' in setup
+    assert setup.index('minrate=512k') < setup.index('epel')
