@@ -306,7 +306,7 @@ software_stacks:
     keep_generations: 2 # current + previous validated; older managed images are removed
     # seconds from request acceptance to READY for a test launch; slower fails the bake
     ready_gate_seconds_linux: 300
-    ready_gate_seconds_windows: 480
+    ready_gate_seconds_windows: 600
     # the service user and hidden project test launches (and compute test jobs) run as
     validation_user: idea-validate
     validation_project: idea-validate

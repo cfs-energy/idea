@@ -68,7 +68,14 @@ function Configure-WindowsEC2Instance {
   # flip below lines if you want to enable/disable computer renaming
   $DesktopHostname = Get-IdeaHostname
   # $DesktopHostname = $InstanceId.substring($InstanceId.length - 15, 15).ToUpper()
-  if ($env:COMPUTERNAME -ne $DesktopHostname) {
+  {% if context.config.get_string('directoryservice.provider', required=True) in ['aws_managed_activedirectory', 'activedirectory'] %}
+  # The domain join below renames the computer (Add-Computer -NewName), and the restart at
+  # the end applies both: a rename restart first cost every desktop a full extra boot.
+  $RenameFirst = $false
+  {% else %}
+  $RenameFirst = $env:COMPUTERNAME -ne $DesktopHostname
+  {% endif %}
+  if ($RenameFirst) {
     Write-ToLog -Message "Hostname detected $env:COMPUTERNAME . Renaming Computer to $DesktopHostname ..."
     Rename-Computer -NewName $DesktopHostname -Force
     Write-ToLog -Message "Name has been changed, re-enabling user data as we are about to restart the system ..."
@@ -99,7 +106,7 @@ function Configure-WindowsEC2Instance {
   $DomainUserName = "{{ context.config.get_string('directoryservice.ad_short_name', required=True) }}\$LocalUser"
   if ($ServerInAD -eq $false)
   {
-    Start-ADAutomationAuthorization
+    Start-ADAutomationAuthorization -Hostname $DesktopHostname
     Start-ADAutomationWaitForAuthorizationAndJoin
 
     New-ItemProperty -Path "HKLM:\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name "AutoAdminLogon" -PropertyType "DWord" -Value 1 -Force

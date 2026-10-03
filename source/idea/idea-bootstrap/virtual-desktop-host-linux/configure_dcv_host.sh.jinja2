@@ -58,12 +58,14 @@ function install_microphone_redirect() {
 }
 
 function install_usb_support() {
-  if [[ -z "$(lsmod | grep eveusb)" ]]; then
+  # installed for the running kernel, not loaded: a baked image boots with the module on disk
+  # and dcvserver loads it (ExecStartPre modprobe); rebuilding it through DKMS cost ~90 s
+  if ! modinfo eveusb >/dev/null 2>&1; then
     echo "Installing usb support..."
     DCV_USB_DRIVER_INSTALLER=$(which dcvusbdriverinstaller)
     $DCV_USB_DRIVER_INSTALLER --quiet
   else
-    log_info "Found eveusb kernel module pre-installed... skipping installation..."
+    log_info "Found eveusb kernel module installed... skipping installation..."
   fi
 
   echo "# disable x11 display power management system"

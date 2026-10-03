@@ -916,7 +916,22 @@ class ComputeImageService:
         a builder no live record owns and older than any real bake (its process died
         before it recorded the instance) is stopped; one stopped for a day is terminated
         """
-        busy = {r.instance_id for r in self.records.list_all() if r.is_in_flight()}
+        records = [r for r in self.records.list_all() if r.is_in_flight()]
+        busy = {r.instance_id for r in records}
+        # a hidden validation queue whose candidate no row is validating was left by a
+        # failed cleanup or a restart; reap it so the queues do not accumulate
+        candidates = {r.image_id for r in records if r.image_id}
+        canary = ComputeImageCanary(self.context)
+        for profile in self.context.queue_profiles.list_queue_profiles():
+            params = profile.default_job_params
+            if (profile.name or '').startswith(VALIDATION_QUEUE_PREFIX) and (
+                params is None or params.instance_ami not in candidates
+            ):
+                errors = canary.reap(profile)
+                if errors:
+                    self._logger.warning(
+                        f'validation queue {profile.name} not reaped: {"; ".join(errors)}'
+                    )
         result = (
             self.context.aws()
             .ec2()

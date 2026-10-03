@@ -10,7 +10,6 @@ $AD_AUTOMATION_SQS_QUEUE_URL = "{{ context.config.get_string('directoryservice.a
 $AD_AUTOMATION_DDB_TABLE_NAME = "{{ context.config.get_string('cluster.cluster_name', required=True) }}.ad-automation"
 $AD_DOMAIN_NAME = "{{ context.config.get_string('directoryservice.name', required=True) }}"
 $AD_SHORT_NAME = "{{ context.config.get_string('directoryservice.ad_short_name', required=True) }}"
-$WINDOWS_HOSTNAME = $env:COMPUTERNAME
 
 # Various timers / settings controlling AD Join process
 # These configuration settings impact the AD Join process after the eVDI client is authorized to join Active Directory
@@ -26,8 +25,11 @@ function Send-ADAutomationSQSMessage
   #>
   [OutputType([Boolean])]
   [CmdletBinding()]
+  # the name the computer account is created with: Configure passes the IDEA hostname, so
+  # the rename rides on the domain join (Add-Computer -NewName) and one restart applies both
+  Param([String] $Hostname = $env:COMPUTERNAME)
 
-  $payload = @{ header = @{ namespace = 'ADAutomation.PresetComputer' }; payload = @{ nonce = $AD_AUTHORIZATION_NONCE; instance_id = $AD_AUTHORIZATION_INSTANCE_ID; hostname = $WINDOWS_HOSTNAME } } | ConvertTo-Json -Compress
+  $payload = @{ header = @{ namespace = 'ADAutomation.PresetComputer' }; payload = @{ nonce = $AD_AUTHORIZATION_NONCE; instance_id = $AD_AUTHORIZATION_INSTANCE_ID; hostname = $Hostname } } | ConvertTo-Json -Compress
   # todo - support vpc endpoint
   Write-ToLog -Message ("[Join AD] Sending to AD Automation: $AD_AUTOMATION_SQS_QUEUE_URL /  InstanceID: $AD_AUTHORIZATION_INSTANCE_ID / Nonce: $AD_AUTHORIZATION_NONCE ...")
 
@@ -48,16 +50,17 @@ function Start-ADAutomationAuthorization
           Invoke Send-ADAutomationSQSMessage until message is posted successfully.
   #>
   [CmdletBinding()]
+  Param([String] $Hostname = $env:COMPUTERNAME)
   $attemptCount = 0
   $maxAttempts = 5
-  $success = Send-ADAutomationSQSMessage
+  $success = Send-ADAutomationSQSMessage -Hostname $Hostname
   while (($success -ne $true) -and ($attemptCount -le $maxAttempts))
   {
     $sleepTime = $( Get-Random -Minimum 3 -Maximum 10 )
     Write-ToLog -Message "[Join AD] ($attemptCount of $maxAttempts) failed to request authorization to join AD, retrying in $sleepTime seconds ..."
     Start-Sleep -Seconds $sleepTime
     $attemptCount++
-    $success = Send-ADAutomationSQSMessage
+    $success = Send-ADAutomationSQSMessage -Hostname $Hostname
   }
 }
 
@@ -118,14 +121,16 @@ function Start-ADAutomationWaitForAuthorizationAndJoin
   # Initialize DynamoDB Client
   $regionEndpoint = [Amazon.RegionEndPoint]::GetBySystemName($AWS_REGION)
 
+  # the automation agent usually answers within seconds: poll every 3 s, within the same
+  # overall wait the retry settings allowed (a fixed 30 s sleep cost every desktop ~30 s)
+  $authorizationDeadline = (Get-Date).AddSeconds([int]$AD_JOIN_RETRY_COUNT * [int]$AD_JOIN_MAX_SLEEP)
   $attemptCount = 0
   $authorizationEntry = Get-ADAutomationAuthorizationEntry
-  while (($authorizationEntry -eq $null) -and ($attemptCount -lt $AD_JOIN_RETRY_COUNT))
+  while (($authorizationEntry -eq $null) -and ((Get-Date) -lt $authorizationDeadline))
   {
     $attemptCount++
-    $sleepTime = $( Get-Random -Minimum $AD_JOIN_MIN_SLEEP -Maximum $AD_JOIN_MAX_SLEEP )
-    Write-ToLog -Message "[Join AD] ($attemptCount of $AD_JOIN_RETRY_COUNT) waiting for AD authorization. Sleeping $sleepTime seconds ..."
-    Start-Sleep -Seconds $sleepTime
+    Write-ToLog -Message "[Join AD] ($attemptCount) waiting for AD authorization, polling again in 3 seconds ..."
+    Start-Sleep -Seconds 3
     $authorizationEntry = Get-ADAutomationAuthorizationEntry
   }
 
@@ -167,7 +172,7 @@ function Start-ADAutomationWaitForAuthorizationAndJoin
 
     # hostname supplied by cluster-manager
 
-    if ($($authorizationEntry.hostname) -ne $WINDOWS_HOSTNAME )
+    if ($($authorizationEntry.hostname) -ne $env:COMPUTERNAME )
     {
         Write-ToLog -Message "[Join AD] Joining with cluster-manager supplied hostname: $($authorizationEntry.hostname)"
         $joinCmd += "-NewName $($authorizationEntry.hostname) "
@@ -184,11 +189,15 @@ function Start-ADAutomationWaitForAuthorizationAndJoin
     Write-ToLog -Message "[Join AD] Using AD Join settings of (Min/Max/Attempts): $AD_JOIN_MIN_SLEEP / $AD_JOIN_MAX_SLEEP / $AD_JOIN_RETRY_COUNT"
 
     # AD Join retry loop
+    # the join names the domain controller that created the account, so the first attempt
+    # needs no replication delay; only a failed attempt waits before the next one
     do {
         $attemptNumber++
-        $sleepBuffer = $(Get-Random -Minimum $AD_JOIN_MIN_SLEEP -Maximum $AD_JOIN_MAX_SLEEP)
-        Write-ToLog -Message "[Join AD] Attempt #$attemptNumber - Delaying $sleepBuffer seconds to allow AD sync"
-        Start-Sleep -Seconds $sleepBuffer
+        if ($attemptNumber -gt 1) {
+            $sleepBuffer = $(Get-Random -Minimum $AD_JOIN_MIN_SLEEP -Maximum $AD_JOIN_MAX_SLEEP)
+            Write-ToLog -Message "[Join AD] Attempt #$attemptNumber - Delaying $sleepBuffer seconds after the failed attempt"
+            Start-Sleep -Seconds $sleepBuffer
+        }
         Write-ToLog -Message "[Join AD] Attempt #$attemptNumber - Proceeding with AD join"
 
         $joinResult = Invoke-Expression $joinCmd

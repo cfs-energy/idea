@@ -480,3 +480,31 @@ def test_builder_sweep_stops_only_orphaned_builders_past_any_real_bake(monkeypat
     monkeypatch.setattr(module, 'terminate_old_stopped_builders', lambda *a: [])
     svc.sweep_builders(now)
     assert stopped == ['i-orphan']
+
+
+def test_builder_sweep_reaps_validation_queues_no_row_is_validating(monkeypatch):
+    from ideadatamodel import HpcQueueProfile, SocaJobParams
+
+    svc = service()
+    svc.records.put(row(status='test_launching', image_id='ami-live'))
+    ec2 = Mock()
+    ec2.describe_instances.return_value = {}
+    svc.context.aws.return_value.ec2.return_value = ec2
+    monkeypatch.setattr(module, 'terminate_old_stopped_builders', lambda *a: [])
+    svc.context.queue_profiles.list_queue_profiles.return_value = [
+        HpcQueueProfile(
+            name='iv-live', default_job_params=SocaJobParams(instance_ami='ami-live')
+        ),
+        HpcQueueProfile(
+            name='iv-left', default_job_params=SocaJobParams(instance_ami='ami-old')
+        ),
+        HpcQueueProfile(
+            name='normal', default_job_params=SocaJobParams(instance_ami='ami-old')
+        ),
+    ]
+    reaped = []
+    monkeypatch.setattr(
+        module.ComputeImageCanary, 'reap', lambda self, p: reaped.append(p.name) or []
+    )
+    svc.sweep_builders(datetime.now(timezone.utc))
+    assert reaped == ['iv-left']

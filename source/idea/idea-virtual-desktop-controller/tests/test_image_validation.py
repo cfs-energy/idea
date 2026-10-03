@@ -388,3 +388,81 @@ def test_the_validation_size_is_one_the_cluster_offers():
     tester, _ = launcher(api, Clock())
     tester.test_launch(RECORD, STACK, ImagePipelineSettings())
     assert api.validated[0].server.instance_type == 'm6i.xlarge'
+
+
+def test_a_cpu_row_takes_a_general_purpose_size_that_boots_its_image():
+    """
+    the live failure: the allow list left out m6i, the picker took g4ad.xlarge (a GPU size,
+    legacy BIOS only) for a UEFI-only Windows candidate and EC2 refused the launch
+    """
+    from ideadatamodel import VirtualDesktopGPU
+
+    def info(name, modes):
+        return {
+            'InstanceType': name,
+            'VCpuInfo': {'DefaultVCpus': 4},
+            'MemoryInfo': {'SizeInMiB': 16384},
+            'SupportedBootModes': modes,
+        }
+
+    offered = [
+        info('g4ad.xlarge', ['legacy-bios']),
+        info('c6i.xlarge', ['legacy-bios', 'uefi']),
+        info('m5.xlarge', ['legacy-bios']),
+        info('m7i.xlarge', ['legacy-bios', 'uefi']),
+    ]
+    api = FakeApi([VirtualDesktopSessionState.READY])
+    api.controller_utils = Mock()
+    api.controller_utils.get_valid_instance_types.return_value = offered
+    api.controller_utils.describe_image_id.return_value = {'BootMode': 'uefi'}
+    tester, _ = launcher(api, Clock())
+    tester.test_launch(RECORD, STACK, ImagePipelineSettings())
+    assert api.validated[0].server.instance_type == 'm7i.xlarge'
+    kwargs = api.controller_utils.get_valid_instance_types.call_args.kwargs
+    assert kwargs['gpu'] == VirtualDesktopGPU.NO_GPU
+    api.controller_utils.describe_image_id.assert_called_with(RECORD.image_id)
+
+
+def test_the_ready_gate_runs_from_the_request_not_from_launch_return():
+    """a slow CreateSession call counts against the gate, as it does for a user"""
+    clock = Clock()
+    states = [VirtualDesktopSessionState.PROVISIONING] * 10 + [
+        VirtualDesktopSessionState.READY
+    ]
+    api = FakeApi(states)
+    hook = api.create_session_hook
+
+    def slow(session):
+        clock.sleep(200)
+        return hook(session)
+
+    api.create_session_hook = slow
+    tester, _ = launcher(api, clock)
+    checks = tester.test_launch(
+        RECORD, STACK, ImagePipelineSettings(ready_gate_seconds_linux=300)
+    )
+    assert checks[-1].name == 'ready_gate' and checks[-1].ok is False
+    assert clock.now <= 1000 + 300 + 15
+
+
+def test_a_windows_utf16_log_line_is_readable_in_the_row_error():
+    """
+    the live failure read "2 0 2 6 - 1 0 - 0 3 ..." (UTF-16 shipped as bytes), and a
+    transcript rule of asterisks hid the line before it
+    """
+    clock = Clock()
+    api = FakeApi([VirtualDesktopSessionState.PROVISIONING])
+    tester, context = launcher(api, clock)
+    utf16 = '2026-10-03 11:40:06 INFO: [Join AD] waiting for AD authorization\r'
+    context.aws().logs().get_log_events.return_value = {
+        'events': [
+            {'message': ''.join('\x00' + ch for ch in utf16)},
+            {'message': '﻿**********************'},
+        ]
+    }
+    checks = tester.test_launch(
+        RECORD, STACK, ImagePipelineSettings(ready_gate_seconds_linux=300)
+    )
+    assert checks[-1].detail.endswith(
+        'last bootstrap log line: 2026-10-03 11:40:06 INFO: [Join AD] waiting for AD authorization'
+    )

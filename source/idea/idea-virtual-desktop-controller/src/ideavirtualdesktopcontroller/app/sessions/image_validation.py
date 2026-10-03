@@ -30,6 +30,7 @@ from ideadatamodel import (
     SocaBaseModel,
     User,
     VirtualDesktopServer,
+    VirtualDesktopGPU,
     VirtualDesktopSession,
     VirtualDesktopSessionState,
     VirtualDesktopSoftwareStack,
@@ -65,6 +66,11 @@ VALIDATION_INSTANCE_TYPES = {
     ('x86_64', ImageVariant.AMD.value): 'g4ad.xlarge',
 }
 
+VALIDATION_GPU = {
+    ImageVariant.NVIDIA.value: VirtualDesktopGPU.NVIDIA,
+    ImageVariant.AMD.value: VirtualDesktopGPU.AMD,
+}
+
 # EC2 refusals that mean "not now", not "broken": the row waits and tries again
 CAPACITY_MARKERS = (
     'InsufficientInstanceCapacity',
@@ -83,6 +89,14 @@ class CapacityWait(Exception):
 
 def is_capacity_problem(text: Optional[str]) -> bool:
     return any(marker in (text or '') for marker in CAPACITY_MARKERS)
+
+
+def log_line(message: str) -> str:
+    """
+    a CloudWatch event as text: Windows PowerShell 5.1 wrote its logs as UTF-16, which the
+    agent ships byte for byte (NUL between characters, a BOM at the start)
+    """
+    return message.replace('\x00', '').replace('\ufeff', '').strip()
 
 
 def check(name: str, ok: bool, detail: str, started: float) -> ImageCheck:
@@ -431,13 +445,15 @@ class ImageTestLauncher:
         stack = self._candidate_stack(record, base_stack, project, variant)
         session = None
         try:
+            requested = self.clock()
             session, launch_check = self._launch(
                 record, stack, project, settings, variant
             )
             checks.append(launch_check)
             if not launch_check.ok:
                 return checks
-            ready = self._wait_ready(session, gate, 'ready_gate')
+            # the gate runs from the request, as a user's wait does, not from launch return
+            ready = self._wait_ready(session, gate, 'ready_gate', started=requested)
             checks.append(ready)
             if not ready.ok:
                 self._explain(ready, session)
@@ -511,8 +527,10 @@ class ImageTestLauncher:
     def _instance_type(self, record, stack, settings, variant) -> str:
         """
         the preferred validation size when the cluster offers it to this stack, else the
-        smallest offered size with 4 vCPUs and 16 GiB (or the smallest offered at all):
-        the test launch goes through the same size filter a user's request does
+        smallest offered size with 4 vCPUs and 16 GiB (or the smallest offered at all),
+        general purpose first: the test launch goes through the same size filter a user's
+        request does. A CPU row never takes a GPU size, and the size must boot the
+        candidate's boot mode (a UEFI-only image refused g4ad, which is legacy BIOS only).
         """
         preferred = VALIDATION_INSTANCE_TYPES.get(
             (record.architecture, variant), 'm6i.xlarge'
@@ -523,15 +541,31 @@ class ImageTestLauncher:
         offered = utils.get_valid_instance_types(
             hibernation_support=False,
             software_stack=stack,
+            gpu=VALIDATION_GPU.get(variant, VirtualDesktopGPU.NO_GPU),
             username=settings.validation_user,
         )
+        boot_mode = (utils.describe_image_id(record.image_id) or {}).get('BootMode')
+        if boot_mode in ('uefi', 'legacy-bios'):
+            offered = [
+                i
+                for i in offered
+                # an instance type that does not list its boot modes is left to EC2
+                if boot_mode in (i.get('SupportedBootModes') or [boot_mode])
+            ]
         if not offered or preferred in {i.get('InstanceType') for i in offered}:
             return preferred  # nothing offered: CreateSession reports why
 
         def size(info):
+            name = info.get('InstanceType') or ''
             vcpus = (info.get('VCpuInfo') or {}).get('DefaultVCpus') or 0
             mib = (info.get('MemoryInfo') or {}).get('SizeInMiB') or 0
-            return (vcpus < 4 or mib < 16384, vcpus, mib, info.get('InstanceType'))
+            return (
+                vcpus < 4 or mib < 16384,
+                not name.startswith('m'),
+                vcpus,
+                mib,
+                name,
+            )
 
         return min(offered, key=size)['InstanceType']
 
@@ -540,9 +574,11 @@ class ImageTestLauncher:
             idea_session_owner=session.owner, idea_session_id=session.idea_session_id
         )
 
-    def _wait_ready(self, session, gate: int, name: str) -> ImageCheck:
-        """READY within gate seconds of acceptance, else a failed check with the last state"""
-        started = self.clock()
+    def _wait_ready(
+        self, session, gate: int, name: str, started: Optional[float] = None
+    ) -> ImageCheck:
+        """READY within gate seconds of the request, else a failed check with the last state"""
+        started = self.clock() if started is None else started
         state = None
         while self.clock() - started <= gate:
             current = self._get(session)
@@ -583,11 +619,13 @@ class ImageTestLauncher:
                     logGroupName=dcv_host_log_group(self.context),
                     logStreamName=BOOTSTRAP_LOG_STREAM.format(instance_id=instance_id),
                     startFromHead=False,
-                    limit=1,
+                    limit=20,
                 )
                 .get('events', [])
             )
-            last = events[-1]['message'].strip() if events else 'no bootstrap log yet'
+            lines = [log_line(e.get('message', '')) for e in events]
+            lines = [line for line in lines if line.strip('*')]
+            last = lines[-1] if lines else 'no bootstrap log yet'
             failed.detail = f'{failed.detail}; last bootstrap log line: {last}'[:500]
         except Exception as e:
             self._logger.warning(f'could not read the bootstrap log tail: {e}')

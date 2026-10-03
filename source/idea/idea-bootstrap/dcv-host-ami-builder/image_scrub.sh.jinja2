@@ -43,12 +43,20 @@ rm -f /var/lib/idea/bake-*.ok
 sed -i '/^AWS_INSTANCE_ID=/d; /^IDEA_DCV_HOST_AMI_BUILDER_LOGS_DIR=/d; /^IDEA_COMPUTE_NODE_AMI_BUILDER_LOGS_DIR=/d; /^IDEA_AMI_NAME=/d; /^IDEA_SESSION_/d' /etc/environment
 
 # Host setup recreates storage entries, directory membership, DCV config and agent tags.
+# shared-storage also holds plain settings (no mount_dir); an empty directory made this
+# pattern match the root entry and every line with two spaces, so images booted read-only.
+# Match the second fstab field exactly, and require the root entry to survive.
 {% for name, storage in context.config.get_config('shared-storage').items() %}
-{% if context.eval_shared_storage_scope(shared_storage=storage) %}
-sed -i '\| {{ storage.mount_dir }}/\{0,1\} |d' /etc/fstab
+{% if storage is mapping and storage.get('mount_dir') and context.eval_shared_storage_scope(shared_storage=storage) %}
+sed -i '\|^[^#[:space:]][^[:space:]]*[[:space:]]\{1,\}{{ storage.mount_dir.rstrip('/') }}/\{0,1\}[[:space:]]|d' /etc/fstab
 {% endif %}
 {% endfor %}
+grep -Eq '^[^#[:space:]]+[[:space:]]+/[[:space:]]' /etc/fstab
 (crontab -l 2>/dev/null | grep -v '_ami_builder_post_reboot.sh' || true) | crontab -
 # Checks have captured the evidence; retain JSON, remove host-specific bootstrap logs.
 rm -rf /root/bootstrap/logs
+# The agent keeps a read offset per log path: a clone resumed its new bootstrap log at the
+# builder's offset, so the stream started minutes into the host's bootstrap.
+systemctl stop amazon-cloudwatch-agent 2>/dev/null || true
+rm -rf /opt/aws/amazon-cloudwatch-agent/logs/state
 /bin/sync

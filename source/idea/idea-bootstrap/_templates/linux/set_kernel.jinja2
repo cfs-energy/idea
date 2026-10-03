@@ -20,13 +20,17 @@ function fail_kernel_bootstrap() {
 # The host keeps the kernel its image boots. The FSx for Lustre repository publishes a module
 # package per kernel ABI, so the only check is that one exists for the running kernel.
 # Add the repository here because kernel management runs before client installation.
-. /etc/os-release
-wget -q -O - https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-ubuntu-public-key.asc | gpg --dearmor > /usr/share/keyrings/fsx-ubuntu-public-key.gpg
-echo "deb [signed-by=/usr/share/keyrings/fsx-ubuntu-public-key.gpg] https://fsx-lustre-client-repo.s3.amazonaws.com/ubuntu ${VERSION_CODENAME} main" > /etc/apt/sources.list.d/fsxlustreclientrepo.list
-apt-get update -qq
 TARGET_KERNEL_ABI=$(uname -r)
-if [[ -z "$(apt-cache show "lustre-client-modules-${TARGET_KERNEL_ABI}" 2>/dev/null)" ]]; then
-  fail_kernel_bootstrap lustre-module-missing "The FSx for Lustre repository has no lustre-client-modules-${TARGET_KERNEL_ABI} for the running kernel ${TARGET_KERNEL_ABI}."
+# A baked image of this release already has the repository and passed the Lustre module
+# check for this kernel in the bake; an apt-get update here cost its first boot the gate.
+if [[ -z "${IDEA_MODULE_VERSION}" || "$(cat /var/lib/idea/baked-release 2>/dev/null)" != "${IDEA_MODULE_VERSION}" ]]; then
+  . /etc/os-release
+  wget -q -O - https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-ubuntu-public-key.asc | gpg --dearmor > /usr/share/keyrings/fsx-ubuntu-public-key.gpg
+  echo "deb [signed-by=/usr/share/keyrings/fsx-ubuntu-public-key.gpg] https://fsx-lustre-client-repo.s3.amazonaws.com/ubuntu ${VERSION_CODENAME} main" > /etc/apt/sources.list.d/fsxlustreclientrepo.list
+  apt-get update -qq
+  if [[ -z "$(apt-cache show "lustre-client-modules-${TARGET_KERNEL_ABI}" 2>/dev/null)" ]]; then
+    fail_kernel_bootstrap lustre-module-missing "The FSx for Lustre repository has no lustre-client-modules-${TARGET_KERNEL_ABI} for the running kernel ${TARGET_KERNEL_ABI}."
+  fi
 fi
 TARGET_KERNEL_VERSION="${TARGET_KERNEL_ABI%-aws}*"
 {% elif context.base_os in ('amazonlinux2023',) %}

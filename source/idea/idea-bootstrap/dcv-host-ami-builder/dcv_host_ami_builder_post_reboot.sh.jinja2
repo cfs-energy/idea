@@ -26,12 +26,14 @@ source "${SCRIPT_DIR}/image_bake_stage.sh"
 {% endif %}
 
 # usb support: same guarded install the session bootstrap performs
-if [[ -z "$(lsmod | grep eveusb)" ]]; then
+# installed for the running kernel, not loaded: a baked image boots with the module on disk
+  # and dcvserver loads it (ExecStartPre modprobe); rebuilding it through DKMS cost ~90 s
+  if ! modinfo eveusb >/dev/null 2>&1; then
   echo "Installing usb support..."
   DCV_USB_DRIVER_INSTALLER=$(which dcvusbdriverinstaller)
   $DCV_USB_DRIVER_INSTALLER --quiet
 else
-  log_info "Found eveusb kernel module pre-installed... skipping installation..."
+  log_info "Found eveusb kernel module installed... skipping installation..."
 fi
 
 # microphone redirect: same guarded install the session bootstrap performs

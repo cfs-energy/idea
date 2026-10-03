@@ -17,10 +17,15 @@ WINDOWS = [os for os in DESKTOP_BASE_OS if os.startswith('windows')]
 
 
 def render(
-    name, base_os='amazonlinux2023', instance_type='m7i.large', lustre=True, drivers=()
+    name,
+    base_os='amazonlinux2023',
+    instance_type='m7i.large',
+    lustre=True,
+    drivers=(),
+    config=None,
 ):
     context = BootstrapContext(
-        config=Config(),
+        config=config or Config(),
         module_name='virtual-desktop-controller',
         module_id='vdc',
         module_set='default',
@@ -539,7 +544,10 @@ def test_a_failed_scrub_names_the_command(tmp_path):
     scrub = render('compute-node-ami-builder/image_scrub.sh.jinja2', 'rocky9')
     trap = next(line for line in scrub.splitlines() if line.startswith('trap '))
     state = tmp_path / 'bake-failed'
-    script = trap.replace('/var/lib/idea/bake-failed', str(state)) + '\nset -e\nfalse --scrub-step\n'
+    script = (
+        trap.replace('/var/lib/idea/bake-failed', str(state))
+        + '\nset -e\nfalse --scrub-step\n'
+    )
     result = subprocess.run(['bash', '-c', script], capture_output=True, text=True)
     assert result.returncode != 0
     assert state.read_text().strip() == 'scrub: false --scrub-step (exit 1)'
@@ -556,7 +564,9 @@ def test_ubuntu_desktop_install_survives_a_snap_store_error(tmp_path, base_os):
         f'snap() {{ echo "$*" >> {calls}; [[ $(wc -l < {calls}) -ge 3 ]]; }}\n'
         'sleep() { :; }\nlog_warning() { :; }\nset -e\n'
     )
-    result = subprocess.run(['bash', '-c', stubs + loop], capture_output=True, text=True)
+    result = subprocess.run(
+        ['bash', '-c', stubs + loop], capture_output=True, text=True
+    )
     assert result.returncode == 0, result.stderr
     assert calls.read_text().splitlines() == ['install firefox'] * 3
 
@@ -584,7 +594,9 @@ def test_windows_log_is_read_before_ec2launch_v2_replaces_v1(base_os):
 
 def test_desktop_bake_installs_openpbs_and_checks_it():
     """a desktop from the image otherwise compiles OpenPBS on first boot (minutes past the gate)"""
-    post = render('dcv-host-ami-builder/dcv_host_ami_builder_post_reboot.sh.jinja2', 'rocky9')
+    post = render(
+        'dcv-host-ami-builder/dcv_host_ami_builder_post_reboot.sh.jinja2', 'rocky9'
+    )
     assert 'install_openpbs_' in post
     assert post.index('install_openpbs_') < post.index('image_checks.sh')
     assert 'systemctl start pbs' not in post  # the host configures and starts it
@@ -598,7 +610,9 @@ def test_openpbs_dependencies_install_only_with_openpbs(tmp_path, installed, bas
     """a baked host (OpenPBS present) must not spend first-boot time on build dependencies"""
     config = Config()
     version = config.get_string('global-settings.package_config.openpbs.version')
-    commit = config.get_string('global-settings.package_config.openpbs.commit', default='')
+    commit = config.get_string(
+        'global-settings.package_config.openpbs.commit', default=''
+    )
     script = render('_templates/linux/openpbs_client.jinja2', base_os)
     script = script[: script.index('# End: Install OpenPBS')]
     pbs = tmp_path / 'opt/pbs'
@@ -613,7 +627,10 @@ def test_openpbs_dependencies_install_only_with_openpbs(tmp_path, installed, bas
         f'{cmd}() {{ echo "{cmd} $*" >> {calls}; return 1; }}\n'
         for cmd in ('yum', 'apt', 'git', 'wget', 'pushd', 'popd', 'mkdir', 'log_info')
     )
-    stubs = stubs.replace(f'log_info() {{ echo "log_info $*" >> {calls}; return 1; }}', 'log_info() { :; }')
+    stubs = stubs.replace(
+        f'log_info() {{ echo "log_info $*" >> {calls}; return 1; }}',
+        'log_info() { :; }',
+    )
     subprocess.run(['bash', '-c', stubs + script], capture_output=True, text=True)
     called = calls.read_text().split('\n') if calls.exists() else []
     assert any(c.startswith('yum ') for c in called) is (not installed), called
@@ -643,3 +660,127 @@ def test_ad_authorization_is_polled_quickly_at_first(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert sleeps.read_text().split() == ['3', '3', '3']
+
+
+def gnu_sed():
+    # the scrub runs on Linux hosts; BSD sed reads -i differently
+    probe = subprocess.run(['sed', '--version'], capture_output=True, text=True)
+    if probe.returncode != 0 or 'GNU' not in probe.stdout:
+        pytest.skip('GNU sed is required to run the scrub block')
+
+
+AL2023_FSTAB = """#
+UUID=331f3ba8-b141-4edf-86a1-9b9e293a44cf     /           xfs    defaults,noatime  1   1
+UUID=9C8A-6014        /boot/efi       vfat    defaults,noatime,uid=0,gid=0,umask=0077,shortname=winnt,x-systemd.automount 0 2
+fs-1.efs.example.invalid:/ APPS/ nfs4 nfsvers=4.1 0 0
+fs-2.efs.example.invalid:/\tDATA\tnfs4 nfsvers=4.1 0 0
+fs-3.efs.example.invalid:/ APPS-archive nfs4 nfsvers=4.1 0 0
+"""
+
+
+@pytest.mark.parametrize(
+    'template',
+    [
+        'dcv-host-ami-builder/image_scrub.sh.jinja2',
+        'compute-node-ami-builder/image_scrub.sh.jinja2',
+    ],
+)
+def test_scrub_removes_only_shared_storage_mounts_from_fstab(tmp_path, template):
+    """
+    shared-storage also carries plain settings; their empty mount_dir rendered a pattern
+    that deleted the root entry and every line with two spaces, and AL2023 images booted
+    with a read-only root (cloud-init, SSM and the bootstrap never ran)
+    """
+    gnu_sed()
+    config = Config()
+    storage = config.get_config('shared-storage')
+    storage['deployment_id'] = 'sample'
+    storage['module_id'] = 'shared-storage'
+    scrub = render(template, 'amazonlinux2023', config=config)
+    block = scrub[scrub.index('# Host setup recreates') : scrub.index('(crontab -l')]
+    fstab = tmp_path / 'fstab'
+    table = AL2023_FSTAB.replace('APPS', storage['apps']['mount_dir'])
+    table = table.replace('DATA', storage['data']['mount_dir'])
+    fstab.write_text(table)
+    result = subprocess.run(
+        ['bash', '-ec', block.replace('/etc/fstab', str(fstab))],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    kept = fstab.read_text().splitlines()
+    assert kept == [table.splitlines()[i] for i in (0, 1, 2, 5)]
+
+
+def test_scrub_refuses_an_fstab_without_a_root_entry(tmp_path):
+    gnu_sed()
+    scrub = render('dcv-host-ami-builder/image_scrub.sh.jinja2', 'amazonlinux2023')
+    block = scrub[scrub.index('# Host setup recreates') : scrub.index('(crontab -l')]
+    fstab = tmp_path / 'fstab'
+    fstab.write_text('#\nfs-1.efs.example.invalid:/ /apps nfs4 defaults 0 0\n')
+    result = subprocess.run(
+        ['bash', '-ec', block.replace('/etc/fstab', str(fstab))],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+
+
+def test_windows_bootstrap_log_is_written_as_utf8():
+    """
+    Out-File writes UTF-16 on PowerShell 5.1: the bootstrap stream showed NUL-separated
+    characters and the IDEA_BOOTSTRAP_COMPLETE filter could never match the line
+    """
+    install = (
+        Path(IDEA_BOOTSTRAP_DIR) / 'virtual-desktop-host-windows/Install.ps1'
+    ).read_text()
+    body = install[
+        install.index('function Write-ToLog') : install.index(
+            'function Wait-ForService'
+        )
+    ]
+    assert 'Out-File' not in body and 'Add-Content' not in body
+    assert '[System.IO.File]::AppendAllText($LogFile' in body
+
+
+@pytest.mark.parametrize(
+    'marker,refreshed', [(None, True), ('old', True), ('current', False)]
+)
+def test_ubuntu_host_refreshes_apt_only_without_a_current_baked_release(
+    tmp_path, marker, refreshed
+):
+    """the live failure: a baked Ubuntu host ran apt-get update on first boot past the gate"""
+    host = render('virtual-desktop-host-linux/setup.sh.jinja2', 'ubuntu2404')
+    start = host.index('TARGET_KERNEL_ABI=$(uname -r)')
+    block = host[start : host.index('TARGET_KERNEL_VERSION=', start)]
+    block = block.replace('/var/lib/idea', str(tmp_path))
+    if marker is not None:
+        (tmp_path / 'baked-release').write_text(marker)
+    stubs = (
+        'apt-get() { echo REFRESHED; }; wget() { :; }; gpg() { :; }\n'
+        'apt-cache() { echo found; }; fail_kernel_bootstrap() { exit 9; }\n'
+        f'mkdir -p {tmp_path}/etc; . () {{ :; }}\n'
+    )
+    block = block.replace('/etc/apt/sources.list.d/', f'{tmp_path}/').replace(
+        '/usr/share/keyrings/', f'{tmp_path}/'
+    )
+    result = subprocess.run(
+        ['bash', '-c', stubs + block],
+        env={**os.environ, 'IDEA_MODULE_VERSION': 'current'},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert ('REFRESHED' in result.stdout) == refreshed
+
+
+def test_desktop_host_keeps_the_baked_usb_module_and_cronie():
+    """a baked host must not rebuild the DCV USB module through DKMS or reinstall cronie"""
+    for name in (
+        'virtual-desktop-host-linux/configure_dcv_host.sh.jinja2',
+        'dcv-host-ami-builder/dcv_host_ami_builder_post_reboot.sh.jinja2',
+    ):
+        text = render(name)
+        assert 'modinfo eveusb' in text and 'lsmod | grep eveusb' not in text
+    setup = render('virtual-desktop-host-linux/setup.sh.jinja2', 'amazonlinux2023')
+    assert 'rpm -q cronie >/dev/null 2>&1 || dnf -y install cronie' in setup

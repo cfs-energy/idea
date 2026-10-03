@@ -239,7 +239,7 @@ class ImagePipelineSettings(SocaBaseModel):
     max_concurrent_bakes: Optional[int] = Field(default=4)
     keep_generations: Optional[int] = Field(default=2)
     ready_gate_seconds_linux: Optional[int] = Field(default=300)
-    ready_gate_seconds_windows: Optional[int] = Field(default=480)
+    ready_gate_seconds_windows: Optional[int] = Field(default=600)
     validation_user: Optional[str] = Field(default='idea-validate')
     validation_project: Optional[str] = Field(default='idea-validate')
 

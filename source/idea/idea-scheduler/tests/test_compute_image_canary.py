@@ -188,3 +188,50 @@ def test_canary_probe_script_runs_and_deletes_its_file(tmp_path, monkeypatch, ca
     assert evidence['token'] == 'known-output'
     assert evidence['checks'][0]['ok'] is True
     assert list(tmp_path.iterdir()) == []
+
+
+def _clock(monkeypatch):
+    now = [0.0]
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    monkeypatch.setattr(module.time, 'monotonic', lambda: now[0])
+    monkeypatch.setattr(module.time, 'sleep', sleep)
+
+
+def test_cleanup_waits_for_an_exiting_job_and_a_busy_queue(monkeypatch):
+    """
+    the live failure: qdel refused the exiting job (state E) and qmgr reported the queue
+    busy; both clear within seconds, so cleanup waits instead of failing a validated row
+    """
+    _clock(monkeypatch)
+    context = Mock()
+    context.scheduler.is_job_active.side_effect = [True] * 5 + [False]
+    busy = exceptions.soca_exception(module.errorcodes.SCHEDULER_QUEUE_BUSY, 'busy')
+    context.queue_profiles.delete_queue_profile.side_effect = [busy, busy, None]
+    errors = ComputeImageCanary(context)._release(
+        '11', SimpleNamespace(queue_profile_id='q')
+    )
+    assert errors == []
+    context.scheduler.delete_job.assert_not_called()
+    assert context.queue_profiles.delete_queue_profile.call_count == 3
+
+
+def test_cleanup_deletes_a_stuck_job_and_reports_what_stayed(monkeypatch):
+    _clock(monkeypatch)
+    context = Mock()
+    context.scheduler.is_job_active.return_value = True
+    context.scheduler.delete_job.side_effect = exceptions.soca_exception(
+        module.errorcodes.SCHEDULER_ERROR, 'Request invalid for state of job'
+    )
+    busy = exceptions.soca_exception(module.errorcodes.SCHEDULER_QUEUE_BUSY, 'busy')
+    context.queue_profiles.delete_queue_profile.side_effect = busy
+    errors = ComputeImageCanary(context)._release(
+        '12', SimpleNamespace(queue_profile_id='q')
+    )
+    context.scheduler.delete_job.assert_called_once_with('12')
+    assert any('did not leave PBS' in e for e in errors)
+    assert any('busy' in e for e in errors)
+    # bounded: the busy retries stop at the cleanup deadline
+    assert module.time.monotonic() <= module.CLEANUP_SECONDS + 5

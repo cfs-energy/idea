@@ -50,7 +50,8 @@ PATH={{ path }}
 source /etc/environment
 
 {% if context.base_os == 'amazonlinux2023' %}
-dnf -y install cronie
+# a baked image has cronie; dnf would still load repository metadata on the way to READY
+rpm -q cronie >/dev/null 2>&1 || dnf -y install cronie
 systemctl enable crond
 systemctl start crond
 {% endif %}

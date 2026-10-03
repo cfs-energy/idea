@@ -181,7 +181,7 @@ def test_schedule_rejects_bad_rule():
 def test_defaults_and_pins():
     s = ImagePipelineSettings()
     assert (s.max_concurrent_bakes, s.keep_generations) == (4, 2)
-    assert (s.ready_gate_seconds_linux, s.ready_gate_seconds_windows) == (300, 480)
+    assert (s.ready_gate_seconds_linux, s.ready_gate_seconds_windows) == (300, 600)
     assert s.validation_user == 'idea-validate'
     assert VirtualDesktopSoftwareStack().image_pinned is None
     assert HpcQueueProfile(image_pinned=True).image_pinned is True

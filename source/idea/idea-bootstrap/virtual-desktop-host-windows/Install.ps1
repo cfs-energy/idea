@@ -40,7 +40,9 @@ function Write-ToLog {
         }
     }
     # If Level == Error send ses message ?
-    "$FormattedDate $LevelText $Message" | Out-File -FilePath $LogFile -Append
+    # UTF-8: the default file encoding of PowerShell 5.1 is UTF-16, which reached CloudWatch as
+    # NUL-separated bytes ("2 0 2 6 - 1 0 ...") in the bootstrap stream
+    [System.IO.File]::AppendAllText($LogFile, "$FormattedDate $LevelText $Message`r`n")
 }
 
 function Wait-ForService {

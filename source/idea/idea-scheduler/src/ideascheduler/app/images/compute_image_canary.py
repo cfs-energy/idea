@@ -16,6 +16,7 @@ from ideadatamodel import (
     SocaQueueMode,
     SocaScalingMode,
     SubmitJobRequest,
+    errorcodes,
     exceptions,
 )
 from ideasdk.aws.image_builds import default_builder_instance_type
@@ -23,6 +24,10 @@ from ideasdk.aws.image_builds import default_builder_instance_type
 # OpenPBS PBS_MAXQUEUENAME is 15: this prefix plus 12 digest characters.
 VALIDATION_QUEUE_PREFIX = 'iv-'
 PIPELINE_SETTINGS = 'virtual-desktop-controller.software_stacks.image_pipeline'
+# PBS keeps a finished job in its queue while it exits and stages out (state E); qdel and
+# queue deletion are refused until it leaves, which takes seconds after the exit status.
+CLEANUP_SECONDS = 180
+EXITING_SECONDS = 60
 
 
 def canary_script(queue, output, mounts, token):
@@ -88,6 +93,58 @@ def canary_job_params(source, record) -> SocaJobParams:
 class ComputeImageCanary:
     def __init__(self, context):
         self.context = context
+
+    def reap(self, profile) -> list:
+        """remove a hidden validation queue and whatever jobs are left in it"""
+        errors = []
+        for job in self.context.scheduler.list_jobs(queue=profile.name):
+            errors += self._release(job.job_id, None)
+        return errors + self._release(None, profile)
+
+    def _release(self, job_id, created) -> list:
+        """
+        wait for the job to leave PBS, delete it only if it is still queued or running after
+        the exiting window, then delete the hidden queue, retrying while PBS reports it busy
+        """
+        scheduler = self.context.scheduler
+        deadline = time.monotonic() + CLEANUP_SECONDS
+        errors = []
+
+        def gone(seconds) -> bool:
+            end = min(deadline, time.monotonic() + seconds)
+            while scheduler.is_job_active(job_id):
+                if time.monotonic() >= end:
+                    return False
+                time.sleep(2)
+            return True
+
+        try:
+            if job_id and not gone(EXITING_SECONDS):
+                try:
+                    scheduler.delete_job(job_id)
+                except exceptions.SocaException:
+                    # qdel refuses a job that is exiting; the wait below decides
+                    pass
+                if not gone(CLEANUP_SECONDS):
+                    errors.append(f'The validation job {job_id} did not leave PBS.')
+        except Exception as error:
+            errors.append(str(error))
+        while created:
+            try:
+                self.context.queue_profiles.delete_queue_profile(
+                    queue_profile_id=created.queue_profile_id
+                )
+                break
+            except exceptions.SocaException as error:
+                busy = error.error_code == errorcodes.SCHEDULER_QUEUE_BUSY
+                if not busy or time.monotonic() >= deadline:
+                    errors.append(str(error))
+                    break
+                time.sleep(5)
+            except Exception as error:
+                errors.append(str(error))
+                break
+        return errors
 
     def validate(self, record, progress):
         from ideascheduler.app.api.scheduler_api import SchedulerAPI
@@ -199,12 +256,9 @@ class ComputeImageCanary:
             # The deterministic queue name lets a restarted leader reap its prior canary.
             for stale in profiles.list_queue_profiles():
                 if stale.name == name:
-                    for job in self.context.scheduler.list_jobs(queue=name):
-                        if self.context.scheduler.is_job_active(job.job_id):
-                            self.context.scheduler.delete_job(job.job_id)
-                    profiles.delete_queue_profile(
-                        queue_profile_id=stale.queue_profile_id
-                    )
+                    errors = self.reap(stale)
+                    if errors:
+                        raise exceptions.general_exception('; '.join(errors))
             created = profiles.create_queue_profile(candidate)
             self.context.scheduler.set_queue_attributes(
                 name,
@@ -335,19 +389,7 @@ class ComputeImageCanary:
                 progress({'checks': checks})
             raise
         finally:
-            cleanup_errors = []
-            try:
-                if job_id and self.context.scheduler.is_job_active(job_id):
-                    self.context.scheduler.delete_job(job_id)
-            except Exception as error:
-                cleanup_errors.append(str(error))
-            try:
-                if created:
-                    profiles.delete_queue_profile(
-                        queue_profile_id=created.queue_profile_id
-                    )
-            except Exception as error:
-                cleanup_errors.append(str(error))
+            cleanup_errors = self._release(job_id, created)
             for path in (output, Path(str(output) + '.err')):
                 try:
                     path.unlink(missing_ok=True)
