@@ -160,6 +160,16 @@ class FakeStackDb:
         self.updated.append(stack.stack_id)
         return stack
 
+    def repoint_image(self, stack, old_ami_id, ami_id, base_ami_id=None):
+        stored = self.stacks.get(stack.stack_id)
+        if stored is None or stored.image_pinned or stored.ami_id != old_ami_id:
+            return None
+        stored = stored.model_copy(deep=True)
+        stored.ami_id = ami_id
+        if base_ami_id:
+            stored.base_ami_id = base_ami_id
+        return self.update(stored)
+
 
 class FakeTester:
     def __init__(self):
@@ -351,8 +361,8 @@ def test_a_row_runs_every_step_and_promotes_a_validated_image():
         'current',
     ]
     assert row.status == 'current'
-    # the image the row's stacks ran before (stock here) stays as the rollback target
-    assert (row.current_image_id, row.previous_image_id) == ('ami-new', 'ami-old')
+    # the image the row's stacks ran before (stock here) never validated: no rollback target
+    assert (row.current_image_id, row.previous_image_id) == ('ami-new', None)
     assert row.source_ami == 'ami-stock-rocky9' and row.release == VERSION
     assert row.validated_on is not None and row.promoted_on is not None
     assert [c.name for c in row.checks] == ['kernel_default', 'ready_gate']
@@ -381,6 +391,36 @@ def test_a_second_promotion_keeps_the_previous_image():
         FakeBuilder.image_id = 'ami-new'
     row = h.row()
     assert (row.current_image_id, row.previous_image_id) == ('ami-newer', 'ami-new')
+
+
+def test_rollback_after_a_first_promotion_refuses_the_unvalidated_stock_image():
+    h = Harness()
+    queue_and_run(h)
+    h.ec2.add_image('ami-old')
+    with pytest.raises(exceptions.SocaException) as exc_info:
+        h.pipeline.rollback(
+            ImageRowKey(base_os='rocky9', architecture='x86_64'), 'admin'
+        )
+    assert 'no previous validated image' in exc_info.value.message
+    assert h.row().current_image_id == 'ami-new'
+
+
+def test_a_pin_set_between_the_read_and_the_write_keeps_the_stack():
+    """an admin pins the stack after promotion read it: the stack keeps its pin and image"""
+    h = Harness()
+    real_get = h.stack_db.get
+
+    def get_then_pin(stack_id, base_os):
+        fresh = real_get(stack_id, base_os)
+        if fresh is not None:
+            h.stack_db.stacks[stack_id].image_pinned = True
+        return fresh
+
+    h.stack_db.get = get_then_pin
+    queue_and_run(h)
+    stack = h.stack_db.stacks['ss-base-rocky9-x86-64-base']
+    assert stack.image_pinned is True and stack.ami_id == 'ami-old'
+    assert h.stack_db.updated == []
 
 
 def test_a_failed_in_bake_check_fails_the_row_with_that_check_and_keeps_the_old_image():
@@ -1109,3 +1149,30 @@ def test_a_failed_in_bake_check_reports_its_detail_and_builder(monkeypatch):
     assert h.row().error == (
         'in-bake check bootstrap failed on builder i-builder: a command failed: setup: make rpm (exit 2)'
     )
+
+
+def test_the_stack_table_repoint_is_conditional_on_the_old_image_and_no_pin():
+    from unittest.mock import MagicMock
+
+    from botocore.exceptions import ClientError
+    from ideavirtualdesktopcontroller.app.software_stacks.virtual_desktop_software_stack_db import (
+        VirtualDesktopSoftwareStackDB,
+    )
+
+    db = VirtualDesktopSoftwareStackDB.__new__(VirtualDesktopSoftwareStackDB)
+    db._table_obj = MagicMock()
+    db.trigger_update_event = MagicMock()
+    db.convert_db_dict_to_software_stack_object = lambda entry: entry
+    stack = base_stack('rocky9', ami='ami-old')
+    db._table_obj.update_item.return_value = {'Attributes': {'ami_id': 'ami-new'}}
+    assert db.repoint_image(stack, 'ami-old', 'ami-new', 'ami-src') == {
+        'ami_id': 'ami-new'
+    }
+    call = db._table_obj.update_item.call_args.kwargs
+    assert 'image_pinned' in call['ExpressionAttributeNames'].values()
+    assert call['ExpressionAttributeValues'][':old'] == 'ami-old'
+    assert 'projects' not in str(call['UpdateExpression'])
+    db._table_obj.update_item.side_effect = ClientError(
+        {'Error': {'Code': 'ConditionalCheckFailedException'}}, 'UpdateItem'
+    )
+    assert db.repoint_image(stack, 'ami-old', 'ami-new') is None

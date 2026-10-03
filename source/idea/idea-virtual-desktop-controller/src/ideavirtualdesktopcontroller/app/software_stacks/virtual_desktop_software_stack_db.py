@@ -11,6 +11,7 @@
 from typing import List, Optional, Dict
 
 import yaml
+from botocore.exceptions import ClientError
 
 import ideavirtualdesktopcontroller
 from ideadatamodel import (
@@ -679,6 +680,58 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
             new_entry=db_entry,
         )
         return self.convert_db_dict_to_software_stack_object(db_entry)
+
+    def repoint_image(
+        self,
+        software_stack: VirtualDesktopSoftwareStack,
+        old_ami_id: Optional[str],
+        ami_id: str,
+        base_ami_id: Optional[str] = None,
+    ) -> Optional[VirtualDesktopSoftwareStack]:
+        """
+        move a stack to ami_id only while it still runs old_ami_id and is not pinned; writes
+        only the image fields, so a pin or edit made since the caller read the stack stays.
+        None when the stack changed underneath.
+        """
+        k = software_stacks_constants
+        names = {
+            '#ami': k.SOFTWARE_STACK_DB_AMI_ID_KEY,
+            '#pin': k.SOFTWARE_STACK_DB_IMAGE_PINNED_KEY,
+            '#upd': k.SOFTWARE_STACK_DB_UPDATED_ON_KEY,
+        }
+        values = {':ami': ami_id, ':old': old_ami_id, ':no': False}
+        values[':upd'] = Utils.current_time_ms()
+        sets = ['#ami = :ami', '#upd = :upd']
+        if base_ami_id:
+            names['#base'] = k.SOFTWARE_STACK_DB_BASE_AMI_ID_KEY
+            values[':base'] = base_ami_id
+            sets.append('#base = :base')
+        try:
+            result = self._table.update_item(
+                Key={
+                    k.SOFTWARE_STACK_DB_HASH_KEY: software_stack.base_os,
+                    k.SOFTWARE_STACK_DB_RANGE_KEY: software_stack.stack_id,
+                },
+                UpdateExpression='SET ' + ', '.join(sets),
+                ConditionExpression='#ami = :old AND (attribute_not_exists(#pin) OR #pin = :no)',
+                ExpressionAttributeNames=names,
+                ExpressionAttributeValues=values,
+                ReturnValues='ALL_NEW',
+            )
+        except ClientError as e:
+            if e.response['Error']['Code'] != 'ConditionalCheckFailedException':
+                raise
+            return None
+        new_entry = result['Attributes']
+        old_entry = dict(new_entry)
+        old_entry[k.SOFTWARE_STACK_DB_AMI_ID_KEY] = old_ami_id
+        self.trigger_update_event(
+            software_stack.base_os,
+            software_stack.stack_id,
+            old_entry=old_entry,
+            new_entry=new_entry,
+        )
+        return self.convert_db_dict_to_software_stack_object(new_entry)
 
     def delete(self, software_stack: VirtualDesktopSoftwareStack):
         if Utils.is_empty(software_stack.stack_id) or Utils.is_empty(

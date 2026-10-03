@@ -47,6 +47,7 @@ from ideasdk.aws.image_builds import (
     is_custom_record,
     ImageBuildRecordsDB,
     ImageBuildRunner,
+    ImageNotValidated,
     describe_images_by_id,
     promote_gate,
     resume_record,
@@ -450,6 +451,10 @@ class DesktopImagePipeline:
         previous = record.previous_image_id
         if not previous:
             raise exceptions.invalid_params('the row has no previous validated image')
+        try:
+            promote_gate(record, previous)
+        except ImageNotValidated as e:
+            raise exceptions.invalid_params(str(e))
         image = describe_images_by_id(self.context.aws().ec2(), [previous]).get(
             previous
         )
@@ -859,7 +864,13 @@ class DesktopImagePipeline:
             return
         promote_gate(record, candidate)
         self._repoint(record, candidate, image_source=record.source_ami)
-        if record.current_image_id and record.current_image_id != candidate:
+        # only a validated generation becomes the rollback target: before the first
+        # promotion the row's current image is the stock or legacy one it was seeded with
+        if (
+            record.promoted_on is not None
+            and record.current_image_id
+            and record.current_image_id != candidate
+        ):
             record.previous_image_id = record.current_image_id
         record.current_image_id = candidate
         record.promoted_on = record.finished_on = now_utc()
@@ -879,10 +890,15 @@ class DesktopImagePipeline:
             fresh = self._stack_db.get(stack_id=stack.stack_id, base_os=stack.base_os)
             if fresh is None or fresh.image_pinned or fresh.ami_id == image_id:
                 continue
-            fresh.ami_id = image_id
-            if image_source:
-                fresh.base_ami_id = image_source
-            updated = self._stack_db.update(fresh)
+            # conditional: an admin who pins or repoints the stack after the read above wins
+            updated = self._stack_db.repoint_image(
+                fresh, fresh.ami_id, image_id, image_source
+            )
+            if updated is None:
+                self._logger.info(
+                    f'{row_id(record)} left {stack.stack_id}: it was pinned or changed meanwhile'
+                )
+                continue
             self._stack_utils.update_software_stack_entry_to_opensearch(updated)
 
     # cleanup
